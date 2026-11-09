@@ -4,6 +4,7 @@ import { NativeTabs } from 'expo-router/native-tabs';
 import { rememberIntent } from '../../src/navigation/intents';
 import { useShellColors } from '../../src/components/ShellScreen';
 import { useWorkspace } from '../../src/auth/AuthProvider';
+import { fonts } from '../../src/theme/tokens';
 
 
 export default function TabsLayout() {
@@ -17,8 +18,8 @@ export default function TabsLayout() {
   return (
     <NativeTabs key={workspace.selected} backgroundColor={colors.paper} tintColor={colors.mode === 'light' ? colors.primaryAction : colors.primary}
       iconColor={{ default: colors.muted, selected: colors.mode === 'light' ? colors.primaryAction : colors.primary }}
-      labelStyle={{ default: { color: colors.muted, fontSize: 12 }, selected: { color: colors.mode === 'light' ? colors.primaryAction : colors.primary, fontWeight: '600' } }}
-      indicatorColor={colors.elevated} shadowColor={colors.border} disableTransparentOnScrollEdge>
+      labelStyle={{ default: { color: colors.muted, fontSize: 12, fontFamily: fonts.sans[500] }, selected: { color: colors.mode === 'light' ? colors.primaryAction : colors.primary, fontFamily: fonts.sans[600] } }}
+      indicatorColor={colors.surface} shadowColor={colors.border} disableTransparentOnScrollEdge>
       <NativeTabs.Trigger name="sessions" accessibilityLabel="Sessions" disableAutomaticContentInsets>
         <NativeTabs.Trigger.Label>Sessions</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf="terminal" md="terminal" />

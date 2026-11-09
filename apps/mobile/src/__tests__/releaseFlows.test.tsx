@@ -8,7 +8,10 @@ import { SecureSessionStorage } from '../auth/storage';
 import { clearIntent, consumeIntent, rememberIntent } from '../navigation/intents';
 import { NotificationController, type PushDevice, type PushGateway } from '../notifications/controller';
 import { WorkspaceController } from '../workspaces/controller';
-import { AttentionScreen, PullRequestDetailScreen, WorkbenchDetailScreen, WorkbenchListScreen } from '../workflow/screens';
+import { AttentionScreen } from '../features/prs/AttentionScreen';
+import { PullRequestDetailScreen } from '../features/prs/PullRequestDetailScreen';
+import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
+import { WorkbenchListScreen } from '../features/sessions/WorkbenchListScreen';
 import { fixture, scope, session as workbench } from './workflowFixtures';
 
 let mockActive: ReturnType<typeof fixture>;

@@ -1,6 +1,6 @@
 import { cacheKey, canCompose, canStartSend, ciLabel, queueLabel, externalLabel, deliveryLabel, deliveryReducer, EMPTY_DELIVERY, emptyTranscript,
-  EVENT_LIMIT, explicitSendFailure, failureState, humanGate, mergeEvents, needsAttention, selectWorkbenches,
-  stackLabel, statusLabel, transcriptRows, workbenchTitle } from '../workflow/model';
+  EVENT_LIMIT, explicitSendFailure, failureState, groupByRepository, humanGate, mergeEvents, needsAttention, selectWorkbenches,
+  stackLabel, statusLabel, transcriptRows, upsertWorkbench, withChat, workbenchTitle } from '../workflow/model';
 import { chat, event, pr, scope, session } from './workflowFixtures';
 
 describe('isolated memory keys and selectors', () => {
@@ -95,5 +95,44 @@ describe('delivery and retry decisions', () => {
     expect(deliveryLabel(deliveryReducer(sending, { type: 'failed' }).status)).toBe('Failed');
     const uncertain = deliveryReducer(sending, { type: 'unknown' });
     expect(deliveryReducer(uncertain, { type: 'reconciled' })).toMatchObject({ status: 'unknown', checked: true });
+  });
+});
+
+describe('stable list order and in-place patches', () => {
+  const row = (id: string, createdAt: string, repoFullName = 'example/project') => session({ id, createdAt, repoFullName, updatedAt: '2026-11-09T00:00:00Z' });
+  it('orders by creation, not by last change', () => {
+    const items = [row('b', '2026-11-02T00:00:00Z'), row('a', '2026-11-03T00:00:00Z'), row('c', '2026-11-02T00:00:00Z')];
+    expect(selectWorkbenches(items, 'session', 'one').map((item) => item.id)).toEqual(['a', 'b', 'c']);
+  });
+  it.each([
+    ['replaces in place', session({ title: 'New' }), true, ['session-one', 'old'], 'New'],
+    ['inserts in creation order', row('new', '2026-11-09T00:00:00Z'), true, ['new', 'session-one', 'old'], 'Current work'],
+    ['removes a row that left the list', session(), false, ['old'], undefined],
+    ['ignores a row it does not hold and that does not belong', row('other', '2026-11-09T00:00:00Z'), false, ['session-one', 'old'], 'Current work'],
+  ] as const)('upsert %s', (_name, item, belongs, ids, title) => {
+    const list = [session(), row('old', '2026-11-01T00:00:00Z')];
+    const next = upsertWorkbench(list, item, belongs);
+    expect(next.map((value) => value.id)).toEqual(ids);
+    expect(next.find((value) => value.id === 'session-one')?.title).toBe(title);
+  });
+  it('keeps embedded chats when an update omits them', () => {
+    expect(upsertWorkbench([session()], session({ chats: undefined }), true)[0].chats).toEqual([chat()]);
+  });
+  it.each([
+    ['replaces a known chat', chat({ status: 'running' }), ['chat-one'], 'running'],
+    ['appends a new chat', chat({ id: 'chat-two' }), ['chat-one', 'chat-two'], 'idle'],
+  ] as const)('withChat %s', (_name, value, ids, status) => {
+    const next = withChat(session(), value);
+    expect(next.chats?.map((item) => item.id)).toEqual(ids); expect(next.chats?.[0].status).toBe(status);
+  });
+  it('leaves a row alone for another workbench chat', () => {
+    const item = session(); expect(withChat(item, chat({ workbenchId: 'other' }))).toBe(item);
+  });
+  it('groups by repository, newest group first, with repository-free rows in one group', () => {
+    const groups = groupByRepository([row('a', '2026-11-01T00:00:00Z', 'x/one'), row('b', '2026-11-05T00:00:00Z', 'x/two'),
+      row('c', '2026-11-03T00:00:00Z', 'x/one'), row('d', '2026-11-02T00:00:00Z', '')]);
+    expect(groups.map((group) => [group.repo, group.items.map((item) => item.id)])).toEqual([
+      ['x/two', ['b']], ['x/one', ['c', 'a']], ['', ['d']],
+    ]);
   });
 });

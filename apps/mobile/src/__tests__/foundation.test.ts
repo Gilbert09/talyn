@@ -102,3 +102,19 @@ describe('account deletion', () => {
     expect(wipe).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('workspace revalidation', () => {
+  it('keeps the validated choice on screen while the same account reloads', async () => {
+    const { make, list } = workspaces(); const store = make('dev'); await store.load('alice'); await store.select('one');
+    const pending = deferred<{ id: string; name: string }[]>(); list.mockReturnValueOnce(pending.promise);
+    const load = store.load('alice');
+    expect(store.getSnapshot()).toMatchObject({ status: 'loading', selected: 'one', choices: [{ id: 'one', name: 'One' }, { id: 'two', name: 'Two' }] });
+    pending.resolve([{ id: 'one', name: 'One' }]); await load;
+    expect(store.getSnapshot()).toMatchObject({ status: 'ready', selected: 'one' });
+  });
+  it('starts empty for another account', async () => {
+    const { make } = workspaces(); const store = make('dev'); await store.load('alice'); await store.select('one');
+    const load = store.load('bob');
+    expect(store.getSnapshot()).toEqual({ status: 'loading', choices: [], selected: null }); await load;
+  });
+});

@@ -12,17 +12,13 @@ import RootLayout from '../../app/_layout';
 import Index from '../../app';
 import NotFoundScreen from '../../app/+not-found';
 import TabsLayout from '../../app/(tabs)/_layout';
-import AttentionLayout from '../../app/(tabs)/attention/_layout';
-import SessionsLayout from '../../app/(tabs)/sessions/_layout';
-import SettingsLayout from '../../app/(tabs)/settings/_layout';
-import ThreadsLayout from '../../app/(tabs)/threads/_layout';
 import AttentionScreen from '../../app/(tabs)/attention';
-import PullRequestScreen from '../../app/(tabs)/attention/[id]';
 import SessionsScreen from '../../app/(tabs)/sessions';
-import SessionScreen from '../../app/(tabs)/sessions/[id]';
 import SettingsScreen from '../../app/(tabs)/settings';
 import ThreadsScreen from '../../app/(tabs)/threads';
-import ThreadScreen from '../../app/(tabs)/threads/[id]';
+import PullRequestScreen from '../../app/attention/[id]';
+import SessionScreen from '../../app/sessions/[id]';
+import ThreadScreen from '../../app/threads/[id]';
 
 import SignInScreen from '../../app/(auth)/sign-in';
 import AuthLayout from '../../app/(auth)/_layout';
@@ -68,17 +64,13 @@ const routes = {
   index: Index,
   '+not-found': NotFoundScreen,
   '(tabs)/_layout': TabsLayout,
-  '(tabs)/sessions/_layout': SessionsLayout,
-  '(tabs)/threads/_layout': ThreadsLayout,
-  '(tabs)/attention/_layout': AttentionLayout,
-  '(tabs)/settings/_layout': SettingsLayout,
-  '(tabs)/sessions/index': SessionsScreen,
-  '(tabs)/sessions/[id]': SessionScreen,
-  '(tabs)/threads/index': ThreadsScreen,
-  '(tabs)/threads/[id]': ThreadScreen,
-  '(tabs)/attention/index': AttentionScreen,
-  '(tabs)/attention/[id]': PullRequestScreen,
-  '(tabs)/settings/index': SettingsScreen,
+  '(tabs)/sessions': SessionsScreen,
+  '(tabs)/threads': ThreadsScreen,
+  '(tabs)/attention': AttentionScreen,
+  '(tabs)/settings': SettingsScreen,
+  'sessions/[id]': SessionScreen,
+  'threads/[id]': ThreadScreen,
+  'attention/[id]': PullRequestScreen,
 };
 
 describe('native shell', () => {

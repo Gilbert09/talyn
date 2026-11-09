@@ -13,7 +13,11 @@ export const cacheKey = (scope: Scope, entity: Entity, id = '') =>
 export const sameScope = (a: Scope | null, b: Scope | null) => a === b || Boolean(a && b &&
   a.environment === b.environment && a.user === b.user && a.workspace === b.workspace);
 export type LoadState = 'idle' | 'loading' | 'ready' | 'error' | 'offline' | 'unauthorized' | 'deleted';
-export interface Resource<T> { status: LoadState; data?: T; stale: boolean; refreshing: boolean; updatedAt?: number }
+/**
+ * `stale` means a background refetch is owed. Screens keep showing `data` while it runs and never block on it.
+ * `version` grows with each successful fetch, so a screen can wait for one fetch that started after it opened.
+ */
+export interface Resource<T> { status: LoadState; data?: T; stale: boolean; refreshing: boolean; updatedAt?: number; version?: number }
 export const EMPTY_RESOURCE: Resource<never> = Object.freeze({ status: 'idle', stale: true, refreshing: false });
 export function failureState(error: unknown): LoadState {
   const status = (error as { status?: number } | null)?.status;
@@ -101,17 +105,44 @@ const labels: Record<string, string> = {
 export const statusLabel = (value: unknown) => typeof value === 'string' ? labels[value] ?? 'Unknown' : 'Unknown';
 const domainLabel = (states: readonly string[], value: unknown) => typeof value === 'string' && states.includes(value) ? statusLabel(value) : 'Unknown';
 export const ciLabel = (value: unknown) => domainLabel(['none', 'passing', 'running', 'failing_optional', 'failing_required', 'needs_human'], value);
-export const reviewLabel = (value: unknown) => domainLabel(['APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED'], value);
-export const mergeabilityLabel = (value: unknown) => domainLabel(['MERGEABLE', 'CONFLICTING', 'UNKNOWN'], value);
-export const mergeStateLabel = (value: unknown) => domainLabel(['CLEAN', 'BLOCKED', 'BEHIND', 'DIRTY', 'DRAFT', 'HAS_HOOKS', 'UNSTABLE', 'UNKNOWN'], value);
 export const queueLabel = (value: unknown) => domainLabel(['queued', 'awaiting_ci', 'awaiting_review', 'automerge_armed', 'awaiting_external', 'awaiting_stack', 'fixing', 'merging', 'blocked', 'blocked_manual', 'merged', 'removed'], value);
 export const externalLabel = (value: unknown) => domainLabel(['not_submitted', 'not_ready', 'queued', 'testing', 'passed', 'pending_failure', 'failed', 'ejected', 'cancelled', 'rejected', 'merged'], value);
 export const workbenchTitle = (item: Workbench) => item.title?.trim() || item.name;
 export const workbenchKind = (item: Workbench) => item.kind ?? 'session';
 export const humanGate = (item: Workbench) => item.chats?.some((chat) => chat.status === 'awaiting_input') === true;
+/** Newest first by creation, then id. Not by last change, so rows do not move while sessions work. */
+export const compareWorkbenches = (a: Pick<Workbench, 'createdAt' | 'id'>, b: Pick<Workbench, 'createdAt' | 'id'>) =>
+  b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id);
 export function selectWorkbenches(items: Workbench[], kind: 'session' | 'thread', workspace: string) {
   return items.filter((item) => item.workspaceId === workspace && workbenchKind(item) === kind && !item.archivedAt)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    .sort(compareWorkbenches);
+}
+/** Replace a row in place, keeping embedded chats when the update omits them. Missing rows are inserted in order. */
+export function upsertWorkbench(items: Workbench[], item: Workbench, belongs: boolean): Workbench[] {
+  const index = items.findIndex((value) => value.id === item.id);
+  if (!belongs) return index === -1 ? items : items.filter((value) => value.id !== item.id);
+  const merged = index === -1 ? item : { ...item, chats: item.chats ?? items[index].chats };
+  if (index !== -1) { const next = items.slice(); next[index] = merged; return next; }
+  return [...items, merged].sort(compareWorkbenches);
+}
+/** Replace one chat inside a workbench row. Returns the same row when the chat is not part of it. */
+export function withChat(item: Workbench, chat: WorkbenchChat): Workbench {
+  if (item.id !== chat.workbenchId) return item;
+  const chats = item.chats ?? [];
+  const index = chats.findIndex((value) => value.id === chat.id);
+  return { ...item, chats: index === -1 ? [...chats, chat] : chats.map((value) => value.id === chat.id ? chat : value) };
+}
+export interface RepoGroup { repo: string; items: Workbench[] }
+/** Rows grouped by repository, the newest group first, like the web sidebar. Rows without a repository share one group. */
+export function groupByRepository(items: Workbench[]): RepoGroup[] {
+  const groups = new Map<string, Workbench[]>();
+  for (const item of items) {
+    const key = item.repoFullName || '';
+    const list = groups.get(key);
+    if (list) list.push(item); else groups.set(key, [item]);
+  }
+  return [...groups.entries()].map(([repo, list]) => ({ repo, items: [...list].sort(compareWorkbenches) }))
+    .sort((a, b) => compareWorkbenches(a.items[0], b.items[0]) || a.repo.localeCompare(b.repo));
 }
 export function needsAttention(row: PRRow) {
   return row.state === 'open' && (row.reviewRequested && !row.reviewHiddenAt || Boolean(row.summary.humanGates?.length) ||
