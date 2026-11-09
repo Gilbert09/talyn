@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Check ledger recompute reads one row (2026-11-09)
+
+After 486b78b7cf, `recomputeVerdicts` was still the largest egress source: about 207 ledger rows per call for PostHog/posthog, about 900 calls in 7 minutes.
+- `ledgerTallyQuery` returns one aggregate row: the `breakdownOf` counts, the md5 of the check digest, and the failing checks as JSON. `deriveCiVerdict` reads every other check only as a count, so it now takes an optional `tally` (`total`, `running`) and accepts the failing checks alone.
+- The digest string is about 50 bytes per check, so it no longer ships either. The UPDATE writes `last_check_digest` from a scalar subquery and holds the write unless the subquery's md5 equals the one the read saw. Every ledger write is followed by its own recompute, so a held write is one a newer recompute makes. `affectedPrsForSha` ships `md5(last_check_digest)` for the required-ness recheck, not the digest.
+- JS sorts by UTF-16 code unit and `COLLATE "C"` by UTF-8 byte. They differ only for names with a character at or above U+E000. Such a ledger takes the old full read and computes in JS.
+- The reseed stays direct. prCache already coalesces it per commit and runs two at a time, it recomputes only when the ledger hash changed, and its tests and `_awaitCheckLedgerReseeds` expect the verdict when it returns. Its md5 `ledgerHash` cannot reuse the check digest, because it also covers `required` and `raw_state`.
+
 ## Start progress for session boxes (2026-11-09)
 
 A session that is starting now shows a progress bar in place of a spinner: "Step 1 of 3 · Starting the sandbox", then "Getting the code" with git's real percentage, then "Running the setup script". The work was written on 2026-11-06 and left uncommitted in the main checkout; it was rebased onto main and its migration renumbered from 0118 (taken by `0118_usage_period_midnight`) to `0125_workbench_start_progress`.

@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 
 // The required-ness recheck fires the authoritative by-number refresh
 // (prCache.forceFetchAndUpsert); the settle refresh goes through the monitor.
@@ -19,6 +20,7 @@ vi.mock('../services/webhookIndex.js', () => ({ targetsForRepo: mockTargets }));
 import {
   checkCountCoalescer,
   ingestCheckRun,
+  ledgerTallyQuery,
   parseCheckRunPayload,
   parseStatusPayload,
   pruneChecksForSha,
@@ -37,8 +39,8 @@ import {
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import { debugBus } from '../services/debugBus.js';
 import { domainEvents, type DomainPrChecksEvent } from '../services/events.js';
-import { deriveCiVerdict, type CheckFact } from '@talyn/shared';
-import { computeCheckDigest, computeFailingChecksDigest } from '../services/githubGraphql.js';
+import { deriveCiVerdict, type CheckFact, type PRHumanGate } from '@talyn/shared';
+import { breakdownOf, computeCheckDigest, computeFailingChecksDigest } from '../services/githubGraphql.js';
 import type { Database } from '../db/client.js';
 import {
   workspaces as workspacesTable,
@@ -809,6 +811,156 @@ describe('checkCounts', () => {
 
     it('returns nothing for another commit', async () => {
       expect(await readLedgerFacts('acme/widget', 'sha-OTHER')).toEqual([]);
+    });
+  });
+
+  // The recompute reads counts, the digest's md5 and the failing rows from SQL,
+  // and writes the digest from SQL. Every answer must equal the JS functions
+  // run on the whole ledger.
+  describe('ledger tally (SQL ≡ JS)', () => {
+    type Row = { name: string; state: string; required: boolean | null; rawState: string | null };
+    const row = (name: string, state: string, required: boolean | null = true, rawState: string | null = null): Row => ({
+      name,
+      state,
+      required,
+      rawState,
+    });
+    const URL = (name: string) => `https://ci.example/${encodeURIComponent(name)}`;
+    const md5 = (s: string) => createHash('md5').update(s).digest('hex');
+    const fullFacts = (rows: Row[]): CheckFact[] =>
+      rows.map((r) => ({ name: r.name, state: r.state as CheckFact['state'], required: r.required, rawState: r.rawState, url: URL(r.name) }));
+    const insertLedger = async (rows: Row[]) => {
+      if (rows.length === 0) return;
+      await db.insert(prCheckStates).values(
+        rows.map((r, i) => ({
+          id: `row-${i}`,
+          repoFullName: 'acme/widget',
+          headSha: 'sha-A',
+          name: r.name,
+          source: 'check_run',
+          state: r.state,
+          required: r.required,
+          rawState: r.rawState,
+          url: URL(r.name),
+          ts: at(1),
+        })),
+      );
+    };
+    const byName = <T extends { name: string }>(xs: T[]) => [...xs].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+    const LEDGERS: Array<[string, Row[], boolean]> = [
+      ['empty', [], true],
+      ['all passing (200 checks)', Array.from({ length: 200 }, (_, i) => row(`Django tests (${i}/200)`, 'success', i % 3 === 0)), true],
+      ['all failing', [row('a', 'failure', true), row('b', 'failure', false), row('c', 'failure', null)], true],
+      ['only running', [row('a', 'pending'), row('b', 'in_progress', false)], true],
+      [
+        'every state, every required-ness',
+        [
+          row('ok', 'success', true, 'SUCCESS'),
+          row('neutral', 'success', false, 'NEUTRAL'),
+          row('req-fail', 'failure', true, 'FAILURE'),
+          row('opt-fail', 'failure', false, 'TIMED_OUT'),
+          row('unk-fail', 'failure', null, 'CANCELLED'),
+          row('queued', 'pending', null, 'QUEUED'),
+          row('running', 'in_progress', false, 'IN_PROGRESS'),
+          row('skipped', 'skipped', false, 'SKIPPED'),
+          row('legacy', 'cancelled', null, null),
+        ],
+        true,
+      ],
+      [
+        'names with spaces, punctuation, case and digits',
+        [
+          row('a', 'success'),
+          row('A', 'failure', null),
+          row('a b', 'success'),
+          row('a-b', 'pending'),
+          row('a_b', 'failure', false),
+          row('a=b', 'success'),
+          row('a|b', 'failure', true),
+          row('lint', 'success'),
+          row('lint ', 'failure', null),
+          row('Lint', 'skipped'),
+          row('lint2', 'in_progress'),
+          row('lint10', 'success'),
+          row('lint=success', 'failure', true),
+          row('"quoted" it\'s', 'failure', false),
+          row('back\\slash', 'success'),
+          row('[x] (y) {z}', 'failure', true),
+          row('Tests – Core, Py 3.12 ✓', 'failure', null),
+          row('Ünïcödé', 'success'),
+        ],
+        true,
+      ],
+      [
+        'a Visual Review gate and its consequences',
+        [
+          row('PostHog Visual Review / storybook', 'failure', false, 'FAILURE'),
+          row('PostHog Visual Review / playwright', 'failure', false, 'ERROR'),
+          row('PostHog Visual Review / storybook (tracking)', 'failure', false, 'FAILURE'),
+          row('Visual regression tests pass', 'failure', true, 'FAILURE'),
+          row('Complete Visual Review run', 'failure', false, 'FAILURE'),
+          row('Django Tests Pass', 'pending', true),
+        ],
+        true,
+      ],
+      ['only the gate, no raw state', [row('PostHog Visual Review / storybook', 'failure', false, null), row('x', 'success')], true],
+      // U+FF21 sorts after an astral character in JS and before it in UTF-8.
+      ['astral and high-BMP names (the JS path)', [row('\u{1F680} deploy', 'failure', null), row('Ａ wide', 'success'), row(' private', 'pending'), row('plain', 'failure', true)], false],
+    ];
+
+    it.each(LEDGERS)('%s', async (_label, rows, sqlSafe) => {
+      await seedPr(7, 'sha-A', { ...POSTHOG_FACTS, blockingReason: 'blocked' });
+      await insertLedger(rows);
+      const full = fullFacts(rows);
+
+      const [tally] = await ledgerTallyQuery('acme/widget', 'sha-A');
+      expect(tally.sqlDigestSafe).toBe(sqlSafe);
+      if (sqlSafe) expect(tally.digestMd5).toBe(md5(computeCheckDigest('sha-A', full)));
+      const { total, passed, failed, inProgress, skipped } = tally;
+      expect({ total, passed, failed, inProgress, skipped }).toEqual(breakdownOf(full));
+
+      verdictRecomputes.request('acme/widget', 'sha-A', ['r1'], false);
+      await verdictRecomputes.flushAllNow();
+      const [pr] = await db
+        .select({ ls: pullRequestsTable.lastSummary, digest: pullRequestsTable.lastCheckDigest })
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, 'pr-7'));
+      const s = pr.ls as Summary & { failingChecksDigest: string; humanGates: PRHumanGate[] };
+      const ci = deriveCiVerdict(full);
+      expect(pr.digest).toBe(computeCheckDigest('sha-A', full));
+      expect(s.checks).toEqual(breakdownOf(full));
+      expect(s.ciStatus).toBe(ci.ciStatus);
+      expect(byName(s.humanGates)).toEqual(byName(ci.humanGates));
+      expect(s.failingChecksDigest).toBe(computeFailingChecksDigest(full));
+      expect(s.blockingReason).toBe(verdictFor({ ...POSTHOG_FACTS, blockingReason: 'blocked', labels: null }, breakdownOf(full), ci));
+    });
+
+    it('ships no row of a passing check: one aggregate row, failing checks only', async () => {
+      await insertLedger(Array.from({ length: 200 }, (_, i) => row(`c${i}`, i === 7 ? 'failure' : 'success')));
+      const result = await ledgerTallyQuery('acme/widget', 'sha-A');
+      expect(result).toHaveLength(1);
+      expect(JSON.parse(result[0].failing)).toEqual([['c7', true, null, URL('c7')]]);
+
+      const { sql: text } = ledgerTallyQuery('acme/widget', 'sha-A').toSQL();
+      expect(text).not.toMatch(/group by/i);
+      expect(text.match(/"url"/g)).toHaveLength(1);
+      expect(text).toMatch(/json_agg\(json_build_array\([^)]*"url"\)[\s\S]*?\) FILTER \(WHERE "state" = 'failure'\)/);
+    });
+
+    it('does not re-ask about required-ness when only the PR row changed', async () => {
+      await seedPr(7, 'sha-A', POSTHOG_FACTS);
+      await ingest({ name: 'gate', state: 'failure' });
+      expect(mockForceFetch).toHaveBeenCalledTimes(1);
+      _resetRequirednessRecheck();
+      await db
+        .update(pullRequestsTable)
+        .set({ lastSummary: sql`${pullRequestsTable.lastSummary} || '{"blockingReason":"mergeable"}'::jsonb` })
+        .where(eq(pullRequestsTable.id, 'pr-7'));
+      verdictRecomputes.request('acme/widget', 'sha-A', ['r1'], false);
+      await verdictRecomputes.flushAllNow();
+      expect((await summaryOf(7)).blockingReason).toBe('checks_failed');
+      expect(mockForceFetch).toHaveBeenCalledTimes(1);
     });
   });
 

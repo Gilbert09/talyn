@@ -146,10 +146,15 @@ export function humanGatesIn(facts: readonly CheckFact[]): {
  * `MERGEABLE` + `UNSTABLE` is GitHub saying "this can merge, some non-required
  * checks are not passing", so the unknowns are optional there. Everywhere else
  * the wrong guess must be red, never green.
+ *
+ * Only failing checks are read one by one. A caller that passes `tally` (every
+ * check, and the pending or in-progress ones) may pass only the failing checks
+ * as `facts`, which is how the webhook path avoids reading a whole ledger.
  */
 export function deriveCiVerdict(
   facts: readonly CheckFact[],
   pr: { mergeable?: string | null; mergeStateStatus?: string | null } = {},
+  tally?: { total: number; running: number },
 ): CiVerdict {
   const unstable =
     pr.mergeable === 'MERGEABLE' && (pr.mergeStateStatus ?? '').toUpperCase() === 'UNSTABLE';
@@ -172,8 +177,10 @@ export function deriveCiVerdict(
     }
   }
 
+  if (tally) running = tally.running;
+
   let ciStatus: PRCiStatus;
-  if (facts.length === 0) ciStatus = 'none';
+  if ((tally?.total ?? facts.length) === 0) ciStatus = 'none';
   else if (blockingFailing > 0) ciStatus = 'failing_required';
   else if (gates.length > 0) ciStatus = 'needs_human';
   else if (running > 0) ciStatus = 'running';

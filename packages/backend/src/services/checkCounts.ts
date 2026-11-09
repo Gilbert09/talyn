@@ -25,7 +25,7 @@
 
 import { createHash } from 'node:crypto';
 import { v4 as uuid } from 'uuid';
-import { and, eq, inArray, lt, notInArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, lt, notInArray, sql, type SQL } from 'drizzle-orm';
 import { deriveCiVerdict, type CheckFact, type CiVerdict } from '@talyn/shared';
 import { getPoolDbClient, isRealPostgres } from '../db/client.js';
 import { createConcurrencyLimit } from './concurrencyLimit.js';
@@ -185,7 +185,8 @@ interface AffectedPr {
   mergeStateStatus: string | null;
   reviewDecision: string | null;
   labels: string[] | null;
-  lastCheckDigest: string | null;
+  /** md5 of `last_check_digest`: the digest is ~50 bytes per check, and this read runs on every flush. */
+  lastCheckDigestMd5: string | null;
 }
 
 /** Scalars only — the summary fields are `->`/`->>`-extracted, so the blob never ships. */
@@ -202,7 +203,7 @@ const AFFECTED_COLUMNS = {
   mergeStateStatus: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'mergeStateStatus'`,
   reviewDecision: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'reviewDecision'`,
   labels: sql<string[] | null>`${pullRequestsTable.lastSummary} -> 'labels'`,
-  lastCheckDigest: pullRequestsTable.lastCheckDigest,
+  lastCheckDigestMd5: sql<string | null>`md5(${pullRequestsTable.lastCheckDigest})`,
 } as const;
 
 /**
@@ -613,21 +614,14 @@ export function verdictFor(
 }
 
 /**
- * Re-derive every affected PR's checks + verdict from the ledger, write only
- * what changed, and broadcast. Must run inside {@link withShaLock}.
- *
- * `announceUnchanged` keeps the old webhook behaviour of emitting `pr:checks`
- * on every flush (the merge queue and workflows treat it as "checks moved");
- * a reseed passes false, because the full fetch that caused it has already
- * emitted its own snapshot event.
- */
-/**
  * The ledger for one commit, as {@link CheckFact}s.
  *
  * `url` ships only for FAILING rows. Its one reader is `humanGatesIn`, which
  * reads it only for a fact `isHumanFailure` accepts, and that needs
- * `state = 'failure'`. The digests read name and state alone. The url was most
- * of each row's bytes, and this read runs on every recompute.
+ * `state = 'failure'`. The digests read name and state alone.
+ *
+ * The recompute uses this only when {@link ledgerTallyQuery} cannot build the
+ * digest in SQL.
  */
 export async function readLedgerFacts(repoFullName: string, headSha: string): Promise<CheckFact[]> {
   const rows = await getPoolDbClient()
@@ -649,6 +643,111 @@ export async function readLedgerFacts(repoFullName: string, headSha: string): Pr
   }));
 }
 
+const CHECK_LINE = sql`(${prCheckStates.name} || '=' || ${prCheckStates.state})`;
+
+/**
+ * The part of {@link computeCheckDigest} after `headSha:`. JS `.sort()` compares
+ * UTF-16 code units and `COLLATE "C"` compares UTF-8 bytes. The two orders
+ * differ only between a character at or above U+E000 and an astral one, so a
+ * ledger with such a name takes the JS path instead (`sqlDigestSafe`).
+ */
+const DIGEST_TAIL = sql`COALESCE(string_agg(${CHECK_LINE}, '|' ORDER BY ${CHECK_LINE} COLLATE "C"), '')`;
+
+/** {@link computeCheckDigest} as a scalar subquery, so the string never leaves the database. */
+function checkDigestSql(repoFullName: string, headSha: string): SQL {
+  return sql`(SELECT ${headSha}::text || ':' || ${DIGEST_TAIL} FROM ${prCheckStates}
+    WHERE ${prCheckStates.repoFullName} = ${repoFullName} AND ${prCheckStates.headSha} = ${headSha})`;
+}
+
+/**
+ * Everything the recompute needs from a commit's ledger, in ONE row: the
+ * {@link breakdownOf} counts, the md5 of the check digest, and the FAILING
+ * checks alone. `deriveCiVerdict` reads every other check only as a count, and
+ * about 98% of a ledger is not failing. The old read shipped all ~200 rows.
+ */
+export function ledgerTallyQuery(repoFullName: string, headSha: string) {
+  const state = prCheckStates.state;
+  return getPoolDbClient()
+    .select({
+      total: sql<number>`count(*)::int`,
+      passed: sql<number>`(count(*) FILTER (WHERE ${state} = 'success'))::int`,
+      failed: sql<number>`(count(*) FILTER (WHERE ${state} = 'failure'))::int`,
+      inProgress: sql<number>`(count(*) FILTER (WHERE ${state} IN ('in_progress', 'pending')))::int`,
+      skipped: sql<number>`(count(*) FILTER (WHERE ${state} = 'skipped'))::int`,
+      digestMd5: sql<string>`md5(${headSha}::text || ':' || ${DIGEST_TAIL})`,
+      sqlDigestSafe: sql<boolean>`NOT COALESCE(bool_or(${prCheckStates.name} ~ '[\\uE000-\\U0010FFFF]'), false)`,
+      // [name, required, raw_state, url] per failing check, as JSON text so both drivers hand back a string.
+      failing: sql<string>`COALESCE(
+        json_agg(json_build_array(${prCheckStates.name}, ${prCheckStates.required}, ${prCheckStates.rawState}, ${prCheckStates.url})
+          ORDER BY ${prCheckStates.name} COLLATE "C") FILTER (WHERE ${state} = 'failure'),
+        '[]'
+      )::text`,
+    })
+    .from(prCheckStates)
+    .where(and(eq(prCheckStates.repoFullName, repoFullName), eq(prCheckStates.headSha, headSha)));
+}
+
+interface LedgerVerdictInputs {
+  counts: CheckBreakdown;
+  ci: CiVerdict;
+  failingChecksDigest: string;
+  digestMd5: string;
+  /** What to write to `last_check_digest`. */
+  digestValue: SQL;
+  /**
+   * Holds the write to the ledger this read saw. Only a ledger write moves the
+   * digest, and every ledger write is followed by its own recompute, so a write
+   * this guard drops is one a newer recompute makes.
+   */
+  writeGuard: SQL | undefined;
+}
+
+const md5Hex = (s: string) => createHash('md5').update(s).digest('hex');
+
+async function readLedgerVerdictInputs(repoFullName: string, headSha: string): Promise<LedgerVerdictInputs> {
+  const [t] = await ledgerTallyQuery(repoFullName, headSha);
+  if (!t.sqlDigestSafe) {
+    const facts = await readLedgerFacts(repoFullName, headSha);
+    const digest = computeCheckDigest(headSha, facts);
+    return {
+      counts: breakdownOf(facts),
+      ci: deriveCiVerdict(facts),
+      failingChecksDigest: computeFailingChecksDigest(facts),
+      digestMd5: md5Hex(digest),
+      digestValue: sql`${digest}`,
+      writeGuard: undefined,
+    };
+  }
+  const failing: CheckFact[] = (JSON.parse(t.failing) as Array<[string, boolean | null, string | null, string | null]>).map(
+    ([name, required, rawState, url]) => ({ name, state: 'failure', required, rawState, url }),
+  );
+  const counts: CheckBreakdown = {
+    total: t.total,
+    passed: t.passed,
+    failed: t.failed,
+    inProgress: t.inProgress,
+    skipped: t.skipped,
+  };
+  const digestSql = checkDigestSql(repoFullName, headSha);
+  return {
+    counts,
+    ci: deriveCiVerdict(failing, {}, { total: counts.total, running: counts.inProgress }),
+    failingChecksDigest: computeFailingChecksDigest(failing),
+    digestMd5: t.digestMd5,
+    digestValue: digestSql,
+    writeGuard: sql`md5(${digestSql}) = ${t.digestMd5}`,
+  };
+}
+
+/**
+ * Re-derive every affected PR's checks + verdict from the ledger, write only
+ * what changed, and broadcast. Must run inside {@link withShaLock}.
+ *
+ * `announceUnchanged` keeps the old webhook behaviour of emitting `pr:checks`
+ * on every flush (the merge queue and workflows treat it as "checks moved");
+ * a reseed passes false, because the full fetch that caused it has already
+ * emitted its own snapshot event.
+ */
 async function recomputeVerdicts(
   repoFullName: string,
   headSha: string,
@@ -656,20 +755,17 @@ async function recomputeVerdicts(
   opts: { announceUnchanged: boolean },
 ): Promise<void> {
   const db = getPoolDbClient();
-  const facts = await readLedgerFacts(repoFullName, headSha);
-  const counts = breakdownOf(facts);
-  const digest = computeCheckDigest(headSha, facts);
-  const failingChecksDigest = computeFailingChecksDigest(facts);
+  // No PR facts: `MERGEABLE + UNSTABLE` vouches that unknown failures are
+  // optional only when it was read WITH them. The row's mergeStateStatus is
+  // from the last full fetch, and a required check failing since then is
+  // exactly what would have moved it to BLOCKED. Unknown reads as blocking
+  // here until the recheck below answers.
+  const { counts, ci, failingChecksDigest, digestMd5, digestValue, writeGuard } =
+    await readLedgerVerdictInputs(repoFullName, headSha);
   const countsJson = JSON.stringify(counts);
 
   let changedAny = false;
   for (const row of affected) {
-    // No PR facts: `MERGEABLE + UNSTABLE` vouches that unknown failures are
-    // optional only when it was read WITH them. The row's mergeStateStatus is
-    // from the last full fetch, and a required check failing since then is
-    // exactly what would have moved it to BLOCKED. Unknown reads as blocking
-    // here until the recheck below answers.
-    const ci = deriveCiVerdict(facts);
     const blockingReason = verdictFor(row, counts, ci);
     const patch = {
       checks: counts,
@@ -684,7 +780,7 @@ async function recomputeVerdicts(
       .set({
         // `||` merges just these top-level keys — never reads the blob back.
         lastSummary: sql`${pullRequestsTable.lastSummary} || ${patchJson}::jsonb`,
-        lastCheckDigest: digest,
+        lastCheckDigest: digestValue,
         // The summary no longer matches the digest the full fetch stored, so
         // the next full fetch must not skip its write as "unchanged".
         lastSummaryDigest: null,
@@ -700,6 +796,7 @@ async function recomputeVerdicts(
             OR ${pullRequestsTable.lastSummary} -> 'humanGates' IS DISTINCT FROM ${JSON.stringify(ci.humanGates)}::jsonb
             OR ${pullRequestsTable.lastSummary} ->> 'failingChecksDigest' IS DISTINCT FROM ${failingChecksDigest}
           )`,
+          writeGuard,
         ),
       )
       .returning({ id: pullRequestsTable.id });
@@ -720,7 +817,7 @@ async function recomputeVerdicts(
     });
     // A failing check nobody has told us the required-ness of. It reads as
     // blocking until we know — ask, once the failing set actually changed.
-    if (ci.unknownFailing > 0 && digest !== row.lastCheckDigest) {
+    if (ci.unknownFailing > 0 && digestMd5 !== row.lastCheckDigestMd5) {
       scheduleRequirednessRecheck(row);
     }
   }
