@@ -62,7 +62,8 @@ jobs:
       TALYN_MOBILE_SUPPORT_URL: ${{ vars.TALYN_MOBILE_SUPPORT_URL }}
       TALYN_MOBILE_PRIVACY_URL: ${{ vars.TALYN_MOBILE_PRIVACY_URL }}
       TALYN_MOBILE_DELETION_URL: ${{ vars.TALYN_MOBILE_DELETION_URL }}
-      MOBILE_UPDATES_ENABLED: ${{ vars.MOBILE_UPDATES_ENABLED }}
+      # Mirrors eas.json: every profile except the development client runs signed updates.
+      MOBILE_UPDATES_ENABLED: ${{ inputs.profile == 'development' && '0' || '1' }}
       MOBILE_UPDATE_KEY_ID: ${{ vars.MOBILE_UPDATE_KEY_ID }}
       MOBILE_ASC_APP_ID: ${{ vars.MOBILE_ASC_APP_ID }}
       MOBILE_APPLE_TEAM_ID: ${{ vars.MOBILE_APPLE_TEAM_ID }}

@@ -80,18 +80,23 @@ export function getAppIdentity(env: IdentityEnvironment) {
   };
 }
 
-export function readPushProjectId(env: PublicEnvironment, environment: AppEnvironment): string | undefined {
-  const projectId = env.EXPO_PUBLIC_EAS_PROJECT_ID;
-  if (projectId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(projectId)) {
+/** The Expo account that owns the EAS project. */
+export const EAS_OWNER = 'talyn-app';
+/** `@talyn-app/talyn-mobile`. A public identifier, not a credential. */
+export const EAS_PROJECT_ID = '69499768-c478-44c0-8588-355c674515df';
+
+/** The EAS project for push and updates. `EXPO_PUBLIC_EAS_PROJECT_ID` overrides the Talyn project, for a fork. */
+export function readPushProjectId(env: PublicEnvironment): string {
+  const projectId = env.EXPO_PUBLIC_EAS_PROJECT_ID || EAS_PROJECT_ID;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(projectId)) {
     throw new Error('Use a valid public EAS project ID.');
   }
-  if (environment === 'production' && !projectId) throw new Error('Production requires EXPO_PUBLIC_EAS_PROJECT_ID.');
   return projectId;
 }
 
 export default ({ config }: ConfigContext): ExpoConfig => {
   const identity = getAppIdentity(process.env);
-  const projectId = readPushProjectId(process.env, identity.environment);
+  const projectId = readPushProjectId(process.env);
 
   const release = readReleaseSettings(process.env, identity.environment, projectId);
   const mobile = readMobileConfig(process.env, identity.environment, identity.scheme);
@@ -100,6 +105,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   return {
     ...config,
     name: identity.name,
+    owner: EAS_OWNER,
     slug: 'talyn-mobile',
     version: release.version,
     icon: '../desktop/assets/icons/1024x1024.png',
@@ -140,6 +146,6 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       mode: release.profile === 'development' ? 'development' : 'production', enableBackgroundRemoteNotifications: false,
     }]],
     experiments: { typedRoutes: true },
-    extra: { release: { profile: release.profile, urls: release.urls }, appEnvironment: identity.environment, mobile, ...(projectId ? { eas: { projectId } } : {}) },
+    extra: { release: { profile: release.profile, urls: release.urls }, appEnvironment: identity.environment, mobile, eas: { projectId } },
   };
 };

@@ -13,6 +13,7 @@ import { NotificationSettings } from '../../notifications/Settings';
 import { radius, setThemePreference, useTheme, useThemePreference } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
 import { WebRow } from '../more/Page';
+import { AboutUpdates } from '../updates/AboutUpdates';
 import { useBillingStatus } from '../usage/data';
 import { appInfo, DOCS_URL, WEB_APP_URL } from './about';
 import { APPEARANCE_OPTIONS, billingLine, githubStateLabel, githubStateOf, webSettingsLinks } from './model';
@@ -89,8 +90,7 @@ export function SettingsScreen() {
       </Group> : null}
       <Group title="About">
         <Row title="Version" trailing={<AppText variant="meta" tone="muted" selectable>{info.build ? `${info.version} (${info.build})` : info.version}</AppText>} />
-        {info.channel || info.runtime ? <Row title="Update channel" trailing={<AppText variant="meta" tone="muted" selectable>
-          {[info.channel, info.runtime ? `runtime ${info.runtime}` : null, info.update].filter(Boolean).join(' · ')}</AppText>} /> : null}
+        <AboutUpdates info={info} />
         <Row title="Open Talyn on the web" chevron onPress={() => openExternal(WEB_APP_URL)} />
         <Row title="Help and documentation" chevron divider={false} onPress={() => openExternal(DOCS_URL)} />
       </Group>

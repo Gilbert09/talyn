@@ -21,6 +21,12 @@ async function inspect() {
   assert(gradle.includes(`versionName "${exp.version}"`) || gradle.includes(`versionName '${exp.version}'`));
   const app = manifest.manifest.application[0];
   assert.notEqual(app.$['android:usesCleartextTraffic'], 'true');
+  if (exp.updates.enabled) {
+    // The app starts its own checks (src/features/updates); native code checks only to recover from a failed launch.
+    const meta = Object.fromEntries((app['meta-data'] ?? []).map((entry) => [entry.$['android:name'], entry.$['android:value']]));
+    assert.equal(meta['expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH'], 'ERROR_RECOVERY_ONLY');
+    assert.equal(meta['expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS'], '0');
+  }
   const iosRoot = path.join(root, 'ios');
   const project = fs.readdirSync(iosRoot).find((name) => fs.existsSync(path.join(iosRoot, name, 'Info.plist')));
   assert(project, 'Generate the iOS project first.');
@@ -52,6 +58,8 @@ async function inspect() {
     assert.equal(expoPlist.EXUpdatesURL, exp.updates.url);
     assert.equal(expoPlist.EXUpdatesCodeSigningMetadata.alg, 'rsa-v1_5-sha256');
     assert.equal(expoPlist.EXUpdatesRequestHeaders['expo-channel-name'], exp.extra.release.profile);
+    assert.equal(expoPlist.EXUpdatesCheckOnLaunch, 'ERROR_RECOVERY_ONLY');
+    assert.equal(expoPlist.EXUpdatesLaunchWaitMs, 0);
   }
   console.log('Generated native identity, version, permissions, entitlements, privacy, and update settings passed.');
   console.log('Signed archives, merged dependency manifests, and 16 KB binary alignment remain release gates.');

@@ -1,0 +1,109 @@
+name: Mobile update
+
+# Every push to main that changes the app or the packages it bundles publishes a signed OTA update
+# to the preview and internal-beta channels. Production updates and rollbacks stay on the approved
+# Mobile release workflow. Set the repository variable MOBILE_UPDATES_AUTO to 0 to stop this workflow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/mobile/**'
+      - 'packages/client/**'
+      - 'packages/shared/**'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One publish at a time, oldest first, so a slow run cannot land after a newer one.
+concurrency:
+  group: mobile-update
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish preview and internal-beta updates
+    if: github.repository == 'Gilbert09/talyn' && github.ref == 'refs/heads/main' && vars.MOBILE_UPDATES_AUTO != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: mobile-updates
+    env:
+      CI: 'true'
+      EXPO_NO_TELEMETRY: '1'
+      EXPO_NO_DOTENV: '1'
+      MOBILE_UPDATE_KEY_ID: ${{ vars.MOBILE_UPDATE_KEY_ID }}
+      MOBILE_UPDATES_AUTO: ${{ vars.MOBILE_UPDATES_AUTO }}
+    steps:
+      - name: Require the Expo token
+        id: gate
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::notice::EXPO_TOKEN is not set, so no mobile update was published."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check out the pushed commit
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          node-version: '22.23.4'
+      - name: Install without release secrets or caches
+        if: steps.gate.outputs.run == 'true'
+        run: npm ci --ignore-scripts
+      - name: Install the pinned EAS tool outside the app
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          npm install --prefix "$RUNNER_TEMP/mobile-eas-cli" --no-save --ignore-scripts --package-lock=false eas-cli@27.5.0
+          echo "MOBILE_EAS_CLI_PATH=$RUNNER_TEMP/mobile-eas-cli/node_modules/eas-cli/bin/run" >> "$GITHUB_ENV"
+      - name: Build shared packages
+        if: steps.gate.outputs.run == 'true'
+        run: npm run mobile:build:packages
+      - name: Write the signing files
+        if: steps.gate.outputs.run == 'true'
+        env:
+          UPDATE_CERTIFICATE: ${{ secrets.MOBILE_UPDATE_CERTIFICATE_PEM }}
+          UPDATE_PRIVATE_KEY: ${{ secrets.MOBILE_UPDATE_PRIVATE_KEY_PEM }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          for (const name of ['UPDATE_CERTIFICATE', 'UPDATE_PRIVATE_KEY', 'MOBILE_UPDATE_KEY_ID']) {
+            if (!process.env[name]) { console.error(`::error::Set ${name === 'MOBILE_UPDATE_KEY_ID' ? 'the MOBILE_UPDATE_KEY_ID variable' : `the MOBILE_${name}_PEM secret`}.`); process.exit(1); }
+          }
+          const dir = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP, 'mobile-update-'));
+          const key = path.join(dir, 'private-key.pem');
+          fs.writeFileSync(key, process.env.UPDATE_PRIVATE_KEY, { mode: 0o600 });
+          fs.writeFileSync(path.join(process.env.GITHUB_WORKSPACE, 'apps/mobile/release/update-certificate.pem'), process.env.UPDATE_CERTIFICATE, { mode: 0o600 });
+          fs.appendFileSync(process.env.GITHUB_ENV, `MOBILE_UPDATE_PRIVATE_KEY_PATH=${key}\nMOBILE_UPDATE_TEMP=${dir}\n`);
+          NODE
+      - name: Describe the update
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          subject="$(git log -1 --format=%s | tr -d '\r')"
+          echo "MOBILE_UPDATE_MESSAGE=${subject} ($(git rev-parse --short HEAD))" >> "$GITHUB_ENV"
+      # Preview first: a failure there stops the run before internal-beta testers receive the change.
+      - name: Publish to preview
+        if: steps.gate.outputs.run == 'true'
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: node apps/mobile/scripts/publish-update.cjs preview --execute
+      # Internal-beta uses the production EAS environment, which needs the approved production identity
+      # (bundle IDs, scheme, HTTPS callback). Set MOBILE_UPDATES_INTERNAL_BETA=1 once that exists.
+      - name: Publish to internal-beta
+        if: steps.gate.outputs.run == 'true' && vars.MOBILE_UPDATES_INTERNAL_BETA == '1'
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: node apps/mobile/scripts/publish-update.cjs internal-beta --execute
+      - name: Remove signing files
+        if: always()
+        run: |
+          rm -f -- apps/mobile/release/update-certificate.pem
+          if [ -n "$MOBILE_UPDATE_TEMP" ]; then rm -rf -- "$MOBILE_UPDATE_TEMP"; fi

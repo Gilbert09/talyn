@@ -84,10 +84,16 @@ describe('push configuration', () => {
   const previous = process.env;
   afterEach(() => { process.env = previous; });
   const build = () => appConfig({ config: {} } as Parameters<typeof appConfig>[0]);
-  it('rejects a missing production EAS project', () => {
-    process.env = { ...previous, ...publicValues, APP_ENV: 'production' };
+  it.each(['production', 'preview', 'development'])('uses the Talyn EAS project for %s when none is set', (environment) => {
+    process.env = { ...previous, ...publicValues, APP_ENV: environment };
     delete process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
-    expect(build).toThrow('Production requires EXPO_PUBLIC_EAS_PROJECT_ID');
+    const result = build();
+    expect(result.owner).toBe('talyn-app');
+    expect(result.extra?.eas?.projectId).toBe('69499768-c478-44c0-8588-355c674515df');
+  });
+  it.each(['not-a-uuid', '69499768c47844c08588355c674515df'])('rejects the malformed project ID %s', (projectId) => {
+    process.env = { ...previous, ...publicValues, APP_ENV: 'production', EXPO_PUBLIC_EAS_PROJECT_ID: projectId };
+    expect(build).toThrow('valid public EAS project ID');
   });
   it('exports the public project and only alert capabilities', () => {
     const projectId = '10000000-0000-4000-8000-000000000001';

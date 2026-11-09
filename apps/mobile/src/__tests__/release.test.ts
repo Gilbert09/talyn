@@ -7,7 +7,9 @@ import appConfig from '../../app.config';
 
 const { readReleaseSettings, profiles } = require('../../release/policy.cjs');
 const { releasePlan, assertExecution, assertRuntime, assertBuild, assertChannel } = require('../../scripts/release.cjs');
-const { checkMetadata } = require('../../scripts/check-release.cjs');
+const { checkMetadata, checkUpdateWorkflow } = require('../../scripts/check-release.cjs');
+const { autoUpdatePlan, assertAutoExecution, parseDotenv, publishEnvironment, assertUpdateConfig, redact } = require('../../scripts/publish-update.cjs');
+const yaml = require('js-yaml');
 const metadata = require('../../release/store-metadata.json');
 
 // These values are inert fixtures. They are never used for a hosted build.
@@ -19,6 +21,19 @@ const fixture = {
   EXPO_PUBLIC_SUPABASE_KEY: 'sb_publishable_fixture', EXPO_PUBLIC_AUTH_CALLBACK_URL: 'https://mobile.fixture.dev/callback',
   TALYN_MOBILE_SUPPORT_URL: 'https://fixture.dev/support', TALYN_MOBILE_PRIVACY_URL: 'https://fixture.dev/privacy', TALYN_MOBILE_DELETION_URL: 'https://fixture.dev/delete',
 };
+
+// A stand-in public certificate inside the app, where EAS reads the real one. Config checks only its PEM shape.
+const mobileRoot = path.resolve(__dirname, '../..');
+let certificateDir = '';
+let certificate = '';
+beforeAll(() => {
+  fs.mkdirSync(path.join(mobileRoot, '.expo'), { recursive: true });
+  certificateDir = fs.mkdtempSync(path.join(mobileRoot, '.expo', 'release-test-'));
+  fs.writeFileSync(path.join(certificateDir, 'certificate.pem'), '-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----\n');
+  certificate = `./${path.relative(mobileRoot, path.join(certificateDir, 'certificate.pem')).split(path.sep).join('/')}`;
+});
+afterAll(() => { fs.rmSync(certificateDir, { recursive: true, force: true }); });
+const signed = () => ({ MOBILE_UPDATES_ENABLED: '1', MOBILE_UPDATE_CERTIFICATE: certificate, MOBILE_UPDATE_KEY_ID: 'main' });
 
 describe('release configuration boundaries', () => {
   const previous = process.env;
@@ -56,13 +71,37 @@ describe('release configuration boundaries', () => {
   it.each(['EXPO_PUBLIC_SERVICE_ROLE_KEY', 'EXPO_PUBLIC_PROJECT_ROOT_EXTRA'])('rejects unreviewed public build variable %s', (name) => {
     expect(() => readReleaseSettings({ ...fixture, EXPO_PUBLIC_PROJECT_ROOT: path.resolve(__dirname, '../..'), [name]: 'fixture' }, 'production')).toThrow('unexpected public');
   });
-  it.each(['MOBILE_UPDATE_CERTIFICATE', 'MOBILE_UPDATE_KEY_ID'])('blocks signed updates without %s', (key) => {
-    expect(() => readReleaseSettings({ ...fixture, MOBILE_UPDATES_ENABLED: '1', MOBILE_UPDATE_CERTIFICATE: 'fixture.pem', MOBILE_UPDATE_KEY_ID: 'fixture', [key]: undefined }, 'production', fixture.EXPO_PUBLIC_EAS_PROJECT_ID)).toThrow();
+  it.each<[string, Record<string, string | undefined>, string]>([
+    ['no key ID', { MOBILE_UPDATE_KEY_ID: undefined }, 'MOBILE_UPDATE_KEY_ID'],
+    ['no certificate file', { MOBILE_UPDATE_CERTIFICATE: './release/missing-certificate.pem' }, 'public update certificate'],
+    ['a certificate outside the app', { MOBILE_UPDATE_CERTIFICATE: '../desktop/certificate.pem' }, 'inside apps/mobile'],
+    ['an absolute certificate path', { MOBILE_UPDATE_CERTIFICATE: '/etc/certificate.pem' }, 'inside apps/mobile'],
+    ['a certificate that is not PEM', { MOBILE_UPDATE_CERTIFICATE: './package.json' }, 'inside apps/mobile'],
+    ['a malformed switch', { MOBILE_UPDATES_ENABLED: 'yes' }, 'Use 0 or 1'],
+  ])('blocks signed updates with %s', (_name, patch, message) => {
+    expect(() => readReleaseSettings({ ...fixture, ...signed(), ...patch }, 'production', fixture.EXPO_PUBLIC_EAS_PROJECT_ID)).toThrow(message);
   });
-  it('configures signed updates with an embedded fallback', () => {
-    const result = readReleaseSettings({ ...fixture, MOBILE_UPDATES_ENABLED: '1', MOBILE_UPDATE_CERTIFICATE: './fixture.pem', MOBILE_UPDATE_KEY_ID: 'fixture' }, 'production', fixture.EXPO_PUBLIC_EAS_PROJECT_ID);
-    expect(result.updates).toMatchObject({ enabled: true, useEmbeddedUpdate: true, fallbackToCacheTimeout: 0,
-      codeSigningMetadata: { keyid: 'fixture', alg: 'rsa-v1_5-sha256' } });
+  it('keeps the development client on Metro', () => {
+    expect(() => readReleaseSettings({ ...fixture, ...signed(), APP_ENV: 'development', MOBILE_RELEASE_PROFILE: 'development' }, 'development', fixture.EXPO_PUBLIC_EAS_PROJECT_ID)).toThrow('Metro');
+  });
+  it.each(Object.keys(profiles).filter((name) => profiles[name].updates))('configures signed updates for %s', (profile: string) => {
+    // An empty value is how an unset GitHub variable arrives.
+    process.env = { ...previous, ...fixture, ...signed(), APP_ENV: profiles[profile].environment, MOBILE_RELEASE_PROFILE: profile, EXPO_PUBLIC_EAS_PROJECT_ID: '' };
+    const result = appConfig({ config: {} } as Parameters<typeof appConfig>[0]);
+    expect(result.owner).toBe('talyn-app');
+    expect(result.updates).toEqual({
+      enabled: true, url: 'https://u.expo.dev/69499768-c478-44c0-8588-355c674515df', checkAutomatically: 'ON_ERROR_RECOVERY',
+      requestHeaders: { 'expo-channel-name': profiles[profile].channel }, fallbackToCacheTimeout: 0, useEmbeddedUpdate: true,
+      codeSigningCertificate: certificate, codeSigningMetadata: { keyid: 'main', alg: 'rsa-v1_5-sha256' },
+    });
+    expect(result.runtimeVersion).toEqual({ policy: 'fingerprint' });
+  });
+  it('enables updates in eas.json for exactly the profiles the policy names', () => {
+    const eas = require('../../eas.json');
+    for (const [name, policy] of Object.entries(profiles) as [string, { updates: boolean }][]) {
+      expect(eas.build[name].env.MOBILE_UPDATES_ENABLED).toBe(policy.updates ? '1' : '0');
+    }
+    expect(Object.keys(profiles).filter((name) => profiles[name].autoUpdate)).toEqual(['preview', 'internal-beta']);
   });
   it('keeps store templates incomplete until owner approval', () => {
     expect(() => checkMetadata(metadata)).not.toThrow(); expect(() => checkMetadata(metadata, true)).toThrow();
@@ -155,5 +194,107 @@ describe('release execution safeguards', () => {
       expect(() => assertExecution(submit, { ...env, MOBILE_STORE_METADATA_PATH: undefined }, git)).toThrow('MOBILE_STORE_METADATA_PATH');
       expect(() => assertExecution(submit, { ...env, MOBILE_BUILD_ID: 'different' }, git)).toThrow('inspected build');
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('automatic update workflow', () => {
+  const text = fs.readFileSync(path.resolve(__dirname, '../../../../.github/workflows/mobile-update.yml'), 'utf8');
+  it('passes as committed', () => { expect(() => checkUpdateWorkflow(text, yaml)).not.toThrow(); });
+  it.each<[string, string, string]>([
+    ['the fork guard', "github.repository == 'Gilbert09/talyn' && ", ''],
+    ['the kill switch', " && vars.MOBILE_UPDATES_AUTO != '0'", ''],
+    ['ordered publishes', 'cancel-in-progress: false', 'cancel-in-progress: true'],
+    ['the internal-beta publish', 'publish-update.cjs internal-beta --execute', 'publish-update.cjs preview --execute'],
+    ['a direct production publish', 'publish-update.cjs internal-beta --execute', 'publish-update.cjs internal-beta --execute && eas update --channel production'],
+    ['the pinned EAS CLI', 'eas-cli@27.5.0', 'eas-cli@latest'],
+    ['a PR trigger', 'workflow_dispatch:', 'workflow_dispatch:\n  pull_request:'],
+  ])('rejects a workflow without %s', (_name, from, to) => {
+    expect(text.includes(from)).toBe(true);
+    expect(() => checkUpdateWorkflow(text.replace(from, to), yaml)).toThrow();
+  });
+});
+
+describe('automatic update publication', () => {
+  const sha = 'c'.repeat(40);
+  const ciEnv = { CI: 'true', GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'push', GITHUB_SHA: sha, EXPO_TOKEN: 'fixture', MOBILE_EAS_CLI_PATH: '/fixture/eas' };
+  const git = (args: string[]) => args[0] === 'rev-parse' ? sha : '';
+  const planEnv = { MOBILE_UPDATE_MESSAGE: 'feat: fixture (ccccccc)', MOBILE_UPDATE_PRIVATE_KEY_PATH: '/fixture/key.pem' };
+
+  it.each([['preview', 'preview'], ['internal-beta', 'production']])('publishes %s with its EAS environment and every platform', (profile, environment) => {
+    const { args } = autoUpdatePlan(profile, planEnv);
+    expect(args).toEqual(['update', '--channel', profile, '--environment', environment, '--platform', 'all',
+      '--message', planEnv.MOBILE_UPDATE_MESSAGE, '--private-key-path', planEnv.MOBILE_UPDATE_PRIVATE_KEY_PATH, '--non-interactive', '--json']);
+    expect(args).not.toContain('--runtime-version');
+  });
+  it.each(['production', 'development', 'prod', undefined])('refuses an automatic publish to %s', (profile) => {
+    expect(() => autoUpdatePlan(profile, planEnv)).toThrow('Automatic updates publish only to preview and internal-beta');
+  });
+  it.each(['MOBILE_UPDATE_MESSAGE', 'MOBILE_UPDATE_PRIVATE_KEY_PATH'])('requires %s', (name) => {
+    expect(() => autoUpdatePlan('preview', { ...planEnv, [name]: undefined })).toThrow(name);
+  });
+  it.each(['push', 'workflow_dispatch'])('allows %s on main', (event) => {
+    expect(assertAutoExecution({ ...ciEnv, GITHUB_EVENT_NAME: event }, git)).toBe(true);
+  });
+  it.each<[string, Record<string, string | undefined>]>([
+    ['outside CI', { CI: undefined }],
+    ['another branch', { GITHUB_REF: 'refs/heads/feature' }],
+    ['a pull request', { GITHUB_EVENT_NAME: 'pull_request' }],
+    ['a pull_request_target run', { GITHUB_EVENT_NAME: 'pull_request_target' }],
+    ['the kill switch', { MOBILE_UPDATES_AUTO: '0' }],
+    ['no Expo token', { EXPO_TOKEN: undefined }],
+    ['no EAS CLI', { MOBILE_EAS_CLI_PATH: undefined }],
+    ['a malformed commit', { GITHUB_SHA: 'main' }],
+  ])('blocks execution for %s', (_name, patch) => {
+    expect(() => assertAutoExecution({ ...ciEnv, ...patch }, git)).toThrow();
+  });
+  it.each<[string, (args: string[]) => string]>([
+    ['a different commit', (args) => args[0] === 'rev-parse' ? 'd'.repeat(40) : ''],
+    ['a dirty checkout', (args) => args[0] === 'rev-parse' ? sha : ' M apps/mobile/app.config.ts'],
+  ])('blocks execution from %s', (_name, gitFake) => {
+    expect(() => assertAutoExecution(ciEnv, gitFake)).toThrow('clean checkout');
+  });
+
+  it('reads the pulled EAS environment file', () => {
+    expect(parseDotenv('# Environment: preview\n\nEXPO_PUBLIC_API_ORIGIN=https://api.fixture.dev\n# SECRET=***** (secret)\nQUOTED="a=b"\nbad line\n'))
+      .toEqual({ EXPO_PUBLIC_API_ORIGIN: 'https://api.fixture.dev', QUOTED: 'a=b' });
+  });
+  it.each(['preview', 'internal-beta'])('evaluates %s as its binary does', (profile) => {
+    const env = publishEnvironment({ PATH: '/bin', EAS_BUILD_PROFILE: 'production', MOBILE_UPDATE_KEY_ID: 'main' },
+      { EXPO_PUBLIC_API_ORIGIN: 'https://api.fixture.dev', TALYN_MOBILE_SCHEME: 'fixture', UNRELATED: 'x', MOBILE_UPDATES_ENABLED: '1' }, profile);
+    expect(env).toMatchObject({ PATH: '/bin', APP_ENV: profiles[profile].environment, MOBILE_RELEASE_PROFILE: profile, MOBILE_UPDATES_ENABLED: '1',
+      MOBILE_UPDATE_KEY_ID: 'main', MOBILE_UPDATE_CERTIFICATE: './release/update-certificate.pem', EXPO_PUBLIC_API_ORIGIN: 'https://api.fixture.dev', TALYN_MOBILE_SCHEME: 'fixture' });
+    expect(env.EAS_BUILD_PROFILE).toBeUndefined();
+    expect(env.UNRELATED).toBeUndefined();
+  });
+  it.each<[string, Record<string, string>, Record<string, string>, string]>([
+    ['EAS turns updates off', { MOBILE_UPDATE_KEY_ID: 'main' }, { MOBILE_UPDATES_ENABLED: '0' }, 'eas.json owns the switch'],
+    ['key IDs disagree', { MOBILE_UPDATE_KEY_ID: 'main' }, { MOBILE_UPDATE_KEY_ID: 'old' }, 'MOBILE_UPDATE_KEY_ID differs'],
+    ['no key ID anywhere', {}, {}, 'Set MOBILE_UPDATE_KEY_ID'],
+  ])('refuses a publish when %s', (_name, base, pulled, message) => {
+    expect(() => publishEnvironment(base, pulled, 'preview')).toThrow(message);
+  });
+  it('takes the key ID from EAS when GitHub has none', () => {
+    expect(publishEnvironment({}, { MOBILE_UPDATE_KEY_ID: 'main' }, 'preview').MOBILE_UPDATE_KEY_ID).toBe('main');
+  });
+
+  const exp = { extra: { eas: { projectId: '69499768-c478-44c0-8588-355c674515df' } }, updates: {
+    enabled: true, url: 'https://u.expo.dev/69499768-c478-44c0-8588-355c674515df', checkAutomatically: 'ON_ERROR_RECOVERY',
+    requestHeaders: { 'expo-channel-name': 'preview' }, codeSigningCertificate: './release/update-certificate.pem',
+    codeSigningMetadata: { keyid: 'main', alg: 'rsa-v1_5-sha256' } } };
+  it('accepts the configuration of a signed preview binary', () => { expect(() => assertUpdateConfig(exp, 'preview', 'main')).not.toThrow(); });
+  it.each<[string, Record<string, unknown>]>([
+    ['updates off', { enabled: false }],
+    ['another project URL', { url: 'https://u.expo.dev/10000000-0000-4000-8000-000000000001' }],
+    ['native automatic checks', { checkAutomatically: 'ON_LOAD' }],
+    ['another channel', { requestHeaders: { 'expo-channel-name': 'production' } }],
+    ['another key ID', { codeSigningMetadata: { keyid: 'old', alg: 'rsa-v1_5-sha256' } }],
+    ['another algorithm', { codeSigningMetadata: { keyid: 'main', alg: 'none' } }],
+    ['another certificate path', { codeSigningCertificate: './other.pem' }],
+  ])('refuses a configuration with %s', (_name, patch) => {
+    expect(() => assertUpdateConfig({ ...exp, updates: { ...exp.updates, ...patch } }, 'preview', 'main')).toThrow('does not enable signed updates');
+  });
+  it('keeps signed URLs and long tokens out of logs', () => {
+    const text = redact(`GET https://storage.fixture.dev/a.js?X-Amz-Signature=abc failed with ${'t'.repeat(48)}`);
+    expect(text).toBe('GET [signed URL removed] failed with [long value removed]');
   });
 });

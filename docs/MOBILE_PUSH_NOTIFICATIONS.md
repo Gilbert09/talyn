@@ -16,7 +16,7 @@ Never commit credentials, real push tokens, or account fixtures.
 | `TALYN_TOKEN_KEY` | Existing backend encryption key. Protects stored token values. |
 | `TALYN_MOBILE_PUSH_APP_IDENTITIES` | Comma-separated `appIdentity@environment` allowlist. Registration and dispatch both check it. |
 | `EXPO_ACCESS_TOKEN` | Optional server-side Expo credential. No token is required by default. |
-| `EXPO_PUBLIC_EAS_PROJECT_ID` | Public mobile project UUID. Production app configuration requires it. |
+| `EXPO_PUBLIC_EAS_PROJECT_ID` | Optional public mobile project UUID. The app config defaults to the Talyn project `@talyn-app/talyn-mobile`. |
 
 The provider can use Expo without an Expo access token.
 If deployment supplies an access token, keep it on the backend.

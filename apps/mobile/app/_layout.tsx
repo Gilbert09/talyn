@@ -12,6 +12,7 @@ import { rememberIntent } from '../src/navigation/intents';
 import { AuthProvider, useAuth, useMobileRuntime } from '../src/auth/AuthProvider';
 import { Status } from '../src/components/AuthControls';
 import { ShellScreen, useShellColors } from '../src/components/ShellScreen';
+import { UpdateBanner } from '../src/features/updates/UpdateBanner';
 import { useAppFonts } from '../src/theme/fonts';
 import { sans } from '../src/theme/tokens';
 
@@ -79,6 +80,8 @@ export default function RootLayout() {
     {/* Boot state 1 of 3: the bundled fonts load, which takes about one frame. */}
     {!fonts ? <AppLoading phase="fonts" /> : <SafeAreaProvider style={{ backgroundColor: colors.background }}>
       <SystemChrome /><AuthProvider><AuthenticatedRoutes /></AuthProvider>
+      {/* Over every screen, and never a modal: it offers a restart and does not take one. */}
+      <UpdateBanner />
     </SafeAreaProvider>}
   </GestureHandlerRootView>;
 }
