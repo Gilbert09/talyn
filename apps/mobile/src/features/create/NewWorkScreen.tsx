@@ -282,7 +282,8 @@ const styles = StyleSheet.create({
   heading: { fontSize: 24, lineHeight: 30, letterSpacing: -0.3, textAlign: 'center', ...display(600) },
   dock: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8, gap: 8, width: '100%', maxWidth: 760, alignSelf: 'center' },
   card: { borderRadius: 16, borderWidth: 1 },
-  prompt: { ...type.body, minHeight: 56, maxHeight: PROMPT_MAX_HEIGHT, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8,
+  // Two lines tall from the start, so the first typed line does not resize the field.
+  prompt: { ...type.body, minHeight: 64, maxHeight: PROMPT_MAX_HEIGHT, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8,
     textAlignVertical: 'top' },
   controls: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 8, paddingRight: 8, paddingBottom: 8 },
   spacer: { flex: 1 },

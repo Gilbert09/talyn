@@ -106,8 +106,8 @@ export const MODES: ReadonlyArray<{ value: NewWorkMode; label: string; detail: s
   { value: 'thread', label: 'Thread', detail: 'Starts a thread. It can work across repositories.' },
 ];
 export const PLACEHOLDER: Record<NewWorkMode, string> = {
-  session: 'Describe a task. The agent works on a new branch and can open a pull request.',
-  thread: 'What do you want to get done? A thread can work across repositories.',
+  session: 'Describe a task',
+  thread: 'What do you want to get done?',
 };
 const MODE_LABEL: Record<NewWorkMode, string> = { session: 'Session', thread: 'Thread' };
 const AGENT_SHORT: Record<WorkbenchAgent, string> = { claude: 'Claude', codex: 'Codex' };
