@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Check, Loader2, X } from 'lucide-react';
 import {
   MCP_AUTH_KINDS,
+  MCP_DISPLAY_NAME_MAX,
   SLACK_INTERNAL_APP_MANIFEST,
   emptyMcpServerInput,
   mcpCatalogEntry,
   mcpServerInputProblem,
+  mcpServerNameProblem,
   mcpServerToInput,
   mcpServerFromAddress,
   type PrivateRoute,
@@ -242,7 +244,11 @@ export function McpServerEditorPage({
     });
   };
 
-  const problem = useMemo(() => mcpServerInputProblem(input, privateRoutes), [input, privateRoutes]);
+  const nameProblem = useMemo(() => mcpServerNameProblem(input.name, existingNames), [input.name, existingNames]);
+  const problem = useMemo(
+    () => mcpServerInputProblem(input, privateRoutes) ?? nameProblem,
+    [input, privateRoutes, nameProblem]
+  );
   const catalog = input.catalogHandle ? mcpCatalogEntry(input.catalogHandle) : undefined;
 
   const connected = probe?.ok === true || oauthConnected;
@@ -626,6 +632,23 @@ export function McpServerEditorPage({
 
           {(editing || connected) && (
             <Section
+              title="Name"
+              description="Give this server a name that is easy to read. Agents use the identifier to reach it."
+            >
+              <NameFields
+                displayName={input.displayName ?? ''}
+                name={input.name}
+                placeholder={probe?.serverName || analyticsHost(input.url)}
+                problem={nameProblem}
+                renamed={editing !== null && editing.name !== input.name.trim().toLowerCase()}
+                onDisplayNameChange={(displayName) => edit({ displayName })}
+                onNameChange={(name) => edit({ name })}
+              />
+            </Section>
+          )}
+
+          {(editing || connected) && (
+            <Section
               title="Repository access"
               description="Allow this server in every repository, or limit it to selected repositories."
             >
@@ -687,6 +710,60 @@ export function McpServerEditorPage({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function NameFields({
+  displayName,
+  name,
+  placeholder,
+  problem,
+  renamed,
+  onDisplayNameChange,
+  onNameChange,
+}: {
+  displayName: string;
+  name: string;
+  placeholder: string;
+  problem: string | null;
+  renamed: boolean;
+  onDisplayNameChange: (next: string) => void;
+  onNameChange: (next: string) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <label className="block space-y-1 text-sm">
+        <span className="font-medium">Display name</span>
+        <Input
+          value={displayName}
+          maxLength={MCP_DISPLAY_NAME_MAX}
+          placeholder={placeholder}
+          onChange={(e) => onDisplayNameChange(e.target.value)}
+        />
+      </label>
+      <label className="block space-y-1 text-sm">
+        <span className="font-medium">Identifier</span>
+        <Input
+          value={name}
+          maxLength={40}
+          spellCheck={false}
+          autoCapitalize="off"
+          className="font-mono"
+          aria-invalid={problem !== null}
+          onChange={(e) => onNameChange(e.target.value.toLowerCase().replace(/[\s_]+/g, '-'))}
+        />
+      </label>
+      {problem ? (
+        <p role="alert" className="text-xs text-red-500">
+          {problem}
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Lowercase letters, digits and hyphens.
+          {renamed && ' Sessions that are running keep the old identifier until their sandbox restarts.'}
+        </p>
+      )}
     </div>
   );
 }
