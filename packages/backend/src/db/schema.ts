@@ -260,6 +260,34 @@ export const teamMembers = pgTable(
   })
 );
 
+/**
+ * Team invites by email (migration 0127). The row waits for the person to
+ * open the emailed link and accept with their GitHub sign-in; accepting adds
+ * their `team_members` row. Only a hash of the link token is stored.
+ */
+export const teamInvites = pgTable(
+  'team_invites',
+  {
+    id: text('id').primaryKey(),
+    teamId: text('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    invitedByUserId: text('invited_by_user_id'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+    acceptedByUserId: text('accepted_by_user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    tokenHashUq: uniqueIndex('uq_team_invites_token_hash').on(t.tokenHash),
+    pendingEmailUq: uniqueIndex('uq_team_invites_pending_email')
+      .on(t.teamId, t.email)
+      .where(sql`${t.acceptedAt} IS NULL`),
+  })
+);
+
 export const spaces = pgTable(
   'spaces',
   {

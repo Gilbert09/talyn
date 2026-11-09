@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Archive, Check, Loader2, Pencil, Plus, Trash2, UserPlus, X } from 'lucide-react';
+import { Archive, Check, Copy, Loader2, Mail, Pencil, Plus, Trash2, UserPlus, X } from 'lucide-react';
 import {
   MAX_SPACE_NAME_LENGTH,
   MAX_TEAM_NAME_LENGTH,
   TEAM_ROLES,
   canManageTeam,
+  isValidInviteEmail,
   type Space,
   type SpacesTeam,
+  type TeamEmailInvite,
   type TeamMember,
   type TeamRole,
 } from '@talyn/shared';
@@ -199,10 +201,26 @@ function MembersSection({ team, manage }: { team: SpacesTeam; manage: boolean })
   const [error, setError] = useState<string | null>(null);
   const [removing, setRemoving] = useState<TeamMember | null>(null);
   const [removeBusy, setRemoveBusy] = useState(false);
+  const [emailInvites, setEmailInvites] = useState<TeamEmailInvite[]>([]);
+  const [shareLink, setShareLink] = useState<{ email: string; url: string } | null>(null);
 
   useEffect(() => {
     void loadMembers(team.id);
   }, [team.id]);
+
+  useEffect(() => {
+    if (!manage) return;
+    let cancelled = false;
+    api.teams
+      .emailInvites(team.id)
+      .then((invites) => {
+        if (!cancelled) setEmailInvites(invites);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [team.id, manage]);
 
   const replace = (member: TeamMember) => {
     const current = useSpacesStore.getState().members[team.id] ?? [];
@@ -211,18 +229,60 @@ function MembersSection({ team, manage }: { team: SpacesTeam; manage: boolean })
       : [...current, member]);
   };
 
+  const inviteByEmail = async (email: string) => {
+    const res = await api.teams.inviteByEmail(team.id, { email });
+    setEmailInvites((current) => [res.invite, ...current.filter((i) => i.id !== res.invite.id && i.email !== res.invite.email)]);
+    if (res.emailSent) {
+      setShareLink(null);
+      toast.success(`Invite sent to ${res.invite.email}`);
+    } else {
+      setShareLink(res.acceptUrl ? { email: res.invite.email, url: res.acceptUrl } : null);
+    }
+  };
+
   const invite = async () => {
-    const value = login.trim().replace(/^@/, '');
-    if (!value) return;
+    const raw = login.trim();
+    if (!raw) return;
+    const isEmail = raw.indexOf('@', 1) > 0;
+    const email = raw.toLowerCase();
+    if (isEmail && !isValidInviteEmail(email)) {
+      setError('Enter a valid email address.');
+      return;
+    }
     setInviting(true);
     setError(null);
     try {
-      replace(await api.teams.invite(team.id, { githubLogin: value }));
+      if (isEmail) {
+        await inviteByEmail(email);
+      } else {
+        replace(await api.teams.invite(team.id, { githubLogin: raw.replace(/^@/, '') }));
+      }
       setLogin('');
     } catch (err) {
       setError(errorText(err, 'Could not invite them.'));
     } finally {
       setInviting(false);
+    }
+  };
+
+  const revokeEmailInvite = async (pending: TeamEmailInvite) => {
+    setError(null);
+    try {
+      await api.teams.revokeEmailInvite(team.id, pending.id);
+      setEmailInvites((current) => current.filter((i) => i.id !== pending.id));
+      setShareLink((current) => (current?.email === pending.email ? null : current));
+    } catch (err) {
+      setError(errorText(err, 'Could not revoke the invite.'));
+    }
+  };
+
+  const copyShareLink = async () => {
+    if (!shareLink) return;
+    try {
+      await navigator.clipboard.writeText(shareLink.url);
+      toast.success('Link copied');
+    } catch {
+      toast.error('Could not copy the link');
     }
   };
 
@@ -300,6 +360,46 @@ function MembersSection({ team, manage }: { team: SpacesTeam; manage: boolean })
           </div>
         ))
       )}
+      {manage && emailInvites.length > 0 && (
+        <div data-attr="team-email-invites">
+          <div className="px-3 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Pending invites
+          </div>
+          {emailInvites.map((pending) => (
+            <div key={pending.id} className="flex items-center gap-3 px-3 py-2 text-[13px]" data-attr="team-email-invite-row">
+              <Mail className="h-[22px] w-[22px] shrink-0 p-0.5 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate">{pending.email}</div>
+                <div className="text-xs text-muted-foreground">
+                  Invited · expires {new Date(pending.expiresAt).toLocaleDateString()}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void revokeEmailInvite(pending)}
+                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label={`Revoke invite for ${pending.email}`}
+                title="Revoke the invite"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {manage && shareLink && (
+        <div className="space-y-2 px-3 py-2 text-xs" data-attr="team-invite-share-link">
+          <p className="text-muted-foreground">
+            Talyn could not send the email to {shareLink.email}. Share this link with them yourself.
+          </p>
+          <div className="flex items-center gap-2">
+            <Input value={shareLink.url} readOnly className="h-8 flex-1 font-mono text-xs" aria-label="Invite link" />
+            <Button size="sm" variant="outline" onClick={() => void copyShareLink()}>
+              <Copy className="mr-1 h-4 w-4" /> Copy
+            </Button>
+          </div>
+        </div>
+      )}
       {manage && (
         <div className="flex items-center gap-2 px-3 py-2">
           <Input
@@ -308,9 +408,9 @@ function MembersSection({ team, manage }: { team: SpacesTeam; manage: boolean })
             onKeyDown={(e) => {
               if (e.key === 'Enter') void invite();
             }}
-            placeholder="GitHub username"
+            placeholder="GitHub username or email"
             className="h-8 flex-1"
-            aria-label="GitHub username to invite"
+            aria-label="GitHub username or email to invite"
           />
           <Button size="sm" onClick={() => void invite()} disabled={inviting || !login.trim()}>
             {inviting ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <UserPlus className="mr-1 h-4 w-4" />}

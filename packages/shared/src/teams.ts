@@ -164,6 +164,53 @@ export interface InviteTeamMemberRequest {
   githubLogin: string;
 }
 
+/** How long an email invite link stays valid. */
+export const TEAM_INVITE_TTL_DAYS = 7;
+export const MAX_INVITE_EMAIL_LENGTH = 254;
+
+/** A loose shape check. The email itself is the proof: only its owner gets the link. */
+export function isValidInviteEmail(value: string): boolean {
+  return value.length <= MAX_INVITE_EMAIL_LENGTH && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+/** A pending invite by email. Only owners and admins see these. */
+export interface TeamEmailInvite {
+  id: string;
+  teamId: string;
+  email: string;
+  invitedByLogin: string | null;
+  expiresAt: string;
+  createdAt: string;
+}
+
+export interface InviteTeamEmailRequest {
+  email: string;
+}
+
+export interface InviteTeamEmailResponse {
+  invite: TeamEmailInvite;
+  /** False when this deployment cannot send email, or the send failed. */
+  emailSent: boolean;
+  /** The accept link, only when the email was not sent, so the inviter can share it. */
+  acceptUrl: string | null;
+}
+
+/** The token from an invite link. Sent in the body, never in a URL. */
+export interface TeamInviteTokenRequest {
+  token: string;
+}
+
+/** What the invitee sees before they accept. */
+export interface TeamInvitePreview {
+  teamId: string;
+  teamName: string;
+  invitedByLogin: string | null;
+  email: string;
+  expiresAt: string;
+  /** The caller is already in this team. */
+  alreadyMember: boolean;
+}
+
 export interface CreateSpaceSessionRequest {
   /** Default 'session'. A thread takes no repository, branch or base branch. */
   kind?: WorkbenchKind;

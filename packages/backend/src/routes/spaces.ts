@@ -10,8 +10,11 @@ import type {
   SpaceSessionRow,
   SpaceTaskRow,
   Task,
+  TeamEmailInvite,
+  TeamInvitePreview,
   TeamMember,
   Workbench,
+  InviteTeamEmailResponse,
 } from '@talyn/shared';
 import { assertUser } from '../middleware/auth.js';
 import { getPoolDbClient } from '../db/client.js';
@@ -33,6 +36,13 @@ import {
   setHomeWorkspace,
 } from '../services/teams/membership.js';
 import {
+  acceptEmailInvite,
+  inviteByEmail,
+  listEmailInvites,
+  previewEmailInvite,
+  revokeEmailInvite,
+} from '../services/teams/emailInvites.js';
+import {
   addSpaceRepository,
   archiveSpace,
   createSessionInSpace,
@@ -49,8 +59,9 @@ import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/wor
 import { fleetErrorAsRefusal } from '../services/workbenches/errors.js';
 
 /**
- * Teams and Spaces, under `/api/v1`: `/teams/...`, `/spaces/...`, and the two
- * move routes `/workbenches/:id/space` and `/tasks/:id/space`.
+ * Teams and Spaces, under `/api/v1`: `/teams/...`, `/spaces/...`, the invite
+ * link routes `/team-invites/...`, and the two move routes
+ * `/workbenches/:id/space` and `/tasks/:id/space`.
  *
  * Mounted BEFORE `ownerScope`: `team_members`, `spaces` and
  * `space_repositories` are backend-pool-only, and a space lists rows from
@@ -195,6 +206,49 @@ export function spaceRoutes(): Router {
     handle(async (req, res) => {
       await removeMember(req.params.id!, assertUser(req).id, req.params.memberId!);
       ok(res, null);
+    })
+  );
+
+  // ---- Invites by email ----
+
+  router.get(
+    '/teams/:id/invites',
+    handle(async (req, res) => {
+      ok(res, (await listEmailInvites(req.params.id!, assertUser(req).id)) satisfies TeamEmailInvite[]);
+    })
+  );
+
+  router.post(
+    '/teams/:id/invites',
+    handle(async (req, res) => {
+      const email = String((req.body as { email?: unknown } | undefined)?.email ?? '');
+      const data = await inviteByEmail(req.params.id!, assertUser(req).id, email);
+      ok(res, data satisfies InviteTeamEmailResponse, 201);
+    })
+  );
+
+  router.delete(
+    '/teams/:id/invites/:inviteId',
+    handle(async (req, res) => {
+      await revokeEmailInvite(req.params.id!, assertUser(req).id, req.params.inviteId!);
+      ok(res, null);
+    })
+  );
+
+  // The token rides in the body, so it never lands in an access log.
+  router.post(
+    '/team-invites/preview',
+    handle(async (req, res) => {
+      const token = (req.body as { token?: unknown } | undefined)?.token;
+      ok(res, (await previewEmailInvite(token, assertUser(req).id)) satisfies TeamInvitePreview);
+    })
+  );
+
+  router.post(
+    '/team-invites/accept',
+    handle(async (req, res) => {
+      const token = (req.body as { token?: unknown } | undefined)?.token;
+      ok(res, (await acceptEmailInvite(token, assertUser(req).id)) satisfies SpacesTeam);
     })
   );
 

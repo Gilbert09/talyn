@@ -31,6 +31,7 @@ import { useActiveSpace, loadExtraWorkbench, spacesOffered } from '../../lib/spa
 import { useFollowSessionContext, useSpaceLive, useSpacesBoot } from '../../hooks/useSpaces';
 import { useSpacesStore } from '../../stores/spaces';
 import { SpaceDialogsHost } from '../spaces/SpaceDialogs';
+import { PendingInviteDialog } from '../spaces/PendingInviteDialog';
 import { MoveToSpaceDialog } from '../spaces/MoveToSpace';
 import { SpaceHomePage } from '../spaces/SpaceHomePage';
 
@@ -81,6 +82,7 @@ export function AppShell() {
       <ConnectAgentModal />
       <WhatsNewModal />
       <SpaceDialogsHost />
+      <PendingInviteDialog />
       <MoveToSpaceDialog />
       <CodeReviewIntroModal
         open={codeReviewIntro.open && !whatsNewOpen}
