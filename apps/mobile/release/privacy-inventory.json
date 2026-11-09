@@ -1,0 +1,147 @@
+{
+  "status": "Engineering inventory; privacy owner must approve store answers and retention before beta.",
+  "lockfileSha256": "a76ce6a9dffabd2c476424b6819743714055afedf9ea81483dea2d592ed975eb",
+  "mobileDependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-community/netinfo": "12.0.1",
+    "@supabase/supabase-js": "2.103.3",
+    "@talyn/client": "*",
+    "@talyn/shared": "*",
+    "expo": "~58.0.23",
+    "expo-constants": "~58.0.15",
+    "expo-crypto": "~58.0.7",
+    "expo-dev-client": "~58.0.18",
+    "expo-device": "~58.0.5",
+    "expo-font": "~58.0.11",
+    "expo-linking": "~58.0.16",
+    "expo-notifications": "~58.1.8",
+    "expo-router": "~58.0.30",
+    "expo-secure-store": "~58.0.2",
+    "expo-symbols": "~58.0.4",
+    "expo-system-ui": "~58.0.7",
+    "expo-updates": "~58.0.21",
+    "expo-web-browser": "~58.0.7",
+    "fast-text-encoding": "1.0.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-safe-area-context": "~5.11.1",
+    "react-native-screens": "~4.30.1"
+  },
+  "prohibited": [
+    "analytics",
+    "advertising",
+    "tracking",
+    "session-replay"
+  ],
+  "data": [
+    {
+      "category": "Account identity",
+      "fields": [
+        "user ID",
+        "GitHub profile",
+        "email"
+      ],
+      "purpose": "Authentication and account display",
+      "location": "SecureStore session; Talyn backend; Supabase",
+      "retention": "Provider cleanup and backup periods require approval"
+    },
+    {
+      "category": "Authentication",
+      "fields": [
+        "access token",
+        "refresh token",
+        "PKCE verifier",
+        "OAuth attempt"
+      ],
+      "purpose": "Sign-in and session refresh",
+      "location": "Device-only SecureStore; Supabase",
+      "retention": "Logout clears local values; iOS uninstall can retain Keychain entries"
+    },
+    {
+      "category": "Workspace choice",
+      "fields": [
+        "workspace ID scoped by environment and user"
+      ],
+      "purpose": "Restore authorized selection",
+      "location": "AsyncStorage",
+      "retention": "Cleared on account or environment changes"
+    },
+    {
+      "category": "Product content",
+      "fields": [
+        "sessions",
+        "threads",
+        "transcripts",
+        "drafts",
+        "pull requests",
+        "repository references"
+      ],
+      "purpose": "Read work and send explicit messages",
+      "location": "Process memory; Talyn backend and configured providers",
+      "retention": "No new persistent content cache; backend retention requires approval"
+    },
+    {
+      "category": "Notifications",
+      "fields": [
+        "Expo push token",
+        "installation ID",
+        "preferences",
+        "locale",
+        "timezone",
+        "app identity",
+        "app version",
+        "opaque event IDs"
+      ],
+      "purpose": "Optional generic alerts and authorized tap resolution",
+      "location": "SecureStore installation ID; encrypted backend token; Expo Push Service; APNs; FCM",
+      "retention": "See docs/MOBILE_PUSH_NOTIFICATIONS.md; approve processors before activation"
+    },
+    {
+      "category": "Network and operational metadata",
+      "fields": [
+        "IP address",
+        "request metadata",
+        "provider delivery receipts"
+      ],
+      "purpose": "API delivery and operational security",
+      "location": "Talyn infrastructure and service providers",
+      "retention": "Infrastructure logging and provider policies require review; no app analytics added"
+    },
+    {
+      "category": "Updates",
+      "fields": [
+        "update request",
+        "platform",
+        "runtime fingerprint",
+        "update ID",
+        "network metadata",
+        "persistent EAS client ID sent as EAS-Client-ID"
+      ],
+      "purpose": "Signed compatible software delivery when enabled",
+      "location": "Expo EAS Update; device update cache; native UserDefaults or SharedPreferences for the EAS client ID",
+      "retention": "The EAS client ID and update cache can survive logout. Review Expo retention, uninstall, backup, and native cache behavior before activation."
+    }
+  ],
+  "processors": [
+    "Talyn backend and hosting",
+    "Supabase authentication",
+    "GitHub OAuth",
+    "Expo Push Service and EAS Update when enabled",
+    "Apple APNs",
+    "Google FCM",
+    "Configured coding-agent and repository providers through the existing backend"
+  ],
+  "applePreparation": {
+    "tracking": false,
+    "trackingDomains": [],
+    "collectedDataTypes": "Do not infer a no-collection answer from the app manifest. Review linked account data, content, identifiers, and processor practices.",
+    "requiredReasonApis": "Inspect merged archive manifests from React Native, Expo, AsyncStorage, SecureStore, and updates. Approve reasons from actual use. Do not copy generic reason codes."
+  },
+  "googlePreparation": {
+    "collection": "Review account data, messages, app activity, identifiers, and diagnostics against current Console definitions.",
+    "sharing": "Assess processors and service-provider exceptions with the privacy owner.",
+    "security": "Verify HTTPS transport and deletion completion. Do not attest to full deletion or encryption scope without evidence.",
+    "deletion": "In-app deletion exists. Publish an unauthenticated deletion page with paying-admin restrictions and partial-cleanup support."
+  }
+}

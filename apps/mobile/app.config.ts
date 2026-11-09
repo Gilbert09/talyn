@@ -1,6 +1,7 @@
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
 import type { AppEnvironment, MobileConfig } from './src/config';
+import { readReleaseSettings } from './release/policy.cjs';
 
 type PublicEnvironment = Record<string, string | undefined>;
 
@@ -48,6 +49,16 @@ export function getAppIdentity(env: IdentityEnvironment) {
     throw new Error('APP_ENV must be development, preview, or production.');
   }
 
+  if (environment === 'production' && (!env.TALYN_MOBILE_IOS_BUNDLE_ID || !env.TALYN_MOBILE_ANDROID_PACKAGE || !env.TALYN_MOBILE_SCHEME)) {
+    throw new Error('Production requires explicit app identifiers and scheme.');
+  }
+  for (const name of ['TALYN_MOBILE_IOS_BUNDLE_ID', 'TALYN_MOBILE_ANDROID_PACKAGE']) {
+    const value = env[name];
+    if (value && (!/^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*){2,}$/.test(value) || /(^|\.)(example|test|invalid)(\.|$)/.test(value))) {
+      throw new Error('Use approved reverse-domain app identifiers.');
+    }
+  }
+  if (env.TALYN_MOBILE_SCHEME && !/^[a-z][a-z0-9+.-]+$/.test(env.TALYN_MOBILE_SCHEME)) throw new Error('Use a valid app scheme.');
   const suffix = environment === 'production' ? '' : `.${environment}`;
   const schemeSuffix = environment === 'production' ? '' : `-${environment}`;
 
@@ -73,6 +84,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   const identity = getAppIdentity(process.env);
   const projectId = readPushProjectId(process.env, identity.environment);
 
+  const release = readReleaseSettings(process.env, identity.environment, projectId);
   const mobile = readMobileConfig(process.env, identity.environment, identity.scheme);
   const httpsCallback = mobile?.callbackUrl.startsWith('https:') ? new URL(mobile.callbackUrl) : null;
 
@@ -80,27 +92,45 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ...config,
     name: identity.name,
     slug: 'talyn-mobile',
-    version: '0.1.0',
+    version: release.version,
+    icon: '../desktop/assets/icons/1024x1024.png',
+    runtimeVersion: release.runtimeVersion,
+    updates: release.updates,
     scheme: identity.scheme,
     platforms: ['ios', 'android'],
     userInterfaceStyle: 'automatic',
     ios: {
       bundleIdentifier: identity.iosBundleIdentifier,
       supportsTablet: true,
+      buildNumber: release.build,
+      privacyManifests: {
+        NSPrivacyTracking: false,
+        NSPrivacyTrackingDomains: [],
+      },
+      infoPlist: { NSAppTransportSecurity: { NSAllowsArbitraryLoads: false, NSAllowsLocalNetworking: identity.environment === 'development' } },
       ...(httpsCallback ? { associatedDomains: [`applinks:${httpsCallback.hostname}`] } : {}),
     },
     android: {
       package: identity.androidPackage,
-      blockedPermissions: ['android.permission.RECEIVE_BOOT_COMPLETED'],
+      versionCode: Number(release.build),
+      permissions: ['android.permission.INTERNET', 'android.permission.ACCESS_NETWORK_STATE', 'android.permission.VIBRATE', 'android.permission.POST_NOTIFICATIONS'],
+      blockedPermissions: [
+        'android.permission.RECEIVE_BOOT_COMPLETED', 'android.permission.RECORD_AUDIO',
+        'android.permission.CAMERA', 'android.permission.READ_EXTERNAL_STORAGE',
+        'android.permission.WRITE_EXTERNAL_STORAGE', 'android.permission.SYSTEM_ALERT_WINDOW',
+      ],
       ...(httpsCallback ? { intentFilters: [{ action: 'VIEW', autoVerify: true,
         category: ['BROWSABLE', 'DEFAULT'],
-        data: [{ scheme: 'https', host: httpsCallback.hostname, path: httpsCallback.pathname }],
+        data: [
+          { scheme: 'https', host: httpsCallback.hostname, path: httpsCallback.pathname },
+          ...['sessions', 'threads', 'attention'].map((kind) => ({ scheme: 'https', host: httpsCallback.hostname, pathPrefix: `/${kind}/` })),
+        ],
       }] } : {}),
     },
     plugins: ['expo-router', 'expo-dev-client', 'expo-secure-store', ['expo-notifications', {
-      mode: identity.environment === 'production' ? 'production' : 'development', enableBackgroundRemoteNotifications: false,
+      mode: release.profile === 'development' ? 'development' : 'production', enableBackgroundRemoteNotifications: false,
     }]],
     experiments: { typedRoutes: true },
-    extra: { appEnvironment: identity.environment, mobile, ...(projectId ? { eas: { projectId } } : {}) },
+    extra: { release: { profile: release.profile, urls: release.urls }, appEnvironment: identity.environment, mobile, ...(projectId ? { eas: { projectId } } : {}) },
   };
 };

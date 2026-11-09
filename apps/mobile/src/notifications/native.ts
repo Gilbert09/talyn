@@ -1,3 +1,4 @@
+import { version } from '../../package.json';
 import { MOBILE_NOTIFICATION_CATEGORIES } from '@talyn/shared';
 import Constants from 'expo-constants';
 import * as Crypto from 'expo-crypto';
@@ -41,7 +42,7 @@ export function notificationDevice(config: MobileConfig, namespace: string): Pus
     metadata: () => ({
       platform: Platform.OS === 'ios' ? 'ios' : 'android', environment: config.environment,
       appIdentity: (Platform.OS === 'ios' ? Constants.expoConfig?.ios?.bundleIdentifier : Constants.expoConfig?.android?.package) ?? '',
-      appVersion: Constants.expoConfig?.version ?? '0.1.0',
+      appVersion: Constants.expoConfig?.version ?? version,
       locale: Intl.DateTimeFormat().resolvedOptions().locale,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),

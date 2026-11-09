@@ -1,0 +1,10 @@
+appId: ${APP_ID}
+name: Clear local account state on logout
+---
+- launchApp
+- tapOn: "Settings"
+- tapOn: "Sign out"
+- assertVisible: "Sign in to Talyn"
+- openLink: ${SESSION_LINK}
+- assertVisible: "Sign in to Talyn"
+- assertNotVisible: "Conversation transcript"

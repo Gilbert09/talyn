@@ -11,3 +11,7 @@ ios/
 *.p8
 *.p12
 *.mobileprovision
+release/update-certificate.pem
+.maestro/
+__pycache__/
+scripts/__pycache__/
