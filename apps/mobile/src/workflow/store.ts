@@ -1,12 +1,13 @@
-import { pullRequests, workbenches, wsClient, type ClientLifecycle, type PRRow } from '@talyn/client/native';
-import type { Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
+import { cloudProviders, environments, features, pullRequests, repositories, tasks, workbenches, workspaces, wsClient,
+  type ClientLifecycle, type PRRow } from '@talyn/client/native';
+import type { CreateWorkbenchInput, Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 
 import { cacheKey, canCompose, canStartSend, deliveryReducer, EMPTY_DELIVERY, EMPTY_RESOURCE, emptyTranscript, explicitSendFailure,
-  failureState, mergeEvents, PAGE_SIZE, sameScope, selectWorkbenches, upsertWorkbench, withChat, workbenchKind,
+  failureState, mergeEvents, PAGE_SIZE, sameScope, selectWorkbenches, upsertWorkbench, withChat, workbenchKind, workbenchTitle,
   type Delivery, type Entity, type Resource, type Scope, type Transcript } from './model';
 import { applyPrUpdate, mergeRowUpdate, type PullRequestUpdate } from './prPatch';
 
-export const workflowApi = { workbenches, pullRequests };
+export const workflowApi = { workbenches, pullRequests, features, repositories, cloudProviders, workspaces, environments, tasks };
 export type WorkflowApi = typeof workflowApi;
 export type WorkflowSocket = Pick<typeof wsClient, 'connect' | 'on' | 'subscribe' | 'unsubscribe' | 'setCapabilities'>;
 interface Entry {
@@ -25,6 +26,7 @@ export const RECOVERY_DEBOUNCE = 250;
 /** A busy repository emits constantly. Echo-driven refetches of one entry run at most this often. */
 export const EVENT_REFETCH_INTERVAL = 2_000;
 type PrDetail = { row: PRRow; fresh: unknown };
+type MergeQueueFields = Pick<PRRow, 'mergeQueued' | 'mergeQueue'>;
 
 /**
  * One in-memory owner for snapshots, cursors, drafts, and delivery state.
@@ -47,7 +49,7 @@ export class WorkflowStore {
   private stopped = false;
   private loads = 0;
   private sends = new Map<string, Promise<void>>();
-  constructor(private lifecycle: ClientLifecycle, private api: WorkflowApi = workflowApi, private socket: WorkflowSocket = wsClient) {
+  constructor(private lifecycle: ClientLifecycle, readonly api: WorkflowApi = workflowApi, private socket: WorkflowSocket = wsClient) {
     this.active = this.canRead();
     this.unbind.push(lifecycle.subscribe(() => {
       const active = this.canRead();
@@ -282,6 +284,15 @@ export class WorkflowStore {
       case 'pr': return this.authorizedPr(id, scope);
       case 'timeline': await this.authorizedPr(id, scope); assertScope(); return this.api.pullRequests.mergeQueueTimeline(id);
       case 'transcript': return this.reconcile(id, scope, data as Transcript | undefined);
+      case 'features': return this.api.features.get();
+      case 'repositories': return (await this.api.repositories.list(scope.workspace)).filter((repo) => repo.workspaceId === scope.workspace);
+      case 'providers': return this.api.cloudProviders.list(scope.workspace);
+      case 'workspace': {
+        const item = await this.api.workspaces.get(scope.workspace);
+        if (item.id !== scope.workspace) throw { status: 403 };
+        return item;
+      }
+      case 'environments': return this.api.environments.list();
     }
   }
   private async reconcile(chatId: string, scope: Scope, prior?: Transcript): Promise<Transcript> {
@@ -396,6 +407,105 @@ export class WorkflowStore {
     this.sends.set(chatId, promise);
     return promise;
   }
+  /** Owe one entry a quiet refetch, e.g. after an action the socket may not echo. */
+  refresh(entity: Entity, id = '') { this.invalidateEntry(this.entry(entity, id, false), false); }
+
+  // -------------------------------------------------------------------------
+  // Actions. Each updates held rows first where web does, then the server row wins.
+  // -------------------------------------------------------------------------
+
+  /** The newest held copy of a workbench, from its own entry or any list. */
+  findWorkbench(id: string): Workbench | undefined {
+    const own = this.read<Workbench>('workbench', id).data;
+    if (own) return own;
+    for (const entry of this.entries.values()) {
+      if (entry.entity !== 'sessions' && entry.entity !== 'threads' && entry.entity !== 'children') continue;
+      const found = (entry.state.data as Workbench[] | undefined)?.find((item) => item.id === id);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  /** Apply a server row everywhere it is held. Rows of another workspace are ignored. */
+  applyWorkbench(item: Workbench) {
+    if (item && this.scope && item.workspaceId === this.scope.workspace) this.patchWorkbench(item);
+  }
+  async renameWorkbench(id: string, title: string) {
+    const previous = this.findWorkbench(id);
+    const next = title.trim();
+    if (!previous || !next || next === workbenchTitle(previous)) return;
+    this.applyWorkbench({ ...previous, title: next });
+    try {
+      this.applyWorkbench(await this.api.workbenches.update(id, { title: next }));
+    } catch (error) {
+      const current = this.findWorkbench(id);
+      if (current?.title === next) this.applyWorkbench({ ...current, title: previous.title ?? null });
+      throw error;
+    }
+  }
+  async createWorkbench(input: CreateWorkbenchInput) {
+    const item = await this.api.workbenches.create(input);
+    this.applyWorkbench(item);
+    return item;
+  }
+  async archiveWorkbench(id: string) { this.applyWorkbench(await this.api.workbenches.archive(id)); }
+  async restoreWorkbench(id: string) { this.applyWorkbench(await this.api.workbenches.restore(id)); }
+  async retryWorkbench(id: string) { this.applyWorkbench(await this.api.workbenches.retry(id)); }
+  async wakeWorkbench(id: string) {
+    const answer = await this.api.workbenches.wake(id);
+    this.refresh('workbench', id);
+    return answer;
+  }
+  async stopChat(workbenchId: string, chatId: string) {
+    await this.api.workbenches.cancel(chatId);
+    this.refresh('workbench', workbenchId);
+    this.refresh('transcript', chatId);
+  }
+
+  /** The newest held copy of a pull request row. */
+  findPr(id: string): PRRow | undefined {
+    return this.read<PrDetail>('pr', id).data?.row ?? this.read<PRRow[]>('attention').data?.find((row) => row.id === id);
+  }
+  /** Patch a held pull request row in the list and in its detail. */
+  patchPr(id: string, patch: Partial<PRRow>) {
+    let changed = this.updateData<PRRow[]>(this.entry('attention', '', false),
+      (rows) => rows.some((row) => row.id === id) ? rows.map((row) => row.id === id ? { ...row, ...patch } : row) : rows);
+    changed = this.updateData<PrDetail>(this.entry('pr', id, false), (data) => ({ ...data, row: { ...data.row, ...patch } })) || changed;
+    if (changed) this.emit();
+  }
+  /** Membership only. The echo carries the real queue entry, so none is invented here. */
+  async setMergeQueue(id: string, enabled: boolean) {
+    const row = this.findPr(id);
+    const prior: MergeQueueFields | null = row ? { mergeQueued: row.mergeQueued, mergeQueue: row.mergeQueue } : null;
+    this.patchPr(id, { mergeQueued: enabled, ...(enabled ? {} : { mergeQueue: null }) });
+    try {
+      await this.api.pullRequests.setMergeQueue(id, enabled);
+      this.refresh('timeline', id);
+    } catch (error) {
+      if (prior) this.patchPr(id, prior);
+      throw error;
+    }
+  }
+  async setAutoKeep(id: string, enabled: boolean) {
+    const row = this.findPr(id);
+    const prior = row ? { autoKeepMergeable: row.autoKeepMergeable, autoMergeState: row.autoMergeState } : null;
+    this.patchPr(id, { autoKeepMergeable: enabled, autoMergeState: enabled ? { attempts: 0, paused: false } : null });
+    try {
+      await this.api.pullRequests.setAutoKeepMergeable(id, enabled);
+    } catch (error) {
+      if (prior) this.patchPr(id, prior);
+      throw error;
+    }
+  }
+  async mergePr(id: string) {
+    const result = await this.api.pullRequests.merge(id);
+    this.refresh('pr', id); this.refresh('attention');
+    return result;
+  }
+  async resubmitMergeQueue(id: string) {
+    await this.api.pullRequests.resubmitMergeQueue(id);
+    this.refresh('pr', id); this.refresh('timeline', id);
+  }
+
   dispose() {
     this.setScope(null); this.stopped = true; this.unbind.forEach((unbind) => unbind()); this.listeners.clear(); clearTimeout(this.timer);
   }

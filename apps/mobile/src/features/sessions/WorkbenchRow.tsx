@@ -9,11 +9,12 @@ import { sessionRoute, threadRoute } from '../../navigation/routes';
 import { workbenchKind, workbenchTitle } from '../../workflow/model';
 
 /** One session or thread: state mark, title, PR number, and when it last changed. */
-export function WorkbenchRow({ item, now, divider = true }: { item: Workbench; now: number; divider?: boolean }) {
+export function WorkbenchRow({ item, now, divider = true, onLongPress }: { item: Workbench; now: number; divider?: boolean; onLongPress?(item: Workbench): void }) {
   const state = workbenchState(item);
   const title = workbenchTitle(item);
   const updated = relativeTimeLabel(item.updatedAt, now);
   return <Row href={workbenchKind(item) === 'thread' ? threadRoute(item.id) : sessionRoute(item.id)} title={title} divider={divider}
+    onLongPress={onLongPress ? () => onLongPress(item) : undefined} longPressLabel={`Actions for ${title}`}
     accessibilityLabel={[`${title}.`, `${state.label}.`, item.pr ? `Pull request ${item.pr.number}.` : '', updated ? `Updated ${updated}.` : '']
       .filter(Boolean).join(' ')}
     leading={<SessionStateIcon state={state} />}

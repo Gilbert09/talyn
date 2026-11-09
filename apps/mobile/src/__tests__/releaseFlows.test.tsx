@@ -17,7 +17,8 @@ import { fixture, scope, session as workbench } from './workflowFixtures';
 let mockActive: ReturnType<typeof fixture>;
 let mockWorkspace: WorkspaceController;
 let mockParams = { id: 'session-one' };
-jest.mock('expo-router', () => ({ useLocalSearchParams: () => mockParams, Link: ({ children }: { children: React.ReactNode }) => children }));
+jest.mock('expo-router', () => ({ useLocalSearchParams: () => mockParams, Link: ({ children }: { children: React.ReactNode }) => children,
+  useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => true }), Stack: { Screen: () => null } }));
 jest.mock('../auth/AuthProvider', () => ({
   useMobileRuntime: () => ({ workflow: mockActive.store }),
   useWorkspace: () => mockWorkspace.getSnapshot(),
@@ -70,7 +71,7 @@ describe('deterministic release journeys', () => {
     view = await render(<AttentionScreen />);
     expect(await screen.findByRole('link', { name: /Review current work/ })).toBeVisible(); await view.unmount();
     mockParams = { id: 'pr-one' }; view = await render(<PullRequestDetailScreen />);
-    expect(await screen.findByLabelText('Pull request and merge queue timeline')).toBeVisible(); await view.unmount();
+    expect(await screen.findByRole('header', { name: 'Review current work' })).toBeVisible(); await view.unmount();
     mockActive.store.updateLocal('chat-one', { draft: 'Fixture draft' });
     await mockWorkspace.select('two'); expect(mockActive.store.local('chat-one').draft).toBe('');
     await auth.signOut(); expect(mockActive.store.getScope()).toBeNull(); expect(preferences.size).toBe(0);

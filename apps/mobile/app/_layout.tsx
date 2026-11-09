@@ -38,6 +38,7 @@ function AuthenticatedRoutes() {
       <Stack.Screen name="threads/[id]" options={detail('Thread')} />
       <Stack.Screen name="attention/[id]" options={detail('Pull request')} />
       <Stack.Screen name="workspaces" options={detail('Workspace')} />
+      <Stack.Screen name="new" options={{ ...detail('New'), animation: 'slide_from_bottom' }} />
     </Stack.Protected>
   </Stack>;
 }

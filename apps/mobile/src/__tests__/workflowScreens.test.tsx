@@ -16,6 +16,9 @@ let mockNetwork = 'online';
 jest.mock('expo-router', () => ({
   useLocalSearchParams: () => mockParams,
   Link: ({ children }: { children: React.ReactNode }) => children,
+  useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => true }),
+  // The header's right button renders in place, so tests can press it.
+  Stack: { Screen: ({ options }: { options?: { headerRight?: () => React.ReactNode } }) => options?.headerRight?.() ?? null },
 }));
 jest.mock('../auth/AuthProvider', () => ({
   useMobileRuntime: () => ({ workflow: mockActive.store }), useNetwork: () => mockNetwork,
@@ -88,10 +91,8 @@ describe('detail and composer accessibility', () => {
     expect(screen.getByRole('link', { name: 'Open related pull request' })).toBeVisible();
     expect(screen.queryByText(/Readiness/)).toBeNull(); expect(screen.getByLabelText('Message')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
-    expect(screen.queryByText(/Model: Default/)).toBeNull();
-    await fireEvent.press(screen.getByRole('button', { name: 'Conversation details' }));
-    expect(screen.getByText(/Model: Default/)).toBeVisible();
-    expect(mockActive.store.local('chat-one').following).toBe(false);
+    expect(screen.getByText('Codex · GPT-6.1 Terra · High effort')).toBeVisible();
+    expect(screen.queryByText(/Model:|Time unavailable/)).toBeNull();
   });
   it.each([
     ['the agent is not connected', { ok: true, reasons: [], agents: { claude: { ok: true }, codex: { ok: false, reason: { code: 'agent_not_connected', message: 'Connect Codex in Settings.' } } } }, 'Connect Codex in Settings.'],
@@ -131,7 +132,9 @@ describe('detail and composer accessibility', () => {
   it('handles a supported human gate through text and leaves permissions read-only', async () => {
     mockActive.api.workbenches.get.mockResolvedValueOnce(session({ chats: [chat({ status: 'awaiting_input' })] }));
     await render(<WorkbenchDetailScreen kind="session" />); await screen.findByText('Agent response 1');
-    expect(screen.getByText(/A text response is needed/)).toBeVisible();
+    expect(screen.getByText(/The agent is waiting for your reply/)).toBeVisible();
+    expect(screen.getByPlaceholderText('Reply to the agent')).toBeVisible();
+    expect(screen.queryByText(/desktop or web|Talyn on the web/)).toBeNull();
     expect(screen.queryByRole('button', { name: /approve|permission|terminal/i })).toBeNull();
   });
   it('shows the planning conversation and child sessions', async () => {
@@ -147,21 +150,22 @@ describe('detail and composer accessibility', () => {
   it('retains chat selection and drafts across detail navigation', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat(), chat({ id: 'chat-two', title: 'Second conversation' })] }));
     const view = await render(<WorkbenchDetailScreen kind="session" />); await screen.findByText('Agent response 1');
-    await fireEvent.press(screen.getByRole('button', { name: 'Second conversation · Idle' }));
+    await fireEvent.press(screen.getByRole('tab', { name: 'Second conversation · Idle' }));
     await fireEvent.changeText(screen.getByLabelText('Message'), 'Second draft');
     expect(mockActive.store.local('selected:session-one').selectedChat).toBe('chat-two');
     await view.unmount(); await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await screen.findByRole('button', { name: 'Second conversation · Idle · Selected' })).toBeVisible();
+    expect(await screen.findByRole('tab', { name: 'Second conversation · Idle · Selected' })).toBeVisible();
     expect(screen.getByDisplayValue('Second draft')).toBeVisible();
   });
-  it('shows read-only PR detail and partial provider data', async () => {
+  it('shows a reviewer PR detail with one merge line and only the website link', async () => {
     mockParams = { id: 'pr-one' }; await render(<PullRequestDetailScreen />);
     expect(await screen.findByRole('header', { name: 'Review current work' })).toBeVisible();
-    expect(screen.queryByText(/Mergeability|Merge state/)).toBeNull();
-    expect(screen.getByText('Stack')).toBeVisible(); expect(screen.getByText('Standalone')).toBeVisible();
+    expect(screen.queryByText(/Mergeability|Merge state|Read only|on the web/)).toBeNull();
+    expect(screen.getByText('GitHub has not said yet if this can merge.')).toBeVisible();
     expect(screen.getByLabelText('Status: Unknown')).toBeVisible();
-    expect(screen.getByText('Provider detail is unavailable. The server snapshot is shown.')).toBeVisible();
+    expect(screen.getByText('Live detail from GitHub is unavailable. Showing the last saved state.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Open pull request website' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /^Merge$|Fix with agent/ })).toBeNull();
   });
   it('hides cached PR content until current authorization succeeds', async () => {
     await mockActive.store.load('pr', 'pr-one'); await mockActive.store.load('timeline', 'pr-one');

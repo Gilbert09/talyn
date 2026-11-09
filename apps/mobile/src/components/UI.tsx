@@ -1,8 +1,8 @@
 import { Link, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
-import { ActionSheetIOS, ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, TextInput, View,
+import { ActionSheetIOS, ActivityIndicator, Alert, BackHandler, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
   type StyleProp, type TextProps, type TextStyle, type ViewStyle } from 'react-native';
 
 import { mono, radius, sans, type, useTheme, withAlpha, type Theme, type TypeVariant } from '../theme/tokens';
@@ -102,10 +102,13 @@ interface RowProps {
   disabled?: boolean;
   divider?: boolean;
   titleLines?: number;
+  /** A secondary gesture, e.g. a menu of actions. Screen readers get it as a named action. */
+  onLongPress?(): void;
+  longPressLabel?: string;
 }
 /** A flat, divider-separated list row. With `href` it is a link; with `onPress` it is a button. */
 export function Row({ title, subtitle, leading, trailing, children, chevron = false, href, onPress, accessibilityLabel,
-  accessibilityRole, selected, disabled = false, divider = true, titleLines = 2 }: RowProps) {
+  accessibilityRole, selected, disabled = false, divider = true, titleLines = 2, onLongPress, longPressLabel = 'Show actions' }: RowProps) {
   const c = useTheme();
   const [pressed, setPressed] = useState(false);
   const interactive = Boolean(href || onPress);
@@ -129,6 +132,8 @@ export function Row({ title, subtitle, leading, trailing, children, chevron = fa
   if (!interactive) return <View style={style} accessibilityLabel={accessibilityLabel}>{body}</View>;
   const pressable = <Pressable accessibilityRole={accessibilityRole ?? (href ? 'link' : 'button')} accessibilityLabel={accessibilityLabel ?? title}
     accessibilityState={{ disabled, selected }} disabled={disabled} onPress={onPress}
+    onLongPress={onLongPress} accessibilityActions={onLongPress ? [{ name: 'longpress', label: longPressLabel }] : undefined}
+    onAccessibilityAction={onLongPress ? (event) => { if (event.nativeEvent.actionName === 'longpress') onLongPress(); } : undefined}
     onPressIn={() => setPressed(true)} onPressOut={() => setPressed(false)} style={style}>{body}</Pressable>;
   return href ? <Link href={href} asChild>{pressable}</Link> : pressable;
 }
@@ -277,6 +282,104 @@ export function showActionMenu(title: string, actions: Array<{ label: string; de
     onPress: action.onPress })), { text: 'Cancel', style: 'cancel' as const }]);
 }
 
+
+// ---------------------------------------------------------------------------
+// Sheets
+// ---------------------------------------------------------------------------
+
+export interface SheetAction {
+  label: string;
+  onPress(): void;
+  detail?: string;
+  icon?: Symbol;
+  destructive?: boolean;
+  disabled?: boolean;
+  /** Draws a check mark, for a choice in a list. */
+  selected?: boolean;
+}
+export interface SheetRequest { title: string; message?: string; actions: SheetAction[] }
+
+/**
+ * A bottom sheet of actions drawn over the screen. Unlike an Android alert it
+ * has no three-button limit, and unlike a native modal an alert can open from
+ * one of its actions straight away. Render `sheet` last inside the screen.
+ */
+export function useActionSheet() {
+  const [request, setRequest] = useState<SheetRequest | null>(null);
+  const close = () => setRequest(null);
+  return { open: setRequest, close, sheet: request ? <ActionSheet request={request} onClose={close} /> : null };
+}
+
+export function ActionSheet({ request, onClose }: { request: SheetRequest; onClose(): void }) {
+  const c = useTheme();
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => { onClose(); return true; });
+    return () => subscription.remove();
+  }, [onClose]);
+  return <View style={StyleSheet.absoluteFill}>
+    <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose}
+      style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
+    <View accessibilityViewIsModal style={[styles.sheet, { backgroundColor: c.elevated, borderColor: c.border }]}>
+      <View style={styles.sheetHeader}>
+        <AppText accessibilityRole="header" variant="rowTitle" numberOfLines={2}>{request.title}</AppText>
+        {request.message ? <AppText variant="meta" tone="muted">{request.message}</AppText> : null}
+      </View>
+      <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+        {request.actions.map((action, index) => {
+          const color = action.destructive ? c.destructive : c.text;
+          return <Pressable key={`${action.label}:${index}`} accessibilityRole="button" accessibilityLabel={action.label}
+            accessibilityHint={action.detail} accessibilityState={{ disabled: action.disabled, selected: action.selected }}
+            disabled={action.disabled} onPress={() => { onClose(); action.onPress(); }}
+            style={({ pressed }) => [styles.sheetItem, { borderTopColor: c.border, opacity: action.disabled ? 0.45 : 1,
+              backgroundColor: pressed ? c.surface : 'transparent' }]}>
+            {action.icon ? <SymbolView name={action.icon} size={18} tintColor={color} /> : null}
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text numberOfLines={2} style={[type.body, sans(500), { color }]}>{action.label}</Text>
+              {action.detail ? <AppText variant="meta" tone="muted" numberOfLines={2}>{action.detail}</AppText> : null}
+            </View>
+            {action.selected ? <SymbolView name={{ ios: 'checkmark', android: 'check' }} size={16} tintColor={c.primaryAction} /> : null}
+          </Pressable>;
+        })}
+      </ScrollView>
+      <Pressable accessibilityRole="button" accessibilityLabel="Cancel" onPress={onClose}
+        style={({ pressed }) => [styles.sheetItem, styles.sheetCancel, { borderTopColor: c.border, backgroundColor: pressed ? c.surface : 'transparent' }]}>
+        <Text style={[type.body, sans(600), { color: c.text }]}>Cancel</Text>
+      </Pressable>
+    </View>
+  </View>;
+}
+
+/** A small text prompt in a modal, since `Alert.prompt` exists on iOS only. */
+export function PromptSheet({ visible, title, label, initialValue = '', placeholder, maxLength, submitLabel = 'Save', onCancel, onSubmit }: {
+  visible: boolean; title: string; label: string; initialValue?: string; placeholder?: string; maxLength?: number;
+  submitLabel?: string; onCancel(): void; onSubmit(value: string): void;
+}) {
+  const c = useTheme();
+  const [value, setValue] = useState(initialValue);
+  useEffect(() => { if (visible) setValue(initialValue); }, [visible, initialValue]);
+  const submit = () => { if (value.trim()) onSubmit(value.trim()); };
+  return <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel} statusBarTranslucent>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.promptBackdrop}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onCancel} style={StyleSheet.absoluteFill} />
+      <View accessibilityViewIsModal style={[styles.prompt, { backgroundColor: c.elevated, borderColor: c.border }]}>
+        <AppText accessibilityRole="header" variant="rowTitle">{title}</AppText>
+        <Input accessibilityLabel={label} autoFocus value={value} onChangeText={setValue} placeholder={placeholder}
+          maxLength={maxLength} returnKeyType="done" onSubmitEditing={submit} />
+        <View style={styles.promptActions}>
+          <Button variant="quiet" size="sm" title="Cancel" onPress={onCancel} />
+          <Button size="sm" title={submitLabel} disabled={!value.trim()} onPress={submit} />
+        </View>
+      </View>
+    </KeyboardAvoidingView>
+  </Modal>;
+}
+
+/** Fixed actions under a scrolling screen, like a toolbar. */
+export function BottomBar({ children }: PropsWithChildren) {
+  const c = useTheme();
+  return <View style={[styles.bottomBar, { backgroundColor: c.background, borderTopColor: c.border }]}>{children}</View>;
+}
+
 export const ui = StyleSheet.create({
   body: { ...type.body, flexShrink: 1, maxWidth: '100%', textAlign: 'auto', writingDirection: 'auto' },
   caption: { ...type.meta, flexShrink: 1, maxWidth: '100%', textAlign: 'auto', writingDirection: 'auto' },
@@ -309,5 +412,16 @@ const styles = StyleSheet.create({
   empty: { alignItems: 'center', gap: 6, paddingVertical: 48, paddingHorizontal: 24 },
   segmented: { flexDirection: 'row', borderRadius: radius.md, padding: 2, gap: 2 },
   segment: { flex: 1, minHeight: 32, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: 'transparent' },
+  sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth, paddingBottom: 24, maxWidth: 760, alignSelf: 'center', width: '100%' },
+  sheetHeader: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 10, gap: 4 },
+  sheetItem: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10,
+    borderTopWidth: StyleSheet.hairlineWidth },
+  sheetCancel: { justifyContent: 'center' },
+  promptBackdrop: { flex: 1, justifyContent: 'center', padding: 24, backgroundColor: 'rgba(0,0,0,0.35)' },
+  prompt: { borderRadius: radius.lg, borderWidth: StyleSheet.hairlineWidth, padding: 16, gap: 12, width: '100%', maxWidth: 480, alignSelf: 'center' },
+  promptActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
+  bottomBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10,
+    borderTopWidth: StyleSheet.hairlineWidth },
   input: { minHeight: 44, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 10, borderRadius: radius.md, ...type.body, textAlignVertical: 'top' },
 });

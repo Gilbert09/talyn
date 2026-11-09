@@ -11,3 +11,8 @@ export const threadRoute = (id: string) => ({
 export const pullRequestRoute = (id: string) => ({
   pathname: '/attention/[id]', params: { id },
 }) satisfies Href;
+
+export type NewWorkMode = 'session' | 'thread';
+export const newWorkRoute = (mode: NewWorkMode) => ({
+  pathname: '/new', params: { mode },
+}) satisfies Href;

@@ -1,6 +1,8 @@
 import { Redirect, usePathname } from 'expo-router';
 import { NativeTabs } from 'expo-router/native-tabs';
 
+import { WorkspaceWait } from '../../src/navigation/DetailRoute';
+import { workspaceGate } from '../../src/navigation/workspaceGate';
 import { rememberIntent } from '../../src/navigation/intents';
 import { useShellColors } from '../../src/components/ShellScreen';
 import { useWorkspace } from '../../src/auth/AuthProvider';
@@ -11,7 +13,9 @@ export default function TabsLayout() {
   const workspace = useWorkspace();
   const colors = useShellColors();
   const pathname = usePathname();
-  if (!pathname.startsWith('/settings') && !workspace.selected) {
+  const gate = workspaceGate(workspace);
+  if (!pathname.startsWith('/settings') && gate === 'wait') return <WorkspaceWait />;
+  if (!pathname.startsWith('/settings') && gate === 'choose') {
     rememberIntent(pathname);
     return <Redirect href="/workspaces" />;
   }
