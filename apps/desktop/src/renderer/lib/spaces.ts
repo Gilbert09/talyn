@@ -78,6 +78,44 @@ export function useIsWorkbenchOwner(workbench: Pick<Workbench, 'id' | 'workspace
   return !extra || mine;
 }
 
+/**
+ * The context a session lives in: its space when I am in that team, else the
+ * Personal workspace that owns it. Null for a teammate's session outside my
+ * spaces, and while my teams load.
+ */
+export function contextForSession(
+  workbench: Pick<Workbench, 'workspaceId' | 'spaceId'>,
+  teams: SpacesTeam[] | null,
+  workspaces: Workspace[],
+  currentWorkspaceId: string | null,
+): AppContext | null {
+  if (teams === null) return null;
+  if (workbench.spaceId && findSpace(teams, workbench.spaceId)) return { kind: 'space', spaceId: workbench.spaceId };
+  if (!isWorkbenchOwner(workbench, workspaces, currentWorkspaceId)) return null;
+  return { kind: 'personal', workspaceId: workbench.workspaceId };
+}
+
+/**
+ * Move the app to the context of an open session, for example one opened by a
+ * link. The route stays on the session. False until the features and my teams
+ * load, so the caller can try again.
+ */
+export function followSessionContext(workbench: Pick<Workbench, 'workspaceId' | 'spaceId'>): boolean {
+  const ws = useWorkspaceStore.getState();
+  if (ws.features === null) return false;
+  if (!spacesOffered(ws.features)) return true;
+  const teams = useSpacesStore.getState().teams;
+  if (teams === null) return false;
+  const target = contextForSession(workbench, teams, ws.workspaces ?? [], ws.currentWorkspaceId);
+  if (!target) return true;
+  const current: AppContext =
+    ws.currentContext.kind === 'personal'
+      ? { kind: 'personal', workspaceId: ws.currentContext.workspaceId ?? ws.currentWorkspaceId }
+      : ws.currentContext;
+  if (!contextsEqual(current, target)) ws.setContext(target);
+  return true;
+}
+
 export async function loadExtraWorkbench(id: string): Promise<Workbench | null> {
   const spaces = useSpacesStore.getState();
   spaces.setExtraLoad(id, 'loading');
