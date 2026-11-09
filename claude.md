@@ -96,7 +96,7 @@ When a session lands non-trivial work, append a note to `docs/SESSIONS.md`. When
 **A change to the public API, the MCP server or a feature that users see updates its docs in the same pull request.** The website pages in `apps/marketing/content/docs/` are written by hand. No test catches a page that is out of date, so the author of the change must do it.
 
 - **Public API** (`packages/backend/src/routes/public/`) → run `npm run openapi:generate -w @talyn/backend` and commit `docs/api/openapi.json`. Then update `docs/api/*.md`, the scopes and overview in `apps/marketing/content/docs/api.md`, and the endpoint in `apps/marketing/content/docs/api-reference.md`. Every endpoint in `openapi.json` must have an entry in `api-reference.md`.
-- **MCP tools** (`packages/backend/src/mcp/tools/`) → update the tool table in `docs/MCP_SERVER.md` and the areas in `apps/marketing/content/docs/mcp.md`. If a sandbox skill in `packages/backend/src/services/workbenches/skillPack/` or the briefing in `packages/shared/src/talynBriefing.ts` names the tool, update it too.
+- **MCP tools** (`packages/backend/src/mcp/tools/`) → update the tool table in `docs/MCP_SERVER.md` and the areas in `apps/marketing/content/docs/mcp.md`. If a sandbox skill in `packages/backend/src/services/workbenches/skillPack/`, a local skill in `apps/desktop/src/main/localSkillPack.ts` or the briefing in `packages/shared/src/talynBriefing.ts` names the tool, update it too.
 - **Other user-facing behaviour** → update the matching page in `apps/marketing/content/docs/`. A new page also needs an entry in `DOCS_NAV` in `apps/marketing/lib/docs.ts`.
 
 ## Core Concepts (at a glance)

@@ -8,10 +8,13 @@ import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
 import { Input } from '../../ui/input';
 import { SettingsPage } from '../../ui/settings';
+import { LocalAgentsCard } from './LocalAgentsCard';
 
 /**
- * MCP server settings — mint a long-lived personal token and copy the one-line
- * `claude mcp add` command that points a Claude client at the hosted endpoint.
+ * MCP server settings — connect Claude Code and Codex on this computer in one
+ * click (`LocalAgentsCard`), or mint a long-lived personal token and copy the
+ * one-line `claude mcp add` command that points a Claude client at the hosted
+ * endpoint.
  * The token authenticates the backend's `/api/v1/mcp` endpoint; it's shown in
  * full exactly once at creation, then only its prefix is ever displayed.
  */
@@ -81,8 +84,10 @@ export function MCPServerSettings() {
   return (
     <SettingsPage
       title="Talyn MCP server"
-      description="Drive Talyn from a Claude client (Claude Code or Claude Desktop). Generate a personal token, then run the command below to connect."
+      description="Drive Talyn from Claude Code, Codex or Claude Desktop. Connect this computer in one click, or generate a personal token and connect another client yourself."
     >
+      <LocalAgentsCard endpoint={endpoint} tokens={tokens} reloadTokens={reload} />
+
       <Card className="p-3 space-y-2">
         <div className="flex items-center gap-2">
           <Plug className="w-3.5 h-3.5" />
