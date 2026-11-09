@@ -2,12 +2,12 @@ import type { CloudProviderInfo, MergeQueueTimelineEvent, pullRequests } from '@
 import { fixBlockedMessage, queueSessionBadge, resolveReportingBar, type CloudAgentChoice, type Environment, type Workspace } from '@talyn/shared';
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Alert, RefreshControl, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { Alert, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { PrPill, PrReviewPill, PrStatusPill } from '../../components/Status';
-import { AppText, BottomBar, Button, Dot, Group, IconButton, Notice, Pill, Row, SectionLabel, useActionSheet } from '../../components/UI';
+import { AppText, BottomBar, Button, Dot, Group, IconButton, Notice, Pill, Row, SectionLabel, Toggle, useActionSheet } from '../../components/UI';
 import { Heading, NativeText, openExternal, safeExternalUrl, StateNotice, workflowStyles as styles } from '../../components/Workflow';
 import { errorMessage, showActionError } from '../../lib/errors';
 import { prStatus } from '../../lib/status';
@@ -186,10 +186,10 @@ export function PullRequestDetailScreen() {
 
         {actions.queue || actions.autoKeep ? <Group title="Automation">
           {actions.queue ? <Row title="Merge queue" subtitle={queueStateLabel(row)} divider={actions.autoKeep}
-            trailing={<Switch accessibilityLabel="Merge queue" value={row.mergeQueued} disabled={busyAny}
+            trailing={<Toggle accessibilityLabel="Merge queue" value={row.mergeQueued} disabled={busyAny}
               onValueChange={toggleQueue} trackColor={{ true: colors.primaryAction, false: colors.surface }} />} /> : null}
           {actions.autoKeep ? <Row title="Keep mergeable" subtitle={autoKeepLabel(row)} divider={false}
-            trailing={<Switch accessibilityLabel="Keep mergeable" value={row.autoKeepMergeable} disabled={busyAny}
+            trailing={<Toggle accessibilityLabel="Keep mergeable" value={row.autoKeepMergeable} disabled={busyAny}
               onValueChange={toggleAutoKeep} trackColor={{ true: colors.primaryAction, false: colors.surface }} />} /> : null}
         </Group> : null}
 

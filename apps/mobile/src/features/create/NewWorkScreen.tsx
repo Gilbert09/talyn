@@ -3,11 +3,11 @@ import type { WorkbenchAgent, WorkbenchReadiness, Workspace } from '@talyn/share
 import { useRouter } from 'expo-router';
 import { HeaderHeightContext } from 'expo-router/react-navigation';
 import { useContext, useEffect, useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { ScreenContainer } from '../../components/ScreenContainer';
-import { AppText, Banner, BottomBar, Button, EmptyState, Field, Group, Input, Row, Segmented, Spinner, useActionSheet } from '../../components/UI';
+import { AppText, Banner, BottomBar, Button, EmptyState, Field, Group, Input, Row, Segmented, Spinner, Toggle, useActionSheet } from '../../components/UI';
 import { Heading, openExternal, workflowStyles as styles } from '../../components/Workflow';
 import { boxRefusal, errorMessage, showBoxRefusal } from '../../lib/errors';
 import { featureOffered, useFeatures } from '../../lib/features';
@@ -132,7 +132,7 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
           <Row title="Model" onPress={chooseModel} chevron accessibilityLabel={`Model: ${modelLabel(model)}`}
             trailing={<AppText variant="meta" tone="muted" style={local.value}>{modelLabel(model)}</AppText>} />
           <Row title="Internet access" divider={false} subtitle={internetAccess ? 'The agent can reach the internet.' : 'Repository only.'}
-            trailing={<Switch accessibilityLabel="Internet access" value={internetAccess} onValueChange={setInternetAccess}
+            trailing={<Toggle accessibilityLabel="Internet access" value={internetAccess} onValueChange={setInternetAccess}
               trackColor={{ true: colors.primaryAction, false: colors.surface }} />} />
         </Group>
         {mode === 'session' && repository ? <Field label="Base branch">

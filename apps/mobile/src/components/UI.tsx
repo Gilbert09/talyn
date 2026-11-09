@@ -2,7 +2,7 @@ import { Link, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useState } from 'react';
 import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
-import { ActionSheetIOS, ActivityIndicator, Alert, BackHandler, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+import { ActionSheetIOS, ActivityIndicator, Alert, BackHandler, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
   type StyleProp, type TextProps, type TextStyle, type ViewStyle } from 'react-native';
 
 import { mono, radius, sans, type, useTheme, withAlpha, type Theme, type TypeVariant } from '../theme/tokens';
@@ -452,3 +452,9 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth, maxWidth: 480, elevation: 3, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
   input: { minHeight: 44, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 10, borderRadius: radius.md, ...type.body, textAlignVertical: 'top' },
 });
+
+/** A switch in the app colours. The Android default thumb is teal. */
+export function Toggle(props: ComponentProps<typeof Switch>) {
+  const c = useTheme();
+  return <Switch trackColor={{ false: c.border, true: c.primaryAction }} thumbColor={c.elevated} ios_backgroundColor={c.border} {...props} />;
+}
