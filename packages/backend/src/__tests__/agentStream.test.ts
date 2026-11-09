@@ -52,6 +52,16 @@ describe('buildClaudeArgv', () => {
       { prompt: 'p', appendSystemPrompt: 'be brief' },
       [...head, '--permission-mode', 'bypassPermissions', '--append-system-prompt', 'be brief', '--', 'p'],
     ],
+    [
+      'co-author attribution off',
+      { prompt: 'p', claudeCoAuthoredBy: false },
+      [...head, '--permission-mode', 'bypassPermissions', '--settings', '{"includeCoAuthoredBy":false}', '--', 'p'],
+    ],
+    [
+      'co-author attribution on',
+      { prompt: 'p', claudeCoAuthoredBy: true },
+      [...head, '--permission-mode', 'bypassPermissions', '--settings', '{"includeCoAuthoredBy":true}', '--', 'p'],
+    ],
     ['custom binary', { prompt: 'p', binary: '/opt/claude' }, ['/opt/claude', ...head.slice(1), '--permission-mode', 'bypassPermissions', '--', 'p']],
     ['prompt starting with a dash stays a prompt', { prompt: '--help me' }, [...head, '--permission-mode', 'bypassPermissions', '--', '--help me']],
   ])('%s', (_name, opts, expected) => {

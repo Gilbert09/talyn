@@ -889,6 +889,8 @@ export interface WorkbenchLocalBridge {
     planMode: boolean;
     resumeSessionId?: string;
     appendSystemPrompt?: string;
+    /** Overrides Claude Code's commit co-author setting for this turn. */
+    claudeCoAuthoredBy?: boolean;
     attachments?: WorkbenchAttachment[];
     /**
      * The text of the repository's Talyn instructions when they apply to this

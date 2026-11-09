@@ -62,6 +62,8 @@ export interface ClaudeArgvOptions {
   /** Only meaningful with `resumeSessionId`: branch the session instead of continuing it. */
   forkSession?: boolean;
   appendSystemPrompt?: string;
+  /** Overrides Claude Code's commit co-author setting for this run. */
+  claudeCoAuthoredBy?: boolean;
   effort?: WorkbenchEffort;
   /** Tools allowed without asking (`--allowedTools`). With `dontAsk`, everything else is denied. */
   allowedTools?: string[];
@@ -94,6 +96,9 @@ export function buildClaudeArgv(opts: ClaudeArgvOptions): string[] {
     if (opts.forkSession) argv.push('--fork-session');
   }
   if (opts.appendSystemPrompt) argv.push('--append-system-prompt', opts.appendSystemPrompt);
+  if (opts.claudeCoAuthoredBy !== undefined) {
+    argv.push('--settings', JSON.stringify({ includeCoAuthoredBy: opts.claudeCoAuthoredBy }));
+  }
   if (opts.effort) argv.push('--effort', opts.effort);
   // Variadic, so it goes last: the `--` below ends its list.
   if (opts.allowedTools?.length) argv.push('--allowedTools', ...opts.allowedTools);

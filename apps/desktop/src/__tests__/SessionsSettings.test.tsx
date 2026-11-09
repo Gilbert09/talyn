@@ -90,6 +90,18 @@ describe('SessionsSettings branch prefix', () => {
   });
 });
 
+describe('SessionsSettings commit co-authorship', () => {
+  it('starts on and saves an off choice', async () => {
+    render(<SessionsSettings />);
+    const toggle = screen.getByRole('checkbox', { name: /^Add Claude as a co-author/ });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledWith('ws1', {
+      settings: { claudeCoAuthoredBy: false },
+    }));
+  });
+});
+
 describe('SessionsSettings model', () => {
   const modelSelect = () => screen.getByLabelText('Default model') as HTMLSelectElement;
   const optionIds = () => Array.from(modelSelect().options).map((o) => o.value);

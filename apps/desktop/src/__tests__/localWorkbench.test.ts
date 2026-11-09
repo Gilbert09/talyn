@@ -200,6 +200,14 @@ describe('LocalTurnController', () => {
     expect(input).not.toHaveProperty('repositoryInstructions');
   });
 
+  it('hands the Claude co-author choice to the bridge', async () => {
+    const claudeCoAuthoredBy = jest.fn(() => false);
+    const { controller, bridge } = setup([], { claudeCoAuthoredBy });
+    await controller.send(WB, chat(), { text: 'go' });
+    expect(claudeCoAuthoredBy).toHaveBeenCalledWith('ws1');
+    expect(bridge.startTurn).toHaveBeenCalledWith(expect.objectContaining({ claudeCoAuthoredBy: false }));
+  });
+
   it('takes a checkpoint before the turn, outside the working tree', async () => {
     const { controller, bridge } = setup();
     await controller.send(WB, chat(), { text: 'go' });
