@@ -17,8 +17,8 @@ vi.mock('../services/sessionMcpToken.js', async (original) => ({
   chatWorkbenchId: vi.fn(async (chatId: string) => (chatId.startsWith('self') ? 's1' : 's2')),
 }));
 
-vi.mock('../services/workbenches/threads.js', () => ({ announceThreadSession: vi.fn(async () => undefined) }));
-const { announceThreadSession } = await import('../services/workbenches/threads.js');
+vi.mock('../services/workbenches/threads.js', () => ({ announceSessionSpawn: vi.fn(async () => undefined) }));
+const { announceSessionSpawn } = await import('../services/workbenches/threads.js');
 
 const OWNER = 'user-test';
 const SELF: McpCallContext = { session: { tokenId: 'token-1', workbenchId: 's1', depth: 0 } };
@@ -308,6 +308,7 @@ describe('sessions started by a session', () => {
     expect(order).toEqual(['reserve', 'create', 'record']);
     expect(reserveSessionCreate).toHaveBeenCalledWith(SELF.session);
     expect(recordSessionSpawn).toHaveBeenCalledWith('child', SELF.session);
+    expect(announceSessionSpawn).toHaveBeenCalledWith('s1', 'child');
   });
 
   it('creates nothing when the depth limit refuses', async () => {
@@ -326,16 +327,15 @@ describe('sessions started by a session', () => {
     const { calls } = mockApi({ 'POST /api/v1/workbenches': () => session({ id: 'child', threadId: 's1' }) });
     await tool('create_session').handler(OWNER, args, SELF);
     expect(calls[0].body).toMatchObject({ threadId: 's1', repositoryId: 'r1' });
-    expect(announceThreadSession).toHaveBeenCalledWith('child');
+    expect(announceSessionSpawn).toHaveBeenCalledWith('s1', 'child');
   });
 
-  it('leaves the thread out for a session that is not a thread', async () => {
+  it('leaves the thread out and announces the child in its parent session', async () => {
     vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: null });
-    vi.mocked(announceThreadSession).mockClear();
     const { calls } = mockApi({ 'POST /api/v1/workbenches': () => session({ id: 'child' }) });
     await tool('create_session').handler(OWNER, args, SELF);
     expect(calls[0].body).not.toHaveProperty('threadId');
-    expect(announceThreadSession).not.toHaveBeenCalled();
+    expect(announceSessionSpawn).toHaveBeenCalledWith('s1', 'child');
   });
 
   it('leaves a user token uncapped', async () => {
@@ -343,5 +343,6 @@ describe('sessions started by a session', () => {
     await tool('create_session').handler(OWNER, args);
     expect(reserveSessionCreate).not.toHaveBeenCalled();
     expect(recordSessionSpawn).not.toHaveBeenCalled();
+    expect(announceSessionSpawn).not.toHaveBeenCalled();
   });
 });

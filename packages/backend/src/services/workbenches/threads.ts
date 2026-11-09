@@ -189,6 +189,40 @@ export async function announceThreadSession(childId: string): Promise<void> {
 }
 
 /**
+ * `talyn_create_session` from a session: show the new session in the caller's
+ * chat. A thread uses the same card through its normal notification path.
+ */
+export async function announceSessionSpawn(parentId: string, childId: string): Promise<void> {
+  try {
+    const [parent, child] = await Promise.all([
+      getWorkbench(parentId),
+      getWorkbench(childId),
+    ]);
+    if (!parent || !child || parent.archivedAt) return;
+    if (isThread(parent)) {
+      await notifyThread(child, 'session_started');
+      return;
+    }
+    const chat = activeChat(await listChats(parent.id));
+    if (!chat) return;
+    const event: ThreadSessionEvent = {
+      action: 'session_started',
+      sessionId: child.id,
+      name: child.title || child.name,
+      repo: child.repoFullName,
+      status: activeChat(await listChats(child.id))?.status ?? 'idle',
+    };
+    const stored = await appendEvents(chat.id, [{
+      turn: chat.turnCount,
+      event: { type: 'talyn_thread', ...event },
+    }]);
+    emitWorkbenchEvents(parent.workspaceId, chat.id, stored);
+  } catch (err) {
+    console.warn(`[session] announcing child session ${childId} to parent ${parentId} failed:`, err);
+  }
+}
+
+/**
  * `POST /workbenches/:id/thread`: a new thread whose first message recaps the
  * session's chat, with the session as its first member.
  */
