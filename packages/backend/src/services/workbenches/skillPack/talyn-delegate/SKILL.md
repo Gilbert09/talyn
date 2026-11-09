@@ -63,6 +63,8 @@ talyn_create_session
 
 Write down each child id. It is the first token of the output.
 
+When this session is in a team space, each child starts in the same space. The output says which space.
+
 ## 4. Monitor
 
 - Do your own part while the children work.

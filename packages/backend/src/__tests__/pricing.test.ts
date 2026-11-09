@@ -5,6 +5,17 @@ import {
   autoTopupMonthKey,
   BOX_HOUR_PRICE_MICROS,
   boxHoursToWeightedSeconds,
+  breakEvenBoxHourMicros,
+  FLEET_BOX_HOUR_COST_ESTIMATE_MICROS,
+  formatPlanPeriodLine,
+  includedAfterTierChange,
+  isSellableTier,
+  isTierUpgrade,
+  MIN_FULL_USE_MARGIN_PERCENT,
+  netOfPaymentFees,
+  sellableTierPrices,
+  tierSoldAnnually,
+  type BillingPricing,
   burnCreditLots,
   centsToMicros,
   consumeBudget,
@@ -62,6 +73,7 @@ describe('plan tiers', () => {
   it.each<[PlanTier, number, number, SandboxSize[], boolean, boolean]>([
     ['free', 10, 2, ['small', 'standard'], false, false],
     ['pro', 200, 100, SIZES, true, true],
+    ['max', 1000, 100, SIZES, true, true],
     ['legacy_pro', 50, 100, SIZES, true, true],
   ])('%s limits', (tier, hours, concurrent, sizes, credits, auto) => {
     expect(PLAN_LIMITS[tier]).toEqual({
@@ -77,18 +89,19 @@ describe('plan tiers', () => {
   it.each<[PlanTier, number, number | null]>([
     ['free', 0, null],
     ['pro', 40_000_000, 400_000_000],
+    ['max', 100_000_000, null],
     ['legacy_pro', 15_000_000, 150_000_000],
   ])('%s price', (tier, monthly, annual) => {
     expect(PLAN_PRICES[tier]).toEqual({ monthlyMicros: monthly, annualMicros: annual });
   });
 
   it('lists every tier once', () => {
-    expect([...PLAN_TIERS]).toEqual(['free', 'pro', 'legacy_pro']);
+    expect([...PLAN_TIERS]).toEqual(['free', 'pro', 'max', 'legacy_pro']);
   });
 
   it.each<[unknown, boolean]>([
-    ['free', true], ['pro', true], ['legacy_pro', true],
-    ['unlimited', false], ['Pro', false], ['', false], [null, false], [undefined, false], [1, false],
+    ['free', true], ['pro', true], ['max', true], ['legacy_pro', true],
+    ['unlimited', false], ['Pro', false], ['Max', false], ['', false], [null, false], [undefined, false], [1, false],
   ])('isPlanTier(%j) = %s', (value, expected) => {
     expect(isPlanTier(value)).toBe(expected);
   });
@@ -97,6 +110,7 @@ describe('plan tiers', () => {
     ['free', 'free'],
     ['unlimited', 'pro'],
     ['pro', 'pro'],
+    ['max', 'max'],
     ['legacy_pro', 'legacy_pro'],
     ['team', null],
     ['', null],
@@ -107,7 +121,7 @@ describe('plan tiers', () => {
   });
 
   it.each<[unknown, boolean]>([
-    ['free', true], ['unlimited', true], ['pro', true], ['legacy_pro', true], ['team', false], [null, false],
+    ['free', true], ['unlimited', true], ['pro', true], ['max', true], ['legacy_pro', true], ['team', false], [null, false],
   ])('isPlanOverride(%j) = %s', (value, expected) => {
     expect(isPlanOverride(value)).toBe(expected);
   });
@@ -115,12 +129,150 @@ describe('plan tiers', () => {
   it.each<[string | null | undefined, PlanTier]>([
     ['pro', 'pro'],
     ['legacy_pro', 'legacy_pro'],
+    ['max', 'legacy_pro'],
     [null, 'legacy_pro'],
     [undefined, 'legacy_pro'],
     ['free', 'legacy_pro'],
     ['garbage', 'legacy_pro'],
   ])('teamSeatTier(%j) = %s', (teamTier, expected) => {
     expect(teamSeatTier(teamTier)).toBe(expected);
+  });
+});
+
+describe('Max and plan changes', () => {
+  it.each<[unknown, boolean]>([
+    ['pro', true], ['max', true], ['legacy_pro', false], ['free', false], ['Max', false], [null, false],
+  ])('isSellableTier(%j) = %s', (value, expected) => {
+    expect(isSellableTier(value)).toBe(expected);
+  });
+
+  it.each<[PlanTier, PlanTier, boolean]>([
+    ['free', 'legacy_pro', true],
+    ['free', 'pro', true],
+    ['free', 'max', true],
+    ['legacy_pro', 'pro', true],
+    ['legacy_pro', 'max', true],
+    ['pro', 'max', true],
+    ['max', 'pro', false],
+    ['max', 'legacy_pro', false],
+    ['pro', 'legacy_pro', false],
+    ['pro', 'free', false],
+    ['max', 'free', false],
+    ['pro', 'pro', false],
+    ['max', 'max', false],
+  ])('isTierUpgrade(%s → %s) = %s', (from, to, expected) => {
+    expect(isTierUpgrade(from, to)).toBe(expected);
+  });
+
+  it('every upgrade buys more included hours', () => {
+    for (const from of PLAN_TIERS) {
+      for (const to of PLAN_TIERS) {
+        if (isTierUpgrade(from, to)) {
+          expect(PLAN_LIMITS[to].includedBoxHours).toBeGreaterThan(PLAN_LIMITS[from].includedBoxHours);
+        }
+      }
+    }
+  });
+
+  const period = { start: d('2026-11-01T00:00:00Z'), end: d('2026-12-01T00:00:00Z') };
+  const at = (day: number) => new Date(period.start.getTime() + day * 86_400_000);
+
+  it.each<[string, string, PlanTier, number, Date, number]>([
+    ['Pro → Max at the start adds all 800 hours', 'pro', 'max', 200 * HOUR, at(0), 1000 * HOUR],
+    ['Pro → Max half way adds 400 hours', 'pro', 'max', 200 * HOUR, at(15), 600 * HOUR],
+    ['Pro → Max on the last day adds 1/30 of 800 hours', 'pro', 'max', 200 * HOUR, at(29), 200 * HOUR + Math.round(800 * HOUR / 30)],
+    ['Pro → Max after the end adds nothing', 'pro', 'max', 200 * HOUR, at(31), 200 * HOUR],
+    ['Legacy Pro → Pro half way adds 75 hours', 'legacy_pro', 'pro', 50 * HOUR, at(15), 125 * HOUR],
+    ['Legacy Pro → Max half way adds 475 hours', 'legacy_pro', 'max', 50 * HOUR, at(15), 525 * HOUR],
+    ['a prorated Max row stays capped at the full amount', 'pro', 'max', 900 * HOUR, at(0), 1000 * HOUR],
+    ['Max → Pro drops to Pro at once', 'max', 'pro', 1000 * HOUR, at(15), 200 * HOUR],
+    ['Pro → Free drops to Free at once', 'pro', 'free', 200 * HOUR, at(15), 10 * HOUR],
+    ['Free → Max (a comp) gives the full amount', 'free', 'max', 10 * HOUR, at(15), 1000 * HOUR],
+    ['an unknown old tier gives the full amount', 'gold', 'max', 0, at(15), 1000 * HOUR],
+  ])('%s', (_label, from, to, current, now, expected) => {
+    expect(includedAfterTierChange({ from, to, currentIncludedWsec: current, period, now })).toBe(expected);
+  });
+
+  it('an empty period gives the full amount', () => {
+    const empty = { start: period.start, end: period.start };
+    expect(includedAfterTierChange({ from: 'pro', to: 'max', currentIncludedWsec: 0, period: empty, now: at(0) })).toBe(1000 * HOUR);
+  });
+
+  const base: BillingPricing = { proMonthlyMicros: 40_000_000, proAnnualMicros: 400_000_000, legacyProMonthlyMicros: 15_000_000, boxHourMicros: 220_000 };
+  it('sellableTierPrices offers Max only when the backend sent its prices', () => {
+    expect(sellableTierPrices('pro', base)).toEqual({ monthlyMicros: 40_000_000, annualMicros: 400_000_000 });
+    expect(sellableTierPrices('max', base)).toBeNull();
+    expect(sellableTierPrices('max', { ...base, maxMonthlyMicros: 100_000_000 })).toEqual({
+      monthlyMicros: 100_000_000,
+      annualMicros: null,
+    });
+  });
+
+  it.each([
+    ['pro', true],
+    ['max', false],
+  ] as const)('tierSoldAnnually(%s) = %s', (tier, expected) => {
+    expect(tierSoldAnnually(tier)).toBe(expected);
+  });
+
+  it('formatPlanPeriodLine has no annual Max line', () => {
+    expect(formatPlanPeriodLine('max', 'annual', base)).toBeNull();
+  });
+
+  it.each<['monthly' | 'annual', string]>([
+    ['monthly', 'Max · Monthly · $100/month'],
+  ])('formatPlanPeriodLine(max, %s)', (billingPeriod, expected) => {
+    expect(formatPlanPeriodLine('max', billingPeriod, base)).toBe(expected);
+  });
+});
+
+describe('margins', () => {
+  it.each<[number, number]>([
+    [0, 0],
+    [-1, 0],
+    [100_000_000, 93_600_000],
+    [40_000_000, 37_200_000],
+    [100_000, 0],
+  ])('netOfPaymentFees(%i) = %i', (gross, net) => {
+    expect(netOfPaymentFees(gross)).toBe(net);
+  });
+
+  it.each<[PlanTier, number]>([
+    ['free', 0],
+    ['pro', 186_000],
+    ['max', 93_600],
+    ['legacy_pro', 274_000],
+  ])('%s breaks even at a fleet cost of %i micros a box-hour', (tier, micros) => {
+    expect(breakEvenBoxHourMicros(tier)).toBe(micros);
+  });
+
+  // The guard rail for every future price or allowance change: a customer who
+  // uses every included hour must still leave us MIN_FULL_USE_MARGIN_PERCENT.
+  it.each(PLAN_TIERS.filter((tier) => tier !== 'free'))('%s keeps the minimum margin at full use', (tier) => {
+    const net = netOfPaymentFees(PLAN_PRICES[tier].monthlyMicros);
+    const cost = PLAN_LIMITS[tier].includedBoxHours * FLEET_BOX_HOUR_COST_ESTIMATE_MICROS;
+    expect(((net - cost) * 100) / net).toBeGreaterThanOrEqual(MIN_FULL_USE_MARGIN_PERCENT);
+  });
+
+  it.each(PLAN_TIERS.filter((tier) => PLAN_PRICES[tier].annualMicros != null))(
+    '%s annual keeps the minimum margin over twelve full months',
+    (tier) => {
+      const net = netOfPaymentFees(PLAN_PRICES[tier].annualMicros!);
+      const cost = 12 * PLAN_LIMITS[tier].includedBoxHours * FLEET_BOX_HOUR_COST_ESTIMATE_MICROS;
+      expect(((net - cost) * 100) / net).toBeGreaterThanOrEqual(MIN_FULL_USE_MARGIN_PERCENT);
+    }
+  );
+
+  it('credits, after the biggest pack bonus, keep the margin too', () => {
+    const effective = Math.floor(BOX_HOUR_PRICE_MICROS / (CREDIT_PACKS['500'].creditMicros / CREDIT_PACKS['500'].priceMicros));
+    const net = netOfPaymentFees(effective * 1000) / 1000;
+    expect(((net - FLEET_BOX_HOUR_COST_ESTIMATE_MICROS) * 100) / net).toBeGreaterThanOrEqual(MIN_FULL_USE_MARGIN_PERCENT);
+  });
+
+  it('Max is the cheapest box-hour, and every plan is cheaper than credits', () => {
+    const perHour = (tier: 'pro' | 'max') => PLAN_PRICES[tier].monthlyMicros / PLAN_LIMITS[tier].includedBoxHours;
+    expect(perHour('max')).toBeLessThan(perHour('pro'));
+    expect(perHour('pro')).toBeLessThan(BOX_HOUR_PRICE_MICROS);
   });
 });
 
@@ -530,6 +682,8 @@ describe('formatting', () => {
 
   it.each<[number, number, string]>([
     [135_000, 720_000, '37.5 of 200 box-hours'],
+    [900_000, 3_600_000, '250 of 1,000 box-hours'],
+    [3_601_800, 3_600_000, '1,000.5 of 1,000 box-hours'],
     [0, 36_000, '0 of 10 box-hours'],
     [1800, HOUR, '0.5 of 1 box-hour'],
   ])('formatBoxHoursUsage(%s, %s) = %s', (used, included, text) => {

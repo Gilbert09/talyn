@@ -141,6 +141,7 @@ describe('validateEnv', () => {
     ['old team pair, one', { POLAR_PRODUCT_ID_TEAM_ANNUAL: 't-a' }, /Polar team plan is partially configured/],
     ['Pro team pair, both', { POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY: 'tp-m', POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL: 'tp-a' }, null],
     ['Pro team pair, one', { POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY: 'tp-m' }, /Pro team plan is partially configured/],
+    ['the Max product alone (monthly only)', { POLAR_PRODUCT_ID_MAX_MONTHLY: 'max-m' }, null],
   ])('optional pair on top of billing: %s', (_name, extra, expected) => {
     const errors = validateEnv(validEnv({ ...POLAR_CORE, ...extra }));
     if (expected) {
@@ -154,6 +155,7 @@ describe('validateEnv', () => {
   it.each([
     ['the legacy pair', { POLAR_PRODUCT_ID_MONTHLY: 'l-m', POLAR_PRODUCT_ID_ANNUAL: 'l-a' }, /old Unlimited products/],
     ['the Pro team pair', { POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY: 'tp-m', POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL: 'tp-a' }, /Pro team plan/],
+    ['the Max product', { POLAR_PRODUCT_ID_MAX_MONTHLY: 'max-m' }, /Max product/],
   ])('%s without billing is refused', (_name, extra, label) => {
     const errors = validateEnv(validEnv(extra));
     expect(errors).toHaveLength(1);
@@ -163,6 +165,7 @@ describe('validateEnv', () => {
 
   it.each([
     ['a credit pack equal to a Pro product', { POLAR_PRODUCT_ID_CREDITS_25: 'pro-m' }, ['POLAR_PRODUCT_ID_PRO_MONTHLY', 'POLAR_PRODUCT_ID_CREDITS_25']],
+    ['the Max product equal to a Pro product', { POLAR_PRODUCT_ID_MAX_MONTHLY: 'pro-m' }, ['POLAR_PRODUCT_ID_PRO_MONTHLY', 'POLAR_PRODUCT_ID_MAX_MONTHLY']],
     [
       'a legacy product equal to a team product',
       { POLAR_PRODUCT_ID_MONTHLY: 'same', POLAR_PRODUCT_ID_ANNUAL: 'l-a', POLAR_PRODUCT_ID_TEAM_MONTHLY: 'same', POLAR_PRODUCT_ID_TEAM_ANNUAL: 't-a' },

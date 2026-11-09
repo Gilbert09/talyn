@@ -54,13 +54,17 @@ describe('billing outcomes', () => {
     expect(sessionStorage.getItem('billing_credit_checkout')).toBeNull();
   });
 
-  it('captures plan_changed once after a started change lands', () => {
-    useBillingStore.getState().setStatus(usageStatus('legacy_pro'));
-    useBillingStore.getState().markPlanChangeStarted('annual');
-    useBillingStore.getState().setStatus(usageStatus('pro'));
-    useBillingStore.getState().setStatus(usageStatus('pro'));
+  it.each([
+    ['legacy_pro', 'pro', 'annual'],
+    ['pro', 'max', 'monthly'],
+    ['legacy_pro', 'max', 'monthly'],
+  ] as const)('captures plan_changed once after a started %s to %s change lands', (from, to, period) => {
+    useBillingStore.getState().setStatus(usageStatus(from, { maxOffered: true }));
+    useBillingStore.getState().markPlanChangeStarted(period);
+    useBillingStore.getState().setStatus(usageStatus(to));
+    useBillingStore.getState().setStatus(usageStatus(to));
     expect(track.mock.calls.filter(([event]) => event === 'plan_changed')).toEqual([
-      ['plan_changed', { from: 'legacy_pro', to: 'pro', period: 'annual' }],
+      ['plan_changed', { from, to, period }],
     ]);
   });
 

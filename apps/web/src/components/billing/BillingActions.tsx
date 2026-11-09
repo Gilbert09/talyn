@@ -1,18 +1,21 @@
 import { useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { CreditCard, Loader2 } from 'lucide-react';
 import {
   CREDIT_PACKS,
   CREDIT_PACK_IDS,
   PLAN_LIMITS,
   PLAN_PRICES,
+  PLAN_TIER_LABELS,
   formatUsd,
+  tierSoldAnnually,
   type BillingPricing,
   type CreditPackId,
+  type SellableTier,
 } from '@talyn/shared';
 import { api, ApiError } from '../../lib/api';
 import { trackEvent } from '../../lib/analytics';
 import { trackBillingFailure } from '../../stores/billing';
-import { goToHostedPage } from '../../lib/usageBilling';
+import { goToHostedPage, maxNeedsPortal, maxPricesOf } from '../../lib/usageBilling';
 import { useBillingStore } from '../../stores/billing';
 import { toast } from '../../stores/toast';
 import { cn } from '../../lib/utils';
@@ -26,6 +29,19 @@ export function proPrices(pricing: BillingPricing | undefined): { monthly: strin
     monthly: formatUsd(pricing?.proMonthlyMicros ?? PLAN_PRICES.pro.monthlyMicros, 0),
     annual: formatUsd(pricing?.proAnnualMicros ?? PLAN_PRICES.pro.annualMicros ?? 0, 0),
   };
+}
+
+/**
+ * A sellable plan's list prices, or null for Max when this account may not buy
+ * it. `annual` is null for Max, which is sold monthly only.
+ */
+export function planPrices(
+  plan: SellableTier,
+  pricing: BillingPricing | undefined
+): { monthly: string; annual: string | null } | null {
+  if (plan === 'pro') return proPrices(pricing);
+  const max = maxPricesOf({ pricing });
+  return max ? { monthly: formatUsd(max.monthlyMicros, 0), annual: null } : null;
 }
 
 export function legacyMonthlyPrice(pricing: BillingPricing | undefined): string {
@@ -123,50 +139,79 @@ function PeriodOption({
 }
 
 /**
- * Pick monthly or annual Pro, then buy it (Free) or move to it (Legacy Pro).
+ * Pick monthly or annual Pro, or monthly Max, then buy it (Free) or move to it
+ * (a paid subscription).
  *
  * `mode: 'checkout'` sends the browser to Polar. `mode: 'change'` changes the
- * live Legacy Pro subscription in place, with no checkout.
+ * live subscription in place, with no checkout. Only upgrades go through
+ * here: a smaller plan goes through the billing portal, and so does Pro
+ * annual to Max. Renders nothing for Max when this account may not buy it.
  */
-export function ProPlanForm({
+export function PlanForm({
+  plan = 'pro',
   mode,
   placement,
   onChanged,
 }: {
+  plan?: SellableTier;
   mode: 'checkout' | 'change';
   placement: string;
   onChanged?: () => void;
 }) {
-  const pricing = useBillingStore((s) => s.status?.pricing);
-  const prices = proPrices(pricing);
-  const [period, setPeriod] = useState<Period>('monthly');
+  const status = useBillingStore((s) => s.status);
+  const prices = planPrices(plan, status?.pricing);
+  const [chosenPeriod, setPeriod] = useState<Period>('monthly');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  if (!prices) return null;
+  if (plan === 'max' && mode === 'change' && maxNeedsPortal(status)) {
+    return (
+      <div className="space-y-2" data-testid="max-via-portal">
+        <p className="text-xs text-muted-foreground">Max is monthly only. To move from annual Pro to Max, use Manage billing.</p>
+        <PortalButton secondary />
+      </div>
+    );
+  }
+  const planLabel = PLAN_TIER_LABELS[plan];
+  // Max is sold monthly only.
+  const period: Period = tierSoldAnnually(plan) ? chosenPeriod : 'monthly';
 
   const submit = async () => {
     setBusy(true);
     setError(null);
     try {
       if (mode === 'checkout') {
-        trackEvent('checkout_started', { period, plan: 'pro', placement });
-        const { url } = await api.billing.checkout({ period, plan: 'pro' });
+        trackEvent('checkout_started', { period, plan, placement });
+        const { url } = await api.billing.checkout({ period, plan });
         goToHostedPage(url);
         return;
       }
-      trackEvent('plan_change_started', { period, to: 'pro', placement });
+      trackEvent('plan_change_started', { period, to: plan, placement });
       useBillingStore.getState().markPlanChangeStarted(period);
-      await api.billing.changePlan({ to: 'pro', period });
+      await api.billing.changePlan({ to: plan, period });
       await useBillingStore.getState().refresh();
-      toast.success('You are on Pro now', `${PLAN_LIMITS.pro.includedBoxHours} box-hours a month start today.`);
+      toast.success(
+        `You are on ${planLabel} now`,
+        plan === 'pro'
+          ? `${PLAN_LIMITS.pro.includedBoxHours} box-hours a month start today.`
+          : 'Your new box-hours are ready to use.'
+      );
       setBusy(false);
       onChanged?.();
     } catch (err) {
       trackBillingFailure(mode === 'checkout' ? 'checkout_failed' : 'plan_change_failed', 'create_checkout', err);
       if (mode === 'change') useBillingStore.getState().clearPlanChange();
-      if (err instanceof ApiError && err.code === 'already_subscribed') {
-        setError('You already have a subscription. Use "Move to Pro" to change it.');
-      } else if (err instanceof ApiError && err.code === 'no_subscription') {
-        setError('There is no subscription to change. Buy Pro instead.');
+      const code = err instanceof ApiError ? err.code : undefined;
+      if (code === 'already_subscribed') {
+        setError(`You already have a subscription. Use "${plan === 'pro' ? 'Move to Pro' : 'Upgrade to Max'}" to change it.`);
+      } else if (code === 'no_subscription') {
+        setError(`There is no subscription to change. Buy ${planLabel} instead.`);
+      } else if (code === 'max_plan_unavailable') {
+        setError('Max is not available for this account.');
+      } else if (code === 'downgrade_via_portal') {
+        setError('To move to a smaller plan, use Manage billing.');
+      } else if (code === 'annual_to_monthly_via_portal') {
+        setError('To move from an annual plan to a monthly plan, use Manage billing.');
       } else {
         setError(errorText(err, mode === 'checkout' ? 'Could not start the checkout.' : 'Could not change the plan.'));
       }
@@ -174,29 +219,64 @@ export function ProPlanForm({
     }
   };
 
-  const label = mode === 'checkout' ? 'Upgrade to Pro' : 'Move to Pro';
+  const label = plan === 'max' ? 'Upgrade to Max' : mode === 'checkout' ? 'Upgrade to Pro' : 'Move to Pro';
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2">
-        <PeriodOption
-          label="Monthly"
-          price={`${prices.monthly}/mo`}
-          selected={period === 'monthly'}
-          onSelect={() => setPeriod('monthly')}
-          disabled={busy}
-        />
-        <PeriodOption
-          label="Annual"
-          price={`${prices.annual}/yr`}
-          hint="2 months free"
-          selected={period === 'annual'}
-          onSelect={() => setPeriod('annual')}
-          disabled={busy}
-        />
-      </div>
-      <Button onClick={() => void submit()} disabled={busy} className="w-full gap-2" data-attr={`pro-${mode}`}>
+      {prices.annual != null && (
+        <div className="grid grid-cols-2 gap-2">
+          <PeriodOption
+            label="Monthly"
+            price={`${prices.monthly}/mo`}
+            selected={period === 'monthly'}
+            onSelect={() => setPeriod('monthly')}
+            disabled={busy}
+          />
+          <PeriodOption
+            label="Annual"
+            price={`${prices.annual}/yr`}
+            hint="2 months free"
+            selected={period === 'annual'}
+            onSelect={() => setPeriod('annual')}
+            disabled={busy}
+          />
+        </div>
+      )}
+      <Button onClick={() => void submit()} disabled={busy} className="w-full gap-2" data-attr={`${plan}-${mode}`}>
         {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-        {label}: {period === 'annual' ? `${prices.annual}/yr` : `${prices.monthly}/mo`}
+        {label}: {period === 'annual' && prices.annual != null ? `${prices.annual}/yr` : `${prices.monthly}/mo`}
+      </Button>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+    </div>
+  );
+}
+
+/** "Manage billing": opens Polar's customer portal. Cancels, card changes and downgrades go there. */
+export function PortalButton({ secondary = false }: { secondary?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const open = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { url } = await api.billing.portal();
+      goToHostedPage(url);
+    } catch (err) {
+      trackBillingFailure('plan_change_failed', 'portal', err);
+      setError(err instanceof Error ? err.message : 'Could not open the billing portal.');
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="space-y-2">
+      <Button
+        variant={secondary ? 'link' : 'default'}
+        data-attr="plan-manage-billing"
+        onClick={() => void open()}
+        disabled={busy}
+        className="gap-2"
+      >
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
+        Manage billing
       </Button>
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>

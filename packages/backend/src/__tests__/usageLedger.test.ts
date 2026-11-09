@@ -258,6 +258,42 @@ describe('usage ledger', () => {
       expect(row?.usedWsec).toBe(100);
     });
 
+    const halfWay = new Date('2026-11-16T00:00:00Z');
+
+    it('prorates the extra hours of a paid upgrade inside the period', async () => {
+      await ensurePeriod(OWNER, 'pro', period, halfWay);
+      await addUsage(OWNER, period.start, 150 * 3600);
+      await ensurePeriod(OWNER, 'max', period, halfWay);
+      const row = await readPeriod(OWNER, period.start);
+      expect(row?.tier).toBe('max');
+      expect(row?.includedWsec).toBe(includedWeightedSeconds('pro') + 400 * 3600);
+      expect(row?.usedWsec).toBe(150 * 3600);
+      // Seeing the same tier again changes nothing.
+      await ensurePeriod(OWNER, 'max', period, new Date('2026-11-01T00:00:00Z'));
+      expect((await readPeriod(OWNER, period.start))?.includedWsec).toBe(600 * 3600);
+    });
+
+    it('drops to the smaller allowance at once on a downgrade', async () => {
+      await ensurePeriod(OWNER, 'max', period, halfWay);
+      await ensurePeriod(OWNER, 'pro', period, halfWay);
+      const row = await readPeriod(OWNER, period.start);
+      expect(row?.tier).toBe('pro');
+      expect(row?.includedWsec).toBe(includedWeightedSeconds('pro'));
+    });
+
+    it('adds the prorated hours once when two meters see the upgrade together', async () => {
+      await ensurePeriod(OWNER, 'pro', period, halfWay);
+      await Promise.all(Array.from({ length: 5 }, () => ensurePeriod(OWNER, 'max', period, halfWay)));
+      expect((await readPeriod(OWNER, period.start))?.includedWsec).toBe(600 * 3600);
+    });
+
+    it('creates the row once under concurrency', async () => {
+      await Promise.all(Array.from({ length: 5 }, () => ensurePeriod(OWNER, 'max', period, halfWay)));
+      const row = await readPeriod(OWNER, period.start);
+      expect(row?.tier).toBe('max');
+      expect(row?.includedWsec).toBe(includedWeightedSeconds('max'));
+    });
+
     it('adds atomically under concurrency', async () => {
       await ensurePeriod(OWNER, 'pro', period);
       await Promise.all(Array.from({ length: 20 }, () => addUsage(OWNER, period.start, 7)));
