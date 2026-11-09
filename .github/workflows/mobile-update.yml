@@ -24,7 +24,9 @@ concurrency:
 jobs:
   publish:
     name: Publish preview and internal-beta updates
-    if: github.repository == 'Gilbert09/talyn' && github.ref == 'refs/heads/main' && vars.MOBILE_UPDATES_AUTO != '0'
+    # An unset variable is null, and null != '0' is false in Actions expressions (both coerce to 0),
+    # so the kill switch defaults to '1' before the comparison.
+    if: github.repository == 'Gilbert09/talyn' && github.ref == 'refs/heads/main' && (vars.MOBILE_UPDATES_AUTO || '1') != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: mobile-updates
