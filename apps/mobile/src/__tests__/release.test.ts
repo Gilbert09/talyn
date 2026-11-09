@@ -47,8 +47,14 @@ describe('release configuration boundaries', () => {
   it('blocks a mismatched environment and profile', () => {
     expect(() => readReleaseSettings(fixture, 'preview')).toThrow('must match');
   });
-  it('rejects unreviewed public build variables', () => {
-    expect(() => readReleaseSettings({ ...fixture, EXPO_PUBLIC_SERVICE_ROLE_KEY: 'fixture' }, 'production')).toThrow('unexpected public');
+  it.each(Object.keys(profiles))('ignores the Expo internal project root for %s configuration', (profile: string) => {
+    process.env = { ...previous, ...fixture, APP_ENV: profiles[profile].environment, MOBILE_RELEASE_PROFILE: profile };
+    const expected = appConfig({ config: {} } as Parameters<typeof appConfig>[0]);
+    process.env.EXPO_PUBLIC_PROJECT_ROOT = path.resolve(__dirname, '../..');
+    expect(appConfig({ config: {} } as Parameters<typeof appConfig>[0])).toEqual(expected);
+  });
+  it.each(['EXPO_PUBLIC_SERVICE_ROLE_KEY', 'EXPO_PUBLIC_PROJECT_ROOT_EXTRA'])('rejects unreviewed public build variable %s', (name) => {
+    expect(() => readReleaseSettings({ ...fixture, EXPO_PUBLIC_PROJECT_ROOT: path.resolve(__dirname, '../..'), [name]: 'fixture' }, 'production')).toThrow('unexpected public');
   });
   it.each(['MOBILE_UPDATE_CERTIFICATE', 'MOBILE_UPDATE_KEY_ID'])('blocks signed updates without %s', (key) => {
     expect(() => readReleaseSettings({ ...fixture, MOBILE_UPDATES_ENABLED: '1', MOBILE_UPDATE_CERTIFICATE: 'fixture.pem', MOBILE_UPDATE_KEY_ID: 'fixture', [key]: undefined }, 'production', fixture.EXPO_PUBLIC_EAS_PROJECT_ID)).toThrow();
