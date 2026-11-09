@@ -1,6 +1,7 @@
 import { Redirect, Stack, useLocalSearchParams, usePathname } from 'expo-router';
 
 import { useWorkspace } from '../../src/auth/AuthProvider';
+import { EdgeSwipeBack } from '../../src/components/EdgeSwipeBack';
 import { pullsTab, PULLS_TITLES } from '../../src/features/prs/lists';
 import { PullRequestsScreen } from '../../src/features/prs/PullRequestsScreen';
 import { WorkspaceWait } from '../../src/navigation/DetailRoute';
@@ -19,8 +20,8 @@ export default function Screen() {
     rememberIntent(pathname);
     return <Redirect href="/workspaces" />;
   }
-  return <>
+  return <EdgeSwipeBack>
     <Stack.Screen options={{ headerShown: true, title: PULLS_TITLES[tab] }} />
     <PullRequestsScreen key={tab} tab={tab} />
-  </>;
+  </EdgeSwipeBack>;
 }

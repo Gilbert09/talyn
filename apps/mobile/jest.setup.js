@@ -16,3 +16,21 @@ jest.mock('react-native-drawer-layout', () => {
   return { Drawer, DrawerProgressContext, useDrawerProgress: () => ({ value: 0 }) };
 });
 jest.mock('expo-splash-screen', () => ({ preventAutoHideAsync: jest.fn(() => Promise.resolve(true)), hideAsync: jest.fn(() => Promise.resolve(true)) }));
+
+// Reanimated and Worklets have no native side in Jest. Screens that import them render with these stand-ins.
+jest.mock('react-native-worklets', () => ({ scheduleOnRN: (fn) => fn() }));
+jest.mock('react-native-reanimated', () => {
+  const { View } = require('react-native');
+  const identity = (value) => value;
+  return {
+    __esModule: true,
+    default: { View, createAnimatedComponent: identity },
+    Easing: { out: identity, cubic: identity },
+    useSharedValue: (value) => ({ value }),
+    useAnimatedStyle: (fn) => fn(),
+    withSpring: identity,
+    withTiming: identity,
+    useEvent: () => jest.fn(),
+    useHandler: () => ({ context: {}, doDependenciesDiffer: false, useWeb: false }),
+  };
+});
