@@ -12,11 +12,10 @@ import { useFeatures } from '../../lib/features';
 import { NotificationSettings } from '../../notifications/Settings';
 import { radius, setThemePreference, useTheme, useThemePreference } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
-import { WebRow } from '../more/Page';
 import { AboutUpdates } from '../updates/AboutUpdates';
 import { useBillingStatus } from '../usage/data';
 import { appInfo, DOCS_URL, WEB_APP_URL } from './about';
-import { APPEARANCE_OPTIONS, billingLine, githubStateLabel, githubStateOf, webSettingsLinks } from './model';
+import { APPEARANCE_OPTIONS, billingLine, githubStateLabel, githubStateOf, settingsEditorLinks } from './model';
 import { SessionSettings } from './SessionSettings';
 
 export function SettingsScreen() {
@@ -49,7 +48,7 @@ export function SettingsScreen() {
         });
       } },
     ]);
-  const webLinks = webSettingsLinks(features);
+  const editors = selected ? settingsEditorLinks(features) : [];
   return <ScreenContainer>
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <Group title="Account">
@@ -76,6 +75,10 @@ export function SettingsScreen() {
         <Row title="Plan and billing" subtitle={plan ?? 'Plan, box-hours and credits'} chevron href="/billing" divider={false} />
       </Group>
       {current ? <SessionSettings workspace={current} offline={offline} openSheet={sheet.open} refresh={workspace.refresh} /> : null}
+      {editors.length ? <Group title="Agents and tools">
+        {editors.map((link, index) => <Row key={link.key} title={link.title} subtitle={link.subtitle} href={link.href} chevron
+          divider={index < editors.length - 1} />)}
+      </Group> : null}
       <Group title="Appearance" footer="Applies to this device.">
         <View style={styles.block}>
           <Segmented options={APPEARANCE_OPTIONS} value={theme} onChange={(value) => setThemePreference(value)} accessibilityLabel="Theme" />
@@ -83,10 +86,6 @@ export function SettingsScreen() {
       </Group>
       {auth.issue === 'outage' ? <Status message="Sign-in is temporarily unavailable. Your account is still signed in." /> : null}
       {notifications ? <NotificationSettings controller={notifications} offline={offline} /> : null}
-      {webLinks.length ? <Group title="More on the web" footer="These settings open in Talyn on the web.">
-        {webLinks.map((link, index) => <WebRow key={link.key} title={link.title} subtitle={link.subtitle} path={link.path}
-          divider={index < webLinks.length - 1} />)}
-      </Group> : null}
       <Group title="About">
         <Row title="Version" trailing={<AppText variant="meta" tone="muted" selectable>{info.build ? `${info.version} (${info.build})` : info.version}</AppText>} />
         <AboutUpdates info={info} />

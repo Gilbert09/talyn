@@ -11,6 +11,10 @@ export const validRoutes: Href[] = [
   pullsRoute('mine'), pullsRoute('reviews'), pullsRoute('queue'),
   newWorkRoute('session'), newWorkRoute('thread'), '/new',
   '/spaces', '/automations', '/usage', '/agents', '/insights', '/billing', '/billing/return',
+  // Settings editors and their browser return links.
+  '/settings/sandboxSetup', '/settings/privateRoutes', '/settings/mcp', '/settings/apiTokens', '/settings/apiTokens/new',
+  '/settings/slack', '/settings/integrations', '/settings/skills', '/settings/instructions', '/settings/memory', '/settings/codeReview',
+  '/mcp/callback', '/slack/callback', '/posthog/callback',
 ];
 
 // @ts-expect-error The route does not exist.

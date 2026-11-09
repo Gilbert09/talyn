@@ -1,7 +1,7 @@
 import type { BillingStatus, Features, WorkspaceSettings } from '@talyn/shared';
 
 import {
-  billingLine, branchPrefixLine, githubStateLabel, githubStateOf, idleDayChoices, idleDaysLabel, sessionSettingsOf, webSettingsLinks,
+  billingLine, branchPrefixLine, githubStateLabel, githubStateOf, idleDayChoices, idleDaysLabel, sessionSettingsOf, settingsEditorLinks,
 } from '../features/settings/model';
 import {
   getThemePreference, hydrateThemePreference, isThemePreference, resolveScheme, setThemePreference, subscribeThemePreference,
@@ -51,8 +51,8 @@ describe('connections and plan lines', () => {
   });
 });
 
-describe('web settings links', () => {
-  const keys = (features: Partial<Features> | null) => webSettingsLinks(features).map((link) => link.key);
+describe('settings editor links', () => {
+  const keys = (features: Partial<Features> | null) => settingsEditorLinks(features).map((link) => link.key);
   it.each([
     [null, ['integrations', 'skills', 'instructions', 'review']],
     [{ workbenches: true }, ['sandbox', 'slack', 'integrations', 'skills', 'instructions', 'memory', 'review']],
@@ -62,8 +62,10 @@ describe('web settings links', () => {
   ])('follows the flags %j', (features, expected) => {
     expect(keys(features)).toEqual(expected);
   });
-  it('points every link at a web path', () => {
-    for (const link of webSettingsLinks({ workbenches: true, privateRoutes: true, mcpServers: true, publicApi: true })) expect(link.path).toMatch(/^\//);
+  it('opens every editor under /settings', () => {
+    for (const link of settingsEditorLinks({ workbenches: true, privateRoutes: true, mcpServers: true, publicApi: true })) {
+      expect(link.href).toMatch(/^\/settings\/[a-zA-Z]+$/);
+    }
   });
 });
 

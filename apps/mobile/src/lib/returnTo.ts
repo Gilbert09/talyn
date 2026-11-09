@@ -1,13 +1,18 @@
-import { MOBILE_BILLING_RETURN_PATH, MOBILE_GITHUB_RETURN_PATH } from '@talyn/shared';
+import {
+  MOBILE_BILLING_RETURN_PATH, MOBILE_GITHUB_RETURN_PATH, MOBILE_MCP_RETURN_PATH, MOBILE_POSTHOG_RETURN_PATH, MOBILE_SLACK_RETURN_PATH,
+} from '@talyn/shared';
 import Constants from 'expo-constants';
 import * as WebBrowser from 'expo-web-browser';
 
 /** A browser flow that finishes with a redirect back into the app. */
-export type ReturnKind = 'github' | 'billing';
+export type ReturnKind = 'github' | 'billing' | 'mcp' | 'slack' | 'posthog';
 
 const RETURN_PATHS: Record<ReturnKind, string> = {
   github: MOBILE_GITHUB_RETURN_PATH,
   billing: MOBILE_BILLING_RETURN_PATH,
+  mcp: MOBILE_MCP_RETURN_PATH,
+  slack: MOBILE_SLACK_RETURN_PATH,
+  posthog: MOBILE_POSTHOG_RETURN_PATH,
 };
 
 const FALLBACK_SCHEME = 'talyn-mobile-development';

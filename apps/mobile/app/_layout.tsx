@@ -60,12 +60,34 @@ function AuthenticatedRoutes() {
       <Stack.Screen name="history" options={detail('History')} />
       {/* The screen draws its own "Settings" heading. */}
       <Stack.Screen name="settings" options={detail('Settings')} />
+      {/* Settings editors. Screens with a dynamic title set it themselves. */}
+      <Stack.Screen name="settings/sandboxSetup" options={detail('Sandbox setup')} />
+      <Stack.Screen name="settings/privateRoutes" options={detail('Private routes')} />
+      <Stack.Screen name="settings/mcp/index" options={detail('MCP servers')} />
+      <Stack.Screen name="settings/mcp/[id]" options={detail('MCP server')} />
+      <Stack.Screen name="settings/apiTokens/index" options={detail('API tokens')} />
+      <Stack.Screen name="settings/apiTokens/new" options={detail('Create API token')} />
+      <Stack.Screen name="settings/slack" options={detail('Slack')} />
+      <Stack.Screen name="settings/integrations" options={detail('Integrations')} />
+      <Stack.Screen name="settings/skills/index" options={detail('Skills')} />
+      <Stack.Screen name="settings/skills/[id]" options={detail('Skill')} />
+      <Stack.Screen name="settings/skills/repo" options={detail('Repo skill')} />
+      <Stack.Screen name="settings/instructions/index" options={detail('Instructions')} />
+      <Stack.Screen name="settings/instructions/prompt/[kind]" options={detail('Prompt')} />
+      <Stack.Screen name="settings/instructions/repository/[id]" options={detail('Repository instructions')} />
+      <Stack.Screen name="settings/memory/index" options={detail('Memory')} />
+      <Stack.Screen name="settings/memory/[id]" options={detail('Memory')} />
+      <Stack.Screen name="settings/codeReview" options={detail('Code review')} />
       <Stack.Screen name="workspaces" options={detail('Workspace')} />
       <Stack.Screen name="repositories" options={detail('Repositories')} />
       {/* Setup draws its own heading and steps, with no navigation header. */}
       <Stack.Screen name="onboarding" options={{ headerShown: false, animation: 'fade', gestureEnabled: false }} />
       {/* The GitHub install flow's return link. It steps back at once. */}
       <Stack.Screen name="github/callback" options={{ headerShown: false, animation: 'none' }} />
+      {/* Settings sign-in return links. Each steps back at once. */}
+      <Stack.Screen name="mcp/callback" options={{ headerShown: false, animation: 'none' }} />
+      <Stack.Screen name="slack/callback" options={{ headerShown: false, animation: 'none' }} />
+      <Stack.Screen name="posthog/callback" options={{ headerShown: false, animation: 'none' }} />
       <Stack.Screen name="new" options={{ ...detail('New'), animation: 'slide_from_bottom' }} />
     </Stack.Protected>
   </Stack>;

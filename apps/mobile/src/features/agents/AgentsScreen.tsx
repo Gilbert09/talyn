@@ -102,8 +102,9 @@ export function AgentsScreen() {
           trailing={<AppText variant="meta" tone="muted" numberOfLines={2} style={{ maxWidth: '55%', textAlign: 'right' }}>{currentLabel}</AppText>} />
         {fleetModel ? <Fact label="Talyn Fleet model" value={fleetModel} divider={false} /> : null}
       </Group> : null}
-      <Group footer="Connect PostHog Code and change the Talyn Fleet model in Talyn on the web.">
-        <WebRow title="Manage on the web" path="/settings/integrations" />
+      <Group footer="Change the Talyn Fleet model in Talyn on the web.">
+        <Row title="PostHog Code and Trunk" subtitle="Connect keys and sign in" chevron href="/settings/integrations" divider />
+        <WebRow title="Talyn Fleet model" path="/settings/integrations" />
       </Group>
     </Page>
     {menu.sheet}

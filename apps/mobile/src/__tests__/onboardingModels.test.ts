@@ -41,6 +41,9 @@ describe('return links', () => {
   it.each([
     ['github', 'talyn-mobile://github/callback'],
     ['billing', 'talyn-mobile://billing/return'],
+    ['mcp', 'talyn-mobile://mcp/callback'],
+    ['slack', 'talyn-mobile://slack/callback'],
+    ['posthog', 'talyn-mobile://posthog/callback'],
   ] as const)('ends a %s flow at its prefix', (kind, expected) => expect(returnPrefix(kind, 'talyn-mobile://')).toBe(expected));
 
   it.each([
@@ -69,6 +72,12 @@ describe('return links', () => {
     ['talyn-mobile-preview://github/callback?github=error&reason=denied', '/github/callback'],
     ['talyn-mobile://billing/return?kind=credits&result=success', '/billing/return?kind=credits&result=success'],
     ['talyn-mobile://auth/callback?code=abc', '/auth/callback'],
+    ['talyn-mobile://mcp/callback?mcp=connected', '/mcp/callback'],
+    ['talyn-mobile://mcp/callback?mcp=error&code=abc', '/mcp/callback'],
+    ['talyn-mobile-preview://slack/callback?slack=installed', '/slack/callback'],
+    ['talyn-mobile://slack/callback?slack=error&message=Denied', '/slack/callback'],
+    ['talyn-mobile://posthog/callback?posthog=connected', '/posthog/callback'],
+    ['talyn-mobile://posthog/callback?posthog=error&error=x', '/posthog/callback'],
   ])('routes the system link %s', (path, expected) => expect(redirectSystemPath({ path, initial: false })).toBe(expected));
 
   it('keeps the GitHub return for the screen that listens', () => {

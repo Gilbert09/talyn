@@ -1,4 +1,5 @@
-import { CONCURRENT_BOX_LIMIT_ERROR_CODE, SIZE_REQUIRES_PRO_ERROR_CODE, USAGE_BILLING_ERROR_CODES, USAGE_EXHAUSTED_ERROR_CODE,
+import { AUTO_KEEP_DEFAULT_ERROR_CODE, AUTO_REVIEW_ERROR_CODE, CONCURRENT_BOX_LIMIT_ERROR_CODE, SIZE_REQUIRES_PRO_ERROR_CODE,
+  USAGE_BILLING_ERROR_CODES, USAGE_EXHAUSTED_ERROR_CODE,
   type UsageBillingErrorCode } from '@talyn/shared';
 import { router, type Href } from 'expo-router';
 import { Alert, type AlertButton } from 'react-native';
@@ -76,4 +77,43 @@ export function showActionError(title: string, error: unknown, fallback = 'Pleas
   const refusal = boxRefusal(error);
   if (refusal) { showBoxRefusal(refusal); return; }
   Alert.alert(title, errorMessage(error, fallback));
+}
+
+export type PaidFeatureErrorCode = typeof AUTO_REVIEW_ERROR_CODE | typeof AUTO_KEEP_DEFAULT_ERROR_CODE;
+export interface PaidFeatureRefusal { code: PaidFeatureErrorCode; title: string; message: string }
+
+// Web's upgrade copy for these two codes (`UsageUpgradeModal`). Nothing was
+// used up, so the copy names the feature and not a limit.
+const PAID_FEATURES: Record<PaidFeatureErrorCode, { title: string; message: string }> = {
+  [AUTO_REVIEW_ERROR_CODE]: {
+    title: 'Review every new PR with Pro',
+    message: 'Reviewing every new pull request automatically is a Pro feature. You can still review PRs one at a time on Free.',
+  },
+  [AUTO_KEEP_DEFAULT_ERROR_CODE]: {
+    title: 'Keep every new PR green with Pro',
+    message: 'Keeping every new PR mergeable is a Pro feature. Talyn watches each PR you open and fixes conflicts and red CI '
+      + 'without you asking. You can still turn it on for one PR at a time on Free.',
+  },
+};
+
+const isPaidFeatureCode = (code: unknown): code is PaidFeatureErrorCode =>
+  code === AUTO_REVIEW_ERROR_CODE || code === AUTO_KEEP_DEFAULT_ERROR_CODE;
+
+/**
+ * The 402 a free plan gets when it turns on a paid automatic feature, or null
+ * for any other error. Web sends these to its upgrade modal
+ * (`maybeHandleBillingLimit`).
+ */
+export function paidFeatureRefusal(error: unknown): PaidFeatureRefusal | null {
+  if (!error || typeof error !== 'object') return null;
+  const { code, status } = error as { code?: unknown; status?: unknown };
+  if (!isPaidFeatureCode(code)) return null;
+  if (status !== undefined && status !== 402) return null;
+  return { code, ...PAID_FEATURES[code] };
+}
+
+/** The paid-feature refusal, with Plan and credits as the way out. */
+export function showPaidFeatureRefusal(refusal: PaidFeatureRefusal) {
+  Alert.alert(refusal.title, refusal.message, [{ text: 'Close', style: 'cancel' },
+    { text: 'Plan and credits', onPress: () => router.navigate(BILLING_ROUTE) }]);
 }
