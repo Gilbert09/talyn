@@ -601,6 +601,33 @@ describe('Changes tab', () => {
     expect(screen.getByRole('button', { name: /b\.ts/ })).toHaveAttribute('aria-expanded', 'true');
   });
 
+  it('gives the file list the full panel until a file opens', async () => {
+    render(
+      <ChangesTab
+        workbench={WB}
+        chat={chat}
+        ops={makeOps()}
+        visible
+        turnsEnded={0}
+        comments={[]}
+        setComments={vi.fn()}
+      />,
+    );
+    const row = await screen.findByRole('button', { name: /a\.ts/ });
+    const list = screen.getByTestId('changes-file-list');
+    expect(list).toHaveClass('flex-1');
+    expect(screen.queryByTestId('changes-file-diff')).not.toBeInTheDocument();
+
+    fireEvent.click(row);
+    await screen.findByTestId('changes-file-diff');
+    expect(list).toHaveClass('max-h-[40%]');
+    expect(list).not.toHaveClass('flex-1');
+
+    fireEvent.click(row);
+    expect(screen.queryByTestId('changes-file-diff')).not.toBeInTheDocument();
+    expect(list).toHaveClass('flex-1');
+  });
+
   it('"N comments ready to send" sends them to the agent as one message', async () => {
     const setComments = vi.fn();
     const send = vi.fn(async () => ({ queued: false }));
