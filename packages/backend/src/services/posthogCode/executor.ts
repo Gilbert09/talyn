@@ -78,9 +78,9 @@ export async function dispatchTaskToPostHogCode(
   // The task-level rung is GUARDED, like the workspace one below it, and the
   // case that needs it is failover. A task dispatched at the fleet carries a
   // fleet model on `metadata.model`; when the fleet is at capacity the queue
-  // moves it here (`result.capacity` → the next link in the chain), and six of
-  // the fleet's models are ones PostHog's runtime does not accept —
-  // `claude-fable-5-1` and every `gpt-*`. Sent verbatim they earn a 400 at
+  // moves it here (`result.capacity` → the next link in the chain), and many of
+  // the fleet's models are ones PostHog's runtime does not accept — for example
+  // `claude-fable-5-2` and every `gpt-*`. Sent verbatim they earn a 400 at
   // dispatch, so a capacity refusal the fall-back exists to absorb became a
   // failed task instead.
   //

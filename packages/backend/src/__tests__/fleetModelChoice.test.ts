@@ -38,14 +38,15 @@ describe('fleet model choice', () => {
   });
 
   it('offers each vendor\'s current flagship', () => {
-    // Verified against platform.claude.com and learn.chatgpt.com on 2026-09-09.
+    // Verified against platform.claude.com on 2026-11-09 and learn.chatgpt.com on 2026-09-09.
     // This is a DATED assertion, not a permanent truth — it fails loudly when
     // the catalogue is edited, which is the only signal this file has that
     // someone re-checked. Fable 5.1 shipped 2026-09-01 and sat unnoticed for a
     // week; Astra likewise. See the note on FLEET_MODELS.
     const ids = FLEET_MODELS.map((m) => m.id);
-    expect(ids).toContain('claude-fable-5-1');
+    expect(ids).toContain('claude-fable-5-2');
     expect(ids).toContain('gpt-6-astra');
+    expect(FLEET_MODELS.find((m) => m.provider === 'anthropic')?.id).toBe('claude-fable-5-2');
   });
 
   it('offers the current-generation Claude ids', () => {
@@ -113,7 +114,8 @@ describe('fleet model choice', () => {
     ['claude-opus-5', 'codex', 'gpt-6.1-sol'],
     ['claude-sonnet-5-5', 'codex', 'gpt-6.1-terra'],
     ['claude-sonnet-4-6', 'codex', 'gpt-6-luna'],
-    ['gpt-6-astra', 'claude', 'claude-fable-5-1'],
+    ['claude-fable-5-1', 'codex', 'gpt-6.1-sol'],
+    ['gpt-6-astra', 'claude', 'claude-fable-5-2'],
     ['gpt-6.1-sol', 'claude', 'claude-opus-5'],
     ['gpt-6.1-terra', 'claude', 'claude-sonnet-5-5'],
     ['gpt-6-luna', 'claude', 'claude-sonnet-4-6'],
