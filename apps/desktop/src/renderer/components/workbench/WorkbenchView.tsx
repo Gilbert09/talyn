@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Loader2, Moon, RefreshCw } from 'lucide-react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { api } from '../../lib/api';
@@ -27,6 +27,7 @@ import { useRepoPaths } from './new/useRepoPaths';
 import { getDeviceId } from '../../lib/workbenchBridge';
 import { checkoutFor, takeOverLocalWorkbench } from '../../lib/localTakeover';
 import { useWorkbenchBackgroundLoad } from '../../hooks/useSessionBackground';
+import { ImageDropOverlay, useImageDropZone } from './useComposerImages';
 
 /** The header spans the chat and right panel. Threads use WorkPanel on the right. */
 export function WorkbenchView({ workbench }: { workbench: Workbench }) {
@@ -126,9 +127,13 @@ function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: Workbe
   const localQueue = useWorkbenchStore((s) => (chat ? s.localQueues[chat.id] : undefined));
   const queued = (ops.runtime === 'local' ? localQueue : chat?.queuedMessages)?.length ?? 0;
   const startingHint = isStarting(workbench) ? <StartingHint workbench={workbench} queued={queued} /> : undefined;
+  // The whole chat column takes image drops, not only the composer strip.
+  const attachRef = useRef<((files: File[]) => void) | null>(null);
+  const { dragging, dropProps } = useImageDropZone((files) => attachRef.current?.(files));
 
   return (
-    <>
+    <div className="relative flex min-h-0 flex-1 flex-col" data-attr="workbench-chat-drop-zone" {...dropProps}>
+      <ImageDropOverlay dragging={dragging} />
       <div className="min-h-0 flex-1">
         {chat ? (
           <WorkbenchTranscript
@@ -152,8 +157,8 @@ function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: Workbe
           </div>
         )}
       </div>
-      <Composer workbench={workbench} chat={chat} ops={ops} todos={insights.todos} contextUsage={insights.contextUsage} slashCommands={insights.slashCommands} />
-    </>
+      <Composer workbench={workbench} chat={chat} ops={ops} todos={insights.todos} contextUsage={insights.contextUsage} slashCommands={insights.slashCommands} attachRef={attachRef} />
+    </div>
   );
 }
 

@@ -311,7 +311,7 @@ describe('NewWorkbenchPage', () => {
     mockSend.mockResolvedValue({ queued: true });
     await renderPage();
     await chooseRepo('Any repository');
-    fireEvent.drop(textarea(), { dataTransfer: { files: [new File(['image'], 'shot.png', { type: 'image/png' })] } });
+    fireEvent.drop(textarea(), { dataTransfer: { types: ['Files'], files: [new File(['image'], 'shot.png', { type: 'image/png' })] } });
     await screen.findByText('shot.png');
     fireEvent.change(textarea(), { target: { value: 'Inspect this image' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));
@@ -339,7 +339,7 @@ describe('NewWorkbenchPage', () => {
     mockSend.mockResolvedValue({ queued: true });
     await renderPage();
     const file = new File(['image'], 'shot.png', { type: 'image/png' });
-    fireEvent.drop(textarea(), { dataTransfer: { files: [file] } });
+    fireEvent.drop(textarea(), { dataTransfer: { types: ['Files'], files: [file] } });
     await screen.findByText('shot.png');
     fireEvent.change(textarea(), { target: { value: 'Inspect this image' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));

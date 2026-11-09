@@ -1,5 +1,5 @@
-import React, { useRef, useState } from 'react';
-import { ImageIcon, Loader2, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ImageIcon, ImagePlus, Loader2, X } from 'lucide-react';
 import { workbenchQueuesMessages, type WorkbenchAttachment, type WorkbenchStatus } from '@talyn/shared';
 import { downscaleImage } from '../../lib/imageDownscale';
 import { rememberAttachmentPreview } from '../../lib/attachmentPreviews';
@@ -56,16 +56,88 @@ export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchO
     void attachFiles(files);
   };
 
-  const onDrop = (event: React.DragEvent) => {
-    event.preventDefault();
-    void attachFiles([...event.dataTransfer.files].filter((file) => file.type.startsWith('image/')));
-  };
-
   return {
     attachments, setAttachments, pendingUploads, imageNotReady, setImageNotReady,
-    fileInputRef, attachFiles, onPaste, onDrop,
+    fileInputRef, attachFiles, onPaste,
     clear: () => { setAttachments([]); setImageNotReady(false); },
   };
+}
+
+const carriesFiles = (event: { dataTransfer: DataTransfer | null }) =>
+  [...(event.dataTransfer?.types ?? [])].includes('Files');
+
+/**
+ * Makes an element a drop target for images from the OS or another app.
+ * Drags without files (selected text, list reordering) pass through untouched.
+ * A file dropped next to the zone is swallowed, so the browser does not open it in place of the app.
+ */
+export function useImageDropZone(onFiles: (files: File[]) => void) {
+  const [dragging, setDragging] = useState(false);
+  const depth = useRef(0);
+
+  useEffect(() => {
+    const guard = (event: DragEvent) => {
+      if (!carriesFiles(event) || event.defaultPrevented) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'none';
+    };
+    const reset = () => { depth.current = 0; setDragging(false); };
+    window.addEventListener('dragover', guard);
+    window.addEventListener('drop', guard);
+    window.addEventListener('drop', reset);
+    window.addEventListener('dragend', reset);
+    return () => {
+      window.removeEventListener('dragover', guard);
+      window.removeEventListener('drop', guard);
+      window.removeEventListener('drop', reset);
+      window.removeEventListener('dragend', reset);
+    };
+  }, []);
+
+  const dropProps = {
+    onDragEnter: (event: React.DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      depth.current += 1;
+      setDragging(true);
+    },
+    onDragOver: (event: React.DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+    },
+    onDragLeave: (event: React.DragEvent) => {
+      if (!carriesFiles(event)) return;
+      depth.current = Math.max(0, depth.current - 1);
+      if (depth.current === 0) setDragging(false);
+    },
+    onDrop: (event: React.DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      depth.current = 0;
+      setDragging(false);
+      const files = [...event.dataTransfer.files];
+      const images = files.filter((file) => file.type.startsWith('image/'));
+      if (images.length > 0) onFiles(images);
+      else if (files.length > 0) toast.error('Could not attach the file', 'Only images can be attached.');
+    },
+  };
+
+  return { dragging, dropProps };
+}
+
+export function ImageDropOverlay({ dragging, className }: { dragging: boolean; className?: string }) {
+  if (!dragging) return null;
+  return (
+    <div
+      data-attr="image-drop-overlay"
+      className={`pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-2 border-dashed border-primary/60 bg-background/80 ${className ?? ''}`}
+    >
+      <span className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
+        <ImagePlus className="h-4 w-4" /> Drop images to attach
+      </span>
+    </div>
+  );
 }
 
 export function ImageAttachmentChips({
