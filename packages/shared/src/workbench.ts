@@ -17,6 +17,7 @@ import type { SlackSessionSource } from './slack.js';
 import type { MemoryReviewSessionSource } from './memoryReview.js';
 import type { SandboxSize } from './sandboxSize.js';
 import type { WorkbenchBackground, WorkbenchMessageTrigger } from './workbenchBackground.js';
+import type { WorkbenchStartProgress } from './workbenchStartProgress.js';
 
 // ============================================================================
 // Vocabulary
@@ -219,6 +220,11 @@ export interface Workbench {
    * (what failed while provisioning) and cleared when there is nothing to say.
    */
   statusMessage?: string | null;
+  /**
+   * How far a sandbox start has got, while it runs. Null or absent: not
+   * starting, or a server from before start progress.
+   */
+  startProgress?: WorkbenchStartProgress | null;
   /**
    * The linked pull request, as {@link nextWorkbenchAction} reads it. Present on
    * the single-workbench GET once a PR from this branch exists; null otherwise.

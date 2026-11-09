@@ -50,7 +50,9 @@ import {
 } from './recovery.js';
 import { isSizeRefusal, noteSizeFallback, sessionSandboxSize, sizeFallbackNote, sizeForSession, sizeRefusalReason } from './sandboxSize.js';
 import { boxStartRecord, imageSetupForCreate, noteImageResults, noteImageStatus, recordBoxSetupResults, type BoxTiming } from './setupLayers.js';
-import { writeBoxStart, type BoxStartCause } from './boxStart.js';
+import { readStartStepMedians, writeBoxStart, type BoxStartCause, type StartStepMedians } from './boxStart.js';
+import { GitProgressTracker, meaningfulStderrTail } from './gitProgress.js';
+import { clearLiveStartProgress, createProgressThrottle, setLiveGitProgress, startStep, type StoredStartProgress } from './startProgress.js';
 import {
   cloneScript,
   fleetClientFor,
@@ -309,7 +311,11 @@ async function createWaitingForCapacity(
   const noteWait = async (why: string) => {
     if (noted) return;
     noted = true;
-    row = await setProvisioningRow(row, ownSandboxId, { statusMessage: WAITING_FOR_SANDBOX_MESSAGE });
+    // No estimate: a wait for room has no usual length.
+    row = await setProvisioningRow(row, ownSandboxId, {
+      statusMessage: WAITING_FOR_SANDBOX_MESSAGE,
+      startProgress: startStep('sandbox', { thread: isThread(row), expectedMs: null }),
+    });
     recordWorkbenchEvent(row, 'sandbox_capacity_wait', `${why}: waiting for a free sandbox`, false);
     // A real session outranks the warm pool: its boxes go back to the fleet.
     await yieldWarmPool(`session ${row.id.slice(0, 8)} is waiting for room (${why})`);
@@ -422,6 +428,7 @@ async function failProvision(workbenchId: string, sandboxId: string | null, rawM
   if (isWorkbenchDraining()) return;
   // A lost box found while provisioning ends in `error`: nothing is starting a new one.
   const message = rawMessage === SANDBOX_LOST_MESSAGE ? SANDBOX_LOST_FAILED_MESSAGE : rawMessage;
+  clearLiveStartProgress(workbenchId);
   const row = await failProvisioningWorkbench(workbenchId, sandboxId, message);
   if (!row) {
     console.warn(`[workbench] not failing ${workbenchId}: it moved on from sandbox ${sandboxId ?? '(none)'} (${message})`);
@@ -704,8 +711,15 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
     // 1. The box.
     const createStartedAt = Date.now();
     const cause: BoxStartCause = opts.restore || row.memoryRestorePending === 'archive' ? 'restore' : replacingLostSandbox ? 'lost' : 'new';
+    const thread = isThread(row);
+    // Read once: every step's estimate comes from this.
+    const medians: StartStepMedians = await readStartStepMedians(thread ? null : row.repositoryId);
     // A new session's first box can come ready-made from the repository's warm pool.
-    const warm: WarmClaim | null = cause === 'new' && !isThread(row) ? await claimWarmBox(row) : null;
+    const warm: WarmClaim | null = cause === 'new' && !thread ? await claimWarmBox(row) : null;
+    // A warm box is booted already: its start goes straight to the code.
+    if (!warm) {
+      row = await setProvisioningRow(row, ownSandboxId, { startProgress: startStep('sandbox', { thread, expectedMs: medians.sandbox }) });
+    }
     const waited = warm
       ? { created: warm.created, ownSandboxId, waitMs: 0 }
       : await createWaitingForCapacity(row, row.sandboxId ?? sandboxIdFor(row.id), ownSandboxId, claim);
@@ -716,14 +730,18 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
     assertOwned(claim);
     const boxReadyMs = Date.now() - createStartedAt;
     let boxLayer = boxLayerOf(created);
+    const prebakedCheckout = hasPrebakedCheckout(boxLayer, created.record.prebakedCheckout);
     const sandboxId = created.sandboxId;
+    const codeStep = thread ? null : startStep('code', { thread, expectedMs: prebakedCheckout ? medians.checkout : medians.clone });
     const boxed = await recordProvisionedSandbox(row.id, ownSandboxId, {
       sandboxId,
       sandboxState: replacingLostSandbox ? 'lost' : 'running',
       fleetHost: created.fleetHost,
       fleetSandboxId: created.fleetSandboxId,
       size: created.size,
-      statusMessage: isThread(row) ? 'Preparing the thread' : 'Cloning the repository',
+      statusMessage: thread ? 'Preparing the thread' : 'Cloning the repository',
+      // A thread's only step was the box.
+      startProgress: codeStep,
     });
     if (!boxed) throw new ProvisionSupersededError(`the session moved on from sandbox ${ownSandboxId ?? '(none)'}`);
     ownSandboxId = sandboxId;
@@ -755,7 +773,7 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
       repoCommit: boxLayer.repoCommit,
       userLayerPending: created.record.userLayerPending ?? null,
       repoLayerPending: created.record.repoLayerPending ?? null,
-      prebakedCheckout: hasPrebakedCheckout(boxLayer, created.record.prebakedCheckout),
+      prebakedCheckout,
       ...(warm ? { warm: true } : {}),
     };
     // The image and the boot show in the Sandbox panel while the clone and the setup run.
@@ -763,15 +781,16 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
       console.warn(`[workbench] keeping the start of ${sandboxId} failed:`, err));
     // 2. The repository and the branch: a checkout when the image holds the repository.
     const checkoutStartedAt = Date.now();
-    const cloned = await runCapture(row, cloneScript(row, { boxLayer, prebakedCheckout: created.record.prebakedCheckout, firstBox: cause === 'new' }), {
-      cwd: '/',
-      timeoutMs: CLONE_TIMEOUT_MS,
-    });
+    const cloned = await runCloneWithProgress(
+      row,
+      cloneScript(row, { boxLayer, prebakedCheckout: created.record.prebakedCheckout, firstBox: cause === 'new', progress: true }),
+      codeStep,
+    );
     const checkoutMs = Date.now() - checkoutStartedAt;
     if (cloned.exitCode !== 0) {
       return await fail(
         `Could not clone ${row.repoFullName} and check out ${row.branch}: ` +
-          (cloned.stderr.trim().split('\n').slice(-3).join(' ') || `git exited ${cloned.exitCode}`),
+          (cloned.errorTail || `git exited ${cloned.exitCode}`),
       );
     }
     boxLayer = withCheckoutCommit(boxLayer, cloned.stdout);
@@ -803,7 +822,10 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
     if (isWorkbenchDraining()) return;
     if (config?.setup) {
       assertOwned(claim);
-      row = await setProvisioningRow(row, sandboxId, { statusMessage: 'Running the setup script' });
+      row = await setProvisioningRow(row, sandboxId, {
+        statusMessage: 'Running the setup script',
+        startProgress: startStep('setup', { thread, expectedMs: medians.setup }),
+      });
       const setupStartedAt = Date.now();
       const { done } = await startScript(row, 'setup', { config, resume: true });
       const exited = await awaitSetupScript(done, row.id, sandboxId, claim);
@@ -824,7 +846,9 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
       await recordRecoveredTranscript(row, row.memoryRestorePending === 'archive', workNote);
     }
     assertOwned(claim);
-    row = await setProvisioningRow(row, sandboxId, { status: 'ready', sandboxState: 'running', statusMessage: setupNote, memoryRestorePending: null });
+    row = await setProvisioningRow(row, sandboxId, {
+      status: 'ready', sandboxState: 'running', statusMessage: setupNote, memoryRestorePending: null, startProgress: null,
+    });
     recordWorkbenchEvent(row, 'ready', 'provisioned');
     if (warm) await noteWarmStartReady(row, warm, Date.now() - createStartedAt);
     // A new box (a start, a move, a recovery): store its changes, which refreshes the stat too.
@@ -850,6 +874,43 @@ async function provisionClaimed(workbenchId: string, opts: { restore?: boolean }
   }
 }
 
+/** How often git progress may go out to the clients. A field, not a constant, so tests can shorten it. */
+export const PROVISION_PROGRESS = { emitMs: 1_000 };
+
+/**
+ * The clone script, streamed so git's progress reaches the start's progress
+ * bar while it runs. The percentage is kept in this process only and goes out
+ * at most once a second. The error tail leaves the progress lines out.
+ */
+async function runCloneWithProgress(
+  row: WorkbenchRow,
+  script: string,
+  step: StoredStartProgress | null,
+): Promise<{ exitCode: number; stdout: string; errorTail: string }> {
+  const tracker = new GitProgressTracker();
+  const throttle = createProgressThrottle(async () => {
+    const fresh = await getWorkbench(row.id);
+    if (fresh?.status === 'provisioning') await emitWorkbenchUpdated(await publicWorkbench(fresh));
+  }, PROVISION_PROGRESS.emitMs);
+  try {
+    const cloned = await runCapture(row, script, {
+      cwd: '/',
+      timeoutMs: CLONE_TIMEOUT_MS,
+      marker: `clone-${row.id}`,
+      onStderrLine: (line) => {
+        const state = tracker.push(line);
+        if (!state || !step) return;
+        setLiveGitProgress(row.id, step.stepStartedAt, state.percent, state.detail);
+        throttle.note(state.percent);
+      },
+    });
+    return { exitCode: cloned.exitCode, stdout: cloned.stdout, errorTail: meaningfulStderrTail(cloned.stderr) };
+  } finally {
+    throttle.stop();
+    clearLiveStartProgress(row.id);
+  }
+}
+
 /** A thread's box after its create: the work directory, the recap, then the queued messages. */
 async function finishThreadProvision(
   row: WorkbenchRow,
@@ -866,7 +927,9 @@ async function finishThreadProvision(
   if (row.memoryRestorePending || replacingLostSandbox) {
     await recordRecoveredTranscript(row, row.memoryRestorePending === 'archive');
   }
-  row = await setProvisioningRow(row, row.sandboxId, { status: 'ready', sandboxState: 'running', statusMessage: null, memoryRestorePending: null });
+  row = await setProvisioningRow(row, row.sandboxId, {
+    status: 'ready', sandboxState: 'running', statusMessage: null, memoryRestorePending: null, startProgress: null,
+  });
   recordWorkbenchEvent(row, 'ready', 'provisioned');
   for (const chat of await listChats(row.id)) {
     if (chat.queuedMessages.length > 0 && !chat.closedAt) await startQueuedIfIdle(chat.id);
@@ -1039,6 +1102,7 @@ export async function retryWorkbench(workbenchId: string): Promise<WorkbenchRow>
   row = await setRow(row, {
     status: 'provisioning',
     statusMessage: 'Creating the sandbox',
+    startProgress: null,
     sandboxId: oldBox ? nextSandboxId({ ...row, sandboxId: oldBox }) : sandboxIdFor(row.id),
     // A stuck recovery of a lost box stays one, so the new box gets the checkpoint back.
     sandboxState: stuck && row.sandboxState === 'lost' ? 'lost' : 'creating',
@@ -1110,6 +1174,7 @@ export async function restoreWorkbench(workbenchId: string, opts: { archiveWaitM
     name,
     status: 'provisioning',
     statusMessage: 'Creating a new sandbox',
+    startProgress: null,
     memoryRestorePending: 'archive',
     sandboxId: nextSandboxId(row),
     sandboxState: 'creating',

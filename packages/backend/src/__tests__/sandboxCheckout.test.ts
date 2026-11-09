@@ -227,6 +227,81 @@ describe.skipIf(process.platform === 'win32')('checkout from an older image', ()
     }
   });
 
+  describe('with git progress', () => {
+    const progressOpts = (f: ReturnType<typeof fixture>) => ({ ...f.opts, progress: true });
+    const lines = (stderr: string) => stderr.split('\n').map((line) => line.trim()).filter(Boolean);
+
+    it.each([
+      { name: 'a fetch into the image checkout', removeImage: false, phase: /^Receiving objects: +\d+%/ },
+      { name: 'a full clone when there is no image', removeImage: true, phase: /^Receiving objects: +\d+%/ },
+    ])('prints each update as its own line for $name, and checks out the branch', ({ removeImage, phase }) => {
+      const f = fixture();
+      try {
+        if (removeImage) rmSync(f.image, { recursive: true, force: true });
+        const result = f.run(`progress: ${removeImage ? 'clone' : 'fetch'}`, row, progressOpts(f), 'export GIT_PROGRESS_DELAY=0');
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stderr).not.toContain('\r');
+        expect(lines(result.stderr).some((line) => phase.test(line))).toBe(true);
+        expect(f.git(f.checkout, 'branch', '--show-current')).toBe(row.branch);
+        expect(result.stdout.trim().split('\n').pop()).toBe(f.git(f.checkout, 'rev-parse', 'HEAD'));
+        const network = result.commands.filter(([command]) => command === 'fetch' || command === 'clone');
+        expect(network.length).toBeGreaterThan(0);
+        expect(network.every((args) => args.includes('--progress'))).toBe(true);
+      } finally {
+        rmSync(f.root, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      { name: 'clone', code: 128, removeImage: true },
+      { name: 'clone', code: 7, removeImage: true },
+      { name: 'fetch', code: 128, removeImage: false },
+      { name: 'fetch', code: 3, removeImage: false },
+    ])('keeps the exit status $code of a failed $name, and stops there', ({ name, code, removeImage }) => {
+      const f = fixture();
+      try {
+        if (removeImage) rmSync(f.image, { recursive: true, force: true });
+        const fake = `git() { if [ "$1" = ${name} ]; then printf 'Receiving objects:  10%% (1/10)\\rReceiving objects:  20%% (2/10)\\r' >&2; echo 'fatal: the remote hung up' >&2; return ${code}; fi; command git "$@"; }`;
+        const result = f.run(`progress: failed ${name} ${code}`, row, progressOpts(f), fake);
+        expect(result.status).toBe(code);
+        expect(result.stderr).not.toContain('\r');
+        expect(lines(result.stderr)).toEqual(expect.arrayContaining([
+          'Receiving objects:  10% (1/10)', 'Receiving objects:  20% (2/10)', 'fatal: the remote hung up',
+        ]));
+        expect(result.commands.some(([command]) => command === 'checkout')).toBe(false);
+      } finally {
+        rmSync(f.root, { recursive: true, force: true });
+      }
+    });
+
+    it('falls back to the depth fetch when the date-limited one fails, as without progress', () => {
+      const f = fixture();
+      try {
+        const older = f.git(f.origin, 'rev-parse', 'main~350');
+        f.git(f.origin, 'update-ref', 'refs/heads/main', older);
+        const result = f.run('progress: base rewritten before image date', row, progressOpts(f));
+        expect(result.status, result.stderr).toBe(0);
+        expect(f.git(f.checkout, 'rev-parse', 'HEAD')).toBe(older);
+        const fetches = result.commands.filter(([command]) => command === 'fetch');
+        expect(fetches).toHaveLength(2);
+        expect(fetches[1]).toEqual(expect.arrayContaining(['--progress', '--depth=50']));
+      } finally {
+        rmSync(f.root, { recursive: true, force: true });
+      }
+    });
+
+    it('runs without stdbuf', () => {
+      const f = fixture();
+      try {
+        const result = f.run('progress: no stdbuf', row, progressOpts(f), 'command() { if [ "$1" = -v ] && [ "$2" = stdbuf ]; then return 1; fi; builtin command "$@"; }');
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stderr).not.toContain('\r');
+      } finally {
+        rmSync(f.root, { recursive: true, force: true });
+      }
+    });
+  });
+
   it('stops when the branch probe fails, even if the base could be fetched', () => {
     const f = fixture();
     try {

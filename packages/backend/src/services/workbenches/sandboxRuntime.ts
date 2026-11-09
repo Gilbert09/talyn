@@ -56,6 +56,7 @@ import {
   frameCommand,
   FrameDemux,
   killMarkerScript,
+  newNonce,
   parseSections,
   sectionsScript,
 } from './execFraming.js';
@@ -493,6 +494,12 @@ export interface SandboxExecOptions {
    * a different box would repeat it against other state.
    */
   diskRecovery?: boolean;
+  /**
+   * Stream the command and hand each stderr line here as it arrives, for
+   * progress. The result is then line based: the lines of each stream joined
+   * with `\n`. Not with `quiet`, `follow` or `diskRecovery`.
+   */
+  onStderrLine?: (line: string) => void;
 }
 
 export interface SandboxExecResult {
@@ -520,6 +527,7 @@ export async function runCapture(
   script: string,
   opts: SandboxExecOptions = {},
 ): Promise<SandboxExecResult> {
+  if (opts.onStderrLine) return runCaptureStreamed(row, script, opts.onStderrLine, opts);
   let result: SandboxExecResult;
   try {
     result = await runCaptureOnce(row, script, opts);
@@ -532,6 +540,33 @@ export async function runCapture(
     if (await grownAfterDiskFull(row)) return runCaptureOnce(row, script, opts);
   }
   return result;
+}
+
+async function runCaptureStreamed(
+  row: WorkbenchRow,
+  script: string,
+  onStderrLine: (line: string) => void,
+  opts: SandboxExecOptions,
+): Promise<SandboxExecResult> {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const outcome = await runStream(row, script, {
+    cwd: opts.cwd,
+    env: opts.env,
+    timeoutMs: opts.timeoutMs,
+    marker: opts.marker ?? `capture-${newNonce()}`,
+    onStdoutLine: (line) => { stdout.push(line); },
+    onStderrLine: (line) => {
+      stderr.push(line);
+      try {
+        onStderrLine(line);
+      } catch (err) {
+        console.warn('[workbench] a stderr line handler failed:', err);
+      }
+    },
+  });
+  const out = stdout.join('\n');
+  return { exitCode: outcome.exitCode ?? -1, stdout: out, stderr: stderr.join('\n'), stdoutBytes: Buffer.from(out, 'utf8') };
 }
 
 /** True when the same box now has room. Otherwise a move may have started; it does not concern this call. */
@@ -777,6 +812,25 @@ export const GOLDEN_REPO_DIR = `${SANDBOX_WORK_ROOT}/repo`;
 /** The clone script's lock. In the work root, never in a repository's tree. */
 export const CLONE_LOCK_FILE = `${SANDBOX_WORK_ROOT}/.talyn-clone.lock`;
 
+/**
+ * Shell functions for `cloneScript({ progress: true })`. `git_progress CMD...`
+ * runs CMD with its stdout untouched and its stderr through `cr_lines`, which
+ * turns git's `\r` updates into lines. It runs in a subshell with `pipefail`,
+ * so its status is CMD's (tr exits 0), the script's other pipelines keep their
+ * old status rules, and `set -e` stops the script on a failed clone or fetch
+ * exactly as it did. A pipeline, not `2> >(...)`: bash does not wait for a
+ * process substitution, so a capture could end before the last error line.
+ * `stdbuf -o0` stops tr holding updates in a 4 KiB buffer; without it the
+ * lines still arrive, later.
+ */
+export const GIT_PROGRESS_FUNCTIONS = [
+  "cr_lines() { if command -v stdbuf >/dev/null 2>&1; then stdbuf -o0 tr '\\r' '\\n'; else tr '\\r' '\\n'; fi; }",
+  'git_progress() (',
+  '  set -o pipefail',
+  '  { "$@" 2>&1 1>&3 3>&- | cr_lines >&2 3>&-; } 3>&1',
+  ')',
+];
+
 /** `git fetch --deepen` steps tried for a merge base in a shallow clone before `--unshallow`. */
 export const MERGE_BASE_DEEPEN_TRIES = 4;
 export const MERGE_BASE_DEEPEN_BY = 500;
@@ -803,11 +857,16 @@ export const MERGE_BASE_DEEPEN_BY = 500;
  * `git` reaches GitHub through the guest's proxy rewrite, which attaches the
  * credential host-side; the token never enters the box. The fallback clone is
  * blobless, so a large repository is usable in seconds and blobs arrive as read.
+ *
+ * With `progress`, every clone and fetch prints git's progress, one update per
+ * stderr line: git separates its updates with `\r`, and the guest splits
+ * output on `\n` only. Each command keeps its own exit status (see
+ * {@link GIT_PROGRESS_FUNCTIONS}).
  */
 export function cloneScript(
   row: Pick<WorkbenchRow, 'repoFullName' | 'branch' | 'baseBranch'>
     & Partial<Pick<WorkbenchRow, 'allocatedBranch' | 'pushedHeadShas'>>,
-  opts: { boxLayer?: BoxLayerContext; prebakedCheckout?: boolean; firstBox?: boolean; warm?: boolean } = {},
+  opts: { boxLayer?: BoxLayerContext; prebakedCheckout?: boolean; firstBox?: boolean; warm?: boolean; progress?: boolean } = {},
 ): string {
   const prebaked = opts.boxLayer ? hasPrebakedCheckout(opts.boxLayer, opts.prebakedCheckout) : false;
   const depth = prebaked ? 50 : 200;
@@ -824,8 +883,12 @@ export function cloneScript(
   const localRef = shellQuote(`refs/heads/${row.branch}`);
   const baseSpec = shellQuote(`+refs/heads/${row.baseBranch}:refs/remotes/origin/${row.baseBranch}`);
   const branchSpec = shellQuote(`+refs/heads/${row.branch}:refs/remotes/origin/${row.branch}`);
+  const run = opts.progress ? 'git_progress ' : '';
+  const progress = opts.progress ? ' --progress' : '';
+  const fetch = `${run}git fetch --no-tags${progress}`;
   return [
     'set -e',
+    ...(opts.progress ? GIT_PROGRESS_FUNCTIONS : []),
     `mkdir -p ${SANDBOX_WORK_ROOT}`,
     // Two provisions of one session can run this at once. The second waits,
     // then finds the clone and takes the existing-clone path. Outside the work tree.
@@ -840,7 +903,7 @@ export function cloneScript(
     `  if [ -n "$golden_match" ] && [ -d ${golden}/.git ] && [ ! -e ${dir} ]; then`,
     `    ln -s ${golden} ${dir}`,
     '  else',
-    `    git clone --filter=blob:none ${url} ${dir}`,
+    `    ${run}git clone --filter=blob:none${progress} ${url} ${dir}`,
     '  fi',
     'fi',
     `cd ${dir}`,
@@ -886,12 +949,12 @@ export function cloneScript(
     'if [ -n "$shallow" ]; then',
     // A rewritten base can predate the image. Retry without the date limit.
     '  if [ -n "$shallow_since" ]; then',
-    `    git fetch --no-tags --shallow-since="$shallow_since" origin "$@" || git fetch --no-tags --depth=${depth} origin "$@"`,
+    `    ${fetch} --shallow-since="$shallow_since" origin "$@" || ${fetch} --depth=${depth} origin "$@"`,
     '  else',
-    `    git fetch --no-tags --depth=${depth} origin "$@"`,
+    `    ${fetch} --depth=${depth} origin "$@"`,
     '  fi',
     'else',
-    '  git fetch --no-tags origin "$@"',
+    `  ${fetch} origin "$@"`,
     'fi',
     ...(opts.warm ? [`git checkout --detach ${remoteBase}`] : [
       `if git show-ref --verify --quiet ${localRef}; then`,
@@ -908,8 +971,8 @@ export function cloneScript(
     // unrelated histories, and `--unshallow` on a complete repo is an error.
     'tries=0',
     `while [ "$(git rev-parse --is-shallow-repository)" = true ] && ! git merge-base HEAD ${remoteBase} >/dev/null 2>&1; do`,
-    `  if [ "$tries" -ge ${MERGE_BASE_DEEPEN_TRIES} ]; then git fetch --no-tags --unshallow origin "$@"; break; fi`,
-    `  git fetch --no-tags --deepen=${MERGE_BASE_DEEPEN_BY} origin "$@"`,
+    `  if [ "$tries" -ge ${MERGE_BASE_DEEPEN_TRIES} ]; then ${fetch} --unshallow origin "$@"; break; fi`,
+    `  ${fetch} --deepen=${MERGE_BASE_DEEPEN_BY} origin "$@"`,
     '  tries=$((tries + 1))',
     'done',
     // What the box knows about its image, for the box setup (`BOX_LAYER_FILE`).

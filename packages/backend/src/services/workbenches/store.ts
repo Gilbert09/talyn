@@ -30,6 +30,7 @@ import { emitWorkbenchChat, emitWorkbenchEvents } from './emit.js';
 import { isRestoring } from './restorePhase.js';
 import { cleanJsonbString, stringifyJsonbSafe, toJsonbSafe } from './jsonSafe.js';
 import { BOX_START_SETTINGS_KEYS } from './boxStart.js';
+import { publicStartProgress } from './startProgress.js';
 import { bootSampleFromMetric, storeBootSamples } from '../insights/bootSamples.js';
 
 /**
@@ -82,6 +83,7 @@ export const WORKBENCH_COLUMNS = {
   fleetHost: workbenchesTable.fleetHost,
   status: workbenchesTable.status,
   statusMessage: workbenchesTable.statusMessage,
+  startProgress: workbenchesTable.startProgress,
   pullRequestId: workbenchesTable.pullRequestId,
   pullRequestLinkedAt: workbenchesTable.pullRequestLinkedAt,
   pushedHeadShas: workbenchesTable.pushedHeadShas,
@@ -165,6 +167,7 @@ export function rowToWorkbench(row: WorkbenchRow): Workbench {
     sandboxState: row.sandboxState as WorkbenchSandboxState,
     status: row.status === 'archiveError' ? 'archiveError' : row.archivedAt ? 'archived' : row.status as WorkbenchStatus,
     statusMessage: row.statusMessage,
+    startProgress: publicStartProgress(row),
     pullRequestId: row.pullRequestId,
     settings: publicSettings(row.settings),
     source: row.source ?? null,
@@ -711,7 +714,7 @@ export async function isProvisionOwned(id: string, sandboxId: string | null): Pr
 export async function updateProvisioningWorkbench(
   id: string,
   sandboxId: string | null,
-  patch: Pick<Partial<NewWorkbench>, 'status' | 'statusMessage' | 'sandboxState' | 'memoryRestorePending'>,
+  patch: Pick<Partial<NewWorkbench>, 'status' | 'statusMessage' | 'sandboxState' | 'memoryRestorePending' | 'startProgress'>,
 ): Promise<WorkbenchRow | null> {
   const [row] = await db()
     .update(workbenchesTable)
@@ -736,6 +739,7 @@ export async function recordProvisionedSandbox(
     fleetSandboxId: string | null;
     size: string;
     statusMessage: string;
+    startProgress: NewWorkbench['startProgress'];
   },
 ): Promise<WorkbenchRow | null> {
   const s = workbenchesTable.settings;
@@ -755,6 +759,7 @@ export async function recordProvisionedSandbox(
       ...(box.fleetHost ? { fleetHost: box.fleetHost } : {}),
       settings,
       statusMessage: box.statusMessage,
+      startProgress: box.startProgress,
       updatedAt: new Date(),
     })
     .where(ownedByProvision(id, expectedSandboxId))
@@ -782,7 +787,7 @@ export async function moveProvisionToSandboxId(
 
 /** A provision failed. Null when the row is no longer this provision's. */
 export async function failProvisioningWorkbench(id: string, sandboxId: string | null, message: string): Promise<WorkbenchRow | null> {
-  return updateProvisioningWorkbench(id, sandboxId, { status: 'error', statusMessage: message, sandboxState: 'error' });
+  return updateProvisioningWorkbench(id, sandboxId, { status: 'error', statusMessage: message, sandboxState: 'error', startProgress: null });
 }
 
 /**

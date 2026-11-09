@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Start progress for session boxes (2026-11-09)
+
+A session that is starting now shows a progress bar in place of a spinner: "Step 1 of 3 · Starting the sandbox", then "Getting the code" with git's real percentage, then "Running the setup script". The work was written on 2026-11-06 and left uncommitted in the main checkout; it was rebased onto main and its migration renumbered from 0118 (taken by `0118_usage_period_midnight`) to `0125_workbench_start_progress`.
+- The STEP is stored on `workbenches.start_progress` and changes a few times per start. Git's PERCENTAGE changes many times a second, so it stays in the process that runs the clone (`startProgress.ts`) and goes out at most once a second. A broadcast from another instance has no percentage; the front ends never move a bar backwards within a step, so that is harmless.
+- Each step's estimate is this repository's MEDIAN from `setupTimingHistory`, with a checkout and a full clone kept apart because they differ by minutes. With fewer samples than the start comparison needs, the bar is indeterminate. The estimate slows as it nears 95% so a slow start never shows as done.
+- The clone script runs git with `--progress` through `git_progress`, a subshell with `pipefail` that turns git's `\r` updates into lines and keeps each command's own exit status (`GIT_PROGRESS_FUNCTIONS`). The error message quotes the last stderr lines that are NOT progress, so a failed clone no longer reports "Receiving objects: 43%".
+- A warm-pool box skips the sandbox step. A thread has one step, the box. Every path that ends or restarts a start (ready, failure, retry, restore) clears the column.
+
 ## Max plan (2026-11-08)
 
 A third paid tier: **Max**, $100 a month (monthly only, Tom's call), 1,000 box-hours a month, every size, credits and auto features. Tom asked for "something like $100 with a lot more compute" that does not lose money.

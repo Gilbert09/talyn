@@ -25,6 +25,7 @@ import type {
   WorkbenchImportedFrom,
   WorkbenchQueuedMessage,
   WorkbenchSettings,
+  WorkbenchStartProgress,
   WorkbenchSource,
   MemorySource,
   SlackRepoCandidate,
@@ -2322,6 +2323,8 @@ export const workbenches = pgTable(
     /** `WorkbenchStatus`. */
     status: text('status').notNull().default('provisioning'),
     statusMessage: text('status_message'),
+    /** The step a sandbox start is on (migration 0125). Null when no start runs. Git's live percent is not stored. */
+    startProgress: jsonb('start_progress').$type<Omit<WorkbenchStartProgress, 'percent' | 'detail'>>(),
     pullRequestId: text('pull_request_id').references(() => pullRequests.id, {
       onDelete: 'set null',
     }),
