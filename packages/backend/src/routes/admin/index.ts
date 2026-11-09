@@ -1,3 +1,4 @@
+import { mobileNotificationMetricsSnapshot } from '../../services/mobileNotifications/metrics.js';
 import { Router } from 'express';
 import type { AdminAccess, ApiResponse } from '@talyn/shared';
 import { requireAdmin } from '../../middleware/auth.js';
@@ -65,6 +66,9 @@ export function adminRoutes(): Router {
 
   // Everything below is operator-only.
   router.use(requireAdmin);
+  router.get('/mobile-notifications/metrics', (_req, res) => {
+    res.json({ success: true, data: mobileNotificationMetricsSnapshot() });
+  });
 
   /**
    * The debug surface, under the console's prefix.

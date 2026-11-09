@@ -50,6 +50,12 @@ jest.mock('expo-crypto', () => {
   };
 });
 jest.mock('expo-web-browser', () => ({ openAuthSessionAsync: jest.fn(), dismissAuthSession: jest.fn() }));
+jest.mock('expo-notifications', () => ({
+  setNotificationHandler: jest.fn(),
+  addNotificationResponseReceivedListener: jest.fn(() => ({ remove: jest.fn() })),
+  addPushTokenListener: jest.fn(() => ({ remove: jest.fn() })),
+  getLastNotificationResponse: jest.fn(() => null), clearLastNotificationResponse: jest.fn(),
+}));
 jest.mock('@supabase/supabase-js', () => ({ createClient: jest.fn(() => ({ auth: mockAuth })) }));
 jest.mock('@talyn/client/native', () => ({
   configureApiClient: jest.fn(), wsClient: { reset: jest.fn(), connect: jest.fn(async () => {}), on: jest.fn(() => () => {}),
@@ -120,6 +126,15 @@ describe('mobile runtime binding', () => {
     const abort = new AbortController(); abort.abort();
     await expect(createMobileRuntime(config, abort.signal)).rejects.toThrow();
     expect(createClient).not.toHaveBeenCalled(); expect(NetInfo.addEventListener).not.toHaveBeenCalled();
+  });
+  it('finishes installation removal before local sign-out and coalesces repeated actions', async () => {
+    const runtime = await createMobileRuntime(config); await runtime.start();
+    let finish!: () => void;
+    jest.spyOn(runtime.notifications, 'logout').mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const first = runtime.signOut(); const second = runtime.signOut();
+    expect(first).toBe(second); expect(mockAuth.signOut).not.toHaveBeenCalled();
+    finish(); await first;
+    expect(mockAuth.signOut).toHaveBeenCalledTimes(1); runtime.dispose();
   });
   it('clears old secure data and workspace preferences when the environment changes', async () => {
     const runtime = await createMobileRuntime(config);
