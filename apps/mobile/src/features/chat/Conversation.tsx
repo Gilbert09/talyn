@@ -1,4 +1,4 @@
-import type { Workbench } from '@talyn/shared';
+import type { ToolBlock, Workbench } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ReactNode } from 'react';
 import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View, type TextInput } from 'react-native';
@@ -6,7 +6,6 @@ import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View, 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { AppText } from '../../components/UI';
 import { StateNotice, workflowStyles as styles } from '../../components/Workflow';
-import { chatDetailsLine } from '../../lib/models';
 import { useNow } from '../../lib/time';
 import { type, useTheme } from '../../theme/tokens';
 import { useLocal, useResource } from '../../workflow/hooks';
@@ -14,12 +13,16 @@ import type { Transcript } from '../../workflow/model';
 import { chatActions } from './actions';
 import { ChatTabs } from './ChatTabs';
 import { Composer } from './Composer';
+import { fullToolFrom, TranscriptContext, toolSeq, type TranscriptActions } from './fullTool';
 import { TypingDots } from './Pulse';
-import { transcriptRows, type TranscriptRow as Row } from './transcript';
+import { RowBoundary } from './RowBoundary';
+import { TranscriptRowCache, type TranscriptRow as Row } from './transcript';
 import { TranscriptRow, type PlanControls } from './TranscriptRow';
 
 /** How close to the newest message still counts as following new output. */
 const FOLLOW_DISTANCE = 64;
+/** How close to the oldest loaded message the next older page loads, in screen heights. */
+const OLDER_DISTANCE = 0.6;
 
 /**
  * The conversation for a session or a thread. The list is inverted: index 0 is
@@ -45,10 +48,13 @@ export function Conversation({ item, ready, header, top }: {
   const [following, setFollowing] = useState(local.following);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [planBusy, setPlanBusy] = useState(false);
+  const cache = useRef(new TranscriptRowCache());
+  /** The reader reached the oldest loaded message while another load ran. The older page is owed once it ends. */
+  const olderOwed = useRef(false);
   useLayoutEffect(() => { setFollowing(workflow.local(chat?.id ?? '').following); }, [workflow, chat?.id]);
   useEffect(() => { if (chat) workflow.updateLocal(`selected:${item.id}`, { selectedChat: chat.id }); }, [workflow, item.id, chat?.id]);
   const rows = useMemo(() => {
-    const list = transcriptRows(chat?.id ?? '', state.data?.events ?? []);
+    const list = cache.current.rows(chat?.id ?? '', state.data?.events ?? []);
     for (const message of chat?.queuedMessages ?? []) {
       list.push({ key: `queue:${message.id}`, kind: 'queued', text: message.text, fromTalyn: message.origin === 'talyn', timestamp: message.queuedAt });
     }
@@ -56,18 +62,33 @@ export function Conversation({ item, ready, header, top }: {
   }, [chat?.id, chat?.queuedMessages, state.data]);
 
   const pauseFollowing = useCallback(() => { setFollowing(false); workflow.updateLocal(chat?.id ?? item.id, { following: false }); }, [workflow, chat?.id, item.id]);
-  const loadOlder = () => {
-    if (!chat || !state.data?.hasOlder || loadingOlder || state.refreshing || offline) return;
+  const data = state.data;
+  const canLoadOlder = Boolean(chat && data?.hasOlder && !data.limited && !data.olderFailed && !loadingOlder && !state.refreshing && !offline);
+  const chatId = chat?.id;
+  const startOlder = useCallback(() => {
+    if (!chatId) return;
     setLoadingOlder(true);
-    void workflow.older(chat.id).finally(() => setLoadingOlder(false));
+    void workflow.older(chatId).finally(() => setLoadingOlder(false));
+  }, [workflow, chatId]);
+  const loadOlder = () => {
+    if (canLoadOlder) { olderOwed.current = false; startOlder(); }
+    else if (data?.hasOlder && !data.limited && !data.olderFailed) olderOwed.current = true;
   };
+  // The list asks once per content size. When it asked during another load, ask for it when that load ends.
+  useEffect(() => {
+    if (olderOwed.current && canLoadOlder) { olderOwed.current = false; startOlder(); }
+  }, [canLoadOlder, startOlder]);
   const jumpToLatest = () => {
     setFollowing(true); workflow.updateLocal(chat?.id ?? item.id, { following: true });
-    // A long read upwards can drop the newest messages from the bounded window. Reload them.
-    const data = state.data;
-    if (chat && data?.trimmed && (data.events.at(-1)?.seq ?? 0) < data.cursor) void workflow.latest(chat.id);
     ref.current?.scrollToOffset({ offset: 0, animated: true });
   };
+  const actions: TranscriptActions = useMemo(() => ({
+    loadFullTool: async (tool: ToolBlock) => {
+      const seq = toolSeq(tool);
+      if (!chat || seq === null) return null;
+      return fullToolFrom(tool, await workflow.fullEvents(chat.id, seq));
+    },
+  }), [workflow, chat]);
   const running = chat?.status === 'running';
   const plan: PlanControls = useMemo(() => ({
     busy: planBusy, disabled: running || offline || !ready,
@@ -87,24 +108,27 @@ export function Conversation({ item, ready, header, top }: {
     },
   }), [planBusy, running, offline, ready, chat, workflow, item.id]);
   const empty = state.status === 'ready' && rows.length === 0;
-  const details = chatDetailsLine(chat, item.agent);
 
   return <View style={{ flex: 1 }}>
     {header}
     {chats.length > 1 ? <ChatTabs chats={chats} selected={chat?.id} onSelect={setSelected} /> : null}
-    {details ? <AppText variant="caption" tone="muted" numberOfLines={1} style={local_.details}>{details}</AppText> : null}
     <View style={{ flex: 1 }}>
+      <RowBoundary label="The conversation" resetKey={chat?.id} retry><TranscriptContext.Provider value={actions}>
       <FlatList ref={ref} key={chat?.id ?? item.id} inverted data={rows} keyExtractor={(row) => row.key} accessibilityRole="list" accessibilityLabel="Conversation transcript"
         initialNumToRender={14} maxToRenderPerBatch={10} windowSize={9} contentContainerStyle={[styles.content, local_.content]}
         contentOffset={{ x: 0, y: local.offset }} scrollEventThrottle={100}
         maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: FOLLOW_DISTANCE }}
         onScroll={(event) => {
-          const offset = event.nativeEvent.contentOffset.y;
+          const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+          const offset = contentOffset.y;
           const next = offset < FOLLOW_DISTANCE;
+          if (contentSize.height - offset - layoutMeasurement.height > layoutMeasurement.height * OLDER_DISTANCE * 2) olderOwed.current = false;
           if (next !== following) setFollowing(next);
           workflow.updateLocal(chat?.id ?? item.id, { offset, following: next });
+          // Back at the newest message: older events past the release bound load again on the next scroll up.
+          if (next && !following && chat) workflow.release(chat.id);
         }}
-        onEndReached={loadOlder} onEndReachedThreshold={0.6}
+        onEndReached={loadOlder} onEndReachedThreshold={OLDER_DISTANCE}
         keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive"
         ListHeaderComponent={running ? <View accessibilityLiveRegion="polite" style={local_.working}>
           <TypingDots />
@@ -114,11 +138,18 @@ export function Conversation({ item, ready, header, top }: {
           {top ? <View>{top(pauseFollowing)}</View> : null}
           <StateNotice resource={state} offline={offline} refresh={state.refresh} refreshLabel="Try again" />
           {loadingOlder ? <View style={local_.older}><ActivityIndicator accessibilityLabel="Loading earlier messages" size="small" color={c.muted} /></View> : null}
-          {state.data?.trimmed ? <AppText variant="caption" tone="muted" style={local_.note}>History is limited on this device.</AppText> : null}
+          {data?.olderFailed ? <View style={local_.older}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Could not load earlier messages. Try again" hitSlop={8}
+              onPress={() => { if (chatId) { setLoadingOlder(true); void workflow.retryOlder(chatId).finally(() => setLoadingOlder(false)); } }}>
+              <AppText variant="caption" tone="muted">Could not load earlier messages. <AppText variant="caption" style={{ color: c.primaryAction }}>Try again</AppText></AppText>
+            </Pressable>
+          </View> : null}
+          {data?.limited && data.hasOlder ? <AppText variant="caption" tone="muted" style={local_.note}>History is limited on this device. Jump to the newest message to read further back.</AppText> : null}
           {state.data?.gap ? <AppText variant="caption" tone="muted" style={local_.note}>Some events are missing. Talyn is loading them again.</AppText> : null}
           {empty ? <AppText variant="meta" tone="muted" style={local_.empty}>No messages yet.</AppText> : null}
         </View>}
         renderItem={({ item: row }) => <TranscriptRow row={row} now={now} workbench={item} plan={plan} />} />
+      </TranscriptContext.Provider></RowBoundary>
       {!following && rows.length ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest" onPress={jumpToLatest} hitSlop={6}
         style={[local_.jump, { backgroundColor: c.elevated, borderColor: c.border }]}>
         <SymbolView name={{ ios: 'arrow.down', android: 'arrow_downward' }} size={16} tintColor={c.text} />
@@ -131,7 +162,6 @@ export function Conversation({ item, ready, header, top }: {
 
 const local_ = StyleSheet.create({
   content: { paddingTop: 8, paddingBottom: 12 },
-  details: { paddingHorizontal: 16, paddingVertical: 6 },
   working: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
   top: { gap: 8, paddingBottom: 8 },
   older: { height: 28, alignItems: 'center', justifyContent: 'center' },

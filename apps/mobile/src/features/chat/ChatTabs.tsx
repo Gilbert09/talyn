@@ -8,7 +8,7 @@ import { StatusDot } from './Pulse';
 const dotState = (chat: WorkbenchChat) => chat.status === 'running' ? 'running' as const : chat.status === 'error' ? 'error' as const
   : chat.status === 'awaiting_input' ? 'waiting' as const : null;
 
-/** Compact chat tabs, like web `ChatTabs`: the selected one is underlined, each with a status dot when it has news. */
+/** Compact chat tabs, like web `ChatTabs`: the selected one is underlined, each with a status dot when it has news. A slop keeps the touch target at 44 points. */
 export function ChatTabs({ chats, selected, onSelect }: { chats: WorkbenchChat[]; selected: string | undefined; onSelect(id: string): void }) {
   const c = useTheme();
   return <View style={[styles.wrap, { borderColor: c.border }]}>
@@ -17,11 +17,11 @@ export function ChatTabs({ chats, selected, onSelect }: { chats: WorkbenchChat[]
         const active = chat.id === selected;
         const dot = dotState(chat);
         const title = chat.title || 'Chat';
-        return <Pressable key={chat.id} accessibilityRole="tab" onPress={() => onSelect(chat.id)}
+        return <Pressable key={chat.id} accessibilityRole="tab" onPress={() => onSelect(chat.id)} hitSlop={{ top: 6, bottom: 6 }}
           accessibilityLabel={`${title} · ${statusLabel(chat.status)}${active ? ' · Selected' : ''}`} accessibilityState={{ selected: active }}
           style={[styles.tab, { borderBottomColor: active ? c.primary : 'transparent' }]}>
           {dot ? <StatusDot state={dot} /> : null}
-          <Text numberOfLines={1} style={[type.meta, sans(active ? 600 : 500), { color: active ? c.text : c.muted }]}>{title}</Text>
+          <Text numberOfLines={1} style={[type.caption, sans(active ? 600 : 500), { color: active ? c.text : c.muted }]}>{title}</Text>
         </Pressable>;
       })}
     </ScrollView>
@@ -30,6 +30,6 @@ export function ChatTabs({ chats, selected, onSelect }: { chats: WorkbenchChat[]
 
 const styles = StyleSheet.create({
   wrap: { borderBottomWidth: StyleSheet.hairlineWidth },
-  tabs: { paddingHorizontal: 12, gap: 4 },
-  tab: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 200, minHeight: 40, paddingHorizontal: 8, borderBottomWidth: 2 },
+  tabs: { paddingHorizontal: 10, gap: 2 },
+  tab: { flexDirection: 'row', alignItems: 'center', gap: 5, maxWidth: 160, minHeight: 32, paddingHorizontal: 6, borderBottomWidth: 2 },
 });

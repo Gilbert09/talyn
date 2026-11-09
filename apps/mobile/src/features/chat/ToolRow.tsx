@@ -1,10 +1,11 @@
 import { editDiffFromInput, type EditDiff, type ToolBlock, type ToolGroupBlock } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
-import { memo, useMemo, useState, type ReactNode } from 'react';
+import { memo, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { mono, type, useTheme, withAlpha } from '../../theme/tokens';
 import { ROW_TEXT_LIMIT } from '../../workflow/model';
+import { useTranscriptActions } from './fullTool';
 import { StatusDot } from './Pulse';
 import { ThinkingRow } from './TranscriptParts';
 import { diffTone, preview, readableOutput, toolLine, type DiffTone } from './toolFormat';
@@ -70,22 +71,40 @@ function inputText(input: unknown): string {
   try { return JSON.stringify(input, null, 2) ?? ''; } catch { return String(input); }
 }
 
+type FullState = { status: 'idle' | 'loading' | 'failed' } | { status: 'ready'; tool: ToolBlock };
+
 /**
  * One tool call as a compact mono line, like web: a status dot, the verb and
  * what it acted on. Tapping opens the input and the result.
+ *
+ * `partial`: the transcript holds a preview of the call or its result. "Show more" loads the
+ * whole call once and keeps it in this row only, so it leaves memory with the row.
  */
-export const ToolRow = memo(function ToolRow({ tool, nested = false }: { tool: ToolBlock; nested?: boolean }) {
+export const ToolRow = memo(function ToolRow({ tool: held, nested = false, partial = false }: { tool: ToolBlock; nested?: boolean; partial?: boolean }) {
   const c = useTheme();
+  const actions = useTranscriptActions();
   const [open, setOpen] = useState(false);
   const [full, setFull] = useState(false);
+  const [whole, setWhole] = useState<FullState>({ status: 'idle' });
+  const asked = useRef(false);
+  const tool = useMemo(() => whole.status === 'ready' ? { ...held, input: whole.tool.input, output: whole.tool.output ?? held.output } : held, [whole, held]);
+  const isPreview = partial && whole.status !== 'ready';
+  const loadWhole = () => {
+    if (!actions || asked.current) return;
+    asked.current = true;
+    setWhole({ status: 'loading' });
+    const failed = () => { asked.current = false; setWhole({ status: 'failed' }); };
+    actions.loadFullTool(held).then((loaded) => { if (loaded) setWhole({ status: 'ready', tool: loaded }); else failed(); }, failed);
+  };
   const line = useMemo(() => toolLine(tool.name, tool.input), [tool.name, tool.input]);
   const editDiff = useMemo(() => editDiffFromInput(tool.name, tool.input), [tool.name, tool.input]);
   const output = useMemo(() => open || tool.isError ? readableOutput(editDiff && !tool.isError ? undefined : tool.output) : null,
     [open, tool.isError, tool.output, editDiff]);
   const input = useMemo(() => open && !editDiff ? inputText(tool.input) : '', [open, editDiff, tool.input]);
   const state = !tool.settled ? 'running' : tool.isError ? 'error' : 'done';
-  const shown = output ? full ? { text: output.text.slice(0, ROW_TEXT_LIMIT), hidden: output.text.length > ROW_TEXT_LIMIT }
-    : preview(output.text, open ? PREVIEW_LINES : 3, PREVIEW_CHARS) : null;
+  const shown = output ? full ? { text: output.text.slice(0, ROW_TEXT_LIMIT), hidden: output.text.length > ROW_TEXT_LIMIT || isPreview }
+    : { ...preview(output.text, open ? PREVIEW_LINES : 3, PREVIEW_CHARS), ...(isPreview ? { hidden: true } : {}) } : null;
+  const more = () => { setOpen(true); setFull(true); if (isPreview) loadWhole(); };
   const label = `${line.label}${line.detail ? ` ${line.detail}` : ''}${state === 'running' ? ', running' : state === 'error' ? ', failed' : ''}`;
   return <View style={[styles.tool, nested && { paddingVertical: 2 }]}>
     <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ expanded: open }}
@@ -93,23 +112,28 @@ export const ToolRow = memo(function ToolRow({ tool, nested = false }: { tool: T
       <StatusDot state={state} />
       <Text numberOfLines={1} style={[styles.label, { color: tool.isError ? c.destructive : c.text }]}>{line.label}</Text>
       {line.detail ? <Text numberOfLines={1} style={[styles.detail, { color: c.muted }]}>{line.detail}</Text> : <View style={{ flex: 1 }} />}
-      {editDiff ? <Text style={styles.counts}><Text style={{ color: c.success }}>+{editDiff.added}</Text> <Text style={{ color: c.destructive }}>−{editDiff.removed}</Text></Text> : null}
+      {editDiff && !isPreview ? <Text style={styles.counts}><Text style={{ color: c.success }}>+{editDiff.added}</Text> <Text style={{ color: c.destructive }}>−{editDiff.removed}</Text></Text> : null}
       {tool.stopped ? <Text style={[styles.counts, { color: c.muted }]}>stopped</Text> : null}
       <Chevron open={open} />
     </Pressable>
     {open || (tool.isError && shown?.text) ? <View style={[styles.body, { borderColor: tool.isError ? withAlpha(c.destructive, 0.4) : c.border }]}>
       {open && input ? <Section label="Input"><Text selectable style={[styles.code, { color: c.text }]}>{input.slice(0, PREVIEW_CHARS * 4)}</Text></Section> : null}
+      {open && isPreview && actions && !shown?.text ? whole.status === 'loading' ? <Text style={[type.caption, { color: c.muted }]}>Loading the whole call</Text>
+        : <ShowMore label={whole.status === 'failed' ? 'Could not load the whole call. Try again' : 'Show the whole call'} onPress={loadWhole} /> : null}
       {open && editDiff && editDiff.lines.length ? <EditDiffBody diff={editDiff} /> : null}
       {shown?.text ? <Section label={tool.isError ? 'Error' : `Result${output?.summary ? ` · ${output.summary}` : ''}`}>
         <CodeText text={shown.text} diff={Boolean(output?.diff)} tone={tool.isError ? 'error' : undefined} />
-        {shown.hidden && !full ? <ShowMore label="Show more" onPress={() => { setOpen(true); setFull(true); }} /> : null}
+        {whole.status === 'loading' ? <Text style={[type.caption, { color: c.muted }]}>Loading the whole output</Text>
+          : whole.status === 'failed' ? <ShowMore label="Could not load the whole output. Try again" onPress={loadWhole} />
+            : shown.hidden && (!full || (isPreview && actions)) ? <ShowMore label="Show more" onPress={more} />
+              : isPreview ? <Text style={[type.caption, { color: c.muted }]}>Preview. Open the session on the web for the whole output.</Text> : null}
       </Section> : open && !editDiff && tool.settled ? <Text style={[type.caption, { color: c.muted }]}>No output.</Text> : null}
     </View> : null}
   </View>;
 });
 
 /** A run of tool calls folded into one line, like web: "Ran 3 commands, read a file". */
-export const ToolGroupRow = memo(function ToolGroupRow({ group }: { group: ToolGroupBlock }) {
+export const ToolGroupRow = memo(function ToolGroupRow({ group, partial = [] }: { group: ToolGroupBlock; partial?: readonly string[] }) {
   const c = useTheme();
   const [open, setOpen] = useState(group.lastFailed && !group.running);
   const state = group.running ? 'running' : group.isError ? 'error' : 'done';
@@ -125,7 +149,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({ group }: { group: ToolG
     {open ? <View style={[styles.group, { borderColor: c.border }]}>
       {group.children.map((child) => child.kind === 'thinking'
         ? <ThinkingRow key={child.key} text={child.text} compact />
-        : <ToolRow key={child.key} tool={child} nested />)}
+        : <ToolRow key={child.key} tool={child} nested partial={partial.includes(child.toolId)} />)}
     </View> : null}
   </View>;
 });

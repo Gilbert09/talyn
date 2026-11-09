@@ -4,7 +4,7 @@ import { cloudProviders, environments, features, pullRequests, repositories, tas
 import type { CreateWorkbenchInput, Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 
 import { cacheKey, canCompose, canStartSend, deliveryReducer, EMPTY_DELIVERY, EMPTY_RESOURCE, emptyTranscript, explicitSendFailure,
-  failureState, mergeEvents, PAGE_SIZE, sameScope, selectWorkbenches, upsertWorkbench, withChat, workbenchKind, workbenchTitle,
+  failureState, mergeEvents, PAGE_CEILING, PAGE_SIZE, releaseOlder, sameScope, windowFull, selectWorkbenches, upsertWorkbench, withChat, workbenchKind, workbenchTitle,
   type Delivery, type Entity, type Resource, type Scope, type Transcript } from './model';
 import { applyPrUpdate, jsonEqual, mergeRowUpdate, type PullRequestUpdate } from './prPatch';
 
@@ -22,6 +22,8 @@ export interface LocalState { draft: string; delivery: Delivery; offset: number;
 const EMPTY_LOCAL: LocalState = Object.freeze({ draft: '', delivery: EMPTY_DELIVERY, offset: 0, following: true, selectedChat: null });
 const CACHE_LIMIT = 32;
 const SEND_TIMEOUT = 30_000;
+/** Events read after a tool call to find its result. A result follows its call within a few events. */
+export const FULL_LOOKUP = 50;
 /** Bursts of invalidations inside this window cost one refetch. */
 export const RECOVERY_DEBOUNCE = 250;
 /** A busy repository emits constantly. Echo-driven refetches of one entry run at most this often. */
@@ -96,7 +98,9 @@ export class WorkflowStore {
       on<{ chatId: string; events: WorkbenchEvent[] }>('workbench:event', ({ chatId, events }) => {
         const entry = this.entry('transcript', chatId, false);
         if (!entry || entry.state.status === 'deleted' || entry.state.status === 'unauthorized') return;
-        const data = mergeEvents(chatId, entry.state.data as Transcript | undefined ?? emptyTranscript(), events);
+        const reading = this.local(chatId).following ? 'newest' : 'older';
+        const data = mergeEvents(chatId, entry.state.data as Transcript | undefined ?? emptyTranscript(), events ?? [], 'live', undefined, reading);
+        if (data === entry.state.data) return;
         entry.state = { ...entry.state, data, stale: entry.state.stale || data.gap };
         this.emit();
         if (data.gap) this.invalidateEntry(entry, false);
@@ -315,8 +319,9 @@ export class WorkflowStore {
   }
   private async reconcile(chatId: string, scope: Scope, prior?: Transcript): Promise<Transcript> {
     let state = prior ?? emptyTranscript();
-    if (!prior?.events.length) {
-      const page = await this.api.workbenches.events(chatId, { before: 'latest', limit: PAGE_SIZE });
+    // Socket events alone set no history boundary. The newest page does; the held events merge in after.
+    if (!prior?.anchored || !prior.events.length) {
+      const page = await this.api.workbenches.events(chatId, { before: 'latest', limit: PAGE_SIZE, ceiling: PAGE_CEILING });
       if (this.scope !== scope) throw new Error('Scope changed.');
       state = mergeEvents(chatId, emptyTranscript(), page.events, 'rest', page);
       // Older servers ignore backward paging. Continue only within a bounded recovery batch.
@@ -339,24 +344,56 @@ export class WorkflowStore {
     this.updateLocal(chatId, { offset: 0, following: true });
     await this.load('transcript', chatId);
   }
+  /**
+   * The page of history just older than the window. The newest events stay; when the window
+   * is full, the transcript is marked `limited` instead and nothing is fetched.
+   */
   async older(chatId: string) {
     const entry = this.entry('transcript', chatId, false);
     const prior = entry?.state.data as Transcript | undefined;
-    if (!entry || !prior?.hasOlder || !prior.oldest || entry.pending || !this.canRead()) return;
+    if (!entry || !prior?.hasOlder || !prior.oldest || prior.limited || prior.olderFailed || entry.pending || !this.canRead()) return;
+    if (windowFull(prior)) { entry.state = { ...entry.state, data: { ...prior, limited: true } }; this.emit(); return; }
     const generation = this.generation; const revision = ++entry.revision;
     const valid = () => generation === this.generation && revision === entry.revision;
     entry.state = { ...entry.state, refreshing: true }; this.emit();
     entry.pending = (async () => {
       try {
-        const page = await this.api.workbenches.events(chatId, { before: prior.oldest!, limit: PAGE_SIZE });
+        const page = await this.api.workbenches.events(chatId, { before: prior.oldest!, limit: PAGE_SIZE, ceiling: PAGE_CEILING });
         if (!valid()) return;
         if (page.oldestSeq === undefined) throw new Error('Older history is not supported.');
-        entry.state = { ...entry.state, status: 'ready', data: mergeEvents(chatId, entry.state.data as Transcript, page.events, 'older', page), refreshing: false };
+        entry.state = { ...entry.state, data: mergeEvents(chatId, entry.state.data as Transcript, page.events, 'older', page), refreshing: false };
       } catch {
-        if (valid()) entry.state = { ...entry.state, status: 'error', stale: true, refreshing: false };
+        // The held window stays on screen. The reader retries from the top of the list.
+        if (valid()) entry.state = { ...entry.state, data: { ...entry.state.data as Transcript, olderFailed: true }, refreshing: false };
       } finally { if (valid()) { entry.pending = undefined; this.emit(); } }
     })();
     return entry.pending;
+  }
+  /** Ask for older history again after a failed page. */
+  retryOlder(chatId: string) {
+    const entry = this.entry('transcript', chatId, false);
+    const data = entry?.state.data as Transcript | undefined;
+    if (!entry || !data?.olderFailed) return Promise.resolve();
+    entry.state = { ...entry.state, data: { ...data, olderFailed: false } };
+    return this.older(chatId);
+  }
+  /** The reader is back at the newest message: free older events past `RELEASE_AT`. */
+  release(chatId: string) {
+    const entry = this.entry('transcript', chatId, false);
+    const data = entry?.state.data as Transcript | undefined;
+    if (!entry || !data || entry.pending) return;
+    const next = releaseOlder(data);
+    if (next === data) return;
+    entry.state = { ...entry.state, data: next }; this.emit();
+  }
+  /**
+   * The stored events from `seq` on, whole, as the server holds them. For a tool call the
+   * window keeps only in part. Nothing here enters the window.
+   */
+  async fullEvents(chatId: string, seq: number, limit = FULL_LOOKUP) {
+    if (!this.scope || !this.canRead()) throw new Error('Offline.');
+    const page = await this.api.workbenches.events(chatId, { after: Math.max(0, seq - 1), limit });
+    return page.events.filter((item) => item.chatId === chatId);
   }
   private localKey(id: string) { return this.scope ? cacheKey(this.scope, 'transcript', id) : null; }
   local(id: string): LocalState { const key = this.localKey(id); return key ? this.locals.get(key) ?? EMPTY_LOCAL : EMPTY_LOCAL; }

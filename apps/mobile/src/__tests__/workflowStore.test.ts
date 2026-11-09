@@ -1,8 +1,8 @@
 import type { PRRow } from '@talyn/client/native';
 import type { Workbench } from '@talyn/shared';
 
-import { EVENT_LIMIT, type Transcript } from '../workflow/model';
-import { EVENT_REFETCH_INTERVAL, RECOVERY_DEBOUNCE } from '../workflow/store';
+import { EVENT_LIMIT, PAGE_CEILING, PAGE_SIZE, RELEASE_KEEP, type Transcript } from '../workflow/model';
+import { EVENT_REFETCH_INTERVAL, FULL_LOOKUP, RECOVERY_DEBOUNCE } from '../workflow/store';
 import { chat, deferred, event, fixture, pr, scope, session } from './workflowFixtures';
 
 const settle = async () => { for (let index = 0; index < 20; index++) await Promise.resolve(); };
@@ -121,7 +121,7 @@ describe('socket invalidation, resume, and transcript reconciliation', () => {
     api.workbenches.events.mockResolvedValueOnce({ events: [event(10)], cursor: 10, oldestSeq: 10, hasOlder: true });
     await store.load('transcript', 'chat-one');
     api.workbenches.events.mockResolvedValueOnce({ events: [event(9)], cursor: 9, oldestSeq: 9, hasOlder: false });
-    await store.older('chat-one'); expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { before: 10, limit: 200 });
+    await store.older('chat-one'); expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { before: 10, limit: 200, ceiling: 400 });
     expect(store.read<Transcript>('transcript', 'chat-one').data?.events.map((item) => item.seq)).toEqual([9, 10]);
   });
   it('caps recovery batches and retained events for large histories', async () => {
@@ -292,5 +292,77 @@ describe('targeted invalidation and stale-while-revalidate', () => {
     emit('connection:status', { connected: true });
     jest.advanceTimersByTime(RECOVERY_DEBOUNCE); await settle();
     expect(api.workbenches.list).toHaveBeenCalledTimes(2); stop();
+  });
+});
+
+describe('transcript paging on a phone', () => {
+  type Page = Awaited<ReturnType<typeof active.api.workbenches.events>>;
+  const page = (from: number, to: number, hasOlder = from > 1): Page =>
+    ({ events: Array.from({ length: to - from + 1 }, (_, index) => event(from + index)), cursor: to, oldestSeq: from, hasOlder });
+  const held = () => active.store.read<Transcript>('transcript', 'chat-one').data!;
+  it('asks for a bounded newest page', async () => {
+    const { store, api } = active;
+    await store.load('transcript', 'chat-one');
+    expect(api.workbenches.events).toHaveBeenCalledWith('chat-one', { before: 'latest', limit: PAGE_SIZE, ceiling: PAGE_CEILING });
+  });
+  it('fetches the newest page when only socket events are held', async () => {
+    const { store, api, emit } = active;
+    api.workbenches.events.mockRejectedValueOnce({ status: 503 }); await store.load('transcript', 'chat-one');
+    emit('workbench:event', { chatId: 'chat-one', events: [event(57)] });
+    expect(held()).toMatchObject({ anchored: false });
+    api.workbenches.events.mockResolvedValueOnce(page(1, 57, false));
+    await store.load('transcript', 'chat-one');
+    expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { before: 'latest', limit: PAGE_SIZE, ceiling: PAGE_CEILING });
+    expect(held().events).toHaveLength(57); expect(held().anchored).toBe(true);
+  });
+  it('pages older history back to the start and keeps the newest events', async () => {
+    const { store, api } = active;
+    api.workbenches.events.mockResolvedValueOnce(page(601, 800)); await store.load('transcript', 'chat-one');
+    for (const [from, to] of [[401, 600], [201, 400], [1, 200]]) {
+      api.workbenches.events.mockResolvedValueOnce(page(from, to)); await store.older('chat-one');
+    }
+    expect(held().events).toHaveLength(800); expect(held().events.at(-1)?.seq).toBe(800); expect(held().hasOlder).toBe(false);
+    api.workbenches.events.mockClear(); await store.older('chat-one');
+    expect(api.workbenches.events).not.toHaveBeenCalled();
+  });
+  it('keeps the window and offers a retry when an older page fails', async () => {
+    const { store, api } = active;
+    api.workbenches.events.mockResolvedValueOnce(page(201, 400)); await store.load('transcript', 'chat-one');
+    api.workbenches.events.mockRejectedValueOnce(new Error('offline')); await store.older('chat-one');
+    expect(store.read('transcript', 'chat-one').status).toBe('ready');
+    expect(held()).toMatchObject({ olderFailed: true, hasOlder: true }); expect(held().events).toHaveLength(200);
+    api.workbenches.events.mockClear(); await store.older('chat-one');
+    expect(api.workbenches.events).not.toHaveBeenCalled();
+    api.workbenches.events.mockResolvedValueOnce(page(1, 200)); await store.retryOlder('chat-one');
+    expect(held()).toMatchObject({ olderFailed: false, hasOlder: false }); expect(held().events).toHaveLength(400);
+  });
+  it('fetches nothing when the window is full and marks it limited', async () => {
+    const { store, api } = active;
+    api.workbenches.events.mockResolvedValueOnce(page(1001, 1000 + EVENT_LIMIT)); await store.load('transcript', 'chat-one');
+    api.workbenches.events.mockClear(); await store.older('chat-one');
+    expect(api.workbenches.events).not.toHaveBeenCalled(); expect(held().limited).toBe(true);
+    store.release('chat-one');
+    expect(held()).toMatchObject({ limited: false, hasOlder: true }); expect(held().events).toHaveLength(RELEASE_KEEP);
+    expect(held().events.at(-1)?.seq).toBe(1000 + EVENT_LIMIT);
+  });
+  it.each([
+    ['following the newest', true, 1],
+    ['reading older history', false, 0],
+  ])('trims live growth by where the reader is: %s', async (_name, following, dropped) => {
+    const { store, api, emit } = active;
+    api.workbenches.events.mockResolvedValueOnce(page(1, EVENT_LIMIT, false)); await store.load('transcript', 'chat-one');
+    store.updateLocal('chat-one', { following });
+    emit('workbench:event', { chatId: 'chat-one', events: [event(EVENT_LIMIT + 1)] });
+    expect(held().events[0].seq).toBe(1 + dropped);
+  });
+  it('reads a whole tool call without putting it in the window', async () => {
+    const { store, api } = active;
+    await store.load('transcript', 'chat-one');
+    const before = held();
+    api.workbenches.events.mockResolvedValueOnce({ events: [event(3), event(4, { chatId: 'other' })], cursor: 4 } as Page);
+    const events = await store.fullEvents('chat-one', 3);
+    expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { after: 2, limit: FULL_LOOKUP });
+    expect(events.map((item) => item.seq)).toEqual([3]);
+    expect(held()).toBe(before);
   });
 });
