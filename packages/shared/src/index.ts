@@ -322,7 +322,7 @@ export type FleetProvider = 'anthropic' | 'openai';
  * same as PostHog Code's — that list is PostHog's runtime allow-list, and only
  * PostHog can say what it accepts. Anthropic ships a new flagship faster than
  * anyone remembers to edit this file: Fable 5.1 landed 2026-09-01 and this list
- * still said Fable 5 was the newest a week later.
+ * still said Fable 5 was the newest a week later. Fable 5.2 landed 2026-11-09.
  *
  * THE CODEX HALF IS WHAT A CHATGPT SUBSCRIPTION MAY USE, which is NOT the same
  * question as what the guest's harness knows. It was built from the harness's
@@ -347,10 +347,11 @@ export type FleetProvider = 'anthropic' | 'openai';
 type FleetModelTier = 'flagship' | 'strong' | 'fast' | 'economy';
 
 export const FLEET_MODELS = [
-  { id: 'claude-fable-5-1', label: 'Fable 5.1', provider: 'anthropic', tier: 'flagship', blurb: 'Most capable — demanding reasoning.' },
+  { id: 'claude-fable-5-2', label: 'Fable 5.2', provider: 'anthropic', tier: 'flagship', blurb: 'Most capable — demanding reasoning.' },
   { id: 'claude-opus-5-5', label: 'Opus 5.5', provider: 'anthropic', tier: 'flagship', blurb: 'Newest Opus.' },
   { id: 'claude-opus-5', label: 'Opus 5', provider: 'anthropic', tier: 'strong', blurb: 'The previous Opus — 1M context.' },
-  { id: 'claude-fable-5', label: 'Fable 5', provider: 'anthropic', tier: 'strong', blurb: 'The previous Fable.' },
+  { id: 'claude-fable-5-1', label: 'Fable 5.1', provider: 'anthropic', tier: 'strong', blurb: 'The previous Fable.' },
+  { id: 'claude-fable-5', label: 'Fable 5', provider: 'anthropic', tier: 'strong', blurb: 'An older Fable.' },
   { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', provider: 'anthropic', tier: 'fast', blurb: 'Strong and fast — the default.' },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', provider: 'anthropic', tier: 'fast', blurb: 'The previous Sonnet.' },
   { id: 'claude-opus-4-8', label: 'Opus 4.8', provider: 'anthropic', tier: 'strong', blurb: 'The previous Opus flagship.' },

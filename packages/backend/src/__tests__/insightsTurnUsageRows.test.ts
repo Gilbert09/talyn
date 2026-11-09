@@ -154,7 +154,7 @@ describe('buildTurnUsageRows: model and agent attribution', () => {
   it.each<[string, Partial<ChatFacts>, Partial<TurnFacts>, string]>([
     ['an alias is the newest model of its family', { model: 'sonnet' }, {}, 'claude-sonnet-5-5'],
     ['an alias in any case', { model: 'Opus' }, {}, 'claude-opus-5-5'],
-    ['fable', { model: 'fable' }, {}, 'claude-fable-5-1'],
+    ['fable', { model: 'fable' }, {}, 'claude-fable-5-2'],
     ['a full id stays', { model: 'claude-sonnet-5' }, {}, 'claude-sonnet-5'],
     ['a stamped alias', { model: null }, { turnModel: 'sonnet' }, 'claude-sonnet-5-5'],
     ['the init model wins over the stamp', { model: null }, { turnModel: 'claude-sonnet-5', initModel: 'claude-opus-5-5' }, 'claude-opus-5-5'],
