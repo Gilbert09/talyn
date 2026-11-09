@@ -17,7 +17,7 @@ Merge #128, then #129, then this release change. Do not queue this stacked chang
 Development and preview remain useful without production secrets.
 Internal beta and production require explicit identities, public URLs, project configuration, and a reserved build number.
 The mobile package supplies the version. Both stores use `MOBILE_BUILD_NUMBER` with local EAS version management.
-Every profile uses a fingerprint runtime. Preview, internal-beta, and production builds run signed EAS updates.
+Every profile uses a fingerprint runtime. Preview, internal-beta, and production builds run unsigned EAS updates.
 The development client loads from Metro and has updates off.
 Local plans have no side effects. Execution requires the protected manual workflow on main.
 
@@ -250,7 +250,7 @@ The repository holds no signing credentials or EAS tokens. Store uploads stay on
 
 ## OTA updates
 
-Each push to `main` that changes the app, `packages/client`, `packages/shared`, or the lockfile publishes a signed EAS update
+Each push to `main` that changes the app, `packages/client`, `packages/shared`, or the lockfile publishes an unsigned EAS update
 to the `preview` and `internal-beta` channels (`.github/workflows/mobile-update.yml`). Production updates need an approved manual dispatch.
 Set the repository variable `MOBILE_UPDATES_AUTO=0` to stop automatic publishing.
 
@@ -261,6 +261,8 @@ and **Check for updates**. Update errors show only there. The development client
 
 An update can change JavaScript and assets only. A new native module, config plugin, or native field in `app.config.ts`
 changes the native fingerprint, so its update reaches no installed app. Ship that change in a new binary.
+Updates are unsigned by decision (2026-11-09), because EAS code signing needs a paid EAS plan. EAS HTTPS delivery and
+access to `EXPO_TOKEN` and the Expo project protect them. Signing later needs that plan, a certificate in the config, and a new binary.
 See [the release runbook](../../docs/MOBILE_RELEASE.md#automatic-updates-for-preview-and-internal-beta) for secrets, checks, and rollback.
 
 An explicit HTTPS callback configures iOS Associated Domains and an exact Android intent filter.

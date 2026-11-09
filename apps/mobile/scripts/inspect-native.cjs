@@ -24,6 +24,7 @@ async function inspect() {
   if (exp.updates.enabled) {
     // The app starts its own checks (src/features/updates); native code checks only to recover from a failed launch.
     const meta = Object.fromEntries((app['meta-data'] ?? []).map((entry) => [entry.$['android:name'], entry.$['android:value']]));
+    assert(!meta['expo.modules.updates.CODE_SIGNING_CERTIFICATE'] && !meta['expo.modules.updates.CODE_SIGNING_METADATA'], 'Updates are unsigned. Remove the update certificate.');
     assert.equal(meta['expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH'], 'ERROR_RECOVERY_ONLY');
     assert.equal(meta['expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS'], '0');
   }
@@ -53,10 +54,10 @@ async function inspect() {
   assert.deepEqual(privacy.NSPrivacyTrackingDomains ?? [], []);
   const expoPlist = parse('Supporting/Expo.plist');
   assert.equal(expoPlist.EXUpdatesEnabled, !!exp.updates.enabled);
+  // Updates are unsigned by decision (2026-11-09). A certificate would make the binary reject every unsigned update.
+  assert(!expoPlist.EXUpdatesCodeSigningCertificate && !expoPlist.EXUpdatesCodeSigningMetadata, 'Updates are unsigned. Remove the update certificate.');
   if (exp.updates.enabled) {
-    assert(expoPlist.EXUpdatesCodeSigningCertificate);
     assert.equal(expoPlist.EXUpdatesURL, exp.updates.url);
-    assert.equal(expoPlist.EXUpdatesCodeSigningMetadata.alg, 'rsa-v1_5-sha256');
     assert.equal(expoPlist.EXUpdatesRequestHeaders['expo-channel-name'], exp.extra.release.profile);
     assert.equal(expoPlist.EXUpdatesCheckOnLaunch, 'ERROR_RECOVERY_ONLY');
     assert.equal(expoPlist.EXUpdatesLaunchWaitMs, 0);

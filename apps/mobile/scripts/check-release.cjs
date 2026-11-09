@@ -43,14 +43,29 @@ function checkUpdateWorkflow(text, yaml) {
   assert.equal(workflow.permissions.contents, 'read');
   assert.equal(workflow.concurrency['cancel-in-progress'], false, 'Update publishes must queue in order.');
   const job = workflow.jobs.publish;
-  for (const guard of ["github.repository == 'Gilbert09/talyn'", "github.ref == 'refs/heads/main'", "vars.MOBILE_UPDATES_AUTO != '0'"]) {
+  for (const guard of ["github.repository == 'Gilbert09/talyn'", "github.ref == 'refs/heads/main'", "(vars.MOBILE_UPDATES_AUTO || '1') != '0'"]) {
     assert(job.if.includes(guard), `The update workflow needs the guard ${guard}.`);
   }
   assert(!/actions\/(?:upload-artifact|cache)|cache:\s*npm|set\s+-x|pull_request|--channel\s+production|eas\s+update/.test(text),
     'The update workflow publishes only through publish-update.cjs, with no cache, artifact, or PR trigger.');
   assert(text.includes(`eas-cli@${JSON.parse(read('eas.json')).cli.version}`), 'Keep the external EAS CLI pin aligned.');
+  // An unset variable is null, and null != '0' is false in Actions expressions, so the guard must default it first.
+  assert(!/(?<!\|\| '1'\) )vars\.MOBILE_UPDATES_AUTO != '0'/.test(text), 'Default MOBILE_UPDATES_AUTO before comparing it.');
   const published = [...text.matchAll(/publish-update\.cjs\s+(\S+)\s+--execute/g)].map((match) => match[1]);
   assert.deepEqual(published, Object.keys(profiles).filter((name) => profiles[name].autoUpdate), 'Publish to every automatic channel, preview first.');
+}
+
+/**
+ * Updates are unsigned by decision (2026-11-09): EAS code signing needs a paid EAS plan. A certificate in a binary
+ * would make it reject every unsigned update, so nothing may configure or supply one.
+ */
+function checkUnsignedUpdates(workflowTexts) {
+  const policy = fs.readFileSync(path.join(mobile, 'release/policy.cjs'), 'utf8');
+  const config = fs.readFileSync(path.join(mobile, 'app.config.ts'), 'utf8');
+  for (const text of [policy, config]) assert(!/codeSigning(?:Certificate|Metadata)\s*:/.test(text), 'Updates are unsigned. Remove update code signing from the app config.');
+  for (const text of workflowTexts) {
+    assert(!/MOBILE_UPDATE_(?:CERTIFICATE|PRIVATE_KEY)|private-key-path|update-certificate\.pem/.test(text), 'Updates are unsigned. Remove update signing from the mobile workflows.');
+  }
 }
 
 function scanFiles() {
@@ -85,7 +100,9 @@ function check() {
   assert(releaseWorkflow.jobs.release.environment && releaseWorkflow.jobs.release.if.includes("refs/heads/main"));
   assert(!/actions\/(?:upload-artifact|cache)|cache:\s*npm|set\s+-x/.test(releaseText), 'Release secrets must stay outside logs, caches, and artifacts.');
   assert(releaseText.includes("MOBILE_UPDATES_ENABLED: ${{ inputs.profile == 'development' && '0' || '1' }}"), 'The release workflow must enable updates as eas.json does.');
-  checkUpdateWorkflow(fs.readFileSync(path.join(root, '.github/workflows/mobile-update.yml'), 'utf8'), yaml);
+  const updateText = fs.readFileSync(path.join(root, '.github/workflows/mobile-update.yml'), 'utf8');
+  checkUpdateWorkflow(updateText, yaml);
+  checkUnsignedUpdates([releaseText, updateText]);
   for (const name of ['auth', 'workflows', 'deep-links', 'notifications', 'notification-tap', 'logout', 'deletion']) {
     const flow = yaml.loadAll(read(`e2e/${name}.yaml`));
     assert.equal(flow.length, 2, `Invalid Maestro flow: ${name}.`);
@@ -130,4 +147,4 @@ if (require.main === module) {
   if (process.argv[2] === '--privacy-digest') console.log(privacyDigest());
   else check();
 }
-module.exports = { checkMetadata, checkUpdateWorkflow, privacyDigest, scanFiles };
+module.exports = { checkMetadata, checkUnsignedUpdates, checkUpdateWorkflow, privacyDigest, scanFiles };

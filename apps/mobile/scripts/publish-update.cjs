@@ -1,30 +1,30 @@
-// Publishes a signed EAS update to one automatic channel (preview or internal-beta) from a push to main.
+// Publishes an unsigned EAS update to one automatic channel (preview or internal-beta) from a push to main.
 // The guarded wrapper in release.cjs needs the installed runtime and an approval record, which a push cannot supply.
 // This path instead lets the fingerprint policy pick the runtime: an update reaches only binaries whose native
 // fingerprint matches, so a native change publishes to a runtime no installed app runs and needs a new build.
+// Updates are unsigned by decision (2026-11-09): EAS code signing needs a paid EAS plan.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-const { profiles, required, UPDATE_CERTIFICATE, CHECK_AUTOMATICALLY } = require('../release/policy.cjs');
-const { assertChannel, checkCertificate } = require('./release.cjs');
+const { profiles, required, CHECK_AUTOMATICALLY } = require('../release/policy.cjs');
+const { assertChannel } = require('./release.cjs');
 
 const root = path.resolve(__dirname, '..');
 const autoProfiles = Object.keys(profiles).filter((name) => profiles[name].autoUpdate);
 // The names the app configuration reads. Nothing else pulled from EAS enters the local publish environment.
-const PULLED = /^(?:EXPO_PUBLIC_[A-Z0-9_]+|TALYN_MOBILE_[A-Z0-9_]+|MOBILE_UPDATE_KEY_ID|MOBILE_UPDATES_ENABLED)$/;
+const PULLED = /^(?:EXPO_PUBLIC_[A-Z0-9_]+|TALYN_MOBILE_[A-Z0-9_]+|MOBILE_UPDATES_ENABLED)$/;
 // Selectors this script sets itself. They are removed while EAS evaluates the project for `env:pull`.
-const SELECTORS = ['APP_ENV', 'MOBILE_RELEASE_PROFILE', 'EAS_BUILD_PROFILE', 'MOBILE_UPDATES_ENABLED', 'MOBILE_UPDATE_CERTIFICATE'];
+const SELECTORS = ['APP_ENV', 'MOBILE_RELEASE_PROFILE', 'EAS_BUILD_PROFILE', 'MOBILE_UPDATES_ENABLED'];
 
 function autoUpdatePlan(profile, env) {
   const policy = profiles[profile];
   if (!policy?.autoUpdate) throw new Error(`Automatic updates publish only to ${autoProfiles.join(' and ')}.`);
   const message = required(env, 'MOBILE_UPDATE_MESSAGE');
-  const key = required(env, 'MOBILE_UPDATE_PRIVATE_KEY_PATH');
   return {
     profile, policy,
     args: ['update', '--channel', policy.channel, '--environment', policy.environment, '--platform', 'all',
-      '--message', message, '--private-key-path', key, '--non-interactive', '--json'],
+      '--message', message, '--non-interactive', '--json'],
   };
 }
 
@@ -58,30 +58,25 @@ function publishEnvironment(base, pulled, profile) {
   if (remote.MOBILE_UPDATES_ENABLED !== undefined && remote.MOBILE_UPDATES_ENABLED !== '1') {
     throw new Error(`The EAS ${policy.environment} environment sets MOBILE_UPDATES_ENABLED=${remote.MOBILE_UPDATES_ENABLED}. Remove it; eas.json owns the switch.`);
   }
-  if (remote.MOBILE_UPDATE_KEY_ID && base.MOBILE_UPDATE_KEY_ID && remote.MOBILE_UPDATE_KEY_ID !== base.MOBILE_UPDATE_KEY_ID) {
-    throw new Error(`MOBILE_UPDATE_KEY_ID differs between GitHub and the EAS ${policy.environment} environment.`);
-  }
-  const keyid = remote.MOBILE_UPDATE_KEY_ID || base.MOBILE_UPDATE_KEY_ID;
-  if (!keyid) throw new Error('Set MOBILE_UPDATE_KEY_ID.');
   const env = { ...base, ...remote };
   delete env.EAS_BUILD_PROFILE;
   return {
-    ...env, APP_ENV: policy.environment, MOBILE_RELEASE_PROFILE: profile, MOBILE_UPDATES_ENABLED: '1', MOBILE_UPDATE_KEY_ID: keyid,
-    MOBILE_UPDATE_CERTIFICATE: UPDATE_CERTIFICATE, EXPO_NO_DOTENV: '1',
+    ...env, APP_ENV: policy.environment, MOBILE_RELEASE_PROFILE: profile, MOBILE_UPDATES_ENABLED: '1', EXPO_NO_DOTENV: '1',
     // Store profiles require a build number. The fingerprint skips version fields, and About reads the native number.
     MOBILE_BUILD_NUMBER: base.MOBILE_BUILD_NUMBER || '1',
   };
 }
 
 /** The resolved configuration must be the one the installed binary was built with. */
-function assertUpdateConfig(exp, profile, keyid) {
+function assertUpdateConfig(exp, profile) {
   const updates = exp.updates ?? {};
   const projectId = exp.extra?.eas?.projectId;
   if (!updates.enabled || !projectId || updates.url !== `https://u.expo.dev/${projectId}` || updates.checkAutomatically !== CHECK_AUTOMATICALLY ||
-    updates.requestHeaders?.['expo-channel-name'] !== profiles[profile].channel || updates.codeSigningMetadata?.keyid !== keyid ||
-    updates.codeSigningMetadata?.alg !== 'rsa-v1_5-sha256' || updates.codeSigningCertificate !== UPDATE_CERTIFICATE) {
-    throw new Error(`The ${profile} configuration does not enable signed updates as its binary does.`);
+    updates.requestHeaders?.['expo-channel-name'] !== profiles[profile].channel) {
+    throw new Error(`The ${profile} configuration does not enable updates as its binary does.`);
   }
+  // A signing certificate would make EAS try to sign (a paid plan) and the binary reject unsigned updates.
+  if (updates.codeSigningCertificate || updates.codeSigningMetadata) throw new Error(`The ${profile} configuration has update code signing. Updates are unsigned.`);
 }
 
 // Signed asset URLs and tokens never reach CI logs. Error text keeps its shape so a failure can be read.
@@ -121,21 +116,19 @@ function summarize(env, lines) {
 async function run() {
   const [profile, mode] = process.argv.slice(2);
   if (mode && !['--execute', '--dry-run'].includes(mode)) throw new Error('Use --dry-run or --execute.');
-  const plan = autoUpdatePlan(profile, { MOBILE_UPDATE_MESSAGE: 'plan', MOBILE_UPDATE_PRIVATE_KEY_PATH: 'plan', ...process.env });
+  const plan = autoUpdatePlan(profile, { MOBILE_UPDATE_MESSAGE: 'plan', ...process.env });
   console.log(JSON.stringify({ action: 'update', profile, channel: plan.policy.channel, environment: plan.policy.environment, platform: 'all', execute: mode === '--execute' }));
   if (mode !== '--execute') return;
   assertAutoExecution(process.env);
   autoUpdatePlan(profile, process.env);
   if (['ios', 'android'].some((name) => fs.existsSync(path.join(root, name)))) throw new Error('Publish from CNG source without generated native directories.');
-  const keyPath = required(process.env, 'MOBILE_UPDATE_PRIVATE_KEY_PATH');
   const env = publishEnvironment(process.env, pullEnvironment(process.env, plan.policy.environment), profile);
   const { getConfig } = require('@expo/config');
   const previous = process.env;
   let exp;
   process.env = env;
   try { ({ exp } = getConfig(root, { skipSDKVersionRequirement: true })); } finally { process.env = previous; }
-  assertUpdateConfig(exp, profile, env.MOBILE_UPDATE_KEY_ID);
-  checkCertificate(path.resolve(root, exp.updates.codeSigningCertificate), keyPath);
+  assertUpdateConfig(exp, profile);
   assertChannel(JSON.parse(easOrThrow(env, ['channel:view', plan.policy.channel, '--json', '--non-interactive'], `Reading the ${plan.policy.channel} channel`)), plan.policy.channel);
   const published = JSON.parse(easOrThrow(env, autoUpdatePlan(profile, env).args, `Publishing to ${plan.policy.channel}`));
   const lines = [`${plan.policy.channel}: update group ${published[0]?.group ?? 'unknown'}`];

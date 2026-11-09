@@ -1,8 +1,10 @@
 name: Mobile update
 
-# Every push to main that changes the app or the packages it bundles publishes a signed OTA update
+# Every push to main that changes the app or the packages it bundles publishes an OTA update
 # to the preview and internal-beta channels. Production updates and rollbacks stay on the approved
 # Mobile release workflow. Set the repository variable MOBILE_UPDATES_AUTO to 0 to stop this workflow.
+# Updates are unsigned by decision (2026-11-09): EAS code signing needs a paid EAS plan. EAS serves them
+# over HTTPS, and only holders of EXPO_TOKEN or Expo project access can publish.
 on:
   push:
     branches: [main]
@@ -34,7 +36,6 @@ jobs:
       CI: 'true'
       EXPO_NO_TELEMETRY: '1'
       EXPO_NO_DOTENV: '1'
-      MOBILE_UPDATE_KEY_ID: ${{ vars.MOBILE_UPDATE_KEY_ID }}
       MOBILE_UPDATES_AUTO: ${{ vars.MOBILE_UPDATES_AUTO }}
     steps:
       - name: Require the Expo token
@@ -68,24 +69,6 @@ jobs:
       - name: Build shared packages
         if: steps.gate.outputs.run == 'true'
         run: npm run mobile:build:packages
-      - name: Write the signing files
-        if: steps.gate.outputs.run == 'true'
-        env:
-          UPDATE_CERTIFICATE: ${{ secrets.MOBILE_UPDATE_CERTIFICATE_PEM }}
-          UPDATE_PRIVATE_KEY: ${{ secrets.MOBILE_UPDATE_PRIVATE_KEY_PEM }}
-        run: |
-          node <<'NODE'
-          const fs = require('node:fs');
-          const path = require('node:path');
-          for (const name of ['UPDATE_CERTIFICATE', 'UPDATE_PRIVATE_KEY', 'MOBILE_UPDATE_KEY_ID']) {
-            if (!process.env[name]) { console.error(`::error::Set ${name === 'MOBILE_UPDATE_KEY_ID' ? 'the MOBILE_UPDATE_KEY_ID variable' : `the MOBILE_${name}_PEM secret`}.`); process.exit(1); }
-          }
-          const dir = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP, 'mobile-update-'));
-          const key = path.join(dir, 'private-key.pem');
-          fs.writeFileSync(key, process.env.UPDATE_PRIVATE_KEY, { mode: 0o600 });
-          fs.writeFileSync(path.join(process.env.GITHUB_WORKSPACE, 'apps/mobile/release/update-certificate.pem'), process.env.UPDATE_CERTIFICATE, { mode: 0o600 });
-          fs.appendFileSync(process.env.GITHUB_ENV, `MOBILE_UPDATE_PRIVATE_KEY_PATH=${key}\nMOBILE_UPDATE_TEMP=${dir}\n`);
-          NODE
       - name: Describe the update
         if: steps.gate.outputs.run == 'true'
         run: |
@@ -104,8 +87,3 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: node apps/mobile/scripts/publish-update.cjs internal-beta --execute
-      - name: Remove signing files
-        if: always()
-        run: |
-          rm -f -- apps/mobile/release/update-certificate.pem
-          if [ -n "$MOBILE_UPDATE_TEMP" ]; then rm -rf -- "$MOBILE_UPDATE_TEMP"; fi

@@ -70,8 +70,8 @@ Configure these public values in the protected GitHub environment and matching E
   `@talyn-app/talyn-mobile` (`69499768-c478-44c0-8588-355c674515df`). Set it only for a fork.
 - `TALYN_MOBILE_IOS_BUNDLE_ID`, `TALYN_MOBILE_ANDROID_PACKAGE`, `TALYN_MOBILE_SCHEME`.
 - `TALYN_MOBILE_SUPPORT_URL`, `TALYN_MOBILE_PRIVACY_URL`, `TALYN_MOBILE_DELETION_URL`.
-- `MOBILE_UPDATE_KEY_ID` (`main`). Set it in both EAS environments and as a GitHub repository variable.
-  `eas.json` owns `MOBILE_UPDATES_ENABLED` per profile. Do not set it in an EAS environment.
+- `eas.json` owns `MOBILE_UPDATES_ENABLED` per profile. Do not set it in an EAS environment.
+  Updates are unsigned, so no update certificate or key ID is configured (see "Unsigned updates" below).
 - `MOBILE_ASC_APP_ID` and `MOBILE_APPLE_TEAM_ID` for iOS submission.
 
 All bundled values are public. Use only a Supabase publishable or legacy anon key.
@@ -114,8 +114,6 @@ Protected GitHub secret names:
 | Name | Use |
 | --- | --- |
 | `EXPO_TOKEN` | Restricted Expo account or robot access. Available only to the approved operation step and the automatic publish steps. |
-| `MOBILE_UPDATE_CERTIFICATE_PEM` | Public update certificate. Required for every preview, beta, and production build, because all three enable signed updates. |
-| `MOBILE_UPDATE_PRIVATE_KEY_PEM` | Private update signing key. Required for update publication or rollback, including the automatic publish. |
 | `MOBILE_RELEASE_EVIDENCE_JSON` | Candidate-specific approval references. Required for store operations. |
 | `MOBILE_STORE_METADATA_JSON` | Approved complete metadata snapshot. Required for submission; contains review instructions without credentials. |
 
@@ -129,9 +127,7 @@ Provider output is suppressed because it can contain signed download URLs.
 Inspect failures in the restricted EAS dashboard. Do not enable shell tracing or verbose Fastlane output.
 No PR workflow receives release credentials. PR checks cannot build through EAS, publish, or submit.
 The operation writes private files under `RUNNER_TEMP` with mode 0600. Cleanup runs after success or failure.
-The public certificate uses `apps/mobile/release/update-certificate.pem` during the operation.
-That generated public file is ignored by git but included in the EAS source archive.
-Private keys and evidence stay outside the repository and EAS source archive.
+Evidence and metadata files stay outside the repository and EAS source archive.
 `.easignore` excludes native output, environment files, signing files, and private key patterns.
 Review the actual EAS source archive before the first hosted build. A filename filter is not a complete secret audit.
 
@@ -157,9 +153,9 @@ npm run typecheck
 git diff --check
 ```
 
-`mobile:native:check` generates all four profiles with inert fixtures and a temporary test certificate.
+`mobile:native:check` generates all four profiles with inert fixtures.
 It refuses existing native directories, then removes its generated files. It runs no hosted EAS or release-signing command.
-It also checks certificate/key mismatch and proves that native link changes produce an incompatible Expo fingerprint.
+It confirms that no profile embeds an update certificate. It proves that native link changes produce an incompatible Expo fingerprint.
 `mobile:release:check` checks profile/channel mapping, version policy, metadata structure, privacy graph, and credential patterns.
 It does not treat incomplete store templates as approved listings.
 After a dependency change, review the full lockfile and privacy inventory before updating its digest:
@@ -284,7 +280,7 @@ Play internal testing alone does not satisfy every production-access requirement
 
 ## Automatic updates for preview and internal-beta
 
-`.github/workflows/mobile-update.yml` publishes a signed update after each push to `main`.
+`.github/workflows/mobile-update.yml` publishes an unsigned update after each push to `main`.
 It runs when the push changes `apps/mobile/**`, `packages/client/**`, `packages/shared/**`, or `package-lock.json`.
 **Actions → Mobile update → Run workflow** publishes the current `main` again.
 It publishes to `preview` first. A failure there stops the run before `internal-beta` gets the change.
@@ -296,15 +292,12 @@ The workflow uses these settings:
 | Name | Kind | Use |
 | --- | --- | --- |
 | `EXPO_TOKEN` | Secret | Expo robot token. When it is absent, the run skips with a notice and does not fail. |
-| `MOBILE_UPDATE_CERTIFICATE_PEM` | Secret | Public certificate. It is written to `apps/mobile/release/update-certificate.pem` for the run. |
-| `MOBILE_UPDATE_PRIVATE_KEY_PEM` | Secret | Signing key. It is written under `RUNNER_TEMP` with mode 0600 and removed after the run. |
-| `MOBILE_UPDATE_KEY_ID` | Variable | Code-signing key ID (`main`). It must match the EAS environment value when both are set. |
 | `MOBILE_UPDATES_AUTO` | Variable | Kill switch. `0` stops every automatic publish. Absent or any other value lets it run. |
 The internal-beta leg also needs the repository variable `MOBILE_UPDATES_INTERNAL_BETA=1`. Leave it unset until the production identity (bundle IDs, scheme and HTTPS callback) is approved and set in the EAS `production` environment, because internal-beta builds read that environment.
 
 The job uses the GitHub environment `mobile-updates`. Restrict it to `main` and give it no required reviewers.
-Store the three secrets in that environment, not at repository level, so no other branch or workflow can read them.
-A missing certificate, key, or key ID fails the run. Only a missing `EXPO_TOKEN` skips it.
+Store `EXPO_TOKEN` in that environment, not at repository level, so no other branch or workflow can read it.
+A missing `EXPO_TOKEN` skips the run.
 
 `apps/mobile/scripts/publish-update.cjs` does each publish. The guarded wrapper in `release.cjs` cannot do it:
 the wrapper requires the installed runtime, a manual dispatch, and approval evidence, and a push supplies none of them.
@@ -313,12 +306,11 @@ The script keeps the wrapper's other checks and adds its own:
 1. It runs only in CI, on `main`, from a clean checkout of the pushed commit, and only for preview or internal-beta.
 2. It reads the public configuration from the EAS environment with `eas env:pull`. EAS builds use the same values.
    The update therefore has the native fingerprint of a binary built from that environment.
-3. It resolves the app config and requires signed updates, the project URL, the channel header, and the key ID.
-4. It checks that the certificate is current RSA and matches the private key.
-5. It requires one active channel mapped only to its matching branch, as the wrapper does.
-6. It runs `eas update --channel <channel> --environment <environment> --platform all --private-key-path <key> --non-interactive --json`.
+3. It resolves the app config and requires updates on, the project URL, the channel header, and no code signing.
+4. It requires one active channel mapped only to its matching branch, as the wrapper does.
+5. It runs `eas update --channel <channel> --environment <environment> --platform all --non-interactive --json`.
    The message is the commit subject and short SHA. No runtime override is passed. The fingerprint policy chooses the runtime.
-7. It warns when no finished build on the channel runs the new runtime.
+6. It warns when no finished build on the channel runs the new runtime.
    That means the push changed native configuration. The update reaches no installed app until a new binary ships.
 
 A change that needs a new native build must not ship as an update. That includes a native module, a config plugin,
@@ -342,10 +334,31 @@ To verify on a device:
 Before an embedded rollback on preview or internal-beta, set `MOBILE_UPDATES_AUTO=0`.
 Otherwise the next push to `main` publishes over the rollback. Set it back after the fix merges.
 
+## Unsigned updates
+
+Updates are unsigned by decision (2026-11-09). EAS Update code signing needs the EAS Production or Enterprise plan.
+The `talyn-app` account has no such plan, so EAS refused to sign the first publish.
+These controls protect delivery instead:
+
+- EAS serves updates and manifests over HTTPS only.
+- Only a holder of `EXPO_TOKEN` or of Expo access to `@talyn-app/talyn-mobile` can publish or roll back.
+  Keep that access small. Rotate `EXPO_TOKEN` when a holder leaves or the token can have leaked.
+
+The app config, `release/policy.cjs`, the publish scripts, `mobile:release:check`, and `inspect-native.cjs` all refuse
+an update certificate. A binary with a certificate rejects every unsigned update, so a stray certificate would stop delivery silently.
+
+To turn signing on later:
+
+1. Subscribe the Expo account to the EAS Production plan.
+2. Create an RSA key pair. Keep the private key in approved secret custody.
+3. Add `codeSigningCertificate` and `codeSigningMetadata` to the app config, and remove the checks that refuse them.
+4. Publish with `--private-key-path` in both workflows.
+5. Ship a NEW BINARY. The certificate is native configuration and part of the fingerprint. An update cannot turn on signing.
+
 ## Runtime compatibility, channels, and rollback
 
 Every profile uses `runtimeVersion: { policy: 'fingerprint' }`.
-A native dependency, permission, entitlement, SDK, build configuration, or certificate change needs a compatible new binary.
+A native dependency, permission, entitlement, SDK, or build configuration change needs a compatible new binary.
 Put native changes in app configuration or source-controlled config plugins. Generated native projects are ignored CNG output.
 Do not edit generated native files for a release. The release wrapper rejects existing native directories.
 The update wrapper compares the local platform fingerprint with the inspected installed runtime before publishing.
@@ -357,12 +370,7 @@ Test the previous release and current candidate against the intended backend bef
 
 `eas.json` sets `MOBILE_UPDATES_ENABLED=1` for preview, internal-beta, and production, and `0` for development.
 `release/policy.cjs` records the same choice, and `mobile:release:check` fails when they differ.
-An enabled build requires the public certificate at `apps/mobile/release/update-certificate.pem` and `MOBILE_UPDATE_KEY_ID`.
-Without them, the app config stops with an error that names the missing value.
 A binary built before this change has updates off. An update cannot turn updates on in that binary. Install a new build.
-Use an organization-controlled RSA update key. Keep its private half in approved secret custody.
-The public certificate is part of the native fingerprint. Rotation requires a new compatible binary and a migration plan.
-EAS transport authentication and update signature verification protect different boundaries.
 
 Before the first update, create each channel and its matching branch through the approved Expo administration process.
 Record the one-to-one mapping in the release record. Never map preview, beta, and production to one branch.
@@ -373,30 +381,29 @@ It targets channels explicitly. It does not move channel pointers or promote bet
 
 Preview and internal-beta also receive automatic updates (see above). Production receives updates only this way.
 For an update, dispatch `update` with the exact profile, platform, source, build number, and installed runtime.
-Approve a preview drill first, then a beta drill. Test signature rejection and compatible update delivery.
+Approve a preview drill first, then a beta drill. Test compatible update delivery.
 Record update group and platform IDs from the EAS dashboard.
 Test online, offline, restart, cache fallback, and the previous binary.
 Do not use OTA to bypass store policies or change unapproved native functionality.
 
 For recovery, dispatch `rollback` with the same channel and exact affected platform runtime.
-The guarded command uses `eas update:roll-back-to-embedded` with the update signing key.
+The guarded command uses `eas update:roll-back-to-embedded`. It needs no signing key.
 The rollback directive returns compatible clients to their embedded update after they contact the update service.
 It does not instantly reach offline devices. It cannot repair a native crash before update handling starts.
 It does not downgrade native code, undo server mutations, or remove a broken store binary.
-Republishing a known-good update is an alternative only after its runtime and signing identity match.
+Republishing a known-good update is an alternative only after its runtime matches.
 Use a separately reviewed operation for that alternative. This wrapper exposes only embedded rollback.
 Do not change channel mappings or force-end an active rollout without a separate incident review.
 
 Before beta, run this drill on each physical platform:
 
-1. Install the exact signed binary. Record the embedded ID, channel, platform runtime, and certificate digest.
+1. Install the exact signed binary. Record the embedded ID, channel, and platform runtime.
 2. Publish an approved harmless compatible preview update through the protected workflow.
 3. Restart and confirm the update. Disconnect and verify cached startup.
-4. Publish the signed embedded rollback for that exact platform runtime.
+4. Publish the embedded rollback for that exact platform runtime.
 5. Reconnect and restart until the embedded version returns. Record timing and update IDs.
 6. Confirm an incompatible native change is rejected by the wrapper and requires a new binary.
-7. Test a signature mismatch on an isolated preview build. Confirm recovery without leaking the test key.
-8. Repeat on beta. Store the evidence before production approval.
+7. Repeat on beta. Store the evidence before production approval.
 
 ## Release smoke, rollout, and incident response
 

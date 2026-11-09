@@ -130,7 +130,7 @@
         "network metadata",
         "persistent EAS client ID sent as EAS-Client-ID"
       ],
-      "purpose": "Signed compatible software delivery. Enabled in preview, internal-beta, and production builds; the development client loads from Metro and sends no update requests",
+      "purpose": "Compatible software delivery over HTTPS from EAS. Updates are unsigned by decision (2026-11-09). Enabled in preview, internal-beta, and production builds; the development client loads from Metro and sends no update requests",
       "location": "Expo EAS Update; device update cache; native UserDefaults or SharedPreferences for the EAS client ID",
       "retention": "The EAS client ID and update cache can survive logout. The privacy owner must review Expo retention, uninstall, backup, and native cache behavior before beta."
     },

@@ -1,26 +1,15 @@
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { profiles } = require('../release/policy.cjs');
-const { checkCertificate, assertRuntime } = require('./release.cjs');
+const { assertRuntime } = require('./release.cjs');
 const assert = require('node:assert/strict');
 
 const root = path.resolve(__dirname, '..');
-const publicCertificate = path.join(root, 'release/update-certificate.pem');
-for (const name of ['android', 'ios', 'release/update-certificate.pem']) {
+for (const name of ['android', 'ios']) {
   if (fs.existsSync(path.join(root, name))) throw new Error('Remove only disposable generated native files before this check.');
 }
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'talyn-native-fixture-'));
 try {
-  // This temporary key has no service access. Only its test certificate enters generated native configuration.
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=Native configuration fixture',
-    '-keyout', path.join(dir, 'key.pem'), '-out', path.join(dir, 'certificate.pem')], { stdio: 'ignore' });
-  fs.copyFileSync(path.join(dir, 'certificate.pem'), publicCertificate);
-  checkCertificate(publicCertificate, path.join(dir, 'key.pem'));
-  const otherKey = require('node:crypto').generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' });
-  fs.writeFileSync(path.join(dir, 'other-key.pem'), otherKey, { mode: 0o600 });
-  assert.throws(() => checkCertificate(publicCertificate, path.join(dir, 'other-key.pem')), /does not match/);
   for (const [profile, policy] of Object.entries(profiles)) {
     const env = {
       ...process.env, CI: 'true', EXPO_NO_DOTENV: '1', EXPO_NO_TELEMETRY: '1', APP_ENV: policy.environment,
@@ -31,7 +20,7 @@ try {
       EXPO_PUBLIC_SUPABASE_KEY: 'sb_publishable_fixture', EXPO_PUBLIC_AUTH_CALLBACK_URL: 'https://mobile.fixture.dev/callback',
       EXPO_PUBLIC_EAS_PROJECT_ID: '10000000-0000-4000-8000-000000000001',
       TALYN_MOBILE_SUPPORT_URL: 'https://fixture.dev/support', TALYN_MOBILE_PRIVACY_URL: 'https://fixture.dev/privacy', TALYN_MOBILE_DELETION_URL: 'https://fixture.dev/deletion',
-      MOBILE_UPDATES_ENABLED: profile === 'development' ? '0' : '1', MOBILE_UPDATE_KEY_ID: 'fixture', MOBILE_UPDATE_CERTIFICATE: './release/update-certificate.pem',
+      MOBILE_UPDATES_ENABLED: profile === 'development' ? '0' : '1',
     };
     execFileSync(process.execPath, [require.resolve('expo/bin/cli'), 'prebuild', '--clean', '--no-install', '--platform', 'all'], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
     execFileSync(process.execPath, [path.join(__dirname, 'inspect-native.cjs')], { cwd: root, env, stdio: 'inherit' });
@@ -48,8 +37,6 @@ try {
     console.log(`${profile}: generated native inspection passed with inert fixtures.`);
   }
 } finally {
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.rmSync(publicCertificate, { force: true });
   fs.rmSync(path.join(root, 'android'), { recursive: true, force: true });
   fs.rmSync(path.join(root, 'ios'), { recursive: true, force: true });
 }

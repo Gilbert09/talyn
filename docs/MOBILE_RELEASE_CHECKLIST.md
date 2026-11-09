@@ -33,7 +33,7 @@ An unchecked row blocks release. An export or mock result does not satisfy a phy
 | iOS platform | Test the approved minimum OS and current OS. Verify universal-link OAuth support, iPad behavior, keyboard focus, and final APNs entitlement. |
 | Native inspection | Verify signed archives, certificates, package identity, permissions, entitlements, backups, all SDK privacy manifests, and current SDK requirements. |
 | Privacy | Approve field inventory, processors, retention, App Privacy, Data safety, and generated content policy. Confirm no analytics, tracking, advertising, ATT prompt, or replay. |
-| Updates | Verify compatible signed update, signature rejection, offline cache, embedded rollback, and incompatible native rejection on each platform. Confirm an automatic preview and beta update arrives after a merge, the **Update ready** restart, About's update rows, and the `MOBILE_UPDATES_AUTO=0` stop. |
+| Updates | Verify compatible unsigned update delivery, that the binary embeds no update certificate, offline cache, embedded rollback, and incompatible native rejection on each platform. Confirm an automatic preview and beta update arrives after a merge, the **Update ready** restart, About's update rows, and the `MOBILE_UPDATES_AUTO=0` stop. |
 | Backend compatibility | Run the previous binary and candidate against the planned backend. Keep auth, workflow, link, and notification contracts compatible. |
 | Store review | Confirm metadata, assets, reviewer access, privacy pages, policy decisions, export answers, age ratings, regions, and all required account verification. |
 | Operations | Assign named release, incident, privacy, backend, and support owners. Confirm thresholds, halt authority, artifact custody, and recovery records. |
