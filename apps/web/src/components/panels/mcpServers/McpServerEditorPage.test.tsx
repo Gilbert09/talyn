@@ -22,19 +22,21 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('../../../lib/api', () => ({ api: { mcpServers: mocks, workspaces: { privateConnector: { get: mocks.privateConnector } } } }));
 vi.mock('../../../lib/openExternal', () => ({ openExternal: mocks.openExternal, prepareSignInWindow: () => ({ open: mocks.openSignIn, close: mocks.closeSignIn }) }));
-vi.mock('../../../stores/workspace', () => ({
-  useWorkspaceStore: (selector: (state: {
-    currentWorkspaceId: string;
-    repositories: { id: string; workspaceId: string; fullName: string }[];
-  }) => unknown) =>
-    selector({
+// A real zustand store, not a plain function, so that a selector that returns
+// a new value on each call fails here the same way it fails in the app.
+vi.mock('../../../stores/workspace', async () => {
+  const { create } = await import('zustand');
+  return {
+    useWorkspaceStore: create(() => ({
       currentWorkspaceId: 'ws-1',
       repositories: [
         { id: 'repo-a', workspaceId: 'ws-1', fullName: 'acme/api' },
         { id: 'repo-b', workspaceId: 'ws-1', fullName: 'acme/web' },
+        { id: 'repo-c', workspaceId: 'ws-2', fullName: 'other/app' },
       ],
-    }),
-}));
+    })),
+  };
+});
 
 const url = 'https://mcp.example.com/mcp';
 const server: McpServerDefinition = {
@@ -93,6 +95,7 @@ describe('MCP authentication setup', () => {
     expect((screen.getByRole('radio', { name: /All repositories/ }) as HTMLInputElement).checked)
       .toBe(true);
     fireEvent.click(screen.getByRole('radio', { name: 'Only selected repositories' }));
+    expect(screen.queryByRole('checkbox', { name: 'other/app' })).toBeNull();
     const webRepository = screen.getByRole('checkbox', { name: 'acme/web' }) as HTMLInputElement;
     fireEvent.click(webRepository);
     await waitFor(() => expect(webRepository.checked).toBe(false));

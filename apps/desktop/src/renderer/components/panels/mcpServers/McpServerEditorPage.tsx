@@ -112,8 +112,12 @@ export function McpServerEditorPage({
   const [probing, setProbing] = useState(false);
 
   const workspaceId = useWorkspaceStore((state) => state.currentWorkspaceId);
-  const repositories = useWorkspaceStore((state) =>
-    (state.repositories ?? []).filter((repository) => repository.workspaceId === workspaceId)
+  // Select the store's own array and filter outside the selector. A selector
+  // that returns a new array on each call makes zustand v5 re-render forever.
+  const allRepositories = useWorkspaceStore((state) => state.repositories);
+  const repositories = useMemo(
+    () => (allRepositories ?? []).filter((repository) => repository.workspaceId === workspaceId),
+    [allRepositories, workspaceId]
   );
   const [routeState, setRouteState] = useState<{ workspaceId: string; routes: PrivateRoute[] } | null>(null);
   const privateRoutes = useMemo(() => routeState?.workspaceId === workspaceId ? routeState.routes : [], [routeState, workspaceId]);
