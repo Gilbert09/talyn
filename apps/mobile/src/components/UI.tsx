@@ -1,6 +1,6 @@
 import { Link, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
 import { ActionSheetIOS, ActivityIndicator, Alert, BackHandler, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
   type StyleProp, type TextProps, type TextStyle, type ViewStyle } from 'react-native';
@@ -380,6 +380,30 @@ export function BottomBar({ children }: PropsWithChildren) {
   return <View style={[styles.bottomBar, { backgroundColor: c.background, borderTopColor: c.border }]}>{children}</View>;
 }
 
+/**
+ * A short confirmation, such as "Copied", that hides itself after a moment.
+ * Render `element` last inside the screen.
+ */
+export function useToast(duration = 2000) {
+  const [toast, setToast] = useState<{ message: string; at: number } | null>(null);
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = setTimeout(() => setToast(null), duration);
+    return () => clearTimeout(timer);
+  }, [toast, duration]);
+  const show = useCallback((message: string) => setToast({ message, at: Date.now() }), []);
+  return { show, element: toast ? <Toast message={toast.message} /> : null };
+}
+export function Toast({ message }: { message: string }) {
+  const c = useTheme();
+  return <View pointerEvents="none" style={styles.toastWrap}>
+    <View style={[styles.toast, { backgroundColor: c.elevated, borderColor: c.border }]}>
+      <SymbolView name={{ ios: 'checkmark.circle', android: 'check_circle' }} size={16} tintColor={c.success} />
+      <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[type.meta, sans(500), { color: c.text, flexShrink: 1 }]}>{message}</Text>
+    </View>
+  </View>;
+}
+
 export const ui = StyleSheet.create({
   body: { ...type.body, flexShrink: 1, maxWidth: '100%', textAlign: 'auto', writingDirection: 'auto' },
   caption: { ...type.meta, flexShrink: 1, maxWidth: '100%', textAlign: 'auto', writingDirection: 'auto' },
@@ -423,5 +447,8 @@ const styles = StyleSheet.create({
   promptActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
   bottomBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10,
     borderTopWidth: StyleSheet.hairlineWidth },
+  toastWrap: { position: 'absolute', left: 16, right: 16, bottom: 32, alignItems: 'center' },
+  toast: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, paddingHorizontal: 14, borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth, maxWidth: 480, elevation: 3, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
   input: { minHeight: 44, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 10, borderRadius: radius.md, ...type.body, textAlignVertical: 'top' },
 });

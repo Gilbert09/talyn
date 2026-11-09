@@ -66,3 +66,23 @@ export function archiveCopy(item: Workbench) {
       : 'The session is archived. The branch, its chats and any PR stay, and you can restore it later.',
   };
 }
+
+export type CopyActionKind = 'copy_link' | 'copy_branch' | 'copy_id';
+
+/** The copy entries of the menu, like web's sidebar and header menus. A branch name only for a session that has one. */
+export function copyActions(item: Pick<Workbench, 'kind' | 'branch'>): CopyActionKind[] {
+  const actions: CopyActionKind[] = ['copy_link'];
+  if ((item.kind ?? 'session') === 'session' && item.branch) actions.push('copy_branch');
+  actions.push('copy_id');
+  return actions;
+}
+
+/** The menu label of a copy entry, the text it copies, and the words that confirm it. */
+export function copyEntry(kind: CopyActionKind, item: Pick<Workbench, 'id' | 'kind' | 'branch'>): { label: string; text: string; done: string } {
+  const noun = (item.kind ?? 'session') === 'thread' ? 'thread' : 'session';
+  switch (kind) {
+    case 'copy_link': return { label: 'Copy link', text: webLink(item.id), done: 'Link copied.' };
+    case 'copy_branch': return { label: 'Copy branch name', text: item.branch, done: 'Branch name copied.' };
+    case 'copy_id': return { label: `Copy ${noun} ID`, text: item.id, done: `${noun[0].toUpperCase()}${noun.slice(1)} ID copied.` };
+  }
+}

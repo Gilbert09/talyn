@@ -1,15 +1,19 @@
 import { WORKBENCH_MANUAL_TITLE_MAX, type Workbench } from '@talyn/shared';
+import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Alert, Share } from 'react-native';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
-import { PromptSheet, useActionSheet, type SheetAction, type Symbol } from '../../components/UI';
+import { PromptSheet, useActionSheet, useToast, type SheetAction, type SheetRequest, type Symbol } from '../../components/UI';
 import { openExternal } from '../../components/Workflow';
 import { boxRefusal, showActionError, showBoxRefusal } from '../../lib/errors';
+import { useFeatures } from '../../lib/features';
 import { threadRoute } from '../../navigation/routes';
 import { workbenchKind, workbenchTitle } from '../../workflow/model';
-import { archiveCopy, runningChat, SESSION_ACTION_LABEL, sessionActions, webLink, type SessionActionKind } from './actions';
+import { spacesOffered } from '../spaces/model';
+import { useMoveToSpace, type MoveToSpaceAction } from '../spaces/actions';
+import { archiveCopy, copyActions, copyEntry, runningChat, SESSION_ACTION_LABEL, sessionActions, webLink, type SessionActionKind } from './actions';
 
 const ICONS: Record<SessionActionKind, Symbol> = {
   stop: { ios: 'stop.circle', android: 'stop_circle' },
@@ -22,6 +26,22 @@ const ICONS: Record<SessionActionKind, Symbol> = {
   archive: { ios: 'archivebox', android: 'archive' },
   restore: { ios: 'arrow.uturn.backward', android: 'unarchive' },
 };
+const COPY_ICON: Symbol = { ios: 'doc.on.doc', android: 'content_copy' };
+type MoveBuilder = (item: Workbench) => MoveToSpaceAction | null;
+
+/**
+ * Loads my teams for "Move to space…". Mounted only while Spaces is offered,
+ * so nothing reads teams for an account without it.
+ */
+function MoveToSpaceBinding({ openSheet, onMoved, onChange }: {
+  openSheet(request: SheetRequest): void; onMoved(item: Workbench): void; onChange(build: MoveBuilder | null): void;
+}) {
+  const build = useMoveToSpace(openSheet, onMoved);
+  useEffect(() => { onChange(build); }, [build, onChange]);
+  useEffect(() => () => onChange(null), [onChange]);
+  return null;
+}
+
 /** Actions that need the server. Offline they show but cannot be chosen. */
 const NEEDS_NETWORK = new Set<SessionActionKind>(['stop', 'wake', 'retry', 'rename', 'archive', 'restore']);
 
@@ -35,6 +55,14 @@ export function useSessionMenu({ onArchived, onThreadScreen = false }: { onArchi
   const offline = useNetwork() === 'offline';
   const sheet = useActionSheet();
   const [renaming, setRenaming] = useState<Workbench | null>(null);
+  const toast = useToast();
+  const spaces = spacesOffered(useFeatures());
+  const [moveBuilder, setMoveBuilder] = useState<{ build: MoveBuilder } | null>(null);
+  const onMoveChange = useCallback((build: MoveBuilder | null) => setMoveBuilder(build ? { build } : null), []);
+  const onMoved = useCallback((item: Workbench) => workflow.applyWorkbench(item), [workflow]);
+  const copyText = (text: string, done: string) => {
+    Clipboard.setStringAsync(text).then(() => toast.show(done), () => Alert.alert('Could not copy', 'Please try again.'));
+  };
 
   const attempt = async (title: string, action: () => Promise<unknown>) => {
     try { await action(); } catch (error) { showActionError(title, error); }
@@ -80,9 +108,20 @@ export function useSessionMenu({ onArchived, onThreadScreen = false }: { onArchi
       detail: offline && NEEDS_NETWORK.has(kind) ? 'You are offline.' : undefined,
       onPress: () => perform(kind, item, selectedChat),
     }));
+    // Archive or Restore stays last, after the copy entries and the move.
+    const last = actions.pop();
+    for (const kind of copyActions(item)) {
+      const entry = copyEntry(kind, item);
+      actions.push({ label: entry.label, icon: COPY_ICON, onPress: () => copyText(entry.text, entry.done) });
+    }
+    const move = moveBuilder?.build(item);
+    if (move) actions.push({ label: move.label, icon: move.icon, disabled: move.disabled, detail: move.detail, onPress: move.run });
+    if (last) actions.push(last);
     sheet.open({ title: workbenchTitle(item), actions });
   };
   const elements = <>
+    {spaces ? <MoveToSpaceBinding openSheet={sheet.open} onMoved={onMoved} onChange={onMoveChange} /> : null}
+    {toast.element}
     {sheet.sheet}
     <PromptSheet visible={renaming !== null} title={renaming && workbenchKind(renaming) === 'thread' ? 'Rename thread' : 'Rename session'}
       label="Title" initialValue={renaming ? workbenchTitle(renaming) : ''} maxLength={WORKBENCH_MANUAL_TITLE_MAX}
@@ -92,5 +131,5 @@ export function useSessionMenu({ onArchived, onThreadScreen = false }: { onArchi
         if (item) void attempt(`Could not rename the ${workbenchKind(item) === 'thread' ? 'thread' : 'session'}`, () => workflow.renameWorkbench(item.id, title));
       }} />
   </>;
-  return { open, elements };
+  return { open, elements, toast: toast.show, openSheet: sheet.open };
 }

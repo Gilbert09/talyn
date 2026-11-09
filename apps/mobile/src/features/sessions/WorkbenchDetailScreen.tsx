@@ -1,14 +1,14 @@
 import type { Workbench, WorkbenchReadiness } from '@talyn/shared';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { HeaderHeightContext } from 'expo-router/react-navigation';
-import { useContext, useEffect, useState } from 'react';
+import { useContext, useEffect, useState, type ReactNode } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { ShellLink } from '../../components/ShellScreen';
 import { PrPill, SessionStateIcon } from '../../components/Status';
-import { AppText, Banner, Disclosure, IconButton, Row } from '../../components/UI';
+import { AppText, Banner, Disclosure, IconButton, Row, Segmented } from '../../components/UI';
 import { Heading, NativeText, StateNotice, workflowStyles as styles } from '../../components/Workflow';
 import { showActionError } from '../../lib/errors';
 import { useKeyboardInset } from '../../lib/keyboard';
@@ -20,7 +20,12 @@ import { useResource } from '../../workflow/hooks';
 import { workbenchKind, workbenchTitle } from '../../workflow/model';
 import { Conversation } from '../chat/Conversation';
 import { canRetry } from './actions';
-import { readinessProblem } from './model';
+import { runningJobs } from './background';
+import { ChangesTab } from './ChangesTab';
+import { useBackground } from './data';
+import { JobsTab } from './JobsTab';
+import { readinessProblem, SESSION_TAB_LABEL, sessionTabs, type SessionTab } from './model';
+import { PullRequestTab } from './PullRequestTab';
 import { useSessionMenu } from './SessionMenu';
 import { WorkbenchRow } from './WorkbenchRow';
 
@@ -86,6 +91,33 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
   useEffect(() => { if (item) completeIntent(`/${kind === 'session' ? 'sessions' : 'threads'}/${encodeURIComponent(id)}`); }, [item, kind, id]);
   const childItems = kind === 'thread' ? children.data ?? [] : [];
   const keyboard = useKeyboardInset();
+  const background = useBackground(item);
+  const [chosenTab, setTab] = useState<SessionTab>('chat');
+  const tabs = item ? sessionTabs(item, { jobs: background.data?.jobs.length ?? 0 }) : ['chat' as const];
+  const tab = tabs.includes(chosenTab) ? chosenTab : 'chat';
+  const running = runningJobs(background.data);
+  const tabOptions = tabs.map((value) => ({ value, label: value === 'jobs' && running ? `${SESSION_TAB_LABEL.jobs} · ${running}` : SESSION_TAB_LABEL[value] }));
+  let content: ReactNode = null;
+  if (item) {
+    const header = <View style={local.fixed}>
+      <DetailHeader item={item} readiness={readiness.data} compact={keyboard.open} />
+      {state.status === 'error' || offline ? <StateNotice resource={state} offline={offline} refresh={state.refresh} /> : null}
+      {tabs.length > 1 && !keyboard.open ? <Segmented<SessionTab> options={tabOptions} value={tab} onChange={setTab} accessibilityLabel="Session views" /> : null}
+    </View>;
+    content = tab === 'chat' ? <Conversation key={item.id} item={item} ready={state.status === 'ready' || state.status === 'error'} header={header}
+      top={kind === 'thread' ? (pause) => <View style={{ gap: 4 }}>
+        <StateNotice resource={children} offline={offline} refresh={children.refresh} refreshLabel="Refresh child sessions" />
+        {childItems.length ? <Disclosure title={`Related sessions (${childItems.length})`} onToggle={pause}>
+          <View>{childItems.map((child, index) => <WorkbenchRow key={child.id} item={child} now={now} divider={index < childItems.length - 1} />)}</View>
+        </Disclosure> : children.status === 'ready' ? <AppText variant="meta" tone="muted">No sessions started from this thread yet.</AppText> : null}
+      </View> : undefined} />
+      : <View style={{ flex: 1 }}>
+        {header}
+        {tab === 'changes' ? <ChangesTab item={item} />
+          : tab === 'pr' ? <PullRequestTab item={item} openSheet={menu.openSheet} onSent={(message) => { menu.toast(message); setTab('chat'); }} />
+            : <JobsTab workbenchId={item.id} background={background} />}
+      </View>;
+  }
   // iOS resizes through the avoiding view. An edge-to-edge Android window does not resize, so it gets the keyboard's height as padding. Android passes no behavior: a disabled padding view writes paddingBottom 0 over this style.
   const android = Platform.OS === 'android';
   return <ScreenContainer>
@@ -93,17 +125,7 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
       symbol={{ ios: 'ellipsis.circle', android: 'more_vert' }} onPress={() => menu.open(item)} /> }} /> : null}
     <KeyboardAvoidingView style={[styles.page, android && { paddingBottom: keyboard.inset }]} 
       behavior={android ? undefined : 'padding'} keyboardVerticalOffset={headerHeight}>
-      {item ? <Conversation key={item.id} item={item} ready={state.status === 'ready' || state.status === 'error'}
-        header={<View style={local.fixed}>
-          <DetailHeader item={item} readiness={readiness.data} compact={keyboard.open} />
-          {state.status === 'error' || offline ? <StateNotice resource={state} offline={offline} refresh={state.refresh} /> : null}
-        </View>}
-        top={kind === 'thread' ? (pause) => <View style={{ gap: 4 }}>
-          <StateNotice resource={children} offline={offline} refresh={children.refresh} refreshLabel="Refresh child sessions" />
-          {childItems.length ? <Disclosure title={`Related sessions (${childItems.length})`} onToggle={pause}>
-            <View>{childItems.map((child, index) => <WorkbenchRow key={child.id} item={child} now={now} divider={index < childItems.length - 1} />)}</View>
-          </Disclosure> : children.status === 'ready' ? <AppText variant="meta" tone="muted">No sessions started from this thread yet.</AppText> : null}
-        </View> : undefined} />
+      {item ? content
         : <ScrollView contentContainerStyle={[styles.content, { gap: 12 }]}>
           <StateNotice resource={state} offline={offline} refresh={state.refresh} />
           {state.data && !valid ? <Banner message="This link has the wrong work type. Return to its list." /> : null}
