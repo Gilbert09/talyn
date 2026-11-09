@@ -12,7 +12,7 @@ import { closeChatTab, createChatTab } from '../workbench/ChatTabs';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { groupSidebarWorkbenches, isArchived, visibleGroupItems } from '../workbench/workbenchSelectors';
 import { buildGoToShortcuts } from './goToShortcuts';
-import { contextEntries, inPersonalList, isWorkbenchOwner, spacesOffered, switchContext } from '../../lib/spaces';
+import { activeSpace, contextEntries, groupSpaceSessions, inPersonalList, isWorkbenchOwner, openSpaceSession, spacesOffered, switchContext } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
 import { useSessionBackgroundStore } from '../../stores/sessionBackground';
 
@@ -65,17 +65,33 @@ function currentChat(wb: Workbench): WorkbenchChat | null {
   return chats.find((c) => c.id === store.selectedChatByWorkbench[wb.id]) ?? chats[chats.length - 1] ?? null;
 }
 
-function openWorkbench(wb: Workbench | undefined): void {
-  if (wb) useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
+/**
+ * The session ids the sidebar shows, in its order. In a space these are the
+ * space's rows ("Active now", then "Recent"), teammates' sessions included.
+ */
+export function orderedSidebarSessionIds(): string[] {
+  const space = activeSpace();
+  if (!space) return orderedLiveWorkbenches().map((w) => w.id);
+  const { sessions, presence, selfUserId } = useSpacesStore.getState();
+  const list = sessions[space.space.id];
+  if (!list?.loaded) return [];
+  const { active, recent } = groupSpaceSessions(list.items, presence[space.space.id], selfUserId);
+  return [...active, ...recent].map((row) => row.id);
+}
+
+function openSidebarSession(id: string | undefined): void {
+  if (!id) return;
+  if (activeSpace()) void openSpaceSession(id);
+  else useNavigationStore.getState().navigate({ view: 'workbench', id });
 }
 
 function stepWorkbench(delta: 1 | -1): void {
-  const list = orderedLiveWorkbenches();
+  const list = orderedSidebarSessionIds();
   if (list.length === 0) return;
-  const cur = currentWorkbench();
-  const i = cur ? list.findIndex((w) => w.id === cur.id) : -1;
+  const { route } = useNavigationStore.getState();
+  const i = route.view === 'workbench' ? list.indexOf(route.id) : -1;
   const next = i === -1 ? (delta === 1 ? 0 : list.length - 1) : (i + delta + list.length) % list.length;
-  openWorkbench(list[next]);
+  openSidebarSession(list[next]);
 }
 
 const offered = () => workbenchesOffered(useWorkspaceStore.getState().features);
@@ -113,7 +129,7 @@ function headerAction(id: string, action: WorkbenchAction): Shortcut {
 export function buildAppShortcuts(): Shortcut[] {
   const nav = () => useNavigationStore.getState();
   const wbStore = () => useWorkbenchStore.getState();
-  const canStep = () => offered() && orderedLiveWorkbenches().length > 0;
+  const canStep = () => offered() && orderedSidebarSessionIds().length > 0;
 
   const jumps: Shortcut[] = Array.from({ length: 9 }, (_, i) =>
     fromMenu({
@@ -122,8 +138,8 @@ export function buildAppShortcuts(): Shortcut[] {
       group: 'Sessions',
       allowInInput: true,
       hidden: true,
-      when: () => offered() && orderedLiveWorkbenches().length > i,
-      run: () => openWorkbench(orderedLiveWorkbenches()[i]),
+      when: () => offered() && orderedSidebarSessionIds().length > i,
+      run: () => openSidebarSession(orderedSidebarSessionIds()[i]),
     })
   );
 

@@ -2,17 +2,18 @@ import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vite
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { Features, Workbench, WorkbenchChat } from '@talyn/shared';
+import type { Features, SpaceSessionRow, SpacesTeam, Workbench, WorkbenchChat } from '@talyn/shared';
 import { api } from '../lib/api';
 import { CommandPalette } from '../components/CommandPalette';
-import { buildAppShortcuts, orderedLiveWorkbenches } from '../components/layout/appShortcuts';
+import { buildAppShortcuts, orderedLiveWorkbenches, orderedSidebarSessionIds } from '../components/layout/appShortcuts';
 import { FOCUS_COMPOSER_EVENT, clearShortcuts, dispatchKeydown, formatKeys, registerShortcuts } from '../lib/shortcuts';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useNavigationStore } from '../stores/navigation';
+import { useSpacesStore } from '../stores/spaces';
 
 vi.mock('../lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
-vi.mock('../lib/api', () => ({ api: { workbenches: { list: vi.fn(), restore: vi.fn() }, pullRequests: {} } }));
+vi.mock('../lib/api', () => ({ api: { workbenches: { list: vi.fn(), restore: vi.fn(), get: vi.fn() }, pullRequests: {} } }));
 
 function wb(id: string, over: Partial<Workbench> = {}): Workbench {
   return {
@@ -518,5 +519,144 @@ describe('session arrows', () => {
     const e = press('ArrowDown');
     expect(e.defaultPrevented).toBe(false);
     expect(route()).toEqual({ view: 'home' });
+  });
+});
+
+describe('session arrows in a space', () => {
+  const opts = { menuOwnsChords: false, mac: true };
+  const route = () => useNavigationStore.getState().route;
+  const space = (id: string, name: string) => ({ id, teamId: 't1', name, color: null, image: null, createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' });
+  const TEAM: SpacesTeam = { id: 't1', name: 'Acme', role: 'admin', homeWorkspaceId: 'ws1', createdAt: '', spaces: [space('s1', 'Web')] };
+
+  function row(id: string, over: Partial<SpaceSessionRow> = {}): SpaceSessionRow {
+    return {
+      id,
+      spaceId: 's1',
+      workspaceId: 'ws1',
+      name: id,
+      title: null,
+      status: 'ready',
+      sandboxState: 'running',
+      running: false,
+      repoFullName: 'acme/app',
+      branch: `feat/${id}`,
+      baseBranch: 'main',
+      agent: 'claude',
+      model: null,
+      pullRequest: null,
+      creator: { userId: 'me', githubLogin: 'me', avatarUrl: null },
+      lastActivityAt: null,
+      archivedAt: null,
+      createdAt: '2026-10-13T00:00:00Z',
+      updatedAt: '2026-10-13T00:00:00Z',
+      ...over,
+    };
+  }
+
+  function setSpaceSessions(items: SpaceSessionRow[], loaded = true): void {
+    useSpacesStore.setState({ sessions: { s1: { items, hiddenCount: 0, loaded, error: null } } });
+  }
+
+  function press(key: 'ArrowUp' | 'ArrowDown'): KeyboardEvent {
+    const e = new KeyboardEvent('keydown', { key, code: key, bubbles: true, cancelable: true, metaKey: true });
+    Object.defineProperty(e, 'target', { value: document.body });
+    act(() => {
+      dispatchKeydown(e, opts);
+    });
+    return e;
+  }
+
+  beforeEach(() => {
+    useNavigationStore.setState({ paletteOpen: false });
+    vi.mocked(api.workbenches.get).mockReset().mockResolvedValue(wb('mate', { workspaceId: 'ws2', spaceId: 's1' }));
+    useWorkspaceStore.setState({
+      features: { workbenches: true, spaces: true } as Features,
+      currentContext: { kind: 'space', spaceId: 's1' },
+    });
+    useWorkbenchStore.getState().removeWorkbench('mate');
+    useWorkbenchStore.getState().setWorkbenches('ws1', [wb('lisbon', { spaceId: 's1' }), wb('oslo', { spaceId: 's1' }), wb('rome')]);
+    useSpacesStore.setState({ teams: [TEAM], presence: {}, selfUserId: 'me' });
+    // Sidebar order: "Active now" (oslo runs a turn), then "Recent" by last activity.
+    setSpaceSessions([
+      row('mate', { workspaceId: 'ws2', lastActivityAt: '2026-10-13T01:00:00Z', creator: { userId: 'u2', githubLogin: 'mate', avatarUrl: null } }),
+      row('lisbon', { lastActivityAt: '2026-10-13T03:00:00Z' }),
+      row('oslo', { running: true, lastActivityAt: '2026-10-13T00:30:00Z' }),
+      row('old', { archivedAt: '2026-10-13T04:00:00Z', lastActivityAt: '2026-10-13T04:00:00Z' }),
+    ]);
+  });
+
+  afterEach(() => {
+    useWorkspaceStore.setState({ currentContext: { kind: 'personal', workspaceId: 'ws1' } });
+    useSpacesStore.setState({ teams: null, sessions: {}, presence: {}, extraLoads: {} });
+  });
+
+  it('follows the space sidebar order, not the personal list', () => {
+    expect(orderedSidebarSessionIds()).toEqual(['oslo', 'lisbon', 'mate']);
+    expect(orderedLiveWorkbenches().map((w) => w.id)).toEqual(['rome']);
+  });
+
+  it.each([
+    ['home', 'ArrowDown', 'oslo'],
+    ['home', 'ArrowUp', 'mate'],
+    ['oslo', 'ArrowDown', 'lisbon'],
+    ['lisbon', 'ArrowUp', 'oslo'],
+    ['lisbon', 'ArrowDown', 'mate'],
+    ['mate', 'ArrowDown', 'oslo'],
+    ['oslo', 'ArrowUp', 'mate'],
+    ['rome', 'ArrowDown', 'oslo'],
+    ['rome', 'ArrowUp', 'mate'],
+  ] as const)('from %s, ⌘%s opens %s', async (from, key, to) => {
+    if (from !== 'home') act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: from }));
+    const e = press(key);
+    expect(e.defaultPrevented).toBe(true);
+    await waitFor(() => expect(route()).toEqual({ view: 'workbench', id: to }));
+  });
+
+  it("fetches a teammate's session before it opens it", async () => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: 'lisbon' }));
+    press('ArrowDown');
+    await waitFor(() => expect(route()).toEqual({ view: 'workbench', id: 'mate' }));
+    expect(api.workbenches.get).toHaveBeenCalledWith('mate');
+    expect(useWorkbenchStore.getState().extraWorkbenchIds.mate).toBe(true);
+  });
+
+  it('does not fetch a session that is already loaded', async () => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' }));
+    press('ArrowDown');
+    await waitFor(() => expect(route()).toEqual({ view: 'workbench', id: 'lisbon' }));
+    expect(api.workbenches.get).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [1, 'oslo'],
+    [2, 'lisbon'],
+    [3, 'mate'],
+  ] as const)('⌘⌥%i opens the space session at that place', async (n, to) => {
+    const jump = buildAppShortcuts().find((s) => s.id === `workbench.jump.${n}`);
+    expect(jump?.when?.()).toBe(true);
+    act(() => jump?.run());
+    await waitFor(() => expect(route()).toEqual({ view: 'workbench', id: to }));
+  });
+
+  it('⌘⌥4 is off with three space sessions', () => {
+    expect(buildAppShortcuts().find((s) => s.id === 'workbench.jump.4')?.when?.()).toBe(false);
+  });
+
+  it.each([
+    ['not loaded yet', [row('oslo')], false],
+    ['empty', [], true],
+    ['all archived', [row('old', { archivedAt: '2026-10-13T04:00:00Z' })], true],
+  ] as const)('does nothing while the space list is %s', (_, items, loaded) => {
+    setSpaceSessions([...items], loaded);
+    const e = press('ArrowDown');
+    expect(e.defaultPrevented).toBe(false);
+    expect(route()).toEqual({ view: 'home' });
+  });
+
+  it('uses the personal list again after a switch to Personal', () => {
+    act(() => useWorkspaceStore.setState({ currentContext: { kind: 'personal', workspaceId: 'ws1' } }));
+    expect(orderedSidebarSessionIds()).toEqual(['rome']);
+    press('ArrowDown');
+    expect(route()).toEqual({ view: 'workbench', id: 'rome' });
   });
 });
