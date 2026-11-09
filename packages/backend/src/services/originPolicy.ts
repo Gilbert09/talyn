@@ -30,6 +30,14 @@ export interface OriginPolicy {
   isAllowed(origin: string | undefined): boolean;
   /** WS only: is this the packaged desktop renderer? */
   isDesktop(origin: string | undefined): boolean;
+  /**
+   * WS only: does the Origin name the API's own host? React Native's Android
+   * WebSocket sends `Origin: https://<api host>` when the app sets none, so
+   * without this the mobile app never gets live updates. Only a page served
+   * from the API host itself can send this origin, and the API serves no
+   * untrusted content. A preview host is never accepted.
+   */
+  isOwnHost(origin: string | undefined, host: string | undefined): boolean;
 }
 
 export function createOriginPolicy(env: NodeJS.ProcessEnv = process.env): OriginPolicy {
@@ -66,5 +74,9 @@ export function createOriginPolicy(env: NodeJS.ProcessEnv = process.env): Origin
     isDesktop: (origin) =>
       (allowNullOrigin && origin === 'null') ||
       (origin?.startsWith('file://') ?? false),
+    isOwnHost: (origin, host) => {
+      if (!origin || !host || matchPreviewHost(host, previewDomain) !== null) return false;
+      return origin === `https://${host}` || origin === `http://${host}`;
+    },
   };
 }
