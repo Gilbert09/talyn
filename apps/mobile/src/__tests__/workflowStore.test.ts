@@ -1,5 +1,9 @@
+import type { PRRow } from '@talyn/client/native';
+import type { Workbench } from '@talyn/shared';
+
 import { EVENT_LIMIT, type Transcript } from '../workflow/model';
-import { deferred, event, fixture, pr, scope, session } from './workflowFixtures';
+import { EVENT_REFETCH_INTERVAL, RECOVERY_DEBOUNCE } from '../workflow/store';
+import { chat, deferred, event, fixture, pr, scope, session } from './workflowFixtures';
 
 const settle = async () => { for (let index = 0; index < 20; index++) await Promise.resolve(); };
 let active: ReturnType<typeof fixture>;
@@ -61,11 +65,15 @@ describe('authoritative reads and boundaries', () => {
 });
 
 describe('socket invalidation, resume, and transcript reconciliation', () => {
-  it('coalesces invalidation bursts and refetches watched snapshots', async () => {
-    const { store, api, emit } = active; const stop = store.watch('sessions'); await settle();
-    for (let index = 0; index < 100; index++) emit('workbench:updated', { workbench: session() });
-    expect(store.read('sessions').stale).toBe(true); jest.advanceTimersByTime(250); await settle();
-    expect(api.workbenches.list).toHaveBeenCalledTimes(2); expect(store.read('sessions').stale).toBe(false); stop();
+  it('coalesces a burst of echoes into one background refetch', async () => {
+    const { store, api, emit } = active; const stop = store.watch('attention'); await settle();
+    for (let index = 0; index < 100; index++) emit('pull_request:updated', { id: `new-${index}`, state: 'open' });
+    jest.advanceTimersByTime(RECOVERY_DEBOUNCE); await settle();
+    expect(api.pullRequests.list).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(EVENT_REFETCH_INTERVAL); await settle();
+    expect(api.pullRequests.list).toHaveBeenCalledTimes(2); expect(store.read('attention').stale).toBe(false);
+    jest.advanceTimersByTime(EVENT_REFETCH_INTERVAL * 5); await settle();
+    expect(api.pullRequests.list).toHaveBeenCalledTimes(2); stop();
   });
   it('marks snapshots stale until the recovery REST request succeeds', async () => {
     const { store, api, emit } = active; store.watch('sessions'); await settle();
@@ -188,15 +196,101 @@ describe('text delivery without automatic resend', () => {
     await prepare(); active.network({ reachability }); await active.store.send('session-one', 'chat-one');
     expect(active.api.workbenches.sendMessage).not.toHaveBeenCalled(); expect(active.store.local('chat-one').draft).toBe('Hello');
   });
-  it('rejects sends with stale or unauthorized parent state', async () => {
-    await prepare(); active.emit('connection:status', { connected: false }); await active.store.send('session-one', 'chat-one');
-    expect(active.api.workbenches.sendMessage).not.toHaveBeenCalled();
-    active.api.workbenches.get.mockRejectedValueOnce({ status: 403 }); await active.store.load('workbench', 'session-one');
+  it('sends while a background refresh is owed, because the server validates the send', async () => {
+    await prepare(); active.emit('connection:status', { connected: false });
+    expect(active.store.read('workbench', 'session-one').stale).toBe(true);
+    await active.store.send('session-one', 'chat-one'); expect(active.api.workbenches.sendMessage).toHaveBeenCalledTimes(1);
+  });
+  it('rejects sends with unauthorized parent state', async () => {
+    await prepare(); active.api.workbenches.get.mockRejectedValueOnce({ status: 403 }); await active.store.load('workbench', 'session-one');
     await active.store.send('session-one', 'chat-one'); expect(active.api.workbenches.sendMessage).not.toHaveBeenCalled();
   });
   it('does not restore a draft or delivery status after an account change', async () => {
     await prepare(); const pending = deferred<{ queued: boolean }>(); active.api.workbenches.sendMessage.mockReturnValueOnce(pending.promise);
     const send = active.store.send('session-one', 'chat-one'); active.store.setScope({ ...scope, user: 'other' });
     pending.resolve({ queued: true }); await send; expect(active.store.local('chat-one')).toMatchObject({ draft: '', delivery: { status: 'idle' } });
+  });
+});
+
+describe('targeted invalidation and stale-while-revalidate', () => {
+  it('patches the named workbench in place and leaves other workbenches alone', async () => {
+    const { store, api, emit } = active;
+    const stopA = store.watch('workbench', 'session-one'); const stopB = store.watch('workbench', 'session-two'); await settle();
+    const before = store.read('workbench', 'session-two');
+    emit('workbench:updated', { workbench: session({ title: 'Renamed', chats: undefined }) });
+    jest.advanceTimersByTime(EVENT_REFETCH_INTERVAL * 2); await settle();
+    expect(store.read<Workbench>('workbench', 'session-one').data).toMatchObject({ title: 'Renamed', chats: [chat()] });
+    expect(store.read('workbench', 'session-two')).toBe(before);
+    expect(api.workbenches.get).toHaveBeenCalledTimes(2); stopA(); stopB();
+  });
+  it.each([
+    ['ignores another workspace', session({ workspaceId: 'two', title: 'Foreign' }), ['session-one', 'older'], 'Current work'],
+    ['keeps creation order when a row changes', session({ title: 'Renamed', updatedAt: '2026-11-09T00:00:00Z' }), ['session-one', 'older'], 'Renamed'],
+    ['inserts a new session in creation order', session({ id: 'newest', createdAt: '2026-11-09T00:00:00Z' }), ['newest', 'session-one', 'older'], 'Current work'],
+    ['drops an archived session', session({ archivedAt: '2026-11-09T00:00:00Z' }), ['older'], undefined],
+  ] as const)('%s in a list without a refetch', async (_name, update, ids, firstTitle) => {
+    const { store, api, emit } = active;
+    api.workbenches.list.mockResolvedValueOnce([session(), session({ id: 'older', createdAt: '2026-11-01T00:00:00Z', title: 'Older' })]);
+    const stop = store.watch('sessions'); await settle();
+    emit('workbench:updated', { workbench: update });
+    jest.advanceTimersByTime(EVENT_REFETCH_INTERVAL * 2); await settle();
+    const rows = store.read<Workbench[]>('sessions').data!;
+    expect(rows.map((row) => row.id)).toEqual(ids);
+    expect(rows.find((row) => row.id === 'session-one')?.title).toBe(firstTitle);
+    expect(api.workbenches.list).toHaveBeenCalledTimes(1); stop();
+  });
+  it('moves a chat status into the workbench and its list row without a refetch', async () => {
+    const { store, api, emit } = active; const stopList = store.watch('sessions'); const stopItem = store.watch('workbench', 'session-one'); await settle();
+    emit('workbench:chat', { chat: chat({ status: 'running' }) });
+    expect(store.read<Workbench>('workbench', 'session-one').data?.chats?.[0].status).toBe('running');
+    expect(store.read<Workbench[]>('sessions').data?.[0].chats?.[0].status).toBe('running');
+    jest.advanceTimersByTime(EVENT_REFETCH_INTERVAL * 2); await settle();
+    expect(api.workbenches.get).toHaveBeenCalledTimes(1); expect(api.workbenches.list).toHaveBeenCalledTimes(1);
+    expect(api.workbenches.events).not.toHaveBeenCalled(); stopList(); stopItem();
+  });
+  it('removes a deleted workbench from lists without a refetch', async () => {
+    const { store, api, emit } = active; const stop = store.watch('threads'); await settle();
+    emit('workbench:deleted', { id: 'thread-one' });
+    expect(store.read<Workbench[]>('threads').data).toEqual([]);
+    jest.advanceTimersByTime(EVENT_REFETCH_INTERVAL * 2); await settle(); expect(api.workbenches.list).toHaveBeenCalledTimes(1); stop();
+  });
+  it.each([
+    ['patches a held row', { id: 'pr-one', state: 'open', lastSummary: { ciStatus: 'failing_required' } }, ['pr-one'], 1],
+    ['drops a row that closed', { id: 'pr-one', state: 'merged' }, [], 1],
+    ['ignores a closed PR it does not hold', { id: 'other', state: 'closed' }, ['pr-one'], 1],
+    ['refetches for an open PR it does not hold', { id: 'other', state: 'open' }, ['pr-one'], 2],
+  ] as const)('%s on a PR echo', async (_name, update, ids, calls) => {
+    const { store, api, emit } = active; const stop = store.watch('attention'); await settle();
+    emit('pull_request:updated', update);
+    expect(store.read<PRRow[]>('attention').data?.map((row) => row.id)).toEqual(ids);
+    if (update.id === 'pr-one' && update.state === 'open') expect(store.read<PRRow[]>('attention').data?.[0].summary.ciStatus).toBe('failing_required');
+    jest.advanceTimersByTime(EVENT_REFETCH_INTERVAL * 2); await settle();
+    expect(api.pullRequests.list).toHaveBeenCalledTimes(calls); stop();
+  });
+  it('refreshes only the PR detail an echo names', async () => {
+    const { store, api, emit } = active;
+    const stopOne = store.watch('pr', 'pr-one'); const stopTwo = store.watch('pr', 'pr-two'); await settle();
+    expect(api.pullRequests.get).toHaveBeenCalledTimes(2);
+    emit('pull_request:updated', { id: 'pr-one', state: 'open', lastSummary: { title: 'Patched' } });
+    expect(store.read<{ row: PRRow }>('pr', 'pr-one').data?.row.summary.title).toBe('Patched');
+    expect(store.read('pr', 'pr-two').stale).toBe(false);
+    jest.advanceTimersByTime(EVENT_REFETCH_INTERVAL * 2); await settle();
+    expect(api.pullRequests.get.mock.calls.map((call) => (call as unknown[])[0])).toEqual(['pr-one', 'pr-two', 'pr-one']); stopOne(); stopTwo();
+  });
+  it('keeps data and order on screen while a background refetch runs', async () => {
+    const { store, api, emit } = active; const stop = store.watch('attention'); await settle();
+    const pending = deferred<PRRow[]>(); api.pullRequests.list.mockReturnValueOnce(pending.promise);
+    const before = store.read<PRRow[]>('attention').data;
+    emit('pull_request:updated', { id: 'other', state: 'open' });
+    jest.advanceTimersByTime(EVENT_REFETCH_INTERVAL); await settle();
+    expect(store.read('attention')).toMatchObject({ status: 'ready', refreshing: true }); expect(store.read('attention').data).toBe(before);
+    pending.resolve([pr(), pr({ id: 'other' })]); await settle();
+    expect(store.read<PRRow[]>('attention').data?.map((row) => row.id)).toEqual(['pr-one', 'other']); stop();
+  });
+  it('recovers at once after a reconnect, without the echo throttle', async () => {
+    const { store, api, emit } = active; const stop = store.watch('sessions'); await settle();
+    emit('connection:status', { connected: true });
+    jest.advanceTimersByTime(RECOVERY_DEBOUNCE); await settle();
+    expect(api.workbenches.list).toHaveBeenCalledTimes(2); stop();
   });
 });

@@ -1,52 +1,48 @@
-import { Link, type Href } from 'expo-router';
 import { useEffect, useRef, type PropsWithChildren, type ComponentRef } from 'react';
 import { AccessibilityInfo, Alert, findNodeHandle, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { Resource } from '../workflow/model';
 import { ROW_TEXT_LIMIT } from '../workflow/model';
 import { useShellColors } from './ShellScreen';
-import { Button, Notice, ui } from './UI';
+import { mono as monoFont, type } from '../theme/tokens';
+import { Banner, Button, Spinner } from './UI';
 
 export function Body({ children, muted = false, label }: PropsWithChildren<{ muted?: boolean; label?: string }>) {
   const colors = useShellColors();
   return <Text selectable accessibilityLabel={label} style={[styles.body, { color: muted ? colors.muted : colors.text }]}>{children}</Text>;
 }
-export function Heading({ children }: PropsWithChildren) {
+/** The screen's own title. Focused for screen readers when the screen opens. */
+export function Heading({ children, size = 'title' }: PropsWithChildren<{ size?: 'title' | 'heading' }>) {
   const colors = useShellColors();
   const ref = useRef<ComponentRef<typeof Text>>(null);
   useEffect(() => {
     const node = findNodeHandle(ref.current);
     if (node) AccessibilityInfo.setAccessibilityFocus(node);
   }, []);
-  return <Text ref={ref} accessibilityRole="header" style={[styles.heading, { color: colors.text }]}>{children}</Text>;
+  return <Text ref={ref} accessibilityRole="header" style={[type[size], { color: colors.text, textAlign: 'auto' }]}>{children}</Text>;
 }
 export function Action({ label, onPress, disabled = false, primary = false }: { label: string; onPress(): void; disabled?: boolean; primary?: boolean }) {
-  return <Button title={label} onPress={onPress} disabled={disabled} variant={primary ? 'primary' : 'quiet'} />;
+  return <Button title={label} onPress={onPress} disabled={disabled} variant={primary ? 'primary' : 'quiet'} size="sm" />;
 }
-export function CardLink({ href, title, detail, children }: PropsWithChildren<{ href: Href; title: string; detail: string }>) {
+/**
+ * Shows only what a person must know: first load, offline, error, no access, deleted.
+ * A background refetch stays silent, and existing data stays on screen.
+ */
+export function StateNotice({ resource, offline, refresh, refreshLabel = 'Try again' }: { resource: Resource<unknown>; offline: boolean; refresh(): void; refreshLabel?: string }) {
   const colors = useShellColors();
-  return <Link href={href} asChild><Pressable accessibilityRole="link" accessibilityLabel={`${title}. ${detail}`}
-    style={({ pressed }) => [styles.card, { backgroundColor: pressed ? colors.paper : colors.background, borderColor: colors.border }]}>
-    <View style={ui.inline}><Text style={[styles.cardTitle, { color: colors.text, flex: 1 }]}>{title}</Text>
-      <Text accessible={false} style={{ fontSize: 22, color: colors.muted }}>›</Text></View>
-    {children ?? <Text style={[ui.caption, { color: colors.muted }]}>{detail}</Text>}
-  </Pressable></Link>;
-}
-export function StateNotice({ resource, offline, refresh, refreshLabel = 'Refresh' }: { resource: Resource<unknown>; offline: boolean; refresh(): void; refreshLabel?: string }) {
+  const hasData = resource.data !== undefined;
+  if ((resource.status === 'loading' || resource.status === 'idle') && !hasData && !offline) {
+    return <View accessibilityState={{ busy: true }} style={styles.loading}><Spinner /><Text style={[type.meta, { color: colors.muted }]}>Loading</Text></View>;
+  }
   let text = '';
-  if (resource.status === 'loading' || resource.status === 'idle') text = offline ? 'Offline. Connect to load this view.' : 'Loading';
-  else if (resource.status === 'deleted') text = 'This item was deleted or is no longer available. Return to the list.';
-  else if (resource.status === 'unauthorized') text = 'Access is unavailable. Check your account and workspace.';
-  else if (offline || resource.status === 'offline') text = 'Offline. Saved data is from this app session only.';
-  else if (resource.status === 'error') text = 'This view could not be refreshed. Try again.';
-  else if (resource.stale) text = 'Stale data. Refresh to check current state.';
+  let tone: 'warning' | 'destructive' = 'warning';
+  let action = true;
+  if (resource.status === 'deleted') { text = 'This item was deleted or is no longer available.'; tone = 'destructive'; action = false; }
+  else if (resource.status === 'unauthorized') { text = 'Access is unavailable. Check your account and workspace.'; tone = 'destructive'; }
+  else if (offline || resource.status === 'offline') { text = hasData ? 'You are offline. Showing what this app last loaded.' : 'You are offline. Connect to load this view.'; action = false; }
+  else if (resource.status === 'error') { text = hasData ? 'Could not refresh. Showing earlier data.' : 'This view could not load.'; tone = 'destructive'; }
   if (!text) return null;
-  return <View accessibilityState={{ busy: resource.refreshing }}>
-    <Notice message={text} loading={resource.status === 'loading' || resource.status === 'idle'}
-      alert={['error', 'unauthorized', 'deleted'].includes(resource.status)}>
-      <Action label={refreshLabel} disabled={offline || resource.refreshing} onPress={refresh} />
-    </Notice>
-  </View>;
+  return <Banner message={text} tone={tone} action={action ? refreshLabel : undefined} onAction={refresh} actionDisabled={offline || resource.refreshing} />;
 }
 export function safeExternalUrl(value: string): string | null {
   try {
@@ -85,14 +81,13 @@ export function NativeText({ text }: { text: string }) {
   })}{text.length >= ROW_TEXT_LIMIT ? <Body muted>Long text is limited in this view.</Body> : null}</View>;
 }
 export const workflowStyles = StyleSheet.create({
-  page: { flex: 1 }, content: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32, gap: 10, width: '100%', maxWidth: 760, alignSelf: 'center' },
-  header: { gap: 12, marginBottom: 8 }, footer: { padding: 12, gap: 8, width: '100%', maxWidth: 760, alignSelf: 'center' },
-  input: { minHeight: 52, maxHeight: 160, borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 17, textAlignVertical: 'top', writingDirection: 'auto' },
-  transcript: { padding: 14, gap: 10, borderRadius: 14, borderWidth: 1, borderLeftWidth: 3 },
+  page: { flex: 1 }, content: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 32, width: '100%', maxWidth: 760, alignSelf: 'center' },
+  header: { gap: 10, marginBottom: 4 }, footer: { padding: 12, gap: 8, width: '100%', maxWidth: 760, alignSelf: 'center' },
+  input: { minHeight: 44, maxHeight: 160, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, ...type.body, textAlignVertical: 'top', writingDirection: 'auto' },
 });
 const styles = StyleSheet.create({
-  heading: { fontSize: 28, lineHeight: 36, letterSpacing: -0.5, fontWeight: '700', textAlign: 'auto' }, body: { fontSize: 16, lineHeight: 24, textAlign: 'auto', writingDirection: 'auto' },
+  body: { ...type.body, textAlign: 'auto', writingDirection: 'auto' },
   action: { minHeight: 48, padding: 12, borderRadius: 8, justifyContent: 'center' },
-  card: { minHeight: 48, paddingVertical: 14, paddingHorizontal: 14, gap: 6, borderRadius: 14, borderWidth: 1 }, cardTitle: { fontSize: 17, lineHeight: 25, fontWeight: '600', textAlign: 'auto' },
-  textParts: { gap: 8 }, code: { padding: 10, borderRadius: 6 }, mono: { fontFamily: 'monospace' },
+  loading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 24 },
+  textParts: { gap: 8 }, code: { padding: 10, borderRadius: 6 }, mono: { ...monoFont(400), fontSize: 13, lineHeight: 19 },
 });

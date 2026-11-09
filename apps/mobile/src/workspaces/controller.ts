@@ -33,8 +33,10 @@ export class WorkspaceController {
   }
   async load(user: string) {
     const generation = ++this.generation;
+    // Revalidating the same account keeps its validated choice on screen; a new account starts empty.
+    const revalidate = this.user === user && this.snapshot.status === 'ready';
     this.user = user;
-    this.publish({ status: 'loading', choices: [], selected: null });
+    this.publish(revalidate ? { ...this.snapshot, status: 'loading' } : { status: 'loading', choices: [], selected: null });
     try {
       await this.writes;
       const [choices, selected] = await Promise.all([this.list(), this.preferences.getItem(this.key(user))]);

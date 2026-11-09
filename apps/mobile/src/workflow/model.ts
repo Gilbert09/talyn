@@ -1,4 +1,4 @@
-import { buildBlocks, type Workbench, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
+import type { Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 import type { PRRow, WorkbenchEventsPage } from '@talyn/client/native';
 
 export const SCHEMA_VERSION = 1;
@@ -7,13 +7,19 @@ export const EVENT_BYTES = 2_000_000;
 export const PAGE_SIZE = 200;
 export const ROW_TEXT_LIMIT = 16000;
 export interface Scope { environment: string; user: string; workspace: string }
-export type Entity = 'sessions' | 'threads' | 'attention' | 'workbench' | 'children' | 'readiness' | 'pr' | 'timeline' | 'transcript';
+/** `attention` holds every open PR of the workspace, as web's one PR store; the three PR pages filter it. */
+export type Entity = 'sessions' | 'threads' | 'attention' | 'workbench' | 'children' | 'readiness' | 'pr' | 'timeline' | 'transcript'
+  | 'features' | 'repositories' | 'providers' | 'workspace' | 'environments' | 'codeReview';
 export const cacheKey = (scope: Scope, entity: Entity, id = '') =>
   JSON.stringify(['mobile', SCHEMA_VERSION, scope.environment, scope.user, scope.workspace, entity, id]);
 export const sameScope = (a: Scope | null, b: Scope | null) => a === b || Boolean(a && b &&
   a.environment === b.environment && a.user === b.user && a.workspace === b.workspace);
 export type LoadState = 'idle' | 'loading' | 'ready' | 'error' | 'offline' | 'unauthorized' | 'deleted';
-export interface Resource<T> { status: LoadState; data?: T; stale: boolean; refreshing: boolean; updatedAt?: number }
+/**
+ * `stale` means a background refetch is owed. Screens keep showing `data` while it runs and never block on it.
+ * `version` grows with each successful fetch, so a screen can wait for one fetch that started after it opened.
+ */
+export interface Resource<T> { status: LoadState; data?: T; stale: boolean; refreshing: boolean; updatedAt?: number; version?: number }
 export const EMPTY_RESOURCE: Resource<never> = Object.freeze({ status: 'idle', stale: true, refreshing: false });
 export function failureState(error: unknown): LoadState {
   const status = (error as { status?: number } | null)?.status;
@@ -101,17 +107,44 @@ const labels: Record<string, string> = {
 export const statusLabel = (value: unknown) => typeof value === 'string' ? labels[value] ?? 'Unknown' : 'Unknown';
 const domainLabel = (states: readonly string[], value: unknown) => typeof value === 'string' && states.includes(value) ? statusLabel(value) : 'Unknown';
 export const ciLabel = (value: unknown) => domainLabel(['none', 'passing', 'running', 'failing_optional', 'failing_required', 'needs_human'], value);
-export const reviewLabel = (value: unknown) => domainLabel(['APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED'], value);
-export const mergeabilityLabel = (value: unknown) => domainLabel(['MERGEABLE', 'CONFLICTING', 'UNKNOWN'], value);
-export const mergeStateLabel = (value: unknown) => domainLabel(['CLEAN', 'BLOCKED', 'BEHIND', 'DIRTY', 'DRAFT', 'HAS_HOOKS', 'UNSTABLE', 'UNKNOWN'], value);
 export const queueLabel = (value: unknown) => domainLabel(['queued', 'awaiting_ci', 'awaiting_review', 'automerge_armed', 'awaiting_external', 'awaiting_stack', 'fixing', 'merging', 'blocked', 'blocked_manual', 'merged', 'removed'], value);
 export const externalLabel = (value: unknown) => domainLabel(['not_submitted', 'not_ready', 'queued', 'testing', 'passed', 'pending_failure', 'failed', 'ejected', 'cancelled', 'rejected', 'merged'], value);
 export const workbenchTitle = (item: Workbench) => item.title?.trim() || item.name;
 export const workbenchKind = (item: Workbench) => item.kind ?? 'session';
 export const humanGate = (item: Workbench) => item.chats?.some((chat) => chat.status === 'awaiting_input') === true;
+/** Newest first by creation, then id. Not by last change, so rows do not move while sessions work. */
+export const compareWorkbenches = (a: Pick<Workbench, 'createdAt' | 'id'>, b: Pick<Workbench, 'createdAt' | 'id'>) =>
+  b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id);
 export function selectWorkbenches(items: Workbench[], kind: 'session' | 'thread', workspace: string) {
   return items.filter((item) => item.workspaceId === workspace && workbenchKind(item) === kind && !item.archivedAt)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    .sort(compareWorkbenches);
+}
+/** Replace a row in place, keeping embedded chats when the update omits them. Missing rows are inserted in order. */
+export function upsertWorkbench(items: Workbench[], item: Workbench, belongs: boolean): Workbench[] {
+  const index = items.findIndex((value) => value.id === item.id);
+  if (!belongs) return index === -1 ? items : items.filter((value) => value.id !== item.id);
+  const merged = index === -1 ? item : { ...item, chats: item.chats ?? items[index].chats };
+  if (index !== -1) { const next = items.slice(); next[index] = merged; return next; }
+  return [...items, merged].sort(compareWorkbenches);
+}
+/** Replace one chat inside a workbench row. Returns the same row when the chat is not part of it. */
+export function withChat(item: Workbench, chat: WorkbenchChat): Workbench {
+  if (item.id !== chat.workbenchId) return item;
+  const chats = item.chats ?? [];
+  const index = chats.findIndex((value) => value.id === chat.id);
+  return { ...item, chats: index === -1 ? [...chats, chat] : chats.map((value) => value.id === chat.id ? chat : value) };
+}
+export interface RepoGroup { repo: string; items: Workbench[] }
+/** Rows grouped by repository, the newest group first, like the web sidebar. Rows without a repository share one group. */
+export function groupByRepository(items: Workbench[]): RepoGroup[] {
+  const groups = new Map<string, Workbench[]>();
+  for (const item of items) {
+    const key = item.repoFullName || '';
+    const list = groups.get(key);
+    if (list) list.push(item); else groups.set(key, [item]);
+  }
+  return [...groups.entries()].map(([repo, list]) => ({ repo, items: [...list].sort(compareWorkbenches) }))
+    .sort((a, b) => compareWorkbenches(a.items[0], b.items[0]) || a.repo.localeCompare(b.repo));
 }
 export function needsAttention(row: PRRow) {
   return row.state === 'open' && (row.reviewRequested && !row.reviewHiddenAt || Boolean(row.summary.humanGates?.length) ||
@@ -128,39 +161,4 @@ export function stackLabel(row: PRRow) {
 }
 export function canCompose(item: Workbench | undefined, chat: WorkbenchChat | undefined) {
   return Boolean(item && chat && item.status === 'ready' && !item.archivedAt && ['idle', 'running', 'awaiting_input', 'error'].includes(chat.status));
-}
-
-export interface TranscriptRow { key: string; author: 'You' | 'Agent' | 'System'; text: string; timestamp: string | null; streaming: boolean }
-export function transcriptRows(chatId: string, events: WorkbenchEvent[]): TranscriptRow[] {
-  const normalized = events.map((item) => ({ ...item.event, seq: item.seq }));
-  const bySeq = new Map(events.map((item) => [item.seq, item.event]));
-  const rows: TranscriptRow[] = [];
-  for (const block of buildBlocks(normalized)) {
-    const seq = Number(block.key.split('.')[0]);
-    const event = bySeq.get(seq);
-    const rawTime = event?.timestamp;
-    const timestamp = typeof rawTime === 'string' && Number.isFinite(Date.parse(rawTime)) ? rawTime : null;
-    let text: string;
-    if (block.kind === 'text' || block.kind === 'thinking' || block.kind === 'system') text = block.text;
-    else if (block.kind === 'result') text = block.isError ? `Turn failed. ${block.summary}` : block.summary || 'Turn complete';
-    else if (block.kind === 'permission') text = block.status === 'pending' ? 'A permission request needs the desktop or web app.' : `Permission: ${statusLabel(block.status)}`;
-    else if (block.kind === 'tool_use') text = `Tool: ${block.name}`;
-    else text = block.stopped ? 'Tool interrupted' : block.isError ? 'Tool failed' : 'Tool result';
-    const system = block.kind !== 'text' && block.kind !== 'thinking' || Boolean(event?.talyn);
-    rows.push({ key: `${chatId}:${block.key}`, author: system ? 'System' : event?.type === 'user' ? 'You' : 'Agent',
-      text: text.slice(0, ROW_TEXT_LIMIT), timestamp, streaming: block.key.startsWith('stream-') });
-  }
-  for (const item of events) {
-    if (item.event.type !== 'user' || item.event.talyn) continue;
-    const content = item.event.message?.content;
-    const text = typeof content === 'string' ? content : Array.isArray(content)
-      ? content.filter((part) => part?.type === 'text' && typeof part.text === 'string').map((part) => part.text).join('\n') : '';
-    if (!text || text.startsWith('[Request interrupted')) continue;
-    rows.push({ key: `${chatId}:${item.seq}.user`, author: 'You', text: text.slice(0, ROW_TEXT_LIMIT),
-      timestamp: typeof item.event.timestamp === 'string' ? item.event.timestamp : null, streaming: false });
-  }
-  return rows.sort((a, b) => {
-    const seq = (row: TranscriptRow) => row.key.includes(':stream-') ? Infinity : Number(row.key.slice(chatId.length + 1).split('.')[0]);
-    return seq(a) - seq(b);
-  });
 }

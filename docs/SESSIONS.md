@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Mobile app aligned with web (2026-11-09)
+
+An on-device review of `apps/mobile` found it looked and worked like a form, not like Talyn. This session rebuilt it to match web and added the features a phone needs.
+- **Live updates never worked on Android.** React Native sends `Origin: https://<api host>` when the app sets none, and the WS upgrade gate destroyed the socket. The app now sends an empty Origin (allowed for native clients), and the server also accepts its own host as an origin (`isOwnHost`). Before this, every screen showed stale data.
+- **The store marked every entry stale on every socket event**, which kept a "Stale data" banner up and locked the composer on busy repos. Invalidation is now per id, refetches are silent and coalesced, and data stays on screen.
+- **Navigation is a drawer that mirrors the web sidebar**, not bottom tabs. Home is the new-session composer, as on web. Pinning every page above Settings left no room for sessions on a phone, so only the pull request lists stay pinned.
+- **Edge-to-edge Android does not resize for the keyboard.** A disabled `KeyboardAvoidingView` with `behavior="padding"` writes `paddingBottom: 0` over its own style, and the reported keyboard height leaves out the navigation bar. The inset now comes from the keyboard's `screenY`.
+- New: Markdown chat with tool rows, plan approval, stop, image attachments, session menu actions, PR actions and code review, changes and diffs, jobs, history, spaces, automations, usage, agents, insights, feature flags (`GET /features`), the owl boot and sign-in screens, and a native splash.
+- Metro caches the worklets Babel plugin in memory. After adding reanimated or worklets, restart Metro with `--clear`, or the app fails with a version mismatch.
+
 ## Check ledger recompute reads one row (2026-11-09)
 
 After 486b78b7cf, `recomputeVerdicts` was still the largest egress source: about 207 ledger rows per call for PostHog/posthog, about 900 calls in 7 minutes.

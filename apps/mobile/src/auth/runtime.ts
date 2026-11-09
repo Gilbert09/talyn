@@ -9,6 +9,7 @@ import * as WebBrowser from 'expo-web-browser';
 import { AppState } from 'react-native';
 
 import type { MobileConfig } from '../config';
+import { createNativeSocket } from '../native/socket';
 import { createNativeLifecycle } from '../native/lifecycle';
 import { WorkspaceController } from '../workspaces/controller';
 import { clearIntent } from '../navigation/intents';
@@ -68,7 +69,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
   });
   const initialized = supabase.auth.initialize();
   const bindClient = () => configureApiClient({
-    baseUrl: config.apiOrigin, clientVersion: `mobile/${version}`, runtime: { lifecycle },
+    baseUrl: config.apiOrigin, clientVersion: `mobile/${version}`, runtime: { lifecycle, createWebSocket: createNativeSocket },
     getAccessToken: () => auth.getAccessToken(), recoverSession: () => auth.recoverSession(),
   });
   const workflow = new WorkflowStore(lifecycle);
@@ -123,9 +124,11 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
   const bindWorkflow = () => {
     const account = auth.getSnapshot();
     const selected = workspace.getSnapshot();
-    workflow.setScope(account.status === 'signedIn' && account.user && selected.status === 'ready' && selected.selected
+    // A workspace being revalidated keeps its selection, so the cached views stay.
+    const usable = selected.status === 'ready' || selected.status === 'loading';
+    workflow.setScope(account.status === 'signedIn' && account.user && usable && selected.selected
       ? { environment: namespace, user: account.user.id, workspace: selected.selected } : null);
-    notifications.setScope(account.status === 'signedIn' && account.user && selected.status === 'ready' && selected.selected
+    notifications.setScope(account.status === 'signedIn' && account.user && usable && selected.selected
       ? { user: account.user.id, workspace: selected.selected } : null);
   };
   const unbindAuth = auth.subscribe(bindWorkflow);
