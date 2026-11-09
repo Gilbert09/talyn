@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from '../lib/api';
-import { isActiveSessionState, sessionPr, sessionState, type SessionStateKind } from '../lib/sessionState';
+import { isActiveSessionState, sessionPr, sessionState, spaceSessionState, type SessionStateKind } from '../lib/sessionState';
 
 type Wb = Pick<Workbench, 'status' | 'sandboxState' | 'diffStat' | 'committedStats' | 'archivedAt'>;
 const WB: Wb = { status: 'ready', sandboxState: 'running', diffStat: null, archivedAt: null } as Wb;
@@ -103,5 +103,28 @@ describe('sessionState', () => {
     ['closed', false],
   ] as [SessionStateKind, boolean][])('classifies %s for the active sidebar group', (kind, active) => {
     expect(isActiveSessionState({ kind, label: kind })).toBe(active);
+  });
+});
+
+describe('spaceSessionState', () => {
+  const SPACE_SESSION: Parameters<typeof spaceSessionState>[0] = {
+    id: 's1',
+    status: 'ready',
+    sandboxState: 'running',
+    running: false,
+    pullRequest: null,
+    archivedAt: null,
+  };
+
+  it.each([
+    ['an idle session', {}, 'idle'],
+    ['a failed session', { status: 'error' }, 'failed'],
+    ['a starting session', { status: 'provisioning', sandboxState: 'creating' }, 'starting'],
+    ['a running turn', { running: true }, 'working'],
+    ['an open pull request', { pullRequest: { number: 7, state: 'open', url: 'https://github.com/a/b/pull/7' } }, 'pr_waiting'],
+    ['a merged pull request', { pullRequest: { number: 7, state: 'merged', url: 'https://github.com/a/b/pull/7' } }, 'merged'],
+    ['a closed pull request', { pullRequest: { number: 7, state: 'closed', url: 'https://github.com/a/b/pull/7' } }, 'closed'],
+  ] as [string, Partial<typeof SPACE_SESSION>, SessionStateKind][])('%s', (_name, patch, kind) => {
+    expect(spaceSessionState({ ...SPACE_SESSION, ...patch }).kind).toBe(kind);
   });
 });
