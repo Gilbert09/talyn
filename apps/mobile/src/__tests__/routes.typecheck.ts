@@ -10,7 +10,7 @@ export const validRoutes: Href[] = [
   sessionRoute('session-id'), threadRoute('thread-id'), pullRequestRoute('pr-id'),
   pullsRoute('mine'), pullsRoute('reviews'), pullsRoute('queue'),
   newWorkRoute('session'), newWorkRoute('thread'), '/new',
-  '/spaces', '/automations', '/usage', '/agents', '/insights',
+  '/spaces', '/automations', '/usage', '/agents', '/insights', '/billing', '/billing/return',
 ];
 
 // @ts-expect-error The route does not exist.

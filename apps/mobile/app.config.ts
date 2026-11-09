@@ -1,6 +1,6 @@
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
-import type { AppEnvironment, MobileConfig } from './src/config';
+import type { AppEnvironment, MobileConfig, PurchaseMode } from './src/config';
 import { readReleaseSettings } from './release/policy.cjs';
 
 type PublicEnvironment = Record<string, string | undefined>;
@@ -36,7 +36,16 @@ export function readMobileConfig(env: PublicEnvironment, environment: AppEnviron
   return {
     environment, apiOrigin: origin(api, environment === 'development'),
     supabaseUrl: origin(supabase, environment === 'development'), supabaseKey: publicSupabaseKey(key), callbackUrl: callback,
+    purchaseMode: readPurchaseMode(env),
   };
+}
+
+/** `EXPO_PUBLIC_PURCHASE_MODE`: `external` (the default) or `none` for a store build with no purchase links. */
+export function readPurchaseMode(env: PublicEnvironment): PurchaseMode {
+  const value = env.EXPO_PUBLIC_PURCHASE_MODE?.trim();
+  if (!value) return 'external';
+  if (value === 'external' || value === 'none') return value;
+  throw new Error('EXPO_PUBLIC_PURCHASE_MODE must be external or none.');
 }
 
 type Environment = 'development' | 'preview' | 'production';

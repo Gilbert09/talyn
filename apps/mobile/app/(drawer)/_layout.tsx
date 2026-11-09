@@ -8,6 +8,7 @@ import { MenuButton } from '../../src/features/nav/MenuButton';
 import { drawerWidth } from '../../src/features/nav/model';
 import { NavDrawer } from '../../src/features/nav/NavDrawer';
 import { AppLoading } from '../../src/navigation/AppLoading';
+import { OnboardingRedirect } from '../../src/navigation/OnboardingRedirect';
 import { rememberIntent } from '../../src/navigation/intents';
 import { workspaceGate } from '../../src/navigation/workspaceGate';
 import { useTheme } from '../../src/theme/tokens';
@@ -26,7 +27,7 @@ export default function DrawerLayout() {
     rememberIntent(pathname);
     return <Redirect href="/workspaces" />;
   }
-  return <Drawer key={workspace.selected ?? ''} backBehavior="initialRoute"
+  return <OnboardingRedirect><Drawer key={workspace.selected ?? ''} backBehavior="initialRoute"
     drawerContent={({ navigation }) => <NavDrawer close={navigation.closeDrawer} />}
     screenOptions={{
       headerShown: false, drawerStyle: { width: drawerWidth(width), backgroundColor: c.paper },
@@ -37,5 +38,5 @@ export default function DrawerLayout() {
     <Drawer.Screen name="sessions" options={{ swipeEnabled: false }} />
     <Drawer.Screen name="threads" options={{ swipeEnabled: false }} />
     <Drawer.Screen name="attention" options={{ swipeEnabled: false }} />
-  </Drawer>;
+  </Drawer></OnboardingRedirect>;
 }

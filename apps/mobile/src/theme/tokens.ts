@@ -1,4 +1,5 @@
-import { useColorScheme } from 'react-native';
+import { useSyncExternalStore } from 'react';
+import { Appearance, useColorScheme } from 'react-native';
 
 // Surfaces and borders match the web tokens. Some light foregrounds are a little
 // darker than web so small text keeps 4.5:1 contrast on every surface.
@@ -53,8 +54,89 @@ export function themeForScheme(scheme: string | null | undefined) {
 }
 export type Theme = ReturnType<typeof themeForScheme>;
 
+// ---------------------------------------------------------------------------
+// Appearance preference: follow the system, or force light or dark.
+// ---------------------------------------------------------------------------
+
+export type ThemePreference = 'system' | 'light' | 'dark';
+export const THEME_PREFERENCES: readonly ThemePreference[] = ['system', 'light', 'dark'];
+const THEME_PREFERENCE_KEY = 'talyn.appearance.v1';
+
+/** The scheme to draw: the person's choice, else the system's. */
+export function resolveScheme(preference: ThemePreference, system: string | null | undefined): 'light' | 'dark' {
+  if (preference === 'light' || preference === 'dark') return preference;
+  return system === 'dark' ? 'dark' : 'light';
+}
+
+export function isThemePreference(value: unknown): value is ThemePreference {
+  return typeof value === 'string' && (THEME_PREFERENCES as readonly string[]).includes(value);
+}
+
+interface PreferenceStorage { getItem(key: string): Promise<string | null>; setItem(key: string, value: string): Promise<void> }
+
+let preference: ThemePreference = 'system';
+let hydration: Promise<void> | null = null;
+let changedBeforeHydration = false;
+const preferenceListeners = new Set<() => void>();
+
+function preferenceStorage(): PreferenceStorage | null {
+  try {
+    // Loaded on first use, so screens and tests that never read the preference never load the native module.
+    const module = require('@react-native-async-storage/async-storage') as { default?: PreferenceStorage };
+    return module.default ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Native chrome (alerts, keyboards, switches) follows the override too. */
+function applyNativeScheme(next: ThemePreference) {
+  try { Appearance.setColorScheme(next === 'system' ? 'unspecified' : next); } catch { /* No native appearance module. */ }
+}
+
+function publishPreference(next: ThemePreference) {
+  if (next === preference) return;
+  preference = next;
+  applyNativeScheme(next);
+  preferenceListeners.forEach((listener) => listener());
+}
+
+/** Reads the saved preference once. A choice made while it loads wins. */
+export function hydrateThemePreference(storage: PreferenceStorage | null = preferenceStorage()): Promise<void> {
+  if (hydration) return hydration;
+  hydration = (async () => {
+    try {
+      const saved = storage ? await storage.getItem(THEME_PREFERENCE_KEY) : null;
+      if (!changedBeforeHydration && isThemePreference(saved)) publishPreference(saved);
+    } catch { /* Keep following the system. */ }
+  })();
+  return hydration;
+}
+
+export function getThemePreference(): ThemePreference {
+  return preference;
+}
+
+/** Saves the preference on this device and redraws every themed screen. */
+export function setThemePreference(next: ThemePreference, storage: PreferenceStorage | null = preferenceStorage()): void {
+  changedBeforeHydration = true;
+  publishPreference(next);
+  void storage?.setItem(THEME_PREFERENCE_KEY, next).catch(() => { /* The choice still holds until the app restarts. */ });
+}
+
+export function subscribeThemePreference(listener: () => void): () => void {
+  preferenceListeners.add(listener);
+  void hydrateThemePreference();
+  return () => { preferenceListeners.delete(listener); };
+}
+
+export function useThemePreference(): ThemePreference {
+  return useSyncExternalStore(subscribeThemePreference, getThemePreference, getThemePreference);
+}
+
 export function useTheme() {
-  return themeForScheme(useColorScheme());
+  const system = useColorScheme();
+  return themeForScheme(resolveScheme(useThemePreference(), system));
 }
 
 /** `#rrggbb` at an alpha, for tinted pill and banner fills. */
