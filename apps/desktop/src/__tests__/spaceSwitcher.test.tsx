@@ -6,7 +6,6 @@ import { buildAppShortcuts } from '../renderer/components/layout/appShortcuts';
 import { MENU_COMMANDS } from '../main/menuCommands';
 import { WorkspaceSwitcher } from '../renderer/components/layout/WorkspaceSwitcher';
 import { AppSidebar } from '../renderer/components/layout/AppSidebar';
-import { SpaceSidebar } from '../renderer/components/layout/SpaceSidebar';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useSpacesStore } from '../renderer/stores/spaces';
 import { useNavigationStore } from '../renderer/stores/navigation';
@@ -32,6 +31,8 @@ const row = (id: string, patch: Partial<SpaceSessionRow> = {}) =>
     id,
     spaceId: 's1',
     workspaceId: 'ws-ana',
+    kind: 'session',
+    threadId: null,
     name: id,
     title: null,
     status: 'ready',
@@ -107,38 +108,6 @@ describe('WorkspaceSwitcher', () => {
     expect(screen.queryByRole('button', { name: /Create team/ })).toBeNull();
   });
 });
-
-describe('SpaceSidebar', () => {
-  const active = { team: TEAM, space: TEAM.spaces[0] };
-
-  it('groups Active now before Recent, with who is here', () => {
-    useSpacesStore.getState().setSessions('s1', {
-      items: [row('quiet'), row('busy', { running: true }), row('watched')],
-      hiddenCount: 2,
-      loaded: true,
-    });
-    useSpacesStore.getState().setPresence('s1', [
-      { userId: 'ben', githubLogin: 'ben', avatarUrl: null, sessionId: 'watched', state: 'active', at: 0 },
-    ]);
-    render(<SpaceSidebar active={active} />);
-    const activeNow = screen.getByRole('group', { name: 'Active now' });
-    expect(within(activeNow).getAllByText(/busy|watched/)).toHaveLength(2);
-    expect(within(activeNow).getByLabelText('Working')).toBeInTheDocument();
-    expect(within(activeNow).getAllByTitle('ben is here').length).toBeGreaterThan(0);
-    const recent = screen.getByRole('group', { name: 'Recent' });
-    expect(within(recent).getByText('quiet')).toBeInTheDocument();
-    expect(within(recent).getByLabelText('Idle')).toBeInTheDocument();
-    expect(within(recent).getByTitle('ana')).toBeInTheDocument();
-    expect(screen.getByText("2 items you can't see")).toBeInTheDocument();
-  });
-
-  it('says so when the space has no sessions', () => {
-    useSpacesStore.getState().setSessions('s1', { items: [], loaded: true });
-    render(<SpaceSidebar active={active} />);
-    expect(screen.getByText('No sessions in this space yet.')).toBeInTheDocument();
-  });
-});
-
 
 describe('context shortcuts', () => {
   it('uses the web chords without a desktop conflict', () => {

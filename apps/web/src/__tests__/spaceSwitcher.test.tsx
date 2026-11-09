@@ -2,9 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { SpaceSessionRow, SpacesTeam, Workspace } from '@talyn/shared';
+import type { SpacesTeam, Workspace } from '@talyn/shared';
 import { WorkspaceSwitcher } from '../components/layout/WorkspaceSwitcher';
-import { SpaceSidebar } from '../components/layout/SpaceSidebar';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useSpacesStore } from '../stores/spaces';
 import { useNavigationStore } from '../stores/navigation';
@@ -23,25 +22,6 @@ const TEAM: SpacesTeam = {
     { id: 's2', teamId: 't1', name: 'Infra', color: null, image: null, createdByUserId: null, archivedAt: null, createdAt: '', updatedAt: '' },
   ],
 };
-
-const row = (id: string, patch: Partial<SpaceSessionRow> = {}) =>
-  ({
-    id,
-    spaceId: 's1',
-    workspaceId: 'ws-ana',
-    name: id,
-    title: null,
-    status: 'ready',
-    sandboxState: 'running',
-    running: false,
-    repoFullName: 'acme/app',
-    creator: { userId: 'ana', githubLogin: 'ana', avatarUrl: null },
-    lastActivityAt: '2026-11-05T00:00:00Z',
-    archivedAt: null,
-    createdAt: '2026-11-01T00:00:00Z',
-    updatedAt: '2026-11-05T00:00:00Z',
-    ...patch,
-  }) as SpaceSessionRow;
 
 beforeEach(() => {
   localStorage.clear();
@@ -101,36 +81,5 @@ describe('WorkspaceSwitcher', () => {
     expect(screen.getByText('Workspaces')).toBeInTheDocument();
     expect(screen.queryByText('Acme')).toBeNull();
     expect(screen.queryByRole('button', { name: /Create team/ })).toBeNull();
-  });
-});
-
-describe('SpaceSidebar', () => {
-  const active = { team: TEAM, space: TEAM.spaces[0] };
-
-  it('groups Active now before Recent, with who is here', () => {
-    useSpacesStore.getState().setSessions('s1', {
-      items: [row('quiet'), row('busy', { running: true }), row('watched')],
-      hiddenCount: 2,
-      loaded: true,
-    });
-    useSpacesStore.getState().setPresence('s1', [
-      { userId: 'ben', githubLogin: 'ben', avatarUrl: null, sessionId: 'watched', state: 'active', at: 0 },
-    ]);
-    render(<SpaceSidebar active={active} />);
-    const activeNow = screen.getByRole('group', { name: 'Active now' });
-    expect(within(activeNow).getAllByText(/busy|watched/)).toHaveLength(2);
-    expect(within(activeNow).getByLabelText('Working')).toBeInTheDocument();
-    expect(within(activeNow).getAllByTitle('ben is here').length).toBeGreaterThan(0);
-    const recent = screen.getByRole('group', { name: 'Recent' });
-    expect(within(recent).getByText('quiet')).toBeInTheDocument();
-    expect(within(recent).getByLabelText('Idle')).toBeInTheDocument();
-    expect(within(recent).getByTitle('ana')).toBeInTheDocument();
-    expect(screen.getByText("2 items you can't see")).toBeInTheDocument();
-  });
-
-  it('says so when the space has no sessions', () => {
-    useSpacesStore.getState().setSessions('s1', { items: [], loaded: true });
-    render(<SpaceSidebar active={active} />);
-    expect(screen.getByText('No sessions in this space yet.')).toBeInTheDocument();
   });
 });

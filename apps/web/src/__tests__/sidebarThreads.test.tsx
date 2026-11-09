@@ -7,6 +7,8 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import type { Features, Workbench, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from '../lib/api';
 import { AppSidebar } from '../components/layout/AppSidebar';
+import { SidebarThreadList } from '../components/layout/SidebarThreadList';
+import { useSpacesStore } from '../stores/spaces';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useNavigationStore } from '../stores/navigation';
@@ -166,5 +168,38 @@ describe('Sidebar threads', () => {
     render(<AppSidebar />);
     fireEvent.click(screen.getByRole('button', { name: 'New thread' }));
     expect(useNavigationStore.getState().route).toEqual({ view: 'home', mode: 'thread' });
+  });
+});
+
+describe('Thread menu', () => {
+  beforeAll(() => {
+    (globalThis as { DOMRect: unknown }).DOMRect = class {
+      constructor(public x = 0, public y = 0, public width = 0, public height = 0) {}
+      static fromRect(rect: { x?: number; y?: number; width?: number; height?: number } = {}) {
+        return new (globalThis.DOMRect as new (...args: (number | undefined)[]) => DOMRect)(rect.x, rect.y, rect.width, rect.height);
+      }
+      get left() { return this.x; }
+      get top() { return this.y; }
+      get right() { return this.x + this.width; }
+      get bottom() { return this.y + this.height; }
+    };
+  });
+
+  it.each<[string, boolean, string | null, boolean, boolean]>([
+    ['Spaces off', false, null, false, false],
+    ['Spaces on, in Personal', true, null, true, false],
+    ['Spaces on, in a space', true, 's1', true, true],
+  ])('%s: Move to space %s, Move to Personal %s', async (_name, spaces, spaceId, toSpace, toPersonal) => {
+    useWorkspaceStore.setState({ features: { workbenches: true, spaces } as Features });
+    const list = [thread('plan', { title: 'Plan', spaceId })];
+    render(<SidebarThreadList workbenches={list} />);
+    fireEvent.contextMenu(screen.getByText('Plan'));
+    expect(await screen.findByRole('menuitem', { name: 'Archive…' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Move to space…' }) !== null).toBe(toSpace);
+    expect(screen.queryByRole('menuitem', { name: 'Move to Personal' }) !== null).toBe(toPersonal);
+    if (toSpace) {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Move to space…' }));
+      expect(useSpacesStore.getState().dialog).toEqual({ kind: 'move', target: 'session', id: 'plan', spaceId });
+    }
   });
 });

@@ -84,8 +84,9 @@ export interface CreateWorkbenchServiceInput extends CreateWorkbenchInput {
   /** Where the session came from, when not the app. Stored once on the row. */
   source?: WorkbenchSource | null;
   /**
-   * The space the session starts in. Set only by the space route, after it
-   * checked that the actor is a member of the space's team.
+   * The space the session or thread starts in. Set only by the space route,
+   * after it checked that the actor is a member of the space's team. A
+   * session in a thread with no `spaceId` goes in the thread's space.
    */
   spaceId?: string | null;
 }
@@ -104,12 +105,11 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
   if (body.kind !== undefined && !WORKBENCH_KINDS.includes(body.kind)) {
     throw refuse(400, `kind must be one of: ${WORKBENCH_KINDS.join(', ')}`);
   }
-  if (body.kind === 'thread') {
-    if (body.spaceId) throw refuse(400, 'A thread cannot start in a space.');
-    return createThread(body, workspaceId, actor, sentAt);
-  }
+  if (body.kind === 'thread') return createThread(body, workspaceId, actor, sentAt);
   if (body.fromSessionId !== undefined) throw refuse(400, 'fromSessionId is only for a thread.');
-  const threadId = body.threadId === undefined ? null : await requireThread(body.threadId, workspaceId);
+  const thread = body.threadId === undefined ? null : await requireThread(body.threadId, workspaceId);
+  const threadId = thread?.id ?? null;
+  const spaceId = body.spaceId !== undefined ? body.spaceId : (thread?.spaceId ?? null);
 
   const db = getPoolDbClient();
   const repo = (
@@ -229,7 +229,7 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
           ...(body.autoCreatePr === undefined ? {} : { autoCreatePr: body.autoCreatePr }),
         },
         source: body.source ?? null,
-        spaceId: body.spaceId ?? null,
+        spaceId,
       });
     } catch (err) {
       const constraint = uniqueViolationConstraint(err);
@@ -281,13 +281,13 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
   return data;
 }
 
-/** The id of a live thread in this workspace, or a 400. */
-async function requireThread(threadId: unknown, workspaceId: string): Promise<string> {
+/** The id and space of a live thread in this workspace, or a 400. */
+async function requireThread(threadId: unknown, workspaceId: string): Promise<{ id: string; spaceId: string | null }> {
   const thread = typeof threadId === 'string' && threadId ? await getWorkbench(threadId) : null;
   if (!thread || thread.workspaceId !== workspaceId || !isThread(thread) || thread.archivedAt) {
     throw refuse(400, 'That thread is not a live thread in this workspace.');
   }
-  return thread.id;
+  return { id: thread.id, spaceId: thread.spaceId ?? null };
 }
 
 /**
@@ -355,6 +355,7 @@ async function createThread(body: CreateWorkbenchServiceInput, workspaceId: stri
         statusMessage: 'Creating the sandbox',
         settings: body.internetAccess === undefined ? {} : { internetAccess: body.internetAccess },
         source: body.source ?? null,
+        spaceId: body.spaceId !== undefined ? body.spaceId : (fromSession?.spaceId ?? null),
       });
     } catch (err) {
       if (uniqueViolationConstraint(err) !== 'uq_workbenches_workspace_name_live') throw err;

@@ -467,12 +467,12 @@ POST /v1/sessions
 
 Scope: `sessions:write`.
 
-Creates a sandbox session on a repository (or a thread, with `kind: "thread"`) and starts provisioning. With a `prompt`, the agent starts on it when the sandbox is ready. Counts against the plan like a session started in the app.
+Creates a sandbox session on a repository (or a thread, with `kind: "thread"`) and starts provisioning. With a `prompt`, the agent starts on it when the sandbox is ready. Counts against the plan like a session started in the app. With `space_id`, a session or a thread starts in that space; `thread_id`, `pull_request_id` and `auto_create_pr` are not supported there. A session started with `thread_id` goes in the space of its thread.
 
 | Body field | Type | Description |
 | --- | --- | --- |
 | `workspace_id` | string | Required unless space_id is set or the token is bound to one workspace. |
-| `space_id` | string | Start in this space. Requires spaces:write and uses your home workspace. |
+| `space_id` | string | Start in this space. Requires spaces:write and uses your home workspace. A session or a thread can start in a space. |
 | `repository_full_name` | string | Repository owner/name in the space. Use when no repository_id exists in your workspaces. |
 | `kind` | `session` \| `thread` | Default `session`. A thread takes no repository or branch. |
 | `repository_id` | string | Required for a session unless space_id and repository_full_name are set. |
@@ -483,7 +483,7 @@ Creates a sandbox session on a repository (or a thread, with `kind: "thread"`) a
 | `base_branch` | string | max length 250 |
 | `branch` | string | An existing branch to work on. Default: a new branch. |
 | `pull_request_id` | string | Start from this pull request's head branch and link the session to it. |
-| `thread_id` | string | Put the new session in this thread. |
+| `thread_id` | string | Put the new session in this thread. The session goes in the space of the thread. |
 | `internet_access` | boolean |  |
 | `auto_create_pr` | boolean |  |
 
