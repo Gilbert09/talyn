@@ -60,6 +60,11 @@ export interface SlackAuthorizeResponse {
 export interface SlackStartInput {
   /** The workspace new sessions go to. Defaults to the caller's first workspace. */
   workspaceId?: string;
+  /**
+   * The mobile app's URL base. The callback then finishes on
+   * `${returnTo}slack/callback`. See `INVALID_RETURN_TO_CODE`.
+   */
+  returnTo?: string;
 }
 
 /** Body of `PATCH /slack/links/:id`. Omitted fields are left alone. */

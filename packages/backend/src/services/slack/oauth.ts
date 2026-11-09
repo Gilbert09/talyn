@@ -46,6 +46,8 @@ export async function startSlackAuthorization(input: {
   userId: string;
   workspaceId: string | null;
   client: 'web' | 'desktop';
+  /** The mobile app's allowlisted URL base; the route has already validated it. */
+  mobileReturn?: string | null;
 }): Promise<{ authorizeUrl: string; state: string }> {
   const config = requireSlackAppConfig();
   const state = base64Url(randomBytes(32));
@@ -63,6 +65,7 @@ export async function startSlackAuthorization(input: {
     workspaceId: input.workspaceId,
     codeVerifierEnc: encryptString(verifier),
     client: input.client,
+    mobileReturn: input.mobileReturn ?? null,
     expiresAt: new Date(now + STATE_TTL_MS),
   });
 
@@ -88,6 +91,8 @@ export interface PendingSlackState {
   workspaceId: string | null;
   verifier: string;
   client: 'web' | 'desktop';
+  /** As stored. The callback validates it again before it redirects there. */
+  mobileReturn: string | null;
 }
 
 /**
@@ -106,6 +111,7 @@ export async function consumeSlackState(state: string): Promise<PendingSlackStat
       workspaceId: slackOauthStates.workspaceId,
       codeVerifierEnc: slackOauthStates.codeVerifierEnc,
       client: slackOauthStates.client,
+      mobileReturn: slackOauthStates.mobileReturn,
       expiresAt: slackOauthStates.expiresAt,
     });
   const row = rows[0];
@@ -125,6 +131,7 @@ export async function consumeSlackState(state: string): Promise<PendingSlackStat
     workspaceId: row.workspaceId,
     verifier,
     client: row.client === 'web' ? 'web' : 'desktop',
+    mobileReturn: row.mobileReturn,
   };
 }
 

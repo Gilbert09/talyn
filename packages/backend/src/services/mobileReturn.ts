@@ -3,6 +3,9 @@ import {
   INVALID_RETURN_TO_CODE,
   MOBILE_BILLING_RETURN_PATH,
   MOBILE_GITHUB_RETURN_PATH,
+  MOBILE_MCP_RETURN_PATH,
+  MOBILE_POSTHOG_RETURN_PATH,
+  MOBILE_SLACK_RETURN_PATH,
   type GitHubCallbackErrorReason,
   type MobileBillingReturnKind,
   type MobileBillingReturnResult,
@@ -98,6 +101,45 @@ export function mobileGitHubReturnUrl(
     MOBILE_GITHUB_RETURN_PATH,
     outcome.ok ? { github: 'connected' } : { github: 'error', reason: outcome.reason }
   );
+}
+
+/** `{ <key>: 'error', message }`, the same pair the web Settings redirect carries. */
+function errorParams(key: string, message: string): Record<string, string> {
+  const text = message.trim();
+  return text ? { [key]: 'error', message: text } : { [key]: 'error' };
+}
+
+/** Where the Slack OAuth callback finishes for a mobile flow. */
+export function mobileSlackReturnUrl(
+  returnTo: string,
+  outcome: { ok: true; flow: 'install' | 'link' } | { ok: false; message: string }
+): string {
+  return appUrl(
+    returnTo,
+    MOBILE_SLACK_RETURN_PATH,
+    outcome.ok ? { slack: outcome.flow === 'install' ? 'installed' : 'linked' } : errorParams('slack', outcome.message)
+  );
+}
+
+/** Where the PostHog Code OAuth callback finishes for a mobile flow. */
+export function mobilePostHogReturnUrl(
+  returnTo: string,
+  outcome: { ok: true } | { ok: false; message: string }
+): string {
+  return appUrl(
+    returnTo,
+    MOBILE_POSTHOG_RETURN_PATH,
+    outcome.ok ? { posthog: 'connected' } : errorParams('posthog', outcome.message)
+  );
+}
+
+/**
+ * Where an MCP server sign-in finishes for a mobile flow. The web callback
+ * page sends the browser here; the vendor's text stays out, because the app
+ * re-reads the server's grant status (which carries it) after the return.
+ */
+export function mobileMcpReturnUrl(returnTo: string, outcome: { ok: boolean }): string {
+  return appUrl(returnTo, MOBILE_MCP_RETURN_PATH, { mcp: outcome.ok ? 'connected' : 'error' });
 }
 
 /** The app deep link a billing return ends on. */

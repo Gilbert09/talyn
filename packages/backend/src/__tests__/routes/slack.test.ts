@@ -49,6 +49,7 @@ const ENV_KEYS = [
   'SLACK_MCP_CLIENT_SECRET',
   'SLACK_OAUTH_REDIRECT_URI',
   'WEB_APP_URL',
+  'MOBILE_RETURN_SCHEMES',
 ] as const;
 
 function headersFor(userId: string, extra: Record<string, string> = {}) {
@@ -465,6 +466,150 @@ describe('Slack routes', () => {
     const target = new URL(bad.location!);
     expect(target.searchParams.get('slack')).toBe('error');
     expect(target.searchParams.get('message')).toContain('not installed');
+  });
+
+  // -------------------------------------------------------------------------
+  // Mobile return
+  // -------------------------------------------------------------------------
+
+  describe('mobile return', () => {
+    it.each(['install', 'link'] as const)('POST /%s stores an allowlisted returnTo on the state row', async (flow) => {
+      await start(flow, { body: { returnTo: 'talyn-mobile-preview://' } });
+      const rows = await db.select().from(slackOauthStates);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].mobileReturn).toBe('talyn-mobile-preview://');
+    });
+
+    it.each(['install', 'link'] as const)('POST /%s without a returnTo stores none', async (flow) => {
+      await start(flow);
+      expect((await db.select().from(slackOauthStates))[0].mobileReturn).toBeNull();
+    });
+
+    it.each([
+      ['install', 'TALYN-MOBILE://'],
+      ['install', 'talyn-mobile:///'],
+      ['install', 'talyn-mobile://evil'],
+      ['install', 'https://evil.com'],
+      ['install', 'javascript:'],
+      ['install', ' talyn-mobile://'],
+      ['install', ''],
+      ['install', 42],
+      ['link', 'talyn-mobile://evil'],
+      ['link', 'https://evil.com'],
+      ['link', 'javascript:'],
+    ] as const)('POST /%s refuses returnTo %j with 400 invalid_return_to and mints no state', async (flow, returnTo) => {
+      const res = await call('POST', `/slack/${flow}`, { body: { returnTo } });
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({ success: false, code: 'invalid_return_to' });
+      expect(await db.select().from(slackOauthStates)).toHaveLength(0);
+    });
+
+    it('an install ends with a 302 to the app', async () => {
+      const { state } = await start('install', { body: { returnTo: 'talyn-mobile://' } });
+      const res = await callback({ code: 'c', state });
+      expect(res.status).toBe(302);
+      expect(res.location).toBe('talyn-mobile://slack/callback?slack=installed');
+      expect(await db.select().from(slackInstallations)).toHaveLength(1);
+    });
+
+    it('a link ends with a 302 to the app', async () => {
+      await seedInstall('T1', OTHER);
+      const { state } = await start('link', { body: { returnTo: 'talyn-mobile://' } });
+      const res = await callback({ code: 'c', state });
+      expect(res.status).toBe(302);
+      expect(res.location).toBe('talyn-mobile://slack/callback?slack=linked');
+    });
+
+    it('the app return wins over the web settings page', async () => {
+      process.env.WEB_APP_URL = 'https://app.talyn.dev';
+      resetWebAppUrlCacheForTests();
+      const { state } = await start('install', {
+        body: { returnTo: 'talyn-mobile://' },
+        headers: { origin: 'https://app.talyn.dev' },
+      });
+      expect((await callback({ code: 'c', state })).location).toBe('talyn-mobile://slack/callback?slack=installed');
+    });
+
+    it.each([
+      [
+        'a cancelled sign-in',
+        async (state: string) => callback({ error: 'access_denied', state }),
+        'The Slack sign-in was cancelled.',
+      ],
+      [
+        'another Slack error',
+        async (state: string) => callback({ error: 'invalid_scope', state }),
+        'Slack returned an error: invalid_scope.',
+      ],
+      [
+        'a missing code',
+        async (state: string) => callback({ state }),
+        'Missing code or state.',
+      ],
+      [
+        'an exchange Slack refuses',
+        async (state: string) => {
+          slackAnswers['oauth.v2.access'] = () => Response.json({ ok: false, error: 'invalid_code' });
+          return callback({ code: 'c', state });
+        },
+        'Slack refused the sign-in (invalid_code). Try again.',
+      ],
+      [
+        'an org-wide install',
+        async (state: string) => {
+          slackAnswers['oauth.v2.access'] = () =>
+            Response.json({ ok: true, access_token: 'x', token_type: 'bot', bot_user_id: 'U', app_id: 'A', team: null });
+          return callback({ code: 'c', state });
+        },
+        'Org-wide (Enterprise Grid) installs are not supported. Install Talyn in one workspace.',
+      ],
+    ])('%s ends with slack=error and the message', async (_label, finish, message) => {
+      const { state } = await start('install', { body: { returnTo: 'talyn-mobile://' } });
+      const res = await finish(state);
+      expect(res.status).toBe(302);
+      const target = new URL(res.location!);
+      expect(`${target.protocol}//${target.host}${target.pathname}`).toBe('talyn-mobile://slack/callback');
+      expect(target.searchParams.get('slack')).toBe('error');
+      expect(target.searchParams.get('message')).toBe(message);
+      expect(await db.select().from(slackOauthStates)).toHaveLength(0);
+    });
+
+    it('the flag switched off after the start still ends in the app, with the refusal', async () => {
+      const { state } = await start('install', { body: { returnTo: 'talyn-mobile://' } });
+      process.env.WORKBENCHES_ENABLED = 'false';
+      resetFeatureFlagsForTests();
+      const res = await callback({ code: 'c', state });
+      expect(res.status).toBe(302);
+      expect(new URL(res.location!).searchParams.get('slack')).toBe('error');
+      expect(slackCalls).toHaveLength(0);
+    });
+
+    it('a stored return that has left the allowlist is never a redirect target', async () => {
+      const { state } = await start('install', { body: { returnTo: 'talyn-mobile-preview://' } });
+      process.env.MOBILE_RETURN_SCHEMES = 'talyn-mobile://';
+      const res = await callback({ code: 'c', state });
+      expect(res.status).toBe(200);
+      expect(res.location).toBeNull();
+      expect(res.text).toContain('Slack connected');
+    });
+
+    it('a stored return that was never valid is ignored', async () => {
+      const { state } = await start('install');
+      await db
+        .update(slackOauthStates)
+        .set({ mobileReturn: 'https://evil.com' })
+        .where(eq(slackOauthStates.stateHash, hashState(state)));
+      const res = await callback({ code: 'c', state });
+      expect(res.status).toBe(200);
+      expect(res.location).toBeNull();
+    });
+
+    it('an unknown state has no app to return to', async () => {
+      await start('install', { body: { returnTo: 'talyn-mobile://' } });
+      const res = await callback({ code: 'c', state: 'not-a-state' });
+      expect(res.status).toBe(400);
+      expect(res.location).toBeNull();
+    });
   });
 
   // -------------------------------------------------------------------------

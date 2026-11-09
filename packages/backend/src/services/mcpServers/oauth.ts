@@ -121,6 +121,9 @@ export interface StoredMcpOAuth {
     verifier?: string;
     verifierEnc?: EncryptedEnvelope;
     expiresAt: string;
+    /** The mobile app's allowlisted URL base when the app started this flow.
+     *  `/complete` validates it again and answers the deep link to open. */
+    mobileReturn?: string;
   };
 }
 
@@ -236,7 +239,8 @@ export interface StartedFlow {
 export async function startMcpOAuth(
   server: Pick<McpServerDefinition, 'id' | 'url' | 'workspaceId'>,
   existing: StoredMcpOAuth | null,
-  now: Date
+  now: Date,
+  opts: { mobileReturn?: string | null } = {}
 ): Promise<StartedFlow> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new DOMException('The MCP request timed out.', 'TimeoutError')), EXCHANGE_TIMEOUT_MS);
@@ -328,7 +332,13 @@ export async function startMcpOAuth(
         ...(clientSource ? { clientSource } : {}),
         scopes,
         resource,
-        flow: { id: flowId, stateHash: base64url(sha256(state)), verifierEnc: encryptString(verifier), expiresAt },
+        flow: {
+          id: flowId,
+          stateHash: base64url(sha256(state)),
+          verifierEnc: encryptString(verifier),
+          expiresAt,
+          ...(opts.mobileReturn ? { mobileReturn: opts.mobileReturn } : {}),
+        },
       },
       authorizeUrl: authorize.toString(),
       flowId,

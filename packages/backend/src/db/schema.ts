@@ -593,6 +593,8 @@ export const posthogOauthStates = pgTable(
     host: text('host').notNull(),
     /** 'web' | 'desktop' — chooses how the flow ends, recorded server-side. */
     client: text('client').notNull().default('desktop'),
+    /** The mobile app's allowlisted URL base, or null (migration 0127). */
+    mobileReturn: text('mobile_return'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   },
@@ -2902,6 +2904,8 @@ export const slackOauthStates = pgTable(
     workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
     codeVerifierEnc: jsonb('code_verifier_enc').$type<EncryptedEnvelope>().notNull(),
     client: text('client').notNull().default('desktop'),
+    /** The mobile app's allowlisted URL base, or null (migration 0127). */
+    mobileReturn: text('mobile_return'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   },

@@ -228,6 +228,22 @@ describe('starting a sign-in', () => {
     await startMcpOAuth({ id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' }, stored, new Date());
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+  // The mobile app's return rides on the flow, so `/complete` can read it
+  // before the flow is cleared.
+  it.each([
+    ['talyn-mobile://', 'talyn-mobile://'],
+    [null, undefined],
+    [undefined, undefined],
+  ])('records the mobile return %s on the flow', async (mobileReturn, expected) => {
+    const started = await startMcpOAuth(
+      { id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' },
+      stored,
+      new Date(),
+      mobileReturn === undefined ? undefined : { mobileReturn }
+    );
+    expect(started.stored.flow?.mobileReturn).toBe(expected);
+    expect(started.stored.flow && 'mobileReturn' in started.stored.flow).toBe(expected !== undefined);
+  });
 });
 
 describe('finishing a sign-in', () => {

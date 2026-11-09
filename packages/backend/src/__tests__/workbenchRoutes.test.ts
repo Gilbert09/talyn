@@ -2327,6 +2327,24 @@ describe('workbench routes', () => {
       expect((await call('GET', `/workbenches/chats/${chatId}/events?after=0`)).body.data).not.toHaveProperty('hasOlder');
     });
 
+    it.each([
+      ['no ceiling extends to the turn start', '', [2, 3, 4, 5, 6]],
+      ['a ceiling equal to the limit cuts the turn', '&ceiling=2', [5, 6]],
+      ['a ceiling below the limit reads as the limit', '&ceiling=1', [5, 6]],
+      ['a ceiling inside the turn cuts at the ceiling', '&ceiling=3', [4, 5, 6]],
+      ['a ceiling past the turn start stops at the turn', '&ceiling=50', [2, 3, 4, 5, 6]],
+      ['an invalid ceiling is ignored', '&ceiling=abc', [2, 3, 4, 5, 6]],
+      ['a zero ceiling is ignored', '&ceiling=0', [2, 3, 4, 5, 6]],
+    ])('bounds a backward page: %s', async (_name, query, seqs) => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      const events = [1, 2, 3, 4, 5, 6].map((seq) => ({ chatId, seq, turn: seq === 1 ? 1 : 2, event: { seq, type: 'assistant' } }));
+      await call('POST', `/workbenches/chats/${chatId}/local-events`, { events });
+      const page = (await call('GET', `/workbenches/chats/${chatId}/events?before=latest&limit=2${query}`)).body.data;
+      expect(page.events.map((e: Loose) => e.seq)).toEqual(seqs);
+      expect(page).toMatchObject({ cursor: 6, oldestSeq: seqs[0], hasOlder: true });
+    });
+
     it.each(['before=0', 'before=-1', 'before=1.5', 'before=newest', 'before=latest&after=2'])(
       'refuses the events query %s',
       async (query) => {

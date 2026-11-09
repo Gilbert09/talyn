@@ -472,8 +472,13 @@ export function workbenchRoutes(): Router {
       if (before !== null && !(Number.isInteger(before) && before > 0)) {
         return bad(res, 400, 'before must be "latest" or a positive integer');
       }
-      // The ceiling that bounds a turn-aligned page is the forward page's own cap.
-      return ok(res, await listOlderEvents(found.chat.id, before, limit, MAX_EVENT_PAGE));
+      // `ceiling` bounds how far a page extends to reach the start of a turn. The default is the
+      // forward page's own cap. A phone asks for less: one long turn otherwise answers 2000 events.
+      const rawCeiling = Number(req.query.ceiling);
+      const ceiling = Number.isFinite(rawCeiling) && rawCeiling > 0
+        ? Math.min(MAX_EVENT_PAGE, Math.max(limit, Math.floor(rawCeiling)))
+        : MAX_EVENT_PAGE;
+      return ok(res, await listOlderEvents(found.chat.id, before, limit, ceiling));
     }
     ok(res, await listEvents(found.chat.id, Number.isFinite(after) && after > 0 ? Math.floor(after) : 0, limit));
   });

@@ -20,6 +20,12 @@ import { users as usersTable } from '../db/schema.js';
 import { AccessError, assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { renderCallbackPage } from '../services/callbackPage.js';
 import { getWebAppUrl, webAppUrl } from '../services/webApp.js';
+import {
+  invalidReturnToBody,
+  mobileSlackReturnUrl,
+  parseReturnTo,
+  validMobileReturn,
+} from '../services/mobileReturn.js';
 import { slackRefusalReason, userMayUseSlack } from '../services/slack/access.js';
 import { SlackApiError } from '../services/slack/api.js';
 import { getSlackAppConfig } from '../services/slack/config.js';
@@ -49,8 +55,8 @@ import { fleetErrorAsRefusal } from '../services/workbenches/errors.js';
  * Slack sessions, behind the `workbenches` flag.
  *
  *   GET    /slack                          installs I can see + my links
- *   POST   /slack/install   { workspaceId? }   → { authorizeUrl }
- *   POST   /slack/link      { workspaceId? }   → { authorizeUrl }
+ *   POST   /slack/install   { workspaceId?, returnTo? }   → { authorizeUrl }
+ *   POST   /slack/link      { workspaceId?, returnTo? }   → { authorizeUrl }
  *   PATCH  /slack/links/:id { triggerEmojis?, workspaceId? }
  *   DELETE /slack/links/:id
  *   DELETE /slack/installations/:teamId    installer only
@@ -96,11 +102,23 @@ export function slackPublicRoutes(): Router {
 
   router.get('/oauth/callback', oauthRateLimit, async (req, res) => {
     const { code, state, error } = req.query as Record<string, string | undefined>;
+    // Set once the state row is read. Validated again here, so a value that
+    // has left the allowlist since the flow started is never a redirect target.
+    let mobileReturn: string | null = null;
 
     const finish = (
       client: 'web' | 'desktop',
       opts: { ok: boolean; message: string; status?: number; flow?: SlackFlow }
     ) => {
+      if (mobileReturn) {
+        return res.redirect(
+          302,
+          mobileSlackReturnUrl(
+            mobileReturn,
+            opts.ok ? { ok: true, flow: opts.flow ?? 'link' } : { ok: false, message: opts.message }
+          )
+        );
+      }
       if (client === 'web') {
         const outcome = !opts.ok ? 'error' : opts.flow === 'install' ? 'installed' : 'linked';
         const target = webAppUrl('/settings', {
@@ -117,6 +135,7 @@ export function slackPublicRoutes(): Router {
 
     // Consumed even on an error, so a cancelled flow cannot be finished later.
     const pending = state ? await consumeSlackState(state) : null;
+    mobileReturn = validMobileReturn(pending?.mobileReturn);
     const client = pending?.client ?? originClient(req);
     if (error) {
       const message = error === 'access_denied' ? 'The Slack sign-in was cancelled.' : `Slack returned an error: ${error}.`;
@@ -203,8 +222,12 @@ export function slackRoutes(): Router {
     res.json({ success: true, data } as ApiResponse<SlackStatus>);
   });
 
+  // An optional `returnTo` (the mobile app's allowlisted URL base) makes the
+  // callback finish with a 302 to `${returnTo}slack/callback?...`.
   const start = (flow: SlackFlow) => async (req: Request, res: Response) => {
     if (await refuseUnlessEnabled(req, res)) return;
+    const returnTo = parseReturnTo((req.body as { returnTo?: unknown } | undefined)?.returnTo);
+    if (!returnTo.ok) return res.status(400).json(invalidReturnToBody());
     if (!getSlackAppConfig()) {
       return res.status(503).json({
         success: false,
@@ -220,6 +243,7 @@ export function slackRoutes(): Router {
       userId: assertUser(req).id,
       workspaceId,
       client: originClient(req),
+      mobileReturn: returnTo.returnTo,
     });
     res.json({ success: true, data: { authorizeUrl } } as ApiResponse<SlackAuthorizeResponse>);
   };

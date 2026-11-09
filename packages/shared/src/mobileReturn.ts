@@ -22,6 +22,15 @@ export const MOBILE_GITHUB_RETURN_PATH = 'github/callback';
 /** Path (after `returnTo`) a Polar checkout or portal session comes back to. */
 export const MOBILE_BILLING_RETURN_PATH = 'billing/return';
 
+/** Path (after `returnTo`) an MCP server sign-in finishes on: `?mcp=connected|error`. */
+export const MOBILE_MCP_RETURN_PATH = 'mcp/callback';
+
+/** Path (after `returnTo`) a Slack install or link finishes on: `?slack=installed|linked|error`. */
+export const MOBILE_SLACK_RETURN_PATH = 'slack/callback';
+
+/** Path (after `returnTo`) a PostHog Code sign-in finishes on: `?posthog=connected|error`. */
+export const MOBILE_POSTHOG_RETURN_PATH = 'posthog/callback';
+
 /**
  * Why a GitHub connect failed, as `?github=error&reason=<code>`.
  * - `access_denied`: the person declined on GitHub.

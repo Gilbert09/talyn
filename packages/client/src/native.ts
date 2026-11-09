@@ -517,7 +517,7 @@ export const posthog = {
    * app opens it (system browser on desktop, same tab on web); the backend
    * callback finishes the exchange, so no token ever reaches the client.
    */
-  startOAuth: (workspaceId: string, opts?: { host?: string; projectId?: string }) =>
+  startOAuth: (workspaceId: string, opts?: { host?: string; projectId?: string; returnTo?: string }) =>
     request<{ authorizeUrl: string }>('POST', '/posthog/oauth/start', {
       workspaceId,
       ...opts,
@@ -2286,10 +2286,15 @@ export const mcpServers = {
   discoverAuth: (workspaceId: string, url: string) =>
     request<McpAuthDiscovery>('POST', '/mcp-servers/discover-auth', { workspaceId, url }),
 
-  startSignIn: (id: string) =>
+  /**
+   * `returnTo` is the mobile app's URL base: the web callback page then sends
+   * the browser to `${returnTo}mcp/callback?mcp=connected|error`.
+   */
+  startSignIn: (id: string, opts?: { returnTo?: string }) =>
     request<{ flowId: string; authorizeUrl: string; expiresAt: string; scopes: string[] }>(
       'POST',
-      `/mcp-servers/${id}/connect`
+      `/mcp-servers/${id}/connect`,
+      opts?.returnTo ? { returnTo: opts.returnTo } : undefined
     ),
 
   /** The poll a client runs while somebody is at the consent screen. */
@@ -2301,10 +2306,11 @@ export const mcpServers = {
 
   /**
    * Finish a sign-in from the callback page, which holds nothing but these two
-   * values — the state is what names the server.
+   * values — the state is what names the server. `appReturnUrl` is set when
+   * the mobile app started the flow: the page then sends the browser there.
    */
   complete: (state: string, code: string, error?: string) =>
-    request<null>('POST', '/mcp-servers/complete', { state, code, error }),
+    request<{ appReturnUrl?: string } | null>('POST', '/mcp-servers/complete', { state, code, error }),
 
   /** Hand back the grant, keeping the endpoints so a reconnect is cheap. */
   disconnect: (id: string) =>
@@ -2429,12 +2435,15 @@ export const workbenches = {
    * aligned to whole turns; pass the returned `oldestSeq` back as `before`.
    * A backend older than `before` ignores it and answers the forward page from
    * the start, without `hasOlder`.
+   * `ceiling` (with `before` only): the most events one page may hold while it
+   * extends to the start of a turn. A long turn is cut there instead.
    */
-  events: (chatId: string, opts: { after?: number; before?: number | 'latest'; limit?: number } = {}) => {
+  events: (chatId: string, opts: { after?: number; before?: number | 'latest'; limit?: number; ceiling?: number } = {}) => {
     const qs = new URLSearchParams();
     if (opts.after !== undefined) qs.set('after', String(opts.after));
     if (opts.before !== undefined) qs.set('before', String(opts.before));
     if (opts.limit) qs.set('limit', String(opts.limit));
+    if (opts.ceiling && opts.before !== undefined) qs.set('ceiling', String(opts.ceiling));
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request<WorkbenchEventsPage>(
       'GET',

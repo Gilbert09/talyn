@@ -21,6 +21,12 @@ import {
 } from '../services/cloudProviders/environment.js';
 import { renderCallbackPage } from '../services/callbackPage.js';
 import { getWebAppUrl, webAppUrl } from '../services/webApp.js';
+import {
+  invalidReturnToBody,
+  mobilePostHogReturnUrl,
+  parseReturnTo,
+  validMobileReturn,
+} from '../services/mobileReturn.js';
 import type { ApiResponse } from '@talyn/shared';
 
 /** Mirrors `PostHogCodeStatus` in @talyn/client (the shape both front ends read). */
@@ -71,6 +77,9 @@ export function posthogPublicRoutes(): Router {
 
   router.get('/oauth/callback', oauthRateLimit, async (req, res) => {
     const { code, state, error, error_description } = req.query as Record<string, string | undefined>;
+    // Set once the state row is read. Validated again here, so a value that
+    // has left the allowlist since the flow started is never a redirect target.
+    let mobileReturn: string | null = null;
 
     /**
      * End the flow the way the client that started it needs. `client` comes from
@@ -82,6 +91,12 @@ export function posthogPublicRoutes(): Router {
       client: 'web' | 'desktop',
       opts: { ok: boolean; message: string; status?: number }
     ) => {
+      if (mobileReturn) {
+        return res.redirect(
+          302,
+          mobilePostHogReturnUrl(mobileReturn, opts.ok ? { ok: true } : { ok: false, message: opts.message })
+        );
+      }
       if (client === 'web') {
         const target = webAppUrl('/settings', {
           posthog: opts.ok ? 'connected' : 'error',
@@ -94,6 +109,14 @@ export function posthogPublicRoutes(): Router {
         .type('html')
         .send(renderCallbackPage({ ok: opts.ok, product: 'PostHog', message: opts.message }));
     };
+
+    // Single-use: the lookup deletes the row, so a replayed callback (or a second
+    // tab) finds nothing and the code can only be spent once. Consumed on an
+    // error too, so a cancelled flow cannot be finished later and a mobile flow
+    // still learns where to send the person back. Web and desktop still choose
+    // their ending from the Origin sniff on these early errors, as before.
+    const pending = state ? await consumeState(state) : null;
+    mobileReturn = validMobileReturn(pending?.mobileReturn);
 
     if (error) {
       return finish(originClient(req), {
@@ -110,9 +133,6 @@ export function posthogPublicRoutes(): Router {
       });
     }
 
-    // Single-use: the lookup deletes the row, so a replayed callback (or a second
-    // tab) finds nothing and the code can only be spent once.
-    const pending = await consumeState(state);
     if (!pending) {
       return finish(originClient(req), {
         ok: false,
@@ -209,14 +229,18 @@ export function posthogRoutes(): Router {
    * touches the client, and no PostHog credential ever reaches a renderer.
    */
   router.post('/oauth/start', async (req, res) => {
-    const { workspaceId, host, projectId } = req.body as {
+    const { workspaceId, host, projectId, returnTo: rawReturnTo } = req.body as {
       workspaceId?: string;
       host?: string;
       projectId?: string;
+      /** The mobile app's URL base: the callback then ends with a 302 to `${returnTo}posthog/callback?...`. */
+      returnTo?: unknown;
     };
     if (!workspaceId) {
       return res.status(400).json({ success: false, error: 'workspaceId is required' });
     }
+    const returnTo = parseReturnTo(rawReturnTo);
+    if (!returnTo.ok) return res.status(400).json(invalidReturnToBody());
     if (!isPostHogOAuthEnabled()) {
       return res.status(400).json({
         success: false,
@@ -243,6 +267,7 @@ export function posthogRoutes(): Router {
       // Only ever a pre-selection on PostHog's own consent screen, and only
       // honoured there if the user actually has access to it.
       projectIdHint: projectId,
+      mobileReturn: returnTo.returnTo,
     });
     res.json({ success: true, data: { authorizeUrl } } as ApiResponse<{ authorizeUrl: string }>);
   });

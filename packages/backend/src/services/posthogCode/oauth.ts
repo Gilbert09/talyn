@@ -140,6 +140,8 @@ export interface StartAuthorizationInput {
   client: 'web' | 'desktop';
   /** Optional project to pre-select on PostHog's consent screen. */
   projectIdHint?: string;
+  /** The mobile app's allowlisted URL base; the route has already validated it. */
+  mobileReturn?: string | null;
 }
 
 export async function startAuthorization(
@@ -165,6 +167,7 @@ export async function startAuthorization(
     codeVerifierEnc: encryptString(verifier),
     host,
     client: input.client,
+    mobileReturn: input.mobileReturn ?? null,
     expiresAt: new Date(Date.now() + STATE_TTL_MS),
   });
 
@@ -196,6 +199,8 @@ interface PendingState {
   verifier: string;
   host: string;
   client: 'web' | 'desktop';
+  /** As stored (absent = none). The callback validates it again before it redirects there. */
+  mobileReturn?: string | null;
 }
 
 /**
@@ -215,6 +220,7 @@ export async function consumeState(state: string): Promise<PendingState | null> 
       codeVerifierEnc: posthogOauthStates.codeVerifierEnc,
       host: posthogOauthStates.host,
       client: posthogOauthStates.client,
+      mobileReturn: posthogOauthStates.mobileReturn,
       expiresAt: posthogOauthStates.expiresAt,
     });
   const row = rows[0];
@@ -235,6 +241,7 @@ export async function consumeState(state: string): Promise<PendingState | null> 
     verifier,
     host: row.host,
     client: row.client === 'web' ? 'web' : 'desktop',
+    mobileReturn: row.mobileReturn,
   };
 }
 

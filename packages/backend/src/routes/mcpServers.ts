@@ -12,6 +12,12 @@ import {
 } from '../services/mcpServersAccess.js';
 import { probeMcpServer } from '../services/mcpServers/probe.js';
 import {
+  invalidReturnToBody,
+  mobileMcpReturnUrl,
+  parseReturnTo,
+  validMobileReturn,
+} from '../services/mobileReturn.js';
+import {
   McpOAuthUnavailableError,
   readMcpAccount,
   completeMcpOAuth,
@@ -293,6 +299,10 @@ export function mcpServerRoutes(): Router {
    * A POST and not a redirect, because it WRITES a flow and may register a
    * client at a third party — neither belongs behind a link a prefetcher will
    * follow. The caller does the redirect with what it gets back, then polls.
+   *
+   * An optional `returnTo` (the mobile app's allowlisted URL base) makes
+   * `/complete` answer `appReturnUrl`, `${returnTo}mcp/callback?mcp=...`, which
+   * the web callback page opens to send the person back to the app.
    */
   router.post('/:id/connect', async (req: Request, res: Response) => {
     const server = await loadAndGate(req, res);
@@ -300,9 +310,11 @@ export function mcpServerRoutes(): Router {
     if (server.authKind !== 'bearer') {
       return res.status(400).json({ success: false, error: 'Select OAuth before starting sign-in.' });
     }
+    const returnTo = parseReturnTo((req.body as { returnTo?: unknown } | undefined)?.returnTo);
+    if (!returnTo.ok) return res.status(400).json(invalidReturnToBody());
     try {
       const stored = await mcpOAuthStore.read(server.id);
-      const started = await startMcpOAuth(server, stored, new Date());
+      const started = await startMcpOAuth(server, stored, new Date(), { mobileReturn: returnTo.returnTo });
       await mcpOAuthStore.write(server.id, started.stored);
       captureWorkspaceEvent(server.workspaceId, 'mcp_server_connect_started', {
         ...serverShape(server),
@@ -411,15 +423,19 @@ export function mcpOAuthCallbackRoutes(): Router {
       if (!(await workspaceMayUseMcpServers(server.workspaceId))) {
         return res.status(403).json({ success: false, error: 'MCP servers are not available.' });
       }
+      // Read off the flow now: every outcome below clears it. Validated again,
+      // so a value that has left the allowlist is never handed back.
+      const mobileReturn = validMobileReturn(stored.flow?.mobileReturn);
+      const appReturn = (ok: boolean) => (mobileReturn ? { appReturnUrl: mobileMcpReturnUrl(mobileReturn, { ok }) } : null);
       if (denied) {
         await mcpOAuthStore.write(server.id, { ...stored, status: stored.status === 'connected' ? 'connected' : 'pending', detail: denied, flow: undefined });
-        return res.json({ success: true, data: null });
+        return res.json({ success: true, data: appReturn(false) });
       }
       try {
         const next = await completeMcpOAuth(stored, state, code, new Date(), { workspaceId: server.workspaceId, purpose: 'exchange' });
         await mcpOAuthStore.write(server.id, next);
         captureWorkspaceEvent(server.workspaceId, 'mcp_server_connected_oauth', serverShape(server));
-        res.json({ success: true, data: null });
+        res.json({ success: true, data: appReturn(true) });
       } catch (err) {
         // The vendor's own words where there are any. A refusal here is a fact
         // about the grant, not a server fault, so it is a 409 and not a 500.
@@ -430,7 +446,7 @@ export function mcpOAuthCallbackRoutes(): Router {
           detail: message,
           flow: undefined,
         });
-        res.status(409).json({ success: false, error: message });
+        res.status(409).json({ success: false, error: message, ...appReturn(false) });
       }
     });
   });

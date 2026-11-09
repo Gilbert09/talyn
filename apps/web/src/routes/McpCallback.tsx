@@ -4,6 +4,15 @@ import { api } from '../lib/api';
 import { PANEL_PATHS } from '../lib/routes';
 import { StartingSpinner } from '../components/StartingSpinner';
 import { captureAnalyticsException, trackEvent } from '../lib/analytics';
+import { appReturnUrlOf, openAppReturn } from '../lib/appReturn';
+
+/** Send the in-app browser back to the app. True when there was somewhere to go. */
+function returnToApp(value: unknown): boolean {
+  const url = appReturnUrlOf(value);
+  if (!url) return false;
+  openAppReturn(url);
+  return true;
+}
 
 /**
  * Where an MCP server's sign-in comes back to.
@@ -17,6 +26,12 @@ import { captureAnalyticsException, trackEvent } from '../lib/analytics';
  * `serverIdFromState`), and the backend's stored hash is what actually
  * authorises the exchange, so this page can hand both straight over without
  * knowing which server it is finishing.
+ *
+ * A flow the MOBILE app started also lands here, in the phone's in-app
+ * browser, which has no Talyn session. The backend then answers an
+ * `appReturnUrl` (`talyn-mobile://mcp/callback?mcp=...`, built from its
+ * allowlist) with the outcome, and this page opens it instead of showing its
+ * own result, which closes the in-app browser.
  */
 export function McpCallback() {
   const [params] = useSearchParams();
@@ -50,9 +65,16 @@ export function McpCallback() {
     // credential-shaped string and has no business in an analytics payload.
     if (denied) {
       trackEvent('mcp_oauth_callback', { outcome: 'denied', failure_reason: 'denied' });
-      if (state) void api.mcpServers.complete(state, '', denied).catch((err: unknown) => {
-        captureAnalyticsException(err, { flow: 'mcp_oauth_callback' });
-      });
+      if (state) {
+        void api.mcpServers
+          .complete(state, '', denied)
+          .then((data) => {
+            returnToApp(data);
+          })
+          .catch((err: unknown) => {
+            captureAnalyticsException(err, { flow: 'mcp_oauth_callback' });
+          });
+      }
       setError(denied);
       return;
     }
@@ -64,13 +86,16 @@ export function McpCallback() {
 
     api.mcpServers
       .complete(state, code)
-      .then(() => {
+      .then((data) => {
         trackEvent('mcp_oauth_callback', { outcome: 'connected' });
+        if (returnToApp(data)) return;
         setComplete(true);
       })
       .catch((err: unknown) => {
         captureAnalyticsException(err, { flow: 'mcp_oauth_callback' });
         trackEvent('mcp_oauth_callback', { outcome: 'exchange_failed', failure_reason: 'exchange_failed' });
+        // An ApiError carries the whole error body as `details`.
+        if (returnToApp((err as { details?: unknown } | null)?.details)) return;
         setError(err instanceof Error ? err.message : 'Could not finish that sign-in.');
       });
   }, [params, navigate]);
