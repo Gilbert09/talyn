@@ -539,6 +539,8 @@ describe('session arrows in a space', () => {
       id,
       spaceId: 's1',
       workspaceId: 'ws1',
+      kind: 'session',
+      threadId: null,
       name: id,
       title: null,
       status: 'ready',

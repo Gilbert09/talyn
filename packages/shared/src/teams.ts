@@ -1,4 +1,4 @@
-import type { Workbench, WorkbenchAgent, WorkbenchSandboxState, WorkbenchStatus } from './workbench.js';
+import type { Workbench, WorkbenchAgent, WorkbenchKind, WorkbenchSandboxState, WorkbenchStatus } from './workbench.js';
 import type { TaskStatus, TaskType } from './index.js';
 
 /**
@@ -94,6 +94,10 @@ export interface SpaceSessionRow {
   id: string;
   spaceId: string;
   workspaceId: string;
+  /** A thread has no repository, so only its owner can see it. */
+  kind: WorkbenchKind;
+  /** The thread that started this session, when there is one. */
+  threadId: string | null;
   name: string;
   title: string | null;
   status: WorkbenchStatus;
@@ -161,7 +165,10 @@ export interface InviteTeamMemberRequest {
 }
 
 export interface CreateSpaceSessionRequest {
-  repoFullName: string;
+  /** Default 'session'. A thread takes no repository, branch or base branch. */
+  kind?: WorkbenchKind;
+  /** Required for a session. */
+  repoFullName?: string;
   agent: WorkbenchAgent;
   model?: string;
   prompt?: string;

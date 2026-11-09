@@ -533,6 +533,8 @@ describe('session arrows in a space', () => {
       id,
       spaceId: 's1',
       workspaceId: 'ws1',
+      kind: 'session',
+      threadId: null,
       name: id,
       title: null,
       status: 'ready',
@@ -593,6 +595,27 @@ describe('session arrows in a space', () => {
   it('follows the space sidebar order, not the personal list', () => {
     expect(orderedSidebarSessionIds()).toEqual(['oslo', 'lisbon', 'mate']);
     expect(orderedLiveWorkbenches().map((w) => w.id)).toEqual(['rome']);
+  });
+
+  it.each<[string, 'active_first' | 'repository', Record<string, true>, boolean, string[]]>([
+    ['active first', 'active_first', {}, false, ['oslo', 'lisbon', 'mate']],
+    ['by repository', 'repository', {}, false, ['lisbon', 'mate', 'oslo']],
+    ['active first, a teammate has mate open', 'active_first', {}, true, ['mate', 'oslo', 'lisbon']],
+    ['by repository, a teammate has mate open', 'repository', {}, true, ['lisbon', 'mate', 'oslo']],
+    ["the space's active group collapsed", 'active_first', { 'space:s1:active': true }, false, ['lisbon', 'mate']],
+    ["Personal's active group collapsed", 'active_first', { active: true }, false, ['oslo', 'lisbon', 'mate']],
+  ])('counts the space sidebar order: %s', (_name, sidebarOrder, collapsedSessionGroups, watched, ids) => {
+    useWorkspaceStore.setState({ sidebarOrder, collapsedSessionGroups });
+    if (watched) {
+      useSpacesStore.setState({
+        presence: { s1: [{ userId: 'u3', githubLogin: 'ben', avatarUrl: null, sessionId: 'mate', state: 'active', at: 0 }] },
+      });
+    }
+    try {
+      expect(orderedSidebarSessionIds()).toEqual(ids);
+    } finally {
+      useWorkspaceStore.setState({ sidebarOrder: 'active_first', collapsedSessionGroups: {} });
+    }
   });
 
   it.each([

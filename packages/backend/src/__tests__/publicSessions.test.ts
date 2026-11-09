@@ -142,6 +142,38 @@ describe('/v1 sessions and chats', () => {
       expect(mismatch.body.error).toMatchObject({ code: 'invalid_parameter', param: 'workspace_id' });
     });
 
+    it('starts a thread in a member space through the home workspace', async () => {
+      await seedSpace(true);
+      const member = await mintToken('owner-b');
+      const res = await call('POST', '/sessions', { space_id: 'space-a', kind: 'thread', agent: 'claude', prompt: 'Plan it' }, undefined, member);
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      expect(res.body).toMatchObject({ kind: 'thread', workspace_id: 'ws-b', space_id: 'space-a', thread_id: null });
+      await vi.waitFor(async () => expect((await getWorkbench(res.body.id))?.status).toBe('ready'), { timeout: 5000 });
+      expect(await getWorkbench(res.body.id)).toMatchObject({ kind: 'thread', spaceId: 'space-a', repositoryId: null, repoFullName: '' });
+
+      const child = await call('POST', '/sessions', { workspace_id: 'ws-b', repository_id: 'repo-b', agent: 'claude', thread_id: res.body.id }, undefined, member);
+      expect(child.status, JSON.stringify(child.body)).toBe(201);
+      expect(child.body).toMatchObject({ kind: 'session', thread_id: res.body.id, space_id: 'space-a' });
+      await vi.waitFor(async () => expect((await getWorkbench(child.body.id))?.status).toBe('ready'), { timeout: 5000 });
+    });
+
+    it.each([
+      ['a repository name', { repository_full_name: 'acme/app' }, 'invalid_parameter', 'repository_full_name'],
+      ['a repository id', { repository_id: 'repo-a' }, 'invalid_parameter', 'repository_id'],
+      ['a branch', { branch: 'feature' }, 'invalid_parameter', undefined],
+      ['a base branch', { base_branch: 'main' }, 'invalid_parameter', undefined],
+      ['a thread id', { thread_id: 'th-x' }, 'invalid_parameter', 'space_id'],
+      ['a pull request', { pull_request_id: 'pr-x' }, 'invalid_parameter', 'space_id'],
+      ['auto_create_pr', { auto_create_pr: true }, 'invalid_parameter', 'space_id'],
+    ])('refuses a thread in a space with %s', async (_name, extra, code, param) => {
+      await seedSpace();
+      const res = await call('POST', '/sessions', { space_id: 'space-a', kind: 'thread', agent: 'claude', ...extra });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe(code);
+      expect(res.body.error.param).toBe(param);
+      expect(await testDb.db.select({ id: workbenches.id }).from(workbenches)).toEqual([]);
+    });
+
     it('refuses strangers, missing scopes, and a disabled flag', async () => {
       await seedSpace();
       const stranger = await mintToken('owner-b');

@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Archive, ChevronDown, ChevronRight, Plus } from 'lucide-react';
-import { workbenchDisplayName, type Workbench } from '@talyn/shared';
+import { workbenchDisplayName, type SpaceSessionRow, type Workbench, type WorkbenchChat } from '@talyn/shared';
 import { cn } from '../../lib/utils';
-import { sessionPr, sessionState } from '../../lib/sessionState';
+import { sessionPr, sessionState, spaceSessionState } from '../../lib/sessionState';
 import { useBackground } from '../../stores/sessionBackground';
 import { liveThreads, runningSessionCount, threadChildren, threadSummary } from '../../lib/threads';
 import { newestSessions } from '../../lib/sessionOrder';
@@ -13,6 +13,23 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
 import { ArchiveWorkbenchDialog, archiveWorkbench } from '../workbench/archiveWorkbench';
 import { PrPill, SessionStateIcon } from '../workbench/WorkbenchBadges';
 import { openNewThread } from '../workbench/new/openNewWorkbench';
+import { spacesOffered } from '../../lib/spaces';
+import { useSpacesStore } from '../../stores/spaces';
+import { useWorkspaceStore } from '../../stores/workspace';
+import { moveToSpace } from '../spaces/MoveToSpace';
+import { SessionViewers } from '../spaces/SpaceAvatars';
+
+/** A row of the Threads section: a loaded workbench, or a space row when the workbench is not loaded. */
+export interface SidebarThreadItem {
+  id: string;
+  workbench: Workbench | null;
+  row?: SpaceSessionRow | null;
+}
+
+export interface SidebarThreadEntry {
+  thread: SidebarThreadItem;
+  children: SidebarThreadItem[];
+}
 
 /**
  * The sidebar's Threads section, above the sessions: each live thread with
@@ -20,10 +37,30 @@ import { openNewThread } from '../workbench/new/openNewWorkbench';
  * visible when there are no live threads so a person can start one.
  */
 export function SidebarThreadList({ workbenches }: { workbenches: Workbench[] }) {
-  const route = useNavigationStore((s) => s.route);
   const navigate = useNavigationStore((s) => s.navigate);
+  const entries = useMemo(
+    () =>
+      newestSessions(liveThreads(workbenches)).map((thread) => ({
+        thread: { id: thread.id, workbench: thread },
+        children: newestSessions(threadChildren(workbenches, thread.id)).map((child) => ({ id: child.id, workbench: child })),
+      })),
+    [workbenches],
+  );
+  return <SidebarThreadSection entries={entries} onOpen={(id) => navigate({ view: 'workbench', id })} />;
+}
+
+/** The Threads section for any list of threads. A space passes `spaceId` to show who has a session open. */
+export function SidebarThreadSection({
+  entries,
+  onOpen,
+  spaceId,
+}: {
+  entries: SidebarThreadEntry[];
+  onOpen: (id: string) => void;
+  spaceId?: string;
+}) {
+  const route = useNavigationStore((s) => s.route);
   const chats = useWorkbenchStore((s) => s.chats);
-  const threads = useMemo(() => newestSessions(liveThreads(workbenches)), [workbenches]);
   const [collapsed, setCollapsed] = useState<Record<string, true>>({});
   const openId = route.view === 'workbench' ? route.id : null;
 
@@ -42,15 +79,15 @@ export function SidebarThreadList({ workbenches }: { workbenches: Workbench[] })
           <Plus className="h-3.5 w-3.5" />
         </button>
       </div>
-      {threads.map((thread) => {
-        const children = newestSessions(threadChildren(workbenches, thread.id));
+      {entries.map(({ thread, children }) => {
         const expanded = !collapsed[thread.id];
+        const running = runningChildren(children, chats);
         return (
           <div key={thread.id}>
             <ThreadRow
-              thread={thread}
-              summary={threadSummary(runningSessionCount(children, chats))}
-              sessionsRunning={runningSessionCount(children, chats)}
+              item={thread}
+              summary={threadSummary(running)}
+              sessionsRunning={running}
               hasChildren={children.length > 0}
               expanded={expanded}
               selected={thread.id === openId}
@@ -62,18 +99,29 @@ export function SidebarThreadList({ workbenches }: { workbenches: Workbench[] })
                   return next;
                 })
               }
-              onSelect={() => navigate({ view: 'workbench', id: thread.id })}
+              onSelect={() => onOpen(thread.id)}
             />
             {expanded && children.length > 0 && (
-              <div id={`thread-children-${thread.id}`} role="group" aria-label={`Sessions of ${workbenchDisplayName(thread)}`}>
-                {children.map((child) => (
-                  <ThreadChildRow
-                    key={child.id}
-                    session={child}
-                    selected={child.id === openId}
-                    onSelect={() => navigate({ view: 'workbench', id: child.id })}
-                  />
-                ))}
+              <div id={`thread-children-${thread.id}`} role="group" aria-label={`Sessions of ${itemName(thread)}`}>
+                {children.map((child) =>
+                  child.workbench ? (
+                    <ThreadChildRow
+                      key={child.id}
+                      session={child.workbench}
+                      selected={child.id === openId}
+                      spaceId={spaceId}
+                      onSelect={() => onOpen(child.id)}
+                    />
+                  ) : child.row ? (
+                    <SpaceThreadChildRow
+                      key={child.id}
+                      row={child.row}
+                      selected={child.id === openId}
+                      spaceId={spaceId}
+                      onSelect={() => onOpen(child.id)}
+                    />
+                  ) : null,
+                )}
               </div>
             )}
           </div>
@@ -83,8 +131,18 @@ export function SidebarThreadList({ workbenches }: { workbenches: Workbench[] })
   );
 }
 
+function itemName(item: SidebarThreadItem): string {
+  if (item.workbench) return workbenchDisplayName(item.workbench);
+  return item.row?.title || item.row?.name || '';
+}
+
+function runningChildren(children: SidebarThreadItem[], chats: Record<string, WorkbenchChat[] | undefined>): number {
+  const loaded = children.filter((c) => c.workbench);
+  return runningSessionCount(loaded, chats) + children.filter((c) => !c.workbench && c.row?.running).length;
+}
+
 function ThreadRow({
-  thread,
+  item,
   summary,
   sessionsRunning,
   hasChildren,
@@ -93,7 +151,7 @@ function ThreadRow({
   onToggle,
   onSelect,
 }: {
-  thread: Workbench;
+  item: SidebarThreadItem;
   summary: string;
   sessionsRunning: number;
   hasChildren: boolean;
@@ -102,22 +160,29 @@ function ThreadRow({
   onToggle: () => void;
   onSelect: () => void;
 }) {
-  const chats = useWorkbenchStore((s) => s.chats[thread.id]);
+  const thread = item.workbench;
+  const chats = useWorkbenchStore((s) => s.chats[item.id]);
   const unread = useWorkbenchStore((s) => s.unread);
-  const background = useBackground(thread.id);
-  const own = sessionState(thread, chats ?? [], unread, null, false, background);
+  const background = useBackground(item.id);
+  const spacesOn = useWorkspaceStore((s) => spacesOffered(s.features));
+  const spaceId = thread ? thread.spaceId ?? null : item.row?.spaceId ?? null;
+  const own = thread
+    ? sessionState(thread, chats ?? [], unread, null, false, background)
+    : item.row
+      ? spaceSessionState(item.row)
+      : { kind: 'idle' as const, label: 'Idle' };
   // A resting thread whose sessions work is working too. Its own reply, question or failure still wins.
   const state = sessionsRunning > 0 && (own.kind === 'idle' || own.kind === 'wakeup')
     ? { kind: 'working' as const, label: sessionsRunning === 1 ? '1 session working' : `${sessionsRunning} sessions working` }
     : own;
-  const name = workbenchDisplayName(thread);
+  const name = itemName(item);
   const [confirming, setConfirming] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const Chevron = expanded ? ChevronDown : ChevronRight;
 
   const archive = async () => {
     setArchiving(true);
-    const ok = await archiveWorkbench(thread.id, selected);
+    const ok = await archiveWorkbench(item.id, selected);
     setArchiving(false);
     if (ok) setConfirming(false);
   };
@@ -155,7 +220,7 @@ function ThreadRow({
               onClick={onToggle}
               disabled={!hasChildren}
               aria-expanded={hasChildren ? expanded : undefined}
-              aria-controls={hasChildren ? `thread-children-${thread.id}` : undefined}
+              aria-controls={hasChildren ? `thread-children-${item.id}` : undefined}
               aria-label={expanded ? `Hide the sessions of ${name}` : `Show the sessions of ${name}`}
               className="app-region-no-drag mr-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground disabled:hidden"
             >
@@ -165,25 +230,52 @@ function ThreadRow({
         </ContextMenuTrigger>
         <ContextMenuContent className="min-w-[10rem]">
           <ContextMenuItem onSelect={onSelect}>Open</ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => setConfirming(true)}>
-            <Archive className="h-3.5 w-3.5" />
-            Archive…
-          </ContextMenuItem>
+          {spacesOn && (
+            <ContextMenuItem
+              data-attr="sidebar-thread-move-to-space"
+              onSelect={() => useSpacesStore.getState().openDialog({ kind: 'move', target: 'session', id: item.id, spaceId })}
+            >
+              Move to space…
+            </ContextMenuItem>
+          )}
+          {spacesOn && spaceId && (
+            <ContextMenuItem onSelect={() => void moveToSpace('session', item.id, spaceId, null)}>Move to Personal</ContextMenuItem>
+          )}
+          {thread && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => setConfirming(true)}>
+                <Archive className="h-3.5 w-3.5" />
+                Archive…
+              </ContextMenuItem>
+            </>
+          )}
         </ContextMenuContent>
       </ContextMenu>
-      <ArchiveWorkbenchDialog
-        workbench={thread}
-        open={confirming}
-        busy={archiving}
-        onConfirm={() => void archive()}
-        onCancel={() => setConfirming(false)}
-      />
+      {thread && (
+        <ArchiveWorkbenchDialog
+          workbench={thread}
+          open={confirming}
+          busy={archiving}
+          onConfirm={() => void archive()}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
     </>
   );
 }
 
-function ThreadChildRow({ session, selected, onSelect }: { session: Workbench; selected: boolean; onSelect: () => void }) {
+function ThreadChildRow({
+  session,
+  selected,
+  spaceId,
+  onSelect,
+}: {
+  session: Workbench;
+  selected: boolean;
+  spaceId?: string;
+  onSelect: () => void;
+}) {
   const chats = useWorkbenchStore((s) => s.chats[session.id]);
   const unread = useWorkbenchStore((s) => s.unread);
   const row = usePullRequestStore((s) =>
@@ -214,6 +306,49 @@ function ThreadChildRow({ session, selected, onSelect }: { session: Workbench; s
         <SessionStateIcon state={state} />
       </span>
       {pr && <PrPill number={pr.number} state={pr.state} draft={pr.summary.draft} />}
+      {spaceId && <SessionViewers spaceId={spaceId} sessionId={session.id} />}
+    </button>
+  );
+}
+
+/** A thread's session that is not loaded here: the space row is all there is. */
+function SpaceThreadChildRow({
+  row,
+  selected,
+  spaceId,
+  onSelect,
+}: {
+  row: SpaceSessionRow;
+  selected: boolean;
+  spaceId?: string;
+  onSelect: () => void;
+}) {
+  const state = spaceSessionState(row);
+  const repo = row.repoFullName.split('/').pop() || row.repoFullName;
+  const name = row.title || row.name;
+  const prState = row.pullRequest?.state === 'merged' || row.pullRequest?.state === 'closed' ? row.pullRequest.state : 'open';
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      data-attr="sidebar-thread-child"
+      aria-current={selected ? 'page' : undefined}
+      title={`${state.label}\n${name} · ${row.repoFullName} · ${row.branch}`}
+      className={cn(
+        'app-region-no-drag flex w-full items-center gap-1.5 rounded-md py-0.5 pl-8 pr-3 text-left text-xs transition-colors',
+        selected ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
+      )}
+    >
+      <span className="min-w-0 flex-1 truncate">
+        <span className="text-foreground/80">{repo}</span>
+        <span aria-hidden> · </span>
+        <span className="font-mono">{row.branch || name}</span>
+      </span>
+      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+        <SessionStateIcon state={state} />
+      </span>
+      {row.pullRequest && <PrPill number={row.pullRequest.number} state={prState} />}
+      {spaceId && <SessionViewers spaceId={spaceId} sessionId={row.id} />}
     </button>
   );
 }

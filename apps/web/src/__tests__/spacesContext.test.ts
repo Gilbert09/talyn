@@ -56,6 +56,8 @@ function row(id: string, patch: Partial<SpaceSessionRow> = {}): SpaceSessionRow 
     id,
     spaceId: 's1',
     workspaceId: 'ws-ana',
+    kind: 'session',
+    threadId: null,
     name: id,
     title: null,
     status: 'ready',

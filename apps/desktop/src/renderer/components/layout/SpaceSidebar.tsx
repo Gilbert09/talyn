@@ -2,30 +2,39 @@ import { useMemo } from 'react';
 import { CheckCircle2, Circle, CircleDot, ExternalLink, Loader2, XCircle } from 'lucide-react';
 import type { SpaceSessionRow, SpaceTaskRow } from '@talyn/shared';
 import { cn } from '../../lib/utils';
-import { groupSpaceSessions, isWorkbenchOwner, openSpaceSession, viewersOf } from '../../lib/spaces';
+import { isWorkbenchOwner, openSpaceSession } from '../../lib/spaces';
+import { formatKeys } from '../../lib/shortcuts';
 import { openExternal } from '../../lib/openExternal';
 import { emptySpaceList, useSpacesStore, type SpaceRef } from '../../stores/spaces';
 import { useNavigationStore } from '../../stores/navigation';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { Button } from '../ui/button';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '../ui/context-menu';
-import { MemberAvatar, PresenceAvatars } from '../spaces/SpaceAvatars';
+import { MemberAvatar, SessionViewers } from '../spaces/SpaceAvatars';
 import { moveToSpace } from '../spaces/MoveToSpace';
 import { SessionStateIcon } from '../workbench/WorkbenchBadges';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { timeAgo } from '../workbench/new/RecentWorkbenches';
-import { spaceSessionState } from '../../lib/sessionState';
+import { spaceSessionState, type SessionState } from '../../lib/sessionState';
+import { spaceGroupKeyPrefix } from '../workbench/workbenchSelectors';
+import { SessionsHeader, SidebarSessionGroups, WorkbenchRow } from './SidebarWorkbenchList';
+import { SidebarThreadSection } from './SidebarThreadList';
+import { useSpaceSidebarModel } from './spaceSidebarModel';
 
+/**
+ * The sidebar body in a space, laid out like Personal: my threads, then every
+ * member's sessions in the Personal groups and order, then the space's tasks.
+ */
 export function SpaceSidebar({ active }: { active: SpaceRef }) {
   const spaceId = active.space.id;
   const sessions = useSpacesStore((s) => s.sessions[spaceId]) ?? emptySpaceList<SpaceSessionRow>();
   const tasks = useSpacesStore((s) => s.tasks[spaceId]) ?? emptySpaceList<SpaceTaskRow>();
-  const presence = useSpacesStore((s) => s.presence[spaceId]);
-  const selfUserId = useSpacesStore((s) => s.selfUserId);
   const route = useNavigationStore((s) => s.route);
   const openId = route.view === 'workbench' ? route.id : null;
-  const groups = useMemo(() => groupSpaceSessions(sessions.items, presence, selfUserId), [sessions.items, presence, selfUserId]);
+  const model = useSpaceSidebarModel(spaceId);
+  const mine = useMemo(() => [...model.owned.values()], [model.owned]);
   const hidden = sessions.hiddenCount + tasks.hiddenCount;
+  const open = (id: string) => void openSpaceSession(id);
 
   return (
     <div className="space-y-2" data-attr="space-sidebar">
@@ -35,17 +44,49 @@ export function SpaceSidebar({ active }: { active: SpaceRef }) {
         </div>
       ) : sessions.error ? (
         <p className="px-3 py-2 text-xs text-destructive">{sessions.error}</p>
-      ) : groups.active.length + groups.recent.length === 0 ? (
-        <div className="space-y-2 px-3 py-2 text-xs text-muted-foreground" data-attr="space-sidebar-empty">
-          <p>No sessions in this space yet.</p>
-          <Button variant="outline" size="sm" onClick={() => openNewWorkbench()}>
-            Start a session
-          </Button>
-        </div>
       ) : (
         <>
-          <SessionGroup label="Active now" rows={groups.active} openId={openId} spaceId={spaceId} />
-          <SessionGroup label="Recent" rows={groups.recent} openId={openId} spaceId={spaceId} />
+          <SidebarThreadSection entries={model.threads} onOpen={open} spaceId={spaceId} />
+          {model.groups.length === 0 ? (
+            <div className="space-y-2 px-3 py-2 text-xs text-muted-foreground" data-attr="space-sidebar-empty">
+              <p>No sessions in this space yet.</p>
+              <Button variant="outline" size="sm" onClick={() => openNewWorkbench()}>
+                Start a session
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-1" data-attr="sidebar-workbenches">
+              <SessionsHeader workbenches={mine} openId={openId} />
+              <SidebarSessionGroups
+                groups={model.groups}
+                states={model.states}
+                openId={openId}
+                keyPrefix={spaceGroupKeyPrefix(spaceId)}
+                renderItem={(row, shortcut) => {
+                  const workbench = model.owned.get(row.id);
+                  return workbench ? (
+                    <WorkbenchRow
+                      key={row.id}
+                      workbench={workbench}
+                      shortcut={shortcut}
+                      selected={row.id === openId}
+                      onSelect={() => open(row.id)}
+                      trailing={<SpaceRowPeople row={row} spaceId={spaceId} />}
+                    />
+                  ) : (
+                    <SpaceSessionItem
+                      key={row.id}
+                      row={row}
+                      selected={row.id === openId}
+                      spaceId={spaceId}
+                      shortcut={shortcut}
+                      state={model.states.get(row.id)}
+                    />
+                  );
+                }}
+              />
+            </div>
+          )}
         </>
       )}
       {tasks.items.length > 0 && (
@@ -65,25 +106,33 @@ export function SpaceSidebar({ active }: { active: SpaceRef }) {
   );
 }
 
-function SessionGroup({ label, rows, openId, spaceId }: { label: string; rows: SpaceSessionRow[]; openId: string | null; spaceId: string }) {
-  if (rows.length === 0) return null;
+/** Who started a space session, and the teammates who have it open now. */
+function SpaceRowPeople({ row, spaceId }: { row: SpaceSessionRow; spaceId: string }) {
   return (
-    <div role="group" aria-label={label}>
-      <div className="px-3 pb-0.5 pt-1.5 text-[11px] font-medium text-muted-foreground">{label}</div>
-      {rows.map((row) => (
-        <SpaceSessionItem key={row.id} row={row} selected={row.id === openId} spaceId={spaceId} />
-      ))}
-    </div>
+    <>
+      <MemberAvatar member={row.creator} size={14} />
+      <SessionViewers spaceId={spaceId} sessionId={row.id} />
+    </>
   );
 }
 
-export function SpaceSessionItem({ row, selected, spaceId }: { row: SpaceSessionRow; selected: boolean; spaceId: string }) {
-  const presence = useSpacesStore((s) => s.presence[spaceId]);
-  const selfUserId = useSpacesStore((s) => s.selfUserId);
+/** A space session row from the space's list only: a teammate's, or mine when it is not loaded here. */
+export function SpaceSessionItem({
+  row,
+  selected,
+  spaceId,
+  shortcut = null,
+  state: given,
+}: {
+  row: SpaceSessionRow;
+  selected: boolean;
+  spaceId: string;
+  shortcut?: number | null;
+  state?: SessionState;
+}) {
   const owner = useWorkspaceStore((s) => isWorkbenchOwner(row, s.workspaces, s.currentWorkspaceId));
-  const viewers = viewersOf(presence, row.id, selfUserId);
   const name = row.title || row.name;
-  const state = spaceSessionState(row);
+  const state = given ?? spaceSessionState(row);
   const open = () => void openSpaceSession(row.id);
   const move = (to: 'personal' | 'pick') => {
     if (to === 'personal') {
@@ -106,7 +155,7 @@ export function SpaceSessionItem({ row, selected, spaceId }: { row: SpaceSession
       }}
       data-attr="space-session-row"
       aria-current={selected ? 'page' : undefined}
-      title={`${state.label}\n${name}\n${row.repoFullName} · ${row.creator.githubLogin ?? 'A teammate'}`}
+      title={`${state.label}\n${name}\n${row.repoFullName} · ${row.creator.githubLogin ?? 'A teammate'}${shortcut ? ` (${formatKeys(`mod+${shortcut}`)})` : ''}`}
       className={cn(
         'flex w-full items-center gap-2 rounded-md px-3 py-1 text-left text-[13px] transition-colors',
         selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60',
@@ -116,8 +165,7 @@ export function SpaceSessionItem({ row, selected, spaceId }: { row: SpaceSession
         <SessionStateIcon state={state} />
       </span>
       <span className="min-w-0 flex-1 truncate">{name}</span>
-      <MemberAvatar member={row.creator} size={14} />
-      <PresenceAvatars members={viewers} max={2} size={14} />
+      <SpaceRowPeople row={row} spaceId={spaceId} />
     </div>
   );
   if (!owner) return item;

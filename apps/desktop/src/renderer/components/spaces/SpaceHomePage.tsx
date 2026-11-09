@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ArrowUp, Globe2, Loader2 } from 'lucide-react';
 import {
   defaultFleetModelForAgent,
+  storedFleetModelForAgent,
+  type CreateSpaceSessionRequest,
   type SpaceSessionRow,
   type SpaceTaskRow,
   type WorkbenchAgent,
@@ -16,9 +18,12 @@ import { openExternal } from '../../lib/openExternal';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { useWorkspaceStore, type WatchedRepo } from '../../stores/workspace';
 import { emptySpaceList, loadSpaceSessions, useSpacesStore, type SpaceRef } from '../../stores/spaces';
+import { useNavigationStore } from '../../stores/navigation';
+import { workbenchPlaceLabel } from '../../lib/threads';
 import { TooltipProvider } from '../ui/tooltip';
 import { ModelPicker } from '../workbench/ComposerControls';
 import {
+  ANY_REPOSITORY,
   AgentPicker,
   ConnectAgentNotice,
   ControlChip,
@@ -47,6 +52,7 @@ function writeLastRepo(spaceId: string, repo: string): void {
   }
 }
 
+/** A space's home: a composer that starts a session or a thread in the space, then every member's sessions and the tasks. */
 export function SpaceHomePage({ active }: { active: SpaceRef }) {
   const { space, team } = active;
   return (
@@ -74,12 +80,16 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const openSettings = useWorkspaceStore((s) => s.openSettings);
   const readiness = useReadiness(team.homeWorkspaceId);
+  const threadRoute = useNavigationStore((s) => s.route.view === 'home' && s.route.mode === 'thread');
+  const route = useNavigationStore((s) => s.route);
   const [defaults] = useState(readSessionDefaults);
   const [agent, setAgent] = useState<WorkbenchAgent>(defaults.agent);
   const [model, setModel] = useState<string>(() => defaultFleetModelForAgent(defaults.agent));
   const [internetAccess, setInternetAccess] = useState(defaults.internetAccess);
   const [prompt, setPrompt] = useState('');
-  const [repoFullName, setRepoFullName] = useState<string>(() => readLastRepo(space.id) ?? '');
+  const [repoFullName, setRepoFullName] = useState<string>(() => (threadRoute ? ANY_REPOSITORY : readLastRepo(space.id) ?? ''));
+  // "Any repository" starts a thread; a repository starts a session.
+  const mode = repoFullName === ANY_REPOSITORY ? 'thread' : 'session';
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -93,15 +103,23 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
     [repos, space.id],
   );
 
+  // "New thread" opens this page with "Any repository" chosen. Only a new navigation moves the choice.
+  useEffect(() => {
+    if (threadRoute) setRepoFullName(ANY_REPOSITORY);
+    else setRepoFullName((cur) => (cur === ANY_REPOSITORY ? readLastRepo(space.id) ?? '' : cur));
+  }, [route]);
+
   // Keep the choice on a repository the space still has.
   useEffect(() => {
-    if (!repos) return;
+    if (!repos || repoFullName === ANY_REPOSITORY) return;
     if (!repos.some((r) => r.repoFullName === repoFullName)) setRepoFullName(repos[0]?.repoFullName ?? '');
   }, [repos, repoFullName]);
 
+  // The home workspace runs the session, so its model setting applies.
+  const storedModel = storedFleetModelForAgent(homeWorkspace?.settings, agent);
   useEffect(() => {
-    setModel(defaultFleetModelForAgent(agent));
-  }, [agent]);
+    setModel(storedModel ?? defaultFleetModelForAgent(agent));
+  }, [agent, storedModel]);
 
   const choiceFor = useCallback((a: WorkbenchAgent) => agentChoice({ sandbox: readiness.sandbox, local: null }, 'sandbox', a), [readiness.sandbox]);
   const agentOk = choiceFor(agent);
@@ -128,8 +146,8 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
 
   const repoInHome = homeWorkspace?.repos.some((r) => r.name.toLowerCase() === repoFullName.toLowerCase()) ?? false;
   const blockedReason = !team.homeWorkspaceId
-    ? 'You need a workspace of your own to start a session in a space.'
-    : !repoFullName
+    ? `You need a workspace of your own to start a ${mode} in a space.`
+    : mode === 'session' && !repoFullName
       ? 'Choose a repository.'
       : readiness.sandbox !== null && !sandbox.available
         ? sandbox.reason
@@ -148,14 +166,18 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
     setBusy(true);
     setError(null);
     try {
-      const res = await api.spaces.createSession(space.id, { repoFullName, agent, model, prompt: text, internetAccess });
-      writeLastRepo(space.id, repoFullName);
+      const body: CreateSpaceSessionRequest =
+        mode === 'thread'
+          ? { kind: 'thread', agent, model, prompt: text, internetAccess }
+          : { repoFullName, agent, model, prompt: text, internetAccess };
+      const res = await api.spaces.createSession(space.id, body);
+      if (mode === 'session') writeLastRepo(space.id, repoFullName);
       setPrompt('');
       void loadSpaceSessions(space.id);
       openCreatedSession(res.workbench);
     } catch (err) {
       if (maybeHandleBillingLimit(err, 'session_create')) return;
-      setError(err instanceof Error && err.message ? err.message : 'Could not start the session.');
+      setError(err instanceof Error && err.message ? err.message : `Could not start the ${mode}.`);
     } finally {
       setBusy(false);
     }
@@ -178,7 +200,11 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
               void submit();
             }
           }}
-          placeholder={`Start a session in ${space.name}. Your teammates can see it.`}
+          placeholder={
+            mode === 'thread'
+              ? `Start a thread in ${space.name}. It can work across repositories. Only you can see it.`
+              : `Start a session in ${space.name}. Your teammates can see it.`
+          }
           aria-label="Task"
           rows={3}
           disabled={busy}
@@ -189,6 +215,7 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
             repositories={pickerRepos}
             value={repoFullName}
             onChange={setRepoFullName}
+            allowAnyRepository
             emptyText="No repository in this space matches."
             extraAction={{ label: 'Add repository to space…', onSelect: () => openDialog({ kind: 'addRepository', spaceId: space.id }) }}
           />
@@ -232,7 +259,7 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
             </button>
           </p>
         )}
-        {repoFullName && homeWorkspace && !repoInHome && (
+        {mode === 'session' && repoFullName && homeWorkspace && !repoInHome && (
           <p className="text-muted-foreground" data-attr="space-adds-repository">
             Adds {repoFullName} to {homeWorkspace.name}
           </p>
@@ -289,7 +316,7 @@ function SpaceFeed({ spaceId }: { spaceId: string }) {
                     <span className="min-w-0 flex-1">
                       <span className="block truncate font-medium">{row.title || row.name}</span>
                       <span className="block truncate text-xs text-muted-foreground">
-                        {row.creator.githubLogin ?? 'A teammate'} · {row.repoFullName}
+                        {row.creator.githubLogin ?? 'A teammate'} · {workbenchPlaceLabel(row)}
                         {row.running ? ' · working' : ''}
                       </span>
                     </span>

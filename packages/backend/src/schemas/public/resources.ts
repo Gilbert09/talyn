@@ -186,7 +186,7 @@ export const ListSessionsQuery = z
 export const CreateSessionBody = z
   .object({
     workspace_id: Id.optional().openapi({ description: 'Required unless space_id is set or the token is bound to one workspace.' }),
-    space_id: Id.optional().openapi({ description: 'Start in this space. Requires spaces:write and uses your home workspace.' }),
+    space_id: Id.optional().openapi({ description: 'Start in this space. Requires spaces:write and uses your home workspace. A session or a thread can start in a space.' }),
     repository_full_name: z.string().min(3).max(200).optional().openapi({ description: 'Repository owner/name in the space. Use when no repository_id exists in your workspaces.' }),
     kind: z.enum(SESSION_KINDS).optional().openapi({ description: 'Default `session`. A thread takes no repository or branch.' }),
     repository_id: Id.optional().openapi({ description: 'Required for a session unless space_id and repository_full_name are set.' }),
@@ -201,7 +201,7 @@ export const CreateSessionBody = z
     base_branch: z.string().min(1).max(250).optional(),
     branch: z.string().min(1).max(250).optional().openapi({ description: 'An existing branch to work on. Default: a new branch.' }),
     pull_request_id: Id.optional().openapi({ description: "Start from this pull request's head branch and link the session to it." }),
-    thread_id: Id.optional().openapi({ description: 'Put the new session in this thread.' }),
+    thread_id: Id.optional().openapi({ description: 'Put the new session in this thread. The session goes in the space of the thread.' }),
     internet_access: z.boolean().optional(),
     auto_create_pr: z.boolean().optional(),
   })

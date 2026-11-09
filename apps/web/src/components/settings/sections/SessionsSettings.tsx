@@ -15,6 +15,8 @@ import { api } from '../../../lib/api';
 import { toast } from '../../../stores/toast';
 import { useWorkspaceStore, type SidebarOrder } from '../../../stores/workspace';
 import { useSessionDefaults, writeSessionDefaults } from '../../../lib/sessionDefaults';
+import { useActiveSpace } from '../../../lib/spaces';
+import type { SpaceRef } from '../../../stores/spaces';
 import { SettingRow, SettingToggle, SettingsPage, SettingsSection, SettingsSelect } from '../../ui/settings';
 
 const EFFORT_LABEL: Record<WorkbenchEffort, string> = {
@@ -27,8 +29,42 @@ const EFFORT_LABEL: Record<WorkbenchEffort, string> = {
 
 const IDLE_DAY_OPTIONS = [0, 1, 3, 7, 14, 30];
 
+/**
+ * The workspace whose session settings this page edits. A space session runs
+ * in my home workspace for the team, so in a space that is the one, when it
+ * is mine. Else the current workspace.
+ */
+export function sessionSettingsWorkspaceId(
+  space: Pick<SpaceRef, 'team'> | null,
+  workspaces: Pick<Workspace, 'id'>[],
+  currentWorkspaceId: string | null,
+): string | null {
+  const home = space?.team.homeWorkspaceId;
+  return home && workspaces.some((w) => w.id === home) ? home : currentWorkspaceId;
+}
+
+function useSettingsWorkspaceId(): string | null {
+  const space = useActiveSpace();
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  return sessionSettingsWorkspaceId(space, workspaces, currentWorkspaceId);
+}
+
+/** In a space: one line that names the workspace these settings belong to. */
+function SpaceSettingsNote() {
+  const space = useActiveSpace();
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const workspace = space ? workspaces.find((w) => w.id === space.team.homeWorkspaceId) : undefined;
+  if (!space || !workspace) return null;
+  return (
+    <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground" data-attr="sessions-settings-space-note">
+      Sessions you start in {space.space.name} use the settings of {workspace.name}.
+    </p>
+  );
+}
+
 function LimitResumeSection() {
-  const id = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const id = useSettingsWorkspaceId();
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
   const workspace = workspaces.find((w) => w.id === id);
@@ -55,7 +91,7 @@ function LimitResumeSection() {
 }
 
 function AutoArchiveSection() {
-  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const currentWorkspaceId = useSettingsWorkspaceId();
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
   const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
@@ -126,7 +162,7 @@ function AutoArchiveSection() {
 }
 
 function BranchPrefixRow() {
-  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const currentWorkspaceId = useSettingsWorkspaceId();
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
   const stored = workspaces.find((w) => w.id === currentWorkspaceId)?.settings?.sessionBranchPrefix ?? '';
@@ -203,7 +239,7 @@ function BranchPrefixRow() {
 }
 
 function ClaudeCoAuthorshipSection() {
-  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const currentWorkspaceId = useSettingsWorkspaceId();
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
   const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
@@ -242,7 +278,7 @@ function ClaudeCoAuthorshipSection() {
  * page reads it back through `storedFleetModelForAgent`.
  */
 function ModelRow({ agent }: { agent: WorkbenchAgent }) {
-  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const currentWorkspaceId = useSettingsWorkspaceId();
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
   const [saving, setSaving] = useState(false);
@@ -298,10 +334,11 @@ export function SessionsSettings() {
 
   return (
     <SettingsPage title="Sessions" description="Choose defaults and archive rules for sessions.">
+      <SpaceSettingsNote />
       <SettingsSection title="Sidebar">
         <SettingRow
           label="Session order"
-          description="Active sessions need attention, work now, or have an open pull request."
+          description="Active sessions need attention, work now, or have an open pull request. In a space, a session that a teammate has open is also active. This device uses this order in Personal and in every space."
         >
           <SettingsSelect
             value={sidebarOrder}
