@@ -151,12 +151,16 @@ export function prNextStep(input: NextStepInput): NextStep {
       return step('behind', `Behind ${base}`, 'Update the branch on GitHub before it can merge.', 'warning', 'behind', OPEN);
     }
     const checks = summary.checks;
+    // Failing checks that do not block the merge. The Checks tab counts them, so the card says what they mean.
+    const optionalFailing = failing.filter((check) => check.required === false).length;
+    const optionalNote = optionalFailing > 0
+      ? ` ${plural(optionalFailing, 'optional check fails', 'optional checks fail')}, which does not block the merge.` : '';
     if (checks && checks.inProgress > 0) {
       return step('checks_running', `Checks are running (${checks.total - checks.inProgress} of ${checks.total} done)`,
-        'Add it to the merge queue and it merges when ready.', 'neutral', 'running', queueOr(OPEN));
+        `Add it to the merge queue and it merges when ready.${optionalNote}`, 'neutral', 'running', queueOr(OPEN));
     }
     if (decision === 'REVIEW_REQUIRED' || (reason === 'blocked' && decision !== 'APPROVED')) {
-      return step('awaiting_review', 'Waiting for review', 'A required review is missing.', 'neutral', 'review', queueOr(OPEN));
+      return step('awaiting_review', 'Waiting for review', `A required review is missing.${optionalNote}`, 'neutral', 'review', queueOr(OPEN));
     }
     if (canMerge({ state: row.state, summary })) {
       return step('ready', 'Ready to merge', reason === 'checks_failed_optional' ? `Merges into ${base}. Some optional checks fail.` : `Merges into ${base}.`,

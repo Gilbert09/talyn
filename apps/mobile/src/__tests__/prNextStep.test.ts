@@ -240,3 +240,22 @@ describe('automation toggle text', () => {
     expect(keepToggleText(row as never)).toBe(text);
   });
 });
+
+describe('optional failures on a PR that can still merge', () => {
+  it.each([
+    [1, '1 optional check fails, which does not block the merge.'],
+    [91, '91 optional checks fail, which does not block the merge.'],
+  ])('a running PR with %i optional failures says so', (count, note) => {
+    const contexts = Array.from({ length: count }, (_, index) => check(`shadow ${index}`, 'failure', false));
+    const step = next(mine({}, { blockingReason: 'unknown', ciStatus: 'pending', checks: { total: 10 + count, passed: 9, failed: count, inProgress: 1, skipped: 0 } }),
+      { checkContexts: [...contexts, check('build', 'in_progress')] });
+    expect(step.key).toBe('checks_running');
+    expect(step.detail).toBe(`Add it to the merge queue and it merges when ready. ${note}`);
+  });
+
+  it('says nothing extra when no optional check fails', () => {
+    const step = next(mine({}, { blockingReason: 'unknown', ciStatus: 'pending', checks: { total: 2, passed: 1, failed: 0, inProgress: 1, skipped: 0 } }),
+      { checkContexts: [check('build', 'in_progress'), check('lint', 'success')] });
+    expect(step.detail).toBe('Add it to the merge queue and it merges when ready.');
+  });
+});
