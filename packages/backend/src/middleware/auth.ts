@@ -488,18 +488,11 @@ export async function requireWorkspaceAccess(
   const userId = assertUser(req).id;
   const db = getDbClient();
   const rows = await db
-    .select({ id: workspacesTable.id })
-    .from(workspacesTable)
-    .where(eq(workspacesTable.id, workspaceId))
-    .limit(1);
-  if (!rows[0]) throw new AccessError('workspace not found');
-
-  const ownerRows = await db
     .select({ ownerId: workspacesTable.ownerId })
     .from(workspacesTable)
     .where(eq(workspacesTable.id, workspaceId))
     .limit(1);
-  if (ownerRows[0]?.ownerId !== userId) {
+  if (!rows[0] || rows[0].ownerId !== userId) {
     throw new AccessError('workspace not found');
   }
 }

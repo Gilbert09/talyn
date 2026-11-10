@@ -521,6 +521,18 @@ describe('ownership helpers', () => {
     ).rejects.toThrow(AccessError);
   });
 
+  it.each([
+    ['ws-mine', null],
+    ['ws-theirs', 'workspace not found'],
+    ['missing', 'workspace not found'],
+  ])('requireWorkspaceAccess(%s) runs one query', async (workspaceId, error) => {
+    const select = vi.spyOn(db, 'select');
+    const result = requireWorkspaceAccess(makeReq(TEST_USER_ID), workspaceId);
+    if (error) await expect(result).rejects.toThrow(error);
+    else await expect(result).resolves.toBeUndefined();
+    expect(select).toHaveBeenCalledTimes(1);
+  });
+
   it('requireEnvironmentAccess uses the env.ownerId column directly', async () => {
     await db.insert(environmentsTable).values([
       {
