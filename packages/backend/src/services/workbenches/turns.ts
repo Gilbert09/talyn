@@ -16,6 +16,7 @@ import {
   createAgentStreamParser,
   parseAutoPrDetails,
   parsePrDetails,
+  resolveFleetModel,
   workbenchTurnPrompt,
   shellQuote,
   toShellScript,
@@ -675,14 +676,15 @@ class EventBatcher {
 /**
  * The model a turn runs on. Undefined: the agent's own default. The session's
  * model applies only to a chat on the session's agent, so a Codex chat in a
- * Claude session never runs a Claude model.
+ * Claude session never runs a Claude model. A retired id runs as the model
+ * that replaces it.
  */
 export function turnModelFor(
   message: Pick<WorkbenchQueuedMessage, 'model'>,
   chat: { agent: string; model: string | null },
   wb: { agent: string; model: string | null },
 ): string | undefined {
-  return message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model ?? undefined : undefined);
+  return resolveFleetModel(message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model ?? undefined : undefined));
 }
 
 /**
