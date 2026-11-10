@@ -1100,7 +1100,7 @@ async function waitForOtherPayer(chatId: string, message: WorkbenchQueuedMessage
 
 /** Give the turn back to the queue because the plan refused its box, and say why in the chat. */
 async function holdTurn(chatId: string, message: WorkbenchQueuedMessage, refusal: BoxGateError): Promise<TurnOutcome> {
-  const requeued = await requeueTurn(chatId, message);
+  const requeued = await requeueTurn(chatId, message, { drain: false });
   if (requeued) {
     const stored = await appendEvents(chatId, [
       {
@@ -1193,7 +1193,7 @@ async function capacityWaitOutcome(
  */
 async function requeueForSandbox(chatId: string, message: WorkbenchQueuedMessage, turn: number, wait: WorkbenchCapacityWait): Promise<void> {
   adoptFailures.delete(chatId);
-  const requeued = await requeueTurn(chatId, { ...message, capacityWait: wait }, turn);
+  const requeued = await requeueTurn(chatId, { ...message, capacityWait: wait }, { turn });
   if (!requeued) {
     await releaseLease(chatId, turn, 'the chat moved on before its wait for a sandbox was recorded');
     return;
