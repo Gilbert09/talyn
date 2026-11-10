@@ -28,17 +28,17 @@ Sessions, threads, fix runs, code reviews, skills, workflow actions and loops al
 
 ## Plans
 
-| | Free | Pro |
-| --- | --- | --- |
-| Price | $0 | $40 a month, or $400 a year |
-| Box-hours each month | 10 | 200 |
-| Boxes running at once | 2 | 100 |
-| Box sizes | Small and Standard | All sizes |
-| Credits and auto top-up | No | Yes |
-| Keep every new PR green automatically | No | Yes |
-| Review every new PR automatically | No | Yes |
+| | Free | Pro | Max |
+| --- | --- | --- | --- |
+| Price | $0 | $40 a month, or $400 a year | $100 a month (monthly only) |
+| Box-hours each month | 10 | 200 | 1,000 |
+| Boxes running at once | 2 | 100 | 100 |
+| Box sizes | Small and Standard | All sizes | All sizes |
+| Credits and auto top-up | No | Yes | Yes |
+| Keep every new PR green automatically | No | Yes | Yes |
+| Review every new PR automatically | No | Yes | Yes |
 
-Everything else is on both plans: sessions, threads, the PR dashboard, fixing pull requests, keeping a pull request green when you turn it on for that pull request, the merge queue, code review, skills, workflows, loops, Slack and MCP servers.
+Everything else is on every plan: sessions, threads, the PR dashboard, fixing pull requests, keeping a pull request green when you turn it on for that pull request, the merge queue, code review, skills, workflows, loops, Slack and MCP servers.
 
 Box-hours and running boxes are counted for your account, across every workspace you own.
 
@@ -104,14 +104,16 @@ Turn on **Buy credits automatically when the balance is low** to buy a pack when
 
 If an automatic charge fails, the page says so and offers **Buy credits**.
 
-## Upgrade to Pro
+## Upgrade to Pro or Max
 
 1. Open the plan page.
-2. Select **Upgrade**.
-3. Choose **Monthly** ($40 a month) or **Annual** ($400 a year).
+2. Select **Upgrade to Pro** or **Upgrade to Max**.
+3. For Pro, choose **Monthly** ($40 a month) or **Annual** ($400 a year). Max is $100 a month and has no annual option.
 4. Pay on the checkout page.
 
-The annual plan costs the same as 10 months, so you get 2 months free. If you pay monthly, you can switch to annual from the plan page. You pay the prorated difference at once.
+The annual Pro plan costs the same as 10 months, so you get 2 months free. If you pay monthly, you can switch to annual from the plan page. You pay the prorated difference at once.
+
+If you are on monthly Pro, select **Upgrade to Max** on the plan page. The change is immediate. You pay the prorated difference, and for the rest of this month you get the share of Max's extra box-hours that matches the part of the month that is left. If you pay for Pro annually, use **Manage billing** to move to Max.
 
 ## Manage or cancel
 
@@ -122,7 +124,7 @@ Select **Manage billing** on the plan page. It opens the billing portal, where y
 - Switch from annual to monthly.
 - Cancel.
 
-When you cancel, you keep Pro until the end of the period you paid for. Then your account moves to the free plan, which keeps working.
+When you cancel, you keep your paid plan until the end of the period you paid for. Then your account moves to the free plan, which keeps working.
 
 If a payment fails, you keep your plan while the payment is retried. Update your payment method in the portal. If the retries run out, the plan drops to Free.
 

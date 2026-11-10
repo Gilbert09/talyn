@@ -15,26 +15,27 @@ import { pricing } from "@/lib/content";
  * comparison a buyer wants after the cards have sold them, which is why it is
  * visible rather than hidden for crawlers. Hiding it would be cloaking.
  */
-const LIMITS: Array<{ label: string; free: string; paid: string }> = [
-  { label: "Price, billed monthly", free: "$0", paid: "$40 per month" },
-  { label: "Price, billed annually", free: "$0", paid: "$400 per year ($33.33 per month)" },
-  { label: "Box-hours included each month", free: "10", paid: "200" },
-  { label: "Box sizes", free: "Small and standard", paid: "Small, standard, medium, large and xlarge" },
-  { label: "Boxes running at once", free: "2", paid: "Up to 100" },
-  { label: "Credits and auto top-up", free: "Not included", paid: "Included" },
-  { label: "Pull request dashboard, all repositories", free: "Included", paid: "Included" },
-  { label: "Agent providers (Claude, Codex, PostHog Code)", free: "All of them", paid: "All of them" },
-  { label: "Merge queue, workflows, loops and code review", free: "Included", paid: "Included" },
-  { label: "Connected MCP servers", free: "Included", paid: "Included" },
-  { label: "Keep a pull request mergeable, flagged by hand", free: "Included", paid: "Included" },
-  { label: "Keep every new pull request mergeable automatically", free: "Not included", paid: "Included" },
-  { label: "Review every new pull request automatically", free: "Not included", paid: "Included" },
-  { label: "Mobile app (coming soon)", free: "Included", paid: "Included" },
-  { label: "Model usage", free: "Your own subscription", paid: "Your own subscription" },
+const LIMITS: Array<{ label: string; free: string; pro: string; max: string }> = [
+  { label: "Price, billed monthly", free: "$0", pro: "$40 per month", max: "$100 per month" },
+  { label: "Price, billed annually", free: "$0", pro: "$400 per year ($33.33 per month)", max: "Monthly only" },
+  { label: "Box-hours included each month", free: "10", pro: "200", max: "1,000" },
+  { label: "Cost of an included box-hour", free: "Free", pro: "$0.20", max: "$0.10" },
+  { label: "Box sizes", free: "Small and standard", pro: "Small, standard, medium, large and xlarge", max: "Small, standard, medium, large and xlarge" },
+  { label: "Boxes running at once", free: "2", pro: "Up to 100", max: "Up to 100" },
+  { label: "Credits and auto top-up", free: "Not included", pro: "Included", max: "Included" },
+  { label: "Pull request dashboard, all repositories", free: "Included", pro: "Included", max: "Included" },
+  { label: "Agent providers (Claude, Codex, PostHog Code)", free: "All of them", pro: "All of them", max: "All of them" },
+  { label: "Merge queue, workflows, loops and code review", free: "Included", pro: "Included", max: "Included" },
+  { label: "Connected MCP servers", free: "Included", pro: "Included", max: "Included" },
+  { label: "Keep a pull request mergeable, flagged by hand", free: "Included", pro: "Included", max: "Included" },
+  { label: "Keep every new pull request mergeable automatically", free: "Not included", pro: "Included", max: "Included" },
+  { label: "Review every new pull request automatically", free: "Not included", pro: "Included", max: "Included" },
+  { label: "Mobile app (coming soon)", free: "Included", pro: "Included", max: "Included" },
+  { label: "Model usage", free: "Your own subscription", pro: "Your own subscription", max: "Your own subscription" },
 ];
 
 export function PlanTable() {
-  const [free, paid] = pricing.tiers;
+  const [free, pro, max] = pricing.tiers;
 
   return (
     <section className="border-t border-line bg-paper-100 py-20">
@@ -43,21 +44,24 @@ export function PlanTable() {
           Every plan, side by side
         </h2>
         <p className="mt-2 max-w-2xl text-ink-500">
-          Both prices and every limit in full, so you do not have to flip a toggle to
-          compare them. A team seat is $40 a month and gets Pro with its own 200
-          box-hours.
+          Every price and every limit in full, so you do not have to flip a toggle
+          to compare them. A team seat is $40 a month and gets Pro with its own
+          200 box-hours.
         </p>
 
         <div className="mt-8 overflow-x-auto">
-          <table className="w-full min-w-[34rem] border-collapse text-left text-sm">
+          <table className="w-full min-w-[44rem] border-collapse text-left text-sm">
             <thead>
               <tr className="border-b border-line-strong">
                 <th className="py-3 pr-4 font-semibold text-ink-400">&nbsp;</th>
                 <th className="py-3 pr-4 font-display text-base font-semibold text-ink">
                   {free.name}
                 </th>
+                <th className="py-3 pr-4 font-display text-base font-semibold text-ink">
+                  {pro.name}
+                </th>
                 <th className="py-3 font-display text-base font-semibold text-ink">
-                  {paid.name}
+                  {max.name}
                 </th>
               </tr>
             </thead>
@@ -66,7 +70,8 @@ export function PlanTable() {
                 <tr key={row.label} className="border-b border-line">
                   <td className="py-3 pr-4 text-ink-600">{row.label}</td>
                   <td className="py-3 pr-4 text-ink-700">{row.free}</td>
-                  <td className="py-3 text-ink-700">{row.paid}</td>
+                  <td className="py-3 pr-4 text-ink-700">{row.pro}</td>
+                  <td className="py-3 text-ink-700">{row.max}</td>
                 </tr>
               ))}
             </tbody>

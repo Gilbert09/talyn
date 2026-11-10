@@ -18,9 +18,9 @@ import { OfferSchema } from "@/components/seo/OfferSchema";
 import { site, pricingFaq } from "@/lib/content";
 
 const title = "Pricing";
-const seoTitle = "Talyn pricing: free, or $40/month for 200 box-hours";
+const seoTitle = "Talyn pricing: free, $40 or $100 a month";
 const description =
-  "Talyn is free with 10 box-hours a month, or $40 a month for 200 box-hours and every box size. Add credits and pay as you go above your plan. You bring your own Claude or ChatGPT subscription, so you pay us for the machines, not the model.";
+  "Talyn is free with 10 box-hours a month. Pro is $40 a month for 200 box-hours, and Max is $100 a month for 1,000. Add credits and pay as you go above your plan. You bring your own Claude or ChatGPT subscription, so you pay us for the machines, not the model.";
 
 /**
  * Pricing gets a real page.

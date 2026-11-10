@@ -69,11 +69,14 @@ export function Pricing() {
         <SectionHeading kicker={pricing.kicker} title={pricing.title} sub={pricing.sub} />
         <PeriodToggle period={period} onChange={setPeriod} />
 
-        <div className="mx-auto mt-10 grid max-w-3xl gap-4 md:grid-cols-2">
+        <div className="mx-auto mt-10 grid max-w-5xl gap-4 md:grid-cols-2 lg:grid-cols-3">
           {pricing.tiers.map((tier, i) => (
-            <Reveal key={tier.name} delay={i * 0.06}>
+            <Reveal key={tier.name} delay={i * 0.06} className="h-full">
               <GlowCard
                 tone={tier.highlighted ? "clay" : "plain"}
+                // The inner wrapper fills the card, so `mt-auto` can push the
+                // buttons to the bottom and they line up across the row.
+                innerClassName="flex flex-1 flex-col"
                 className={cn(
                   "flex h-full flex-col p-7",
                   tier.highlighted && "border-clay/40 ring-1 ring-clay/20"

@@ -34,8 +34,9 @@ export function PricingBand() {
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-ink-500">
             Free includes 10 box-hours a month. Pro includes 200, every box
-            size, and credits when you need more. A sleeping sandbox costs
-            nothing, and the model runs on your own Claude or ChatGPT plan.
+            size, and credits when you need more. Max is $100 a month for
+            1,000. A sleeping sandbox costs nothing, and the model runs on your
+            own Claude or ChatGPT plan.
           </p>
           <a
             href="/pricing"

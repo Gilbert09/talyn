@@ -20,9 +20,10 @@ function amount(price: string): number {
 }
 
 export function OfferSchema() {
-  const [free, paid] = pricing.tiers;
+  const [free, paid, max] = pricing.tiers;
   const monthly = amount(paid.priceMonthly);
-  const annual = amount(paid.priceAnnualTotal);
+  const annual = amount(paid.priceAnnualTotal ?? paid.priceMonthly);
+  const maxMonthly = amount(max.priceMonthly);
   const annualPerMonth = amount(paid.priceAnnual);
 
   return (
@@ -72,6 +73,23 @@ export function OfferSchema() {
               price: annualPerMonth,
               priceCurrency: "USD",
               billingDuration: 12,
+              billingIncrement: 1,
+              unitCode: "MON",
+            },
+          },
+          {
+            "@type": "Offer",
+            name: `${max.name}, billed monthly`,
+            price: maxMonthly,
+            priceCurrency: "USD",
+            description: max.blurb,
+            url: `${site.url}/pricing`,
+            availability: "https://schema.org/InStock",
+            priceSpecification: {
+              "@type": "UnitPriceSpecification",
+              price: maxMonthly,
+              priceCurrency: "USD",
+              billingDuration: 1,
               billingIncrement: 1,
               unitCode: "MON",
             },

@@ -190,7 +190,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
     ],
     planNote:
-      "Free: 10 box-hours a month and two sandboxes at once. Pro: 200 box-hours and up to 100 at once.",
+      "Free: 10 box-hours a month and two sandboxes at once. Pro: 200 box-hours and up to 100 at once. Max: 1,000 box-hours.",
     related: ["threads", "fix-pull-requests", "agents"],
     relatedCompare: ["conductor", "t3-code", "cursor-background-agents"],
     updated: "2026-11-04",

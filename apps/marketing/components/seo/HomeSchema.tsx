@@ -19,7 +19,6 @@ function amount(price: string): number {
 }
 
 export function HomeSchema() {
-  const paid = pricing.tiers.find((t) => t.highlighted) ?? pricing.tiers[1];
 
   return (
     <JsonLd
@@ -49,7 +48,7 @@ export function HomeSchema() {
             "@type": "AggregateOffer",
             priceCurrency: "USD",
             lowPrice: 0,
-            highPrice: amount(paid.priceMonthly),
+            highPrice: Math.max(...pricing.tiers.map((t) => amount(t.priceMonthly))),
             offerCount: pricing.tiers.length,
             url: `${site.url}/pricing`,
           },

@@ -350,6 +350,28 @@ export const pricing = {
       cta: "Download, then upgrade in the app",
       highlighted: true,
     },
+    {
+      name: "Max",
+      priceMonthly: "$100",
+      // Max is sold monthly only, so the annual toggle shows the monthly
+      // price with a note rather than an annual one.
+      priceAnnual: "$100",
+      priceAnnualTotal: null,
+      period: "/month",
+      periodAnnualNote: "billed monthly only",
+      blurb: "1,000 box-hours a month. A box-hour costs half what it does on Pro.",
+      features: [
+        "Everything in Pro",
+        "1,000 box-hours a month",
+        "Every box size",
+        "Up to 100 boxes running at once",
+        "Credits with auto top-up, for anything above your allowance",
+        "Billed monthly",
+        "Cancel any time, in the app",
+      ],
+      cta: "Download, then upgrade in the app",
+      highlighted: false,
+    },
   ],
   sizesTitle: "Pay as you go, above your plan",
   sizesSub:
@@ -362,7 +384,7 @@ export const pricing = {
     { name: "XLarge", vcpu: 8, ram: 16, perHour: "$0.55", weight: "2.5 box-hours" },
   ],
   sizesNote:
-    "Free accounts can use small and standard boxes. Pro and Team can use every size. Your included hours are used first, then your credits.",
+    "Free accounts can use small and standard boxes. Pro, Max and Team can use every size. Your included hours are used first, then your credits.",
   creditsTitle: "Credits",
   creditPacks: [
     { amount: "$25", bonus: null },
@@ -373,7 +395,7 @@ export const pricing = {
     "Credits last 12 months from the day you buy them.",
     "Turn on auto top-up and pick the balance that triggers it and the amount to add.",
     "Set a monthly limit on auto top-ups, so a busy month cannot surprise you.",
-    "Credits are on Pro and Team plans.",
+    "Credits are on Pro, Max and Team plans.",
   ],
   comingSoon: "The mobile app is coming soon, and it is included on every plan.",
 };
@@ -454,11 +476,11 @@ export const pricingFaq = [
   },
   {
     q: "Can it merge something without me asking?",
-    a: "Only on pull requests you flagged. Auto-keep and the merge queue are opt-in per pull request on every plan, so nothing you have not flagged is ever merged, rebased or pushed to. The one setting that changes that is the workspace default that flags every new pull request you open. It is part of Pro and it is off unless you switch it on. Everything still goes through GitHub's own merge API, so your branch protection applies exactly as you set it up.",
+    a: "Only on pull requests you flagged. Auto-keep and the merge queue are opt-in per pull request on every plan, so nothing you have not flagged is ever merged, rebased or pushed to. The one setting that changes that is the workspace default that flags every new pull request you open. It is part of Pro and Max, and it is off unless you switch it on. Everything still goes through GitHub's own merge API, so your branch protection applies exactly as you set it up.",
   },
   {
     q: "Can I cancel, and do I get a refund?",
-    a: "Cancel any time from Settings → Billing in the app. You keep Pro until the end of the period you have paid for and then drop back to the free plan, which keeps working. Payments are not refundable. Talyn is in public beta, and the free plan exists so you can find out whether it works for you before paying anything.",
+    a: "Cancel any time from Settings → Billing in the app. You keep your paid plan until the end of the period you have paid for and then drop back to the free plan, which keeps working. Payments are not refundable. Talyn is in public beta, and the free plan exists so you can find out whether it works for you before paying anything.",
   },
 ];
 
@@ -494,11 +516,11 @@ export const faq = [
   },
   {
     q: "Will it merge something without me asking?",
-    a: "Only pull requests you flagged. Keeping a pull request mergeable and adding it to the merge queue are both opt-in, one pull request at a time. The one setting that widens that is the workspace default that flags every new pull request you open. It is part of Pro and it is off unless you turn it on. Everything goes through GitHub's merge API, so your branch protection applies as you set it up.",
+    a: "Only pull requests you flagged. Keeping a pull request mergeable and adding it to the merge queue are both opt-in, one pull request at a time. The one setting that widens that is the workspace default that flags every new pull request you open. It is part of Pro and Max, and it is off unless you turn it on. Everything goes through GitHub's merge API, so your branch protection applies as you set it up.",
   },
   {
     q: "What does it cost?",
-    a: "Free includes 10 box-hours a month. Pro is $40 a month ($400 a year) and includes 200 box-hours, every box size and up to 100 boxes at once. A box is the sandbox a session or an agent run uses, and it counts only while it is awake. The model runs on your own Claude or ChatGPT plan, so you pay us for the machines, not the model.",
+    a: "Free includes 10 box-hours a month. Pro is $40 a month ($400 a year) and includes 200 box-hours, every box size and up to 100 boxes at once. Max is $100 a month for 1,000 box-hours. A box is the sandbox a session or an agent run uses, and it counts only while it is awake. The model runs on your own Claude or ChatGPT plan, so you pay us for the machines, not the model.",
   },
   {
     q: "What platforms are supported?",
