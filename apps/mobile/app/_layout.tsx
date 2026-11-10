@@ -14,6 +14,7 @@ import { AnalyticsRoot, useAnalyticsReady } from '../src/components/Analytics';
 import { Status } from '../src/components/AuthControls';
 import { ShellScreen, useShellColors } from '../src/components/ShellScreen';
 import { UpdateBanner } from '../src/features/updates/UpdateBanner';
+import { useFleetModelCatalogSync } from '../src/lib/fleetModelCatalog';
 import { useAppFonts } from '../src/theme/fonts';
 import { sans } from '../src/theme/tokens';
 
@@ -26,6 +27,7 @@ function AuthenticatedRoutes() {
   if (auth.status !== 'signedIn') rememberIntent(pathname);
   const { auth: controller, signOut } = useMobileRuntime();
   const colors = useShellColors();
+  useFleetModelCatalogSync(auth.status === 'signedIn');
   // Boot state 2 of 3: sign-in is restored. The workspace wait is in `(drawer)/_layout` and `DetailRoute`.
   if (auth.status === 'restoring') return <AppLoading phase="auth" />;
   if (auth.status === 'locked') return <ShellScreen topInset centered title="Opening Talyn" description="Your account stays protected while sign-in is checked.">

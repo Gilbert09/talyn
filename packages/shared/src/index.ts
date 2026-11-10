@@ -348,9 +348,29 @@ export type FleetProvider = 'anthropic' | 'openai';
  *
  * Most capable first within each vendor.
  */
-type FleetModelTier = 'flagship' | 'strong' | 'fast' | 'economy';
+export type FleetModelTier = 'flagship' | 'strong' | 'fast' | 'economy';
 
-export const FLEET_MODELS = [
+/**
+ * One model in the catalogue. `tier` is a plain string on the wire so that a
+ * newer backend can add a tier that an older app does not know: the app then
+ * shows the model and only skips it when it maps a tier across agents.
+ */
+export interface FleetModel {
+  id: string;
+  label: string;
+  provider: FleetProvider;
+  tier: FleetModelTier | (string & {});
+  blurb: string;
+}
+
+/**
+ * The catalogue this build ships with. The backend serves it from
+ * `GET /models`, and the apps replace their copy with that answer (see
+ * `setFleetModelCatalog`). So a new model needs only a backend deploy: the
+ * desktop and mobile apps show it without a new release. The apps keep this
+ * copy as the fallback before the first answer and when the backend is down.
+ */
+export const BUNDLED_FLEET_MODELS = [
   { id: 'claude-fable-5-2', label: 'Fable 5.2', provider: 'anthropic', tier: 'flagship', blurb: 'Most capable — demanding reasoning.' },
   { id: 'claude-opus-5-5', label: 'Opus 5.5', provider: 'anthropic', tier: 'flagship', blurb: 'Newest Opus.' },
   { id: 'claude-opus-5', label: 'Opus 5', provider: 'anthropic', tier: 'strong', blurb: 'The previous Opus — 1M context.' },
@@ -364,9 +384,16 @@ export const FLEET_MODELS = [
   { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', provider: 'openai', tier: 'strong', blurb: 'Near-Astra on complex work, for less.' },
   { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', provider: 'openai', tier: 'fast', blurb: 'Fast and efficient: the Codex default.' },
   { id: 'gpt-6-luna', label: 'GPT-6 Luna', provider: 'openai', tier: 'economy', blurb: 'Cheapest, for focused high-volume work.' },
-] as const satisfies readonly { id: string; label: string; provider: FleetProvider; tier: FleetModelTier; blurb: string }[];
+] as const satisfies readonly FleetModel[];
 
-export type FleetModelId = (typeof FLEET_MODELS)[number]['id'];
+/** An id from the bundled catalogue. Use it for constants that the compiler must check. */
+export type BundledFleetModelId = (typeof BUNDLED_FLEET_MODELS)[number]['id'];
+
+/**
+ * Any fleet model id. Wider than the bundled ids because the live catalogue
+ * can hold models that this build has never seen.
+ */
+export type FleetModelId = BundledFleetModelId | (string & {});
 
 /**
  * Default model for a fleet run on a CLAUDE credential.
@@ -378,7 +405,7 @@ export type FleetModelId = (typeof FLEET_MODELS)[number]['id'];
  * merge-queue `queue_failure` kind), and a workspace that wants it back can
  * pick it in Settings → Talyn Fleet.
  */
-export const DEFAULT_FLEET_MODEL_ID: FleetModelId = 'claude-sonnet-5-5';
+export const DEFAULT_FLEET_MODEL_ID: BundledFleetModelId = 'claude-sonnet-5-5';
 
 /**
  * Default model for a fleet run on a CODEX credential.
@@ -388,7 +415,7 @@ export const DEFAULT_FLEET_MODEL_ID: FleetModelId = 'claude-sonnet-5-5';
  * asked for. The dispatch ladder picks between the two by which credential the
  * workspace actually holds.
  */
-export const DEFAULT_FLEET_CODEX_MODEL_ID: FleetModelId = 'gpt-6.1-terra';
+export const DEFAULT_FLEET_CODEX_MODEL_ID: BundledFleetModelId = 'gpt-6.1-terra';
 
 /**
  * Codex ids that OpenAI has withdrawn from the ChatGPT sign-in path, and what
@@ -402,7 +429,7 @@ export const DEFAULT_FLEET_CODEX_MODEL_ID: FleetModelId = 'gpt-6.1-terra';
  * migrated forward instead. This is also what OpenAI's own retirement notice
  * tells you to do ("replace gpt-5.4 with gpt-5.6-terra").
  */
-export const RETIRED_FLEET_MODELS = {
+export const BUNDLED_RETIRED_FLEET_MODELS = {
   'gpt-5.1-codex': 'gpt-6.1-terra',
   'gpt-5-codex': 'gpt-6.1-terra',
   'gpt-5.1': 'gpt-6.1-terra',
@@ -410,9 +437,136 @@ export const RETIRED_FLEET_MODELS = {
   'gpt-5.6-sol': 'gpt-6.1-sol',
   'gpt-5.6-terra': 'gpt-6.1-terra',
   'gpt-5.6-luna': 'gpt-6-luna',
-} as const satisfies Record<string, FleetModelId>;
+} as const satisfies Record<string, BundledFleetModelId>;
 
-export type RetiredFleetModelId = keyof typeof RETIRED_FLEET_MODELS;
+export type RetiredFleetModelId = keyof typeof BUNDLED_RETIRED_FLEET_MODELS | (string & {});
+
+/** The catalogue as `GET /models` serves it. */
+export interface FleetModelCatalog {
+  /** Most capable first within each provider. */
+  models: FleetModel[];
+  /** The model each agent runs when the workspace has chosen nothing. */
+  defaults: Record<FleetAgent, string>;
+  /** Withdrawn ids, and the model to run in place of each one. */
+  retired: Record<string, string>;
+}
+
+export function bundledFleetModelCatalog(): FleetModelCatalog {
+  return {
+    models: BUNDLED_FLEET_MODELS.map((model) => ({ ...model })),
+    defaults: { claude: DEFAULT_FLEET_MODEL_ID, codex: DEFAULT_FLEET_CODEX_MODEL_ID },
+    retired: { ...BUNDLED_RETIRED_FLEET_MODELS },
+  };
+}
+
+/**
+ * The live catalogue. Every helper below reads these, so a catalogue from the
+ * backend reaches every call site at once.
+ *
+ * `FLEET_MODELS` and `RETIRED_FLEET_MODELS` are changed IN PLACE, never
+ * replaced. Code that imported them keeps the same object, whatever the
+ * bundler does with module bindings. On the backend nothing calls
+ * `setFleetModelCatalog`, so they always hold the bundled values.
+ */
+export const FLEET_MODELS: readonly FleetModel[] = BUNDLED_FLEET_MODELS.map((model) => ({ ...model }));
+export const RETIRED_FLEET_MODELS: Readonly<Record<string, string>> = { ...BUNDLED_RETIRED_FLEET_MODELS };
+const fleetModelDefaults: Record<FleetAgent, string> = {
+  claude: DEFAULT_FLEET_MODEL_ID,
+  codex: DEFAULT_FLEET_CODEX_MODEL_ID,
+};
+let fleetModelCatalogSnapshot: FleetModelCatalog = bundledFleetModelCatalog();
+const fleetModelCatalogListeners = new Set<() => void>();
+
+const FLEET_PROVIDERS: readonly FleetProvider[] = ['anthropic', 'openai'];
+const FLEET_AGENT_PROVIDER: Record<FleetAgent, FleetProvider> = { claude: 'anthropic', codex: 'openai' };
+
+const nonEmptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0;
+
+/**
+ * Check a catalogue from the network. Bad entries are dropped one by one, so a
+ * newer backend that adds a provider this build cannot route only hides those
+ * models. Returns null when nothing usable is left; keep the current catalogue
+ * then.
+ */
+export function parseFleetModelCatalog(value: unknown): FleetModelCatalog | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as { models?: unknown; defaults?: unknown; retired?: unknown };
+  if (!Array.isArray(raw.models)) return null;
+
+  const models: FleetModel[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw.models) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { id, label, provider, tier, blurb } = entry as Record<string, unknown>;
+    if (!nonEmptyString(id) || !nonEmptyString(label) || !nonEmptyString(tier)) continue;
+    if (!FLEET_PROVIDERS.includes(provider as FleetProvider) || seen.has(id)) continue;
+    seen.add(id);
+    models.push({ id, label, provider: provider as FleetProvider, tier, blurb: typeof blurb === 'string' ? blurb : '' });
+  }
+  if (models.length === 0) return null;
+
+  // A default must be a listed model of that agent's vendor. Otherwise use the
+  // bundled default if the list still has it, then the vendor's first model.
+  const rawDefaults = (raw.defaults && typeof raw.defaults === 'object' ? raw.defaults : {}) as Record<string, unknown>;
+  const runsOn = (id: unknown, agent: FleetAgent) =>
+    models.some((model) => model.id === id && model.provider === FLEET_AGENT_PROVIDER[agent]);
+  const defaultFor = (agent: FleetAgent, bundled: string): string => {
+    const sent = rawDefaults[agent];
+    if (runsOn(sent, agent)) return sent as string;
+    if (runsOn(bundled, agent)) return bundled;
+    return models.find((model) => model.provider === FLEET_AGENT_PROVIDER[agent])?.id ?? bundled;
+  };
+
+  const retired: Record<string, string> = {};
+  if (raw.retired && typeof raw.retired === 'object') {
+    for (const [from, to] of Object.entries(raw.retired as Record<string, unknown>)) {
+      if (nonEmptyString(from) && !seen.has(from) && typeof to === 'string' && seen.has(to)) retired[from] = to;
+    }
+  }
+
+  return {
+    models,
+    defaults: {
+      claude: defaultFor('claude', DEFAULT_FLEET_MODEL_ID),
+      codex: defaultFor('codex', DEFAULT_FLEET_CODEX_MODEL_ID),
+    },
+    retired,
+  };
+}
+
+/** The live catalogue. The same object until the catalogue changes, so React can compare it. */
+export function getFleetModelCatalog(): FleetModelCatalog {
+  return fleetModelCatalogSnapshot;
+}
+
+/**
+ * Replace the live catalogue. Pass the backend's answer as it arrived: it is
+ * checked here. Returns whether anything changed. An equal catalogue changes
+ * nothing and notifies nobody.
+ */
+export function setFleetModelCatalog(value: unknown): boolean {
+  const next = parseFleetModelCatalog(value);
+  if (!next || JSON.stringify(next) === JSON.stringify(fleetModelCatalogSnapshot)) return false;
+
+  (FLEET_MODELS as FleetModel[]).splice(0, FLEET_MODELS.length, ...next.models.map((model) => ({ ...model })));
+  const retired = RETIRED_FLEET_MODELS as Record<string, string>;
+  for (const id of Object.keys(retired)) delete retired[id];
+  Object.assign(retired, next.retired);
+  Object.assign(fleetModelDefaults, next.defaults);
+  rebuildFleetModelProviders();
+  fleetModelCatalogSnapshot = next;
+  for (const listener of [...fleetModelCatalogListeners]) listener();
+  return true;
+}
+
+/** Call `listener` after each change to the live catalogue. Returns the unsubscribe. */
+export function subscribeFleetModelCatalog(listener: () => void): () => void {
+  fleetModelCatalogListeners.add(listener);
+  return () => {
+    fleetModelCatalogListeners.delete(listener);
+  };
+}
 
 /**
  * The model a dispatch should actually ask for, given whatever is stored.
@@ -425,25 +579,32 @@ export function resolveFleetModel(modelId: string): string;
 export function resolveFleetModel(modelId: string | undefined): string | undefined;
 export function resolveFleetModel(modelId: string | undefined): string | undefined {
   if (!modelId) return modelId;
-  return (RETIRED_FLEET_MODELS as Record<string, FleetModelId>)[modelId] ?? modelId;
+  return Object.prototype.hasOwnProperty.call(RETIRED_FLEET_MODELS, modelId)
+    ? RETIRED_FLEET_MODELS[modelId]
+    : modelId;
 }
 
 /**
  * Derived from the catalogue rather than hand-maintained beside it. The two
  * used to be separate and the map was empty, so every model — including one
  * added as OpenAI's — answered 'anthropic' and would have been dispatched with
- * no route to its own API.
+ * no route to its own API. Rebuilt on each catalogue change.
  */
-const FLEET_MODEL_PROVIDERS: Record<string, FleetProvider> = {
-  ...Object.fromEntries(FLEET_MODELS.map((m) => [m.id, m.provider])),
-  // The retired ids have to keep answering 'openai'. The fallback below is
-  // 'anthropic', so a workspace still pinned to gpt-5.1-codex would otherwise
-  // have its Codex run routed at Anthropic — refused for a Claude credential
-  // it never connected, on a model it never picked.
-  ...Object.fromEntries(
-    Object.keys(RETIRED_FLEET_MODELS).map((id) => [id, 'openai' as FleetProvider]),
-  ),
-};
+const FLEET_MODEL_PROVIDERS: Record<string, FleetProvider> = {};
+
+function rebuildFleetModelProviders(): void {
+  for (const id of Object.keys(FLEET_MODEL_PROVIDERS)) delete FLEET_MODEL_PROVIDERS[id];
+  for (const model of FLEET_MODELS) FLEET_MODEL_PROVIDERS[model.id] = model.provider;
+  // A retired id keeps answering its replacement's vendor. The fallback below
+  // is 'anthropic', so a workspace still pinned to gpt-5.1-codex would
+  // otherwise have its Codex run routed at Anthropic — refused for a Claude
+  // credential it never connected, on a model it never picked.
+  for (const [id, replacement] of Object.entries(RETIRED_FLEET_MODELS)) {
+    const provider = FLEET_MODEL_PROVIDERS[replacement];
+    if (provider && !(id in FLEET_MODEL_PROVIDERS)) FLEET_MODEL_PROVIDERS[id] = provider;
+  }
+}
+rebuildFleetModelProviders();
 
 /**
  * Which vendor a fleet model belongs to.
@@ -498,16 +659,16 @@ export function fleetAgentForModel(modelId: string | undefined): FleetAgent {
   return fleetProviderForModel(modelId) === 'openai' ? 'codex' : 'claude';
 }
 
-/** That agent's SHIPPED default — the floor when a workspace has chosen nothing. */
+/** That agent's default from the live catalogue — the floor when a workspace has chosen nothing. */
 export function defaultFleetModelForAgent(agent: FleetAgent): FleetModelId {
-  return agent === 'codex' ? DEFAULT_FLEET_CODEX_MODEL_ID : DEFAULT_FLEET_MODEL_ID;
+  return fleetModelDefaults[agent === 'codex' ? 'codex' : 'claude'];
 }
 
 /** Keep the model's capability tier when a chat moves to the other agent. */
 export function fleetModelForAgentSwitch(modelId: string, agent: FleetAgent): FleetModelId {
   const current = FLEET_MODELS.find((model) => model.id === resolveFleetModel(modelId));
   if (!current) return defaultFleetModelForAgent(agent);
-  const provider: FleetProvider = agent === 'codex' ? 'openai' : 'anthropic';
+  const provider = FLEET_AGENT_PROVIDER[agent];
   return FLEET_MODELS.find((model) => model.provider === provider && model.tier === current.tier)?.id
     ?? defaultFleetModelForAgent(agent);
 }
@@ -590,7 +751,7 @@ export function isStoredFleetModelId(value: unknown): value is StoredFleetModelI
     // discarded — `resolveFleetModel` then moves it to a model that can run.
     // Rejecting it here would drop it to the next source in the ladder, which
     // for a Codex-only workspace is the Claude default.
-    (typeof value === 'string' && value in RETIRED_FLEET_MODELS) ||
+    (typeof value === 'string' && Object.prototype.hasOwnProperty.call(RETIRED_FLEET_MODELS, value)) ||
     isStoredPostHogCodeModelId(value)
   );
 }

@@ -51,6 +51,7 @@ import type {
   CodeReviewPreset,
   CodeReviewPublic,
   Features,
+  FleetModelCatalog,
   GithubHealth,
   MergeEtaAnswer,
   TrunkIntegrationStatus,
@@ -2077,6 +2078,19 @@ export const features = {
 };
 
 // ============================================================================
+// Agent models
+// ============================================================================
+
+export const models = {
+  /**
+   * The agent models to offer, and each agent's default. Pass the answer to
+   * `setFleetModelCatalog` from `@talyn/shared`, which checks it. The backend
+   * owns this list, so a new model reaches the apps with no app release.
+   */
+  get: () => request<FleetModelCatalog>('GET', '/models'),
+};
+
+// ============================================================================
 // Workflows (user-defined PR automation)
 // ============================================================================
 
@@ -2696,6 +2710,7 @@ export const api = {
   releaseNotes,
   users,
   features,
+  models,
   system,
   workflows,
   loops,

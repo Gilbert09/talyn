@@ -14,6 +14,7 @@ import { openExternal } from '../../components/Workflow';
 import { trackEvent } from '../../lib/analytics';
 import { boxRefusal, errorMessage, showBoxRefusal } from '../../lib/errors';
 import { featureOffered, useFeatures } from '../../lib/features';
+import { useFleetModelCatalog } from '../../lib/fleetModelCatalog';
 import { useKeyboardInset } from '../../lib/keyboard';
 import { sessionRoute, threadRoute } from '../../navigation/routes';
 import { display, mono, radius, sans, type, useTheme } from '../../theme/tokens';
@@ -56,6 +57,8 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const c = useTheme();
   const offline = useNetwork() === 'offline';
   const features = useFeatures();
+  // Subscribes, so the model picker renders again when the backend's catalogue arrives.
+  useFleetModelCatalog();
   const offered = featureOffered(features, 'workbenches');
   const repositories = useResource<WatchedRepo[]>('repositories', '', offered);
   const readiness = useResource<WorkbenchReadiness>('readiness', '', offered);

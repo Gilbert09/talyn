@@ -61,6 +61,7 @@ import { ApiError, api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
 import { setLogoutReason } from '../../lib/logoutReason';
+import { useFleetModelCatalog } from '../../lib/fleetModelCatalog';
 import { downscaleImage } from '../../lib/imageDownscale';
 import { cn } from '../../lib/utils';
 import { FleetAgentMark } from '../../lib/providerMeta';
@@ -97,8 +98,6 @@ import { FleetAccountsList } from '../settings/FleetAccountsList';
 import { SessionsSettings } from '../settings/sections/SessionsSettings';
 import { ShortcutsSettings } from '../settings/sections/ShortcutsSettings';
 import {
-  DEFAULT_FLEET_MODEL_ID,
-  FLEET_MODELS,
   POSTHOG_CODE_MODELS,
   DEFAULT_POSTHOG_CODE_MODEL_ID,
   defaultFleetModelForAgent,
@@ -1226,6 +1225,7 @@ export function ProviderConnectCards() {
  * every settings visit.
  */
 function SelfHostedFleetCard() {
+  const modelCatalog = useFleetModelCatalog();
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);
@@ -1324,8 +1324,8 @@ function SelfHostedFleetCard() {
             providerType="selfhosted"
             title="Model"
             description="Which model fleet runs use, and therefore which agent runs them — the model carries its vendor. Sonnet 5 handles the mechanical work (rebases, conflicts, re-running CI) at a fraction of Opus's cost."
-            models={FLEET_MODELS}
-            defaultId={DEFAULT_FLEET_MODEL_ID}
+            models={modelCatalog.models}
+            defaultId={modelCatalog.defaults.claude}
             settingKey="fleetModel"
           />
         </div>

@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import {
-  FLEET_MODELS,
   DEFAULT_AUTO_ARCHIVE_IDLE_DAYS,
   WORKBENCH_EFFORTS,
   defaultFleetModelForAgent,
@@ -14,6 +13,7 @@ import {
 import { api } from '../../../lib/api';
 import { toast } from '../../../stores/toast';
 import { useWorkspaceStore, type SidebarOrder } from '../../../stores/workspace';
+import { useFleetModelCatalog } from '../../../lib/fleetModelCatalog';
 import type { WorkbenchRuntime } from '../../../lib/readiness';
 import { useSessionDefaults, writeSessionDefaults } from '../../../lib/sessionDefaults';
 import { useActiveSpace } from '../../../lib/spaces';
@@ -284,7 +284,7 @@ function ModelRow({ agent }: { agent: WorkbenchAgent }) {
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
   const [saving, setSaving] = useState(false);
   const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
-  const models = FLEET_MODELS.filter((m) => fleetAgentForModel(m.id) === agent);
+  const models = useFleetModelCatalog().models.filter((m) => fleetAgentForModel(m.id) === agent);
   const current = storedFleetModelForAgent(workspace?.settings, agent) ?? defaultFleetModelForAgent(agent);
   const agentLabel = agent === 'codex' ? 'Codex' : 'Claude';
 

@@ -35,9 +35,9 @@
 
 import { Cron } from 'croner';
 import {
-  DEFAULT_FLEET_MODEL_ID,
   DEFAULT_POSTHOG_CODE_MODEL_ID,
   FLEET_MODELS,
+  defaultFleetModelForAgent,
   POSTHOG_CODE_MODELS,
   isStoredFleetModelId,
   isStoredPostHogCodeModelId,
@@ -603,7 +603,7 @@ export function modelsForLoopProvider(
 }
 
 export function defaultModelForLoopProvider(provider: LoopProvider): string {
-  return provider === 'selfhosted' ? DEFAULT_FLEET_MODEL_ID : DEFAULT_POSTHOG_CODE_MODEL_ID;
+  return provider === 'selfhosted' ? defaultFleetModelForAgent('claude') : DEFAULT_POSTHOG_CODE_MODEL_ID;
 }
 
 /**

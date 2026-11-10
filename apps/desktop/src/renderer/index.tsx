@@ -13,6 +13,7 @@ import { sessionIdFromAppUrl } from '@talyn/shared';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { captureAnalyticsException, initAnalytics } from './lib/analytics';
+import { hydrateFleetModelCatalog } from './lib/fleetModelCatalog';
 import { installNavigation, useNavigationStore } from './stores/navigation';
 
 // Initialise PostHog before first render so session replay + autocapture
@@ -32,6 +33,8 @@ const reportMainError = (frame: { source: 'main' | 'renderer'; operation: string
 window.electron?.mainErrors?.onEvent(reportMainError);
 void window.electron?.mainErrors?.drain().then((frames) => frames.forEach(reportMainError));
 installNavigation();
+// The last agent model catalogue the backend sent, so pickers show it at once.
+hydrateFleetModelCatalog();
 window.electron?.app?.onSessionLink((url) => {
   const id = sessionIdFromAppUrl(url);
   if (id) useNavigationStore.getState().navigate({ view: 'workbench', id });
