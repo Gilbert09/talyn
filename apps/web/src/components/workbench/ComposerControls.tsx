@@ -10,6 +10,7 @@ import {
   type WorkbenchTodo,
 } from '@talyn/shared';
 import { cn } from '../../lib/utils';
+import { useFleetModelCatalog } from '../../lib/fleetModelCatalog';
 import { formatTokens } from '../../lib/workbenchFormat';
 
 /** The models the workbench's agent can run: the fleet catalogue, filtered by vendor. */
@@ -78,6 +79,8 @@ export function ModelPicker({
   /** Agents the workspace has not connected. Their models show, but cannot be picked. */
   unconnected?: WorkbenchAgent[];
 }) {
+  // Subscribes, so the list renders again when the backend's catalogue arrives.
+  useFleetModelCatalog();
   const models = modelsForAgent(agent);
   const known = models.some((m) => m.id === value);
   const locked = unconnected.filter((a) => a !== agent);
