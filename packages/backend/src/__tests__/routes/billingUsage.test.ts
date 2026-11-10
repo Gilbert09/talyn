@@ -233,7 +233,7 @@ describe('POST /billing/credits/checkout', () => {
     const { status, body } = await call('POST', '/credits/checkout', { pack: '100' });
     expect(status).toBe(200);
     expect(body.data).toEqual({ url: `https://polar.test/checkout/credits/100/${TEST_USER_ID}` });
-    expect(polar.createCreditCheckoutUrl).toHaveBeenCalledWith(TEST_USER_ID, '100');
+    expect(polar.createCreditCheckoutUrl).toHaveBeenCalledWith(TEST_USER_ID, '100', null);
   });
 });
 
@@ -246,7 +246,22 @@ describe('POST /billing/checkout', () => {
     setPolarEnv();
     const res = await call('POST', '/checkout', body);
     expect(res.status).toBe(200);
-    expect(polar.createCheckoutUrl).toHaveBeenCalledWith(TEST_USER_ID, period, 'pro');
+    expect(polar.createCheckoutUrl).toHaveBeenCalledWith(TEST_USER_ID, period, 'pro', null);
+  });
+
+  it('passes an allowed mobile return target to the checkout', async () => {
+    setPolarEnv();
+    const res = await call('POST', '/checkout', { returnTo: 'talyn-mobile://' });
+    expect(res.status).toBe(200);
+    expect(polar.createCheckoutUrl).toHaveBeenCalledWith(TEST_USER_ID, 'annual', 'pro', 'talyn-mobile://');
+  });
+
+  it.each([['https://evil.test/'], ['talyn-mobile://x'], ['javascript:']])('400 for return target %s', async (returnTo) => {
+    setPolarEnv();
+    const { status, body } = await call('POST', '/checkout', { returnTo });
+    expect(status).toBe(400);
+    expect(body.code).toBe('invalid_return_to');
+    expect(polar.createCheckoutUrl).not.toHaveBeenCalled();
   });
 
   it.each([['unlimited'], ['legacy_pro'], ['free'], ['Max']])('400 for plan %s', async (plan) => {
@@ -261,7 +276,7 @@ describe('POST /billing/checkout', () => {
     setMaxEnv();
     const res = await call('POST', '/checkout', { plan: 'max', ...(period ? { period } : {}) });
     expect(res.status).toBe(200);
-    expect(polar.createCheckoutUrl).toHaveBeenCalledWith(TEST_USER_ID, expected, 'max');
+    expect(polar.createCheckoutUrl).toHaveBeenCalledWith(TEST_USER_ID, expected, 'max', null);
   });
 
   it('403 for Max when the Max product is not set', async () => {
