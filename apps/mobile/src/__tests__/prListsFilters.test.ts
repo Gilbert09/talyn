@@ -22,6 +22,9 @@ describe('search', () => {
   it.each([
     ['login', true], ['fix the', true], ['example/project', true], ['example/project#123', true], ['project#12', true],
     ['123', true], ['#123', true], ['#12', true], ['12', true], ['other', false], ['#999', false], ['example/other', false],
+    ['https://github.com/example/project/pull/123', true], ['https://github.com/example/project/pull/123/files', true],
+    ['github.com/example/project/pull/123', true], ['https://github.com/example/project/pull/12', false],
+    ['https://github.com/example/other/pull/123', false], ['https://github.com/other/project/pull/123', false],
   ])('matches %j: %s', (q, expected) => expect(prMatchesText(target, q)).toBe(expected));
 
   it('treats a missing title as empty', () => {

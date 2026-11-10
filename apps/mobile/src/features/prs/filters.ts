@@ -1,5 +1,5 @@
 import type { PRRow, PRSummaryShape } from '@talyn/client/native';
-import { loadReviewSortMode, prMatchesAnyFilter, type PRFilterCriteria, type PRFilterDefinition } from '@talyn/shared';
+import { loadReviewSortMode, parsePullRequestUrl, prMatchesAnyFilter, type PRFilterCriteria, type PRFilterDefinition } from '@talyn/shared';
 
 import { isAwaitingReview, isNeedsAttention, isReadyToMerge, mineCohort, queueCohort, reviewCohort, sortReviews,
   type ReviewSortMode, type SortDir } from './lists';
@@ -83,8 +83,11 @@ export function matchesRequestedVia(summary: Pick<PRSummaryShape, 'reviewRequest
 /**
  * Web `prMatchesText`, for a lowercased and trimmed query: the title, the
  * `owner/repo#number` ref, or the number. A leading `#` is ignored for the number.
+ * A GitHub PR URL matches only that PR.
  */
 export function prMatchesText(row: Pick<PRRow, 'owner' | 'repo' | 'number'> & { summary: { title?: string } }, q: string): boolean {
+  const url = parsePullRequestUrl(q);
+  if (url) return url.number === row.number && `${url.owner}/${url.repo}`.toLowerCase() === `${row.owner}/${row.repo}`.toLowerCase();
   const ref = `${row.owner}/${row.repo}#${row.number}`.toLowerCase();
   return (row.summary.title ?? '').toLowerCase().includes(q) || ref.includes(q) || String(row.number).includes(q.replace(/^#/, ''));
 }

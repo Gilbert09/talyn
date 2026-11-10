@@ -5,7 +5,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import { IconButton } from '../../components/UI';
 import { radius, sans, type, useTheme, withAlpha } from '../../theme/tokens';
 
-export const SEARCH_PLACEHOLDER = 'Search title, repo or #number';
+export const SEARCH_PLACEHOLDER = 'Search title, repo, #number or URL';
 
 /**
  * One neutral chip style for the whole bar: an outline when off, a light

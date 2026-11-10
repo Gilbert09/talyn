@@ -80,14 +80,14 @@ describe('pull request pages', () => {
     mockActive.api.pullRequests.list.mockResolvedValueOnce(mineRows());
     await render(<PullRequestsScreen tab="mine" />);
     await screen.findByRole('link', { name: /^Plain\./ });
-    await fireEvent.changeText(screen.getByLabelText('Search title, repo or #number'), '#2');
+    await fireEvent.changeText(screen.getByLabelText('Search title, repo, #number or URL'), '#2');
     expect(linkNames()).toEqual(['Plain']);
-    await fireEvent.changeText(screen.getByLabelText('Search title, repo or #number'), 'nothing like this');
+    await fireEvent.changeText(screen.getByLabelText('Search title, repo, #number or URL'), 'nothing like this');
     expect(screen.getByText('No pull requests match these filters.')).toBeVisible();
     expect(screen.queryAllByRole('link')).toHaveLength(0);
     await fireEvent.press(screen.getByRole('button', { name: 'Clear filters' }));
     expect(linkNames()).toEqual(['Plain', 'Conflicted']);
-    expect(screen.getByLabelText('Search title, repo or #number').props.value).toBe('');
+    expect(screen.getByLabelText('Search title, repo, #number or URL').props.value).toBe('');
   });
 
   it('narrows to one repository from the picker', async () => {
@@ -155,7 +155,7 @@ describe('pull request pages', () => {
     await fireEvent.press(await screen.findByRole('button', { name: 'Requested via: Any requested' }));
     await fireEvent.press(await screen.findByRole('button', { name: '@org/web' }));
     expect(linkNames()).toEqual(['Newer review']);
-    await fireEvent.changeText(screen.getByLabelText('Search title, repo or #number'), 'older');
+    await fireEvent.changeText(screen.getByLabelText('Search title, repo, #number or URL'), 'older');
     expect(screen.getByText('No pull requests match these filters.')).toBeVisible();
   });
 
@@ -168,7 +168,7 @@ describe('pull request pages', () => {
     await render(<PullRequestsScreen tab="queue" />);
     await screen.findByRole('link', { name: /^First queued\./ });
     expect(screen.queryByRole('button', { name: /^Sort:/ })).toBeNull();
-    await fireEvent.changeText(screen.getByLabelText('Search title, repo or #number'), 'second');
+    await fireEvent.changeText(screen.getByLabelText('Search title, repo, #number or URL'), 'second');
     expect(linkNames()).toEqual(['Second queued']);
   });
 

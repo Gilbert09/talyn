@@ -1,4 +1,5 @@
 import { ArrowUpDown, FilterX, Sparkles } from 'lucide-react';
+import { parsePullRequestUrl } from '@talyn/shared';
 import { cn } from '../../../lib/utils';
 
 export type SortDir = 'asc' | 'desc';
@@ -187,7 +188,8 @@ export function sortDirForMode(mode: ReviewSortMode): SortDir {
 /**
  * Whether a PR matches a (lowercased, trimmed) search query by its title,
  * `owner/repo`, `owner/repo#number` ref, or bare PR number. A leading `#` on
- * the query is ignored so both `#123` and `123` match the number.
+ * the query is ignored so both `#123` and `123` match the number. A GitHub PR
+ * URL matches only that PR.
  */
 export function prMatchesText(
   r: { owner: string; repo: string; number: number; summary: { title?: string } },
@@ -195,6 +197,8 @@ export function prMatchesText(
 ): boolean {
   const title = r.summary.title?.toLowerCase() ?? '';
   const repo = `${r.owner}/${r.repo}`.toLowerCase();
+  const url = parsePullRequestUrl(q);
+  if (url) return url.number === r.number && `${url.owner}/${url.repo}`.toLowerCase() === repo;
   const ref = `${repo}#${r.number}`;
   const num = String(r.number);
   return (
