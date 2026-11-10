@@ -352,6 +352,35 @@ describe('websocket service', () => {
     await closeClient(client);
   });
 
+  it.each([
+    ['completed', true],
+    ['queued', false],
+    ['in_progress', false],
+    ['failed', false],
+    ['needs_human', false],
+  ])('task:status for %s carries completedAt only when completed', async (status, hasTime) => {
+    const client = await authed(serverUrl, 'token-mine');
+    await client.waitFor('connection:status');
+    client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: 'ws-mine' }));
+    await new Promise((r) => setTimeout(r, 100));
+
+    const before = Date.now();
+    emitTaskStatus('ws-mine', 't1', status);
+    const msg = (await client.waitFor('task:status')) as {
+      payload: { completedAt?: string | null };
+    };
+    // The key is always present, so a client can clear a reused task's old
+    // completion time instead of keeping it.
+    expect('completedAt' in msg.payload).toBe(true);
+    if (hasTime) {
+      expect(Date.parse(msg.payload.completedAt as string)).toBeGreaterThanOrEqual(before - 1000);
+    } else {
+      expect(msg.payload.completedAt).toBeNull();
+    }
+
+    await closeClient(client);
+  });
+
   it('emitEnvironmentCreated reaches only the owning user (no cross-tenant leak)', async () => {
     const mine = await authed(serverUrl, 'token-mine');
     const theirs = await authed(serverUrl, 'token-theirs');

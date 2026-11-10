@@ -1802,6 +1802,13 @@ export interface TaskStatusEvent {
   taskId: string;
   status: TaskStatus;
   result?: TaskResult;
+  /**
+   * When the run completed, for `completed`; null for every other status.
+   * A finished task is reused for the next run at its PR, so without this a
+   * client kept the first run's completion time on the second ("Created 33m
+   * ago, Completed 3h ago"). Absent from older backends: leave the field as is.
+   */
+  completedAt?: string | null;
 }
 
 export interface TaskUpdateEvent {

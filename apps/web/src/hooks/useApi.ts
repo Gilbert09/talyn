@@ -381,6 +381,9 @@ export function useApiConnection() {
         updateTask(payload.taskId, {
           status: payload.status,
           result: payload.result,
+          // Replace (or clear) the completion time, so a reused task does not
+          // keep its previous run's. Older backends do not send the key.
+          ...('completedAt' in payload ? { completedAt: payload.completedAt ?? undefined } : {}),
         });
         // A run that just ended grew the history by one. Only on the crossing
         // into a terminal status, so an in_progress heartbeat does not put a

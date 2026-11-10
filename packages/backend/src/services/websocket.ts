@@ -739,7 +739,10 @@ export function broadcastToUser(userId: string, event: WSEvent): void {
 export function emitTaskStatus(workspaceId: string, taskId: string, status: string, result?: unknown): void {
   broadcastToWorkspace(workspaceId, {
     type: 'task:status',
-    payload: { taskId, status, result },
+    // Every write that moves a task to `completed` sets `completed_at` to now
+    // and every other move clears it, so the event can say the same without a
+    // read. Clients use it to replace a reused task's old completion time.
+    payload: { taskId, status, result, completedAt: status === 'completed' ? new Date().toISOString() : null },
     timestamp: new Date().toISOString(),
   });
   domainEvents.emit('task:status', {
