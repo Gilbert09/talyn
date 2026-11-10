@@ -151,13 +151,13 @@ describe('initialisation', () => {
     ['development', false, false],
     ['preview', true, true],
     ['production', true, true],
-  ] as const)('in %s, replay is %s and exception autocapture is %s', async (environment, replay, exceptions) => {
+  ] as const)('in %s, replay is %s and exception and native crash autocapture is %s', async (environment, replay, exceptions) => {
     configure(environment);
     const { options } = await started();
     expect(options).toMatchObject({ host: CONFIG.host, personProfiles: 'identified_only', captureAppLifecycleEvents: true, enableSessionReplay: replay });
     expect(options.sessionReplayConfig).toMatchObject({ maskAllTextInputs: true, maskAllImages: true, maskAllSandboxedViews: true, captureLog: false });
     expect(options.errorTracking).toEqual(exceptions
-      ? { autocapture: { uncaughtExceptions: true, unhandledRejections: true, console: ['error'] } }
+      ? { autocapture: { uncaughtExceptions: true, unhandledRejections: true, console: ['error'], nativeCrashes: true, androidNdkCrashes: true } }
       : { autocapture: false });
     expect(options.before_send).toBe(beforeSend);
   });

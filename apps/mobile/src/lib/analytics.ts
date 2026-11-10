@@ -110,8 +110,14 @@ function optionsFor(config: AnalyticsConfig, environment: AppEnvironment, startO
       captureNetworkTelemetry: false,
     },
     // Exception autocapture is noisy against Metro; it runs in preview and production builds.
+    // Native crashes (iOS, Android JVM, and Android NDK on API 31+) come from @posthog/react-native-plugin.
+    // They skip `before_send`, and the SDK passes the opt-out to the native side.
+    // An NDK crash is sent on the next launch.
     errorTracking: development ? { autocapture: false } : {
-      autocapture: { uncaughtExceptions: true, unhandledRejections: true, console: ['error'] },
+      autocapture: {
+        uncaughtExceptions: true, unhandledRejections: true, console: ['error'],
+        nativeCrashes: true, androidNdkCrashes: true,
+      },
     },
     before_send: beforeSend,
   };

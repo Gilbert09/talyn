@@ -7,8 +7,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-const { profiles, required, CHECK_AUTOMATICALLY } = require('../release/policy.cjs');
+const { profiles, required, CHECK_AUTOMATICALLY, POSTHOG_SYMBOL_UPLOADS } = require('../release/policy.cjs');
 const { assertChannel } = require('./release.cjs');
+const { uploadUpdateSourceMaps } = require('./posthog-symbols.cjs');
 
 const root = path.resolve(__dirname, '..');
 const autoProfiles = Object.keys(profiles).filter((name) => profiles[name].autoUpdate);
@@ -60,6 +61,8 @@ function publishEnvironment(base, pulled, profile) {
   }
   const env = { ...base, ...remote };
   delete env.EAS_BUILD_PROFILE;
+  // The PostHog key goes only to the PostHog CLI, after the publish.
+  delete env[POSTHOG_SYMBOL_UPLOADS.keyName];
   return {
     ...env, APP_ENV: policy.environment, MOBILE_RELEASE_PROFILE: profile, MOBILE_UPDATES_ENABLED: '1', EXPO_NO_DOTENV: '1',
     // Store profiles require a build number. The fingerprint skips version fields, and About reads the native number.
@@ -113,6 +116,16 @@ function summarize(env, lines) {
   if (env.GITHUB_STEP_SUMMARY) fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${lines.map((line) => `- ${line}`).join('\n')}\n`);
 }
 
+/** Print upload results as Actions annotations. Only the first line is the annotation; the CLI output follows it. */
+function annotate(results) {
+  for (const { level, message } of results) {
+    const [first, ...rest] = redact(message).split('\n');
+    console.log(`::${level}::${first}`);
+    for (const line of rest) console.log(line);
+  }
+  return results.map(({ message }) => redact(message).split('\n')[0]);
+}
+
 async function run() {
   const [profile, mode] = process.argv.slice(2);
   if (mode && !['--execute', '--dry-run'].includes(mode)) throw new Error('Use --dry-run or --execute.');
@@ -142,6 +155,7 @@ async function run() {
       console.log(`::warning::No finished ${plan.policy.channel} ${update.platform} build runs runtime ${update.runtimeVersion}. The native fingerprint changed, so this update reaches no installed app until a new binary ships.`);
     } else if (found === null) console.log(`::notice::Could not list ${plan.policy.channel} ${update.platform} builds to confirm an installed binary runs runtime ${update.runtimeVersion}.`);
   }
+  lines.push(...annotate(uploadUpdateSourceMaps({ env: process.env, root, exp, channel: plan.policy.channel })));
   summarize(env, lines);
 }
 

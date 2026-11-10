@@ -49,6 +49,7 @@ function checkUpdateWorkflow(text, yaml) {
   assert(!/actions\/(?:upload-artifact|cache)|cache:\s*npm|set\s+-x|pull_request|--channel\s+production|eas\s+update/.test(text),
     'The update workflow publishes only through publish-update.cjs, with no cache, artifact, or PR trigger.');
   assert(text.includes(`eas-cli@${JSON.parse(read('eas.json')).cli.version}`), 'Keep the external EAS CLI pin aligned.');
+  assert(text.includes(`@posthog/cli@${JSON.parse(read('release/toolchain.json')).posthogCli}`), 'Keep the PostHog CLI pin aligned with release/toolchain.json.');
   // An unset variable is null, and null != '0' is false in Actions expressions, so the guard must default it first.
   assert(!/(?<!\|\| '1'\) )vars\.MOBILE_UPDATES_AUTO != '0'/.test(text), 'Default MOBILE_UPDATES_AUTO before comparing it.');
   const published = [...text.matchAll(/publish-update\.cjs\s+(\S+)\s+--execute/g)].map((match) => match[1]);
@@ -114,6 +115,7 @@ function check() {
   assert.equal(eas.cli.requireCommit, true);
   assert.equal(eas.cli.version, JSON.parse(read('release/toolchain.json')).easCli);
   assert(fs.readFileSync(path.join(root, '.github/workflows/mobile-release.yml'), 'utf8').includes(`eas-cli@${eas.cli.version}`), 'Keep the external EAS CLI pin aligned.');
+  assert(releaseText.includes(`@posthog/cli@${JSON.parse(read('release/toolchain.json')).posthogCli}`), 'Keep the PostHog CLI pin aligned with release/toolchain.json.');
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'))).packages['apps/mobile'].version, JSON.parse(read('package.json')).version, 'Mobile version differs from the root lockfile.');
   assert.deepEqual(Object.keys(eas.build).sort(), Object.keys(profiles).sort());
   for (const [name, policy] of Object.entries(profiles)) {

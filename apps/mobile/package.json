@@ -24,7 +24,7 @@
     "release:plan": "node scripts/release.cjs",
     "native:generate": "expo prebuild --no-install --clean --platform all",
     "native:inspect": "node scripts/inspect-native.cjs",
-    "eas-build-post-install": "cd ../.. && npm run mobile:build:packages",
+    "eas-build-post-install": "node scripts/posthog-symbols.cjs eas-install && cd ../.. && npm run mobile:build:packages",
     "test:release": "jest --runInBand --runTestsByPath src/__tests__/release.test.ts src/__tests__/releaseFlows.test.tsx",
     "native:check": "node scripts/check-native-profiles.cjs"
   },

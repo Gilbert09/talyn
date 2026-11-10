@@ -118,6 +118,7 @@ Protected GitHub secret names:
 | `EXPO_TOKEN` | Restricted Expo account or robot access. Available only to the approved operation step and the automatic publish steps. |
 | `MOBILE_RELEASE_EVIDENCE_JSON` | Candidate-specific approval references. Required for store operations. |
 | `MOBILE_STORE_METADATA_JSON` | Approved complete metadata snapshot. Required for submission; contains review instructions without credentials. |
+| `POSTHOG_CLI_API_KEY` | Optional. PostHog personal API key that uploads source maps after a manual `update`. See "PostHog error tracking symbols". |
 
 Hosted credentials remain in EAS. If the organization later chooses CI-managed submission credentials, use reviewed file secrets.
 Suggested names are `EXPO_ASC_API_KEY_P8`, `EXPO_ASC_KEY_ID`, `EXPO_ASC_ISSUER_ID`, and `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`.
@@ -294,6 +295,7 @@ The workflow uses these settings:
 | Name | Kind | Use |
 | --- | --- | --- |
 | `EXPO_TOKEN` | Secret | Expo robot token. When it is absent, the run skips with a notice and does not fail. |
+| `POSTHOG_CLI_API_KEY` | Secret | Optional. Uploads each update's Hermes source maps to PostHog. When it is absent, the upload skips with a notice and the run does not fail. |
 | `MOBILE_UPDATES_AUTO` | Variable | Kill switch. `0` stops every automatic publish. Absent or any other value lets it run. |
 The internal-beta leg also needs the repository variable `MOBILE_UPDATES_INTERNAL_BETA=1`. Leave it unset until the production identity (bundle IDs, scheme and HTTPS callback) is approved and set in the EAS `production` environment, because internal-beta builds read that environment.
 
@@ -314,10 +316,86 @@ The script keeps the wrapper's other checks and adds its own:
    The message is the commit subject and short SHA. No runtime override is passed. The fingerprint policy chooses the runtime.
 6. It warns when no finished build on the channel runs the new runtime.
    That means the push changed native configuration. The update reaches no installed app until a new binary ships.
+7. It uploads the Hermes source maps of the update to PostHog (see "PostHog error tracking symbols").
+   A failed upload is a warning. It does not fail the run, because the update is already live.
 
 A change that needs a new native build must not ship as an update. That includes a native module, a config plugin,
 and the native fields in `app.config.ts`. The change gives a new fingerprint, so its update reaches no current binary.
 Build and distribute a new binary for it.
+
+## PostHog error tracking symbols
+
+PostHog shows a readable stack trace only when it has the symbols for the exact code that crashed.
+The app uses PostHog's own tools for this, and nothing else:
+
+- `metro.config.js` uses `getPostHogExpoConfig` from `posthog-react-native/metro`. It puts a chunk ID in each bundle and its source map.
+- `apps/mobile/plugins/withPostHogSymbolUploads.cjs` applies the official `posthog-react-native/expo` config plugin
+  with `uploadNativeSymbols: true`. Gradle and Xcode then upload the Hermes source maps, iOS dSYMs,
+  Android R8 mappings and Android NDK `.so` symbols during a release build.
+- `apps/mobile/scripts/posthog-symbols.cjs` runs `posthog-cli hermes upload` on the `dist/` folder after each `eas update`.
+  `publish-update.cjs` (automatic) and `release.cjs` (manual `update`) call it after the publish.
+- `posthog-cli` is pinned in `apps/mobile/release/toolchain.json` (`posthogCli`). The two workflows must use the same version. `check-release.cjs` checks this.
+- The PostHog project (`459813`) and host (`https://us.posthog.com`) are in `POSTHOG_SYMBOL_UPLOADS` in `apps/mobile/release/policy.cjs`.
+  Do not write them in a second place.
+
+| Symbols | Uploaded by | Key from |
+| --- | --- | --- |
+| Hermes source maps of an OTA update | `publish-update.cjs` or `release.cjs`, after the publish | GitHub secret `POSTHOG_CLI_API_KEY` |
+| Hermes source maps of a binary, iOS dSYMs, Android R8 mapping and NDK symbols | Gradle and Xcode, during the EAS build | EAS secret `POSTHOG_CLI_API_KEY` |
+
+### The secret
+
+There is one secret, `POSTHOG_CLI_API_KEY`: a PostHog **personal** API key (`phx_`), not the `phc_` project key.
+Give it the scopes `error tracking write` and `organization read`, and limit it to project `459813`.
+Tom creates it:
+
+1. In PostHog, open Settings > Personal API keys. Create the key with the two scopes above.
+2. Save it first in 1Password, in the `Private` vault of the `my.1password.com` account.
+3. On `Gilbert09/talyn`, add the GitHub Actions secret `POSTHOG_CLI_API_KEY` to the environments
+   `mobile-updates` (automatic updates), `mobile-preview` and `mobile-production` (manual release).
+   Do not add it at repository level.
+4. In EAS, add `POSTHOG_CLI_API_KEY` with the visibility **Secret** to the EAS environments `preview` and `production`:
+   `eas env:create --name POSTHOG_CLI_API_KEY --environment preview --visibility secret` (then again for `production`).
+   EAS builds run on Expo's machines. They cannot read GitHub secrets.
+5. In PostHog error tracking settings, make sure "Enable exception autocapture" is on. Native crash capture needs it.
+
+### Without the key
+
+Every path keeps working with no key:
+
+- A publish prints a notice and goes on. The update has minified stack traces in PostHog.
+- An EAS build leaves the config plugin out. The `eas-build-post-install` hook prints that the upload is skipped. The build has no upload steps.
+- A development client never uploads.
+- A key that does not start with `phx_` stops an EAS build at once. On a publish it is a warning.
+- A failed upload after a publish is a warning, never a failure, because the update is already live.
+
+The key goes only to the PostHog CLI. The scripts remove it from the environment of every `eas` command.
+On an EAS build, prebuild writes the key, project and host to `apps/mobile/.expo/posthog-cli.env` (mode 0600) for the CLI.
+The CLI reads all three values from one source. The EAS environment has only the key, so the file supplies all three.
+`.gitignore` and `.easignore` both exclude `.expo/`.
+The hook installs `@posthog/cli` globally on the EAS machine. Its install script downloads the pinned binary from PostHog.
+
+### Releases and the native fingerprint
+
+The uploads use the CLI's `event` release mode. A source map is matched by its chunk ID, not by a release.
+Each exception gets its release from the `$app_namespace`, `$app_version` and `$app_build` that the SDK sends.
+The update upload passes the bundle identifier (iOS) or package (Android) and the app version. It passes no build number,
+because one update can reach more than one build.
+
+The upload steps do not change the native fingerprint, so a build with the key takes updates published without it.
+The app config loads `plugins/withPostHogSymbolUploads.cjs`, so a change to that file gives a new fingerprint.
+Put CI and EAS upload logic in `scripts/posthog-symbols.cjs`, which the config does not load.
+
+To try an upload from a local release build, install the CLI (`npm install -g @posthog/cli@<posthogCli>`)
+and export `POSTHOG_CLI_API_KEY` before `expo prebuild`. Without the key, local builds have no upload steps.
+
+### Native crash capture
+
+Preview and production builds set `nativeCrashes` and `androidNdkCrashes` in `src/lib/analytics.ts`.
+`@posthog/react-native-plugin` captures iOS crashes, Android JVM crashes, and Android NDK crashes on Android 12 (API 31) and later.
+An NDK crash is sent on the next launch, so its app version and identity describe that launch.
+Native crashes do not go through `before_send`. The Settings opt-out still stops them: the SDK sends the opt-out to the native side.
+This change and the config plugin change the native fingerprint. Ship a new binary to get native crash capture and native symbols.
 
 The app checks for an update at cold start and when it returns to the foreground, at most every 15 minutes.
 It downloads the update in the background and shows **Update ready** with **Restart**. It never restarts by itself.

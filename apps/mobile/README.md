@@ -137,6 +137,9 @@ Use a Supabase publishable key or legacy anon key. Never use a secret key or ser
 | `EXPO_PUBLIC_TALYN_POSTHOG_KEY` | Optional PostHog project key (`phc_`). With no key, analytics, replay, and error tracking are off. |
 | `EXPO_PUBLIC_TALYN_POSTHOG_HOST` | Optional PostHog ingestion origin. The default is `https://us.i.posthog.com`. |
 
+`POSTHOG_CLI_API_KEY` is a build secret, not a public value, and never enters the app.
+It is a PostHog personal API key (`phx_`) that uploads source maps and native symbols. See the release runbook.
+
 Set `APP_ENV` to `development`, `preview`, or `production`. Development is the default.
 Production configuration fails if any public value is missing. Production requires HTTPS for all three URLs.
 Only development permits HTTP API and Supabase origins for local services.
@@ -506,6 +509,8 @@ The official SDK is `posthog-react-native`, with `@posthog/react-native-plugin` 
 - Touches are autocaptured by component name and test ID only. Text children and accessibility labels are not captured.
 - Session replay masks all text, inputs, images, and sandboxed views. It records no console logs or network requests. It is off in development builds.
 - Exception autocapture runs in preview and production builds. Each exception goes through the shared `exceptionDropReason` and `isConnectivityMessage` rules, like web.
+- Native crash capture (iOS, Android JVM, and Android NDK on API 31 and later) runs in preview and production builds. Native crashes skip `before_send`. The opt-out still stops them.
+- Readable stack traces need uploaded symbols. With the `POSTHOG_CLI_API_KEY` secret, each OTA update uploads its Hermes source maps. Each EAS build uploads its source maps, dSYMs, R8 mapping and NDK symbols. Without the key, uploads skip with a notice. See [PostHog error tracking symbols](../../docs/MOBILE_RELEASE.md#posthog-error-tracking-symbols) for the secret and where to create it.
 - Settings > Account > "Share usage data and session replays" turns it all off. The choice is saved on the device and read before the first event.
 - Apple tracking stays false: there is no cross-app tracking, so there is no ATT prompt.
 - Before store submission, the App Store privacy answers and Play Data safety must declare analytics, diagnostics, and the user ID.

@@ -89,6 +89,12 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/mobile-eas-cli" --no-save --ignore-scripts --package-lock=false eas-cli@27.5.0
           echo "MOBILE_EAS_CLI_PATH=$RUNNER_TEMP/mobile-eas-cli/node_modules/eas-cli/bin/run" >> "$GITHUB_ENV"
+      # An update uploads its Hermes source maps to PostHog. Native builds run on EAS and read their key from the EAS environment.
+      - name: Install the pinned PostHog CLI outside the app
+        if: inputs.action == 'update'
+        run: |
+          npm install --prefix "$RUNNER_TEMP/posthog-cli" --no-save --package-lock=false --no-audit --no-fund @posthog/cli@0.18.12
+          echo "POSTHOG_CLI_PATH=$RUNNER_TEMP/posthog-cli/node_modules/@posthog/cli/run-posthog-cli.js" >> "$GITHUB_ENV"
       - name: Build shared packages
         run: npm run mobile:build:packages
       - name: Check the candidate
@@ -129,6 +135,8 @@ jobs:
           RELEASE_ACTION: ${{ inputs.action }}
           RELEASE_PLATFORM: ${{ inputs.platform }}
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          # Absent: the update publishes and its source maps are skipped with a notice.
+          POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
         run: npm run mobile:release:plan -- "$RELEASE_ACTION" "$MOBILE_RELEASE_PROFILE" "$RELEASE_PLATFORM" --execute
       - name: Remove protected files
         if: always()

@@ -2,6 +2,7 @@ import type { ConfigContext, ExpoConfig } from 'expo/config';
 
 import type { AnalyticsConfig, AppEnvironment, MobileConfig, PurchaseMode } from './src/config';
 import { readReleaseSettings } from './release/policy.cjs';
+import { withPostHogSymbolUploads } from './plugins/withPostHogSymbolUploads.cjs';
 
 type PublicEnvironment = Record<string, string | undefined>;
 
@@ -114,7 +115,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   const mobile = readMobileConfig(process.env, identity.environment, identity.scheme);
   const httpsCallback = mobile?.callbackUrl.startsWith('https:') ? new URL(mobile.callbackUrl) : null;
 
-  return {
+  // PostHog source map and native symbol uploads, on when the build has POSTHOG_CLI_API_KEY (plugins/withPostHogSymbolUploads.cjs).
+  return withPostHogSymbolUploads({
     ...config,
     name: identity.name,
     owner: EAS_OWNER,
@@ -160,5 +162,5 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     experiments: { typedRoutes: true },
     extra: { release: { profile: release.profile, urls: release.urls }, appEnvironment: identity.environment, mobile,
       analytics: readAnalyticsConfig(process.env), eas: { projectId } },
-  };
+  }, { profile: release.profile });
 };

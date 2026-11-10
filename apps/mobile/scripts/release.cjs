@@ -1,7 +1,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync, execFileSync } = require('node:child_process');
-const { profiles, required } = require('../release/policy.cjs');
+const { profiles, required, POSTHOG_SYMBOL_UPLOADS } = require('../release/policy.cjs');
+const { uploadUpdateSourceMaps } = require('./posthog-symbols.cjs');
 
 const root = path.resolve(__dirname, '..');
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -124,9 +125,16 @@ function execute(plan, env, exp) {
   // A certificate in the binary would reject every unsigned update this project publishes.
   if (exp.updates?.codeSigningCertificate || exp.updates?.codeSigningMetadata) throw new Error('Updates are unsigned. Remove update code signing from the app config.');
   // Hosted logs can contain signed URLs. Keep all provider output out of CI logs and artifacts.
-  const result = spawnSync(process.execPath, [executable, ...plan.args], { cwd: root, env, stdio: 'ignore' });
+  // The PostHog key goes only to the PostHog CLI. A native build reads its own key from the EAS environment.
+  const easEnv = { ...env };
+  delete easEnv[POSTHOG_SYMBOL_UPLOADS.keyName];
+  const result = spawnSync(process.execPath, [executable, ...plan.args], { cwd: root, env: easEnv, stdio: 'ignore' });
   if (result.status !== 0) throw new Error('EAS failed. Inspect the restricted EAS dashboard.');
   console.log('EAS operation finished. Record its IDs from the restricted EAS dashboard.');
+  if (plan.action === 'update') {
+    // A failed upload never fails the release: the update is live. Only the first line is printed, never CLI output.
+    for (const { level, message } of uploadUpdateSourceMaps({ env, root, exp, channel: plan.policy.channel })) console.log(`::${level}::${message.split('\n')[0]}`);
+  }
 }
 
 if (require.main === module) Promise.resolve().then(run).catch(() => { console.error('Release blocked. Check configuration, approval evidence, and the release runbook.'); process.exitCode = 1; });
