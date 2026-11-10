@@ -82,13 +82,15 @@ export const hero = {
    * The accent line is typed out, one ending after another, under the fixed
    * lead. The first is the headline: it is what the server renders, what
    * search engines and screen readers get, and where the rotation stops after
-   * one pass. Every entry must finish the lead as a sentence.
+   * one pass. Every entry must finish the lead as a sentence, and fit on one
+   * line on a phone: the line is as tall as its longest entry, so a long one
+   * leaves a gap under the shorter ones.
    */
   titleAccents: [
     "with the laptop closed.",
     "in parallel, in the cloud.",
-    "until the pull request is merged.",
-    "on the plan you already pay for.",
+    "until the PR is merged.",
+    "on your own subscription.",
   ],
   sub: "Run Claude Code and Codex in parallel cloud sandboxes, on the plan you already pay for. Come back to a diff, or to a pull request that is already green.",
   primaryCta: "Download for {platform}",

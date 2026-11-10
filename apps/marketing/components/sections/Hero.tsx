@@ -8,7 +8,8 @@ import { WebAppButton } from "@/components/ui/WebAppButton";
 import { PlatformNote } from "@/components/ui/PlatformNote";
 import { Badge } from "@/components/ui/badge";
 import { GridBackground } from "@/components/ui/GridBackground";
-import { ScreenshotPlaceholder } from "@/components/ui/ScreenshotPlaceholder";
+import { AppFrame } from "@/components/ui/AppFrame";
+import { SessionDemo } from "@/components/mocks/SessionDemo";
 import { TypedRotator } from "@/components/ui/TypedRotator";
 import { hero } from "@/lib/content";
 import { cn } from "@/lib/utils";
@@ -114,7 +115,10 @@ export function Hero() {
           transition={{ duration: 0.9, delay: 0.15, ease: [0.21, 0.47, 0.32, 0.98] }}
           className="relative mx-auto mt-10 max-w-6xl"
         >
-          <ScreenshotPlaceholder shot="session" title="Talyn · Add CSV export" />
+          {/* Plays a session from prompt to merged pull request. */}
+          <AppFrame title="Talyn · Add CSV export">
+            <SessionDemo />
+          </AppFrame>
         </motion.div>
       </div>
     </section>
