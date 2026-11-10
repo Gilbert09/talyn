@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Private connector read: retry and cache (2026-11-10)
+
+From 14:40 to 14:48 UTC, Railway's edge answered 429 to calls from the backend to the fleet control plane. Every session start reads the workspace's private connector, so one 429 failed the start with "Private routes are rate limited".
+
+`sandboxPolicyForWorkspace` now reads the connector through `connectorForPolicy` in `services/selfHosted/privateRoutes.ts`. A throttled read retries twice. It waits `retryAfterMs` or 1 s, each wait capped at 5 s, 10 s in total. Writes never retry. The result, including "no connector" (404), stays in process memory for 60 s. If a fresh read then fails with a throttle, a capacity error, a 5xx or a network error, the entry is used when it is at most 10 minutes old, and the code logs one warning. A 4xx other than 404 is never masked.
+
+`startPrivateConnector`, `replacePrivateRoutes` and `deletePrivateConnector` drop the entry before and after the call. A read that started before a write is not stored (`connectorWriteEpoch`). The `workspaceId` check runs on every use. The routes in `routes/workspaces.ts` and the MCP reads still call `getPrivateConnector` live.
+
 ## DB pool diagnostics (2026-11-10)
 
 On 2026-11-10 the 20-connection pool filled between 10:39 and 10:54 UTC. The loops wedged, every request waited, and `dbWatchdog` restarted the process. No query logged a statement timeout, and nothing could say what held the connections. Now the backend keeps an always-on in-flight registry (`db/inflight.ts`): each awaited query until it settles (operation and table only, never values), each open owner-scope transaction (labelled `METHOD /path`, no query string) and each advisory-lock transaction (by lock name). `instrumentEgress` now also wraps `begin` and `savepoint`, because postgres-js gives each transaction its own `sql` object. Before this, no query inside a transaction passed the meter, so the Debug panel's DB tiles now count request queries too. `services/dbInflightReporter.ts` runs every 15 s. It logs `[db-inflight]` lines for entries open over 30 s (then at most once a minute each, 15 lines and a "+N more" line per tick), and it warns when pool demand (pool queries plus open transactions) is above `DB_POOL_MAX`. The watchdog logs a summary on each failed probe and dumps the 15 oldest entries of each kind before it exits. A note on the warning: postgres-js can pipeline pool queries on a busy connection, so demand above the max is a strong sign of queueing, not an exact count.
