@@ -1,8 +1,6 @@
 import { Router } from 'express';
 import { and, desc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
-import { getDbClient, runWithoutScope } from '../db/client.js';
-import { withOwnerScope } from '../db/scope.js';
-import { continueWithoutOwnerScope } from '../middleware/ownerScope.js';
+import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable, workbenches as workbenchesTable } from '../db/schema.js';
 import { upsertFromBatchResult } from '../services/prCache.js';
 import { publicAutoMergeState, setAutoKeepMergeable } from '../services/prAutoKeep.js';
@@ -662,66 +660,61 @@ export function pullRequestRoutes(): Router {
       });
     }
 
-    // GitHub can take seconds. Commit the owner scope first, so the wait does
-    // not hold a pooled connection. Every write below is keyed by `row`, whose
-    // ownership is proved above.
-    const ownerId = assertUser(req).id;
-    return continueWithoutOwnerScope(req, async () => {
-      let fresh: Awaited<ReturnType<typeof batchPullRequests>>[number]['pr'] = null;
-      try {
-        const results = await batchPullRequests({
-          workspaceId: row.workspaceId,
-          owner: row.owner,
-          repo: row.repo,
-          branches: [summaryHead],
-          // Carry the PR number so the fetch resolves `isRequired` per check —
-          // lets the detail pill + Checks tab tell required from non-required
-          // failures instead of guessing from mergeStateStatus.
-          numbers: [row.number],
-        });
-        fresh = results[0]?.pr ?? null;
-      } catch (err) {
-        // Network blip, token revoked, etc — caller still gets the
-        // cached row.
-        console.warn(`[pull-requests] fresh detail fetch failed for ${row.id}:`, err);
-      }
+    let fresh: Awaited<ReturnType<typeof batchPullRequests>>[number]['pr'] = null;
+    try {
+      const results = await batchPullRequests({
+        workspaceId: row.workspaceId,
+        owner: row.owner,
+        repo: row.repo,
+        branches: [summaryHead],
+        // Carry the PR number so the fetch resolves `isRequired` per check —
+        // lets the detail pill + Checks tab tell required from non-required
+        // failures instead of guessing from mergeStateStatus.
+        numbers: [row.number],
+      });
+      fresh = results[0]?.pr ?? null;
+    } catch (err) {
+      // Network blip, token revoked, etc — caller still gets the
+      // cached row.
+      console.warn(`[pull-requests] fresh detail fetch failed for ${row.id}:`, err);
+    }
 
-      let outRow = row;
-      if (!fresh && row.state === 'open') {
-        // GraphQL only returns OPEN PRs. A null result on a row still marked
-        // 'open' means it merged/closed upstream — reconcile so the row (and
-        // its tab) stops claiming it's open.
-        const reconciled = await reconcileTerminalState(row);
-        if (reconciled) outRow = reconciled;
-      } else if (fresh && freshDiffersMaterially(row, fresh)) {
-        // Persist the authoritative live fetch when it materially differs from
-        // the cache. Otherwise the cached summary only updates on the next
-        // background poll — so a base-branch retarget (which flips a check's
-        // required-ness) or a stale-check correction can show wrong until then,
-        // even though we just fetched the truth to render `fresh`. The upsert
-        // also broadcasts pull_request:updated, fixing the list rows too. Guarded
-        // so an unchanged open is a pure read (no write, no broadcast, flat egress).
-        const result = await upsertFromBatchResult({
-          workspaceId: row.workspaceId,
-          repositoryId: row.repositoryId,
-          taskId: row.taskId,
-          summary: fresh,
-          existingId: row.id,
-        });
-        const refreshed = await getDbClient()
-          .select(DETAIL_COLUMNS)
-          .from(pullRequestsTable)
-          .where(eq(pullRequestsTable.id, result.rowId))
-          .limit(1);
-        if (refreshed[0]) outRow = refreshed[0];
-      }
+    let outRow = row;
+    if (!fresh && row.state === 'open') {
+      // GraphQL only returns OPEN PRs. A null result on a row still marked
+      // 'open' means it merged/closed upstream — reconcile so the row (and
+      // its tab) stops claiming it's open.
+      const reconciled = await reconcileTerminalState(row);
+      if (reconciled) outRow = reconciled;
+    } else if (fresh && freshDiffersMaterially(row, fresh)) {
+      // Persist the authoritative live fetch when it materially differs from
+      // the cache. Otherwise the cached summary only updates on the next
+      // background poll — so a base-branch retarget (which flips a check's
+      // required-ness) or a stale-check correction can show wrong until then,
+      // even though we just fetched the truth to render `fresh`. The upsert
+      // also broadcasts pull_request:updated, fixing the list rows too. Guarded
+      // so an unchanged open is a pure read (no write, no broadcast, flat egress).
+      const result = await upsertFromBatchResult({
+        workspaceId: row.workspaceId,
+        repositoryId: row.repositoryId,
+        taskId: row.taskId,
+        summary: fresh,
+        existingId: row.id,
+      });
+      const refreshed = await db
+        .select(DETAIL_COLUMNS)
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, result.rowId))
+        .limit(1);
+      if (refreshed[0]) outRow = refreshed[0];
+    }
 
-      const data = await withOwnerScope(
-        ownerId,
-        async (scoped) => ({ row: await publicPrRow(outRow, scoped), fresh }),
-        'GET /pull-requests/:id response'
-      );
-      res.json({ success: true, data });
+    res.json({
+      success: true,
+      data: {
+        row: await publicPrRow(outRow, db),
+        fresh,
+      },
     });
   });
 
@@ -851,30 +844,22 @@ export function pullRequestRoutes(): Router {
 
     // A PR GraphQL no longer returns is not open: the service reconciles its
     // terminal state via REST so a manual refresh can recover a stuck row
-    // (e.g. a merged PR still showing as closed/open). Off the owner scope, as
-    // in `GET /:id`: the refresh is keyed by `row`, whose ownership is proved.
-    const ownerId = assertUser(req).id;
-    const outcome = await continueWithoutOwnerScope(req, () => refreshPullRequest(row));
+    // (e.g. a merged PR still showing as closed/open).
+    const outcome = await refreshPullRequest(row);
     if (outcome.kind === 'not_found') {
       return res
         .status(404)
         .json({ success: false, error: 'PR not found on GitHub or has no head branch in cache' });
     }
-    const data = await runWithoutScope(() =>
-      withOwnerScope(
-        ownerId,
-        async (scoped) => {
-          const fresh = await scoped
-            .select(DETAIL_COLUMNS)
-            .from(pullRequestsTable)
-            .where(eq(pullRequestsTable.id, outcome.kind === 'refreshed' ? outcome.rowId : row.id))
-            .limit(1);
-          return publicPrRow(fresh[0], scoped);
-        },
-        'POST /pull-requests/:id/refresh response'
-      )
-    );
-    res.json({ success: true, data });
+    const fresh = await db
+      .select(DETAIL_COLUMNS)
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, outcome.kind === 'refreshed' ? outcome.rowId : row.id))
+      .limit(1);
+    res.json({
+      success: true,
+      data: await publicPrRow(fresh[0], db),
+    });
   });
 
   // Fire the standard "get this PR mergeable" cloud run — the same action as

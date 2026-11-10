@@ -1,5 +1,4 @@
 import { runWithoutScope } from '../db/client.js';
-import { continueWithoutOwnerScope } from '../middleware/ownerScope.js';
 import { getRepositoryBake, putRepositoryBake } from '../services/workbenches/setupLayers.js';
 import { userMayUseWorkbenches } from '../services/workbenches/access.js';
 import { detectRepoPreview, getPreviewRepository, mergePreview, previewResponse, validatePreviewChoice } from '../services/preview/repoPreview.js';
@@ -398,12 +397,7 @@ export function repositoryRoutes(): Router {
   // and a 200 there reads as "nothing new". A partial one reports its count.
   router.post('/poll', async (req, res) => {
     try {
-      // The poll runs on the pool. Commit the owner scope so it does not sit
-      // idle in transaction while the poll waits on GitHub.
-      const ownerId = assertUser(req).id;
-      const outcome = await continueWithoutOwnerScope(req, () =>
-        prMonitorService.forcePollForOwner(ownerId, { untilListReady: true })
-      );
+      const outcome = await prMonitorService.forcePollForOwner(assertUser(req).id, { untilListReady: true });
       if (!outcome) {
         res.json({
           success: true,
