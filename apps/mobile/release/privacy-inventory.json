@@ -1,6 +1,6 @@
 {
   "status": "Engineering inventory; privacy owner must approve store answers and retention before beta.",
-  "lockfileSha256": "461acf798b85d1e8bf411cfbe990ca934eb0a836a5924a0e3c82f110924260cc",
+  "lockfileSha256": "24bbc6bd7561ed2feea6aefb3f6ff1eeee6533a9af13afc73c0c0d2ee9d12811",
   "mobileDependencies": {
     "@expo-google-fonts/inter": "^0.4.2",
     "@expo-google-fonts/jetbrains-mono": "^0.4.1",

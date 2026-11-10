@@ -1,0 +1,24 @@
+diff --git a/node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift b/node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift
+--- a/node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift
++++ b/node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI/Runtime/Values/JavaScriptObject.swift
+@@ -941,11 +941,19 @@ private func withEncodedValue(
+     }
+     // The runtime can't be deallocated during a call on its JavaScript thread, so it's borrowed without
+     // a retain.
++    // Talyn patch: the Swift compiler in Xcode 26.3 rejects capturing `slot` here ("sending 'slot' risks
++    // causing data races"). The closure runs synchronously on this thread, so a sendable box is safe.
++    let boxed = TalynUncheckedSendable(value: slot)
+     try runtime._withUnsafeGuaranteedRef { runtime in
+       try JavaScriptActor.assumeIsolated {
+-        try encode(JavaScriptValue.Slot(slot), runtime)
++        try encode(JavaScriptValue.Slot(boxed.value), runtime)
+       }
+     }
+     body(slot.pointee)
+   }
+ }
++
++/// Talyn patch: carries a pointer into a closure the caller knows runs synchronously.
++private struct TalynUncheckedSendable<Value>: @unchecked Sendable {
++  let value: Value
++}
