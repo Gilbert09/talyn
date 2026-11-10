@@ -199,6 +199,15 @@ export function SessionDemo() {
   const merged = at(CUE.merged);
   const green = at(CUE.tests);
 
+  // Phones show one pane at a time, like the mobile app: the chat while the
+  // agent starts, the diff while it writes the test and runs it, the chat
+  // again for "Create a pull request", then the pull request to the end.
+  const pane: Pane = prTab
+    ? "pr"
+    : at(CUE.testWrite) && !at(CUE.done)
+      ? "changes"
+      : "chat";
+
   const rowState: SessionRow["state"] = merged
     ? "merged"
     : prTab
@@ -213,7 +222,7 @@ export function SessionDemo() {
   return (
     <div
       ref={ref}
-      className="relative flex h-[640px] bg-white text-left md:h-[460px] lg:h-[480px]"
+      className="relative flex h-[540px] bg-white text-left md:h-[460px] lg:h-[480px]"
     >
       <AppSidebar active={at(CUE.send) ? SESSION_NAME : ""} rows={rows} />
 
@@ -233,7 +242,14 @@ export function SessionDemo() {
             <HeaderAction t={t} />
           </div>
 
-          <div className="flex min-h-0 flex-1 flex-col justify-end gap-2.5 overflow-hidden p-3">
+          <PhoneTabs pane={pane} added={added} done={done} onReplay={replay} />
+
+          <div
+            className={cn(
+              "flex min-h-0 flex-1 flex-col justify-end gap-2.5 overflow-hidden p-3",
+              pane !== "chat" && "hidden md:flex"
+            )}
+          >
             {!at(CUE.send) && (
               <p className="m-auto text-center text-[11px] text-ink-400">
                 Sandbox ready · sundial/web
@@ -282,11 +298,25 @@ export function SessionDemo() {
             )}
           </div>
 
+          {pane === "changes" && (
+            <div key="changes" className={cn("flex min-h-0 flex-1 flex-col md:hidden", appear)}>
+              <ChangesPanel files={files} showDiff />
+              <div className="border-t border-line bg-[#1e1b17] px-3 py-2 font-mono text-[10px] leading-relaxed">
+                <TerminalLines t={t} />
+              </div>
+            </div>
+          )}
+          {pane === "pr" && (
+            <div key="pr" className="flex min-h-0 flex-1 flex-col md:hidden">
+              <PullRequestPanel t={t} merged={merged} green={green} />
+            </div>
+          )}
+
           <DemoComposer value={typed} typing={typing} sending={at(CUE.send - 250) && !at(CUE.send)} />
         </div>
 
         {/* right panel */}
-        <div className="flex h-[260px] w-full min-w-0 shrink-0 flex-col border-t border-line md:h-auto md:w-[44%] md:border-t-0 lg:w-[42%]">
+        <div className="hidden min-w-0 shrink-0 flex-col md:flex md:w-[44%] lg:w-[42%]">
           <div className="flex items-center gap-0.5 overflow-hidden border-b border-line px-2 py-1.5">
             {PANEL_TABS.map((tab) => {
               const active = prTab ? tab === "Pull request" : tab === "Changes";
@@ -315,7 +345,7 @@ export function SessionDemo() {
           )}
 
           {/* terminal dock */}
-          <div className="hidden border-t border-line md:block">
+          <div className="border-t border-line">
             <div className="flex items-center gap-0.5 px-2 py-1">
               {DOCK_TABS.map((tab) => (
                 <span
@@ -332,21 +362,7 @@ export function SessionDemo() {
               ))}
             </div>
             <div className="h-[62px] bg-[#1e1b17] px-3 py-2 font-mono text-[10px] leading-relaxed">
-              {at(CUE.bash) ? (
-                <>
-                  <div className="text-paper-100/80">$ npm test -- reports</div>
-                  {at(CUE.bashDone) ? (
-                    <>
-                      <div className="text-status-green">✓ export.test.ts (6 tests)</div>
-                      <div className="text-paper-300/60">Tests  6 passed</div>
-                    </>
-                  ) : (
-                    <div className="text-paper-300/60">running…</div>
-                  )}
-                </>
-              ) : (
-                <div className="text-paper-300/60">$</div>
-              )}
+              <TerminalLines t={t} />
             </div>
           </div>
         </div>
@@ -356,12 +372,82 @@ export function SessionDemo() {
         <button
           type="button"
           onClick={replay}
-          className="absolute bottom-3 right-3 z-10 flex items-center gap-1.5 rounded-full border border-line-strong bg-white/90 px-3 py-1.5 text-[11px] font-medium text-ink-600 shadow-soft backdrop-blur transition-colors hover:text-ink"
+          className="absolute bottom-3 right-3 z-10 hidden items-center gap-1.5 rounded-full border border-line-strong bg-white/90 px-3 py-1.5 text-[11px] font-medium text-ink-600 shadow-soft backdrop-blur transition-colors hover:text-ink md:flex"
         >
           <RotateCcw className="h-3 w-3" /> Replay
         </button>
       )}
     </div>
+  );
+}
+
+type Pane = "chat" | "changes" | "pr";
+
+/**
+ * The phone's tab row. The tabs follow the story, they are not buttons. Once
+ * the film has finished, Replay sits at the end of the row, where it covers
+ * nothing (the desktop puts it in the corner of the frame).
+ */
+function PhoneTabs({
+  pane,
+  added,
+  done,
+  onReplay,
+}: {
+  pane: Pane;
+  added: number;
+  done: boolean;
+  onReplay: () => void;
+}) {
+  const tabs: Array<{ id: Pane; label: string }> = [
+    { id: "chat", label: "Chat" },
+    { id: "changes", label: "Changes" },
+    { id: "pr", label: "Pull request" },
+  ];
+  return (
+    <div className="flex shrink-0 items-center gap-1 border-b border-line px-2 py-1.5 md:hidden">
+      {tabs.map((tab) => (
+        <span
+          key={tab.id}
+          className={cn(
+            "rounded-md px-2.5 py-1 text-[11px] transition-colors duration-300",
+            pane === tab.id ? "bg-paper-200 font-medium text-ink" : "text-ink-500"
+          )}
+        >
+          {tab.label}
+          {tab.id === "changes" && added > 0 && (
+            <span className="ml-1 text-status-green">+{added}</span>
+          )}
+        </span>
+      ))}
+      {done && !reducedMotion() && (
+        <button
+          type="button"
+          onClick={onReplay}
+          aria-label="Replay"
+          className="ml-auto flex h-6 w-6 items-center justify-center rounded-full border border-line text-ink-500"
+        >
+          <RotateCcw className="h-3 w-3" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function TerminalLines({ t }: { t: number }) {
+  if (t < CUE.bash) return <div className="text-paper-300/60">$</div>;
+  return (
+    <>
+      <div className="text-paper-100/80">$ npm test -- reports</div>
+      {t >= CUE.bashDone ? (
+        <>
+          <div className="text-status-green">✓ export.test.ts (6 tests)</div>
+          <div className="text-paper-300/60">Tests  6 passed</div>
+        </>
+      ) : (
+        <div className="text-paper-300/60">running…</div>
+      )}
+    </>
   );
 }
 
@@ -570,9 +656,7 @@ function PullRequestPanel({
         })}
       </div>
 
-      {/* Left out on phones: the panel is a short strip there, and the
-          checks are the part that matters. */}
-      <div className="hidden items-start gap-2 text-[10.5px] leading-relaxed text-ink-500 md:flex">
+      <div className="flex items-start gap-2 text-[10.5px] leading-relaxed text-ink-500">
         <CircleDot className="mt-0.5 h-3 w-3 shrink-0 text-ink-300" />
         <span>
           Adds an Export CSV button above the reports table. Columns keep their
