@@ -38,6 +38,7 @@ export * from './promptTemplates.js';
 // Saved PR filters — the one matcher behind the PR list's named filter chips,
 // shared so the desktop and web forks can't disagree about what a filter shows.
 export * from './prFilters.js';
+export * from './pullRequestUrl.js';
 
 // Review priority — the ordering behind the Reviews tab's "Priority" sort.
 // Shared for the same reason as prFilters, and more so: two forks disagreeing

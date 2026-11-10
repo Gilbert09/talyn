@@ -81,7 +81,7 @@ export function GitHubPageShell({
   activeView,
   search,
   onSearch,
-  searchPlaceholder = 'Search title, repo or #number… (⌘F)',
+  searchPlaceholder = 'Search title, repo, #number or URL… (⌘F)',
   filters,
   filtersSecondary,
   headerActions,
