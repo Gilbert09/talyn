@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button, ui } from '../components/UI';
 import { ShellScreen, useShellColors } from '../components/ShellScreen';
+import { BackendHealthFrame } from '../components/BackendHealthBanner';
 import { BootScreen } from '../components/BootScreen';
 import { Status } from '../components/AuthControls';
 import { rememberIntent } from '../navigation/intents';
@@ -60,7 +61,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     <Button title="Try again" onPress={() => setRetry((value) => value + 1)} />
   </ShellScreen>;
   if (!runtime) return <BootScreen label="Restoring sign-in" />;
-  return <RuntimeContext.Provider value={runtime}><WorkspaceBinding /><NotificationBinding />{children}</RuntimeContext.Provider>;
+  return <RuntimeContext.Provider value={runtime}><WorkspaceBinding /><NotificationBinding /><BackendHealthFrame health={runtime.health}>{children}</BackendHealthFrame></RuntimeContext.Provider>;
 }
 
 export function useMobileRuntime() {

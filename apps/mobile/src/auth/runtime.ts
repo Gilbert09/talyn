@@ -11,6 +11,7 @@ import { AppState } from 'react-native';
 import type { MobileConfig } from '../config';
 import { createNativeSocket } from '../native/socket';
 import { createNativeLifecycle } from '../native/lifecycle';
+import { BackendHealth } from '../workflow/backendHealth';
 import { WorkspaceController } from '../workspaces/controller';
 import { ContextController, contextKey } from '../workspaces/context';
 import { clearIntent } from '../navigation/intents';
@@ -71,9 +72,15 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     global: { fetch: createAuthFetch(globalThis.fetch, () => rejectRefresh()) },
   });
   const initialized = supabase.auth.initialize();
+  const reachable = () => {
+    const state = lifecycle.getSnapshot();
+    return state.activity === 'active' && state.reachability !== 'offline';
+  };
+  const health = new BackendHealth(`${config.apiOrigin}/health`, { fetch: (url, init) => globalThis.fetch(url, init), canProbe: reachable });
   const bindClient = () => configureApiClient({
     baseUrl: config.apiOrigin, clientVersion: `mobile/${version}`, runtime: { lifecycle, createWebSocket: createNativeSocket },
     getAccessToken: () => auth.getAccessToken(), recoverSession: () => auth.recoverSession(),
+    onRequestError: (failure) => health.report(failure),
   });
   const workflow = new WorkflowStore(lifecycle);
   const auth = new AuthController({
@@ -116,6 +123,13 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     auth.setActive(state.activity === 'active' && state.reachability !== 'offline');
   };
   const unbind = lifecycle.subscribe(active);
+  // Back in the foreground or back online: check at once rather than wait out the probe backoff.
+  let wasReachable = reachable();
+  const unbindHealth = lifecycle.subscribe(() => {
+    const next = reachable();
+    if (next && !wasReachable) health.checkNow();
+    wasReachable = next;
+  });
   let pushActive = false;
   const unbindPushLifecycle = lifecycle.subscribe(() => {
     const state = lifecycle.getSnapshot();
@@ -138,14 +152,14 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
   const unbindWorkspace = workspace.subscribe(bindWorkflow);
   let signingOut: Promise<void> | null = null;
   return {
-    auth, workspace, context, lifecycle, workflow, notifications, account: new AccountActions(auth, users.wipeMe),
+    auth, workspace, context, lifecycle, workflow, notifications, health, account: new AccountActions(auth, users.wipeMe),
     signOut() {
       signingOut ??= notifications.logout().finally(() => auth.signOut()).finally(() => { signingOut = null; });
       return signingOut;
     },
     async start() { await auth.restore(); active(); },
     dispose() {
-      workflow.dispose(); unbindAuth(); unbindWorkspace();
+      workflow.dispose(); unbindAuth(); unbindWorkspace(); unbindHealth(); health.dispose();
       notifications.dispose(); unbindNotifications(); unbindPushLifecycle();
       previousStorageDrain = storage.seal();
       auth.dispose();
