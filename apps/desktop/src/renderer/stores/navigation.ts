@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import type { Workbench } from '@talyn/shared';
-import { setPanelNavigator, useWorkspaceStore, type ActivePanel, type SettingsSection } from './workspace';
+import { contextsEqual, setPanelNavigator, useWorkspaceStore, type AppContext, type ActivePanel, type SettingsSection } from './workspace';
 import { useWorkbenchStore } from './workbenches';
+import { findSpace, useSpacesStore } from './spaces';
 
 /**
  * Where the app is: one route, a short back/forward history, and the last
@@ -162,10 +163,36 @@ export function routeForPanel(
   }
 }
 
+/** A place in history: the route and the context (Personal or a space) it showed in. */
+export interface HistoryEntry {
+  route: Route;
+  context: AppContext;
+}
+
+function contextNow(): AppContext {
+  const ws = useWorkspaceStore.getState();
+  return ws.currentContext.kind === 'personal'
+    ? { kind: 'personal', workspaceId: ws.currentContext.workspaceId ?? ws.currentWorkspaceId }
+    : ws.currentContext;
+}
+
+/**
+ * Back and forward return to the context an entry showed in. For example, a
+ * session that moved the app to its space goes back to the PR list in the
+ * first context. Only with Spaces on, and only to a context that still exists.
+ */
+function restoreContext(context: AppContext): void {
+  const ws = useWorkspaceStore.getState();
+  if (ws.features?.spaces !== true || contextsEqual(contextNow(), context)) return;
+  if (context.kind === 'space' && !findSpace(useSpacesStore.getState().teams, context.spaceId)) return;
+  if (context.kind === 'personal' && !(ws.workspaces ?? []).some((w) => w.id === context.workspaceId)) return;
+  ws.setContext(context);
+}
+
 interface NavigationState {
   route: Route;
-  backStack: Route[];
-  forwardStack: Route[];
+  backStack: HistoryEntry[];
+  forwardStack: HistoryEntry[];
   /** The workbench open most recently, for "back to workbenches". */
   lastWorkbenchId: string | null;
   paletteOpen: boolean;
@@ -233,7 +260,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       set((s) => ({
         route,
         lastWorkbenchId,
-        backStack: [...s.backStack, cur].slice(-HISTORY_LIMIT),
+        backStack: [...s.backStack, { route: cur, context: contextNow() }].slice(-HISTORY_LIMIT),
         forwardStack: [],
       }));
     }
@@ -243,11 +270,13 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   back: () => {
     const { backStack, route } = get();
     if (backStack.length === 0) return;
-    const prev = backStack[backStack.length - 1];
+    const { route: prev, context } = backStack[backStack.length - 1];
+    const here: HistoryEntry = { route, context: contextNow() };
+    restoreContext(context);
     set((s) => ({
       route: prev,
       backStack: s.backStack.slice(0, -1),
-      forwardStack: [route, ...s.forwardStack].slice(0, HISTORY_LIMIT),
+      forwardStack: [here, ...s.forwardStack].slice(0, HISTORY_LIMIT),
       lastWorkbenchId: prev.view === 'workbench' ? prev.id : s.lastWorkbenchId,
     }));
     applyRoute(prev);
@@ -256,11 +285,13 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   forward: () => {
     const { forwardStack, route } = get();
     if (forwardStack.length === 0) return;
-    const next = forwardStack[0];
+    const { route: next, context } = forwardStack[0];
+    const here: HistoryEntry = { route, context: contextNow() };
+    restoreContext(context);
     set((s) => ({
       route: next,
       forwardStack: s.forwardStack.slice(1),
-      backStack: [...s.backStack, route].slice(-HISTORY_LIMIT),
+      backStack: [...s.backStack, here].slice(-HISTORY_LIMIT),
       lastWorkbenchId: next.view === 'workbench' ? next.id : s.lastWorkbenchId,
     }));
     applyRoute(next);

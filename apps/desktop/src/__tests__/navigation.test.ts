@@ -66,11 +66,11 @@ describe('navigation store', () => {
     const s = () => nav.useNavigationStore.getState();
     s().navigate({ view: 'prs', tab: 'reviews' });
     s().navigate({ view: 'history' });
-    expect(s().backStack).toEqual([{ view: 'home' }, { view: 'prs', tab: 'reviews' }]);
+    expect(s().backStack.map((e) => e.route)).toEqual([{ view: 'home' }, { view: 'prs', tab: 'reviews' }]);
 
     s().back();
     expect(s().route).toEqual({ view: 'prs', tab: 'reviews' });
-    expect(s().forwardStack).toEqual([{ view: 'history' }]);
+    expect(s().forwardStack.map((e) => e.route)).toEqual([{ view: 'history' }]);
     s().back();
     expect(s().route).toEqual({ view: 'home' });
     s().back();
@@ -106,7 +106,7 @@ describe('navigation store', () => {
     s().navigate({ view: 'history' });
     s().navigate({ view: 'prs', tab: 'my_prs' }, { replace: true });
     expect(s().route).toEqual({ view: 'prs', tab: 'my_prs' });
-    expect(s().backStack).toEqual([{ view: 'home' }]);
+    expect(s().backStack.map((e) => e.route)).toEqual([{ view: 'home' }]);
   });
 
   it('caps the back stack', () => {
@@ -206,7 +206,7 @@ describe('navigation store', () => {
       seedWorkbenches(wbs, [wb('a'), wb('b')]);
       wbs.useWorkbenchStore.getState().selectWorkbench('b');
       expect(nav.useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'b' });
-      expect(nav.useNavigationStore.getState().backStack).toEqual([{ view: 'home' }]);
+      expect(nav.useNavigationStore.getState().backStack.map((e) => e.route)).toEqual([{ view: 'home' }]);
     });
 
     it('selectWorkbench(null) on a workbench route goes home without a history entry', () => {
@@ -215,7 +215,7 @@ describe('navigation store', () => {
       nav.useNavigationStore.getState().navigate({ view: 'workbench', id: 'a' });
       wbs.useWorkbenchStore.getState().selectWorkbench(null);
       expect(nav.useNavigationStore.getState().route).toEqual({ view: 'home' });
-      expect(nav.useNavigationStore.getState().backStack).toEqual([{ view: 'home' }]);
+      expect(nav.useNavigationStore.getState().backStack.map((e) => e.route)).toEqual([{ view: 'home' }]);
     });
 
     it('a workspace switch does not bounce home before the new list loads', () => {

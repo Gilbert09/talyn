@@ -5,6 +5,7 @@ import { useRouteUrlSync } from '../hooks/useRouteUrlSync';
 import { installNavigation, useNavigationStore, SETTINGS_SECTIONS, type Route } from '../stores/navigation';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useWorkbenchStore } from '../stores/workbenches';
+import { useSpacesStore } from '../stores/spaces';
 import { PANEL_PATHS, panelForPath, pathForRoute, routeForPath } from '../lib/routes';
 import type { ActivePanel } from '../lib/panels';
 
@@ -36,7 +37,7 @@ beforeEach(() => {
     backStack: [],
     forwardStack: [],
   });
-  useWorkspaceStore.setState({ activePanel: 'workbenches', settingsSection: 'workspace' });
+  useWorkspaceStore.setState({ activePanel: 'workbenches', settingsSection: 'workspace', features: null });
   currentPath = '';
 });
 afterEach(cleanup);
@@ -96,6 +97,35 @@ describe('route URL sync', () => {
     act(() => move(1));
     expect(currentPath).toBe('/s/one');
     expect(useWorkbenchStore.getState().selectedWorkbenchId).toBe('one');
+  });
+
+  it('keeps the app history in step with browser back and forward', () => {
+    mount('/prs');
+    go({ view: 'workbench', id: 'one' });
+    act(() => move(-1));
+    expect(useNavigationStore.getState().backStack).toEqual([]);
+    expect(useNavigationStore.getState().forwardStack.map((e) => e.route)).toEqual([{ view: 'workbench', id: 'one' }]);
+    act(() => move(1));
+    expect(useNavigationStore.getState().backStack.map((e) => e.route)).toEqual([{ view: 'prs', tab: 'my_prs' }]);
+    expect(useNavigationStore.getState().forwardStack).toEqual([]);
+  });
+
+  it('returns to the old space on browser back from a session that moved the app', () => {
+    useWorkspaceStore.setState({
+      currentWorkspaceId: 'ws1',
+      currentContext: { kind: 'personal', workspaceId: 'ws1' },
+      workspaces: [{ id: 'ws1', name: 'ws1' } as never],
+      features: { spaces: true } as never,
+    });
+    useSpacesStore.setState({ teams: [{ id: 't1', spaces: [{ id: 's1' }] } as never] });
+    mount('/prs');
+    go({ view: 'workbench', id: 'one' });
+    act(() => useWorkspaceStore.getState().setContext({ kind: 'space', spaceId: 's1' }));
+    act(() => move(-1));
+    expect(currentPath).toBe('/prs');
+    expect(useWorkspaceStore.getState().currentContext).toEqual({ kind: 'personal', workspaceId: 'ws1' });
+    act(() => move(1));
+    expect(useWorkspaceStore.getState().currentContext).toEqual({ kind: 'space', spaceId: 's1' });
   });
 
   it('updates the URL for app back and forward', () => {
