@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import { ArrowRight } from "lucide-react";
 import { DownloadButton, isMobileDevice } from "@/components/ui/DownloadButton";
 import { WebAppButton } from "@/components/ui/WebAppButton";
 import { PlatformNote } from "@/components/ui/PlatformNote";
@@ -35,7 +36,19 @@ export function Hero() {
           className="mx-auto max-w-3xl text-center"
         >
           <div className="mb-6 flex justify-center">
-            <Badge dot>{hero.badge}</Badge>
+            {hero.announcement ? (
+              <a
+                href={hero.announcement.href}
+                className="transition-opacity hover:opacity-80"
+              >
+                <Badge dot>
+                  {hero.announcement.label}
+                  <ArrowRight className="h-3 w-3" />
+                </Badge>
+              </a>
+            ) : (
+              <Badge dot>{hero.badge}</Badge>
+            )}
           </div>
 
           {/* Each part on its own line so a free-flowing wrap cannot break

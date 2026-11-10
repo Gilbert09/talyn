@@ -1,8 +1,8 @@
 ---
 title: "Talyn vs T3 Code"
-description: "T3 Code is a free, MIT-licensed control surface for the agent CLIs already installed on your machine. Talyn runs the work on its own hardware when you are not there. The difference is not features: it is who has to be present."
+description: "T3 Code is a free, MIT-licensed control surface for the agent CLIs already installed on your machine. Talyn runs Claude Code and Codex sessions in parallel cloud sandboxes on your own subscription, so the work goes on with your laptop closed."
 competitor: "T3 Code"
-category: "PR mission control"
+category: "Cloud coding agents"
 navLabel: "vs T3 Code"
 verdict: "You want to drive agents on your own machines: six harnesses, six git hosts, your own hardware, no vendor in the middle. It costs nothing, and you are happy to be the one pressing the button."
 updated: "2026-09-29"
@@ -24,16 +24,17 @@ sources:
   - label: "T3 Code docs: remote access"
     url: "https://github.com/pingdotgg/t3code/blob/main/docs/user/remote-access.md"
 related: ["conductor", "cursor-background-agents", "devin"]
-relatedFeatures: ["merge-queue", "agents", "workflows"]
+relatedFeatures: ["sessions", "merge-queue", "workflows"]
 ---
 
-This is the closest thing to Talyn that exists, and it is very good. It is also
-free, MIT-licensed, and shipping faster than we are. So let us do the useful
-thing and find the actual difference, because it is not a feature list.
+This is one of the closest things to Talyn that exists, and it is very good. It
+is also free, MIT-licensed, and shipping faster than we are. Both give each
+task its own agent on its own branch. The useful question is where that agent
+runs.
 
 **T3 Code is a control surface for agents running on your machines. Talyn runs
-the work on its own machines while you are not there.** Everything below falls
-out of that.
+each session in its own cloud sandbox, so the work goes on while you are not
+there.** Most of what follows comes from that.
 
 ## What T3 Code is
 
@@ -57,13 +58,13 @@ That number is theirs and carries no source, so take it as they present it.
 
 ## Where they are straightforwardly better
 
-Not a courtesy section. These are real and several of them we have no answer
-to.
+These are real, and several of them we have no answer to.
 
 - **Six harnesses to our two.** Claude Code, Codex, Cursor, Grok Build,
   OpenCode and Antigravity, with model switching mid-thread and a shift-click
   that fans one prompt out to several models at once, each in its own worktree.
-  Talyn runs Claude and Codex, plus PostHog Code.
+  Talyn runs Claude Code and Codex, and PR fixes and loops can also run on
+  PostHog Code.
 - **Six git hosts to our one.** GitHub, GitLab, Forgejo, Gitea, Bitbucket and
   Azure DevOps. Talyn is GitHub only. If you are not on GitHub, this comparison
   is already over.
@@ -71,8 +72,8 @@ to.
   branch rules and GitHub's own merge queue. Talyn drains stacks bottom-up but
   does not help you build one.
 - **Real mobile apps** on iOS and Android: start a run, browse files, use a
-  terminal, home-screen quota widgets. Talyn has a browser app and nothing
-  native.
+  terminal, home-screen quota widgets. Talyn has a browser app, and its mobile
+  app is not public yet.
 - **It is free and it is yours.** MIT, fork it, ship your own build. Talyn is
   $40 a month for the full allowance, and closed.
 - **Quota pooling and multi-machine load balancing** across several provider
@@ -90,7 +91,7 @@ failing check and its unresolved review threads to an agent as a prompt.
 If you read a comparison page telling you T3 Code just opens pull requests,
 close it.
 
-## The actual difference: who has to be there
+## The first difference: who has to be there
 
 Every state-changing action in T3 Code starts with a person in the UI. There is
 no cron, no inbound webhook, no scheduler, and no merge queue of its own. Its
@@ -101,24 +102,26 @@ That is a coherent choice for a tool whose whole architecture is *your machine,
 your control*. It also means the pull request that goes red at 11pm is still
 red at 9am.
 
-Talyn is built for that gap and almost nothing else:
+Talyn's sessions run in the cloud. Start several, close the laptop, and pick
+them up later in the desktop app or the browser. Then the work that needs
+nobody present:
 
-- **Keep-mergeable.** Flag a pull request and a watcher fixes it the moment it
-  falls behind, conflicts, or a check fails. Nobody presses anything.
-- **A merge queue that fixes before it lands**, drains independent pull
-  requests concurrently, and gives up on evidence: a blocker that comes back
-  unchanged parks the entry; a different blocker counts as progress.
-- **Workflows** that fire on webhook events across every pull request in a
-  connected repository, including ones you did not open, with the app closed.
-- **Loops**: a prompt on a cron schedule, in your timezone, surviving the
-  clocks changing.
+- **One button past the pull request.** It opens the pull request, then fixes
+  failing checks, resolves conflicts and merges.
+- **Keep-mergeable.** Flag a pull request and an agent fixes it when it falls
+  behind, conflicts, or a check fails. Nobody presses anything.
+- **A merge queue** that lands ready pull requests in order and sends an agent
+  when one breaks.
+- **Workflows** that run on pull request events in a connected repository,
+  including ones you did not open, with the app closed.
+- **Loops**: a prompt on a cron schedule.
 
 T3 Code needs *"That machine must stay running and reachable while you work."*
 Talyn needs nothing of yours to be awake.
 
 ## The second difference: what the agent is running inside
 
-T3 Code's isolation primitive is the git worktree, and it says so honestly in
+T3 Code's isolation primitive is the git worktree, and it says so openly in
 its internals doc: *"Prompt instructions and tool denial do not create a native
 sandbox."* Whatever sandboxing you get is whatever Codex, Claude or Cursor
 brings, on your own OS user account. Its permission modes run from
@@ -128,36 +131,35 @@ approval prompts.
 For agents you are watching, on your own machine, that is a reasonable default
 and a fast one.
 
-Talyn's runs happen in a fresh Firecracker microVM on our hardware. Your
-subscription token is never inside it: a proxy attaches credentials from
-outside the machine. The egress route table is built from the model you chose,
-so a Codex run has no route to Anthropic's API at all, and the machine is
-destroyed when the task ends. That matters more the less you are watching, which
-is the whole point of the previous section.
+Each Talyn session runs in its own Firecracker microVM on our hardware. Your
+subscription token is never inside it: a proxy adds credentials from outside
+the machine. Talyn builds an image of your repository with its setup done, and
+a sandbox sleeps after 10 idle minutes. That matters more the less you are
+watching.
+
+You still get a terminal in the sandbox, a diff and run scripts. In the
+desktop app, a session can also run in a git worktree on your own computer,
+like T3 Code, and use none of your box-hours.
 
 ## What Talyn does not do
 
 - **GitHub only.** No GitLab, Bitbucket, Forgejo, Gitea or Azure DevOps.
 - **Two agent vendors**, not six. No Cursor, Grok, OpenCode or Antigravity.
-- **No stacked-PR tooling**, no mobile app, no terminal, no local execution,
-  no multi-machine anything.
+- **No stacked-PR tooling**, no public mobile app yet, and no multi-machine
+  anything.
 - **It is not open source**, and you cannot fork it.
-- **It costs money** past 10 box-hours a month, and the fleet is finite
-  hardware rather than your own.
-- **You do not get a shell on the sandbox.** If you want to poke at the agent's
-  working tree, Talyn is the wrong shape.
+- **It costs money** past 10 box-hours a month, and the cloud sandboxes run on
+  finite hardware that is not your own.
 
 ## Which one
 
 **Use T3 Code if** you want to drive agents yourself, across more harnesses and
-more git hosts than we support, on hardware you control, for nothing. It is the
-better tool for the hour you are actually sitting there, and for anyone outside
-GitHub it is the only one of the two that works at all.
+more git hosts than we support, on hardware you control, for nothing. For
+anyone outside GitHub it is the only one of the two that works at all.
 
-**Use Talyn if** the problem is the hours you are not sitting there: the pull
-request that went stale overnight, the check that failed on Friday, the
-dependency bump nobody schedules, and you would rather that happened in a
-sandbox that never sees your token than on the laptop in your bag.
+**Use Talyn if** you want your sessions to keep running with the laptop
+closed, in a sandbox that never sees your token. Talyn also covers what happens
+next: the pull request that went stale overnight, the check that failed on
+Friday, and the dependency bump nobody schedules.
 
-They are not really competing for the same hour of your day, and running both
-is not a strange thing to do.
+Running both is not a strange thing to do.

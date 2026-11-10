@@ -325,7 +325,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
   {
     slug: "pr-dashboard",
     navLabel: "PR dashboard",
-    eyebrow: "Mission control",
+    eyebrow: "PR dashboard",
     tagline: "Every PR, worst first",
     title: "Every pull request, triaged. No tabs required.",
     seoTitle: "GitHub pull request dashboard: every PR in one list",
@@ -1202,8 +1202,35 @@ export const FEATURE_PAGES: FeaturePage[] = [
   },
 ];
 
+/**
+ * The order the menu, the footer and the /features hub show: running agents
+ * first, then the work that starts without you, then the pull request work
+ * that happens after the agent finishes. A slug missing from this list keeps
+ * its place at the end rather than disappearing.
+ */
+const FEATURE_ORDER = [
+  "sessions",
+  "threads",
+  "agents",
+  "mcp-servers",
+  "slack",
+  "loops",
+  "workflows",
+  "skills",
+  "fix-pull-requests",
+  "merge-queue",
+  "code-review",
+  "pr-dashboard",
+  "reviews",
+];
+
+function rank(slug: string): number {
+  const i = FEATURE_ORDER.indexOf(slug);
+  return i === -1 ? FEATURE_ORDER.length : i;
+}
+
 export function listFeaturePages(): FeaturePage[] {
-  return FEATURE_PAGES;
+  return [...FEATURE_PAGES].sort((a, b) => rank(a.slug) - rank(b.slug));
 }
 
 export function getFeaturePage(slug: string): FeaturePage | null {

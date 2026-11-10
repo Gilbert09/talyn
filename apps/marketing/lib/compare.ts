@@ -163,7 +163,14 @@ export function relatedComparePages(page: ComparePage): CompareMeta[] {
     .filter((c): c is ComparePage => Boolean(c));
 }
 
-/** Group the pages for the hub, preserving the order categories first appear. */
+/**
+ * The categories the hub shows first, in this order. Talyn is a place to run
+ * coding agents first, so those comparisons lead. Any other category follows
+ * in the order it first appears.
+ */
+const CATEGORY_ORDER = ["Cloud coding agents"];
+
+/** Group the pages for the hub, leading with {@link CATEGORY_ORDER}. */
 export function comparePagesByCategory(): Array<{
   category: string;
   pages: ComparePage[];
@@ -174,7 +181,13 @@ export function comparePagesByCategory(): Array<{
     if (existing) existing.push(page);
     else groups.set(page.category, [page]);
   }
-  return [...groups.entries()].map(([category, pages]) => ({ category, pages }));
+  const rank = (c: string) => {
+    const i = CATEGORY_ORDER.indexOf(c);
+    return i === -1 ? CATEGORY_ORDER.length : i;
+  };
+  return [...groups.entries()]
+    .map(([category, pages]) => ({ category, pages }))
+    .sort((a, b) => rank(a.category) - rank(b.category));
 }
 
 export function formatCompareDate(date: string): string {

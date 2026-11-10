@@ -1,6 +1,6 @@
 ---
 title: "Talyn vs Graphite"
-description: "Graphite is built around stacked pull requests, with a merge queue and AI review on top. Talyn is built around getting the pull requests you already have to green and merged. They overlap less than the feature lists suggest."
+description: "Graphite is built around stacked pull requests, with a merge queue and AI review on top. Talyn runs coding agents in cloud sandboxes, then gets their pull requests, and any others you have open, to green and merged. They overlap less than the feature lists suggest."
 competitor: "Graphite"
 category: "Merge queues"
 navLabel: "vs Graphite"

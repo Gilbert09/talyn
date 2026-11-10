@@ -1,117 +1,123 @@
 ---
-title: "Talyn vs Conductor"
-description: "Conductor runs several coding agents in parallel workspaces on your Mac. Talyn runs them in the cloud against the pull requests those agents produced. Different halves of the same day."
+title: "Talyn vs Conductor: moving off Conductor Cloud"
+description: "Conductor is joining Meta. Conductor Cloud goes read-only on November 13 and shuts down on November 20, 2026. Talyn runs the same kind of parallel Claude Code and Codex sessions in cloud sandboxes, and reads your conductor.json as it is."
 competitor: "Conductor"
-category: "PR mission control"
+category: "Cloud coding agents"
 navLabel: "vs Conductor"
-verdict: "You want to run several agents at once on your own machine, watch them work side by side in isolated workspaces, and review their changes before anything reaches a pull request."
-updated: "2026-09-28"
+verdict: "you want to keep your local Conductor workspaces on your Mac until the app winds down in early 2027, or you depend on Cursor or OpenCode as your agent."
+updated: "2026-11-10"
 sources:
+  - label: "Conductor is joining Meta (announcement and timeline)"
+    url: "https://www.conductor.build/announcement"
+  - label: "Conductor changelog 0.93.0"
+    url: "https://www.conductor.build/changelog/0.93.0-conductor-is-joining-meta"
   - label: "Conductor"
-    url: "https://conductor.build/"
-  - label: "Conductor pricing"
-    url: "https://conductor.build/pricing"
-related: ["devin", "cursor-background-agents"]
-relatedFeatures: ["pr-dashboard", "fix-pull-requests", "agents"]
+    url: "https://www.conductor.build/"
+related: ["t3-code", "cursor-background-agents", "codex-cloud"]
+relatedFeatures: ["sessions", "threads", "agents"]
 ---
 
-Conductor and Talyn are both "mission control" apps and they are watching
-different things. Conductor watches **agents**. Talyn watches **pull
-requests**.
+Conductor and Talyn are built around the same idea. You give each task its own
+agent, on its own branch, in its own workspace, and you run several of them at
+once. Conductor called the unit a workspace. Talyn calls it a session.
 
-That sounds like a distinction without a difference until you notice where each
-one's timeline starts and ends. Conductor's begins when you start an agent and
-ends when you merge its work into your branch. Talyn's begins when a pull
-request exists and ends when it is merged into main.
+On November 4, 2026, Conductor announced that it is joining Meta. If you use
+Conductor Cloud, you need somewhere to move your work this month. This page
+says what changes on which date, what carries over to Talyn unchanged, and what
+Talyn does not do.
 
-## What Conductor does
+## The Conductor timeline
 
-As of September 2026, from its own site and pricing page:
+From Conductor's own announcement:
 
-- Runs **parallel Claude Code, Codex and Cursor agents in isolated workspaces
-  on your Mac**, so several can work at once without treading on each other.
-- Gives you one interface to watch their progress and then **review and merge
-  their changes**.
-- **macOS**, with cloud workspaces on the paid tiers.
-- **Bring your own subscriptions and keys**: Conductor does not sell you
-  inference.
-- **Pricing**: Free with local workspaces on your Mac, Pro at $50/month adding
-  cloud workspace hours, multiplayer, an API and a mobile app, Teams at
-  $60/month per user, and custom Enterprise.
+- **November 4**: no new sign-ups and no new downloads. Existing Pro users keep
+  Pro features for free.
+- **November 13**: Conductor Cloud goes read-only. You can read old chats and
+  export data, but you cannot send new messages. Active subscribers get a
+  refund.
+- **November 20**: Conductor Cloud shuts down and Conductor starts to delete
+  cloud user data.
+- **Early 2027**: local Conductor gets new models and critical fixes until
+  then, and then it winds down.
 
-It is a genuinely nice piece of software and it is one of the reasons Talyn's
-desktop app is as polished as it is.
+## What carries over unchanged
 
-## Where Talyn is different
+**Your setup scripts.** Talyn reads `conductor.json` and
+`.conductor/settings.toml`, so a repository set up for Conductor works with no
+changes. The setup, run and archive scripts run as they did, and every
+`CONDUCTOR_*` variable your scripts use is set, with the same value as its
+`TALYN_*` name. See [repository setup](/docs/repository-setup).
 
-**Nothing runs on your machine.** Every Talyn task runs in a Firecracker
-microVM on our hardware, with your Claude or ChatGPT credential attached by a
-proxy *outside* the machine. Nothing is cloned locally, no worktree is created,
-your laptop can be shut. That is the point of the merge queue and of
-keep-mergeable: the work happens at 3am with nobody awake.
+**Your subscriptions.** Talyn runs first-party Claude Code on your Claude Pro
+or Max plan and Codex on your ChatGPT Plus or Pro plan. You sign in with the
+account. There is no API key and no token markup.
 
-**The unit is a pull request that already exists.** Talyn's list is every open
-pull request across every repository you connect, including ones you did not
-open, sorted by what is blocking each one. You do not start from an agent; you
-start from the thing that is not merged.
+**The way you work.** Each session has its own branch, sandbox, diff, terminal
+and run scripts. Sessions never touch each other's files. In the desktop app, a
+session can also run in a git worktree on your own computer, and a local
+session uses none of your box-hours.
 
-**It closes the loop after the pull request opens.** Fix the failing check.
-Resolve the conflict when main moves. Address the review comments. Then land it:
-a merge queue takes the ready ones in order and fixes the ones that break on
-the way in.
+**Cloud sandboxes.** Each cloud session runs in its own Firecracker microVM.
+Talyn builds an image of your repository with the setup already done, so a new
+session does not start from a clean machine. A sandbox goes to sleep after 10
+minutes without work, and a sleeping sandbox costs nothing.
 
-**Work that starts without you.** Workflows fire on pull request events, with
-the app closed, on every pull request in a connected repository. Loops run a
-prompt on a schedule. Neither has an analogue in an app whose agents you launch
-by hand.
+## How to move
 
-**It runs everywhere.** macOS, Windows and Linux desktop builds, plus a browser
-app at app.talyn.dev with the same account and the same queue. Conductor is Mac
-only.
+1. **Before November 13, save your work in Conductor Cloud.** Push the branch
+   of each workspace you want to keep to GitHub. Conductor also lets you
+   right-click a cloud workspace and choose **Transfer to local**, and export
+   everything from **Settings → Account → Export data**.
+2. **Open Talyn.** [Download it](/download) for macOS, Windows or Linux, or use
+   [the browser app](https://app.talyn.dev). Sign in with GitHub and install the
+   Talyn GitHub App on the repositories you work in.
+3. **Connect Claude, ChatGPT or both.** Talyn uses the subscription you sign in
+   with. See [connect your agents](/docs/connect-agents).
+4. **Pick up each branch.** Start a session and choose **Create from…** to open
+   it on an existing branch or an open pull request.
 
-**Price.** Talyn is free with 10 box-hours a month, or $40/month for 200
-box-hours. Conductor's free tier is
-real and generous if you are happy running everything locally.
+Talyn does not import Conductor chats. The work is on the branch, and the
+session starts a new conversation on top of it.
+
+## What Talyn adds
+
+- **Windows, Linux and the browser.** The same account and the same sessions on
+  macOS, Windows, Linux and at app.talyn.dev.
+- **Threads.** One conversation with a goal that starts a session on every
+  repository that needs a change, and keeps track of each one.
+- **Past the pull request.** One button opens the pull request. The same button
+  then fixes failing checks, resolves conflicts and merges. A merge queue lands
+  ready pull requests in order and sends an agent when one breaks.
+- **Code review in the app.** Several reviewers read a change, then a check
+  drops what it cannot back up. Nothing reaches GitHub unless you post it.
+- **Work that starts without you.** Loops run a prompt on a schedule. Workflows
+  run on pull request events. Both run in the cloud with the app closed.
+- **Slack, MCP servers and a public API.** Start a session from a Slack
+  message, give the agent your Linear or Sentry tools without putting the keys
+  in the sandbox, or drive sessions from your own scripts.
 
 ## What Talyn does not do
 
-- **No local agents and no local worktrees.** If you want the agent's working
-  tree on your own disk so you can poke at it, Talyn is the wrong shape,
-  everything happens in a sandbox you do not have a shell on.
-- **No parallel-workspace view of several agents on one machine.**
-- **No Cursor as an agent.** Claude, Codex and PostHog Code.
-- **No multiplayer, no mobile app, no public API.**
-- **GitHub only.**
-- **Finite hardware.** Talyn Fleet is our own machines; it paces itself and
-  spills to a fall-back provider when it is full.
+- **No Cursor or OpenCode.** Talyn runs Claude Code and Codex.
+- **No public iOS app yet.** The mobile app is coming. Today you can use the
+  browser app on your phone.
+- **Team sharing is not generally available.** Each person has their own
+  workspaces.
+- **GitHub only.** No GitLab and no Bitbucket.
+- **Windows builds are unsigned.** SmartScreen warns on the first install.
 
-## What Conductor does not do
+## Price
 
-- **Track pull requests you did not create.** Its list is agents you started.
-- **Merge.** There is no queue that lands a ready pull request in order and
-  rebases it on the way in.
-- **React to a pull request going red** a day later, on its own.
-- **Run scheduled work.**
-
-## The honest overlap
-
-The thing both apps have is a well-made desktop surface for watching agents
-work. If you have one of them you have that.
-
-What decides between them is whether your bottleneck is **producing changes**
-or **landing them**. Conductor is very good at the first: several agents
-going at once, on your machine, on your subscription. Talyn is built for the
-second, and in particular for the part that happens when you are not there.
-
-Running both is coherent: Conductor to produce the pull requests, Talyn to keep
-them green and merge them. Talyn does not care which tool opened a pull
-request.
+Talyn is free with 10 box-hours a month. Pro is $40 a month for 200 box-hours,
+every sandbox size and up to 100 sandboxes at once. A box-hour is one standard
+sandbox awake for one hour, billed per second. The model runs on your own
+Claude or ChatGPT plan, so you pay Talyn for the machines, not the model. See
+[pricing](/pricing).
 
 ## Which one
 
-**Use Conductor if** you want to parallelise your own agent work on a Mac and
-review it before it becomes a pull request.
+**Stay on local Conductor if** your work already lives in local workspaces on
+your Mac and you are happy to move when it winds down in early 2027.
 
-**Use Talyn if** the pull requests exist already and the problem is the two
-days they spend going stale, and you would like that fixed while you are
-asleep.
+**Use Talyn if** you used Conductor Cloud, you want your agents to keep working
+with the laptop closed, or you need Windows, Linux or the browser.

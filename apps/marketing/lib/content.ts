@@ -63,6 +63,17 @@ export const nav: NavItem[] = [
  */
 export const hero = {
   badge: "Public beta",
+  /**
+   * Shown in place of the badge while it is set. Conductor announced on
+   * 2026-11-04 that it is joining Meta, and Conductor Cloud shuts down on
+   * 2026-11-20, so its users are looking for somewhere to go this month.
+   * Set to null once that has passed (early 2027, when local Conductor winds
+   * down, at the latest).
+   */
+  announcement: {
+    label: "Leaving Conductor Cloud? Your conductor.json works here",
+    href: "/compare/conductor",
+  } as { label: string; href: string } | null,
   titleLead: "Give every task",
   titleAccent: "its own agent.",
   sub: "Each session is a branch with its own agent, diff and terminal in the cloud. Run as many as you like on the Claude or ChatGPT plan you already have.",
@@ -479,7 +490,7 @@ export const finalCta = {
 
 export const footer = {
   blurb: "Coding agents in cloud sandboxes, one session per task, from the first prompt to the merged pull request.",
-  madeBy: "Made by night owls who were tired of babysitting CI.",
+  madeBy: "Made by a night owl who wanted the agents to work the night shift.",
   columns: [
     {
       title: "Product",

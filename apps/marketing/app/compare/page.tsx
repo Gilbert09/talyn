@@ -12,7 +12,7 @@ import { getGuide } from "@/lib/guides";
 
 const title = "Talyn vs the alternatives";
 const description =
-  "Honest comparisons against the AI review tools, merge queues, cloud coding agents and PR dashboards people weigh Talyn up against, including when you should pick theirs.";
+  "Comparisons against the cloud coding agents, AI review tools and merge queues people weigh Talyn up against, including when you should pick theirs.";
 
 export const metadata: Metadata = {
   title,

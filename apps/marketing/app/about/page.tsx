@@ -68,18 +68,20 @@ export default function AboutPage() {
 
           <h2>Why it exists</h2>
           <p>
-            Writing code stopped being the slow part. Landing it did not. A
-            change that takes twenty minutes to write spends two days being a
-            pull request: a test fails for a reason nobody has read yet, the
-            base branch moves underneath it, a reviewer asks for one small thing
-            on a Friday afternoon. None of that is hard. All of it needs
-            somebody present.
+            Agents write most of a change now, and the slow part moved. You
+            wait for one agent to finish before you start the next. Your laptop
+            has to stay open while it works. Then the pull request it opens
+            spends two days going red: a test fails, the base branch moves, a
+            reviewer asks for one small thing on a Friday afternoon. None of
+            that is hard. All of it needs somebody present.
           </p>
           <p>
-            Talyn is the attempt to hand that stretch to an agent without
-            handing over anything else: it does not write your features, it does
-            not want your API key, and it does not merge anything you have not
-            flagged.
+            Talyn gives every task its own agent in its own cloud sandbox, so
+            you can start as many as you have tasks, close the laptop and come
+            back to a diff. Then it takes the work the rest of the way, to a
+            merged pull request. It runs on the Claude or ChatGPT plan you
+            already pay for. It does not want your API key, and it does not
+            merge anything you have not flagged.
           </p>
 
           <h2>It is built on itself</h2>
@@ -133,7 +135,7 @@ export default function AboutPage() {
 
         <PageCta
           placement="about"
-          title="The quickest way to judge it is to point it at a red pull request."
+          title="The quickest way to judge it is to give it the task you keep putting off."
           body="Free with 10 box-hours a month, on the Claude or ChatGPT subscription you already pay for."
         />
       </main>
