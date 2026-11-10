@@ -98,6 +98,10 @@ const config: Config = {
           "0%, 100%": { transform: "translateX(-40%)", opacity: "0" },
           "50%": { transform: "translateX(40%)", opacity: "1" },
         },
+        caret: {
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0" },
+        },
       },
       animation: {
         "fade-up": "fade-up 0.6s ease both",
@@ -105,6 +109,7 @@ const config: Config = {
         "pulse-ring": "pulse-ring 1.8s ease-out infinite",
         "dot-pulse": "dot-pulse 1.8s ease-in-out infinite",
         scan: "scan 3.5s ease-in-out infinite",
+        caret: "caret 1s step-end infinite",
       },
     },
   },

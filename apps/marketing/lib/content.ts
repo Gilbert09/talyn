@@ -78,7 +78,18 @@ export const hero = {
   // That is what a local tool cannot say, and the subhead then answers the two
   // FAQ questions visitors open most (which agents, where the work happens).
   titleLead: "Your coding agents keep working",
-  titleAccent: "with the laptop closed.",
+  /**
+   * The accent line is typed out, one ending after another, under the fixed
+   * lead. The first is the headline: it is what the server renders, what
+   * search engines and screen readers get, and where the rotation stops after
+   * one pass. Every entry must finish the lead as a sentence.
+   */
+  titleAccents: [
+    "with the laptop closed.",
+    "in parallel, in the cloud.",
+    "until the pull request is merged.",
+    "on the plan you already pay for.",
+  ],
   sub: "Run Claude Code and Codex in parallel cloud sandboxes, on the plan you already pay for. Come back to a diff, or to a pull request that is already green.",
   primaryCta: "Download for {platform}",
   webCta: "Open in browser",

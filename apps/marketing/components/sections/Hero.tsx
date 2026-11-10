@@ -9,6 +9,7 @@ import { PlatformNote } from "@/components/ui/PlatformNote";
 import { Badge } from "@/components/ui/badge";
 import { GridBackground } from "@/components/ui/GridBackground";
 import { ScreenshotPlaceholder } from "@/components/ui/ScreenshotPlaceholder";
+import { TypedRotator } from "@/components/ui/TypedRotator";
 import { hero } from "@/lib/content";
 import { cn } from "@/lib/utils";
 
@@ -55,7 +56,7 @@ export function Hero() {
               the phrase in an odd place at laptop widths. */}
           <h1 className="font-display text-4xl font-semibold leading-[1.06] tracking-tight text-ink [text-wrap:balance] sm:text-5xl lg:text-6xl">
             <span className="block">{hero.titleLead}</span>
-            <span className="block text-clay">{hero.titleAccent}</span>
+            <TypedRotator phrases={hero.titleAccents} className="text-clay" />
           </h1>
 
           <p className="mx-auto mt-5 max-w-2xl text-lg leading-relaxed text-ink-500 [text-wrap:pretty]">
