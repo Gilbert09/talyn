@@ -5,11 +5,27 @@ import * as schema from './schema.js';
 import { debugBus } from '../services/debugBus.js';
 import {
   beginInflight,
+  describeEntry,
   endInflight,
   transactionClosed,
   transactionOpened,
   type QueryConnection,
 } from './inflight.js';
+import {
+  currentStallLimit,
+  DbQueryStalledError,
+  StallBreaker,
+  type TxState,
+} from './stallBreaker.js';
+
+export {
+  DB_QUERY_STALLED_CODE,
+  DB_STALL_MS,
+  DB_STATEMENT_TIMEOUT_MS,
+  DbQueryStalledError,
+  DbTransactionLostError,
+  withStallLimit,
+} from './stallBreaker.js';
 
 /**
  * The Drizzle query builder that every service/route consumes. Both the
@@ -67,23 +83,67 @@ export function summarizeSql(raw: string): { operation: string; table: string | 
  * transaction and savepoint its own `sql` object, so `begin` and `savepoint`
  * are wrapped too: without that, no query inside a transaction (which is every
  * query of an authenticated request) would pass through here.
+ *
+ * With a `breaker`, each query is also watched for a stall (see
+ * `db/stallBreaker.ts`). A query that the breaker closed rejects with
+ * `DbQueryStalledError`, and so does the `begin` of its transaction.
  */
 export function instrumentEgress(
   sql: postgres.Sql,
   connection: QueryConnection = 'pool',
+  opts: { breaker?: StallBreaker; tx?: TxState } = {},
 ): void {
+  const { breaker, tx } = opts;
   const original = sql.unsafe.bind(sql) as (
     query: string,
     params?: unknown[],
     options?: unknown,
   ) => object;
+  // Set only while the original `begin` runs: its first `unsafe` is the BEGIN.
+  let beginOf: TxState | null = null;
+
+  if (breaker && tx && connection === 'transaction') {
+    // Never run: it only shows the scope handler (see `bindScope`).
+    breaker.bindScope(original(''), tx);
+  }
 
   const wrapPending = (pending: object, query: string): object => {
     const startedAt = Date.now();
     let counted = false;
     let inflightId: number | null = null;
     let inflightDone = false;
+    const ownerScope = scopedDbStore.getStore() !== undefined;
+    let stalled = false;
+    let stallError: DbQueryStalledError | null = null;
+    const limitMs = breaker ? currentStallLimit(breaker.stallMs) : null;
+    const watch = breaker
+      ? breaker.watch(pending, limitMs, {
+          tx,
+          beginOf: beginOf ?? undefined,
+          onTrip: () => {
+            stalled = true;
+          },
+          describe: () =>
+            describeEntry({
+              id: 0,
+              kind: 'query',
+              startedAt,
+              label: query,
+              connection,
+              ownerScope,
+              reportedAt: null,
+            }),
+        })
+      : null;
+    beginOf = null;
+    const failure = (raw: unknown): unknown => {
+      if (!stalled) return raw;
+      stallError ??= new DbQueryStalledError(limitMs ?? 0, { cause: raw });
+      if (tx && !tx.tripped) tx.tripped = stallError;
+      return stallError;
+    };
     const settle = (result: unknown, ok: boolean, err?: unknown): void => {
+      watch?.clear();
       if (inflightId !== null && !inflightDone) {
         inflightDone = true;
         endInflight(inflightId);
@@ -134,7 +194,8 @@ export function instrumentEgress(
                 settle(result, true);
                 return onFulfilled ? onFulfilled(result) : result;
               },
-              (err) => {
+              (raw) => {
+                const err = failure(raw);
                 settle(undefined, false, err);
                 if (onRejected) return onRejected(err);
                 throw err;
@@ -160,10 +221,12 @@ export function instrumentEgress(
     wrapPending(original(query, params, options), query);
 
   type ScopeFn = (inner: postgres.Sql) => unknown;
-  const instrumentScope = (fn: ScopeFn): ScopeFn => (inner) => {
-    instrumentEgress(inner, 'transaction');
-    return fn(inner);
-  };
+  const instrumentScope =
+    (fn: ScopeFn, scopeTx: TxState | undefined): ScopeFn =>
+    (inner) => {
+      instrumentEgress(inner, 'transaction', { breaker, tx: scopeTx });
+      return fn(inner);
+    };
   const target = sql as unknown as {
     begin?: (...args: unknown[]) => Promise<unknown>;
     savepoint?: (...args: unknown[]) => Promise<unknown>;
@@ -179,22 +242,31 @@ export function instrumentEgress(
       const fn = args[fnIndex];
       if (typeof fn !== 'function') return begin(...args);
       let opened = false;
+      const txState = breaker?.newTransaction();
       const wrapped = instrumentScope((inner) => {
         opened = true;
         transactionOpened();
         return (fn as ScopeFn)(inner);
-      });
+      }, txState);
       const close = () => {
         if (opened) transactionClosed();
       };
-      return begin(...args.slice(0, fnIndex), wrapped).then(
+      beginOf = txState ?? null;
+      let started: Promise<unknown>;
+      try {
+        started = begin(...args.slice(0, fnIndex), wrapped);
+      } finally {
+        beginOf = null;
+      }
+      return started.then(
         (v) => {
           close();
           return v;
         },
         (e: unknown) => {
           close();
-          throw e;
+          // postgres-js rejects the begin with CONNECTION_CLOSED; the stall is the reason.
+          throw txState?.tripped ?? e;
         },
       );
     };
@@ -207,7 +279,8 @@ export function instrumentEgress(
       const fnIndex = args.length - 1;
       const fn = args[fnIndex];
       if (typeof fn !== 'function') return savepoint(...args);
-      return savepoint(...args.slice(0, fnIndex), instrumentScope(fn as ScopeFn));
+      if (breaker && tx && breaker.txLost(tx)) return Promise.reject(breaker.lostError(tx));
+      return savepoint(...args.slice(0, fnIndex), instrumentScope(fn as ScopeFn, tx));
     };
   }
 }
@@ -221,6 +294,7 @@ export function instrumentEgress(
 function createPostgresHandle(connectionString: string): Handle {
   const url = new URL(connectionString);
   const isPooler = url.hostname.includes('pooler.supabase.com');
+  const breaker = new StallBreaker();
   const sql = postgres(connectionString, {
     // Headroom so the webhook worker's concurrent batch can't starve everything
     // else of connections — WS auth (a DB upsert with a 5s handshake budget),
@@ -229,11 +303,19 @@ function createPostgresHandle(connectionString: string): Handle {
     max: DB_POOL_MAX,
     idle_timeout: 20,
     prepare: !isPooler,
-    // Cap how long any single statement can run. Without this a query stuck on
-    // the (cross-region) pooler hangs forever, and since the webhook worker
-    // awaits a `Promise.all` over the batch, one stuck query wedges the whole
-    // consumer with no error. 30s errors it instead — handleEntry catches it,
-    // the delivery stays un-acked, and the loop keeps draining.
+    // THESE TWO STARTUP PARAMETERS DO NOT APPLY through Supavisor's transaction
+    // pooler, which drops them (verified 2026-11-10: `statement_timeout` reads
+    // 2min, the role-level value, and `idle_in_transaction_session_timeout`
+    // reads 0). They apply only on a direct or session-pooler connection. In
+    // production the role-level settings and the stall breaker are what limit
+    // a statement; see DB_STATEMENT_TIMEOUT_MS in db/stallBreaker.ts.
+    //
+    // The intent: cap how long any single statement can run. Without this a
+    // query stuck on the (cross-region) pooler hangs forever, and since the
+    // webhook worker awaits a `Promise.all` over the batch, one stuck query
+    // wedges the whole consumer with no error. 30s errors it instead —
+    // handleEntry catches it, the delivery stays un-acked, and the loop keeps
+    // draining.
     //
     // idle_in_transaction_session_timeout is the transaction-shaped twin, and
     // it's what statement_timeout can NOT catch: the ownerScope middleware
@@ -254,8 +336,13 @@ function createPostgresHandle(connectionString: string): Handle {
     connection: { statement_timeout: 30_000, idle_in_transaction_session_timeout: 30_000 },
     // Don't wait forever to acquire a socket either.
     connect_timeout: 15,
+    // The stall breaker owns the sockets so that it can close a dead one, and
+    // counts closes so that a transaction never writes to a closed connection.
+    // `socket` is documented in the postgres-js README but not in its types.
+    ...({ socket: breaker.socket } as object),
+    onclose: breaker.connectionClosed,
   });
-  instrumentEgress(sql);
+  instrumentEgress(sql, 'pool', { breaker });
   const db = drizzle(sql, { schema, casing: 'snake_case' }) as Database;
   return {
     db,

@@ -1,6 +1,6 @@
 import path from 'path';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import { getDbClient, isRealPostgres, type Database } from './client.js';
+import { getDbClient, isRealPostgres, withStallLimit, type Database } from './client.js';
 import { withBlockingAdvisoryLock } from '../services/advisoryLock.js';
 
 /**
@@ -20,12 +20,18 @@ const MIGRATIONS_FOLDER = path.resolve(__dirname, 'migrations');
  *
  * Throws if `DATABASE_URL` is unset or migrations fail — both are fatal
  * for boot so callers shouldn't try to recover.
+ *
+ * The stall breaker is off here. A boot waits on purpose for the other
+ * instance's migration run, and a DDL statement can be slow. A stall here
+ * shows as a failed deploy, and the old instance keeps serving.
  */
 export async function initDatabase(): Promise<Database> {
   const db = getDbClient();
   if (isRealPostgres()) {
-    await withBlockingAdvisoryLock(db, 'db:migrate', () =>
-      migrate(db, { migrationsFolder: MIGRATIONS_FOLDER })
+    await withStallLimit(null, () =>
+      withBlockingAdvisoryLock(db, 'db:migrate', () =>
+        migrate(db, { migrationsFolder: MIGRATIONS_FOLDER })
+      )
     );
   } else {
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
