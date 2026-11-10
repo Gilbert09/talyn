@@ -71,6 +71,31 @@ export function summarizeSql(raw: string): { operation: string; table: string | 
 
 const lateQuerySites = new Map<string, number>();
 const LATE_QUERY_SITE_CAP = 50;
+const endedScopes = new WeakSet<object>();
+
+/** `withOwnerScope` calls this when its transaction ends. */
+export function markScopeEnded(db: Database): void {
+  endedScopes.add(db);
+}
+
+/** Log `what` once per call site, with the frames outside the db layer. */
+function reportLateSite(what: string): void {
+  const frames = (new Error().stack ?? '')
+    .split('\n')
+    .slice(1)
+    .map((line) => line.trim())
+    .filter((line) => !/node_modules|db\/(client|scope)\.(ts|js)|node:internal/.test(line))
+    .slice(0, 8);
+  const site = `${what} | ${frames.join(' | ')}`;
+  const seen = lateQuerySites.get(site);
+  if (seen !== undefined) {
+    lateQuerySites.set(site, seen + 1);
+    return;
+  }
+  if (lateQuerySites.size >= LATE_QUERY_SITE_CAP) return;
+  lateQuerySites.set(site, 1);
+  console.warn(`[db] ${what}\n  ${frames.join('\n  ') || '(no frames outside the db layer)'}`);
+}
 
 /**
  * A query sent on a transaction that has already ended never runs inside it.
@@ -80,24 +105,17 @@ const LATE_QUERY_SITE_CAP = 50;
  * once, so the site can be fixed.
  */
 export function reportLateTransactionQuery(query: string): void {
-  const frames = (new Error().stack ?? '')
-    .split('\n')
-    .slice(1)
-    .map((line) => line.trim())
-    .filter((line) => !/node_modules|db\/client\.(ts|js)|node:internal/.test(line))
-    .slice(0, 8);
-  const site = frames.join(' | ');
-  const seen = lateQuerySites.get(site);
-  if (seen !== undefined) {
-    lateQuerySites.set(site, seen + 1);
-    return;
-  }
-  if (lateQuerySites.size >= LATE_QUERY_SITE_CAP) return;
-  lateQuerySites.set(site, 1);
   const { operation, table } = summarizeSql(query);
-  console.warn(
-    `[db] query sent after its transaction ended: ${operation} ${table ? `"${table}"` : ''}\n  ${frames.join('\n  ')}`,
-  );
+  reportLateSite(`query sent after its transaction ended: ${operation} ${table ? `"${table}"` : ''}`.trim());
+}
+
+/** The owner-scoped handle in this async context, logged once per site when its transaction has ended. */
+function currentScope(accessor: string): Database | undefined {
+  const store = scopedDbStore.getStore();
+  if (store && endedScopes.has(store)) {
+    reportLateSite(`owner scope used after its transaction ended: ${accessor}`);
+  }
+  return store;
 }
 
 /** Tests only. */
@@ -419,7 +437,7 @@ function ensureSingleton(): Database {
  * start without Postgres.
  */
 export function getDbClient(): Database {
-  return scopedDbStore.getStore() ?? ensureSingleton();
+  return currentScope('getDbClient()') ?? ensureSingleton();
 }
 
 /**
@@ -438,7 +456,7 @@ export function isRealPostgres(): boolean {
 
 /** The owner-scoped handle if a scope is active, else undefined. */
 export function getScopedDb(): Database | undefined {
-  return scopedDbStore.getStore();
+  return currentScope('getScopedDb()');
 }
 
 /** Run `fn` with `db` installed as the owner-scoped handle for its async tree. */

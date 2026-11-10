@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type postgres from 'postgres';
 import {
+  getScopedDb,
   instrumentEgress,
+  markScopeEnded,
   resetLateTransactionQuerySites,
   runInScopedDb,
   summarizeSql,
@@ -413,6 +415,33 @@ describe('a query sent after its transaction ended', () => {
     await sendLate(tx);
     await awaitNow(tx.unsafe('select 1 from "tasks"', []));
     expect(warn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('an owner scope used after its transaction ended', () => {
+  beforeEach(() => resetLateTransactionQuerySites());
+  afterEach(() => vi.restoreAllMocks());
+
+  it('logs once per call site and still returns the handle', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const scoped = {} as Database;
+    const seen: Array<Database | undefined> = [];
+    runInScopedDb(scoped, () => {
+      seen.push(getScopedDb());
+      markScopeEnded(scoped);
+      for (let i = 0; i < 3; i++) seen.push(getScopedDb());
+    });
+    expect(seen).toEqual([scoped, scoped, scoped, scoped]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(
+      /^\[db\] owner scope used after its transaction ended: getScopedDb\(\)\n {2}at /,
+    );
+  });
+
+  it('logs nothing while the scope is open', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    runInScopedDb({} as Database, () => getScopedDb());
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 

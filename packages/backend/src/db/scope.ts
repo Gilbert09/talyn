@@ -3,6 +3,7 @@ import {
   getPoolDbClient,
   getScopedDb,
   isRealPostgres,
+  markScopeEnded,
   runInScopedDb,
   type Database,
 } from './client.js';
@@ -46,10 +47,12 @@ export async function withOwnerScope<T>(
   // The entry starts when the transaction holds its connection. Before that
   // the wait shows as an in-flight `begin` query.
   let inflightId = null as number | null;
+  let scopedHandle: Database | null = null;
   try {
     return await getPoolDbClient().transaction(async (tx) => {
       inflightId = beginInflight('owner_tx', label);
       const scoped = tx as unknown as Database;
+      scopedHandle = scoped;
       // Set both the modern `request.jwt.claims` and the legacy dotted GUC —
       // `public.talyn_uid()` prefers the dotted one and falls back to the JSON,
       // exactly as `auth.uid()` does — then drop to the non-privileged role so
@@ -62,5 +65,6 @@ export async function withOwnerScope<T>(
     });
   } finally {
     if (inflightId !== null) endInflight(inflightId);
+    if (scopedHandle) markScopeEnded(scopedHandle);
   }
 }
