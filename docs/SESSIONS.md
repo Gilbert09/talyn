@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## DB pool: four fixes after the pool filled (2026-11-10)
+
+The pool diagnostics below showed where connections were wasted. Four changes, one commit each:
+- **Webhook fast lane.** The worker ran a whole batch of up to 32 fast deliveries at once. A semaphore (`FAST_LANE_MAX = 8`) now bounds it. The batch still waits for all of them before the next read.
+- **`requireWorkspaceAccess`** ran two selects on the same workspace row. It now runs one, with the same 404s.
+- **PR routes and GitHub.** `GET /pull-requests/:id`, `POST /pull-requests/:id/refresh` and `POST /repositories/poll` waited on GitHub with the owner-scope transaction open, idle in transaction. `runWithoutScope` alone does not help: the request transaction stays open until the response ends. The new `continueWithoutOwnerScope(req, fn)` in `middleware/ownerScope.ts` commits the scope, then runs `fn` on the pool. Use it only after the handler has proved ownership, and keep every write keyed by the proved row, because RLS does not filter it. Do not query after it returns: the scoped handle is closed. The two PR routes build their response in a new short owner scope, so RLS filters the response as before.
+- **Acquire deadline.** postgres-js has no acquire timeout. `instrumentEgress` now cancels a pool query or `begin` that is still in the postgres-js queue after 10 s (`DbAcquireTimeoutError`, code `DB_POOL_ACQUIRE_TIMEOUT`). It never cancels a started query (that sends a server cancel) or a query in a transaction. It also leaves alone a query that postgres-js opens a new connection for. A cancel there skips the query, so the new connection never reports open and stays stuck until `max_lifetime`. The pool handler tells the cases apart: it returns undefined when it queues a query and the connection when it opens one. When a connection closes, postgres-js opens it for the head of the queue, so the queries queued at that moment lose their deadline. A check against real postgres-js and a silent TCP server confirmed it: the queued query failed at 10 s, and the connecting one failed at `connect_timeout`.
+
 ## Private connector read: retry and cache (2026-11-10)
 
 From 14:40 to 14:48 UTC, Railway's edge answered 429 to calls from the backend to the fleet control plane. Every session start reads the workspace's private connector, so one 429 failed the start with "Private routes are rate limited".
