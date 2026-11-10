@@ -60,8 +60,8 @@ describe('PR status pill', () => {
     ['blocked on review, review shown', { state: 'open' as const, blockingReason: 'blocked' as const, checks: checks(), includeReview: true }, 'Review', 'warning'],
     ['approved but protected', { state: 'open' as const, blockingReason: 'blocked' as const, checks: checks(), includeReview: true, reviewDecision: 'APPROVED' as const }, 'Protected', 'warning'],
     ['changes requested, review shown', { state: 'open' as const, blockingReason: 'changes_requested' as const, checks: checks(), includeReview: true }, 'Changes requested', 'warning'],
-    ['a queue testing it', { state: 'open' as const, blockingReason: 'mergeable' as const, checks: checks(), externalQueueState: 'testing' as const }, 'Queue: testing', 'information'],
-    ['a queue that refused it', { state: 'open' as const, blockingReason: 'mergeable' as const, checks: checks(), externalQueueState: 'rejected' as const }, 'Queue: refused', 'destructive'],
+    ['a queue testing it', { state: 'open' as const, blockingReason: 'mergeable' as const, checks: checks(), externalQueueState: 'testing' as const }, 'Testing in merge queue', 'information'],
+    ['a queue that refused it', { state: 'open' as const, blockingReason: 'mergeable' as const, checks: checks(), externalQueueState: 'rejected' as const }, 'Refused by merge queue', 'destructive'],
     ['a queue holding it with its own reason', { state: 'open' as const, blockingReason: 'merge_conflicts' as const, checks: checks(), externalQueueState: 'not_ready' as const }, 'Conflicts', 'destructive'],
   ])('reads %s', (_name, input, label, tone) => expect(prStatus(input)).toMatchObject({ label, tone }));
   it('merges mergeability and merge state into one answer for a row', () => {

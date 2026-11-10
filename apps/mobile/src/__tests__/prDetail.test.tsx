@@ -3,6 +3,7 @@ import { Alert } from 'react-native';
 
 import type { MergeQueuePublic, PRCheckContext, PRRow } from '@talyn/client/native';
 
+import { trackEvent } from '../lib/analytics';
 import { PullRequestDetailScreen } from '../features/prs/PullRequestDetailScreen';
 import { fixture, pr } from './workflowFixtures';
 
@@ -25,8 +26,9 @@ jest.mock('../auth/AuthProvider', () => ({
   useMobileRuntime: () => ({ workflow: mockActive.store }), useNetwork: () => 'online',
   useWorkspace: () => ({ status: 'ready', selected: 'one', choices: [{ id: 'one', name: 'Test workspace' }] }),
 }));
+jest.mock('../lib/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn(async () => true) }));
-beforeEach(() => { mockActive.store.dispose(); mockActive = fixture(); mockRouter.push.mockClear(); });
+beforeEach(() => { (trackEvent as jest.Mock).mockClear(); mockActive.store.dispose(); mockActive = fixture(); mockRouter.push.mockClear(); });
 afterEach(() => { mockActive.store.dispose(); jest.restoreAllMocks(); });
 
 type Summary = PRRow['summary'];
@@ -365,5 +367,60 @@ describe('PR detail tabs', () => {
     await render(<PullRequestDetailScreen />);
     await screen.findByText('Ready to merge');
     expect(screen.queryByRole('tab', { name: /^Findings/ })).toBeNull();
+  });
+});
+
+describe('PR detail analytics', () => {
+  const events = (name: string) => (trackEvent as jest.Mock).mock.calls.filter(([event]) => event === name).map(([, props]) => props);
+
+  it('reports the PR opened, with no repository or title', async () => {
+    serve(mine());
+    await render(<PullRequestDetailScreen />);
+    await screen.findByText('Ready to merge');
+    const [props] = events('pr_detail_opened');
+    expect(props).toMatchObject({ pr_number: 42, blocking_reason: 'mergeable' });
+    expect(props).not.toHaveProperty('repo');
+    expect(events('pr_detail_opened')).toHaveLength(1);
+  });
+
+  it('reports a merge only once it succeeded', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const mergePr = mockActive.api.pullRequests.merge as jest.Mock;
+    mergePr.mockResolvedValue({ merged: true, message: '' });
+    serve(mine());
+    await render(<PullRequestDetailScreen />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Merge' }));
+    expect(events('pr_merged')).toHaveLength(0);
+    const confirm = alert.mock.calls[0][2]?.find((button) => button.text === 'Merge');
+    await act(async () => { confirm?.onPress?.(); });
+    await waitFor(() => expect(events('pr_merged')).toEqual([{ source: 'manual', pr_number: 42, blocking_reason: 'mergeable' }]));
+  });
+
+  it('reports the merge queue toggle after the call succeeds', async () => {
+    serve(mine());
+    await render(<PullRequestDetailScreen />);
+    await fireEvent.press(await screen.findByRole('switch', { name: 'Merge queue' }));
+    await waitFor(() => expect(events('merge_queue_toggled')).toEqual([{ enabled: true, pr_number: 42 }]));
+  });
+
+  it('reports a review verdict with whether it had a comment', async () => {
+    serve(pr());
+    await render(<PullRequestDetailScreen />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled());
+    await fireEvent.press(screen.getByRole('button', { name: 'Approve' }));
+    await screen.findByText('Approve #42');
+    await fireEvent.changeText(screen.getByLabelText('Comment (optional)'), 'Looks good.');
+    await act(async () => { fireEvent.press(screen.getAllByRole('button', { name: 'Approve' }).at(-1)!); });
+    await waitFor(() => expect(events('pr_review_submitted')).toEqual([{ event: 'approve', has_comment: true }]));
+  });
+
+  it('reports a started code review with its preset', async () => {
+    serve(mine());
+    await render(<PullRequestDetailScreen />);
+    await openMenu();
+    await fireEvent.press(screen.getByRole('button', { name: 'Review with Talyn' }));
+    await fireEvent.press(await screen.findByRole('tab', { name: 'Deep' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Start review' }));
+    await waitFor(() => expect(events('code_review_started')).toEqual([{ preset: expect.any(String), depth: expect.any(String) }]));
   });
 });

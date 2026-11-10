@@ -3,13 +3,14 @@ import { CODE_REVIEW_DISMISS_REASON_LABELS, CODE_REVIEW_DISMISS_REASONS, CODE_RE
   CODE_REVIEW_PRESETS, CODE_REVIEW_SEVERITY_GROUP_LABELS, codeReviewLensLabel, codeReviewLensNames, codeReviewLensTally,
   codeReviewPresetFacts, codeReviewProgress } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import { useMobileRuntime } from '../../auth/AuthProvider';
 import { AppText, BottomBar, Button, Disclosure, Dot, Notice, Pill, SectionLabel, Segmented, SheetModal, toneColor, type SheetRequest,
   type Tone } from '../../components/UI';
 import { openExternal, safeExternalUrl } from '../../components/Workflow';
+import { trackEvent } from '../../lib/analytics';
 import { errorMessage, showActionError } from '../../lib/errors';
 import { mono, radius, sans, useTheme, withAlpha } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
@@ -42,6 +43,17 @@ export function useCodeReview(id: string, options: { seed?: CodeReviewPublic | n
   const pull = state.data?.pullRequest;
   const prLabel = pull ? `${pull.owner}/${pull.repo}#${pull.number}` : null;
 
+  // Once per review and head, like web: a second impression would inflate every funnel built on it.
+  const viewedKey = review && !running ? `${review.id}:${review.reviewedHeadSha}` : null;
+  const viewedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!viewedKey || !review || viewedRef.current === viewedKey) return;
+    viewedRef.current = viewedKey;
+    trackEvent('code_review_findings_viewed', {
+      preset: review.preset, open_count: review.openCount, blocker: review.counts.blocker, major: review.counts.major,
+      minor: review.counts.minor, nit: review.counts.nit, stale_for_head: review.staleForHead,
+    });
+  }, [viewedKey, review]);
   // The socket keeps the review current, not its findings, so poll while something runs. Web does the same.
   useEffect(() => {
     if (!running || !options.enabled || !id) return undefined;
@@ -58,7 +70,8 @@ export function useCodeReview(id: string, options: { seed?: CodeReviewPublic | n
   }, []);
   const start = () => run('start', 'Could not start the review', async () => {
     setNotice(null);
-    await workflow.startCodeReview(id, preset ?? state.data?.defaultPreset ?? 'standard');
+    const next = await workflow.startCodeReview(id, preset ?? state.data?.defaultPreset ?? 'standard');
+    trackEvent('code_review_started', { preset: next.preset, depth: next.preset });
   });
   const stop = () => run('stop', fixing ? 'Could not stop the fix' : 'Could not stop the review',
     () => workflow.stopCodeReview(id, fixing ? review?.fixTaskId : null));
@@ -68,6 +81,7 @@ export function useCodeReview(id: string, options: { seed?: CodeReviewPublic | n
       setNotice(null);
       try {
         await workflow.fixCodeReviewFindings(id, ids);
+        trackEvent('code_review_fix_started', { findings_count: ids.length });
         setSelected(new Set());
       } catch (error) {
         // A full task slot defers the fix rather than refusing it, as on web. Say so plainly.
@@ -85,6 +99,7 @@ export function useCodeReview(id: string, options: { seed?: CodeReviewPublic | n
       { text: 'Cancel', style: 'cancel', isPreferred: true },
       { text: 'Post to PR', onPress: () => void run('post', 'Could not post to the pull request', async () => {
         const result = await workflow.postCodeReviewFindings(id, ids);
+        trackEvent('code_review_posted_to_pr', { findings_count: result.posted });
         setSelected(new Set());
         setNotice(`Posted ${result.posted} finding${result.posted === 1 ? '' : 's'} to the pull request.`);
       }) },
@@ -260,6 +275,13 @@ export function CodeReviewSection({ review: cr, open, openSheet, onReviewRequest
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
+  const onToggleExpanded = (id: string) => {
+    if (!expanded.has(id)) {
+      const finding = findings.find((item) => item.id === id);
+      if (finding) trackEvent('code_review_finding_expanded', { severity: finding.severity, confidence: finding.confidence, anchor_verified: finding.anchorVerified });
+    }
+    toggleExpanded(id);
+  };
   const disabled = busy !== null;
 
   if (!review) {
@@ -324,7 +346,7 @@ export function CodeReviewSection({ review: cr, open, openSheet, onReviewRequest
         trailing={<Button variant="quiet" size="sm" title="Select all" accessibilityLabel={`Select all ${CODE_REVIEW_SEVERITY_GROUP_LABELS[group.severity]}`}
           onPress={() => cr.selectAll(group.items.filter((finding) => finding.disposition !== 'selected').map((finding) => finding.id))} />} />
       {group.items.map((finding) => <FindingCard key={finding.id} finding={finding} review={cr} names={names}
-        expanded={expanded.has(finding.id)} onToggleExpanded={() => toggleExpanded(finding.id)} openSheet={openSheet} />)}
+        expanded={expanded.has(finding.id)} onToggleExpanded={() => onToggleExpanded(finding.id)} openSheet={openSheet} />)}
     </View>)}
 
     {!running && review.funnel.raised > 0 ? <View style={{ gap: 6 }}>

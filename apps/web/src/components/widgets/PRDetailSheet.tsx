@@ -53,6 +53,7 @@ import {
   type PRReviewDetail,
   type PRReviewThread,
   type MergeQueueTimelineEvent,
+  type PRReviewEvent,
 } from '../../lib/api';
 import { prime } from '../../lib/prSummaryCache';
 import { useOnReconnect } from '../../hooks/useOnReconnect';
@@ -68,6 +69,7 @@ import { useGitHubActions } from '../panels/github/useGitHubActions';
 import { stackSelection } from '../panels/github/stacks';
 import { PrSessionChip } from './session/PrSessionChip';
 import { OpenInWorkbenchButton } from './session/OpenInWorkbenchButton';
+import { PRReviewDialog } from './PRReviewDialog';
 
 /**
  * Slide-in detail panel for a PR. Phase 4 ships the skeleton —
@@ -140,6 +142,8 @@ export function PRDetailSheet({
   const [merging, setMerging] = useState(false);
   const [confirmMerge, setConfirmMerge] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Which review dialog is open, if any. Only offered to a requested reviewer.
+  const [reviewPrompt, setReviewPrompt] = useState<PRReviewEvent | null>(null);
   // Whether PostHog Code is connected for this PR's workspace — gates the
   // auto-keep-mergeable toggle (the watcher dispatches via PostHog Code).
   const [togglingQueue, setTogglingQueue] = useState(false);
@@ -449,8 +453,12 @@ export function PRDetailSheet({
   // auto-keep-mergeable) and the CI status pill only make sense on a PR you
   // own; on one you're only a requested reviewer, the relevant signal is
   // whether your review is required, so we show the review-decision pill and
-  // drop every write action.
+  // drop every write action except your own review (`canReview` below).
   const isOwnPr = !!view && view.row.authored;
+  // The one write a reviewer gets: their own review, on an open PR that asked
+  // for it. GitHub refuses a review of your own PR, and so does the backend.
+  const canReview =
+    !!view && view.row.state === 'open' && view.row.reviewRequested && !view.row.authored;
 
   // Whether an agent can take this PR right now, and if not, why. The row list
   // gets its task status as a prop; the sheet has to look the linked task up
@@ -616,6 +624,28 @@ export function PRDetailSheet({
                 }
                 state={view.row.state}
               />
+            )}
+            {/* Right, for a requested reviewer: their own review. */}
+            {canReview && (
+              <div className="flex flex-wrap items-center justify-start gap-x-1 gap-y-1.5">
+                <Button
+                  className="h-7 bg-emerald-600 px-2 text-xs text-white hover:bg-emerald-700"
+                  onClick={() => setReviewPrompt('approve')}
+                  title="Approve this pull request on GitHub, from your own account"
+                >
+                  <Check className="mr-1 h-3.5 w-3.5" />
+                  Approve
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setReviewPrompt('request_changes')}
+                  title="Request changes on GitHub, from your own account. Needs a comment."
+                >
+                  <MessageSquare className="mr-1 h-3.5 w-3.5" />
+                  Request changes
+                </Button>
+              </div>
             )}
             {/* Right: write actions — only for PRs you own.
 
@@ -832,6 +862,21 @@ export function PRDetailSheet({
             Connect an agent
           </Button>
         </div>
+      )}
+
+      {view && (
+        <PRReviewDialog
+          event={reviewPrompt}
+          row={view.row}
+          onClose={() => setReviewPrompt(null)}
+          onSubmitted={(next) => {
+            // The WS broadcast carries the same refresh; applying the answer
+            // now just means the pill does not wait for it.
+            if (!next) return;
+            setData((prev) => (prev && prev.row.id === next.id ? { ...prev, row: next } : prev));
+            usePullRequestStore.getState().patchRow(next.id, next);
+          }}
+        />
       )}
 
       {view && (
