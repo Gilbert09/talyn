@@ -80,6 +80,12 @@ export function BillingCard({ userId, email, canMutate }: { userId: string; emai
         </p>
       )}
 
+      {usage && (usage.resetUsedWsec ?? 0) > 0 && (
+        <p className="mt-2 text-xs text-muted-foreground" data-testid="billing-reset-hours">
+          Usage resets cleared {formatBoxHours(usage.resetUsedWsec ?? 0)} box-hours this period (not in the figure above).
+        </p>
+      )}
+
       <h3 className="mb-1 mt-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Auto top-up</h3>
       {data.autoTopup ? (
         <div className="rounded-lg border border-border bg-card p-3 text-xs">

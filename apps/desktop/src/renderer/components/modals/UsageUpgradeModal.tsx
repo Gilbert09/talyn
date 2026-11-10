@@ -20,6 +20,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { AnnualSwitch } from '../settings/sections/AnnualSwitch';
+import { UsageResetAction } from '../billing/UsageResetAction';
 import { api } from '../../lib/api';
 import { openExternal } from '../../lib/openExternal';
 import { trackEvent } from '../../lib/analytics';
@@ -495,6 +496,10 @@ export function UsageUpgradeModal({
                 </Button>
               ))}
             </div>
+          )}
+
+          {!nothingToSell && !upgradeToMax && (
+            <UsageResetAction offer={status.usageReset} periodEnd={status.usage.periodEnd} resets={status.usage.resets} placement="upgrade_modal" />
           )}
 
           {waiting && (

@@ -4,6 +4,7 @@ import {
   CREDIT_PACK_IDS,
   PLAN_TIER_LABELS,
   TEAM_MIN_SEATS,
+  USAGE_RESET_TIERS,
   type BillingOrder,
   type CreditPackId,
   type PaidTier,
@@ -11,6 +12,7 @@ import {
   type TeamPriceTiers,
   type TeamPricing,
   type TeamTier,
+  type UsageResetTier,
 } from '@talyn/shared';
 import { debugBus } from '../debugBus.js';
 import { webAppUrl } from '../webApp.js';
@@ -38,6 +40,10 @@ import { billingEnabled } from './entitlements.js';
  * Optional pair — the old Unlimited products, no longer sold. Their
  * subscribers resolve to Legacy Pro, so keep them set while any exist:
  *   POLAR_PRODUCT_ID_MONTHLY / POLAR_PRODUCT_ID_ANNUAL
+ * Optional — usage resets, one one-time product per tier, priced at the
+ * tier's monthly price. A tier can buy a reset only while its product is set:
+ *   POLAR_PRODUCT_ID_RESET_PRO / POLAR_PRODUCT_ID_RESET_MAX /
+ *   POLAR_PRODUCT_ID_RESET_LEGACY_PRO
  * Optional:
  *   POLAR_SUCCESS_URL             — browser landing page after checkout
  *                                   (default: the web app's billing page)
@@ -73,6 +79,12 @@ export const CREDIT_PACK_PRODUCT_ENV: Record<CreditPackId, string> = {
   '25': 'POLAR_PRODUCT_ID_CREDITS_25',
   '100': 'POLAR_PRODUCT_ID_CREDITS_100',
   '500': 'POLAR_PRODUCT_ID_CREDITS_500',
+};
+
+export const USAGE_RESET_PRODUCT_ENV: Record<UsageResetTier, string> = {
+  pro: 'POLAR_PRODUCT_ID_RESET_PRO',
+  max: 'POLAR_PRODUCT_ID_RESET_MAX',
+  legacy_pro: 'POLAR_PRODUCT_ID_RESET_LEGACY_PRO',
 };
 
 function envProduct(name: string): string | undefined {
@@ -113,6 +125,16 @@ export function creditPackProductId(pack: CreditPackId): string | undefined {
 export function creditPackForProduct(productId: string | null | undefined): CreditPackId | null {
   if (!productId) return null;
   return CREDIT_PACK_IDS.find((pack) => creditPackProductId(pack) === productId) ?? null;
+}
+
+export function usageResetProductId(tier: UsageResetTier): string | undefined {
+  return envProduct(USAGE_RESET_PRODUCT_ENV[tier]);
+}
+
+/** The tier a usage-reset product resets, or null for any other product. */
+export function usageResetTierForProduct(productId: string | null | undefined): UsageResetTier | null {
+  if (!productId) return null;
+  return USAGE_RESET_TIERS.find((tier) => usageResetProductId(tier) === productId) ?? null;
 }
 
 /**
@@ -166,10 +188,10 @@ export const BILLING_PAGE_PATH = '/settings/billing';
  * cannot name its own public origin, the web redirects stay.
  */
 export function checkoutRedirects(
-  kind: 'plan' | 'credits',
+  kind: 'plan' | 'credits' | 'reset',
   returnTo?: string | null
 ): { successUrl?: string; returnUrl?: string } {
-  if (returnTo) {
+  if (returnTo && kind !== 'reset') {
     const returnKind = kind === 'plan' ? 'checkout' : 'credits';
     const successUrl = mobileBillingBounceUrl(returnTo, returnKind, 'success');
     const returnUrl = mobileBillingBounceUrl(returnTo, returnKind, 'cancel');
@@ -285,6 +307,28 @@ export async function createCreditCheckoutUrl(
       allowDiscountCodes: false,
       metadata: { kind: 'credit_pack', pack },
       ...checkoutRedirects('credits', returnTo),
+    })
+  );
+  return checkout.url;
+}
+
+/**
+ * Hosted checkout for a usage reset of `tier` (a one-time product at the
+ * tier's monthly price). The `order.paid` webhook applies the reset; the
+ * product id says which tier, so the metadata is a label only. Discount codes
+ * are off, as for credit packs. Web and desktop only for now, so there is no
+ * mobile `returnTo`.
+ */
+export async function createUsageResetCheckoutUrl(userId: string, tier: UsageResetTier): Promise<string> {
+  const productId = usageResetProductId(tier);
+  if (!productId) throw new Error(`Polar product id for the ${PLAN_TIER_LABELS[tier]} usage reset is not set`);
+  const checkout = await timed('POST', 'checkouts.create', () =>
+    getPolarClient().checkouts.create({
+      products: [productId],
+      externalCustomerId: userId,
+      allowDiscountCodes: false,
+      metadata: { kind: 'usage_reset', tier },
+      ...checkoutRedirects('reset'),
     })
   );
   return checkout.url;

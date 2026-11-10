@@ -809,6 +809,15 @@ then keeps the old build serving, so nothing breaks, but nothing deploys.
    origin (`TALYN_PUBLIC_API_URL`, or the origin of
    `POSTHOG_OAUTH_REDIRECT_URI` / `SLACK_OAUTH_REDIRECT_URI`). Without one, a
    mobile checkout keeps the web return URLs.
+10. **Usage reset products (optional).** Create one one-time product for
+    each tier that may buy a reset, at that tier's monthly price, with no
+    discounts: "Talyn Pro usage reset" $40, "Talyn Max usage reset" $100 and
+    "Talyn Legacy Pro usage reset" $15. Copy the ids to
+    `POLAR_PRODUCT_ID_RESET_PRO`, `POLAR_PRODUCT_ID_RESET_MAX` and
+    `POLAR_PRODUCT_ID_RESET_LEGACY_PRO`. A tier without its product cannot
+    buy a reset. The PostHog flag `usage-reset` (env override
+    `USAGE_RESET_ENABLED`) chooses who sees the offer. The price comes from
+    `PLAN_PRICES`, so keep the Polar prices the same as that table.
 
 How the pieces behave:
 
@@ -1109,6 +1118,9 @@ POSTHOG_HOST=https://us.i.posthog.com
 #
 # Optional pairs on top of the core group (both or neither):
 # POLAR_PRODUCT_ID_MAX_MONTHLY=<uuid of Max, $100/month; Max has no annual product>
+# POLAR_PRODUCT_ID_RESET_PRO=<uuid of the $40 one-time Pro usage reset>        # optional, alone
+# POLAR_PRODUCT_ID_RESET_MAX=<uuid of the $100 one-time Max usage reset>       # optional, alone
+# POLAR_PRODUCT_ID_RESET_LEGACY_PRO=<uuid of the $15 one-time Legacy Pro reset> # optional, alone
 # POLAR_PRODUCT_ID_MONTHLY=<uuid of the OLD $15/mo Unlimited product>   # Legacy Pro
 # POLAR_PRODUCT_ID_ANNUAL=<uuid of the OLD $150/yr Unlimited product>   # Legacy Pro
 # POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY=<uuid of the $40/seat monthly team product>

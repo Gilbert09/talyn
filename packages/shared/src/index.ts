@@ -173,6 +173,7 @@ import type {
   PlanTier,
   SellableTier,
   SizePrice,
+  UsageResetOffer,
   UsageSummary,
 } from './pricing.js';
 
@@ -2008,6 +2009,12 @@ export interface BillingStatus {
   concurrentBoxes?: ConcurrentBoxUsage;
   /** List prices, so no client hard-codes a dollar amount. */
   pricing?: BillingPricing;
+  /**
+   * A usage reset this account can buy now: the tier's monthly price for a
+   * fresh allowance in the current period. Absent when resets are off, the
+   * tier is free, the reset product is not set, or nothing is used yet.
+   */
+  usageReset?: UsageResetOffer;
 }
 
 export interface CreateCheckoutRequest {

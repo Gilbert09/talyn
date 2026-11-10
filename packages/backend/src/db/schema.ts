@@ -356,6 +356,9 @@ export const usagePeriods = pgTable(
     // Overage the credits could not cover (a turn or task that finished after
     // the budget ran out). Recorded, not billed.
     uncoveredMicros: bigint('uncovered_micros', { mode: 'number' }).notNull().default(0),
+    // Weighted seconds that usage resets moved out of used_wsec this period.
+    // used_wsec + reset_used_wsec is everything the period ran.
+    resetUsedWsec: bigint('reset_used_wsec', { mode: 'number' }).notNull().default(0),
     alert50At: timestamp('alert_50_at', { withTimezone: true }),
     alert80At: timestamp('alert_80_at', { withTimezone: true }),
     alert100At: timestamp('alert_100_at', { withTimezone: true }),
@@ -364,6 +367,30 @@ export const usagePeriods = pgTable(
   },
   (t) => ({
     pk: primaryKey({ name: 'usage_periods_pkey', columns: [t.ownerId, t.periodStart] }),
+  })
+);
+
+/**
+ * One paid usage reset (a one-time Polar order). Unique on the order id, so a
+ * redelivered `order.paid` resets once. A refund that arrives first leaves a
+ * row with `period_start` NULL, so the late `order.paid` does nothing.
+ */
+export const usageResets = pgTable(
+  'usage_resets',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id').notNull(),
+    polarOrderId: text('polar_order_id').notNull(),
+    tier: text('tier').notNull(), // UsageResetTier the order paid for
+    periodStart: timestamp('period_start', { withTimezone: true }),
+    usedBeforeWsec: bigint('used_before_wsec', { mode: 'number' }).notNull().default(0),
+    includedWsec: bigint('included_wsec', { mode: 'number' }).notNull().default(0),
+    refundedAt: timestamp('refunded_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    polarOrderUq: uniqueIndex('uq_usage_resets_polar_order').on(t.polarOrderId),
+    ownerPeriodIdx: index('idx_usage_resets_owner_period').on(t.ownerId, t.periodStart),
   })
 );
 

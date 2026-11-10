@@ -50,6 +50,7 @@ import { Select } from '../../ui/select';
 import { SettingsPage } from '../../ui/settings';
 import { OrderHistory, formatRenewalDate } from './BillingOrderHistory';
 import { AnnualSwitch } from './AnnualSwitch';
+import { UsageResetAction } from '../../billing/UsageResetAction';
 
 const hours = includedHoursText;
 
@@ -307,6 +308,7 @@ function UsageCard({ status }: { status: UsageBillingStatus }) {
           </p>
         )}
         <p className="text-xs text-muted-foreground">{formatBoxHoursUsage(usage.usedWsec, usage.includedWsec)} used</p>
+        <UsageResetAction offer={status.usageReset} periodEnd={usage.periodEnd} resets={usage.resets} placement="settings" />
         {status.concurrentBoxes && (
           <p className="text-xs text-muted-foreground" data-testid="open-boxes">
             {status.concurrentBoxes.used} of {status.concurrentBoxes.limit} boxes running now

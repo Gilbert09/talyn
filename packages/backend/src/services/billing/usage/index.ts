@@ -20,6 +20,13 @@ export type { EndReason, OpenIntervalInput } from './intervals.js';
 export type { UsageBudget } from './charge.js';
 export { grantCreditLot, reverseCreditLot, liveLots, creditBalance, type GrantCreditLotInput } from './credits.js';
 export { resolveUsageTier, type UsageTier } from './tier.js';
+export {
+  applyUsageReset,
+  countUsageResets,
+  markUsageResetRefunded,
+  usageResetAvailability,
+  type UsageResetRefusal,
+} from './resets.js';
 export { initUsageMeter, usageMeter } from './meter.js';
 
 /**

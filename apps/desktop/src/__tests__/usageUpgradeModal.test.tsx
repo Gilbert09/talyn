@@ -14,6 +14,7 @@ import { oldStatus, usageStatus } from '../testing/billingStatus';
 const checkout = jest.fn();
 const changePlan = jest.fn();
 const creditCheckout = jest.fn();
+const usageResetCheckout = jest.fn();
 const portal = jest.fn();
 const statusFetch = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
@@ -23,6 +24,7 @@ jest.mock('../renderer/lib/api', () => ({
       checkout: (...a: unknown[]) => checkout(...a),
       changePlan: (...a: unknown[]) => changePlan(...a),
       creditCheckout: (...a: unknown[]) => creditCheckout(...a),
+      usageResetCheckout: (...a: unknown[]) => usageResetCheckout(...a),
       portal: (...a: unknown[]) => portal(...a),
     },
   },
@@ -42,7 +44,7 @@ function open(status: ReturnType<typeof usageStatus>, reason: UpgradeReason | nu
 
 describe('UpgradeModal with usage billing', () => {
   beforeEach(() => {
-    [checkout, changePlan, creditCheckout, portal, openExternal, openSettings, statusFetch].forEach((m) => m.mockReset());
+    [checkout, changePlan, creditCheckout, usageResetCheckout, portal, openExternal, openSettings, statusFetch].forEach((m) => m.mockReset());
     statusFetch.mockReturnValue(new Promise(() => undefined));
     useWorkspaceStore.setState({ openSettings, features: null } as never);
     useBillingStore.getState().stopCheckoutPollBurst();
@@ -351,6 +353,57 @@ describe('UpgradeModal with usage billing', () => {
       });
       expect(screen.getByText('You are on Max')).toBeInTheDocument();
       expect(screen.getByText('You have 1,000 box-hours a month and every box size.')).toBeInTheDocument();
+    });
+  });
+
+  describe('usage reset', () => {
+    const resettable = (resets?: number) => {
+      const status = usageStatus('pro', { usedHours: 200, exhausted: true });
+      status.usageReset = { tier: 'pro', priceMicros: 40_000_000, includedWsec: 200 * 3600 };
+      if (resets != null) status.usage = { ...status.usage!, resets };
+      return status;
+    };
+
+    it('hides the action when the status has no offer', () => {
+      open(usageStatus('pro', { usedHours: 200, exhausted: true }), 'usage_exhausted');
+      expect(document.querySelector('[data-attr="usage-reset-checkout"]')).toBeNull();
+    });
+
+    it('shows the price and the explanation', () => {
+      open(resettable(), 'usage_exhausted');
+      expect(screen.getByRole('button', { name: 'Reset usage: $40' })).toBeInTheDocument();
+      expect(screen.getByText(/get all 200 box-hours back now\. Your period still ends on .*Unused hours do not carry over/)).toBeInTheDocument();
+      expect(screen.queryByTestId('usage-reset-count')).toBeNull();
+    });
+
+    it.each([
+      [1, 'Reset 1 time this period'],
+      [2, 'Reset 2 times this period'],
+    ])('notes %i resets this period', (resets, text) => {
+      open(resettable(resets), 'usage_exhausted');
+      expect(screen.getByText(text)).toBeInTheDocument();
+    });
+
+    it('opens the hosted checkout on click', async () => {
+      usageResetCheckout.mockResolvedValue({ url: 'https://polar.test/reset' });
+      open(resettable(), 'usage_exhausted');
+      fireEvent.click(screen.getByRole('button', { name: 'Reset usage: $40' }));
+      await waitFor(() => expect(openExternal).toHaveBeenCalledWith('https://polar.test/reset'));
+      expect(usageResetCheckout).toHaveBeenCalledTimes(1);
+      expect(trackEvent).toHaveBeenCalledWith('usage_reset_checkout_started', { tier: 'pro', placement: 'upgrade_modal' });
+    });
+
+    it.each([
+      ['usage_reset_requires_paid_plan', 'A usage reset needs a paid plan.'],
+      ['nothing_to_reset', 'You have not used any box-hours yet. There is nothing to reset.'],
+      ['usage_reset_unavailable', 'Usage reset is not available for this account.'],
+    ])('shows text for %s', async (code, text) => {
+      usageResetCheckout.mockRejectedValue(Object.assign(new Error('raw'), { code }));
+      open(resettable(), 'usage_exhausted');
+      fireEvent.click(screen.getByRole('button', { name: 'Reset usage: $40' }));
+      expect(await screen.findByText(text)).toBeInTheDocument();
+      expect(openExternal).not.toHaveBeenCalled();
+      expect(trackEvent).toHaveBeenCalledWith('usage_reset_checkout_failed', expect.objectContaining({ stage: 'create_checkout', code }));
     });
   });
 });

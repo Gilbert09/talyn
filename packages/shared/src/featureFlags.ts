@@ -394,6 +394,24 @@ export const FEATURE_FLAGS = {
     releaseScopes: ['api', 'public-api'],
   },
 
+  /**
+   * Usage reset — pay the plan's monthly price once to set the current
+   * period's used box-hours back to zero.
+   *
+   * Fails CLOSED: it sells fleet hours, so a PostHog outage must not offer it
+   * to accounts nobody chose. Clients do not read it from `/features`: the
+   * backend sends `BillingStatus.usageReset` only when the flag is on, and the
+   * checkout route checks it again.
+   */
+  usageReset: {
+    posthogKey: 'usage-reset',
+    envOverride: 'USAGE_RESET_ENABLED',
+    fallback: false,
+    description: 'Usage reset — buy a fresh box-hour allowance for the current period',
+    availability: 'gated',
+    releaseScopes: ['usage-reset'],
+  },
+
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */
