@@ -8,6 +8,7 @@ import {
   terminalOutcomeFromPayload,
   processWebhookDelivery,
   _resetCoalesce,
+  WebhookWorker,
   type WebhookDelivery,
 } from '../services/webhookWorker.js';
 import { refreshWebhookIndex, _resetWebhookIndex } from '../services/webhookIndex.js';
@@ -965,5 +966,60 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     expect(n).toBe(0);
     expect(baseSpy).not.toHaveBeenCalled();
     expect(refreshSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('WebhookWorker fast lane', () => {
+  function runLoop(entries: Array<[string, string[]]>) {
+    const worker = new WebhookWorker() as unknown as {
+      conn: unknown;
+      running: boolean;
+      supportsAutoClaim: boolean;
+      loop(): Promise<void>;
+      handleEntry(id: string, d: WebhookDelivery | null, lane: string, replayed: boolean): Promise<void>;
+    };
+    let active = 0;
+    let peak = 0;
+    const handled: string[] = [];
+    worker.handleEntry = vi.fn(async (id: string) => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active--;
+      handled.push(id);
+      if (id === 'boom') throw new Error('boom');
+    });
+    let reads = 0;
+    worker.conn = {
+      xreadgroup: vi.fn(async () => {
+        if (reads++ === 0) return [['gh:webhooks', entries]];
+        worker.running = false;
+        return null;
+      }),
+    };
+    worker.supportsAutoClaim = false;
+    worker.running = true;
+    return { done: worker.loop(), handled, peak: () => peak };
+  }
+
+  const entry = (id: string): [string, string[]] => [
+    id,
+    ['data', JSON.stringify(delivery({ deliveryId: id, eventType: 'check_run', action: 'completed' }))],
+  ];
+
+  it.each([1, 8, 9, 32])('runs at most 8 of a batch of %i at once and handles every entry', async (n) => {
+    const ids = Array.from({ length: n }, (_, i) => `${i}-0`);
+    const run = runLoop(ids.map(entry));
+    await run.done;
+    expect(run.handled.sort()).toEqual([...ids].sort());
+    expect(run.peak()).toBe(Math.min(n, 8));
+  });
+
+  it('a rejected entry frees its slot for the rest of the batch', async () => {
+    const ids = ['boom', ...Array.from({ length: 15 }, (_, i) => `${i}-0`)];
+    const run = runLoop(ids.map(entry));
+    await run.done;
+    expect(run.handled).toHaveLength(16);
+    expect(run.peak()).toBe(8);
   });
 });
