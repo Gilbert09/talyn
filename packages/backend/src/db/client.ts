@@ -45,38 +45,6 @@ let backedByRealPostgres = false;
  */
 const scopedDbStore = new AsyncLocalStorage<Database>();
 
-/** How long a pool query or `begin` may wait for a free connection. */
-export const DB_ACQUIRE_TIMEOUT_MS = 10_000;
-export const DB_ACQUIRE_TIMEOUT_CODE = 'DB_POOL_ACQUIRE_TIMEOUT';
-
-/** A pool query or `begin` got no connection in time, so it never ran. */
-export class DbAcquireTimeoutError extends Error {
-  readonly code = DB_ACQUIRE_TIMEOUT_CODE;
-  constructor(readonly timeoutMs: number, options?: { cause?: unknown }) {
-    super(`db pool: no connection within ${timeoutMs}ms`, options);
-    this.name = 'DbAcquireTimeoutError';
-  }
-}
-
-/** The parts of a postgres-js `Query` that the acquire deadline reads. */
-interface PgQuery {
-  /** Null until the query is given to a connection. */
-  state: unknown;
-  handler: ((q: unknown) => unknown) & { debug?: unknown };
-  cancel: () => unknown;
-}
-
-function isPgQuery(x: object): x is PgQuery {
-  const q = x as Partial<PgQuery>;
-  return 'state' in x && typeof q.handler === 'function' && typeof q.cancel === 'function';
-}
-
-/** Hooks for the pool that `instrumentEgress` wraps. */
-export interface PoolHooks {
-  /** Wire to postgres-js `onclose`. */
-  connectionClosed: () => void;
-}
-
 /** Pull the operation + target table out of a SQL string for a panel label. */
 export function summarizeSql(raw: string): { operation: string; table: string | null } {
   const q = raw.replace(/^[\s(]+/, '');
@@ -103,97 +71,19 @@ export function summarizeSql(raw: string): { operation: string; table: string | 
 export function instrumentEgress(
   sql: postgres.Sql,
   connection: QueryConnection = 'pool',
-): PoolHooks {
+): void {
   const original = sql.unsafe.bind(sql) as (
     query: string,
     params?: unknown[],
     options?: unknown,
   ) => object;
 
-  // Pool queries that wait in the postgres-js queue. When a connection closes,
-  // postgres-js opens it again for the head of that queue. A cancel of a query
-  // that a connection is opening for leaves that connection stuck, so the
-  // queries queued at that moment lose their deadline.
-  const queued = new Set<PgQuery>();
-  const keep = new WeakSet<PgQuery>();
-
-  /**
-   * The acquire deadline. postgres-js has none, so a query waits for a free
-   * connection forever. A query is cancelled only while it waits in the pool
-   * queue: there `cancel()` removes it and rejects it with 57014. On a started
-   * query `cancel()` sends a server cancel, which we never do. Queries in a
-   * transaction share its connection and get no deadline.
-   *
-   * The hand-off is watched from creation, because `execute()` (which `begin`
-   * uses) can hand the query to the pool before the first `then`.
-   */
-  const watchAcquire = (q: PgQuery) => {
-    let timer: NodeJS.Timeout | null = null;
-    let reachedConnection = false;
-    const clear = (): void => {
-      if (timer) clearTimeout(timer);
-      timer = null;
-      queued.delete(q);
-    };
-    const handOff = q.handler;
-    q.handler = Object.assign(
-      (x: unknown) => {
-        const out = handOff(x);
-        // The pool handler returns undefined when it queues the query, and the
-        // connection when it opens one for it.
-        if (q.state != null || out !== undefined) {
-          reachedConnection = true;
-          clear();
-          return out;
-        }
-        queued.add(q);
-        try {
-          let state: unknown = null;
-          Object.defineProperty(q, 'state', {
-            configurable: true,
-            enumerable: true,
-            get: () => state,
-            set: (v: unknown) => {
-              state = v;
-              if (v != null) clear();
-            },
-          });
-        } catch {
-          // The timer still checks `state` before it cancels.
-        }
-        return out;
-      },
-      { debug: handOff.debug },
-    );
-    const start = (onTimeout: () => void): void => {
-      if (timer || reachedConnection || q.state != null) return;
-      timer = setTimeout(() => {
-        timer = null;
-        if (q.state != null || !queued.has(q) || keep.has(q)) return;
-        queued.delete(q);
-        onTimeout();
-        q.cancel();
-      }, DB_ACQUIRE_TIMEOUT_MS);
-      timer.unref?.();
-    };
-    return { start, clear };
-  };
-
   const wrapPending = (pending: object, query: string): object => {
     const startedAt = Date.now();
     let counted = false;
     let inflightId: number | null = null;
     let inflightDone = false;
-    const acquire = connection === 'pool' && isPgQuery(pending) ? watchAcquire(pending) : null;
-    let timedOut = false;
-    let timeoutError: DbAcquireTimeoutError | null = null;
-    const failure = (err: unknown): unknown => {
-      if (!timedOut) return err;
-      timeoutError ??= new DbAcquireTimeoutError(DB_ACQUIRE_TIMEOUT_MS, { cause: err });
-      return timeoutError;
-    };
     const settle = (result: unknown, ok: boolean, err?: unknown): void => {
-      acquire?.clear();
       if (inflightId !== null && !inflightDone) {
         inflightDone = true;
         endInflight(inflightId);
@@ -238,17 +128,13 @@ export function instrumentEgress(
                 connection,
                 ownerScope: scopedDbStore.getStore() !== undefined,
               });
-              acquire?.start(() => {
-                timedOut = true;
-              });
             }
             return (target as PromiseLike<unknown>).then(
               (result) => {
                 settle(result, true);
                 return onFulfilled ? onFulfilled(result) : result;
               },
-              (raw) => {
-                const err = failure(raw);
+              (err) => {
                 settle(undefined, false, err);
                 if (onRejected) return onRejected(err);
                 throw err;
@@ -324,12 +210,6 @@ export function instrumentEgress(
       return savepoint(...args.slice(0, fnIndex), instrumentScope(fn as ScopeFn));
     };
   }
-
-  return {
-    connectionClosed: () => {
-      for (const q of queued) keep.add(q);
-    },
-  };
 }
 
 /**
@@ -341,7 +221,6 @@ export function instrumentEgress(
 function createPostgresHandle(connectionString: string): Handle {
   const url = new URL(connectionString);
   const isPooler = url.hostname.includes('pooler.supabase.com');
-  let pool: PoolHooks | null = null;
   const sql = postgres(connectionString, {
     // Headroom so the webhook worker's concurrent batch can't starve everything
     // else of connections — WS auth (a DB upsert with a 5s handshake budget),
@@ -375,9 +254,8 @@ function createPostgresHandle(connectionString: string): Handle {
     connection: { statement_timeout: 30_000, idle_in_transaction_session_timeout: 30_000 },
     // Don't wait forever to acquire a socket either.
     connect_timeout: 15,
-    onclose: () => pool?.connectionClosed(),
   });
-  pool = instrumentEgress(sql);
+  instrumentEgress(sql);
   const db = drizzle(sql, { schema, casing: 'snake_case' }) as Database;
   return {
     db,
