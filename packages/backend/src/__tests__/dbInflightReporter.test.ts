@@ -44,6 +44,48 @@ describe('collectInflightReport thresholds', () => {
   });
 });
 
+describe('collectInflightReport call site', () => {
+  const site = (frames: string[]) => {
+    const err = new Error('db query site');
+    err.stack = ['Error: db query site', ...frames.map((f) => `    at ${f}`)].join('\n');
+    return err;
+  };
+
+  it('prints the app frames once, on the first report', () => {
+    beginInflight(
+      'query',
+      'select "id" from "integrations"',
+      {
+        connection: 'transaction',
+        ownerScope: true,
+        site: site([
+          'wrapPending (/app/packages/backend/dist/db/client.js:190:20)',
+          'QueryPromise.then (/app/node_modules/drizzle-orm/query-promise.js:31:17)',
+          'getGithubToken (/app/packages/backend/dist/services/github.js:663:5)',
+          'processTicksAndRejections (node:internal/process/task_queues:105:5)',
+          'async checkBoxGate (/app/packages/backend/dist/services/billing/entitlements.js:720:9)',
+        ]),
+      },
+      T0,
+    );
+    expect(collectInflightReport(s(31))).toEqual([
+      '[db-inflight] query open 31s: select "integrations" (owner scope)',
+      '[db-inflight]   from getGithubToken (/app/packages/backend/dist/services/github.js:663:5) <- async checkBoxGate (/app/packages/backend/dist/services/billing/entitlements.js:720:9)',
+    ]);
+    expect(collectInflightReport(s(91))).toEqual([
+      '[db-inflight] query open 91s: select "integrations" (owner scope)',
+    ]);
+  });
+
+  it.each([
+    ['no site', undefined],
+    ['only library frames', site(['QueryPromise.then (/app/node_modules/drizzle-orm/q.js:1:1)'])],
+  ])('prints no frame line with %s', (_name, entrySite) => {
+    beginInflight('query', 'select 1', { connection: 'pool', site: entrySite }, T0);
+    expect(collectInflightReport(s(31))).toHaveLength(1);
+  });
+});
+
 describe('collectInflightReport throttling', () => {
   it('logs once at the threshold, then at most once per 60 s', () => {
     beginInflight('lock_tx', 'loopScheduler:tick', {}, T0);

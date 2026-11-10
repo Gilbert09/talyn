@@ -27,6 +27,8 @@ export interface InflightEntry {
   ownerScope?: boolean;
   /** Last time the reporter logged this entry. */
   reportedAt: number | null;
+  /** Where the query was awaited. The text is built only when it is logged. */
+  site?: Error;
 }
 
 const entries = new Map<number, InflightEntry>();
@@ -37,12 +39,23 @@ let openTransactions = 0;
 export function beginInflight(
   kind: InflightKind,
   label: string,
-  extra: { connection?: QueryConnection; ownerScope?: boolean } = {},
+  extra: { connection?: QueryConnection; ownerScope?: boolean; site?: Error } = {},
   now: number = Date.now(),
 ): number {
   const id = nextId++;
   entries.set(id, { id, kind, startedAt: now, label, reportedAt: null, ...extra });
   return id;
+}
+
+/** The frames of an entry's call site outside node_modules and the db layer. */
+export function siteFrames(entry: InflightEntry, max = 10): string[] {
+  if (!entry.site?.stack) return [];
+  return entry.site.stack
+    .split('\n')
+    .slice(1)
+    .map((line) => line.trim().replace(/^at /, ''))
+    .filter((line) => !/node_modules|node:internal|db\/(client|inflight)\.(ts|js)/.test(line))
+    .slice(0, max);
 }
 
 /** Idempotent: ending an id twice, or an unknown id, does nothing. */

@@ -2,6 +2,7 @@ import { DB_POOL_MAX } from '../db/client.js';
 import {
   ageSeconds,
   describeEntry,
+  siteFrames,
   inflightCounts,
   inflightEntries,
   kindName,
@@ -56,8 +57,11 @@ export function collectInflightReport(
       now - e.startedAt >= thresholdMs && (e.reportedAt === null || now - e.reportedAt >= repeatMs),
   );
   for (const e of due.slice(0, maxLines)) {
+    const first = e.reportedAt === null;
     e.reportedAt = now;
     lines.push(`[db-inflight] ${kindName(e.kind)} open ${ageSeconds(e, now)}s: ${describeEntry(e)}`);
+    const frames = first ? siteFrames(e) : [];
+    if (frames.length > 0) lines.push(`[db-inflight]   from ${frames.join(' <- ')}`);
   }
   if (due.length > maxLines) lines.push(`[db-inflight] +${due.length - maxLines} more`);
   return lines;

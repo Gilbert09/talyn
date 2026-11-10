@@ -239,9 +239,14 @@ export function instrumentEgress(
           ) => {
             if (inflightId === null && ended?.value) reportLateTransactionQuery(query);
             if (inflightId === null) {
+              const limit = Error.stackTraceLimit;
+              Error.stackTraceLimit = 40;
+              const site = new Error('db query site');
+              Error.stackTraceLimit = limit;
               inflightId = beginInflight('query', query, {
                 connection,
                 ownerScope: scopedDbStore.getStore() !== undefined,
+                site,
               });
             }
             return (target as PromiseLike<unknown>).then(
