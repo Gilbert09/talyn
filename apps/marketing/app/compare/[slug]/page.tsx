@@ -11,6 +11,7 @@ import {
   JsonLd,
   breadcrumbSchema,
   articleSchema,
+  faqSchema,
   type Crumb,
 } from "@/components/seo/JsonLd";
 import { site } from "@/lib/content";
@@ -19,7 +20,9 @@ import {
   getComparePage,
   relatedComparePages,
   formatCompareDate,
+  compareCardTitle,
 } from "@/lib/compare";
+import { FaqAccordion } from "@/components/sections/FaqAccordion";
 import { getFeaturePage } from "@/lib/features";
 
 export function generateStaticParams() {
@@ -95,6 +98,15 @@ export default function ComparePageRoute({ params }: Params) {
 
         <Prose as="article" className="mt-10" html={page.html} />
 
+        {page.faq.length > 0 && (
+          <div className="mt-12 border-t border-line pt-6">
+            <h2 className="font-display text-2xl font-semibold tracking-tight text-ink">
+              Common questions
+            </h2>
+            <FaqAccordion items={page.faq} className="mt-6" />
+          </div>
+        )}
+
         <div className="mt-12 border-t border-line pt-6">
           <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">
             Sources
@@ -144,7 +156,7 @@ export default function ComparePageRoute({ params }: Params) {
                 <FeatureCard
                   key={s.slug}
                   eyebrow="Compare"
-                  title={`Talyn vs ${s.competitor}`}
+                  title={compareCardTitle(s)}
                   body={s.verdict}
                   href={`/compare/${s.slug}`}
                   cta="Read the comparison"
@@ -164,6 +176,7 @@ export default function ComparePageRoute({ params }: Params) {
             path: `/compare/${page.slug}`,
             modified: page.updated,
           }),
+          ...(page.faq.length ? [faqSchema(page.faq)] : []),
         ]}
       />
     </>

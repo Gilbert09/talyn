@@ -26,28 +26,8 @@ export async function Proof() {
   const shipped = relativeTime(stats.latestPublishedAt);
 
   const items = [
-    {
-      icon: Github,
-      // Deliberately NOT a star count. A number is only a trust signal when
-      // it is a big one — at single or double digits a developer reads it as
-      // "nobody is here", which is worse than saying nothing. The verifiable
-      // claim underneath it needs no number: the source is there, and the
-      // link is the proof.
-      label: "The source is public",
-      detail: "Read what it does before you install it, or check how it does it.",
-      href: site.githubUrl,
-    },
-    stats.latestVersion && {
-      icon: Timer,
-      // Two facts in one: which build is current, and that the project is
-      // alive. "Is anybody still working on this" is the unasked question
-      // behind every public-beta badge.
-      label: shipped
-        ? `${stats.latestVersion} shipped ${shipped}`
-        : `${stats.latestVersion} is the current build`,
-      detail: "A stable release goes out every six hours when there is anything in it.",
-      href: `${site.githubUrl}/releases`,
-    },
+    // The two safety answers lead: half of visitors stop around here, and
+    // these are what replays show them looking for before they download.
     // Was "Signed and notarized on macOS". Windows visitors already get the
     // SmartScreen warning from PlatformNote under the hero buttons, and the
     // question replays show people hunting for before they download is this
@@ -63,6 +43,28 @@ export async function Proof() {
       label: "Your token never enters the sandbox",
       detail:
         "Each session runs in its own microVM. Your credentials are added from outside it.",
+    },
+    {
+      icon: Github,
+      // Deliberately NOT a star count. A number is only a trust signal when
+      // it is a big one — at single or double digits a developer reads it as
+      // "nobody is here", which is worse than saying nothing. The verifiable
+      // claim underneath it needs no number: the source is there, and the
+      // link is the proof.
+      label: "The source is public",
+      detail: "Read the code before you install it.",
+      href: site.githubUrl,
+    },
+    stats.latestVersion && {
+      icon: Timer,
+      // Two facts in one: which build is current, and that the project is
+      // alive. "Is anybody still working on this" is the unasked question
+      // behind every public-beta badge.
+      label: shipped
+        ? `${stats.latestVersion} shipped ${shipped}`
+        : `${stats.latestVersion} is the current build`,
+      detail: "A stable release goes out every six hours when there is anything in it.",
+      href: `${site.githubUrl}/releases`,
     },
   ].filter(Boolean) as Array<{
     icon: typeof Github;

@@ -7,7 +7,7 @@ import { pullRequests } from "@/lib/content";
 /** The PR side of the product: the GitHub panel, fixes, the queue, review. */
 export function PullRequests() {
   return (
-    <section id="pull-requests" className="scroll-mt-20 border-t border-line bg-paper-100 py-24">
+    <section id="pull-requests" className="scroll-mt-20 border-t border-line py-24">
       <div className="container">
         <SectionHeading
           kicker={pullRequests.kicker}

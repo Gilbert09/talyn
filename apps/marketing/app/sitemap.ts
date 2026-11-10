@@ -7,7 +7,15 @@ import { listFeaturePages } from "@/lib/features";
 import { listComparePages } from "@/lib/compare";
 import { listDocs } from "@/lib/docs";
 
+const day = (d: string) => new Date(`${d}T00:00:00Z`);
+
+/** The newest of a list of ISO dates, for a hub page that lists them. */
+function newest(dates: string[]): Date {
+  return day([...dates].sort().at(-1) ?? site.updated);
+}
+
 export default function sitemap(): MetadataRoute.Sitemap {
+  const siteUpdated = day(site.updated);
   // Guides are ungated — unlike the blog, each ships complete or not at all,
   // and a landing page nobody can crawl earns nothing.
   const guides: MetadataRoute.Sitemap = listGuides().map((guide) => ({
@@ -34,7 +42,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
   }));
 
   const docs: MetadataRoute.Sitemap = [
-    { url: `${site.url}/docs`, changeFrequency: "weekly" as const, priority: 0.8 },
+    {
+      url: `${site.url}/docs`,
+      lastModified: siteUpdated,
+      changeFrequency: "weekly" as const,
+      priority: 0.8,
+    },
     ...listDocs().map((doc) => ({
       url: `${site.url}/docs/${doc.slug}`,
       changeFrequency: "monthly" as const,
@@ -45,31 +58,37 @@ export default function sitemap(): MetadataRoute.Sitemap {
   const staticPages: MetadataRoute.Sitemap = [
     {
       url: site.url,
+      lastModified: siteUpdated,
       changeFrequency: "weekly",
       priority: 1,
     },
     {
       url: `${site.url}/features`,
+      lastModified: newest(listFeaturePages().map((f) => f.updated)),
       changeFrequency: "weekly",
       priority: 0.9,
     },
     {
       url: `${site.url}/pricing`,
+      lastModified: siteUpdated,
       changeFrequency: "monthly",
       priority: 0.9,
     },
     {
       url: `${site.url}/download`,
+      lastModified: siteUpdated,
       changeFrequency: "monthly",
       priority: 0.8,
     },
     {
       url: `${site.url}/compare`,
+      lastModified: newest(listComparePages().map((c) => c.updated)),
       changeFrequency: "monthly",
       priority: 0.7,
     },
     {
       url: `${site.url}/about`,
+      lastModified: siteUpdated,
       changeFrequency: "monthly",
       priority: 0.5,
     },

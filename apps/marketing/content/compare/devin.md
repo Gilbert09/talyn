@@ -4,8 +4,8 @@ description: "Devin is an autonomous engineer you assign work to. Talyn runs Cla
 competitor: "Devin"
 category: "Cloud coding agents"
 navLabel: "vs Devin"
-verdict: "You want to hand over whole tasks (a ticket, a migration, a feature) to an autonomous engineer that goes away and comes back with a pull request, and you would rather buy its usage from Devin than bring your own Claude or ChatGPT plan."
-updated: "2026-09-28"
+verdict: "You want to hand over a whole task to an autonomous engineer that comes back with a pull request, and you would rather buy its usage from Devin than bring your own Claude or ChatGPT plan."
+updated: "2026-11-10"
 sources:
   - label: "Devin pricing"
     url: "https://devin.ai/pricing"
@@ -28,11 +28,11 @@ chat, and Talyn takes it through to a merged pull request.
 
 ## What Devin does
 
-As of September 2026, from its own pricing page:
+As of 10 November 2026, from its own pricing page:
 
 - An autonomous coding agent that takes a task, works in its own environment,
   and produces a pull request.
-- Desktop and CLI surfaces alongside the cloud product.
+- Devin Cloud, Devin Desktop, and free use of its SWE-2 model on Pro and above.
 - **Pricing**: a Free tier with a light usage quota, Pro at $20/month, Max at
   $200/month, Teams at $80/month plus $40/month per developer seat up to 200
   users, and custom Enterprise. Each paid plan carries a usage allowance that
@@ -84,22 +84,23 @@ sit idle most of the day.
 - **It is not built as an autonomous engineer.** A session is your agent on
   your branch, and you steer it. If you want to assign a ticket and not look at
   it again, Devin is closer to that.
-- **No organisation memory of the kind Devin markets.** Sessions save short
-  notes as they learn your codebase, and that is all.
+- **Little shared memory.** Sessions save short notes as they learn your
+  codebase, and that is all.
 - **No IDE integration.**
 - **No public mobile app yet.**
 - **GitHub only.**
 
-## What Devin does not do
+## What we did not find in Devin's docs
 
-Watch the pull request after it opens one. If CI goes red an hour later, if
-main moves and the branch conflicts, if a reviewer asks for something, that is
-back to you. In Talyn, that stretch is the same session and the same button.
+Devin's pricing page does not describe these (checked 10 November 2026). Devin
+may offer some of them elsewhere, so check before you rely on this list.
 
-It also has no concept of *your* pull requests as a set. There is no list of
-everything you have open ordered by what is blocked, no queue landing the ready
-ones, no rule that fires on every pull request in a repository whether you
-opened it or not.
+- Watching a pull request after it opens: red CI an hour later, a branch that
+  conflicts when main moves, or a reviewer's request. In Talyn, that stretch
+  is the same session and the same button.
+- Your pull requests as a set: a list ordered by what is blocked, a queue
+  that lands the ready ones, or a rule that fires on every pull request in a
+  repository.
 
 ## Using both
 

@@ -1,11 +1,22 @@
 ---
-title: "Talyn vs Conductor: moving off Conductor Cloud"
-description: "Conductor is joining Meta. Conductor Cloud goes read-only on November 13 and shuts down on November 20, 2026. Talyn runs the same kind of parallel Claude Code and Codex sessions in cloud sandboxes, and reads your conductor.json as it is."
+title: "Conductor alternative: move off Conductor Cloud to Talyn"
+description: "Conductor Cloud shuts down on November 20, 2026. Talyn runs parallel Claude Code and Codex sessions in cloud sandboxes and reads your conductor.json unchanged."
 competitor: "Conductor"
 category: "Cloud coding agents"
 navLabel: "vs Conductor"
-verdict: "you want to keep your local Conductor workspaces on your Mac until the app winds down in early 2027, or you depend on Cursor or OpenCode as your agent."
+verdict: "You want to keep your local Conductor workspaces on your Mac until early 2027, or you need Cursor or OpenCode as your agent."
 updated: "2026-11-10"
+faq:
+  - q: "What happens to Conductor Cloud on November 20?"
+    a: "Conductor Cloud shuts down on November 20, 2026, and Conductor starts to delete cloud user data. On November 13 it goes read-only: you can read old chats and export data, but you cannot send new messages. Export your data before November 20."
+  - q: "Will my conductor.json work in Talyn?"
+    a: "Yes. Talyn reads conductor.json and .conductor/settings.toml, so a repository set up for Conductor works with no changes. The setup, run and archive scripts run as before, and each CONDUCTOR_* variable your scripts use is set with the same value as its TALYN_* name."
+  - q: "How do I move a Conductor Cloud workspace to Talyn?"
+    a: "Push the workspace's branch to GitHub before November 13. Open Talyn, sign in with GitHub, and connect Claude, ChatGPT or both. Start a session and choose Create from to open it on that branch or its pull request. Talyn does not import Conductor chats."
+  - q: "Does Talyn work on Windows and Linux?"
+    a: "Yes. Talyn has desktop apps for macOS, Windows and Linux, and a browser app at app.talyn.dev, all on the same account and sessions. Windows builds are unsigned, so SmartScreen warns on the first install. The browser app needs no install."
+  - q: "What does Talyn cost?"
+    a: "Talyn is free with 10 box-hours a month. Pro is $40 a month for 200 box-hours, every sandbox size and up to 100 sandboxes at once. Agents run on your own Claude or ChatGPT plan, so you pay Talyn for the machines, not the model."
 sources:
   - label: "Conductor is joining Meta (announcement and timeline)"
     url: "https://www.conductor.build/announcement"
@@ -25,6 +36,10 @@ On November 4, 2026, Conductor announced that it is joining Meta. If you use
 Conductor Cloud, you need somewhere to move your work this month. This page
 says what changes on which date, what carries over to Talyn unchanged, and what
 Talyn does not do.
+
+Ready to move? [Open the browser app](https://app.talyn.dev) or
+[download Talyn](/download), sign in with GitHub, and pick up your first branch
+in a few minutes.
 
 ## The Conductor timeline
 

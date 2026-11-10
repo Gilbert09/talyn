@@ -36,6 +36,12 @@ interface RawFrontmatter {
   sources?: unknown;
   related?: unknown;
   relatedFeatures?: unknown;
+  faq?: unknown;
+}
+
+export interface CompareFaqItem {
+  q: string;
+  a: string;
 }
 
 export interface CompareSource {
@@ -66,6 +72,8 @@ export interface CompareMeta {
   related: string[];
   /** Feature-page slugs this comparison is about. */
   relatedFeatures: string[];
+  /** Optional questions, shown on the page and sent as FAQPage schema. */
+  faq: CompareFaqItem[];
 }
 
 export interface ComparePage extends CompareMeta {
@@ -81,6 +89,16 @@ function readSources(raw: unknown): CompareSource[] {
     const { label, url } = entry as Record<string, unknown>;
     if (typeof label !== "string" || typeof url !== "string") return [];
     return [{ label, url }];
+  });
+}
+
+function readFaq(raw: unknown): CompareFaqItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const { q, a } = entry as Record<string, unknown>;
+    if (typeof q !== "string" || typeof a !== "string" || !q || !a) return [];
+    return [{ q, a }];
   });
 }
 
@@ -138,6 +156,7 @@ function readComparePage(fileName: string): ComparePage {
     sources,
     related: readStrings(fm.related),
     relatedFeatures: readStrings(fm.relatedFeatures),
+    faq: readFaq(fm.faq),
     html: marked.parse(content, { async: false }),
   };
 }
@@ -188,6 +207,17 @@ export function comparePagesByCategory(): Array<{
   return [...groups.entries()]
     .map(([category, pages]) => ({ category, pages }))
     .sort((a, b) => rank(a.category) - rank(b.category));
+}
+
+/**
+ * The title of a card that links to a comparison. A 1:1 page reads "Talyn vs
+ * X"; a roundup such as "Conductor alternatives" uses its own label, or it
+ * would be a second "Talyn vs Conductor".
+ */
+export function compareCardTitle(page: CompareMeta): string {
+  return page.navLabel.startsWith("vs ")
+    ? `Talyn ${page.navLabel}`
+    : page.navLabel;
 }
 
 export function formatCompareDate(date: string): string {

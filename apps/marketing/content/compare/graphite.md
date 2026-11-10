@@ -89,16 +89,18 @@ attached from outside the machine.
 - **No speculative batching in the queue.**
 - **GitHub only.**
 
-## What Graphite does not do
+## What we did not find in Graphite's docs
 
-- **Fix the pull request.** Its queue is a queue: it orders and lands, and if
-  something fails it comes back to you. Nothing sends an agent at a failing
-  test, a conflict, or a review comment.
-- **Run scheduled work.** There is no equivalent of a loop: a prompt that runs
-  every weekday morning against a repository and opens a pull request when it
-  finds something.
-- **Run on your existing agent subscription.** Graphite's AI is Graphite's, and
-  it is priced into the per-seat tier.
+We did not re-read Graphite's docs for this section. These come from its
+pricing page as read in September, so treat them as unconfirmed and check
+before you rely on them.
+
+- Fixing the pull request: its queue orders and lands, and we found nothing
+  that sends an agent at a failing test, a conflict or a review comment.
+- Scheduled work: we found no equivalent of a loop, a prompt that runs every
+  weekday morning against a repository.
+- Your own agent subscription: Graphite's AI is listed as part of its per-seat
+  tiers.
 
 ## The overlap, honestly
 

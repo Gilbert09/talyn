@@ -10,7 +10,7 @@ import { Reveal } from "@/components/ui/Reveal";
 import { JsonLd, breadcrumbSchema, type Crumb } from "@/components/seo/JsonLd";
 import { site } from "@/lib/content";
 
-const title = "Download Talyn";
+const title = "Download for macOS, Windows and Linux";
 const description =
   "Talyn for macOS, Windows and Linux, or open it in your browser. Same account, same sessions and pull requests on every one.";
 

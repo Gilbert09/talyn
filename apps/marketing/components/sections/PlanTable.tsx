@@ -124,9 +124,6 @@ export function PlanTable() {
           ))}
         </ul>
 
-        <p className="mt-10 max-w-2xl text-xs leading-relaxed text-ink-400">
-          {pricing.footnote}
-        </p>
       </div>
     </section>
   );

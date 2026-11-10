@@ -2,10 +2,10 @@
 title: "Talyn vs T3 Code"
 description: "T3 Code is a free, MIT-licensed control surface for the agent CLIs already installed on your machine. Talyn runs Claude Code and Codex sessions in parallel cloud sandboxes on your own subscription, so the work goes on with your laptop closed."
 competitor: "T3 Code"
-category: "Cloud coding agents"
+category: "Agent workspaces"
 navLabel: "vs T3 Code"
 verdict: "You want to drive agents on your own machines: six harnesses, six git hosts, your own hardware, no vendor in the middle. It costs nothing, and you are happy to be the one pressing the button."
-updated: "2026-09-29"
+updated: "2026-11-10"
 sources:
   - label: "T3 Code"
     url: "https://t3.codes/"
@@ -28,7 +28,7 @@ relatedFeatures: ["sessions", "merge-queue", "workflows"]
 ---
 
 This is one of the closest things to Talyn that exists, and it is very good. It
-is also free, MIT-licensed, and shipping faster than we are. Both give each
+is also free, MIT-licensed, and releasing often. Both give each
 task its own agent on its own branch. The useful question is where that agent
 runs.
 
@@ -49,11 +49,11 @@ clients control it over authenticated RPC."* There is no T3-operated compute
 that runs your agents. It drives the provider CLIs you have already installed
 and logged into, on hardware you own.
 
-As of 29 September 2026 it is **MIT-licensed, free, and has no paid tier**.
-Its terms say *"T3 Code is currently offered without a T3 Tools subscription
-fee unless we clearly state otherwise for a feature."* The homepage advertises
-"22k+ GitHub stars"; the repository actually shows just under 24,000, so they
-are understating it. It also claims to be *"Tolerated by over 300,000 devs"*.
+As of 10 November 2026 it is **MIT-licensed and free**, and its homepage lists
+no paid tier. Its terms said in September *"T3 Code is currently offered
+without a T3 Tools subscription fee unless we clearly state otherwise for a
+feature."* The homepage now claims "55k+" GitHub stars, and the repository
+shows about 55,300. It also claims to be *"Tolerated by over 500,000 devs"*.
 That number is theirs and carries no source, so take it as they present it.
 
 ## Where they are straightforwardly better
@@ -78,8 +78,8 @@ These are real, and several of them we have no answer to.
   $40 a month for the full allowance, and closed.
 - **Quota pooling and multi-machine load balancing** across several provider
   accounts and several of your own machines. We have nothing like it.
-- **Velocity.** Hundreds of commits a week and nightly builds. We are one
-  person.
+- **Velocity.** Frequent releases: its latest release on GitHub is from 9
+  November 2026. We are one person.
 
 Their PR support is also deeper than their own homepage suggests. "One button
 to commit, push, and make a PR" undersells it: it tracks existing pull requests

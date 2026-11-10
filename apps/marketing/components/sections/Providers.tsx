@@ -7,7 +7,7 @@ import { providers } from "@/lib/content";
 
 export function Providers() {
   return (
-    <section id="providers" className="relative border-t border-line py-24">
+    <section id="providers" className="relative border-t border-line bg-paper-100 py-24">
       <div className="container">
         <SectionHeading
           kicker={providers.kicker}

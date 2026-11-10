@@ -15,7 +15,7 @@ export const site = {
   url: "https://www.talyn.dev",
   tagline: "Your coding agents keep working with the laptop closed.",
   description:
-    "Run Claude Code and Codex in parallel cloud sandboxes, on the subscription you already pay for. Each session gets its own branch, diff, terminal and a path to a merged pull request.",
+    "Run Claude Code and Codex in parallel cloud sandboxes, on the subscription you already pay for. Each session gets a branch, a diff and a path to a merged PR.",
   githubUrl: "https://github.com/Gilbert09/talyn",
   /** The browser app: same product, nothing to install. */
   appUrl: "https://app.talyn.dev",
@@ -23,6 +23,11 @@ export const site = {
   supportUrl: "https://github.com/Gilbert09/talyn/issues",
   /** The public API docs, in the docs section. */
   apiDocsUrl: "/docs/api",
+  /**
+   * When the home, pricing, download and about pages last changed, as the
+   * sitemap's lastmod. Move it when one of those pages changes.
+   */
+  updated: "2026-11-10",
 };
 
 /**
@@ -97,7 +102,9 @@ export const hero = {
   webCta: "Open in browser",
   // "For GitHub" stays: a GitLab user should find out in eight seconds, not
   // after an install.
-  microtrust: "For GitHub. macOS, Windows and Linux, or in your browser.",
+  // Carries the price too: "What does it cost?" is a top FAQ question, and
+  // half of visitors never scroll past the hero.
+  microtrust: "Free with 10 box-hours a month. For GitHub, on macOS, Windows, Linux or your browser.",
 };
 
 /** How a session works. Carries the `#how` anchor older links point at. */
@@ -311,7 +318,7 @@ export const pricing = {
       priceAnnualTotal: "$0",
       period: "forever",
       periodAnnualNote: null,
-      blurb: "The whole app, with a small monthly allowance.",
+      blurb: "The whole app, 10 box-hours a month, and no card to start.",
       features: [
         "10 box-hours a month",
         "Small and standard boxes",
@@ -319,7 +326,6 @@ export const pricing = {
         "Sessions, threads and the whole PR dashboard",
         "Skills, the merge queue, workflows, loops and code review",
         "Keep a PR mergeable on any PR you flag by hand",
-        "Mobile app (coming soon)",
       ],
       cta: "Download for {platform}",
       highlighted: false,
@@ -331,7 +337,7 @@ export const pricing = {
       priceAnnualTotal: "$400",
       period: "/month",
       periodAnnualNote: "billed annually ($400/yr)",
-      blurb: "For the weeks when everything ships at once.",
+      blurb: "200 box-hours, up to 100 boxes at once, and auto-keep on every new PR.",
       features: [
         "Everything in Free",
         "200 box-hours a month",
@@ -339,10 +345,9 @@ export const pricing = {
         "Up to 100 boxes running at once",
         "Auto-keep on every new PR, and auto-review on every new PR",
         "Credits with auto top-up, for anything above your allowance",
-        "Mobile app (coming soon)",
         "Cancel any time, in the app",
       ],
-      cta: "Download & upgrade in-app",
+      cta: "Download, then upgrade in the app",
       highlighted: true,
     },
   ],
@@ -468,6 +473,10 @@ export const faq = [
     a: "An app for running coding agents in the cloud. Each session is a branch with its own agent, sandbox, diff and terminal, and it ends in a pull request. Talyn also watches your open pull requests and sends an agent to fix the ones that break.",
   },
   {
+    q: "Is my code safe?",
+    a: "The Talyn GitHub App sees only the repositories you pick. Each session runs in its own microVM, and a proxy outside it adds your agent sign-in and MCP keys, so no credential is inside the machine. Stored tokens are encrypted, and Talyn deletes a sandbox when you archive its session. The source is public, so you can check all of this.",
+  },
+  {
     q: "How is a session different from Claude Code on my laptop?",
     a: "The agent runs in a cloud sandbox, not on your machine. You can run several at once, close the laptop, and open the same session later in the browser. Each session has its own branch, so two agents never edit the same files. On the desktop app you can also run a session in a local git worktree, or move a Claude Code conversation from your computer into a sandbox and carry on.",
   },
@@ -477,7 +486,7 @@ export const faq = [
   },
   {
     q: "Where does my code run?",
-    a: "On Talyn Fleet: one Firecracker microVM per session, on our own hardware. Your GitHub and agent credentials are added by a proxy outside the machine, so no token is ever inside it. A sandbox sleeps after 10 minutes without work. Talyn saves your unpushed work after every turn, so a lost sandbox can be restored.",
+    a: "In a cloud sandbox on our own hardware: one Firecracker microVM per session. Your GitHub and agent credentials are added by a proxy outside the machine, so no token is ever inside it. A sandbox sleeps after 10 minutes without work. Talyn saves your unpushed work after every turn, so a lost sandbox can be restored.",
   },
   {
     q: "Does it work with GitLab or Bitbucket?",

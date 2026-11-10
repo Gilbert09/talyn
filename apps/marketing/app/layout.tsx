@@ -21,7 +21,10 @@ const mono = JetBrains_Mono({
   display: "swap",
 });
 
-const title = `${site.name}: coding agents that keep working with the laptop closed`;
+// The search title names what Talyn runs and where, in under 60 characters.
+// Social cards keep the headline, which reads better as a share.
+const title = `${site.name}: run Claude Code and Codex in cloud sandboxes`;
+const socialTitle = `${site.name}: your coding agents keep working with the laptop closed`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(site.url),
@@ -48,22 +51,20 @@ export const metadata: Metadata = {
     "cloud coding agents",
     "agent workspaces",
     "AI coding sessions",
-    "GitHub PR management",
     "merge queue",
     "AI code review",
-    "PR automation",
     "scheduled AI agents",
   ],
   openGraph: {
     type: "website",
     url: site.url,
-    title,
+    title: socialTitle,
     description: site.description,
     siteName: site.name,
   },
   twitter: {
     card: "summary_large_image",
-    title,
+    title: socialTitle,
     description: site.description,
   },
   icons: {

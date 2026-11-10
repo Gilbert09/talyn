@@ -7,6 +7,7 @@ import { Reveal } from "@/components/ui/Reveal";
 import { GlowCard } from "@/components/ui/GlowCard";
 import { Badge } from "@/components/ui/badge";
 import { DownloadButton } from "@/components/ui/DownloadButton";
+import { WebAppButton } from "@/components/ui/WebAppButton";
 import { capture } from "@/lib/analytics";
 import { pricing } from "@/lib/content";
 import { cn } from "@/lib/utils";
@@ -58,7 +59,9 @@ function PeriodToggle({
 }
 
 export function Pricing() {
-  const [period, setPeriod] = useState<Period>("annual");
+  // Monthly first: the home page says "$40 a month", and opening on the
+  // annual "$33.33" sent visitors toggling back and forth to reconcile them.
+  const [period, setPeriod] = useState<Period>("monthly");
 
   return (
     <section id="pricing" className="border-t border-line py-24">
@@ -117,6 +120,14 @@ export function Pricing() {
                   >
                     {tier.cta}
                   </DownloadButton>
+                  <WebAppButton
+                    size="sm"
+                    variant="ghost"
+                    className="mt-2 w-full"
+                    placement={`pricing-${tier.name.toLowerCase()}-${period}`}
+                  >
+                    or open it in your browser
+                  </WebAppButton>
                 </div>
               </GlowCard>
             </Reveal>

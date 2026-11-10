@@ -4,8 +4,8 @@ description: "Codex cloud runs tasks in an isolated environment on your ChatGPT 
 competitor: "Codex cloud"
 category: "Cloud coding agents"
 navLabel: "vs Codex cloud"
-verdict: "You want to dispatch work from ChatGPT, a GitHub issue, Linear or Slack and have it come back as a pull request, and the surfaces OpenAI ships are the ones you already work in."
-updated: "2026-09-28"
+verdict: "You want to dispatch work from ChatGPT or the Codex CLI and have it come back as a pull request, and the surfaces OpenAI ships are the ones you already work in."
+updated: "2026-11-10"
 sources:
   - label: "Codex cloud documentation"
     url: "https://learn.chatgpt.com/docs/cloud"
@@ -22,28 +22,29 @@ once the pull request opens.
 
 ## What Codex cloud does
 
-As of September 2026, from OpenAI's own documentation:
+From OpenAI's own documentation, read on 10 November 2026:
 
 - Runs tasks in **isolated cloud environments**, which continue while you do
   something else.
-- Launches from the **web** at chatgpt.com/codex, the **Codex CLI**, **GitHub**
-  pull requests and issues, **GitLab** merge requests and issues (beta),
-  **Linear**, and **Slack**.
+- The docs page says you start cloud work from the **web**, **mobile**, the
+  **desktop app** and the **Codex CLI**.
 - Produces **pull requests** ready for review: you inspect the summary and
   diff, ask for a follow-up, or open the pull request when it is ready.
-- Agent internet access is a separate configuration step rather than on by
-  default.
-- Runs on your ChatGPT plan.
+- Network access has options: all public internet, package manager domains
+  only, or extra allowed domains.
 
-It is a good product with more entry points than Talyn has, and GitLab support
-Talyn does not have at all.
+In September, we also read that Codex cloud launches from GitHub issues and
+pull requests, GitLab merge requests (beta), Linear and Slack. The current
+docs page does not list these. We have not re-checked them, so treat them as
+last reported.
 
-One thing worth stating because it shapes what any third party can build:
-**there is no documented server-to-server API for creating a Codex cloud
-task.** The integration surface is the CLI and the listed platforms. That is
-why Talyn runs Codex in its own sandboxes and does not drive Codex cloud. We
-cannot drive it from a backend, so Talyn runs the agent on your subscription
-itself.
+It is a good product with more entry points than Talyn has.
+
+We found no documented way to create a Codex cloud task from a backend (checked
+10 November 2026). The docs link a Codex SDK and an App Server, and we did not
+find that either one creates cloud tasks. If one does, this paragraph is
+wrong, so tell us. Talyn runs Codex in its own sandboxes on your subscription
+and does not drive Codex cloud.
 
 ## What Talyn adds
 
@@ -64,9 +65,8 @@ or need to review, blocked ones first. That includes ones from teammates and
 Dependabot. A fix pushes to the existing branch, so the review history stays.
 
 **Work that starts without you.** Workflows run on pull request events with the
-app closed. Loops run a prompt on a cron schedule. Each one is a machine
-deciding to start a Codex run, which needs a backend, which is the thing there
-is no API for.
+app closed. Loops run a prompt on a cron schedule. Both start Codex runs from
+our backend.
 
 **Code review in the app.** Several reviewers read the change, then a check
 drops what it cannot back up. Findings reach GitHub only if you post them.
@@ -82,28 +82,28 @@ credential, so no token is inside the box that runs your repository's code.
 Talyn builds an image of your repository with its setup done, and a sandbox
 sleeps after 10 idle minutes.
 
-Each session has an **Internet on** / **Internet off** switch. New sessions
-start with it on unless you change the default. Fix runs and code reviews reach
+Each session has an **Internet on** / **Internet off** switch. You set the
+default for new sessions in Settings. Fix runs and code reviews reach
 only the repository and the agent's API, and loops have their own switch. You
 can also connect MCP servers (Linear, Sentry, Supabase, your own). Talyn holds
 their keys outside the sandbox.
 
 ## What Talyn does not do
 
-- **No GitLab.** Codex cloud has it in beta; Talyn is GitHub only.
+- **GitHub only.** OpenAI reported GitLab support (beta) in September.
 - **No ChatGPT-native surface, and no GitHub issue or Linear trigger.**
 - **Nothing to do with ChatGPT conversations.** Talyn is a separate app.
 - **Finite hardware.** Talyn's sandboxes run on our own machines. OpenAI's
   capacity is not our capacity.
 - **Talyn costs money.** Free with 10 box-hours a month, or $40/month for 200
-  box-hours and every box size, with credits above that. Codex cloud is
-  included in your ChatGPT plan.
+  box-hours and every box size, with credits above that. Codex cloud ran on
+  your ChatGPT plan when we last confirmed it. The current docs page does not
+  say which plans include it.
 
 ## Which one
 
 **Use Codex cloud if** dispatching is what you want and OpenAI's surfaces are
-where you already are (ChatGPT, the CLI, a GitHub issue, Linear, Slack) or
-you need GitLab.
+where you already are (ChatGPT on the web, mobile or desktop, or the CLI).
 
 **Use Talyn if** you want the same Codex subscription running many sessions at
 once, each with its own diff and terminal, and each pull request carried

@@ -9,19 +9,23 @@ import { WhyTalyn } from "@/components/sections/WhyTalyn";
 import { JsonLd, breadcrumbSchema, type Crumb } from "@/components/seo/JsonLd";
 import { site } from "@/lib/content";
 import { listFeaturePages } from "@/lib/features";
-import { listComparePages } from "@/lib/compare";
+import { compareCardTitle, listComparePages } from "@/lib/compare";
 
 const title = "Everything Talyn does";
 const description =
   "Sessions and threads for agent coding, a PR list that sends fixes, a merge queue, AI code review, loops, workflows, Slack and MCP servers. All on your own Claude or ChatGPT plan.";
 
+// The page heading stays "Everything Talyn does"; the search title says what
+// that is.
+const metaTitle = "Features: parallel coding agents in cloud sandboxes";
+
 export const metadata: Metadata = {
-  title,
+  title: metaTitle,
   description,
   alternates: { canonical: "/features" },
   openGraph: {
     type: "website",
-    title,
+    title: metaTitle,
     description,
     url: `${site.url}/features`,
   },
@@ -100,7 +104,7 @@ export default function FeaturesHubPage() {
                   <FeatureCard
                     key={c.slug}
                     eyebrow="Compare"
-                    title={`Talyn vs ${c.competitor}`}
+                    title={compareCardTitle(c)}
                     body={c.verdict}
                     href={`/compare/${c.slug}`}
                     cta="Read the comparison"

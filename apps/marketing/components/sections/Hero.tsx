@@ -32,8 +32,11 @@ export function Hero() {
 
       <div className="container relative">
         <motion.div
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
+          // Visible from the first paint: the headline is the page's largest
+          // text, so hiding it until the script loads delayed LCP. It still
+          // settles up into place.
+          initial={{ y: 12 }}
+          animate={{ y: 0 }}
           transition={{ duration: 0.7, ease: [0.21, 0.47, 0.32, 0.98] }}
           className="mx-auto max-w-5xl text-center"
         >
@@ -56,7 +59,7 @@ export function Hero() {
           {/* Each part on its own line so a free-flowing wrap cannot break
               the phrase in an odd place at laptop widths. */}
           <h1 className="font-display text-4xl font-semibold leading-[1.06] tracking-tight text-ink [text-wrap:balance] sm:text-5xl lg:text-6xl">
-            <span className="block">{hero.titleLead}</span>
+            <span className="block">{hero.titleLead}</span>{" "}
             <TypedRotator phrases={hero.titleAccents} className="text-clay" />
           </h1>
 
@@ -119,6 +122,11 @@ export function Hero() {
           <AppFrame title="Talyn · Add CSV export">
             <SessionDemo />
           </AppFrame>
+          {/* Ties the film to the headline's promise at the point where half
+              of visitors decide to leave. */}
+          <p className="mt-3 text-center text-xs text-ink-400">
+            Sped up. Close the app at any step and the sandbox keeps working.
+          </p>
         </motion.div>
       </div>
     </section>

@@ -27,8 +27,11 @@ const FIRST_HOLD_MS = 3200;
  *   spends on the page. Visitors who ask for reduced motion get the first
  *   phrase and no animation at all.
  *
- * The animated text is `aria-hidden`; screen readers read `phrases[0]` from a
- * visually hidden copy, so the heading's name does not change under them.
+ * At rest (server render, before the pass starts and after it ends) it is one
+ * plain span holding `phrases[0]`, so a crawler or a screen reader reads the
+ * heading as one sentence. Only while it types is the moving text
+ * `aria-hidden`, with `phrases[0]` in a visually hidden copy and the sizing
+ * copies beside it.
  */
 export function TypedRotator({
   phrases,
@@ -81,6 +84,10 @@ export function TypedRotator({
     };
   }, [phrases]);
 
+  if (!running) {
+    return <span className={cn("block", className)}>{text}</span>;
+  }
+
   return (
     <span className={cn("block", className)}>
       <span className="sr-only">{phrases[0]}</span>
@@ -94,11 +101,9 @@ export function TypedRotator({
           {text}
           {/* A zero-size anchor with the caret positioned off it, so the
               caret can never make the line box taller. */}
-          {running && (
-            <span className="relative inline-block h-0 w-0">
-              <span className="absolute left-[0.06em] top-[-0.82em] h-[0.92em] w-[0.06em] animate-caret bg-current" />
-            </span>
-          )}
+          <span className="relative inline-block h-0 w-0">
+            <span className="absolute left-[0.06em] top-[-0.82em] h-[0.92em] w-[0.06em] animate-caret bg-current" />
+          </span>
         </span>
       </span>
     </span>

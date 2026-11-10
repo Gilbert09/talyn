@@ -6,7 +6,7 @@ import { automation } from "@/lib/content";
 /** Loops, workflows, Slack, MCP servers, skills and the public API. */
 export function Automation() {
   return (
-    <section id="automation" className="scroll-mt-20 border-t border-line py-24">
+    <section id="automation" className="scroll-mt-20 border-t border-line bg-paper-100 py-24">
       <div className="container">
         <SectionHeading kicker={automation.kicker} title={automation.title} sub={automation.sub} />
 

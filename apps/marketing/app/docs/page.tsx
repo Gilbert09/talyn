@@ -4,7 +4,7 @@ import { DocsShell } from "@/components/docs/DocsShell";
 import { site } from "@/lib/content";
 import { DOCS_NAV, getDoc } from "@/lib/docs";
 
-const title = "Talyn docs";
+const title = "Talyn docs: sessions, sandboxes, pull requests and API";
 const description =
   "How to set up Talyn, run agent sessions in cloud sandboxes, fix and review pull requests, automate the routine work, and use the API.";
 

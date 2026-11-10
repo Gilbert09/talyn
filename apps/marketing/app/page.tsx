@@ -21,8 +21,10 @@ export const metadata: Metadata = {
 
 /**
  * The relaunch home page (November 2026), built around sessions and threads.
- * Order: what a session is, why many of them work, threads, then the PR work
- * that made Talyn's name, automation, the subscription, price, and the close.
+ * Order: what a session is, which agents and whose subscription (the most
+ * opened FAQ question), the PR work today's users rely on, why many sessions
+ * work, threads, automation, price, the objections, and then the close, so the
+ * last ask comes after the questions are answered.
  */
 export default function Home() {
   return (
@@ -33,15 +35,15 @@ export default function Home() {
         {/* Checkable facts, straight after the claim they back. */}
         <Proof />
         <SessionSteps />
+        <Providers />
+        <PullRequests />
         <Sandboxes />
         <Threads />
-        <PullRequests />
         <Automation />
-        <Providers />
         <PricingBand />
+        <Faq />
         {/* Carries the #download anchor. */}
         <FinalCta />
-        <Faq />
       </main>
       <Footer />
       {/* FAQPage schema is emitted by <Faq /> itself, from the same array it
