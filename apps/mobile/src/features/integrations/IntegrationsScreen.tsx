@@ -6,6 +6,7 @@ import { Alert, StyleSheet, View } from 'react-native';
 import { useMobileRuntime, useNetwork, useWorkspace } from '../../auth/AuthProvider';
 import { AppText, Button, Card, EmptyState, Field, Group, Input, Pill, Row, useActionSheet } from '../../components/UI';
 import { openExternal, StateNotice } from '../../components/Workflow';
+import { trackEvent } from '../../lib/analytics';
 import { errorMessage } from '../../lib/errors';
 import { featureOffered, useFeatures } from '../../lib/features';
 import { appReturnBase, openReturnFlow } from '../../lib/returnTo';
@@ -99,6 +100,7 @@ export function PostHogCodeCard({ workspaceId, status, offline }: { workspaceId:
       const { authorizeUrl } = await withAppReturn((returnTo) =>
         posthog.startOAuth(workspaceId, postHogOAuthOptions(host, data?.projectId, returnTo)), appReturnBase());
       if (!isHttpsUrl(authorizeUrl)) throw new Error('The PostHog sign-in address is not valid.');
+      trackEvent('cloud_provider_oauth_started', { provider: 'posthog_code' });
       await openReturnFlow(authorizeUrl, 'posthog');
     } catch (e) {
       setError(errorMessage(e, 'Failed to start the PostHog connection'));
@@ -115,6 +117,7 @@ export function PostHogCodeCard({ workspaceId, status, offline }: { workspaceId:
     setError(null);
     try {
       const next = await posthog.saveConfig(workspaceId, config);
+      trackEvent('cloud_provider_connected', { provider: 'posthog_code' });
       status.mutate(() => next);
       setApiKey('');
       setEditing(false);

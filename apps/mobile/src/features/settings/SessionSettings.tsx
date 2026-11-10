@@ -1,6 +1,6 @@
 import { workspaces } from '@talyn/client/native';
 import {
-  FLEET_MODELS, defaultFleetModelForAgent, fleetAgentForModel, storedFleetModelForAgent,
+  defaultFleetModelForAgent, fleetAgentForModel, storedFleetModelForAgent,
   type Workspace, type WorkspaceSettings, type WorkbenchAgent,
 } from '@talyn/shared';
 import { useState } from 'react';
@@ -8,6 +8,7 @@ import { Alert } from 'react-native';
 
 import { AppText, Group, Row, Toggle, type SheetRequest } from '../../components/UI';
 import { errorMessage } from '../../lib/errors';
+import { useFleetModelCatalog } from '../../lib/fleetModelCatalog';
 import { modelLabel } from '../../lib/models';
 import { Fact } from '../more/Page';
 import { branchPrefixLine, idleDayChoices, idleDaysLabel, sessionSettingsOf } from './model';
@@ -24,6 +25,7 @@ export function SessionSettings({ workspace, refresh, offline, openSheet }: {
 }) {
   const [pending, setPending] = useState<Partial<WorkspaceSettings>>({});
   const [saving, setSaving] = useState(false);
+  const { models: fleetModels } = useFleetModelCatalog();
   const settings = { ...workspace.settings, ...pending } as WorkspaceSettings;
   const view = sessionSettingsOf(settings);
   const disabled = saving || offline;
@@ -45,7 +47,7 @@ export function SessionSettings({ workspace, refresh, offline, openSheet }: {
   const pickModel = (agent: WorkbenchAgent, label: string) => {
     const current = storedFleetModelForAgent(settings, agent) ?? defaultFleetModelForAgent(agent);
     openSheet({ title: `${label} model`, message: `The ${label} model new sessions start with.`,
-      actions: FLEET_MODELS.filter((model) => fleetAgentForModel(model.id) === agent).map((model) => ({
+      actions: fleetModels.filter((model) => fleetAgentForModel(model.id) === agent).map((model) => ({
         label: model.label, selected: model.id === current,
         onPress: () => { void save({ fleetModels: { ...(settings.fleetModels ?? {}), [agent]: model.id } } as Partial<WorkspaceSettings>, 'Could not save the model'); },
       })) });

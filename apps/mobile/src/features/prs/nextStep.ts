@@ -11,7 +11,8 @@ export type NextStepIcon = 'merged' | 'closed' | 'agent' | 'queue' | 'stopped' |
 export type NextStepKey = 'merged' | 'closed' | 'agent' | 'queued' | 'queue_stopped' | 'draft' | 'conflicts' | 'needs_human'
   | 'checks_failing' | 'changes_requested' | 'behind' | 'checks_running' | 'awaiting_review' | 'ready' | 'branch_rule'
   | 'waiting' | 'review_requested' | 'other';
-export type PrimaryKind = 'merge' | 'fix' | 'queue' | 'resubmit' | 'requeue' | 'session' | 'review' | 'findings' | 'open';
+export type PrimaryKind = 'merge' | 'fix' | 'queue' | 'resubmit' | 'requeue' | 'session' | 'review' | 'findings' | 'open'
+  | 'approve' | 'request_changes';
 
 export interface NextStepPrimary {
   kind: PrimaryKind;
@@ -28,6 +29,8 @@ export interface NextStep {
   icon: NextStepIcon;
   /** Null when nothing is needed from the person. */
   primary: NextStepPrimary | null;
+  /** A second action drawn beside the primary one. Null for most states. */
+  secondary: NextStepPrimary | null;
   session: { id: string; name: string } | null;
   /** Up to three failing check names, for the card. */
   failing: string[];
@@ -48,6 +51,8 @@ export interface NextStepInput {
 
 const OPEN: NextStepPrimary = { kind: 'open', label: 'Open on GitHub' };
 const QUEUE: NextStepPrimary = { kind: 'queue', label: 'Add to merge queue' };
+const APPROVE: NextStepPrimary = { kind: 'approve', label: 'Approve' };
+const REQUEST_CHANGES: NextStepPrimary = { kind: 'request_changes', label: 'Request changes' };
 
 /** Who last asked for changes, from the live reviews. */
 function changesRequestedBy(reviews: PRFreshDetail['recentReviews'] | undefined): string | null {
@@ -68,7 +73,8 @@ export function prNextStep(input: NextStepInput): NextStep {
   const base = summary.baseBranch || 'the base branch';
   const session = row.session ? { id: row.session.id, name: row.session.name } : null;
   const step = (key: NextStepKey, verdict: string, detail: string | null, tone: NextStepTone, icon: NextStepIcon,
-    primary: NextStepPrimary | null, failing: string[] = []): NextStep => ({ key, verdict, detail, tone, icon, primary, session, failing });
+    primary: NextStepPrimary | null, failing: string[] = [], secondary: NextStepPrimary | null = null): NextStep =>
+    ({ key, verdict, detail, tone, icon, primary, secondary, session, failing });
   const fix = (label: string): NextStepPrimary => !actions.fix ? OPEN
     : actions.fixBlocked ? { kind: 'fix', label, disabledReason: fixBlockedMessage(actions.fixBlocked) } : { kind: 'fix', label };
   const queueOr = (fallback: NextStepPrimary) => actions.queue ? QUEUE : fallback;
@@ -160,9 +166,10 @@ export function prNextStep(input: NextStepInput): NextStep {
     return step('waiting', 'Waiting for GitHub', mergeLine(row, summary), 'neutral', 'info', queueOr(OPEN));
   }
 
-  if (row.reviewRequested) {
+  // "Review with Talyn" is in the menu and on the Findings tab for this state.
+  if (row.reviewRequested && !row.authored) {
     return step('review_requested', 'Your review is requested', mergeLine(row, summary), 'information', 'review',
-      !input.codeReview || input.codeReview === 'none' ? { kind: 'review', label: 'Review with Talyn' } : { kind: 'findings', label: 'View findings' });
+      APPROVE, [], REQUEST_CHANGES);
   }
   return step('other', sentence(mergeLine(row, summary)), null, 'neutral', 'info', OPEN);
 }

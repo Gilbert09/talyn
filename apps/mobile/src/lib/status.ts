@@ -145,19 +145,19 @@ function externalVariant(input: PrStatusInput, checks: PRChecks): PrPillVariant 
   const state = input.externalQueueState ?? externalQueueStatusFromLabels(input.labels)?.state;
   if (!state || state === 'not_submitted') return null;
   switch (state) {
-    case 'rejected': return { icon: 'closed', label: 'Queue: refused', tone: 'destructive' };
-    case 'failed': return { icon: 'closed', label: 'Queue: failed', tone: 'destructive' };
-    case 'pending_failure': return { icon: 'clock', label: 'Queue: failure pending', tone: 'warning' };
-    case 'cancelled': return { icon: 'warning', label: 'Queue: cancelled', tone: 'warning' };
+    case 'rejected': return { icon: 'closed', label: 'Refused by merge queue', tone: 'destructive' };
+    case 'failed': return { icon: 'closed', label: 'Failed in merge queue', tone: 'destructive' };
+    case 'pending_failure': return { icon: 'clock', label: 'Merge queue failure pending', tone: 'warning' };
+    case 'cancelled': return { icon: 'warning', label: 'Removed from merge queue', tone: 'warning' };
     case 'merged': return { icon: 'merged', label: 'Merged', tone: 'merged' };
-    case 'passed': return { icon: 'check', label: 'Queue: passed', tone: 'success' };
+    case 'passed': return { icon: 'check', label: 'Passed merge queue', tone: 'success' };
     case 'not_ready': {
       const reason = input.blockingReason;
       const prSaysWhy = checks.inProgress > 0 || checks.failed > 0 || reason === 'merge_conflicts' || reason === 'changes_requested' || reason === 'needs_human';
-      return prSaysWhy ? null : { icon: 'clock', label: 'Queue: not ready', tone: 'warning' };
+      return prSaysWhy ? null : { icon: 'clock', label: 'Not ready for merge queue', tone: 'warning' };
     }
-    case 'testing': return { icon: 'spinner', label: 'Queue: testing', tone: 'information' };
-    default: return { icon: 'queue', label: 'Queue: queued', tone: 'information' };
+    case 'testing': return { icon: 'spinner', label: 'Testing in merge queue', tone: 'information' };
+    default: return { icon: 'queue', label: 'In merge queue', tone: 'information' };
   }
 }
 

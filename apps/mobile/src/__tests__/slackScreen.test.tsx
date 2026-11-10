@@ -14,6 +14,7 @@ const mockUnlink = jest.fn();
 const mockEmoji = jest.fn();
 const mockForget = jest.fn();
 const mockOpenReturn = jest.fn();
+const mockTrack = jest.fn();
 let mockFeatures: Record<string, boolean> | null = { workbenches: true };
 let mockChoices = [{ id: 'ws-1', name: 'Personal' }];
 
@@ -36,6 +37,7 @@ jest.mock('../lib/returnTo', () => ({
   appReturnBase: () => 'talyn-mobile://',
   openReturnFlow: (...a: unknown[]) => mockOpenReturn(...a),
 }));
+jest.mock('../lib/analytics', () => ({ trackEvent: (...a: unknown[]) => mockTrack(...a) }));
 jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn(async () => true) }));
 
 const install = (extra: Partial<SlackInstallationView> = {}): SlackInstallationView => ({
@@ -99,7 +101,7 @@ describe('install and link', () => {
     expect(await screen.findByText('Talyn is not installed in any Slack workspace yet.')).toBeVisible();
     await act(async () => { fireEvent.press(screen.getByLabelText('Connect Slack')); });
     expect(mockInstall).toHaveBeenCalledWith({ workspaceId: 'ws-1', returnTo: 'talyn-mobile://' });
-    expect(mockOpenReturn).toHaveBeenCalledWith('https://slack.com/oauth/v2/authorize?x=1', 'slack');
+    expect(mockOpenReturn).toHaveBeenCalledWith('https://slack.com/oauth/v2/authorize?x=1', 'slack', expect.any(Function));
     expect(await screen.findByText('Acme')).toBeVisible();
     expect(screen.getByText('Connected')).toBeVisible();
     expect(mockStatus).toHaveBeenCalledTimes(2);
@@ -113,8 +115,24 @@ describe('install and link', () => {
     await render(<SlackScreen />);
     await act(async () => { fireEvent.press(await screen.findByLabelText('Link my Slack account')); });
     expect(mockLink.mock.calls).toEqual([[{ workspaceId: 'ws-1', returnTo: 'talyn-mobile://' }], [{ workspaceId: 'ws-1' }]]);
-    expect(mockOpenReturn).toHaveBeenCalledWith('https://slack.com/openid/connect/authorize', 'slack');
+    expect(mockOpenReturn).toHaveBeenCalledWith('https://slack.com/openid/connect/authorize', 'slack', expect.any(Function));
     await waitFor(() => expect(mockStatus).toHaveBeenCalledTimes(2));
+  });
+
+  it.each([
+    ['talyn-mobile://slack/callback?slack=installed', 'workspace'],
+    ['talyn-mobile://slack/callback?slack=linked', 'account'],
+    ['talyn-mobile://slack/callback?slack=error&message=no', null],
+  ])('tracks the return %s as slack_connected for %s, like web', async (url, kind) => {
+    mockStatus.mockResolvedValue(empty);
+    mockInstall.mockResolvedValue({ authorizeUrl: 'https://slack.com/oauth/v2/authorize?x=1' });
+    mockOpenReturn.mockImplementation(async (_url: string, _kind: string, onReturn?: (value: string) => void) => { onReturn?.(url); return 'returned'; });
+    mockTrack.mockClear();
+    await render(<SlackScreen />);
+    await act(async () => { fireEvent.press(await screen.findByLabelText('Connect Slack')); });
+    if (kind) expect(mockTrack).toHaveBeenCalledWith('slack_connected', { connection_kind: kind });
+    else expect(mockTrack).not.toHaveBeenCalled();
+    mockOpenReturn.mockReset();
   });
 
   it('shows the not-configured message when the start refuses', async () => {

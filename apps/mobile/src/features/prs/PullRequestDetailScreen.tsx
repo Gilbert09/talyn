@@ -1,16 +1,17 @@
-import type { CloudProviderInfo, MergeQueueTimelineEvent, PRFile, PRReviewDetail, pullRequests } from '@talyn/client/native';
-import { fixBlockedMessage, resolveReportingBar, type CloudAgentChoice, type Environment, type Workspace } from '@talyn/shared';
+import type { CloudProviderInfo, MergeQueueTimelineEvent, PRFile, PRReviewDetail, PRReviewEvent, pullRequests } from '@talyn/client/native';
+import { fixBlockedMessage, fixBlockedReason, resolveReportingBar, type CloudAgentChoice, type Environment, type Workspace } from '@talyn/shared';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { PrStateBadge } from '../../components/Status';
-import { AppText, BottomBar, Button, IconButton, Notice, Row, useActionSheet, type SheetAction,
+import { AppText, BottomBar, Button, IconButton, Notice, PromptSheet, Row, useActionSheet, useToast, type SheetAction,
   type Symbol } from '../../components/UI';
 import { Heading, NativeText, openExternal, safeExternalUrl, StateNotice, workflowStyles as styles } from '../../components/Workflow';
+import { trackEvent } from '../../lib/analytics';
 import { errorMessage, showActionError } from '../../lib/errors';
 import { relativeTimeLabel, shortTime, useNow } from '../../lib/time';
 import { completeIntent } from '../../navigation/intents';
@@ -29,7 +30,9 @@ import { ChecksTab, Description, DetailTabStrip, FilesTab, QueueSection, Reviews
 import { usePrLinkMenu, type PrLinkTarget } from './usePrLinkMenu';
 
 type PrDetail = Awaited<ReturnType<typeof pullRequests.get>>;
-type Busy = 'merge' | 'fix' | 'queue' | 'autoKeep' | 'resubmit' | 'hide' | null;
+type Busy = 'merge' | 'fix' | 'queue' | 'autoKeep' | 'resubmit' | 'hide' | 'review' | null;
+/** GitHub refuses a review comment longer than this. */
+const MAX_REVIEW_BODY = 65_536;
 
 const STEP_ICON: Record<NextStepIcon, Symbol> = {
   merged: { ios: 'arrow.triangle.merge', android: 'merge' },
@@ -58,6 +61,8 @@ const PRIMARY_ICON: Record<NextStepPrimary['kind'], Symbol> = {
   review: { ios: 'text.magnifyingglass', android: 'manage_search' },
   findings: { ios: 'text.magnifyingglass', android: 'manage_search' },
   open: { ios: 'safari', android: 'open_in_new' },
+  approve: { ios: 'checkmark.circle', android: 'check_circle' },
+  request_changes: { ios: 'text.bubble', android: 'rate_review' },
 };
 const OPEN_ICON: Symbol = { ios: 'safari', android: 'open_in_new' };
 
@@ -123,10 +128,12 @@ export function PullRequestDetailScreen() {
   const links = usePrLinkMenu();
   const [busy, setBusy] = useState<Busy>(null);
   const [reviewSheet, setReviewSheet] = useState(false);
+  const [reviewPrompt, setReviewPrompt] = useState<PRReviewEvent | null>(null);
+  const toast = useToast();
   const [taskRunning, setTaskRunning] = useState(false);
   const [notice, setNotice] = useState<{ message: string; session?: { id: string; name: string } } | null>(null);
   useEffect(() => { if (row) completeIntent(`/attention/${encodeURIComponent(id)}`); }, [row, id]);
-  useEffect(() => { setNotice(null); setTab('overview'); setSeen(new Set(['overview'])); }, [id]);
+  useEffect(() => { setNotice(null); setReviewPrompt(null); setTab('overview'); setSeen(new Set(['overview'])); }, [id]);
   const taskId = row?.taskId ?? null;
   useEffect(() => {
     let cancelled = false;
@@ -134,6 +141,21 @@ export function PullRequestDetailScreen() {
     void linkedTaskRunning(workflow, { taskId }).then((running) => { if (!cancelled) setTaskRunning(running); });
     return () => { cancelled = true; };
   }, [workflow, taskId]);
+  const openedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!row || openedRef.current === id) return;
+    openedRef.current = id;
+    const blocked = fixBlockedReason(row.summary, { state: row.state, taskRunning: false });
+    const createdAt = row.summary.createdAt ? new Date(row.summary.createdAt).getTime() : Number.NaN;
+    trackEvent('pr_detail_opened', {
+      pr_number: row.number,
+      ...(Number.isFinite(createdAt) ? { age_hours: Math.round((Date.now() - createdAt) / 3_600_000) } : {}),
+      blocking_reason: row.summary.blockingReason,
+      can_dispatch: blocked === null,
+      ...(blocked ? { dispatch_blocked_reason: blocked } : {}),
+      ...(providers.data ? { has_agent: providers.data.some((provider) => provider.connected) } : {}),
+    });
+  }, [row, id, providers.data]);
   const codeReview = useCodeReview(id, { seed: row?.codeReview, enabled: Boolean(row),
     reportingBar: resolveReportingBar(workspace.data?.settings?.codeReview) });
 
@@ -149,6 +171,8 @@ export function PullRequestDetailScreen() {
   const ref = row ? `#${row.number}` : '';
   const linkTarget: PrLinkTarget | null = row && url ? { title: summary?.title ?? '', url, ref: `${row.owner}/${row.repo} #${row.number}` } : null;
   const busyAny = busy !== null || offline || !current;
+  const canReview = Boolean(row && row.state === 'open' && row.reviewRequested && !row.authored);
+  const selectionBar = codeReview.selected.size > 0 && !codeReview.fixing;
 
   const selectTab = (next: PrDetailTab) => {
     setTab(next);
@@ -164,10 +188,16 @@ export function PullRequestDetailScreen() {
       { text: 'Cancel', style: 'cancel', isPreferred: true },
       { text: 'Merge', onPress: () => void run('merge', `Could not merge ${ref}`, async () => {
         const result = await workflow.mergePr(row.id);
+        if (result.submitted) {
+          trackEvent('pr_submitted_external_queue', { pr_number: row.number, via: result.via ?? 'auto_merge' });
+        }
         if (result.submitted) setNotice({ message: `Submitted ${ref} to the merge queue. ${result.message}`.trim() });
         else if (result.alreadyTerminal) setNotice({ message: `${ref} was already ${result.merged ? 'merged' : 'closed'}.` });
         else if (!result.merged) throw new Error(result.message || 'GitHub did not merge the pull request.');
-        else setNotice({ message: `Merged ${ref}.` });
+        else {
+          trackEvent('pr_merged', { source: 'manual', pr_number: row.number, blocking_reason: row.summary.blockingReason });
+          setNotice({ message: `Merged ${ref}.` });
+        }
       }) },
     ]);
   };
@@ -181,7 +211,10 @@ export function PullRequestDetailScreen() {
         { text: 'Close', style: 'cancel' }, { text: 'Open Talyn on the web', onPress: () => openExternal(WEB_APP_URL) },
       ]);
       else if (outcome.kind === 'session') setNotice({ message: `Sent to the session ${outcome.name}.`, session: outcome });
-      else setNotice({ message: 'An agent is working on this pull request.' });
+      else {
+        trackEvent('pr_fix_task_started', { pr_number: row.number, blocking_reason: row.summary.blockingReason });
+        setNotice({ message: 'An agent is working on this pull request.' });
+      }
     });
   };
   const pickAgent = () => {
@@ -191,21 +224,38 @@ export function PullRequestDetailScreen() {
       label: choice.displayName, detail: choice.models.find((model) => model.id === choice.model)?.label, onPress: () => fix(choice),
     })) });
   };
-  const pressFix = () => actions?.fixBlocked ? Alert.alert('Nothing to hand to an agent', fixBlockedMessage(actions.fixBlocked)) : pickAgent();
+  const pressFix = () => {
+    if (!actions?.fixBlocked) { pickAgent(); return; }
+    if (row) trackEvent('pr_fix_blocked', { source: 'pr_detail', reason: actions.fixBlocked, pr_number: row.number, blocking_reason: row.summary.blockingReason });
+    Alert.alert('Nothing to hand to an agent', fixBlockedMessage(actions.fixBlocked));
+  };
   const toggleQueue = (enabled: boolean) => row && void run('queue', `Could not ${enabled ? 'queue' : 'dequeue'} ${ref}`,
-    () => workflow.setMergeQueue(row.id, enabled));
+    async () => {
+      await workflow.setMergeQueue(row.id, enabled);
+      trackEvent('merge_queue_toggled', { enabled, pr_number: row.number });
+    });
   const toggleAutoKeep = (enabled: boolean) => row && void run('autoKeep', 'Could not change auto-keep',
     () => workflow.setAutoKeep(row.id, enabled));
   const resubmit = () => row && void run('resubmit', 'Could not re-submit to Trunk', async () => {
     try { await workflow.resubmitMergeQueue(row.id); setNotice({ message: 'Re-submitted to Trunk.' }); }
     catch (error) { throw new Error(errorMessage(error, 'Please try again.')); }
   });
-  const requeue = () => row && void run('queue', `Could not requeue ${ref}`, () => workflow.setMergeQueue(row.id, true));
+  const requeue = () => row && void run('queue', `Could not requeue ${ref}`, async () => {
+    await workflow.setMergeQueue(row.id, true);
+    trackEvent('merge_queue_toggled', { enabled: true, pr_number: row.number });
+  });
   const toggleHidden = () => row && void run('hide', 'Could not change the review request', async () => {
     const hide = !row.reviewHiddenAt;
     await workflow.setReviewHidden(row.id, hide);
     setNotice({ message: hide ? 'Hidden from your review requests.' : 'Back in your review requests.' });
   });
+  const submitReview = (event: PRReviewEvent, body: string) => row && void run('review',
+    event === 'approve' ? `Could not approve ${ref}` : `Could not request changes on ${ref}`, async () => {
+      await workflow.submitPrReview(row.id, event, body || undefined);
+      trackEvent('pr_review_submitted', { event, has_comment: Boolean(body.trim()) });
+      setReviewPrompt(null);
+      toast.show(event === 'approve' ? 'Approved.' : 'Changes requested.');
+    });
   const refreshAll = () => {
     void state.refresh(); void codeReview.state.refresh();
     if (queued) void timeline.refresh();
@@ -224,6 +274,8 @@ export function PullRequestDetailScreen() {
       case 'review': setReviewSheet(true); break;
       case 'findings': selectTab('findings'); break;
       case 'open': if (url) openExternal(url); break;
+      case 'approve': setReviewPrompt('approve'); break;
+      case 'request_changes': setReviewPrompt('request_changes'); break;
     }
   };
 
@@ -241,6 +293,11 @@ export function PullRequestDetailScreen() {
     else if (actions.requeue && kind !== 'requeue') items.push({ label: 'Requeue', icon: PRIMARY_ICON.requeue, disabled: busyAny, onPress: requeue });
     if (actions.autoKeep) items.push({ label: row.autoKeepMergeable ? 'Turn off Keep mergeable' : 'Turn on Keep mergeable',
       icon: { ios: 'shield.lefthalf.filled', android: 'shield' }, disabled: busyAny, onPress: () => toggleAutoKeep(!row.autoKeepMergeable) });
+    // Shown here when the bar does not offer them: a selection bar replaces it, or another state comes first.
+    const inBar = !selectionBar && (kind === 'approve' || step?.secondary?.kind === 'request_changes');
+    if (canReview && !inBar) items.push(
+      { label: 'Approve', icon: PRIMARY_ICON.approve, disabled: busyAny, onPress: () => setReviewPrompt('approve') },
+      { label: 'Request changes', icon: PRIMARY_ICON.request_changes, disabled: busyAny, onPress: () => setReviewPrompt('request_changes') });
     if (row.reviewRequested && !row.authored) items.push({ label: row.reviewHiddenAt ? 'Show in review requests' : 'Hide review request',
       icon: { ios: 'eye.slash', android: 'visibility_off' }, disabled: busyAny, onPress: toggleHidden });
     items.push({ label: 'Refresh', icon: { ios: 'arrow.clockwise', android: 'refresh' }, disabled: offline, onPress: refreshAll });
@@ -260,7 +317,12 @@ export function PullRequestDetailScreen() {
   }
   const shownTab = tab === 'findings' && !codeReview.review ? 'overview' : tab;
   const primary = step?.primary ?? null;
-  const primaryBusy = primary && ({ merge: 'merge', fix: 'fix', queue: 'queue', requeue: 'queue', resubmit: 'resubmit' } as Partial<Record<NextStepPrimary['kind'], Busy>>)[primary.kind];
+  const secondary = primary && primary.kind !== 'open' ? step?.secondary ?? null : null;
+  const primaryBusy = primary && ({ merge: 'merge', fix: 'fix', queue: 'queue', requeue: 'queue', resubmit: 'resubmit', approve: 'review',
+    request_changes: 'review' } as Partial<Record<NextStepPrimary['kind'], Busy>>)[primary.kind];
+  const primaryButton = primary ? <Button title={primary.label} variant={primary.kind === 'merge' ? 'success' : 'primary'} icon={PRIMARY_ICON[primary.kind]}
+    loading={Boolean(primaryBusy) && busy === primaryBusy} disabled={Boolean(primary.disabledReason) || (Boolean(primaryBusy) && busyAny)}
+    accessibilityLabel={primary.disabledReason ? `${primary.label}. ${primary.disabledReason}` : primary.label} onPress={() => runPrimary(primary)} /> : null;
   const stack = row ? stackLabel(row) : '';
 
   return <ScreenContainer>
@@ -310,21 +372,30 @@ export function PullRequestDetailScreen() {
       </> : state.status === 'deleted' || state.status === 'unauthorized'
         ? <Row title="Back to pull requests" href={pullsRoute('mine')} chevron divider={false} /> : null}
     </ScrollView>
-    {row && codeReview.selected.size > 0 && !codeReview.fixing ? <CodeReviewSelectionBar review={codeReview} />
+    {row && selectionBar ? <CodeReviewSelectionBar review={codeReview} />
       : row && step ? <BottomBar>
         {primary && primary.kind !== 'open' ? <>
           <View style={{ flex: 1, gap: 4 }}>
             {primary.disabledReason ? <AppText variant="caption" tone="muted" numberOfLines={2}>{primary.disabledReason}</AppText> : null}
-            <Button title={primary.label} variant={primary.kind === 'merge' ? 'success' : 'primary'} icon={PRIMARY_ICON[primary.kind]}
-              loading={Boolean(primaryBusy) && busy === primaryBusy} disabled={Boolean(primary.disabledReason) || (Boolean(primaryBusy) && busyAny)}
-              accessibilityLabel={primary.disabledReason ? `${primary.label}. ${primary.disabledReason}` : primary.label} onPress={() => runPrimary(primary)} />
+            {secondary ? <View style={local.barButtons}>
+              <View style={{ flex: 1 }}><Button variant="secondary" title={secondary.label} disabled={busyAny} onPress={() => runPrimary(secondary)} /></View>
+              <View style={{ flex: 1 }}>{primaryButton}</View>
+            </View> : primaryButton}
           </View>
           {url ? <IconButton label="Open pull request website" symbol={OPEN_ICON} onPress={() => openExternal(url)} /> : null}
         </> : url ? <View style={{ flex: 1 }}><Button variant={primary ? 'primary' : 'secondary'} title="Open on GitHub"
           accessibilityLabel="Open pull request website" icon={OPEN_ICON} onPress={() => openExternal(url)} /></View> : null}
       </BottomBar> : null}
+    <PromptSheet visible={reviewPrompt !== null} busy={busy === 'review'} maxLength={MAX_REVIEW_BODY} multiline
+      title={reviewPrompt === 'request_changes' ? `Request changes on ${ref}` : `Approve ${ref}`}
+      message={reviewPrompt === 'request_changes' ? 'Say what to change. GitHub needs a comment to request changes.' : 'A comment is optional.'}
+      label={reviewPrompt === 'request_changes' ? 'What to change' : 'Comment (optional)'}
+      placeholder={reviewPrompt === 'request_changes' ? 'What to change' : 'Add a comment'}
+      optional={reviewPrompt !== 'request_changes'} submitLabel={reviewPrompt === 'request_changes' ? 'Request changes' : 'Approve'}
+      onCancel={() => setReviewPrompt(null)} onSubmit={(value) => { if (reviewPrompt) submitReview(reviewPrompt, value); }} />
     <CodeReviewStartSheet review={codeReview} visible={reviewSheet} onClose={() => setReviewSheet(false)} onStarted={() => selectTab('findings')} />
     {links.toast}
+    {toast.element}
     {sheet.sheet}
   </ScreenContainer>;
 }
@@ -338,4 +409,5 @@ const local = StyleSheet.create({
   failing: { gap: 2, paddingLeft: 30 },
   failingRow: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 28 },
   tab: { gap: 14 },
+  barButtons: { flexDirection: 'row', gap: 8 },
 });

@@ -39,7 +39,7 @@ The filters at the top narrow the list. Each shows a count.
 
 You can also filter by repository, sort by **Newest** or **Oldest**, and search by title, repository or number. Press ⌘F on a Mac to search.
 
-To save a set of filters, use the saved filters bar. A saved filter can match repositories, labels, words in the title and authors.
+To save a set of filters, use the saved filters bar. A saved filter can match repositories, labels, words in the title, authors and review state (approved or not approved).
 
 ### Track any pull request
 
@@ -86,6 +86,8 @@ Sort it by **Newest**, **Oldest** or **Priority**. Priority puts first the pull 
 To drop a pull request from the list and the count, select the hide icon on its row. It stays hidden even if you are asked again. To bring it back, select **Show N hidden pull requests** at the bottom of the list, then the eye icon on its row.
 
 To keep a pull request on **My PRs** after you review it, select the bookmark icon.
+
+In every app, a pull request that asks for your review has **Approve** and **Request changes** buttons. On web and desktop, they are at the top of the pull request. The review goes to GitHub from your own account. Approve takes an optional comment. Request changes needs a comment.
 
 ## Share a list
 

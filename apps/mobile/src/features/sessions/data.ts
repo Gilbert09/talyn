@@ -66,7 +66,7 @@ export function useLoad<T>(key: string | null, load: () => Promise<T>): Load<T> 
 /** A read that wakes the box goes through the box gate. Its 402 gets the plan alert. */
 function wakeRefused(error: unknown) {
   const refusal = boxRefusal(error);
-  if (refusal) showBoxRefusal(refusal);
+  if (refusal) showBoxRefusal(refusal, 'session_wake');
   return error;
 }
 

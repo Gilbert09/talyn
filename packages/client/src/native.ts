@@ -51,6 +51,7 @@ import type {
   CodeReviewPreset,
   CodeReviewPublic,
   Features,
+  FleetModelCatalog,
   GithubHealth,
   MergeEtaAnswer,
   TrunkIntegrationStatus,
@@ -1457,7 +1458,23 @@ export const pullRequests = {
       via?: 'auto_merge' | 'label';
       alreadyTerminal?: boolean;
     }>('POST', `/pull-requests/${id}/merge`, { method }),
+  /**
+   * Approve or request changes, as the connected GitHub user. `body` is
+   * optional for `approve` and required for `request_changes` (400
+   * `body_required`). 409 `pr_not_open` / `own_pull_request` when GitHub would
+   * refuse; a GitHub 403/404/422 keeps its status and message. `row` is the
+   * refreshed PR row (null only if it vanished meanwhile).
+   */
+  submitReview: (id: string, input: { event: PRReviewEvent; body?: string }) =>
+    request<PRReviewSubmitResult>('POST', `/pull-requests/${id}/review`, input),
 };
+
+export type PRReviewEvent = 'approve' | 'request_changes';
+
+export interface PRReviewSubmitResult {
+  review: { id: number; state: string; url: string };
+  row: PRRow | null;
+}
 
 export const repositories = {
   files: (id: string) => request<{ paths: string[] }>('GET', `/repositories/${enc(id)}/files`),
@@ -2067,6 +2084,19 @@ export const features = {
    * surface enforces its own gate; this only decides what to draw.
    */
   get: () => request<Features>('GET', '/features'),
+};
+
+// ============================================================================
+// Agent models
+// ============================================================================
+
+export const models = {
+  /**
+   * The agent models to offer, and each agent's default. Pass the answer to
+   * `setFleetModelCatalog` from `@talyn/shared`, which checks it. The backend
+   * owns this list, so a new model reaches the apps with no app release.
+   */
+  get: () => request<FleetModelCatalog>('GET', '/models'),
 };
 
 // ============================================================================
@@ -2689,6 +2719,7 @@ export const api = {
   releaseNotes,
   users,
   features,
+  models,
   system,
   workflows,
   loops,

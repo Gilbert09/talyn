@@ -7,6 +7,7 @@ import { Alert, Share } from 'react-native';
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { PromptSheet, useActionSheet, useToast, type SheetAction, type SheetRequest, type Symbol } from '../../components/UI';
 import { openExternal } from '../../components/Workflow';
+import { trackEvent } from '../../lib/analytics';
 import { boxRefusal, showActionError, showBoxRefusal } from '../../lib/errors';
 import { useFeatures } from '../../lib/features';
 import { threadRoute } from '../../navigation/routes';
@@ -81,9 +82,12 @@ export function useSessionMenu({ onArchived, onThreadScreen = false }: { onArchi
         const answer = await workflow.wakeWorkbench(item.id) as { status?: string; code?: unknown; notice?: unknown };
         const refusal = answer?.status === 'exhausted' || answer?.status === 'box_limit'
           ? boxRefusal({ code: answer.code ?? (answer.notice as { code?: unknown } | undefined)?.code, details: { notice: answer.notice } }) : null;
-        if (refusal) showBoxRefusal(refusal);
+        if (refusal) showBoxRefusal(refusal, 'session_wake');
       });
-      case 'retry': return attempt('Could not retry', () => workflow.retryWorkbench(item.id));
+      case 'retry': return attempt('Could not retry', async () => {
+        await workflow.retryWorkbench(item.id);
+        trackEvent('session_retry', { workbench_id: item.id });
+      });
       case 'rename': setRenaming(item); break;
       case 'open_pr': if (item.pr?.url) openExternal(item.pr.url); break;
       case 'share': void Share.share({ message: webLink(item.id), url: webLink(item.id) }).catch(() => {}); break;
@@ -94,12 +98,16 @@ export function useSessionMenu({ onArchived, onThreadScreen = false }: { onArchi
           { text: 'Cancel', style: 'cancel', isPreferred: true },
           { text: 'Archive', style: 'destructive', onPress: () => void attempt(`Could not archive the ${noun}`, async () => {
             await workflow.archiveWorkbench(item.id);
+            trackEvent('session_archived', { workbench_id: item.id, kind: item.kind ?? 'session', runtime: item.runtime });
             onArchived?.(item);
           }) },
         ]);
         break;
       }
-      case 'restore': return attempt(`Could not restore the ${noun}`, () => workflow.restoreWorkbench(item.id));
+      case 'restore': return attempt(`Could not restore the ${noun}`, async () => {
+        await workflow.restoreWorkbench(item.id);
+        trackEvent('session_restored', { workbench_id: item.id, kind: item.kind ?? 'session', runtime: item.runtime });
+      });
     }
     return Promise.resolve();
   };

@@ -557,7 +557,7 @@ which box is least loaded or which stopped reporting four minutes ago.
   renews them itself — a subscription access token is short-lived and a fleet
   run outlives it.
 
-**Keeping the model catalogues current.** `FLEET_MODELS` is hand-curated
+**Keeping the model catalogues current.** `BUNDLED_FLEET_MODELS` is hand-curated
 (ordering, blurbs, deliberate exclusions), so it rots silently — a legacy model
 keeps working, it just stops being the best one on offer. Two things watch it,
 split by what each vendor actually exposes:
@@ -572,6 +572,15 @@ split by what each vendor actually exposes:
   learned at run time: `services/selfHosted/withdrawnModels.ts` reads the
   vendor's own refusal out of the failure, stops dispatching at that id, and
   migrates the workspace's stored choice onto the agent's default — no deploy.
+
+**The apps read the catalogue from the backend.** `GET /api/v1/models`
+(`routes/models.ts`) serves the models, each agent's default and the retired-id
+map. The web, desktop and mobile apps fetch it at start and on focus, and apply
+it with `setFleetModelCatalog` from `@talyn/shared`. So to add a model, edit
+`BUNDLED_FLEET_MODELS` and deploy the backend. Released desktop and mobile
+builds then offer it with no app release. The endpoint also hides a model that
+`withdrawnModels.ts` saw the vendor withdraw. The bundled list in each app is
+only the fallback before the first answer, or when the backend is down.
 
 **Either agent alone is enough.** A workspace with only Codex connected is fully
 configured, and its runs default to `gpt-6.1-terra` rather than to a Claude

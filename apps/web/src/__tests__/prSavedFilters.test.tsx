@@ -21,7 +21,13 @@ import {
  * Duplicated in apps/desktop on purpose: the renderer is a deliberate fork.
  */
 
-function row(opts: { id: string; repo?: string; title?: string; labels?: string[] }): PRRow {
+function row(opts: {
+  id: string;
+  repo?: string;
+  title?: string;
+  labels?: string[];
+  reviewDecision?: PRRow['summary']['reviewDecision'];
+}): PRRow {
   return {
     id: opts.id,
     workspaceId: 'ws1',
@@ -52,7 +58,7 @@ function row(opts: { id: string; repo?: string; title?: string; labels?: string[
       url: 'https://github.com/acme/app/pull/1',
       mergeable: 'MERGEABLE',
       mergeStateStatus: 'CLEAN',
-      reviewDecision: null,
+      reviewDecision: opts.reviewDecision ?? null,
       blockingReason: 'mergeable',
       checks: { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 },
       labels: opts.labels,
@@ -227,6 +233,42 @@ describe('PRFilterModal', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
+  it.each([
+    ['approved', 'Matches 1 of 3 PRs on this page.'],
+    ['not_approved', 'Matches 2 of 3 PRs on this page.'],
+  ] as const)('saves a filter on the review state alone (%s)', async (approval, preview) => {
+    seed();
+    const { onSave } = open({
+      rows: [
+        row({ id: '1', reviewDecision: 'APPROVED' }),
+        row({ id: '2', reviewDecision: 'REVIEW_REQUIRED' }),
+        row({ id: '3' }),
+      ],
+    });
+    fireEvent.change(name(), { target: { value: 'Approved' } });
+    fireEvent.change(screen.getByLabelText('Review'), { target: { value: approval } });
+    expect(screen.getByText(preview)).toBeTruthy();
+    fireEvent.click(create());
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect((onSave.mock.calls[0][0] as PRFilterDefinition).criteria).toEqual({ approval });
+  });
+
+  it('loads the review state when editing, and clears it back to any', async () => {
+    seed();
+    const editing = filter({ criteria: { labels: ['frontend'], approval: 'not_approved' } });
+    const { onSave } = open({ editing });
+    const review = screen.getByLabelText('Review') as HTMLSelectElement;
+    expect(review.value).toBe('not_approved');
+
+    fireEvent.change(review, { target: { value: '' } });
+    fireEvent.click(screen.getByText('Save').closest('button') as HTMLButtonElement);
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect((onSave.mock.calls[0][0] as PRFilterDefinition).criteria).toEqual({
+      labels: ['frontend'],
+    });
+  });
+
   it('keeps the id and createdAt when editing, and offers Delete', async () => {
     seed();
     const editing = filter({ criteria: { labels: ['frontend'], labelMatch: 'all' } });
@@ -261,6 +303,8 @@ describe('describeCriteria', () => {
     [{ repos: ['acme/app'], titleContains: 'fix' }, 'repo: acme/app · title contains "fix"'],
     [{ excludeLabels: ['wip'] }, 'without: wip'],
     [{ authors: ['octocat'] }, 'author: octocat'],
+    [{ approval: 'approved' as const }, 'approved'],
+    [{ labels: ['a'], approval: 'not_approved' as const }, 'any label: a · not approved'],
     [{}, 'no criteria'],
   ])('%j → %s', (criteria, expected) => {
     expect(describeCriteria(criteria)).toBe(expected);

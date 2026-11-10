@@ -32,11 +32,13 @@ export function returnPrefix(kind: ReturnKind, base = appReturnBase()): string {
 /**
  * Opens a browser flow and waits until it redirects back to the app or the
  * person closes the browser. The server stays the source of truth: callers
- * refetch what the flow changed in both cases.
+ * refetch what the flow changed in both cases. `onReturn` gets the return
+ * URL, for an analytics event that reads its outcome.
  */
-export async function openReturnFlow(url: string, kind: ReturnKind): Promise<'returned' | 'dismissed'> {
+export async function openReturnFlow(url: string, kind: ReturnKind, onReturn?: (url: string) => void): Promise<'returned' | 'dismissed'> {
   try {
     const result = await WebBrowser.openAuthSessionAsync(url, returnPrefix(kind));
+    if (result.type === 'success' && onReturn) onReturn(result.url);
     return result.type === 'success' ? 'returned' : 'dismissed';
   } catch {
     return 'dismissed';

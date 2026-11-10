@@ -1,6 +1,6 @@
 import { cloudProviders, environments, features, pullRequests, repositories, tasks, workbenches, workspaces, wsClient,
   type ClientLifecycle, type CodeReviewDismissReason, type CodeReviewFinding, type CodeReviewPreset, type CodeReviewPublic,
-  type PRRow } from '@talyn/client/native';
+  type PRReviewEvent, type PRRow } from '@talyn/client/native';
 import type { CreateWorkbenchInput, Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 
 import { cacheKey, canCompose, canStartSend, deliveryReducer, EMPTY_DELIVERY, EMPTY_RESOURCE, emptyTranscript, explicitSendFailure,
@@ -574,6 +574,13 @@ export class WorkflowStore {
   }
   async mergePr(id: string) {
     const result = await this.api.pullRequests.merge(id);
+    this.refresh('pr', id); this.refresh('attention');
+    return result;
+  }
+  /** Approve or request changes as the person. The answer carries the refreshed row. */
+  async submitPrReview(id: string, event: PRReviewEvent, body?: string) {
+    const result = await this.api.pullRequests.submitReview(id, { event, ...(body ? { body } : {}) });
+    if (result?.row) this.patchPr(id, result.row);
     this.refresh('pr', id); this.refresh('attention');
     return result;
   }

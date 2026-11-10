@@ -6,6 +6,8 @@ Talyn is a desktop "mission control" app for **GitHub PR management**, powered b
 
 **Target user**: engineers who live in GitHub PRs and want to hand routine PR work to cloud agents.
 
+**Three front ends: `apps/desktop`, `apps/web` and `apps/mobile`.** A new feature, a changed behaviour or a user-visible fix lands in all three in the same change. Mobile is not optional. The rules and the web-only exceptions are in **Mobile client — keep it in step**.
+
 ## Git Workflow
 
 **Repository**: `git@github.com:Gilbert09/talyn.git` (main branch)
@@ -281,7 +283,7 @@ Inside `packages/backend/src/`: `db/` (migrations + Drizzle schema/client), `rou
 
 Inside `apps/desktop/src/renderer/components/`: `layout/`, `modals/`, `panels/`, `terminal/`, `widgets/`, `ui/` (shadcn).
 
-**`apps/web` is a deliberate FORK of the desktop renderer, not a shared build of it.** Tom's call: every UI feature gets built twice from here on, in exchange for the two clients being able to diverge freely. What is NOT forked is the backend contract — both import `@talyn/client` — because two copies of that drift into runtime bugs rather than type errors. Three things the fork must keep straight, all verified with a spike before the app existed:
+**`apps/web` is a deliberate FORK of the desktop renderer, not a shared build of it.** Tom's call: every UI feature gets built separately in each client (desktop, web and `apps/mobile`), in exchange for the clients being able to diverge freely. What is NOT forked is the backend contract — both import `@talyn/client` — because two copies of that drift into runtime bugs rather than type errors. Three things the fork must keep straight, all verified with a spike before the app existed:
 - **Env is `import.meta.env.VITE_*`, never `process.env.*`.** Vite's `define` entries are *"defined as globals during dev and statically replaced during build"*, so mirroring webpack's `EnvironmentPlugin` with a `define` of `process.env.TALYN_API_URL` serves the dev browser an unsubstituted expression that throws on the missing `process` global. `vite.config.ts` fails a production build outright when a required key is empty (a white screen on a public URL is much worse than the desktop's runtime throw) and refuses any value containing `service_role`.
 - **OAuth is a full-page redirect** — `signInWithOAuth` with no `skipBrowserRedirect`, plus `detectSessionInUrl: true`. The desktop's `openExternal(data.url)` fires after two `await`s, so its `window.open` fallback has lost user activation and Safari/Firefox block it, silently, on the sign-in screen.
 - **Never carry `migrateLegacyAuthFromLocalStorage` across.** On web the "bridge" IS localStorage, so its `setItem`-then-`removeItem` on the same key wipes the session every page load.

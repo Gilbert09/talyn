@@ -1,5 +1,5 @@
 import { spaces, workbenches, workspaces as workspaceApi, type PRRow, type WatchedRepo } from '@talyn/client/native';
-import type { SpaceRepository, WorkbenchAgent, WorkbenchReadiness, Workspace } from '@talyn/shared';
+import type { SpaceRepository, Workbench, WorkbenchAgent, WorkbenchReadiness, Workspace } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import { HeaderHeightContext } from 'expo-router/react-navigation';
@@ -11,8 +11,10 @@ import { PickerSheet, type PickerSection } from '../../components/PickerSheet';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { AppText, Banner, Button, EmptyState, Spinner, useToast, type Symbol } from '../../components/UI';
 import { openExternal } from '../../components/Workflow';
+import { trackEvent } from '../../lib/analytics';
 import { boxRefusal, errorMessage, showBoxRefusal } from '../../lib/errors';
 import { featureOffered, useFeatures } from '../../lib/features';
+import { useFleetModelCatalog } from '../../lib/fleetModelCatalog';
 import { useKeyboardInset } from '../../lib/keyboard';
 import { sessionRoute, threadRoute } from '../../navigation/routes';
 import { display, mono, radius, sans, type, useTheme } from '../../theme/tokens';
@@ -55,6 +57,8 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const c = useTheme();
   const offline = useNetwork() === 'offline';
   const features = useFeatures();
+  // Subscribes, so the model picker renders again when the backend's catalogue arrives.
+  useFleetModelCatalog();
   const offered = featureOffered(features, 'workbenches');
   const repositories = useResource<WatchedRepo[]>('repositories', '', offered);
   const readiness = useResource<WorkbenchReadiness>('readiness', '', offered);
@@ -131,6 +135,7 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
       };
       if (inSpace) {
         const created = await spaces.createSession(inSpace.space.id, spaceCreateBody(form));
+        trackCreated(created.workbench, form);
         if (mode === 'session' && repository) rememberRepository(repoKey, repository.id);
         workflow.updateLocal(draftKey, { draft: '' });
         // The detail screens read the selected workspace, so a session in another of mine switches to it first.
@@ -143,13 +148,14 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
         return;
       }
       const item = await workflow.createWorkbench(createInput(form, workspaceId));
+      trackCreated(item, form);
       if (mode === 'session' && repository) rememberRepository(workspaceId, repository.id);
       workflow.updateLocal(draftKey, { draft: '' });
       setBaseBranch('');
       open(item.id);
     } catch (failure) {
       const refusal = boxRefusal(failure);
-      if (refusal) showBoxRefusal(refusal);
+      if (refusal) showBoxRefusal(refusal, mode === 'thread' ? 'thread_create' : 'session_create');
       setError(refusal?.message ?? errorMessage(failure, mode === 'thread' ? 'Could not create the thread.' : 'Could not create the session.'));
     } finally { setBusy(false); }
   };
@@ -328,6 +334,14 @@ function SendButton({ enabled, busy, hint, label, onPress }: { enabled: boolean;
     {busy ? <ActivityIndicator size="small" color={foreground} />
       : <SymbolView name={{ ios: 'arrow.up', android: 'arrow_upward' }} size={18} tintColor={foreground} />}
   </Pressable>;
+}
+
+
+/** Web's create events, with the same names and keys. The prompt goes with the create, so it counts as a sent message. */
+function trackCreated(item: Workbench, form: NewWorkForm) {
+  trackEvent('session_created', { kind: item.kind ?? 'session', runtime: item.runtime, repository_id: item.repositoryId ?? null,
+    size: item.settings.sandboxSize ?? item.settings.boxSize ?? 'default' });
+  if (form.prompt.trim()) trackEvent('session_message_sent', { queued: true, plan_mode: false, model_id: form.model, attachments_count: 0 });
 }
 
 const styles = StyleSheet.create({

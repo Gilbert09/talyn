@@ -7,10 +7,9 @@ const AGENT_LABELS: Record<string, string> = { claude: 'Claude', codex: 'Codex' 
 const EFFORT_LABELS: Record<WorkbenchEffort, string> = {
   low: 'Low effort', medium: 'Medium effort', high: 'High effort', xhigh: 'Extra-high effort', max: 'Max effort',
 };
-const MODEL_LABELS = new Map<string, string>([
-  ...POSTHOG_CODE_MODELS.map((model) => [model.id, model.label] as const),
-  ...FLEET_MODELS.map((model) => [model.id, model.label] as const),
-]);
+/** Read at call time: the fleet catalogue changes when the backend's answer arrives. */
+const knownLabel = (id: string): string | undefined =>
+  FLEET_MODELS.find((model) => model.id === id)?.label ?? POSTHOG_CODE_MODELS.find((model) => model.id === id)?.label;
 
 /** "Claude" or "Codex", like the web agent picker. An unknown agent keeps its own name. */
 export function agentLabel(agent: string | null | undefined): string {
@@ -26,7 +25,7 @@ export function agentLabel(agent: string | null | undefined): string {
 export function modelLabel(model: string | null | undefined, agent?: string | null): string {
   const id = model || (agent === 'codex' || agent === 'claude' ? defaultFleetModelForAgent(agent) : '');
   if (!id) return '';
-  const known = MODEL_LABELS.get(id) ?? MODEL_LABELS.get(resolveFleetModel(id));
+  const known = knownLabel(id) ?? knownLabel(resolveFleetModel(id));
   if (known) return known;
   const claude = /^claude-([a-z]+)-(\d+(?:-\d+)*)/.exec(id);
   if (claude) return `${claude[1].charAt(0).toUpperCase()}${claude[1].slice(1)} ${claude[2].replace(/-/g, '.')}`;

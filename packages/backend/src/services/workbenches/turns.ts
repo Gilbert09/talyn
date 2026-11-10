@@ -16,6 +16,7 @@ import {
   createAgentStreamParser,
   parseAutoPrDetails,
   parsePrDetails,
+  resolveFleetModel,
   workbenchTurnPrompt,
   shellQuote,
   toShellScript,
@@ -675,14 +676,15 @@ class EventBatcher {
 /**
  * The model a turn runs on. Undefined: the agent's own default. The session's
  * model applies only to a chat on the session's agent, so a Codex chat in a
- * Claude session never runs a Claude model.
+ * Claude session never runs a Claude model. A retired id runs as the model
+ * that replaces it.
  */
 export function turnModelFor(
   message: Pick<WorkbenchQueuedMessage, 'model'>,
   chat: { agent: string; model: string | null },
   wb: { agent: string; model: string | null },
 ): string | undefined {
-  return message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model ?? undefined : undefined);
+  return resolveFleetModel(message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model ?? undefined : undefined));
 }
 
 /**
@@ -1098,7 +1100,7 @@ async function waitForOtherPayer(chatId: string, message: WorkbenchQueuedMessage
 
 /** Give the turn back to the queue because the plan refused its box, and say why in the chat. */
 async function holdTurn(chatId: string, message: WorkbenchQueuedMessage, refusal: BoxGateError): Promise<TurnOutcome> {
-  const requeued = await requeueTurn(chatId, message);
+  const requeued = await requeueTurn(chatId, message, { drain: false });
   if (requeued) {
     const stored = await appendEvents(chatId, [
       {
@@ -1191,7 +1193,7 @@ async function capacityWaitOutcome(
  */
 async function requeueForSandbox(chatId: string, message: WorkbenchQueuedMessage, turn: number, wait: WorkbenchCapacityWait): Promise<void> {
   adoptFailures.delete(chatId);
-  const requeued = await requeueTurn(chatId, { ...message, capacityWait: wait }, turn);
+  const requeued = await requeueTurn(chatId, { ...message, capacityWait: wait }, { turn });
   if (!requeued) {
     await releaseLease(chatId, turn, 'the chat moved on before its wait for a sandbox was recorded');
     return;

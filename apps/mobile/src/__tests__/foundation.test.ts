@@ -54,9 +54,24 @@ describe('workspace access and preferences', () => {
   });
   it('removes saved selection when access is revoked', async () => {
     const { make, list, values } = workspaces(); const store = make('dev'); await store.load('alice'); await store.select('one');
-    list.mockResolvedValue([{ id: 'two', name: 'Two' }]); await store.load('alice');
+    list.mockResolvedValue([{ id: 'two', name: 'Two' }, { id: 'three', name: 'Three' }]); await store.load('alice');
     expect(store.getSnapshot().selected).toBeNull(); expect(values.size).toBe(0);
     await store.select('one'); expect(values.size).toBe(0);
+  });
+  it('chooses the only workspace without asking, and saves it', async () => {
+    const { make, list, values } = workspaces(); list.mockResolvedValue([{ id: 'solo', name: 'Solo' }]);
+    const store = make('dev'); await store.load('alice');
+    expect(store.getSnapshot()).toMatchObject({ status: 'ready', selected: 'solo' });
+    expect([...values.values()]).toEqual(['solo']);
+  });
+  it('moves to the only workspace left when access to the saved one is revoked', async () => {
+    const { make, list } = workspaces(); const store = make('dev'); await store.load('alice'); await store.select('one');
+    list.mockResolvedValue([{ id: 'two', name: 'Two' }]); await store.load('alice');
+    expect(store.getSnapshot().selected).toBe('two');
+  });
+  it('still asks when there are several workspaces and none is saved', async () => {
+    const { make } = workspaces(); const store = make('dev'); await store.load('alice');
+    expect(store.getSnapshot()).toMatchObject({ status: 'ready', selected: null });
   });
   it('does not expose saved access before validation succeeds', async () => {
     const { make, list } = workspaces(); const store = make('dev'); await store.load('alice'); await store.select('one');

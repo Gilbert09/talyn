@@ -1414,21 +1414,25 @@ export async function finishTurn(
  * Give a turn back to the queue before it ran anything: its message goes to
  * the head of the queue, the turn number is returned, and the chat is idle.
  * For a turn that found its workbench moving, and for a turn that waits for a
- * free sandbox (the message then carries `capacityWait`). Null when the chat
- * was not running.
+ * free sandbox (the message then carries `capacityWait`). Set `drain` to false
+ * when a billing refusal requires the person to retry. Null when the chat was not running.
  */
-export async function requeueTurn(chatId: string, message: WorkbenchQueuedMessage, turn?: number): Promise<ChatRow | null> {
+export async function requeueTurn(
+  chatId: string,
+  message: WorkbenchQueuedMessage,
+  opts: { turn?: number; drain?: boolean } = {},
+): Promise<ChatRow | null> {
   const result = await db().execute(sql`
     UPDATE workbench_chats c SET
       queued_messages = ${stringifyJsonbSafe([message])}::jsonb || c.queued_messages,
       status = 'idle',
       turn_message = NULL,
-      drain_pending = true,
+      drain_pending = ${opts.drain ?? true},
       status_message = NULL,
       turn_count = GREATEST(c.turn_count - 1, 0),
       updated_at = now()
     WHERE c.id = ${chatId} AND c.status = 'running' AND c.turn_owner = ${TURN_OWNER}
-      AND (${turn ?? null}::int IS NULL OR c.turn_count = ${turn ?? null})
+      AND (${opts.turn ?? null}::int IS NULL OR c.turn_count = ${opts.turn ?? null})
     RETURNING ${RETURNING_CHAT}
   `);
   const row = rowsOf<RawChatRow>(result)[0];

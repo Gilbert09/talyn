@@ -32,7 +32,6 @@ import {
   gaugeTone,
   leftPercent,
   maxNeedsPortal,
-  maxPricesOf,
   usageBillingOf,
   type UsageBillingView,
 } from '../../../lib/usageBilling';
@@ -40,7 +39,7 @@ import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
 import { BillingTeamNotice } from '../../panels/TeamBilling';
 import { CreditPackButtons, PortalButton, UsageResetAction, legacyMonthlyPrice, planPrices, proPrices } from '../../billing/BillingActions';
-import { AnnualSwitch } from './AnnualSwitch';
+import { PlanCards } from '../../billing/PlanCards';
 import { AutoTopupForm } from './AutoTopupForm';
 import { LegacyBillingSettings, formatOrderAmount } from './LegacyBillingSettings';
 
@@ -64,7 +63,6 @@ function tierPrice(tier: PlanTier, view: UsageBillingView): string {
 
 export function PlanAndUsage({ view }: { view: UsageBillingView }) {
   const refresh = useBillingStore((s) => s.refresh);
-  const openUpgrade = useBillingStore((s) => s.setUpgradeModalOpen);
   const openSettings = useWorkspaceStore((s) => s.openSettings);
   const { status, tier } = view;
   const limits = PLAN_LIMITS[tier];
@@ -78,9 +76,7 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
   const teamPaid = status.planSource === 'team';
   const subscribed = status.planSource === 'subscription';
   const pastDue = status.subscriptionStatus === 'past_due';
-  const canMoveToPro = tier === 'legacy_pro' && subscribed;
   const maxViaPortal = maxNeedsPortal(status);
-  const canUpgradeToMax = tier === 'pro' && subscribed && maxPricesOf(status) != null && !maxViaPortal;
 
   return (
     <div className="space-y-6" data-attr="plan-and-usage">
@@ -154,29 +150,26 @@ export function PlanAndUsage({ view }: { view: UsageBillingView }) {
             </div>
           )}
 
-          <AnnualSwitch status={status} placement="plan_page" />
-
-          <div className="flex flex-wrap items-center gap-2">
-            {tier === 'free' || canMoveToPro || canUpgradeToMax ? (
-              <Button data-attr="plan-upgrade" onClick={() => openUpgrade(true, 'upgrade')}>
-                {canMoveToPro ? 'Move to Pro' : canUpgradeToMax ? 'Upgrade to Max' : 'Upgrade'}
-              </Button>
-            ) : teamPaid ? (
-              <Button data-attr="plan-manage-billing" onClick={() => openSettings('teams')}>
-                Manage billing
-              </Button>
-            ) : (
-              subscribed && <PortalButton />
-            )}
-            {(canMoveToPro || canUpgradeToMax) && <PortalButton secondary />}
-            <Button variant="link" size="sm" data-attr="plan-compare" onClick={() => { trackEvent('compare_plans_opened', { where: 'plan_page' }); openUpgrade(true, 'compare_plans'); }}>
-              Compare plans
-            </Button>
-          </div>
+          {(teamPaid || subscribed) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {teamPaid ? (
+                <Button data-attr="plan-manage-billing" onClick={() => openSettings('teams')}>
+                  Manage billing
+                </Button>
+              ) : (
+                <PortalButton />
+              )}
+            </div>
+          )}
         </Card>
       </div>
 
       <UsageCard view={view} />
+
+      <div>
+        <h3 className="mb-4 text-lg font-semibold">Plans</h3>
+        <PlanCards view={view} placement="plan_page" />
+      </div>
 
       {limits.creditsAllowed && <CreditsCard view={view} />}
 

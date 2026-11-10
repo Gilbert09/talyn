@@ -88,7 +88,8 @@ Privacy owners must approve Expo Push Service as a processor before enabling pro
 Review its retention, subprocessors, service region, deletion behavior, and contractual terms.
 Update Apple App Privacy and Google Play Data safety disclosures for device identifiers and notification delivery.
 Confirm those disclosures match token retention and provider processing in the deployed backend.
-No ATT prompt, advertising identifier, analytics, or tracking is added.
+No ATT prompt, advertising identifier, or cross-app tracking is added.
+PostHog analytics is first-party product analytics (Tom's call, 2026-11-10). See "Analytics" below.
 Do not approve sensitive previews without another payload and privacy review.
 
 Physical iOS and Android checks remain required. Test foreground, background, terminated, cold-start, and delayed notifications.
@@ -133,6 +134,8 @@ Use a Supabase publishable key or legacy anon key. Never use a secret key or ser
 | `EXPO_PUBLIC_SUPABASE_KEY` | Public publishable key or legacy anon key. |
 | `EXPO_PUBLIC_AUTH_CALLBACK_URL` | Exact callback URL for this environment, ending in `/callback`. |
 | `EXPO_PUBLIC_EAS_PROJECT_ID` | Optional public EAS project UUID. The default is the Talyn project `69499768-c478-44c0-8588-355c674515df`. |
+| `EXPO_PUBLIC_TALYN_POSTHOG_KEY` | Optional PostHog project key (`phc_`). With no key, analytics, replay, and error tracking are off. |
+| `EXPO_PUBLIC_TALYN_POSTHOG_HOST` | Optional PostHog ingestion origin. The default is `https://us.i.posthog.com`. |
 
 Set `APP_ENV` to `development`, `preview`, or `production`. Development is the default.
 Production configuration fails if any public value is missing. Production requires HTTPS for all three URLs.
@@ -489,3 +492,21 @@ Use the device preview to check these items before release:
 - Enable reduced motion. Check that sign-in has no transition animation.
 
 The floating Expo development gear belongs to the development client.
+
+## Analytics
+
+Tom's call (2026-11-10): the app uses PostHog for product analytics, session replay, and error tracking, like web.
+This reverses the MVP rule of no analytics or replay SDK.
+The official SDK is `posthog-react-native`, with `@posthog/react-native-plugin` for session replay and native capture (the older `posthog-react-native-session-replay` package is deprecated).
+`src/lib/analytics.ts` holds the guarded helpers. They do nothing in a build with no `EXPO_PUBLIC_TALYN_POSTHOG_KEY`.
+
+- The distinct ID is the Supabase user ID, as on web. Email and GitHub username are person properties. Sign-out resets the identity.
+- Every event carries `client: 'mobile'`, `platform`, `app_version`, `app_build`, `update_id`, `update_channel`, `environment`, and `workspace_id`.
+- Each route change records a `$screen` named by its route pattern, such as `/pulls/[id]`. No IDs go in the name.
+- Touches are autocaptured by component name and test ID only. Text children and accessibility labels are not captured.
+- Session replay masks all text, inputs, images, and sandboxed views. It records no console logs or network requests. It is off in development builds.
+- Exception autocapture runs in preview and production builds. Each exception goes through the shared `exceptionDropReason` and `isConnectivityMessage` rules, like web.
+- Settings > Account > "Share usage data and session replays" turns it all off. The choice is saved on the device and read before the first event.
+- Apple tracking stays false: there is no cross-app tracking, so there is no ATT prompt.
+- Before store submission, the App Store privacy answers and Play Data safety must declare analytics, diagnostics, and the user ID.
+- Event names and property keys match web. Never put titles, prompts, transcripts, code, or repository names in a property.

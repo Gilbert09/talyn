@@ -16,6 +16,7 @@ import { adminRoutes } from './admin/index.js';
 import { userRoutes } from './users.js';
 import { featureRoutes } from './features.js';
 import { systemRoutes } from './system.js';
+import { modelRoutes } from './models.js';
 import { loopRoutes } from './loops.js';
 import { workbenchRoutes } from './workbenches.js';
 import { spaceRoutes } from './spaces.js';
@@ -222,6 +223,10 @@ export function setupRoutes(app: Express): void {
   // for the same reason as `/features`, and more so: the answer is global and
   // comes from memory. See routes/system.ts.
   app.use(`${api}/system`, mount(systemRoutes()));
+
+  // The agent model catalogue the apps offer. Pre-ownerScope like `/system`:
+  // the answer is global and comes from memory. See routes/models.ts.
+  app.use(`${api}/models`, mount(modelRoutes()));
 
   // The "What's new" feed. Pre-ownerScope because the content is global —
   // what shipped in 0.2.61 is the same fact for every user, `release_notes`

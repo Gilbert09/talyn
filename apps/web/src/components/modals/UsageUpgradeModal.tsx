@@ -1,8 +1,7 @@
 import { Check, Zap } from 'lucide-react';
-import { BILLING_PERIOD_LABELS, PLAN_LIMITS, PLAN_PRICES, PLAN_TIER_LABELS, SANDBOX_SIZES, formatBoxHoursLabel, boxHoursToWeightedSeconds, formatUsd, type PlanTier } from '@talyn/shared';
+import { PLAN_LIMITS, formatUsd } from '@talyn/shared';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
-import { AnnualSwitch } from '../settings/sections/AnnualSwitch';
 import { useBillingStore, type UpgradeReason } from '../../stores/billing';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { trackEvent } from '../../lib/analytics';
@@ -14,7 +13,8 @@ import {
   type BoxRefusalNotice,
   type UsageBillingView,
 } from '../../lib/usageBilling';
-import { CreditPackButtons, PlanForm, PortalButton, UsageResetAction, legacyMonthlyPrice, proPrices } from '../billing/BillingActions';
+import { CreditPackButtons, PlanForm, UsageResetAction, legacyMonthlyPrice, proPrices } from '../billing/BillingActions';
+import { PlanCards, planCardTiers } from '../billing/PlanCards';
 
 /** What the modal offers, in order. The Max offers appear only when the status carries Max prices. */
 export type UsageOffer = 'pro_checkout' | 'max_checkout' | 'move_to_pro' | 'move_to_max' | 'credits' | 'auto_topup';
@@ -163,13 +163,6 @@ export function UsageUpgradeModal({
   const close = () => onOpenChange(false);
 
   if (reason === 'compare_plans') {
-    const maxPrices = maxPricesOf(view.status);
-    const plans: Array<PlanTier | 'team'> = ['free', 'pro', 'team'];
-    if (maxPrices || view.tier === 'max') plans.splice(2, 0, 'max');
-    if (view.tier === 'legacy_pro') plans.splice(1, 0, 'legacy_pro');
-    const current = view.tier === 'legacy_pro' ? view.tier : view.status.planSource === 'team' ? 'team' : view.tier;
-    const subscribed = view.status.planSource === 'subscription';
-    const pricing = view.status.pricing;
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-5xl" onClose={close}>
@@ -177,75 +170,12 @@ export function UsageUpgradeModal({
             <DialogTitle>Compare plans</DialogTitle>
             <DialogDescription>See what each plan includes.</DialogDescription>
           </DialogHeader>
-          <div className={`grid gap-3 sm:grid-cols-2 ${GRID_COLUMNS[plans.length] ?? 'lg:grid-cols-3'}`}>
-            {plans.map((plan) => {
-              const limits = PLAN_LIMITS[plan === 'team' ? 'pro' : plan];
-              const monthly = plan === 'free'
-                ? PLAN_PRICES.free.monthlyMicros
-                : plan === 'legacy_pro'
-                  ? pricing?.legacyProMonthlyMicros ?? PLAN_PRICES.legacy_pro.monthlyMicros
-                  : plan === 'max'
-                    ? maxPrices?.monthlyMicros ?? PLAN_PRICES.max.monthlyMicros
-                    : pricing?.proMonthlyMicros ?? PLAN_PRICES.pro.monthlyMicros;
-              // Max is sold monthly only.
-              const annual = plan === 'free' || plan === 'max'
-                ? null
-                : plan === 'legacy_pro'
-                  ? PLAN_PRICES.legacy_pro.annualMicros
-                  : pricing?.proAnnualMicros ?? PLAN_PRICES.pro.annualMicros;
-              return (
-                <div key={plan} data-testid={`compare-plan-${plan}`} className="flex flex-col rounded-md border p-3 text-sm">
-                  <div className="font-semibold">{plan === 'team' ? 'Team' : PLAN_TIER_LABELS[plan]}</div>
-                  <div className="mt-1 font-medium">
-                    {formatUsd(monthly, 0)}/mo
-                    {plan === 'team' ? ' per seat' : ''}
-                  </div>
-                  {annual != null && (
-                    <div className="text-xs text-muted-foreground">
-                      {formatUsd(annual, 0)}/yr
-                      {plan === 'team' ? ' per seat' : ''}
-                      {' · Save '}{formatUsd(monthly * 12 - annual, 0)}/yr
-                    </div>
-                  )}
-                  <ul className="my-3 space-y-1 text-xs text-muted-foreground">
-                    <li>{plan === 'max' ? MAX_INCLUDED_TEXT : formatBoxHoursLabel(boxHoursToWeightedSeconds(limits.includedBoxHours))} per month</li>
-                    <li>{limits.concurrentBoxes} concurrent boxes</li>
-                    <li>Box sizes: {limits.sizes.map((size) => SANDBOX_SIZES[size].label).join(', ')}</li>
-                    <li>Credits: {limits.creditsAllowed ? 'Yes' : 'No'}</li>
-                    {plan === 'team' && <li>Each seat has its own included box-hours.</li>}
-                  </ul>
-                  <div className="mt-auto space-y-2">
-                    {plan === current ? (
-                      <>
-                        <p className="font-medium text-primary">
-                          Your plan{plan !== 'team' && view.status.planSource === 'subscription' && view.status.period ? ` · ${BILLING_PERIOD_LABELS[view.status.period]}` : ''}
-                        </p>
-                        {(plan === 'pro' || plan === 'max') && <AnnualSwitch status={view.status} placement="compare_plans" />}
-                      </>
-                    ) : plan === 'pro' && view.tier === 'free' ? (
-                      <PlanForm mode="checkout" placement="upgrade_modal" />
-                    ) : plan === 'pro' && view.tier === 'legacy_pro' && subscribed ? (
-                      <PlanForm mode="change" placement="upgrade_modal" onChanged={close} />
-                    ) : plan === 'pro' && view.tier === 'max' && subscribed ? (
-                      <>
-                        <p className="text-xs text-muted-foreground">To move to Pro, use Manage billing. The change starts at your next renewal.</p>
-                        <PortalButton secondary />
-                      </>
-                    ) : plan === 'max' && view.tier === 'free' ? (
-                      <PlanForm plan="max" mode="checkout" placement="upgrade_modal" />
-                    ) : plan === 'max' && (view.tier === 'pro' || view.tier === 'legacy_pro') && subscribed ? (
-                      <PlanForm plan="max" mode="change" placement="upgrade_modal" onChanged={close} />
-                    ) : plan === 'team' ? (
-                      <Button variant="outline" className="w-full" onClick={() => { trackEvent('team_offer_opened', { placement: 'upgrade_modal' }); close(); openSettings('teams'); }}>Explore Team</Button>
-                    ) : null}
-                    {limits.creditsAllowed && plan === current && (
-                      <button type="button" className="text-xs text-primary hover:underline" onClick={() => { close(); openSettings('billing'); }}>Add credits</button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <PlanCards
+            view={view}
+            placement="compare_plans"
+            onLeave={close}
+            className={GRID_COLUMNS[planCardTiers(view).length] ?? 'lg:grid-cols-3'}
+          />
           <DialogFooter><Button variant="ghost" onClick={close}>Done</Button></DialogFooter>
         </DialogContent>
       </Dialog>

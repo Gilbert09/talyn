@@ -20,11 +20,17 @@ export interface AuthBrowser {
 export type AuthStatus = 'restoring' | 'signedOut' | 'signingIn' | 'signedIn' | 'locked';
 export interface AuthSnapshot {
   status: AuthStatus;
-  user: Pick<User, 'id' | 'email'> | null;
+  /** `githubLogin` is the GitHub username, when the session carries it. */
+  user: (Pick<User, 'id' | 'email'> & { githubLogin?: string }) | null;
   issue: SignInError['kind'] | 'outage' | null;
   notice?: 'deleted';
 }
 type Attempt = { callback: string; startedAt: number; phase: 'awaiting' | 'exchanging' };
+
+function snapshotUser(user: User): NonNullable<AuthSnapshot['user']> {
+  const login = (user.user_metadata as { user_name?: unknown } | undefined)?.user_name;
+  return { id: user.id, email: user.email, ...(typeof login === 'string' && login ? { githubLogin: login } : {}) };
+}
 
 export function isRefreshRejection(error: unknown): boolean {
   const value = error as { name?: string; code?: string; status?: number } | null;
@@ -70,7 +76,7 @@ export class AuthController {
     }
     this.session = session;
     this.setActive(this.active);
-    this.publish({ status: session ? 'signedIn' : 'signedOut', user: session ? { id: session.user.id, email: session.user.email } : null, issue: null });
+    this.publish({ status: session ? 'signedIn' : 'signedOut', user: session ? snapshotUser(session.user) : null, issue: null });
   }
 
   private async pending(): Promise<Attempt | null> {

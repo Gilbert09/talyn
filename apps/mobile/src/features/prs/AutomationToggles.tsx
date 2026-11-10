@@ -12,7 +12,10 @@ const ON_ICON: Symbol = { ios: 'checkmark', android: 'check' };
 
 /** The text a toggle wears: its name when off, its state when on. */
 export function queueToggleText(row: Pick<PRRow, 'mergeQueued' | 'mergeQueue'>): string {
-  return row.mergeQueued ? queueStateLabel(row) : 'Merge queue';
+  if (!row.mergeQueued) return 'Merge queue';
+  const label = queueStateLabel(row);
+  // "Fixing" alone does not say what is fixing; the queue labels already start with Queue.
+  return /^Queue/.test(label) ? label : `Queue: ${label.toLowerCase()}`;
 }
 export function keepToggleText(row: Pick<PRRow, 'autoKeepMergeable' | 'autoMergeState'>): string {
   if (!row.autoKeepMergeable) return 'Keep mergeable';

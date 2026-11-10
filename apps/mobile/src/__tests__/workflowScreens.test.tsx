@@ -171,7 +171,8 @@ describe('detail and composer accessibility', () => {
     expect(screen.getByText('Your review is requested')).toBeVisible();
     expect(screen.getByText('Live detail from GitHub is unavailable. Showing the last saved state.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Open pull request website' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Review with Talyn' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Request changes' })).toBeVisible();
     expect(screen.queryByRole('button', { name: /^Merge$|Fix with agent/ })).toBeNull();
   });
   it('hides cached PR content until current authorization succeeds', async () => {

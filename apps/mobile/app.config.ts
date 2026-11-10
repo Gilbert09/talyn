@@ -1,6 +1,6 @@
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
-import type { AppEnvironment, MobileConfig, PurchaseMode } from './src/config';
+import type { AnalyticsConfig, AppEnvironment, MobileConfig, PurchaseMode } from './src/config';
 import { readReleaseSettings } from './release/policy.cjs';
 
 type PublicEnvironment = Record<string, string | undefined>;
@@ -46,6 +46,18 @@ export function readPurchaseMode(env: PublicEnvironment): PurchaseMode {
   if (!value) return 'external';
   if (value === 'external' || value === 'none') return value;
   throw new Error('EXPO_PUBLIC_PURCHASE_MODE must be external or none.');
+}
+
+/**
+ * PostHog from `EXPO_PUBLIC_TALYN_POSTHOG_KEY` and `EXPO_PUBLIC_TALYN_POSTHOG_HOST`.
+ * No key means analytics is off: the app sends nothing. The host defaults to PostHog US.
+ */
+export function readAnalyticsConfig(env: PublicEnvironment): AnalyticsConfig | null {
+  const key = env.EXPO_PUBLIC_TALYN_POSTHOG_KEY?.trim();
+  if (!key) return null;
+  if (!/^phc_[A-Za-z0-9_-]+$/.test(key)) throw new Error('EXPO_PUBLIC_TALYN_POSTHOG_KEY must be a PostHog project key (phc_).');
+  const host = env.EXPO_PUBLIC_TALYN_POSTHOG_HOST?.trim() || 'https://us.i.posthog.com';
+  return { key, host: origin(host, false) };
 }
 
 type Environment = 'development' | 'preview' | 'production';
@@ -146,6 +158,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       mode: release.profile === 'development' ? 'development' : 'production', enableBackgroundRemoteNotifications: false,
     }]],
     experiments: { typedRoutes: true },
-    extra: { release: { profile: release.profile, urls: release.urls }, appEnvironment: identity.environment, mobile, eas: { projectId } },
+    extra: { release: { profile: release.profile, urls: release.urls }, appEnvironment: identity.environment, mobile,
+      analytics: readAnalyticsConfig(process.env), eas: { projectId } },
   };
 };

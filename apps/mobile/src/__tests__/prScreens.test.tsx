@@ -17,7 +17,8 @@ jest.mock('expo-router', () => ({
   usePathname: () => '/pulls',
   Link: ({ children }: { children: React.ReactNode }) => children,
   useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => true }),
-  Stack: { Screen: () => null },
+  // Draws the header's buttons, so the PR page's menu can be opened.
+  Stack: { Screen: ({ options }: { options?: { headerRight?: () => React.ReactNode } }) => options?.headerRight?.() ?? null },
 }));
 jest.mock('../auth/AuthProvider', () => ({
   useMobileRuntime: () => ({ workflow: mockActive.store }), useNetwork: () => 'online',
@@ -218,6 +219,8 @@ describe('code review on PR detail', () => {
     await render(<PullRequestDetailScreen />);
     // No preset picker on the page itself.
     expect(screen.queryByRole('tab', { name: 'Deep' })).toBeNull();
+    // A requested review puts Approve in the bar, so Review with Talyn is in the menu.
+    await fireEvent.press(await screen.findByRole('button', { name: 'Pull request actions' }));
     await fireEvent.press(await screen.findByRole('button', { name: 'Review with Talyn' }));
     await fireEvent.press(await screen.findByRole('tab', { name: 'Deep' }));
     await fireEvent.press(screen.getByRole('button', { name: 'Start review' }));

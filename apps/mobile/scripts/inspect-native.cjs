@@ -50,6 +50,7 @@ async function inspect() {
   assert.deepEqual(entitlements['com.apple.developer.associated-domains'] ?? [], exp.ios.associatedDomains ?? []);
   assert(!(info.UIBackgroundModes ?? []).includes('remote-notification'), 'No background push execution is approved.');
   const privacy = parse('PrivacyInfo.xcprivacy');
+  // PostHog analytics and masked replay are first-party with no cross-app tracking (Tom's call, 2026-11-10), so tracking stays false.
   assert.equal(privacy.NSPrivacyTracking, false);
   assert.deepEqual(privacy.NSPrivacyTrackingDomains ?? [], []);
   const expoPlist = parse('Supporting/Expo.plist');

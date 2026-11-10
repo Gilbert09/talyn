@@ -9,6 +9,7 @@ import {
 } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
+import { useFleetModelCatalog } from '../../../lib/fleetModelCatalog';
 import { useOnReconnect } from '../../../hooks/useOnReconnect';
 
 /**
@@ -81,10 +82,11 @@ export function useLoops(): UseLoops {
    * fleet flag's audience. So the fleet part of this editor sits behind the
    * fleet flag without a second check here, and the backend gates again anyway.
    */
+  const modelCatalog = useFleetModelCatalog();
   const agents = useMemo(() => {
     const settings = workspaces.find((w) => w.id === workspaceId)?.settings;
     return cloudAgentChoices(cloudProviders ?? [], settings);
-  }, [cloudProviders, workspaces, workspaceId]);
+  }, [cloudProviders, workspaces, workspaceId, modelCatalog]);
 
   // A run transition changes both the history and the derived stats, and the
   // stats are aggregated server-side — so the event splices the run in locally

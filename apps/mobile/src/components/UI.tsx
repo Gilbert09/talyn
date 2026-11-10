@@ -356,25 +356,33 @@ export function ActionSheet({ request, onClose }: { request: SheetRequest; onClo
   </View>;
 }
 
-/** A small text prompt in a modal, since `Alert.prompt` exists on iOS only. */
-export function PromptSheet({ visible, title, label, initialValue = '', placeholder, maxLength, submitLabel = 'Save', onCancel, onSubmit }: {
-  visible: boolean; title: string; label: string; initialValue?: string; placeholder?: string; maxLength?: number;
-  submitLabel?: string; onCancel(): void; onSubmit(value: string): void;
+/**
+ * A small text prompt in a modal, since `Alert.prompt` exists on iOS only.
+ * `optional` allows an empty answer; `multiline` is for a comment rather than a name.
+ */
+export function PromptSheet({ visible, title, label, message, initialValue = '', placeholder, maxLength, submitLabel = 'Save',
+  optional = false, multiline = false, busy = false, onCancel, onSubmit }: {
+  visible: boolean; title: string; label: string; message?: string; initialValue?: string; placeholder?: string; maxLength?: number;
+  submitLabel?: string; optional?: boolean; multiline?: boolean; busy?: boolean; onCancel(): void; onSubmit(value: string): void;
 }) {
   const c = useTheme();
   const [value, setValue] = useState(initialValue);
   useEffect(() => { if (visible) setValue(initialValue); }, [visible, initialValue]);
-  const submit = () => { if (value.trim()) onSubmit(value.trim()); };
+  const ready = (optional || Boolean(value.trim())) && !busy;
+  const submit = () => { if (ready) onSubmit(value.trim()); };
   return <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel} statusBarTranslucent>
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.promptBackdrop}>
       <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onCancel} style={StyleSheet.absoluteFill} />
       <View accessibilityViewIsModal style={[styles.prompt, { backgroundColor: c.elevated, borderColor: c.border }]}>
         <AppText accessibilityRole="header" variant="rowTitle">{title}</AppText>
+        {message ? <AppText variant="meta" tone="muted">{message}</AppText> : null}
         <Input accessibilityLabel={label} autoFocus value={value} onChangeText={setValue} placeholder={placeholder}
-          maxLength={maxLength} returnKeyType="done" onSubmitEditing={submit} />
+          maxLength={maxLength} editable={!busy} {...(multiline
+            ? { multiline: true, textAlignVertical: 'top' as const, style: styles.promptMultiline }
+            : { returnKeyType: 'done' as const, onSubmitEditing: submit })} />
         <View style={styles.promptActions}>
-          <Button variant="quiet" size="sm" title="Cancel" onPress={onCancel} />
-          <Button size="sm" title={submitLabel} disabled={!value.trim()} onPress={submit} />
+          <Button variant="quiet" size="sm" title="Cancel" disabled={busy} onPress={onCancel} />
+          <Button size="sm" title={submitLabel} disabled={!ready} loading={busy} onPress={submit} />
         </View>
       </View>
     </KeyboardAvoidingView>
@@ -453,6 +461,7 @@ const styles = StyleSheet.create({
   promptBackdrop: { flex: 1, justifyContent: 'center', padding: 24, backgroundColor: 'rgba(0,0,0,0.35)' },
   prompt: { borderRadius: radius.lg, borderWidth: StyleSheet.hairlineWidth, padding: 16, gap: 12, width: '100%', maxWidth: 480, alignSelf: 'center' },
   promptActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
+  promptMultiline: { minHeight: 96, maxHeight: 200, paddingTop: 10 },
   bottomBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10,
     borderTopWidth: StyleSheet.hairlineWidth },
   toastWrap: { position: 'absolute', left: 16, right: 16, bottom: 32, alignItems: 'center' },

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 
 import { AppText, Button, Field, Input } from '../../../components/UI';
+import { trackEvent } from '../../../lib/analytics';
 import { accountErrorMessage, API_KEY_KIND, API_KEY_LABEL, API_KEY_PLACEHOLDER, apiKeyError, SUBSCRIPTION } from './model';
 
 /**
@@ -23,6 +24,7 @@ export function ApiKeyForm({ agent, workspaceId, label, onAdded, disabled = fals
     setBusy(true); setError(null);
     try {
       await cloudProviders.fleetAccounts.add(workspaceId, agent, API_KEY_KIND[agent], key.trim(), label);
+      trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent });
       setKey('');
       onAdded();
     } catch (failure) {

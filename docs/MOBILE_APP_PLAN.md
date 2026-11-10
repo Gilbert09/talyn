@@ -770,12 +770,15 @@ Keep internal preview capabilities, terminal execution, and downloaded code outs
 Certificate pinning is an open risk decision. MASVS does not mean every app must use identical pinning controls. [O01]
 
 Choose one native crash reporter after reviewing SDK data, processors, retention, and regional requirements.
-Disable session replay and automatic view content capture for MVP.
-Allow only explicit analytics events with reviewed fields.
+**Revised 2026-11-10 (Tom's call):** the app now uses PostHog for product analytics, session replay, and error tracking, like web.
+This replaces the MVP rule that disabled session replay and automatic view content capture.
+Replay masks all text, inputs, images, and sandboxed views, and records no console logs or network requests.
+Touch autocapture reads component names and test IDs only. Explicit events reuse the web names and reviewed fields.
+Settings > Account has an opt-out. Apple tracking stays false, so there is no ATT prompt.
 Exclude prompts, transcript text, code, auth URLs, tokens, push tokens, and raw request query strings.
 Pseudonymous identifiers can still be personal data. Disclose them accurately. [A05] [G06] [G20]
 
-Keep diagnostics and product analytics choices separate.
+One opt-out covers diagnostics and product analytics, as on web (Tom's call, 2026-11-10).
 Offer appropriate consent and opt-out controls. Confirm legal bases with the privacy owner.
 Audit automatic IP, device, breadcrumb, network, and identity capture before enabling an SDK.
 Upload source maps in CI with restricted credentials.

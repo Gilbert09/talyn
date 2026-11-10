@@ -1,12 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Loader2, Zap } from 'lucide-react';
 import {
-  BILLING_PERIOD_LABELS,
   CREDIT_PACK_IDS,
   PLAN_LIMITS,
-  PLAN_PRICES,
   PLAN_TIER_LABELS,
-  SANDBOX_SIZES,
   SELLABLE_TIERS,
   formatCreditPack,
   formatUsd,
@@ -19,7 +16,7 @@ import {
 } from '@talyn/shared';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
-import { AnnualSwitch } from '../settings/sections/AnnualSwitch';
+import { PlanCards, PlanOption, planCardTiers } from '../billing/PlanCards';
 import { UsageResetAction } from '../billing/UsageResetAction';
 import { api } from '../../lib/api';
 import { openExternal } from '../../lib/openExternal';
@@ -303,11 +300,6 @@ export function UsageUpgradeModal({
       </div>
     );
 
-  const portalButton = (
-    <Button className="w-full" variant="outline" onClick={openPortal} disabled={busy !== null}>
-      {busy === 'portal' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Manage billing'}
-    </Button>
-  );
   const maxPortalNote = (
     <p className="text-muted-foreground" data-testid="max-via-portal">
       Max is monthly only. To move from annual Pro to Max, use Manage billing.
@@ -331,10 +323,6 @@ export function UsageUpgradeModal({
   );
 
   if (reason === 'compare_plans') {
-    const plans: Array<PlanTier | 'team'> = ['free', 'pro', 'team'];
-    if (maxPrices || tier === 'max') plans.splice(2, 0, 'max');
-    if (tier === 'legacy_pro') plans.splice(1, 0, 'legacy_pro');
-    const current = tier === 'legacy_pro' ? tier : status.planSource === 'team' ? 'team' : tier;
     return (
       <Dialog open={open} onOpenChange={close}>
         <DialogContent className="max-w-5xl" onClose={() => close(false)}>
@@ -342,84 +330,12 @@ export function UsageUpgradeModal({
             <DialogTitle>Compare plans</DialogTitle>
             <DialogDescription>See what each plan includes.</DialogDescription>
           </DialogHeader>
-          {(tier === 'free' || (tier === 'legacy_pro' && subscribed)) && (
-            <div className="mb-4 max-w-sm">{periodPicker(proPrices)}</div>
-          )}
-          <div className={`grid gap-3 sm:grid-cols-2 ${GRID_COLUMNS[plans.length] ?? 'lg:grid-cols-3'}`}>
-            {plans.map((card) => {
-              const limits = PLAN_LIMITS[card === 'team' ? 'pro' : card];
-              const monthly =
-                card === 'free'
-                  ? PLAN_PRICES.free.monthlyMicros
-                  : card === 'legacy_pro'
-                    ? pricing.legacyProMonthlyMicros
-                    : card === 'max'
-                      ? (maxPrices?.monthlyMicros ?? PLAN_PRICES.max.monthlyMicros)
-                      : pricing.proMonthlyMicros;
-              // Max is sold monthly only.
-              const annual =
-                card === 'legacy_pro'
-                  ? PLAN_PRICES.legacy_pro.annualMicros
-                  : card === 'max'
-                    ? null
-                    : pricing.proAnnualMicros;
-              return (
-                <div key={card} data-testid={`compare-plan-${card}`} className="flex flex-col rounded-md border p-3 text-[13px]">
-                  <div className="font-semibold">{card === 'team' ? 'Team' : PLAN_TIER_LABELS[card]}</div>
-                  <div className="mt-1 font-medium">
-                    {formatUsd(monthly, 0)}/mo{card === 'team' ? ' per seat' : ''}
-                  </div>
-                  {annual != null && card !== 'free' && (
-                    <div className="text-muted-foreground">
-                      {formatUsd(annual, 0)}/yr{card === 'team' ? ' per seat' : ''} · Save {formatUsd(monthly * 12 - annual, 0)}/yr
-                    </div>
-                  )}
-                  <ul className="my-3 space-y-1 text-muted-foreground">
-                    <li>{hours(card === 'team' ? 'pro' : card)} per month</li>
-                    <li>{limits.concurrentBoxes} concurrent boxes</li>
-                    <li>Box sizes: {limits.sizes.map((size) => SANDBOX_SIZES[size].label).join(', ')}</li>
-                    <li>Credits: {limits.creditsAllowed ? 'Yes' : 'No'}</li>
-                    {card === 'team' && <li>Each seat has its own included box-hours.</li>}
-                  </ul>
-                  <div className="mt-auto space-y-2">
-                    {card === current ? (
-                      <>
-                        <p className="font-medium text-primary">
-                          Your plan{card !== 'team' && subscribed && status.period ? ` · ${BILLING_PERIOD_LABELS[status.period]}` : ''}
-                        </p>
-                        {isSellableTier(card) && <AnnualSwitch status={status} placement="compare_plans" />}
-                      </>
-                    ) : card === 'pro' && tier === 'free' ? (
-                      <Button className="w-full" onClick={() => checkout('pro')} disabled={busy !== null || waiting}>Upgrade to Pro</Button>
-                    ) : card === 'pro' && tier === 'legacy_pro' && subscribed ? (
-                      <Button className="w-full" onClick={() => changePlan('pro')} disabled={busy !== null || waiting}>Move to Pro</Button>
-                    ) : card === 'pro' && tier === 'max' && subscribed ? (
-                      <>
-                        <p className="text-muted-foreground">To move to Pro, use Manage billing. The change starts at your next renewal.</p>
-                        {portalButton}
-                      </>
-                    ) : card === 'max' && maxViaPortal ? (
-                      <>
-                        {maxPortalNote}
-                        {portalButton}
-                      </>
-                    ) : card === 'max' && tier === 'free' ? (
-                      <Button className="w-full" onClick={() => checkout('max')} disabled={busy !== null || waiting}>Upgrade to Max</Button>
-                    ) : card === 'max' && canMoveToMax ? (
-                      <Button className="w-full" onClick={() => changePlan('max')} disabled={busy !== null || waiting}>Upgrade to Max</Button>
-                    ) : card === 'team' ? (
-                      <Button className="w-full" variant="outline" onClick={() => { close(false); openSettings('teams'); }}>Explore Team</Button>
-                    ) : null}
-                    {limits.creditsAllowed && card === current && (
-                      <button type="button" className="text-xs text-primary hover:underline" onClick={goToSettings}>Add credits</button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {waiting && <p className="mt-3 text-[13px] text-muted-foreground">Finish in your browser. This updates by itself once payment completes.</p>}
-          {error && <p className="mt-3 text-[13px] text-destructive">{error}</p>}
+          <PlanCards
+            status={status}
+            placement="compare_plans"
+            onLeave={() => close(false)}
+            className={GRID_COLUMNS[planCardTiers(status).length] ?? 'lg:grid-cols-3'}
+          />
           <DialogFooter><Button variant="ghost" onClick={() => close(false)}>Done</Button></DialogFooter>
         </DialogContent>
       </Dialog>
@@ -581,37 +497,5 @@ function PlanFeatures({ tier }: { tier: SellableTier }) {
         <Check className="h-3.5 w-3.5" /> Cancel anytime from Settings
       </li>
     </ul>
-  );
-}
-
-function PlanOption({
-  label,
-  price,
-  hint,
-  selected,
-  onSelect,
-  disabled,
-}: {
-  label: string;
-  price: string;
-  hint?: string;
-  selected: boolean;
-  onSelect: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      disabled={disabled}
-      aria-pressed={selected}
-      className={`rounded-md border p-3 text-left transition-colors ${
-        selected ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/40'
-      } ${disabled ? 'opacity-60' : ''}`}
-    >
-      <div className="text-[13px] font-medium">{label}</div>
-      <div className="text-sm font-semibold">{price}</div>
-      {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
-    </button>
   );
 }
