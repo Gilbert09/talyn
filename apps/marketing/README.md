@@ -73,7 +73,7 @@ time; it was taken out with the form.
 ## Brand quick reference
 
 - **Name:** Talyn (a stylized "talon" — the owl's grip that drags a failing PR to green)
-- **Tagline:** "Give every task its own agent."
+- **Tagline:** "Your coding agents keep working with the laptop closed."
 - **Palette:** warm paper `#f8f5f0`, charcoal ink `#23201b`, terracotta/clay accent `#c25e3a` (CTAs); status colors only inside the product mockups
 - **Type:** Space Grotesk (display) · Inter (body) · JetBrains Mono (code)
 - **Voice:** plain, specific and short. Second person, sentence-case headings, no em-dashes, no exclamation marks. See the house rules at the top of `lib/content.ts`.

@@ -21,7 +21,7 @@ const mono = JetBrains_Mono({
   display: "swap",
 });
 
-const title = `${site.name}: give every task its own coding agent`;
+const title = `${site.name}: coding agents that keep working with the laptop closed`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(site.url),

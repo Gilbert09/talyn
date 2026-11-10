@@ -23,7 +23,7 @@ export default function Image({ params }: { params: { slug: string } }) {
     (
       <OgCard
         eyebrow={feature?.eyebrow}
-        title={feature?.title ?? "Give every task its own agent."}
+        title={feature?.title ?? "Your coding agents keep working with the laptop closed."}
         sub={feature?.description}
         footer="talyn.dev"
       />

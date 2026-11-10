@@ -33,7 +33,7 @@ export function Hero() {
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.7, ease: [0.21, 0.47, 0.32, 0.98] }}
-          className="mx-auto max-w-3xl text-center"
+          className="mx-auto max-w-5xl text-center"
         >
           <div className="mb-6 flex justify-center">
             {hero.announcement ? (
@@ -53,12 +53,12 @@ export function Hero() {
 
           {/* Each part on its own line so a free-flowing wrap cannot break
               the phrase in an odd place at laptop widths. */}
-          <h1 className="font-display text-5xl font-semibold leading-[1.04] tracking-tight text-ink sm:text-7xl">
+          <h1 className="font-display text-4xl font-semibold leading-[1.06] tracking-tight text-ink [text-wrap:balance] sm:text-5xl lg:text-6xl">
             <span className="block">{hero.titleLead}</span>
             <span className="block text-clay">{hero.titleAccent}</span>
           </h1>
 
-          <p className="mx-auto mt-5 max-w-2xl text-lg leading-relaxed text-ink-500">
+          <p className="mx-auto mt-5 max-w-2xl text-lg leading-relaxed text-ink-500 [text-wrap:pretty]">
             {hero.sub}
           </p>
 

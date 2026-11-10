@@ -13,7 +13,7 @@ export const site = {
   domain: "talyn.dev",
   /** Canonical origin. The apex 308-redirects to www at the Vercel level. */
   url: "https://www.talyn.dev",
-  tagline: "Give every task its own agent.",
+  tagline: "Your coding agents keep working with the laptop closed.",
   description:
     "Run Claude Code and Codex in parallel cloud sandboxes, on the subscription you already pay for. Each session gets its own branch, diff, terminal and a path to a merged pull request.",
   githubUrl: "https://github.com/Gilbert09/talyn",
@@ -74,9 +74,12 @@ export const hero = {
     label: "Leaving Conductor Cloud? Your conductor.json works here",
     href: "/compare/conductor",
   } as { label: string; href: string } | null,
-  titleLead: "Give every task",
-  titleAccent: "its own agent.",
-  sub: "Each session is a branch with its own agent, diff and terminal in the cloud. Run as many as you like on the Claude or ChatGPT plan you already have.",
+  // Leads with the cloud benefit: the agents run on our machines, not yours.
+  // That is what a local tool cannot say, and the subhead then answers the two
+  // FAQ questions visitors open most (which agents, where the work happens).
+  titleLead: "Your coding agents keep working",
+  titleAccent: "with the laptop closed.",
+  sub: "Run Claude Code and Codex in parallel cloud sandboxes, on the plan you already pay for. Come back to a diff, or to a pull request that is already green.",
   primaryCta: "Download for {platform}",
   webCta: "Open in browser",
   // "For GitHub" stays: a GitLab user should find out in eight seconds, not
