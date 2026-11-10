@@ -32,6 +32,7 @@ import {
   expiringSoonMicros,
   formatBoxHours,
   formatBoxHoursLabel,
+  formatBoxHoursPrecise,
   formatBoxHoursUsage,
   formatCreditPack,
   formatPricePerHour,
@@ -693,6 +694,24 @@ describe('formatting', () => {
     [HOUR, '1'],
   ])('formatBoxHours(%s) = %s', (wsec, text) => {
     expect(formatBoxHours(wsec)).toBe(text);
+  });
+
+  it.each<[number, string]>([
+    [0, '0'],
+    [-50, '0'],
+    [1, '<0.001'],
+    [3, '<0.001'],
+    [4, '0.001'],
+    [7, '0.001'],
+    [58, '0.016'],
+    [360, '0.1'],
+    [1800, '0.5'],
+    [10_458, '2.905'],
+    [HOUR, '1'],
+    [HOUR + 36, '1.01'],
+    [3_601_800, '1,000.5'],
+  ])('formatBoxHoursPrecise(%s) = %s', (wsec, text) => {
+    expect(formatBoxHoursPrecise(wsec)).toBe(text);
   });
 
   it.each<[number, string]>([

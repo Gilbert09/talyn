@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { formatBoxHours, formatBoxHoursUsage, formatUsd, type AdminBillingLot, type AdminBillingView } from '@talyn/shared';
+import { formatBoxHours, formatBoxHoursPrecise, formatBoxHoursUsage, formatUsd, type AdminBillingLot, type AdminBillingView } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { useAdminQuery } from '../../hooks/useAdminQuery';
 import { absolute, relativeAge } from '../../lib/format';
@@ -202,10 +202,15 @@ function IntervalList({ rows }: { rows: AdminBillingView['recentIntervals'] }) {
           <span title={absolute(r.startedAt)}>started {relativeAge(r.startedAt)} ago</span>
           {r.endedAt ? (
             <span className="text-muted-foreground">
-              ended {r.endReason ?? ''} · {formatBoxHours(r.billedWsec)} box-hours billed
+              ended {r.endReason ?? ''} · {formatBoxHoursPrecise(r.billedWsec)} box-hours billed
             </span>
           ) : (
-            <Pill tone="warn">running</Pill>
+            <>
+              <Pill tone="warn">running</Pill>
+              <span className="text-muted-foreground">
+                {formatBoxHoursPrecise(r.billedWsec)} box-hours billed so far
+              </span>
+            </>
           )}
         </li>
       ))}

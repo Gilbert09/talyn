@@ -808,6 +808,20 @@ export function formatBoxHours(wsec: number): string {
   return tenths % 10 === 0 ? whole : `${whole}.${tenths % 10}`;
 }
 
+/**
+ * Box-hours to three decimals, floored, for the operator console: "0.016",
+ * "2.905", "1,000". An amount above zero and below 0.001 shows as "<0.001",
+ * so a short run never reads as free.
+ */
+export function formatBoxHoursPrecise(wsec: number): string {
+  const safe = Math.max(0, wsec);
+  const thousandths = Math.floor((safe * 1000) / BOX_HOUR_SECONDS);
+  if (thousandths === 0) return safe > 0 ? '<0.001' : '0';
+  const whole = Math.floor(thousandths / 1000).toLocaleString('en-US');
+  const fraction = String(thousandths % 1000).padStart(3, '0').replace(/0+$/, '');
+  return fraction ? `${whole}.${fraction}` : whole;
+}
+
 /** "1 box-hour", "2.5 box-hours". */
 export function formatBoxHoursLabel(wsec: number): string {
   const text = formatBoxHours(wsec);
