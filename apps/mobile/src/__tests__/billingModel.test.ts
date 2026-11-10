@@ -5,7 +5,7 @@ import { readPurchaseMode } from '../../app.config';
 import {
   billingErrorCopy, billingReasonOf, canSwitchToAnnual, cardTiers, changedPlanMessage, creditLotLines, dollarsToMicros,
   maxNeedsPortal, orderAmount, planAction, planCards, planSummary, reasonNotice, refusesReturnTarget, showsPeriodSwitch,
-  topupConfigFromDraft, topupSummary, type Period,
+  topupConfigFromDraft, topupSummary, usageResetCount, usageResetDetail, usageResetLabel, type Period,
 } from '../features/billing/model';
 import {
   BillingReturnTracker, RETURN_POLL_DELAYS_MS, returnBanner, returnKindOf, returnLanded, returnResultOf,
@@ -261,7 +261,7 @@ describe('credits and auto top-up', () => {
 });
 
 describe('billing return', () => {
-  it.each([['credits', 'credits'], ['portal', 'portal'], ['checkout', 'checkout'], ['other', 'checkout'], [undefined, 'checkout']])('reads kind %p', (value, kind) => {
+  it.each([['credits', 'credits'], ['reset', 'reset'], ['portal', 'portal'], ['checkout', 'checkout'], ['other', 'checkout'], [undefined, 'checkout']])('reads kind %p', (value, kind) => {
     expect(returnKindOf(value)).toBe(kind);
   });
   it.each([['success', 'success'], ['cancel', 'cancel'], [['cancel'], 'cancel'], ['x', 'unknown'], [undefined, 'unknown']])('reads result %p', (value, result) => {
@@ -278,6 +278,10 @@ describe('billing return', () => {
     ['checkout', null, status(), false],
     ['credits', status({ credits: { balanceMicros: 1, expiringSoonMicros: 0, lots: [] } }), status({ credits: { balanceMicros: 26, expiringSoonMicros: 0, lots: [] } }), true],
     ['credits', status(), status(), false],
+    ['reset', status({ usage: { ...status().usage!, resets: 1 } }), status({ usage: { ...status().usage!, resets: 2 } }), true],
+    ['reset', status(), status({ usage: { ...status().usage!, resets: 1 } }), true],
+    ['reset', status({ usage: { ...status().usage!, resets: 1 } }), status({ usage: { ...status().usage!, resets: 1 } }), false],
+    ['reset', status(), status(), false],
     ['portal', status(), status(), true],
   ] as const)('a %s return landed %#', (kind, before, after, landed) => {
     expect(returnLanded(kind, before, after)).toBe(landed);
@@ -285,6 +289,10 @@ describe('billing return', () => {
   it.each([
     ['checkout', 'cancel', false, null, { tone: 'information', message: 'Checkout was canceled. Nothing was charged.' }],
     ['credits', 'cancel', false, null, { tone: 'information', message: 'The credit purchase was canceled. Nothing was charged.' }],
+    ['reset', 'cancel', false, null, { tone: 'information', message: 'The usage reset was canceled. Nothing was charged.' }],
+    ['reset', 'success', true, status(), { tone: 'success', message: 'Usage reset. Your box-hours are back.' }],
+    ['reset', 'success', false, status(), { tone: 'warning', message: 'Your usage reset has not arrived yet. It can take a minute. Pull down to refresh.' }],
+    ['reset', 'unknown', false, status(), null],
     ['checkout', 'success', true, status({ tier: 'max' }), { tone: 'success', message: 'You are on Max now.' }],
     ['credits', 'success', true, status({ credits: { balanceMicros: 25e6, expiringSoonMicros: 0, lots: [] } }), { tone: 'success', message: 'Credits added. Your balance is $25.00.' }],
     ['checkout', 'success', false, status(), { tone: 'warning', message: 'Your plan has not updated yet. It can take a minute. Pull down to refresh.' }],
@@ -332,5 +340,25 @@ describe('billing return', () => {
     await expect(first).resolves.toMatchObject({ tone: 'success' });
     await expect(second).resolves.toMatchObject({ tone: 'success' });
     expect(read).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('usage reset', () => {
+  const offer = { tier: 'pro', priceMicros: 40e6, includedWsec: 720_000 } as const;
+  it('words the action, the detail and the count', () => {
+    expect(usageResetLabel(offer)).toBe('Reset usage: $40');
+    expect(usageResetDetail(offer, '2026-12-01T00:00:00Z')).toBe(
+      "Pay your plan's monthly price once to get all 200 box-hours back now. Your period still ends on 1 December 2026. Unused hours do not carry over.");
+    expect(usageResetDetail(offer, null)).toContain('Your period still ends.');
+  });
+  it.each([[undefined, null], [0, null], [1, 'Reset 1 time this period'], [3, 'Reset 3 times this period']])('counts %p', (n, text) => {
+    expect(usageResetCount(n)).toBe(text);
+  });
+  it.each([
+    ['usage_reset_requires_paid_plan', 'A usage reset needs a paid plan.'],
+    ['nothing_to_reset', 'You have not used any box-hours yet. There is nothing to reset.'],
+    ['usage_reset_unavailable', 'Usage reset is not available for this account.'],
+  ])('explains %s', (code, message) => {
+    expect(billingErrorCopy({ code, message: 'raw' }, { action: 'reset' })).toEqual({ message, portal: false });
   });
 });

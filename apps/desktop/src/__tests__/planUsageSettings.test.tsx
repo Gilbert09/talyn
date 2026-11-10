@@ -17,6 +17,8 @@ const orders = jest.fn();
 const checkout = jest.fn();
 const changePlan = jest.fn();
 const creditCheckout = jest.fn();
+const usageResetCheckout = jest.fn();
+const openExternal = jest.fn();
 const portal = jest.fn();
 const autoTopupUpdate = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
@@ -27,13 +29,14 @@ jest.mock('../renderer/lib/api', () => ({
       checkout: (...a: unknown[]) => checkout(...a),
       changePlan: (...a: unknown[]) => changePlan(...a),
       creditCheckout: (...a: unknown[]) => creditCheckout(...a),
+      usageResetCheckout: (...a: unknown[]) => usageResetCheckout(...a),
       portal: (...a: unknown[]) => portal(...a),
       autoTopup: { update: (...a: unknown[]) => autoTopupUpdate(...a) },
     },
   },
   ApiError: class ApiError extends Error {},
 }));
-jest.mock('../renderer/lib/openExternal', () => ({ openExternal: jest.fn() }));
+jest.mock('../renderer/lib/openExternal', () => ({ openExternal: (...a: unknown[]) => openExternal(...a) }));
 jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 jest.mock('../renderer/stores/toast', () => ({ toast: { error: jest.fn(), success: jest.fn(), info: jest.fn() } }));
@@ -59,7 +62,7 @@ function show(status: ReturnType<typeof usageStatus>) {
 
 describe('BillingSettings with usage billing', () => {
   beforeEach(() => {
-    [statusFetch, orders, checkout, changePlan, creditCheckout, portal, autoTopupUpdate].forEach((m) => m.mockReset());
+    [statusFetch, orders, checkout, changePlan, creditCheckout, usageResetCheckout, openExternal, portal, autoTopupUpdate].forEach((m) => m.mockReset());
     // Order history has its own tests; left pending here so it never re-renders mid-test.
     orders.mockReturnValue(new Promise(() => undefined));
     useWorkspaceStore.setState({ features: null } as never);
@@ -515,6 +518,57 @@ describe('BillingSettings with usage billing', () => {
       await waitFor(() => expect(screen.getByText('The plan change failed.')).toBeVisible());
       expect(trackEvent).toHaveBeenCalledWith('annual_switch_failed', { placement: 'plan_page', code: undefined });
       expect(captureAnalyticsException).toHaveBeenCalled();
+    });
+  });
+
+  describe('usage reset', () => {
+    const resettable = (resets?: number) => {
+      const status = usageStatus('pro', { usedHours: 50 });
+      status.usageReset = { tier: 'pro', priceMicros: 40_000_000, includedWsec: 200 * 3600 };
+      if (resets != null) status.usage = { ...status.usage!, resets };
+      return status;
+    };
+
+    it('hides the action when the status has no offer', () => {
+      show(usageStatus('pro', { usedHours: 50 }));
+      expect(document.querySelector('[data-attr="usage-reset-checkout"]')).toBeNull();
+    });
+
+    it('shows the price and the explanation', () => {
+      show(resettable());
+      expect(screen.getByRole('button', { name: 'Reset usage: $40' })).toBeInTheDocument();
+      expect(screen.getByText(/get all 200 box-hours back now\. Your period still ends on .*Unused hours do not carry over/)).toBeInTheDocument();
+      expect(screen.queryByTestId('usage-reset-count')).toBeNull();
+    });
+
+    it.each([
+      [1, 'Reset 1 time this period'],
+      [2, 'Reset 2 times this period'],
+    ])('notes %i resets this period', (resets, text) => {
+      show(resettable(resets));
+      expect(screen.getByText(text)).toBeInTheDocument();
+    });
+
+    it('opens the hosted checkout on click', async () => {
+      usageResetCheckout.mockResolvedValue({ url: 'https://polar.test/reset' });
+      show(resettable());
+      fireEvent.click(screen.getByRole('button', { name: 'Reset usage: $40' }));
+      await waitFor(() => expect(openExternal).toHaveBeenCalledWith('https://polar.test/reset'));
+      expect(usageResetCheckout).toHaveBeenCalledTimes(1);
+      expect(trackEvent).toHaveBeenCalledWith('usage_reset_checkout_started', { tier: 'pro', placement: 'settings' });
+    });
+
+    it.each([
+      ['usage_reset_requires_paid_plan', 'A usage reset needs a paid plan.'],
+      ['nothing_to_reset', 'You have not used any box-hours yet. There is nothing to reset.'],
+      ['usage_reset_unavailable', 'Usage reset is not available for this account.'],
+    ])('shows text for %s', async (code, text) => {
+      usageResetCheckout.mockRejectedValue(Object.assign(new Error('raw'), { code }));
+      show(resettable());
+      fireEvent.click(screen.getByRole('button', { name: 'Reset usage: $40' }));
+      expect(await screen.findByText(text)).toBeInTheDocument();
+      expect(openExternal).not.toHaveBeenCalled();
+      expect(trackEvent).toHaveBeenCalledWith('usage_reset_checkout_failed', expect.objectContaining({ stage: 'create_checkout', code }));
     });
   });
 });

@@ -101,6 +101,7 @@ import type {
   CheckoutSessionResponse,
   CreateCheckoutRequest,
   CreditCheckoutRequest,
+  UsageResetCheckoutRequest,
   PortalSessionRequest,
   CreditSummary,
   UpdateAutoTopupRequest,
@@ -1643,6 +1644,14 @@ export const billing = {
   /** One-time credit pack checkout. 402 `credits_require_paid_plan` on Free. `returnTo` (mobile) returns to `${returnTo}billing/return?kind=credits&result=…`. */
   creditCheckout: (data: CreditCheckoutRequest) =>
     request<CheckoutSessionResponse>('POST', '/billing/credits/checkout', data),
+  /**
+   * Usage reset checkout: the plan's monthly price for a full allowance in the
+   * current period. 402 `usage_reset_requires_paid_plan` on Free, 409
+   * `nothing_to_reset`, 404 `usage_reset_unavailable` when the tier has no
+   * reset product. `returnTo` (mobile) returns to `${returnTo}billing/return?kind=reset&result=…`.
+   */
+  usageResetCheckout: (data: UsageResetCheckoutRequest = {}) =>
+    request<CheckoutSessionResponse>('POST', '/billing/usage-reset/checkout', data),
   autoTopup: {
     get: () => request<AutoTopupSettings>('GET', '/billing/auto-topup'),
     /** Saving also clears a recorded charge failure (the "try again"). */

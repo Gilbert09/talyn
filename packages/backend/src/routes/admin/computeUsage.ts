@@ -81,7 +81,7 @@ function usageBase(now: string, lastWeek: string, q: string): SQL {
       GROUP BY w.owner_id
     ), current_period AS (
       SELECT DISTINCT ON (owner_id) owner_id, tier, period_start, period_end,
-        used_wsec, included_wsec, credit_micros_used
+        used_wsec + reset_used_wsec AS used_wsec, included_wsec, credit_micros_used
       FROM usage_periods
       WHERE period_start <= ${now}::timestamptz AND period_end > ${now}::timestamptz
       ORDER BY owner_id, period_start DESC

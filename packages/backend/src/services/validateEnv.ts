@@ -110,12 +110,22 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): string[] {
   if (env[maxVar] && setPolarVars.length === 0) {
     errors.push(`The Max product is configured (${maxVar}) but Polar billing is not — set ${polarVars.join(', ')}`);
   }
+  // Usage resets: one optional one-time product per tier. A tier without its
+  // product cannot buy a reset, so each stands alone.
+  const resetVars = ['POLAR_PRODUCT_ID_RESET_PRO', 'POLAR_PRODUCT_ID_RESET_MAX', 'POLAR_PRODUCT_ID_RESET_LEGACY_PRO'];
+  const setResetVars = resetVars.filter((name) => Boolean(env[name]));
+  if (setResetVars.length > 0 && setPolarVars.length === 0) {
+    errors.push(
+      `Usage reset products are configured (${setResetVars.join(', ')}) but Polar billing is not — set ${polarVars.join(', ')}`
+    );
+  }
   // Every product id routes a webhook: an id configured twice would grant a
   // credit pack for a subscription, or the wrong tier.
   const productVars = [
     ...polarVars.filter((name) => name.startsWith('POLAR_PRODUCT_ID_')),
     ...optionalPairs.flatMap((pair) => pair.vars),
     maxVar,
+    ...resetVars,
   ];
   const byId = new Map<string, string[]>();
   for (const name of productVars) {

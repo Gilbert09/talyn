@@ -47,8 +47,8 @@ import { useWorkspaceStore } from './workspace';
 const POLL_BURST_INTERVAL_MS = 3_000;
 const POLL_BURST_MAX_MS = 2 * 60_000;
 
-/** What a checkout poll burst waits for: a plan change, or credits landing. */
-export type CheckoutKind = 'plan' | 'credits';
+/** What a checkout poll burst waits for: a plan change, credits landing, or a usage reset. */
+export type CheckoutKind = 'plan' | 'credits' | 'reset';
 
 /** A session's box that the plan would not wake, from `POST /workbenches/:id/wake`. */
 export interface SessionRefusal {
@@ -84,11 +84,11 @@ interface BillingState {
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let pollDeadline = 0;
 /** What the running burst compares against to know its checkout landed. */
-let burstBaseline: { kind: CheckoutKind; plan: string | null; balanceMicros: number } | null = null;
+let burstBaseline: { kind: CheckoutKind; plan: string | null; balanceMicros: number; resets: number } | null = null;
 let pendingPlanChange: { from: string; period: 'monthly' | 'annual' } | null = null;
 let returnFailureReported = false;
 
-export function trackBillingFailure(event: 'checkout_failed' | 'plan_change_failed' | 'credit_checkout_failed' | 'team_checkout_failed', stage: 'create_checkout' | 'portal' | 'return', err: unknown): void {
+export function trackBillingFailure(event: 'checkout_failed' | 'plan_change_failed' | 'credit_checkout_failed' | 'usage_reset_checkout_failed' | 'team_checkout_failed', stage: 'create_checkout' | 'portal' | 'return', err: unknown): void {
   const error = err && typeof err === 'object' ? err as { code?: unknown; status?: unknown } : null;
   const code = typeof error?.code === 'string' && /^[a-z0-9_]{1,64}$/.test(error.code) ? error.code : undefined;
   const status = typeof error?.status === 'number' ? error.status : undefined;
@@ -185,6 +185,7 @@ export const useBillingStore = create<BillingState>((set, get) => ({
       kind,
       plan: current ? (current.tier ?? current.plan) : null,
       balanceMicros: current?.credits?.balanceMicros ?? 0,
+      resets: current?.usage?.resets ?? 0,
     };
     if (pollTimer) return; // already running — just extended the deadline
     pollTimer = setInterval(() => {
@@ -255,6 +256,9 @@ function checkoutLanded(
   status: BillingStatus,
 ): CheckoutKind | null {
   if (!baseline) return status.plan !== 'free' ? 'plan' : null;
+  if (baseline.kind === 'reset') {
+    return (status.usage?.resets ?? 0) > baseline.resets ? 'reset' : null;
+  }
   if (baseline.kind === 'credits') {
     return (status.credits?.balanceMicros ?? 0) > baseline.balanceMicros ? 'credits' : null;
   }
@@ -266,6 +270,10 @@ function checkoutLanded(
 /** The success notice for a checkout that landed in this session. */
 function announceCheckout(kind: CheckoutKind, status: BillingStatus): void {
   if (!hasUsageBilling(status)) return; // the old modal shows its own success state
+  if (kind === 'reset') {
+    toast.success('Usage reset', 'Your box-hours are back.');
+    return;
+  }
   if (kind === 'credits') {
     toast.success('Credits added', `Your balance is ${formatUsd(status.credits?.balanceMicros ?? 0)}.`);
     return;

@@ -478,6 +478,37 @@ export function crossedUsageThresholds(usedBeforeWsec: number, usedAfterWsec: nu
 }
 
 // ---------------------------------------------------------------------------
+// Usage reset
+// ---------------------------------------------------------------------------
+
+/**
+ * The tiers that can buy a usage reset: every paid tier. A reset is a one-time
+ * payment of the tier's monthly price that sets the current period's used
+ * box-hours back to zero and the included hours to the full allowance of the
+ * tier paid for. The period end does not move, and included hours that were
+ * left are not added on top.
+ */
+export const USAGE_RESET_TIERS = ['pro', 'max', 'legacy_pro'] as const satisfies readonly PaidTier[];
+export type UsageResetTier = (typeof USAGE_RESET_TIERS)[number];
+
+export function isUsageResetTier(value: unknown): value is UsageResetTier {
+  return typeof value === 'string' && (USAGE_RESET_TIERS as readonly string[]).includes(value);
+}
+
+/** What a reset costs: the tier's monthly list price, also for an annual subscriber. */
+export function usageResetPriceMicros(tier: UsageResetTier): Micros {
+  return PLAN_PRICES[tier].monthlyMicros;
+}
+
+/** `BillingStatus.usageReset`: present only when this account can buy a reset now. */
+export interface UsageResetOffer {
+  tier: UsageResetTier;
+  priceMicros: Micros;
+  /** The included weighted seconds the period holds after the reset (the tier's full allowance). */
+  includedWsec: number;
+}
+
+// ---------------------------------------------------------------------------
 // Credits
 // ---------------------------------------------------------------------------
 
@@ -668,6 +699,8 @@ export interface UsageSummary {
   percent: number;
   /** Included hours and credits are both spent; new boxes are refused. */
   exhausted: boolean;
+  /** Usage resets bought in this period. Absent on a backend without resets. */
+  resets?: number;
 }
 
 /** Credit balance, in `BillingStatus.credits` and `GET /billing/credits`. */

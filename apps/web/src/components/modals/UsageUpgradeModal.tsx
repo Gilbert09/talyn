@@ -13,7 +13,7 @@ import {
   type BoxRefusalNotice,
   type UsageBillingView,
 } from '../../lib/usageBilling';
-import { CreditPackButtons, PlanForm, legacyMonthlyPrice, proPrices } from '../billing/BillingActions';
+import { CreditPackButtons, PlanForm, UsageResetAction, legacyMonthlyPrice, proPrices } from '../billing/BillingActions';
 import { PlanCards, planCardTiers } from '../billing/PlanCards';
 
 /** What the modal offers, in order. The Max offers appear only when the status carries Max prices. */
@@ -240,6 +240,13 @@ export function UsageUpgradeModal({
                   <div key={offer} className="space-y-2">
                     <p className="text-sm font-medium">Add credits</p>
                     <CreditPackButtons placement="upgrade_modal" />
+                    <UsageResetAction
+                      offer={view.status.usageReset}
+                      periodEnd={view.usage.periodEnd}
+                      resets={view.usage.resets}
+                      placement="upgrade_modal"
+                      className="pt-1"
+                    />
                   </div>
                 );
               case 'auto_topup':

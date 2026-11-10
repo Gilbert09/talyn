@@ -38,7 +38,7 @@ import {
 import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
 import { BillingTeamNotice } from '../../panels/TeamBilling';
-import { CreditPackButtons, PortalButton, legacyMonthlyPrice, planPrices, proPrices } from '../../billing/BillingActions';
+import { CreditPackButtons, PortalButton, UsageResetAction, legacyMonthlyPrice, planPrices, proPrices } from '../../billing/BillingActions';
 import { PlanCards } from '../../billing/PlanCards';
 import { AutoTopupForm } from './AutoTopupForm';
 import { LegacyBillingSettings, formatOrderAmount } from './LegacyBillingSettings';
@@ -239,6 +239,7 @@ export function UsageCard({ view }: { view: UsageBillingView }) {
           </div>
         )}
         <p className="text-sm text-muted-foreground">{formatBoxHoursUsage(usage.usedWsec, usage.includedWsec)} used</p>
+        <UsageResetAction offer={status.usageReset} periodEnd={usage.periodEnd} resets={usage.resets} placement="billing_settings" />
         {status.concurrentBoxes && (
           <p className="text-sm text-muted-foreground" data-attr="concurrent-boxes">
             Boxes running now: {status.concurrentBoxes.used} of {status.concurrentBoxes.limit}

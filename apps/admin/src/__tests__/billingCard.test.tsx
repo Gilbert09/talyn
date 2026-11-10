@@ -53,6 +53,18 @@ describe('BillingCard', () => {
     expect(screen.getByText(/card declined/)).toBeTruthy();
   });
 
+  it.each([
+    [undefined, false],
+    [0, false],
+    [180_000, true],
+  ])('reset hours note with resetUsedWsec=%s shows: %s', async (resetUsedWsec, shown) => {
+    billing.mockResolvedValue({ ...VIEW, usage: { ...VIEW.usage!, resetUsedWsec } });
+    await setup();
+    const note = screen.queryByTestId('billing-reset-hours');
+    expect(Boolean(note)).toBe(shown);
+    if (note) expect(note.textContent).toMatch(/cleared 50 box-hours this period/);
+  });
+
   it('hides both actions without the capability', async () => {
     await setup(false);
     expect(screen.queryByText('Grant credits')).toBeNull();

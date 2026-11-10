@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
+import { ApiError } from '@talyn/client';
 import type { BillingStatus } from '@talyn/shared';
 import { UpgradeModal } from '../components/modals/UpgradeModal';
 import { useWorkspaceStore } from '../stores/workspace';
@@ -16,6 +17,7 @@ const { billing, goToHostedPage } = vi.hoisted(() => ({
     checkout: vi.fn(),
     changePlan: vi.fn(),
     creditCheckout: vi.fn(),
+    usageResetCheckout: vi.fn(),
     portal: vi.fn(),
     orders: vi.fn(),
     invoice: vi.fn(),
@@ -443,6 +445,56 @@ describe('BillingSettings', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Confirm switch' }));
       await waitFor(() => expect(screen.getByText('The plan change failed.')).toBeVisible());
       expect(trackEvent).toHaveBeenCalledWith('annual_switch_failed', { placement: 'plan_page', code: undefined });
+    });
+  });
+
+  describe('usage reset', () => {
+    const withReset = (resets?: number) => {
+      const status = usageStatus('pro', { usedHours: 50 });
+      status.usageReset = { tier: 'pro', priceMicros: 40_000_000, includedWsec: 200 * 3600 };
+      if (resets != null) status.usage = { ...status.usage!, resets };
+      return status;
+    };
+
+    it('hides the action when the status has no offer', () => {
+      show(usageStatus('pro', { usedHours: 50 }));
+      expect(document.querySelector('[data-attr="usage-reset-checkout"]')).toBeNull();
+    });
+
+    it('shows the price and the explanation', () => {
+      show(withReset());
+      expect(screen.getByRole('button', { name: 'Reset usage: $40' })).toBeVisible();
+      expect(screen.getByText(/get all 200 box-hours back now\. Your period still ends on .*Unused hours do not carry over/)).toBeVisible();
+      expect(screen.queryByTestId('usage-reset-count')).toBeNull();
+    });
+
+    it.each([
+      [1, 'Reset 1 time this period'],
+      [2, 'Reset 2 times this period'],
+    ])('notes %i resets this period', (resets, text) => {
+      show(withReset(resets));
+      expect(screen.getByText(text)).toBeVisible();
+    });
+
+    it('goes to the hosted checkout on click', async () => {
+      billing.usageResetCheckout.mockResolvedValue({ url: 'https://polar.test/reset' });
+      show(withReset());
+      fireEvent.click(screen.getByRole('button', { name: 'Reset usage: $40' }));
+      await waitFor(() => expect(goToHostedPage).toHaveBeenCalledWith('https://polar.test/reset'));
+      expect(trackEvent).toHaveBeenCalledWith('usage_reset_checkout_started', { tier: 'pro', placement: 'billing_settings' });
+    });
+
+    it.each([
+      ['usage_reset_requires_paid_plan', 402, 'A usage reset needs a paid plan.'],
+      ['nothing_to_reset', 409, 'You have not used any box-hours yet. There is nothing to reset.'],
+      ['usage_reset_unavailable', 404, 'Usage reset is not available for this account.'],
+    ])('shows text for %s', async (code, status, text) => {
+      billing.usageResetCheckout.mockRejectedValue(new ApiError('raw', status, code));
+      show(withReset());
+      fireEvent.click(screen.getByRole('button', { name: 'Reset usage: $40' }));
+      expect(await screen.findByText(text)).toBeVisible();
+      expect(goToHostedPage).not.toHaveBeenCalled();
+      expect(trackEvent).toHaveBeenCalledWith('usage_reset_checkout_failed', { stage: 'create_checkout', code, status });
     });
   });
 });

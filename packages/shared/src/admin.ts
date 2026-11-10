@@ -131,6 +131,8 @@ export interface AdminBillingView {
     usedWsec: number;
     creditMicrosUsed: number;
     uncoveredMicros: number;
+    /** Box-hours that paid usage resets cleared this period. Absent on an older backend. */
+    resetUsedWsec?: number;
     exhaustedAt: string | null;
   } | null;
   openBoxes: AdminBillingBox[];

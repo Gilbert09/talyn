@@ -13,6 +13,9 @@ import {
   isTierUpgrade,
   MIN_FULL_USE_MARGIN_PERCENT,
   netOfPaymentFees,
+  isUsageResetTier,
+  USAGE_RESET_TIERS,
+  usageResetPriceMicros,
   sellableTierPrices,
   tierSoldAnnually,
   type BillingPricing,
@@ -252,6 +255,26 @@ describe('margins', () => {
     const net = netOfPaymentFees(PLAN_PRICES[tier].monthlyMicros);
     const cost = PLAN_LIMITS[tier].includedBoxHours * FLEET_BOX_HOUR_COST_ESTIMATE_MICROS;
     expect(((net - cost) * 100) / net).toBeGreaterThanOrEqual(MIN_FULL_USE_MARGIN_PERCENT);
+  });
+
+  // A usage reset sells one more full allowance at the monthly price, so it
+  // must keep the same margin as a month of the plan.
+  it.each(USAGE_RESET_TIERS)('a %s usage reset costs the monthly price and keeps the minimum margin', (tier) => {
+    expect(usageResetPriceMicros(tier)).toBe(PLAN_PRICES[tier].monthlyMicros);
+    const net = netOfPaymentFees(usageResetPriceMicros(tier));
+    const cost = PLAN_LIMITS[tier].includedBoxHours * FLEET_BOX_HOUR_COST_ESTIMATE_MICROS;
+    expect(((net - cost) * 100) / net).toBeGreaterThanOrEqual(MIN_FULL_USE_MARGIN_PERCENT);
+  });
+
+  it.each([
+    ['pro', true],
+    ['max', true],
+    ['legacy_pro', true],
+    ['free', false],
+    ['gold', false],
+    [null, false],
+  ])('isUsageResetTier(%s) is %s', (value, expected) => {
+    expect(isUsageResetTier(value)).toBe(expected);
   });
 
   it.each(PLAN_TIERS.filter((tier) => PLAN_PRICES[tier].annualMicros != null))(

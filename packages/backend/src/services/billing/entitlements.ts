@@ -62,6 +62,7 @@ import { advisoryLockKey } from '../advisoryLock.js';
 import { readBudget, type UsageBudget } from './usage/charge.js';
 import { liveLots } from './usage/credits.js';
 import { getBudget } from './usage/index.js';
+import { countUsageResets, usageResetAvailability } from './usage/resets.js';
 
 /**
  * Plan entitlements: the provider-agnostic seam every plan check goes through.
@@ -917,7 +918,7 @@ export function billingPricingFor(input: { tier: PlanTier; maxOffered: boolean }
 }
 
 /** Pure: the period's usage as `BillingStatus.usage` shows it. */
-export function usageSummaryFromBudget(budget: UsageBudget): UsageSummary {
+export function usageSummaryFromBudget(budget: UsageBudget, resets = 0): UsageSummary {
   return {
     periodStart: budget.period.start.toISOString(),
     periodEnd: budget.period.end.toISOString(),
@@ -925,6 +926,7 @@ export function usageSummaryFromBudget(budget: UsageBudget): UsageSummary {
     usedWsec: budget.usedWsec,
     percent: usagePercent(budget.usedWsec, budget.includedWsec),
     exhausted: budget.exhausted,
+    resets,
   };
 }
 
@@ -1056,6 +1058,8 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
       limits.creditsAllowed ? readAutoTopupSettings(ownerId, now) : Promise.resolve(undefined),
     ])
   );
+  const resets = await runWithoutScope(() => countUsageResets(ownerId, budget.period.start));
+  const reset = usageResetAvailability({ tier, usedWsec: budget.usedWsec });
 
   return {
     billingEnabled: true,
@@ -1070,12 +1074,13 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     activeTaskLimit: limits.concurrentBoxes,
     ...uncapped,
     tier,
-    usage: usageSummaryFromBudget(budget),
+    usage: usageSummaryFromBudget(budget, resets),
     ...(credits ? { credits } : {}),
     ...(autoTopup ? { autoTopup } : {}),
     sizePrices: sizePriceTable(tier),
     concurrentBoxes: { used: boxesInUse, limit: limits.concurrentBoxes },
     pricing: billingPricingFor({ tier, maxOffered: maxPlanOffered() }),
+    ...(reset.ok ? { usageReset: reset.offer } : {}),
   };
 }
 

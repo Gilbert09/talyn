@@ -16,6 +16,7 @@ const { billing, trackEvent, goToHostedPage } = vi.hoisted(() => ({
     checkout: vi.fn(),
     changePlan: vi.fn(),
     creditCheckout: vi.fn(),
+    usageResetCheckout: vi.fn(),
     portal: vi.fn(),
   },
   trackEvent: vi.fn(),
@@ -316,6 +317,43 @@ describe('UpgradeModal', () => {
       const card = screen.getByTestId('compare-plan-max');
       expect(within(card).queryByRole('button', { name: /Switch to annual/ })).toBeNull();
       expect(card).not.toHaveTextContent(/\/yr/);
+    });
+  });
+
+  describe('usage reset', () => {
+    const resettable = (resets?: number) => {
+      const status = usageStatus('pro', { usedHours: 200, exhausted: true });
+      status.usageReset = { tier: 'pro', priceMicros: 40_000_000, includedWsec: 200 * 3600 };
+      if (resets != null) status.usage = { ...status.usage!, resets };
+      return status;
+    };
+
+    it('hides the offer when the status has none', () => {
+      open(usageStatus('pro'), 'usage_exhausted', EXHAUSTED);
+      expect(document.querySelector('[data-attr="usage-reset-checkout"]')).toBeNull();
+    });
+
+    it('shows the price next to the credit packs and the resets note', () => {
+      open(resettable(1), 'usage_exhausted', EXHAUSTED);
+      expect(screen.getByRole('button', { name: 'Reset usage: $40' })).toBeInTheDocument();
+      expect(document.querySelector('[data-attr="credit-pack-25"]')).not.toBeNull();
+      expect(screen.getByText('Reset 1 time this period')).toBeInTheDocument();
+    });
+
+    it('goes to the hosted checkout on click', async () => {
+      billing.usageResetCheckout.mockResolvedValue({ url: 'https://polar.test/reset' });
+      open(resettable(), 'usage_exhausted', EXHAUSTED);
+      fireEvent.click(screen.getByRole('button', { name: 'Reset usage: $40' }));
+      await waitFor(() => expect(goToHostedPage).toHaveBeenCalledWith('https://polar.test/reset'));
+      expect(trackEvent).toHaveBeenCalledWith('usage_reset_checkout_started', { tier: 'pro', placement: 'upgrade_modal' });
+    });
+
+    it('shows the text for an error code', async () => {
+      billing.usageResetCheckout.mockRejectedValue(new ApiError('raw', 409, 'nothing_to_reset'));
+      open(resettable(), 'usage_exhausted', EXHAUSTED);
+      fireEvent.click(screen.getByRole('button', { name: 'Reset usage: $40' }));
+      expect(await screen.findByText('You have not used any box-hours yet. There is nothing to reset.')).toBeInTheDocument();
+      expect(trackEvent).toHaveBeenCalledWith('usage_reset_checkout_failed', { stage: 'create_checkout', code: 'nothing_to_reset', status: 409 });
     });
   });
 

@@ -156,6 +156,7 @@ export async function buildAdminBillingView(ownerId: string, now = new Date()): 
           usedWsec: Number(p.usedWsec),
           creditMicrosUsed: Number(p.creditMicrosUsed),
           uncoveredMicros: Number(p.uncoveredMicros),
+          resetUsedWsec: Number(p.resetUsedWsec),
           exhaustedAt: iso(p.exhaustedAt),
         }
       : null,
@@ -200,10 +201,10 @@ export function usageSummaryQuery(now: Date) {
   const at = now.toISOString();
   return db().execute(sql`
     SELECT
-      (SELECT COALESCE(SUM(used_wsec), 0) FROM usage_periods
+      (SELECT COALESCE(SUM(used_wsec + reset_used_wsec), 0) FROM usage_periods
         WHERE period_start <= ${at}::timestamptz AND period_end > ${at}::timestamptz) AS period_wsec,
       (SELECT COUNT(*) FROM usage_periods
-        WHERE period_start <= ${at}::timestamptz AND period_end > ${at}::timestamptz AND used_wsec > 0) AS owners_with_usage,
+        WHERE period_start <= ${at}::timestamptz AND period_end > ${at}::timestamptz AND used_wsec + reset_used_wsec > 0) AS owners_with_usage,
       (SELECT COUNT(*) FROM usage_periods
         WHERE period_start <= ${at}::timestamptz AND period_end > ${at}::timestamptz AND exhausted_at IS NOT NULL) AS owners_exhausted,
       (SELECT COALESCE(SUM(total_micros), 0) FROM credit_lots
