@@ -2,6 +2,7 @@ import { Component, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { AppText, Button } from '../../components/UI';
+import { captureAnalyticsException } from '../../lib/analytics';
 
 interface Props { children: ReactNode; label: string; resetKey: unknown; retry?: boolean }
 interface State { failed: boolean; key: unknown }
@@ -19,6 +20,8 @@ export class RowBoundary extends Component<Props, State> {
   }
   componentDidCatch(error: unknown) {
     if (__DEV__) console.warn(`${this.props.label} failed to render`, error);
+    // The label is fixed copy ("This message"), never content.
+    captureAnalyticsException(error, { boundary: this.props.label });
   }
   render() {
     if (!this.state.failed) return this.props.children;

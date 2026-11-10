@@ -10,6 +10,7 @@ import { SystemChrome } from '../src/components/SystemChrome';
 import { AppLoading } from '../src/navigation/AppLoading';
 import { rememberIntent } from '../src/navigation/intents';
 import { AuthProvider, useAuth, useMobileRuntime } from '../src/auth/AuthProvider';
+import { AnalyticsRoot, useAnalyticsReady } from '../src/components/Analytics';
 import { Status } from '../src/components/AuthControls';
 import { ShellScreen, useShellColors } from '../src/components/ShellScreen';
 import { UpdateBanner } from '../src/features/updates/UpdateBanner';
@@ -95,16 +96,18 @@ function AuthenticatedRoutes() {
 
 export default function RootLayout() {
   const fonts = useAppFonts();
+  // The saved analytics opt-out is read before the first screen, so an opted-out person sends nothing.
+  const analytics = useAnalyticsReady();
   const colors = useShellColors();
   useEffect(() => { if (fonts) void SplashScreen.hideAsync().catch(() => {}); }, [fonts]);
   // The root paints the app background, so the area under a transparent status bar never shows grey.
   return <GestureHandlerRootView style={[styles.root, { backgroundColor: colors.background }]}>
     {/* Boot state 1 of 3: the bundled fonts load, which takes about one frame. */}
-    {!fonts ? <AppLoading phase="fonts" /> : <SafeAreaProvider style={{ backgroundColor: colors.background }}>
+    {!fonts || !analytics ? <AppLoading phase="fonts" /> : <AnalyticsRoot><SafeAreaProvider style={{ backgroundColor: colors.background }}>
       <SystemChrome /><AuthProvider><AuthenticatedRoutes /></AuthProvider>
       {/* Over every screen, and never a modal: it offers a restart and does not take one. */}
       <UpdateBanner />
-    </SafeAreaProvider>}
+    </SafeAreaProvider></AnalyticsRoot>}
   </GestureHandlerRootView>;
 }
 

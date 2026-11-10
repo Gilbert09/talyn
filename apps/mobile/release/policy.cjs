@@ -28,7 +28,8 @@ function publicUrl(value, name) {
 }
 
 function readReleaseSettings(env, environment, projectId) {
-  const publicNames = ['EXPO_PUBLIC_API_ORIGIN', 'EXPO_PUBLIC_SUPABASE_URL', 'EXPO_PUBLIC_SUPABASE_KEY', 'EXPO_PUBLIC_AUTH_CALLBACK_URL', 'EXPO_PUBLIC_EAS_PROJECT_ID', 'EXPO_PUBLIC_PURCHASE_MODE'];
+  const publicNames = ['EXPO_PUBLIC_API_ORIGIN', 'EXPO_PUBLIC_SUPABASE_URL', 'EXPO_PUBLIC_SUPABASE_KEY', 'EXPO_PUBLIC_AUTH_CALLBACK_URL', 'EXPO_PUBLIC_EAS_PROJECT_ID', 'EXPO_PUBLIC_PURCHASE_MODE',
+    'EXPO_PUBLIC_TALYN_POSTHOG_KEY', 'EXPO_PUBLIC_TALYN_POSTHOG_HOST'];
   // Expo CLI sets this internal path before Metro reads the app configuration again.
   if (Object.keys(env).some((name) => name.startsWith('EXPO_PUBLIC_') && name !== 'EXPO_PUBLIC_PROJECT_ROOT' && !publicNames.includes(name))) throw new Error('Review unexpected public build variables.');
   const profile = env.EAS_BUILD_PROFILE ?? env.MOBILE_RELEASE_PROFILE ?? environment;

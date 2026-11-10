@@ -8,6 +8,7 @@ import { AppState, StyleSheet, View } from 'react-native';
 import { useMobileRuntime, useWorkspace } from '../../../auth/AuthProvider';
 import { PickerSheet } from '../../../components/PickerSheet';
 import { AppText, Button, Disclosure, Divider, Field, Group, Input, Pill, Row, SectionHeader, Spinner } from '../../../components/UI';
+import { trackEvent } from '../../../lib/analytics';
 import { mono } from '../../../theme/tokens';
 import { useResource } from '../../../workflow/hooks';
 import { webUrl } from '../../more/Page';
@@ -168,6 +169,7 @@ function ClaudeSignIn({ workspaceId, target, reconnecting, onConnected }: {
     setBusy(true); setError(null);
     try {
       await cloudProviders.completeClaudeSignIn(workspaceId, code.trim(), targetOptions(started));
+      trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent: 'claude' });
       setCode('');
       await onConnected();
     } catch (failure) {

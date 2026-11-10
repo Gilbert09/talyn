@@ -15,6 +15,7 @@ import {
   AppText, Button, Card, Disclosure, EmptyState, Field, Group, Input, Notice, Row, SectionHeader, Toggle, useActionSheet, useToast,
 } from '../../components/UI';
 import { StateNotice, openExternal } from '../../components/Workflow';
+import { trackEvent } from '../../lib/analytics';
 import { errorMessage } from '../../lib/errors';
 import { useFeatures } from '../../lib/features';
 import { openReturnFlow } from '../../lib/returnTo';
@@ -166,6 +167,7 @@ export function McpServerEditor({ workspaceId, servers, server, initial, offline
     const request = mcpRequest(body);
     const current = editingRef.current;
     const saved = current ? await mcpServers.update(current.id, request) : await mcpServers.create(workspaceId, request);
+    trackEvent('mcp_server_saved', { auth_method: body.authKind, tools_restricted: body.tools !== null && body.tools !== undefined });
     savedId.current = saved.id;
     setEditing(saved);
     setBaseline({ ...body, secret: undefined });

@@ -7,6 +7,7 @@ import { Alert, StyleSheet, View } from 'react-native';
 import { useNetwork } from '../../auth/AuthProvider';
 import { AppText, Banner, EmptyState, Group, Notice, Pill, Row, useToast } from '../../components/UI';
 import { StateNotice } from '../../components/Workflow';
+import { trackEvent } from '../../lib/analytics';
 import { Fact, Loading, Page } from '../more/Page';
 import { usageViewOf, type UsageView } from '../usage/model';
 import { AutoTopupSection, CreditsSection } from './CreditsSection';
@@ -78,6 +79,7 @@ export function BillingScreen({ reason = null }: { reason?: BillingReason | null
 
   const buyPlan = async (plan: SellableTier, chosen: Period) => {
     setBusy(`checkout:${plan}`);
+    trackEvent('checkout_started', { period: chosen, plan, placement: 'plan_page' });
     try {
       const { url } = await requestCheckout(plan, chosen);
       await hosted('checkout', url);
@@ -90,6 +92,7 @@ export function BillingScreen({ reason = null }: { reason?: BillingReason | null
 
   const changePlan = async (plan: SellableTier, chosen: Period, wasTier: UsageView['tier']) => {
     setBusy(`change:${plan}`);
+    trackEvent('plan_change_started', { period: chosen, to: plan, placement: 'plan_page' });
     try {
       await billing.changePlan({ to: plan, period: chosen });
       await status.refresh();
@@ -103,6 +106,7 @@ export function BillingScreen({ reason = null }: { reason?: BillingReason | null
 
   const buyCredits = async (pack: CreditPackId) => {
     setBusy(`credits:${pack}`);
+    trackEvent('credits_checkout_started', { pack, placement: 'plan_page' });
     try {
       const { url } = await requestCreditCheckout(pack);
       await hosted('credits', url);

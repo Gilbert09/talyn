@@ -34,3 +34,9 @@ jest.mock('react-native-reanimated', () => {
     useHandler: () => ({ context: {}, doDependenciesDiffer: false, useWeb: false }),
   };
 });
+
+// PostHog has native modules. Tests that check analytics mock it themselves; the rest get inert stand-ins.
+jest.mock('posthog-react-native', () => {
+  function PostHog() {}
+  return { __esModule: true, default: PostHog, PostHog, PostHogProvider: ({ children }) => children };
+});

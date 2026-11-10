@@ -15,6 +15,7 @@ import { useResource } from '../../workflow/hooks';
 import { AboutUpdates } from '../updates/AboutUpdates';
 import { useBillingStatus } from '../usage/data';
 import { appInfo, DOCS_URL, WEB_APP_URL } from './about';
+import { AnalyticsSetting } from './AnalyticsSetting';
 import { APPEARANCE_OPTIONS, billingLine, githubStateLabel, githubStateOf, settingsEditorLinks } from './model';
 import { SessionSettings } from './SessionSettings';
 
@@ -56,6 +57,7 @@ export function SettingsScreen() {
         <Row title={showId ? 'Hide account ID' : 'Show account ID'} onPress={() => setShowId(!showId)}>
           {showId ? <AppText selectable variant="meta" tone="muted">Account ID: {auth.user?.id}</AppText> : null}
         </Row>
+        <AnalyticsSetting divider />
         <Row title="Sign out" disabled={deleting} divider={false} onPress={() => { void (signOut ? signOut() : controller.signOut()); }} />
       </Group>
       <Group title="Workspace">

@@ -6,6 +6,7 @@ import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, TextInp
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { Button, showActionMenu, type Symbol } from '../../components/UI';
+import { trackEvent } from '../../lib/analytics';
 import { radius, type, useTheme } from '../../theme/tokens';
 import { useLocal } from '../../workflow/hooks';
 import { canCompose, deliveryLabel, workbenchKind } from '../../workflow/model';
@@ -57,8 +58,16 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
     ? 'Delivery is still unknown. The server can receive the same message twice. Check the conversation and queue first.'
     : 'This sends the current draft again.', [
       { text: 'Cancel', style: 'cancel', isPreferred: true },
-      { text: 'Send again', onPress: () => { void workflow.send(item.id, chatId, true); } },
+      { text: 'Send again', onPress: () => { void sendText(true); } },
     ]);
+  // Web's `session_message_sent`. The store settles the send without throwing, so the delivery says whether it went.
+  const tracked = (queued: boolean, attachments: number) => trackEvent('session_message_sent', {
+    queued, plan_mode: Boolean(chat?.planMode), model_id: chat?.model ?? null, attachments_count: attachments });
+  const sendText = async (manualRetry = false) => {
+    await workflow.send(item.id, chatId, manualRetry);
+    const status = workflow.local(chatId).delivery.status;
+    if (status === 'sent' || status === 'queued') tracked(status === 'queued', 0);
+  };
   const stop = async () => {
     setStopping(true);
     try { await chatActions.stop(chatId); } catch { Alert.alert('Could not stop the agent', 'Try again.'); } finally {
@@ -113,7 +122,9 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
     if (imageBlock || sendingImages) return;
     setSendingImages(true); setImageSendError('');
     try {
-      await chatActions.send(chatId, buildMessageInput(local.draft.trim(), images));
+      const input = buildMessageInput(local.draft.trim(), images);
+      const ack = await chatActions.send(chatId, input);
+      tracked(ack.queued, input.attachments?.length ?? 0);
       workflow.updateLocal(chatId, { draft: '' });
       updateImages(() => []);
       void workflow.load('workbench', item.id);
@@ -167,7 +178,7 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
         {!running || hasDraft ? <RoundButton label={running ? 'Queue message' : 'Send message'} symbol={{ ios: 'arrow.up', android: 'arrow_upward' }} tone="primary"
           busy={delivery.status === 'sending' || sendingImages}
           disabled={!allowed || !hasDraft || blocked || delivery.status === 'sending' || sendingImages || (hasImages && Boolean(imageBlock))}
-          onPress={() => { if (hasImages) void sendImages(); else void workflow.send(item.id, chatId); }} /> : null}
+          onPress={() => { if (hasImages) void sendImages(); else void sendText(); }} /> : null}
       </View>
     </View>
   </View>;

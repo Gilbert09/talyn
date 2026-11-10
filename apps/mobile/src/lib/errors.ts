@@ -4,6 +4,8 @@ import { AUTO_KEEP_DEFAULT_ERROR_CODE, AUTO_REVIEW_ERROR_CODE, CONCURRENT_BOX_LI
 import { router, type Href } from 'expo-router';
 import { Alert, type AlertButton } from 'react-native';
 
+import { trackEvent } from './analytics';
+
 export interface BoxRefusal { code: UsageBillingErrorCode; title: string; message: string }
 
 const TITLES: Record<UsageBillingErrorCode, string> = {
@@ -65,8 +67,19 @@ export function refusalActions(code: UsageBillingErrorCode): RefusalAction[] {
   }
 }
 
-/** The refusal with the server's own message, and a button for each way out. */
-export function showBoxRefusal(refusal: BoxRefusal) {
+/** Web's `paywall_shown` reason for each box gate code. */
+const PAYWALL_REASON: Record<UsageBillingErrorCode, string> = {
+  [USAGE_EXHAUSTED_ERROR_CODE]: 'usage_exhausted',
+  [SIZE_REQUIRES_PRO_ERROR_CODE]: 'size_requires_pro',
+  [CONCURRENT_BOX_LIMIT_ERROR_CODE]: 'concurrent_box_limit',
+};
+
+/**
+ * The refusal with the server's own message, and a button for each way out.
+ * `trigger` is the action that hit the wall, as in web's `paywall_shown`.
+ */
+export function showBoxRefusal(refusal: BoxRefusal, trigger = 'unknown') {
+  trackEvent('paywall_shown', { reason: PAYWALL_REASON[refusal.code], trigger });
   const buttons: AlertButton[] = [{ text: 'Close', style: 'cancel' },
     ...refusalActions(refusal.code).map((action) => ({ text: action.label, onPress: () => router.navigate(action.href) }))];
   Alert.alert(refusal.title, refusal.message, buttons);

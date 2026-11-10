@@ -11,6 +11,7 @@ import {
   AppText, Banner, Button, Card, EmptyState, IconButton, Pill, Row, useActionSheet, useToast, type SheetRequest,
 } from '../../components/UI';
 import { StateNotice } from '../../components/Workflow';
+import { trackEvent } from '../../lib/analytics';
 import { errorMessage } from '../../lib/errors';
 import { useFeatures } from '../../lib/features';
 import { appReturnBase, openReturnFlow } from '../../lib/returnTo';
@@ -30,6 +31,14 @@ type StartKind = 'install' | 'link';
  * workspace, link your Slack account, choose the trigger emoji and the Talyn
  * workspace sessions go to. Slack's pages open in the browser and return here.
  */
+/** Web's `slack_connected`: the callback says `slack=installed` for a workspace and `slack=linked` for an account. */
+function trackSlackReturn(url: string) {
+  let outcome: string | null = null;
+  try { outcome = new URL(url).searchParams.get('slack'); } catch { return; }
+  if (outcome === 'installed') trackEvent('slack_connected', { connection_kind: 'workspace' });
+  else if (outcome === 'linked') trackEvent('slack_connected', { connection_kind: 'account' });
+}
+
 export function SlackScreen() {
   const features = useFeatures();
   const offered = workbenchesOffered(features);
@@ -54,7 +63,7 @@ export function SlackScreen() {
         return kind === 'install' ? slack.install(body) : slack.link(body);
       }, appReturnBase());
       if (!isHttpsUrl(authorizeUrl)) throw new Error('The Slack sign-in address is not valid.');
-      await openReturnFlow(authorizeUrl, 'slack');
+      await openReturnFlow(authorizeUrl, 'slack', trackSlackReturn);
       await remote.refresh();
     } catch (e) {
       const message = notConfiguredMessage(e);
@@ -114,7 +123,7 @@ function TeamCard({ team, busy, offline, onStart, onChanged, openSheet, toast }:
 
   const unlink = () => link && Alert.alert(`Unlink your Slack account from ${view.name}?`, undefined, [
     { text: 'Cancel', style: 'cancel' },
-    { text: 'Unlink', style: 'destructive', onPress: () => { void run(async () => { await slack.unlink(link.id); toast('Slack account unlinked'); }, 'Could not unlink'); } },
+    { text: 'Unlink', style: 'destructive', onPress: () => { void run(async () => { await slack.unlink(link.id); trackEvent('slack_disconnected', { connection_kind: 'account' }); toast('Slack account unlinked'); }, 'Could not unlink'); } },
   ]);
 
   const disconnect = () => Alert.alert(`Disconnect ${view.name}?`,
@@ -122,6 +131,7 @@ function TeamCard({ team, busy, offline, onStart, onChanged, openSheet, toast }:
       { text: 'Cancel', style: 'cancel' },
       { text: 'Disconnect', style: 'destructive', onPress: () => { void run(async () => {
         const res = await slack.forgetInstallation(team.teamId);
+        trackEvent('slack_disconnected', { connection_kind: 'workspace' });
         Alert.alert('Slack workspace disconnected', res.message);
       }, 'Could not disconnect'); } },
     ]);

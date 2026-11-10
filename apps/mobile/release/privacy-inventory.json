@@ -1,6 +1,6 @@
 {
   "status": "Engineering inventory; privacy owner must approve store answers and retention before beta.",
-  "lockfileSha256": "553c2d28ca37f829ef79a673928f44a89236ba0f7a1c13637d6b2f2b18bec969",
+  "lockfileSha256": "461acf798b85d1e8bf411cfbe990ca934eb0a836a5924a0e3c82f110924260cc",
   "mobileDependencies": {
     "@expo-google-fonts/inter": "^0.4.2",
     "@expo-google-fonts/jetbrains-mono": "^0.4.1",
@@ -11,14 +11,17 @@
     "@talyn/client": "*",
     "@talyn/shared": "*",
     "expo": "~58.0.23",
+    "expo-application": "~58.1.2",
     "expo-clipboard": "~58.0.4",
     "expo-constants": "~58.0.15",
     "expo-crypto": "~58.0.7",
     "expo-dev-client": "~58.0.18",
     "expo-device": "~58.0.5",
+    "expo-file-system": "~58.0.13",
     "expo-font": "~58.0.11",
     "expo-image-picker": "~58.0.10",
     "expo-linking": "~58.0.16",
+    "expo-localization": "~58.0.5",
     "expo-navigation-bar": "~58.0.4",
     "expo-notifications": "~58.1.8",
     "expo-router": "~58.0.30",
@@ -30,6 +33,8 @@
     "expo-web-browser": "~58.0.7",
     "fast-text-encoding": "1.0.6",
     "marked": "^16.4.2",
+    "posthog-react-native": "4.84.0",
+    "@posthog/react-native-plugin": "2.12.6",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-native": "0.88.1",
@@ -41,10 +46,8 @@
     "react-native-worklets": "0.13.0"
   },
   "prohibited": [
-    "analytics",
     "advertising",
-    "tracking",
-    "session-replay"
+    "tracking"
   ],
   "data": [
     {
@@ -118,7 +121,7 @@
       ],
       "purpose": "API delivery and operational security",
       "location": "Talyn infrastructure and service providers",
-      "retention": "Infrastructure logging and provider policies require review; no app analytics added"
+      "retention": "Infrastructure logging and provider policies require review. App analytics is listed separately under PostHog."
     },
     {
       "category": "Updates",
@@ -168,11 +171,12 @@
       "fields": [
         "theme",
         "onboarding progress",
-        "chosen team space"
+        "chosen team space",
+        "analytics choice"
       ],
       "purpose": "Restore the person's choices on this device",
       "location": "AsyncStorage, scoped by environment and user where it names account data",
-      "retention": "Onboarding progress and space choice clear on sign-out; theme stays until changed or the app is removed"
+      "retention": "Onboarding progress and space choice clear on sign-out; theme and the analytics choice stay until changed or the app is removed"
     },
     {
       "category": "Billing",
@@ -185,6 +189,24 @@
       "purpose": "Show the plan and let the person upgrade or buy credits",
       "location": "Talyn backend; checkout and portal run on Polar in the browser, not in the app",
       "retention": "Polar is the merchant of record; its retention and Talyn's billing records require approval"
+    },
+    {
+      "category": "Product analytics, session replay, and diagnostics",
+      "fields": [
+        "Supabase user ID as the distinct ID, with email and GitHub username as person properties",
+        "anonymous PostHog device ID before sign-in",
+        "usage events with IDs and settings, never titles, prompts, transcripts, code, or repository names",
+        "screen names as route patterns with no IDs",
+        "touch autocapture by component name and test ID",
+        "masked session replay: text, inputs, images, and sandboxed views are masked; no console logs or network requests",
+        "exceptions with stack traces, the online state, and a connectivity flag",
+        "device and app info: platform, OS, model, locale, timezone, app version and build, OTA update ID and channel, release environment",
+        "app lifecycle events (installed, updated, opened, backgrounded)",
+        "IP address as seen by PostHog ingestion"
+      ],
+      "purpose": "First-party product analytics, session replay of the app UI, and crash and error diagnostics. Tom reversed the MVP rule of no analytics or replay on 2026-11-10",
+      "location": "PostHog (project from EXPO_PUBLIC_TALYN_POSTHOG_KEY, US ingestion by default); SDK queue and anonymous ID in the app document directory",
+      "retention": "PostHog project retention. Settings > Account > \"Share usage data and session replays\" turns it off on the device from the next event, and stops replay. No key in the build means nothing is sent. Replay is off in development builds"
     }
   ],
   "processors": [
@@ -197,16 +219,17 @@
     "Configured coding-agent and repository providers through the existing backend",
     "Polar checkout and customer portal, opened in the browser",
     "Anthropic Claude sign-in, opened in the browser",
-    "GitHub App installation, opened in the browser"
+    "GitHub App installation, opened in the browser",
+    "PostHog product analytics, session replay, and error tracking (first-party use, no cross-app tracking)"
   ],
   "applePreparation": {
     "tracking": false,
     "trackingDomains": [],
-    "collectedDataTypes": "Do not infer a no-collection answer from the app manifest. Review linked account data, content, identifiers, and processor practices.",
+    "collectedDataTypes": "Do not infer a no-collection answer from the app manifest. Declare Product Interaction, Crash Data, Other Diagnostic Data, and the User ID (linked to the person, not used for tracking) for PostHog, plus linked account data and content. Review processor practices.",
     "requiredReasonApis": "Inspect merged archive manifests from React Native, Expo, AsyncStorage, SecureStore, and updates. Approve reasons from actual use. Do not copy generic reason codes."
   },
   "googlePreparation": {
-    "collection": "Review account data, messages, app activity, identifiers, and diagnostics against current Console definitions.",
+    "collection": "Review account data, messages, app activity (PostHog usage events and session replay), identifiers (user ID), and diagnostics (crash logs) against current Console definitions.",
     "sharing": "Assess processors and service-provider exceptions with the privacy owner.",
     "security": "Verify HTTPS transport and deletion completion. Do not attest to full deletion or encryption scope without evidence.",
     "deletion": "In-app deletion exists. Publish an unauthenticated deletion page with paying-admin restrictions and partial-cleanup support."

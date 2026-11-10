@@ -8,6 +8,12 @@ export type AppEnvironment = 'development' | 'preview' | 'production';
 export type PurchaseMode = 'external' | 'none';
 export const PURCHASE_MODES: readonly PurchaseMode[] = ['external', 'none'];
 
+/** The public PostHog project key and ingestion host. Absent means analytics is off. */
+export interface AnalyticsConfig {
+  key: string;
+  host: string;
+}
+
 export interface MobileConfig {
   environment: AppEnvironment;
   apiOrigin: string;

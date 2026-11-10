@@ -4,6 +4,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { useNetwork } from '../../auth/AuthProvider';
 import { AppText, Banner, Button, Pill } from '../../components/UI';
+import { trackEvent } from '../../lib/analytics';
 import { errorMessage } from '../../lib/errors';
 import { radius, useTheme } from '../../theme/tokens';
 import { openGithubAppFlow, type useGithubConnection } from './githubFlow';
@@ -33,6 +34,8 @@ export function ConnectGitHubStep({ workspaceId, connection }: { workspaceId: st
     setConnecting(true);
     setError(null);
     try {
+      // The activation funnel reads signup, then this, then onboarding_completed.
+      trackEvent('github_connect_started', { source: 'onboarding' });
       await openGithubAppFlow(workspaceId, 'connect');
     } catch (failure) {
       setError(errorMessage(failure, 'Could not start the GitHub App install.'));

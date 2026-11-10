@@ -146,5 +146,6 @@ Exports and test doubles do not establish these results.
 - Update Apple App Privacy disclosures and required privacy manifests for the final native binary.
 - Update Google Play Data safety and the privacy policy for push processing and deletion.
 - Confirm retention, backup removal, and deletion support procedures with backend and privacy owners.
-- Confirm that no tracking, advertising identifier, ATT prompt, analytics, or replay SDK was added.
+- Confirm that no tracking, advertising identifier, or ATT prompt was added.
+  PostHog analytics and masked session replay are allowed (Tom's call, 2026-11-10). Confirm that no push token or payload reaches them.
 - Complete phase 5 beta, signing, release, and store submission procedures separately.

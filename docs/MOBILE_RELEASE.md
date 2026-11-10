@@ -68,6 +68,8 @@ Configure these public values in the protected GitHub environment and matching E
 - `EXPO_PUBLIC_API_ORIGIN`, `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_KEY`.
 - `EXPO_PUBLIC_AUTH_CALLBACK_URL`. `EXPO_PUBLIC_EAS_PROJECT_ID` is optional: the config defaults to the Talyn project
   `@talyn-app/talyn-mobile` (`69499768-c478-44c0-8588-355c674515df`). Set it only for a fork.
+- `EXPO_PUBLIC_TALYN_POSTHOG_KEY` and, optionally, `EXPO_PUBLIC_TALYN_POSTHOG_HOST` (default `https://us.i.posthog.com`).
+  With no key, the app sends no analytics, replay, or exceptions.
 - `TALYN_MOBILE_IOS_BUNDLE_ID`, `TALYN_MOBILE_ANDROID_PACKAGE`, `TALYN_MOBILE_SCHEME`.
 - `TALYN_MOBILE_SUPPORT_URL`, `TALYN_MOBILE_PRIVACY_URL`, `TALYN_MOBILE_DELETION_URL`.
 - `eas.json` owns `MOBILE_UPDATES_ENABLED` per profile. Do not set it in an EAS environment.
@@ -411,8 +413,12 @@ Complete [MOBILE_RELEASE_CHECKLIST.md](MOBILE_RELEASE_CHECKLIST.md) on the exact
 Use [mobile E2E instructions](../apps/mobile/e2e/README.md). Deterministic tests cannot prove operating system integration.
 Require zero known critical security defects and zero unresolved auth or data-loss defects.
 Agree on beta baselines for crashes, sign-in success, API failures, duplicate sends, and push receipt failures.
-Record numeric thresholds and owners before rollout. No new analytics, tracking, advertising, or replay SDK is added.
-Use approved existing backend signals and voluntary tester reports. Redact private content and device tokens.
+Record numeric thresholds and owners before rollout. No tracking or advertising SDK is added.
+PostHog gives product analytics, masked session replay, and error tracking (Tom's call, 2026-11-10, which reverses the MVP rule).
+Use PostHog, approved backend signals, and voluntary tester reports. Redact private content and device tokens.
+Apple tracking stays false: PostHog here is first-party analytics with no cross-app tracking, so there is no ATT prompt.
+Before store submission, the App Store privacy answers and Play Data safety must declare analytics, diagnostics, and the user ID.
+People can turn analytics and replay off in Settings > Account.
 
 Start with internal testers. Expand to approved external beta audiences after review.
 For initial public release, choose countries and manual publication carefully.

@@ -4,6 +4,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { useMobileRuntime, useWorkspace } from '../../auth/AuthProvider';
 import { AppText, Button } from '../../components/UI';
+import { trackEvent } from '../../lib/analytics';
 import { AppLoading } from '../../navigation/AppLoading';
 import { agentReady, type OnboardingStep } from '../../navigation/onboardingGate';
 import { HOME } from '../../navigation/routes';
@@ -61,12 +62,15 @@ function Footer({ step, next, nextLabel = 'Next', canAdvance, skip }: {
   </>;
 }
 
+/** Web's `onboarding_step_completed`, with the same step keys. */
+function completed(step: OnboardingStep) { trackEvent('onboarding_step_completed', { step }); }
+
 export function GithubStepScreen() {
   const workspace = useWorkspace().selected as string;
   const connection = useGithubConnection(workspace);
   const { workspace: resource } = useOnboardingGate();
   const connected = connection.connected || Boolean(resource.data?.integrations?.github);
-  return <OnboardingShell step="github" footer={<Footer step="github" canAdvance={connected} next={() => router.push(stepRoute('repos'))} />}>
+  return <OnboardingShell step="github" footer={<Footer step="github" canAdvance={connected} next={() => { completed('github'); router.push(stepRoute('repos')); }} />}>
     <ConnectGitHubStep workspaceId={workspace} connection={connection} />
   </OnboardingShell>;
 }
@@ -75,18 +79,23 @@ export function ReposStepScreen() {
   const workspace = useWorkspace().selected as string;
   const { repositories } = useOnboardingGate();
   const count = repositories.data?.length ?? 0;
-  return <OnboardingShell step="repos" footer={<Footer step="repos" canAdvance={count > 0} next={() => router.push(stepRoute('agent'))} />}>
+  return <OnboardingShell step="repos" footer={<Footer step="repos" canAdvance={count > 0} next={() => { completed('repos'); router.push(stepRoute('agent')); }} />}>
     <RepositoriesPanel workspaceId={workspace} />
   </OnboardingShell>;
 }
 
 export function AgentStepScreen() {
-  const { readiness } = useOnboardingGate();
+  const { readiness, repositories } = useOnboardingGate();
   const { finish } = useOnboardingProgress();
   const { workflow } = useMobileRuntime();
   const ready = agentReady(readiness.data);
   const done = () => { finish(); router.replace(HOME); };
-  return <OnboardingShell step="agent" footer={<Footer step="agent" nextLabel="Start using Talyn" canAdvance={ready} next={done} skip={ready ? undefined : done} />}>
+  const next = () => {
+    completed('agent');
+    trackEvent('onboarding_completed', { github_connected: true, repos_watched: repositories.data?.length ?? 0, agent_connected: true });
+    done();
+  };
+  return <OnboardingShell step="agent" footer={<Footer step="agent" nextLabel="Start using Talyn" canAdvance={ready} next={next} skip={ready ? undefined : done} />}>
     <AppText variant="meta" tone="muted">Use your Claude or ChatGPT subscription. Sessions run on your own plan.</AppText>
     <ConnectAgentPanel onConnected={() => { workflow.refresh('readiness'); workflow.refresh('providers'); }} />
     <ReadinessChecklist readiness={readiness.data} />
