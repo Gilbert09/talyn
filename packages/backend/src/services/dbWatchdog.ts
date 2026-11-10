@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { getPoolDbClient } from '../db/client.js';
 import { debugBus } from './debugBus.js';
+import { describeInflightSummary, describeOldestByKind } from '../db/inflight.js';
 
 /**
  * Last-resort self-healing for a wedged database pool.
@@ -31,6 +32,8 @@ import { debugBus } from './debugBus.js';
 const PROBE_INTERVAL_MS = 15_000;
 const PROBE_TIMEOUT_MS = 3_000;
 const MAX_CONSECUTIVE_FAILURES = 8;
+/** Entries of each kind the exit dump prints, oldest first. */
+const DUMP_LIMIT = 15;
 
 export interface DbWatchdogOptions {
   intervalMs?: number;
@@ -112,6 +115,7 @@ export class DbWatchdog {
         `[dbWatchdog] probe failed (${this.consecutiveFailures}/${this.maxConsecutiveFailures}):`,
         error,
       );
+      console.error(`[dbWatchdog] in flight: ${describeInflightSummary()}`);
     } finally {
       debugBus.pollerTick('db_watchdog', {
         durationMs: Date.now() - startedAt,
@@ -125,6 +129,10 @@ export class DbWatchdog {
     if (!ok && this.consecutiveFailures >= this.maxConsecutiveFailures && !this.fired) {
       this.fired = true;
       this.stopTimer();
+      // The process exits next, and the registry dies with it. This is the
+      // last chance to say what held the pool.
+      console.error('[dbWatchdog] oldest in-flight entries before exit:');
+      for (const line of describeOldestByKind(DUMP_LIMIT)) console.error(`[dbWatchdog]   ${line}`);
       this.onFatal(
         `database unreachable for ${this.consecutiveFailures} consecutive probes (~${Math.round(
           (this.consecutiveFailures * this.intervalMs) / 1000,

@@ -3,6 +3,13 @@ import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from './schema.js';
 import { debugBus } from '../services/debugBus.js';
+import {
+  beginInflight,
+  endInflight,
+  transactionClosed,
+  transactionOpened,
+  type QueryConnection,
+} from './inflight.js';
 
 /**
  * The Drizzle query builder that every service/route consumes. Both the
@@ -18,6 +25,9 @@ interface Handle {
 }
 
 let singleton: Handle | null = null;
+
+/** Size of the postgres-js client pool. The in-flight reporter compares against it. */
+export const DB_POOL_MAX = 20;
 
 /**
  * True once the singleton is a real postgres-js handle (vs a test-injected
@@ -51,8 +61,17 @@ export function summarizeSql(raw: string): { operation: string; table: string | 
  * settle — whether via `await` or a `.values()`-style chain — estimates the
  * bytes the result pulled back. Measurement is skipped entirely while the panel
  * isn't recording, so the serialize cost is only paid when someone's watching.
+ *
+ * The same hook records each awaited query in the in-flight registry
+ * (`db/inflight.ts`), always, until it settles. postgres-js gives each
+ * transaction and savepoint its own `sql` object, so `begin` and `savepoint`
+ * are wrapped too: without that, no query inside a transaction (which is every
+ * query of an authenticated request) would pass through here.
  */
-export function instrumentEgress(sql: postgres.Sql): void {
+export function instrumentEgress(
+  sql: postgres.Sql,
+  connection: QueryConnection = 'pool',
+): void {
   const original = sql.unsafe.bind(sql) as (
     query: string,
     params?: unknown[],
@@ -62,7 +81,13 @@ export function instrumentEgress(sql: postgres.Sql): void {
   const wrapPending = (pending: object, query: string): object => {
     const startedAt = Date.now();
     let counted = false;
+    let inflightId: number | null = null;
+    let inflightDone = false;
     const settle = (result: unknown, ok: boolean, err?: unknown): void => {
+      if (inflightId !== null && !inflightDone) {
+        inflightDone = true;
+        endInflight(inflightId);
+      }
       if (counted || !debugBus.isRecording()) return;
       counted = true;
       const { operation, table } = summarizeSql(query);
@@ -97,8 +122,14 @@ export function instrumentEgress(sql: postgres.Sql): void {
           return (
             onFulfilled?: (v: unknown) => unknown,
             onRejected?: (e: unknown) => unknown,
-          ) =>
-            (target as PromiseLike<unknown>).then(
+          ) => {
+            if (inflightId === null) {
+              inflightId = beginInflight('query', query, {
+                connection,
+                ownerScope: scopedDbStore.getStore() !== undefined,
+              });
+            }
+            return (target as PromiseLike<unknown>).then(
               (result) => {
                 settle(result, true);
                 return onFulfilled ? onFulfilled(result) : result;
@@ -109,6 +140,7 @@ export function instrumentEgress(sql: postgres.Sql): void {
                 throw err;
               },
             );
+          };
         }
         const value = Reflect.get(target, prop, receiver);
         if (typeof value === 'function') {
@@ -126,6 +158,58 @@ export function instrumentEgress(sql: postgres.Sql): void {
 
   (sql as unknown as { unsafe: typeof original }).unsafe = (query, params, options) =>
     wrapPending(original(query, params, options), query);
+
+  type ScopeFn = (inner: postgres.Sql) => unknown;
+  const instrumentScope = (fn: ScopeFn): ScopeFn => (inner) => {
+    instrumentEgress(inner, 'transaction');
+    return fn(inner);
+  };
+  const target = sql as unknown as {
+    begin?: (...args: unknown[]) => Promise<unknown>;
+    savepoint?: (...args: unknown[]) => Promise<unknown>;
+  };
+
+  // `begin(fn)` or `begin(options, fn)`. The callback runs once the
+  // transaction holds its connection, and the promise settles after commit
+  // or rollback, so that span is what the open-transaction count covers.
+  if (connection === 'pool' && typeof target.begin === 'function') {
+    const begin = target.begin.bind(sql);
+    target.begin = (...args: unknown[]) => {
+      const fnIndex = args.length - 1;
+      const fn = args[fnIndex];
+      if (typeof fn !== 'function') return begin(...args);
+      let opened = false;
+      const wrapped = instrumentScope((inner) => {
+        opened = true;
+        transactionOpened();
+        return (fn as ScopeFn)(inner);
+      });
+      const close = () => {
+        if (opened) transactionClosed();
+      };
+      return begin(...args.slice(0, fnIndex), wrapped).then(
+        (v) => {
+          close();
+          return v;
+        },
+        (e: unknown) => {
+          close();
+          throw e;
+        },
+      );
+    };
+  }
+
+  // A savepoint (drizzle's nested transaction) gets a fresh `sql` object as well.
+  if (connection === 'transaction' && typeof target.savepoint === 'function') {
+    const savepoint = target.savepoint.bind(sql);
+    target.savepoint = (...args: unknown[]) => {
+      const fnIndex = args.length - 1;
+      const fn = args[fnIndex];
+      if (typeof fn !== 'function') return savepoint(...args);
+      return savepoint(...args.slice(0, fnIndex), instrumentScope(fn as ScopeFn));
+    };
+  }
 }
 
 /**
@@ -142,7 +226,7 @@ function createPostgresHandle(connectionString: string): Handle {
     // else of connections — WS auth (a DB upsert with a 5s handshake budget),
     // HTTP requests, and the pollers all share this pool. The Supabase
     // transaction pooler multiplexes, so a larger client pool is fine.
-    max: 20,
+    max: DB_POOL_MAX,
     idle_timeout: 20,
     prepare: !isPooler,
     // Cap how long any single statement can run. Without this a query stuck on

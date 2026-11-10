@@ -71,6 +71,7 @@ import { initMergeQueueTriggers } from './services/mergeQueue/triggers.js';
 import { mergeQueueReconciler } from './services/mergeQueue/reconciler.js';
 import { loadExternalQueueSubmitRoutes } from './services/externalQueueSubmitRoute.js';
 import { dbWatchdog } from './services/dbWatchdog.js';
+import { dbInflightReporter } from './services/dbInflightReporter.js';
 import { githubHealthMonitor } from './services/githubHealthMonitor.js';
 
 const PORT = process.env.PORT || 4747;
@@ -272,6 +273,9 @@ async function main() {
   // policy restarts us — Railway does NOT healthcheck running deploys, so
   // without this the Jul 6 incident state persists until a human restarts it.
   dbWatchdog.init();
+  // Logs the queries and transactions that hold the pool for over 30s, so a
+  // pool that fills names its holders (2026-11-10).
+  dbInflightReporter.init();
 
   // GitHub outage detector: reads GitHub's status page once a minute and
   // watches the share of our own GitHub calls that fail. Feeds the in-app
@@ -514,6 +518,7 @@ async function main() {
     draining = true; // /health now answers 503 so the LB stops routing here
     console.log('Shutting down...');
     dbWatchdog.shutdown();
+    dbInflightReporter.shutdown();
     githubHealthMonitor.shutdown();
     cloudTaskPoller.shutdown();
     usageMeter.stop();

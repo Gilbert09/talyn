@@ -29,7 +29,8 @@ export function ownerScope(req: Request, res: Response, next: NextFunction): voi
         res.once('finish', resolve);
         res.once('close', resolve);
         next();
-      })
+      }),
+    `${req.method} ${req.originalUrl.split('?')[0]}`
   ).catch((err) => {
     if (!res.headersSent) next(err);
   });

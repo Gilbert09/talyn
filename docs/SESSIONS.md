@@ -2,6 +2,10 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## DB pool diagnostics (2026-11-10)
+
+On 2026-11-10 the 20-connection pool filled between 10:39 and 10:54 UTC. The loops wedged, every request waited, and `dbWatchdog` restarted the process. No query logged a statement timeout, and nothing could say what held the connections. Now the backend keeps an always-on in-flight registry (`db/inflight.ts`): each awaited query until it settles (operation and table only, never values), each open owner-scope transaction (labelled `METHOD /path`, no query string) and each advisory-lock transaction (by lock name). `instrumentEgress` now also wraps `begin` and `savepoint`, because postgres-js gives each transaction its own `sql` object. Before this, no query inside a transaction passed the meter, so the Debug panel's DB tiles now count request queries too. `services/dbInflightReporter.ts` runs every 15 s. It logs `[db-inflight]` lines for entries open over 30 s (then at most once a minute each, 15 lines and a "+N more" line per tick), and it warns when pool demand (pool queries plus open transactions) is above `DB_POOL_MAX`. The watchdog logs a summary on each failed probe and dumps the 15 oldest entries of each kind before it exits. A note on the warning: postgres-js can pipeline pool queries on a busy connection, so demand above the max is a strong sign of queueing, not an exact count.
+
 ## PostHog on mobile (2026-11-10)
 
 Tom's call: the mobile app now has PostHog product analytics, session replay, and error tracking, like web. This reverses the MVP rule of no analytics or replay SDK.

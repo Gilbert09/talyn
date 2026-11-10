@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { getPoolDbClient, isRealPostgres, type Database } from '../db/client.js';
+import { beginInflight, endInflight } from '../db/inflight.js';
 
 /**
  * Postgres advisory-lock guards for the side-effectful poll loops.
@@ -129,6 +130,26 @@ async function withDeadline<T>(
   }
 }
 
+type LockTx = Parameters<Parameters<Database['transaction']>[0]>[0];
+
+/** `db.transaction`, recorded in the in-flight registry from the moment the
+ *  transaction holds its connection until it commits or rolls back. */
+async function inLockTransaction<T>(
+  db: Database,
+  name: string,
+  fn: (tx: LockTx) => Promise<T>
+): Promise<T> {
+  let inflightId = null as number | null;
+  try {
+    return await db.transaction(async (tx) => {
+      inflightId = beginInflight('lock_tx', name);
+      return fn(tx);
+    });
+  } finally {
+    if (inflightId !== null) endInflight(inflightId);
+  }
+}
+
 export interface AdvisoryLockOptions {
   /** Hard ceiling on the tick's runtime. See DEFAULT_MAX_LOCK_HOLD_MS. */
   maxHoldMs?: number;
@@ -153,7 +174,7 @@ export async function tryWithAdvisoryLock<T>(
 ): Promise<LockOutcome<T>> {
   const key = advisoryLockKey(name).toString();
   const maxHoldMs = opts.maxHoldMs ?? DEFAULT_MAX_LOCK_HOLD_MS;
-  return db.transaction(async (tx) => {
+  return inLockTransaction(db, name, async (tx) => {
     // Postgres-side backstop, set per transaction rather than trusted from the
     // connection's startup parameters (a pooler may drop those). `set_config`
     // rather than a bare SET because SET takes no bind parameters. The
@@ -197,7 +218,7 @@ export async function withBlockingAdvisoryLock<T>(
   fn: () => Promise<T>
 ): Promise<T> {
   const key = advisoryLockKey(name).toString();
-  return db.transaction(async (tx) => {
+  return inLockTransaction(db, name, async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(${key}::bigint)`);
     return fn();
   });

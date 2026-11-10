@@ -11,9 +11,11 @@ import {
 import { TickGuard } from '../services/tickGuard.js';
 import { createTestDb } from './helpers/testDb.js';
 import { resetDbClient, type Database } from '../db/client.js';
+import { _resetInflight, inflightEntries, inflightSize } from '../db/inflight.js';
 
 afterEach(() => {
   resetDbClient();
+  _resetInflight();
 });
 
 describe('advisoryLockKey', () => {
@@ -265,5 +267,49 @@ describe('against real (pglite) Postgres — SQL validity', () => {
     } finally {
       await cleanup();
     }
+  });
+});
+
+describe('advisory lock in-flight entries', () => {
+  type Run = (db: Database, fn: () => Promise<unknown>) => Promise<unknown>;
+  const runs: Array<[string, Run]> = [
+    ['tryWithAdvisoryLock', (db, fn) => tryWithAdvisoryLock(db, 'loopScheduler:tick', fn)],
+    ['withBlockingAdvisoryLock', (db, fn) => withBlockingAdvisoryLock(db, 'loopScheduler:tick', fn)],
+  ];
+
+  it.each(runs)('%s holds a lock_tx entry while fn runs and removes it after', async (_name, run) => {
+    const { db } = mockDb([{ acquired: true }]);
+    let during: unknown[] = [];
+    await run(db, async () => {
+      during = inflightEntries().map((e) => [e.kind, e.label]);
+    });
+    expect(during).toEqual([['lock_tx', 'loopScheduler:tick']]);
+    expect(inflightSize()).toBe(0);
+  });
+
+  it.each(runs)('%s removes the entry when fn throws', async (_name, run) => {
+    const { db } = mockDb([{ acquired: true }]);
+    await expect(
+      run(db, async () => {
+        throw new Error('tick failed');
+      }),
+    ).rejects.toThrow('tick failed');
+    expect(inflightSize()).toBe(0);
+  });
+
+  it('removes the entry when the lock is held elsewhere', async () => {
+    const { db } = mockDb([{ acquired: false }]);
+    await tryWithAdvisoryLock(db, 'x', async () => 1);
+    expect(inflightSize()).toBe(0);
+  });
+
+  it('adds no entry when the transaction never opens', async () => {
+    const db = {
+      transaction: async () => {
+        throw new Error('connect timeout');
+      },
+    } as unknown as Database;
+    await expect(tryWithAdvisoryLock(db, 'x', async () => 1)).rejects.toThrow('connect timeout');
+    expect(inflightSize()).toBe(0);
   });
 });

@@ -6,6 +6,7 @@ import {
   runInScopedDb,
   type Database,
 } from './client.js';
+import { beginInflight, endInflight } from './inflight.js';
 
 /**
  * Owner-scoped database access enforces RLS on the privileged backend connection.
@@ -27,10 +28,12 @@ export function rlsEnforcementEnabled(): boolean {
 /**
  * Run `fn` with an owner-scoped DB handle. Nested calls reuse the active scope
  * (reentrant), so it's safe to wrap a handler whose services also call it.
+ * `label` names the transaction in the in-flight registry (`db/inflight.ts`).
  */
 export async function withOwnerScope<T>(
   ownerId: string,
-  fn: (db: Database) => Promise<T>
+  fn: (db: Database) => Promise<T>,
+  label = 'owner scope'
 ): Promise<T> {
   const existing = getScopedDb();
   if (existing) return fn(existing);
@@ -40,16 +43,24 @@ export async function withOwnerScope<T>(
     return fn(getPoolDbClient());
   }
 
-  return getPoolDbClient().transaction(async (tx) => {
-    const scoped = tx as unknown as Database;
-    // Set both the modern `request.jwt.claims` and the legacy dotted GUC —
-    // `public.talyn_uid()` prefers the dotted one and falls back to the JSON,
-    // exactly as `auth.uid()` does — then drop to the non-privileged role so
-    // RLS applies for the rest of this transaction.
-    const claims = JSON.stringify({ sub: ownerId, role: 'talyn_backend' });
-    await scoped.execute(sql`select set_config('request.jwt.claims', ${claims}, true)`);
-    await scoped.execute(sql`select set_config('request.jwt.claim.sub', ${ownerId}, true)`);
-    await scoped.execute(sql.raw('set local role talyn_backend'));
-    return runInScopedDb(scoped, () => fn(scoped));
-  });
+  // The entry starts when the transaction holds its connection. Before that
+  // the wait shows as an in-flight `begin` query.
+  let inflightId = null as number | null;
+  try {
+    return await getPoolDbClient().transaction(async (tx) => {
+      inflightId = beginInflight('owner_tx', label);
+      const scoped = tx as unknown as Database;
+      // Set both the modern `request.jwt.claims` and the legacy dotted GUC —
+      // `public.talyn_uid()` prefers the dotted one and falls back to the JSON,
+      // exactly as `auth.uid()` does — then drop to the non-privileged role so
+      // RLS applies for the rest of this transaction.
+      const claims = JSON.stringify({ sub: ownerId, role: 'talyn_backend' });
+      await scoped.execute(sql`select set_config('request.jwt.claims', ${claims}, true)`);
+      await scoped.execute(sql`select set_config('request.jwt.claim.sub', ${ownerId}, true)`);
+      await scoped.execute(sql.raw('set local role talyn_backend'));
+      return runInScopedDb(scoped, () => fn(scoped));
+    });
+  } finally {
+    if (inflightId !== null) endInflight(inflightId);
+  }
 }
