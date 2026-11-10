@@ -151,11 +151,12 @@ describe('pull request actions', () => {
   it('toggles the merge queue and auto-keep', async () => {
     mockActive.api.pullRequests.get.mockResolvedValue({ row: mine(), fresh: null });
     await render(<PullRequestDetailScreen />);
-    const queue = await screen.findByLabelText('Merge queue');
-    await fireEvent(queue, 'valueChange', true);
+    const queue = await screen.findByRole('switch', { name: 'Merge queue' });
+    expect(queue.props.accessibilityState).toMatchObject({ checked: false });
+    await fireEvent.press(queue);
     expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledWith('pr-one', true);
-    const keep = await screen.findByLabelText('Keep mergeable');
-    await fireEvent(keep, 'valueChange', true);
+    const keep = await screen.findByRole('switch', { name: 'Keep mergeable' });
+    await fireEvent.press(keep);
     expect(mockActive.api.pullRequests.setAutoKeepMergeable).toHaveBeenCalledWith('pr-one', true);
   });
   it('starts a fix with the agent picker when the workspace asks', async () => {

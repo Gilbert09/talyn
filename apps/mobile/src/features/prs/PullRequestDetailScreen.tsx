@@ -7,7 +7,8 @@ import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, View } from '
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { ScreenContainer } from '../../components/ScreenContainer';
-import { AppText, BottomBar, Button, Group, IconButton, Notice, Row, Toggle, useActionSheet, type SheetAction,
+import { PrStateBadge } from '../../components/Status';
+import { AppText, BottomBar, Button, IconButton, Notice, Row, useActionSheet, type SheetAction,
   type Symbol } from '../../components/UI';
 import { Heading, NativeText, openExternal, safeExternalUrl, StateNotice, workflowStyles as styles } from '../../components/Workflow';
 import { errorMessage, showActionError } from '../../lib/errors';
@@ -18,7 +19,8 @@ import { sans, useTheme, withAlpha, type Theme } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
 import { stackLabel } from '../../workflow/model';
 import { WEB_APP_URL } from '../settings/about';
-import { autoKeepLabel, fixAgentChoices, linkedTaskRunning, prActions, queueStateLabel, startPrFix, type FixOutcome } from './actions';
+import { AutomationToggles } from './AutomationToggles';
+import { fixAgentChoices, linkedTaskRunning, prActions, startPrFix, type FixOutcome } from './actions';
 import { CodeReviewSection, CodeReviewSelectionBar, CodeReviewStartSheet, useCodeReview } from './CodeReviewSection';
 import { failingBadge, groupChecks, type PrDetailTab } from './detailModel';
 import { pullsRoute } from './lists';
@@ -272,14 +274,19 @@ export function PullRequestDetailScreen() {
       {row && summary && actions && step ? <>
         <View style={local.header}>
           <Heading size="heading">{summary.title || 'Pull request'}</Heading>
-          <AppText variant="meta" tone="muted" numberOfLines={2}
-            accessibilityLabel={`${row.owner}/${row.repo} pull request ${row.number}, by ${summary.author || 'unknown author'}${updated ? `, updated ${relativeTimeLabel(updated, now)}` : ''}`}>
-            {`${row.owner}/${row.repo} #${row.number} · ${summary.author || 'Unknown author'}${updated ? ` · ${shortTime(updated, now)}` : ''}`}
-          </AppText>
+          <View style={local.meta}>
+            <PrStateBadge state={row.state} draft={summary.draft} />
+            <AppText variant="meta" tone="muted" numberOfLines={2} style={{ flexShrink: 1 }}
+              accessibilityLabel={`${row.owner}/${row.repo} pull request ${row.number}, by ${summary.author || 'unknown author'}${updated ? `, updated ${relativeTimeLabel(updated, now)}` : ''}`}>
+              {`${row.owner}/${row.repo} #${row.number} · ${summary.author || 'Unknown author'}${updated ? ` · ${shortTime(updated, now)}` : ''}`}
+            </AppText>
+          </View>
           {summary.headBranch ? <AppText variant="mono" tone="muted" numberOfLines={1} ellipsizeMode="middle" style={{ fontSize: 12 }}>
             {`${summary.headBranch} → ${summary.baseBranch}`}</AppText> : null}
         </View>
         <NextStepCard step={step} onChecks={() => selectTab('checks')} />
+        <AutomationToggles row={row} queue={Boolean(actions.queue)} autoKeep={Boolean(actions.autoKeep)} disabled={busyAny}
+          onQueue={toggleQueue} onAutoKeep={toggleAutoKeep} />
         {notice ? <Notice message={notice.message} tone="success">
           {notice.session ? <Row title={`Open ${notice.session.name}`} href={sessionRoute(notice.session.id)} chevron divider={false} /> : null}
         </Notice> : null}
@@ -291,14 +298,6 @@ export function PullRequestDetailScreen() {
           <Description body={(fresh ? fresh.body : description.data?.body) ?? ''}
             loading={!fresh && !description.data && (description.status === 'loading' || description.status === 'idle')} />
           {stack !== 'Standalone' && stack !== 'Unknown' ? <AppText variant="meta" tone="muted">Stack: {stack}</AppText> : null}
-          {actions.queue || actions.autoKeep ? <Group title="Automation">
-            {actions.queue ? <Row title="Merge queue" subtitle={queueStateLabel(row)} divider={actions.autoKeep}
-              trailing={<Toggle accessibilityLabel="Merge queue" value={row.mergeQueued} disabled={busyAny}
-                onValueChange={toggleQueue} trackColor={{ true: colors.primaryAction, false: colors.surface }} />} /> : null}
-            {actions.autoKeep ? <Row title="Keep mergeable" subtitle={autoKeepLabel(row)} divider={false}
-              trailing={<Toggle accessibilityLabel="Keep mergeable" value={row.autoKeepMergeable} disabled={busyAny}
-                onValueChange={toggleAutoKeep} trackColor={{ true: colors.primaryAction, false: colors.surface }} />} /> : null}
-          </Group> : null}
           {row.autoMergeState?.needsHuman ? <NativeText text={row.autoMergeState.needsHuman.reason} /> : null}
           {queued ? <QueueSection entry={row.mergeQueue} sessionName={row.session?.name} timeline={timeline} offline={offline} now={now} /> : null}
         </View> : null}
@@ -333,6 +332,7 @@ export function PullRequestDetailScreen() {
 const local = StyleSheet.create({
   content: { gap: 14 },
   header: { gap: 4 },
+  meta: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   card: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 12, gap: 8 },
   cardHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   failing: { gap: 2, paddingLeft: 30 },

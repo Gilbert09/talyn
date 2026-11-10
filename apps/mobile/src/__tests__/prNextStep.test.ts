@@ -121,11 +121,13 @@ describe('prNextStep, one row of the state table each', () => {
     expect(step.primary?.kind).toBe(kind);
   });
 
-  it('names up to three required failing checks, and counts from the live list', () => {
+  it('names up to three failing checks, required first, and counts from the live list', () => {
     const row = mine({}, { blockingReason: 'checks_failed', checks: { total: 6, passed: 1, failed: 5, inProgress: 0, skipped: 0 } });
     const step = next(row, { checkContexts: [check('lint', 'failure'), check('e2e', 'failure'), check('unit', 'failure'), check('types', 'failure'),
       check('optional', 'failure', false), check('build', 'success')] });
-    expect(step.verdict).toBe('4 checks are failing');
+    // Every failing check counts, as in the badge; the detail says how many block the merge.
+    expect(step.verdict).toBe('5 checks are failing');
+    expect(step.detail).toBe('4 are required and must pass before it can merge.');
     expect(step.failing).toEqual(['e2e', 'lint', 'types']);
     expect(next(mine({}, { blockingReason: 'checks_failed', checks: { total: 1, passed: 0, failed: 1, inProgress: 0, skipped: 0 } })).verdict).toBe('1 check is failing');
   });
@@ -157,7 +159,8 @@ describe('PR detail model', () => {
     expect(groups.running.map((item) => item.name)).toEqual(['run', 'wait']);
     expect(groups.passed).toHaveLength(1);
     expect(groups.skipped).toHaveLength(1);
-    expect(failingBadge(groups, 9)).toBe(1);
+    // The badge counts optional failures too, as the card and the list do.
+    expect(failingBadge(groups, 9)).toBe(2);
     expect(failingBadge(groupChecks([]), 3)).toBe(3);
   });
 

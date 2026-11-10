@@ -79,7 +79,7 @@ export function workbenchState(item: Workbench, row?: PRRow | null): SessionStat
 // the PR list draws it: review has its own pill.
 // ---------------------------------------------------------------------------
 
-export type PrIcon = 'check' | 'warning' | 'failed' | 'spinner' | 'merged' | 'closed' | 'review' | 'unknown' | 'protected' | 'clock' | 'behind' | 'person';
+export type PrIcon = 'check' | 'warning' | 'failed' | 'spinner' | 'merged' | 'closed' | 'review' | 'unknown' | 'protected' | 'clock' | 'behind' | 'person' | 'queue';
 export interface PrPillVariant { icon: PrIcon; label: string; tone: StatusTone }
 
 export interface PrStatusInput {
@@ -157,7 +157,7 @@ function externalVariant(input: PrStatusInput, checks: PRChecks): PrPillVariant 
       return prSaysWhy ? null : { icon: 'clock', label: 'Queue: not ready', tone: 'warning' };
     }
     case 'testing': return { icon: 'spinner', label: 'Queue: testing', tone: 'information' };
-    default: return { icon: 'clock', label: 'Queue: queued', tone: 'information' };
+    default: return { icon: 'queue', label: 'Queue: queued', tone: 'information' };
   }
 }
 

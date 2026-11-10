@@ -18,6 +18,8 @@ export const PR_ICON: Record<Exclude<PrIcon, 'spinner'>, Symbol> = {
   clock: { ios: 'clock', android: 'schedule' },
   behind: { ios: 'arrow.down.to.line', android: 'arrow_downward' },
   person: { ios: 'person', android: 'person' },
+  // A numbered list reads as "waiting in line", where a clock read as "slow".
+  queue: { ios: 'list.number', android: 'format_list_numbered' },
 };
 const PR_OPEN: Symbol = { ios: 'arrow.triangle.pull', android: 'fork_right' };
 const PR_DRAFT: Symbol = { ios: 'pencil.circle', android: 'draft' };
@@ -63,6 +65,18 @@ export function PrReviewPill({ decision, state }: { decision: PRReviewDecision |
   if (!variant) return null;
   return <Pill label={variant.label} tone={variant.tone as Tone} icon={PR_ICON[variant.icon as Exclude<PrIcon, 'spinner'>]}
     accessibilityLabel={`Review: ${variant.label}`} />;
+}
+
+/** Open, Draft, Merged or Closed, with GitHub's colours: what a person checks first on a PR page. */
+export function prStateLabel(state: PRState | string, draft?: boolean): string {
+  if (state === 'merged') return 'Merged';
+  if (state === 'closed') return 'Closed';
+  return draft ? 'Draft' : 'Open';
+}
+export function PrStateBadge({ state, draft }: { state: PRState | string; draft?: boolean }) {
+  const label = prStateLabel(state, draft);
+  const icon = state === 'merged' ? PR_ICON.merged : state === 'closed' ? PR_ICON.closed : draft ? PR_DRAFT : PR_OPEN;
+  return <Pill label={label} tone={prNumberTone(state, draft) as Tone} icon={icon} accessibilityLabel={`State: ${label}`} />;
 }
 
 /** A mono `#123` tinted by PR state, like web `PrPill`. */

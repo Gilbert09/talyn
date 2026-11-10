@@ -122,11 +122,17 @@ export function prNextStep(input: NextStepInput): NextStep {
       return step('needs_human', 'A person must approve a check', gates.length ? `${[...new Set(gates)].join(', ')}. No agent can clear it.`
         : 'No agent can clear it.', 'warning', 'person', OPEN);
     }
-    const required = failingChecks(input.checkContexts).filter((check) => check.required !== false);
-    const failingCount = required.length || summary.checks?.failed || 0;
+    // Every failing check, the number the Checks tab badge and list show; the detail says how many block the merge.
+    const failing = failingChecks(input.checkContexts);
+    const required = failing.filter((check) => check.required !== false);
+    const failingCount = failing.length || summary.checks?.failed || 0;
     if ((reason === 'checks_failed' || summary.ciStatus === 'failing_required') && failingCount > 0) {
-      return step('checks_failing', `${plural(failingCount, 'check is', 'checks are')} failing`, 'Required checks must pass before it can merge.',
-        'danger', 'failed', fix('Fix with agent'), required.slice(0, 3).map((check) => check.name));
+      const optional = failing.length - required.length;
+      const detail = failing.length && optional > 0
+        ? `${plural(required.length, 'is', 'are')} required and must pass before it can merge.`
+        : 'Required checks must pass before it can merge.';
+      return step('checks_failing', `${plural(failingCount, 'check is', 'checks are')} failing`, detail,
+        'danger', 'failed', fix('Fix with agent'), [...required, ...failing.filter((check) => check.required === false)].slice(0, 3).map((check) => check.name));
     }
     if (reason === 'changes_requested' || decision === 'CHANGES_REQUESTED') {
       const who = changesRequestedBy(input.recentReviews);

@@ -51,6 +51,34 @@ const menuItems = () => {
 };
 
 describe('PR detail next step', () => {
+  it.each([
+    [{ state: 'open' }, {}, 'Open'],
+    [{ state: 'open' }, { draft: true }, 'Draft'],
+    [{ state: 'merged' }, {}, 'Merged'],
+    [{ state: 'closed' }, {}, 'Closed'],
+  ] as const)('shows the PR state %j %j as %s', async (patch, s, label) => {
+    serve(mine(patch as Partial<PRRow>, s));
+    await render(<PullRequestDetailScreen />);
+    expect(await screen.findByLabelText(`State: ${label}`)).toBeVisible();
+  });
+
+  it('counts optional failures in the Checks badge, as the card does', async () => {
+    const row = mine({}, { blockingReason: 'checks_failed', ciStatus: 'failing_required', checks: { total: 3, passed: 0, failed: 3, inProgress: 0, skipped: 0 } });
+    serve(row, { checkContexts: [check('lint', 'failure'), check('e2e', 'failure'), check('docs', 'failure', false)] });
+    await render(<PullRequestDetailScreen />);
+    expect(await screen.findByText('3 checks are failing')).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Checks, 3' })).toBeVisible();
+  });
+
+  it('draws the queue and keep-mergeable switches as buttons that name their state', async () => {
+    serve(mine({ mergeQueued: true, mergeQueue: { status: 'queued', position: 4 } as PRRow['mergeQueue'], autoKeepMergeable: true }));
+    await render(<PullRequestDetailScreen />);
+    const queue = await screen.findByRole('switch', { name: 'Merge queue' });
+    expect(queue.props.accessibilityState).toMatchObject({ checked: true });
+    expect(queue.props.accessibilityValue).toEqual({ text: 'Queued #4' });
+    expect(screen.getByRole('switch', { name: 'Keep mergeable' }).props.accessibilityValue).toEqual({ text: 'Keeping mergeable' });
+  });
+
   it('draws the list copy at once and holds Merge until the current copy loads', async () => {
     const row = mine();
     mockActive.api.pullRequests.list.mockResolvedValue([row]);

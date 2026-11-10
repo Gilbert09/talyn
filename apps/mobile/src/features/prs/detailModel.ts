@@ -29,9 +29,12 @@ export function groupChecks(contexts: PRCheckContext[] | undefined, blockingReas
   };
 }
 
-/** The Checks tab badge: failing checks that block the merge. */
+/**
+ * The Checks tab badge: every failing check, the same number the next-step card states and the tab lists.
+ * Optional failures count too; the tab marks them "Not required".
+ */
 export function failingBadge(groups: CheckGroups, failedCount: number): number {
-  return groups.failing.length ? groups.failing.filter((item) => !item.optional).length : failedCount;
+  return groups.failing.length || failedCount;
 }
 
 export type ReviewItem =
