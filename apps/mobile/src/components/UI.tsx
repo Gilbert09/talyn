@@ -2,7 +2,7 @@ import { Link, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useCallback, useContext, useEffect, useState } from 'react';
 import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
-import { ActionSheetIOS, ActivityIndicator, Alert, BackHandler, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
+import { ActionSheetIOS, ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
   type StyleProp, type TextProps, type TextStyle, type ViewStyle } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
@@ -66,8 +66,8 @@ export function Button({ title, onPress, disabled = false, accessibilityLabel, v
     accessibilityState={{ disabled, busy: loading }} disabled={disabled} onPress={onPress}
     onPressIn={() => setPressed(true)} onPressOut={() => setPressed(false)}
     style={[styles.button, size === 'sm' && styles.buttonSmall, { backgroundColor: background, opacity: disabled ? 0.45 : pressed ? 0.75 : 1 }]}>
-    {loading ? <ActivityIndicator size="small" color={foreground} /> : icon ? <SymbolView name={icon} size={16} tintColor={foreground} /> : null}
-    <Text style={[size === 'sm' ? styles.buttonTextSmall : styles.buttonText, { color: foreground }]}>{title}</Text>
+    {loading ? <ActivityIndicator size="small" color={foreground} /> : icon ? <SymbolView name={icon} size={16} tintColor={foreground} style={styles.buttonIcon} /> : null}
+    <Text numberOfLines={1} textBreakStrategy="simple" style={[size === 'sm' ? styles.buttonTextSmall : styles.buttonText, { color: foreground }]}>{title}</Text>
   </Pressable>;
 }
 export function IconButton({ label, symbol, onPress, onLongPress, longPressLabel, disabled = false, tone, filled = false, size = 20 }: {
@@ -107,13 +107,15 @@ interface RowProps {
   disabled?: boolean;
   divider?: boolean;
   titleLines?: number;
+  /** Explanations need room; list rows keep one line. */
+  subtitleLines?: number;
   /** A secondary gesture, e.g. a menu of actions. Screen readers get it as a named action. */
   onLongPress?(): void;
   longPressLabel?: string;
 }
 /** A flat, divider-separated list row. With `href` it is a link; with `onPress` it is a button. */
 export function Row({ title, subtitle, leading, leadingWidth, trailing, children, chevron = false, href, onPress, accessibilityLabel,
-  accessibilityRole, selected, disabled = false, divider = true, titleLines = 2, onLongPress, longPressLabel = 'Show actions' }: RowProps) {
+  accessibilityRole, selected, disabled = false, divider = true, titleLines = 2, subtitleLines = 1, onLongPress, longPressLabel = 'Show actions' }: RowProps) {
   const c = useTheme();
   const [pressed, setPressed] = useState(false);
   const interactive = Boolean(href || onPress);
@@ -125,7 +127,7 @@ export function Row({ title, subtitle, leading, leadingWidth, trailing, children
         {trailing}
         {chevron ? <SymbolView name={{ ios: 'chevron.right', android: 'chevron_right' }} size={14} tintColor={c.muted} /> : null}
       </View>
-      {typeof subtitle === 'string' ? <AppText variant="meta" tone="muted" numberOfLines={1}>{subtitle}</AppText> : subtitle}
+      {typeof subtitle === 'string' ? <AppText variant="meta" tone="muted" numberOfLines={subtitleLines}>{subtitle}</AppText> : subtitle}
       {children}
     </View>
   </View>;
@@ -317,13 +319,11 @@ export function useActionSheet() {
 
 export function ActionSheet({ request, onClose }: { request: SheetRequest; onClose(): void }) {
   const c = useTheme();
-  // An absolute child ignores the screen's padding, so the sheet adds the navigation bar inset itself.
+  // A modal like PickerSheet, so the backdrop covers the header too. It draws under the system bars, so the
+  // sheet adds the navigation bar inset itself. Back closes it through onRequestClose.
   const bottom = useContext(SafeAreaInsetsContext)?.bottom ?? 0;
-  useEffect(() => {
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => { onClose(); return true; });
-    return () => subscription.remove();
-  }, [onClose]);
-  return <View style={StyleSheet.absoluteFill}>
+  return <Modal visible transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
+    <View style={StyleSheet.absoluteFill}>
     <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose}
       style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
     <View accessibilityViewIsModal style={[styles.sheet, { backgroundColor: c.elevated, borderColor: c.border, paddingBottom: 24 + bottom }]}>
@@ -353,7 +353,8 @@ export function ActionSheet({ request, onClose }: { request: SheetRequest; onClo
         <Text style={[type.body, sans(600), { color: c.text }]}>Cancel</Text>
       </Pressable>
     </View>
-  </View>;
+    </View>
+  </Modal>;
 }
 
 /**
@@ -431,6 +432,8 @@ const styles = StyleSheet.create({
   shrink: { flexShrink: 1, textAlign: 'auto', writingDirection: 'auto' },
   sectionLabel: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 4, paddingTop: 16, paddingBottom: 6 },
   button: { minHeight: 44, borderRadius: radius.md, paddingVertical: 10, paddingHorizontal: 16, flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center' },
+  // A fixed box: on Android the symbol view otherwise measures wider than its glyph and squeezes the label.
+  buttonIcon: { width: 16, height: 16 },
   buttonSmall: { minHeight: 36, paddingVertical: 6, paddingHorizontal: 12 },
   buttonText: { fontSize: 15, lineHeight: 20, ...sans(600), textAlign: 'center', flexShrink: 1 },
   buttonTextSmall: { fontSize: 13, lineHeight: 18, ...sans(600), textAlign: 'center', flexShrink: 1 },

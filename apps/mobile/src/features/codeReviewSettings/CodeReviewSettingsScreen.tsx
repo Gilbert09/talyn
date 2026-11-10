@@ -79,7 +79,7 @@ export function CodeReviewSettingsScreen() {
 
     <Step n={1} title="Review every pull request" badge={settings.autoReview ? 'On' : 'Off'}>
       <ToggleRow title="Review my new pull requests automatically" value={settings.autoReview} disabled={disabled} divider={false}
-        detail="Every pull request you open in a watched repository is reviewed as you push. Part of Unlimited."
+        detail="Every pull request you open in a watched repository is reviewed as you push. Part of Pro and Max."
         onChange={(value) => { void save({ autoReview: value }, 'automatic reviews'); }} />
     </Step>
 

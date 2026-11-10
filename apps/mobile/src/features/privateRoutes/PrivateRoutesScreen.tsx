@@ -118,7 +118,7 @@ function Body({ workspaceId, connector, offline, loading, onConnector, refresh }
     }
   };
 
-  const confirmDisconnect = () => Alert.alert('Disconnect Tailscale?', 'Sandboxes lose access to every private destination. Talyn reports success only after YAS removes the connector.', [
+  const confirmDisconnect = () => Alert.alert('Disconnect Tailscale?', 'Sandboxes lose access to every private destination. Talyn reports success only after the connector is removed.', [
     { text: 'Cancel', style: 'cancel', isPreferred: true },
     { text: 'Disconnect', style: 'destructive', onPress: () => { void disconnect(); } },
   ]);
@@ -126,14 +126,14 @@ function Body({ workspaceId, connector, offline, loading, onConnector, refresh }
   return <>
     <Group title="Tailscale connector">
       <Row title={status?.label ?? (loading ? 'Checking connection' : 'Not connected')}
-        subtitle={status?.detail ?? 'Connect this workspace to a tailnet before you add destinations.'} divider={Boolean(connector)}>
+        subtitle={status?.detail ?? 'Connect this workspace to a tailnet before you add destinations.'} subtitleLines={4} divider={Boolean(connector)}>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
           {!connector || connector.status === 'needs_login'
             ? <Button title="Connect Tailscale" size="sm" loading={busy} disabled={disabled} onPress={() => { void connect(); }} /> : null}
           {connector ? <Button title="Refresh" size="sm" variant="secondary" disabled={busy} onPress={() => { void refresh(); if (connected) void peers.refresh(); }} /> : null}
         </View>
       </Row>
-      {connector ? <Row title="Disconnect" subtitle="Talyn reports success only after YAS removes the connector." divider={false}>
+      {connector ? <Row title="Disconnect" subtitle="Talyn reports success only after the connector is removed." subtitleLines={3} divider={false}>
         <View style={{ marginTop: 8, alignItems: 'flex-start' }}>
           <Button title="Disconnect" size="sm" variant="destructive" disabled={disabled} onPress={confirmDisconnect} />
         </View>

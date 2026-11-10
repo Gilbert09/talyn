@@ -67,7 +67,7 @@ export function SettingsScreen() {
         {selected ? <>
           <Row title="Repositories" subtitle="Watched repositories and box sizes" chevron href="/repositories" />
           <Row title="GitHub" subtitle={github === 'connected' ? 'Manage the GitHub App and its access' : 'Connect GitHub to watch repositories'}
-            chevron href={github === 'connected' ? '/repositories' : '/onboarding/github'}
+            chevron href="/settings/github"
             trailing={github === 'unknown' ? undefined : <AppText variant="meta" tone={github === 'connected' ? 'success' : 'warning'}>{githubStateLabel(github)}</AppText>}
             accessibilityLabel={`GitHub. ${githubStateLabel(github) || 'Status unknown'}.`} />
           <Row title="Agents" subtitle="Connect Claude or Codex" chevron href="/agents" divider={false} />

@@ -149,7 +149,8 @@ function TeamCard({ team, busy, offline, onStart, onChanged, openSheet, toast }:
   return <Card>
     <View style={styles.header}>
       <AppText accessibilityRole="header" variant="rowTitle" numberOfLines={1} style={{ flexShrink: 1 }}>{view.name}</AppText>
-      <Pill label={view.pill.label} tone={view.pill.tone} />
+      {/* Pill pins itself to the top of a row; centre it on the name. */}
+      <View style={{ alignSelf: 'center' }}><Pill label={view.pill.label} tone={view.pill.tone} /></View>
       <View style={{ flex: 1 }} />
       <IconButton label={`Actions for ${view.name}`} symbol={{ ios: 'ellipsis', android: 'more_horiz' }} onPress={openMenu} />
     </View>

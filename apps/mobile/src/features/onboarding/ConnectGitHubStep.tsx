@@ -18,7 +18,9 @@ type Connection = ReturnType<typeof useGithubConnection>;
  * and returns to the app. The connection is checked again when the browser
  * closes, when the return link arrives and when the app comes back.
  */
-export function ConnectGitHubStep({ workspaceId, connection }: { workspaceId: string; connection: Connection }) {
+export function ConnectGitHubStep({ workspaceId, connection, source = 'onboarding' }: {
+  workspaceId: string; connection: Connection; source?: 'onboarding' | 'settings';
+}) {
   const c = useTheme();
   const offline = useNetwork() === 'offline';
   const [connecting, setConnecting] = useState(false);
@@ -35,7 +37,7 @@ export function ConnectGitHubStep({ workspaceId, connection }: { workspaceId: st
     setError(null);
     try {
       // The activation funnel reads signup, then this, then onboarding_completed.
-      trackEvent('github_connect_started', { source: 'onboarding' });
+      trackEvent('github_connect_started', { source });
       await openGithubAppFlow(workspaceId, 'connect');
     } catch (failure) {
       setError(errorMessage(failure, 'Could not start the GitHub App install.'));
@@ -51,7 +53,9 @@ export function ConnectGitHubStep({ workspaceId, connection }: { workspaceId: st
 
   return <View style={styles.stack}>
     <AppText variant="body" tone="muted">
-      Talyn tracks your pull requests, reviews, and CI status through GitHub. Connect your account to continue. A browser window opens to authorize, then you return here.
+      {source === 'settings'
+        ? 'Talyn tracks your pull requests, reviews, and CI status through the Talyn GitHub App. Check which accounts have it, or add it to another one.'
+        : 'Talyn tracks your pull requests, reviews, and CI status through GitHub. Connect your account to continue. A browser window opens to authorize, then you return here.'}
     </AppText>
     <View style={[styles.card, { backgroundColor: c.paper, borderColor: c.border }]}>
       <View style={[styles.icon, { backgroundColor: c.surface }]}>

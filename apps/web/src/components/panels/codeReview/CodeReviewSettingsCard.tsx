@@ -151,7 +151,7 @@ export function CodeReviewSettingsCard() {
           onChange={(next) => void save({ autoReview: next }, 'automatic reviews')}
         >
           Every pull request you open in a watched repository is reviewed as you push. Part
-          of Unlimited.
+          of Pro and Max.
         </Toggle>
       </Step>
 
