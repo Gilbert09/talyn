@@ -35,7 +35,6 @@ import {
   includedHoursText,
   leftPercent,
   maxNeedsPortal,
-  maxPricesOf,
   pricingOf,
   type UsageBillingStatus,
 } from '../../../lib/usageBilling';
@@ -49,7 +48,7 @@ import { Input } from '../../ui/input';
 import { Select } from '../../ui/select';
 import { SettingsPage } from '../../ui/settings';
 import { OrderHistory, formatRenewalDate } from './BillingOrderHistory';
-import { AnnualSwitch } from './AnnualSwitch';
+import { PlanCards } from '../../billing/PlanCards';
 
 const hours = includedHoursText;
 
@@ -114,6 +113,10 @@ export function PlanUsageSettings({ status }: { status: UsageBillingStatus }) {
       <PlanCard status={status} busy={busy} onPortal={openPortal} />
       {error && <p className="text-xs text-destructive">{error}</p>}
       <UsageCard status={status} />
+      <div>
+        <SectionTitle>Plans</SectionTitle>
+        <PlanCards status={status} placement="plan_page" />
+      </div>
       {creditsAllowed && <CreditsCard status={status} busy={busy} onBuy={buyCredits} waiting={waiting === 'credits'} />}
       <details className="rounded-lg border bg-card p-3" data-attr="usage-explanation">
         <summary className="cursor-pointer text-[13px] font-medium">How usage is counted</summary>
@@ -152,7 +155,6 @@ function PlanCard({
   busy: string | null;
   onPortal: () => void;
 }) {
-  const openUpgrade = useBillingStore((s) => s.setUpgradeModalOpen);
   const openSettings = useWorkspaceStore((s) => s.openSettings);
   const pricing = pricingOf(status);
   const { tier } = status;
@@ -160,10 +162,7 @@ function PlanCard({
   const teamPaid = status.planSource === 'team';
   const pastDue = status.subscriptionStatus === 'past_due';
   const canManage = tier !== 'free' && !comped && !teamPaid;
-  const canMove = tier === 'legacy_pro' && !teamPaid;
   const maxViaPortal = maxNeedsPortal(status);
-  const canUpgradeToMax =
-    tier === 'pro' && status.planSource === 'subscription' && maxPricesOf(status) != null && !maxViaPortal;
   const prices = isSellableTier(tier) ? sellableTierPrices(tier, pricing) : null;
   const price =
     tier === 'legacy_pro'
@@ -226,38 +225,23 @@ function PlanCard({
           run out.
         </p>
       )}
-      <AnnualSwitch status={status} placement="plan_page" />
-      <div className="flex flex-wrap items-center gap-2">
-        {tier === 'free' || canMove || canUpgradeToMax ? (
-          <Button size="sm" data-attr="plan-upgrade" onClick={() => openUpgrade(true, canUpgradeToMax ? 'upgrade' : null)}>
-            {canMove ? 'Move to Pro' : canUpgradeToMax ? 'Upgrade to Max' : 'Upgrade'}
-          </Button>
-        ) : (
-          (canManage || teamPaid) && (
-            <Button
-              size="sm"
-              data-attr="plan-manage-billing"
-              onClick={teamPaid ? () => openSettings('teams') : onPortal}
-              disabled={busy !== null}
-            >
-              {busy === 'portal' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <CreditCard className="h-3.5 w-3.5" />
-              )}
-              Manage billing
-            </Button>
-          )
-        )}
-        {(canMove || canUpgradeToMax) && canManage && (
-          <Button variant="link" size="sm" data-attr="plan-manage-billing" onClick={onPortal} disabled={busy !== null}>
+      {(canManage || teamPaid) && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            data-attr="plan-manage-billing"
+            onClick={teamPaid ? () => openSettings('teams') : onPortal}
+            disabled={busy !== null}
+          >
+            {busy === 'portal' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <CreditCard className="h-3.5 w-3.5" />
+            )}
             Manage billing
           </Button>
-        )}
-        <Button variant="link" size="sm" data-attr="plan-compare" onClick={() => { trackEvent('compare_plans_opened', { where: 'plan_page' }); openUpgrade(true, 'compare_plans'); }}>
-          Compare plans
-        </Button>
-      </div>
+        </div>
+      )}
     </Card>
   );
 }
