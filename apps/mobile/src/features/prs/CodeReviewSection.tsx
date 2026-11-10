@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import { useMobileRuntime } from '../../auth/AuthProvider';
-import { AppText, BottomBar, Button, Disclosure, Dot, Notice, Pill, SectionLabel, Segmented, toneColor, type SheetRequest,
+import { AppText, BottomBar, Button, Disclosure, Dot, Notice, Pill, SectionLabel, Segmented, SheetModal, toneColor, type SheetRequest,
   type Tone } from '../../components/UI';
 import { openExternal, safeExternalUrl } from '../../components/Workflow';
 import { errorMessage, showActionError } from '../../lib/errors';
@@ -130,6 +130,21 @@ function PresetPicker({ value, onChange }: { value: CodeReviewPreset; onChange(p
   </View>;
 }
 
+/** Start a review: the depth, what it means, and the start button. Opened from the PR menu and the Findings tab. */
+export function CodeReviewStartSheet({ review: cr, visible, onClose, onStarted }: {
+  review: CodeReviewController; visible: boolean; onClose(): void; onStarted(): void;
+}) {
+  const start = async () => { await cr.start(); onClose(); onStarted(); };
+  return <SheetModal visible={visible} onClose={onClose} title="Review with Talyn">
+    <View style={local.sheet}>
+      <AppText variant="meta" tone="muted">Findings show up here, in Talyn. Nothing is posted to GitHub unless you post it.</AppText>
+      <PresetPicker value={cr.preset} onChange={cr.setPreset} />
+      <Button title="Start review" icon={{ ios: 'text.magnifyingglass', android: 'manage_search' }}
+        loading={cr.busy === 'start'} disabled={cr.busy !== null} onPress={() => void start()} />
+    </View>
+  </SheetModal>;
+}
+
 function Progress({ fraction, label }: { fraction: number | null; label: string }) {
   const c = useTheme();
   return <View accessibilityRole="progressbar" accessibilityLabel={label}
@@ -221,8 +236,10 @@ function FindingCard({ finding, review, names, expanded, onToggleExpanded, openS
   </View>;
 }
 
-/** The PR detail's code review: start one, follow it, read and act on its findings. */
-export function CodeReviewSection({ review: cr, open, openSheet }: { review: CodeReviewController; open: boolean; openSheet(request: SheetRequest): void }) {
+/** The PR detail's Findings tab: follow a review, read and act on its findings. Starting one opens the start sheet. */
+export function CodeReviewSection({ review: cr, open, openSheet, onReviewRequest }: {
+  review: CodeReviewController; open: boolean; openSheet(request: SheetRequest): void; onReviewRequest(): void;
+}) {
   const c = useTheme();
   const { review, findings, groups, running, fixing, post, busy } = cr;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -247,16 +264,14 @@ export function CodeReviewSection({ review: cr, open, openSheet }: { review: Cod
 
   if (!review) {
     return <View style={local.section}>
-      <SectionLabel title="Code review" />
       {cr.state.status === 'loading' && !cr.state.data ? <AppText variant="meta" tone="muted">Loading the review.</AppText> : open ? <>
         <View style={[local.panel, { borderColor: c.border, backgroundColor: c.paper }]}>
           <AppText variant="rowTitle">Have Talyn review this pull request</AppText>
           <AppText variant="meta" tone="muted">Findings show up here, in Talyn.</AppText>
         </View>
-        <PresetPicker value={cr.preset} onChange={cr.setPreset} />
         <View style={{ alignSelf: 'flex-start' }}>
           <Button size="sm" title="Review this pull request" icon={{ ios: 'text.magnifyingglass', android: 'manage_search' }}
-            loading={busy === 'start'} disabled={disabled} onPress={() => void cr.start()} />
+            loading={busy === 'start'} disabled={disabled} onPress={onReviewRequest} />
         </View>
       </> : <AppText variant="meta" tone="muted">This pull request was not reviewed.</AppText>}
     </View>;
@@ -273,7 +288,6 @@ export function CodeReviewSection({ review: cr, open, openSheet }: { review: Cod
   ].filter(Boolean).join(' · ');
   const stale = review.staleForHead && !running;
   return <View style={local.section}>
-    <SectionLabel title="Code review" trailing={review.openCount ? <AppText variant="caption" tone="muted">{review.openCount}</AppText> : undefined} />
     <View style={[local.panel, { borderColor: stale ? withAlpha(c.warning, 0.45) : c.border,
       backgroundColor: stale ? withAlpha(c.warning, c.mode === 'dark' ? 0.08 : 0.05) : c.paper }]}>
       <AppText variant="rowTitle" accessibilityLiveRegion="polite">{running ? progress.label : reviewHeadline(review)}</AppText>
@@ -290,7 +304,7 @@ export function CodeReviewSection({ review: cr, open, openSheet }: { review: Cod
           {fixable.length > 0 ? <Button variant="secondary" size="sm" title={`Fix all ${fixable.length}`} icon={{ ios: 'wrench.and.screwdriver', android: 'build' }}
             loading={busy === 'fix'} disabled={disabled} onPress={() => cr.fix(fixable)} /> : null}
           {open ? <Button variant={review.staleForHead ? 'primary' : 'secondary'} size="sm" title={review.staleForHead ? 'Review this commit' : 'Review again'}
-            icon={{ ios: 'arrow.counterclockwise', android: 'refresh' }} loading={busy === 'start'} disabled={disabled} onPress={() => void cr.start()} /> : null}
+            icon={{ ios: 'arrow.counterclockwise', android: 'refresh' }} loading={busy === 'start'} disabled={disabled} onPress={onReviewRequest} /> : null}
         </>}
       </View>
       {post.disabledReason && groups.length > 0 && !running ? <AppText variant="caption" tone="muted">{post.disabledReason}</AppText> : null}
@@ -359,6 +373,7 @@ export function CodeReviewSection({ review: cr, open, openSheet }: { review: Cod
 
 const local = StyleSheet.create({
   section: { gap: 10 },
+  sheet: { gap: 12, paddingHorizontal: 16, paddingTop: 4, paddingBottom: 16 },
   panel: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, padding: 12, gap: 6 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingTop: 4 },
   track: { height: 4, borderRadius: 2, overflow: 'hidden' },

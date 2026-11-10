@@ -2,7 +2,7 @@ import type { PRRow } from '@talyn/client/native';
 import * as Clipboard from 'expo-clipboard';
 import { Alert, Share } from 'react-native';
 
-import { useActionSheet, useToast, type Symbol } from '../../components/UI';
+import { useActionSheet, useToast, type SheetAction, type Symbol } from '../../components/UI';
 import { openExternal, safeExternalUrl } from '../../components/Workflow';
 import { PR_LINK_ACTION_LABEL, prCopyText, prLinkActions, type PrLinkActionKind } from './copyLink';
 
@@ -20,7 +20,7 @@ export function prLinkTarget(row: Pick<PRRow, 'number' | 'owner' | 'repo'> & { s
   return url ? { title: row.summary.title, url, ref: `${row.owner}/${row.repo} #${row.number}` } : null;
 }
 
-/** Copy, share and open for a PR. Render `sheet` and `toast` last inside the screen. */
+/** Copy, share and open for a PR. `actions` gives the same items for a bigger menu. Render `sheet` and `toast` last inside the screen. */
 export function usePrLinkMenu() {
   const sheet = useActionSheet();
   const toast = useToast();
@@ -33,11 +33,12 @@ export function usePrLinkMenu() {
     else if (kind === 'share') void Share.share({ message: target.url, url: target.url }).catch(() => {});
     else openExternal(target.url);
   };
+  const actions = (target: PrLinkTarget | null): SheetAction[] => target ? prLinkActions(target.url).map((kind) => ({
+    label: PR_LINK_ACTION_LABEL[kind], icon: ICONS[kind], onPress: () => run(kind, target),
+  })) : [];
   const open = (target: PrLinkTarget | null) => {
     if (!target) return;
-    sheet.open({ title: target.title || 'Pull request', message: target.ref, actions: prLinkActions(target.url).map((kind) => ({
-      label: PR_LINK_ACTION_LABEL[kind], icon: ICONS[kind], onPress: () => run(kind, target),
-    })) });
+    sheet.open({ title: target.title || 'Pull request', message: target.ref, actions: actions(target) });
   };
-  return { open, copyLink: (target: PrLinkTarget | null) => { if (target) copy('copy_link', target); }, sheet: sheet.sheet, toast: toast.element };
+  return { open, actions, copyLink: (target: PrLinkTarget | null) => { if (target) copy('copy_link', target); }, sheet: sheet.sheet, toast: toast.element };
 }

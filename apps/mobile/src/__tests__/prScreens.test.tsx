@@ -212,10 +212,15 @@ describe('code review on PR detail', () => {
     defaultPreset: 'standard', pullRequest: { owner: 'example', repo: 'project', number: 42 },
   });
 
-  it('starts a review with the chosen depth', async () => {
+  const openFindings = async () => fireEvent.press(await screen.findByRole('tab', { name: /^Findings/ }));
+
+  it('starts a review with the chosen depth from the review sheet', async () => {
     await render(<PullRequestDetailScreen />);
+    // No preset picker on the page itself.
+    expect(screen.queryByRole('tab', { name: 'Deep' })).toBeNull();
+    await fireEvent.press(await screen.findByRole('button', { name: 'Review with Talyn' }));
     await fireEvent.press(await screen.findByRole('tab', { name: 'Deep' }));
-    await fireEvent.press(screen.getByRole('button', { name: 'Review this pull request' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Start review' }));
     await waitFor(() => expect(mockActive.api.pullRequests.startCodeReview).toHaveBeenCalledWith('pr-one', { preset: 'deep' }));
   });
 
@@ -223,6 +228,7 @@ describe('code review on PR detail', () => {
     withFindings();
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     await render(<PullRequestDetailScreen />);
+    await openFindings();
     expect(await screen.findByText('Must fix 1')).toBeVisible();
     expect(screen.getByText('Should fix 1')).toBeVisible();
     expect(screen.getByRole('button', { name: /Null `user` is read\. src\/app\.ts:12, Logic and Security agree/ })).toBeVisible();
@@ -241,6 +247,7 @@ describe('code review on PR detail', () => {
   it('fixes the ticked findings from the bottom bar', async () => {
     withFindings();
     await render(<PullRequestDetailScreen />);
+    await openFindings();
     await fireEvent.press(await screen.findByRole('checkbox', { name: 'Select "Retry loop" to fix' }));
     expect(screen.getByText('1 selected')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Post 1 to PR' })).toBeVisible();
@@ -251,6 +258,7 @@ describe('code review on PR detail', () => {
   it('dismisses with a reason', async () => {
     withFindings();
     await render(<PullRequestDetailScreen />);
+    await openFindings();
     await fireEvent.press(await screen.findByRole('button', { name: 'Dismiss' }));
     await fireEvent.press(await screen.findByRole('button', { name: 'Not a problem' }));
     await waitFor(() => expect(mockActive.api.pullRequests.dismissCodeReviewFinding).toHaveBeenCalledWith('pr-one', 'finding-one', 'not_a_problem'));
@@ -260,6 +268,7 @@ describe('code review on PR detail', () => {
     mockActive.api.pullRequests.codeReview.mockResolvedValue({ review: review({ phase: 'reviewing', runsDone: 1 }), findings: [finding()],
       defaultPreset: 'standard', pullRequest: { owner: 'example', repo: 'project', number: 42 } });
     await render(<PullRequestDetailScreen />);
+    await openFindings();
     expect(await screen.findByRole('button', { name: 'Post to PR. Wait for the review to finish before you post.' })).toBeDisabled();
     await fireEvent.press(screen.getByRole('button', { name: 'Stop' }));
     await waitFor(() => expect(mockActive.api.pullRequests.cancelCodeReview).toHaveBeenCalledWith('pr-one'));
@@ -270,6 +279,7 @@ describe('code review on PR detail', () => {
       mergeQueue: { status: 'blocked', position: 3, blockedCode: 'agent_needs_human', reason: 'A person must approve.' } }), fresh: null });
     await render(<PullRequestDetailScreen />);
     expect(await screen.findByText('#3 · Waiting on you. The queue carries on by itself once this clears.')).toBeVisible();
+    expect(screen.getByText('Merge queue stopped')).toBeVisible();
     expect(screen.getByText('A person must approve.')).toBeVisible();
   });
 });

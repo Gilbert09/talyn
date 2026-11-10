@@ -54,13 +54,13 @@ export function SectionHeader({ title, detail }: { title: string; detail?: strin
 
 export function Button({ title, onPress, disabled = false, accessibilityLabel, variant = 'primary', size = 'md', icon, loading = false }: {
   title: string; onPress(): void; disabled?: boolean; accessibilityLabel?: string;
-  variant?: 'primary' | 'secondary' | 'quiet' | 'destructive'; size?: 'md' | 'sm'; icon?: Symbol; loading?: boolean;
+  variant?: 'primary' | 'secondary' | 'quiet' | 'destructive' | 'success'; size?: 'md' | 'sm'; icon?: Symbol; loading?: boolean;
 }) {
   const c = useTheme();
   const [pressed, setPressed] = useState(false);
-  const background = variant === 'primary' ? c.primaryAction : variant === 'destructive' ? c.destructiveFill
+  const background = variant === 'primary' ? c.primaryAction : variant === 'success' ? c.success : variant === 'destructive' ? c.destructiveFill
     : variant === 'secondary' ? c.surface : 'transparent';
-  const foreground = variant === 'primary' ? c.primaryText : variant === 'destructive' ? c.destructiveFillText
+  const foreground = variant === 'primary' || variant === 'success' ? c.primaryText : variant === 'destructive' ? c.destructiveFillText
     : variant === 'quiet' ? c.primaryAction : c.text;
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? title}
     accessibilityState={{ disabled, busy: loading }} disabled={disabled} onPress={onPress}

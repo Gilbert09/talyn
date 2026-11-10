@@ -89,13 +89,18 @@ describe('PR link copy on screens', () => {
     expect(share).toHaveBeenCalledWith({ message: URL, url: URL });
   });
 
-  it('the detail header copies the plain link on tap and opens the menu on long press', async () => {
+  it('the detail menu starts with the link actions, and each copy writes its text', async () => {
     mockActive.api.pullRequests.get.mockResolvedValue({ row: pr() as PRRow, fresh: null });
     await render(<PullRequestDetailScreen />);
-    const button = await screen.findByRole('button', { name: 'Copy link' });
-    await act(async () => { fireEvent.press(button); });
+    const menu = await screen.findByRole('button', { name: 'Pull request actions' });
+    expect(screen.queryByRole('button', { name: 'Copy link' })).toBeNull();
+    await fireEvent.press(menu);
+    expect(screen.getByText('example/project #42')).toBeVisible();
+    await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Copy link' })); });
     expect(clipboard.setStringAsync).toHaveBeenLastCalledWith(URL);
-    await fireEvent(button, 'longPress');
-    expect(screen.getByRole('button', { name: 'Copy as Markdown link' })).toBeVisible();
+    expect(await screen.findByText('Link copied.')).toBeVisible();
+    await fireEvent.press(menu);
+    await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Copy as Markdown link' })); });
+    expect(clipboard.setStringAsync).toHaveBeenLastCalledWith(`[Review current work](${URL})`);
   });
 });

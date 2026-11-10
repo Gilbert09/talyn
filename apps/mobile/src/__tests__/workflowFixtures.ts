@@ -1,5 +1,5 @@
 import type { Workbench, WorkbenchChat, WorkbenchEvent, WorkbenchReadiness } from '@talyn/shared';
-import type { ClientLifecycleEvent, ClientState, CodeReviewFinding, CodeReviewPublic, PRRow } from '@talyn/client/native';
+import type { ClientLifecycleEvent, ClientState, CodeReviewFinding, CodeReviewPublic, PRFile, PRReviewDetail, PRRow } from '@talyn/client/native';
 
 import { WorkflowStore, type WorkflowApi, type WorkflowSocket } from '../workflow/store';
 import type { Scope } from '../workflow/model';
@@ -93,6 +93,10 @@ export function fixture() {
       codeReviewFinding: jest.fn(async (_id?: string, findingId?: string) => finding({ id: findingId, body: 'The body.', anchor: 'const user = load();', suggestion: 'Check it first.' })),
       dismissCodeReviewFinding: jest.fn(async (_id?: string, _findingId?: string, _reason?: string) => review({ openCount: 1, dismissedCount: 1 })),
       undismissCodeReviewFinding: jest.fn(async (_id?: string, _findingId?: string) => review()),
+      description: jest.fn(async (_id?: string) => ({ body: null as string | null })),
+      files: jest.fn(async (_id?: string) => [] as PRFile[]),
+      reviews: jest.fn(async (_id?: string): Promise<PRReviewDetail> => ({ reviews: [], threads: [], comments: [] })),
+      setReviewHidden: jest.fn(async (_id?: string, _hidden?: boolean) => null),
     },
     features: { get: jest.fn(async () => ({ workbenches: true } as Record<string, boolean>)) },
     repositories: { list: jest.fn(async () => [{ id: 'repo-one', workspaceId: 'one', owner: 'example', repo: 'project',

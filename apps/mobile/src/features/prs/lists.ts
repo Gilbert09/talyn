@@ -219,6 +219,12 @@ export function queueBlockedReason(entry: MergeQueuePublic | null | undefined): 
 /** The queue status sentence on PR detail. Ports the web detail sheet's `statusLabel`. */
 export function queueStatusLine(entry: MergeQueuePublic | null | undefined, sessionName?: string | null): string {
   if (!entry) return 'Waiting';
+  return `${entry.position ? `#${entry.position} · ` : ''}${queueStatusLabel(entry, sessionName)}`;
+}
+
+/** `queueStatusLine` without the position, for a verdict that already names it. */
+export function queueStatusLabel(entry: MergeQueuePublic | null | undefined, sessionName?: string | null): string {
+  if (!entry) return 'Waiting';
   const badge = queueSessionBadge(entry);
   const blocked = entry.status === 'blocked' || entry.status === 'blocked_manual';
   let label: string;
@@ -231,9 +237,8 @@ export function queueStatusLine(entry: MergeQueuePublic | null | undefined, sess
     label = `Waiting for a required review. This PR was retargeted after #${entry.stackParentNumber} merged, which may have dismissed an earlier approval.`;
   } else if (blocked && queueBlockNeedsHuman(entry.blockedCode)) label = 'Waiting on you. The queue carries on by itself once this clears.';
   else label = queueLabel(entry.status);
-  const position = entry.position ? `#${entry.position} · ` : '';
   const armed = entry.autoMerge?.armed && entry.status !== 'automerge_armed' ? ' · auto-merge armed' : '';
-  return `${position}${label}${armed}`;
+  return `${label}${armed}`;
 }
 
 /** "Fix runs 1/3 · Check re-runs 0/2 · Re-signs 0/3", or null without budgets. */

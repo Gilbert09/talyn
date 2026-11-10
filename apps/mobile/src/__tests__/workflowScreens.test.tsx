@@ -70,14 +70,15 @@ describe('native lists and useful states', () => {
     await render(<StateNotice resource={resource} offline={false} refresh={jest.fn()} />);
     expect(screen.toJSON()).toBeNull();
   });
-  it('keeps PR lists read-only with one status and a separate review pill', async () => {
+  it('keeps PR lists read-only with one status and a separate review fact', async () => {
     mockActive.api.pullRequests.list.mockResolvedValueOnce([pr({ authored: true, summary: { ...pr().summary, ciStatus: undefined } })]);
     await render(<AttentionScreen />);
     expect(await screen.findByRole('link', { name: /Status: Unknown\. Review: Needs approval\./ })).toBeVisible();
     expect(screen.getByText('#42')).toBeVisible();
     expect(screen.queryByText(/Review: Review required/)).toBeNull();
-    expect(screen.queryByRole('button', { name: /merge|approve|queue/i })).toBeNull();
-    expect(screen.getByText('Waiting for review')).toBeVisible();
+    // Filter chips are buttons too; no row action may merge, approve or queue.
+    expect(screen.queryByRole('button', { name: /^(merge|approve|add to merge queue|queue)$/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /^Ready to merge/ })).toBeVisible();
   });
   it('virtualizes a performance fixture with ten thousand sessions', async () => {
     mockActive.api.workbenches.list.mockResolvedValueOnce(Array.from({ length: 10000 }, (_, index) => session({ id: `session-${index}`, title: `Work ${index}` })));
@@ -162,14 +163,15 @@ describe('detail and composer accessibility', () => {
     expect(await screen.findByRole('tab', { name: 'Second conversation · Idle · Selected' })).toBeVisible();
     expect(screen.getByDisplayValue('Second draft')).toBeVisible();
   });
-  it('shows a reviewer PR detail with one merge line and only the website link', async () => {
+  it('shows a reviewer PR detail with one merge line, a review action and the website link', async () => {
     mockParams = { id: 'pr-one' }; await render(<PullRequestDetailScreen />);
     expect(await screen.findByRole('header', { name: 'Review current work' })).toBeVisible();
     expect(screen.queryByText(/Mergeability|Merge state|Read only|on the web/)).toBeNull();
     expect(screen.getByText('GitHub has not said yet if this can merge.')).toBeVisible();
-    expect(screen.getByLabelText('Status: Unknown')).toBeVisible();
+    expect(screen.getByText('Your review is requested')).toBeVisible();
     expect(screen.getByText('Live detail from GitHub is unavailable. Showing the last saved state.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Open pull request website' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Review with Talyn' })).toBeVisible();
     expect(screen.queryByRole('button', { name: /^Merge$|Fix with agent/ })).toBeNull();
   });
   it('hides cached PR content until current authorization succeeds', async () => {

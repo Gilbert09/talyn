@@ -307,12 +307,15 @@ export class WorkflowStore {
         return item;
       }
       case 'environments': return this.api.environments.list();
-      case 'codeReview': {
+      case 'codeReview': case 'prDescription': case 'prFiles': case 'prReviews': {
         // A held row answers the scope question without a live GitHub read.
         const held = this.findPr(id);
         if (!held) await this.authorizedPr(id, scope);
         else if (held.workspaceId !== scope.workspace) throw { status: 403 };
         assertScope();
+        if (entity === 'prDescription') return this.api.pullRequests.description(id);
+        if (entity === 'prFiles') return this.api.pullRequests.files(id);
+        if (entity === 'prReviews') return this.api.pullRequests.reviews(id);
         return this.api.pullRequests.codeReview(id);
       }
     }
@@ -520,6 +523,13 @@ export class WorkflowStore {
   findPr(id: string): PRRow | undefined {
     return this.read<PrDetail>('pr', id).data?.row ?? this.read<PRRow[]>('attention').data?.find((row) => row.id === id);
   }
+  /**
+   * The row from the open-PR list only. A cached detail may predate an access change, so it is never
+   * drawn before the current read; the list is the data the list screen already shows.
+   */
+  listedPr(id: string): PRRow | undefined {
+    return this.read<PRRow[]>('attention').data?.find((row) => row.id === id);
+  }
   /** Patch a held pull request row in the list and in its detail. */
   patchPr(id: string, patch: Partial<PRRow>) {
     let changed = this.updateData<PRRow[]>(this.entry('attention', '', false),
@@ -537,6 +547,17 @@ export class WorkflowStore {
       this.refresh('timeline', id);
     } catch (error) {
       if (prior) this.patchPr(id, prior);
+      throw error;
+    }
+  }
+  /** Hide a review request from the Reviews list, or bring it back. Optimistic, like the queue toggle. */
+  async setReviewHidden(id: string, hidden: boolean) {
+    const prior = this.findPr(id)?.reviewHiddenAt ?? null;
+    this.patchPr(id, { reviewHiddenAt: hidden ? new Date().toISOString() : null });
+    try {
+      await this.api.pullRequests.setReviewHidden(id, hidden);
+    } catch (error) {
+      this.patchPr(id, { reviewHiddenAt: prior });
       throw error;
     }
   }

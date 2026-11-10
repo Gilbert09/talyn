@@ -132,8 +132,9 @@ describe('session controls', () => {
 });
 
 describe('pull request actions', () => {
-  const mine = () => pr({ authored: true, summary: { ...pr().summary, blockingReason: 'mergeable', mergeable: 'MERGEABLE',
+  const mine = () => pr({ authored: true, summary: { ...pr().summary, blockingReason: 'mergeable', mergeable: 'MERGEABLE', reviewDecision: 'APPROVED',
     checks: { total: 3, passed: 2, failed: 1, inProgress: 0, skipped: 0 } } });
+  const openMenu = async () => fireEvent.press(await screen.findByRole('button', { name: 'Pull request actions' }));
   beforeEach(() => { mockParams = { id: 'pr-one' }; });
 
   it('merges after a confirmation', async () => {
@@ -145,7 +146,7 @@ describe('pull request actions', () => {
     await confirmLast(alert, 'Merge');
     expect(mockActive.api.pullRequests.merge).toHaveBeenCalledWith('pr-one');
     expect(await screen.findByText('Merged #42.')).toBeVisible();
-    expect(screen.getByText('3 checks: 2 passed, 1 failing')).toBeVisible();
+    expect(screen.getByText('Ready to merge')).toBeVisible();
   });
   it('toggles the merge queue and auto-keep', async () => {
     mockActive.api.pullRequests.get.mockResolvedValue({ row: mine(), fresh: null });
@@ -162,6 +163,8 @@ describe('pull request actions', () => {
     mockActive.api.workspaces.get.mockResolvedValue({ id: 'one', name: 'Test workspace', settings: { defaultCloudProvider: 'ask' }, repos: [] });
     await render(<PullRequestDetailScreen />);
     await waitFor(() => expect(mockActive.api.workspaces.get).toHaveBeenCalled());
+    // A ready PR's primary is Merge, so the fix is in the menu.
+    await openMenu();
     await fireEvent.press(await screen.findByRole('button', { name: 'Fix with agent' }));
     await fireEvent.press(await screen.findByRole('button', { name: 'PostHog Code' }));
     await waitFor(() => expect(mockActive.api.tasks.create).toHaveBeenCalledWith(expect.objectContaining({ assignedEnvironmentId: 'env-posthog' })));
@@ -171,7 +174,10 @@ describe('pull request actions', () => {
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     mockActive.api.pullRequests.get.mockResolvedValue({ row: pr({ authored: true, summary: { ...pr().summary, blockingReason: 'mergeable', mergeable: 'MERGEABLE' } }), fresh: null });
     await render(<PullRequestDetailScreen />);
-    await fireEvent.press(await screen.findByRole('button', { name: /^Fix with agent\. Nothing to fix/ }));
+    await openMenu();
+    const item = await screen.findByRole('button', { name: 'Fix with agent' });
+    expect(item.props.accessibilityHint).toMatch(/^Nothing to fix/);
+    await fireEvent.press(item);
     expect(alert.mock.calls[0][0]).toBe('Nothing to hand to an agent');
     expect(mockActive.api.tasks.create).not.toHaveBeenCalled();
   });
