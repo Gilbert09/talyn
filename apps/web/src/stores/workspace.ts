@@ -213,6 +213,12 @@ function persistWorkspaceId(id: string | null) {
  */
 export type AppContext = { kind: 'personal'; workspaceId: string | null } | { kind: 'space'; spaceId: string };
 
+export function contextsEqual(a: AppContext, b: AppContext): boolean {
+  if (a.kind === 'personal' && b.kind === 'personal') return a.workspaceId === b.workspaceId;
+  if (a.kind === 'space' && b.kind === 'space') return a.spaceId === b.spaceId;
+  return false;
+}
+
 export const CONTEXT_PREF_KEY = 'talyn-current-context';
 
 export function readStoredContext(): AppContext {

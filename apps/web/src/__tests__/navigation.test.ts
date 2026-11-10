@@ -59,7 +59,7 @@ describe('navigation store', () => {
     const { nav } = await load();
     nav.useNavigationStore.getState().navigate({ view: 'history' });
     expect(localStorage.getItem('talyn-last-route')).toBeNull();
-    expect(nav.useNavigationStore.getState().backStack).toEqual([{ view: 'home' }]);
+    expect(nav.useNavigationStore.getState().backStack.map((e) => e.route)).toEqual([{ view: 'home' }]);
     expect(nav.useNavigationStore.getState().forwardStack).toEqual([]);
   });
 

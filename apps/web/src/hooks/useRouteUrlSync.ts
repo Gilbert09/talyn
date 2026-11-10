@@ -33,7 +33,12 @@ export function useRouteUrlSync(): void {
       const fromUrl = routeForPath(pathname) ?? HOME;
       const path = routeForPath(pathname) ? pathname : pathForRoute(fromUrl);
       last.current = { route: fromUrl, path };
-      setRoute(fromUrl, { replace: true });
+      // The browser's back and forward buttons walk the app history, so the context returns too.
+      const nav = useNavigationStore.getState();
+      const prev = nav.backStack[nav.backStack.length - 1];
+      if (prev && routesEqual(prev.route, fromUrl)) nav.back();
+      else if (nav.forwardStack[0] && routesEqual(nav.forwardStack[0].route, fromUrl)) nav.forward();
+      else setRoute(fromUrl, { replace: true });
       if (path !== pathname) navigate(path, { replace: true });
     }
   }, [route, replace, pathname, navigate, setRoute]);

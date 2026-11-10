@@ -40,8 +40,8 @@ describe('navigation history', () => {
     nav.back();
     expect(useNavigationStore.getState()).toMatchObject({
       route: { view: 'history' },
-      backStack: [{ view: 'home' }],
-      forwardStack: [{ view: 'prs', tab: 'reviews' }],
+      backStack: [{ route: { view: 'home' }, context: { kind: 'personal', workspaceId: null } }],
+      forwardStack: [{ route: { view: 'prs', tab: 'reviews' }, context: { kind: 'personal', workspaceId: null } }],
     });
     nav.forward();
     expect(useNavigationStore.getState().route).toEqual({ view: 'prs', tab: 'reviews' });
@@ -55,17 +55,17 @@ describe('navigation history', () => {
     nav.navigate({ view: 'history' });
     nav.back();
     nav.navigate({ view: 'home' });
-    expect(useNavigationStore.getState().forwardStack).toEqual([{ view: 'history' }]);
+    expect(useNavigationStore.getState().forwardStack.map((e) => e.route)).toEqual([{ view: 'history' }]);
     nav.navigate({ view: 'prs', tab: 'reviews' }, { replace: true });
     expect(useNavigationStore.getState().backStack).toEqual([]);
-    expect(useNavigationStore.getState().forwardStack).toEqual([{ view: 'history' }]);
+    expect(useNavigationStore.getState().forwardStack.map((e) => e.route)).toEqual([{ view: 'history' }]);
   });
 
   it('limits the back stack', () => {
     const nav = useNavigationStore.getState();
     for (let i = 0; i <= HISTORY_LIMIT; i++) nav.navigate({ view: 'workbench', id: `session-${i}` });
     expect(useNavigationStore.getState().backStack).toHaveLength(HISTORY_LIMIT);
-    expect(useNavigationStore.getState().backStack[0]).toEqual({ view: 'workbench', id: 'session-0' });
+    expect(useNavigationStore.getState().backStack[0].route).toEqual({ view: 'workbench', id: 'session-0' });
   });
 });
 
