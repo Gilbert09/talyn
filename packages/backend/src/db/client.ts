@@ -69,6 +69,42 @@ export function summarizeSql(raw: string): { operation: string; table: string | 
   return { operation, table };
 }
 
+const lateQuerySites = new Map<string, number>();
+const LATE_QUERY_SITE_CAP = 50;
+
+/**
+ * A query sent on a transaction that has already ended never runs inside it.
+ * postgres-js either holds it forever or runs it on the bare connection,
+ * outside the owner's RLS settings. The usual cause is work that a request
+ * starts and does not wait for, without `runWithoutScope`. Log the call site
+ * once, so the site can be fixed.
+ */
+export function reportLateTransactionQuery(query: string): void {
+  const frames = (new Error().stack ?? '')
+    .split('\n')
+    .slice(1)
+    .map((line) => line.trim())
+    .filter((line) => !/node_modules|db\/client\.(ts|js)|node:internal/.test(line))
+    .slice(0, 8);
+  const site = frames.join(' | ');
+  const seen = lateQuerySites.get(site);
+  if (seen !== undefined) {
+    lateQuerySites.set(site, seen + 1);
+    return;
+  }
+  if (lateQuerySites.size >= LATE_QUERY_SITE_CAP) return;
+  lateQuerySites.set(site, 1);
+  const { operation, table } = summarizeSql(query);
+  console.warn(
+    `[db] query sent after its transaction ended: ${operation} ${table ? `"${table}"` : ''}\n  ${frames.join('\n  ')}`,
+  );
+}
+
+/** Tests only. */
+export function resetLateTransactionQuerySites(): void {
+  lateQuerySites.clear();
+}
+
 /**
  * Wrap the postgres-js client so every query's result is metered into the
  * Debug panel's DB egress / request tiles. Every Drizzle query funnels through
@@ -91,9 +127,9 @@ export function summarizeSql(raw: string): { operation: string; table: string | 
 export function instrumentEgress(
   sql: postgres.Sql,
   connection: QueryConnection = 'pool',
-  opts: { breaker?: StallBreaker; tx?: TxState } = {},
+  opts: { breaker?: StallBreaker; tx?: TxState; ended?: { value: boolean } } = {},
 ): void {
-  const { breaker, tx } = opts;
+  const { breaker, tx, ended } = opts;
   const original = sql.unsafe.bind(sql) as (
     query: string,
     params?: unknown[],
@@ -183,6 +219,7 @@ export function instrumentEgress(
             onFulfilled?: (v: unknown) => unknown,
             onRejected?: (e: unknown) => unknown,
           ) => {
+            if (inflightId === null && ended?.value) reportLateTransactionQuery(query);
             if (inflightId === null) {
               inflightId = beginInflight('query', query, {
                 connection,
@@ -222,9 +259,9 @@ export function instrumentEgress(
 
   type ScopeFn = (inner: postgres.Sql) => unknown;
   const instrumentScope =
-    (fn: ScopeFn, scopeTx: TxState | undefined): ScopeFn =>
+    (fn: ScopeFn, scopeTx: TxState | undefined, scopeEnded: { value: boolean }): ScopeFn =>
     (inner) => {
-      instrumentEgress(inner, 'transaction', { breaker, tx: scopeTx });
+      instrumentEgress(inner, 'transaction', { breaker, tx: scopeTx, ended: scopeEnded });
       return fn(inner);
     };
   const target = sql as unknown as {
@@ -243,12 +280,18 @@ export function instrumentEgress(
       if (typeof fn !== 'function') return begin(...args);
       let opened = false;
       const txState = breaker?.newTransaction();
-      const wrapped = instrumentScope((inner) => {
-        opened = true;
-        transactionOpened();
-        return (fn as ScopeFn)(inner);
-      }, txState);
+      const endedFlag = { value: false };
+      const wrapped = instrumentScope(
+        (inner) => {
+          opened = true;
+          transactionOpened();
+          return (fn as ScopeFn)(inner);
+        },
+        txState,
+        endedFlag,
+      );
       const close = () => {
+        endedFlag.value = true;
         if (opened) transactionClosed();
       };
       beginOf = txState ?? null;
@@ -280,7 +323,10 @@ export function instrumentEgress(
       const fn = args[fnIndex];
       if (typeof fn !== 'function') return savepoint(...args);
       if (breaker && tx && breaker.txLost(tx)) return Promise.reject(breaker.lostError(tx));
-      return savepoint(...args.slice(0, fnIndex), instrumentScope(fn as ScopeFn, tx));
+      return savepoint(
+        ...args.slice(0, fnIndex),
+        instrumentScope(fn as ScopeFn, tx, ended ?? { value: false }),
+      );
     };
   }
 }

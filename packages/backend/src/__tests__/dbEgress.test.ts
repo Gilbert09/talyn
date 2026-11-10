@@ -1,6 +1,12 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type postgres from 'postgres';
-import { instrumentEgress, runInScopedDb, summarizeSql, type Database } from '../db/client.js';
+import {
+  instrumentEgress,
+  resetLateTransactionQuerySites,
+  runInScopedDb,
+  summarizeSql,
+  type Database,
+} from '../db/client.js';
 import {
   _resetInflight,
   inflightCounts,
@@ -347,6 +353,66 @@ describe('instrumentEgress transactions', () => {
     expect(during).toBe(1);
     expect(inflightSize()).toBe(0);
     expect(inflightCounts().openTransactions).toBe(0);
+  });
+});
+
+describe('a query sent after its transaction ended', () => {
+  const sendLate = (tx: postgres.Sql) => awaitNow(tx.unsafe('select "id" from "integrations"', []));
+
+  async function endedTx(nested: boolean): Promise<postgres.Sql> {
+    const sql = fakeTxSql();
+    instrumentEgress(sql);
+    let kept: postgres.Sql | undefined;
+    await (sql.begin as (fn: (tx: postgres.Sql) => Promise<unknown>) => Promise<unknown>)(
+      async (tx) => {
+        if (!nested) {
+          kept = tx;
+          return;
+        }
+        await (
+          tx as unknown as { savepoint: (fn: (s: postgres.Sql) => Promise<unknown>) => Promise<unknown> }
+        ).savepoint(async (sp) => {
+          kept = sp;
+        });
+      },
+    );
+    return kept as postgres.Sql;
+  }
+
+  beforeEach(() => resetLateTransactionQuerySites());
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ['transaction', false],
+    ['savepoint', true],
+  ])('logs the call site once on a %s', async (_name, nested) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tx = await endedTx(nested);
+    for (let i = 0; i < 3; i++) await sendLate(tx);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(
+      /^\[db\] query sent after its transaction ended: SELECT "integrations"\n {2}at /,
+    );
+  });
+
+  it('logs nothing for a query inside an open transaction', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sql = fakeTxSql();
+    instrumentEgress(sql);
+    await (sql.begin as (fn: (tx: postgres.Sql) => Promise<unknown>) => Promise<unknown>)(
+      async (tx) => {
+        await sendLate(tx);
+      },
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('logs a different call site again', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tx = await endedTx(false);
+    await sendLate(tx);
+    await awaitNow(tx.unsafe('select 1 from "tasks"', []));
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 });
 
