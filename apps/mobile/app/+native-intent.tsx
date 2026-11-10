@@ -31,6 +31,8 @@ export function redirectSystemPath({ path }: { path: string; initial: boolean })
     if (product) { rememberIntent(path); return product; }
     // A custom scheme puts the first segment in the host (`talyn-mobile://pulls` has host `pulls` and no path), so
     // use the whole logical path. Query data is dropped as for product links; the PR list keeps only a known tab.
+    // The development client opens the app with its own link to load a bundle; that is a start, not a page.
+    if (url.host === 'expo-development-client') return '/';
     if (logical === '/pulls') {
       const tab = url.searchParams.get('tab');
       return tab && (PULLS_TAB_VALUES as readonly string[]).includes(tab) ? `/pulls?tab=${tab}` : '/pulls';
