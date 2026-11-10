@@ -49,6 +49,8 @@ function SettingsWithModal() {
   );
 }
 
+const planCard = (plan: string) => screen.getByTestId(`compare-plan-${plan}`);
+
 function show(status: ReturnType<typeof usageStatus>) {
   useBillingStore.setState({ status, upgradeModalOpen: false, upgradeReason: null, upgradeNotice: null });
   statusFetch.mockResolvedValue(status);
@@ -70,10 +72,10 @@ describe('BillingSettings with usage billing', () => {
 
   it('captures plan page clicks with their locations', () => {
     show(usageStatus('pro'));
-    fireEvent.click(screen.getByRole('button', { name: 'Compare plans' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add credits', expanded: false }));
-    expect(trackEvent).toHaveBeenCalledWith('compare_plans_opened', { where: 'plan_page' });
+    fireEvent.click(within(planCard('team')).getByRole('button', { name: 'Explore Team' }));
     expect(trackEvent).toHaveBeenCalledWith('add_credits_clicked', { where: 'plan_page' });
+    expect(trackEvent).toHaveBeenCalledWith('team_offer_opened', { placement: 'plan_page' });
   });
 
   it('keeps the old page on an older backend', async () => {
@@ -104,10 +106,11 @@ describe('BillingSettings with usage billing', () => {
     expect(screen.queryByTestId('credits-card')).toBeNull();
     expect(screen.queryByTestId('auto-topup')).toBeNull();
     expect(screen.getByText(/mobile app is coming soon/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade' }));
+    expect(within(planCard('free')).getByText('Your plan')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: /Annual/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Pro: $400/yr' }));
+    fireEvent.click(within(planCard('pro')).getByRole('button', { name: 'Upgrade to Pro' }));
     await waitFor(() => expect(checkout).toHaveBeenCalledWith({ period: 'annual', plan: 'pro' }));
+    expect(trackEvent).toHaveBeenCalledWith('checkout_started', { period: 'annual', plan: 'pro', placement: 'plan_page' });
   });
 
   it('shows Free credits it still holds, without packs to buy', () => {
@@ -129,14 +132,11 @@ describe('BillingSettings with usage billing', () => {
     show(usageStatus('legacy_pro', { usedHours: 20 }));
     expect(screen.getByTestId('plan-card')).toHaveTextContent('Legacy Pro');
     expect(screen.getByTestId('plan-card')).toHaveTextContent('$15/month');
-    fireEvent.click(screen.getByRole('button', { name: 'Move to Pro' }));
-    const move = screen.getByTestId('legacy-changes');
-    expect(move).toHaveTextContent('50 box-hours a month becomes 200 box-hours');
+    expect(planCard('legacy_pro')).toHaveTextContent('50 box-hours per month');
+    expect(planCard('pro')).toHaveTextContent('200 box-hours per month');
     fireEvent.click(screen.getByRole('button', { name: /Annual/ }));
-    expect(move).toHaveTextContent('$15 a month becomes $400 a year');
     fireEvent.click(screen.getByRole('button', { name: /Monthly/ }));
-    expect(move).toHaveTextContent('$15 a month becomes $40 a month');
-    fireEvent.click(screen.getAllByRole('button', { name: 'Move to Pro' })[1]);
+    fireEvent.click(within(planCard('pro')).getByRole('button', { name: 'Move to Pro' }));
     await waitFor(() => expect(changePlan).toHaveBeenCalledWith({ to: 'pro', period: 'monthly' }));
     expect(screen.queryByTestId('credit-packs')).toBeNull();
     expect(screen.queryByTestId('auto-topup')).toBeNull();
@@ -152,9 +152,8 @@ describe('BillingSettings with usage billing', () => {
     changePlan.mockResolvedValue({ ok: true });
     show(usageStatus('pro', { maxOffered: true, overrides: { period: 'monthly' } }));
     expect(within(screen.getByTestId('plan-card')).getByRole('button', { name: 'Manage billing' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max' }));
-    expect(screen.getByTestId('max-changes')).toHaveTextContent('200 box-hours a month becomes 1,000 box-hours');
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max: $100/mo' }));
+    expect(planCard('max')).toHaveTextContent('1,000 box-hours per month');
+    fireEvent.click(within(planCard('max')).getByRole('button', { name: 'Upgrade to Max' }));
     await waitFor(() => expect(changePlan).toHaveBeenCalledWith({ to: 'max', period: 'monthly' }));
     expect(checkout).not.toHaveBeenCalled();
   });
@@ -312,11 +311,35 @@ describe('BillingSettings with usage billing', () => {
     expect(screen.getByText(`${usedHours} of 200 box-hours used`)).toBeVisible();
   });
 
-  it.each(['free', 'legacy_pro', 'pro'] as const)('opens the existing modal to compare %s', (tier) => {
+  it.each([
+    ['free', ['free', 'pro', 'team']],
+    ['legacy_pro', ['free', 'legacy_pro', 'pro', 'team']],
+    ['pro', ['free', 'pro', 'team']],
+    ['max', ['free', 'pro', 'max', 'team']],
+  ] as const)('lays out every plan on the page for %s, with the current one marked', (tier, plans) => {
     show(usageStatus(tier));
-    fireEvent.click(screen.getByRole('button', { name: 'Compare plans' }));
-    expect(useBillingStore.getState().upgradeModalOpen).toBe(true);
-    expect(screen.getByRole('heading', { level: 2 })).toBeVisible();
+    const cards = within(screen.getByTestId('plan-cards')).getAllByTestId(/^compare-plan-/);
+    expect(cards.map((card) => card.dataset.testid)).toEqual(plans.map((plan) => `compare-plan-${plan}`));
+    expect(within(planCard(tier)).getByText(/^Your plan/)).toBeVisible();
+    for (const other of plans.filter((plan) => plan !== tier)) {
+      expect(within(planCard(other)).queryByText(/^Your plan/)).toBeNull();
+    }
+    expect(screen.queryByRole('button', { name: 'Compare plans' })).toBeNull();
+    expect(useBillingStore.getState().upgradeModalOpen).toBe(false);
+  });
+
+  it('shows Max on the page and sells it to Free', async () => {
+    checkout.mockResolvedValue({ url: 'u' });
+    show(usageStatus('free', { maxOffered: true }));
+    expect(planCard('max')).toHaveTextContent('$100/mo');
+    fireEvent.click(within(planCard('max')).getByRole('button', { name: 'Upgrade to Max' }));
+    await waitFor(() => expect(checkout).toHaveBeenCalledWith({ period: 'monthly', plan: 'max' }));
+  });
+
+  it('marks the team plan for a team seat and offers no purchase', () => {
+    show(usageStatus('pro', { maxOffered: true, overrides: { planSource: 'team' } }));
+    expect(within(planCard('team')).getByText('Your plan')).toBeVisible();
+    expect(within(screen.getByTestId('plan-cards')).queryByRole('button', { name: /Upgrade|Move to Pro|Explore Team/ })).toBeNull();
   });
 
   it.each([
