@@ -39,7 +39,7 @@ The filters at the top narrow the list. Each shows a count.
 
 You can also filter by repository, sort by **Newest** or **Oldest**, and search by title, repository or number. Press ⌘F on a Mac to search.
 
-To save a set of filters, use the saved filters bar. A saved filter can match repositories, labels, words in the title and authors.
+To save a set of filters, use the saved filters bar. A saved filter can match repositories, labels, words in the title, authors and review state (approved or not approved).
 
 ### Track any pull request
 
