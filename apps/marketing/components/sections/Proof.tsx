@@ -48,11 +48,15 @@ export async function Proof() {
       detail: "A stable release goes out every six hours when there is anything in it.",
       href: `${site.githubUrl}/releases`,
     },
+    // Was "Signed and notarized on macOS". Windows visitors already get the
+    // SmartScreen warning from PlatformNote under the hero buttons, and the
+    // question replays show people hunting for before they download is this
+    // one (the FAQ "Will it merge something without me asking?").
     {
       icon: ShieldCheck,
-      label: "Signed and notarized on macOS",
+      label: "Nothing merges unless you say so",
       detail:
-        "Windows is not signed yet and will warn you on first install. We would rather say so here.",
+        "Auto-keep and the merge queue are opt-in, one pull request at a time. Your branch protection still applies.",
     },
     {
       icon: Boxes,
