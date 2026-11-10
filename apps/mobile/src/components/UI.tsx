@@ -93,6 +93,8 @@ interface RowProps {
   title: string;
   subtitle?: ReactNode;
   leading?: ReactNode;
+  /** The leading column width. 16 by default, for a small icon. */
+  leadingWidth?: number;
   trailing?: ReactNode;
   /** Content under the title line, e.g. a line of pills. */
   children?: ReactNode;
@@ -110,13 +112,13 @@ interface RowProps {
   longPressLabel?: string;
 }
 /** A flat, divider-separated list row. With `href` it is a link; with `onPress` it is a button. */
-export function Row({ title, subtitle, leading, trailing, children, chevron = false, href, onPress, accessibilityLabel,
+export function Row({ title, subtitle, leading, leadingWidth, trailing, children, chevron = false, href, onPress, accessibilityLabel,
   accessibilityRole, selected, disabled = false, divider = true, titleLines = 2, onLongPress, longPressLabel = 'Show actions' }: RowProps) {
   const c = useTheme();
   const [pressed, setPressed] = useState(false);
   const interactive = Boolean(href || onPress);
   const body = <View style={styles.rowInner}>
-    {leading ? <View style={styles.rowLeading}>{leading}</View> : null}
+    {leading ? <View style={[styles.rowLeading, leadingWidth ? { width: leadingWidth } : null]}>{leading}</View> : null}
     <View style={styles.rowMain}>
       <View style={styles.rowTitleLine}>
         <AppText variant="rowTitle" numberOfLines={titleLines} style={{ flex: 1 }}>{title}</AppText>

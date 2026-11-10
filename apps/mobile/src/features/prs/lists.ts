@@ -23,10 +23,14 @@ export function pullsTab(value: unknown): PullsTab {
 
 export const pullsRoute = (tab: PullsTab) => ({ pathname: '/pulls', params: { tab } }) satisfies Href;
 
-/** Web `compareByCreated`: by when GitHub opened the PR, newest first. */
-export function compareByCreated(a: Pick<PRRow, 'summary' | 'createdAt' | 'id'>, b: Pick<PRRow, 'summary' | 'createdAt' | 'id'>): number {
+export type SortDir = 'asc' | 'desc';
+
+/** Web `compareByCreated`: by when GitHub opened the PR, newest first unless `dir` is `asc`. The id breaks ties. */
+export function compareByCreated(a: Pick<PRRow, 'summary' | 'createdAt' | 'id'>, b: Pick<PRRow, 'summary' | 'createdAt' | 'id'>,
+  dir: SortDir = 'desc'): number {
   const at = (row: Pick<PRRow, 'summary' | 'createdAt'>) => Date.parse((row.summary as { createdAt?: string }).createdAt || row.createdAt) || 0;
-  return at(b) - at(a) || a.id.localeCompare(b.id);
+  const diff = at(b) - at(a);
+  return (dir === 'desc' ? diff : -diff) || a.id.localeCompare(b.id);
 }
 
 /** A blocking issue the author owns. Web `isNeedsAttention`. */
@@ -67,35 +71,17 @@ export const hiddenReviewCohort = (rows: PRRow[]) => rows.filter((row) => row.re
   .sort((a, b) => (b.reviewHiddenAt ?? '').localeCompare(a.reviewHiddenAt ?? ''));
 export const queueCohort = (rows: PRRow[]) => rows.filter((row) => row.mergeQueued);
 
-export interface PrSection { key: string; title: string; rows: PRRow[] }
-
-const MINE_SECTIONS = [
-  { key: 'attention', title: 'Needs attention', test: isNeedsAttention },
-  { key: 'ready', title: 'Ready to merge', test: isReadyToMerge },
-  { key: 'review', title: 'Waiting for review', test: isAwaitingReview },
-] as const;
+export type ReviewSortMode = 'newest' | 'oldest' | 'priority';
 
 /**
- * My PRs on a phone: the web filter chips become sections, the one that needs
- * you first. A PR sits in the first section it matches. Newest first inside each.
+ * Review requests in web's order: the server's priority verdicts in Priority
+ * mode, else by created date. One clock for the whole sort.
  */
-export function mineSections(rows: PRRow[]): PrSection[] {
-  const buckets = new Map<string, PRRow[]>([...MINE_SECTIONS.map(({ key }) => [key, []] as [string, PRRow[]]), ['other', []]]);
-  for (const row of mineCohort(rows)) {
-    const match = MINE_SECTIONS.find(({ test }) => test(row));
-    buckets.get(match?.key ?? 'other')!.push(row);
+export function sortReviews(rows: PRRow[], options: { mode: ReviewSortMode; now: number }): PRRow[] {
+  if (options.mode !== 'priority') {
+    const dir: SortDir = options.mode === 'oldest' ? 'asc' : 'desc';
+    return rows.slice().sort((a, b) => compareByCreated(a, b, dir));
   }
-  return [...MINE_SECTIONS, { key: 'other', title: 'Open' }]
-    .map(({ key, title }) => ({ key, title, rows: buckets.get(key)!.sort(compareByCreated) }))
-    .filter((section) => section.rows.length > 0);
-}
-
-/**
- * Review requests in web's order: the server's priority verdicts when the
- * account has Priority, newest first otherwise. One clock for the whole sort.
- */
-export function sortReviews(rows: PRRow[], options: { priority: boolean; now: number }): PRRow[] {
-  if (!options.priority) return rows.slice().sort(compareByCreated);
   const verdicts = new Map<string, PRPriorityVerdict>();
   const unscored: PRRow[] = [];
   for (const row of rows) {

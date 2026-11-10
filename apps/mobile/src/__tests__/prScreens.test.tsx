@@ -5,6 +5,7 @@ import type { MergeQueuePublic, PRRow } from '@talyn/client/native';
 
 import { PullRequestDetailScreen } from '../features/prs/PullRequestDetailScreen';
 import { PullRequestsScreen } from '../features/prs/PullRequestsScreen';
+import { forgetReviewSortMode } from '../features/prs/reviewSort';
 import { finding, fixture, pr, review } from './workflowFixtures';
 
 jest.setTimeout(15000);
@@ -22,7 +23,12 @@ jest.mock('../auth/AuthProvider', () => ({
   useMobileRuntime: () => ({ workflow: mockActive.store }), useNetwork: () => 'online',
   useWorkspace: () => ({ status: 'ready', selected: 'one', choices: [{ id: 'one', name: 'Test workspace' }] }),
 }));
-beforeEach(() => { mockActive.store.dispose(); mockActive = fixture(); mockParams = { id: 'pr-one' }; });
+const mockStorage = { getItem: jest.fn(async (_key: string): Promise<string | null> => null), setItem: jest.fn(async (_key: string, _value: string) => {}) };
+jest.mock('@react-native-async-storage/async-storage', () => ({ __esModule: true, default: mockStorage }));
+beforeEach(() => {
+  mockActive.store.dispose(); mockActive = fixture(); mockParams = { id: 'pr-one' };
+  forgetReviewSortMode(); mockStorage.getItem.mockReset().mockResolvedValue(null); mockStorage.setItem.mockClear();
+});
 afterEach(() => { mockActive.store.dispose(); jest.restoreAllMocks(); });
 
 const summary = (patch: Partial<PRRow['summary']> = {}) => ({ ...pr().summary, ...patch });
@@ -32,17 +38,137 @@ const confirmLast = async (alert: jest.SpyInstance, label: string) => {
 };
 
 describe('pull request pages', () => {
-  it('leads My PRs with what needs you', async () => {
-    mockActive.api.pullRequests.list.mockResolvedValueOnce([
-      pr({ id: 'a', number: 1, authored: true, reviewRequested: false, summary: summary({ title: 'Conflicted', blockingReason: 'merge_conflicts' }) }),
-      pr({ id: 'b', number: 2, authored: true, reviewRequested: false, summary: summary({ title: 'Plain', reviewDecision: undefined }) }),
-      pr({ id: 'c', number: 3, reviewRequested: true, summary: summary({ title: 'Not mine' }) }),
-    ]);
+  const linkNames = () => screen.getAllByRole('link').map((link) => String(link.props.accessibilityLabel).split('.')[0]);
+  const mineRows = () => [
+    pr({ id: 'a', number: 1, authored: true, reviewRequested: false, createdAt: '2026-11-01T00:00:00Z',
+      summary: summary({ title: 'Conflicted', blockingReason: 'merge_conflicts', reviewDecision: undefined }) }),
+    pr({ id: 'b', number: 2, authored: true, reviewRequested: false, createdAt: '2026-11-03T00:00:00Z',
+      summary: summary({ title: 'Plain', reviewDecision: undefined, headBranch: 'plain' }) }),
+    pr({ id: 'c', number: 3, reviewRequested: true, summary: summary({ title: 'Not mine' }) }),
+  ];
+
+  it('lists My PRs newest first in one list, and a chip narrows it', async () => {
+    mockActive.api.pullRequests.list.mockResolvedValueOnce(mineRows());
     await render(<PullRequestsScreen tab="mine" />);
     expect(await screen.findByRole('link', { name: /^Conflicted\./ })).toBeVisible();
-    expect(screen.getByText('Needs attention')).toBeVisible();
-    expect(screen.getByText('Open')).toBeVisible();
+    expect(linkNames()).toEqual(['Plain', 'Conflicted']);
+    // No section split: the old headers are gone.
+    expect(screen.queryByText('Open')).toBeNull();
     expect(screen.queryByRole('link', { name: /^Not mine\./ })).toBeNull();
+    const chip = screen.getByRole('button', { name: 'Needs attention, 1' });
+    expect(screen.getByRole('button', { name: 'Ready to merge' })).toBeVisible();
+    await fireEvent.press(chip);
+    expect(linkNames()).toEqual(['Conflicted']);
+    expect(screen.getByRole('button', { name: 'Needs attention, 1' })).toBeSelected();
+    await fireEvent.press(screen.getByRole('button', { name: 'Clear all filters' }));
+    expect(linkNames()).toEqual(['Plain', 'Conflicted']);
+    expect(screen.queryByRole('button', { name: 'Clear all filters' })).toBeNull();
+  });
+
+  it('flips My PRs to oldest first', async () => {
+    mockActive.api.pullRequests.list.mockResolvedValueOnce(mineRows());
+    await render(<PullRequestsScreen tab="mine" />);
+    await screen.findByRole('link', { name: /^Plain\./ });
+    await fireEvent.press(screen.getByRole('button', { name: 'Sort: Newest' }));
+    await fireEvent.press(await screen.findByRole('button', { name: 'Oldest' }));
+    expect(linkNames()).toEqual(['Conflicted', 'Plain']);
+    expect(screen.getByRole('button', { name: 'Sort: Oldest' })).toBeVisible();
+  });
+
+  it('searches by number and offers to clear when nothing matches', async () => {
+    mockActive.api.pullRequests.list.mockResolvedValueOnce(mineRows());
+    await render(<PullRequestsScreen tab="mine" />);
+    await screen.findByRole('link', { name: /^Plain\./ });
+    await fireEvent.changeText(screen.getByLabelText('Search title, repo or #number'), '#2');
+    expect(linkNames()).toEqual(['Plain']);
+    await fireEvent.changeText(screen.getByLabelText('Search title, repo or #number'), 'nothing like this');
+    expect(screen.getByText('No pull requests match these filters.')).toBeVisible();
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+    await fireEvent.press(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(linkNames()).toEqual(['Plain', 'Conflicted']);
+    expect(screen.getByLabelText('Search title, repo or #number').props.value).toBe('');
+  });
+
+  it('narrows to one repository from the picker', async () => {
+    const rows = mineRows();
+    rows[0] = { ...rows[0], repositoryId: 'repo-two', repo: 'other' };
+    mockActive.api.pullRequests.list.mockResolvedValueOnce(rows);
+    await render(<PullRequestsScreen tab="mine" />);
+    await screen.findByRole('link', { name: /^Plain\./ });
+    await fireEvent.press(screen.getByRole('button', { name: 'Repository: All repos' }));
+    await fireEvent.press(await screen.findByRole('button', { name: 'example/other' }));
+    expect(linkNames()).toEqual(['Conflicted']);
+    expect(screen.getByRole('button', { name: 'Repository: example/other' })).toBeVisible();
+  });
+
+  it('selects saved filters from the workspace and ORs them', async () => {
+    const definition = (id: string, labels: string[]) => ({ id, name: `Label ${id}`, criteria: { labels }, createdAt: '', updatedAt: '' });
+    mockActive.api.workspaces.get.mockResolvedValue({ id: 'one', name: 'Test workspace', repos: [],
+      settings: { prFilters: [definition('bug', ['bug']), definition('ui', ['ui'])] } });
+    const rows = mineRows();
+    rows[0] = { ...rows[0], summary: { ...rows[0].summary, labels: ['bug'] } };
+    rows[1] = { ...rows[1], summary: { ...rows[1].summary, labels: ['ui'] } };
+    mockActive.api.pullRequests.list.mockResolvedValueOnce(rows);
+    await render(<PullRequestsScreen tab="mine" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Saved filters' }));
+    await fireEvent.press(await screen.findByRole('button', { name: 'Label bug' }));
+    expect(linkNames()).toEqual(['Conflicted']);
+    // The sheet stays open, so a second filter can be ticked.
+    await fireEvent.press(screen.getByRole('button', { name: 'Label ui' }));
+    expect(linkNames()).toEqual(['Plain', 'Conflicted']);
+    expect(screen.getByRole('button', { name: '2 saved filters' })).toBeVisible();
+  });
+
+  const reviewRows = () => [
+    pr({ id: 'old', number: 1, createdAt: '2026-11-01T00:00:00Z', summary: summary({ title: 'Older review', reviewRequestVia: { direct: true, teams: [] } }) }),
+    pr({ id: 'new', number: 2, createdAt: '2026-11-05T00:00:00Z', summary: summary({ title: 'Newer review', reviewRequestVia: { direct: false, teams: ['org/web'] } }) }),
+  ];
+
+  it('sorts review requests from the sort chip and saves the choice', async () => {
+    mockActive.api.pullRequests.list.mockResolvedValueOnce(reviewRows());
+    await render(<PullRequestsScreen tab="reviews" />);
+    await screen.findByRole('link', { name: /^Newer review\./ });
+    // A stored Priority falls back to Newest when the account does not have it.
+    expect(linkNames()).toEqual(['Newer review', 'Older review']);
+    await fireEvent.press(screen.getByRole('button', { name: 'Sort: Newest' }));
+    expect(screen.queryByRole('button', { name: 'Priority' })).toBeNull();
+    await fireEvent.press(screen.getByRole('button', { name: 'Oldest' }));
+    expect(linkNames()).toEqual(['Older review', 'Newer review']);
+    expect(mockStorage.setItem).toHaveBeenCalledWith('talyn-reviews-sort-mode-v2', 'oldest');
+  });
+
+  it('reads the saved review sort and offers Priority when the account has it', async () => {
+    mockStorage.getItem.mockResolvedValue('oldest');
+    mockActive.api.features.get.mockResolvedValue({ workbenches: true, reviewPriorityMode: true });
+    mockActive.api.pullRequests.list.mockResolvedValueOnce(reviewRows());
+    await render(<PullRequestsScreen tab="reviews" />);
+    expect(await screen.findByRole('button', { name: 'Sort: Oldest' })).toBeVisible();
+    expect(linkNames()).toEqual(['Older review', 'Newer review']);
+    await fireEvent.press(screen.getByRole('button', { name: 'Sort: Oldest' }));
+    expect(await screen.findByRole('button', { name: 'Priority' })).toBeVisible();
+  });
+
+  it('filters review requests by who was asked', async () => {
+    mockActive.api.pullRequests.list.mockResolvedValueOnce(reviewRows());
+    await render(<PullRequestsScreen tab="reviews" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Requested via: Any requested' }));
+    await fireEvent.press(await screen.findByRole('button', { name: '@org/web' }));
+    expect(linkNames()).toEqual(['Newer review']);
+    await fireEvent.changeText(screen.getByLabelText('Search title, repo or #number'), 'older');
+    expect(screen.getByText('No pull requests match these filters.')).toBeVisible();
+  });
+
+  it('searches the merge queue', async () => {
+    const queued = { mergeQueued: true, mergeQueue: { status: 'queued', position: 1 } as MergeQueuePublic };
+    mockActive.api.pullRequests.list.mockResolvedValueOnce([
+      pr({ id: 'a', number: 1, ...queued, summary: summary({ title: 'First queued', headBranch: 'a' }) }),
+      pr({ id: 'b', number: 2, ...queued, summary: summary({ title: 'Second queued', headBranch: 'b' }) }),
+    ]);
+    await render(<PullRequestsScreen tab="queue" />);
+    await screen.findByRole('link', { name: /^First queued\./ });
+    expect(screen.queryByRole('button', { name: /^Sort:/ })).toBeNull();
+    await fireEvent.changeText(screen.getByLabelText('Search title, repo or #number'), 'second');
+    expect(linkNames()).toEqual(['Second queued']);
   });
 
   it.each([
