@@ -15,6 +15,8 @@ function row(opts: {
   title?: string;
   author?: string;
   labels?: string[];
+  reviewDecision?: string | null;
+  effectiveReviewDecision?: string | null;
 }): PRFilterTarget {
   return {
     owner: opts.owner ?? 'PostHog',
@@ -23,6 +25,8 @@ function row(opts: {
       title: opts.title ?? 'fix(pr-list): settle the mergeable verdict',
       author: opts.author ?? 'gilbert09',
       labels: opts.labels,
+      reviewDecision: opts.reviewDecision,
+      effectiveReviewDecision: opts.effectiveReviewDecision,
     },
   };
 }
@@ -85,6 +89,46 @@ describe('prMatchesFilter', () => {
     expect(prMatchesFilter(row({ labels }), criteria)).toBe(expected);
   });
 
+  it.each<[string, Parameters<typeof row>[0], PRFilterCriteria['approval'], boolean]>([
+    ['approved wants APPROVED', { reviewDecision: 'APPROVED' }, 'approved', true],
+    ['approved rejects REVIEW_REQUIRED', { reviewDecision: 'REVIEW_REQUIRED' }, 'approved', false],
+    ['approved rejects CHANGES_REQUESTED', { reviewDecision: 'CHANGES_REQUESTED' }, 'approved', false],
+    ['approved rejects no decision', { reviewDecision: null }, 'approved', false],
+    ['approved rejects a missing decision', {}, 'approved', false],
+    ['not approved rejects APPROVED', { reviewDecision: 'APPROVED' }, 'not_approved', false],
+    ['not approved takes REVIEW_REQUIRED', { reviewDecision: 'REVIEW_REQUIRED' }, 'not_approved', true],
+    ['not approved takes CHANGES_REQUESTED', { reviewDecision: 'CHANGES_REQUESTED' }, 'not_approved', true],
+    ['not approved takes no decision', { reviewDecision: null }, 'not_approved', true],
+    ['not approved takes a missing decision', {}, 'not_approved', true],
+    // Repos with no required reviews give GitHub's reviewDecision as null. The
+    // effective decision is derived from the reviews, and it wins.
+    [
+      'effective APPROVED wins over a null raw decision',
+      { reviewDecision: null, effectiveReviewDecision: 'APPROVED' },
+      'approved',
+      true,
+    ],
+    [
+      'effective REVIEW_REQUIRED wins over a raw APPROVED',
+      { reviewDecision: 'APPROVED', effectiveReviewDecision: 'REVIEW_REQUIRED' },
+      'approved',
+      false,
+    ],
+    [
+      'a null effective decision falls back to the raw one',
+      { reviewDecision: 'APPROVED', effectiveReviewDecision: null },
+      'approved',
+      true,
+    ],
+  ])('approval — %s', (_name, opts, approval, expected) => {
+    expect(prMatchesFilter(row(opts), { approval })).toBe(expected);
+  });
+
+  it('an approval criterion alone makes a filter non-empty', () => {
+    expect(prFilterIsEmpty({ approval: 'approved' })).toBe(false);
+    expect(prFilterIsEmpty({ approval: 'not_approved' })).toBe(false);
+  });
+
   it('ANDs the criteria within one filter', () => {
     const criteria: PRFilterCriteria = {
       repos: ['PostHog/posthog'],
@@ -141,6 +185,11 @@ describe('validatePRFilters', () => {
     expect(out[0].criteria.labelMatch).toBe('all');
   });
 
+  it.each(['approved', 'not_approved'] as const)('keeps approval: %s on its own', (approval) => {
+    const out = validatePRFilters(def({ approval }));
+    expect(out[0].criteria).toEqual({ approval });
+  });
+
   it('stamps missing timestamps rather than rejecting', () => {
     const out = validatePRFilters(
       def({ labels: ['bug'] }, { createdAt: undefined, updatedAt: undefined })
@@ -168,6 +217,8 @@ describe('validatePRFilters', () => {
     ['non-string list member', def({ labels: [1] })],
     ['bad labelMatch', def({ labels: ['a'], labelMatch: 'either' })],
     ['non-string titleContains', def({ titleContains: 7 })],
+    ['bad approval', def({ approval: 'APPROVED' })],
+    ['non-string approval', def({ approval: true })],
     // A filter with no criteria would match every PR — a saved view that
     // filters nothing, which the UI also refuses to create.
     ['no criteria at all', def({})],
