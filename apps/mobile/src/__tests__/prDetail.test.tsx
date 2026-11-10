@@ -43,7 +43,7 @@ const serve = (row: PRRow, extra?: Parameters<typeof fresh>[1] | null) =>
 const openMenu = async () => fireEvent.press(await screen.findByRole('button', { name: 'Pull request actions' }));
 const MENU = ['Copy link', 'Copy as Markdown link', 'Share', 'Open on GitHub', 'Fix with agent', 'Merge', 'Review with Talyn',
   'Add to merge queue', 'Leave merge queue', 'Requeue', 'Re-submit to Trunk', 'Turn on Keep mergeable', 'Turn off Keep mergeable',
-  'Hide review request', 'Show in review requests', 'Refresh'];
+  'Approve', 'Request changes', 'Hide review request', 'Show in review requests', 'Refresh'];
 // The action sheet renders last, and it starts with Copy link.
 const menuItems = () => {
   const labels = screen.getAllByRole('button').map((item) => String(item.props.accessibilityLabel));
@@ -151,14 +151,115 @@ describe('PR detail next step', () => {
     expect(mockRouter.push).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ id: 'session-one' }) }));
   });
 
-  it('a requested review offers Review with Talyn, which opens the review sheet', async () => {
+  it('a requested review offers Approve and Request changes, and Review with Talyn moves to the menu', async () => {
     serve(pr(), null);
     await render(<PullRequestDetailScreen />);
     expect(await screen.findByText('Your review is requested')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Request changes' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Open pull request website' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Review with Talyn' })).toBeNull();
+    await openMenu();
     await fireEvent.press(screen.getByRole('button', { name: 'Review with Talyn' }));
     expect(await screen.findByRole('tab', { name: 'Quick' })).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Start review' }));
     await waitFor(() => expect(mockActive.api.pullRequests.startCodeReview).toHaveBeenCalledWith('pr-one', { preset: 'standard' }));
+  });
+});
+
+describe('PR detail review buttons', () => {
+  // The prompt draws over the bar, so its submit button is the last one with the name.
+  const submit = (name: string) => screen.getAllByRole('button', { name }).at(-1)!;
+
+  it.each([
+    ['without a comment', '', undefined],
+    ['with a comment', '  Looks good.  ', 'Looks good.'],
+  ])('Approve submits %s', async (_label, typed, body) => {
+    serve(pr());
+    await render(<PullRequestDetailScreen />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled());
+    await fireEvent.press(screen.getByRole('button', { name: 'Approve' }));
+    expect(await screen.findByText('Approve #42')).toBeVisible();
+    if (typed) await fireEvent.changeText(screen.getByLabelText('Comment (optional)'), typed);
+    expect(submit('Approve')).toBeEnabled();
+    await act(async () => { fireEvent.press(submit('Approve')); });
+    await waitFor(() => expect(mockActive.api.pullRequests.submitReview).toHaveBeenCalledWith('pr-one',
+      body ? { event: 'approve', body } : { event: 'approve' }));
+    expect(await screen.findByText('Approved.')).toBeVisible();
+    expect(screen.queryByText('Approve #42')).toBeNull();
+  });
+
+  it('Request changes refuses an empty comment, then submits it', async () => {
+    serve(pr());
+    await render(<PullRequestDetailScreen />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Request changes' })).toBeEnabled());
+    await fireEvent.press(screen.getByRole('button', { name: 'Request changes' }));
+    expect(await screen.findByText('Request changes on #42')).toBeVisible();
+    expect(submit('Request changes')).toBeDisabled();
+    await fireEvent.changeText(screen.getByLabelText('What to change'), '   ');
+    expect(submit('Request changes')).toBeDisabled();
+    await act(async () => { fireEvent.press(submit('Request changes')); });
+    expect(mockActive.api.pullRequests.submitReview).not.toHaveBeenCalled();
+    await fireEvent.changeText(screen.getByLabelText('What to change'), 'Please add a test.');
+    expect(submit('Request changes')).toBeEnabled();
+    await act(async () => { fireEvent.press(submit('Request changes')); });
+    await waitFor(() => expect(mockActive.api.pullRequests.submitReview).toHaveBeenCalledWith('pr-one',
+      { event: 'request_changes', body: 'Please add a test.' }));
+    expect(await screen.findByText('Changes requested.')).toBeVisible();
+  });
+
+  it('shows GitHub\'s message when the review fails, and keeps the comment', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    mockActive.api.pullRequests.submitReview.mockRejectedValue(new Error('GitHub API error 422: Review cannot be submitted'));
+    serve(pr());
+    await render(<PullRequestDetailScreen />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Request changes' })).toBeEnabled());
+    await fireEvent.press(screen.getByRole('button', { name: 'Request changes' }));
+    await fireEvent.changeText(screen.getByLabelText('What to change'), 'Split this.');
+    await act(async () => { fireEvent.press(submit('Request changes')); });
+    await waitFor(() => expect(alert).toHaveBeenCalledWith('Could not request changes on #42', 'GitHub API error 422: Review cannot be submitted'));
+    expect(screen.getByText('Request changes on #42')).toBeVisible();
+    expect(screen.getByLabelText('What to change').props.value).toBe('Split this.');
+  });
+
+  it('holds both buttons until the current copy loads', async () => {
+    const row = pr();
+    mockActive.api.pullRequests.list.mockResolvedValue([row]);
+    await act(async () => { await mockActive.store.load('attention'); });
+    let answer: (value: unknown) => void = () => {};
+    mockActive.api.pullRequests.get.mockReturnValue(new Promise((resolve) => { answer = resolve; }) as never);
+    await render(<PullRequestDetailScreen />);
+    expect(await screen.findByText('Your review is requested')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Request changes' })).toBeDisabled();
+    await act(async () => { answer({ row, fresh: fresh(row) }); });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Request changes' })).toBeEnabled();
+  });
+
+  it.each([
+    ['my own PR', mine()],
+    ['my own PR that also lists me as reviewer', mine({ reviewRequested: true })],
+    ['a PR that does not ask for my review', pr({ reviewRequested: false })],
+    ['a closed PR', pr({ state: 'closed' })],
+  ])('offers neither on %s, in the bar or the menu', async (_label, row) => {
+    serve(row);
+    await render(<PullRequestDetailScreen />);
+    await openMenu();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Request changes' })).toBeNull();
+  });
+
+  it('lists them in the menu when another state holds the bar', async () => {
+    serve(pr({ summary: { ...pr().summary, draft: true } }), null);
+    await render(<PullRequestDetailScreen />);
+    expect(await screen.findByText('Mark it ready for review on GitHub before it can merge.')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    await openMenu();
+    expect(menuItems()).toEqual(['Copy link', 'Copy as Markdown link', 'Share', 'Open on GitHub', 'Review with Talyn', 'Approve',
+      'Request changes', 'Hide review request', 'Refresh']);
+    await fireEvent.press(screen.getByRole('button', { name: 'Approve' }));
+    expect(await screen.findByText('Approve #42')).toBeVisible();
   });
 });
 
@@ -178,8 +279,8 @@ describe('PR detail menu', () => {
     serve(pr());
     await render(<PullRequestDetailScreen />);
     await openMenu();
-    // Review with Talyn is the primary button, so the menu does not repeat it.
-    expect(menuItems()).toEqual(['Copy link', 'Copy as Markdown link', 'Share', 'Open on GitHub', 'Hide review request', 'Refresh']);
+    // Approve and Request changes are in the bar, so the menu does not repeat them.
+    expect(menuItems()).toEqual(['Copy link', 'Copy as Markdown link', 'Share', 'Open on GitHub', 'Review with Talyn', 'Hide review request', 'Refresh']);
     await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Hide review request' })); });
     expect(mockActive.api.pullRequests.setReviewHidden).toHaveBeenCalledWith('pr-one', true);
     expect(await screen.findByText('Hidden from your review requests.')).toBeVisible();

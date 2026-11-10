@@ -87,6 +87,8 @@ To drop a pull request from the list and the count, select the hide icon on its 
 
 To keep a pull request on **My PRs** after you review it, select the bookmark icon.
 
+In the mobile app, a pull request that asks for your review has **Approve** and **Request changes** buttons. The review goes to GitHub from your own account. Request changes needs a comment.
+
 ## Share a list
 
 **Copy list** copies the pull requests you can see as a list, ready to paste into Slack.

@@ -81,6 +81,9 @@ export function fixture() {
       list: jest.fn(async () => [pr()]), get: jest.fn(async () => ({ row: pr(), fresh: null })),
       mergeQueueTimeline: jest.fn(async () => ({ events: [] })),
       merge: jest.fn(async (_id?: string) => ({ merged: true, message: 'Merged.' } as { merged: boolean; message: string; submitted?: boolean; alreadyTerminal?: boolean })),
+      submitReview: jest.fn(async (id?: string, input?: { event: string; body?: string }) => ({
+        review: { id: 1, state: input?.event === 'request_changes' ? 'CHANGES_REQUESTED' : 'APPROVED', url: 'https://github.com/example/project/pull/42#pullrequestreview-1' },
+        row: pr({ id: id ?? 'pr-1', reviewRequested: false }) as PRRow | null })),
       setMergeQueue: jest.fn(async (_id?: string, _enabled?: boolean) => null),
       setAutoKeepMergeable: jest.fn(async (_id?: string, _enabled?: boolean) => null),
       resubmitMergeQueue: jest.fn(async (_id?: string) => null),

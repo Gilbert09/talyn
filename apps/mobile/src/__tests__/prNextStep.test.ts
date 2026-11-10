@@ -61,8 +61,8 @@ describe('prNextStep, one row of the state table each', () => {
       'ready', 'Ready to merge', 'merge', 'Merge'],
     ['held by a branch rule', mine({}, { blockingReason: 'blocked' }), {}, 'branch_rule', 'Blocked by a branch rule', 'queue', 'Add to merge queue'],
     ['GitHub has not answered', mine({}, { blockingReason: 'unknown', mergeable: 'UNKNOWN' }), {}, 'waiting', 'Waiting for GitHub', 'queue', 'Add to merge queue'],
-    ['review requested from me', theirs({ reviewRequested: true }), {}, 'review_requested', 'Your review is requested', 'review', 'Review with Talyn'],
-    ['review requested, a review exists', theirs({ reviewRequested: true }), { codeReview: 'running' }, 'review_requested', 'Your review is requested', 'findings', 'View findings'],
+    ['review requested from me', theirs({ reviewRequested: true }), {}, 'review_requested', 'Your review is requested', 'approve', 'Approve'],
+    ['review requested, a review exists', theirs({ reviewRequested: true }), { codeReview: 'running' }, 'review_requested', 'Your review is requested', 'approve', 'Approve'],
     ['someone else', theirs({}, { blockingReason: 'mergeable' }), {}, 'other', 'Ready to merge', 'open', 'Open on GitHub'],
   ])('%s', (_name, row, extra, key, verdict, kind, label) => {
     const step = next(row, extra);
@@ -113,12 +113,36 @@ describe('prNextStep, one row of the state table each', () => {
 
   it.each([
     ['author', mine({}, { blockingReason: 'merge_conflicts' }), 'conflicts', 'fix'],
-    ['reviewer', theirs({ reviewRequested: true }, { blockingReason: 'merge_conflicts' }), 'review_requested', 'review'],
+    ['reviewer', theirs({ reviewRequested: true }, { blockingReason: 'merge_conflicts' }), 'review_requested', 'approve'],
     ['bystander', theirs({}, { blockingReason: 'merge_conflicts' }), 'other', 'open'],
   ] as const)('the %s gets their own next step', (_who, row, key, kind) => {
     const step = next(row);
     expect(step.key).toBe(key);
     expect(step.primary?.kind).toBe(kind);
+  });
+
+  it.each<[string, PRRow, Partial<NextStepInput>, string, string | null, string | null]>([
+    ['review requested', theirs({ reviewRequested: true }), {}, 'review_requested', 'approve', 'request_changes'],
+    ['review requested, a code review is ready', theirs({ reviewRequested: true }), { codeReview: 'ready' }, 'review_requested', 'approve', 'request_changes'],
+    ['review requested, I already approved', theirs({ reviewRequested: true }, { reviewDecision: 'APPROVED' }), {}, 'review_requested', 'approve', 'request_changes'],
+    ['review requested on my own PR', mine({ reviewRequested: true }), {}, 'ready', 'merge', null],
+    ['review requested on a closed PR', theirs({ reviewRequested: true, state: 'closed' }), {}, 'closed', 'open', null],
+    ['review requested on a merged PR', theirs({ reviewRequested: true, state: 'merged' }), {}, 'merged', 'open', null],
+    ['review requested on a draft', theirs({ reviewRequested: true }, { draft: true }), {}, 'draft', 'open', null],
+    ['review requested while a run fixes it', theirs({ reviewRequested: true }), { taskRunning: true }, 'agent', null, null],
+    ['no review requested', theirs(), {}, 'other', 'open', null],
+    ['my own PR', mine(), {}, 'ready', 'merge', null],
+  ])('%s: primary and secondary', (_name, row, extra, key, primary, secondary) => {
+    const step = next(row, extra);
+    expect(step.key).toBe(key);
+    expect(step.primary?.kind ?? null).toBe(primary);
+    expect(step.secondary?.kind ?? null).toBe(secondary);
+  });
+
+  it('labels the review actions', () => {
+    const step = next(theirs({ reviewRequested: true }));
+    expect(step.primary).toEqual({ kind: 'approve', label: 'Approve' });
+    expect(step.secondary).toEqual({ kind: 'request_changes', label: 'Request changes' });
   });
 
   it('names up to three failing checks, required first, and counts from the live list', () => {
@@ -194,5 +218,25 @@ describe('PR detail model', () => {
     expect(lastHunkLines('1\n2', 3)).toBe('1\n2');
     expect(fileTotals([{ sha: '', filename: 'a', status: 'added', additions: 3, deletions: 1, changes: 4 },
       { sha: '', filename: 'b', status: 'removed', additions: 0, deletions: 5, changes: 5 }])).toEqual({ added: 3, removed: 6 });
+  });
+});
+
+describe('automation toggle text', () => {
+  const { queueToggleText, keepToggleText } = jest.requireActual('../features/prs/AutomationToggles') as typeof import('../features/prs/AutomationToggles');
+  it.each([
+    [{ mergeQueued: false }, 'Merge queue'],
+    [{ mergeQueued: true, mergeQueue: { status: 'queued', position: 4 } }, 'Queued #4'],
+    [{ mergeQueued: true, mergeQueue: { status: 'fixing' } }, 'Queue: fixing'],
+    [{ mergeQueued: true, mergeQueue: { status: 'merging' } }, 'Queue: merging'],
+    [{ mergeQueued: true, mergeQueue: { status: 'blocked' } }, 'Queue blocked'],
+  ])('queue %j reads %s', (row, text) => {
+    expect(queueToggleText(row as never)).toBe(text);
+  });
+  it.each([
+    [{ autoKeepMergeable: false }, 'Keep mergeable'],
+    [{ autoKeepMergeable: true }, 'Keeping mergeable'],
+    [{ autoKeepMergeable: true, autoMergeState: { paused: true } }, 'Keep mergeable paused'],
+  ])('keep mergeable %j reads %s', (row, text) => {
+    expect(keepToggleText(row as never)).toBe(text);
   });
 });

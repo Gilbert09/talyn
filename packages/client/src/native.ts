@@ -1456,7 +1456,23 @@ export const pullRequests = {
       via?: 'auto_merge' | 'label';
       alreadyTerminal?: boolean;
     }>('POST', `/pull-requests/${id}/merge`, { method }),
+  /**
+   * Approve or request changes, as the connected GitHub user. `body` is
+   * optional for `approve` and required for `request_changes` (400
+   * `body_required`). 409 `pr_not_open` / `own_pull_request` when GitHub would
+   * refuse; a GitHub 403/404/422 keeps its status and message. `row` is the
+   * refreshed PR row (null only if it vanished meanwhile).
+   */
+  submitReview: (id: string, input: { event: PRReviewEvent; body?: string }) =>
+    request<PRReviewSubmitResult>('POST', `/pull-requests/${id}/review`, input),
 };
+
+export type PRReviewEvent = 'approve' | 'request_changes';
+
+export interface PRReviewSubmitResult {
+  review: { id: number; state: string; url: string };
+  row: PRRow | null;
+}
 
 export const repositories = {
   files: (id: string) => request<{ paths: string[] }>('GET', `/repositories/${enc(id)}/files`),
