@@ -41,8 +41,8 @@ function QueueChipView({ position, chip }: { position: number; chip: QueueChip }
  * it last changed. Review requests add who was asked; the merge queue adds the
  * queue position, its status and why it is blocked.
  */
-export function PrRow({ row, now, divider = true, variant = 'mine', parentStatus }: {
-  row: PRRow; now: number; divider?: boolean; variant?: PrRowVariant; parentStatus?: MergeQueuePublic['status'];
+export function PrRow({ row, now, divider = true, variant = 'mine', parentStatus, onLongPress }: {
+  row: PRRow; now: number; divider?: boolean; variant?: PrRowVariant; parentStatus?: MergeQueuePublic['status']; onLongPress?(row: PRRow): void;
 }) {
   const queue = variant === 'queue';
   // The queue page has no review column, so its status pill carries the review verdict too, as on web.
@@ -57,6 +57,7 @@ export function PrRow({ row, now, divider = true, variant = 'mine', parentStatus
   const blocked = queue ? queueBlockedReason(row.mergeQueue) : null;
   const requestedText = requested ? `${requested.label}${requested.extra > 0 ? ` +${requested.extra}` : ''}` : '';
   return <Row href={pullRequestRoute(row.id)} title={prTitle(row)} divider={divider}
+    onLongPress={onLongPress ? () => onLongPress(row) : undefined} longPressLabel={`Link actions for ${prTitle(row)}`}
     accessibilityLabel={[`${prTitle(row)}.`, `${row.owner}/${row.repo} #${row.number} by ${author}.`,
       chip ? `Queue: ${position > 0 ? `position ${position}, ` : ''}${chip.label}.` : '',
       `Status: ${status.label}.`, review ? `Review: ${review.label}.` : '',

@@ -16,6 +16,7 @@ import { useResource } from '../../workflow/hooks';
 import { buildQueueGroups, hiddenReviewCohort, mineSections, PULLS_TITLES, queueCohort, queueParentStatus, reviewCohort,
   sortReviews, type PullsTab } from './lists';
 import { PrRow, type PrRowVariant } from './PrRow';
+import { prLinkTarget, usePrLinkMenu } from './usePrLinkMenu';
 
 interface ListSection { key: string; title: string; detail?: string; warning?: string; data: PRRow[] }
 
@@ -50,6 +51,7 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
   const { workflow } = useMobileRuntime();
   const features = useFeatures();
   const colors = useTheme();
+  const links = usePrLinkMenu();
   const now = useNow();
   const [showHidden, setShowHidden] = useState(false);
   const priority = reviewPriorityOffered(features);
@@ -81,10 +83,13 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
       // Hidden review requests sit under a toggle at the foot, like web. A short list, so it is not virtualized.
       ListFooterComponent={hiddenCount > 0 ? <View>
         <HiddenToggle count={hiddenCount} open={showHidden} onPress={() => setShowHidden(!showHidden)} />
-        {showHidden ? hidden.map((row, index) => <PrRow key={row.id} row={row} now={now} variant="review" divider={index < hidden.length - 1} />) : null}
+        {showHidden ? hidden.map((row, index) => <PrRow key={row.id} row={row} now={now} variant="review" divider={index < hidden.length - 1}
+          onLongPress={(item) => links.open(prLinkTarget(item))} />) : null}
       </View> : undefined}
       renderItem={({ item, index, section }) => <PrRow row={item} now={now} variant={VARIANT[tab]} parentStatus={parents?.get(item.id)}
-        divider={index < section.data.length - 1} />} />
+        divider={index < section.data.length - 1} onLongPress={(pr) => links.open(prLinkTarget(pr))} />} />
+    {links.toast}
+    {links.sheet}
   </ScreenContainer>;
 }
 

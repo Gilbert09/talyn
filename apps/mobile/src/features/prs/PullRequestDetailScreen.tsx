@@ -1,6 +1,6 @@
 import type { CloudProviderInfo, MergeQueueTimelineEvent, pullRequests } from '@talyn/client/native';
 import { fixBlockedMessage, queueSessionBadge, resolveReportingBar, type CloudAgentChoice, type Environment, type Workspace } from '@talyn/shared';
-import { useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Alert, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -22,6 +22,7 @@ import { autoKeepLabel, checksLine, failingChecks, fixAgentChoices, mergeLine, p
   type FixOutcome } from './actions';
 import { CodeReviewSection, CodeReviewSelectionBar, useCodeReview } from './CodeReviewSection';
 import { pullsRoute, queueBudgetsLine, queueStatusLine } from './lists';
+import { usePrLinkMenu, type PrLinkTarget } from './usePrLinkMenu';
 
 type PrDetail = Awaited<ReturnType<typeof pullRequests.get>>;
 type Busy = 'merge' | 'fix' | 'queue' | 'autoKeep' | 'resubmit' | null;
@@ -68,6 +69,7 @@ export function PullRequestDetailScreen() {
   const now = useNow();
   const colors = useTheme();
   const sheet = useActionSheet();
+  const links = usePrLinkMenu();
   const [busy, setBusy] = useState<Busy>(null);
   const [notice, setNotice] = useState<{ message: string; session?: { id: string; name: string } } | null>(null);
   useEffect(() => { if (row) completeIntent(`/attention/${encodeURIComponent(id)}`); }, [row, id]);
@@ -86,6 +88,7 @@ export function PullRequestDetailScreen() {
   const updated = summary?.updatedAt ?? row?.updatedAt;
   const url = summary ? safeExternalUrl(summary.url) : null;
   const ref = row ? `#${row.number}` : '';
+  const linkTarget: PrLinkTarget | null = row && url ? { title: summary?.title ?? '', url, ref: `${row.owner}/${row.repo} #${row.number}` } : null;
 
   const run = async (kind: Exclude<Busy, null>, title: string, action: () => Promise<void>) => {
     setBusy(kind);
@@ -143,7 +146,12 @@ export function PullRequestDetailScreen() {
   const stack = row ? stackLabel(row) : '';
   const busyAny = busy !== null || offline;
 
+  // As on web: a tap copies the plain link, and a long press offers the Markdown link, Share and GitHub.
   return <ScreenContainer>
+    {linkTarget ? <Stack.Screen options={{
+      headerRight: () => <IconButton label="Copy link" symbol={{ ios: 'link', android: 'link' }}
+        onPress={() => links.copyLink(linkTarget)} onLongPress={() => links.open(linkTarget)} longPressLabel="More link actions" />,
+    }} /> : null}
     <ScrollView contentContainerStyle={[styles.content, local.content]}
       refreshControl={<RefreshControl refreshing={(state.refreshing || timeline.refreshing) && Boolean(row)}
         onRefresh={() => { void state.refresh(); void codeReview.state.refresh(); if (queued) void timeline.refresh(); }} tintColor={colors.muted} colors={[colors.primaryAction]} />}>
@@ -228,7 +236,9 @@ export function PullRequestDetailScreen() {
         : <View style={{ flex: 1 }}><Button variant="secondary" title="Open on GitHub" accessibilityLabel="Open pull request website"
           icon={{ ios: 'safari', android: 'open_in_new' }} onPress={() => openExternal(url)} /></View> : null}
     </BottomBar> : null}
+    {links.toast}
     {sheet.sheet}
+    {links.sheet}
   </ScreenContainer>;
 }
 

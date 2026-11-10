@@ -70,14 +70,16 @@ export function Button({ title, onPress, disabled = false, accessibilityLabel, v
     <Text style={[size === 'sm' ? styles.buttonTextSmall : styles.buttonText, { color: foreground }]}>{title}</Text>
   </Pressable>;
 }
-export function IconButton({ label, symbol, onPress, disabled = false, tone, filled = false, size = 20 }: {
-  label: string; symbol: Symbol; onPress(): void; disabled?: boolean; tone?: Tone; filled?: boolean; size?: number;
+export function IconButton({ label, symbol, onPress, onLongPress, longPressLabel, disabled = false, tone, filled = false, size = 20 }: {
+  label: string; symbol: Symbol; onPress(): void; onLongPress?(): void; longPressLabel?: string; disabled?: boolean; tone?: Tone; filled?: boolean; size?: number;
 }) {
   const c = useTheme();
   const [pressed, setPressed] = useState(false);
   const tint = filled ? c.primaryText : tone ? toneColor(c, tone) : c.text;
   return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} hitSlop={4}
-    disabled={disabled} onPress={onPress} onPressIn={() => setPressed(true)} onPressOut={() => setPressed(false)}
+    disabled={disabled} onPress={onPress} onLongPress={onLongPress} onPressIn={() => setPressed(true)} onPressOut={() => setPressed(false)}
+    accessibilityActions={onLongPress ? [{ name: 'longpress', label: longPressLabel ?? 'More actions' }] : undefined}
+    onAccessibilityAction={onLongPress ? (event) => { if (event.nativeEvent.actionName === 'longpress') onLongPress(); } : undefined}
     style={[styles.iconButton, { backgroundColor: filled ? c.primaryAction : pressed ? c.surface : 'transparent', opacity: disabled ? 0.4 : 1 }]}>
     <SymbolView name={symbol} size={size} tintColor={tint} />
   </Pressable>;
@@ -313,6 +315,8 @@ export function useActionSheet() {
 
 export function ActionSheet({ request, onClose }: { request: SheetRequest; onClose(): void }) {
   const c = useTheme();
+  // An absolute child ignores the screen's padding, so the sheet adds the navigation bar inset itself.
+  const bottom = useContext(SafeAreaInsetsContext)?.bottom ?? 0;
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => { onClose(); return true; });
     return () => subscription.remove();
@@ -320,7 +324,7 @@ export function ActionSheet({ request, onClose }: { request: SheetRequest; onClo
   return <View style={StyleSheet.absoluteFill}>
     <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose}
       style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
-    <View accessibilityViewIsModal style={[styles.sheet, { backgroundColor: c.elevated, borderColor: c.border }]}>
+    <View accessibilityViewIsModal style={[styles.sheet, { backgroundColor: c.elevated, borderColor: c.border, paddingBottom: 24 + bottom }]}>
       <View style={styles.sheetHeader}>
         <AppText accessibilityRole="header" variant="rowTitle" numberOfLines={2}>{request.title}</AppText>
         {request.message ? <AppText variant="meta" tone="muted">{request.message}</AppText> : null}
@@ -397,7 +401,8 @@ export function useToast(duration = 2000) {
 }
 export function Toast({ message }: { message: string }) {
   const c = useTheme();
-  return <View pointerEvents="none" style={styles.toastWrap}>
+  const bottom = useContext(SafeAreaInsetsContext)?.bottom ?? 0;
+  return <View pointerEvents="none" style={[styles.toastWrap, { bottom: 32 + bottom }]}>
     <View style={[styles.toast, { backgroundColor: c.elevated, borderColor: c.border }]}>
       <SymbolView name={{ ios: 'checkmark.circle', android: 'check_circle' }} size={16} tintColor={c.success} />
       <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[type.meta, sans(500), { color: c.text, flexShrink: 1 }]}>{message}</Text>
