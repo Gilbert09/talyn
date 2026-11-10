@@ -7,6 +7,8 @@ import { receiveGithubReturn } from '../src/features/onboarding/githubReturn';
 import { productPath, rememberIntent } from '../src/navigation/intents';
 import { billingReturnPath, linkPath } from '../src/navigation/returnLinks';
 
+const PULLS_TAB_VALUES = ['mine', 'reviews', 'queue'] as const;
+
 export function redirectSystemPath({ path }: { path: string; initial: boolean }): string {
   try {
     const url = new URL(path, 'https://local.invalid');
@@ -27,7 +29,13 @@ export function redirectSystemPath({ path }: { path: string; initial: boolean })
     }
     const product = productPath(path);
     if (product) { rememberIntent(path); return product; }
-    return url.pathname;
+    // A custom scheme puts the first segment in the host (`talyn-mobile://pulls` has host `pulls` and no path), so
+    // use the whole logical path. Query data is dropped as for product links; the PR list keeps only a known tab.
+    if (logical === '/pulls') {
+      const tab = url.searchParams.get('tab');
+      return tab && (PULLS_TAB_VALUES as readonly string[]).includes(tab) ? `/pulls?tab=${tab}` : '/pulls';
+    }
+    return logical;
   } catch {
     return '/';
   }

@@ -14,6 +14,20 @@ describe('product deep links in memory', () => {
   it.each(['/sessions', '/sessions/id/extra', '/sessions/a%2fb', '/threads/a%5cb', '/settings/admin', 'not a link'])('rejects unsupported product path %s', (path) => {
     expect(productPath(path)).toBeNull();
   });
+  it.each([
+    ['talyn-mobile-development://pulls?tab=mine', '/pulls?tab=mine'],
+    ['talyn-mobile://pulls?tab=reviews', '/pulls?tab=reviews'],
+    ['talyn-mobile://pulls?tab=queue&secret=x', '/pulls?tab=queue'],
+    ['talyn-mobile://pulls?tab=admin', '/pulls'],
+    ['talyn-mobile://pulls', '/pulls'],
+    ['/pulls?tab=mine', '/pulls?tab=mine'],
+    ['talyn-mobile://settings', '/settings'],
+    ['talyn-mobile://settings?token=private', '/settings'],
+    ['talyn-mobile://billing', '/billing'],
+    ['talyn-mobile://', '/'],
+  ])('routes the custom-scheme link %s to %s', (url, expected) => {
+    expect(redirectSystemPath({ path: url, initial: true })).toBe(expected);
+  });
   it('retains one cold intent across authentication and workspace selection', () => {
     rememberIntent('/sessions/session-one'); expect(peekIntent()).toBe('/sessions/session-one');
     expect(consumeIntent()).toBe('/sessions/session-one'); expect(consumeIntent()).toBeNull();

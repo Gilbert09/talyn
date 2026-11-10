@@ -237,6 +237,12 @@ describe('native shell', () => {
     expect(screen).toHavePathname('/sessions/session-one');
   });
 
+  it('keeps the chooser open when it was opened on purpose', async () => {
+    await renderRouter(routes, { initialUrl: '/workspaces' });
+    expect(screen.getByRole('header', { name: 'Choose a workspace' })).toBeVisible();
+    expect(screen).toHavePathname('/workspaces');
+  });
+
   it('shows account details and accessible account actions', async () => {
     await renderRouter(routes, { initialUrl: '/settings' });
     expect(screen.getByText('Signed in with GitHub')).toBeVisible();
