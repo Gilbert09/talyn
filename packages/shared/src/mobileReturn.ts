@@ -49,7 +49,7 @@ export const GITHUB_CALLBACK_ERROR_REASONS = [
 export type GitHubCallbackErrorReason = (typeof GITHUB_CALLBACK_ERROR_REASONS)[number];
 
 /** `kind` on a billing return: a plan checkout, a credit-pack checkout, or the portal. */
-export const MOBILE_BILLING_RETURN_KINDS = ['checkout', 'credits', 'portal'] as const;
+export const MOBILE_BILLING_RETURN_KINDS = ['checkout', 'credits', 'reset', 'portal'] as const;
 export type MobileBillingReturnKind = (typeof MOBILE_BILLING_RETURN_KINDS)[number];
 
 /**

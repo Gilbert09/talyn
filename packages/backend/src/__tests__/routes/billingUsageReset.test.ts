@@ -10,10 +10,9 @@ import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
 import { usagePeriods, usageResets, users as usersTable } from '../../db/schema.js';
-import { resetFeatureFlagsForTests } from '../../services/featureFlags.js';
 
 const polarMocks = vi.hoisted(() => ({
-  createUsageResetCheckoutUrl: vi.fn(async (_userId: string, tier: string) => `https://polar.test/reset/${tier}`),
+  createUsageResetCheckoutUrl: vi.fn(async (_userId: string, tier: string, _returnTo?: string | null) => `https://polar.test/reset/${tier}`),
 }));
 
 vi.mock('../../services/billing/polar.js', async (importOriginal) => {
@@ -29,9 +28,8 @@ const ENV: Record<string, string> = {
   POLAR_PRODUCT_ID_RESET_PRO: 'prod-reset-pro',
   POLAR_PRODUCT_ID_RESET_MAX: 'prod-reset-max',
   POLAR_PRODUCT_ID_RESET_LEGACY_PRO: 'prod-reset-legacy',
-  USAGE_RESET_ENABLED: 'true',
 };
-const TOUCHED = [...Object.keys(ENV), 'TALYN_POSTHOG_KEY'];
+const TOUCHED = [...Object.keys(ENV), 'TALYN_PUBLIC_API_URL', 'WEB_APP_URL'];
 const savedEnv: Record<string, string | undefined> = {};
 
 let db: Database;
@@ -72,7 +70,6 @@ beforeEach(async () => {
     delete process.env[k];
   }
   Object.assign(process.env, ENV);
-  resetFeatureFlagsForTests();
   await seedUser(db);
 
   const app = express();
@@ -93,7 +90,6 @@ afterEach(async () => {
     if (savedEnv[k] === undefined) delete process.env[k];
     else process.env[k] = savedEnv[k];
   }
-  resetFeatureFlagsForTests();
   polarMocks.createUsageResetCheckoutUrl.mockClear();
   await close();
   await cleanup();
@@ -113,7 +109,6 @@ describe('GET /billing/status: the usage reset offer', () => {
   });
 
   it.each<[string, () => Promise<void>]>([
-    ['the flag is off', async () => void (process.env.USAGE_RESET_ENABLED = 'false')],
     ['the tier has no reset product', async () => void delete process.env.POLAR_PRODUCT_ID_RESET_PRO],
     ['nothing is used yet', async () => void (await db.update(usagePeriods).set({ usedWsec: 0 }))],
     ['the account is free', async () => void (await setOverride(null))],
@@ -121,7 +116,6 @@ describe('GET /billing/status: the usage reset offer', () => {
     await setOverride('pro');
     await seedPeriod('pro', 5 * HOUR);
     await arrange();
-    resetFeatureFlagsForTests();
     const status = await getStatus();
     expect(status.usageReset).toBeUndefined();
   });
@@ -148,22 +142,44 @@ describe('POST /billing/usage-reset/checkout', () => {
     const res = await checkout();
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ success: true, data: { url: 'https://polar.test/reset/max' } });
-    expect(polarMocks.createUsageResetCheckoutUrl).toHaveBeenCalledWith(TEST_USER_ID, 'max');
+    expect(polarMocks.createUsageResetCheckoutUrl).toHaveBeenCalledWith(TEST_USER_ID, 'max', null);
   });
 
   it.each<[string, () => Promise<void>, number, string]>([
     ['a free account', async () => void (await setOverride(null)), 402, 'usage_reset_requires_paid_plan'],
     ['nothing used', async () => void (await db.update(usagePeriods).set({ usedWsec: 0 })), 409, 'nothing_to_reset'],
-    ['the flag off', async () => void (process.env.USAGE_RESET_ENABLED = 'false'), 404, 'usage_reset_unavailable'],
     ['no product for the tier', async () => void delete process.env.POLAR_PRODUCT_ID_RESET_PRO, 404, 'usage_reset_unavailable'],
   ])('refuses %s', async (_label, arrange, status, code) => {
     await setOverride('pro');
     await seedPeriod('pro', 5 * HOUR);
     await arrange();
-    resetFeatureFlagsForTests();
     const res = await checkout();
     expect(res.status).toBe(status);
     expect(await res.json()).toMatchObject({ success: false, code });
+    expect(polarMocks.createUsageResetCheckoutUrl).not.toHaveBeenCalled();
+  });
+
+  it('passes the mobile returnTo through to the checkout', async () => {
+    await setOverride('pro');
+    await seedPeriod('pro', 5 * HOUR);
+    const res = await fetch(`${url}/billing/usage-reset/checkout`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ returnTo: 'talyn-mobile://' }),
+    });
+    expect(res.status).toBe(200);
+    expect(polarMocks.createUsageResetCheckoutUrl).toHaveBeenCalledWith(TEST_USER_ID, 'pro', 'talyn-mobile://');
+  });
+
+  it('refuses a returnTo that is not an allowed app scheme', async () => {
+    await setOverride('pro');
+    await seedPeriod('pro', 5 * HOUR);
+    const res = await fetch(`${url}/billing/usage-reset/checkout`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ returnTo: 'https://evil.test/' }),
+    });
+    expect(res.status).toBe(400);
     expect(polarMocks.createUsageResetCheckoutUrl).not.toHaveBeenCalled();
   });
 

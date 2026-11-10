@@ -3,7 +3,7 @@ import {
   type BillingStatus, type MobileBillingReturnKind, type MobileBillingReturnResult,
 } from '@talyn/shared';
 
-/** What the browser flow did: bought a plan, bought credits, or managed the subscription. */
+/** What the browser flow did: bought a plan, bought credits, reset usage, or managed the subscription. */
 export type ReturnKind = MobileBillingReturnKind;
 /** `unknown` when the app saw the browser come back but not the link it came back on. */
 export type ReturnResult = MobileBillingReturnResult | 'unknown';
@@ -28,10 +28,12 @@ export function returnLanded(kind: ReturnKind, before: BillingStatus | null, aft
   if (kind === 'portal') return true;
   if (!before) return kind === 'checkout' ? after.tier !== undefined && after.tier !== 'free' : true;
   if (kind === 'checkout') return after.tier !== before.tier || after.period !== before.period;
+  if (kind === 'reset') return (after.usage?.resets ?? 0) > (before.usage?.resets ?? 0);
   return (after.credits?.balanceMicros ?? 0) > (before.credits?.balanceMicros ?? 0);
 }
 
 export function returnTitle(kind: ReturnKind): string {
+  if (kind === 'reset') return 'Resetting your usage…';
   return kind === 'credits' ? 'Adding your credits…' : kind === 'portal' ? 'Updating your plan…' : 'Finishing your upgrade…';
 }
 
@@ -40,9 +42,11 @@ export interface ReturnBanner { tone: 'success' | 'information' | 'warning'; mes
 /** The banner the plan page shows after the flow, or null for none. */
 export function returnBanner(kind: ReturnKind, result: ReturnResult, landed: boolean, after: BillingStatus | null): ReturnBanner | null {
   if (result === 'cancel') {
+    if (kind === 'reset') return { tone: 'information', message: 'The usage reset was canceled. Nothing was charged.' };
     return { tone: 'information', message: kind === 'credits' ? 'The credit purchase was canceled. Nothing was charged.' : 'Checkout was canceled. Nothing was charged.' };
   }
   if (kind === 'portal') return null;
+  if (landed && kind === 'reset') return { tone: 'success', message: 'Usage reset. Your box-hours are back.' };
   if (landed && kind === 'credits') {
     return { tone: 'success', message: `Credits added. Your balance is ${formatUsd(after?.credits?.balanceMicros ?? 0)}.` };
   }
@@ -51,6 +55,9 @@ export function returnBanner(kind: ReturnKind, result: ReturnResult, landed: boo
     return { tone: 'success', message: tier ? `You are on ${tier} now.` : 'Your plan is updated.' };
   }
   if (result === 'unknown') return null;
+  if (kind === 'reset') {
+    return { tone: 'warning', message: 'Your usage reset has not arrived yet. It can take a minute. Pull down to refresh.' };
+  }
   return { tone: 'warning', message: kind === 'credits'
     ? 'Your credits have not arrived yet. They can take a minute. Pull down to refresh.'
     : 'Your plan has not updated yet. It can take a minute. Pull down to refresh.' };

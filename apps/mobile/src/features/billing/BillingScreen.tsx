@@ -9,8 +9,8 @@ import { AppText, Banner, EmptyState, Group, Notice, Pill, Row, useToast } from 
 import { StateNotice } from '../../components/Workflow';
 import { Fact, Loading, Page } from '../more/Page';
 import { usageViewOf, type UsageView } from '../usage/model';
-import { AutoTopupSection, CreditsSection } from './CreditsSection';
-import { appPurchaseMode, requestCheckout, requestCreditCheckout, requestPortal, runHostedFlow, useBillingStatus, useOrders } from './data';
+import { AutoTopupSection, CreditsSection, UsageResetSection } from './CreditsSection';
+import { appPurchaseMode, requestCheckout, requestCreditCheckout, requestPortal, requestUsageResetCheckout, runHostedFlow, useBillingStatus, useOrders } from './data';
 import {
   billingErrorCopy, changedPlanMessage, longDate, orderAmount, planCards, planSummary, reasonNotice, showsPeriodSwitch,
   type BillingReason, type Period, type PlanAction,
@@ -113,6 +113,18 @@ export function BillingScreen({ reason = null }: { reason?: BillingReason | null
     }
   };
 
+  const resetUsage = async () => {
+    setBusy('reset');
+    try {
+      const { url } = await requestUsageResetCheckout();
+      await hosted('reset', url);
+    } catch (error) {
+      showError(error, { action: 'reset' }, 'Could not start the checkout');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const act = (action: PlanAction) => {
     if (!view || mode === 'none') return;
     if (action.kind === 'portal') { void openPortal(); return; }
@@ -143,16 +155,16 @@ export function BillingScreen({ reason = null }: { reason?: BillingReason | null
       {loaded && status.data?.billingEnabled && !view
         ? <EmptyState title="Plan details are not available" detail="This server does not report box-hour usage yet." /> : null}
       {view ? <BillingBody view={view} mode={mode} period={period} setPeriod={setPeriod} busy={busy} offline={offline}
-        onAction={act} onBuyCredits={(pack) => { void buyCredits(pack); }} onPortal={() => { void openPortal(); }}
+        onAction={act} onBuyCredits={(pack) => { void buyCredits(pack); }} onResetUsage={() => { void resetUsage(); }} onPortal={() => { void openPortal(); }}
         onTopupSaved={(message) => { toast.show(message); void status.refresh(); }} orders={orders.data ?? []} /> : null}
     </Page>
     {toast.element}
   </View>;
 }
 
-function BillingBody({ view, mode, period, setPeriod, busy, offline, onAction, onBuyCredits, onPortal, onTopupSaved, orders }: {
+function BillingBody({ view, mode, period, setPeriod, busy, offline, onAction, onBuyCredits, onResetUsage, onPortal, onTopupSaved, orders }: {
   view: UsageView; mode: ReturnType<typeof appPurchaseMode>; period: Period; setPeriod(period: Period): void; busy: string | null;
-  offline: boolean; onAction(action: PlanAction): void; onBuyCredits(pack: CreditPackId): void; onPortal(): void;
+  offline: boolean; onAction(action: PlanAction): void; onBuyCredits(pack: CreditPackId): void; onResetUsage(): void; onPortal(): void;
   onTopupSaved(message: string): void; orders: NonNullable<ReturnType<typeof useOrders>['data']>;
 }) {
   const { status, tier } = view;
@@ -173,6 +185,8 @@ function BillingBody({ view, mode, period, setPeriod, busy, offline, onAction, o
       message="Your last payment failed. Update your payment method to keep your plan. The plan drops to Free if the retries run out."
       action={canManage ? 'Manage subscription' : undefined} onAction={canManage ? onPortal : undefined} actionDisabled={blocked} /> : null}
     <UsageGauge view={view} />
+    {status.usageReset && mode === 'external' ? <UsageResetSection offer={status.usageReset} periodEnd={status.usage?.periodEnd}
+      resets={status.usage?.resets} busy={busy === 'reset'} disabled={blocked} onReset={onResetUsage} /> : null}
     <View style={styles.plans}>
       <AppText accessibilityRole="header" variant="section" tone="muted" style={styles.label}>Plans</AppText>
       {showsPeriodSwitch(view, mode) ? <PeriodSwitch value={period} onChange={setPeriod} /> : null}

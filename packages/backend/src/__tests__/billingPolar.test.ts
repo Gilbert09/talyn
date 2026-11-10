@@ -343,6 +343,14 @@ describe('request shapes', () => {
     });
   });
 
+  it('usage reset checkout returns to the mobile app through the bounce route', async () => {
+    process.env.TALYN_PUBLIC_API_URL = 'https://api.talyn.test';
+    await polar.createUsageResetCheckoutUrl('user-1', 'pro', 'talyn-mobile://');
+    const req = sdk.checkoutsCreate.mock.calls[0][0] as { successUrl: string; returnUrl: string };
+    expect(req.successUrl).toMatch(/^https:\/\/api\.talyn\.test\/.*kind=reset.*result=success/);
+    expect(req.returnUrl).toMatch(/kind=reset.*result=cancel/);
+  });
+
   it('usage reset checkout throws when the tier has no reset product', async () => {
     delete process.env.POLAR_PRODUCT_ID_RESET_MAX;
     await expect(polar.createUsageResetCheckoutUrl('user-1', 'max')).rejects.toThrow(/Max usage reset/);

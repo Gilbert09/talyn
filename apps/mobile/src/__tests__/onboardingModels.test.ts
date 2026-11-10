@@ -71,6 +71,7 @@ describe('return links', () => {
     ['talyn-mobile://github/callback?github=connected', '/github/callback'],
     ['talyn-mobile-preview://github/callback?github=error&reason=denied', '/github/callback'],
     ['talyn-mobile://billing/return?kind=credits&result=success', '/billing/return?kind=credits&result=success'],
+    ['talyn-mobile://billing/return?kind=reset&result=success', '/billing/return?kind=reset&result=success'],
     ['talyn-mobile://auth/callback?code=abc', '/auth/callback'],
     ['talyn-mobile://mcp/callback?mcp=connected', '/mcp/callback'],
     ['talyn-mobile://mcp/callback?mcp=error&code=abc', '/mcp/callback'],

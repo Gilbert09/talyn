@@ -191,8 +191,8 @@ export function checkoutRedirects(
   kind: 'plan' | 'credits' | 'reset',
   returnTo?: string | null
 ): { successUrl?: string; returnUrl?: string } {
-  if (returnTo && kind !== 'reset') {
-    const returnKind = kind === 'plan' ? 'checkout' : 'credits';
+  if (returnTo) {
+    const returnKind = kind === 'plan' ? 'checkout' : kind;
     const successUrl = mobileBillingBounceUrl(returnTo, returnKind, 'success');
     const returnUrl = mobileBillingBounceUrl(returnTo, returnKind, 'cancel');
     if (successUrl && returnUrl) return { successUrl, returnUrl };
@@ -316,10 +316,14 @@ export async function createCreditCheckoutUrl(
  * Hosted checkout for a usage reset of `tier` (a one-time product at the
  * tier's monthly price). The `order.paid` webhook applies the reset; the
  * product id says which tier, so the metadata is a label only. Discount codes
- * are off, as for credit packs. Web and desktop only for now, so there is no
- * mobile `returnTo`.
+ * are off, as for credit packs. `returnTo` is the mobile app's URL base, as
+ * for {@link createCreditCheckoutUrl}.
  */
-export async function createUsageResetCheckoutUrl(userId: string, tier: UsageResetTier): Promise<string> {
+export async function createUsageResetCheckoutUrl(
+  userId: string,
+  tier: UsageResetTier,
+  returnTo: string | null = null
+): Promise<string> {
   const productId = usageResetProductId(tier);
   if (!productId) throw new Error(`Polar product id for the ${PLAN_TIER_LABELS[tier]} usage reset is not set`);
   const checkout = await timed('POST', 'checkouts.create', () =>
@@ -328,7 +332,7 @@ export async function createUsageResetCheckoutUrl(userId: string, tier: UsageRes
       externalCustomerId: userId,
       allowDiscountCodes: false,
       metadata: { kind: 'usage_reset', tier },
-      ...checkoutRedirects('reset'),
+      ...checkoutRedirects('reset', returnTo),
     })
   );
   return checkout.url;

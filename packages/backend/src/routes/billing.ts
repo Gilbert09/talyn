@@ -28,6 +28,7 @@ import {
   type SandboxSize,
   type SellableTier,
   type UpdateAutoTopupRequest,
+  type UsageResetCheckoutRequest,
   type UsageDay,
   type UsageIntervalPublic,
   type UsageSubjectKind,
@@ -82,7 +83,7 @@ export const ANNUAL_TO_MONTHLY_CODE = 'annual_to_monthly_via_portal';
 export const DOWNGRADE_VIA_PORTAL_CODE = 'downgrade_via_portal';
 /** 403 code when this deployment does not sell Max (the Max product is unset). */
 export const MAX_PLAN_UNAVAILABLE_CODE = 'max_plan_unavailable';
-/** 404 code when usage resets are off for this account or deployment. */
+/** 404 code when this deployment has no reset product for the caller's tier. */
 export const USAGE_RESET_UNAVAILABLE_CODE = 'usage_reset_unavailable';
 /** 402 code when a free account asks for a usage reset. */
 export const USAGE_RESET_REQUIRES_PAID_PLAN_CODE = 'usage_reset_requires_paid_plan';
@@ -437,16 +438,15 @@ export function billingRoutes(): Router {
 
   // Hosted checkout for a usage reset: the plan's monthly price, once, for a
   // full allowance in the current period. `order.paid` applies the reset.
-  // The tier is the caller's own; the body carries nothing.
+  // The tier is the caller's own; the body carries only the mobile `returnTo`.
   router.post('/usage-reset/checkout', async (req, res) => {
     if (!billingEnabled()) return notConfigured(res);
-    const user = assertUser(req);
-    const budget = await getBudget(user.id);
-    const availability = await usageResetAvailability({
-      subject: { distinctId: user.id, email: user.email },
-      tier: budget.tier,
-      usedWsec: budget.usedWsec,
-    });
+    const body = (req.body ?? {}) as Partial<UsageResetCheckoutRequest>;
+    const returnTo = parseReturnTo(body.returnTo);
+    if (!returnTo.ok) return res.status(400).json(invalidReturnToBody());
+    const userId = assertUser(req).id;
+    const budget = await getBudget(userId);
+    const availability = usageResetAvailability({ tier: budget.tier, usedWsec: budget.usedWsec });
     if (!availability.ok) {
       if (availability.reason === 'paid_plan_required') {
         return res.status(402).json({
@@ -464,7 +464,7 @@ export function billingRoutes(): Router {
       }
       return res.status(404).json({ success: false, code: USAGE_RESET_UNAVAILABLE_CODE, error: 'Usage resets are not available.' });
     }
-    const url = await createUsageResetCheckoutUrl(user.id, availability.offer.tier);
+    const url = await createUsageResetCheckoutUrl(userId, availability.offer.tier, returnTo.returnTo);
     res.json({ success: true, data: { url } } as ApiResponse<CheckoutSessionResponse>);
   });
 

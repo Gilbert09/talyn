@@ -12,7 +12,6 @@ import {
 import { getPoolDbClient } from '../../../db/client.js';
 import { usageResets } from '../../../db/schema.js';
 import { domainEvents } from '../../events.js';
-import { isFeatureEnabled, type FlagSubject } from '../../featureFlags.js';
 import { billingEnabled } from '../entitlements.js';
 import { usageResetProductId } from '../polar.js';
 import { chargeOwnerAt } from './charge.js';
@@ -139,17 +138,16 @@ export type UsageResetRefusal = 'not_enabled' | 'paid_plan_required' | 'nothing_
 /**
  * Whether the owner can buy a usage reset now, and what it gives. The billing
  * status draws the offer from this and the checkout route enforces it, so the
- * two cannot disagree. The flag is read last: it is the only remote call.
+ * two cannot disagree. Resets are on for every paid tier whose reset product
+ * is set; there is no feature flag.
  */
-export async function usageResetAvailability(input: {
-  subject: FlagSubject;
+export function usageResetAvailability(input: {
   tier: PlanTier;
   usedWsec: number;
-}): Promise<{ ok: true; offer: UsageResetOffer } | { ok: false; reason: UsageResetRefusal }> {
+}): { ok: true; offer: UsageResetOffer } | { ok: false; reason: UsageResetRefusal } {
   if (!billingEnabled()) return { ok: false, reason: 'not_enabled' };
   if (!isUsageResetTier(input.tier)) return { ok: false, reason: 'paid_plan_required' };
   if (!usageResetProductId(input.tier)) return { ok: false, reason: 'not_enabled' };
-  if (!(await isFeatureEnabled('usageReset', input.subject))) return { ok: false, reason: 'not_enabled' };
   if (input.usedWsec <= 0) return { ok: false, reason: 'nothing_used' };
   const tier = input.tier;
   return { ok: true, offer: { tier, priceMicros: usageResetPriceMicros(tier), includedWsec: includedWeightedSeconds(tier) } };

@@ -2011,8 +2011,8 @@ export interface BillingStatus {
   pricing?: BillingPricing;
   /**
    * A usage reset this account can buy now: the tier's monthly price for a
-   * fresh allowance in the current period. Absent when resets are off, the
-   * tier is free, the reset product is not set, or nothing is used yet.
+   * fresh allowance in the current period. Absent when billing is off, the
+   * tier is free, the tier's reset product is not set, or nothing is used yet.
    */
   usageReset?: UsageResetOffer;
 }
@@ -2028,6 +2028,12 @@ export interface CreateCheckoutRequest {
 /** `POST /billing/credits/checkout`. */
 export interface CreditCheckoutRequest {
   pack: CreditPackId;
+  /** The mobile app's URL base (`talyn-mobile://`). Absent: return to the web app. */
+  returnTo?: string;
+}
+
+/** `POST /billing/usage-reset/checkout`. The backend picks the reset for the caller's tier. */
+export interface UsageResetCheckoutRequest {
   /** The mobile app's URL base (`talyn-mobile://`). Absent: return to the web app. */
   returnTo?: string;
 }

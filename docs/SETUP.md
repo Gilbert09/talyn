@@ -815,9 +815,9 @@ then keeps the old build serving, so nothing breaks, but nothing deploys.
     "Talyn Legacy Pro usage reset" $15. Copy the ids to
     `POLAR_PRODUCT_ID_RESET_PRO`, `POLAR_PRODUCT_ID_RESET_MAX` and
     `POLAR_PRODUCT_ID_RESET_LEGACY_PRO`. A tier without its product cannot
-    buy a reset. The PostHog flag `usage-reset` (env override
-    `USAGE_RESET_ENABLED`) chooses who sees the offer. The price comes from
-    `PLAN_PRICES`, so keep the Polar prices the same as that table.
+    buy a reset. There is no feature flag: setting a product offers that
+    tier's reset to every account on it. The price comes from `PLAN_PRICES`,
+    so keep the Polar prices the same as that table.
 
 How the pieces behave:
 

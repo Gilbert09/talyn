@@ -1028,7 +1028,6 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
 
   const rows = await getDbClient()
     .select({
-      email: usersTable.email,
       plan: usersTable.plan,
       planOverride: usersTable.planOverride,
       polarProductId: usersTable.polarProductId,
@@ -1059,12 +1058,8 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
       limits.creditsAllowed ? readAutoTopupSettings(ownerId, now) : Promise.resolve(undefined),
     ])
   );
-  const [resets, reset] = await runWithoutScope(() =>
-    Promise.all([
-      countUsageResets(ownerId, budget.period.start),
-      usageResetAvailability({ subject: { distinctId: ownerId, email: row?.email ?? null }, tier, usedWsec: budget.usedWsec }),
-    ])
-  );
+  const resets = await runWithoutScope(() => countUsageResets(ownerId, budget.period.start));
+  const reset = usageResetAvailability({ tier, usedWsec: budget.usedWsec });
 
   return {
     billingEnabled: true,

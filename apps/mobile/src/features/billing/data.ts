@@ -45,6 +45,9 @@ export function requestCheckout(plan: SellableTier, period: Period) {
 export function requestCreditCheckout(pack: CreditPackId) {
   return withReturnTarget((returnTo) => billing.creditCheckout(returnTo ? { pack, returnTo } : { pack }));
 }
+export function requestUsageResetCheckout() {
+  return withReturnTarget((returnTo) => billing.usageResetCheckout(returnTo ? { returnTo } : {}));
+}
 export function requestPortal() {
   return withReturnTarget((returnTo) => billing.portal(returnTo ? { returnTo } : {}));
 }
