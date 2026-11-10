@@ -51,6 +51,11 @@ npm-debug.log.*
 
 # Claude Code local settings
 .claude/
+
+# Agent skills installed locally with `npx skills add` (marketing skills and
+# the positioning doc they write). Kept off the public repository.
+.agents/
+skills-lock.json
 posthog-pr-work/
 posthog_work/
 
