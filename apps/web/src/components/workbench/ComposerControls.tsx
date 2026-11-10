@@ -4,6 +4,7 @@ import {
   FLEET_MODELS,
   WORKBENCH_EFFORTS,
   defaultFleetModelForAgent,
+  resolveFleetModel,
   type WorkbenchAgent,
   type WorkbenchContextUsage,
   type WorkbenchEffort,
@@ -82,7 +83,9 @@ export function ModelPicker({
   // Subscribes, so the list renders again when the backend's catalogue arrives.
   useFleetModelCatalog();
   const models = modelsForAgent(agent);
-  const known = models.some((m) => m.id === value);
+  // A retired id (for example gpt-5.6-sol) shows as the model that replaces it.
+  const shown = resolveFleetModel(value);
+  const known = models.some((m) => m.id === shown);
   const locked = unconnected.filter((a) => a !== agent);
   const options = models.map((m) => (
     <option key={m.id} value={m.id}>
@@ -91,13 +94,13 @@ export function ModelPicker({
   ));
   return (
     <PickerSelect
-      value={value}
+      value={shown}
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
       title="Model"
       aria-label="Model"
     >
-      {!known && <option value={value}>{value}</option>}
+      {!known && <option value={shown}>{shown}</option>}
       {locked.length === 0 ? (
         options
       ) : (

@@ -93,4 +93,19 @@ describe('ModelPicker', () => {
 
     expect(screen.getByRole('option', { name: 'Next 6' })).toBeInTheDocument();
   });
+
+  it.each([
+    ['gpt-5.6-sol', 'GPT-6.1 Sol'],
+    ['gpt-5.6-terra', 'GPT-6.1 Terra'],
+    ['gpt-5.5', 'GPT-6.1 Sol'],
+  ])('shows the retired %s as %s, with no extra option', (retired, label) => {
+    render(<ModelPicker agent="codex" value={retired} onChange={() => {}} />);
+    expect(screen.getByRole('option', { name: label, selected: true })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: retired })).not.toBeInTheDocument();
+  });
+
+  it('keeps an unknown model as its own option', () => {
+    render(<ModelPicker agent="codex" value="gpt-custom" onChange={() => {}} />);
+    expect(screen.getByRole('option', { name: 'gpt-custom', selected: true })).toBeInTheDocument();
+  });
 });
