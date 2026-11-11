@@ -14,6 +14,9 @@ export const PANEL_PATHS = {
   settings: '/settings',
 } as const satisfies Record<ActivePanel, string>;
 
+/** Split view is a page of several sessions; its panes are kept on the device, not in the URL. */
+export const SPLIT_PATH = '/split';
+
 /** Insights is a page, not a panel: it has no `activePanel` of its own. */
 export const INSIGHTS_PATH = '/insights';
 
@@ -29,6 +32,8 @@ export function pathForRoute(route: Route): string {
       return `/s/${encodeURIComponent(route.id)}`;
     case 'history':
       return '/history';
+    case 'split':
+      return SPLIT_PATH;
     case 'prs':
     case 'automations':
       return PANEL_PATHS[route.tab];
@@ -45,6 +50,7 @@ export function routeForPath(pathname: string): Route | null {
   const path = pathname.replace(/\/+$/, '') || '/';
   if (path === '/' || path === '/workbenches') return { view: 'home' };
   if (path === '/history') return { view: 'history' };
+  if (path === SPLIT_PATH) return { view: 'split' };
   if (path === '/settings') return { view: 'settings', section: 'workspace' };
   if (path === '/mcp-servers') return { view: 'mcp_servers' };
   if (path === INSIGHTS_PATH) return { view: 'insights' };

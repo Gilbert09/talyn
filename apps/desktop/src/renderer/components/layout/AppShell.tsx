@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { workbenchesOffered } from '@talyn/shared';
+import { splitViewOffered, workbenchesOffered } from '@talyn/shared';
 import { useActiveSpace, loadExtraWorkbench, spacesOffered } from '../../lib/spaces';
 import { useFollowSessionContext, useSpaceLive, useSpacesBoot } from '../../hooks/useSpaces';
 import { useSpacesStore } from '../../stores/spaces';
@@ -24,6 +24,7 @@ import { PullRequestsView } from '../../pages/PullRequestsView';
 import { AutomationsView } from '../../pages/AutomationsView';
 import { InsightsView } from '../../pages/InsightsView';
 import { WorkbenchPage } from '../../pages/WorkbenchPage';
+import { SplitView } from '../workbench/SplitView';
 import { loadWorkbenches } from '../../lib/workbenchData';
 import { getLocalController } from '../../lib/localWorkbench';
 import { useCodeReviewIntro } from '../../hooks/useCodeReviewIntro';
@@ -111,6 +112,7 @@ export function AppShell() {
 /** The main column's content for the current route. */
 export function RoutedView() {
   const route = useNavigationStore((s) => s.route);
+  const features = useWorkspaceStore((s) => s.features);
   const space = useActiveSpace();
   if (space && (route.view === 'home' || route.view === 'prs' || route.view === 'automations' || route.view === 'insights')) {
     return <SpaceHomePage active={space} />;
@@ -122,6 +124,9 @@ export function RoutedView() {
       return <WorkbenchPage id={route.id} />;
     case 'history':
       return <HistoryView />;
+    case 'split':
+      if (splitViewOffered(features)) return <SplitView />;
+      return features === null ? null : <HomePage />;
     case 'prs':
       return <PullRequestsView tab={route.tab} />;
     case 'automations':

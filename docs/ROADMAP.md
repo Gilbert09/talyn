@@ -131,6 +131,7 @@ Follow-ups now that Loops has shipped:
 
 ## Backlog
 
+- [ ] **Split view — mobile, docs and release** — web and desktop show several sessions side by side behind the `split-view` flag (2026-11-11). Not on mobile: a phone has no room for two transcripts, so revisit for tablets when the flag is released. Before flipping `availability` to `'general'`, add a "Several sessions side by side" section to `apps/marketing/content/docs/sessions.md`, and consider pane shortcuts (move focus between panes) and remembering panes per workspace.
 - [ ] **Analytics panel — token / cost usage** — surface an Analytics tab aggregating per-workspace spend, per-task spend + token breakdown, per-model mix, and a trend chart from whatever usage data each cloud provider's transcript/run exposes. Inspiration: how PostHog / Linear surface "insights" around usage.
 - [x] **Approve / Request changes on web and desktop** — all three apps have them on a pull request that asks for your review (`POST /pull-requests/:id/review`, sent as the person's own GitHub review). Web and desktop open a dialog from the PR detail header (2026-11-10).
 - [ ] **Show logged-in user in the app chrome** — bottom-left of the sidebar should display GitHub username + avatar so users know which account they're using (especially on laptops with multiple GitHub accounts).

@@ -28,6 +28,8 @@ export type Route =
   | { view: 'home'; mode?: 'session' | 'thread' }
   | { view: 'workbench'; id: string }
   | { view: 'history' }
+  /** Split view: several sessions side by side. The panes are in `stores/splitView.ts`. */
+  | { view: 'split' }
   | { view: 'insights' }
   | { view: 'prs'; tab: PrTab }
   | { view: 'automations'; tab: AutomationTab }
@@ -72,6 +74,7 @@ export function isRoute(value: unknown): value is Route {
     case 'home':
       return r.mode === undefined || r.mode === 'session' || r.mode === 'thread';
     case 'history':
+    case 'split':
     case 'insights':
       return true;
     case 'workbench':
@@ -303,7 +306,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
 
   reconcileWorkbenchRoute: ({ workbenches, listLoaded, offered }) => {
     const { route } = get();
-    if (route.view !== 'workbench' && route.view !== 'history') return;
+    if (route.view !== 'workbench' && route.view !== 'history' && route.view !== 'split') return;
     if (offered === false) {
       get().navigate(HOME, { replace: true });
       return;

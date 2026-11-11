@@ -76,7 +76,19 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   );
 }
 
-function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: WorkbenchChat | null; ops: WorkbenchOps }) {
+/** The transcript and the composer of one chat. Split view shows one per pane. */
+export function ChatView({
+  workbench,
+  chat,
+  ops,
+  autoFocus = true,
+}: {
+  workbench: Workbench;
+  chat: WorkbenchChat | null;
+  ops: WorkbenchOps;
+  /** Passed to the composer: only one composer on screen should take focus. */
+  autoFocus?: boolean;
+}) {
   const state = useWorkbenchStore((s) => (chat ? s.chatEvents[chat.id] : undefined)) ?? emptyChatEvents;
   const markRead = useWorkbenchStore((s) => s.markRead);
 
@@ -134,12 +146,13 @@ function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: Workbe
         contextUsage={insights.contextUsage}
         slashCommands={insights.slashCommands}
         attachRef={attachRef}
+        autoFocus={autoFocus}
       />
     </div>
   );
 }
 
-function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: WorkbenchOps }) {
+export function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: WorkbenchOps }) {
   const setTerminalTab = useWorkbenchStore((s) => s.setTerminalTab);
   const hasSetupOutput = useWorkbenchStore((s) => (s.scriptOutput[workbench.id]?.setup?.total ?? 0) > 0);
   const [retrying, setRetrying] = useState(false);

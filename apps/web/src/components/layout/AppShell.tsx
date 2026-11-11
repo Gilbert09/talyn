@@ -1,5 +1,5 @@
 import { Suspense, useEffect } from 'react';
-import { mcpServersOffered, workbenchesOffered } from '@talyn/shared';
+import { mcpServersOffered, splitViewOffered, workbenchesOffered } from '@talyn/shared';
 import { useRouteUrlSync } from '../../hooks/useRouteUrlSync';
 import { AppSidebar } from './AppSidebar';
 import { ContextRail } from './ContextRail';
@@ -117,6 +117,9 @@ export function RoutedView() {
       return <WorkbenchPage id={route.id} />;
     case 'history':
       return <HistoryView />;
+    case 'split':
+      if (splitViewOffered(features)) return <SplitView />;
+      return features === null ? null : <HomePage />;
     case 'prs':
       return <PullRequestsView tab={route.tab} />;
     case 'automations':
@@ -163,6 +166,8 @@ function useWorkbenchList(): void {
 const CommandPalette = lazyWithReload(() => import('../CommandPalette').then((m) => ({ default: m.CommandPalette })));
 
 const WorkbenchPage = lazyWithReload(() => import('../../pages/WorkbenchPage').then((m) => ({ default: m.WorkbenchPage })));
+
+const SplitView = lazyWithReload(() => import('../workbench/SplitView').then((m) => ({ default: m.SplitView })));
 
 const SettingsPanel = lazyWithReload(() => import('../panels/SettingsPanel').then((m) => ({ default: m.SettingsPanel })));
 

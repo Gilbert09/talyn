@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
+  Columns2,
   Copy,
   ExternalLink,
   GitBranch,
@@ -19,7 +20,7 @@ import {
   Cloud,
   Wrench,
 } from 'lucide-react';
-import { CREATE_PR_MESSAGE, workbenchDisplayName, type Workbench, type WorkbenchChat } from '@talyn/shared';
+import { CREATE_PR_MESSAGE, splitViewOffered, workbenchDisplayName, type Workbench, type WorkbenchChat } from '@talyn/shared';
 import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import {
@@ -73,6 +74,7 @@ import { useSpacesStore } from '../../stores/spaces';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { moveToSpace } from '../spaces/MoveToSpace';
 import { useGitHubActions } from '../panels/github/useGitHubActions';
+import { openInSplitView } from '../../lib/splitView';
 
 const NO_CHECKS: PRChecks = {
   total: 0,
@@ -173,6 +175,7 @@ export function WorkbenchHeader({
   const openPrTab = () => setSideTab('pr');
   const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
+  const splitOn = useWorkspaceStore((s) => splitViewOffered(s.features));
   // The session's newest stored event across the chats this client holds.
   const lastMessageAt = useWorkbenchStore((s) => {
     let newest: string | null = null;
@@ -587,6 +590,18 @@ export function WorkbenchHeader({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {splitOn && (
+            <Button
+              variant="ghost"
+              className="h-7 w-7 p-0"
+              onClick={() => openInSplitView(workbench.id, 'session_header')}
+              title="Open in split view"
+              aria-label="Open in split view"
+              data-attr="workbench-open-split-view"
+            >
+              <Columns2 className="h-4 w-4" />
+            </Button>
+          )}
           {!thread && owner && (
             <Button
               variant="ghost"
