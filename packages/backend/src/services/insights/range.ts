@@ -11,8 +11,9 @@ export interface ResolvedRange {
 /**
  * Pure: the `[from, to)` window of an Insights request, or the problem with it.
  *
- * `range=7d|30d` ends now. `range=period` is the owner's current usage period
- * up to now (`period` is null when billing has none: the calendar month is the
+ * `range=today` is the current UTC day up to now. `range=yesterday` is the
+ * whole UTC day before it. `range=7d|30d` ends now. `range=period` is the
+ * owner's current usage period up to now (`period` is null when billing has none: the calendar month is the
  * free plan's period, so that is the answer then). `from` + `to` is a custom
  * window of at most {@link INSIGHTS_MAX_DAYS} days. Nothing: the last 30 days.
  */
@@ -23,7 +24,12 @@ export function parseInsightsRange(
 ): ResolvedRange | { error: string } {
   const range = query.range;
   if (range !== undefined && range !== '' && range !== 'custom') {
-    if (!isInsightsRangePreset(range)) return { error: 'range must be 7d, 30d or period.' };
+    if (!isInsightsRangePreset(range)) return { error: 'range must be today, yesterday, 7d, 30d or period.' };
+    if (range === 'today' || range === 'yesterday') {
+      const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      if (range === 'yesterday') return { from: new Date(midnight.getTime() - DAY_MS), to: midnight, preset: 'yesterday' };
+      return { from: midnight, to: now.getTime() > midnight.getTime() ? now : new Date(midnight.getTime() + 1), preset: 'today' };
+    }
     if (range === 'period') {
       const start = period?.start ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
       const end = period && period.end.getTime() < now.getTime() ? period.end : now;
