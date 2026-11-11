@@ -1,4 +1,4 @@
-import { integrationRulesOffered } from '@talyn/shared';
+import { integrationOffered, integrationRulesOffered, slackRulesOffered } from '@talyn/shared';
 import { Redirect, Stack, useLocalSearchParams } from 'expo-router';
 
 import { RuleDetailScreen } from '../../../src/features/integrations/RuleDetailScreen';
@@ -9,12 +9,13 @@ import { DetailRoute } from '../../../src/navigation/DetailRoute';
 export default function Screen() {
   const { kind, id } = useLocalSearchParams<{ kind: string; id: string }>();
   const features = useFeatures();
-  if (kind !== 'github' && kind !== 'schedule') return <Redirect href="/integrations" />;
+  if (kind !== 'github' && kind !== 'schedule' && kind !== 'slack') return <Redirect href="/integrations" />;
   if (!features) return <Page><Loading /></Page>;
-  if (!integrationRulesOffered(features, kind)) return <Redirect href="/integrations" />;
+  if (!integrationRulesOffered(features, kind)
+    && !(kind === 'slack' && integrationOffered(features, kind) && slackRulesOffered(features))) return <Redirect href="/integrations" />;
   if (typeof id !== 'string' || !id) return <Redirect href={{ pathname: '/integrations/[kind]', params: { kind } }} />;
   return <DetailRoute list={{ pathname: '/integrations/[kind]', params: { kind } }}>
     <Stack.Screen options={detailOptions('Rule')} />
-    <RuleDetailScreen kind={kind === 'schedule' ? 'loop' : 'workflow'} id={id} />
+    <RuleDetailScreen kind={kind === 'schedule' ? 'loop' : 'workflow'} integration={kind === 'slack' ? 'slack' : 'github'} id={id} />
   </DetailRoute>;
 }

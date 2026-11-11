@@ -1,4 +1,4 @@
-import { INTEGRATION_CATALOG, integrationOffered, integrationRulesOffered, isIntegrationKind } from '@talyn/shared';
+import { INTEGRATION_CATALOG, integrationOffered, integrationRulesOffered, isIntegrationKind, slackRulesOffered } from '@talyn/shared';
 import { Redirect, Stack, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
@@ -24,7 +24,8 @@ export default function Screen() {
   if (!features) return <Page><Loading /></Page>;
   if (!integrationOffered(features, kind)) return <Redirect href="/integrations" />;
 
-  const rules = integrationRulesOffered(features, kind);
+  const rules = integrationRulesOffered(features, kind)
+    || (kind === 'slack' && integrationOffered(features, kind) && slackRulesOffered(features));
   const connection = !INTEGRATION_CATALOG[kind].builtIn;
   const section = chosen && (chosen === 'rules' ? rules : connection) ? chosen : rules ? 'rules' : 'connection';
   return <DetailRoute list="/integrations">
@@ -32,7 +33,7 @@ export default function Screen() {
     <View style={{ flex: 1 }}>
       {rules && connection ? <View style={{ paddingHorizontal: 16, paddingTop: 12 }}><Segmented<Section> accessibilityLabel={`${INTEGRATION_CATALOG[kind].name} sections`} value={section}
         onChange={setChosen} options={[{ value: 'rules', label: 'Rules' }, { value: 'connection', label: 'Connection' }]} /></View> : null}
-      {section === 'rules' ? <RulesScreen kind={kind === 'schedule' ? 'loop' : 'workflow'} /> : null}
+      {section === 'rules' ? <RulesScreen kind={kind === 'schedule' ? 'loop' : 'workflow'} integration={kind === 'slack' ? 'slack' : 'github'} /> : null}
       {section === 'connection' && kind === 'github' ? <GitHubSettingsScreen /> : null}
       {section === 'connection' && kind === 'slack' ? <SlackScreen /> : null}
       {section === 'connection' && kind === 'tailscale' ? <PrivateRoutesScreen /> : null}

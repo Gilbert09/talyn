@@ -235,6 +235,10 @@ describe('automations', () => {
     [workflow(), 'When pr opened → add labels'],
     [workflow({ events: ['pr_opened', 'pr_reopened', 'pr_merged'] }), 'When pr opened + 2 more → add labels'],
     [workflow({ actions: [] }), 'When pr opened'],
+    [workflow({ integration: 'slack', events: ['slack_message'], conditions: { channels: ['C123'] },
+      actions: [{ type: 'start_session', repositoryId: null, prompt: 'Help' }] }), 'In #C123, start a session'],
+    [workflow({ integration: 'slack', events: ['slack_message'], conditions: { channels: ['#general', 'C123'] },
+      actions: [{ type: 'slack_reply', text: 'Hello' }] }), 'In #general or #C123, reply in the thread'],
   ])('workflow summary %#', (value, text) => { expect(workflowSummary(value)).toBe(text); });
 
   it('describes a loop schedule and repository', () => {
@@ -275,8 +279,13 @@ describe('automations', () => {
 
   it('sends the whole workflow with only enabled changed', () => {
     const value = workflow();
-    expect(workflowToggleInput(value, false)).toEqual({ name: value.name, enabled: false, events: value.events,
+    expect(workflowToggleInput(value, false)).toEqual({ integration: value.integration, name: value.name, enabled: false, events: value.events,
       conditions: value.conditions, actions: value.actions, maxRunsPerPrPerHour: 5 });
+  });
+
+  it('keeps Slack rules in Slack when toggled', () => {
+    const value = workflow({ integration: 'slack' });
+    expect(workflowToggleInput(value, false).integration).toBe('slack');
   });
 
   it('sends the whole loop with only enabled changed', () => {
@@ -295,6 +304,11 @@ describe('automations', () => {
     ['no title', { prNumber: 7, prTitle: '', repoFullName: 'acme/app', event: 'pr_opened', actions: [], error: null }, { title: 'Pull request #7', detail: 'acme/app · PR opened' }],
     ['failed action', { prNumber: 7, prTitle: 'Fix', repoFullName: 'acme/app', event: 'pr_opened', actions: [{ type: 'add_labels', ok: false, error: 'No access' }], error: null },
       { title: 'Fix', detail: 'Add labels: No access' }],
+    ['Slack message', { integration: 'slack', subjectLabel: '#general', prNumber: 0, prTitle: '', repoFullName: '',
+      event: 'slack_message', actions: [], error: null }, { title: '#general', detail: 'New message in a channel' }],
+    ['Slack scope missing', { integration: 'slack', subjectLabel: '#general', prNumber: 0, prTitle: '', repoFullName: '',
+      event: 'slack_message', actions: [{ type: 'slack_reply', ok: false, code: 'slack_scope_missing', error: 'raw' }], error: null },
+      { title: '#general', detail: 'Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.' }],
   ])('workflow run text: %s', (_name, run, expected) => {
     const text = workflowRunText(run as never);
     expect(text.title).toBe(expected.title);

@@ -1,6 +1,6 @@
 import {
   LOOP_TARGET_LABELS, describeSchedule, describeWorkflowActions, describeWorkflowTrigger,
-  type LoopRun, type LoopWithStats, type WorkflowRun, type WorkflowWithStats,
+  type LoopRun, type LoopWithStats, type WorkflowIntegration, type WorkflowRun, type WorkflowWithStats,
 } from '@talyn/shared';
 import { Stack } from 'expo-router';
 import { View } from 'react-native';
@@ -17,9 +17,9 @@ import {
   loopDisabledText, loopRunBadge, loopRunText, nextRunText, problemsText, workflowRunBadge, workflowRunText, type AutomationKind, type Badge,
 } from '../automations/model';
 
-export function RuleDetailScreen({ kind, id }: { kind: AutomationKind; id: string }) {
+export function RuleDetailScreen({ kind, id, integration = 'github' }: { kind: AutomationKind; id: string; integration?: WorkflowIntegration }) {
   const offline = useNetwork() === 'offline';
-  const workflowList = useWorkflowList(kind === 'workflow');
+  const workflowList = useWorkflowList(integration, kind === 'workflow');
   const loopList = useLoopList(kind === 'loop');
   const list = kind === 'workflow' ? workflowList : loopList;
   const item = (list.data as Array<WorkflowWithStats | LoopWithStats> | undefined)?.find((row) => row.id === id);
@@ -40,7 +40,7 @@ export function RuleDetailScreen({ kind, id }: { kind: AutomationKind; id: strin
               : <LoopRunRow key={run.id} run={run as LoopRun} divider={index < runs.data!.length - 1} />)}
       </Group>
       <Group>
-        <WebRow title="Edit on the web" path={`/integrations/${kind === 'workflow' ? 'github' : 'schedule'}`} />
+        <WebRow title="Edit on the web" path={`/integrations/${kind === 'loop' ? 'schedule' : integration}`} />
       </Group>
     </> : null}
   </Page>;
