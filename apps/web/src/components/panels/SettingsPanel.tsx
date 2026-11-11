@@ -42,19 +42,18 @@ import {
   Search,
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
-import { SlackSettings } from './SlackSettings';
+import { useNavigationStore } from '../../stores/navigation';
 import { InstructionsSettings } from './InstructionsSettings';
 import { RepositoryInstructionsSection } from '../settings/RepositoryInstructionsSection';
 import { MemorySection } from '../settings/MemorySection';
 import { SandboxSetupSettings } from '../settings/sections/SandboxSetupSettings';
-import { PrivateRoutesSettings } from '../settings/sections/PrivateRoutesSettings';
+import type { IntegrationKind } from '@talyn/shared';
 import { SettingsPage } from '../ui/settings';
 import { ApiTokensSettings } from '../settings/sections/ApiTokensSettings';
 import { DeveloperInternals } from './DeveloperInternals';
 import { TeamSettings } from './TeamBilling';
 import { TeamsSettings } from '../settings/sections/TeamsSettings';
 import { BillingSettings } from '../settings/sections/BillingSettings';
-import { TrunkSettingsCard } from './TrunkSettingsCard';
 import { BuildInfo } from './BuildInfo';
 import { highlightsForSurface, privateRoutesOffered } from '@talyn/shared';
 import { ApiError, api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
@@ -159,11 +158,6 @@ export function SettingsPanel() {
   const billingStatus = useBillingStore((s) => s.status);
   const [search, setSearch] = useState('');
 
-  // Slack's callback lands on /settings?slack=…; show the Slack section so the
-  // result is visible.
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).has('slack')) setActiveSection('slack');
-  }, [setActiveSection]);
 
   const sections = [
     { id: 'workspace' as const, icon: FolderKanban, label: 'Workspace' },
@@ -269,11 +263,19 @@ export function SettingsPanel() {
           <div className="p-6 max-w-2xl">
             {activeSection === 'workspace' && <WorkspaceSettings />}
             {activeSection === 'sandboxSetup' && features?.workbenches === true && <SandboxSetupSettings />}
-            {activeSection === 'privateRoutes' && privateRoutesOffered(features) && <PrivateRoutesSettings />}
+            {activeSection === 'privateRoutes' && privateRoutesOffered(features) && (
+              <MovedToIntegrations
+                title="Private routes"
+                kind="tailscale"
+                text="Private routes are now the Tailscale integration."
+              />
+            )}
             {activeSection === 'sessions' && <SessionsSettings />}
             {activeSection === 'shortcuts' && <ShortcutsSettings />}
             {activeSection === 'integrations' && <IntegrationsSettings />}
-            {activeSection === 'slack' && <SlackSettings />}
+            {activeSection === 'slack' && (
+              <MovedToIntegrations title="Slack" kind="slack" text="Slack settings are now the Slack integration." />
+            )}
             {activeSection === 'skills' && <SkillsSettings />}
             {activeSection === 'instructions' && (
               <div className="space-y-6">
@@ -860,7 +862,8 @@ function WorkspaceSettings() {
   );
 }
 
-function IntegrationsSettings() {
+/** The GitHub App card: connect, disconnect and the installations list. Shown on the GitHub integration page. */
+export function GithubConnectionCard() {
   // GitHub status + user are preloaded into the store at startup
   // (useSystemStatus) and kept fresh there on window focus, so this panel
   // renders the connection state instantly instead of fetching on open. We
@@ -944,14 +947,7 @@ function IntegrationsSettings() {
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-medium mb-1">Integrations</h3>
-        <p className="text-sm text-muted-foreground">
-          Connect external services to enhance your workflow
-        </p>
-      </div>
-
+    <div className="space-y-4">
       {error && (
         <div className="p-3 rounded-md bg-red-500/10 border border-red-500/20 text-red-400 text-sm flex items-center gap-2">
           <AlertCircle className="w-4 h-4" />
@@ -1034,25 +1030,66 @@ function IntegrationsSettings() {
             </div>
           )}
         </Card>
-
-        {/* Trunk merge ETAs. Draws nothing unless the feature is on. */}
-        <TrunkSettingsCard />
       </div>
+    </div>
+  );
+}
+
+/**
+ * Settings → Integrations. GitHub, Slack, Tailscale, PostHog Code and Trunk
+ * moved to the Integrations area; the cloud agents Talyn Fleet runs stay here.
+ */
+function IntegrationsSettings() {
+  return (
+    <div className="space-y-6">
+      <MovedToIntegrations
+        title="Integrations"
+        kind="github"
+        text="GitHub, Slack, Tailscale, PostHog Code and Trunk are now on the Integrations page."
+      />
 
       {/* Cloud providers — the vendors that run the agent loop and open PRs. */}
       <div className="space-y-3">
         <div>
-          <h4 className="text-sm font-semibold">Cloud providers</h4>
+          <h4 className="text-sm font-semibold">Cloud agents</h4>
           <p className="text-sm text-muted-foreground">
-            Vendors that run your tasks and open PRs. Connect one or more, then choose which
-            provider new tasks use by default.
+            Connect your Claude or Codex subscription for Talyn Fleet, then choose which provider
+            new tasks use by default.
           </p>
         </div>
 
-        <ProviderConnectCards />
+        <SelfHostedFleetCard />
 
         <CloudProviderDefaultSelector />
       </div>
+    </div>
+  );
+}
+
+/** A one-line pointer from a Settings section that now lives in the Integrations area. */
+function MovedToIntegrations({
+  title,
+  kind,
+  text,
+}: {
+  title: string;
+  kind: IntegrationKind;
+  text: string;
+}) {
+  const navigate = useNavigationStore((s) => s.navigate);
+  return (
+    <div className="space-y-1">
+      <h3 className="text-lg font-medium">{title}</h3>
+      <p className="text-sm text-muted-foreground">
+        {text}{' '}
+        <button
+          type="button"
+          className="underline underline-offset-2 hover:text-foreground"
+          onClick={() => navigate({ view: 'integrations', kind })}
+        >
+          Moved to Integrations
+        </button>
+      </p>
     </div>
   );
 }

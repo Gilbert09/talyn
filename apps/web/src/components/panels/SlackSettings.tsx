@@ -679,7 +679,7 @@ export function SlackSettings() {
 
   const [banner, setBanner] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // The callback sends us back to /settings?slack=installed|linked|error&message=…
+  // The callback sends us back to /integrations/slack?slack=installed|linked|error&message=…
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const result = params.get('slack');
@@ -708,7 +708,7 @@ export function SlackSettings() {
       const input = currentWorkspaceId ? { workspaceId: currentWorkspaceId } : {};
       const { authorizeUrl } =
         kind === 'install' ? await api.slack.install(input) : await api.slack.link(input);
-      // A full-page redirect: the callback returns to /settings?slack=… in this tab.
+      // A full-page redirect: the callback returns to /integrations/slack?slack=… in this tab.
       window.location.assign(authorizeUrl);
     } catch (e) {
       captureAnalyticsException(e, { flow: 'slack_connect' });

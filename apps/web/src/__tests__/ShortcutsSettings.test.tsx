@@ -35,8 +35,7 @@ describe("Settings → Shortcuts go-to", () => {
       ['Go to Code review', 'G then C'],
       ['Go to Merge queue', 'G then M'],
       ['Go to Tasks', 'G then T'],
-      ['Go to Automations', 'G then A'],
-      ['Go to Loops', 'G then L'],
+      ['Go to Integrations', 'G then N'],
       ['Go to Insights', 'G then I'],
       ['Go to Settings', 'G then S'],
     ]);

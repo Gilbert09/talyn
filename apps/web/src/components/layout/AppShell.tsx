@@ -14,7 +14,7 @@ import { AddRepositoryModal } from '../modals/AddRepositoryModal';
 import { HomePage } from '../../pages/HomePage';
 import { HistoryView } from '../../pages/HistoryView';
 import { PullRequestsView } from '../../pages/PullRequestsView';
-import { AutomationsView } from '../../pages/AutomationsView';
+import { IntegrationsView } from '../../pages/IntegrationsView';
 import { loadWorkbenches } from '../../lib/workbenchData';
 import { useCodeReviewIntro } from '../../hooks/useCodeReviewIntro';
 import { useSystemStatus } from '../../hooks/useSystemStatus';
@@ -107,7 +107,7 @@ export function RoutedView() {
   )
     return null;
   // A space shows its own feed where Personal shows pages that belong only to Personal.
-  if (space && (route.view === 'home' || route.view === 'prs' || route.view === 'automations' || route.view === 'mcp_servers' || route.view === 'insights')) {
+  if (space && (route.view === 'home' || route.view === 'prs' || route.view === 'integrations' || route.view === 'mcp_servers' || route.view === 'insights')) {
     return <SpaceHomePage active={space} />;
   }
   switch (route.view) {
@@ -122,8 +122,8 @@ export function RoutedView() {
       return features === null ? null : <HomePage />;
     case 'prs':
       return <PullRequestsView tab={route.tab} />;
-    case 'automations':
-      return <AutomationsView tab={route.tab} />;
+    case 'integrations':
+      return <IntegrationsView kind={route.kind ?? null} />;
     case 'mcp_servers':
       return mcpServersOffered(features) ? <McpServersPanel /> : null;
     case 'insights':

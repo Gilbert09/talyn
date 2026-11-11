@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { HOME, routesEqual, useNavigationStore, type Route } from '../stores/navigation';
-import { pathForRoute, routeForPath } from '../lib/routes';
+import { isLegacyPath, pathForRoute, routeForLocation, routeForPath } from '../lib/routes';
 
 // One effect resolves the side that changed. Separate effects can undo each other.
 export function useRouteUrlSync(): void {
@@ -9,16 +9,18 @@ export function useRouteUrlSync(): void {
   const replace = useNavigationStore((s) => s.replace);
   const setRoute = useNavigationStore((s) => s.navigate);
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const last = useRef<{ route: Route; path: string } | null>(null);
 
   useEffect(() => {
     if (last.current === null) {
-      const fromUrl = routeForPath(pathname) ?? HOME;
-      const path = routeForPath(pathname) ? pathname : pathForRoute(fromUrl);
+      const fromUrl = routeForLocation(pathname, search) ?? HOME;
+      // An old address (/workflows, /loops, /settings?slack=...) is rewritten to its new page; the query string stays.
+      const moved = isLegacyPath(pathname) || (fromUrl.view === 'integrations' && !pathname.startsWith('/integrations'));
+      const path = routeForPath(pathname) && !moved ? pathname : pathForRoute(fromUrl);
       last.current = { route: fromUrl, path };
       setRoute(fromUrl, { replace: true });
-      if (path !== pathname) navigate(path, { replace: true });
+      if (path !== pathname) navigate({ pathname: path, search: moved ? search : '' }, { replace: true });
       return;
     }
 
@@ -41,5 +43,5 @@ export function useRouteUrlSync(): void {
       else setRoute(fromUrl, { replace: true });
       if (path !== pathname) navigate(path, { replace: true });
     }
-  }, [route, replace, pathname, navigate, setRoute]);
+  }, [route, replace, pathname, search, navigate, setRoute]);
 }

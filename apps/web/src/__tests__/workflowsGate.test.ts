@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { availableWorkflowConditions, workflowsOffered } from '@talyn/shared';
-import { PANEL_PATHS, panelForPath } from '../lib/routes';
+import { PANEL_PATHS, isLegacyPath, panelForPath, routeForLocation, routeForPath } from '../lib/routes';
 
 /**
  * The web fork's half of the Workflows gate.
@@ -35,9 +35,34 @@ describe('conditions follow the trigger', () => {
   });
 });
 
-describe('the Workflows URL', () => {
-  it('has a path, so the panel is reachable and shareable', () => {
-    expect(PANEL_PATHS.workflows).toBe('/workflows');
-    expect(panelForPath('/workflows')).toBe('workflows');
+describe('the GitHub rules URL', () => {
+  it('has a path, so the page is reachable and shareable', () => {
+    expect(PANEL_PATHS.integrations).toBe('/integrations');
+    expect(panelForPath('/integrations/github')).toBe('integrations');
+  });
+
+  it.each([
+    ['/workflows', { view: 'integrations', kind: 'github' }],
+    ['/workflows/abc', { view: 'integrations', kind: 'github' }],
+    ['/loops', { view: 'integrations', kind: 'schedule' }],
+    ['/loops/abc', { view: 'integrations', kind: 'schedule' }],
+  ])('keeps the old address %s working', (path, route) => {
+    expect(routeForPath(path)).toEqual(route);
+    expect(isLegacyPath(path)).toBe(true);
+  });
+
+  it.each([
+    ['/settings', '?slack=installed'],
+    ['/settings/slack', '?slack=error&message=x'],
+  ])('sends the old Slack callback %s%s to the Slack page', (path, search) => {
+    expect(routeForLocation(path, search)).toEqual({ view: 'integrations', kind: 'slack' });
+  });
+
+  it('does not treat a plain settings address as the Slack callback', () => {
+    expect(routeForLocation('/settings', '')).toEqual({ view: 'settings', section: 'workspace' });
+  });
+
+  it('refuses an unknown integration', () => {
+    expect(routeForPath('/integrations/nope')).toBeNull();
   });
 });

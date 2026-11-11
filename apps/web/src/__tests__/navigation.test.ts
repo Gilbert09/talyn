@@ -154,8 +154,7 @@ describe('navigation store', () => {
       ['code_reviews', { view: 'prs', tab: 'code_reviews' }],
       ['merge_queue', { view: 'prs', tab: 'merge_queue' }],
       ['queue', { view: 'prs', tab: 'queue' }],
-      ['workflows', { view: 'automations', tab: 'workflows' }],
-      ['loops', { view: 'automations', tab: 'loops' }],
+      ['integrations', { view: 'integrations' }],
       ['settings', { view: 'settings', section: 'workspace' }],
       ['mcp_servers', { view: 'mcp_servers' }],
       ['workbenches', { view: 'home' }],
@@ -217,7 +216,7 @@ describe('navigation store', () => {
     [{ view: 'home' }, 'home'],
     [{ view: 'workbench', id: 'a' }, 'workbench'],
     [{ view: 'prs', tab: 'reviews' }, 'reviews'],
-    [{ view: 'automations', tab: 'loops' }, 'loops'],
+    [{ view: 'integrations', kind: 'schedule' }, 'integrations'],
     [{ view: 'settings', section: 'about' }, 'settings'],
   ])('analyticsPanel(%p) is %s', async (route, expected) => {
     const { nav } = await load();

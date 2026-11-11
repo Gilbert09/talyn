@@ -203,8 +203,8 @@ describe('CommandPalette', () => {
     expect(screen.getByText('Review requests')).toBeInTheDocument();
     expect(screen.getByText('Merge queue')).toBeInTheDocument();
     expect(screen.getByText('Pull requests: Code review')).toBeInTheDocument();
-    expect(screen.getByText('Automations: Workflows')).toBeInTheDocument();
-    expect(screen.queryByText('Automations: Loops')).not.toBeInTheDocument();
+    expect(screen.getByText('Integrations: GitHub')).toBeInTheDocument();
+    expect(screen.queryByText('Integrations: Schedule')).not.toBeInTheDocument();
     expect(screen.getByText('Settings: Billing')).toBeInTheDocument();
   });
 
@@ -303,7 +303,7 @@ describe('go-to shortcuts', () => {
     ['c', { view: 'prs', tab: 'code_reviews' }],
     ['m', { view: 'prs', tab: 'merge_queue' }],
     ['t', { view: 'prs', tab: 'queue' }],
-    ['a', { view: 'automations', tab: 'workflows' }],
+    ['n', { view: 'integrations' }],
     ['i', { view: 'insights' }],
     ['y', { view: 'history' }],
   ])('G then %s opens %p', (letter, expected) => {
@@ -327,26 +327,10 @@ describe('go-to shortcuts', () => {
     expect(route()).toEqual({ view: 'settings', section: 'shortcuts' });
   });
 
-  it.each([
-    ['l', 'Loops is off', { workbenches: true, workflows: true }],
-    ['a', 'no automation is offered', { workbenches: true }],
-    ['y', 'sessions are off', {}],
-  ])('G then %s does nothing when %s', (letter, _label, features) => {
+  it.each([['y', 'sessions are off', {}]])('G then %s does nothing when %s', (letter, _label, features) => {
     useWorkspaceStore.setState({ features: features as Features });
     expect(go(letter)).toBe(false);
     expect(route()).toEqual({ view: 'home' });
-  });
-
-  it('G then L opens Loops when Loops is on', () => {
-    useWorkspaceStore.setState({ features: { workbenches: true, loops: true } as Features });
-    expect(go('l')).toBe(true);
-    expect(route()).toEqual({ view: 'automations', tab: 'loops' });
-  });
-
-  it('G then A opens the first automation offered', () => {
-    useWorkspaceStore.setState({ features: { workbenches: true, loops: true } as Features });
-    expect(go('a')).toBe(true);
-    expect(route()).toEqual({ view: 'automations', tab: 'loops' });
   });
 
   it('the palette shows the keys on its Navigate rows', () => {

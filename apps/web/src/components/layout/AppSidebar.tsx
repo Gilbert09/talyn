@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { formatKeys } from '../../lib/shortcuts';
-import { PR_PAGE_TABS, offeredAutomationTabs } from '../../lib/routeLabels';
+import { PR_PAGE_TABS } from '../../lib/routeLabels';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useSidebarWidth } from '../../lib/sidebarWidth';
 import { useNavigationStore } from '../../stores/navigation';
@@ -60,7 +60,6 @@ export function AppSidebar() {
   const splitOffered = splitViewOffered(features);
   const splitPanes = useSplitViewStore((s) => s.panes.length);
   const prCounts = usePrBadgeCounts();
-  const automationTabs = offeredAutomationTabs(features);
 
   const newWorkbench = () => openNewWorkbench();
 
@@ -191,18 +190,17 @@ export function AppSidebar() {
             onClick={() => navigate({ view: 'prs', tab: 'merge_queue' })}
             dataAttr="nav-merge-queue"
           />
-          {automationTabs.length > 0 && (
-            <SidebarItem
-              icon={Workflow}
-              label="Automations"
-              collapsed={collapsed}
-              active={route.view === 'automations'}
-              onClick={() => {
-                if (route.view !== 'automations') navigate({ view: 'automations', tab: automationTabs[0] });
-              }}
-              dataAttr="nav-automations"
-            />
-          )}
+          <SidebarItem
+            icon={Workflow}
+            label="Integrations"
+            collapsed={collapsed}
+            active={route.view === 'integrations'}
+            onClick={() => {
+              if (route.view !== 'integrations') navigate({ view: 'integrations' });
+            }}
+            dataAttr="nav-integrations"
+          />
+
           <SidebarItem
             icon={BarChart3}
             label="Insights"

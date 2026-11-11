@@ -1,13 +1,11 @@
 import { create } from 'zustand';
-import type { Workbench } from '@talyn/shared';
+import { isIntegrationKind, type IntegrationKind, type Workbench } from '@talyn/shared';
 import { contextsEqual, setPanelNavigator, useWorkspaceStore, type AppContext, type SettingsSection } from './workspace';
 import { useWorkbenchStore } from './workbenches';
 import { findSpace, useSpacesStore } from './spaces';
 import type { ActivePanel } from '../lib/panels';
 import { PR_TABS, type PrTab } from '../lib/prTabs';
 export { PR_TABS, type PrTab } from '../lib/prTabs';
-export type AutomationTab = 'workflows' | 'loops';
-
 export type Route =
   | { view: 'home'; mode?: 'session' | 'thread' }
   | { view: 'workbench'; id: string }
@@ -17,10 +15,10 @@ export type Route =
   | { view: 'mcp_servers' }
   | { view: 'insights' }
   | { view: 'prs'; tab: PrTab }
-  | { view: 'automations'; tab: AutomationTab }
+  /** The Integrations area: the catalog, or one integration's page. */
+  | { view: 'integrations'; kind?: IntegrationKind }
   | { view: 'settings'; section: SettingsSection };
 
-export const AUTOMATION_TABS: readonly AutomationTab[] = ['workflows', 'loops'];
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'sessions',
   'shortcuts',
@@ -59,8 +57,8 @@ export function isRoute(value: unknown): value is Route {
       return typeof r.id === 'string' && r.id.length > 0;
     case 'prs':
       return PR_TABS.includes(r.tab as PrTab);
-    case 'automations':
-      return AUTOMATION_TABS.includes(r.tab as AutomationTab);
+    case 'integrations':
+      return r.kind === undefined || isIntegrationKind(r.kind);
     case 'settings':
       return SETTINGS_SECTIONS.includes(r.section as SettingsSection);
     default:
@@ -75,8 +73,9 @@ export function routesEqual(a: Route, b: Route): boolean {
 export function panelForRoute(route: Route): ActivePanel {
   switch (route.view) {
     case 'prs':
-    case 'automations':
       return route.tab;
+    case 'integrations':
+      return 'integrations';
     case 'settings':
       return 'settings';
     case 'mcp_servers':
@@ -89,7 +88,6 @@ export function panelForRoute(route: Route): ActivePanel {
 export function analyticsPanel(route: Route): string {
   switch (route.view) {
     case 'prs':
-    case 'automations':
       return route.tab;
     default:
       return route.view;
@@ -111,9 +109,8 @@ export function routeForPanel(
     case 'merge_queue':
     case 'queue':
       return { view: 'prs', tab: panel };
-    case 'workflows':
-    case 'loops':
-      return { view: 'automations', tab: panel };
+    case 'integrations':
+      return { view: 'integrations' };
     case 'settings':
       return { view: 'settings', section: ctx.settingsSection };
     case 'mcp_servers':

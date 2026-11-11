@@ -6,8 +6,7 @@ export const PANEL_PATHS = {
   my_prs: '/prs',
   reviews: '/reviews',
   merge_queue: '/merge-queue',
-  workflows: '/workflows',
-  loops: '/loops',
+  integrations: '/integrations',
   code_reviews: '/code-reviews',
   workbenches: '/',
   mcp_servers: '/mcp-servers',
@@ -35,8 +34,9 @@ export function pathForRoute(route: Route): string {
     case 'split':
       return SPLIT_PATH;
     case 'prs':
-    case 'automations':
       return PANEL_PATHS[route.tab];
+    case 'integrations':
+      return route.kind ? `${PANEL_PATHS.integrations}/${route.kind}` : PANEL_PATHS.integrations;
     case 'settings':
       return `/settings/${route.section}`;
     case 'mcp_servers':
@@ -46,9 +46,33 @@ export function pathForRoute(route: Route): string {
   }
 }
 
+/** URLs from before the Integrations area. They resolve to a route, then the address is rewritten. */
+export function isLegacyPath(pathname: string): boolean {
+  return /^\/(workflows|loops)(\/.*)?$/.test(pathname.replace(/\/+$/, '') || '/');
+}
+
+/**
+ * `routeForPath`, plus the query string, for a Slack callback that still
+ * lands on `/settings?slack=...` while an install is in flight.
+ */
+export function routeForLocation(pathname: string, search: string): Route | null {
+  const path = pathname.replace(/\/+$/, '') || '/';
+  if ((path === '/settings' || path === '/settings/slack') && new URLSearchParams(search).has('slack')) {
+    return { view: 'integrations', kind: 'slack' };
+  }
+  return routeForPath(pathname);
+}
+
 export function routeForPath(pathname: string): Route | null {
   const path = pathname.replace(/\/+$/, '') || '/';
   if (path === '/' || path === '/workbenches') return { view: 'home' };
+  if (/^\/workflows(\/.*)?$/.test(path)) return { view: 'integrations', kind: 'github' };
+  if (/^\/loops(\/.*)?$/.test(path)) return { view: 'integrations', kind: 'schedule' };
+  const integration = /^\/integrations\/([^/]+)$/.exec(path);
+  if (integration) {
+    const route = { view: 'integrations', kind: integration[1] };
+    return isRoute(route) ? route : null;
+  }
   if (path === '/history') return { view: 'history' };
   if (path === SPLIT_PATH) return { view: 'split' };
   if (path === '/settings') return { view: 'settings', section: 'workspace' };
@@ -69,7 +93,7 @@ export function routeForPath(pathname: string): Route | null {
     return isRoute(route) ? route : null;
   }
   const panel = PATH_TO_PANEL[path];
-  if (panel === 'workflows' || panel === 'loops') return { view: 'automations', tab: panel };
+  if (panel === 'integrations') return { view: 'integrations' };
   if (
     panel === 'my_prs' ||
     panel === 'reviews' ||

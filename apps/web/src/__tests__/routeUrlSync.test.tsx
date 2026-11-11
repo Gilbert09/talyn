@@ -52,8 +52,11 @@ const routes: Array<[string, Route]> = [
   ['/merge-queue', { view: 'prs', tab: 'merge_queue' }],
   ['/code-reviews', { view: 'prs', tab: 'code_reviews' }],
   ['/queue', { view: 'prs', tab: 'queue' }],
-  ['/workflows', { view: 'automations', tab: 'workflows' }],
-  ['/loops', { view: 'automations', tab: 'loops' }],
+  ['/integrations', { view: 'integrations' }],
+  ['/integrations/github', { view: 'integrations', kind: 'github' }],
+  ['/integrations/slack', { view: 'integrations', kind: 'slack' }],
+  ['/integrations/schedule', { view: 'integrations', kind: 'schedule' }],
+  ['/integrations/tailscale', { view: 'integrations', kind: 'tailscale' }],
   ['/mcp-servers', { view: 'mcp_servers' }],
   ...SETTINGS_SECTIONS.map((section): [string, Route] => [`/settings/${section}`, { view: 'settings', section }]),
 ];

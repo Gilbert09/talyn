@@ -40,7 +40,7 @@ describe('settings analytics saves', () => {
   it('records a loop save without prompt text', async () => {
     mockCreateLoop.mockResolvedValue(undefined);
     render(<LoopsPanel />);
-    fireEvent.click(screen.getByRole('button', { name: 'New loop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New scheduled rule' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save loop' }));
     await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('loop_saved', { new: true, schedule_kind: 'daily', internet_access: true }));
   });

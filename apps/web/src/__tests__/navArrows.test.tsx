@@ -46,7 +46,7 @@ describe('navigation history', () => {
     nav.forward();
     expect(useNavigationStore.getState().route).toEqual({ view: 'prs', tab: 'reviews' });
     nav.back();
-    nav.navigate({ view: 'automations', tab: 'loops' });
+    nav.navigate({ view: 'integrations', kind: 'schedule' });
     expect(useNavigationStore.getState().forwardStack).toEqual([]);
   });
 

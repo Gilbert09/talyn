@@ -222,7 +222,7 @@ export function LoopsPanel() {
     if (view.mode === 'edit' && view.loop) {
       await update(view.loop.id, input);
       trackEvent('loop_saved', { new: false, schedule_kind: presetForCron(input.cron).kind, internet_access: Boolean(input.internetAccess) });
-      toast.success('Loop saved');
+      toast.success('Scheduled rule saved');
     } else {
       try {
         await create(input);
@@ -237,7 +237,7 @@ export function LoopsPanel() {
         throw err;
       }
       trackEvent('loop_saved', { new: true, schedule_kind: presetForCron(input.cron).kind, internet_access: Boolean(input.internetAccess) });
-      toast.success('Loop created');
+      toast.success('Scheduled rule created');
       // Keep the owner-wide count current, so the NEXT click is pre-empted
       // rather than round-tripping to the same refusal.
       void useBillingStore.getState().refresh();
@@ -274,7 +274,7 @@ export function LoopsPanel() {
       // error beside it rather than dropping the user back with no explanation.
       setPendingDelete(null);
       trackEvent('loop_deleted');
-      toast.success('Loop deleted');
+      toast.success('Scheduled rule deleted');
       // A deleted row gives its free-plan slot back — re-read the count so
       // the create button stops pre-empting on a limit the user is no longer at.
       void useBillingStore.getState().refresh();
@@ -305,7 +305,7 @@ export function LoopsPanel() {
       <header className="flex items-center gap-3 border-b px-6 py-4">
         <Repeat className="h-5 w-5" />
         <div className="flex-1">
-          <h1 className="text-lg font-semibold">Loops</h1>
+          <h1 className="text-lg font-semibold">Scheduled rules</h1>
           <p className="text-sm text-muted-foreground">
             Run a prompt on a schedule. Start a reviewable session or a cloud task on the agent
             you pick.
@@ -314,7 +314,7 @@ export function LoopsPanel() {
         <FeedbackButton surface="loops" />
         <Button onClick={openNew} data-attr="loop-new">
           <Plus className="mr-1 h-4 w-4" />
-          New loop
+          New scheduled rule
         </Button>
       </header>
 
@@ -324,19 +324,19 @@ export function LoopsPanel() {
         {/* `null` is loading, `[]` is genuinely none. Rendering the empty state
             for both would flash "no loops" at somebody who has ten. */}
         {loops === null ? (
-          <p className="text-sm text-muted-foreground">Loading loops...</p>
+          <p className="text-sm text-muted-foreground">Loading scheduled rules...</p>
         ) : loops.length === 0 ? (
           <div className="mx-auto max-w-lg py-12 text-center">
             <Repeat className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-            <h2 className="font-medium">No loops yet</h2>
+            <h2 className="font-medium">No scheduled rules yet</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              A loop runs the same prompt on a repository on a schedule — sweep yesterday&rsquo;s
+              A scheduled rule runs the same prompt on a repository on a schedule — sweep yesterday&rsquo;s
               failing checks every morning, keep dependencies current every Monday, or draft the
               release notes every Friday at five.
             </p>
             <Button className="mt-4" onClick={openNew}>
               <Plus className="mr-1 h-4 w-4" />
-              Create your first loop
+              Create your first scheduled rule
             </Button>
           </div>
         ) : (
