@@ -4,7 +4,7 @@ import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import { HeaderHeightContext } from 'expo-router/react-navigation';
 import { useContext, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { PickerSheet, type PickerSection } from '../../components/PickerSheet';
@@ -22,12 +22,18 @@ import { useLocal, useResource } from '../../workflow/hooks';
 import { useRemote } from '../more/useRemote';
 import { WEB_APP_URL } from '../settings/about';
 import { SpaceTile } from '../spaces/Avatars';
+import { chatActions } from '../chat/actions';
+import { ComposerImages } from '../chat/AttachmentViews';
+import { writeImageDrafts } from '../chat/attachmentDrafts';
+import { buildMessageInput, type ImageDraft } from '../chat/attachments';
+import { showImagePicker } from '../chat/imagePicker';
 import { useActiveContext } from '../spaces/context';
 import { ConnectAgentSheet } from '../agents/connect/ConnectAgentSheet';
 import { agentForModel, blockedReason, branchSuggestions, chipLabel, composerChips, CONNECT_ACTION, connectNotice, createInput, defaultRepositoryId,
   effectiveBranch, filterBranches, filterRepositories, internetMessage, MODES, modelFor, modelSections, modelsFor, PLACEHOLDER,
   rememberRepository, sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm, type NewWorkMode } from './model';
 import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spaceRepositories } from './space';
+import { useInlineImages } from './useInlineImages';
 
 type SheetKind = 'mode' | 'repository' | 'branch' | 'model';
 
@@ -83,6 +89,9 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const settingsSource = remoteHome ? homeWorkspace.data : workspace.data;
   const repoKey = spaceId ? `space:${spaceId}` : workspaceId;
   const prompt = useLocal(draftKey).draft;
+  // Web's space composer takes no images, so a space start takes none either.
+  const images = useInlineImages(draftKey);
+  const attached = inSpace ? [] : images.drafts;
 
   const [mode, setMode] = useState<NewWorkMode>(initialMode);
   const [repositoryId, setRepositoryId] = useState('');
@@ -114,7 +123,7 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const agent = usableAgent(sandbox, wantedAgent);
   const model = pickedModel && modelsFor(agent).some((item) => item.id === pickedModel) ? pickedModel : modelFor(settingsSource?.settings, agent);
   const form: NewWorkForm = { mode, prompt, repository, agent, model, baseBranch, internetAccess };
-  const blocked = inSpace ? spaceBlockedReason(form, inSpace.team, sandbox, offline) : blockedReason(form, sandbox, offline);
+  const blocked = inSpace ? spaceBlockedReason(form, inSpace.team, sandbox, offline) : blockedReason(form, sandbox, offline) ?? images.block;
   const send = sendState(blocked, busy, workspaceId);
   const sandboxOk = sandboxChoice(sandbox);
   const connect = connectNotice(sandbox, agent);
@@ -147,10 +156,13 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
         }
         return;
       }
-      const item = await workflow.createWorkbench(createInput(form, workspaceId));
-      trackCreated(item, form);
+      const withImages = attached.length > 0;
+      const item = await workflow.createWorkbench(createInput(form, workspaceId, withImages));
+      trackCreated(item, form, withImages);
       if (mode === 'session' && repository) rememberRepository(workspaceId, repository.id);
-      workflow.updateLocal(draftKey, { draft: '' });
+      // When the first message could not go to the new chat, the text and images stay here.
+      const kept = withImages && !(await sendFirstMessage(item, form, attached));
+      if (!kept) { workflow.updateLocal(draftKey, { draft: '' }); images.clear(); }
       setBaseBranch('');
       open(item.id);
     } catch (failure) {
@@ -158,6 +170,32 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
       if (refusal) showBoxRefusal(refusal, mode === 'thread' ? 'thread_create' : 'session_create');
       setError(refusal?.message ?? errorMessage(failure, mode === 'thread' ? 'Could not create the thread.' : 'Could not create the session.'));
     } finally { setBusy(false); }
+  };
+
+  /**
+   * Like web: a first message with images goes after the create. When it fails, the new chat's composer keeps it.
+   * False when there is no chat to keep it in.
+   */
+  const sendFirstMessage = async (item: Workbench, sent: NewWorkForm, drafts: ImageDraft[]): Promise<boolean> => {
+    const input = buildMessageInput(sent.prompt.trim(), drafts);
+    let chatId = item.chats?.[0]?.id ?? null;
+    try {
+      chatId ??= (await workbenches.createChat(item.id, { model: sent.model })).id;
+      const ack = await chatActions.send(chatId, input);
+      trackEvent('session_message_sent', { queued: ack.queued, plan_mode: false, model_id: sent.model, attachments_count: input.attachments?.length ?? 0 });
+      void workflow.load('workbench', item.id);
+      return true;
+    } catch (failure) {
+      const reason = errorMessage(failure, 'The message did not send.');
+      if (!chatId) {
+        Alert.alert('The first message did not send', `${reason} The ${sent.mode} started without it. Your text and images are still on this page.`);
+        return false;
+      }
+      workflow.updateLocal(chatId, { draft: sent.prompt.trim() });
+      writeImageDrafts(chatId, drafts);
+      Alert.alert('The first message did not send', `${reason} Your text and images are in the new chat. Send them again from there.`);
+      return true;
+    }
   };
 
   const openSheet = (kind: SheetKind) => { Keyboard.dismiss(); setSheet(kind); };
@@ -221,12 +259,20 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
           {chips.context.map(chip)}
         </ScrollView>
         <View style={[styles.card, { backgroundColor: c.elevated, borderColor: focused ? c.primary : c.border, opacity: busy ? 0.85 : 1 }]}>
+          {attached.length ? <View style={styles.images}>
+            <ComposerImages drafts={attached} errors={[]} onRemove={images.remove} onRetry={images.retry} onDismissError={() => undefined} />
+          </View> : null}
           <TextInput accessibilityLabel={mode === 'thread' ? 'What to get done' : 'Task'} multiline value={prompt} editable={!busy}
             placeholder={inSpace ? spacePlaceholder(mode, inSpace.space.name) : PLACEHOLDER[mode]} placeholderTextColor={c.muted} selectionColor={c.primary}
             onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
             onChangeText={(text) => { workflow.updateLocal(draftKey, { draft: text }); if (error) setError(null); }}
             style={[styles.prompt, { color: c.text }]} />
           <View style={styles.controls}>
+            {inSpace ? null : <Pressable accessibilityRole="button" accessibilityLabel="Attach an image" accessibilityState={{ disabled: busy }}
+              disabled={busy} hitSlop={6} onPress={() => { Keyboard.dismiss(); showImagePicker(images.add); }}
+              style={({ pressed }) => [styles.attach, { borderColor: c.border, backgroundColor: pressed ? c.surface : 'transparent', opacity: busy ? 0.5 : 1 }]}>
+              <SymbolView name={{ ios: 'plus', android: 'add' }} size={16} tintColor={c.muted} />
+            </Pressable>}
             {chip('mode')}
             <View style={styles.spacer} />
             {chip('model')}
@@ -337,11 +383,14 @@ function SendButton({ enabled, busy, hint, label, onPress }: { enabled: boolean;
 }
 
 
-/** Web's create events, with the same names and keys. The prompt goes with the create, so it counts as a sent message. */
-function trackCreated(item: Workbench, form: NewWorkForm) {
+/**
+ * Web's create events, with the same names and keys. A prompt without images goes with the create, so it counts as a
+ * sent message here. A prompt with images counts when it is sent.
+ */
+function trackCreated(item: Workbench, form: NewWorkForm, withImages = false) {
   trackEvent('session_created', { kind: item.kind ?? 'session', runtime: item.runtime, repository_id: item.repositoryId ?? null,
     size: item.settings.sandboxSize ?? item.settings.boxSize ?? 'default' });
-  if (form.prompt.trim()) trackEvent('session_message_sent', { queued: true, plan_mode: false, model_id: form.model, attachments_count: 0 });
+  if (form.prompt.trim() && !withImages) trackEvent('session_message_sent', { queued: true, plan_mode: false, model_id: form.model, attachments_count: 0 });
 }
 
 const styles = StyleSheet.create({
@@ -357,6 +406,8 @@ const styles = StyleSheet.create({
   // Two lines tall from the start, so the first typed line does not resize the field.
   prompt: { ...type.body, minHeight: 64, maxHeight: PROMPT_MAX_HEIGHT, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8,
     textAlignVertical: 'top' },
+  images: { paddingHorizontal: 10, paddingTop: 10 },
+  attach: { width: 32, height: 32, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
   controls: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 8, paddingRight: 8, paddingBottom: 8 },
   spacer: { flex: 1 },
   contextScroll: { flexGrow: 0 },

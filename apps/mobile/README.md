@@ -333,7 +333,12 @@ The queue and timeline are read only.
 External websites require confirmation. Only HTTP and HTTPS URLs without credentials are allowed.
 Rich reviews use the external website.
 
-The composer sends text to existing chats. It sends no attachments or unsupported gate actions.
+The composer sends text and images to existing chats. It sends no unsupported gate actions.
+A chat image goes to the session sandbox through the upload route (10 MB or less) before the message is sent.
+The New Work composer also takes images, except in a space (web's space composer has none).
+A new session has no sandbox yet, so each image is made smaller on the phone (`expo-image-manipulator`, 1600 px, JPEG).
+The images then go inline with the first message, which is sent after the create, like web.
+The server reads JSON bodies up to 2 MB, so the app blocks a start when the inline images are larger together.
 It requires a confirmed connection and current authorized session state.
 Sending, Queued on server, Sent, Failed, and Delivery unknown have separate labels.
 An acknowledgement records the server response. It does not prove that the agent completed the message.

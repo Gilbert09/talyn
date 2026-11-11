@@ -86,15 +86,21 @@ export function blockedReason(form: NewWorkForm, sandbox: Sandbox | null | undef
   return null;
 }
 
-/** The create request, like web `createWorkbench` without attachments. */
-export function createInput(form: NewWorkForm, workspaceId: string): CreateWorkbenchInput {
-  const prompt = form.prompt.trim() || undefined;
+/**
+ * The create request, like web `createWorkbench`. With images, the first
+ * message goes after the create, so the create has no prompt. The text still
+ * names the session, its branch and its chat.
+ */
+export function createInput(form: NewWorkForm, workspaceId: string, withImages = false): CreateWorkbenchInput {
+  const text = form.prompt.trim() || undefined;
+  const prompt = withImages ? undefined : text;
+  const namingText = withImages ? text : undefined;
   if (form.mode === 'thread') {
-    return { workspaceId, kind: 'thread', runtime: 'sandbox', agent: form.agent, model: form.model, prompt, internetAccess: form.internetAccess };
+    return { workspaceId, kind: 'thread', runtime: 'sandbox', agent: form.agent, model: form.model, prompt, namingText, internetAccess: form.internetAccess };
   }
   if (!form.repository) throw new Error('Choose a repository.');
   return { workspaceId, repositoryId: form.repository.id, runtime: 'sandbox', agent: form.agent, model: form.model,
-    baseBranch: form.baseBranch.trim() || undefined, prompt, internetAccess: form.internetAccess, autoCreatePr: true };
+    baseBranch: form.baseBranch.trim() || undefined, prompt, namingText, internetAccess: form.internetAccess, autoCreatePr: true };
 }
 
 // ---------------------------------------------------------------------------

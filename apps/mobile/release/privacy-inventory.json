@@ -1,6 +1,6 @@
 {
   "status": "Engineering inventory; privacy owner must approve store answers and retention before beta.",
-  "lockfileSha256": "e9f593fe473d2278cd9264c1f018552f98dff5ae354baa617016f33cd433c080",
+  "lockfileSha256": "24452bc96585cd3c8ba62a0e330d44750b90de9159651c7fcd7774e0a21031a8",
   "mobileDependencies": {
     "@expo-google-fonts/inter": "^0.4.2",
     "@expo-google-fonts/jetbrains-mono": "^0.4.1",
@@ -20,6 +20,7 @@
     "expo-device": "~58.0.5",
     "expo-file-system": "~58.0.13",
     "expo-font": "~58.0.12",
+    "expo-image-manipulator": "~58.0.16",
     "expo-image-picker": "~58.0.10",
     "expo-linking": "~58.0.17",
     "expo-localization": "~58.0.5",
@@ -143,9 +144,9 @@
         "images the person picks from the photo library",
         "photos the person takes with the camera"
       ],
-      "purpose": "Attach images to a chat message, only when the person chooses to",
-      "location": "System photo picker and camera (permission asked on first use); uploaded to the session sandbox through the Talyn backend",
-      "retention": "Kept with the session's sandbox files; backend and sandbox retention require approval"
+      "purpose": "Attach images to a chat message or to the first message of a new session, only when the person chooses to",
+      "location": "System photo picker and camera (permission asked on first use); uploaded to the session sandbox through the Talyn backend. For a new session, made smaller on the phone and sent inline with the first message",
+      "retention": "Kept with the session's sandbox files. A new session's queued first message holds them until its turn starts; backend and sandbox retention require approval"
     },
     {
       "category": "Clipboard",
