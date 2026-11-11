@@ -10,6 +10,7 @@ import { useNow } from '../../lib/time';
 import { type, useTheme } from '../../theme/tokens';
 import { useLocal, useResource } from '../../workflow/hooks';
 import type { Transcript } from '../../workflow/model';
+import { isStarting, StartingHint, StartingLine } from '../sessions/Starting';
 import { chatActions } from './actions';
 import { Composer } from './Composer';
 import { fullToolFrom, TranscriptContext, toolSeq, type TranscriptActions } from './fullTool';
@@ -107,6 +108,9 @@ export function Conversation({ item, ready, header, top }: {
     },
   }), [planBusy, running, offline, ready, chat, workflow, item.id]);
   const empty = state.status === 'ready' && rows.length === 0;
+  const starting = isStarting(item);
+  // A new sandbox: show what it does in place of the empty conversation, also while the first load runs.
+  const startHint = starting && rows.length === 0 && (state.status === 'idle' || state.status === 'loading' || state.status === 'ready');
 
   return <View style={{ flex: 1 }}>
     {header}
@@ -128,13 +132,13 @@ export function Conversation({ item, ready, header, top }: {
         }}
         onEndReached={loadOlder} onEndReachedThreshold={OLDER_DISTANCE}
         keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive"
-        ListHeaderComponent={running ? <View accessibilityLiveRegion="polite" style={local_.working}>
+        ListHeaderComponent={starting && !running && rows.length ? <StartingLine workbench={item} /> : running ? <View accessibilityLiveRegion="polite" style={local_.working}>
           <TypingDots />
           <Text style={[type.caption, { color: c.muted }]}>{chat?.phase === 'restoring' ? 'Restoring the sandbox. This can take a few minutes.' : 'Working'}</Text>
         </View> : undefined}
         ListFooterComponent={<View style={local_.top}>
           {top ? <View>{top(pauseFollowing)}</View> : null}
-          <StateNotice resource={state} offline={offline} refresh={state.refresh} refreshLabel="Try again" />
+          {startHint ? null : <StateNotice resource={state} offline={offline} refresh={state.refresh} refreshLabel="Try again" />}
           {loadingOlder ? <View style={local_.older}><ActivityIndicator accessibilityLabel="Loading earlier messages" size="small" color={c.muted} /></View> : null}
           {data?.olderFailed ? <View style={local_.older}>
             <Pressable accessibilityRole="button" accessibilityLabel="Could not load earlier messages. Try again" hitSlop={8}
@@ -144,17 +148,20 @@ export function Conversation({ item, ready, header, top }: {
           </View> : null}
           {data?.limited && data.hasOlder ? <AppText variant="caption" tone="muted" style={local_.note}>History is limited on this device. Jump to the newest message to read further back.</AppText> : null}
           {state.data?.gap ? <AppText variant="caption" tone="muted" style={local_.note}>Some events are missing. Talyn is loading them again.</AppText> : null}
-          {empty ? <AppText variant="meta" tone="muted" style={local_.empty}>No messages yet.</AppText> : null}
+          {empty && !startHint ? <AppText variant="meta" tone="muted" style={local_.empty}>No messages yet.</AppText> : null}
         </View>}
         renderItem={({ item: row }) => <TranscriptRow row={row} now={now} workbench={item} plan={plan} />} />
       </TranscriptContext.Provider></RowBoundary>
+      {startHint ? <View pointerEvents="box-none" style={local_.startHint}>
+        <StartingHint workbench={item} queued={chat?.queuedMessages.length ?? 0} canWrite={Boolean(chat)} />
+      </View> : null}
       {!following && rows.length ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest" onPress={jumpToLatest} hitSlop={6}
         style={[local_.jump, { backgroundColor: c.elevated, borderColor: c.border }]}>
         <SymbolView name={{ ios: 'arrow.down', android: 'arrow_downward' }} size={16} tintColor={c.text} />
       </Pressable> : null}
     </View>
     {chat ? <Composer item={item} chatId={chat.id} ready={ready} inputRef={inputRef} />
-      : <AppText variant="meta" tone="muted" style={local_.empty}>No conversation is available for this item.</AppText>}
+      : startHint ? null : <AppText variant="meta" tone="muted" style={local_.empty}>No conversation is available for this item.</AppText>}
   </View>;
 }
 
@@ -165,6 +172,7 @@ const local_ = StyleSheet.create({
   older: { height: 28, alignItems: 'center', justifyContent: 'center' },
   note: { textAlign: 'center' },
   empty: { paddingVertical: 32, textAlign: 'center' },
+  startHint: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, alignItems: 'center', justifyContent: 'center' },
   jump: { position: 'absolute', right: 16, bottom: 12, width: 40, height: 40, borderRadius: 20, borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center', justifyContent: 'center', elevation: 2, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 4, shadowOffset: { width: 0, height: 1 } },
 });

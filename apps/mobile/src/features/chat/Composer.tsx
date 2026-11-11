@@ -9,6 +9,7 @@ import { trackEvent } from '../../lib/analytics';
 import { radius, type, useTheme } from '../../theme/tokens';
 import { useLocal } from '../../workflow/hooks';
 import { canCompose, deliveryLabel, workbenchKind } from '../../workflow/model';
+import { isStarting } from '../sessions/Starting';
 import { chatActions } from './actions';
 import { ComposerImages } from './AttachmentViews';
 import { useImageDrafts } from './attachmentDrafts';
@@ -121,6 +122,7 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
     queued ? `${queued} ${queued === 1 ? 'message' : 'messages'} queued` : '',
   ].filter(Boolean).join(' · ');
   const placeholder = running ? 'The agent is working. A message now is queued.'
+    : isStarting(item) ? 'The sandbox is starting. A message now is queued.'
     : chat?.status === 'awaiting_input' ? 'Reply to the agent' : workbenchKind(item) === 'thread' ? 'Ask the thread' : 'Ask the agent';
   return <View style={[styles.wrap, { backgroundColor: c.background, borderColor: c.border }]}>
     {status || delivery.status !== 'idle' ? <View style={styles.status}>
