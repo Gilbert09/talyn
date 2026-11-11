@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
-import { act, render, renderHook } from '@testing-library/react';
-import type { Workbench, WorkbenchChat } from '@talyn/shared';
+import { act, renderHook } from '@testing-library/react';
+import type { Workbench } from '@talyn/shared';
 import { ApiNetworkError } from '@talyn/client';
 import { captureAnalyticsException, trackEvent } from '../renderer/lib/analytics';
 import { reportApiError } from '../renderer/lib/apiErrorAnalytics';
@@ -9,7 +9,6 @@ import { useCreateWorkbench, type NewWorkbenchSpec } from '../renderer/component
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { api } from '../renderer/lib/api';
 import { sandboxOps } from '../renderer/lib/workbenchOps';
-import { ChatTabs } from '../renderer/components/workbench/ChatTabs';
 
 jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/lib/api', () => ({ api: { workbenches: { create: jest.fn(), createChat: jest.fn(), sendMessage: jest.fn(), runScript: jest.fn() } } }));
@@ -94,15 +93,4 @@ it('tracks a started setup script', async () => {
   jest.mocked(api.workbenches.runScript).mockResolvedValue(undefined);
   await sandboxOps(workbench).runScript('setup');
   expect(trackEvent).toHaveBeenCalledWith('session_script_run', { workbench_id: 'wb1', script_kind: 'setup' });
-});
-
-it('tracks a chat tab once per mount', () => {
-  const chat = { id: 'chat1', workbenchId: 'wb1', title: 'Private title', status: 'idle', createdAt: '2026-01-01' } as unknown as WorkbenchChat;
-  useWorkbenchStore.setState({ chats: { wb1: [chat] }, hiddenChatIds: {} });
-  const { rerender } = render(<ChatTabs workbench={workbench} selected={chat} />);
-  rerender(<ChatTabs workbench={workbench} selected={null} />);
-  rerender(<ChatTabs workbench={workbench} selected={chat} />);
-  expect(jest.mocked(trackEvent).mock.calls.filter(([name]) => name === 'session_tab_viewed')).toEqual([
-    ['session_tab_viewed', { workbench_id: 'wb1', tab: 'chat', chat_id: 'chat1' }],
-  ]);
 });

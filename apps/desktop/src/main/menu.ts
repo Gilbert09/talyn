@@ -187,7 +187,7 @@ export default class MenuBuilder {
       label: 'Window',
       submenu: [
         { role: 'minimize' },
-        // ⌘W closes the chat tab (File menu); the window takes ⌘⇧W.
+        // The window takes ⌘⇧W, so a stray ⌘W does not close the app.
         { role: 'close', accelerator: 'Command+Shift+W' },
         { type: 'separator' },
         { role: 'front' },
@@ -238,7 +238,7 @@ export default class MenuBuilder {
           ...this.commandItems('app'),
           { type: 'separator' },
           {
-            // Ctrl+W closes the chat tab; the window takes Ctrl+Shift+W.
+            // The window takes Ctrl+Shift+W, so a stray Ctrl+W does not close the app.
             label: '&Close Window',
             accelerator: 'Ctrl+Shift+W',
             click: () => {

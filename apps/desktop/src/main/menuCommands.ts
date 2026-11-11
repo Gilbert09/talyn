@@ -37,8 +37,6 @@ const JUMP_COMMANDS: MenuCommand[] = Array.from({ length: 9 }, (_, i) => ({
 export const MENU_COMMANDS: MenuCommand[] = [
   { id: 'settings.open', label: 'Settings…', keys: 'mod+,', section: 'app' },
   { id: 'workbench.new', label: 'New Session', keys: 'mod+n', section: 'file' },
-  { id: 'chat.new', label: 'New Chat', keys: 'mod+t', section: 'file' },
-  { id: 'chat.close', label: 'Close Chat', keys: 'mod+w', section: 'file', separatorBefore: true },
   { id: 'palette.open', label: 'Command Palette…', keys: 'mod+k', section: 'view' },
   { id: 'sidebar.toggle', label: 'Toggle Sidebar', keys: 'mod+b', section: 'view' },
   { id: 'terminal.toggle', label: 'Toggle Terminal', keys: 'mod+j', section: 'view' },

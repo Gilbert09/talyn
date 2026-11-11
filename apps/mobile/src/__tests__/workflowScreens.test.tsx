@@ -153,15 +153,14 @@ describe('detail and composer accessibility', () => {
     expect(screen.getByRole('header', { name: /^Planning work\./ })).toBeVisible();
     expect(await screen.findByLabelText('Message')).toBeVisible();
   });
-  it('retains chat selection and drafts across detail navigation', async () => {
+  it('shows the newest chat and keeps its draft across detail navigation', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat(), chat({ id: 'chat-two', title: 'Second conversation' })] }));
-    const view = await render(<WorkbenchDetailScreen kind="session" />); await screen.findByText('Agent response 1');
-    await fireEvent.press(screen.getByRole('tab', { name: 'Second conversation · Idle' }));
-    await fireEvent.changeText(screen.getByLabelText('Message'), 'Second draft');
+    const view = await render(<WorkbenchDetailScreen kind="session" />);
+    expect(screen.queryByRole('tab')).toBeNull();
+    await fireEvent.changeText(await screen.findByLabelText('Message'), 'Second draft');
     expect(mockActive.store.local('selected:session-one').selectedChat).toBe('chat-two');
     await view.unmount(); await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await screen.findByRole('tab', { name: 'Second conversation · Idle · Selected' })).toBeVisible();
-    expect(screen.getByDisplayValue('Second draft')).toBeVisible();
+    expect(await screen.findByDisplayValue('Second draft')).toBeVisible();
   });
   it('shows a reviewer PR detail with one merge line, a review action and the website link', async () => {
     mockParams = { id: 'pr-one' }; await render(<PullRequestDetailScreen />);

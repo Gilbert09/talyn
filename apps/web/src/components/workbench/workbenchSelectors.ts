@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
 import { api, type PRRow } from '../../lib/api';
 import { usePullRequestStore } from '../../stores/pullRequests';
-import { isPrOnlyUnseen, useWorkbenchStore, visibleChats, type UnseenUpdates } from '../../stores/workbenches';
+import { isPrOnlyUnseen, useWorkbenchStore, type UnseenUpdates } from '../../stores/workbenches';
 import { isActiveSessionState, sessionPr, sessionState, type SessionState } from '../../lib/sessionState';
 import { opsFor, sandboxUnavailableReason, type WorkbenchOps } from '../../lib/workbenchOps';
 import { isThread, liveThreads, threadChildren } from '../../lib/threads';
@@ -155,15 +155,14 @@ export function useSelectedWorkbench(): Workbench | null {
   return useWorkbenchStore((s) => (s.selectedWorkbenchId ? (s.workbenches[s.selectedWorkbenchId] ?? null) : null));
 }
 
-/** The open chat tab: the remembered one, else the newest visible chat. */
+/** The chat on screen: the remembered one, else the newest chat. */
 export function useSelectedChat(workbenchId: string): WorkbenchChat | null {
-  const chats = useWorkbenchStore((s) => s.chats);
-  const hidden = useWorkbenchStore((s) => s.hiddenChatIds);
+  const chats = useWorkbenchStore((s) => s.chats[workbenchId]);
   const selectedId = useWorkbenchStore((s) => s.selectedChatByWorkbench[workbenchId]);
   return useMemo(() => {
-    const visible = visibleChats({ chats, hiddenChatIds: hidden }, workbenchId);
-    return visible.find((c) => c.id === selectedId) ?? visible[visible.length - 1] ?? null;
-  }, [chats, hidden, selectedId, workbenchId]);
+    const list = chats ?? [];
+    return list.find((c) => c.id === selectedId) ?? list[list.length - 1] ?? null;
+  }, [chats, selectedId]);
 }
 
 export function useWorkbenchOps(workbench: Workbench): WorkbenchOps {

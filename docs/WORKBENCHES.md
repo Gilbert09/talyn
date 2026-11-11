@@ -226,7 +226,7 @@ inside it.
 | Part | Where |
 |---|---|
 | Shell | `layout/AppShell.tsx`, `AppSidebar.tsx`, `stores/navigation.ts` (route union), `lib/shortcuts.ts` + `layout/appShortcuts.ts`, `CommandPalette.tsx` (⌘K) |
-| Menu chords | `main/menuCommands.ts`: the Electron menu owns ⌘N, ⌘W, ⌘T and the rest, and sends `menu:command` to the renderer. Close Window is ⌘⇧W. |
+| Menu chords | `main/menuCommands.ts`: the Electron menu owns ⌘N, ⌘K and the rest, and sends `menu:command` to the renderer. Close Window is ⌘⇧W. |
 | Home | `pages/NewWorkbenchPage.tsx`: one composer. Enter creates the workbench and starts it. Names come from the task (`workbenchNameFromTask`). |
 | Workbench | `WorkbenchView.tsx`, `WorkbenchHeader.tsx` (one action button: Create PR → Resolve conflicts → Fix checks → Merge → Archive), `GitPanel.tsx` (All files / Changes / Checks, terminal dock) |
 | Other pages | `pages/HistoryView.tsx`, `PullRequestsView.tsx` (the five PR panels), `IntegrationsView.tsx` (connections, rules, runs) |

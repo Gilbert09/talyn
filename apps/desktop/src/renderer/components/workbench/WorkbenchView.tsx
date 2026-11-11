@@ -11,7 +11,6 @@ import { emptyChatEvents, useWorkbenchStore } from '../../stores/workbenches';
 import { maybeHandleBillingLimit, useBillingStore } from '../../stores/billing';
 import { BoxRefusalAction, sessionRefusalText } from '../billing/BoxRefusalAction';
 import { Button } from '../ui/button';
-import { ChatTabs } from './ChatTabs';
 import { Composer } from './Composer';
 import { GitPanel } from './GitPanel';
 import { WorkPanel } from './WorkPanel';
@@ -84,7 +83,6 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
       <WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={viewOps} />
       <div className="flex min-h-0 min-w-0 flex-1" data-attr="workbench-columns">
         <div className="flex min-w-0 flex-1 flex-col">
-          <ChatTabs workbench={workbench} selected={chat} />
           {foreign && reason && (
             <Banner tone="muted" icon={<AlertTriangle className="h-3.5 w-3.5" />} text={reason}
               action={!checkout && repoPaths.ready ? (

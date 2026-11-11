@@ -1,6 +1,6 @@
-import { act, render, renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Workbench, WorkbenchChat } from '@talyn/shared';
+import type { Workbench } from '@talyn/shared';
 import { ApiNetworkError } from '@talyn/client';
 import { api as sharedApi, configureApiClient } from '../../../../packages/client/src/index';
 
@@ -20,7 +20,6 @@ import { captureWorkbenchFailure } from '../lib/workbenchAnalytics';
 import { useCreateWorkbench, type NewWorkbenchSpec } from '../components/workbench/new/useCreateWorkbench';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { sandboxOps } from '../lib/workbenchOps';
-import { ChatTabs } from '../components/workbench/ChatTabs';
 
 const spec: NewWorkbenchSpec = {
   workspaceId: 'ws1', repositoryId: 'repo1', repoFullName: 'private/repo',
@@ -143,15 +142,4 @@ it('tracks a started setup script', async () => {
   api.workbenches.runScript.mockResolvedValue(undefined);
   await sandboxOps(workbench).runScript('setup');
   expect(trackEvent).toHaveBeenCalledWith('session_script_run', { workbench_id: 'wb1', script_kind: 'setup' });
-});
-
-it('tracks a chat tab once per mount', () => {
-  const chat = { id: 'chat1', workbenchId: 'wb1', title: 'Private title', status: 'idle', createdAt: '2026-01-01' } as unknown as WorkbenchChat;
-  useWorkbenchStore.setState({ chats: { wb1: [chat] }, hiddenChatIds: {} });
-  const { rerender } = render(<ChatTabs workbench={workbench} selected={chat} />);
-  rerender(<ChatTabs workbench={workbench} selected={null} />);
-  rerender(<ChatTabs workbench={workbench} selected={chat} />);
-  expect(vi.mocked(trackEvent).mock.calls.filter(([name]) => name === 'session_tab_viewed')).toEqual([
-    ['session_tab_viewed', { workbench_id: 'wb1', tab: 'chat', chat_id: 'chat1' }],
-  ]);
 });

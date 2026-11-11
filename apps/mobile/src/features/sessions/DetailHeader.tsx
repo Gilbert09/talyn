@@ -189,7 +189,7 @@ export function SessionDetailsSheet({ visible, onClose, item, row, readiness, on
   const kind = workbenchKind(item);
   const state = workbenchState(item, row);
   const selected = workflow.local(`selected:${item.id}`).selectedChat;
-  const chat = (item.chats ?? []).find((value) => value.id === selected) ?? item.chats?.[0];
+  const chat = (item.chats ?? []).find((value) => value.id === selected) ?? item.chats?.at(-1);
   const agent = chatDetailsLine(chat, item.agent);
   const problem = readinessProblem(readiness, item.agent);
   const updated = relativeTimeLabel(item.updatedAt, now);

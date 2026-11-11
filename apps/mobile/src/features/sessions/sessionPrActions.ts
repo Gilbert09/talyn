@@ -3,11 +3,11 @@ import { CREATE_PR_MESSAGE, type Workbench } from '@talyn/shared';
 import type { WorkflowStore } from '../../workflow/store';
 import { createPrSentText } from './model';
 
-/** The chat an action goes to: the selected one, else the first. */
+/** The chat an action goes to: the one on screen, else the newest. */
 function targetChat(workflow: WorkflowStore, item: Workbench) {
   const selected = workflow.local(`selected:${item.id}`).selectedChat;
   const chats = item.chats ?? [];
-  return chats.find((chat) => chat.id === selected) ?? chats[0];
+  return chats.find((chat) => chat.id === selected) ?? chats[chats.length - 1];
 }
 
 /**
