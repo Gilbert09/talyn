@@ -37,7 +37,7 @@ import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { composerDraftKey, useWorkbenchStore } from '../../stores/workbenches';
-import { createChatTab } from './ChatTabs';
+import { createSessionChat } from './createSessionChat';
 import { useSlashCommandFileDescriptions } from './useSlashCommandFileDescriptions';
 import { ComposerPopover, applyTrigger, findTrigger, type ComposerMentionSource, type ComposerTrigger } from './ComposerPopover';
 import { isThread, threadMentions } from '../../lib/threads';
@@ -268,7 +268,7 @@ export function Composer({
       effort,
     };
     try {
-      const target = chat ?? (await createChatTab(workbench));
+      const target = chat ?? (await createSessionChat(workbench));
       if (!target) return;
       outgoingChatId = target.id;
       // A running turn or a waiting queue means this message waits too: show it as queued, not in the transcript.

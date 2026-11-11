@@ -11,7 +11,7 @@
  * Firefox, ⌘⇧A is tab search and ⌘⇧M is the profile menu in Chrome.
  *
  * The rules for the replacements:
- * - New session is ⌘⇧O. The chat chords add ⌥ to the desktop chord (⌘⌥T, ⌘⌥W).
+ * - New session is ⌘⇧O.
  * - Jumping to a session is ⌘⌥1–9.
  * - Every session action is ⌘⌥ plus the desktop letter (P, X, M, A).
  * - Focus composer is ⌘⇧L.
@@ -44,8 +44,6 @@ const JUMP_COMMANDS: MenuCommand[] = Array.from({ length: 9 }, (_, i) => ({
 export const MENU_COMMANDS: MenuCommand[] = [
   { id: 'settings.open', label: 'Settings…', keys: 'mod+,', section: 'app' },
   { id: 'workbench.new', label: 'New Session', keys: 'mod+shift+o', section: 'file' },
-  { id: 'chat.new', label: 'New Chat', keys: 'mod+alt+t', section: 'file' },
-  { id: 'chat.close', label: 'Close Chat', keys: 'mod+alt+w', section: 'file', separatorBefore: true },
   { id: 'palette.open', label: 'Command Palette…', keys: 'mod+k', section: 'view' },
   { id: 'sidebar.toggle', label: 'Toggle Sidebar', keys: 'mod+b', section: 'view' },
   { id: 'terminal.toggle', label: 'Toggle Terminal', keys: 'mod+j', section: 'view' },

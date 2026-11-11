@@ -54,7 +54,7 @@ import type { WorkbenchOps, WorkbenchPromptActionKind } from '../../lib/workbenc
 import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PrPill } from './WorkbenchBadges';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from './archiveWorkbench';
-import { createChatTab } from './ChatTabs';
+import { createSessionChat } from './createSessionChat';
 import { SlackThreadChip } from './SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
@@ -130,7 +130,7 @@ export async function sendCreatePullRequest(
   chat: WorkbenchChat | null,
 ): Promise<void> {
   try {
-    const target = chat ?? (await createChatTab(workbench));
+    const target = chat ?? (await createSessionChat(workbench));
     if (!target) return;
     const res = await ops.send(target, {
       text: CREATE_PR_MESSAGE,

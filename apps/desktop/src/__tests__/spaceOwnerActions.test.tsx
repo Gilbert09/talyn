@@ -5,7 +5,6 @@ import type { Workbench, WorkbenchChat, Workspace } from '@talyn/shared';
 import { api, ApiError } from '../renderer/lib/api';
 import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
 import { WorkbenchHeader } from '../renderer/components/workbench/WorkbenchHeader';
-import { ChatTabs } from '../renderer/components/workbench/ChatTabs';
 import { SidebarWorkbenchList } from '../renderer/components/layout/SidebarWorkbenchList';
 import { MoveToSpaceDialog, moveToSpace } from '../renderer/components/spaces/MoveToSpace';
 import { buildAppShortcuts } from '../renderer/components/layout/appShortcuts';
@@ -242,21 +241,11 @@ describe('desktop ownership controls', () => {
     move.mockRestore();
   });
 
-  it.each([MINE, THEIRS])('hides chat changes for a member viewing $id', (workbench) => {
-    const chat = { ...CHAT, workbenchId: workbench.id, title: 'Main' };
-    useWorkbenchStore.getState().setChats(workbench.id, [chat]);
-    render(<ChatTabs workbench={workbench} selected={chat} />);
-    expect(screen.queryByRole('button', { name: 'New chat' }) !== null).toBe(workbench === MINE);
-    expect(screen.queryByRole('button', { name: 'Close Main' }) !== null).toBe(workbench === MINE);
-    fireEvent.doubleClick(screen.getByRole('button', { name: 'Main' }));
-    expect(screen.queryByRole('textbox', { name: 'Chat title' }) !== null).toBe(workbench === MINE);
-  });
-
   it('disables owner shortcuts on a teammate session', () => {
     useWorkbenchStore.getState().setChats(THEIRS.id, [CHAT]);
     useNavigationStore.getState().navigate({ view: 'workbench', id: THEIRS.id });
     const shortcuts = buildAppShortcuts();
-    for (const id of ['chat.new', 'chat.close', 'terminal.toggle', 'workbench.sandbox', 'workbench.archive']) {
+    for (const id of ['terminal.toggle', 'workbench.sandbox', 'workbench.archive']) {
       expect(shortcuts.find((shortcut) => shortcut.id === id)?.when?.()).toBe(false);
     }
   });

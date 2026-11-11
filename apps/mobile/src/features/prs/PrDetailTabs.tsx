@@ -21,7 +21,7 @@ type Loaded<T> = Resource<T> & { refresh(): unknown };
 
 export interface TabSpec { key: PrDetailTab; label: string; badge?: string }
 
-/** A compact tab strip that scrolls sideways when it does not fit, like the chat tabs. */
+/** A compact tab strip that scrolls sideways when it does not fit. */
 export function DetailTabStrip({ tabs, value, onChange }: { tabs: TabSpec[]; value: PrDetailTab; onChange(tab: PrDetailTab): void }) {
   const c = useTheme();
   return <View style={[local.tabsWrap, { borderColor: c.border }]}>

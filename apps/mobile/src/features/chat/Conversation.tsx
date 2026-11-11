@@ -11,7 +11,6 @@ import { type, useTheme } from '../../theme/tokens';
 import { useLocal, useResource } from '../../workflow/hooks';
 import type { Transcript } from '../../workflow/model';
 import { chatActions } from './actions';
-import { ChatTabs } from './ChatTabs';
 import { Composer } from './Composer';
 import { fullToolFrom, TranscriptContext, toolSeq, type TranscriptActions } from './fullTool';
 import { TypingDots } from './Pulse';
@@ -37,9 +36,9 @@ export function Conversation({ item, ready, header, top }: {
   const { workflow } = useMobileRuntime();
   const c = useTheme();
   const now = useNow();
-  const [selected, setSelected] = useState<string | null>(() => workflow.local(`selected:${item.id}`).selectedChat);
+  // Like web and desktop: a session shows its newest chat. Older sessions can have more than one.
   const chats = item.chats ?? [];
-  const chat = chats.find((value) => value.id === selected) ?? chats[0];
+  const chat = chats[chats.length - 1];
   const state = useResource<Transcript>('transcript', chat?.id ?? '', Boolean(chat));
   const offline = useNetwork() === 'offline';
   const local = useLocal(chat?.id ?? '');
@@ -111,7 +110,6 @@ export function Conversation({ item, ready, header, top }: {
 
   return <View style={{ flex: 1 }}>
     {header}
-    {chats.length > 1 ? <ChatTabs chats={chats} selected={chat?.id} onSelect={setSelected} /> : null}
     <View style={{ flex: 1 }}>
       <RowBoundary label="The conversation" resetKey={chat?.id} retry><TranscriptContext.Provider value={actions}>
       <FlatList ref={ref} key={chat?.id ?? item.id} inverted data={rows} keyExtractor={(row) => row.key} accessibilityRole="list" accessibilityLabel="Conversation transcript"

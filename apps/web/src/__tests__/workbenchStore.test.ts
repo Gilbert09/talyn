@@ -7,7 +7,6 @@ import {
   mergeWorkbenchEvents,
   setChatFinishedListener,
   useWorkbenchStore,
-  visibleChats,
 } from '../stores/workbenches';
 
 function ev(seq: number, turn = 1, type = 'assistant'): WorkbenchEvent {
@@ -221,15 +220,6 @@ describe('workbench store', () => {
     expect(useWorkbenchStore.getState().chats.wb1.map((c) => c.id)).toEqual(['c', 'cc', 'ccc']);
   });
 
-  it('hideChat moves the selection to the newest remaining tab', () => {
-    const s = useWorkbenchStore.getState();
-    s.setChats('wb1', [chat('a'), chat('bb'), chat('ccc')]);
-    s.selectChat('wb1', 'ccc');
-    s.hideChat('wb1', 'ccc');
-    const state = useWorkbenchStore.getState();
-    expect(state.selectedChatByWorkbench.wb1).toBe('bb');
-    expect(visibleChats(state, 'wb1').map((c) => c.id)).toEqual(['a', 'bb']);
-  });
 
   describe('script output', () => {
     it('collects chunks, then records the exit', () => {

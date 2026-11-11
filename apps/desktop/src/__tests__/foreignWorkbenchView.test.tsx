@@ -26,7 +26,6 @@ jest.mock('../renderer/components/workbench/workbenchSelectors', () => ({
   useThreadChildren: () => [],
 }));
 jest.mock('../renderer/components/workbench/WorkbenchHeader', () => ({ WorkbenchHeader: () => null }));
-jest.mock('../renderer/components/workbench/ChatTabs', () => ({ ChatTabs: () => null }));
 jest.mock('../renderer/components/workbench/GitPanel', () => ({ GitPanel: () => <div>Pull request and changes</div> }));
 
 const wb = {

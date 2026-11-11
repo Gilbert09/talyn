@@ -24,7 +24,6 @@ import { useSplitViewStore } from '../../stores/splitView';
 import { isPrOnlyUnseen, useWorkbenchStore } from '../../stores/workbenches';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
-import { ChatTabs } from './ChatTabs';
 import { PrPill, SessionStateIcon } from './WorkbenchBadges';
 import { ChatView, StatusBanner } from './WorkbenchView';
 import { isArchived, useLiveThreads, useOrderedLiveWorkbenches, useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSelectors';
@@ -153,7 +152,6 @@ function SessionPane({
   return (
     <>
       <PaneHeader workbench={workbench} index={index} count={count} focused={focused} />
-      <ChatTabs workbench={workbench} selected={chat} />
       <StatusBanner workbench={workbench} ops={ops} />
       <ChatView workbench={workbench} chat={chat} ops={ops} autoFocus={focused} />
     </>

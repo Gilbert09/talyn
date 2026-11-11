@@ -24,7 +24,6 @@ import { useSplitViewStore } from '../../stores/splitView';
 import { isPrOnlyUnseen, useWorkbenchStore } from '../../stores/workbenches';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
-import { ChatTabs } from './ChatTabs';
 import { PrPill, SessionStateIcon } from './WorkbenchBadges';
 import { Banner, ChatView, StatusBanner } from './WorkbenchView';
 import { getDeviceId } from '../../lib/workbenchBridge';
@@ -160,7 +159,6 @@ function SessionPane({
   return (
     <>
       <PaneHeader workbench={workbench} index={index} count={count} focused={focused} />
-      <ChatTabs workbench={workbench} selected={chat} />
       {foreign ? (
         <Banner tone="muted" icon={<AlertTriangle className="h-3.5 w-3.5" />} text={FOREIGN_REASON} />
       ) : (

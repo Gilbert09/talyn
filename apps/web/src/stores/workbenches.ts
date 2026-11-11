@@ -203,10 +203,8 @@ interface WorkbenchState {
   /** Transcript events per chat. */
   chatEvents: Record<string, ChatEventsState>;
   selectedWorkbenchId: string | null;
-  /** The open chat tab per workbench. */
+  /** The chat shown per workbench. */
   selectedChatByWorkbench: Record<string, string>;
-  /** Chat tabs the user closed. There is no server-side close, so this is a view decision. */
-  hiddenChatIds: Record<string, true>;
   sideTab: WorkbenchSideTab;
   /** The right panel (files, changes, pull request and the terminal dock). ⌘⌥B. */
   rightPanelOpen: boolean;
@@ -252,7 +250,6 @@ interface WorkbenchState {
   prependOlderPage: (chatId: string, events: WorkbenchEvent[], marker: OlderEventsMarker) => void;
   selectWorkbench: (id: string | null) => void;
   selectChat: (workbenchId: string, chatId: string) => void;
-  hideChat: (workbenchId: string, chatId: string) => void;
   setSideTab: (tab: WorkbenchSideTab) => void;
   /** The Talyn pull request id shown in the session's details overlay, or null. */
   prDetailId: string | null;
@@ -316,7 +313,6 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   chatEvents: {},
   selectedWorkbenchId: null,
   selectedChatByWorkbench: {},
-  hiddenChatIds: {},
   sideTab: initialLayout.gitPanelTab,
   prDetailId: null,
   rightPanelOpen: true,
@@ -478,16 +474,6 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       return { selectedChatByWorkbench: { ...s.selectedChatByWorkbench, [workbenchId]: chatId }, unread, unseen };
     }),
 
-  hideChat: (workbenchId, chatId) =>
-    set((s) => {
-      const visible = (s.chats[workbenchId] ?? []).filter((c) => c.id !== chatId && !s.hiddenChatIds[c.id]);
-      const selected = { ...s.selectedChatByWorkbench };
-      if (selected[workbenchId] === chatId) {
-        if (visible.length) selected[workbenchId] = visible[visible.length - 1].id;
-        else delete selected[workbenchId];
-      }
-      return { hiddenChatIds: { ...s.hiddenChatIds, [chatId]: true }, selectedChatByWorkbench: selected };
-    }),
 
   openPrDetail: (prDetailId) => set({ prDetailId }),
   setSideTab: (sideTab) => {
@@ -637,11 +623,6 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
 /** Where the composer keeps its draft: the chat's, or the workbench's before it has a chat. */
 export function composerDraftKey(workbenchId: string, chat: Pick<WorkbenchChat, 'id'> | null): string {
   return chat?.id ?? `wb:${workbenchId}`;
-}
-
-/** The chats of a workbench the user has not closed. */
-export function visibleChats(state: Pick<WorkbenchState, 'chats' | 'hiddenChatIds'>, workbenchId: string): WorkbenchChat[] {
-  return (state.chats[workbenchId] ?? []).filter((c) => !state.hiddenChatIds[c.id]);
 }
 
 export const emptyChatEvents = EMPTY_EVENTS;

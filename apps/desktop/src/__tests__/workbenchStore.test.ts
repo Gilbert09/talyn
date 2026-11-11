@@ -9,7 +9,6 @@ import {
   mergeWorkbenchEvents,
   setChatFinishedListener,
   useWorkbenchStore,
-  visibleChats,
   wellFormedEvents,
 } from '../renderer/stores/workbenches';
 
@@ -231,15 +230,6 @@ describe('workbench store', () => {
     expect(useWorkbenchStore.getState().chats.wb1.map((c) => c.id)).toEqual(['c', 'cc', 'ccc']);
   });
 
-  it('hideChat moves the selection to the newest remaining tab', () => {
-    const s = useWorkbenchStore.getState();
-    s.setChats('wb1', [chat('a'), chat('bb'), chat('ccc')]);
-    s.selectChat('wb1', 'ccc');
-    s.hideChat('wb1', 'ccc');
-    const state = useWorkbenchStore.getState();
-    expect(state.selectedChatByWorkbench.wb1).toBe('bb');
-    expect(visibleChats(state, 'wb1').map((c) => c.id)).toEqual(['a', 'bb']);
-  });
 
   describe('local queue', () => {
     const msg = (id: string) => ({ id, text: id, queuedAt: '2026-10-13T00:00:00Z' });

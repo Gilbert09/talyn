@@ -1,13 +1,12 @@
 import { useEffect } from 'react';
-import { workbenchesOffered, type Workbench, type WorkbenchChat } from '@talyn/shared';
+import { workbenchesOffered, type Workbench } from '@talyn/shared';
 import { MENU_COMMANDS } from '../../lib/menuCommands';
 import { FOCUS_COMPOSER_EVENT, OPEN_REPOSITORY_PICKER_EVENT, composerForTab, dispatchKeydown, isEmptyComposer, isInOverlay, registerShortcuts, type Shortcut } from '../../lib/shortcuts';
 import { requestWorkbenchAction, type WorkbenchAction } from '../../lib/workbenchActions';
 import { useNavigationStore } from '../../stores/navigation';
-import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
+import { useWorkbenchStore } from '../../stores/workbenches';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { usePullRequestStore } from '../../stores/pullRequests';
-import { closeChatTab, createChatTab } from '../workbench/ChatTabs';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { groupSidebarWorkbenches, isArchived, sidebarSessionStates, visibleGroupItems } from '../workbench/workbenchSelectors';
 import { currentSpaceSidebarModel, spaceSidebarSessionIds } from './spaceSidebarModel';
@@ -49,12 +48,6 @@ export function currentWorkbench(): Workbench | null {
   const { route } = useNavigationStore.getState();
   if (route.view !== 'workbench') return null;
   return useWorkbenchStore.getState().workbenches[route.id] ?? null;
-}
-
-function currentChat(wb: Workbench): WorkbenchChat | null {
-  const store = useWorkbenchStore.getState();
-  const chats = visibleChats(store, wb.id);
-  return chats.find((c) => c.id === store.selectedChatByWorkbench[wb.id]) ?? chats[chats.length - 1] ?? null;
 }
 
 /**
@@ -296,31 +289,6 @@ export function buildAppShortcuts(): Shortcut[] {
     headerAction('workbench.fixChecks', 'fix_checks'),
     headerAction('workbench.merge', 'merge'),
     headerAction('workbench.archive', 'archive'),
-    fromMenu({
-      id: 'chat.new',
-      group: 'Session',
-      allowInInput: true,
-      when: inOwnWorkbench,
-      run: () => {
-        const wb = currentWorkbench();
-        if (wb) void createChatTab(wb);
-      },
-    }),
-    fromMenu({
-      id: 'chat.close',
-      label: 'Close chat tab',
-      group: 'Session',
-      allowInInput: true,
-      when: () => {
-        const wb = currentWorkbench();
-        return offered() && wb !== null && currentChat(wb) !== null;
-      },
-      run: () => {
-        const wb = currentWorkbench();
-        const chat = wb ? currentChat(wb) : null;
-        if (wb && chat) void closeChatTab(wb, chat);
-      },
-    }),
     fromMenu({
       id: 'composer.focus',
       group: 'Session',

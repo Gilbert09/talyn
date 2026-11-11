@@ -4,7 +4,7 @@ import { trackEvent } from './analytics';
 import { captureWorkbenchFailure } from './workbenchAnalytics';
 import { opsFor } from './workbenchOps';
 import { loadWorkbench } from './workbenchData';
-import { useWorkbenchStore, visibleChats } from '../stores/workbenches';
+import { useWorkbenchStore } from '../stores/workbenches';
 import { useNavigationStore } from '../stores/navigation';
 import { toast } from '../stores/toast';
 
@@ -66,7 +66,7 @@ async function sendPrFixToSessionInternal(row: PRRow, session: PrSessionRef): Pr
   if (ops.unavailable) throw new Error(ops.unavailable);
 
   const store = useWorkbenchStore.getState();
-  const chats = visibleChats(store, workbench.id);
+  const chats = store.chats[workbench.id] ?? [];
   let chat: WorkbenchChat | null =
     chats.find((c) => c.id === store.selectedChatByWorkbench[workbench.id]) ?? chats[chats.length - 1] ?? null;
   // A sandbox session picks its latest chat on the server. A local one needs a

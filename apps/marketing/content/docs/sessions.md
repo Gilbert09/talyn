@@ -51,10 +51,6 @@ Type `@` to mention a file, and `/` for the agent's slash commands. The agent is
 
 Each message you send is a checkpoint. To put the files back to how they were before a message, hover over the message and select **Revert to here**, then confirm.
 
-## More than one chat
-
-A session can have several chats on the same branch, shown as tabs. Use **New chat** (⌘T) to open another line of work, for example a review of what the first chat did. Each chat has its own model and plan mode setting.
-
 ## From the diff to a merged pull request
 
 One button in the session header moves the work on. Its label changes as the pull request moves:
