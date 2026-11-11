@@ -57,6 +57,10 @@ Talyn does not retry for ever:
 - While a session works on the pull request, Talyn waits for it.
 - If your plan has no free box right now, the run waits. The row shows **Waiting**.
 
+## While CI runs
+
+This is rolling out to some accounts. On Talyn Fleet, a fix run that pushes a commit stops to wait for CI. Talyn pauses its sandbox, and a paused sandbox uses no box-hours. The row shows **Waiting for CI**. When the checks finish, Talyn resumes the same run in the same checkout and tells the agent the result. The run then continues. If the pull request merges or closes while the run waits, the run ends. Select **Stop** to end it yourself.
+
 ## When an agent needs you
 
 Some things an agent should not decide, such as a product question, a credential the sandbox does not have, or a gate your repository says a person must clear. When a run stops for a reason like that, it is marked **Needs you**, with the agent's own explanation. It is not marked as failed. Select **Run again** when you have dealt with it.

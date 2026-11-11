@@ -2,6 +2,20 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## CI park: pause fleet fix runs while CI runs (2026-11-11)
+
+A fleet fix run kept a large box awake for 228 minutes, 52 of them in `sleep` calls waiting for PostHog/posthog's 40-minute CI. Now a run can end its turn after a publish, and Talyn suspends the box and resumes the same conversation when the checks settle. Behind the `ci-park` PostHog flag (fallback OFF, `availability: 'gated'`, break glass `CI_PARK_ENABLED`). The flag is not on anywhere.
+- **One decision, stamped.** `createCloudTask` asks the flag once, against the workspace owner, for a `pr_response` task with a PR on a `selfhosted` env, and stamps `metadata.ciPark`. The executor and the poller read only the stamp, like `internetAccess`. With no stamp, dispatch is byte-identical: no `ephemeral` key, so the default `true` stays, and the same prompt.
+- **The backend owns the prompt.** The clients build the fix prompt, so the fleet executor applies `withAwaitCiRule` to a stamped run at dispatch. It replaces the "wait for CI" loop line and appends the CI WAITING rule, so a template that drops `{{loopRules}}` still gets it. The stored prompt does not change, so a quota failover to PostHog Code sends today's prompt. `GET /features` does not carry the flag: no client draws anything from it.
+- **New status `waiting_ci`**, active (`TASK_STATUS_TERMINAL.waiting_ci = false`). Deviations from "active": `countPendingTaskBoxesQuery` leaves it out (the box is asleep, a wake goes through the gate); the generic poller still polls only `in_progress`; `PATCH /tasks/:id` refuses it (only the poller parks); stop accepts it, and the fleet provider's cancel deletes a stamped run's box instead of cancelling its task (a non-ephemeral box only goes idle on a cancel).
+- **The sentinel** is `TALYN_AWAIT_CI: <sha>`, with the `parseNeedsHumanSentinel` rules. The needs-human sentinel is read first. A box runs several turns in one event ring, so the final text is scoped to the current fleet task, after its `task_started` marker (`eventsOfTask`). Without that, a resumed turn that said nothing re-read the previous turn's sentinel.
+- **Park** (`selfHosted/poller.ts` `settleTurn` + `ciPark.ts` `parkForCi`): writes `metadata.awaitCi` first, then a CAS `in_progress → waiting_ci`, so the sweep never sees a parked row without its state. A failed suspend still parks: the 10-minute idle timeout suspends the box, and the meter sweep closes the interval. Six parks at most. A turn that does not park is finished and its box deleted.
+- **Wake** (`ciPark.ts`): the `pr:checks` listener and a 60 s sweep (`ci_park_sweep` on the debug bus, `guardCrossReplica`). The claim is a CAS from `waiting_ci` with the park's token. The gate is `checkBoxGate` as unattended work, not `withBoxGate`: the resume is a long HTTP call and the lock path would hold a pool transaction across it, so losing a race on Free costs one box. A claimed wake marks `awaitCi.wakingAt`, and the poller leaves the parked task alone for 15 minutes so it does not re-park on the old turn.
+- **Merge queue:** fix state `waiting`, live like `active`, and `submitHeldForRun` does not release on silence while it waits.
+- **Release scope** is `ci-park`, not `fleet`. A gated flag withholds every highlight with its scopes, and `fleet` would hide every released fleet note.
+- **Not verified on a real box:** that the fleet guests advertise the `tasks` capability (a `tasks_unsupported` refusal finishes the run), and that the resumed pi session really continues the conversation after a rootfs suspend. The resume sends the system prompt and the model again.
+- Analytics: `task_ci_parked` and `task_ci_woken` through `captureWorkspaceEvent`. A run finished by the sweep (PR merged or closed, box lost) sends no task outcome event.
+
 ## DB pool: four fixes after the pool filled (2026-11-10)
 
 The pool diagnostics below showed where connections were wasted. Four changes, one commit each:
