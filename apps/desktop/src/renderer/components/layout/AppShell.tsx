@@ -21,7 +21,7 @@ import { AddRepositoryModal } from '../modals/AddRepositoryModal';
 import { HomePage } from '../../pages/HomePage';
 import { HistoryView } from '../../pages/HistoryView';
 import { PullRequestsView } from '../../pages/PullRequestsView';
-import { AutomationsView } from '../../pages/AutomationsView';
+import { IntegrationsView } from '../../pages/IntegrationsView';
 import { InsightsView } from '../../pages/InsightsView';
 import { WorkbenchPage } from '../../pages/WorkbenchPage';
 import { SplitView } from '../workbench/SplitView';
@@ -114,7 +114,7 @@ export function RoutedView() {
   const route = useNavigationStore((s) => s.route);
   const features = useWorkspaceStore((s) => s.features);
   const space = useActiveSpace();
-  if (space && (route.view === 'home' || route.view === 'prs' || route.view === 'automations' || route.view === 'insights')) {
+  if (space && (route.view === 'home' || route.view === 'prs' || route.view === 'integrations' || route.view === 'insights')) {
     return <SpaceHomePage active={space} />;
   }
   switch (route.view) {
@@ -129,8 +129,8 @@ export function RoutedView() {
       return features === null ? null : <HomePage />;
     case 'prs':
       return <PullRequestsView tab={route.tab} />;
-    case 'automations':
-      return <AutomationsView tab={route.tab} />;
+    case 'integrations':
+      return <IntegrationsView kind={route.kind ?? null} />;
     case 'insights':
       return <InsightsView />;
     case 'settings':

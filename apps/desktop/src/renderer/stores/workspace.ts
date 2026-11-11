@@ -13,8 +13,7 @@ export type ActivePanel =
   | 'my_prs'
   | 'reviews'
   | 'merge_queue'
-  | 'workflows'
-  | 'loops'
+  | 'integrations'
   | 'code_reviews'
   | 'workbenches'
   | 'settings';

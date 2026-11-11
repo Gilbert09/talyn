@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Workbench } from '@talyn/shared';
+import { isIntegrationKind, type IntegrationKind, type Workbench } from '@talyn/shared';
 import { contextsEqual, setPanelNavigator, useWorkspaceStore, type AppContext, type ActivePanel, type SettingsSection } from './workspace';
 import { useWorkbenchStore } from './workbenches';
 import { findSpace, useSpacesStore } from './spaces';
@@ -22,7 +22,6 @@ import { findSpace, useSpacesStore } from './spaces';
  */
 
 export type PrTab = 'my_prs' | 'reviews' | 'code_reviews' | 'merge_queue' | 'queue';
-export type AutomationTab = 'workflows' | 'loops';
 
 export type Route =
   | { view: 'home'; mode?: 'session' | 'thread' }
@@ -32,11 +31,10 @@ export type Route =
   | { view: 'split' }
   | { view: 'insights' }
   | { view: 'prs'; tab: PrTab }
-  | { view: 'automations'; tab: AutomationTab }
+  | { view: 'integrations'; kind?: IntegrationKind }
   | { view: 'settings'; section: SettingsSection };
 
 export const PR_TABS: readonly PrTab[] = ['my_prs', 'reviews', 'code_reviews', 'merge_queue', 'queue'];
-export const AUTOMATION_TABS: readonly AutomationTab[] = ['workflows', 'loops'];
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'sessions',
   'agents',
@@ -81,8 +79,8 @@ export function isRoute(value: unknown): value is Route {
       return typeof r.id === 'string' && r.id.length > 0;
     case 'prs':
       return PR_TABS.includes(r.tab as PrTab);
-    case 'automations':
-      return AUTOMATION_TABS.includes(r.tab as AutomationTab);
+    case 'integrations':
+      return r.kind === undefined || isIntegrationKind(r.kind);
     case 'settings':
       return SETTINGS_SECTIONS.includes(r.section as SettingsSection);
     default:
@@ -117,8 +115,9 @@ export function routesEqual(a: Route, b: Route): boolean {
 export function panelForRoute(route: Route): ActivePanel {
   switch (route.view) {
     case 'prs':
-    case 'automations':
       return route.tab;
+    case 'integrations':
+      return 'integrations';
     case 'settings':
       return 'settings';
     default:
@@ -130,7 +129,6 @@ export function panelForRoute(route: Route): ActivePanel {
 export function analyticsPanel(route: Route): string {
   switch (route.view) {
     case 'prs':
-    case 'automations':
       return route.tab;
     default:
       return route.view;
@@ -153,9 +151,8 @@ export function routeForPanel(
     case 'merge_queue':
     case 'queue':
       return { view: 'prs', tab: panel };
-    case 'workflows':
-    case 'loops':
-      return { view: 'automations', tab: panel };
+    case 'integrations':
+      return { view: 'integrations' };
     case 'settings':
       return { view: 'settings', section: ctx.settingsSection };
     case 'workbenches':

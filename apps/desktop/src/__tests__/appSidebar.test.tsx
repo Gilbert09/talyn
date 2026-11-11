@@ -278,24 +278,21 @@ describe('AppSidebar', () => {
     expect(useNavigationStore.getState().route).toEqual({ view: 'prs', tab: 'my_prs' });
   });
 
-  it.each([
-    [{ workbenches: true }, false],
-    [{ workbenches: true, workflows: true }, true],
-    [{ workbenches: true, loops: true }, true],
-    // MCP servers is in Settings, so it alone does not offer Automations.
-    [{ workbenches: true, mcpServers: true }, false],
-    [null, false],
-  ])('Automations appears only when something is offered (%p → %s)', (features, shown) => {
-    setFeatures(features as Partial<Features> | null);
-    render(<AppSidebar />);
-    expect(screen.queryByText('Automations') !== null).toBe(shown);
-  });
+  it.each([[{ workbenches: true }], [{ workbenches: true, loops: true }], [null]])(
+    'Integrations is always in the sidebar (%p)',
+    (features) => {
+      setFeatures(features as Partial<Features> | null);
+      render(<AppSidebar />);
+      expect(screen.getByText('Integrations')).toBeInTheDocument();
+      expect(screen.queryByText('Automations')).not.toBeInTheDocument();
+    }
+  );
 
-  it('Automations opens the first offered tab', () => {
-    setFeatures({ workbenches: true, loops: true, mcpServers: true });
+  it('Integrations opens the catalog', () => {
+    setFeatures({ workbenches: true, loops: true });
     render(<AppSidebar />);
-    fireEvent.click(screen.getByText('Automations'));
-    expect(useNavigationStore.getState().route).toEqual({ view: 'automations', tab: 'loops' });
+    fireEvent.click(screen.getByText('Integrations'));
+    expect(useNavigationStore.getState().route).toEqual({ view: 'integrations' });
   });
 
   it('hides the workbench list, History and New workbench when workbenches are not offered', () => {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Archive, BarChart3, Columns2, GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
-import { mcpServersOffered, privateRoutesOffered, splitViewOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
+import { INTEGRATION_CATALOG, integrationsOffered, mcpServersOffered, privateRoutesOffered, splitViewOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
 import { formatKeys, getShortcut, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { goToShortcutIdForNavItem } from './layout/goToShortcuts';
 import { sessionPr, sessionState } from '../lib/sessionState';
@@ -11,7 +11,7 @@ import { useNavigationStore, type Route, PR_TABS } from '../stores/navigation';
 import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
-import { AUTOMATION_TAB_LABEL, PR_PAGE_TABS, PR_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
+import { PR_PAGE_TABS, PR_TAB_LABEL } from '../lib/routeLabels';
 import { isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelectors';
 import { openNewThread, openNewWorkbench } from './workbench/new/openNewWorkbench';
 import { claudeImportAvailable, useClaudeImportDialog } from './workbench/new/ContinueClaudeConversation';
@@ -145,12 +145,13 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         route: { view: 'prs', tab },
       });
     }
-    for (const tab of offeredAutomationTabs(features)) {
+    items.push({ key: 'integrations', label: 'Integrations', icon: Workflow, route: { view: 'integrations' } });
+    for (const kind of integrationsOffered(features)) {
       items.push({
-        key: `automations:${tab}`,
-        label: `Automations: ${AUTOMATION_TAB_LABEL[tab]}`,
+        key: `integrations:${kind}`,
+        label: `Integrations: ${INTEGRATION_CATALOG[kind].name}`,
         icon: Workflow,
-        route: { view: 'automations', tab },
+        route: { view: 'integrations', kind },
       });
     }
     items.push({ key: 'insights', label: 'Insights', icon: BarChart3, route: { view: 'insights' } });

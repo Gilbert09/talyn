@@ -120,10 +120,10 @@ describe('navigation store', () => {
 
   it('persists the route', () => {
     const { nav } = load();
-    nav.useNavigationStore.getState().navigate({ view: 'automations', tab: 'loops' });
+    nav.useNavigationStore.getState().navigate({ view: 'integrations', kind: 'schedule' });
     expect(JSON.parse(localStorage.getItem('talyn-last-route') ?? 'null')).toEqual({
-      view: 'automations',
-      tab: 'loops',
+      view: 'integrations',
+      kind: 'schedule',
     });
   });
 
@@ -131,6 +131,7 @@ describe('navigation store', () => {
     ['garbage', 'not json'],
     ['an unknown view', { view: 'inbox' }],
     ['a bad tab', { view: 'prs', tab: 'nope' }],
+    ['an unknown integration', { view: 'integrations', kind: 'nope' }],
     ['a bad settings section', { view: 'settings', section: 'nope' }],
     ['a workbench with no id', { view: 'workbench', id: '' }],
   ])('falls back to home for %s', (_label, persisted) => {
@@ -238,8 +239,7 @@ describe('navigation store', () => {
       ['code_reviews', { view: 'prs', tab: 'code_reviews' }],
       ['merge_queue', { view: 'prs', tab: 'merge_queue' }],
       ['queue', { view: 'prs', tab: 'queue' }],
-      ['workflows', { view: 'automations', tab: 'workflows' }],
-      ['loops', { view: 'automations', tab: 'loops' }],
+      ['integrations', { view: 'integrations' }],
       ['settings', { view: 'settings', section: 'workspace' }],
       ['workbenches', { view: 'home' }],
     ])('setActivePanel(%s) navigates to %p and derives the panel back', (panel, route) => {
@@ -300,7 +300,7 @@ describe('navigation store', () => {
     [{ view: 'home' }, 'home'],
     [{ view: 'workbench', id: 'a' }, 'workbench'],
     [{ view: 'prs', tab: 'reviews' }, 'reviews'],
-    [{ view: 'automations', tab: 'loops' }, 'loops'],
+    [{ view: 'integrations', kind: 'schedule' }, 'integrations'],
     [{ view: 'settings', section: 'about' }, 'settings'],
   ])('analyticsPanel(%p) is %s', (route, expected) => {
     const { nav } = load();

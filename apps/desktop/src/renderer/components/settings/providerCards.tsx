@@ -71,7 +71,7 @@ export function ProviderConnectCards() {
  * "render nothing", but conflating them is how a card flashes in and out on
  * every settings visit.
  */
-function SelfHostedFleetCard() {
+export function SelfHostedFleetCard() {
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);

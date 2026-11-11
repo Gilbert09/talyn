@@ -9,9 +9,11 @@ import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
 import { SettingsPage } from '../../ui/settings';
 import { GithubInstallStatus } from '../../widgets/GithubInstallStatus';
-import { TrunkSettingsCard } from '../../panels/TrunkSettingsCard';
+import { useNavigationStore } from '../../../stores/navigation';
+import { SelfHostedFleetCard } from '../providerCards';
+import { CloudProviderDefaultSelector } from './PullRequestsSettings';
 
-export function IntegrationsSettings() {
+export function GithubConnectionCard() {
   // GitHub status + user are preloaded into the store at startup
   // (useSystemStatus) and kept fresh there on window focus, so this panel
   // renders the connection state instantly instead of fetching on open. We
@@ -98,7 +100,7 @@ export function IntegrationsSettings() {
   };
 
   return (
-    <SettingsPage title="Integrations" description="Connect external services to enhance your workflow">
+    <div className="space-y-4">
       {error && (
         <div className="p-2.5 rounded-md bg-red-500/10 border border-red-500/20 text-red-400 text-xs flex items-center gap-2">
           <AlertCircle className="w-3.5 h-3.5" />
@@ -181,9 +183,34 @@ export function IntegrationsSettings() {
           </div>
         )}
       </Card>
+    </div>
+  );
+}
 
-      {/* Trunk merge ETAs. Draws nothing unless the feature is on. */}
-      <TrunkSettingsCard />
+export function IntegrationsSettings() {
+  const navigate = useNavigationStore((s) => s.navigate);
+  return (
+    <SettingsPage title="Integrations">
+      <p className="text-xs text-muted-foreground">
+        GitHub, Slack, Tailscale, PostHog Code and Trunk are now on the Integrations page.{' '}
+        <button
+          type="button"
+          className="underline underline-offset-2 hover:text-foreground"
+          onClick={() => navigate({ view: 'integrations', kind: 'github' })}
+        >
+          Moved to Integrations
+        </button>
+      </p>
+      <section className="space-y-3">
+        <div>
+          <h2 className="text-[13px] font-medium">Cloud agents</h2>
+          <p className="text-xs text-muted-foreground">
+            Connect your Claude or Codex subscription for Talyn Fleet, then choose which provider new tasks use by default.
+          </p>
+        </div>
+        <SelfHostedFleetCard />
+        <CloudProviderDefaultSelector />
+      </section>
     </SettingsPage>
   );
 }

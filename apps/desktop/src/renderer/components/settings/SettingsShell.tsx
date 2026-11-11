@@ -25,7 +25,8 @@ import {
   Users,
   Wand2,
 } from 'lucide-react';
-import { mcpServersOffered, privateRoutesOffered, workbenchesOffered } from '@talyn/shared';
+import { mcpServersOffered, privateRoutesOffered, workbenchesOffered, type IntegrationKind } from '@talyn/shared';
+import { useNavigationStore } from '../../stores/navigation';
 import { TeamsSettings } from './sections/TeamsSettings';
 import { spacesOffered } from '../../lib/spaces';
 import { cn } from '../../lib/utils';
@@ -35,7 +36,6 @@ import { useWorkspaceStore, type SettingsSection } from '../../stores/workspace'
 import { CodeReviewSettingsCard } from '../panels/codeReview/CodeReviewSettingsCard';
 import { McpServersPanel } from '../panels/mcpServers/McpServersPanel';
 import { SkillsSettings } from '../panels/SkillsSettings';
-import { SlackSettings } from '../panels/SlackSettings';
 import { TeamSettings } from '../panels/TeamBilling';
 import { InstructionsPage } from './InstructionsPage';
 import { MemoryPage } from './MemoryPage';
@@ -52,7 +52,6 @@ import { IntegrationsSettings } from './sections/IntegrationsSettings';
 import { MCPServerSettings } from './sections/McpSettings';
 import { ApiTokensSettings } from './sections/ApiTokensSettings';
 import { PullRequestsSettings } from './sections/PullRequestsSettings';
-import { PrivateRoutesSettings } from './sections/PrivateRoutesSettings';
 import { RepositoriesSettings } from './sections/RepositoriesSettings';
 import { SandboxSetupSettings } from './sections/SandboxSetupSettings';
 import { SessionsSettings } from './sections/SessionsSettings';
@@ -115,12 +114,43 @@ function CodeReviewPage() {
   );
 }
 
-// SlackSettings draws its own heading, so it gets the page padding without a title.
-function SlackPage() {
+function MovedToIntegrations({
+  title,
+  kind,
+  text,
+}: {
+  title: string;
+  kind: IntegrationKind;
+  text: string;
+}) {
+  const navigate = useNavigationStore((s) => s.navigate);
   return (
-    <div className="mx-auto max-w-xl px-6 py-5">
-      <SlackSettings />
-    </div>
+    <SettingsPage title={title}>
+      <p className="text-xs text-muted-foreground">
+        {text}{' '}
+        <button
+          type="button"
+          className="underline underline-offset-2 hover:text-foreground"
+          onClick={() => navigate({ view: 'integrations', kind })}
+        >
+          Moved to Integrations
+        </button>
+      </p>
+    </SettingsPage>
+  );
+}
+
+function SlackPage() {
+  return <MovedToIntegrations title="Slack" kind="slack" text="Slack settings are now the Slack integration." />;
+}
+
+function PrivateRoutesPage() {
+  return (
+    <MovedToIntegrations
+      title="Private routes"
+      kind="tailscale"
+      text="Private routes are now the Tailscale integration."
+    />
   );
 }
 
@@ -155,7 +185,7 @@ const SECTION_BODY: Record<SettingsSection, ComponentType> = {
   agents: AgentsSettings,
   repositories: RepositoriesSettings,
   sandboxSetup: SandboxSetupPage,
-  privateRoutes: PrivateRoutesSettings,
+  privateRoutes: PrivateRoutesPage,
   shortcuts: ShortcutsSettings,
   instructions: InstructionsPage,
   memory: MemoryPage,

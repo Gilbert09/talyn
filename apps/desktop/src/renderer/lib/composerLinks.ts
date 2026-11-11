@@ -66,16 +66,16 @@ export function composerSettingsLinks(features: Features | null): ComposerSettin
       id: 'private-routes',
       label: 'Private routes',
       description: 'Let sessions reach private networks',
-      route: { view: 'settings', section: 'privateRoutes' },
+      route: { view: 'integrations', kind: 'tailscale' },
       keywords: 'private routes tailnet network',
     });
   }
   links.push({
     id: 'integrations',
     label: 'Integrations',
-    description: 'Connect other services',
-    route: { view: 'settings', section: 'integrations' },
-    keywords: 'integrations',
+    description: 'GitHub, Slack, schedules and agent accounts',
+    route: { view: 'integrations' },
+    keywords: 'integrations accounts claude codex github slack schedule tailscale',
   });
   return links;
 }
