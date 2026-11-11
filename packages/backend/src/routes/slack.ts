@@ -7,6 +7,7 @@ import {
   validateSlackTriggerEmojis,
   type ApiResponse,
   type SlackAuthorizeResponse,
+  type SlackChannelsResponse,
   type SlackEmojiResponse,
   type SlackForgetInstallationResponse,
   type SlackPendingRequest,
@@ -29,6 +30,7 @@ import {
 import { slackRefusalReason, userMayUseSlack } from '../services/slack/access.js';
 import { SlackApiError } from '../services/slack/api.js';
 import { getSlackAppConfig } from '../services/slack/config.js';
+import { listTeamChannels } from '../services/slack/channels.js';
 import { listTeamEmoji } from '../services/slack/emoji.js';
 import {
   completeSlackInstall,
@@ -61,6 +63,7 @@ import { fleetErrorAsRefusal } from '../services/workbenches/errors.js';
  *   DELETE /slack/links/:id
  *   DELETE /slack/installations/:teamId    installer only
  *   GET    /slack/teams/:teamId/emoji      the team's custom emoji (installer or linked)
+ *   GET    /slack/teams/:teamId/channels   channels the bot is in (installer or linked)
  *   GET    /slack/pending                  my Slack requests waiting for a repository
  *   POST   /slack/pending/:id/start { repositoryId }  owner only → Workbench
  *   GET    /slack/oauth/callback           public; Slack's browser redirect
@@ -302,6 +305,24 @@ export function slackRoutes(): Router {
     } catch (err) {
       if (!(err instanceof SlackApiError)) throw err;
       res.status(502).json({ success: false, error: `Slack refused the emoji list (${err.code}).` });
+    }
+  });
+
+  // The channel picker of the Slack rule editor. Only channels the bot is a
+  // member of: Slack sends no message events for the others.
+  router.get('/teams/:teamId/channels', async (req, res) => {
+    if (await refuseUnlessEnabled(req, res)) return;
+    const teamId = req.params.teamId;
+    // 404 for a team the caller has nothing to do with, so team ids do not leak.
+    if (!(await userHasTeam(assertUser(req).id, teamId))) {
+      return handleAccessError(new AccessError('team not found'), res);
+    }
+    try {
+      const data = await listTeamChannels(teamId);
+      res.json({ success: true, data } as ApiResponse<SlackChannelsResponse>);
+    } catch (err) {
+      if (!(err instanceof SlackApiError)) throw err;
+      res.status(502).json({ success: false, error: `Slack refused the channel list (${err.code}).` });
     }
   });
 

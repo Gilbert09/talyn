@@ -14,9 +14,15 @@ export interface SlackAppConfig {
   redirectUri: string;
 }
 
-/** The bot scopes the install asks for. No `chat:write`: Talyn never posts. */
+/**
+ * The bot scopes the install asks for. `chat:write` lets a Slack rule reply in
+ * the trigger's thread. An install from before it was added keeps working for
+ * reactions, and a reply there fails with `slack_scope_missing` until the team
+ * installs the app again.
+ */
 export const SLACK_BOT_SCOPES = [
   'app_mentions:read',
+  'chat:write',
   'reactions:read',
   'reactions:write',
   'channels:history',

@@ -51,6 +51,7 @@ const REFUSAL_CODES: ReadonlySet<string> = new Set([
   'session_active',
   'merge_queue_limit_reached',
   'not_open',
+  'repository_unresolved',
 ]);
 
 /**
@@ -244,6 +245,7 @@ async function runOne<Input, Target extends WorkflowSourceTarget, Facts extends 
     actions: results.outcomes,
     taskId: results.taskId,
     pullRequestId: results.pullRequestId,
+    workbenchId: results.workbenchId,
     retryAfter,
   });
   if (settled) emitWorkflowRun(target.workspaceId, settled);
@@ -272,6 +274,7 @@ async function runOne<Input, Target extends WorkflowSourceTarget, Facts extends 
     status,
     action_types: workflow.actions.map((a) => a.type),
     started_task: results.taskId !== null,
+    started_session: results.workbenchId !== null,
     ...subjectProps(facts),
     // The codes on the run itself, so "which workflows are failing and why" is
     // answerable without unpacking the per-action array.

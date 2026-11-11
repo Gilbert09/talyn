@@ -661,6 +661,21 @@ export type WorkflowActionFailureCode =
   | 'review_limit_reached'
   /** Code review cannot run here: no reviewer covers this repository. */
   | 'code_review_unavailable'
+  /**
+   * The Slack install has no `chat:write` scope, so Talyn cannot reply. Not
+   * retried: it clears only when somebody installs the Slack app again.
+   */
+  | 'slack_scope_missing'
+  /** Slack refused a call (not a rate limit, not a missing scope). */
+  | 'slack_error'
+  /**
+   * A Slack rule left the repository to Talyn, and the message did not name
+   * one clearly. Not retried, and no pending request is made: nobody is
+   * waiting to pick one. Set a repository on the rule.
+   */
+  | 'repository_unresolved'
+  /** The session could not start (agent not connected, sessions not allowed). */
+  | 'session_unavailable'
   | 'error';
 
 /** One action's outcome inside one run. */

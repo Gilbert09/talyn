@@ -4,20 +4,15 @@ import type {
   WorkflowActionFailureCode,
   WorkflowActionOutcome,
   WorkflowActionType,
+  WorkflowTemplateExtras,
   GithubEventFacts,
   SlackEventFacts,
   CodeReviewPreset,
 } from '@talyn/shared';
-import {
-  boxRefusalReason,
-  buildSkillPrompt,
-  renderWorkflowComment,
-  SKILL_MAX_BYTES,
-} from '@talyn/shared';
+import { buildSkillPrompt, renderWorkflowComment, SKILL_MAX_BYTES } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { startReviewCycle } from '../codeReview/cycle.js';
-import { isBoxGateError, type BoxGateError } from '../billing/entitlements.js';
-import { deferralRetryAt } from '../billing/boxDeferral.js';
+import { isBoxGateError } from '../billing/entitlements.js';
 import { pullRequests as pullRequestsTable, skills as skillsTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
 import { GitHubRateLimitError } from '../githubRateGate.js';
@@ -29,8 +24,10 @@ import { liveWorkbenchForPr, sessionHoldReason } from '../workbenches/prSessions
 import { setQueueMembership } from '../mergeQueue/membership.js';
 import { getRepoSkillContent } from '../skills.js';
 import { workspacePromptTemplate } from '../promptTemplates.js';
-import { captureWorkspaceEvent } from '../analytics.js';
 import type { PRSummary } from '../githubGraphql.js';
+import { boxRefused, no, ok, type OneResult } from './actionResult.js';
+import { startSession } from './sessionAction.js';
+import { slackReact, slackReply } from './slackActions.js';
 
 /**
  * Executing a matched workflow's actions.
@@ -88,24 +85,24 @@ export interface ActionResults {
   taskId: string | null;
   /** The PR row, if any action had cause to materialise one. */
   pullRequestId: string | null;
+  /** The session a `start_session` started, for `workflow_runs.workbench_id`. */
+  workbenchId: string | null;
   /**
-   * When the latest box refusal among the outcomes clears (epoch ms), 0 when
-   * none. The run's retry is scheduled from it, as a rate gate's is from the
+   * When the latest parked outcome should be tried again (epoch ms), 0 when
+   * none: a box refusal's recheck time, or a Slack rate limit's Retry-After.
+   * The run's retry is scheduled from it, as a GitHub rate gate's is from the
    * gate: a refusal names when to look again.
    */
   boxRetryAtMs: number;
 }
 
-function ok(type: WorkflowActionType, detail: string): WorkflowActionOutcome {
-  return { type, ok: true, detail };
-}
-
-function no(
-  type: WorkflowActionType,
-  code: WorkflowActionFailureCode,
-  error: string
-): WorkflowActionOutcome {
-  return { type, ok: false, code, error };
+/** What a run carries from one action to the next. */
+export interface RunActionsOptions {
+  /**
+   * The link of a session this run already started, for `{{session.url}}`. A
+   * retry passes the session its first attempt started.
+   */
+  sessionUrl?: string | null;
 }
 
 /**
@@ -156,21 +153,27 @@ class PrRowCache {
  */
 export async function runWorkflowActions(
   actions: WorkflowAction[],
-  ctx: WorkflowActionContext
+  ctx: WorkflowActionContext,
+  opts: RunActionsOptions = {}
 ): Promise<ActionResults> {
   const prRow = ctx.integration === 'slack' ? null : new PrRowCache(ctx);
   const outcomes: WorkflowActionOutcome[] = [];
   let taskId: string | null = null;
   let pullRequestId: string | null = null;
+  let workbenchId: string | null = null;
   let boxRetryAtMs = 0;
+  // `{{session.url}}` in a later action of the same run.
+  const extras: WorkflowTemplateExtras = { sessionUrl: opts.sessionUrl ?? null };
 
   for (const action of actions) {
     let outcome: WorkflowActionOutcome;
     try {
-      const result = await runOne(action, ctx, prRow);
+      const result = await runOne(action, ctx, prRow, extras);
       outcome = result.outcome;
       if (result.taskId) taskId = result.taskId;
       if (result.pullRequestId) pullRequestId = result.pullRequestId;
+      if (result.workbenchId) workbenchId = result.workbenchId;
+      if (result.sessionUrl) extras.sessionUrl = result.sessionUrl;
       if (result.retryAt) boxRetryAtMs = Math.max(boxRetryAtMs, result.retryAt.getTime());
     } catch (err) {
       // A handler that throws is a bug, not a refusal — record it as one rather
@@ -184,43 +187,25 @@ export async function runWorkflowActions(
     outcomes.push(outcome);
   }
 
-  return { outcomes, taskId, pullRequestId, boxRetryAtMs };
-}
-
-interface OneResult {
-  outcome: WorkflowActionOutcome;
-  taskId?: string | null;
-  pullRequestId?: string | null;
-  /** A box refusal's recheck time; see {@link ActionResults.boxRetryAtMs}. */
-  retryAt?: Date | null;
-}
-
-/**
- * Actions whose execution is not built yet. The validator accepts them so the
- * rules can be stored; a run that reaches one records a plain refusal rather
- * than throwing.
- */
-function notYetSupported(type: WorkflowActionType): OneResult {
-  return {
-    outcome: no(
-      type,
-      'error',
-      `Talyn cannot run "${type}" yet. The rule was saved, but this action does nothing for now.`
-    ),
-  };
+  return { outcomes, taskId, pullRequestId, workbenchId, boxRetryAtMs };
 }
 
 async function runOne(
   action: WorkflowAction,
   ctx: WorkflowActionContext,
-  prRow: PrRowCache | null
+  prRow: PrRowCache | null,
+  extras: WorkflowTemplateExtras
 ): Promise<OneResult> {
-  if (
-    action.type === 'start_session' ||
-    action.type === 'slack_reply' ||
-    action.type === 'slack_react'
-  ) {
-    return notYetSupported(action.type);
+  if (action.type === 'start_session') return startSession(action, ctx, prRow);
+  if (action.type === 'slack_reply' || action.type === 'slack_react') {
+    if (ctx.integration !== 'slack') {
+      // The validator refuses a Slack action on a GitHub rule. A stored rule
+      // that bypassed it has no message to answer.
+      return { outcome: no(action.type, 'error', 'This action answers a Slack message, and a GitHub rule has none') };
+    }
+    return action.type === 'slack_reply'
+      ? slackReply(action.text, ctx, extras)
+      : slackReact(action.emoji, ctx);
   }
   if (ctx.integration === 'slack' || !prRow) {
     // The validator refuses a PR action on a Slack rule. Reaching here means a
@@ -229,13 +214,14 @@ async function runOne(
       outcome: no(action.type, 'error', 'This action works on a pull request, and a Slack rule has none'),
     };
   }
-  return runPrAction(action, ctx, prRow);
+  return runPrAction(action, ctx, prRow, extras);
 }
 
 async function runPrAction(
   action: Exclude<WorkflowAction, { type: 'start_session' | 'slack_reply' | 'slack_react' }>,
   ctx: GithubActionContext,
-  prRow: PrRowCache
+  prRow: PrRowCache,
+  extras: WorkflowTemplateExtras
 ): Promise<OneResult> {
   switch (action.type) {
     case 'add_labels':
@@ -247,7 +233,7 @@ async function runPrAction(
     case 'assign':
       return { outcome: await assign(action.users, ctx) };
     case 'comment':
-      return { outcome: await comment(action.body, ctx) };
+      return { outcome: await comment(action.body, ctx, extras) };
     case 'watch_pr':
       return watchPr(ctx);
     case 'enqueue_merge_queue':
@@ -329,17 +315,6 @@ async function runCodeReview(
   if (outcome.code === 'deferred') return boxRefused('run_code_review', outcome.error, resolved.id, ctx);
 
   return { outcome: no('run_code_review', workflowCodeFor(outcome.code), outcome.message) };
-}
-
-/**
- * A box the plan refused, as a parked outcome. `usage_exhausted` and
- * `box_limit_reached` are retryable and carry their recheck time; a size the
- * plan cannot start is not (unattended runs are downsized before it).
- */
-function boxRefused(type: WorkflowActionType, err: BoxGateError, pullRequestId: string, ctx?: GithubActionContext): OneResult {
-  const code = boxRefusalReason(err.code);
-  if (ctx) recordDeferral(ctx, code);
-  return { outcome: no(type, code, err.message), pullRequestId, retryAt: deferralRetryAt(err) };
 }
 
 /**
@@ -498,8 +473,12 @@ async function assign(users: string[], ctx: GithubActionContext): Promise<Workfl
   }
 }
 
-async function comment(body: string, ctx: GithubActionContext): Promise<WorkflowActionOutcome> {
-  const rendered = renderWorkflowComment(body, ctx.facts);
+async function comment(
+  body: string,
+  ctx: GithubActionContext,
+  extras: WorkflowTemplateExtras
+): Promise<WorkflowActionOutcome> {
+  const rendered = renderWorkflowComment(body, ctx.facts, extras);
   try {
     await githubService.createIssueComment(
       ctx.workspaceId,
@@ -848,22 +827,4 @@ async function loadSkill(key: string, ctx: GithubActionContext): Promise<LoadedS
   return unavailable(
     'Talyn runs workflows on the server, so it cannot reach a skill stored on your machine'
   );
-}
-
-/**
- * A plan limit hit with nobody watching.
- *
- * Captured server-side for the reason Session 116 gives: a workflow run has no
- * request behind it, so there is no 402 to answer and no UpgradeModal to open.
- * The population that hits this hardest is exactly the one whose clients report
- * nothing.
- */
-function recordDeferral(ctx: GithubActionContext, gate: WorkflowActionFailureCode): void {
-  captureWorkspaceEvent(ctx.workspaceId, 'paywall_deferred', {
-    source: 'workflow',
-    gate,
-    workflow_id: ctx.workflowId,
-    repo: `${ctx.owner}/${ctx.repo}`,
-    pr_number: ctx.facts.number,
-  });
 }

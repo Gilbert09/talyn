@@ -6,6 +6,7 @@ import { debugBus } from '../debugBus.js';
 import { githubRateGate } from '../githubRateGate.js';
 import { githubService } from '../github.js';
 import { TickGuard } from '../tickGuard.js';
+import { sessionLaunchUrl } from '../webApp.js';
 import { workflowsKillSwitchPulled } from '../workflowsAccess.js';
 import { runWorkflowActions, type BaseActionContext, type WorkflowActionContext } from './actions.js';
 import { workflowFactsFromRun } from './facts.js';
@@ -202,7 +203,9 @@ class WorkflowRetrySweep {
         ownerId,
         workflowId: run.workflowId,
         runId: run.id,
-      })
+      }),
+      // A reply retried after its session started still links that session.
+      { sessionUrl: run.workbenchId ? sessionLaunchUrl(run.workbenchId) : null }
     );
 
     // Merge back in place: the outcomes array is positional and the history
@@ -225,6 +228,7 @@ class WorkflowRetrySweep {
       retryAfter,
       ...(results.taskId ? { taskId: results.taskId } : {}),
       ...(results.pullRequestId ? { pullRequestId: results.pullRequestId } : {}),
+      ...(results.workbenchId ? { workbenchId: results.workbenchId } : {}),
     });
     if (settled) emitWorkflowRun(run.workspaceId, settled);
 

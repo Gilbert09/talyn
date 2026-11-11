@@ -17,11 +17,28 @@ export class SlackApiError extends Error {
     readonly method: string,
     /** Slack's error code (`invalid_refresh_token`), or `http_<status>`. */
     readonly code: string,
-    readonly status?: number
+    readonly status?: number,
+    /** Slack's `Retry-After` on a rate limit, in milliseconds. */
+    readonly retryAfterMs?: number,
+    /** The scope Slack named on a `missing_scope` refusal. */
+    readonly needed?: string
   ) {
     super(`Slack ${method} failed: ${code}`);
     this.name = 'SlackApiError';
   }
+}
+
+/** Whether Slack refused a call for its rate limit (HTTP 429, or `ratelimited`). */
+export function isSlackRateLimited(err: unknown): err is SlackApiError {
+  return err instanceof SlackApiError && (err.status === 429 || err.code === 'ratelimited');
+}
+
+/** `Retry-After` is whole seconds on Slack. Absent or unreadable means unknown. */
+function retryAfterMsOf(headers: Headers): number | undefined {
+  const raw = headers.get('retry-after');
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
 }
 
 export interface SlackCallOptions {
@@ -60,7 +77,9 @@ export async function callSlack<T extends Record<string, unknown>>(
       { timeoutMs: TIMEOUT_MS, label: `Slack ${method}` }
     );
     status = res.status;
-    if (!res.ok) throw new SlackApiError(method, `http_${res.status}`, res.status);
+    if (!res.ok) {
+      throw new SlackApiError(method, `http_${res.status}`, res.status, retryAfterMsOf(res.headers));
+    }
     let doc: Record<string, unknown>;
     try {
       doc = JSON.parse(res.bodyText) as Record<string, unknown>;
@@ -68,7 +87,13 @@ export async function callSlack<T extends Record<string, unknown>>(
       throw new SlackApiError(method, 'invalid_json', res.status);
     }
     if (doc.ok !== true) {
-      throw new SlackApiError(method, typeof doc.error === 'string' ? doc.error : 'unknown_error', res.status);
+      throw new SlackApiError(
+        method,
+        typeof doc.error === 'string' ? doc.error : 'unknown_error',
+        res.status,
+        retryAfterMsOf(res.headers),
+        typeof doc.needed === 'string' ? doc.needed : undefined
+      );
     }
     debugBus.recordHttp({
       service: 'slack',

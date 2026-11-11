@@ -12,6 +12,9 @@ import { callSlackAsBot } from './tokens.js';
  * header.
  */
 
+/** Message subtypes that are a person writing. Everything else (edits, deletes, joins, bots) is ignored. */
+export const PERSON_SUBTYPES: ReadonlySet<string | undefined> = new Set([undefined, 'file_share', 'thread_broadcast']);
+
 /** The fields of a Slack message this module reads. */
 export interface SlackMessage {
   ts: string;

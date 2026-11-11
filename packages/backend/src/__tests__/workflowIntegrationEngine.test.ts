@@ -349,11 +349,11 @@ describe('workflow engine — integrations', () => {
         prNumber: null,
         prTitle: '',
         event: 'slack_message',
-        // Reply and react are validated but not executed yet.
+        // No Slack install in this suite, so the reaction fails as Slack's.
         status: 'failed',
       });
       expect((run?.actions as Array<{ code?: string; error?: string }>)[0]).toMatchObject({
-        code: 'error',
+        code: 'slack_error',
       });
       expect((run?.facts as SlackEventFacts).channelId).toBe('C1');
       expect(addLabels).not.toHaveBeenCalled();
@@ -375,16 +375,15 @@ describe('workflow engine — integrations', () => {
     });
 
     it.each([
-      ['start_session', { type: 'start_session', repositoryId: null, prompt: 'Fix it' }],
       ['slack_reply', { type: 'slack_reply', text: 'On it' }],
       ['slack_react', { type: 'slack_react', emoji: 'eyes' }],
-    ])('records %s as not supported yet, without throwing', async (_type, action) => {
+    ])('records %s with no Slack install as a Slack failure, without throwing', async (_type, action) => {
       process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
       const wf = await addSlackRule({ actions: [action] });
       await evaluateWorkflows(fakeSlackSource, slackMessage());
       const [run] = await db.select().from(runsTable).where(eq(runsTable.workflowId, wf.id));
       expect(run?.status).toBe('failed');
-      expect((run?.actions as Array<{ error?: string }>)[0]?.error).toMatch(/cannot run .* yet/);
+      expect((run?.actions as Array<{ code?: string }>)[0]?.code).toBe('slack_error');
     });
 
     it('claims a redelivered Slack event only once', async () => {
@@ -457,7 +456,7 @@ describe('workflow engine — integrations', () => {
       const [run] = await db.select().from(runsTable).where(eq(runsTable.id, claim.run.id));
       expect(run?.attempts).toBe(2);
       expect(run?.status).toBe('failed');
-      expect((run?.actions as Array<{ error?: string }>)[0]?.error).toMatch(/cannot run .* yet/);
+      expect((run?.actions as Array<{ code?: string }>)[0]?.code).toBe('slack_error');
       expect(blockedUntil).not.toHaveBeenCalled();
     });
 

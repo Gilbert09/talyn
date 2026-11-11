@@ -154,17 +154,23 @@ export async function settleRun(runId: string, input: SettleInput): Promise<Work
   if (input.taskId !== undefined) links.taskId = input.taskId;
   if (input.pullRequestId !== undefined) links.pullRequestId = input.pullRequestId;
   if (input.workbenchId !== undefined) links.workbenchId = input.workbenchId;
-  if (Object.keys(links).length > 0) {
-    await db
-      .update(runsTable)
-      .set(links)
-      .where(eq(runsTable.id, runId))
-      .catch((err: unknown) => {
-        console.warn(
-          `[workflows] could not link run ${runId} to its task/PR (the row is gone?):`,
-          err instanceof Error ? err.message : err
-        );
-      });
+  const entries = Object.entries(links);
+  if (entries.length > 0) {
+    const write = (set: typeof links) => db.update(runsTable).set(set).where(eq(runsTable.id, runId));
+    try {
+      await write(links);
+    } catch {
+      // One link's row is gone. Attach the others one at a time, so a PR row
+      // un-watched mid-run does not cost the run its session link too.
+      for (const [key, value] of entries) {
+        await write({ [key]: value } as typeof links).catch((err: unknown) => {
+          console.warn(
+            `[workflows] could not link run ${runId} to its ${key} (the row is gone?):`,
+            err instanceof Error ? err.message : err
+          );
+        });
+      }
+    }
   }
 
   const rows = await db.select().from(runsTable).where(eq(runsTable.id, runId)).limit(1);
@@ -332,6 +338,8 @@ export interface DueRetry {
   prAuthor: string;
   pullRequestId: string | null;
   taskId: string | null;
+  /** The session an earlier attempt started, so a retried reply can link it. */
+  workbenchId: string | null;
   event: string;
   actions: WorkflowActionOutcome[];
   attempts: number;
@@ -362,6 +370,7 @@ export async function dueRetries(limit: number, now = new Date()): Promise<DueRe
       prAuthor: runsTable.prAuthor,
       pullRequestId: runsTable.pullRequestId,
       taskId: runsTable.taskId,
+      workbenchId: runsTable.workbenchId,
       event: runsTable.event,
       actions: runsTable.actions,
       attempts: runsTable.attempts,

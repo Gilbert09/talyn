@@ -1,16 +1,7 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
-import {
-  defaultFleetModelForAgent,
-  storedFleetModelForAgent,
-  type SlackNoticeEvent,
-  type SlackRepoCandidate,
-  type SlackSessionSource,
-  type Workbench,
-  type WorkbenchAgent,
-  type WorkspaceSettings,
-} from '@talyn/shared';
+import { and, eq } from 'drizzle-orm';
+import type { SlackNoticeEvent, SlackRepoCandidate, SlackSessionSource, Workbench } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
-import { slackInstallations, slackUserLinks, users, workbenches, workspaces } from '../../db/schema.js';
+import { slackInstallations, slackUserLinks, users, workspaces } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
 import { isBoxGateError, type BoxGateError } from '../billing/entitlements.js';
 import { BILLING_PATH } from '../billing/usage/alerts.js';
@@ -19,9 +10,11 @@ import { assertWorkbenchBoxStart } from '../workbenches/boxGate.js';
 import { createWorkbench } from '../workbenches/create.js';
 import { userFacingError, WorkbenchError } from '../workbenches/errors.js';
 import { restoreWorkbench } from '../workbenches/lifecycle.js';
-import { workbenchReadiness, type ReadinessUser } from '../workbenches/readiness.js';
+import type { ReadinessUser } from '../workbenches/readiness.js';
 import { getWorkbench, listChats } from '../workbenches/store.js';
 import { sendMessage } from '../workbenches/turns.js';
+import { evaluateWorkflows } from '../workflows/engine.js';
+import { slackWorkflowSource } from '../workflows/sources/slack.js';
 import { userMayUseSlack } from './access.js';
 import { SlackApiError } from './api.js';
 import {
@@ -33,6 +26,7 @@ import {
   fenceFor,
   messagePermalink,
   namesFor,
+  PERSON_SUBTYPES,
   slackToPlainText,
   slackTsToTime,
   stripBotMention,
@@ -40,6 +34,7 @@ import {
   type SlackMessage,
 } from './context.js';
 import { notifySlackUser } from './notify.js';
+import { slackSessionDefaults } from './sessionDefaults.js';
 import { recordRepoUse, resolveRepository } from './repoResolver.js';
 import { reactOnce, moveStatusToMessage, scheduleSlackStatus, setThreadStatus } from './statusReactions.js';
 import { callSlackAsBot } from './tokens.js';
@@ -65,7 +60,12 @@ import {
  * Only a Slack user with a link in that team, whose Talyn account passes the
  * `workbenches` flag, can trigger anything. Bot messages, edits and the bot's
  * own events are ignored. Everything runs on the pool: there is no request.
+ *
+ * A message in a channel is not a personal trigger: it goes to the Slack
+ * channel rules (`onChannelMessage`), which the workflow engine runs.
  */
+
+export { slackSessionDefaults };
 
 export type TriggerOutcome = 'handled' | 'ignored';
 
@@ -84,9 +84,6 @@ export class SlackThreadBusyError extends Error {
     this.name = 'SlackThreadBusyError';
   }
 }
-
-/** Message subtypes that are a person writing. Everything else (edits, deletes, joins, bots) is ignored. */
-const PERSON_SUBTYPES = new Set([undefined, 'file_share', 'thread_broadcast']);
 
 /** Slack errors that mean the bot cannot see the message: nothing to do, nothing to retry. */
 const UNREADABLE = new Set(['not_in_channel', 'channel_not_found', 'thread_not_found', 'missing_scope', 'no_bot_token']);
@@ -146,38 +143,6 @@ async function targetWorkspace(link: Link): Promise<string | null> {
   return firstWorkspaceOf(link.userId);
 }
 
-/**
- * The agent and model a Slack session runs with. The composer's agent default
- * is per device, which the backend cannot see, so this takes the agent of the
- * workspace's most recent sandbox session when it can run, else the first
- * agent that can (Claude, then Codex), and the workspace's model for it.
- */
-export async function slackSessionDefaults(workspaceId: string, actor: ReadinessUser): Promise<{ agent: WorkbenchAgent; model: string }> {
-  const db = getPoolDbClient();
-  const [last, ws, readiness] = await Promise.all([
-    db
-      .select({ agent: workbenches.agent })
-      .from(workbenches)
-      .where(and(eq(workbenches.workspaceId, workspaceId), eq(workbenches.runtime, 'sandbox')))
-      .orderBy(desc(workbenches.createdAt))
-      .limit(1),
-    db
-      .select({
-        fleetModels: sql<WorkspaceSettings['fleetModels'] | null>`${workspaces.settings} -> 'fleetModels'`,
-        fleetModel: sql<string | null>`${workspaces.settings} ->> 'fleetModel'`,
-      })
-      .from(workspaces)
-      .where(eq(workspaces.id, workspaceId))
-      .limit(1),
-    workbenchReadiness(workspaceId, actor),
-  ]);
-  const lastAgent = last[0]?.agent === 'codex' || last[0]?.agent === 'claude' ? (last[0].agent as WorkbenchAgent) : null;
-  const order = [...new Set<WorkbenchAgent>([...(lastAgent ? [lastAgent] : []), 'claude', 'codex'])];
-  const agent = order.find((a) => readiness.sandbox.agents[a]?.ok) ?? order[0];
-  const settings = { fleetModels: ws[0]?.fleetModels ?? undefined, fleetModel: ws[0]?.fleetModel ?? undefined } as WorkspaceSettings;
-  return { agent, model: storedFleetModelForAgent(settings, agent) ?? defaultFleetModelForAgent(agent) };
-}
-
 // ---------------------------------------------------------------------------
 // The three event types
 // ---------------------------------------------------------------------------
@@ -222,10 +187,35 @@ export async function onAppMention(ctx: TriggerContext): Promise<TriggerOutcome>
 
 export async function onMessage(ctx: TriggerContext): Promise<TriggerOutcome> {
   const e = ctx.event;
-  if (str(e.channel_type) !== 'im') return 'ignored';
+  const channelType = str(e.channel_type);
+  if (channelType === 'channel' || channelType === 'group') return onChannelMessage(ctx);
+  if (channelType !== 'im') return 'ignored';
   if (!ctx.teamId || e.bot_id || e.edited || !PERSON_SUBTYPES.has(e.subtype as string | undefined)) return 'ignored';
   if (!str(e.user) || !str(e.channel) || !str(e.ts)) return 'ignored';
   return personTrigger(ctx, 'dm');
+}
+
+/**
+ * A message in a public or private channel: Slack channel rules only. The
+ * workflow engine decides which rules run (`sources/slack.ts`), and it never
+ * throws. The `slack_events` claim above it is what makes a redelivery a
+ * no-op, with the run's own claim on `slack:<event_id>` behind it.
+ *
+ * The cheap checks come first, so a bot's message or an edit costs no query.
+ */
+async function onChannelMessage(ctx: TriggerContext): Promise<TriggerOutcome> {
+  const e = ctx.event;
+  if (!ctx.teamId || e.bot_id || e.edited || !PERSON_SUBTYPES.has(e.subtype as string | undefined)) return 'ignored';
+  if (!str(e.user) || !str(e.channel) || !str(e.ts)) return 'ignored';
+  const install = await loadInstallation(ctx.teamId);
+  if (!install || install.tokenError) return 'ignored';
+  const ran = await evaluateWorkflows(slackWorkflowSource, {
+    eventId: ctx.eventId,
+    teamId: ctx.teamId,
+    event: e,
+    botUserId: install.botUserId,
+  });
+  return ran > 0 ? 'handled' : 'ignored';
 }
 
 async function personTrigger(ctx: TriggerContext, kind: 'mention' | 'dm'): Promise<TriggerOutcome> {
@@ -523,9 +513,8 @@ async function followUp(ctx: TriggerContext, t: Trigger, install: Installation, 
 
 /**
  * Reply in the Slack thread that the plan refused the box, with a link to
- * billing. Best effort: the bot may lack `chat:write` (the install asks only
- * for reactions today), in which case the failed reaction and the in-app
- * notice still say it.
+ * billing. Best effort: an older install may lack `chat:write`, in which case
+ * the failed reaction and the in-app notice still say it.
  */
 export async function replyPlanRefusal(teamId: string, channelId: string, threadTs: string, err: BoxGateError): Promise<void> {
   const link = webAppUrl(BILLING_PATH);
