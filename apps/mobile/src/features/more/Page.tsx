@@ -13,10 +13,7 @@ export function webUrl(path: string): string {
   return `${WEB_APP_URL}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
-/** The native options of a detail screen above the navigation, like the root layout's `detail()`. */
-export function detailOptions(title: string) {
-  return { headerShown: true, title, animation: 'default' as const, headerBackTitle: 'Back' };
-}
+export { detailOptions } from '../../navigation/detailOptions';
 
 /** A scrolling detail screen with pull-to-refresh. The native header carries the title. */
 export function Page({ children, refreshing = false, onRefresh }: PropsWithChildren<{ refreshing?: boolean; onRefresh?(): void }>) {
