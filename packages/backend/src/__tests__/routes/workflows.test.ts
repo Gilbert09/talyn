@@ -241,7 +241,7 @@ describe('workflow routes', () => {
         previewLinks: false,
         publicApi: false,
         privateRoutes: false,
-        splitView: false,
+        splitView: true,
         slackChannelRules: false,
       });
     });
@@ -272,7 +272,7 @@ describe('workflow routes', () => {
         previewLinks: false,
         publicApi: false,
         privateRoutes: false,
-        splitView: false,
+        splitView: true,
         slackChannelRules: false,
       });
     });

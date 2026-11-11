@@ -509,7 +509,7 @@ describe('featuresForUser', () => {
       workbenches: false,
       trunkMergeEta: false,
       publicApi: false,
-      splitView: false,
+      splitView: true,
       slackChannelRules: false,
     });
   });
@@ -535,7 +535,7 @@ describe('featuresForUser', () => {
       workbenches: false,
       trunkMergeEta: false,
       publicApi: false,
-      splitView: false,
+      splitView: true,
       slackChannelRules: false,
     });
   });

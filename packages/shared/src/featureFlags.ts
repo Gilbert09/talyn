@@ -421,17 +421,17 @@ export const FEATURE_FLAGS = {
    * composer, so a person can watch and prompt them at once.
    *
    * Drawing only: every pane talks to the same session routes the full
-   * session page uses, so nothing server-side is gated on it. Fallback OFF and
-   * gated while it is tried out, so a PostHog outage hides an experiment
-   * rather than showing it to accounts nobody chose. `SPLIT_VIEW_ENABLED=true`
-   * turns it on locally with no PostHog project.
+   * session page uses, so nothing server-side is gated on it. Released to
+   * every account on 2026-11-11, so the flag is now a kill switch: fallback ON,
+   * because a PostHog outage must not take a released page away.
+   * `SPLIT_VIEW_ENABLED=false` turns it off without PostHog.
    */
   splitView: {
     posthogKey: 'split-view',
     envOverride: 'SPLIT_VIEW_ENABLED',
-    fallback: false,
+    fallback: true,
     description: 'Split view — several sessions side by side, each with its transcript and composer',
-    availability: 'gated',
+    availability: 'general',
     releaseScopes: ['split-view'],
   },
 
