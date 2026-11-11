@@ -11,8 +11,6 @@ import {
   GitPullRequest,
   Info,
   Keyboard,
-  MessageSquare,
-  Network,
   Palette,
   KeyRound,
   Plug,
@@ -25,8 +23,7 @@ import {
   Users,
   Wand2,
 } from 'lucide-react';
-import { mcpServersOffered, privateRoutesOffered, workbenchesOffered, type IntegrationKind } from '@talyn/shared';
-import { useNavigationStore } from '../../stores/navigation';
+import { mcpServersOffered, workbenchesOffered } from '@talyn/shared';
 import { TeamsSettings } from './sections/TeamsSettings';
 import { spacesOffered } from '../../lib/spaces';
 import { cn } from '../../lib/utils';
@@ -69,7 +66,6 @@ const SETTINGS_SEARCH_TERMS: Record<SettingsSection, string> = {
   agents: 'Claude Codex subscriptions accounts providers API keys models usage rate limits',
   repositories: 'GitHub watched repositories local checkouts scan setup run command preview',
   sandboxSetup: 'dotfiles setup steps install commands branch repository',
-  privateRoutes: 'Tailscale tailnet connector destinations hostname IP TCP port devices',
   shortcuts: 'keyboard hotkeys keys navigation',
   instructions: 'AGENTS.md CLAUDE.md prompts templates plan implement review fix repository files',
   memory: 'notes session remember forget review clean up cleanup schedule overlap contradict',
@@ -79,7 +75,6 @@ const SETTINGS_SEARCH_TERMS: Record<SettingsSection, string> = {
   codeReview: 'automatic reviews depth reviewers attention findings fixes inline comments summary',
   workspace: 'name logo delete',
   integrations: 'GitHub Anthropic Claude Codex PostHog providers API keys connect',
-  slack: 'workspace bot emoji invite sessions channel',
   teams: 'members roles invite spaces home workspace seats',
   billing: 'plan usage box hours limits upgrade invoices orders payment auto top-up balance',
   account: 'email sign out privacy analytics usage data session replays',
@@ -114,46 +109,6 @@ function CodeReviewPage() {
   );
 }
 
-function MovedToIntegrations({
-  title,
-  kind,
-  text,
-}: {
-  title: string;
-  kind: IntegrationKind;
-  text: string;
-}) {
-  const navigate = useNavigationStore((s) => s.navigate);
-  return (
-    <SettingsPage title={title}>
-      <p className="text-xs text-muted-foreground">
-        {text}{' '}
-        <button
-          type="button"
-          className="underline underline-offset-2 hover:text-foreground"
-          onClick={() => navigate({ view: 'integrations', kind })}
-        >
-          Moved to Integrations
-        </button>
-      </p>
-    </SettingsPage>
-  );
-}
-
-function SlackPage() {
-  return <MovedToIntegrations title="Slack" kind="slack" text="Slack settings are now the Slack integration." />;
-}
-
-function PrivateRoutesPage() {
-  return (
-    <MovedToIntegrations
-      title="Private routes"
-      kind="tailscale"
-      text="Private routes are now the Tailscale integration."
-    />
-  );
-}
-
 function McpServersPage() {
   const features = useWorkspaceStore((s) => s.features);
   if (!mcpServersOffered(features)) return null;
@@ -185,7 +140,6 @@ const SECTION_BODY: Record<SettingsSection, ComponentType> = {
   agents: AgentsSettings,
   repositories: RepositoriesSettings,
   sandboxSetup: SandboxSetupPage,
-  privateRoutes: PrivateRoutesPage,
   shortcuts: ShortcutsSettings,
   instructions: InstructionsPage,
   memory: MemoryPage,
@@ -194,7 +148,6 @@ const SECTION_BODY: Record<SettingsSection, ComponentType> = {
   codeReview: CodeReviewPage,
   workspace: WorkspaceSettings,
   integrations: IntegrationsSettings,
-  slack: SlackPage,
   teams: TeamPage,
   billing: BillingSettings,
   account: AccountSettings,
@@ -225,9 +178,6 @@ export function SettingsShell() {
         ...(workbenchesOffered(features)
           ? [{ id: 'sandboxSetup' as const, icon: Box, label: 'Sandbox setup' }]
           : []),
-        ...(privateRoutesOffered(features)
-          ? [{ id: 'privateRoutes' as const, icon: Network, label: 'Private routes' }]
-          : []),
         { id: 'shortcuts', icon: Keyboard, label: 'Shortcuts' },
         { id: 'instructions', icon: FileText, label: 'Instructions' },
         ...(workbenchesOffered(features)
@@ -253,10 +203,6 @@ export function SettingsShell() {
       entries: [
         { id: 'workspace', icon: FolderKanban, label: 'Workspace' },
         { id: 'integrations', icon: Settings, label: 'Integrations' },
-        // Slack starts sessions, so it shares the workbenches flag.
-        ...(workbenchesOffered(features)
-          ? [{ id: 'slack' as const, icon: MessageSquare, label: 'Slack' }]
-          : []),
         // Drawn for anyone the flag offers teams to, and for anyone already on a
         // team whatever the flag says: a seated member must always be able to
         // see who pays for them, and leave.

@@ -14,7 +14,6 @@ import {
   Check,
   AlertCircle,
   ChevronDown,
-  MessageSquare,
   Loader2,
   Unlink,
   RefreshCw,
@@ -38,16 +37,13 @@ import {
   SquareTerminal,
   Keyboard,
   Box,
-  Network,
   Search,
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
-import { useNavigationStore } from '../../stores/navigation';
 import { InstructionsSettings } from './InstructionsSettings';
 import { RepositoryInstructionsSection } from '../settings/RepositoryInstructionsSection';
 import { MemorySection } from '../settings/MemorySection';
 import { SandboxSetupSettings } from '../settings/sections/SandboxSetupSettings';
-import type { IntegrationKind } from '@talyn/shared';
 import { SettingsPage } from '../ui/settings';
 import { ApiTokensSettings } from '../settings/sections/ApiTokensSettings';
 import { DeveloperInternals } from './DeveloperInternals';
@@ -55,7 +51,7 @@ import { TeamSettings } from './TeamBilling';
 import { TeamsSettings } from '../settings/sections/TeamsSettings';
 import { BillingSettings } from '../settings/sections/BillingSettings';
 import { BuildInfo } from './BuildInfo';
-import { highlightsForSurface, privateRoutesOffered } from '@talyn/shared';
+import { highlightsForSurface } from '@talyn/shared';
 import { ApiError, api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
@@ -132,9 +128,7 @@ const SETTINGS_SEARCH_TERMS: Record<SettingsSection, string> = {
   shortcuts: 'keyboard hotkeys keys navigation',
   workspace: 'name logo repositories GitHub delete code review',
   sandboxSetup: 'dotfiles setup steps install commands branch repository',
-  privateRoutes: 'Tailscale tailnet connector destinations hostname IP TCP port devices',
   integrations: 'GitHub Anthropic Claude Codex PostHog providers API keys connect',
-  slack: 'workspace bot emoji invite sessions channel',
   skills: 'SKILL.md local repository workspace tools',
   instructions: 'AGENTS.md CLAUDE.md prompts templates plan implement review fix repository files',
   memory: 'notes session remember forget review clean up cleanup schedule overlap contradict',
@@ -164,15 +158,9 @@ export function SettingsPanel() {
     ...(features?.workbenches === true
       ? [{ id: 'sandboxSetup' as const, icon: Box, label: 'Sandbox setup' }]
       : []),
-    ...(privateRoutesOffered(features)
-      ? [{ id: 'privateRoutes' as const, icon: Network, label: 'Private routes' }]
-      : []),
     { id: 'sessions' as const, icon: SquareTerminal, label: 'Sessions' },
     { id: 'shortcuts' as const, icon: Keyboard, label: 'Shortcuts' },
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
-    ...(features?.workbenches === true
-      ? [{ id: 'slack' as const, icon: MessageSquare, label: 'Slack' }]
-      : []),
     { id: 'skills' as const, icon: Wand2, label: 'Skills' },
     { id: 'instructions' as const, icon: FileText, label: 'Instructions' },
     ...(features?.workbenches === true
@@ -263,19 +251,9 @@ export function SettingsPanel() {
           <div className="p-6 max-w-2xl">
             {activeSection === 'workspace' && <WorkspaceSettings />}
             {activeSection === 'sandboxSetup' && features?.workbenches === true && <SandboxSetupSettings />}
-            {activeSection === 'privateRoutes' && privateRoutesOffered(features) && (
-              <MovedToIntegrations
-                title="Private routes"
-                kind="tailscale"
-                text="Private routes are now the Tailscale integration."
-              />
-            )}
             {activeSection === 'sessions' && <SessionsSettings />}
             {activeSection === 'shortcuts' && <ShortcutsSettings />}
             {activeSection === 'integrations' && <IntegrationsSettings />}
-            {activeSection === 'slack' && (
-              <MovedToIntegrations title="Slack" kind="slack" text="Slack settings are now the Slack integration." />
-            )}
             {activeSection === 'skills' && <SkillsSettings />}
             {activeSection === 'instructions' && (
               <div className="space-y-6">
@@ -1035,18 +1013,11 @@ export function GithubConnectionCard() {
   );
 }
 
-/**
- * Settings → Integrations. GitHub, Slack, Tailscale, PostHog Code and Trunk
- * moved to the Integrations area; the cloud agents Talyn Fleet runs stay here.
- */
+/** Settings → Integrations: the cloud agents Talyn Fleet runs. */
 function IntegrationsSettings() {
   return (
     <div className="space-y-6">
-      <MovedToIntegrations
-        title="Integrations"
-        kind="github"
-        text="GitHub, Slack, Tailscale, PostHog Code and Trunk are now on the Integrations page."
-      />
+      <h3 className="text-lg font-medium">Integrations</h3>
 
       {/* Cloud providers — the vendors that run the agent loop and open PRs. */}
       <div className="space-y-3">
@@ -1062,34 +1033,6 @@ function IntegrationsSettings() {
 
         <CloudProviderDefaultSelector />
       </div>
-    </div>
-  );
-}
-
-/** A one-line pointer from a Settings section that now lives in the Integrations area. */
-function MovedToIntegrations({
-  title,
-  kind,
-  text,
-}: {
-  title: string;
-  kind: IntegrationKind;
-  text: string;
-}) {
-  const navigate = useNavigationStore((s) => s.navigate);
-  return (
-    <div className="space-y-1">
-      <h3 className="text-lg font-medium">{title}</h3>
-      <p className="text-sm text-muted-foreground">
-        {text}{' '}
-        <button
-          type="button"
-          className="underline underline-offset-2 hover:text-foreground"
-          onClick={() => navigate({ view: 'integrations', kind })}
-        >
-          Moved to Integrations
-        </button>
-      </p>
     </div>
   );
 }

@@ -9,7 +9,6 @@ import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
 import { SettingsPage } from '../../ui/settings';
 import { GithubInstallStatus } from '../../widgets/GithubInstallStatus';
-import { useNavigationStore } from '../../../stores/navigation';
 import { SelfHostedFleetCard } from '../providerCards';
 import { CloudProviderDefaultSelector } from './PullRequestsSettings';
 
@@ -188,19 +187,8 @@ export function GithubConnectionCard() {
 }
 
 export function IntegrationsSettings() {
-  const navigate = useNavigationStore((s) => s.navigate);
   return (
     <SettingsPage title="Integrations">
-      <p className="text-xs text-muted-foreground">
-        GitHub, Slack, Tailscale, PostHog Code and Trunk are now on the Integrations page.{' '}
-        <button
-          type="button"
-          className="underline underline-offset-2 hover:text-foreground"
-          onClick={() => navigate({ view: 'integrations', kind: 'github' })}
-        >
-          Moved to Integrations
-        </button>
-      </p>
       <section className="space-y-3">
         <div>
           <h2 className="text-[13px] font-medium">Cloud agents</h2>
