@@ -1,4 +1,4 @@
-import { Stack, usePathname } from 'expo-router';
+import { usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import { StyleSheet } from 'react-native';
@@ -9,6 +9,8 @@ import { Button } from '../src/components/UI';
 import { SystemChrome } from '../src/components/SystemChrome';
 import { AppLoading } from '../src/navigation/AppLoading';
 import { rememberIntent } from '../src/navigation/intents';
+import { detailOptions } from '../src/navigation/detailOptions';
+import { RootStack } from '../src/navigation/rootStack';
 import { AuthProvider, useAuth, useMobileRuntime } from '../src/auth/AuthProvider';
 import { AnalyticsRoot, useAnalyticsReady } from '../src/components/Analytics';
 import { Status } from '../src/components/AuthControls';
@@ -36,70 +38,69 @@ function AuthenticatedRoutes() {
     <Button variant="quiet" title="Clear sign-in on this device" onPress={() => { void (signOut ? signOut() : controller.signOut()); }} />
   </ShellScreen>;
   const signedIn = auth.status === 'signedIn';
-  const detail = (title: string) => ({ headerShown: true, title, animation: 'default' as const, headerBackTitle: 'Back' });
-  return <Stack screenOptions={{ headerShown: false, animation: 'none', headerStyle: { backgroundColor: colors.background },
+  return <RootStack screenOptions={{ headerShown: false, animation: 'none', headerStyle: { backgroundColor: colors.background },
     headerTintColor: colors.text, headerTitleStyle: { ...sans(600), fontSize: 16 }, headerShadowVisible: false,
     statusBarStyle: colors.mode === 'dark' ? 'light' : 'dark', contentStyle: { backgroundColor: colors.background } }}>
-    <Stack.Screen name="index" />
-    <Stack.Screen name="auth/callback" />
-    <Stack.Screen name="+not-found" options={{ headerShown: false }} />
-    <Stack.Protected guard={!signedIn}><Stack.Screen name="(auth)" /></Stack.Protected>
-    <Stack.Protected guard={signedIn}>
+    <RootStack.Screen name="index" />
+    <RootStack.Screen name="auth/callback" />
+    <RootStack.Screen name="+not-found" options={{ headerShown: false }} />
+    <RootStack.Protected guard={!signedIn}><RootStack.Screen name="(auth)" /></RootStack.Protected>
+    <RootStack.Protected guard={signedIn}>
       {/* Home and its drawer. Every other page pushes above it with a native header and a back button. */}
-      <Stack.Screen name="(drawer)" />
-      <Stack.Screen name="sessions/[id]" options={detail('Session')} />
-      <Stack.Screen name="threads/[id]" options={detail('Thread')} />
-      <Stack.Screen name="attention/[id]" options={detail('Pull request')} />
-      <Stack.Screen name="pulls/index" options={detail('Pull requests')} />
-      <Stack.Screen name="spaces/index" options={detail('Spaces')} />
-      <Stack.Screen name="spaces/[id]" options={detail('Space')} />
-      <Stack.Screen name="integrations/index" options={detail('Integrations')} />
-      <Stack.Screen name="integrations/[kind]" options={detail('Integration')} />
-      <Stack.Screen name="integrations/[kind]/[id]" options={detail('Rule')} />
-      <Stack.Screen name="automations/index" options={{ headerShown: false }} />
-      <Stack.Screen name="automations/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="automations/workflows/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="automations/loops/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="usage" options={detail('Usage')} />
-      <Stack.Screen name="billing/index" options={detail('Plan and billing')} />
-      <Stack.Screen name="billing/return" options={{ headerShown: false, animation: 'fade' }} />
-      <Stack.Screen name="agents" options={detail('Agents')} />
-      <Stack.Screen name="insights" options={detail('Insights')} />
-      <Stack.Screen name="history" options={detail('History')} />
+      <RootStack.Screen name="(drawer)" />
+      <RootStack.Screen name="sessions/[id]" options={detailOptions('Session')} />
+      <RootStack.Screen name="threads/[id]" options={detailOptions('Thread')} />
+      <RootStack.Screen name="attention/[id]" options={detailOptions('Pull request')} />
+      <RootStack.Screen name="pulls/index" options={detailOptions('Pull requests')} />
+      <RootStack.Screen name="spaces/index" options={detailOptions('Spaces')} />
+      <RootStack.Screen name="spaces/[id]" options={detailOptions('Space')} />
+      <RootStack.Screen name="integrations/index" options={detailOptions('Integrations')} />
+      <RootStack.Screen name="integrations/[kind]" options={detailOptions('Integration')} />
+      <RootStack.Screen name="integrations/[kind]/[id]" options={detailOptions('Rule')} />
+      <RootStack.Screen name="automations/index" options={{ headerShown: false }} />
+      <RootStack.Screen name="automations/[id]" options={{ headerShown: false }} />
+      <RootStack.Screen name="automations/workflows/[id]" options={{ headerShown: false }} />
+      <RootStack.Screen name="automations/loops/[id]" options={{ headerShown: false }} />
+      <RootStack.Screen name="usage" options={detailOptions('Usage')} />
+      <RootStack.Screen name="billing/index" options={detailOptions('Plan and billing')} />
+      <RootStack.Screen name="billing/return" options={{ headerShown: false, animation: 'fade' }} />
+      <RootStack.Screen name="agents" options={detailOptions('Agents')} />
+      <RootStack.Screen name="insights" options={detailOptions('Insights')} />
+      <RootStack.Screen name="history" options={detailOptions('History')} />
       {/* The screen draws its own "Settings" heading. */}
-      <Stack.Screen name="settings" options={detail('Settings')} />
+      <RootStack.Screen name="settings" options={detailOptions('Settings')} />
       {/* Settings editors. Screens with a dynamic title set it themselves. */}
-      <Stack.Screen name="settings/sandboxSetup" options={detail('Sandbox setup')} />
-      <Stack.Screen name="settings/privateRoutes" options={detail('Private routes')} />
-      <Stack.Screen name="settings/mcp/index" options={detail('MCP servers')} />
-      <Stack.Screen name="settings/mcp/[id]" options={detail('MCP server')} />
-      <Stack.Screen name="settings/apiTokens/index" options={detail('API tokens')} />
-      <Stack.Screen name="settings/apiTokens/new" options={detail('Create API token')} />
-      <Stack.Screen name="settings/slack" options={detail('Slack')} />
-      <Stack.Screen name="settings/integrations" options={detail('Integrations')} />
-      <Stack.Screen name="settings/github" options={{ headerShown: false }} />
-      <Stack.Screen name="settings/skills/index" options={detail('Skills')} />
-      <Stack.Screen name="settings/skills/[id]" options={detail('Skill')} />
-      <Stack.Screen name="settings/skills/repo" options={detail('Repo skill')} />
-      <Stack.Screen name="settings/instructions/index" options={detail('Instructions')} />
-      <Stack.Screen name="settings/instructions/prompt/[kind]" options={detail('Prompt')} />
-      <Stack.Screen name="settings/instructions/repository/[id]" options={detail('Repository instructions')} />
-      <Stack.Screen name="settings/memory/index" options={detail('Memory')} />
-      <Stack.Screen name="settings/memory/[id]" options={detail('Memory')} />
-      <Stack.Screen name="settings/codeReview" options={detail('Code review')} />
-      <Stack.Screen name="workspaces" options={detail('Workspace')} />
-      <Stack.Screen name="repositories" options={detail('Repositories')} />
+      <RootStack.Screen name="settings/sandboxSetup" options={detailOptions('Sandbox setup')} />
+      <RootStack.Screen name="settings/privateRoutes" options={detailOptions('Private routes')} />
+      <RootStack.Screen name="settings/mcp/index" options={detailOptions('MCP servers')} />
+      <RootStack.Screen name="settings/mcp/[id]" options={detailOptions('MCP server')} />
+      <RootStack.Screen name="settings/apiTokens/index" options={detailOptions('API tokens')} />
+      <RootStack.Screen name="settings/apiTokens/new" options={detailOptions('Create API token')} />
+      <RootStack.Screen name="settings/slack" options={detailOptions('Slack')} />
+      <RootStack.Screen name="settings/integrations" options={detailOptions('Integrations')} />
+      <RootStack.Screen name="settings/github" options={{ headerShown: false }} />
+      <RootStack.Screen name="settings/skills/index" options={detailOptions('Skills')} />
+      <RootStack.Screen name="settings/skills/[id]" options={detailOptions('Skill')} />
+      <RootStack.Screen name="settings/skills/repo" options={detailOptions('Repo skill')} />
+      <RootStack.Screen name="settings/instructions/index" options={detailOptions('Instructions')} />
+      <RootStack.Screen name="settings/instructions/prompt/[kind]" options={detailOptions('Prompt')} />
+      <RootStack.Screen name="settings/instructions/repository/[id]" options={detailOptions('Repository instructions')} />
+      <RootStack.Screen name="settings/memory/index" options={detailOptions('Memory')} />
+      <RootStack.Screen name="settings/memory/[id]" options={detailOptions('Memory')} />
+      <RootStack.Screen name="settings/codeReview" options={detailOptions('Code review')} />
+      <RootStack.Screen name="workspaces" options={detailOptions('Workspace')} />
+      <RootStack.Screen name="repositories" options={detailOptions('Repositories')} />
       {/* Setup draws its own heading and steps, with no navigation header. */}
-      <Stack.Screen name="onboarding" options={{ headerShown: false, animation: 'fade', gestureEnabled: false }} />
+      <RootStack.Screen name="onboarding" options={{ headerShown: false, animation: 'fade', gestureEnabled: false }} />
       {/* The GitHub install flow's return link. It steps back at once. */}
-      <Stack.Screen name="github/callback" options={{ headerShown: false, animation: 'none' }} />
+      <RootStack.Screen name="github/callback" options={{ headerShown: false, animation: 'none' }} />
       {/* Settings sign-in return links. Each steps back at once. */}
-      <Stack.Screen name="mcp/callback" options={{ headerShown: false, animation: 'none' }} />
-      <Stack.Screen name="slack/callback" options={{ headerShown: false, animation: 'none' }} />
-      <Stack.Screen name="posthog/callback" options={{ headerShown: false, animation: 'none' }} />
-      <Stack.Screen name="new" options={{ ...detail('New'), animation: 'slide_from_bottom' }} />
-    </Stack.Protected>
-  </Stack>;
+      <RootStack.Screen name="mcp/callback" options={{ headerShown: false, animation: 'none' }} />
+      <RootStack.Screen name="slack/callback" options={{ headerShown: false, animation: 'none' }} />
+      <RootStack.Screen name="posthog/callback" options={{ headerShown: false, animation: 'none' }} />
+      <RootStack.Screen name="new" options={{ ...detailOptions('New'), animation: 'slide_from_bottom' }} />
+    </RootStack.Protected>
+  </RootStack>;
 }
 
 export default function RootLayout() {

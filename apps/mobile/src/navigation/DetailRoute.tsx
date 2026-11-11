@@ -2,7 +2,6 @@ import { Redirect, Stack, usePathname, useRouter, type Href } from 'expo-router'
 import type { PropsWithChildren } from 'react';
 
 import { useWorkspace } from '../auth/AuthProvider';
-import { EdgeSwipeBack } from '../components/EdgeSwipeBack';
 import { IconButton } from '../components/UI';
 import { AppLoading } from './AppLoading';
 import { rememberIntent } from './intents';
@@ -25,10 +24,10 @@ export function DetailRoute({ list, children }: PropsWithChildren<{ list: Href }
     rememberIntent(pathname);
     return <Redirect href="/workspaces" />;
   }
-  return <EdgeSwipeBack>
+  return <>
     <ColdBack list={list} />
     {children}
-  </EdgeSwipeBack>;
+  </>;
 }
 
 /** A back button for a screen opened with nothing under it, such as a cold deep link. */
