@@ -81,7 +81,7 @@ export function settingsEditorLinks(features: Partial<Features> | null | undefin
     mcpServersOffered(features ?? null) && { key: 'mcp', title: 'MCP servers', subtitle: 'Linear, Sentry and other tools', href: '/settings/mcp' },
     features?.publicApi === true && { key: 'tokens', title: 'API tokens', subtitle: 'Personal access tokens', href: '/settings/apiTokens' },
     sessions && { key: 'slack', title: 'Slack', subtitle: 'Start and follow sessions in Slack', href: '/integrations/slack' },
-    { key: 'integrations', title: 'Integrations', subtitle: 'Connections and scheduled rules', href: '/integrations' },
+    { key: 'integrations', title: 'Integrations', subtitle: 'Connections and automations', href: '/integrations' },
     { key: 'skills', title: 'Skills', subtitle: 'Reusable instructions for agents', href: '/settings/skills' },
     { key: 'instructions', title: 'Instructions', subtitle: 'What every agent reads first', href: '/settings/instructions' },
     sessions && { key: 'memory', title: 'Memory', subtitle: 'What agents remember', href: '/settings/memory' },

@@ -95,7 +95,7 @@ export function WorkflowRunsList({
   if (runs.length === 0) {
     return (
       <p className="px-3 py-2 text-[13px] text-muted-foreground">
-        This workflow has not run yet. It fires on the next matching event.
+        This automation has not run yet. It fires on the next matching event.
       </p>
     );
   }

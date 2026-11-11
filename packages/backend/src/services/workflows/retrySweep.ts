@@ -74,7 +74,7 @@ class WorkflowRetrySweep {
     debugBus.registerPoller(
       'workflow_retry_sweep',
       INTERVAL_MS,
-      'Re-runs rule actions that were parked: a GitHub or Slack rate limit, or a box gate refusal. A parked run holds the instant its gate clears; this picks it up once it has.'
+      'Runs automation actions again after a GitHub or Slack rate limit, or a box refusal. It picks up each run when its limit clears.'
     );
     this.timer = setInterval(() => {
       void this.tick();
@@ -175,7 +175,7 @@ class WorkflowRetrySweep {
       // cascade, so a deleted workflow takes its parked runs with it. Kept
       // because the alternative to a cheap guard here is a run owed forever if
       // that ever stops being true.
-      await this.giveUp(run, 'the workflow no longer exists');
+      await this.giveUp(run, 'the automation no longer exists');
       return false;
     }
 
@@ -191,7 +191,7 @@ class WorkflowRetrySweep {
       if (action && action.type === outcome.type) pending.push({ index, action });
     });
     if (pending.length === 0) {
-      await this.giveUp(run, 'the workflow was edited while this was waiting');
+      await this.giveUp(run, 'the automation was edited while this was waiting');
       return false;
     }
 

@@ -29,7 +29,7 @@ export function RuleDetailScreen({ kind, id, integration = 'github' }: { kind: A
   return <Page refreshing={(list.refreshing || runs.refreshing) && Boolean(item)} onRefresh={refresh}>
     {item ? <Stack.Screen options={{ title: item.name }} /> : null}
     {!item && list.status === 'loading' ? <Loading /> : <StateNotice resource={list} offline={offline} refresh={refresh} />}
-    {missing ? <EmptyState title={kind === 'workflow' ? 'Rule not found' : 'Scheduled rule not found'} detail="It may have been deleted." /> : null}
+    {missing ? <EmptyState title="Automation not found" detail="It may have been deleted." /> : null}
     {item ? <>
       {kind === 'workflow' ? <WorkflowFacts workflow={item as WorkflowWithStats} /> : <LoopFacts loop={item as LoopWithStats} />}
       <Group title="Recent runs">
@@ -48,7 +48,7 @@ export function RuleDetailScreen({ kind, id, integration = 'github' }: { kind: A
 
 function WorkflowFacts({ workflow }: { workflow: WorkflowWithStats }) {
   const problems = problemsText(workflow.stats.failures7d);
-  return <Group title="Workflow">
+  return <Group title="Automation">
     <Fact label="Status" value={workflow.enabled ? 'On' : 'Off'} />
     <Fact label="When" value={describeWorkflowTrigger(workflow)} />
     <Fact label="Then" value={describeWorkflowActions(workflow) || 'Nothing'} />
@@ -62,7 +62,7 @@ function LoopFacts({ loop }: { loop: LoopWithStats }) {
   const now = useNow();
   const off = loopDisabledText(loop);
   const problems = problemsText(loop.stats.failures7d);
-  return <Group title="Scheduled rule" footer={off ?? undefined}>
+  return <Group title="Automation" footer={off ?? undefined}>
     <Fact label="Status" value={loop.enabled ? nextRunText(loop, now) : 'Off'} />
     <Fact label="Schedule" value={describeSchedule(loop.cron, loop.timezone)} />
     <Fact label="Repository" value={loop.repoFullName} />

@@ -111,7 +111,7 @@ class LoopScheduler {
     debugBus.registerPoller(
       'loop_scheduler',
       INTERVAL_MS,
-      'Fires loops whose cron occurrence has arrived, and settles the runs already in flight. The schedule lives in loops.next_run_at, so a deploy loses nothing.'
+      'Starts scheduled automations when they are due and settles active runs. The schedule lives in loops.next_run_at, so a deploy loses nothing.'
     );
     // The fast half of settlement. Per-replica, so it is an optimisation rather
     // than the mechanism — `settleBacklog` is what makes it correct.
@@ -427,7 +427,7 @@ class LoopScheduler {
         await settleRun(parked.runId, {
           status: 'skipped',
           failureCode: 'repo_missing',
-          error: 'The loop was removed or lost its repository while this run waited.',
+          error: 'The automation was removed or lost its repository while this run waited.',
         });
         continue;
       }

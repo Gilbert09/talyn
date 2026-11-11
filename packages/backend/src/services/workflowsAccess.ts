@@ -79,7 +79,7 @@ export async function userMayUseWorkflows(subject: FlagSubject): Promise<boolean
  */
 export function workflowsRefusalReason(): string {
   return workflowsKillSwitchPulled()
-    ? `workflows are switched off on this deployment (${FEATURE_FLAGS.workflows.envOverride}=false)`
+    ? `automations are switched off on this deployment (${FEATURE_FLAGS.workflows.envOverride}=false)`
     : 'this account is not in the audience for the "workflows" feature flag';
 }
 
@@ -98,6 +98,6 @@ export async function workspaceMayUseSlackRules(workspaceId: string): Promise<bo
 /** The message a Slack-rule refusal carries. See {@link workflowsRefusalReason}. */
 export function slackRulesRefusalReason(): string {
   return readFlagOverride('slackChannelRules', process.env) === false
-    ? `Slack rules are switched off on this deployment (${FEATURE_FLAGS.slackChannelRules.envOverride}=false)`
+    ? `Slack automations are switched off on this deployment (${FEATURE_FLAGS.slackChannelRules.envOverride}=false)`
     : 'this account is not in the audience for the "slack-channel-rules" feature flag';
 }

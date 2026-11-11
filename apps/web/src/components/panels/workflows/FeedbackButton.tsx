@@ -87,7 +87,7 @@ export function FeedbackButton({ surface }: { surface: string }) {
             autoFocus
             maxLength={MAX_LENGTH}
             value={text}
-            placeholder="I wanted a workflow that..."
+            placeholder="I wanted an automation that..."
             onChange={(e) => setText(e.target.value)}
           />
           <p className="mt-1 text-xs text-muted-foreground">

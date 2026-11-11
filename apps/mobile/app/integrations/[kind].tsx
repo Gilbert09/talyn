@@ -32,7 +32,7 @@ export default function Screen() {
     <Stack.Screen options={detailOptions(INTEGRATION_CATALOG[kind].name)} />
     <View style={{ flex: 1 }}>
       {rules && connection ? <View style={{ paddingHorizontal: 16, paddingTop: 12 }}><Segmented<Section> accessibilityLabel={`${INTEGRATION_CATALOG[kind].name} sections`} value={section}
-        onChange={setChosen} options={[{ value: 'rules', label: 'Rules' }, { value: 'connection', label: 'Connection' }]} /></View> : null}
+        onChange={setChosen} options={[{ value: 'rules', label: 'Automations' }, { value: 'connection', label: 'Connection' }]} /></View> : null}
       {section === 'rules' ? <RulesScreen kind={kind === 'schedule' ? 'loop' : 'workflow'} integration={kind === 'slack' ? 'slack' : 'github'} /> : null}
       {section === 'connection' && kind === 'github' ? <GitHubSettingsScreen /> : null}
       {section === 'connection' && kind === 'slack' ? <SlackScreen /> : null}

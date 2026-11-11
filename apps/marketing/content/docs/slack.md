@@ -7,7 +7,7 @@ description: Start a session with an emoji reaction, mention, or direct message 
 Start a session from Slack. React to a message with your trigger emoji, mention `@Talyn`, or send Talyn a direct message. A session starts with the Slack thread as its brief.
 
 Talyn shows session progress as reactions on the message that started it.
-Channel rules can reply in threads. See the [Slack integration guide](/docs/integrations-slack).
+Channel automations can reply in threads. See the [Slack integration guide](/docs/integrations-slack).
 
 ## Set it up
 

@@ -1,23 +1,23 @@
 ---
-title: GitHub rules
+title: GitHub automations
 description: Run actions when pull request events match your conditions.
 ---
 
-A GitHub rule watches pull request events. It checks your conditions, then runs your actions.
+A GitHub automation watches pull request events. It checks your conditions, then runs your actions.
 It covers every pull request in repositories your workspace watches, including pull requests you did not open.
-Talyn runs rules on its servers, so the app can stay closed.
+Talyn runs automations on its servers, so the app can stay closed.
 
-## Create a GitHub rule
+## Create a GitHub automation
 
 1. Select **Integrations** in the sidebar.
-2. Open **GitHub > Rules**.
-3. Select **New workflow** and give it a name, for example "Label new PRs from bots".
+2. Open **GitHub > Automations**.
+3. Select **New automation** and give it a name, for example "Label new PRs from bots".
 4. Under **When this happens**, select **Add trigger** and pick an event.
 5. Optionally, under **Only if**, select **Add condition**.
 6. Under **Do this**, select **Add action**. Actions run in order, top to bottom.
-7. Select **Create workflow**.
+7. Select **Create an automation**.
 
-Any one of the triggers starts the rule. Every condition must hold.
+Any one of the triggers starts the automation. Every condition must hold.
 
 ## Triggers
 
@@ -34,7 +34,7 @@ Any one of the triggers starts the rule. Every condition must hold.
 
 ## Conditions
 
-With no conditions, a rule runs on every pull request its trigger fires for. Add conditions to narrow it:
+With no conditions, an automation runs on every pull request its trigger fires for. Add conditions to narrow it:
 
 - Repository, base branch, or **Targets the default branch**
 - **Opened by**, **Done by**, or **The person named**: Anyone, Me, Any person, Any bot, or specific accounts
@@ -66,18 +66,18 @@ The editor offers only the conditions that make sense for the triggers you picke
 
 ## Run history
 
-Open **GitHub > Runs** to see rule runs. Each run shows the pull request, event, and action results.
+Open **GitHub > Runs** to see automation runs. Each run shows the pull request, event, and action results.
 A run is **Running**, **Waiting to retry**, **Done**, **Partly done**, **Failed**, or **Stood down**.
 
 **Waiting to retry** means GitHub rate-limited an action. Talyn tries it again later, and does not repeat the actions that already worked.
 
 ## Loop protection
 
-Talyn ignores events caused by its own actions, so a rule does not trigger itself.
+Talyn ignores events caused by its own actions, so an automation does not trigger itself.
 In **Advanced**, set **Stop after this many runs on one PR per hour**. The default is 5.
 A run over the limit is recorded as stood down.
 
 ## Cost
 
-GitHub rules are free to create. Actions that run an agent use box-hours.
+GitHub automations are free to create. Actions that run an agent use box-hours.
 When no box is available, the action waits until there is room.

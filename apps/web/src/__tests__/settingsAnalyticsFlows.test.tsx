@@ -40,7 +40,7 @@ describe('settings analytics saves', () => {
   it('records a loop save without prompt text', async () => {
     mockCreateLoop.mockResolvedValue(undefined);
     render(<LoopsPanel />);
-    fireEvent.click(screen.getByRole('button', { name: 'New scheduled rule' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New automation' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save loop' }));
     await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('loop_saved', { new: true, schedule_kind: 'daily', internet_access: true }));
   });
@@ -48,7 +48,7 @@ describe('settings analytics saves', () => {
   it('records workflow counts', async () => {
     mockCreateWorkflow.mockResolvedValue(undefined);
     render(<WorkflowsPanel />);
-    fireEvent.click(screen.getByRole('button', { name: 'New workflow' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New automation' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
     await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('workflow_saved', { new: true, actions_count: 1, events_count: 1 }));
   });

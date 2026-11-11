@@ -201,7 +201,7 @@ async function runOne(
     if (ctx.integration !== 'slack') {
       // The validator refuses a Slack action on a GitHub rule. A stored rule
       // that bypassed it has no message to answer.
-      return { outcome: no(action.type, 'error', 'This action answers a Slack message, and a GitHub rule has none') };
+      return { outcome: no(action.type, 'error', 'This action answers a Slack message, and a GitHub automation has none') };
     }
     return action.type === 'slack_reply'
       ? slackReply(action.text, ctx, extras)
@@ -211,7 +211,7 @@ async function runOne(
     // The validator refuses a PR action on a Slack rule. Reaching here means a
     // stored rule bypassed it, so record a refusal rather than guess at a PR.
     return {
-      outcome: no(action.type, 'error', 'This action works on a pull request, and a Slack rule has none'),
+      outcome: no(action.type, 'error', 'This action works on a pull request, and a Slack automation has none'),
     };
   }
   return runPrAction(action, ctx, prRow, extras);
@@ -701,7 +701,7 @@ async function startTask(
     // A freeform prompt is handed over verbatim, with the PR named up front so
     // the agent does not have to guess which one it is on.
     prompt = `You are working on pull request ${ref} (${summary.url}).\n\n${action.prompt}`;
-    title = `Workflow run on ${ref}`;
+    title = `Automation run on ${ref}`;
   }
 
   try {
@@ -710,7 +710,7 @@ async function startTask(
       type: 'pr_response',
       source: 'workflow',
       title,
-      description: `Started by the "${ctx.workflowId}" workflow on ${ref}.`,
+      description: `Started by the "${ctx.workflowId}" automation on ${ref}.`,
       prompt,
       repositoryId: ctx.repositoryId,
       assignedEnvironmentId: env.envId,
@@ -825,6 +825,6 @@ async function loadSkill(key: string, ctx: GithubActionContext): Promise<LoadedS
   }
 
   return unavailable(
-    'Talyn runs workflows on the server, so it cannot reach a skill stored on your machine'
+    'Talyn runs automations on the server, so it cannot reach a skill stored on your machine'
   );
 }

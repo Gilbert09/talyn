@@ -105,7 +105,7 @@ function IntegrationsCatalog() {
       <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto max-w-4xl p-6">
           <p className="mb-4 text-sm text-muted-foreground">
-            Connect the places work comes from. Each integration holds its connection and the rules that start work.
+            Connect the places work comes from. Each integration holds its connection and the automations that start work.
           </p>
           <div className="grid gap-3 sm:grid-cols-2" data-attr="integrations-catalog">
             {kinds.map((kind) => {
@@ -199,7 +199,7 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
           <Tabs value={section} onValueChange={(next) => setChosen(next as Section)}>
             <TabsList aria-label={`${info.name} sections`}>
               <TabsTrigger value="rules" data-attr={`integration-tab-rules-${kind}`}>
-                Rules
+                Automations
               </TabsTrigger>
               <TabsTrigger value="connection" data-attr={`integration-tab-connection-${kind}`}>
                 Connection

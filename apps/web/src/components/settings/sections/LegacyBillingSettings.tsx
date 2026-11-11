@@ -189,7 +189,7 @@ export function LegacyBillingSettings() {
               {free && (
                 <p className="text-sm text-muted-foreground mt-1">
                   Up to {limit} tasks running, {status.mergeQueueLimit ?? limit} PRs in the
-                  merge queue, {status.workflowLimit ?? limit} workflows and{' '}
+                  merge queue, {status.workflowLimit ?? limit} automations and{' '}
                   {status.loopLimit ?? limit} loops, across all your workspaces.
                 </p>
               )}
@@ -212,7 +212,7 @@ export function LegacyBillingSettings() {
                 limit={status.mergeQueueLimit ?? limit}
               />
               <UsageMeter
-                label="Workflows"
+                label="Automations"
                 used={status.workflows}
                 limit={status.workflowLimit ?? limit}
               />

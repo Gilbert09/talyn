@@ -48,7 +48,7 @@ const inputSchema = {
     type: 'object',
     properties: fields,
     description:
-      'Optional object with the same fields. Do not combine it with top-level loop fields.',
+      'Optional object with the same fields. Do not combine it with top-level automation fields.',
   },
 };
 const idSchema = { ...workspaceSchema, loop_id: textSchema };
@@ -116,7 +116,7 @@ async function update(
 export const LOOPS = [
   defineTool(
     'list_loops',
-    'List scheduled rules (loops) and their next run times.',
+    'List scheduled automations and their next run times.',
     workspaceSchema,
     [],
     { readOnlyHint: true },
@@ -125,7 +125,7 @@ export const LOOPS = [
   ),
   defineTool(
     'get_loop',
-    'Get the full scheduled rule (loop) definition as JSON for editing, including the next run time.',
+    'Get the full scheduled automation definition as JSON for editing, including the next run time.',
     idSchema,
     ['loop_id'],
     { readOnlyHint: true },
@@ -137,7 +137,7 @@ export const LOOPS = [
   ),
   defineTool(
     'create_loop',
-    'Create a scheduled rule (loop), recurring work. Set target to session for a reviewable sandbox session, or task for a cloud task.',
+    'Create a scheduled automation. Set target to session for a reviewable sandbox session, or task for a cloud task.',
     inputSchema,
     [],
     { openWorldHint: true },
@@ -166,7 +166,7 @@ export const LOOPS = [
   ),
   defineTool(
     'update_loop',
-    'Merge supplied fields into the current scheduled rule (loop) definition. Set model when changing provider.',
+    'Merge supplied fields into the current scheduled automation definition. Set model when changing provider.',
     { ...inputSchema, loop_id: textSchema },
     ['loop_id'],
     { openWorldHint: true, idempotentHint: true },
@@ -175,7 +175,7 @@ export const LOOPS = [
   ),
   defineTool(
     'set_loop_enabled',
-    'Enable or disable a loop while preserving its definition.',
+    'Enable or disable a scheduled automation while preserving its definition.',
     { ...idSchema, enabled: booleanSchema },
     ['loop_id', 'enabled'],
     { openWorldHint: true, idempotentHint: true },
@@ -184,7 +184,7 @@ export const LOOPS = [
   ),
   defineTool(
     'delete_loop',
-    'Delete a loop and its run history.',
+    'Delete a scheduled automation and its run history.',
     { loop_id: textSchema },
     ['loop_id'],
     { destructiveHint: true },
@@ -197,7 +197,7 @@ export const LOOPS = [
   ),
   defineTool(
     'list_loop_runs',
-    'List loop runs. Use the returned cursor to fetch older runs.',
+    'List scheduled automation runs. Use the returned cursor to fetch older runs.',
     { loop_id: textSchema, ...pageSchema },
     ['loop_id'],
     { readOnlyHint: true },
@@ -215,7 +215,7 @@ export const LOOPS = [
   ),
   defineTool(
     'run_loop_now',
-    'Run a loop now through its normal session or task checks.',
+    'Run a scheduled automation now through its normal session or task checks.',
     { loop_id: textSchema },
     ['loop_id'],
     { openWorldHint: true },

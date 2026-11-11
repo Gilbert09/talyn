@@ -89,7 +89,7 @@ export function NotificationSettings({ controller, offline }: { controller: Noti
   const device = deviceTimezone();
   const childDisabled = disabled || !draft?.enabled;
   return <View style={styles.content}>
-    <Group title="Notifications" footer="Alerts use generic text. Private content stays in Talyn. Every workflow works without notifications.">
+    <Group title="Notifications" footer="Alerts use generic text. Private content stays in Talyn. Every automation works without notifications.">
       <View style={styles.block}>
         <Status message={messages[snapshot.state]} loading={snapshot.state === 'loading'} tone={snapshot.state === 'ready' ? 'success' : ['denied', 'unavailable', 'failed'].includes(snapshot.state) ? 'warning' : 'information'} />
         {snapshot.state === 'denied' ? <Button variant="secondary" size="sm" title="Open device notification settings" onPress={() => { void Linking.openSettings().catch(() => {}); }} /> : null}

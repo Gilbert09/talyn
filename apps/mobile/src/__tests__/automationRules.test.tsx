@@ -8,6 +8,7 @@ import { fixture } from './workflowFixtures';
 
 const mockLifecycle = fixture().lifecycle;
 const mockList = jest.fn();
+const mockLoopList = jest.fn();
 const mockRuns = jest.fn();
 let mockParams: { kind: string; id?: string } = { kind: 'slack' };
 let mockFeatures = { workbenches: true, workflows: true, slackChannelRules: true };
@@ -16,7 +17,7 @@ jest.mock('@talyn/client/native', () => {
   const actual = jest.requireActual('@talyn/client/native');
   return { ...actual, workflows: { ...actual.workflows,
     list: (...args: unknown[]) => mockList(...args), runs: (...args: unknown[]) => mockRuns(...args),
-  } };
+  }, loops: { ...actual.loops, list: (...args: unknown[]) => mockLoopList(...args) } };
 });
 jest.mock('../auth/AuthProvider', () => ({
   useMobileRuntime: () => ({ lifecycle: mockLifecycle }),
@@ -60,6 +61,7 @@ beforeEach(() => {
   mockParams = { kind: 'slack' };
   mockFeatures = { workbenches: true, workflows: true, slackChannelRules: true };
   mockList.mockImplementation(async (_workspace: string, integration: string) => integration === 'slack' ? [slackRule] : [githubRule]);
+  mockLoopList.mockResolvedValue([]);
   mockRuns.mockResolvedValue([slackRun]);
 });
 
@@ -77,12 +79,17 @@ describe('integration rules', () => {
     expect(screen.queryByText(integration === 'slack' ? githubRule.name : slackRule.name)).toBeNull();
   });
 
-  it('shows the Slack empty state and web link', async () => {
+  it.each([
+    ['slack', 'workflow', 'An automation watches Slack messages and can start a session, reply or react.'],
+    ['github', 'workflow', 'An automation watches pull request events and can label, comment, request reviewers, start a session and more.'],
+    ['github', 'loop', 'An automation runs on a schedule and starts a session or a task.'],
+  ] as const)('shows the %s %s empty state', async (integration, kind, description) => {
     mockList.mockResolvedValue([]);
-    await render(<RulesScreen kind="workflow" integration="slack" />);
-    expect(await screen.findByText('No Slack rules yet')).toBeVisible();
-    expect(screen.getByText('A Slack rule starts a session or replies when a message arrives in a channel.')).toBeVisible();
-    expect(screen.getByText('Create and edit Slack rules in Talyn on the web.')).toBeVisible();
+    await render(<RulesScreen kind={kind} integration={integration} />);
+    expect(await screen.findByText('No automations yet')).toBeVisible();
+    expect(screen.getByText(description)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Create an automation' })).toBeVisible();
+    expect(screen.getByText('Create and edit automations in Talyn on the web.')).toBeVisible();
     expect(screen.getByText('Edit on the web')).toBeVisible();
   });
 
@@ -91,11 +98,11 @@ describe('integration rules', () => {
     await render(<IntegrationRoute />);
     if (enabled) {
       expect(await screen.findByText(slackRule.name)).toBeVisible();
-      expect(screen.getByRole('tab', { name: 'Rules' })).toBeVisible();
+      expect(screen.getByRole('tab', { name: 'Automations' })).toBeVisible();
       expect(screen.getByRole('tab', { name: 'Connection' })).toBeVisible();
       expect(mockList).toHaveBeenCalledWith('ws-1', 'slack');
     } else {
-      expect(screen.queryByRole('tab', { name: 'Rules' })).toBeNull();
+      expect(screen.queryByRole('tab', { name: 'Automations' })).toBeNull();
       await waitFor(() => expect(mockList).not.toHaveBeenCalled());
     }
   });
@@ -104,6 +111,8 @@ describe('integration rules', () => {
     mockParams = { kind: 'slack', id: 'slack-1' };
     await render(<RuleDetailRoute />);
     expect(await screen.findByText('New message in a channel')).toBeVisible();
+    expect(screen.getByText('Automation')).toBeVisible();
+    expect(screen.queryByText('Who can trigger it')).toBeNull();
     expect(mockList).toHaveBeenCalledWith('ws-1', 'slack');
     expect(await screen.findByText('Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.')).toBeVisible();
     expect(screen.getByText('#support')).toBeVisible();

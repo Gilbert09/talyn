@@ -182,7 +182,7 @@ export function WorkflowEditorPage({
         : input);
     } catch (err) {
       captureAnalyticsException(err, { flow: 'workflow_save' });
-      setSaveError(err instanceof Error ? err.message : 'Could not save this workflow');
+      setSaveError(err instanceof Error ? err.message : 'Could not save this automation');
     } finally {
       setSaving(false);
     }
@@ -193,11 +193,11 @@ export function WorkflowEditorPage({
       <header className="flex items-center gap-3 border-b px-6 py-4">
         <Button variant="ghost" size="sm" onClick={onCancel} data-attr="workflow-editor-back">
           <ArrowLeft className="mr-1 h-4 w-4" />
-          {kind === 'slack' ? 'Slack rules' : 'Workflows'}
+          {kind === 'slack' ? 'Slack automations' : 'Automations'}
         </Button>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-lg font-semibold">
-            {input.name.trim() || (editing ? 'Workflow' : 'New workflow')}
+            {input.name.trim() || (editing ? 'Automation' : 'New automation')}
           </h1>
         </div>
         {/* Only when editing. A workflow you are creating is on — nobody composes
@@ -240,7 +240,7 @@ export function WorkflowEditorPage({
           >
             {input.events.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Pick at least one trigger — a workflow with none can never run.
+                Pick at least one trigger — an automation with none can never run.
               </p>
             ) : (
               <>
@@ -294,7 +294,7 @@ export function WorkflowEditorPage({
           ) : (
           <Section
             title="Only if"
-            description="Every condition has to hold. Add none and the workflow runs on every PR the trigger fires for."
+            description="Every condition has to hold. Add none and the automation runs on every PR the trigger fires for."
             action={
               <DropdownButton
                 label="Add condition"
@@ -422,7 +422,7 @@ export function WorkflowEditorPage({
               Cancel
             </Button>
             <Button onClick={save} disabled={saving} data-attr="workflow-save-inline">
-              {saving ? 'Saving...' : editing ? 'Save changes' : 'Create workflow'}
+              {saving ? 'Saving...' : editing ? 'Save changes' : 'Create automation'}
             </Button>
           </div>
         </div>

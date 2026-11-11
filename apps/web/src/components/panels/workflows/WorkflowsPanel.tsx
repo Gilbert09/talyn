@@ -221,7 +221,7 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
     if (view.mode === 'edit' && view.workflow) {
       await update(view.workflow.id, input);
       trackEvent('workflow_saved', { new: false, actions_count: input.actions.length, events_count: input.events.length });
-      toast.success('Workflow saved');
+      toast.success('Automation saved');
     } else {
       try {
         await create(input);
@@ -236,7 +236,7 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
         throw err;
       }
       trackEvent('workflow_saved', { new: true, actions_count: input.actions.length, events_count: input.events.length });
-      toast.success('Workflow created');
+      toast.success('Automation created');
       // Keep the owner-wide count current, so the NEXT click is pre-empted
       // rather than round-tripping to the same refusal.
       void useBillingStore.getState().refresh();
@@ -275,7 +275,7 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
       // error beside it rather than dropping the user back with no explanation.
       setPendingDelete(null);
       trackEvent('workflow_deleted');
-      toast.success('Workflow deleted');
+      toast.success('Automation deleted');
       // A deleted row gives its free-plan slot back — re-read the count so
       // the create button stops pre-empting on a limit the user is no longer at.
       void useBillingStore.getState().refresh();
@@ -292,7 +292,7 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
       <header className="flex items-center gap-3 border-b px-6 py-4">
         <Workflow className="h-5 w-5" />
         <div className="flex-1">
-          <h1 className="text-lg font-semibold">{integration === 'slack' ? 'Slack rules' : 'Workflows'}</h1>
+          <h1 className="text-lg font-semibold">{integration === 'slack' ? 'Slack automations' : 'GitHub automations'}</h1>
           <p className="text-sm text-muted-foreground">
             {integration === 'slack'
               ? 'Run actions when a message appears in a selected Slack channel.'
@@ -302,7 +302,7 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
         <FeedbackButton surface="workflows" />
         <Button onClick={openNew} data-attr="workflow-new">
           <Plus className="mr-1 h-4 w-4" />
-          New workflow
+          New automation
         </Button>
       </header>
 
@@ -310,21 +310,21 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
         {error && <p className="mb-4 text-sm text-red-500">{error}</p>}
 
         {/* `null` is loading, `[]` is genuinely none. Rendering the empty state
-            for both would flash "no workflows" at somebody who has ten. */}
+            for both would flash "no automations" at somebody who has ten. */}
         {workflows === null ? (
-          <p className="text-sm text-muted-foreground">Loading workflows...</p>
+          <p className="text-sm text-muted-foreground">Loading automations...</p>
         ) : workflows.length === 0 ? (
           <div className="mx-auto max-w-lg py-12 text-center">
             <Workflow className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-            <h2 className="font-medium">No workflows yet</h2>
+            <h2 className="font-medium">No automations yet</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               {integration === 'slack'
-                ? 'A rule watches Slack messages and starts sessions, replies, or reacts.'
-                : 'A workflow watches for something on a pull request and then acts: label it, pull in a reviewer, comment, add it to My PRs, run a skill, or send it to the merge queue.'}
+                ? 'An automation watches Slack messages and can start a session, reply or react.'
+                : 'An automation watches pull request events and can label, comment, request reviewers, start a session and more.'}
             </p>
             <Button className="mt-4" onClick={openNew}>
               <Plus className="mr-1 h-4 w-4" />
-              Create your first workflow
+              Create an automation
             </Button>
           </div>
         ) : (
@@ -357,7 +357,7 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="Delete this workflow?"
+        title="Delete this automation?"
         description={
           <>
             Deleting <span className="font-medium text-foreground">{pendingDelete?.name}</span> 

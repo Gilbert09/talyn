@@ -7,15 +7,15 @@ import { IntegrationsView } from '../pages/IntegrationsView';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-describe('Slack rules gate', () => {
-  it('hides the rules section when slackChannelRules is false', () => {
+describe('Slack automations gate', () => {
+  it('hides the automations section when slackChannelRules is false', () => {
     useWorkspaceStore.setState({
       currentWorkspaceId: 'ws1',
       features: { workbenches: true, workflows: true, slackChannelRules: false },
     } as never);
     vi.spyOn(api.slack, 'getStatus').mockResolvedValue({ installations: [], links: [] });
     render(<IntegrationsView kind="slack" />);
-    expect(screen.queryByRole('tab', { name: 'Rules' })).toBeNull();
-    expect(screen.queryByText('Slack rules')).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Automations' })).toBeNull();
+    expect(screen.queryByText('Slack automations')).toBeNull();
   });
 });

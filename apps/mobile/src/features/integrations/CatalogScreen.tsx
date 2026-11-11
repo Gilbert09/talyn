@@ -36,12 +36,12 @@ export function CatalogScreen() {
     trunk: trunkStatus.data ? (trunkStatus.data.connected ? 'connected' : 'not_connected') : 'unknown',
   };
   return <Page>
-    <Intro>Connect the places work comes from. Each integration holds its connection and rules.</Intro>
+    <Intro>Connect the places work comes from. Each integration holds its connection and automations.</Intro>
     {integrationsOffered(features).map((kind) => {
       const info = INTEGRATION_CATALOG[kind];
       const state = states[kind];
       return <Group key={kind}>
-        <Row title={info.name} subtitle={info.description} subtitleLines={3} chevron divider={false}
+        <Row title={info.name} subtitle={kind === 'github' ? 'Track pull requests and run automations when a pull request changes.' : info.description} subtitleLines={3} chevron divider={false}
           href={{ pathname: '/integrations/[kind]', params: { kind } }} accessibilityLabel={`${info.name}. ${state === 'built_in' ? 'Built in' : state === 'unknown' ? 'Status unknown' : state === 'connected' ? 'Connected' : 'Not connected'}.`}
           trailing={state === 'unknown' ? undefined : <Pill label={state === 'built_in' ? 'Built in' : state === 'connected' ? 'Connected' : 'Not connected'}
             tone={state === 'connected' ? 'success' : 'muted'} />} />

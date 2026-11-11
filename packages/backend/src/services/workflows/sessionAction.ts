@@ -60,7 +60,7 @@ export async function startSession(
   prRow: PrRowSource | null
 ): Promise<OneResult> {
   if (ctx.integration === 'slack') return startSlackSession(action, ctx);
-  if (!prRow) return { outcome: no('start_session', 'error', 'A GitHub rule ran without its pull request.') };
+  if (!prRow) return { outcome: no('start_session', 'error', 'A GitHub automation ran without its pull request.') };
   return startGithubSession(action, ctx, prRow);
 }
 
@@ -245,7 +245,7 @@ async function startSlackSession(action: StartSessionAction, ctx: SlackActionCon
 
   let repositoryId = action.repositoryId;
   let reason = 'picked';
-  let detail = 'Set on the rule.';
+  let detail = 'Set on the automation.';
   if (!repositoryId) {
     const { resolution } = await resolveRepository({
       workspaceId: ctx.workspaceId,
@@ -261,7 +261,7 @@ async function startSlackSession(action: StartSessionAction, ctx: SlackActionCon
           'start_session',
           'repository_unresolved',
           `Talyn could not tell which repository this message is about (${resolution.detail}). ` +
-            'Choose a repository on the rule.'
+            'Choose a repository on the automation.'
         ),
       };
     }
