@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ImageIcon, ImagePlus, Loader2, X } from 'lucide-react';
 import { workbenchQueuesMessages, type WorkbenchAttachment, type WorkbenchStatus } from '@talyn/shared';
 import { downscaleImage } from '../../lib/imageDownscale';
-import { rememberAttachmentPreview } from '../../lib/attachmentPreviews';
+import { attachmentPreview, rememberAttachmentPreview } from '../../lib/attachmentPreviews';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 
@@ -152,8 +152,8 @@ export function ImageAttachmentChips({
   return (
     <div className="flex flex-wrap gap-1 px-2 pt-2">
       {attachments.map((attachment, index) => (
-        <span key={`${attachment.path ?? attachment.name}-${index}`} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]">
-          <ImageIcon className="h-3 w-3" />
+        <span key={`${attachment.path ?? attachment.name}-${index}`} className="inline-flex items-center gap-1.5 rounded bg-muted py-1 pl-1 pr-1.5 text-[11px]">
+          <AttachmentThumbnail attachment={attachment} />
           {attachment.name}
           <button type="button" onClick={() => onRemove(index)} aria-label={`Remove ${attachment.name}`}>
             <X className="h-3 w-3" />
@@ -164,6 +164,24 @@ export function ImageAttachmentChips({
       {imageNotReady && <span className="text-[11px] text-warning">Images can be attached once the sandbox is ready.</span>}
     </div>
   );
+}
+
+function composerPreview(attachment: WorkbenchAttachment): string | null {
+  if (attachment.dataBase64) return `data:${attachment.mimeType};base64,${attachment.dataBase64}`;
+  return attachment.path ? attachmentPreview(attachment.path) : null;
+}
+
+function AttachmentThumbnail({ attachment }: { attachment: WorkbenchAttachment }) {
+  const [failed, setFailed] = useState(false);
+  const source = attachment.mimeType.startsWith('image/') && !failed ? composerPreview(attachment) : null;
+  if (!source) {
+    return (
+      <span className="flex h-8 w-8 items-center justify-center rounded-sm bg-background">
+        <ImageIcon className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  return <img src={source} alt="" className="h-8 w-8 rounded-sm bg-background object-cover" onError={() => setFailed(true)} />;
 }
 
 export function ImageAttachButton({ inputRef, onFiles }: { inputRef: React.RefObject<HTMLInputElement | null>; onFiles: (files: File[]) => void }) {

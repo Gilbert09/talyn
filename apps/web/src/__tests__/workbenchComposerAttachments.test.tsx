@@ -75,6 +75,8 @@ it('uploads a pasted sandbox image and shows its chip', async () => {
   await waitFor(() => expect(screen.getByText('shot.png')).toBeInTheDocument());
   expect(upload).toHaveBeenCalledWith('wb-1', expect.any(Blob), 'shot.png');
   expect(upload.mock.calls[0][1].type).toBe('image/png');
+  const chip = screen.getByText('shot.png');
+  expect(chip.querySelector('img')).toHaveAttribute('src', 'data:image/png;base64,aGVsbG8=');
 });
 
 it('lets a surrounding drop zone attach images through attachRef', async () => {
