@@ -158,7 +158,6 @@ export function HeaderTrailing({ item, row, onChanges }: { item: Workbench; row:
   if (workbenchKind(item) !== 'session') return null;
   const totals = diffTotals(item);
   const number = row?.number ?? item.pr?.number;
-  const scheduledRule = item.source?.kind === 'loop';
   const status = row ? prRowStatus(row) : null;
   const tone = (row?.state === 'open' && status ? status.tone : prNumberTone(row?.state ?? item.pr?.state ?? 'open', row?.summary.draft)) as Tone;
   return <>
@@ -226,7 +225,7 @@ export function SessionDetailsSheet({ visible, onClose, item, row, readiness, on
         {row ? <View style={{ alignSelf: 'flex-start' }}><PrStatusPill variant={prRowStatus(row)} /></View> : null}
       </Row> : null}
       {item.threadId ? <Row divider={false} chevron title="Open parent thread" onPress={() => go(threadRoute(item.threadId!))} /> : null}
-      {scheduledRule ? <Row divider={false} chevron title="Scheduled rule" onPress={() => go('/integrations/schedule')} /> : null}
+      {item.source?.kind === 'loop' ? <Row divider={false} chevron title="Scheduled rule" onPress={() => go('/integrations/schedule')} /> : null}
     </ScrollView>
   </SheetModal>;
 }
