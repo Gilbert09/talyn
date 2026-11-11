@@ -271,7 +271,8 @@ export function Segmented<T extends string>({ options, value, onChange, accessib
       const selected = option.value === value;
       return <Pressable key={option.value} accessibilityRole="tab" accessibilityLabel={option.label} accessibilityState={{ selected }}
         onPress={() => onChange(option.value)} style={[styles.segment, selected && { backgroundColor: c.background, borderColor: c.border }]}>
-        <Text numberOfLines={1} style={[type.meta, sans(selected ? 600 : 500), { color: selected ? c.text : c.muted }]}>{option.label}</Text>
+        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}
+          style={[type.meta, sans(selected ? 600 : 500), { color: selected ? c.text : c.muted }]}>{option.label}</Text>
       </Pressable>;
     })}
   </View>;

@@ -344,6 +344,8 @@ describe('sections', () => {
 
 describe('range', () => {
   it.each([
+    ['Today', 'today'],
+    ['Yesterday', 'yesterday'],
     ['Last 7 days', '7d'],
     ['This billing period', 'period'],
   ])('%s refetches every section with range=%s', async (label, range) => {

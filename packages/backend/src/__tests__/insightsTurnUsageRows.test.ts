@@ -266,12 +266,14 @@ describe('parseInsightsRange', () => {
   const period = { start: new Date('2026-10-20T08:00:00.000Z'), end: new Date('2026-11-20T08:00:00.000Z') };
   it.each<[string, Record<string, unknown>, { from: string; to: string; preset: string } | { error: RegExp }]>([
     ['default: last 30 days', {}, { from: '2026-10-05T12:00:00.000Z', to: now.toISOString(), preset: '30d' }],
+    ['today: midnight to now', { range: 'today' }, { from: '2026-11-04T00:00:00.000Z', to: now.toISOString(), preset: 'today' }],
+    ['yesterday: the whole UTC day before', { range: 'yesterday' }, { from: '2026-11-03T00:00:00.000Z', to: '2026-11-04T00:00:00.000Z', preset: 'yesterday' }],
     ['7d', { range: '7d' }, { from: '2026-10-28T12:00:00.000Z', to: now.toISOString(), preset: '7d' }],
     ['30d', { range: '30d' }, { from: '2026-10-05T12:00:00.000Z', to: now.toISOString(), preset: '30d' }],
     ['period: start to now', { range: 'period' }, { from: period.start.toISOString(), to: now.toISOString(), preset: 'period' }],
     ['custom', { from: '2026-09-01T00:00:00Z', to: '2026-09-08T00:00:00Z' }, { from: '2026-09-01T00:00:00.000Z', to: '2026-09-08T00:00:00.000Z', preset: 'custom' }],
     ['custom named explicitly', { range: 'custom', from: '2026-09-01T00:00:00Z', to: '2026-09-02T00:00:00Z' }, { from: '2026-09-01T00:00:00.000Z', to: '2026-09-02T00:00:00.000Z', preset: 'custom' }],
-    ['unknown preset', { range: '90d' }, { error: /7d, 30d or period/ }],
+    ['unknown preset', { range: '90d' }, { error: /today, yesterday, 7d, 30d or period/ }],
     ['only from', { from: '2026-09-01T00:00:00Z' }, { error: /both from and to/ }],
     ['bad date', { from: 'yesterday', to: '2026-09-01T00:00:00Z' }, { error: /ISO dates/ }],
     ['from after to', { from: '2026-09-02T00:00:00Z', to: '2026-09-01T00:00:00Z' }, { error: /before to/ }],
@@ -290,6 +292,16 @@ describe('parseInsightsRange', () => {
   it('uses the calendar month when there is no period', () => {
     const out = parseInsightsRange({ range: 'period' }, now, null);
     expect('error' in out ? out : out.from.toISOString()).toBe('2026-11-01T00:00:00.000Z');
+  });
+
+  it.each<[string, string, string, { from: string; to: string }]>([
+    ['today at exactly midnight is never empty', 'today', '2026-11-04T00:00:00.000Z', { from: '2026-11-04T00:00:00.000Z', to: '2026-11-04T00:00:00.001Z' }],
+    ['yesterday over a month boundary', 'yesterday', '2026-11-01T09:30:00.000Z', { from: '2026-10-31T00:00:00.000Z', to: '2026-11-01T00:00:00.000Z' }],
+    ['yesterday over a year boundary', 'yesterday', '2027-01-01T00:00:00.000Z', { from: '2026-12-31T00:00:00.000Z', to: '2027-01-01T00:00:00.000Z' }],
+    ['today just before midnight', 'today', '2026-11-04T23:59:59.999Z', { from: '2026-11-04T00:00:00.000Z', to: '2026-11-04T23:59:59.999Z' }],
+  ])('%s', (_label, range, instant, expected) => {
+    const out = parseInsightsRange({ range }, new Date(instant), period);
+    expect('error' in out ? out : { from: out.from.toISOString(), to: out.to.toISOString() }).toEqual(expected);
   });
 
   it('stops a past period at its end', () => {

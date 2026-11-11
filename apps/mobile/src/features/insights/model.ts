@@ -3,8 +3,11 @@ import {
   type InsightsRangePreset, type InsightsResponseBySection, type InsightsTopRepository,
 } from '@talyn/shared';
 
+const RANGE_LABELS: Record<InsightsRangePreset, string> = {
+  today: 'Today', yesterday: 'Yesterday', '7d': '7 days', '30d': '30 days', period: 'This period',
+};
 export const RANGE_OPTIONS: ReadonlyArray<{ value: InsightsRangePreset; label: string }> = INSIGHTS_RANGE_PRESETS.map((value) => ({
-  value, label: value === '7d' ? '7 days' : value === '30d' ? '30 days' : 'This period',
+  value, label: RANGE_LABELS[value],
 }));
 export const DEFAULT_RANGE: InsightsRangePreset = '30d';
 
