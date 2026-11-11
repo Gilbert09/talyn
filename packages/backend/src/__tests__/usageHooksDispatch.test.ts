@@ -127,7 +127,7 @@ describe('the fleet create body', () => {
     expect(createSandbox.mock.calls[0][0]).toMatchObject({
       memMib: SANDBOX_SIZES[size].memMib,
       milliVcpu: SANDBOX_SIZES[size].milliVcpu,
-      idleTtlSec: 600,
+      idleTtlSec: 180,
       ephemeral: true,
     });
   });
@@ -160,7 +160,7 @@ describe('the meter on the code-review path', () => {
     await dispatchUnit((await getReview('rev1'))!, LENS);
     expect(createSandbox).toHaveBeenCalledTimes(1);
     const body = createSandbox.mock.calls[0][0];
-    expect(body).toMatchObject({ memMib: 4096, milliVcpu: 2000, idleTtlSec: 600 });
+    expect(body).toMatchObject({ memMib: 4096, milliVcpu: 2000, idleTtlSec: 180 });
     expect(openInterval).toHaveBeenCalledTimes(1);
     const [unitRow] = await db.select({ id: prCodeReviewRuns.id }).from(prCodeReviewRuns);
     expect(openInterval).toHaveBeenCalledWith({

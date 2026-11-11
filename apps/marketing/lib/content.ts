@@ -145,7 +145,7 @@ export const sandboxes = {
     },
     {
       title: "Asleep costs nothing",
-      body: "A sandbox that sits idle for 10 minutes goes to sleep, and a sleeping sandbox is free. Your next message wakes it.",
+      body: "A sandbox that sits idle for 3 minutes goes to sleep, and a sleeping sandbox is free. Your next message wakes it.",
     },
     {
       title: "Read it without waking it",
@@ -452,7 +452,7 @@ export const pricingFaq = [
   },
   {
     q: "Do idle boxes cost anything?",
-    a: "No. A box that has been idle for 10 minutes goes to sleep, and a sleeping box is free. You only pay for the seconds a box is awake and running.",
+    a: "No. A box that has been idle for 3 minutes goes to sleep, and a sleeping box is free. You only pay for the seconds a box is awake and running.",
   },
   {
     q: "Do I pay for Claude or ChatGPT as well?",
@@ -508,7 +508,7 @@ export const faq = [
   },
   {
     q: "Where does my code run?",
-    a: "In a cloud sandbox on our own hardware: one Firecracker microVM per session. Your GitHub and agent credentials are added by a proxy outside the machine, so no token is ever inside it. A sandbox sleeps after 10 minutes without work. Talyn saves your unpushed work after every turn, so a lost sandbox can be restored.",
+    a: "In a cloud sandbox on our own hardware: one Firecracker microVM per session. Your GitHub and agent credentials are added by a proxy outside the machine, so no token is ever inside it. A sandbox sleeps after 3 minutes without work. Talyn saves your unpushed work after every turn, so a lost sandbox can be restored.",
   },
   {
     q: "Does it work with GitLab or Bitbucket?",

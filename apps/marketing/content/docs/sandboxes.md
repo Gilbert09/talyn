@@ -37,7 +37,7 @@ To see if a session needs a larger box, open the **Sandbox** tab. The **Resource
 
 ## Sleep and wake
 
-A sandbox that is idle for 10 minutes goes to sleep. A sleeping sandbox uses no box-hours.
+A sandbox that is idle for 3 minutes goes to sleep. A sleeping sandbox uses no box-hours.
 
 Your next message wakes it, usually in a few seconds. You can also select **Wake** in the **Sandbox** tab. While it sleeps, you can still read the session's changes and files from the copy Talyn keeps.
 

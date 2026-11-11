@@ -469,12 +469,16 @@ export interface CreateSandboxInput {
 }
 
 /**
- * The idle timeout of every Talyn box: 10 minutes. The fleet's own default is
- * 30. It is also every YAS plan's leased ceiling, so a create that asks for it
+ * The idle timeout of every Talyn box: 3 minutes. The fleet's own default is
+ * 30 and every YAS plan's leased ceiling is 10, so a create that asks for it
  * stays inside the lease; an account whose ceiling an operator lowered is
- * handled by {@link isIdleTtlCeilingRefusal}.
+ * handled by {@link isIdleTtlCeilingRefusal}. The fleet's floor is 1 minute.
+ *
+ * The idle clock runs only when nothing holds the box: a running exec (a
+ * turn), an open terminal or a preview connection keeps it busy. A local
+ * resume takes about a second, so a short timeout costs little wake time.
  */
-export const TALYN_SANDBOX_IDLE_TTL_SEC = 600;
+export const TALYN_SANDBOX_IDLE_TTL_SEC = 180;
 
 /**
  * The fleet refused the idle timeout because the tenant's leased ceiling is

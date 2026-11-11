@@ -202,13 +202,13 @@ describe('fleet client: workbench methods', () => {
   });
 
   it.each([
-    ['no credentials (the old body)', undefined, { idleTtlSec: 600 }],
+    ['no credentials (the old body)', undefined, { idleTtlSec: 180 }],
     [
       'credentials',
       { githubToken: 'ghp_x', anthropicKey: 'sk-ant-x', repo: 'acme/app', integrations: { linear: 'lin_x' } },
-      { idleTtlSec: 600, credentials: { githubToken: 'ghp_x', anthropicKey: 'sk-ant-x', repo: 'acme/app', integrations: { linear: 'lin_x' } } },
+      { idleTtlSec: 180, credentials: { githubToken: 'ghp_x', anthropicKey: 'sk-ant-x', repo: 'acme/app', integrations: { linear: 'lin_x' } } },
     ],
-    ['an OpenAI box', { githubToken: 'ghp_x', openaiKey: 'sk-x' }, { idleTtlSec: 600, credentials: { githubToken: 'ghp_x', openaiKey: 'sk-x' } }],
+    ['an OpenAI box', { githubToken: 'ghp_x', openaiKey: 'sk-x' }, { idleTtlSec: 180, credentials: { githubToken: 'ghp_x', openaiKey: 'sk-x' } }],
   ] as const)('a resume with %s sends the matching body', async (_name, credentials, body) => {
     respond = () => json({ id: 'sb', status: 'idle' });
     await client.resumeSandbox('sb', credentials ? { credentials } : {});
