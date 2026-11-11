@@ -443,8 +443,12 @@ export interface DecisionContext {
   isHead: boolean;
   /** A sibling entry in the group is `merging` or `automerge_armed`. */
   groupMergeInFlight: boolean;
-  /** State of the queue's own fix run (`entry.fixTaskId`). */
-  fixTaskState: 'active' | 'terminal' | 'none';
+  /**
+   * State of the queue's own fix run (`entry.fixTaskId`). `waiting` is a run
+   * paused for CI (`waiting_ci`): active, but silent by design while it waits,
+   * so its silence must not read as a dead run.
+   */
+  fixTaskState: 'active' | 'waiting' | 'terminal' | 'none';
   /** When the linked fix run was created; null when there is none. */
   fixTaskStartedAt: string | null;
   /**

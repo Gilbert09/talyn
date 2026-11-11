@@ -506,8 +506,11 @@ const PRTableRow = React.memo(function PRTableRow({
   // A linked task is "active" while it's queued or running — i.e. not yet
   // fully done. Drives the spinner/label and suppresses the start-task
   // buttons so you can't double-launch.
+  // Paused for CI is still running work: its box is asleep, and it wakes to
+  // carry on, so the row must not offer a second run.
+  const taskWaitingCi = taskStatus === 'waiting_ci';
   const taskRunning =
-    taskStatus === 'pending' || taskStatus === 'queued' || taskStatus === 'in_progress';
+    taskStatus === 'pending' || taskStatus === 'queued' || taskStatus === 'in_progress' || taskWaitingCi;
   // A task is failed/cancelled — distinct from a clean completion so the
   // badge can flag it (and a follow-up run still makes sense). A stop from
   // this row lands in `cancelled`, so the badge names that rather than
@@ -867,7 +870,9 @@ const PRTableRow = React.memo(function PRTableRow({
                         'bg-slate-200 text-slate-700 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600'
                   )}
                   title={
-                    taskRunning
+                    taskWaitingCi
+                      ? 'A task published and is paused until CI finishes — click to open it'
+                      : taskRunning
                       ? 'A task is working this PR — click to open it'
                       : taskNeedsHuman
                       ? `${taskNeedsHumanTitle} — click to open it`
@@ -879,7 +884,12 @@ const PRTableRow = React.memo(function PRTableRow({
                   }
                 >
                   <ProviderIcon provider={taskProvider} className="h-2.5 w-2.5" />
-                  {taskRunning ? (
+                  {taskWaitingCi ? (
+                    <>
+                      <Clock className="h-2.5 w-2.5" />
+                      Waiting for CI
+                    </>
+                  ) : taskRunning ? (
                     <>
                       <Loader2 className="h-2.5 w-2.5 animate-spin" />
                       Working
@@ -1425,7 +1435,7 @@ const PRTableRow = React.memo(function PRTableRow({
                   disabled={busy !== null}
                   className="rounded p-1 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground dark:hover:text-red-400"
                   title={
-                    taskStatus === 'in_progress'
+                    taskStatus === 'in_progress' || taskWaitingCi
                       ? 'Stop the task working this PR — cancels the cloud run'
                       : 'Stop the task queued for this PR before it starts'
                   }

@@ -181,6 +181,27 @@ describe('the meter on the fleet task path', () => {
       expect((row.metadata as { cloudTask: { extra: Record<string, unknown> } }).cloudTask.extra.sandboxSize).toBe(size);
     });
 
+    it.each<[string, Record<string, unknown>, boolean]>([
+      ['a run with no ci-park stamp', { source: 'user' }, false],
+      ['a stamp that is not strictly true', { source: 'user', ciPark: 'yes' }, false],
+      ['a run stamped for ci-park', { source: 'user', ciPark: true }, true],
+    ])('%s: keeps its box and gets the CI WAITING rule only when stamped', async (_label, metadata, parked) => {
+      await seedTask('task-1', { metadata });
+      dispatchSandboxRun.mockResolvedValue(handle('standard'));
+      await dispatchTaskToFleet(task('task-1', metadata), ENV);
+      await drainTaskMetadata('task-1');
+      const spec = dispatchSandboxRun.mock.calls[0][0] as { ephemeral?: boolean; prompt: string };
+      if (parked) {
+        expect(spec.ephemeral).toBe(false);
+        expect(spec.prompt.startsWith('fix it')).toBe(true);
+        expect(spec.prompt).toContain('TALYN_AWAIT_CI:');
+      } else {
+        // Byte-identical to the dispatch before ci-park existed.
+        expect('ephemeral' in spec).toBe(false);
+        expect(spec.prompt).toBe('fix it');
+      }
+    });
+
     it('records the size the fleet actually gave after a fallback', async () => {
       await seedTask('task-1', { metadata: { source: 'user' } });
       sizeForSession.mockResolvedValue('large');

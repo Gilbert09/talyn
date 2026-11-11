@@ -14,7 +14,8 @@ import {
 } from '../../selfHosted/credentials.js';
 import { codexCredentialFrom } from '../../selfHosted/codexOauth.js';
 import { addFleetAccount, updateFleetAccountCredential } from '../../selfHosted/accounts.js';
-import { dispatchTaskToFleet } from '../../selfHosted/executor.js';
+import { ciParkFromTask, dispatchTaskToFleet } from '../../selfHosted/executor.js';
+import { meterBoxClosed } from '../../billing/usageHooks.js';
 import { selfHostedPoller } from '../../selfHosted/poller.js';
 import type { CloudTaskProvider, CloudTaskRow, DispatchResult } from '../types.js';
 
@@ -243,6 +244,13 @@ export const selfHostedProvider: CloudTaskProvider = {
     const { sandbox } = await client.getSandbox(cloud.remoteTaskId);
     if (sandbox.workspaceId !== task.workspaceId) {
       throw new Error('Fleet sandbox not found in this workspace');
+    }
+    // A box that outlives its task (`ci-park`) would only go idle on a cancel,
+    // and a parked one is asleep with nothing to cancel. Delete it instead.
+    if (ciParkFromTask(task)) {
+      await client.deleteSandbox(cloud.remoteTaskId);
+      await meterBoxClosed({ sandboxId: cloud.remoteTaskId, reason: 'deleted', workspaceId: task.workspaceId });
+      return;
     }
     await client.cancelSandbox(cloud.remoteTaskId);
   },

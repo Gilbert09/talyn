@@ -87,6 +87,12 @@ import { countUsageResets, usageResetAvailability } from './usage/resets.js';
 export const ACTIVE_TASK_STATUSES = SHARED_ACTIVE_TASK_STATUSES;
 
 /**
+ * Active tasks that will take a box. A `waiting_ci` task is active but its box
+ * is asleep: it holds no box until a wake, and the wake goes through the gate.
+ */
+export const BOX_PENDING_TASK_STATUSES = ACTIVE_TASK_STATUSES.filter((s) => s !== 'waiting_ci');
+
+/**
  * Whether billing is configured at all. When the Polar env group is absent
  * (local dev, CI, self-hosted) no plan limit is enforced: a paywall with no
  * way to pay would brick every box with zero recourse. Partial config is a
@@ -535,7 +541,7 @@ export function budgetAllowsNewBox(budget: Pick<UsageBudget, 'includedLeftWsec' 
 export function countPendingTaskBoxesQuery(ownerId: string, excludeTaskId?: string, db: Database = getPoolDbClient()) {
   const conditions = [
     eq(workspacesTable.ownerId, ownerId),
-    inArray(tasksTable.status, [...ACTIVE_TASK_STATUSES]),
+    inArray(tasksTable.status, [...BOX_PENDING_TASK_STATUSES]),
     notExists(
       db
         .select({ one: sql`1` })

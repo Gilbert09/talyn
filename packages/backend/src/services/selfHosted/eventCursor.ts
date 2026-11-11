@@ -128,3 +128,22 @@ export function finalTextFromEvents(events: readonly AgentEvent[]): string | nul
   }
   return summary;
 }
+
+/**
+ * The events of one task on a box that has run several, from its
+ * `task_started` marker on. fleetd writes that marker with the task's id
+ * (`internal/fleet/task.go`), and after {@link toAgentEvent} unwraps it the
+ * event carries `taskId` and `taskType` at the top level, which no agent
+ * message does.
+ *
+ * With no marker for the task in `events` it returns them all: either the
+ * box has run one task, or `events` is a stored tail that starts after the
+ * marker and so holds this task's events only.
+ */
+export function eventsOfTask(events: readonly AgentEvent[], fleetTaskId: string): readonly AgentEvent[] {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i] as unknown as { taskId?: unknown; taskType?: unknown };
+    if (event.taskId === fleetTaskId && typeof event.taskType === 'string') return events.slice(i + 1);
+  }
+  return events;
+}

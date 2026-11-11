@@ -679,6 +679,35 @@ export class FleetHttpError extends Error {
   }
 }
 
+/**
+ * The fleet refused a follow-up task on a sandbox (409 on
+ * `POST /v1/sandboxes/{id}/tasks`). The code says what to do:
+ * `sandbox_busy` waits, `sandbox_suspended` resumes first, `sandbox_not_live`
+ * retries, and `tasks_unsupported` means the guest is too old for a second
+ * task, so no retry helps.
+ */
+export type FleetTaskRefusalCode = 'sandbox_busy' | 'sandbox_suspended' | 'tasks_unsupported' | 'sandbox_not_live';
+
+const TASK_REFUSAL_CODES = new Set<string>(['sandbox_busy', 'sandbox_suspended', 'tasks_unsupported', 'sandbox_not_live']);
+
+export class FleetTaskRefusedError extends Error {
+  constructor(
+    message: string,
+    readonly code: FleetTaskRefusalCode,
+  ) {
+    super(message);
+    this.name = 'FleetTaskRefusedError';
+  }
+}
+
+/** A follow-up task, a subset of the create's `task` (fleet `submitTask`). */
+export interface SubmitSandboxTaskInput {
+  prompt: string;
+  taskType?: string;
+  systemPrompt?: string;
+  model?: string;
+}
+
 export class FleetThrottleError extends Error {
   readonly status = 429;
   constructor(
@@ -824,7 +853,7 @@ export class FleetClient {
   private async request<T>(
     path: string,
     init: RequestInit = {},
-    opts: { timeoutMs?: number; preserveNotFound?: boolean; expectedStatus?: number } = {},
+    opts: { timeoutMs?: number; preserveNotFound?: boolean; expectedStatus?: number; taskRefusals?: boolean } = {},
   ): Promise<T> {
     return (await this.requestWithMeta<T>(path, init, opts)).data;
   }
@@ -832,7 +861,7 @@ export class FleetClient {
   private async requestWithMeta<T>(
     path: string,
     init: RequestInit = {},
-    opts: { timeoutMs?: number; preserveNotFound?: boolean; expectedStatus?: number } = {},
+    opts: { timeoutMs?: number; preserveNotFound?: boolean; expectedStatus?: number; taskRefusals?: boolean } = {},
   ): Promise<{ data: T; host?: string }> {
     const timeoutMs = opts.timeoutMs ?? this.timeoutMs;
     const started = Date.now();
@@ -920,6 +949,11 @@ export class FleetClient {
     }
     if (!resp.ok) {
       const { message, code } = await errorBody(resp, `fleet returned ${resp.status}`);
+      // Read before the lost-sandbox mapping, which reads `sandbox_not_live` as
+      // gone. On a follow-up task the fleet means "retry" by it.
+      if (opts.taskRefusals && resp.status === 409 && code && TASK_REFUSAL_CODES.has(code)) {
+        throw new FleetTaskRefusedError(message, code as FleetTaskRefusalCode);
+      }
       // Terminal, not retryable — see FleetRunNotFoundError.
       const lost = opts.preserveNotFound && resp.status === 404
         ? null
@@ -1570,7 +1604,10 @@ export class FleetClient {
    * fleet skips its own fetch from the control plane, which was most of a
    * local wake. A fleet without the field ignores it and fetches, as before.
    */
-  async resumeSandbox(id: string, opts: { credentials?: FleetSandboxCredentials } = {}): Promise<void> {
+  async resumeSandbox(
+    id: string,
+    opts: { credentials?: FleetSandboxCredentials; maxLifetimeSec?: number } = {},
+  ): Promise<void> {
     // A hibernated box pulls its image back from object storage first, which
     // the fleet allows minutes for. Sixty seconds gave up on a resume that works.
     // The idle timeout goes on the resume too, so a box created before Talyn
@@ -1578,7 +1615,14 @@ export class FleetClient {
     const resume = (fields: Record<string, unknown>) =>
       this.request(
         sandboxPath(id, '/resume'),
-        { method: 'POST', body: JSON.stringify({ ...fields, ...(opts.credentials ? { credentials: opts.credentials } : {}) }) },
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            ...fields,
+            ...(opts.credentials ? { credentials: opts.credentials } : {}),
+            ...(opts.maxLifetimeSec ? { maxLifetimeSec: opts.maxLifetimeSec } : {}),
+          }),
+        },
         { timeoutMs: RESUME_TIMEOUT_MS },
       );
     try {
@@ -1587,6 +1631,21 @@ export class FleetClient {
       if (!isIdleTtlCeilingRefusal(err)) throw err;
       await resume({});
     }
+  }
+
+  /**
+   * Give an awake sandbox another prompt. It continues the conversation of the
+   * task before it, in the same checkout. Returns the new task record; its
+   * outcome arrives on the sandbox's `tasks` array. A 409 is a
+   * {@link FleetTaskRefusedError}.
+   */
+  async submitTask(id: string, input: SubmitSandboxTaskInput): Promise<FleetSandboxTask> {
+    const { task } = await this.request<{ task: FleetSandboxTask }>(
+      sandboxPath(id, '/tasks'),
+      { method: 'POST', body: JSON.stringify(input) },
+      { taskRefusals: true },
+    );
+    return task;
   }
 
   /** Delete a sandbox. Already gone counts as done: the caller wanted it gone. */

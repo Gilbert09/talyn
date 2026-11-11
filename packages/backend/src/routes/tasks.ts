@@ -320,6 +320,11 @@ export function taskRoutes(): Router {
         error: `status must be one of: ${TASK_STATUSES.join(', ')}`,
       });
     }
+    // Only the fleet poller parks a run: a parked task without its park state
+    // could never be woken.
+    if (body.status === 'waiting_ci') {
+      return res.status(400).json({ success: false, error: 'status waiting_ci is set by Talyn only' });
+    }
 
     // Only dispatch settings are public. Remote handles and PR links belong to the server.
     if (body.metadata !== undefined) {
@@ -529,7 +534,8 @@ export function taskRoutes(): Router {
       }
       task = (await readTask())!;
     }
-    if (task.status !== 'in_progress') {
+    // A run paused for CI is still running work: stopping it deletes its box.
+    if (task.status !== 'in_progress' && task.status !== 'waiting_ci') {
       return res.status(400).json({ success: false, error: 'Task is not running' });
     }
 

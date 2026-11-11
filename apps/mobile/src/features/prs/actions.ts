@@ -144,13 +144,22 @@ export function sessionFromConflict(error: unknown): { id: string; name: string 
 
 export type FixOutcome = { kind: 'session'; id: string; name: string } | { kind: 'task' } | { kind: 'no_agent' } | { kind: 'blocked'; reason: FixBlockedReason };
 
-/** True when the PR's linked run has not finished. A failed lookup counts as finished: the server checks again. */
-export async function linkedTaskRunning(store: WorkflowStore, row: Pick<PRRow, 'taskId'>): Promise<boolean> {
-  if (!row.taskId) return false;
+/**
+ * Whether the PR's linked run has not finished, and whether it is paused for CI
+ * (`waiting_ci`, still running). A failed lookup counts as finished: the server
+ * checks again.
+ */
+export async function linkedTaskState(store: WorkflowStore, row: Pick<PRRow, 'taskId'>): Promise<{ running: boolean; waitingCi: boolean }> {
+  if (!row.taskId) return { running: false, waitingCi: false };
   try {
     const task = await store.api.tasks.get(row.taskId);
-    return !TASK_STATUS_TERMINAL[task.status as TaskStatus];
-  } catch { return false; }
+    return { running: !TASK_STATUS_TERMINAL[task.status as TaskStatus], waitingCi: task.status === 'waiting_ci' };
+  } catch { return { running: false, waitingCi: false }; }
+}
+
+/** True when the PR's linked run has not finished. */
+export async function linkedTaskRunning(store: WorkflowStore, row: Pick<PRRow, 'taskId'>): Promise<boolean> {
+  return (await linkedTaskState(store, row)).running;
 }
 
 /**

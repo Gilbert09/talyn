@@ -207,7 +207,7 @@ const labels: Record<string, string> = {
   testing: 'Testing', passed: 'Passed', pending_failure: 'Failure pending', failed: 'Failed', ejected: 'Ejected', cancelled: 'Cancelled', rejected: 'Rejected', not_submitted: 'Not submitted', not_ready: 'Not ready',
   allowed: 'Allowed', denied: 'Denied', auto_allowed: 'Allowed automatically',
   passing: 'Passing', failing: 'Failing', pending: 'Pending', none: 'No checks',
-  queued: 'Queued', awaiting_ci: 'Waiting for CI', awaiting_review: 'Waiting for review',
+  queued: 'Queued', awaiting_ci: 'Waiting for CI', waiting_ci: 'Waiting for CI', awaiting_review: 'Waiting for review',
   automerge_armed: 'Auto-merge armed', awaiting_external: 'Waiting for external queue', awaiting_stack: 'Waiting for stack',
   fixing: 'Fixing', merging: 'Merging', blocked: 'Blocked', blocked_manual: 'Human action needed', removed: 'Removed',
 };

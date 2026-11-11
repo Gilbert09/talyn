@@ -21,7 +21,7 @@ import { useResource } from '../../workflow/hooks';
 import { stackLabel } from '../../workflow/model';
 import { WEB_APP_URL } from '../settings/about';
 import { AutomationToggles } from './AutomationToggles';
-import { fixAgentChoices, linkedTaskRunning, prActions, startPrFix, type FixOutcome } from './actions';
+import { fixAgentChoices, linkedTaskState, prActions, startPrFix, type FixOutcome } from './actions';
 import { CodeReviewSection, CodeReviewSelectionBar, CodeReviewStartSheet, useCodeReview } from './CodeReviewSection';
 import { failingBadge, groupChecks, type PrDetailTab } from './detailModel';
 import { pullsRoute } from './lists';
@@ -131,14 +131,17 @@ export function PullRequestDetailScreen() {
   const [reviewPrompt, setReviewPrompt] = useState<PRReviewEvent | null>(null);
   const toast = useToast();
   const [taskRunning, setTaskRunning] = useState(false);
+  const [taskWaitingCi, setTaskWaitingCi] = useState(false);
   const [notice, setNotice] = useState<{ message: string; session?: { id: string; name: string } } | null>(null);
   useEffect(() => { if (row) completeIntent(`/attention/${encodeURIComponent(id)}`); }, [row, id]);
   useEffect(() => { setNotice(null); setReviewPrompt(null); setTab('overview'); setSeen(new Set(['overview'])); }, [id]);
   const taskId = row?.taskId ?? null;
   useEffect(() => {
     let cancelled = false;
-    if (!taskId) { setTaskRunning(false); return undefined; }
-    void linkedTaskRunning(workflow, { taskId }).then((running) => { if (!cancelled) setTaskRunning(running); });
+    if (!taskId) { setTaskRunning(false); setTaskWaitingCi(false); return undefined; }
+    void linkedTaskState(workflow, { taskId }).then((linked) => {
+      if (!cancelled) { setTaskRunning(linked.running); setTaskWaitingCi(linked.waitingCi); }
+    });
     return () => { cancelled = true; };
   }, [workflow, taskId]);
   const openedRef = useRef<string | null>(null);
@@ -164,7 +167,7 @@ export function PullRequestDetailScreen() {
   const actions = row ? prActions(row, { posthogConnected, taskRunning }) : null;
   const reviewState = !codeReview.review ? 'none' as const : codeReview.running ? 'running' as const : 'ready' as const;
   const step = row && summary && actions ? prNextStep({ row, summary, actions, checkContexts: fresh?.checkContexts,
-    recentReviews: fresh?.recentReviews, taskRunning, codeReview: reviewState, now }) : null;
+    recentReviews: fresh?.recentReviews, taskRunning, taskWaitingCi, codeReview: reviewState, now }) : null;
   const checkGroups = useMemo(() => groupChecks(fresh?.checkContexts, summary?.blockingReason), [fresh?.checkContexts, summary?.blockingReason]);
   const updated = summary?.updatedAt ?? row?.updatedAt;
   const url = summary ? safeExternalUrl(summary.url) : null;

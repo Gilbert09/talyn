@@ -66,6 +66,7 @@ import {
 import { postHogCodeProvider } from './services/cloudProviders/posthog/provider.js';
 import { selfHostedProvider } from './services/cloudProviders/selfhosted/provider.js';
 import { cloudTaskPoller } from './services/cloudProviders/poller.js';
+import { ciParkSweep } from './services/ciPark.js';
 import { prAutoMergeWatcher } from './services/prAutoMergeWatcher.js';
 import { initMergeQueueTriggers } from './services/mergeQueue/triggers.js';
 import { mergeQueueReconciler } from './services/mergeQueue/reconciler.js';
@@ -246,6 +247,9 @@ async function main() {
   await githubService.init();
   await prMonitorService.init();
   cloudTaskPoller.init();
+  // Wakes fleet fix runs paused for CI. Armed always: only a run stamped by the
+  // `ci-park` flag can park, and a tick with nothing parked reads one index.
+  ciParkSweep.init();
   prAutoMergeWatcher.init();
   // The merge queue: an event-driven pipeline (triggers) with a 60s reconciler
   // as the backstop for anything no event reached.
@@ -521,6 +525,7 @@ async function main() {
     dbInflightReporter.shutdown();
     githubHealthMonitor.shutdown();
     cloudTaskPoller.shutdown();
+    ciParkSweep.stop();
     usageMeter.stop();
     prAutoMergeWatcher.shutdown();
     mergeQueueReconciler.shutdown();

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { CheckCircle2, Circle, CircleDot, ExternalLink, Loader2, XCircle } from 'lucide-react';
+import { CheckCircle2, Circle, CircleDot, Clock, ExternalLink, Loader2, XCircle } from 'lucide-react';
 import type { SpaceSessionRow, SpaceTaskRow } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { isWorkbenchOwner, openSpaceSession } from '../../lib/spaces';
@@ -187,6 +187,7 @@ const TASK_ICON: Partial<Record<SpaceTaskRow['status'], typeof Circle>> = {
   completed: CheckCircle2,
   failed: XCircle,
   needs_human: CircleDot,
+  waiting_ci: Clock,
 };
 
 function TaskRow({ task }: { task: SpaceTaskRow }) {
@@ -195,7 +196,7 @@ function TaskRow({ task }: { task: SpaceTaskRow }) {
   return (
     <div
       className="flex w-full items-center gap-2 rounded-md px-3 py-1 text-[13px] text-foreground/90"
-      title={`${task.title}\n${task.status.replace('_', ' ')} · ${task.creator.githubLogin ?? 'A teammate'} · ${timeAgo(task.updatedAt)}`}
+      title={`${task.title}\n${task.status.replace(/_/g, ' ')} · ${task.creator.githubLogin ?? 'A teammate'} · ${timeAgo(task.updatedAt)}`}
       data-attr="space-task-row"
     >
       <Icon className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground', task.status === 'in_progress' && 'animate-spin')} />

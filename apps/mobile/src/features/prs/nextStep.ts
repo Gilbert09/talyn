@@ -45,6 +45,8 @@ export interface NextStepInput {
   recentReviews?: PRFreshDetail['recentReviews'];
   /** The PR's linked cloud run has not finished. */
   taskRunning?: boolean;
+  /** That run published and is paused until CI finishes (`waiting_ci`). */
+  taskWaitingCi?: boolean;
   codeReview?: 'none' | 'running' | 'ready';
   now: number;
 }
@@ -89,6 +91,10 @@ export function prNextStep(input: NextStepInput): NextStep {
   const queued = row.mergeQueued || Boolean(entry);
   const badge = queueSessionBadge(entry);
   const queueFixing = entry?.status === 'fixing';
+  if (!badge && !queueFixing && input.taskRunning && input.taskWaitingCi) {
+    return step('agent', 'Waiting for CI', 'A cloud run pushed a fix and is paused until CI finishes. It carries on by itself.',
+      'information', 'agent', session ? { kind: 'session', label: 'View session' } : null);
+  }
   if (badge || queueFixing || input.taskRunning) {
     const detail = badge ? queueSessionBadgeTooltip(badge, entry?.reason, session?.name)
       : queueFixing ? entry?.fixKind === 'resign' ? 'The merge queue is re-signing its commits.' : 'The merge queue started a cloud run to fix it.'

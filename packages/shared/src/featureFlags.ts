@@ -394,6 +394,28 @@ export const FEATURE_FLAGS = {
     releaseScopes: ['api', 'public-api'],
   },
 
+  /**
+   * Park fleet fix runs while CI runs: a run that published ends its turn,
+   * Talyn suspends its box and resumes the same conversation when the checks
+   * settle. Evaluated once per dispatch against the workspace OWNER and
+   * stamped on the task (`metadata.ciPark`), so a run keeps the posture it
+   * started with.
+   *
+   * Fallback OFF and gated: it changes the prompt and the lifecycle of runs
+   * that push to other people's pull requests, and a PostHog outage must not
+   * switch that on for accounts nobody chose. The release scope is its own,
+   * not `fleet`: a gated flag withholds every highlight with its scopes, and
+   * `fleet` would hide every released fleet note too.
+   */
+  ciPark: {
+    posthogKey: 'ci-park',
+    envOverride: 'CI_PARK_ENABLED',
+    fallback: false,
+    description: 'CI park — suspend fleet fix runs while CI runs, then resume them',
+    availability: 'gated',
+    releaseScopes: ['ci-park'],
+  },
+
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */

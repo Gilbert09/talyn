@@ -1191,6 +1191,14 @@ export type TaskStatus =
    * `parseNeedsHumanSentinel`) — never inferred from prose, never a default.
    */
   | 'needs_human'
+  /**
+   * A fleet fix run published and stopped to wait for CI. Its sandbox is
+   * suspended, so it bills nothing, and Talyn resumes the same conversation
+   * when the PR's checks settle (`services/ciPark.ts`). Active, not terminal:
+   * the run is not over, and nothing may reuse or re-dispatch the row.
+   * Entered only behind the `ci-park` flag.
+   */
+  | 'waiting_ci'
   | 'cancelled';
 
 /**
@@ -1220,6 +1228,8 @@ export const TASK_STATUS_TERMINAL: Record<TaskStatus, boolean> = {
   // answer, but the task is finished with its plan slot, its credentials and
   // its watcher. Recovery is a fresh dispatch, exactly as for `failed`.
   needs_human: true,
+  // Active: the run is paused, not over. Its plan slot and its PR stay held.
+  waiting_ci: false,
   cancelled: true,
 };
 

@@ -19,7 +19,7 @@ describe('isolated memory keys and selectors', () => {
     expect(humanGate(session({ chats: [chat({ status: 'awaiting_input' })] }))).toBe(true);
   });
   it.each([undefined, null, 'new_provider_state', 'UNKNOWN', ''])('keeps %s unknown', (value) => expect(statusLabel(value)).toBe('Unknown'));
-  it.each([['failing_required', 'Required checks failing'], ['failing_optional', 'Optional checks failing'], ['awaiting_stack', 'Waiting for stack'], ['blocked_manual', 'Human action needed']])('labels %s accurately', (state, label) => expect(statusLabel(state)).toBe(label));
+  it.each([['failing_required', 'Required checks failing'], ['failing_optional', 'Optional checks failing'], ['awaiting_stack', 'Waiting for stack'], ['blocked_manual', 'Human action needed'], ['waiting_ci', 'Waiting for CI']])('labels %s accurately', (state, label) => expect(statusLabel(state)).toBe(label));
   it('keeps absent stack state unknown', () => {
     expect(stackLabel(pr({ summary: { ...pr().summary, stack: undefined } }))).toBe('Unknown');
     expect(stackLabel(pr())).toBe('Standalone');

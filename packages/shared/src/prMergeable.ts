@@ -534,6 +534,110 @@ export function parseNeedsHumanSentinel(
 }
 
 /**
+ * The prefix a Talyn Fleet fix run puts on the last line of its final message
+ * to say "I published, now pause me until CI finishes". Behind the `ci-park`
+ * flag: the backend adds the rule that asks for it (see {@link withAwaitCiRule})
+ * only to fleet runs it can suspend and resume.
+ */
+export const TALYN_AWAIT_CI_SENTINEL = 'TALYN_AWAIT_CI:';
+
+const AWAIT_CI_SHA = /^[0-9a-f]{7,40}$/;
+
+/**
+ * Read the await-CI sentinel back out of an agent's closing text.
+ *
+ * The same rules as {@link parseNeedsHumanSentinel}: exact prefix on the last
+ * non-empty line, and absence means UNKNOWN. A sentinel with a value that is
+ * not a commit sha still counts, with `headSha: null`, and the caller then uses
+ * the PR's own head. The agent said the important part, which is "wait".
+ */
+export function parseAwaitCiSentinel(
+  text: string | null | undefined
+): { headSha: string | null } | null {
+  if (typeof text !== 'string' || text.length === 0) return null;
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]!.trim();
+    if (line.length === 0) continue;
+    if (!line.startsWith(TALYN_AWAIT_CI_SENTINEL)) return null;
+    const value = line.slice(TALYN_AWAIT_CI_SENTINEL.length).trim().replace(/^`+|`+$/g, '').toLowerCase();
+    return { headSha: AWAIT_CI_SHA.test(value) ? value : null };
+  }
+  return null;
+}
+
+/**
+ * The rule that replaces "wait for CI to finish" on a fleet run that Talyn can
+ * pause. A fix run on PostHog/posthog kept a box awake for 228 minutes, 52 of
+ * them in `sleep` calls waiting for a 40-minute CI. A suspended box bills
+ * nothing, so the run ends its turn and Talyn resumes the same conversation in
+ * the same checkout when the checks settle.
+ */
+export function awaitCiRule(): string {
+  return `CI WAITING: Talyn pauses this sandbox while CI runs. This replaces any instruction to wait for CI.
+  - After every publish, run \`git rev-parse HEAD\` and make the LAST line of your final message exactly:
+      ${TALYN_AWAIT_CI_SENTINEL} <the full sha that command printed>
+  - Then stop. Talyn suspends the sandbox, waits for the checks on that commit to finish, and resumes you in this same checkout with the result. Your work, your files and this conversation are kept.
+  - NEVER sleep or poll to wait for CI (no \`sleep\`, no \`gh pr checks --watch\`, no loop that re-reads the checks). Waiting is Talyn's job.
+  - Emit the line ONLY right after you published a commit that CI must check. When the PR is done, or you stop for a person, end your message the usual way and do not emit it.`;
+}
+
+/** The loop line that tells an agent to wait for CI. {@link withAwaitCiRule} replaces it. */
+const WAIT_FOR_CI_LINE =
+  '  - After every publish, wait for CI to finish, then re-check all of: (1) review comments, (2) check status, and (3) mergeability';
+const AWAIT_CI_LINE =
+  '  - After every publish, end your turn as the CI WAITING rule says. When Talyn resumes you with the CI result, re-check all of: (1) review comments, (2) check status, and (3) mergeability';
+
+/**
+ * Give an already-built prompt the CI WAITING rule. The backend applies this at
+ * fleet dispatch, so every fix run gets it the same way: one built by a client,
+ * one built by a backend watcher, and one from a workspace template that has
+ * dropped `{{loopRules}}`. Idempotent: a prompt that already names the sentinel
+ * is returned unchanged.
+ */
+export function withAwaitCiRule(prompt: string): string {
+  if (prompt.includes(TALYN_AWAIT_CI_SENTINEL)) return prompt;
+  return `${prompt.replace(WAIT_FOR_CI_LINE, AWAIT_CI_LINE)}\n\n${awaitCiRule()}`;
+}
+
+/** What Talyn found when it woke a parked run. */
+export type AwaitCiOutcome =
+  | { kind: 'passing' }
+  | { kind: 'failing'; checks: string[] }
+  | { kind: 'head_moved'; headSha: string }
+  | { kind: 'timed_out' };
+
+/** The prompt that resumes a run parked on {@link TALYN_AWAIT_CI_SENTINEL}. */
+export function buildAwaitCiResumePrompt(input: {
+  ref: string;
+  headSha: string;
+  outcome: AwaitCiOutcome;
+}): string {
+  const short = input.headSha.slice(0, 12);
+  const { outcome } = input;
+  let what: string;
+  switch (outcome.kind) {
+    case 'passing':
+      what = `CI finished on ${short} and no required check is failing.`;
+      break;
+    case 'failing':
+      what = outcome.checks.length > 0
+        ? `CI finished on ${short}. These checks failed: ${outcome.checks.map((c) => `\`${c}\``).join(', ')}. Read their logs and fix the cause.`
+        : `CI finished on ${short} and some checks failed. Read the failing checks and fix the cause.`;
+      break;
+    case 'head_moved':
+      what = `The PR head moved from ${short} to ${outcome.headSha.slice(0, 12)} while you were paused. Somebody else pushed. Fetch the branch and work from the new head; do not overwrite their commits.`;
+      break;
+    case 'timed_out':
+      what = `CI on ${short} did not finish in the time Talyn waits. Read the current check status yourself and decide what to do.`;
+      break;
+  }
+  return `Talyn resumed you on ${input.ref}. ${what}
+
+Continue the loop from where you stopped: re-check review comments, check status and mergeability on the latest commit. Follow the rules from your first message. After your next publish, end your message with the ${TALYN_AWAIT_CI_SENTINEL} line again. When every condition holds, stop without it.`;
+}
+
+/**
  * Instruction block telling a cloud agent how to stop when only a person can
  * carry the work forward. Modelled on {@link talynTaglineRule} — the repo's
  * existing "emit this exact line" contract — because that shape has proven it
@@ -623,6 +727,13 @@ export interface MergeablePromptInput {
    * go looking for it and edit whatever now occupies those lines.
    */
   codeReview?: { headShaShort: string | null; findings: CodeReviewPromptFinding[] };
+  /**
+   * Ask a fleet run to end its turn after each publish instead of waiting for
+   * CI, so Talyn can suspend the box (the `ci-park` flag). Ignored for any
+   * other provider. The backend dispatch also applies {@link withAwaitCiRule},
+   * so a prompt built without this still gets the rule on a parked run.
+   */
+  awaitCi?: boolean;
 }
 
 /**
@@ -817,11 +928,11 @@ export function localChecksRule(): string {
   - Run each local check at most once per change. A local check that fails for a reason that is not your change (a missing service, a missing environment variable) tells you nothing: stop running it and rely on CI.`;
 }
 
-export function postHogCodeLoopRules(ref: string): string {
-  return `${localChecksRule()}
+export function postHogCodeLoopRules(ref: string, opts: { awaitCi?: boolean } = {}): string {
+  return `${localChecksRule()}${opts.awaitCi ? `\n\n${awaitCiRule()}` : ''}
 
 Loop discipline:
-  - After every publish, wait for CI to finish, then re-check all of: (1) review comments, (2) check status, and (3) mergeability — conflicts, or GitHub's own \`BEHIND\`; NOT how many commits the base has gained since.
+${opts.awaitCi ? AWAIT_CI_LINE : WAIT_FOR_CI_LINE} — conflicts, or GitHub's own \`BEHIND\`; NOT how many commits the base has gained since.
   - Do not stop, do not declare victory, and do not hand control back until ALL conditions are simultaneously true on the latest commit.
   - When they are, STOP — even if the base branch has moved on while CI ran. Updating a green branch only to chase the base restarts CI and starts the loop again.
   - If you genuinely get stuck, do NOT keep grinding — follow the stopping rule below.
@@ -890,7 +1001,8 @@ export function mergeablePromptVariables(
     // behaviour, where human feedback takes priority. Only an explicit `false`
     // injects the rule.
     humanCommentRule: input.respondToHumanComments === false ? humanCommentRule() : '',
-    loopRules: postHogCodeLoopRules(ref),
+    // Only a fleet run can be paused and resumed in the same checkout.
+    loopRules: postHogCodeLoopRules(ref, { awaitCi: fleet && input.awaitCi === true }),
   };
 }
 
