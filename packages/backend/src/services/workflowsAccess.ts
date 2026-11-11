@@ -82,3 +82,22 @@ export function workflowsRefusalReason(): string {
     ? `workflows are switched off on this deployment (${FEATURE_FLAGS.workflows.envOverride}=false)`
     : 'this account is not in the audience for the "workflows" feature flag';
 }
+
+/**
+ * Whether this workspace's owner may use Slack rules.
+ *
+ * Asked IN ADDITION to {@link workspaceMayUseWorkflows}: a Slack rule is a
+ * workflow, so the workflows kill switch stops it too. Keyed on the owner for
+ * the same reason as the workflows gate: a Slack message has no Talyn caller,
+ * and the routes and the engine must give one answer.
+ */
+export async function workspaceMayUseSlackRules(workspaceId: string): Promise<boolean> {
+  return (await workspaceHasFeature('slackChannelRules', workspaceId)).enabled;
+}
+
+/** The message a Slack-rule refusal carries. See {@link workflowsRefusalReason}. */
+export function slackRulesRefusalReason(): string {
+  return readFlagOverride('slackChannelRules', process.env) === false
+    ? `Slack rules are switched off on this deployment (${FEATURE_FLAGS.slackChannelRules.envOverride}=false)`
+    : 'this account is not in the audience for the "slack-channel-rules" feature flag';
+}

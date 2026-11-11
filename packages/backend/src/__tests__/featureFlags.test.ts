@@ -483,6 +483,7 @@ describe('featuresForUser', () => {
       'reviewPriorityMode',
       'reviewRankingCandidate',
       'reviewRankingExport',
+      'slackChannelRules',
       'spaces',
       'splitView',
       'teams',
@@ -509,6 +510,7 @@ describe('featuresForUser', () => {
       trunkMergeEta: false,
       publicApi: false,
       splitView: false,
+      slackChannelRules: false,
     });
   });
 
@@ -534,6 +536,7 @@ describe('featuresForUser', () => {
       trunkMergeEta: false,
       publicApi: false,
       splitView: false,
+      slackChannelRules: false,
     });
   });
 

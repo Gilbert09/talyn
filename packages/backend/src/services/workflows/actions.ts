@@ -4,7 +4,8 @@ import type {
   WorkflowActionFailureCode,
   WorkflowActionOutcome,
   WorkflowActionType,
-  WorkflowEventFacts,
+  GithubEventFacts,
+  SlackEventFacts,
   CodeReviewPreset,
 } from '@talyn/shared';
 import {
@@ -51,18 +52,34 @@ import type { PRSummary } from '../githubGraphql.js';
  * rather than on prose.
  */
 
-/** Everything an action needs, resolved once per run. */
-export interface ActionContext {
+/** What every action context carries, whatever the integration. */
+export interface BaseActionContext {
   workspaceId: string;
   /** The workspace's owner — the identity every plan gate is keyed on. */
   ownerId: string;
-  repositoryId: string;
-  owner: string;
-  repo: string;
-  facts: WorkflowEventFacts;
   workflowId: string;
   runId: string;
 }
+
+/** Everything a GitHub rule's action needs, resolved once per run. */
+export interface GithubActionContext extends BaseActionContext {
+  integration?: 'github';
+  repositoryId: string;
+  owner: string;
+  repo: string;
+  facts: GithubEventFacts;
+}
+
+/** Everything a Slack rule's action needs. Built by the Slack source adapter. */
+export interface SlackActionContext extends BaseActionContext {
+  integration: 'slack';
+  /** The repository a `start_session` resolved to, when there is one. */
+  repositoryId: string | null;
+  facts: SlackEventFacts;
+}
+
+/** The context the action runner takes, tagged by integration. */
+export type WorkflowActionContext = GithubActionContext | SlackActionContext;
 
 /** What one run produced beyond its outcomes. */
 export interface ActionResults {
@@ -105,7 +122,7 @@ function no(
 class PrRowCache {
   private resolved: { id: string; summary: PRSummary } | null | undefined;
 
-  constructor(private readonly ctx: ActionContext) {}
+  constructor(private readonly ctx: GithubActionContext) {}
 
   async get(): Promise<{ id: string; summary: PRSummary } | null> {
     if (this.resolved !== undefined) return this.resolved;
@@ -139,9 +156,9 @@ class PrRowCache {
  */
 export async function runWorkflowActions(
   actions: WorkflowAction[],
-  ctx: ActionContext
+  ctx: WorkflowActionContext
 ): Promise<ActionResults> {
-  const prRow = new PrRowCache(ctx);
+  const prRow = ctx.integration === 'slack' ? null : new PrRowCache(ctx);
   const outcomes: WorkflowActionOutcome[] = [];
   let taskId: string | null = null;
   let pullRequestId: string | null = null;
@@ -178,9 +195,46 @@ interface OneResult {
   retryAt?: Date | null;
 }
 
+/**
+ * Actions whose execution is not built yet. The validator accepts them so the
+ * rules can be stored; a run that reaches one records a plain refusal rather
+ * than throwing.
+ */
+function notYetSupported(type: WorkflowActionType): OneResult {
+  return {
+    outcome: no(
+      type,
+      'error',
+      `Talyn cannot run "${type}" yet. The rule was saved, but this action does nothing for now.`
+    ),
+  };
+}
+
 async function runOne(
   action: WorkflowAction,
-  ctx: ActionContext,
+  ctx: WorkflowActionContext,
+  prRow: PrRowCache | null
+): Promise<OneResult> {
+  if (
+    action.type === 'start_session' ||
+    action.type === 'slack_reply' ||
+    action.type === 'slack_react'
+  ) {
+    return notYetSupported(action.type);
+  }
+  if (ctx.integration === 'slack' || !prRow) {
+    // The validator refuses a PR action on a Slack rule. Reaching here means a
+    // stored rule bypassed it, so record a refusal rather than guess at a PR.
+    return {
+      outcome: no(action.type, 'error', 'This action works on a pull request, and a Slack rule has none'),
+    };
+  }
+  return runPrAction(action, ctx, prRow);
+}
+
+async function runPrAction(
+  action: Exclude<WorkflowAction, { type: 'start_session' | 'slack_reply' | 'slack_react' }>,
+  ctx: GithubActionContext,
   prRow: PrRowCache
 ): Promise<OneResult> {
   switch (action.type) {
@@ -222,7 +276,7 @@ async function runOne(
  */
 async function runCodeReview(
   preset: CodeReviewPreset | undefined,
-  ctx: ActionContext,
+  ctx: GithubActionContext,
   prRow: PrRowCache
 ): Promise<OneResult> {
   const resolved = await prRow.get();
@@ -282,7 +336,7 @@ async function runCodeReview(
  * `box_limit_reached` are retryable and carry their recheck time; a size the
  * plan cannot start is not (unattended runs are downsized before it).
  */
-function boxRefused(type: WorkflowActionType, err: BoxGateError, pullRequestId: string, ctx?: ActionContext): OneResult {
+function boxRefused(type: WorkflowActionType, err: BoxGateError, pullRequestId: string, ctx?: GithubActionContext): OneResult {
   const code = boxRefusalReason(err.code);
   if (ctx) recordDeferral(ctx, code);
   return { outcome: no(type, code, err.message), pullRequestId, retryAt: deferralRetryAt(err) };
@@ -346,7 +400,7 @@ function githubOutcome(type: WorkflowActionType, err: unknown): WorkflowActionOu
   return no(type, 'github_error', err instanceof Error ? err.message : String(err));
 }
 
-async function addLabels(labels: string[], ctx: ActionContext): Promise<WorkflowActionOutcome> {
+async function addLabels(labels: string[], ctx: GithubActionContext): Promise<WorkflowActionOutcome> {
   try {
     await githubService.addPullRequestLabels(
       ctx.workspaceId,
@@ -361,7 +415,7 @@ async function addLabels(labels: string[], ctx: ActionContext): Promise<Workflow
   }
 }
 
-async function removeLabels(labels: string[], ctx: ActionContext): Promise<WorkflowActionOutcome> {
+async function removeLabels(labels: string[], ctx: GithubActionContext): Promise<WorkflowActionOutcome> {
   const removed: string[] = [];
   const absent: string[] = [];
   for (const label of labels) {
@@ -389,7 +443,7 @@ async function removeLabels(labels: string[], ctx: ActionContext): Promise<Workf
 
 async function requestReviewers(
   action: { users?: string[]; teams?: string[] },
-  ctx: ActionContext
+  ctx: GithubActionContext
 ): Promise<WorkflowActionOutcome> {
   // GitHub 422s the WHOLE request when it is asked to make the PR's author a
   // reviewer, which would take the other reviewers down with it. Drop the
@@ -415,7 +469,7 @@ async function requestReviewers(
   }
 }
 
-async function assign(users: string[], ctx: ActionContext): Promise<WorkflowActionOutcome> {
+async function assign(users: string[], ctx: GithubActionContext): Promise<WorkflowActionOutcome> {
   try {
     const assigned = await githubService.addPullRequestAssignees(
       ctx.workspaceId,
@@ -444,7 +498,7 @@ async function assign(users: string[], ctx: ActionContext): Promise<WorkflowActi
   }
 }
 
-async function comment(body: string, ctx: ActionContext): Promise<WorkflowActionOutcome> {
+async function comment(body: string, ctx: GithubActionContext): Promise<WorkflowActionOutcome> {
   const rendered = renderWorkflowComment(body, ctx.facts);
   try {
     await githubService.createIssueComment(
@@ -473,7 +527,7 @@ const githubFailure = githubOutcome;
  * watch path is what sets it, primes the head index and arms the workspace's
  * auto-keep default — the same thing pasting a PR's URL does.
  */
-async function watchPr(ctx: ActionContext): Promise<OneResult> {
+async function watchPr(ctx: GithubActionContext): Promise<OneResult> {
   const repos = await prMonitorService.getWatchedRepos(ctx.workspaceId);
   const repo = repos.find((r) => r.id === ctx.repositoryId);
   if (!repo) {
@@ -522,7 +576,7 @@ async function watchPr(ctx: ActionContext): Promise<OneResult> {
  */
 async function enqueue(
   method: string | undefined,
-  ctx: ActionContext,
+  ctx: GithubActionContext,
   prRow: PrRowCache
 ): Promise<OneResult> {
   const resolved = await prRow.get();
@@ -591,7 +645,7 @@ async function enqueue(
 
 async function startTask(
   action: Extract<WorkflowAction, { type: 'run_skill' | 'run_prompt' }>,
-  ctx: ActionContext,
+  ctx: GithubActionContext,
   prRow: PrRowCache
 ): Promise<OneResult> {
   const resolved = await prRow.get();
@@ -720,7 +774,7 @@ type LoadedSkill =
  * save time. This is the second line of that defence, for a rule stored before
  * the check existed.
  */
-async function loadSkill(key: string, ctx: ActionContext): Promise<LoadedSkill> {
+async function loadSkill(key: string, ctx: GithubActionContext): Promise<LoadedSkill> {
   const unavailable = (reason: string): LoadedSkill => ({
     ok: false,
     outcome: no('run_skill', 'skill_unavailable', reason),
@@ -804,7 +858,7 @@ async function loadSkill(key: string, ctx: ActionContext): Promise<LoadedSkill> 
  * The population that hits this hardest is exactly the one whose clients report
  * nothing.
  */
-function recordDeferral(ctx: ActionContext, gate: WorkflowActionFailureCode): void {
+function recordDeferral(ctx: GithubActionContext, gate: WorkflowActionFailureCode): void {
   captureWorkspaceEvent(ctx.workspaceId, 'paywall_deferred', {
     source: 'workflow',
     gate,

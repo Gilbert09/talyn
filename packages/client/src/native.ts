@@ -76,6 +76,7 @@ import type {
   FleetAgent,
   WorkflowCounts,
   WorkflowInput,
+  WorkflowIntegration,
   WorkflowRun,
   WorkflowSuggestions,
   WorkflowWithStats,
@@ -2179,8 +2180,16 @@ export const codeReviews = {
 };
 
 export const workflows = {
-  list: (workspaceId: string) =>
-    request<WorkflowWithStats[]>('GET', `/workflows?workspaceId=${encodeURIComponent(workspaceId)}`),
+  /**
+   * The workspace's rules. Pass `integration` for one integration's rules
+   * only; absent lists every rule.
+   */
+  list: (workspaceId: string, integration?: WorkflowIntegration) =>
+    request<WorkflowWithStats[]>(
+      'GET',
+      `/workflows?workspaceId=${encodeURIComponent(workspaceId)}` +
+        (integration ? `&integration=${encodeURIComponent(integration)}` : '')
+    ),
 
   /**
    * Just the counters, for the sidebar's nav badge.

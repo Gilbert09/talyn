@@ -453,6 +453,31 @@ export const FEATURE_FLAGS = {
     releaseScopes: ['session-ci-wait'],
   },
 
+  /**
+   * Slack channel rules: a message in a watched Slack channel starts work
+   * (a session, a reply, a reaction), as a rule of the Slack integration.
+   *
+   * Gates Slack rules only. GitHub rules stay behind `workflows`. Asked for the
+   * caller at the routes and for the workspace OWNER in the engine, because a
+   * Slack message has no Talyn caller. Fallback OFF and gated: a rule starts
+   * sessions that bill box-hours from messages nobody in Talyn sent, so a
+   * PostHog outage must not switch that on for accounts nobody chose.
+   * `SLACK_CHANNEL_RULES_ENABLED=true` turns it on locally with no PostHog
+   * project.
+   *
+   * The release scope is `slack-rules`, not `slack`: `slack` belongs to the
+   * released Slack session triggers (under `workbenches`), and a gated flag
+   * withholds every highlight that carries one of its scopes.
+   */
+  slackChannelRules: {
+    posthogKey: 'slack-channel-rules',
+    envOverride: 'SLACK_CHANNEL_RULES_ENABLED',
+    fallback: false,
+    description: 'Slack channel rules — a message in a watched Slack channel starts a session',
+    availability: 'gated',
+    releaseScopes: ['slack-rules'],
+  },
+
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */
@@ -581,6 +606,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'privateRoutes',
   'publicApi',
   'splitView',
+  'slackChannelRules',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

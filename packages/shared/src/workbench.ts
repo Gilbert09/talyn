@@ -265,8 +265,19 @@ export interface LoopSessionSource {
   runId: string;
 }
 
+/** A rule (a workflow) whose `start_session` action started a session. */
+export interface WorkflowSessionSource {
+  kind: 'workflow';
+  workflowId: string;
+  runId: string;
+}
+
 /** Where a session came from when the app composer did not start it. */
-export type WorkbenchSource = SlackSessionSource | LoopSessionSource | MemoryReviewSessionSource;
+export type WorkbenchSource =
+  | SlackSessionSource
+  | LoopSessionSource
+  | MemoryReviewSessionSource
+  | WorkflowSessionSource;
 
 /** The linked PR, narrowed to what the header's next-action button needs. */
 export interface WorkbenchPullRequestSummary {

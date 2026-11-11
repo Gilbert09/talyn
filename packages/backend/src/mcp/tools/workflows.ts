@@ -6,6 +6,7 @@ import {
   WORKFLOW_EVENT_LABELS,
   WORKFLOW_TRIGGER_EVENTS,
   type NormalizedWorkflow,
+  type WorkflowDefinition,
   type WorkflowRun,
   type WorkflowSuggestions,
   type WorkflowWithStats,
@@ -52,7 +53,8 @@ async function current(ownerId: string, args: Record<string, unknown>): Promise<
   return workflow;
 }
 
-function definition(workflow: NormalizedWorkflow): NormalizedWorkflow {
+// No `integration`: a PATCH keeps the rule's own, and the route refuses a change.
+function definition(workflow: WorkflowDefinition): Omit<NormalizedWorkflow, 'integration'> {
   const { name, enabled, events, conditions, actions, maxRunsPerPrPerHour } = workflow;
   return { name, enabled, events, conditions, actions, maxRunsPerPrPerHour };
 }

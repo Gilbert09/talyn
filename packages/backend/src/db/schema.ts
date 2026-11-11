@@ -1555,6 +1555,8 @@ export const workflows = pgTable(
     workspaceId: text('workspace_id')
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** `WorkflowIntegration`: 'github' | 'slack'. Every rule before 0130 is GitHub. */
+    integration: text('integration').notNull().default('github'),
     name: text('name').notNull(),
     enabled: boolean('enabled').notNull().default(true),
     /** `WorkflowTriggerEvent[]`. */
@@ -1570,6 +1572,11 @@ export const workflows = pgTable(
   },
   (t) => ({
     workspaceIdx: index('idx_workflows_workspace').on(t.workspaceId),
+    // How a Slack event finds its rules. Partial, so the lookup never reads a
+    // GitHub rule. See migration 0130.
+    slackTeamIdx: index('idx_workflows_slack_team')
+      .on(sql`(${t.conditions} ->> 'slackTeamId')`)
+      .where(sql`${t.integration} = 'slack' AND ${t.enabled}`),
   })
 );
 
@@ -1581,14 +1588,25 @@ export const workflowRuns = pgTable(
       .notNull()
       .references(() => workflows.id, { onDelete: 'cascade' }),
     workspaceId: text('workspace_id').notNull(),
+    /** `WorkflowIntegration` of the rule that ran. */
+    integration: text('integration').notNull().default('github'),
+    /**
+     * What the run acted on: `pr:<owner/repo>#<number>` or
+     * `slack:<team>:<channel>`. The rate cap counts runs per key. Null only on
+     * rows the 0130 backfill could not key.
+     */
+    subjectKey: text('subject_key'),
+    /** The subject as a person reads it: `owner/repo#12` or `#eng-bugs`. */
+    subjectLabel: text('subject_label'),
     /** Nullable: a repo can be removed from the workspace after a run. */
     repositoryId: text('repository_id').references(() => repositories.id, {
       onDelete: 'set null',
     }),
     /** The PR, DENORMALISED — a workflow fires on PRs with no row at all, and
-     *  un-watching a PR deletes the row it had. The history must outlive both. */
-    repoFullName: text('repo_full_name').notNull(),
-    prNumber: integer('pr_number').notNull(),
+     *  un-watching a PR deletes the row it had. The history must outlive both.
+     *  Null on a Slack run. */
+    repoFullName: text('repo_full_name'),
+    prNumber: integer('pr_number'),
     prTitle: text('pr_title').notNull().default(''),
     prUrl: text('pr_url').notNull().default(''),
     prAuthor: text('pr_author').notNull().default(''),
@@ -1596,6 +1614,8 @@ export const workflowRuns = pgTable(
       onDelete: 'set null',
     }),
     taskId: text('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    /** The session a `start_session` action started. */
+    workbenchId: text('workbench_id').references(() => workbenches.id, { onDelete: 'set null' }),
     /** `WorkflowTriggerEvent`. */
     event: text('event').notNull(),
     /** GitHub's `X-GitHub-Delivery`. Unique per workflow — the idempotency key
@@ -1617,7 +1637,7 @@ export const workflowRuns = pgTable(
     /** How many times the actions have been attempted. Starts at 1. */
     attempts: integer('attempts').notNull().default(1),
     /**
-     * `WorkflowEventFacts` — what the run was acting on.
+     * `WorkflowFacts` — what the run was acting on.
      *
      * Kept so a retry is faithful: a `comment` action interpolates the PR's
      * branches, and the webhook payload is long gone by the time the gate clears.
@@ -1635,6 +1655,8 @@ export const workflowRuns = pgTable(
       t.prNumber,
       t.createdAt
     ),
+    // The rate cap, per subject. See migration 0130.
+    subjectAtIdx: index('idx_workflow_runs_subject_at').on(t.workflowId, t.subjectKey, t.createdAt),
   })
 );
 

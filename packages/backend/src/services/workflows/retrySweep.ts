@@ -1,4 +1,5 @@
-import type { WorkflowAction, WorkflowActionOutcome } from '@talyn/shared';
+import type { WorkflowAction, WorkflowActionOutcome, WorkflowFacts } from '@talyn/shared';
+import { isSlackFacts, workflowSubjectOf } from '@talyn/shared';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { runWithoutScope } from '../../db/client.js';
 import { debugBus } from '../debugBus.js';
@@ -6,7 +7,7 @@ import { githubRateGate } from '../githubRateGate.js';
 import { githubService } from '../github.js';
 import { TickGuard } from '../tickGuard.js';
 import { workflowsKillSwitchPulled } from '../workflowsAccess.js';
-import { runWorkflowActions } from './actions.js';
+import { runWorkflowActions, type BaseActionContext, type WorkflowActionContext } from './actions.js';
 import { workflowFactsFromRun } from './facts.js';
 import { dueRetries, isRetryable, MAX_RETRY_ATTEMPTS, settlementFor, settleRun } from './runs.js';
 import { getWorkflow } from './store.js';
@@ -142,10 +143,20 @@ class WorkflowRetrySweep {
   }
 
   private async retryOne(run: Awaited<ReturnType<typeof dueRetries>>[number]): Promise<boolean> {
+    const facts = workflowFactsFromRun(run);
+    if (!facts) {
+      await this.giveUp(run, 'Talyn no longer knows what this run was acting on');
+      return false;
+    }
+
     // Still gated: re-park rather than spend an attempt on a call that cannot
     // succeed. The gate may have been extended since this run was scheduled.
-    const accountKey = githubService.accountKeyFor(run.workspaceId);
-    const blockedUntilMs = githubRateGate.blockedUntil(accountKey, 'rest');
+    // GitHub's gate only: a Slack run does not call GitHub.
+    const gateUntil = (): number =>
+      isSlackFacts(facts)
+        ? 0
+        : githubRateGate.blockedUntil(githubService.accountKeyFor(run.workspaceId), 'rest');
+    const blockedUntilMs = gateUntil();
     if (blockedUntilMs > Date.now()) {
       await settleRun(run.id, {
         status: 'pending_retry',
@@ -183,20 +194,15 @@ class WorkflowRetrySweep {
       return false;
     }
 
-    const facts = workflowFactsFromRun(run);
     const attempts = run.attempts + 1;
     const results = await runWorkflowActions(
       pending.map((p) => p.action),
-      {
+      retryContext(run.repositoryId, facts, {
         workspaceId: run.workspaceId,
         ownerId,
-        repositoryId: run.repositoryId ?? '',
-        owner: facts.repoFullName.split('/')[0] ?? '',
-        repo: facts.repoFullName.split('/')[1] ?? '',
-        facts,
         workflowId: run.workflowId,
         runId: run.id,
-      }
+      })
     );
 
     // Merge back in place: the outcomes array is positional and the history
@@ -209,7 +215,7 @@ class WorkflowRetrySweep {
     });
 
     const { status, retryAfter } = settlementFor(merged, {
-      blockedUntilMs: Math.max(githubRateGate.blockedUntil(accountKey, 'rest'), results.boxRetryAtMs),
+      blockedUntilMs: Math.max(gateUntil(), results.boxRetryAtMs),
       attempts,
     });
     const settled = await settleRun(run.id, {
@@ -226,7 +232,7 @@ class WorkflowRetrySweep {
       service: 'workflows',
       action: 'workflow:retry',
       summary:
-        `retried ${pending.length} action(s) on ${facts.repoFullName}#${facts.number} ` +
+        `retried ${pending.length} action(s) on ${workflowSubjectOf(facts).label} ` +
         `(attempt ${attempts}/${MAX_RETRY_ATTEMPTS}) → ${status}`,
       ok: status === 'succeeded',
       workspaceId: run.workspaceId,
@@ -251,6 +257,20 @@ class WorkflowRetrySweep {
     });
     if (settled) emitWorkflowRun(run.workspaceId, settled);
   }
+}
+
+/**
+ * The action context a parked run is re-run with, rebuilt from its stored facts.
+ * A GitHub run reads its repository off the facts; a Slack run carries its own.
+ */
+function retryContext(
+  repositoryId: string | null,
+  facts: WorkflowFacts,
+  base: BaseActionContext
+): WorkflowActionContext {
+  if (isSlackFacts(facts)) return { ...base, integration: 'slack', repositoryId, facts };
+  const [owner = '', repo = ''] = facts.repoFullName.split('/');
+  return { ...base, repositoryId: repositoryId ?? '', owner, repo, facts };
 }
 
 export const workflowRetrySweep = new WorkflowRetrySweep();

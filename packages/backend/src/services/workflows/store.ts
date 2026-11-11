@@ -5,12 +5,14 @@ import type {
   WorkflowActionOutcome,
   WorkflowCounts,
   WorkflowDefinition,
+  WorkflowIntegration,
   WorkflowRun,
   WorkflowRunStatus,
   WorkflowStats,
   WorkflowTriggerEvent,
   WorkflowWithStats,
 } from '@talyn/shared';
+import { workflowIntegrationOf } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { workflowRuns as runsTable, workflows as workflowsTable } from '../../db/schema.js';
 
@@ -37,6 +39,7 @@ function rowToWorkflow(row: WorkflowRow): WorkflowDefinition {
   return {
     id: row.id,
     workspaceId: row.workspaceId,
+    integration: workflowIntegrationOf({ integration: row.integration as WorkflowIntegration }),
     name: row.name,
     enabled: row.enabled,
     events: (row.events ?? []) as WorkflowTriggerEvent[],
@@ -53,9 +56,15 @@ export function rowToWorkflowRun(row: RunRow): WorkflowRun {
     id: row.id,
     workflowId: row.workflowId,
     workspaceId: row.workspaceId,
+    integration: workflowIntegrationOf({ integration: row.integration as WorkflowIntegration }),
+    subjectKey: row.subjectKey,
+    subjectLabel: row.subjectLabel,
+    workbenchId: row.workbenchId,
     repositoryId: row.repositoryId,
-    repoFullName: row.repoFullName,
-    prNumber: row.prNumber,
+    // A Slack run has no pull request. The API keeps these as a string and a
+    // number, so a client that only knows PR runs still renders.
+    repoFullName: row.repoFullName ?? '',
+    prNumber: row.prNumber ?? 0,
     prTitle: row.prTitle,
     prUrl: row.prUrl,
     prAuthor: row.prAuthor,
@@ -122,11 +131,21 @@ export async function enabledWorkflowsFor(
 
 // ---- CRUD ----------------------------------------------------------------
 
-export async function listWorkflows(workspaceId: string): Promise<WorkflowWithStats[]> {
+export async function listWorkflows(
+  workspaceId: string,
+  opts: { integration?: WorkflowIntegration } = {}
+): Promise<WorkflowWithStats[]> {
   const rows = await getDbClient()
     .select()
     .from(workflowsTable)
-    .where(eq(workflowsTable.workspaceId, workspaceId))
+    .where(
+      opts.integration
+        ? and(
+            eq(workflowsTable.workspaceId, workspaceId),
+            eq(workflowsTable.integration, opts.integration)
+          )
+        : eq(workflowsTable.workspaceId, workspaceId)
+    )
     .orderBy(desc(workflowsTable.createdAt));
   const defs = rows.map(rowToWorkflow);
   const stats = await statsFor(defs.map((d) => d.id));
@@ -176,6 +195,7 @@ export async function createWorkflow(
   const row = {
     id: uuid(),
     workspaceId,
+    integration: input.integration,
     name: input.name,
     enabled: input.enabled,
     events: input.events,
@@ -195,6 +215,8 @@ export async function updateWorkflow(
   workspaceId: string,
   input: NormalizedWorkflow
 ): Promise<WorkflowWithStats | null> {
+  // `integration` is not written: a rule never moves to another integration.
+  // The route refuses that change before it gets here.
   await getDbClient()
     .update(workflowsTable)
     .set({

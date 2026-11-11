@@ -372,6 +372,10 @@ const ACTION_HINTS: Record<WorkflowActionType, string> = {
   enqueue_merge_queue: 'Waits for checks and handles a gated base branch.',
   run_code_review:
     'Reviews the PR and puts the findings in Talyn. Does not use a task slot; the free plan runs one review at a time.',
+  // Not offered by this editor yet. The Slack and session editors come later.
+  start_session: 'Starts a session with this prompt.',
+  slack_reply: 'Replies in the thread of the Slack message.',
+  slack_react: 'Adds a reaction to the Slack message.',
 };
 
 export function WorkflowEditorPage({

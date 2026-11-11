@@ -2,10 +2,11 @@ import { v4 as uuid } from 'uuid';
 import { and, desc, eq, gt, lte, ne, sql } from 'drizzle-orm';
 import type {
   WorkflowActionOutcome,
-  WorkflowEventFacts,
+  WorkflowFacts,
   WorkflowRun,
   WorkflowRunStatus,
 } from '@talyn/shared';
+import { isSlackFacts, workflowSubjectOf } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { workflowRuns as runsTable } from '../../db/schema.js';
 import { rowToWorkflowRun } from './store.js';
@@ -37,25 +38,43 @@ export interface ClaimInput {
   workflowId: string;
   workspaceId: string;
   repositoryId: string | null;
-  facts: WorkflowEventFacts;
+  facts: WorkflowFacts;
   deliveryId: string;
   pullRequestId?: string | null;
 }
 
-export async function claimRun(input: ClaimInput): Promise<ClaimResult> {
-  const { facts } = input;
-  const row = {
-    id: uuid(),
-    workflowId: input.workflowId,
-    workspaceId: input.workspaceId,
-    repositoryId: input.repositoryId,
+/**
+ * The PR snapshot columns. A Slack run has no pull request: the repository and
+ * number are NULL, and the text columns keep their '' default.
+ */
+function prSnapshot(facts: WorkflowFacts) {
+  if (isSlackFacts(facts)) {
+    return { repoFullName: null, prNumber: null, prTitle: '', prUrl: '', prAuthor: '' };
+  }
+  return {
     repoFullName: facts.repoFullName,
     prNumber: facts.number,
     prTitle: facts.title,
     prUrl: facts.url,
     prAuthor: facts.author.login,
+  };
+}
+
+export async function claimRun(input: ClaimInput): Promise<ClaimResult> {
+  const { facts } = input;
+  const subject = workflowSubjectOf(facts);
+  const row = {
+    id: uuid(),
+    workflowId: input.workflowId,
+    workspaceId: input.workspaceId,
+    integration: isSlackFacts(facts) ? 'slack' : 'github',
+    subjectKey: subject.key,
+    subjectLabel: subject.label,
+    repositoryId: input.repositoryId,
+    ...prSnapshot(facts),
     pullRequestId: input.pullRequestId ?? null,
     taskId: null,
+    workbenchId: null,
     event: facts.event,
     deliveryId: input.deliveryId,
     status: 'running' as WorkflowRunStatus,
@@ -95,6 +114,8 @@ export interface SettleInput {
   taskId?: string | null;
   pullRequestId?: string | null;
   error?: string | null;
+  /** The session a `start_session` action started. A best-effort link, like the task. */
+  workbenchId?: string | null;
   /** When a `pending_retry` run becomes due. Cleared on any other status. */
   retryAfter?: Date | null;
   /** Set when re-running, so the sweep can bound how many times it tries. */
@@ -128,9 +149,11 @@ export async function settleRun(runId: string, input: SettleInput): Promise<Work
     })
     .where(eq(runsTable.id, runId));
 
-  const links: { taskId?: string | null; pullRequestId?: string | null } = {};
+  const links: { taskId?: string | null; pullRequestId?: string | null; workbenchId?: string | null } =
+    {};
   if (input.taskId !== undefined) links.taskId = input.taskId;
   if (input.pullRequestId !== undefined) links.pullRequestId = input.pullRequestId;
+  if (input.workbenchId !== undefined) links.workbenchId = input.workbenchId;
   if (Object.keys(links).length > 0) {
     await db
       .update(runsTable)
@@ -243,7 +266,9 @@ export type RateVerdict =
   | { allowed: false; announce: false };
 
 /**
- * Whether this workflow may run on this PR again right now.
+ * Whether this workflow may run on this subject again right now. The subject is
+ * a pull request for a GitHub rule and a channel for a Slack rule — see
+ * `workflowSubjectOf`.
  *
  * Counted from `workflow_runs` rather than an in-process window, so it survives
  * a restart and is shared by every replica. `skipped` rows are excluded from the
@@ -252,20 +277,12 @@ export type RateVerdict =
  */
 export async function checkRateCap(opts: {
   workflowId: string;
-  repoFullName: string;
-  prNumber: number;
+  subjectKey: string;
   cap: number;
   windowMs?: number;
 }): Promise<RateVerdict> {
-  const windowMs = opts.windowMs ?? 60 * 60 * 1000;
-  const since = new Date(Date.now() - windowMs);
   const db = getDbClient();
-  const scope = and(
-    eq(runsTable.workflowId, opts.workflowId),
-    eq(runsTable.repoFullName, opts.repoFullName),
-    eq(runsTable.prNumber, opts.prNumber),
-    gt(runsTable.createdAt, since)
-  );
+  const scope = rateCapScope(opts);
 
   const counted = await db
     .select({ n: sql<number>`count(*)::int` })
@@ -284,6 +301,20 @@ export async function checkRateCap(opts: {
   return { allowed: false, announce: latest[0]?.status !== 'skipped' };
 }
 
+/**
+ * The rate cap's WHERE clause. Exported so a test can assert it keys on
+ * `subject_key`, which is what `idx_workflow_runs_subject_at` covers.
+ */
+export function rateCapScope(opts: { workflowId: string; subjectKey: string; windowMs?: number }) {
+  const windowMs = opts.windowMs ?? 60 * 60 * 1000;
+  const since = new Date(Date.now() - windowMs);
+  return and(
+    eq(runsTable.workflowId, opts.workflowId),
+    eq(runsTable.subjectKey, opts.subjectKey),
+    gt(runsTable.createdAt, since)
+  );
+}
+
 
 // ---- The retry sweep's queries -------------------------------------------
 
@@ -292,9 +323,10 @@ export interface DueRetry {
   id: string;
   workflowId: string;
   workspaceId: string;
+  integration: string;
   repositoryId: string | null;
-  repoFullName: string;
-  prNumber: number;
+  repoFullName: string | null;
+  prNumber: number | null;
   prTitle: string;
   prUrl: string;
   prAuthor: string;
@@ -321,6 +353,7 @@ export async function dueRetries(limit: number, now = new Date()): Promise<DueRe
       id: runsTable.id,
       workflowId: runsTable.workflowId,
       workspaceId: runsTable.workspaceId,
+      integration: runsTable.integration,
       repositoryId: runsTable.repositoryId,
       repoFullName: runsTable.repoFullName,
       prNumber: runsTable.prNumber,

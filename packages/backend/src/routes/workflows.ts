@@ -1,6 +1,11 @@
 import { Router, type Request, type Response } from 'express';
-import type { ApiResponse } from '@talyn/shared';
-import { validateWorkflow } from '@talyn/shared';
+import type { ApiResponse, WorkflowIntegration } from '@talyn/shared';
+import {
+  isWorkflowIntegration,
+  validateWorkflow,
+  WORKFLOW_INTEGRATIONS,
+  workflowIntegrationOf,
+} from '@talyn/shared';
 import type { NormalizedWorkflow } from '@talyn/shared';
 import { captureWorkspaceEvent } from '../services/analytics.js';
 import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
@@ -14,6 +19,8 @@ import {
   updateWorkflow,
 } from '../services/workflows/store.js';
 import {
+  slackRulesRefusalReason,
+  workspaceMayUseSlackRules,
   workspaceMayUseWorkflows,
   workflowsRefusalReason,
 } from '../services/workflowsAccess.js';
@@ -59,10 +66,13 @@ const MAX_RUN_PAGE = 200;
  */
 function workflowShape(
   id: string,
-  workflow: Pick<NormalizedWorkflow, 'events' | 'conditions' | 'actions' | 'enabled'>
+  workflow: Pick<NormalizedWorkflow, 'events' | 'conditions' | 'actions' | 'enabled'> & {
+    integration?: WorkflowIntegration;
+  }
 ): Record<string, unknown> {
   return {
     workflow_id: id,
+    integration: workflowIntegrationOf(workflow),
     enabled: workflow.enabled,
     trigger_count: workflow.events.length,
     events: workflow.events,
@@ -105,10 +115,46 @@ export function workflowRoutes(): Router {
     return true;
   }
 
+  /**
+   * The second gate, for a Slack rule only: the `slackChannelRules` flag, asked
+   * for the workspace owner like the workflows gate above. GitHub rules pass
+   * straight through, so this never changes what a GitHub rule can do.
+   */
+  async function integrationGate(
+    res: Response,
+    workspaceId: string,
+    integration: WorkflowIntegration
+  ): Promise<boolean> {
+    if (integration !== 'slack') return true;
+    if (await workspaceMayUseSlackRules(workspaceId)) return true;
+    res.status(403).json({
+      success: false,
+      error: `Slack rules are not available: ${slackRulesRefusalReason()}.`,
+      code: 'slack_rules_unavailable',
+    });
+    return false;
+  }
+
+  /**
+   * `GET /?integration=github|slack` lists one integration's rules. Absent lists
+   * every rule, which is what a client older than integrations expects.
+   */
   router.get('/', async (req, res) => {
     const workspaceId = req.query.workspaceId as string;
     if (!(await gate(req, res, workspaceId))) return;
-    const data = await listWorkflows(workspaceId);
+    let integration: WorkflowIntegration | undefined;
+    if (req.query.integration !== undefined) {
+      const asked: unknown = req.query.integration;
+      if (!isWorkflowIntegration(asked)) {
+        return res.status(400).json({
+          success: false,
+          error: `integration must be one of ${WORKFLOW_INTEGRATIONS.join(', ')}`,
+        });
+      }
+      integration = asked;
+      if (!(await integrationGate(res, workspaceId, integration))) return;
+    }
+    const data = await listWorkflows(workspaceId, integration ? { integration } : {});
     res.json({ success: true, data } as ApiResponse<typeof data>);
   });
 
@@ -180,6 +226,7 @@ export function workflowRoutes(): Router {
         error: err instanceof Error ? err.message : 'invalid workflow',
       });
     }
+    if (!(await integrationGate(res, workspaceId, normalized.integration))) return;
     // No plan caps how many workflows an owner keeps. A run a workflow starts
     // is gated where its task is created.
     const data = await createWorkflow(workspaceId, normalized);
@@ -198,6 +245,18 @@ export function workflowRoutes(): Router {
       return res.status(404).json({ success: false, error: 'Workflow not found' });
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
+    const integration = workflowIntegrationOf(existing);
+    if (!(await integrationGate(res, existing.workspaceId, integration))) return;
+
+    // A rule never moves to another integration: its events, conditions and
+    // actions all belong to the one it was made for. Make a new rule instead.
+    const askedIntegration = (req.body as { integration?: unknown } | undefined)?.integration;
+    if (askedIntegration !== undefined && askedIntegration !== integration) {
+      return res.status(400).json({
+        success: false,
+        error: 'A rule cannot move to another integration. Create a new rule there instead.',
+      });
+    }
 
     // A PATCH here is a whole-workflow replace, not a field merge. The trigger,
     // the conditions and the actions validate against each other — a condition
@@ -205,7 +264,7 @@ export function workflowRoutes(): Router {
     // combination the validator would have refused as a whole.
     let normalized;
     try {
-      normalized = validateWorkflow({ ...existing, ...(req.body as object) });
+      normalized = validateWorkflow({ ...existing, ...(req.body as object), integration });
     } catch (err) {
       return res.status(400).json({
         success: false,
@@ -238,6 +297,7 @@ export function workflowRoutes(): Router {
       return res.status(404).json({ success: false, error: 'Workflow not found' });
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
+    if (!(await integrationGate(res, existing.workspaceId, workflowIntegrationOf(existing)))) return;
     await deleteWorkflow(existing.id, existing.workspaceId);
     captureWorkspaceEvent(existing.workspaceId, 'workflow_deleted', {
       ...workflowShape(existing.id, existing),
@@ -255,6 +315,7 @@ export function workflowRoutes(): Router {
       return res.status(404).json({ success: false, error: 'Workflow not found' });
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
+    if (!(await integrationGate(res, existing.workspaceId, workflowIntegrationOf(existing)))) return;
     const asked = Number(req.query.limit);
     const limit = Number.isInteger(asked) && asked > 0 ? Math.min(asked, MAX_RUN_PAGE) : DEFAULT_RUN_PAGE;
     const data = await listWorkflowRuns(existing.id, {

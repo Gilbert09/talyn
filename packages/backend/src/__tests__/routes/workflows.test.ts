@@ -236,6 +236,7 @@ describe('workflow routes', () => {
         publicApi: false,
         privateRoutes: false,
         splitView: false,
+        slackChannelRules: false,
       });
     });
 
@@ -266,6 +267,7 @@ describe('workflow routes', () => {
         publicApi: false,
         privateRoutes: false,
         splitView: false,
+        slackChannelRules: false,
       });
     });
   });
@@ -282,5 +284,141 @@ describe('workflow routes', () => {
       const res = await fetch(`${url}/api/v1/workflows/${made.id}/runs?limit=100000`, { headers });
       expect(res.status).toBe(200);
     });
+  });
+
+  describe('integrations', () => {
+    const slackBody = (over: Record<string, unknown> = {}) =>
+      body({
+        integration: 'slack',
+        name: 'Bugs channel',
+        events: ['slack_message'],
+        conditions: { slackTeamId: 'T1', channels: ['C1'] },
+        actions: [{ type: 'slack_react', emoji: 'eyes' }],
+        ...over,
+      });
+
+    async function post(payload: Record<string, unknown>) {
+      return fetch(`${url}/api/v1/workflows`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+    }
+
+    afterEach(() => {
+      delete process.env.SLACK_CHANNEL_RULES_ENABLED;
+    });
+
+    it('creates a GitHub rule when the body names no integration', async () => {
+      const made = await create();
+      expect(made.integration).toBe('github');
+    });
+
+    it('refuses a Slack rule with 403 while the flag is off', async () => {
+      const res = await post(slackBody());
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as { code?: string; error?: string };
+      expect(json.code).toBe('slack_rules_unavailable');
+      expect(json.error).toMatch(/slack-channel-rules/);
+    });
+
+    it('says the switch was pulled when the env override is false', async () => {
+      process.env.SLACK_CHANNEL_RULES_ENABLED = 'false';
+      const res = await post(slackBody());
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error?: string }).error).toMatch(
+        /SLACK_CHANNEL_RULES_ENABLED=false/
+      );
+    });
+
+    it('creates a Slack rule when the flag is on, and returns its integration', async () => {
+      process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+      const res = await post(slackBody());
+      expect(res.status).toBe(200);
+      const made = ((await res.json()) as { data: WorkflowWithStats }).data;
+      expect(made).toMatchObject({
+        integration: 'slack',
+        events: ['slack_message'],
+        conditions: { slackTeamId: 'T1', channels: ['C1'] },
+      });
+    });
+
+    it('validates before it gates, so a bad Slack rule is a 400 either way', async () => {
+      const res = await post(slackBody({ conditions: { slackTeamId: 'T1' } }));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error?: string }).error).toMatch(/at least one channel/);
+    });
+
+    it.each([
+      ['github', ['github']],
+      ['slack', ['slack']],
+      [undefined, ['github', 'slack']],
+    ] as const)('lists by ?integration=%s', async (integration, expected) => {
+      process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+      await create();
+      expect((await post(slackBody())).status).toBe(200);
+      const qs = integration ? `&integration=${integration}` : '';
+      const res = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine${qs}`, { headers });
+      const listed = ((await res.json()) as { data: WorkflowWithStats[] }).data;
+      expect(listed.map((w) => w.integration).sort()).toEqual([...expected]);
+    });
+
+    it('refuses an unknown ?integration with 400', async () => {
+      const res = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine&integration=linear`, {
+        headers,
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('refuses ?integration=slack with 403 while the flag is off', async () => {
+      const res = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine&integration=slack`, {
+        headers,
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it('refuses to move a rule to another integration', async () => {
+      process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+      const made = await create();
+      const res = await fetch(`${url}/api/v1/workflows/${made.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(slackBody()),
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error?: string }).error).toMatch(/another integration/);
+    });
+
+    it('keeps a GitHub rule editable whatever the Slack flag says', async () => {
+      const made = await create();
+      const res = await fetch(`${url}/api/v1/workflows/${made.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ name: 'Renamed' }),
+      });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { data: WorkflowWithStats }).data).toMatchObject({
+        name: 'Renamed',
+        integration: 'github',
+      });
+    });
+
+    it.each(['PATCH', 'DELETE', 'RUNS'] as const)(
+      'refuses %s on a Slack rule once the flag is off again',
+      async (verb) => {
+        process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+        const made = ((await (await post(slackBody())).json()) as { data: WorkflowWithStats }).data;
+        process.env.SLACK_CHANNEL_RULES_ENABLED = 'false';
+        const res =
+          verb === 'RUNS'
+            ? await fetch(`${url}/api/v1/workflows/${made.id}/runs`, { headers })
+            : await fetch(`${url}/api/v1/workflows/${made.id}`, {
+                method: verb,
+                headers,
+                ...(verb === 'PATCH' ? { body: JSON.stringify({ name: 'x' }) } : {}),
+              });
+        expect(res.status).toBe(403);
+      }
+    );
   });
 });

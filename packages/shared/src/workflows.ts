@@ -1,5 +1,10 @@
 import { isCodeReviewPreset, type CodeReviewPreset } from './codeReview.js';
-// Workflows — the user's own automations over PR lifecycle events.
+// Workflows — the user's own automations over PR lifecycle events and, since
+// rules became per integration, over Slack channel messages.
+//
+// A rule belongs to ONE integration (`integration`, absent ⇒ `github`), and its
+// events, conditions and actions must all belong to that integration. The
+// validator refuses a mix with a message that says what to change.
 //
 // A workflow is a named, workspace-scoped rule of the shape "on these events,
 // matching these conditions, do these actions". It is evaluated on the GitHub
@@ -22,6 +27,37 @@ import { isCodeReviewPreset, type CodeReviewPreset } from './codeReview.js';
 import type { SkillKey } from './skills.js';
 
 // ============================================================================
+// Integrations
+// ============================================================================
+
+/** The integrations a rule can belong to. */
+export const WORKFLOW_INTEGRATIONS = ['github', 'slack'] as const;
+
+export type WorkflowIntegration = (typeof WORKFLOW_INTEGRATIONS)[number];
+
+/** How each integration reads in a message or a picker. */
+export const WORKFLOW_INTEGRATION_LABELS: Record<WorkflowIntegration, string> = {
+  github: 'GitHub',
+  slack: 'Slack',
+};
+
+export function isWorkflowIntegration(value: unknown): value is WorkflowIntegration {
+  return typeof value === 'string' && (WORKFLOW_INTEGRATIONS as readonly string[]).includes(value);
+}
+
+/**
+ * The integration a stored rule, an input or a run belongs to.
+ *
+ * Absent means `github`: every rule written before integrations existed is a
+ * GitHub rule, and an old client sends no field at all.
+ */
+export function workflowIntegrationOf(
+  value: { integration?: WorkflowIntegration | null } | null | undefined
+): WorkflowIntegration {
+  return value?.integration === 'slack' ? 'slack' : 'github';
+}
+
+// ============================================================================
 // Triggers
 // ============================================================================
 
@@ -42,7 +78,7 @@ import type { SkillKey } from './skills.js';
  * PR goes green" is the rule people come to this screen to write, and it used
  * to be the last option on a scrolling list.
  */
-export const WORKFLOW_TRIGGER_EVENTS = [
+export const GITHUB_WORKFLOW_EVENTS = [
   'pr_checks_passed',
   'pr_checks_completed',
   'pr_opened',
@@ -65,7 +101,39 @@ export const WORKFLOW_TRIGGER_EVENTS = [
   'pr_comment',
 ] as const;
 
-export type WorkflowTriggerEvent = (typeof WORKFLOW_TRIGGER_EVENTS)[number];
+export type GithubWorkflowEvent = (typeof GITHUB_WORKFLOW_EVENTS)[number];
+
+/**
+ * The GitHub PR events, under the name the editors and the MCP schema have
+ * always read. It does NOT include the Slack events: the GitHub editor offers
+ * this list, and a Slack event there could only be refused on save.
+ */
+export const WORKFLOW_TRIGGER_EVENTS = GITHUB_WORKFLOW_EVENTS;
+
+/**
+ * The Slack events a rule can trigger on.
+ *
+ * `slack_message` is a new message from a person in a watched channel. Edits,
+ * bot messages and Talyn's own messages are dropped before matching, by the
+ * Slack source adapter.
+ */
+export const SLACK_WORKFLOW_EVENTS = ['slack_message'] as const;
+
+export type SlackWorkflowEvent = (typeof SLACK_WORKFLOW_EVENTS)[number];
+
+/** Every event any rule can trigger on. */
+export type WorkflowTriggerEvent = GithubWorkflowEvent | SlackWorkflowEvent;
+
+/** Every event, of every integration. */
+export const ALL_WORKFLOW_TRIGGER_EVENTS: readonly WorkflowTriggerEvent[] = [
+  ...GITHUB_WORKFLOW_EVENTS,
+  ...SLACK_WORKFLOW_EVENTS,
+];
+
+/** The events that belong to one integration. */
+export function workflowEventsFor(integration: WorkflowIntegration): readonly WorkflowTriggerEvent[] {
+  return integration === 'slack' ? SLACK_WORKFLOW_EVENTS : GITHUB_WORKFLOW_EVENTS;
+}
 
 /**
  * Display strings for the trigger list, so the two editors cannot disagree
@@ -92,6 +160,7 @@ export const WORKFLOW_EVENT_LABELS: Record<WorkflowTriggerEvent, string> = {
   pr_comment: 'Comment on the PR',
   pr_checks_completed: 'A check suite finished',
   pr_checks_passed: 'All checks passed',
+  slack_message: 'New message in a channel',
 };
 
 /**
@@ -245,7 +314,71 @@ export interface WorkflowConditions {
   checkConclusions?: WorkflowCheckConclusion[];
   /** Case-insensitive substring of the comment / review body. */
   bodyContains?: string;
+
+  // ---- Slack rules only -------------------------------------------------
+
+  /** The Slack team (workspace) the rule watches. Required on a Slack rule. */
+  slackTeamId?: string;
+  /** Slack channel ids. Matches a message in ANY of them. Required on a Slack rule. */
+  channels?: string[];
+  /** Case-insensitive substring of the Slack message text. */
+  textContains?: string;
+  /** Who may trigger the rule. Absent means `linked`. */
+  slackAuthors?: WorkflowSlackAuthorMatch;
+  /** Whether a reply inside a thread triggers the rule. Absent means no. */
+  includeThreadReplies?: boolean;
 }
+
+/**
+ * Who may trigger a Slack rule.
+ *
+ * `linked` is the default: Slack users who linked their Slack account to Talyn
+ * in that Slack team. A channel is often shared with people outside the team
+ * that pays for the session, so "anyone in the channel" has to be a choice.
+ */
+export type WorkflowSlackAuthorMatch =
+  | { kind: 'linked' }
+  | { kind: 'any' }
+  | { kind: 'users'; userIds: string[] };
+
+export const WORKFLOW_SLACK_AUTHOR_KINDS = ['linked', 'any', 'users'] as const;
+
+export const WORKFLOW_SLACK_AUTHOR_KIND_LABELS: Record<
+  (typeof WORKFLOW_SLACK_AUTHOR_KINDS)[number],
+  string
+> = {
+  linked: 'People linked to Talyn',
+  any: 'Anyone in the channel',
+  users: 'Specific people',
+};
+
+/** The condition keys a GitHub rule may carry. */
+export const GITHUB_WORKFLOW_CONDITION_KEYS = [
+  'repos',
+  'baseBranches',
+  'baseIsDefault',
+  'titleContains',
+  'draft',
+  'labelsAny',
+  'labelsAll',
+  'labelsNone',
+  'author',
+  'actor',
+  'reviewStates',
+  'labelName',
+  'target',
+  'checkConclusions',
+  'bodyContains',
+] as const satisfies ReadonlyArray<keyof WorkflowConditions>;
+
+/** The condition keys a Slack rule may carry. */
+export const SLACK_WORKFLOW_CONDITION_KEYS = [
+  'slackTeamId',
+  'channels',
+  'textContains',
+  'slackAuthors',
+  'includeThreadReplies',
+] as const satisfies ReadonlyArray<keyof WorkflowConditions>;
 
 // ============================================================================
 // Actions
@@ -264,7 +397,34 @@ export const WORKFLOW_ACTION_TYPES = [
   'run_code_review',
 ] as const;
 
-export type WorkflowActionType = (typeof WORKFLOW_ACTION_TYPES)[number];
+/**
+ * The PR actions, under the name the GitHub editor and the MCP schema have
+ * always read. It does not include `start_session` or the Slack actions; see
+ * {@link ALL_WORKFLOW_ACTION_TYPES} and {@link workflowActionsFor}.
+ */
+export type GithubPrWorkflowActionType = (typeof WORKFLOW_ACTION_TYPES)[number];
+
+/** Start a session. Both GitHub and Slack rules can use it. */
+export const SHARED_WORKFLOW_ACTION_TYPES = ['start_session'] as const;
+
+/** Act on the Slack message that triggered the rule. Slack rules only. */
+export const SLACK_WORKFLOW_ACTION_TYPES = ['slack_reply', 'slack_react'] as const;
+
+/** Every action type, of every integration. */
+export const ALL_WORKFLOW_ACTION_TYPES = [
+  ...WORKFLOW_ACTION_TYPES,
+  ...SHARED_WORKFLOW_ACTION_TYPES,
+  ...SLACK_WORKFLOW_ACTION_TYPES,
+] as const;
+
+export type WorkflowActionType = (typeof ALL_WORKFLOW_ACTION_TYPES)[number];
+
+/** The action types one integration's rules may use. */
+export function workflowActionsFor(integration: WorkflowIntegration): readonly WorkflowActionType[] {
+  return integration === 'slack'
+    ? [...SHARED_WORKFLOW_ACTION_TYPES, ...SLACK_WORKFLOW_ACTION_TYPES]
+    : [...WORKFLOW_ACTION_TYPES, ...SHARED_WORKFLOW_ACTION_TYPES];
+}
 
 export type WorkflowMergeMethod = 'squash' | 'merge' | 'rebase';
 
@@ -300,7 +460,25 @@ export type WorkflowAction =
    * and `withTaskLimitGate` would eat the plan's allowance — so it is metered by
    * the review cycle gate instead.
    */
-  | { type: 'run_code_review'; preset?: CodeReviewPreset };
+  | { type: 'run_code_review'; preset?: CodeReviewPreset }
+  /**
+   * Start a session with the rule's prompt.
+   *
+   * `repositoryId: null` means "let Talyn choose", which only a Slack rule can
+   * do: Talyn picks the repository from the message. A GitHub rule runs on the
+   * pull request's own repository.
+   */
+  | {
+      type: 'start_session';
+      repositoryId: string | null;
+      prompt: string;
+      model?: string;
+      internetAccess?: boolean;
+    }
+  /** Reply in the thread of the Slack message that triggered the rule. */
+  | { type: 'slack_reply'; text: string }
+  /** React to the Slack message that triggered the rule. `emoji` has no colons. */
+  | { type: 'slack_react'; emoji: string };
 
 export const WORKFLOW_ACTION_LABELS: Record<WorkflowActionType, string> = {
   add_labels: 'Add labels',
@@ -313,6 +491,9 @@ export const WORKFLOW_ACTION_LABELS: Record<WorkflowActionType, string> = {
   watch_pr: 'Add to My PRs',
   enqueue_merge_queue: 'Add to the merge queue',
   run_code_review: 'Run a code review',
+  start_session: 'Start a session',
+  slack_reply: 'Reply in the thread',
+  slack_react: 'Add a reaction',
 };
 
 /** Actions that start a cloud task, and so consume a plan task slot. */
@@ -348,6 +529,12 @@ export const MAX_WORKFLOW_NAME_LENGTH = 80;
 export interface WorkflowDefinition {
   id: string;
   workspaceId: string;
+  /**
+   * The integration the rule belongs to. Absent on rules from servers older
+   * than integrations, and absent means `github` — read it through
+   * {@link workflowIntegrationOf}.
+   */
+  integration?: WorkflowIntegration;
   name: string;
   enabled: boolean;
   events: WorkflowTriggerEvent[];
@@ -360,6 +547,8 @@ export interface WorkflowDefinition {
 
 /** What a create/update call sends. */
 export interface WorkflowInput {
+  /** Absent means `github`, so an old client keeps creating GitHub rules. */
+  integration?: WorkflowIntegration;
   name: string;
   enabled?: boolean;
   events: WorkflowTriggerEvent[];
@@ -370,6 +559,7 @@ export interface WorkflowInput {
 
 /** The validated, normalised core of a workflow — what the DB columns hold. */
 export interface NormalizedWorkflow {
+  integration: WorkflowIntegration;
   name: string;
   enabled: boolean;
   events: WorkflowTriggerEvent[];
@@ -496,8 +686,21 @@ export interface WorkflowRun {
   id: string;
   workflowId: string;
   workspaceId: string;
+  /** Absent on servers older than integrations, and absent means `github`. */
+  integration?: WorkflowIntegration;
+  /**
+   * What the run acted on, as a stable key: `pr:<owner/repo>#<number>` or
+   * `slack:<team>:<channel>`. The per-hour rate cap counts runs per key.
+   */
+  subjectKey?: string | null;
+  /** The subject as a person reads it: `owner/repo#12` or `#eng-bugs`. */
+  subjectLabel?: string | null;
+  /** The session a `start_session` action started, if any. */
+  workbenchId?: string | null;
   repositoryId: string | null;
+  /** Empty on a Slack run. */
   repoFullName: string;
+  /** 0 on a Slack run. */
   prNumber: number;
   prTitle: string;
   prUrl: string;
@@ -575,8 +778,14 @@ export interface WorkflowActor {
  * the whole taxonomy is unit-testable against verbatim GitHub bodies, and so a
  * workflow can act on a PR Talyn has never heard of.
  */
-export interface WorkflowEventFacts {
-  event: WorkflowTriggerEvent;
+export interface GithubEventFacts {
+  /**
+   * The integration tag of the facts union. Optional on this side: facts stored
+   * on runs written before integrations existed carry no tag, and absent means
+   * GitHub.
+   */
+  integration?: 'github';
+  event: GithubWorkflowEvent;
   repoFullName: string;
   number: number;
   title: string;
@@ -618,7 +827,76 @@ export interface WorkflowEventFacts {
   unknownFields?: ReadonlyArray<WorkflowFactField>;
 }
 
-/** A fact a payload may not carry. See {@link WorkflowEventFacts.unknownFields}. */
+/**
+ * The GitHub facts, under the name every GitHub caller has always used. A
+ * caller that can also see Slack facts takes {@link WorkflowFacts}.
+ */
+export type WorkflowEventFacts = GithubEventFacts;
+
+/**
+ * The facts one Slack message yields.
+ *
+ * Built by the Slack source adapter from a Slack `message` event. The adapter
+ * drops bot messages, edits and Talyn's own messages before this exists, and
+ * it fills `authorLinked` from `slack_user_links`, because the matcher is pure
+ * and cannot read the database.
+ */
+export interface SlackEventFacts {
+  integration: 'slack';
+  event: SlackWorkflowEvent;
+  teamId: string;
+  channelId: string;
+  /** Without the `#`. Absent when the adapter could not resolve it. */
+  channelName?: string;
+  /** The Slack user who wrote the message. */
+  userId: string;
+  text: string;
+  /** The message's own timestamp, which is also its id in the channel. */
+  ts: string;
+  /**
+   * The thread the message is in, or null for a message at the top of the
+   * channel. A thread's first message has `threadTs === ts`; only a REPLY has a
+   * different one.
+   */
+  threadTs: string | null;
+  permalink?: string;
+  /** Whether `userId` is linked to a Talyn account in this Slack team. */
+  authorLinked: boolean;
+}
+
+/** The facts any rule can match on, tagged by integration. */
+export type WorkflowFacts = GithubEventFacts | SlackEventFacts;
+
+export function isSlackFacts(facts: WorkflowFacts): facts is SlackEventFacts {
+  return facts.integration === 'slack';
+}
+
+/** Whether a Slack message is a reply inside a thread, not a top-level message. */
+export function isSlackThreadReply(facts: Pick<SlackEventFacts, 'ts' | 'threadTs'>): boolean {
+  return !!facts.threadTs && facts.threadTs !== facts.ts;
+}
+
+/**
+ * What a run acted on: a stable key and a label a person reads.
+ *
+ * The key is what the per-hour rate cap counts by. A GitHub rule is capped per
+ * pull request (`pr:<owner/repo>#<number>`), a Slack rule per channel
+ * (`slack:<team>:<channel>`).
+ */
+export function workflowSubjectOf(facts: WorkflowFacts): { key: string; label: string } {
+  if (isSlackFacts(facts)) {
+    return {
+      key: `slack:${facts.teamId}:${facts.channelId}`,
+      label: facts.channelName ? `#${facts.channelName}` : facts.channelId,
+    };
+  }
+  return {
+    key: `pr:${facts.repoFullName}#${facts.number}`,
+    label: `${facts.repoFullName}#${facts.number}`,
+  };
+}
+
+/** A fact a payload may not carry. See {@link GithubEventFacts.unknownFields}. */
 export type WorkflowFactField =
   | 'title'
   | 'author'
@@ -705,8 +983,10 @@ export function actorMatches(
  * refused at validation time, so it cannot silently pass here.
  */
 export function workflowMatches(
-  workflow: Pick<WorkflowDefinition, 'events' | 'conditions'>,
-  facts: WorkflowEventFacts,
+  workflow: Pick<WorkflowDefinition, 'events' | 'conditions'> & {
+    integration?: WorkflowIntegration;
+  },
+  facts: WorkflowFacts,
   /**
    * The workspace's connected GitHub login, for any `viewer` actor match.
    * Absent means unknown, which FAILS the condition — "when I am asked to
@@ -715,8 +995,24 @@ export function workflowMatches(
    */
   viewerLogin?: string | null
 ): boolean {
+  // A rule only ever matches facts from its own integration. The event sets do
+  // not overlap, so this is also implied by the event test below; it is said
+  // here so a rule with no events stored cannot fall through to the other side.
+  const integration = workflowIntegrationOf(workflow);
+  if (integration !== (isSlackFacts(facts) ? 'slack' : 'github')) return false;
   if (!workflow.events.includes(facts.event)) return false;
-  const c = workflow.conditions ?? {};
+  const conditions = workflow.conditions ?? {};
+  return isSlackFacts(facts)
+    ? slackConditionsMatch(conditions, facts)
+    : githubConditionsMatch(conditions, facts, viewerLogin);
+}
+
+/** The GitHub half of {@link workflowMatches}. */
+function githubConditionsMatch(
+  c: WorkflowConditions,
+  facts: GithubEventFacts,
+  viewerLogin: string | null | undefined
+): boolean {
   // A condition on a fact the payload never carried cannot be satisfied. See
   // WorkflowEventFacts.unknownFields — the engine enriches what it can first.
   const unknown = (f: WorkflowFactField): boolean => !!facts.unknownFields?.includes(f);
@@ -786,34 +1082,108 @@ export function workflowMatches(
   return true;
 }
 
+/** Whether one Slack message's author passes a rule's `slackAuthors`. */
+export function slackAuthorMatches(
+  match: WorkflowSlackAuthorMatch | undefined,
+  facts: Pick<SlackEventFacts, 'userId' | 'authorLinked'>
+): boolean {
+  const kind = match?.kind ?? 'linked';
+  switch (kind) {
+    case 'any':
+      return true;
+    case 'linked':
+      return facts.authorLinked;
+    case 'users': {
+      const ids = normalizeList((match as { userIds?: string[] }).userIds);
+      return ids.includes(facts.userId.trim().toLowerCase());
+    }
+  }
+}
+
+/**
+ * The Slack half of {@link workflowMatches}.
+ *
+ * The team and the channel list are REQUIRED. A rule that lost either (a
+ * hand-edited row, a bad migration) matches nothing, because "every channel in
+ * every Slack team" is never what somebody wrote.
+ */
+function slackConditionsMatch(c: WorkflowConditions, facts: SlackEventFacts): boolean {
+  const team = (c.slackTeamId ?? '').trim();
+  if (!team || team !== facts.teamId) return false;
+
+  const channels = normalizeList(c.channels);
+  if (channels.length === 0 || !channels.includes(facts.channelId.trim().toLowerCase())) {
+    return false;
+  }
+
+  if (isSlackThreadReply(facts) && c.includeThreadReplies !== true) return false;
+
+  if (!slackAuthorMatches(c.slackAuthors, facts)) return false;
+
+  const text = (c.textContains ?? '').trim().toLowerCase();
+  if (text && !facts.text.toLowerCase().includes(text)) return false;
+
+  return true;
+}
+
 // ============================================================================
 // Comment templating
 // ============================================================================
 
+/** Values a template can use that do not come from the facts. */
+export interface WorkflowTemplateExtras {
+  /** The session a `start_session` action in the same run started. */
+  sessionUrl?: string | null;
+}
+
 /**
- * Interpolate `{{pr.number}}`-style placeholders in a comment body.
+ * Interpolate `{{pr.number}}`-style placeholders in a comment or a reply.
  *
  * A deliberately tiny vocabulary — enough for a useful comment, and nothing
  * that reaches outside the facts we already hold. An unknown placeholder is
  * left VERBATIM rather than blanked: a comment that posts `{{pr.reviewer}}`
- * tells the user their template is wrong, where an empty string hides it.
+ * tells the user their template is wrong, where an empty string hides it. A
+ * known placeholder with no value here (no permalink, no session yet) is left
+ * verbatim for the same reason.
+ *
+ * GitHub facts: `pr.number`, `pr.title`, `pr.url`, `pr.author`,
+ * `pr.baseBranch`, `pr.headBranch`, `repo`, `actor`, `event`.
+ * Slack facts: `message.text`, `message.permalink`, `channel`, `event`.
+ * Both: `session.url`, when a session was started.
  */
-export function renderWorkflowComment(body: string, facts: WorkflowEventFacts): string {
-  const vars: Record<string, string> = {
-    'pr.number': String(facts.number),
-    'pr.title': facts.title,
-    'pr.url': facts.url,
-    'pr.author': facts.author.login,
-    'pr.baseBranch': facts.baseBranch,
-    'pr.headBranch': facts.headBranch,
-    'repo': facts.repoFullName,
-    'actor': facts.actor.login,
-    'event': WORKFLOW_EVENT_LABELS[facts.event],
-  };
+export function renderWorkflowTemplate(
+  body: string,
+  facts: WorkflowFacts,
+  extras: WorkflowTemplateExtras = {}
+): string {
+  const vars: Record<string, string> = isSlackFacts(facts)
+    ? {
+        'message.text': facts.text,
+        ...(facts.permalink ? { 'message.permalink': facts.permalink } : {}),
+        // Slack draws `<#C123>` as a link to the channel, so a reply reads
+        // right even when the adapter could not resolve the name.
+        channel: facts.channelName ? `#${facts.channelName}` : `<#${facts.channelId}>`,
+        event: WORKFLOW_EVENT_LABELS[facts.event],
+      }
+    : {
+        'pr.number': String(facts.number),
+        'pr.title': facts.title,
+        'pr.url': facts.url,
+        'pr.author': facts.author.login,
+        'pr.baseBranch': facts.baseBranch,
+        'pr.headBranch': facts.headBranch,
+        repo: facts.repoFullName,
+        actor: facts.actor.login,
+        event: WORKFLOW_EVENT_LABELS[facts.event],
+      };
+  if (extras.sessionUrl) vars['session.url'] = extras.sessionUrl;
   return body.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (whole, key: string) =>
     key in vars ? vars[key]! : whole
   );
 }
+
+/** The comment renderer under its old name. See {@link renderWorkflowTemplate}. */
+export const renderWorkflowComment = renderWorkflowTemplate;
 
 // ============================================================================
 // Validation
@@ -881,16 +1251,20 @@ export function validateWorkflow(raw: unknown): NormalizedWorkflow {
     fail('enabled must be a boolean');
   }
 
+  if (w.integration !== undefined && w.integration !== null && !isWorkflowIntegration(w.integration)) {
+    fail(`integration must be one of ${WORKFLOW_INTEGRATIONS.join(', ')}`);
+  }
+  const integration = workflowIntegrationOf(w as { integration?: WorkflowIntegration | null });
+
   const events = stringList(w.events, 'events') as WorkflowTriggerEvent[];
   if (events.length === 0) fail('a workflow needs at least one trigger event');
-  for (const e of events) {
-    if (!(WORKFLOW_TRIGGER_EVENTS as readonly string[]).includes(e)) {
-      fail(`"${e}" is not a PR event Talyn can trigger on`);
-    }
-  }
+  for (const e of events) validateEvent(e, integration);
 
-  const conditions = validateConditions(w.conditions, events);
-  const actions = validateActions(w.actions);
+  const conditions =
+    integration === 'slack'
+      ? validateSlackConditions(w.conditions)
+      : validateConditions(w.conditions, events);
+  const actions = validateActions(w.actions, integration);
 
   let maxRuns = DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR;
   if (w.maxRunsPerPrPerHour !== undefined) {
@@ -902,6 +1276,7 @@ export function validateWorkflow(raw: unknown): NormalizedWorkflow {
   }
 
   return {
+    integration,
     name,
     enabled: w.enabled === undefined ? true : (w.enabled as boolean),
     events,
@@ -909,6 +1284,115 @@ export function validateWorkflow(raw: unknown): NormalizedWorkflow {
     actions,
     maxRunsPerPrPerHour: maxRuns,
   };
+}
+
+/** Refuse an event that is unknown, or that belongs to the other integration. */
+function validateEvent(event: string, integration: WorkflowIntegration): void {
+  const own = workflowEventsFor(integration) as readonly string[];
+  if (own.includes(event)) return;
+  const other: WorkflowIntegration = integration === 'slack' ? 'github' : 'slack';
+  if ((workflowEventsFor(other) as readonly string[]).includes(event)) {
+    const otherLabel = WORKFLOW_INTEGRATION_LABELS[other];
+    fail(
+      `"${event}" is a ${otherLabel} event, and this is a ` +
+        `${WORKFLOW_INTEGRATION_LABELS[integration]} rule. Make a ${otherLabel} rule for it instead.`
+    );
+  }
+  fail(
+    integration === 'slack'
+      ? `"${event}" is not a Slack event Talyn can trigger on`
+      : `"${event}" is not a PR event Talyn can trigger on`
+  );
+}
+
+/** Refuse a condition that belongs to the other integration, with a message that names it. */
+function refuseForeignConditions(
+  c: Record<string, unknown>,
+  integration: WorkflowIntegration
+): void {
+  const foreign: readonly string[] =
+    integration === 'slack'
+      ? [...GITHUB_WORKFLOW_CONDITION_KEYS, 'targetIsViewer']
+      : SLACK_WORKFLOW_CONDITION_KEYS;
+  const hit = Object.keys(c).find((k) => foreign.includes(k));
+  if (!hit) return;
+  const other: WorkflowIntegration = integration === 'slack' ? 'github' : 'slack';
+  fail(
+    `"${hit}" is a ${WORKFLOW_INTEGRATION_LABELS[other]} condition, and this is a ` +
+      `${WORKFLOW_INTEGRATION_LABELS[integration]} rule. Remove it.`
+  );
+}
+
+/**
+ * A Slack rule's conditions. The team and at least one channel are REQUIRED:
+ * a Slack rule that watches "every channel" is never what somebody meant, and
+ * the Slack source finds a rule's workspace by its team.
+ */
+function validateSlackConditions(raw: unknown): WorkflowConditions {
+  const given = raw === undefined || raw === null ? {} : raw;
+  if (typeof given !== 'object' || Array.isArray(given)) fail('conditions must be an object');
+  const c = given as Record<string, unknown>;
+
+  refuseForeignConditions(c, 'slack');
+  const unknown = Object.keys(c).filter(
+    (k) => !(SLACK_WORKFLOW_CONDITION_KEYS as readonly string[]).includes(k)
+  );
+  if (unknown.length > 0) fail(`Unknown condition "${unknown[0]}"`);
+
+  const out: WorkflowConditions = {};
+
+  if (c.slackTeamId !== undefined && typeof c.slackTeamId !== 'string') {
+    fail('conditions.slackTeamId must be a string');
+  }
+  const team = typeof c.slackTeamId === 'string' ? c.slackTeamId.trim() : '';
+  if (!team) fail('A Slack rule needs a Slack workspace. Pick the Slack workspace to watch.');
+  out.slackTeamId = team;
+
+  const channels = c.channels === undefined ? [] : stringList(c.channels, 'conditions.channels');
+  if (channels.length === 0) fail('A Slack rule needs at least one channel to watch.');
+  out.channels = channels;
+
+  if (c.textContains !== undefined) {
+    if (typeof c.textContains !== 'string') fail('conditions.textContains must be a string');
+    const trimmed = c.textContains.trim();
+    if (trimmed) out.textContains = trimmed;
+  }
+
+  if (c.slackAuthors !== undefined) {
+    const authors = validateSlackAuthors(c.slackAuthors);
+    if (authors) out.slackAuthors = authors;
+  }
+
+  if (c.includeThreadReplies !== undefined) {
+    if (typeof c.includeThreadReplies !== 'boolean') {
+      fail('conditions.includeThreadReplies must be a boolean');
+    }
+    // Only `true` is stored: absent already means "top-level messages only".
+    if (c.includeThreadReplies) out.includeThreadReplies = true;
+  }
+
+  return out;
+}
+
+function validateSlackAuthors(raw: unknown): WorkflowSlackAuthorMatch | undefined {
+  const at = 'conditions.slackAuthors';
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail(`${at} must be an object`);
+  const kind = (raw as { kind?: unknown }).kind;
+  if (
+    typeof kind !== 'string' ||
+    !(WORKFLOW_SLACK_AUTHOR_KINDS as readonly string[]).includes(kind)
+  ) {
+    fail(`${at}.kind must be one of ${WORKFLOW_SLACK_AUTHOR_KINDS.join(', ')}`);
+  }
+  if (kind === 'users') {
+    const userIds = stringList((raw as { userIds?: unknown }).userIds ?? [], `${at}.userIds`);
+    if (userIds.length === 0) fail(`${at} names no Slack users, so it can never match`);
+    return { kind: 'users', userIds };
+  }
+  // `linked` is the default, so it is dropped: the stored jsonb holds only what
+  // differs from it. `any` is kept, because it WIDENS the rule.
+  if (kind === 'linked') return undefined;
+  return { kind: 'any' };
 }
 
 /**
@@ -945,6 +1429,7 @@ function validateConditions(
     'checkConclusions',
     'bodyContains',
   ];
+  refuseForeignConditions(c, 'github');
   const unknown = Object.keys(c).filter((k) => !known.includes(k));
   if (unknown.length > 0) fail(`Unknown condition "${unknown[0]}"`);
 
@@ -1039,18 +1524,35 @@ function validateConditions(
   return out;
 }
 
-function validateActions(raw: unknown): WorkflowAction[] {
+function validateActions(raw: unknown, integration: WorkflowIntegration): WorkflowAction[] {
   if (!Array.isArray(raw)) fail('actions must be an array');
   if (raw.length === 0) fail('a workflow needs at least one action');
-  return raw.map((entry, i) => validateAction(entry, `actions[${i}]`));
+  return raw.map((entry, i) => validateAction(entry, `actions[${i}]`, integration));
 }
 
-function validateAction(raw: unknown, at: string): WorkflowAction {
+function validateAction(
+  raw: unknown,
+  at: string,
+  integration: WorkflowIntegration
+): WorkflowAction {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail(`${at} must be an object`);
   const a = raw as Record<string, unknown>;
   const type = a.type;
-  if (typeof type !== 'string' || !(WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)) {
-    fail(`${at}.type is not an action Talyn can take on a PR`);
+  if (typeof type !== 'string' || !(ALL_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)) {
+    fail(
+      integration === 'slack'
+        ? `${at}.type is not an action a Slack rule can take`
+        : `${at}.type is not an action Talyn can take on a PR`
+    );
+  }
+  if (!(workflowActionsFor(integration) as readonly string[]).includes(type)) {
+    const label = WORKFLOW_ACTION_LABELS[type as WorkflowActionType];
+    fail(
+      integration === 'slack'
+        ? `${at}: "${label}" acts on a pull request, so a Slack rule cannot use it. ` +
+            'Use "Start a session", "Reply in the thread" or "Add a reaction".'
+        : `${at}: "${label}" acts on a Slack message, so a GitHub rule cannot use it.`
+    );
   }
 
   switch (type as WorkflowActionType) {
@@ -1124,6 +1626,42 @@ function validateAction(raw: unknown, at: string): WorkflowAction {
         ...(p ? { preset: p as CodeReviewPreset } : {}),
       };
     }
+    case 'start_session': {
+      if (typeof a.prompt !== 'string' || !a.prompt.trim()) {
+        fail(`${at}.prompt must be a non-empty string`);
+      }
+      let repositoryId: string | null = null;
+      if (a.repositoryId !== undefined && a.repositoryId !== null) {
+        if (typeof a.repositoryId !== 'string') fail(`${at}.repositoryId must be a string or null`);
+        repositoryId = a.repositoryId.trim() || null;
+      }
+      if (a.internetAccess !== undefined && typeof a.internetAccess !== 'boolean') {
+        fail(`${at}.internetAccess must be a boolean`);
+      }
+      const model = typeof a.model === 'string' && a.model.trim() ? a.model.trim() : undefined;
+      return {
+        type: 'start_session',
+        repositoryId,
+        prompt: a.prompt.trim(),
+        ...(model ? { model } : {}),
+        ...(a.internetAccess === true ? { internetAccess: true } : {}),
+      };
+    }
+    case 'slack_reply': {
+      if (typeof a.text !== 'string' || !a.text.trim()) {
+        fail(`${at}.text must be a non-empty string`);
+      }
+      return { type: 'slack_reply', text: a.text.trim() };
+    }
+    case 'slack_react': {
+      if (typeof a.emoji !== 'string') fail(`${at}.emoji must be a string`);
+      // People type `:eyes:` as often as `eyes`. Slack's API wants the bare name.
+      const emoji = a.emoji.trim().replace(/^:+|:+$/g, '');
+      if (!emoji || /\s/.test(emoji)) {
+        fail(`${at}.emoji must be one emoji name, like "eyes" or ":white_check_mark:"`);
+      }
+      return { type: 'slack_react', emoji };
+    }
   }
 }
 
@@ -1168,11 +1706,35 @@ export function workflowsOffered(features: { workflows?: boolean } | null | unde
 }
 
 /**
- * A blank workflow the editor opens on. Save stays refused until it has a name
- * and at least one action — see {@link workflowInputProblem}.
+ * Whether Slack rules should be drawn. The same three-state discipline as
+ * {@link workflowsOffered}, and also not authorisation: the routes and the
+ * engine gate on the `slackChannelRules` flag themselves.
  */
-export function emptyWorkflowInput(): WorkflowInput {
+export function slackRulesOffered(
+  features: { workflows?: boolean; slackChannelRules?: boolean } | null | undefined
+): boolean {
+  return workflowsOffered(features) && features?.slackChannelRules === true;
+}
+
+/**
+ * A blank workflow the editor opens on. Save stays refused until it has a name
+ * and at least one action — see {@link workflowInputProblem}. A Slack rule also
+ * needs its Slack workspace and a channel.
+ */
+export function emptyWorkflowInput(integration: WorkflowIntegration = 'github'): WorkflowInput {
+  if (integration === 'slack') {
+    return {
+      integration: 'slack',
+      name: '',
+      enabled: true,
+      events: ['slack_message'],
+      conditions: {},
+      actions: [],
+      maxRunsPerPrPerHour: DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR,
+    };
+  }
   return {
+    integration: 'github',
     name: '',
     enabled: true,
     // One trigger preselected, because a workflow with no trigger is not a draft
@@ -1190,6 +1752,7 @@ export function emptyWorkflowInput(): WorkflowInput {
 /** Turn a stored definition back into what the editor edits. */
 export function workflowToInput(workflow: WorkflowDefinition): WorkflowInput {
   return {
+    integration: workflowIntegrationOf(workflow),
     name: workflow.name,
     enabled: workflow.enabled,
     events: [...workflow.events],
@@ -1224,6 +1787,12 @@ export function emptyWorkflowAction(type: WorkflowActionType): WorkflowAction {
       // No preset, so a new row inherits the workspace default until somebody
       // deliberately pins one.
       return { type: 'run_code_review' };
+    case 'start_session':
+      return { type: 'start_session', repositoryId: null, prompt: '' };
+    case 'slack_reply':
+      return { type: 'slack_reply', text: '' };
+    case 'slack_react':
+      return { type: 'slack_react', emoji: 'eyes' };
   }
 }
 
@@ -1421,6 +1990,119 @@ export function emptyWorkflowConditionValue(
   }
 }
 
+/** The widget a Slack condition is edited with. */
+export type SlackWorkflowConditionInput =
+  | 'slackTeam'
+  | 'channels'
+  | 'text'
+  | 'slackAuthors'
+  | 'threadReplies';
+
+export interface SlackWorkflowConditionSpec {
+  key: (typeof SLACK_WORKFLOW_CONDITION_KEYS)[number];
+  label: string;
+  hint: string;
+  input: SlackWorkflowConditionInput;
+  /** The validator refuses a Slack rule without it. */
+  required: boolean;
+}
+
+/**
+ * Every condition a Slack rule can carry, as data — the Slack counterpart of
+ * {@link WORKFLOW_CONDITION_SPECS}. Kept apart because the GitHub editor builds
+ * its menu from that list, and a Slack field there could only be refused.
+ */
+export const SLACK_WORKFLOW_CONDITION_SPECS: readonly SlackWorkflowConditionSpec[] = [
+  {
+    key: 'slackTeamId',
+    label: 'Slack workspace',
+    hint: 'The Slack workspace to watch. Talyn must be installed there.',
+    input: 'slackTeam',
+    required: true,
+  },
+  {
+    key: 'channels',
+    label: 'Channels',
+    hint: 'A message in any of these channels can trigger the rule. Invite Talyn to a channel first.',
+    input: 'channels',
+    required: true,
+  },
+  {
+    key: 'slackAuthors',
+    label: 'Who can trigger it',
+    hint: 'By default, only people who linked their Slack account to Talyn.',
+    input: 'slackAuthors',
+    required: false,
+  },
+  {
+    key: 'textContains',
+    label: 'Message contains',
+    hint: 'Case-insensitive.',
+    input: 'text',
+    required: false,
+  },
+  {
+    key: 'includeThreadReplies',
+    label: 'Replies in threads',
+    hint: 'By default, only new messages in the channel trigger the rule, not replies.',
+    input: 'threadReplies',
+    required: false,
+  },
+];
+
+/** One condition as a vocabulary listing shows it. */
+export interface WorkflowConditionSummary {
+  key: keyof WorkflowConditions;
+  label: string;
+  hint: string;
+  required: boolean;
+  /** Events the condition applies to, or `null` for every event of the integration. */
+  appliesTo: readonly WorkflowTriggerEvent[] | null;
+}
+
+/** What one integration's rules can trigger on, test and do. */
+export interface WorkflowVocabulary {
+  integration: WorkflowIntegration;
+  events: ReadonlyArray<{ event: WorkflowTriggerEvent; label: string }>;
+  conditions: readonly WorkflowConditionSummary[];
+  actions: ReadonlyArray<{ type: WorkflowActionType; label: string }>;
+}
+
+/**
+ * The events, conditions and actions of one integration.
+ *
+ * The same lists {@link validateWorkflow} accepts for a rule of that
+ * integration, so a client or an agent that builds a rule from this listing
+ * cannot compose one the API then refuses on vocabulary grounds.
+ */
+export function workflowVocabulary(integration: WorkflowIntegration): WorkflowVocabulary {
+  const events = workflowEventsFor(integration).map((event) => ({
+    event,
+    label: WORKFLOW_EVENT_LABELS[event],
+  }));
+  const actions = workflowActionsFor(integration).map((type) => ({
+    type,
+    label: WORKFLOW_ACTION_LABELS[type],
+  }));
+  const conditions: WorkflowConditionSummary[] =
+    integration === 'slack'
+      ? SLACK_WORKFLOW_CONDITION_SPECS.map((spec) => ({
+          key: spec.key,
+          label: spec.label,
+          hint: spec.hint,
+          required: spec.required,
+          appliesTo: null,
+        }))
+      : WORKFLOW_CONDITION_SPECS.map((spec) => ({
+          key: spec.key,
+          label: spec.label,
+          hint: spec.hint,
+          required: false,
+          appliesTo: spec.appliesTo,
+        }));
+  return { integration, events, conditions, actions };
+}
+
 /** The spec for one condition key. */
 export function workflowConditionSpec(
   key: keyof WorkflowConditions
@@ -1507,6 +2189,12 @@ export function describeWorkflowAction(action: WorkflowAction): string {
       return action.preset
         ? `Run a ${action.preset} code review`
         : 'Run a code review';
+    case 'start_session':
+      return 'Start a session';
+    case 'slack_reply':
+      return 'Reply in the thread';
+    case 'slack_react':
+      return `React with :${action.emoji}:`;
   }
 }
 
