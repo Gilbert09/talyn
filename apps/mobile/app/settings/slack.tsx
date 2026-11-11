@@ -1,9 +1,5 @@
-import { Stack } from 'expo-router';
-
-import { detailOptions } from '../../src/features/more/Page';
-import { SlackScreen } from '../../src/features/slack/SlackScreen';
-import { DetailRoute } from '../../src/navigation/DetailRoute';
+import { Redirect } from 'expo-router';
 
 export default function Screen() {
-  return <DetailRoute list="/settings"><Stack.Screen options={detailOptions('Slack')} /><SlackScreen /></DetailRoute>;
+  return <Redirect href="/integrations/slack" />;
 }

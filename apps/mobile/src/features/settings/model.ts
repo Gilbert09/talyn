@@ -77,11 +77,11 @@ export function settingsEditorLinks(features: Partial<Features> | null | undefin
   const sessions = workbenchesOffered(features);
   const links: Array<SettingsEditorLink | false> = [
     sessions && { key: 'sandbox', title: 'Sandbox setup', subtitle: 'Dotfiles and setup steps', href: '/settings/sandboxSetup' },
-    privateRoutesOffered(features) && { key: 'private', title: 'Private routes', subtitle: 'Reach private networks', href: '/settings/privateRoutes' },
+    privateRoutesOffered(features) && { key: 'private', title: 'Private routes', subtitle: 'Reach private networks', href: '/integrations/tailscale' },
     mcpServersOffered(features ?? null) && { key: 'mcp', title: 'MCP servers', subtitle: 'Linear, Sentry and other tools', href: '/settings/mcp' },
     features?.publicApi === true && { key: 'tokens', title: 'API tokens', subtitle: 'Personal access tokens', href: '/settings/apiTokens' },
-    sessions && { key: 'slack', title: 'Slack', subtitle: 'Start and follow sessions in Slack', href: '/settings/slack' },
-    { key: 'integrations', title: 'Integrations', subtitle: 'PostHog Code and Trunk', href: '/settings/integrations' },
+    sessions && { key: 'slack', title: 'Slack', subtitle: 'Start and follow sessions in Slack', href: '/integrations/slack' },
+    { key: 'integrations', title: 'Integrations', subtitle: 'Connections and scheduled rules', href: '/integrations' },
     { key: 'skills', title: 'Skills', subtitle: 'Reusable instructions for agents', href: '/settings/skills' },
     { key: 'instructions', title: 'Instructions', subtitle: 'What every agent reads first', href: '/settings/instructions' },
     sessions && { key: 'memory', title: 'Memory', subtitle: 'What agents remember', href: '/settings/memory' },

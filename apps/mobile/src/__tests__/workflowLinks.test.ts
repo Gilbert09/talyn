@@ -24,6 +24,12 @@ describe('product deep links in memory', () => {
     ['talyn-mobile://settings', '/settings'],
     ['talyn-mobile://settings?token=private', '/settings'],
     ['talyn-mobile://billing', '/billing'],
+    ['talyn-mobile://automations', '/integrations/github'],
+    ['talyn-mobile://automations/workflows', '/integrations/github'],
+    ['talyn-mobile://automations/loops', '/integrations/schedule'],
+    ['talyn-mobile://automations/loops/rule-one', '/integrations/schedule/rule-one'],
+    ['talyn-mobile://automations/workflows/rule-two', '/integrations/github/rule-two'],
+    ['talyn-mobile://automations/rule-three?kind=loop', '/integrations/schedule/rule-three'],
     ['talyn-mobile://', '/'],
     ['talyn-mobile-development://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8082', '/'],
   ])('routes the custom-scheme link %s to %s', (url, expected) => {

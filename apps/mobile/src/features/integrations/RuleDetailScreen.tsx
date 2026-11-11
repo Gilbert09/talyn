@@ -2,7 +2,7 @@ import {
   LOOP_TARGET_LABELS, describeSchedule, describeWorkflowActions, describeWorkflowTrigger,
   type LoopRun, type LoopWithStats, type WorkflowRun, type WorkflowWithStats,
 } from '@talyn/shared';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Stack } from 'expo-router';
 import { View } from 'react-native';
 
 import { useNetwork } from '../../auth/AuthProvider';
@@ -12,15 +12,12 @@ import { modelLabel } from '../../lib/models';
 import { longTime, shortTime, useNow } from '../../lib/time';
 import { sessionRoute } from '../../navigation/routes';
 import { Fact, Loading, Page, WebRow } from '../more/Page';
-import { useLoopList, useRuns, useWorkflowList } from './data';
+import { useLoopList, useRuns, useWorkflowList } from '../automations/data';
 import {
   loopDisabledText, loopRunBadge, loopRunText, nextRunText, problemsText, workflowRunBadge, workflowRunText, type AutomationKind, type Badge,
-} from './model';
+} from '../automations/model';
 
-export function AutomationDetailScreen() {
-  const params = useLocalSearchParams<{ id: string; kind?: string }>();
-  const kind: AutomationKind = params.kind === 'loop' ? 'loop' : 'workflow';
-  const id = typeof params.id === 'string' ? params.id : '';
+export function RuleDetailScreen({ kind, id }: { kind: AutomationKind; id: string }) {
   const offline = useNetwork() === 'offline';
   const workflowList = useWorkflowList(kind === 'workflow');
   const loopList = useLoopList(kind === 'loop');
@@ -32,7 +29,7 @@ export function AutomationDetailScreen() {
   return <Page refreshing={(list.refreshing || runs.refreshing) && Boolean(item)} onRefresh={refresh}>
     {item ? <Stack.Screen options={{ title: item.name }} /> : null}
     {!item && list.status === 'loading' ? <Loading /> : <StateNotice resource={list} offline={offline} refresh={refresh} />}
-    {missing ? <EmptyState title={kind === 'workflow' ? 'Workflow not found' : 'Loop not found'} detail="It may have been deleted." /> : null}
+    {missing ? <EmptyState title={kind === 'workflow' ? 'Rule not found' : 'Scheduled rule not found'} detail="It may have been deleted." /> : null}
     {item ? <>
       {kind === 'workflow' ? <WorkflowFacts workflow={item as WorkflowWithStats} /> : <LoopFacts loop={item as LoopWithStats} />}
       <Group title="Recent runs">
@@ -43,7 +40,7 @@ export function AutomationDetailScreen() {
               : <LoopRunRow key={run.id} run={run as LoopRun} divider={index < runs.data!.length - 1} />)}
       </Group>
       <Group>
-        <WebRow title="Edit on the web" path={kind === 'workflow' ? '/workflows' : '/loops'} />
+        <WebRow title="Edit on the web" path={`/integrations/${kind === 'workflow' ? 'github' : 'schedule'}`} />
       </Group>
     </> : null}
   </Page>;
@@ -65,7 +62,7 @@ function LoopFacts({ loop }: { loop: LoopWithStats }) {
   const now = useNow();
   const off = loopDisabledText(loop);
   const problems = problemsText(loop.stats.failures7d);
-  return <Group title="Loop" footer={off ?? undefined}>
+  return <Group title="Scheduled rule" footer={off ?? undefined}>
     <Fact label="Status" value={loop.enabled ? nextRunText(loop, now) : 'Off'} />
     <Fact label="Schedule" value={describeSchedule(loop.cron, loop.timezone)} />
     <Fact label="Repository" value={loop.repoFullName} />

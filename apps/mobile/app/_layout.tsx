@@ -53,8 +53,13 @@ function AuthenticatedRoutes() {
       <Stack.Screen name="pulls/index" options={detail('Pull requests')} />
       <Stack.Screen name="spaces/index" options={detail('Spaces')} />
       <Stack.Screen name="spaces/[id]" options={detail('Space')} />
-      <Stack.Screen name="automations/index" options={detail('Automations')} />
-      <Stack.Screen name="automations/[id]" options={detail('Automation')} />
+      <Stack.Screen name="integrations/index" options={detail('Integrations')} />
+      <Stack.Screen name="integrations/[kind]" options={detail('Integration')} />
+      <Stack.Screen name="integrations/[kind]/[id]" options={detail('Rule')} />
+      <Stack.Screen name="automations/index" options={{ headerShown: false }} />
+      <Stack.Screen name="automations/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="automations/workflows/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="automations/loops/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="usage" options={detail('Usage')} />
       <Stack.Screen name="billing/index" options={detail('Plan and billing')} />
       <Stack.Screen name="billing/return" options={{ headerShown: false, animation: 'fade' }} />
@@ -72,6 +77,7 @@ function AuthenticatedRoutes() {
       <Stack.Screen name="settings/apiTokens/new" options={detail('Create API token')} />
       <Stack.Screen name="settings/slack" options={detail('Slack')} />
       <Stack.Screen name="settings/integrations" options={detail('Integrations')} />
+      <Stack.Screen name="settings/github" options={{ headerShown: false }} />
       <Stack.Screen name="settings/skills/index" options={detail('Skills')} />
       <Stack.Screen name="settings/skills/[id]" options={detail('Skill')} />
       <Stack.Screen name="settings/skills/repo" options={detail('Repo skill')} />

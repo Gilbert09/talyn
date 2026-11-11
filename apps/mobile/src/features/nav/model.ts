@@ -116,7 +116,7 @@ export function toggled(set: ReadonlySet<string>, key: string): Set<string> {
   return next;
 }
 
-export type DrawerTarget = 'home' | `pulls:${PullsTab}` | 'settings' | 'spaces' | 'automations' | 'usage' | 'agents' | 'insights' | 'history' | null;
+export type DrawerTarget = 'home' | `pulls:${PullsTab}` | 'settings' | 'spaces' | 'integrations' | 'usage' | 'agents' | 'insights' | 'history' | null;
 
 /** Which drawer entry the current route belongs to, so the drawer can mark it. */
 export function activeTarget(pathname: string, tab?: string | string[] | null): DrawerTarget {
@@ -127,7 +127,7 @@ export function activeTarget(pathname: string, tab?: string | string[] | null): 
     return value === 'reviews' || value === 'queue' ? `pulls:${value}` : 'pulls:mine';
   }
   const first = path.split('/')[1];
-  if (first === 'settings' || first === 'spaces' || first === 'automations' || first === 'usage' || first === 'agents' || first === 'insights'
+  if (first === 'settings' || first === 'spaces' || first === 'integrations' || first === 'usage' || first === 'agents' || first === 'insights'
     || first === 'history') return first;
   return null;
 }

@@ -10,7 +10,9 @@ export const validRoutes: Href[] = [
   sessionRoute('session-id'), threadRoute('thread-id'), pullRequestRoute('pr-id'),
   pullsRoute('mine'), pullsRoute('reviews'), pullsRoute('queue'),
   newWorkRoute('session'), newWorkRoute('thread'), '/new',
-  '/spaces', '/automations', '/usage', '/agents', '/insights', '/billing', '/billing/return',
+  '/spaces', '/integrations', '/automations', '/automations/workflows', '/automations/loops', '/usage', '/agents', '/insights', '/billing', '/billing/return',
+  { pathname: '/integrations/[kind]', params: { kind: 'github' } },
+  { pathname: '/integrations/[kind]/[id]', params: { kind: 'schedule', id: 'rule-id' } },
   // Settings editors and their browser return links.
   '/settings/sandboxSetup', '/settings/privateRoutes', '/settings/mcp', '/settings/apiTokens', '/settings/apiTokens/new',
   '/settings/slack', '/settings/integrations', '/settings/skills', '/settings/instructions', '/settings/memory', '/settings/codeReview',

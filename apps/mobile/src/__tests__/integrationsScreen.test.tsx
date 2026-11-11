@@ -59,7 +59,7 @@ describe('PostHog Code', () => {
     const saved = { connected: true, projectId: '2', host: 'https://us.posthog.com', authMethod: 'personal_api_key' };
     mockSave.mockResolvedValue(saved);
     mockStatus.mockResolvedValueOnce({ connected: false, oauthAvailable: false }).mockResolvedValue(saved);
-    await render(<IntegrationsScreen />);
+    await render(<IntegrationsScreen kind="posthog" />);
     const key = await screen.findByLabelText('Personal API key');
     expect(key.props.secureTextEntry).toBe(true);
     expect(key.props.autoCorrect).toBe(false);
@@ -79,7 +79,7 @@ describe('PostHog Code', () => {
 
   it('shows the server error and keeps the form', async () => {
     mockSave.mockRejectedValue(apiError(400, 'PostHog rejected the API key.'));
-    await render(<IntegrationsScreen />);
+    await render(<IntegrationsScreen kind="posthog" />);
     await act(async () => { fireEvent.changeText(await screen.findByLabelText('Personal API key'), 'phx_bad'); });
     await act(async () => { fireEvent.changeText(screen.getByLabelText('Project (team) id'), '2'); });
     await act(async () => { fireEvent.press(screen.getByLabelText('Save & verify')); });
@@ -91,7 +91,7 @@ describe('PostHog Code', () => {
     mockStatus.mockResolvedValueOnce({ connected: false, oauthAvailable: true })
       .mockResolvedValue({ connected: true, oauthAvailable: true, authMethod: 'oauth', projectId: '9', host: 'https://eu.posthog.com' });
     mockStartOAuth.mockResolvedValue({ authorizeUrl: 'https://eu.posthog.com/oauth/authorize?x=1' });
-    await render(<IntegrationsScreen />);
+    await render(<IntegrationsScreen kind="posthog" />);
     expect(await screen.findByText(/Connect your PostHog account/)).toBeVisible();
     expect(screen.queryByLabelText('Personal API key')).toBeNull();
     await act(async () => { fireEvent.changeText(screen.getByLabelText('PostHog host'), 'https://eu.posthog.com'); });
@@ -107,7 +107,7 @@ describe('PostHog Code', () => {
     mockStartOAuth.mockRejectedValueOnce(apiError(400, 'Bad returnTo', 'invalid_return_to'))
       .mockResolvedValue({ authorizeUrl: 'https://us.posthog.com/oauth/authorize' });
     mockOpenReturn.mockResolvedValue('dismissed');
-    await render(<IntegrationsScreen />);
+    await render(<IntegrationsScreen kind="posthog" />);
     await act(async () => { fireEvent.press(await screen.findByLabelText('Connect with PostHog')); });
     expect(mockStartOAuth.mock.calls).toEqual([
       ['ws-1', { host: 'https://us.posthog.com', returnTo: 'talyn-mobile://' }],
@@ -121,7 +121,7 @@ describe('PostHog Code', () => {
     mockStatus.mockResolvedValueOnce({ connected: true, projectId: '2', host: 'https://us.posthog.com', authMethod: 'personal_api_key' })
       .mockResolvedValue({ connected: false });
     const alert = jest.spyOn(Alert, 'alert').mockImplementation((_t, _m, buttons) => { buttons?.find((b) => b.style === 'destructive')?.onPress?.(); });
-    await render(<IntegrationsScreen />);
+    await render(<IntegrationsScreen kind="posthog" />);
     await act(async () => { fireEvent.press(await screen.findByLabelText('Disconnect PostHog Code')); });
     expect(alert).toHaveBeenCalledWith('Disconnect PostHog Code?', expect.any(String), expect.any(Array));
     expect(mockDisconnect).toHaveBeenCalledWith('ws-1');
@@ -133,7 +133,7 @@ describe('PostHog Code', () => {
 describe('Trunk', () => {
   it('saves a key and shows it connected', async () => {
     mockTrunkSave.mockResolvedValue({ connected: true, needsReauth: false });
-    await render(<IntegrationsScreen />);
+    await render(<IntegrationsScreen kind="trunk" />);
     const field = await screen.findByLabelText('Trunk API key');
     expect(field.props.secureTextEntry).toBe(true);
     await act(async () => { fireEvent.changeText(field, ' trunk_v2_abc '); });
@@ -146,7 +146,7 @@ describe('Trunk', () => {
 
   it('shows the server error when the save fails', async () => {
     mockTrunkSave.mockRejectedValue(apiError(400, 'Trunk refused this API key.'));
-    await render(<IntegrationsScreen />);
+    await render(<IntegrationsScreen kind="trunk" />);
     await act(async () => { fireEvent.changeText(await screen.findByLabelText('Trunk API key'), 'trunk_v2_bad'); });
     await act(async () => { fireEvent.press(screen.getByLabelText('Save Trunk API key')); });
     expect(await screen.findByText('Trunk refused this API key.')).toBeVisible();
@@ -155,7 +155,7 @@ describe('Trunk', () => {
 
   it('asks for a new key when Trunk refused the saved one', async () => {
     mockTrunkStatus.mockResolvedValue({ connected: true, needsReauth: true, reauthReason: 'Trunk answered 401.' });
-    await render(<IntegrationsScreen />);
+    await render(<IntegrationsScreen kind="trunk" />);
     expect(await screen.findByText('Trunk answered 401. Paste a new key to see merge ETAs again.')).toBeVisible();
     expect(screen.getByText('Reconnect needed')).toBeVisible();
     await act(async () => { fireEvent.press(screen.getByLabelText('Reconnect')); });
@@ -166,7 +166,7 @@ describe('Trunk', () => {
     mockTrunkStatus.mockResolvedValue({ connected: true, needsReauth: false });
     mockTrunkRemove.mockResolvedValue({ connected: false, needsReauth: false });
     const alert = jest.spyOn(Alert, 'alert').mockImplementation((_t, _m, buttons) => { buttons?.find((b) => b.style === 'destructive')?.onPress?.(); });
-    await render(<IntegrationsScreen />);
+    await render(<IntegrationsScreen kind="trunk" />);
     await act(async () => { fireEvent.press(await screen.findByLabelText('Remove the Trunk API key')); });
     expect(mockTrunkRemove).toHaveBeenCalledWith('ws-1');
     expect(await screen.findByLabelText('Trunk API key')).toBeVisible();
@@ -175,9 +175,9 @@ describe('Trunk', () => {
 
   it('is not drawn when the feature is off', async () => {
     mockFeatures = { trunkMergeEta: false };
-    await render(<IntegrationsScreen />);
-    await screen.findByText('PostHog Code');
+    await render(<IntegrationsScreen kind="trunk" />);
     expect(screen.queryByText('Trunk merge queue')).toBeNull();
+    expect(screen.queryByText('PostHog Code')).toBeNull();
     expect(mockTrunkStatus).not.toHaveBeenCalled();
   });
 });

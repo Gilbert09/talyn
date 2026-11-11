@@ -37,6 +37,12 @@ export function redirectSystemPath({ path }: { path: string; initial: boolean })
       const tab = url.searchParams.get('tab');
       return tab && (PULLS_TAB_VALUES as readonly string[]).includes(tab) ? `/pulls?tab=${tab}` : '/pulls';
     }
+    if (logical === '/automations' || logical === '/automations/workflows') return '/integrations/github';
+    if (logical === '/automations/loops') return '/integrations/schedule';
+    const oldRule = /^\/automations\/(workflows|loops)\/([^/]+)$/.exec(logical);
+    if (oldRule) return `/integrations/${oldRule[1] === 'loops' ? 'schedule' : 'github'}/${oldRule[2]}`;
+    const oldDetail = /^\/automations\/([^/]+)$/.exec(logical);
+    if (oldDetail) return `/integrations/${url.searchParams.get('kind') === 'loop' ? 'schedule' : 'github'}/${oldDetail[1]}`;
     return logical;
   } catch {
     return '/';

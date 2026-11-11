@@ -103,7 +103,7 @@ export function AgentsScreen() {
         {fleetModel ? <Fact label="Talyn Fleet model" value={fleetModel} divider={false} /> : null}
       </Group> : null}
       <Group footer="Change the Talyn Fleet model in Talyn on the web.">
-        <Row title="PostHog Code and Trunk" subtitle="Connect keys and sign in" chevron href="/settings/integrations" divider />
+        <Row title="PostHog Code and Trunk" subtitle="Connect keys and sign in" chevron href="/integrations" divider />
         <WebRow title="Talyn Fleet model" path="/settings/integrations" />
       </Group>
     </Page>

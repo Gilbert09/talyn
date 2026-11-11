@@ -1,9 +1,5 @@
-import { Stack } from 'expo-router';
-
-import { detailOptions } from '../../src/features/more/Page';
-import { PrivateRoutesScreen } from '../../src/features/privateRoutes/PrivateRoutesScreen';
-import { DetailRoute } from '../../src/navigation/DetailRoute';
+import { Redirect } from 'expo-router';
 
 export default function Screen() {
-  return <DetailRoute list="/settings"><Stack.Screen options={detailOptions('Private routes')} /><PrivateRoutesScreen /></DetailRoute>;
+  return <Redirect href="/integrations/tailscale" />;
 }

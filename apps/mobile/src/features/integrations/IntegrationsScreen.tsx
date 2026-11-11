@@ -1,5 +1,5 @@
 import { posthog, trunk, workspaces as workspaceApi, type PostHogCodeStatus } from '@talyn/client/native';
-import { POSTHOG_CODE_MODELS, type TrunkIntegrationStatus, type Workspace } from '@talyn/shared';
+import { POSTHOG_CODE_MODELS, type IntegrationKind, type TrunkIntegrationStatus, type Workspace } from '@talyn/shared';
 import { useEffect, useState } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
 
@@ -11,7 +11,7 @@ import { errorMessage } from '../../lib/errors';
 import { featureOffered, useFeatures } from '../../lib/features';
 import { appReturnBase, openReturnFlow } from '../../lib/returnTo';
 import { useResource } from '../../workflow/hooks';
-import { Intro, Page } from '../more/Page';
+import { Page } from '../more/Page';
 import { useRemote, type Remote } from '../more/useRemote';
 import {
   type Badge, DEFAULT_POSTHOG_HOST, isHttpsUrl, keyFormOpen, POSTHOG_API_KEYS_URL, POSTHOG_KEY_SCOPE_NOTE, POSTHOG_MODEL_DESCRIPTION, postHogKeyConfig,
@@ -22,17 +22,13 @@ import {
 const SECRET = { secureTextEntry: true, autoCapitalize: 'none', autoCorrect: false, spellCheck: false, autoComplete: 'off', textContentType: 'none' } as const;
 const PLAIN = { autoCapitalize: 'none', autoCorrect: false, spellCheck: false } as const;
 
-/**
- * Settings → Integrations: PostHog Code and Trunk, like web
- * `IntegrationsSettings`. The Talyn Fleet cards live on the Agents screen, so
- * this one links there.
- */
-export function IntegrationsScreen() {
+/** The existing connection cards on their integration pages. */
+export function IntegrationsScreen({ kind }: { kind: Extract<IntegrationKind, 'posthog' | 'trunk'> }) {
   const workspaceId = useWorkspace().selected;
   const offline = useNetwork() === 'offline';
   const features = useFeatures();
-  const trunkOn = featureOffered(features, 'trunkMergeEta');
-  const posthogStatus = useRemote<PostHogCodeStatus>(workspaceId ? `posthog-status:${workspaceId}` : null,
+  const trunkOn = kind === 'trunk' && featureOffered(features, 'trunkMergeEta');
+  const posthogStatus = useRemote<PostHogCodeStatus>(kind === 'posthog' && workspaceId ? `posthog-status:${workspaceId}` : null,
     () => posthog.getStatus(workspaceId as string));
   const trunkStatus = useRemote<TrunkIntegrationStatus>(workspaceId && trunkOn ? `trunk-status:${workspaceId}` : null,
     () => trunk.getStatus(workspaceId as string));
@@ -40,13 +36,10 @@ export function IntegrationsScreen() {
   if (!workspaceId) {
     return <Page><EmptyState title="No Workspace Selected" detail="Create or select a workspace to configure settings" /></Page>;
   }
-  const refresh = () => { void posthogStatus.refresh(); if (trunkOn) void trunkStatus.refresh(); };
-  return <Page refreshing={posthogStatus.refreshing && posthogStatus.data !== undefined} onRefresh={refresh}>
-    <Intro>Connect external services to enhance your workflow</Intro>
-    <Group title="Agents" footer="Connect Talyn Fleet and choose which agent new work uses.">
-      <Row title="Agents" subtitle="Talyn Fleet and the default agent" chevron href="/agents" divider={false} />
-    </Group>
-    <PostHogCodeCard workspaceId={workspaceId} status={posthogStatus} offline={offline} />
+  const refresh = () => { if (kind === 'posthog') void posthogStatus.refresh(); else void trunkStatus.refresh(); };
+  const remote = kind === 'posthog' ? posthogStatus : trunkStatus;
+  return <Page refreshing={remote.refreshing && remote.data !== undefined} onRefresh={refresh}>
+    {kind === 'posthog' ? <PostHogCodeCard workspaceId={workspaceId} status={posthogStatus} offline={offline} /> : null}
     {trunkOn ? <TrunkCard workspaceId={workspaceId} status={trunkStatus} offline={offline} /> : null}
   </Page>;
 }

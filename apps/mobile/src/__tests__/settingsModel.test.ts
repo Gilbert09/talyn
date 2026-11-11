@@ -62,10 +62,17 @@ describe('settings editor links', () => {
   ])('follows the flags %j', (features, expected) => {
     expect(keys(features)).toEqual(expected);
   });
-  it('opens every editor under /settings', () => {
+  it('opens integration entries in their pages and other editors under settings', () => {
     for (const link of settingsEditorLinks({ workbenches: true, privateRoutes: true, mcpServers: true, publicApi: true })) {
-      expect(link.href).toMatch(/^\/settings\/[a-zA-Z]+$/);
+      expect(link.href).toMatch(['integrations', 'private', 'slack'].includes(link.key) ? /^\/integrations(\/[a-z]+)?$/ : /^\/settings\/[a-zA-Z]+$/);
     }
+  });
+  it.each([
+    ['integrations', '/integrations'],
+    ['slack', '/integrations/slack'],
+    ['private', '/integrations/tailscale'],
+  ])('opens %s at %s', (key, href) => {
+    expect(settingsEditorLinks({ workbenches: true, privateRoutes: true }).find((link) => link.key === key)?.href).toBe(href);
   });
 });
 

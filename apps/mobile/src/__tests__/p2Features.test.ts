@@ -11,7 +11,7 @@ import {
   workflowRunText, workflowSummary, workflowToggleInput,
 } from '../features/automations/model';
 import { dayShares, insightTiles, repositoryBars } from '../features/insights/model';
-import { NAV_ITEMS, automationTabs, visibleNavItems } from '../features/more/navItems';
+import { NAV_ITEMS, visibleNavItems } from '../features/more/navItems';
 import { MIN_REFRESH_MS, refreshInterval } from '../features/more/useRemote';
 import { moveToSpaceAction } from '../features/spaces/actions';
 import {
@@ -83,16 +83,16 @@ describe('navigation entries', () => {
     visibleNavItems(features, status).map((item) => item.key);
 
   it.each([
-    ['features still loading', null, null, ['insights', 'agents']],
-    ['nothing offered', {}, null, ['insights', 'agents']],
-    ['spaces only', { spaces: true }, null, ['spaces', 'insights', 'agents']],
-    ['spaces false', { spaces: false }, null, ['insights', 'agents']],
-    ['workflows only', { workflows: true }, null, ['automations', 'insights', 'agents']],
-    ['loops only', { loops: true }, null, ['automations', 'insights', 'agents']],
-    ['usage billing on', {}, billing(), ['insights', 'usage', 'agents']],
-    ['billing disabled', {}, billing({ billingEnabled: false }), ['insights', 'agents']],
-    ['backend without usage', {}, billing({ tier: undefined, usage: undefined }), ['insights', 'agents']],
-    ['everything', { spaces: true, workflows: true, loops: true }, billing(), ['spaces', 'automations', 'insights', 'usage', 'agents']],
+    ['features still loading', null, null, ['integrations', 'insights', 'agents']],
+    ['nothing offered', {}, null, ['integrations', 'insights', 'agents']],
+    ['spaces only', { spaces: true }, null, ['spaces', 'integrations', 'insights', 'agents']],
+    ['spaces false', { spaces: false }, null, ['integrations', 'insights', 'agents']],
+    ['workflows only', { workflows: true }, null, ['integrations', 'insights', 'agents']],
+    ['loops only', { loops: true }, null, ['integrations', 'insights', 'agents']],
+    ['usage billing on', {}, billing(), ['integrations', 'insights', 'usage', 'agents']],
+    ['billing disabled', {}, billing({ billingEnabled: false }), ['integrations', 'insights', 'agents']],
+    ['backend without usage', {}, billing({ tier: undefined, usage: undefined }), ['integrations', 'insights', 'agents']],
+    ['everything', { spaces: true, workflows: true, loops: true }, billing(), ['spaces', 'integrations', 'insights', 'usage', 'agents']],
   ])('%s', (_name, features, status, expected) => {
     expect(keys(features as never, status)).toEqual(expected);
   });
@@ -105,15 +105,6 @@ describe('navigation entries', () => {
     }
   });
 
-  it.each([
-    [null, []],
-    [{ workflows: true }, ['workflows']],
-    [{ loops: true }, ['loops']],
-    [{ workflows: true, loops: true }, ['workflows', 'loops']],
-    [{ workflows: false, loops: false }, []],
-  ])('offers automation tabs for %j', (features, expected) => {
-    expect(automationTabs(features as never)).toEqual(expected);
-  });
 });
 
 describe('refresh interval', () => {
