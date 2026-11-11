@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { BarChart3 } from 'lucide-react';
 import type { AdminComputeUsageRow } from '@talyn/client';
 import { api } from '../../lib/api';
 import { useAdminQuery } from '../../hooks/useAdminQuery';
 import { Page, Pill } from '../../components/layout/Page';
 import { DataTable, type Column } from '../../components/ui/DataTable';
 import { StatCard } from '../../components/ui/StatCard';
+import { COMPUTE_RANGES, ComputeHoursPanel } from '../../components/admin/ComputeHoursPanel';
 import { absolute, pct, relativeAge } from '../../lib/format';
 import { ROUTES, routeTo } from '../../lib/routes';
 
@@ -19,6 +21,9 @@ export function ComputeUsagePage() {
   const q = params.get('q') ?? '';
   const sort = (params.get('sort') ?? 'period_hours') as Sort;
   const order = params.get('order') === 'asc' ? 'asc' : 'desc';
+  const rawDays = Number(params.get('days'));
+  const days = (COMPUTE_RANGES as readonly number[]).includes(rawDays) ? rawDays : 30;
+  const userId = params.get('user') ?? '';
   const [search, setSearch] = useState(q);
 
   useEffect(() => setSearch(q), [q]);
@@ -39,6 +44,24 @@ export function ComputeUsagePage() {
     () => api.admin.computeUsage({ q: q || undefined, sort, order }),
     { deps: [q, sort, order] }
   );
+  const daily = useAdminQuery(
+    () => api.admin.computeDaily({ days, userId: userId || undefined }),
+    { deps: [days, userId] }
+  );
+
+  function setParam(key: string, value: string) {
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      if (value) next.set(key, value);
+      else next.delete(key);
+      return next;
+    }, { replace: true });
+  }
+
+  function refreshAll() {
+    refresh();
+    daily.refresh();
+  }
 
   function setSort(nextSort: Sort) {
     const next = new URLSearchParams(params);
@@ -69,6 +92,19 @@ export function ComputeUsagePage() {
       cell: (row) => (
         <div className="flex items-center gap-2">
           <span className="truncate font-medium">{row.email}</span>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setParam('user', userId === row.user_id ? '' : row.user_id);
+            }}
+            aria-label={`Show compute hours for ${row.email}`}
+            aria-pressed={userId === row.user_id}
+            title="Show compute hours over time"
+            className={userId === row.user_id ? 'text-blue-500' : 'text-muted-foreground hover:text-foreground'}
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+          </button>
           <Pill tone={row.tier === 'free' || row.tier == null ? 'muted' : 'good'}>{row.tier ?? 'no period'}</Pill>
           {row.plan_override && <Pill tone="warn">override</Pill>}
         </div>
@@ -135,8 +171,8 @@ export function ComputeUsagePage() {
     <Page
       title="Compute usage"
       subtitle={`${data?.totals.users ?? 0} accounts${q ? ' match' : ' with usage or sessions'}`}
-      onRefresh={refresh}
-      refreshing={loading}
+      onRefresh={refreshAll}
+      refreshing={loading || daily.loading}
       actions={
         <input
           value={search}
@@ -147,6 +183,14 @@ export function ComputeUsagePage() {
         />
       }
     >
+      <ComputeHoursPanel
+        data={daily.data}
+        error={daily.error}
+        days={days}
+        userId={userId}
+        onDaysChange={(value) => setParam('days', value === 30 ? '' : String(value))}
+        onUserChange={(value) => setParam('user', value)}
+      />
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard label="Accounts" value={data?.totals.users ?? '—'} />
         <StatCard label="This period" value={data ? `${hours(data.totals.period_used_hours)} h` : '—'} />

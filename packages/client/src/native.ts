@@ -1862,6 +1862,34 @@ export interface AdminComputeUsage {
   };
 }
 
+export interface AdminComputeDailyPoint {
+  /** UTC day, `YYYY-MM-DD`. */
+  day: string;
+  /** Box-hours: wall-clock hours times the size weight. */
+  hours: number;
+  wall_hours: number;
+  boxes_started: number;
+}
+
+export interface AdminComputeDaily {
+  start: string;
+  end: string;
+  user_id: string | null;
+  user_email: string | null;
+  days: AdminComputeDailyPoint[];
+  totals: {
+    hours: number;
+    wall_hours: number;
+    boxes_started: number;
+    peak_day: string | null;
+    peak_hours: number;
+  };
+  by_kind: { key: string; hours: number }[];
+  by_size: { key: string; hours: number }[];
+  /** Every account with usage in the range, most hours first. Ignores the user filter. */
+  users: { user_id: string; email: string | null; hours: number }[];
+}
+
 export const admin = {
   /**
    * Whether the caller is an operator, and what this deploy lets them do.
@@ -1924,6 +1952,9 @@ export const admin = {
   usageSummary: () => request<AdminUsageSummary>('GET', '/admin/billing/summary'),
   computeUsage: (params?: { sort?: string; order?: 'asc' | 'desc'; limit?: number; q?: string }) =>
     request<AdminComputeUsage>('GET', `/admin/usage/compute${adminQuery({ ...params })}`),
+  /** Box-hours per UTC day, for every account or one. */
+  computeDaily: (params?: { days?: number; userId?: string }) =>
+    request<AdminComputeDaily>('GET', `/admin/usage/compute/daily${adminQuery({ ...params })}`),
   workspaces: {
     list: (params?: { q?: string; ownerId?: string; limit?: number; before?: string }) =>
       request<AdminPage<AdminWorkspaceSummary>>(
