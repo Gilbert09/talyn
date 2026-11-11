@@ -162,14 +162,13 @@ it('requires a prompt and a repository that is still watched', async () => {
   expect(api.workbenches.create).not.toHaveBeenCalled();
 });
 
-it('keeps the subscription cards in order and puts PostHog Code under Other options', async () => {
+it('offers only the subscription cards, in order, where the fleet is offered', async () => {
   await toAgent();
   expect(screen.getByText('Use your Claude or ChatGPT subscription')).toBeInTheDocument();
   const choices = screen.getAllByRole('button').filter((button) => /^(Claude|Codex|PostHog Code)/.test(button.textContent ?? ''));
-  expect(choices.map((button) => button.textContent?.split('Use')[0])).toEqual(['Claude', 'Codex', 'PostHog Code']);
-  const other = screen.getByRole('heading', { name: 'Other options' });
-  expect(choices[1].compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(other.compareDocumentPosition(choices[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(choices.map((button) => button.textContent?.split('Use')[0])).toEqual(['Claude', 'Codex']);
+  expect(screen.queryByRole('heading', { name: 'Other options' })).not.toBeInTheDocument();
+  expect(screen.getByText('Connect Claude or ChatGPT to continue.')).toBeInTheDocument();
 });
 
 it.each(['claude', 'codex'] as const)('creates and opens a real session through the API with %s', async (agent) => {

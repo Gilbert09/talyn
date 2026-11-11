@@ -51,6 +51,8 @@ Talyn runs the agent on your own subscription. Pick one:
 
 Follow the sign-in steps on the card. [Connect an agent](/docs/connect-agents) has the details for each one. You can connect both, and add the second one later.
 
+You must connect Claude or Codex to continue. **Next** stays off until you do, and a line under it says what is missing. PostHog Code is not part of this step. You can add it later in **Settings**. If OpenAI does not offer ChatGPT sign-in in your region, connect Claude instead.
+
 ## 6. Start your first session
 
 1. Pick a repository.

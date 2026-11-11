@@ -13,6 +13,14 @@ Web and desktop can show up to four sessions at once, each pane a session's tran
 - **Not on mobile** (a phone has no room for two transcripts), and no public docs yet while the flag is gated. Both are in `ROADMAP.md`.
 - Analytics: `split_view_pane_added` with `source`.
 
+## Onboarding agent step: Claude or Codex is required (2026-11-11)
+
+A PostHog investigation of sign-ups that never connected an agent found four causes. Each now has a fix in web, desktop and mobile.
+- **Agent step.** Where the fleet is offered, onboarding shows only Claude and Codex, and Next needs one of them. PostHog Code stays in Settings. Where the fleet is not offered (`GET /cloud-providers` has no `selfhosted` entry), the PostHog Code path stays so that user is not trapped. The step draws nothing until the provider list arrives, so PostHog Code does not flash at a fleet workspace. Mobile loses the "Skip for now" button unless the sandbox is unavailable (`agentStepSkippable`). Each step with a disabled Next now says what is missing.
+- **PostHog Code OAuth was never counted.** The flow ends in a browser redirect, so no client saw the result. The OAuth callback now fires `cloud_provider_connected` (`provider: 'posthog_code'`) from the backend through `captureCloudProviderConnected`. The API-key path still fires from the client, so there is no double count.
+- **Codex region error.** The desktop sign-in maps OpenAI's 403 `unsupported_country_region_territory` to "OpenAI does not offer ChatGPT sign-in in your region. Connect Claude instead." The renderer strips the Electron `Error invoking remote method` prefix (`ipcErrorMessage`). Web and mobile do not start this flow: web takes a pasted `auth.json`, mobile finishes on a computer.
+- **GitHub step.** The status check ran only on window focus, so a return from the browser that fires no focus event left "Not connected yet" for good. `useGithubConnection` now takes `pollMs`, and the wizard re-checks every 4 s until GitHub connects. Not proven as the cause of the one reported case. Other candidates, not changed: `pendingOAuthStates` in `routes/github.ts` is an in-memory map, so a deploy or a second replica inside the 10-minute window gives `invalid_state` on the callback page; and the token map in `services/github.ts` is per process. Mobile already refreshes on its deep-link return.
+
 ## CI park: pause fleet fix runs while CI runs (2026-11-11)
 
 A fleet fix run kept a large box awake for 228 minutes, 52 of them in `sleep` calls waiting for PostHog/posthog's 40-minute CI. Now a run can end its turn after a publish, and Talyn suspends the box and resumes the same conversation when the checks settle. Behind the `ci-park` PostHog flag (fallback OFF, `availability: 'gated'`, break glass `CI_PARK_ENABLED`). The flag is not on anywhere.

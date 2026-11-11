@@ -7,6 +7,7 @@ import { FleetAgentMark } from '../../lib/providerMeta';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
+import { ipcErrorMessage } from '../../lib/ipcError';
 
 type Account = FleetAccountView;
 
@@ -14,7 +15,7 @@ function errorMessage(error: unknown): string {
   if (error instanceof ApiError && error.code === 'multi_account_disabled') {
     return 'Adding more accounts is turned off for this workspace.';
   }
-  return error instanceof Error ? error.message : 'Could not update the account';
+  return ipcErrorMessage(error, 'Could not update the account');
 }
 
 function formatTimeAt(iso: string, action: string, now = new Date()): string {

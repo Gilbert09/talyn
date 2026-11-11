@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ArrowLeft, Check } from 'lucide-react';
 import { POSTHOG_LOGO } from '../../../assets/providers/logos';
 import { useAgentConnections } from '../../../hooks/useAgentConnections';
@@ -24,6 +24,12 @@ export function ConnectAgentStep() {
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const posthogConnected = useWorkspaceStore((s) => s.posthogStatus?.connected === true);
   const [choice, setChoice] = useState<AgentChoice | null>(null);
+
+  // Until the provider list arrives the fleet is unknown, so draw nothing
+  // rather than flash PostHog Code at a workspace that turns out to have the fleet.
+  if (cloudProviders === null) {
+    return <p className="text-[13px] text-muted-foreground">Checking your agents...</p>;
+  }
 
   const fleet = (cloudProviders ?? []).find((p) => p.type === 'selfhosted');
   const fleetOffered = cloudProviderOffered(cloudProviders, 'selfhosted');
@@ -76,27 +82,31 @@ export function ConnectAgentStep() {
           },
         ]
       : []),
-    {
-      id: 'posthog',
-      name: 'PostHog Code',
-      detail: 'Use your PostHog account.',
-      connected: posthogConnected,
-      icon: <img src={POSTHOG_LOGO} alt="" className="w-5 h-5 object-contain" />,
-    },
+    // PostHog Code is offered here only when the fleet is not. A session runs on
+    // the fleet, so a fleet workspace that picked PostHog Code here could never
+    // continue. It stays in Settings for everyone.
+    ...(fleetOffered
+      ? []
+      : [
+          {
+            id: 'posthog' as const,
+            name: 'PostHog Code',
+            detail: 'Use your PostHog account.',
+            connected: posthogConnected,
+            icon: <img src={POSTHOG_LOGO} alt="" className="w-5 h-5 object-contain" />,
+          },
+        ]),
   ];
 
   return (
     <div className="space-y-4">
       <p className="text-[13px] text-muted-foreground">
-        Use your Claude or ChatGPT subscription
+        {fleetOffered ? 'Use your Claude or ChatGPT subscription' : 'Connect PostHog Code to run your sessions.'}
       </p>
       <div className="space-y-2">
         {options.map((option) => (
-          <Fragment key={option.id}>
-            {option.id === 'posthog' && (
-              <h3 className="pt-2 text-xs font-medium text-muted-foreground">Other options</h3>
-            )}
-            <button
+          <button
+              key={option.id}
               type="button"
               onClick={() => setChoice(option.id)}
               className={cn(
@@ -118,7 +128,6 @@ export function ConnectAgentStep() {
                 </span>
               )}
             </button>
-          </Fragment>
         ))}
       </div>
     </div>

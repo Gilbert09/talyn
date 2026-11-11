@@ -28,6 +28,15 @@ export function agentReady(readiness: WorkbenchReadiness | undefined): boolean {
 }
 
 /**
+ * Connecting Claude or Codex is required. The one way out is a sandbox the
+ * workspace cannot use at all (the fleet is not offered): no connection the
+ * person makes can fix that, so the step must not trap them.
+ */
+export function agentStepSkippable(readiness: WorkbenchReadiness | undefined): boolean {
+  return readiness?.sandbox.ok === false;
+}
+
+/**
  * Where the selected workspace stands in setup. Like web, a workspace that
  * exists says nothing: the backend makes one for every account. A GitHub
  * connection is the evidence. Without it the person connects GitHub. With it,

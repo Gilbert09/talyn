@@ -144,6 +144,23 @@ export function captureWorkspaceEvent(
 }
 
 /**
+ * `cloud_provider_connected` for a connection the clients cannot see finish.
+ * PostHog Code OAuth ends in a browser redirect, so the app never learns the
+ * outcome. The API-key path still fires from the client, so the two never
+ * overlap. Property names match the client event.
+ */
+export function captureCloudProviderConnected(
+  workspaceId: string,
+  provider: string,
+  agent?: string,
+): void {
+  captureWorkspaceEvent(workspaceId, 'cloud_provider_connected', {
+    provider,
+    ...(agent ? { agent } : {}),
+  });
+}
+
+/**
  * Capture the one-and-only-once `signup` for a brand-new account.
  *
  * The clients fire `logged_in` on every sign-in, which cannot answer "how
