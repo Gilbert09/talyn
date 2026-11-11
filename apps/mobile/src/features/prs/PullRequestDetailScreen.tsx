@@ -101,7 +101,7 @@ export function PullRequestDetailScreen() {
   const { workflow } = useMobileRuntime();
   const router = useRouter();
   const state = useResource<PrDetail>('pr', id, Boolean(id), true);
-  // Draw at once from the list's copy while the current one loads. Actions wait for the current copy.
+  // Draw at once from the list's copy while the current one loads.
   const current = Boolean(state.data);
   const seed = state.status === 'deleted' || state.status === 'unauthorized' ? undefined : workflow.listedPr(id);
   const row = state.data?.row ?? seed;
@@ -171,6 +171,7 @@ export function PullRequestDetailScreen() {
   const ref = row ? `#${row.number}` : '';
   const linkTarget: PrLinkTarget | null = row && url ? { title: summary?.title ?? '', url, ref: `${row.owner}/${row.repo} #${row.number}` } : null;
   const busyAny = busy !== null || offline || !current;
+  const queueBusy = busy !== null || offline;
   const canReview = Boolean(row && row.state === 'open' && row.reviewRequested && !row.authored);
   const selectionBar = codeReview.selected.size > 0 && !codeReview.fixing;
 
@@ -288,7 +289,7 @@ export function PullRequestDetailScreen() {
     if (actions.merge && kind !== 'merge') items.push({ label: 'Merge', icon: PRIMARY_ICON.merge, disabled: busyAny, onPress: merge });
     if (row.state === 'open' && kind !== 'review') items.push({ label: 'Review with Talyn', icon: PRIMARY_ICON.review, onPress: () => setReviewSheet(true) });
     if (actions.queue) items.push({ label: row.mergeQueued ? 'Leave merge queue' : 'Add to merge queue', icon: PRIMARY_ICON.queue,
-      disabled: busyAny, onPress: () => toggleQueue(!row.mergeQueued) });
+      disabled: queueBusy, onPress: () => toggleQueue(!row.mergeQueued) });
     if (actions.resubmit && kind !== 'resubmit') items.push({ label: 'Re-submit to Trunk', icon: PRIMARY_ICON.resubmit, disabled: busyAny, onPress: resubmit });
     else if (actions.requeue && kind !== 'requeue') items.push({ label: 'Requeue', icon: PRIMARY_ICON.requeue, disabled: busyAny, onPress: requeue });
     if (actions.autoKeep) items.push({ label: row.autoKeepMergeable ? 'Turn off Keep mergeable' : 'Turn on Keep mergeable',
@@ -321,7 +322,8 @@ export function PullRequestDetailScreen() {
   const primaryBusy = primary && ({ merge: 'merge', fix: 'fix', queue: 'queue', requeue: 'queue', resubmit: 'resubmit', approve: 'review',
     request_changes: 'review' } as Partial<Record<NextStepPrimary['kind'], Busy>>)[primary.kind];
   const primaryButton = primary ? <Button title={primary.label} variant={primary.kind === 'merge' ? 'success' : 'primary'} icon={PRIMARY_ICON[primary.kind]}
-    loading={Boolean(primaryBusy) && busy === primaryBusy} disabled={Boolean(primary.disabledReason) || (Boolean(primaryBusy) && busyAny)}
+    loading={Boolean(primaryBusy) && busy === primaryBusy} disabled={Boolean(primary.disabledReason) || (Boolean(primaryBusy) &&
+      (primary.kind === 'queue' || primary.kind === 'requeue' ? queueBusy : busyAny))}
     accessibilityLabel={primary.disabledReason ? `${primary.label}. ${primary.disabledReason}` : primary.label} onPress={() => runPrimary(primary)} /> : null;
   const stack = row ? stackLabel(row) : '';
 
@@ -347,7 +349,7 @@ export function PullRequestDetailScreen() {
             {`${summary.headBranch} → ${summary.baseBranch}`}</AppText> : null}
         </View>
         <NextStepCard step={step} onChecks={() => selectTab('checks')} />
-        <AutomationToggles row={row} queue={Boolean(actions.queue)} autoKeep={Boolean(actions.autoKeep)} disabled={busyAny}
+        <AutomationToggles row={row} queue={Boolean(actions.queue)} autoKeep={Boolean(actions.autoKeep)} disabled={busyAny} queueDisabled={queueBusy}
           onQueue={toggleQueue} onAutoKeep={toggleAutoKeep} />
         {notice ? <Notice message={notice.message} tone="success">
           {notice.session ? <Row title={`Open ${notice.session.name}`} href={sessionRoute(notice.session.id)} chevron divider={false} /> : null}

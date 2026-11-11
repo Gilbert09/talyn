@@ -26,6 +26,7 @@ const CHIP_ICON: Record<Exclude<QueueChipIcon, 'spinner' | 'none'>, Symbol> = {
 };
 const STACK_ICON = CHIP_ICON.stack;
 const DRAFT_ICON: Symbol = { ios: 'pencil', android: 'edit' };
+const QUEUE_ICON: Symbol = { ios: 'list.number', android: 'format_list_numbered' };
 
 /** The row's one status mark, in its tone. A spinner while checks run. */
 function StatusGlyph({ status }: { status: PrPillVariant }) {
@@ -50,10 +51,10 @@ function Fact({ label, icon, tone = 'muted', spin = false }: { label: string; ic
  * changed, `owner/repo #123 · author`, then short facts. Review requests add
  * who was asked; the merge queue adds the position, its status and why it is blocked.
  */
-export function PrRow({ row, now, divider = true, variant = 'mine', parentStatus, stackedOn, onLongPress }: {
+export function PrRow({ row, now, divider = true, variant = 'mine', parentStatus, stackedOn, onLongPress, onQueue }: {
   row: PRRow; now: number; divider?: boolean; variant?: PrRowVariant; parentStatus?: MergeQueuePublic['status'];
   /** The PR number this row is stacked on, when the list shows that PR too. */
-  stackedOn?: number | null; onLongPress?(row: PRRow): void;
+  stackedOn?: number | null; onLongPress?(row: PRRow): void; onQueue?(row: PRRow): void;
 }) {
   const queue = variant === 'queue';
   // The queue page has no review column, so its status carries the review verdict too, as on web.
@@ -68,12 +69,16 @@ export function PrRow({ row, now, divider = true, variant = 'mine', parentStatus
   const blocked = queue ? queueBlockedReason(row.mergeQueue) : null;
   const requestedText = requested ? `${requested.label}${requested.extra > 0 ? ` +${requested.extra}` : ''}` : '';
   const draft = Boolean(row.summary.draft) && row.state === 'open';
+  const queueFact = !queue && row.mergeQueued && !status.label.toLowerCase().includes('merge queue')
+    ? `In merge queue${position > 0 ? ` #${position}` : ''}` : null;
   return <Row href={pullRequestRoute(row.id)} title={prTitle(row)} divider={divider} leadingWidth={20}
     leading={<StatusGlyph status={status} />}
     onLongPress={onLongPress ? () => onLongPress(row) : undefined} longPressLabel={`Link actions for ${prTitle(row)}`}
+    extraAccessibilityAction={onQueue ? { name: 'queue', label: queue || row.mergeQueued ? 'Leave merge queue' : 'Add to merge queue',
+      onPress: () => onQueue(row) } : undefined}
     accessibilityLabel={[`${prTitle(row)}.`, `${row.owner}/${row.repo} #${row.number} by ${author}.`,
       chip ? `Queue: ${position > 0 ? `position ${position}, ` : ''}${chip.label}.` : '',
-      `Status: ${status.label}.`, draft ? 'Draft.' : '', review ? `Review: ${review.label}.` : '',
+      `Status: ${status.label}.`, queueFact ? `${queueFact}.` : '', draft ? 'Draft.' : '', review ? `Review: ${review.label}.` : '',
       requested ? `Requested: ${requestedText}.` : '', stackedOn ? `Stacked on #${stackedOn}.` : ''].filter(Boolean).join(' ')}
     trailing={<AppText variant="meta" tone="muted">{shortTime(updated, now)}</AppText>}
     subtitle={<View style={styles.meta}>
@@ -88,6 +93,7 @@ export function PrRow({ row, now, divider = true, variant = 'mine', parentStatus
           icon={chip.icon === 'spinner' || chip.icon === 'none' ? undefined : CHIP_ICON[chip.icon]} />
       </View> : null}
       <Fact label={status.label} />
+      {queueFact ? <Fact label={queueFact} icon={QUEUE_ICON} tone="information" /> : null}
       {draft ? <Fact label="Draft" icon={DRAFT_ICON} /> : null}
       {review ? <Fact label={review.label} tone={review.tone as Tone} icon={PR_ICON[review.icon as Exclude<PrIcon, 'spinner'>]} /> : null}
       {requested ? <Fact label={requestedText} icon={requested.direct ? { ios: 'at', android: 'alternate_email' } : { ios: 'person.2', android: 'group' }} /> : null}

@@ -36,9 +36,9 @@ export function usePrLinkMenu() {
   const actions = (target: PrLinkTarget | null): SheetAction[] => target ? prLinkActions(target.url).map((kind) => ({
     label: PR_LINK_ACTION_LABEL[kind], icon: ICONS[kind], onPress: () => run(kind, target),
   })) : [];
-  const open = (target: PrLinkTarget | null) => {
+  const open = (target: PrLinkTarget | null, extra: SheetAction[] = []) => {
     if (!target) return;
-    sheet.open({ title: target.title || 'Pull request', message: target.ref, actions: actions(target) });
+    sheet.open({ title: target.title || 'Pull request', message: target.ref, actions: [...actions(target), ...extra] });
   };
   return { open, actions, copyLink: (target: PrLinkTarget | null) => { if (target) copy('copy_link', target); }, sheet: sheet.sheet, toast: toast.element };
 }

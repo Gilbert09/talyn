@@ -205,6 +205,45 @@ describe('pull request pages', () => {
     expect(screen.getByText('Checks fail. It clears on a new push. Requeue to retry now.')).toBeVisible();
     expect(screen.getByText('example/project → main')).toBeVisible();
   });
+
+  it('offers queue actions from a long press and a screen reader action', async () => {
+    mockActive.api.pullRequests.list.mockResolvedValueOnce([
+      pr({ id: 'queueable', number: 123, authored: true, reviewRequested: false,
+        summary: summary({ title: 'Queueable', reviewDecision: undefined }) }),
+    ]);
+    await render(<PullRequestsScreen tab="mine" />);
+    const row = await screen.findByRole('link', { name: /^Queueable\./ });
+    await fireEvent(row, 'longPress');
+    await fireEvent.press(screen.getByRole('button', { name: 'Add to merge queue' }));
+    await waitFor(() => expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledWith('queueable', true));
+    await fireEvent(row, 'accessibilityAction', { nativeEvent: { actionName: 'queue' } });
+    await waitFor(() => expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledTimes(2));
+  });
+
+  it('does not offer queue actions for a review request', async () => {
+    mockActive.api.pullRequests.list.mockResolvedValueOnce([
+      pr({ id: 'reviewer', number: 124, authored: false, reviewRequested: true,
+        summary: summary({ title: 'Reviewer', reviewDecision: undefined }) }),
+    ]);
+    await render(<PullRequestsScreen tab="reviews" />);
+    const row = await screen.findByRole('link', { name: /^Reviewer\./ });
+    expect(row.props.accessibilityActions).toEqual([{ name: 'longpress', label: 'Link actions for Reviewer' }]);
+    await fireEvent(row, 'longPress');
+    expect(screen.queryByRole('button', { name: 'Add to merge queue' })).toBeNull();
+  });
+
+  it('shows a queued marker and offers Leave merge queue', async () => {
+    mockActive.api.pullRequests.list.mockResolvedValueOnce([
+      pr({ id: 'queued', number: 123, authored: true, reviewRequested: false, mergeQueued: true,
+        mergeQueue: { status: 'queued', position: 3 } as MergeQueuePublic,
+        summary: summary({ title: 'Queued PR', reviewDecision: undefined }) }),
+    ]);
+    await render(<PullRequestsScreen tab="mine" />);
+    const row = await screen.findByRole('link', { name: /In merge queue #3\./ });
+    await fireEvent(row, 'longPress');
+    await fireEvent.press(screen.getByRole('button', { name: 'Leave merge queue' }));
+    expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledWith('queued', false);
+  });
 });
 
 describe('code review on PR detail', () => {

@@ -112,10 +112,12 @@ interface RowProps {
   /** A secondary gesture, e.g. a menu of actions. Screen readers get it as a named action. */
   onLongPress?(): void;
   longPressLabel?: string;
+  extraAccessibilityAction?: { name: string; label: string; onPress(): void };
 }
 /** A flat, divider-separated list row. With `href` it is a link; with `onPress` it is a button. */
 export function Row({ title, subtitle, leading, leadingWidth, trailing, children, chevron = false, href, onPress, accessibilityLabel,
-  accessibilityRole, selected, disabled = false, divider = true, titleLines = 2, subtitleLines = 1, onLongPress, longPressLabel = 'Show actions' }: RowProps) {
+  accessibilityRole, selected, disabled = false, divider = true, titleLines = 2, subtitleLines = 1, onLongPress, longPressLabel = 'Show actions',
+  extraAccessibilityAction }: RowProps) {
   const c = useTheme();
   const [pressed, setPressed] = useState(false);
   const interactive = Boolean(href || onPress);
@@ -139,8 +141,14 @@ export function Row({ title, subtitle, leading, leadingWidth, trailing, children
   if (!interactive) return <View style={style} accessibilityLabel={accessibilityLabel}>{body}</View>;
   const pressable = <Pressable accessibilityRole={accessibilityRole ?? (href ? 'link' : 'button')} accessibilityLabel={accessibilityLabel ?? title}
     accessibilityState={{ disabled, selected }} disabled={disabled} onPress={onPress}
-    onLongPress={onLongPress} accessibilityActions={onLongPress ? [{ name: 'longpress', label: longPressLabel }] : undefined}
-    onAccessibilityAction={onLongPress ? (event) => { if (event.nativeEvent.actionName === 'longpress') onLongPress(); } : undefined}
+    onLongPress={onLongPress} accessibilityActions={onLongPress || extraAccessibilityAction ? [
+      ...(onLongPress ? [{ name: 'longpress', label: longPressLabel }] : []),
+      ...(extraAccessibilityAction ? [{ name: extraAccessibilityAction.name, label: extraAccessibilityAction.label }] : []),
+    ] : undefined}
+    onAccessibilityAction={onLongPress || extraAccessibilityAction ? (event) => {
+      if (event.nativeEvent.actionName === 'longpress') onLongPress?.();
+      if (event.nativeEvent.actionName === extraAccessibilityAction?.name) extraAccessibilityAction.onPress();
+    } : undefined}
     onPressIn={() => setPressed(true)} onPressOut={() => setPressed(false)} style={style}>{body}</Pressable>;
   return href ? <Link href={href} asChild>{pressable}</Link> : pressable;
 }

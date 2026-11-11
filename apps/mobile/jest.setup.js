@@ -3,6 +3,12 @@ jest.mock('expo-font', () => ({ ...jest.requireActual('expo-font'), useFonts: ()
 
 require('react-native-gesture-handler/jestSetup');
 
+jest.mock('react-native-gesture-handler/ReanimatedSwipeable', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  return { __esModule: true, default: ({ children }) => React.createElement(View, null, children) };
+});
+
 // The drawer animates with Reanimated, which has no native side in Jest. This
 // one draws the screen and, while open, the drawer content after it.
 jest.mock('react-native-drawer-layout', () => {

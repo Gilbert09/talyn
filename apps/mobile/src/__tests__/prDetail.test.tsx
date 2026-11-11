@@ -94,6 +94,21 @@ describe('PR detail next step', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Merge' })).toBeEnabled());
   });
 
+  it('queues from the list copy while the detail loads', async () => {
+    const row = mine({}, { blockingReason: 'checks_failed', ciStatus: 'failing_required' });
+    mockActive.api.pullRequests.list.mockResolvedValue([row]);
+    await act(async () => { await mockActive.store.load('attention'); });
+    let answer: (value: unknown) => void = () => {};
+    mockActive.api.pullRequests.get.mockReturnValue(new Promise((resolve) => { answer = resolve; }) as never);
+    await render(<PullRequestDetailScreen />);
+    const queue = await screen.findByRole('button', { name: 'Add to merge queue' });
+    expect(queue).toBeEnabled();
+    expect(screen.getByRole('switch', { name: 'Merge queue' })).toBeEnabled();
+    await fireEvent.press(queue);
+    expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledWith('pr-one', true);
+    await act(async () => { answer({ row, fresh: fresh(row) }); });
+  });
+
   it('does not draw the list copy for a pull request that is gone', async () => {
     mockActive.api.pullRequests.list.mockResolvedValue([mine()]);
     await act(async () => { await mockActive.store.load('attention'); });

@@ -43,13 +43,14 @@ export function ToggleButton({ label, text, icon, value, disabled, onChange }: {
   </Pressable>;
 }
 
-export function AutomationToggles({ row, queue, autoKeep, disabled, onQueue, onAutoKeep }: {
-  row: PRRow; queue: boolean; autoKeep: boolean; disabled: boolean; onQueue(next: boolean): void; onAutoKeep(next: boolean): void;
+export function AutomationToggles({ row, queue, autoKeep, disabled, queueDisabled = disabled, onQueue, onAutoKeep }: {
+  row: PRRow; queue: boolean; autoKeep: boolean; disabled: boolean; queueDisabled?: boolean;
+  onQueue(next: boolean): void; onAutoKeep(next: boolean): void;
 }) {
   if (!queue && !autoKeep) return null;
   return <View style={styles.row}>
     {queue ? <ToggleButton label="Merge queue" text={queueToggleText(row)} icon={QUEUE_ICON} value={row.mergeQueued}
-      disabled={disabled} onChange={onQueue} /> : null}
+      disabled={queueDisabled} onChange={onQueue} /> : null}
     {autoKeep ? <ToggleButton label="Keep mergeable" text={keepToggleText(row)} icon={KEEP_ICON} value={row.autoKeepMergeable}
       disabled={disabled} onChange={onAutoKeep} /> : null}
   </View>;

@@ -2,13 +2,14 @@ import type { PRRow } from '@talyn/client/native';
 import { reviewPriorityOffered, type PRFilterDefinition, type Workspace } from '@talyn/shared';
 import { Stack } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { FlatList, Pressable, RefreshControl, SectionList, StyleSheet, View } from 'react-native';
+import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { PickerSheet, type PickerSection } from '../../components/PickerSheet';
 import { ScreenContainer } from '../../components/ScreenContainer';
-import { AppText, Button, EmptyState, SectionLabel } from '../../components/UI';
+import { AppText, Button, EmptyState, SectionLabel, type SheetAction } from '../../components/UI';
 import { StateNotice, workflowStyles as styles } from '../../components/Workflow';
 import { useFeatures } from '../../lib/features';
 import { useNow } from '../../lib/time';
@@ -22,6 +23,7 @@ import { buildQueueGroups, hiddenReviewCohort, mineCohort, PULLS_TITLES, queueCo
 import { PrRow } from './PrRow';
 import { useReviewSortMode } from './reviewSort';
 import { prLinkTarget, usePrLinkMenu } from './usePrLinkMenu';
+import { useQueueToggle } from './useQueueToggle';
 
 interface QueueSection { key: string; title: string; detail?: string; warning?: string; data: PRRow[] }
 
@@ -37,6 +39,7 @@ const SORT_DETAIL: Record<ReviewSortMode, string> = {
   priority: 'By state, size and how long it has waited',
 };
 const NO_DEFINITIONS: PRFilterDefinition[] = [];
+const QUEUE_ICON = { ios: 'list.number', android: 'format_list_numbered' } as const;
 
 type Picker = 'sort' | 'repo' | 'requested' | 'saved';
 
@@ -62,6 +65,8 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
   const features = useFeatures();
   const colors = useTheme();
   const links = usePrLinkMenu();
+  const queueToggle = useQueueToggle();
+  const openSwipe = useRef<SwipeableMethods | null>(null);
   const now = useNow();
   const [showHidden, setShowHidden] = useState(false);
   const [filters, setFilters] = useState<PrFilters>(NO_FILTERS);
@@ -136,7 +141,21 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
       tintColor={colors.muted} colors={[colors.primaryAction]} progressBackgroundColor={colors.elevated} />,
     ListHeaderComponent: header, ListEmptyComponent: empty,
   };
-  const onLongPress = (pr: PRRow) => links.open(prLinkTarget(pr));
+  const onQueue = (pr: PRRow) => { void queueToggle.toggle(pr, !(tab === 'queue' || pr.mergeQueued)); };
+  const onLongPress = (pr: PRRow) => {
+    const extra: SheetAction[] = queueToggle.canQueue(pr) ? [{
+      label: tab === 'queue' || pr.mergeQueued ? 'Leave merge queue' : 'Add to merge queue', icon: QUEUE_ICON,
+      disabled: queueToggle.busyId === pr.id, onPress: () => onQueue(pr),
+    }] : [];
+    links.open(prLinkTarget(pr), extra);
+  };
+  const drawRow = (item: PRRow, variant: 'mine' | 'review' | 'queue', divider: boolean, stackedOn?: number | null) => {
+    const canQueue = queueToggle.canQueue(item);
+    const content = <PrRow row={item} now={now} variant={variant} divider={divider} stackedOn={stackedOn}
+      onLongPress={onLongPress} onQueue={canQueue ? onQueue : undefined} />;
+    return canQueue ? <QueueSwipeRow row={item} busy={queueToggle.busyId === item.id} openSwipe={openSwipe}
+      onQueue={onQueue}>{content}</QueueSwipeRow> : content;
+  };
 
   return <ScreenContainer>
     <Stack.Screen options={{ title: PULLS_TITLES[tab] }} />
@@ -146,21 +165,50 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
           {section.warning ? <AppText variant="caption" tone="warning">{section.warning}</AppText> : null}
           {section.detail ? <AppText variant="caption" tone="muted">{section.detail}</AppText> : null}
         </View>} />}
-      renderItem={({ item, index, section }) => <PrRow row={item} now={now} variant="queue" parentStatus={parents?.get(item.id)}
-        divider={index < section.data.length - 1} onLongPress={onLongPress} />} />
+      renderItem={({ item, index, section }) => {
+        const canQueue = queueToggle.canQueue(item);
+        const content = <PrRow row={item} now={now} variant="queue" parentStatus={parents?.get(item.id)}
+          divider={index < section.data.length - 1} onLongPress={onLongPress} onQueue={canQueue ? onQueue : undefined} />;
+        return canQueue ? <QueueSwipeRow row={item} queued busy={queueToggle.busyId === item.id} openSwipe={openSwipe}
+          onQueue={onQueue}>{content}</QueueSwipeRow> : content;
+      }} />
       : <FlatList {...common} data={mine?.rows ?? reviews ?? []} keyExtractor={(item) => item.id}
         // Hidden review requests sit under a toggle at the foot, like web. A short list, so it is not virtualized.
         ListFooterComponent={hiddenCount > 0 ? <View>
           <HiddenToggle count={hiddenCount} open={showHidden} onPress={() => setShowHidden(!showHidden)} />
           {showHidden ? hidden.map((row, index) => <PrRow key={row.id} row={row} now={now} variant="review" divider={index < hidden.length - 1}
-            onLongPress={onLongPress} />) : null}
+            onLongPress={onLongPress} onQueue={queueToggle.canQueue(row) ? onQueue : undefined} />) : null}
         </View> : undefined}
-        renderItem={({ item, index }) => <PrRow row={item} now={now} variant={tab === 'mine' ? 'mine' : 'review'}
-          stackedOn={mine?.meta.get(item.id)?.parentNumber} divider={index < (mine?.rows ?? reviews ?? []).length - 1} onLongPress={onLongPress} />} />}
+        renderItem={({ item, index }) => drawRow(item, tab === 'mine' ? 'mine' : 'review',
+          index < (mine?.rows ?? reviews ?? []).length - 1, mine?.meta.get(item.id)?.parentNumber)} />}
     {sheet ? <PickerSheet visible onClose={() => setPicker(null)} {...sheet} /> : null}
     {links.toast}
+    {queueToggle.toast}
     {links.sheet}
   </ScreenContainer>;
+}
+
+function QueueSwipeRow({ row, queued = row.mergeQueued, busy, openSwipe, onQueue, children }: {
+  row: PRRow; queued?: boolean; busy: boolean; openSwipe: React.RefObject<SwipeableMethods | null>;
+  onQueue(row: PRRow): void; children: ReactNode;
+}) {
+  const c = useTheme();
+  const swipe = useRef<SwipeableMethods | null>(null);
+  return <ReanimatedSwipeable ref={swipe} friction={2} rightThreshold={40} overshootRight={false}
+    onSwipeableOpen={() => {
+      if (openSwipe.current && openSwipe.current !== swipe.current) openSwipe.current.close();
+      openSwipe.current = swipe.current;
+    }}
+    onSwipeableClose={() => { if (openSwipe.current === swipe.current) openSwipe.current = null; }}
+    renderRightActions={() => <Pressable accessibilityRole="button" accessibilityLabel={queued ? 'Dequeue' : 'Queue'}
+      accessibilityState={{ disabled: busy }} disabled={busy} onPress={() => { swipe.current?.close(); onQueue(row); }}
+      style={[local.swipeAction, { backgroundColor: queued ? c.surface : c.primaryAction }]}>
+      <SymbolView name={QUEUE_ICON} size={18} tintColor={queued ? c.text : c.primaryText} />
+      <AppText variant="meta" style={{ color: queued ? c.text : c.primaryText }}>{queued ? 'Dequeue' : 'Queue'}</AppText>
+    </Pressable>}>
+    {/* Opaque, or the action behind the row shows through before any swipe. */}
+    <View style={{ backgroundColor: c.background }}>{children}</View>
+  </ReanimatedSwipeable>;
 }
 
 /** The picker a menu chip opens. Saved filters stay open, so several can be ticked. */
@@ -213,6 +261,7 @@ function HiddenToggle({ count, open, onPress }: { count: number; open: boolean; 
 }
 
 const local = StyleSheet.create({
+  swipeAction: { width: 88, alignItems: 'center', justifyContent: 'center', gap: 4 },
   sectionMeta: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   toggle: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44, paddingHorizontal: 4, marginTop: 8, borderTopWidth: StyleSheet.hairlineWidth },
 });
