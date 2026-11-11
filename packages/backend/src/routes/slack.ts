@@ -28,7 +28,7 @@ import {
   validMobileReturn,
 } from '../services/mobileReturn.js';
 import { slackRefusalReason, userMayUseSlack } from '../services/slack/access.js';
-import { SlackApiError } from '../services/slack/api.js';
+import { isSlackRateLimited, SlackApiError } from '../services/slack/api.js';
 import { getSlackAppConfig } from '../services/slack/config.js';
 import { listTeamChannels } from '../services/slack/channels.js';
 import { listTeamEmoji } from '../services/slack/emoji.js';
@@ -322,7 +322,13 @@ export function slackRoutes(): Router {
       res.json({ success: true, data } as ApiResponse<SlackChannelsResponse>);
     } catch (err) {
       if (!(err instanceof SlackApiError)) throw err;
-      res.status(502).json({ success: false, error: `Slack refused the channel list (${err.code}).` });
+      const { code } = err;
+      if (isSlackRateLimited(err)) {
+        const wait = err.retryAfterMs ? ` Try again in ${Math.ceil(err.retryAfterMs / 1000)} seconds.` : ' Try again in a minute.';
+        res.status(502).json({ success: false, error: `Slack is rate-limiting the channel list.${wait}` });
+        return;
+      }
+      res.status(502).json({ success: false, error: `Slack refused the channel list (${code}).` });
     }
   });
 

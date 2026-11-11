@@ -309,22 +309,22 @@ describe('Slack routes', () => {
 
   describe('GET /slack/teams/:teamId/channels', () => {
     const PAGE_ONE = [
-      { id: 'C3', name: 'zeta', is_private: false, is_member: true },
-      { id: 'C2', name: 'not-in', is_private: false, is_member: false },
-      { id: 'G1', name: 'alpha-private', is_private: true, is_member: true },
+      { id: 'C3', name: 'zeta', is_private: false, is_archived: false },
+      { id: 'C2', name: 'archived', is_private: false, is_archived: true },
+      { id: 'G1', name: 'alpha-private', is_private: true, is_archived: false },
     ];
-    const PAGE_TWO = [{ id: 'C4', name: 'mid', is_member: true }];
+    const PAGE_TWO = [{ id: 'C4', name: 'mid', is_archived: false }];
 
     function answerPages(): void {
-      slackAnswers['conversations.list'] = () => {
-        const last = slackCalls.filter((c) => c.method === 'conversations.list').at(-1);
+      slackAnswers['users.conversations'] = () => {
+        const last = slackCalls.filter((c) => c.method === 'users.conversations').at(-1);
         return last?.form.cursor === 'page-2'
           ? Response.json({ ok: true, channels: PAGE_TWO, response_metadata: { next_cursor: '' } })
           : Response.json({ ok: true, channels: PAGE_ONE, response_metadata: { next_cursor: 'page-2' } });
       };
     }
 
-    it('pages through, keeps member channels only, and sorts by name', async () => {
+    it('asks for the bot\'s own channels, pages through, drops archived ones, and sorts by name', async () => {
       await seedInstall('T1', TEST_USER_ID);
       answerPages();
       const res = await call<{ channels: unknown[]; needsScope?: string }>('GET', '/slack/teams/T1/channels');
@@ -336,7 +336,7 @@ describe('Slack routes', () => {
           { id: 'C3', name: 'zeta', isPrivate: false },
         ],
       });
-      const sent = slackCalls.filter((c) => c.method === 'conversations.list');
+      const sent = slackCalls.filter((c) => c.method === 'users.conversations');
       expect(sent).toHaveLength(2);
       expect(sent[0].form).toMatchObject({
         types: 'public_channel,private_channel',
@@ -359,7 +359,7 @@ describe('Slack routes', () => {
       answerPages();
       const res = await call('GET', '/slack/teams/T1/channels');
       expect(res.status).toBe(status);
-      if (status === 404) expect(slackCalls.filter((c) => c.method === 'conversations.list')).toHaveLength(0);
+      if (status === 404) expect(slackCalls.filter((c) => c.method === 'users.conversations')).toHaveLength(0);
     });
 
     it('caches the list for a minute per team', async () => {
@@ -367,7 +367,7 @@ describe('Slack routes', () => {
       answerPages();
       await call('GET', '/slack/teams/T1/channels');
       await call('GET', '/slack/teams/T1/channels');
-      expect(slackCalls.filter((c) => c.method === 'conversations.list')).toHaveLength(2);
+      expect(slackCalls.filter((c) => c.method === 'users.conversations')).toHaveLength(2);
 
       const realNow = Date.now;
       Date.now = () => realNow() + 60_000 + 1000;
@@ -376,7 +376,7 @@ describe('Slack routes', () => {
       } finally {
         Date.now = realNow;
       }
-      expect(slackCalls.filter((c) => c.method === 'conversations.list')).toHaveLength(4);
+      expect(slackCalls.filter((c) => c.method === 'users.conversations')).toHaveLength(4);
     });
 
     it.each([
@@ -384,26 +384,53 @@ describe('Slack routes', () => {
       ['both read scopes when Slack names none', {}, 'channels:read,groups:read'],
     ])('answers needsScope with %s, and does not cache it', async (_label, extra, needsScope) => {
       await seedInstall('T1', TEST_USER_ID);
-      slackAnswers['conversations.list'] = () => Response.json({ ok: false, error: 'missing_scope', ...extra });
+      slackAnswers['users.conversations'] = () => Response.json({ ok: false, error: 'missing_scope', ...extra });
       const res = await call('GET', '/slack/teams/T1/channels');
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual({ channels: [], needsScope });
       await call('GET', '/slack/teams/T1/channels');
-      expect(slackCalls.filter((c) => c.method === 'conversations.list')).toHaveLength(2);
+      expect(slackCalls.filter((c) => c.method === 'users.conversations')).toHaveLength(2);
     });
 
     it('stops on a cursor Slack already sent', async () => {
       await seedInstall('T1', TEST_USER_ID);
-      slackAnswers['conversations.list'] = () =>
+      slackAnswers['users.conversations'] = () =>
         Response.json({ ok: true, channels: PAGE_TWO, response_metadata: { next_cursor: 'again' } });
       const res = await call<{ channels: unknown[] }>('GET', '/slack/teams/T1/channels');
       expect(res.status).toBe(200);
-      expect(slackCalls.filter((c) => c.method === 'conversations.list')).toHaveLength(2);
+      expect(slackCalls.filter((c) => c.method === 'users.conversations')).toHaveLength(2);
+    });
+
+    it.each([
+      ['an HTTP 429 with Retry-After', () => new Response('', { status: 429, headers: { 'retry-after': '30' } }), 'Try again in 30 seconds.'],
+      ['a ratelimited answer', () => Response.json({ ok: false, error: 'ratelimited' }), 'Try again in a minute.'],
+    ])('answers a readable 502 on %s with no earlier list', async (_label, answer, wait) => {
+      await seedInstall('T1', TEST_USER_ID);
+      slackAnswers['users.conversations'] = answer;
+      const res = await call<unknown>('GET', '/slack/teams/T1/channels');
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe(`Slack is rate-limiting the channel list. ${wait}`);
+    });
+
+    it('serves the last good list when Slack rate-limits a refresh', async () => {
+      await seedInstall('T1', TEST_USER_ID);
+      answerPages();
+      await call('GET', '/slack/teams/T1/channels');
+      slackAnswers['users.conversations'] = () => new Response('', { status: 429, headers: { 'retry-after': '30' } });
+      const realNow = Date.now;
+      Date.now = () => realNow() + 60_000 + 1000;
+      try {
+        const res = await call<{ channels: { id: string }[] }>('GET', '/slack/teams/T1/channels');
+        expect(res.status).toBe(200);
+        expect(res.body.data!.channels.map((c) => c.id)).toEqual(['G1', 'C4', 'C3']);
+      } finally {
+        Date.now = realNow;
+      }
     });
 
     it('answers 502 on another Slack error', async () => {
       await seedInstall('T1', TEST_USER_ID);
-      slackAnswers['conversations.list'] = () => Response.json({ ok: false, error: 'ratelimited' });
+      slackAnswers['users.conversations'] = () => Response.json({ ok: false, error: 'internal_error' });
       expect((await call('GET', '/slack/teams/T1/channels')).status).toBe(502);
     });
   });
