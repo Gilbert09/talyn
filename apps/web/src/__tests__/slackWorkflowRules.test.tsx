@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { validateWorkflow, workflowToInput, type WorkflowInput } from '@talyn/shared';
@@ -11,6 +11,11 @@ const installation = {
   teamId: 'T1', teamName: 'Acme Slack', teamUrl: null, botUserId: 'UBOT', botName: 'talyn',
   installedByMe: true, needsReinstall: false, canReply: true, installedAt: '2026-10-01T00:00:00Z',
 };
+
+beforeAll(() => {
+  globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as never;
+  Element.prototype.scrollIntoView ??= () => {};
+});
 
 beforeEach(() => {
   useWorkspaceStore.setState({ currentWorkspaceId: 'ws1', repositories: [{ id: 'repo1', fullName: 'acme/app' }] } as never);

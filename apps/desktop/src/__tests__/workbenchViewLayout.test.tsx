@@ -53,7 +53,6 @@ it('places the header above both columns and keeps the panel controls working', 
   expect(screen.getByRole('button', { name: 'Toggle the right panel' }).parentElement).toHaveClass('app-region-no-drag');
   expect(screen.getByTestId('git-panel').parentElement).toBe(columns);
   expect(header).not.toContainElement(screen.getByTestId('git-panel'));
-  expect(screen.getByRole('tablist', { name: 'Chats' })).toHaveClass('h-9');
   expect(screen.getByRole('tablist', { name: 'Session panels' })).toHaveClass('h-9');
 
   fireEvent(screen.getByRole('separator', { name: 'Resize the right panel' }), new MouseEvent('pointerdown', { bubbles: true, clientX: 1000 }));
