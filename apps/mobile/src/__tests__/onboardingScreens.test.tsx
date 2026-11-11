@@ -108,7 +108,7 @@ describe('onboarding gate', () => {
     await waitFor(() => expect(onboardingProgress.read(key)).toBe(false));
   });
 
-  it('lets a person skip the agent step', async () => {
+  it('requires an agent connection and says so', async () => {
     onboardingProgress.start(key);
     mockWorkflow.api.workspaces.get.mockResolvedValue(githubWorkspace as never);
     mockWorkflow.api.workbenches.readiness.mockResolvedValue({ sandbox: { ok: true, reasons: [], agents: {
@@ -118,7 +118,18 @@ describe('onboarding gate', () => {
     await waitFor(() => expect(routerScreen).toHavePathname('/onboarding/agent'));
     expect(await routerScreen.findByLabelText('Claude Code: Connect Claude.')).toBeVisible();
     expect(routerScreen.getByRole('button', { name: 'Start using Talyn' })).toBeDisabled();
-    await act(async () => { fireEvent.press(routerScreen.getByRole('button', { name: 'Skip for now' })); });
+    expect(routerScreen.getByText('Connect Claude or ChatGPT to continue.')).toBeVisible();
+    expect(routerScreen.queryByRole('button', { name: 'Skip for now' })).toBeNull();
+  });
+
+  it('lets a person skip the agent step when the sandbox is unavailable', async () => {
+    onboardingProgress.start(key);
+    mockWorkflow.api.workspaces.get.mockResolvedValue(githubWorkspace as never);
+    mockWorkflow.api.workbenches.readiness.mockResolvedValue({ sandbox: { ok: false,
+      reasons: [{ code: 'fleet_disabled', message: 'Paused.' }], agents: {} } } as never);
+    await renderRouter(routes, { initialUrl: '/home' });
+    await waitFor(() => expect(routerScreen).toHavePathname('/onboarding/agent'));
+    await act(async () => { fireEvent.press(await routerScreen.findByRole('button', { name: 'Skip for now' })); });
     await waitFor(() => expect(routerScreen).toHavePathname('/home'));
     expect(onboardingProgress.read(key)).toBe(false);
   });

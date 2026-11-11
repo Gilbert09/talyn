@@ -6,7 +6,7 @@ import { useMobileRuntime, useWorkspace } from '../../auth/AuthProvider';
 import { AppText, Button } from '../../components/UI';
 import { trackEvent } from '../../lib/analytics';
 import { AppLoading } from '../../navigation/AppLoading';
-import { agentReady, type OnboardingStep } from '../../navigation/onboardingGate';
+import { agentReady, agentStepSkippable, type OnboardingStep } from '../../navigation/onboardingGate';
 import { HOME } from '../../navigation/routes';
 import { useOnboardingGate } from '../../navigation/useOnboardingGate';
 import { workspaceGate } from '../../navigation/workspaceGate';
@@ -72,6 +72,7 @@ export function GithubStepScreen() {
   const connected = connection.connected || Boolean(resource.data?.integrations?.github);
   return <OnboardingShell step="github" footer={<Footer step="github" canAdvance={connected} next={() => { completed('github'); router.push(stepRoute('repos')); }} />}>
     <ConnectGitHubStep workspaceId={workspace} connection={connection} />
+    {connected ? null : <AppText variant="meta" tone="muted">Connect GitHub and install the Talyn GitHub App on at least one account to continue.</AppText>}
   </OnboardingShell>;
 }
 
@@ -81,6 +82,7 @@ export function ReposStepScreen() {
   const count = repositories.data?.length ?? 0;
   return <OnboardingShell step="repos" footer={<Footer step="repos" canAdvance={count > 0} next={() => { completed('repos'); router.push(stepRoute('agent')); }} />}>
     <RepositoriesPanel workspaceId={workspace} />
+    {count > 0 ? null : <AppText variant="meta" tone="muted">Choose at least one repository to continue.</AppText>}
   </OnboardingShell>;
 }
 
@@ -95,10 +97,11 @@ export function AgentStepScreen() {
     trackEvent('onboarding_completed', { github_connected: true, repos_watched: repositories.data?.length ?? 0, agent_connected: true });
     done();
   };
-  return <OnboardingShell step="agent" footer={<Footer step="agent" nextLabel="Start using Talyn" canAdvance={ready} next={next} skip={ready ? undefined : done} />}>
+  return <OnboardingShell step="agent" footer={<Footer step="agent" nextLabel="Start using Talyn" canAdvance={ready} next={next} skip={!ready && agentStepSkippable(readiness.data) ? done : undefined} />}>
     <AppText variant="meta" tone="muted">Use your Claude or ChatGPT subscription. Sessions run on your own plan.</AppText>
     <ConnectAgentPanel onConnected={() => { workflow.refresh('readiness'); workflow.refresh('providers'); }} />
     <ReadinessChecklist readiness={readiness.data} />
+    {ready || agentStepSkippable(readiness.data) ? null : <AppText variant="meta" tone="muted">Connect Claude or ChatGPT to continue.</AppText>}
   </OnboardingShell>;
 }
 

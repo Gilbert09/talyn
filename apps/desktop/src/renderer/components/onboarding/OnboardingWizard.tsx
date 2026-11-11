@@ -12,6 +12,8 @@ import { WatchReposStep } from './steps/WatchReposStep';
 import { SourceSurvey, type SignupSource } from './SourceSurvey';
 import { useNavigationStore } from '../../stores/navigation';
 
+const GITHUB_POLL_MS = 4000;
+
 const STEPS = [
   { key: 'github', title: 'Connect GitHub' },
   { key: 'repos', title: 'Choose where your agent will work.' },
@@ -23,7 +25,9 @@ const STEPS = [
 export function OnboardingWizard() {
   const { currentWorkspaceId, repositories, cloudProviders, posthogStatus, setOnboardingComplete, setJustOnboarded } =
     useWorkspaceStore();
-  const { status, user } = useGithubConnection(currentWorkspaceId);
+  // The browser round trip can finish without a focus event reaching the app,
+  // so the GitHub step also re-checks every few seconds until it connects.
+  const { status, user } = useGithubConnection(currentWorkspaceId, { pollMs: GITHUB_POLL_MS });
   const navigate = useNavigationStore((s) => s.navigate);
   const [step, setStep] = useState(0);
   const [creatingSession, setCreatingSession] = useState(false);
@@ -56,6 +60,7 @@ export function OnboardingWizard() {
   const posthogConnected = posthogStatus?.connected === true;
   const agentConnected = claudeConnected || codexConnected || posthogConnected;
   // A session runs on the fleet, so where the fleet is offered only a fleet agent can start one.
+  // Where the fleet is not offered, PostHog Code is the only agent, so it stays the way through.
   const sessionAgentConnected = fleet ? claudeConnected || codexConnected : posthogConnected;
 
   useEffect(() => {
@@ -70,6 +75,17 @@ export function OnboardingWizard() {
 
   const canAdvance = step === 0 ? githubConnected : step === 1 ? repositories.length > 0 : sessionAgentConnected;
   const isLast = step === STEPS.length - 1;
+  const blockedHint = canAdvance
+    ? null
+    : step === 0
+      ? 'Connect GitHub and install the Talyn GitHub App on at least one account to continue.'
+      : step === 1
+        ? 'Choose at least one repository to continue.'
+        : step === 2
+          ? cloudProviders && !fleet
+            ? 'Connect PostHog Code to continue.'
+            : 'Connect Claude or ChatGPT to continue.'
+          : null;
 
   function finishOnboarding() {
     trackEvent('onboarding_completed', {
@@ -161,6 +177,12 @@ export function OnboardingWizard() {
             </div>
           )}
         </div>
+
+        {blockedHint && (
+          <p className="text-center text-[13px] text-muted-foreground" role="status">
+            {blockedHint}
+          </p>
+        )}
 
         {/* Footer nav */}
         <div className="flex items-center justify-between pt-2">
