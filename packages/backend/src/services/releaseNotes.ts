@@ -7,6 +7,7 @@ import {
   gatedKeysOf,
   FEATURE_FLAGS,
   FEATURE_FLAG_KEYS,
+  RELEASE_SURFACES,
   type FeatureFlagRegister,
   type ReleaseHighlight,
   type ReleaseNoteEntry,
@@ -30,7 +31,7 @@ import { releaseNotes as releaseNotesTable } from '../db/schema.js';
  */
 
 const HIGHLIGHT_KINDS: readonly HighlightKind[] = ['feature', 'fix', 'improvement'];
-const SURFACES: readonly ReleaseSurface[] = ['desktop', 'web'];
+const SURFACES = RELEASE_SURFACES;
 
 /** Ingest is off entirely when the secret is unset — see {@link ingestTokenValid}. */
 export function releaseIngestConfigured(): boolean {

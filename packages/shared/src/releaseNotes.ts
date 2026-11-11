@@ -33,8 +33,16 @@ import {
 /** What kind of change a highlight describes. Drives the modal's icon. */
 export type HighlightKind = 'feature' | 'fix' | 'improvement';
 
-/** Which client a highlight is relevant to. A change can land on both. */
-export type ReleaseSurface = 'desktop' | 'web';
+/**
+ * Which client a highlight is relevant to. A change can land on more than one.
+ *
+ * `mobile` is kept apart from the other two on purpose: a mobile change shows
+ * only in the mobile app's "What's new", and never in the desktop or web modal.
+ */
+export type ReleaseSurface = 'desktop' | 'web' | 'mobile';
+
+/** Every surface, in display order. The backend validates against this list. */
+export const RELEASE_SURFACES: readonly ReleaseSurface[] = ['desktop', 'web', 'mobile'];
 
 /** One user-facing line in the modal. Written by the CI generator. */
 export interface ReleaseHighlight {
@@ -44,8 +52,8 @@ export interface ReleaseHighlight {
   description: string;
   kind: HighlightKind;
   /**
-   * Non-empty. A highlight that applies to neither client should not have
-   * been generated at all.
+   * Non-empty. A highlight that applies to no client should not have been
+   * generated at all.
    */
   surfaces: ReleaseSurface[];
   /**
@@ -257,13 +265,18 @@ export function filterReleaseCommits(
 
 /**
  * Which clients a commit's scope implies. `desktop` and `web` are the two
- * forks; everything else (backend, shared, a bare scope-less commit) reaches
- * both. A starting point for the generator — the model may override it when
- * the subject says otherwise.
+ * forks, and `mobile` is the mobile app; everything else (backend, shared, a
+ * bare scope-less commit) reaches desktop and web. A starting point for the
+ * generator — the model may override it when the subject says otherwise.
+ *
+ * Mobile is never a default. A mobile change is only for the mobile app, and a
+ * desktop or web change rarely applies there, so only the `mobile` scope (or
+ * the model, for a change the mobile app clearly shows) puts a highlight on it.
  */
 export function surfacesForScope(scope: string | null): ReleaseSurface[] {
   if (scope === 'desktop') return ['desktop'];
   if (scope === 'web') return ['web'];
+  if (scope === 'mobile') return ['mobile'];
   return ['desktop', 'web'];
 }
 
