@@ -435,6 +435,24 @@ export const FEATURE_FLAGS = {
     releaseScopes: ['split-view'],
   },
 
+  /**
+   * Session wake-ups that wait for CI: `talyn_schedule_wakeup` with
+   * `until_ci` sends the turn when the checks on the session's pull request
+   * settle, the head moves or the PR closes, instead of at a guessed time.
+   *
+   * Server-only, asked against the workspace owner when the agent schedules
+   * one. Fallback OFF and gated while it is tried out; with it off, the
+   * request is refused and the agent schedules a timed wake-up instead.
+   */
+  sessionCiWait: {
+    posthogKey: 'session-ci-wait',
+    envOverride: 'SESSION_CI_WAIT_ENABLED',
+    fallback: false,
+    description: 'Session CI wait — wake a session when the checks on its pull request settle',
+    availability: 'gated',
+    releaseScopes: ['session-ci-wait'],
+  },
+
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */

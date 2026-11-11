@@ -75,13 +75,15 @@ talyn_run_background
 - Read output with `talyn_background_logs`, list jobs with `talyn_list_background`, stop one with `talyn_stop_background`.
 - A move or resize of the session stops every job.
 
-To look at something later (a deploy, a CI run), schedule a wake-up and end your turn:
+To look at something later (a deploy, a long job), schedule a wake-up and end your turn:
 
 ```
 talyn_schedule_wakeup
   delay_seconds: 1200
   reason: Check that the deploy finished and the smoke tests pass.
 ```
+
+To wait for CI on this session's pull request, do not guess a time. Set `until_ci: true` and `head_sha` (from `git rev-parse HEAD`) after you push. Talyn wakes you when the checks finish. If the call fails, schedule a timed wake-up instead.
 
 Start Docker and database services only when a test needs them. Stop them when you are done.
 

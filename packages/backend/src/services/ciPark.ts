@@ -2,11 +2,9 @@ import { v4 as uuid } from 'uuid';
 import { and, eq, sql } from 'drizzle-orm';
 import {
   buildAwaitCiResumePrompt,
-  deriveCiVerdict,
   isSandboxSize,
   readCloudTaskMeta,
   type AwaitCiOutcome,
-  type CheckFact,
   type CloudTaskMetadata,
   type SandboxSize,
   type TaskResult,
@@ -20,6 +18,7 @@ import { billingEnabled, checkBoxGate, isBoxGateError } from './billing/entitlem
 import { boxDeferral, deferralRetryAt, noteBoxRefusal, ownerBoxHold, releaseBoxHold } from './billing/boxDeferral.js';
 import { meterBoxClosed, meterBoxOpened } from './billing/usageHooks.js';
 import { readLedgerFacts } from './checkCounts.js';
+import { sameCommit, settledOutcome } from './ciSettle.js';
 import { debugBus } from './debugBus.js';
 import { domainEvents, type DomainPrChecksEvent } from './events.js';
 import { getSelfHostedClient } from './selfHosted/credentials.js';
@@ -52,6 +51,8 @@ import { ownerOfWorkspace } from './workflows/owner.js';
  * flag off no task is ever `waiting_ci`, so the sweep finds nothing and the
  * `pr:checks` listener returns on an empty set.
  */
+
+export { sameCommit, settledOutcome };
 
 /** How often the sweep looks at parked runs. */
 const SWEEP_INTERVAL_MS = 60_000;
@@ -113,13 +114,6 @@ export function readAwaitCi(metadata: Record<string, unknown> | null | undefined
   };
 }
 
-/** Same commit, when one side may be a short sha. */
-export function sameCommit(a: string, b: string): boolean {
-  if (!a || !b) return false;
-  const x = a.toLowerCase();
-  const y = b.toLowerCase();
-  return x.startsWith(y) || y.startsWith(x);
-}
 
 /** The PR a task works, with the two facts the park needs. */
 async function prForTask(taskId: string): Promise<{ state: string; headSha: string | null } | null> {
@@ -227,21 +221,6 @@ export async function parkForCi(input: ParkInput): Promise<boolean> {
 // Reading CI
 // ---------------------------------------------------------------------------
 
-/**
- * What the checks on one commit say, or null while they have not settled.
- * Settled means at least one check and none pending or in progress. A failure
- * with others still running waits: the agent gets one complete answer.
- */
-export function settledOutcome(facts: readonly CheckFact[]): AwaitCiOutcome | null {
-  if (facts.length === 0) return null;
-  if (facts.some((f) => f.state === 'pending' || f.state === 'in_progress')) return null;
-  const verdict = deriveCiVerdict(facts);
-  if (verdict.ciStatus === 'failing_required' || verdict.ciStatus === 'needs_human') {
-    const checks = facts.filter((f) => f.state === 'failure' && f.required !== false).map((f) => f.name);
-    return { kind: 'failing', checks: [...new Set(checks)].sort() };
-  }
-  return { kind: 'passing' };
-}
 
 // ---------------------------------------------------------------------------
 // Wake

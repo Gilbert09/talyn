@@ -43,6 +43,8 @@ describe('sessionState', () => {
   describe('background work', () => {
     const job = (status: WorkbenchBackground['jobs'][number]['status']) => ({ status }) as WorkbenchBackground['jobs'][number];
     const wakeup = (status: WorkbenchBackground['wakeups'][number]['status']) => ({ status }) as WorkbenchBackground['wakeups'][number];
+    const ciWakeup = (status: WorkbenchBackground['wakeups'][number]['status']) =>
+      ({ status, ci: { pullRequestId: 'p1', headSha: 'a'.repeat(40) } }) as WorkbenchBackground['wakeups'][number];
     const bg = (jobs: ReturnType<typeof job>[], wakeups: ReturnType<typeof wakeup>[] = []) => ({ jobs, wakeups });
 
     it.each<[string, Partial<Wb>, ReturnType<typeof chat>[], Record<string, true>, ReturnType<typeof pr> | null, ReturnType<typeof bg> | undefined, SessionStateKind]>([
@@ -60,6 +62,15 @@ describe('sessionState', () => {
       ['an open PR wins over a scheduled wake-up', {}, [], {}, pr('open', { ciStatus: 'running' }), bg([], [wakeup('scheduled')]), 'pr_waiting'],
       ['a merged PR wins over a scheduled wake-up', {}, [], {}, pr('merged'), bg([], [wakeup('scheduled')]), 'merged'],
       ['a running job wins over a scheduled wake-up', {}, [], {}, null, bg([job('running')], [wakeup('scheduled')]), 'background_job'],
+      ['a CI wake-up on an open PR waits for CI', {}, [], {}, pr('open', { ciStatus: 'running' }), bg([], [ciWakeup('scheduled')]), 'waiting_ci'],
+      ['a CI wake-up wins over failing checks', {}, [], {}, pr('open', { ciStatus: 'failing_required' }), bg([], [ciWakeup('scheduled')]), 'waiting_ci'],
+      ['a CI wake-up wins over a draft PR', {}, [], {}, pr('open', { draft: true }), bg([], [ciWakeup('scheduled')]), 'waiting_ci'],
+      ['a merged PR wins over a CI wake-up', {}, [], {}, pr('merged'), bg([], [ciWakeup('scheduled')]), 'merged'],
+      ['a closed PR wins over a CI wake-up', {}, [], {}, pr('closed'), bg([], [ciWakeup('scheduled')]), 'closed'],
+      ['a running job wins over a CI wake-up', {}, [], {}, pr('open'), bg([job('running')], [ciWakeup('scheduled')]), 'background_job'],
+      ['a running chat wins over a CI wake-up', {}, [chat('running')], {}, pr('open'), bg([], [ciWakeup('scheduled')]), 'working'],
+      ['a fired CI wake-up leaves the PR state', {}, [], {}, pr('open'), bg([], [ciWakeup('fired')]), 'ready_to_merge'],
+      ['a CI wake-up with no PR is a wake-up', {}, [], {}, null, bg([], [ciWakeup('scheduled')]), 'wakeup'],
       ['a fired, cancelled or failed wake-up is not work', {}, [], {}, null, bg([], [wakeup('fired'), wakeup('cancelled'), wakeup('failed')]), 'idle'],
       ['no background payload', {}, [], {}, null, undefined, 'idle'],
     ])('%s', (_name, over, chats, unread, row, background, kind) => {
@@ -69,6 +80,8 @@ describe('sessionState', () => {
     it('labels the background states', () => {
       expect(sessionState(WB, [], {}, null, false, bg([job('running')])).label).toBe('Background job running');
       expect(sessionState(WB, [], {}, null, false, bg([], [wakeup('scheduled')])).label).toBe('Wake-up scheduled');
+      expect(sessionState(WB, [], {}, pr('open'), false, bg([], [ciWakeup('scheduled')])).label)
+        .toMatch(/^#\d+: waiting for CI, then the agent continues$/);
     });
   });
 

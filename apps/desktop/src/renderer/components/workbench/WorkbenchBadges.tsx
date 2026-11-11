@@ -6,6 +6,7 @@ import {
   GitPullRequest,
   GitPullRequestClosed,
   GitPullRequestDraft,
+  Hourglass,
   Loader2,
   Timer,
 } from 'lucide-react';
@@ -98,6 +99,8 @@ export function SessionStateIcon({ state }: { state: SessionState }) {
       return <GitPullRequestClosed className={cn(icon, 'text-destructive')} aria-label={label} />;
     case 'unshipped':
       return <span className={cn(dot, 'border-[1.5px] border-dashed border-muted-foreground')} aria-label={label} />;
+    case 'waiting_ci':
+      return <Hourglass className={cn(icon, 'text-success')} aria-label={label} data-attr="session-state-waiting-ci" />;
     case 'wakeup':
       return <Timer className={cn(icon, 'text-muted-foreground')} aria-label={label} data-attr="session-state-wakeup" />;
     case 'idle':

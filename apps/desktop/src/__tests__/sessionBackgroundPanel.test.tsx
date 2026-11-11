@@ -17,7 +17,7 @@ const job: WorkbenchBackgroundJob = {
 };
 const wakeup: WorkbenchWakeup = {
   id: 'wake-1', workbenchId: 'wb-1', chatId: 'chat-1', wakeAt: '2026-11-08T11:00:00Z', reason: 'Check the build',
-  status: 'scheduled', failureDetail: null, createdBy: 'agent', sourceJobId: null,
+  status: 'scheduled', failureDetail: null, createdBy: 'agent', sourceJobId: null, ci: null,
   createdAt: '2026-11-08T09:00:00Z', firedAt: null,
 };
 

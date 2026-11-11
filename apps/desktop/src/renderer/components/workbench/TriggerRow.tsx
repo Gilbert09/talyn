@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { AlarmClock, Terminal } from 'lucide-react';
+import { AlarmClock, CircleCheck, CircleX, Terminal } from 'lucide-react';
 import { messageTriggerText, type WorkbenchMessageTrigger } from '@talyn/shared';
 
 export function TriggerRow({ trigger, text }: { trigger: WorkbenchMessageTrigger; text: string }) {
   const [open, setOpen] = useState(false);
-  const Icon = trigger.kind === 'wakeup' ? AlarmClock : Terminal;
+  const Icon = trigger.kind === 'job_exit'
+    ? Terminal
+    : trigger.ci === 'passing' ? CircleCheck : trigger.ci === 'failing' ? CircleX : AlarmClock;
   return (
     <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
       <div className="flex items-center gap-2">

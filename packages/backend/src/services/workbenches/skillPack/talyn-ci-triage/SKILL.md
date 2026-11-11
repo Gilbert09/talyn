@@ -110,7 +110,20 @@ If it fails again the same way, treat it as real.
 
 ## 8. Wait for the new result
 
-Wait in one call. Do not loop on short sleeps:
+First, ask Talyn to wake you when CI finishes, then end your turn:
+
+```
+talyn_schedule_wakeup
+  until_ci: true
+  head_sha: <the output of git rev-parse HEAD>
+  reason: Read the CI result on the fix for <check name>.
+```
+
+- Talyn starts a new turn when every check on that commit has finished. The turn says which required checks failed.
+- It also starts the turn when somebody else pushes, or the pull request merges or closes. After 3 hours, it starts the turn and you read CI yourself.
+- The sandbox sleeps while you wait. That costs nothing.
+
+If the call fails (the workspace does not have it, or the session has no pull request), wait in one call. Do not loop on short sleeps:
 
 ```bash
 SHA=$(git rev-parse HEAD)

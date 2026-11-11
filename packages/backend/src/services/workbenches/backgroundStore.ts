@@ -8,7 +8,13 @@ import {
   type WorkbenchWakeupStatus,
 } from '@talyn/shared';
 import { getPoolDbClient, type Database } from '../../db/client.js';
-import { workbenchBackgroundJobs as jobs, workbenches, workbenchWakeups as wakeups } from '../../db/schema.js';
+import {
+  pullRequests,
+  workbenchBackgroundJobs as jobs,
+  workbenchChats,
+  workbenches,
+  workbenchWakeups as wakeups,
+} from '../../db/schema.js';
 
 /**
  * Storage for session background jobs and wake-ups (migration 0119). Both
@@ -81,6 +87,9 @@ export const WAKEUP_COLUMNS = {
   payerUserId: wakeups.payerUserId,
   payerWorkspaceId: wakeups.payerWorkspaceId,
   sourceJobId: wakeups.sourceJobId,
+  ciPullRequestId: wakeups.ciPullRequestId,
+  ciHeadSha: wakeups.ciHeadSha,
+  ciPrHeadAtSchedule: wakeups.ciPrHeadAtSchedule,
   createdAt: wakeups.createdAt,
   firedAt: wakeups.firedAt,
 } as const;
@@ -97,6 +106,8 @@ export const WAKEUP_LIST_COLUMNS = {
   failureDetail: wakeups.failureDetail,
   createdBy: wakeups.createdBy,
   sourceJobId: wakeups.sourceJobId,
+  ciPullRequestId: wakeups.ciPullRequestId,
+  ciHeadSha: wakeups.ciHeadSha,
   createdAt: wakeups.createdAt,
   firedAt: wakeups.firedAt,
 } as const;
@@ -137,6 +148,7 @@ export function publicWakeup(row: WakeupListRow): WorkbenchWakeup {
     failureDetail: row.failureDetail,
     createdBy: row.createdBy as WorkbenchWakeupCreatedBy,
     sourceJobId: row.sourceJobId,
+    ci: row.ciPullRequestId && row.ciHeadSha ? { pullRequestId: row.ciPullRequestId, headSha: row.ciHeadSha } : null,
     createdAt: row.createdAt.toISOString(),
     firedAt: iso(row.firedAt),
   };
@@ -261,6 +273,55 @@ export function dueWakeupsQuery(now: Date, limit: number) {
     .limit(limit);
 }
 
+/** A scheduled CI wake-up with the facts of its pull request. */
+export interface CiWakeupRow {
+  id: string;
+  workspaceId: string;
+  /** The wake-up's chat. `running` means a turn is on, and the agent is awake to see CI for itself. */
+  chatStatus: string | null;
+  wakeAt: Date;
+  ciPullRequestId: string;
+  ciHeadSha: string;
+  ciPrHeadAtSchedule: string | null;
+  prState: string | null;
+  prHeadSha: string | null;
+  owner: string | null;
+  repo: string | null;
+  number: number | null;
+}
+
+/**
+ * Scheduled CI wake-ups, with their pull request's state and head. All of
+ * them, or only those on the given pull requests (the checks listener).
+ */
+export async function scheduledCiWakeups(opts: { pullRequestIds?: string[]; limit: number }): Promise<CiWakeupRow[]> {
+  if (opts.pullRequestIds && opts.pullRequestIds.length === 0) return [];
+  const rows = await db().select({
+    id: wakeups.id,
+    workspaceId: wakeups.workspaceId,
+    chatStatus: workbenchChats.status,
+    wakeAt: wakeups.wakeAt,
+    ciPullRequestId: wakeups.ciPullRequestId,
+    ciHeadSha: wakeups.ciHeadSha,
+    ciPrHeadAtSchedule: wakeups.ciPrHeadAtSchedule,
+    prState: pullRequests.state,
+    prHeadSha: sql<string | null>`${pullRequests.lastSummary} ->> 'headSha'`,
+    owner: pullRequests.owner,
+    repo: pullRequests.repo,
+    number: pullRequests.number,
+  }).from(wakeups)
+    .leftJoin(pullRequests, eq(pullRequests.id, wakeups.ciPullRequestId))
+    .leftJoin(workbenchChats, eq(workbenchChats.id, wakeups.chatId))
+    .where(and(
+      eq(wakeups.status, 'scheduled'),
+      isNotNull(wakeups.ciPullRequestId),
+      ...(opts.pullRequestIds ? [inArray(wakeups.ciPullRequestId, opts.pullRequestIds)] : []),
+    ))
+    .orderBy(asc(wakeups.wakeAt))
+    .limit(opts.limit);
+  return rows.filter((r): r is CiWakeupRow => Boolean(r.ciPullRequestId && r.ciHeadSha));
+}
+
 /**
  * The claim: `scheduled` to `fired` in one statement. Two sweeps that both
  * read the row as due cannot both win it, so a wake-up sends one turn.
@@ -285,6 +346,23 @@ export async function settleWakeup(
     .where(and(eq(wakeups.id, id), eq(wakeups.status, from)))
     .returning(WAKEUP_COLUMNS);
   return row ?? null;
+}
+
+/**
+ * Cancel the scheduled CI wake-ups of one chat. A new CI wake-up replaces
+ * them: after another push, the old one would only report a moved head.
+ */
+export async function cancelScheduledCiWakeups(workbenchId: string, chatId: string, detail: string): Promise<number> {
+  const rows = await db().update(wakeups)
+    .set({ status: 'cancelled', failureDetail: detail })
+    .where(and(
+      eq(wakeups.workbenchId, workbenchId),
+      eq(wakeups.chatId, chatId),
+      eq(wakeups.status, 'scheduled'),
+      isNotNull(wakeups.ciPullRequestId),
+    ))
+    .returning({ id: wakeups.id });
+  return rows.length;
 }
 
 /** Cancel every scheduled wake-up of an archived session. Returns the sessions touched. */
