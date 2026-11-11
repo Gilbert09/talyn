@@ -262,8 +262,8 @@ export function Nav() {
 
 /**
  * "Star on GitHub". GitHub has no way to star from another site, so this
- * opens the repository, where the Star button is one click away. No count:
- * the repository is young, and a small number reads as "nobody is here".
+ * opens the repository, where the Star button is one click away. The count is
+ * read at build time (next.config.mjs) and is absent when that read failed.
  */
 function StarButton({
   placement,
@@ -274,6 +274,8 @@ function StarButton({
   size?: "sm" | "md";
   className?: string;
 }) {
+  // A literal member access: Next replaces it with the build-time value.
+  const stars = process.env.GITHUB_STARS;
   return (
     <a
       href={site.githubUrl}
@@ -286,6 +288,11 @@ function StarButton({
         <Github className="h-4 w-4" />
         <Star className="h-3.5 w-3.5" />
         Star
+        {stars && (
+          <span className="rounded-md bg-ink/[0.06] px-1.5 py-0.5 font-mono text-xs font-medium text-ink-600">
+            {Number(stars).toLocaleString("en-US")}
+          </span>
+        )}
       </Button>
     </a>
   );

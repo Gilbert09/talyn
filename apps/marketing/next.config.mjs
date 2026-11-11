@@ -1,3 +1,23 @@
+/**
+ * The repository's star count, read once per build for the nav's Star button.
+ * Build time, not page load: GitHub's unauthenticated API allows 60 requests
+ * an hour per IP, and the page must not wait on it. Any failure gives "", and
+ * the button then shows no number.
+ */
+async function githubStars() {
+  try {
+    const res = await fetch("https://api.github.com/repos/Gilbert09/talyn", {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return "";
+    const { stargazers_count: n } = await res.json();
+    return Number.isInteger(n) ? String(n) : "";
+  } catch {
+    return "";
+  }
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -8,6 +28,7 @@ const nextConfig = {
   // the property we want: see lib/flags.ts.
   env: {
     BLOG_ENABLED: process.env.BLOG_ENABLED ?? "",
+    GITHUB_STARS: await githubStars(),
   },
   images: {
     remotePatterns: [{ protocol: "https", hostname: "img.logo.dev" }],
