@@ -57,11 +57,14 @@ function relative(iso: string): string {
 
 function OutcomeLine({ outcome }: { outcome: WorkflowActionOutcome }) {
   const label = WORKFLOW_ACTION_LABELS[outcome.type] ?? outcome.type;
+  const detail = String(outcome.code) === 'slack_scope_missing'
+    ? 'Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.'
+    : outcome.detail ?? outcome.error ?? '';
   return (
     <div className="flex items-baseline gap-2 text-xs">
       <span className={outcome.ok ? 'text-green-500' : 'text-red-500'}>{outcome.ok ? '+' : 'x'}</span>
       <span className="font-medium">{label}</span>
-      <span className="text-muted-foreground">{outcome.detail ?? outcome.error ?? ''}</span>
+      <span className="text-muted-foreground">{detail}</span>
     </div>
   );
 }
@@ -86,7 +89,7 @@ export function WorkflowRunsList({
   if (runs.length === 0) {
     return (
       <p className="p-4 text-sm text-muted-foreground">
-        This workflow has not run yet. It fires on the next matching pull request event.
+        This workflow has not run yet. It fires on the next matching event.
       </p>
     );
   }
@@ -115,7 +118,7 @@ export function WorkflowRunsList({
               </a>
             ) : (
               <span className="font-medium">
-                {run.repoFullName}#{run.prNumber}
+                {run.subjectLabel || (run.integration === 'slack' ? 'Slack message' : `${run.repoFullName}#${run.prNumber}`)}
               </span>
             )}
             <span className="ml-auto text-xs text-muted-foreground">
@@ -126,6 +129,9 @@ export function WorkflowRunsList({
           {run.prTitle && (
             <p className="truncate text-xs text-muted-foreground">{run.prTitle}</p>
           )}
+          {run.error && <p className="text-xs text-red-500">{run.error === 'slack_scope_missing'
+            ? 'Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.'
+            : run.error}</p>}
 
           <div className="space-y-0.5">
             {run.actions.map((outcome, i) => (

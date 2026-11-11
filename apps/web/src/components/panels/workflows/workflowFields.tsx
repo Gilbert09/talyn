@@ -1,10 +1,51 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Plus, X } from 'lucide-react';
-import type { WorkflowActorMatch, WorkflowSuggestions } from '@talyn/shared';
-import { WORKFLOW_ACTOR_KIND_LABELS, WORKFLOW_ACTOR_KINDS } from '@talyn/shared';
+import { MAX_WORKFLOW_NAME_LENGTH } from '@talyn/shared';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { cn } from '../../../lib/utils';
+
+export function WorkflowNameField({ value, integration, onChange }: {
+  value: string;
+  integration: 'github' | 'slack';
+  onChange: (name: string) => void;
+}) {
+  return <div className="space-y-1.5">
+    <label className="text-sm font-medium" htmlFor="workflow-name">Name</label>
+    <Input id="workflow-name" className="h-10 text-base" value={value}
+      maxLength={MAX_WORKFLOW_NAME_LENGTH}
+      placeholder={integration === 'slack' ? 'Start work from Slack' : 'Label new PRs from bots'}
+      onChange={(event) => onChange(event.target.value)} />
+  </div>;
+}
+
+export function WorkflowRunCapField({ value, integration, onChange }: {
+  value: number;
+  integration: 'github' | 'slack';
+  onChange: (value: number) => void;
+}) {
+  return <div className="mt-2 rounded-lg border p-4">
+    <label className="text-xs font-medium text-muted-foreground">
+      {integration === 'slack' ? 'Runs per PR or channel per hour' : 'Stop after this many runs on one PR per hour'}
+    </label>
+    <Input type="number" min={1} className="mt-1 max-w-32" value={value}
+      onChange={(event) => onChange(Number(event.target.value))} />
+    <p className="mt-1 text-xs text-muted-foreground">
+      {integration === 'slack'
+        ? 'This limit prevents a message from starting too many runs.'
+        : 'A loop breaker. Talyn already ignores its own actions; this bounds an echo from somebody else reacting to them.'}
+    </p>
+  </div>;
+}
+
+export function WorkflowEnabledButton({ enabled, onChange }: {
+  enabled: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
+  return <Button variant={enabled ? 'secondary' : 'outline'} size="sm" onClick={() => onChange(!enabled)}>
+    {enabled ? 'On' : 'Off'}
+  </Button>;
+}
 
 /**
  * The editor's input widgets.
@@ -243,131 +284,6 @@ export function TokenField({
           )}
         </div>
       </div>
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-    </div>
-  );
-}
-
-/** People and teams share a field; the suggestion list says which is which. */
-export function PeopleField({
-  logins,
-  teams,
-  onChange,
-  suggestions,
-  label,
-  hint,
-  includeTeams = true,
-  onNeedSuggestions,
-}: {
-  logins: string[];
-  teams: string[];
-  onChange: (next: { logins: string[]; teams: string[] }) => void;
-  suggestions: WorkflowSuggestions | null;
-  label?: string;
-  hint?: string;
-  includeTeams?: boolean;
-  onNeedSuggestions?: () => void;
-}) {
-  const TEAM_PREFIX = 'team:';
-  // One field over two lists, because "who" is one question. A value prefixed
-  // `team:` is a team; the prefix is also what a user types to name a team the
-  // suggestion list could not offer (listing teams needs `members: read`).
-  const values = [...logins, ...teams.map((t) => `${TEAM_PREFIX}${t}`)];
-  const people = suggestions?.people ?? [];
-  const suggested = [
-    ...people.map((p) => p.login),
-    ...(includeTeams ? (suggestions?.teams ?? []).map((t) => `${TEAM_PREFIX}${t}`) : []),
-  ];
-  const botLogins = new Set(people.filter((p) => p.isBot).map((p) => p.login.toLowerCase()));
-
-  return (
-    <TokenField
-      label={label}
-      onNeedSuggestions={onNeedSuggestions}
-      hint={
-        hint ??
-        (includeTeams
-          ? 'GitHub logins. Prefix a team slug with "team:".'
-          : 'GitHub logins.')
-      }
-      values={values}
-      suggestions={suggested}
-      placeholder={includeTeams ? 'alice, team:frontend' : 'alice'}
-      renderSuggestion={(v) => (
-        <span className="flex items-center justify-between gap-2">
-          <span>{v.startsWith(TEAM_PREFIX) ? v.slice(TEAM_PREFIX.length) : v}</span>
-          <span className="text-xs text-muted-foreground">
-            {v.startsWith(TEAM_PREFIX) ? 'team' : botLogins.has(v.toLowerCase()) ? 'bot' : ''}
-          </span>
-        </span>
-      )}
-      onChange={(next) =>
-        onChange({
-          logins: next.filter((v) => !v.startsWith(TEAM_PREFIX)),
-          teams: next
-            .filter((v) => v.startsWith(TEAM_PREFIX))
-            .map((v) => v.slice(TEAM_PREFIX.length))
-            .filter(Boolean),
-        })
-      }
-    />
-  );
-}
-
-/**
- * Who a condition is about: anyone, me, any person, any bot, or named accounts.
- *
- * "Me" is a first-class option rather than something you express by typing your
- * own login — it keeps working when the connected account changes, and it is what
- * "run a skill when I am asked to review" actually means.
- */
-export function ActorField({
-  value,
-  onChange,
-  suggestions,
-  hint,
-  onNeedSuggestions,
-}: {
-  value: WorkflowActorMatch | undefined;
-  onChange: (next: WorkflowActorMatch) => void;
-  suggestions: WorkflowSuggestions | null;
-  hint?: string;
-  onNeedSuggestions?: () => void;
-}) {
-  const kind = value?.kind ?? 'any';
-  const logins = value?.kind === 'logins' ? value.logins : [];
-  const teams = value?.kind === 'logins' ? (value.teams ?? []) : [];
-
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-1">
-        {WORKFLOW_ACTOR_KINDS.map((k) => (
-          <button
-            key={k}
-            onClick={() =>
-              onChange(k === 'logins' ? { kind: 'logins', logins: [], teams: [] } : { kind: k })
-            }
-            className={cn(
-              'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors',
-              kind === k
-                ? 'border-transparent bg-primary text-primary-foreground'
-                : 'hover:bg-accent'
-            )}
-          >
-            {kind === k && <Check className="h-3 w-3" />}
-            {WORKFLOW_ACTOR_KIND_LABELS[k]}
-          </button>
-        ))}
-      </div>
-      {kind === 'logins' && (
-        <PeopleField
-          logins={logins}
-          teams={teams}
-          suggestions={suggestions}
-          onNeedSuggestions={onNeedSuggestions}
-          onChange={(next) => onChange({ kind: 'logins', ...next })}
-        />
-      )}
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );

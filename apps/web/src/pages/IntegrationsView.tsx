@@ -4,6 +4,7 @@ import {
   INTEGRATION_CATALOG,
   integrationOffered,
   integrationRulesOffered,
+  slackRulesOffered,
   integrationsOffered,
   type IntegrationInfo,
   type IntegrationKind,
@@ -179,7 +180,9 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
   const navigate = useNavigationStore((s) => s.navigate);
   const info = INTEGRATION_CATALOG[kind];
   const offered = integrationOffered(features, kind);
-  const hasRules = integrationRulesOffered(features, kind);
+  const hasRules = kind === 'slack'
+    ? features?.workbenches === true && slackRulesOffered(features)
+    : integrationRulesOffered(features, kind);
   const hasConnection = !info.builtIn;
   const [chosen, setChosen] = useState<Section | null>(null);
   const section: Section = chosen && (chosen === 'rules' ? hasRules : hasConnection) ? chosen : hasRules ? 'rules' : 'connection';
@@ -223,7 +226,8 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
       <div className="min-h-0 flex-1 overflow-hidden">
         <Suspense fallback={null}>
           {section === 'connection' && hasConnection && <ConnectionSection kind={kind} />}
-          {section === 'rules' && kind === 'github' && <WorkflowsPanel />}
+          {section === 'rules' && kind === 'github' && <WorkflowsPanel integration="github" />}
+          {section === 'rules' && kind === 'slack' && hasRules && <WorkflowsPanel integration="slack" />}
           {section === 'rules' && kind === 'schedule' && <LoopsPanel />}
         </Suspense>
       </div>
