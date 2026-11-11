@@ -1,11 +1,11 @@
 import {
-  WORKFLOW_ACTION_LABELS,
-  WORKFLOW_ACTION_TYPES,
+  ALL_WORKFLOW_ACTION_TYPES,
+  ALL_WORKFLOW_TRIGGER_EVENTS,
   WORKFLOW_ACTOR_KINDS,
-  WORKFLOW_CONDITION_SPECS,
-  WORKFLOW_EVENT_LABELS,
-  WORKFLOW_TRIGGER_EVENTS,
+  WORKFLOW_INTEGRATIONS,
+  workflowVocabulary,
   type NormalizedWorkflow,
+  type WorkflowIntegration,
   type WorkflowDefinition,
   type WorkflowRun,
   type WorkflowSuggestions,
@@ -29,20 +29,36 @@ import {
 } from './helpers.js';
 
 const idSchema = { ...workspaceSchema, workflow_id: textSchema };
+const integrationSchema = {
+  type: 'string',
+  enum: WORKFLOW_INTEGRATIONS,
+  description: 'Which integration the rule belongs to. Default: github.',
+};
 const workflowSchema = {
   type: 'object',
   properties: {
+    integration: integrationSchema,
     name: textSchema,
     enabled: booleanSchema,
-    events: { type: 'array', items: { type: 'string', enum: WORKFLOW_TRIGGER_EVENTS } },
+    events: { type: 'array', items: { type: 'string', enum: ALL_WORKFLOW_TRIGGER_EVENTS } },
     conditions: { type: 'object' },
     actions: { type: 'array', items: { type: 'object' } },
     maxRunsPerPrPerHour: { type: 'integer' },
   },
 };
 
+function integrationArg(args: Record<string, unknown>): WorkflowIntegration | undefined {
+  const value = str(args.integration);
+  if (value === undefined) return undefined;
+  if (!(WORKFLOW_INTEGRATIONS as readonly string[]).includes(value))
+    throw new Error(`integration must be one of: ${WORKFLOW_INTEGRATIONS.join(', ')}.`);
+  return value as WorkflowIntegration;
+}
+
 async function list(ownerId: string, args: Record<string, unknown>): Promise<WorkflowWithStats[]> {
   const params = new URLSearchParams({ workspaceId: await resolveWorkspace(ownerId, args) });
+  const integration = integrationArg(args);
+  if (integration) params.set('integration', integration);
   return callApi(ownerId, 'GET', `/workflows?${params}`);
 }
 
@@ -61,7 +77,7 @@ function definition(workflow: WorkflowDefinition): Omit<NormalizedWorkflow, 'int
 
 function workflowLine(workflow: WorkflowWithStats): string {
   const stats = workflow.stats;
-  return `${workflow.id}  ${workflow.name}  enabled: ${workflow.enabled}  events: ${workflow.events.join(', ')}  actions: ${workflow.actions.map((action) => action.type).join(', ')}${stats ? `  runs: ${stats.runsTotal}, last: ${stats.lastStatus ?? 'none'}, failures/7d: ${stats.failures7d}` : ''}`;
+  return `${workflow.id}  ${workflow.name}  integration: ${workflow.integration ?? 'github'}  enabled: ${workflow.enabled}  events: ${workflow.events.join(', ')}  actions: ${workflow.actions.map((action) => action.type).join(', ')}${stats ? `  runs: ${stats.runsTotal}, last: ${stats.lastStatus ?? 'none'}, failures/7d: ${stats.failures7d}` : ''}`;
 }
 
 async function update(
@@ -78,7 +94,7 @@ async function update(
   );
 }
 
-const actionFields: Record<(typeof WORKFLOW_ACTION_TYPES)[number], string> = {
+const actionFields: Record<(typeof ALL_WORKFLOW_ACTION_TYPES)[number], string> = {
   add_labels: 'labels: string[]',
   remove_labels: 'labels: string[]',
   request_reviewers: 'users?: string[], teams?: string[]',
@@ -89,13 +105,17 @@ const actionFields: Record<(typeof WORKFLOW_ACTION_TYPES)[number], string> = {
   watch_pr: 'no extra fields',
   enqueue_merge_queue: 'method?: squash | merge | rebase',
   run_code_review: 'preset?: quick | standard | deep',
+  start_session:
+    'repositoryId: string | null (null lets Talyn choose, Slack only), prompt: string, model?: string, internetAccess?: boolean',
+  slack_reply: 'text: string (may use {{session.url}} and {{message.permalink}})',
+  slack_react: 'emoji: string (a name without colons, for example eyes)',
 };
 
 export const WORKFLOWS = [
   defineTool(
     'list_workflows',
-    'List workflow definitions and run statistics.',
-    workspaceSchema,
+    'List rules (workflows) and run statistics. Pass integration to list one integration only: github or slack.',
+    { ...workspaceSchema, integration: integrationSchema },
     [],
     { readOnlyHint: true },
     async (ownerId, args) => linesOrNone(await list(ownerId, args), workflowLine),
@@ -107,12 +127,19 @@ export const WORKFLOWS = [
     idSchema,
     ['workflow_id'],
     { readOnlyHint: true },
-    async (ownerId, args) => JSON.stringify(definition(await current(ownerId, args)), null, 2),
+    async (ownerId, args) => {
+      const workflow = await current(ownerId, args);
+      return JSON.stringify(
+        { integration: workflow.integration ?? 'github', ...definition(workflow) },
+        null,
+        2
+      );
+    },
     'workflows'
   ),
   defineTool(
     'create_workflow',
-    'Create a workflow object with name, events, conditions, and actions. Read talyn_get_workflow_vocabulary for allowed values.',
+    'Create a rule (workflow) with integration (github or slack), name, events, conditions, and actions. Read talyn_get_workflow_vocabulary for the allowed values of that integration. Slack rules need the Slack channel rules feature.',
     { ...workspaceSchema, workflow: workflowSchema },
     ['workflow'],
     { openWorldHint: true },
@@ -138,11 +165,32 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'get_workflow_vocabulary',
-    'Get event, condition, and action fields with concrete suggestions. Pass repos to fetch their GitHub labels and users.',
-    { ...workspaceSchema, repos: { type: 'array', items: textSchema } },
+    'Get the events, conditions, and actions of one integration (github or slack, default github). For github, pass repos to fetch their GitHub labels and users.',
+    { ...workspaceSchema, integration: integrationSchema, repos: { type: 'array', items: textSchema } },
     [],
     { readOnlyHint: true, openWorldHint: true },
     async (ownerId, args) => {
+      const integration = integrationArg(args) ?? 'github';
+      const vocabulary = workflowVocabulary(integration);
+      const lines = [
+        `integration: ${integration}`,
+        ...vocabulary.events.map((event) => `${event.event}  ${event.label}`),
+        ...vocabulary.conditions.map(
+          (spec) =>
+            `${spec.key}  ${spec.label}  ${spec.hint}${spec.required ? '  required' : ''}  events: ${spec.appliesTo?.join(', ') ?? 'all'}`
+        ),
+        ...vocabulary.actions.map(
+          (action) =>
+            `${action.type}  ${action.label}  {type: ${action.type}, ${actionFields[action.type]}}`
+        ),
+      ];
+      if (integration === 'slack') {
+        return [
+          ...lines,
+          'slackAuthors: {kind: linked | any | users, users?: string[] of Slack user ids}',
+          'Use talyn_list_slack_channels to find channel ids. Only channels Talyn is in are listed.',
+        ].join('\n');
+      }
       const params = new URLSearchParams({
         workspaceId: await resolveWorkspace(ownerId, args),
         github: '1',
@@ -154,17 +202,9 @@ export const WORKFLOWS = [
         `/workflows/suggestions?${params}`
       );
       return [
-        ...WORKFLOW_TRIGGER_EVENTS.map((event) => `${event}  ${WORKFLOW_EVENT_LABELS[event]}`),
-        ...WORKFLOW_CONDITION_SPECS.map(
-          (spec) =>
-            `${spec.key}  ${spec.input}  ${spec.hint}  events: ${spec.appliesTo?.join(', ') ?? 'all'}`
-        ),
+        ...lines,
         `actor kinds: ${WORKFLOW_ACTOR_KINDS.join(', ')}; logins uses {kind: logins, logins: string[]}`,
         'reviewStates: approved, changes_requested, commented; checkConclusions: success, failure',
-        ...WORKFLOW_ACTION_TYPES.map(
-          (type) =>
-            `${type}  ${WORKFLOW_ACTION_LABELS[type]}  {type: ${type}, ${actionFields[type]}}`
-        ),
         `repos: ${suggestions.repos.join(', ')}`,
         `labels: ${suggestions.labels.join(', ')}`,
         `branches: ${suggestions.branches.join(', ')}`,
@@ -215,7 +255,7 @@ export const WORKFLOWS = [
         rows,
         args,
         (run) =>
-          `${run.id}  [${run.status}]  ${run.createdAt}  ${run.repoFullName}#${run.prNumber}  ${run.event}${run.taskId ? `  task: ${run.taskId}` : ''}${str(run.error) ? `  ${run.error}` : ''}`
+          `${run.id}  [${run.status}]  ${run.createdAt}  ${run.subjectLabel ?? `${run.repoFullName}#${run.prNumber}`}  ${run.event}${run.taskId ? `  task: ${run.taskId}` : ''}${str(run.error) ? `  ${run.error}` : ''}`
       );
     },
     'workflows'

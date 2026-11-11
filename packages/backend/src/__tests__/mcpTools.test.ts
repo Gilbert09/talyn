@@ -90,9 +90,40 @@ describe('mcp tool registry', () => {
     }
   });
 
+  it('returns the Slack vocabulary without calling the API', async () => {
+    const { calls } = mockApi({});
+    const text = await tool('talyn_get_workflow_vocabulary').handler(OWNER, {
+      workspace_id: 'ws1',
+      integration: 'slack',
+    });
+    expect(calls).toHaveLength(0);
+    for (const word of ['slack_message', 'slackAuthors', 'start_session', 'slack_reply', 'slack_react'])
+      expect(text).toContain(word);
+    expect(text).not.toContain('add_labels');
+  });
+
+  it('create_workflow passes the integration through', async () => {
+    const { calls } = mockApi({
+      'POST /api/v1/workflows': () => ({ ...workflow, integration: 'slack' }),
+    });
+    const text = await tool('talyn_create_workflow').handler(OWNER, {
+      workspace_id: 'ws1',
+      workflow: { ...workflowBody, integration: 'slack' },
+    });
+    expect(calls[0].body).toEqual({ ...workflowBody, integration: 'slack', workspaceId: 'ws1' });
+    expect(text).toContain('integration: slack');
+  });
+
+  it('rejects an unknown integration', async () => {
+    mockApi({});
+    await expect(
+      tool('talyn_list_workflows').handler(OWNER, { workspace_id: 'ws1', integration: 'jira' })
+    ).rejects.toThrow('integration must be one of');
+  });
+
   it('covers the full surface (listing, context, actions, tasks)', () => {
     const names = TOOLS.map((t) => t.name);
-    expect(names).toHaveLength(103);
+    expect(names).toHaveLength(104);
     for (const expected of [
       'talyn_list_workspaces',
       'talyn_get_workspace',
@@ -168,6 +199,7 @@ describe('mcp tool registry', () => {
       'talyn_set_loop_enabled',
       'talyn_delete_loop',
       'talyn_list_loop_runs',
+      'talyn_list_slack_channels',
       'talyn_run_loop_now',
       'talyn_list_mcp_servers',
       'talyn_get_mcp_server',
@@ -643,7 +675,7 @@ describe('MCP product coverage', () => {
     }
   );
 
-  it.each(['workflows', 'loops', 'mcpServers', 'workbenches'] as const)(
+  it.each(['workflows', 'loops', 'mcpServers', 'workbenches', 'slackChannelRules'] as const)(
     'hides tools when %s is off',
     (feature) => {
       const visible = listToolsFor({ ...features, [feature]: false });
@@ -1024,6 +1056,21 @@ const readCases: {
       partial: true,
     },
     expected: 'labels: bug',
+  },
+  {
+    name: 'list_workflows',
+    args: { workspace_id: 'ws1', integration: 'slack' },
+    path: '/workflows',
+    query: { workspaceId: 'ws1', integration: 'slack' },
+    response: [{ ...workflow, integration: 'slack' }],
+    expected: 'integration: slack',
+  },
+  {
+    name: 'list_slack_channels',
+    args: { teamId: 'T1' },
+    path: '/slack/teams/T1/channels',
+    response: { channels: [{ id: 'C1', name: 'eng-bugs', isPrivate: false }] },
+    expected: 'C1  #eng-bugs',
   },
   {
     name: 'list_workflow_runs',

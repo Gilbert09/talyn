@@ -122,6 +122,8 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_list_loops',
   'talyn_get_loop',
   'talyn_list_loop_runs',
+  // Slack channel list: a read of which channels the bot is in.
+  'talyn_list_slack_channels',
 ]);
 
 export function toolAllowedForCaller(name: string, session: unknown): boolean {

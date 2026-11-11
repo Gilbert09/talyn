@@ -116,7 +116,7 @@ async function update(
 export const LOOPS = [
   defineTool(
     'list_loops',
-    'List recurring loops and their next run times.',
+    'List scheduled rules (loops) and their next run times.',
     workspaceSchema,
     [],
     { readOnlyHint: true },
@@ -125,7 +125,7 @@ export const LOOPS = [
   ),
   defineTool(
     'get_loop',
-    'Get the full loop definition as JSON for editing, including the next run time.',
+    'Get the full scheduled rule (loop) definition as JSON for editing, including the next run time.',
     idSchema,
     ['loop_id'],
     { readOnlyHint: true },
@@ -137,7 +137,7 @@ export const LOOPS = [
   ),
   defineTool(
     'create_loop',
-    'Create recurring work. Set target to session for a reviewable sandbox session, or task for a cloud task.',
+    'Create a scheduled rule (loop), recurring work. Set target to session for a reviewable sandbox session, or task for a cloud task.',
     inputSchema,
     [],
     { openWorldHint: true },
@@ -166,7 +166,7 @@ export const LOOPS = [
   ),
   defineTool(
     'update_loop',
-    'Merge supplied fields into the current loop definition. Set model when changing provider.',
+    'Merge supplied fields into the current scheduled rule (loop) definition. Set model when changing provider.',
     { ...inputSchema, loop_id: textSchema },
     ['loop_id'],
     { openWorldHint: true, idempotentHint: true },

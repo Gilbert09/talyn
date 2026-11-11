@@ -21,6 +21,7 @@ import { MERGEQUEUE } from './mergeQueue.js';
 import { PULLREQUESTS } from './pullRequests.js';
 import { REPOSITORIES } from './repositories.js';
 import { SESSIONS } from './sessions.js';
+import { SLACK } from './slack.js';
 import { SPACES } from './spaces.js';
 import { SKILLS } from './skills.js';
 import { TASKS } from './tasks.js';
@@ -64,6 +65,7 @@ export const TOOLS: McpToolDefinition[] = [
   ...SKILLS,
   ...WORKFLOWS,
   ...LOOPS,
+  ...SLACK,
   ...MCPSERVERS,
   ...ACCOUNT,
 ];
