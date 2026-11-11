@@ -86,6 +86,9 @@ export * from './githubHealth.js';
 // differently from the server is a bug nobody can see.
 export * from './loops.js';
 
+// The Integrations area: catalog + which integrations an account is offered.
+export * from './integrations.js';
+
 // MCP servers — the servers a workspace connects and the fleet wires into
 // every run. The validator MIRRORS the fleet's own refusals, so somebody hears
 // "an MCP url needs a path" while typing rather than as a dispatch that failed

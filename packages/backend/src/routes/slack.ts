@@ -121,7 +121,7 @@ export function slackPublicRoutes(): Router {
       }
       if (client === 'web') {
         const outcome = !opts.ok ? 'error' : opts.flow === 'install' ? 'installed' : 'linked';
-        const target = webAppUrl('/settings', {
+        const target = webAppUrl('/integrations/slack', {
           slack: outcome,
           ...(opts.ok ? {} : { message: opts.message }),
         });

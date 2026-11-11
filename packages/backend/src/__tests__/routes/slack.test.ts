@@ -450,13 +450,13 @@ describe('Slack routes', () => {
     expect(slackCalls).toHaveLength(0);
   });
 
-  it('the web client is sent back to its settings page', async () => {
+  it('the web client is sent back to the Slack integration page', async () => {
     process.env.WEB_APP_URL = 'https://app.talyn.dev';
     resetWebAppUrlCacheForTests();
     const { state } = await start('install', { headers: { origin: 'https://app.talyn.dev' } });
     const ok = await callback({ code: 'c', state });
     expect(ok.status).toBe(302);
-    expect(ok.location).toBe('https://app.talyn.dev/settings?slack=installed');
+    expect(ok.location).toBe('https://app.talyn.dev/integrations/slack?slack=installed');
 
     const { state: s2 } = await start('link', { headers: { origin: 'https://app.talyn.dev' } });
     slackAnswers['openid.connect.userInfo'] = () =>
@@ -464,6 +464,7 @@ describe('Slack routes', () => {
     const bad = await callback({ code: 'c', state: s2 });
     expect(bad.status).toBe(302);
     const target = new URL(bad.location!);
+    expect(target.pathname).toBe('/integrations/slack');
     expect(target.searchParams.get('slack')).toBe('error');
     expect(target.searchParams.get('message')).toContain('not installed');
   });
