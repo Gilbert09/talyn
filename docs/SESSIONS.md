@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Split view: several sessions side by side (2026-11-11)
+
+Web and desktop can show up to four sessions at once, each pane a session's transcript and composer, so a person can watch and prompt several agents without switching pages. Behind the `split-view` PostHog flag (`splitView`, fallback OFF, `availability: 'gated'`, break glass `SPLIT_VIEW_ENABLED`), in `ACCOUNT_FEATURE_FLAGS` so `GET /features` answers it. Drawing only: the panes call the same session routes as the session page, so nothing server-side is gated.
+- **Route `{ view: 'split' }`** (`/split` on web; persisted like any route on desktop). The panes are NOT in the route: `stores/splitView.ts` keeps them in localStorage (`talyn:split-view`), and the pane rules (max 4, the oldest pane makes room, move, parse, grid shape) are in `packages/shared/src/splitView.ts` so web and desktop agree.
+- **Focus is the split store's own, never `selectedWorkbenchId`.** `selectWorkbench` navigates to the session page (the subscription in `installNavigation`), so using it for pane focus would leave split view. A consequence: a turn that finishes in a pane is marked unread for a moment, and the pane's `ChatView` clears it on the status change, as it does on window focus.
+- **Only the focused pane's composer takes focus.** `Composer` and `ChatView` take `autoFocus` (default true); off, the composer neither grabs the caret on open nor answers ⌘L. Without it every pane's composer fought for focus and ⌘L went to whichever mounted last.
+- **Panes reuse the session page's parts**: `ChatTabs`, `StatusBanner` and `ChatView` are exported from `WorkbenchView`. Desktop shows a banner instead of a composer for a local session on another device; moving it needs the folder picker on the session page.
+- **Ways in:** the Split view sidebar item and palette entry, the header button on a session, Open in split view on a sidebar row's menu, ⌘/Ctrl-click on a row, and, while in split view, a plain click on a row adds it as a pane. An archived session's pane closes; a teammate's session is fetched like the session page does.
+- **Not on mobile** (a phone has no room for two transcripts), and no public docs yet while the flag is gated. Both are in `ROADMAP.md`.
+- Analytics: `split_view_pane_added` with `source`.
+
 ## Onboarding agent step: Claude or Codex is required (2026-11-11)
 
 A PostHog investigation of sign-ups that never connected an agent found four causes. Each now has a fix in web, desktop and mobile.

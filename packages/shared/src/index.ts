@@ -20,6 +20,9 @@ export * from './externalMergeQueue.js';
 // formatter both front ends render it with.
 export * from './trunkMergeEta.js';
 
+// Split view — the pane rules both front ends apply to the sessions shown side by side.
+export * from './splitView.js';
+
 // Stacked-PR linking — the one definition of "B is stacked on A", shared by the
 // merge queue's stack drain and both front ends' indented PR lists.
 export * from './stacks.js';

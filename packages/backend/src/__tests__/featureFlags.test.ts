@@ -484,6 +484,7 @@ describe('featuresForUser', () => {
       'reviewRankingCandidate',
       'reviewRankingExport',
       'spaces',
+      'splitView',
       'teams',
       'trunkMergeEta',
       'workbenches',
@@ -507,6 +508,7 @@ describe('featuresForUser', () => {
       workbenches: false,
       trunkMergeEta: false,
       publicApi: false,
+      splitView: false,
     });
   });
 
@@ -531,6 +533,7 @@ describe('featuresForUser', () => {
       workbenches: false,
       trunkMergeEta: false,
       publicApi: false,
+      splitView: false,
     });
   });
 

@@ -57,6 +57,7 @@ export function Composer({
   contextUsage,
   slashCommands,
   attachRef,
+  autoFocus = true,
 }: {
   workbench: Workbench;
   chat: WorkbenchChat | null;
@@ -66,6 +67,11 @@ export function Composer({
   slashCommands: string[] | null;
   /** Set by the composer so a drop zone around it can attach images. */
   attachRef?: React.MutableRefObject<((files: File[]) => void) | null>;
+  /**
+   * Take focus on open and answer ⌘L. Split view shows several composers and
+   * passes true only to the focused pane's, so they do not fight over the caret.
+   */
+  autoFocus?: boolean;
 }) {
   const draftKey = composerDraftKey(workbench.id, chat);
   const draft = useWorkbenchStore((s) => s.drafts[draftKey] ?? '');
@@ -121,15 +127,16 @@ export function Composer({
   }, [draft]);
 
   useEffect(() => {
-    textareaRef.current?.focus();
+    if (autoFocus) textareaRef.current?.focus();
   }, [draftKey]);
 
   // ⌘L (lib/shortcuts.ts) asks the open composer for focus.
   useEffect(() => {
+    if (!autoFocus) return undefined;
     const onFocusRequest = () => textareaRef.current?.focus();
     window.addEventListener(FOCUS_COMPOSER_EVENT, onFocusRequest);
     return () => window.removeEventListener(FOCUS_COMPOSER_EVENT, onFocusRequest);
-  }, []);
+  }, [autoFocus]);
 
   const loadPaths = () => {
     if (thread || paths || pathsLoading || ops.unavailable) return;

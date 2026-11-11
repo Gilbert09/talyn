@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { Archive, BarChart3, GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
-import { mcpServersOffered, privateRoutesOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
+import { Archive, BarChart3, Columns2, GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
+import { mcpServersOffered, privateRoutesOffered, splitViewOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
 import { formatKeys, getShortcut, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { goToShortcutIdForNavItem } from './layout/goToShortcuts';
 import { sessionPr, sessionState } from '../lib/sessionState';
@@ -123,6 +123,9 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     const items: NavItem[] = [{ key: 'home', label: 'Home', icon: Home, route: { view: 'home' } }];
     if (workbenchesOffered(features)) {
       items.push({ key: 'history', label: 'History', icon: History, route: { view: 'history' } });
+    }
+    if (splitViewOffered(features)) {
+      items.push({ key: 'split', label: 'Split view', icon: Columns2, route: { view: 'split' } });
     }
     for (const tab of PR_TABS) {
       items.push({

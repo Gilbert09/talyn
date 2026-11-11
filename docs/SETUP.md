@@ -258,6 +258,7 @@ at the call site.
 | `loops` | Loops — recurring prompts on a cron schedule | `LOOPS_ENABLED=false` | **OFF** | general |
 | `talyn-fleet` | Talyn Fleet — the Firecracker microVMs | `FLEET_ALLOWED=false` | **OFF** | general |
 | `public-api` | The public API (`/v1`) and personal access tokens | `PUBLIC_API_ENABLED=false` | **OFF** | gated |
+| `split-view` | Split view — several sessions side by side, each with its transcript and composer | `SPLIT_VIEW_ENABLED=false` | **OFF** | gated |
 
 #### Public API (`/v1`)
 

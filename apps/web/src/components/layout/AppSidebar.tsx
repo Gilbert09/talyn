@@ -1,11 +1,12 @@
 import { useEffect, type ReactNode } from 'react';
-import { workbenchesOffered } from '@talyn/shared';
+import { splitViewOffered, workbenchesOffered } from '@talyn/shared';
 import {
   ArrowLeft,
   ArrowRight,
   BarChart3,
   ChevronLeft,
   ChevronRight,
+  Columns2,
   FolderPlus,
   Eye,
   GitMerge,
@@ -36,6 +37,7 @@ import { UserChip } from './UserChip';
 import { SpaceSidebar } from './SpaceSidebar';
 import { useActiveSpace } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
+import { useSplitViewStore } from '../../stores/splitView';
 
 export function AppSidebar() {
   const collapsed = useWorkspaceStore((s) => s.sidebarCollapsed);
@@ -55,6 +57,8 @@ export function AppSidebar() {
   }, [user?.id]);
 
   const offered = workbenchesOffered(features);
+  const splitOffered = splitViewOffered(features);
+  const splitPanes = useSplitViewStore((s) => s.panes.length);
   const prCounts = usePrBadgeCounts();
   const automationTabs = offeredAutomationTabs(features);
 
@@ -110,6 +114,17 @@ export function AppSidebar() {
             onClick={() => setPaletteOpen(true)}
             dataAttr="sidebar-search"
           />
+          {splitOffered && (
+            <SidebarItem
+              icon={Columns2}
+              label="Split view"
+              badge={splitPanes || undefined}
+              collapsed={collapsed}
+              active={route.view === 'split'}
+              onClick={() => navigate({ view: 'split' })}
+              dataAttr="sidebar-split-view"
+            />
+          )}
         </div>
 
         <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5" aria-label="Sessions">

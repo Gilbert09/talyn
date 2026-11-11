@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { Archive, ChevronDown, ChevronRight, Copy, ExternalLink, Timer } from 'lucide-react';
-import { workbenchDisplayName, type Workbench } from '@talyn/shared';
+import { Archive, ChevronDown, ChevronRight, Columns2, Copy, ExternalLink, Timer } from 'lucide-react';
+import { splitViewOffered, workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
@@ -39,11 +39,17 @@ import { spacesOffered } from '../../lib/spaces';
 import { moveToSpace } from '../spaces/MoveToSpace';
 import { isActiveBackground } from '../../lib/sessionBackground';
 import { useBackground, useSessionBackgroundStore } from '../../stores/sessionBackground';
+import { useSplitViewStore } from '../../stores/splitView';
+import { openInSplitView } from '../../lib/splitView';
 
 export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[] }) {
   const route = useNavigationStore((s) => s.route);
   const navigate = useNavigationStore((s) => s.navigate);
   const openId = route.view === 'workbench' ? route.id : null;
+  // In split view a row adds its session as a pane, and the rows in panes read as open.
+  const inSplit = route.view === 'split';
+  const splitPanes = useSplitViewStore((s) => s.panes);
+  const addPane = useSplitViewStore((s) => s.addPane);
   const sidebarOrder = useWorkspaceStore((s) => s.sidebarOrder);
   const rows = usePullRequestStore((s) => s.rows);
   const chats = useWorkbenchStore((s) => s.chats);
@@ -82,8 +88,8 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
             key={wb.id}
             workbench={wb}
             shortcut={shortcut}
-            selected={wb.id === openId}
-            onSelect={() => navigate({ view: 'workbench', id: wb.id })}
+            selected={inSplit ? splitPanes.includes(wb.id) : wb.id === openId}
+            onSelect={() => (inSplit ? addPane(wb.id, 'sidebar') : navigate({ view: 'workbench', id: wb.id }))}
           />
         )}
       />
@@ -221,6 +227,7 @@ export function WorkbenchRow({
   const [archiving, setArchiving] = useState(false);
   const rename = useRenameSession(workbench);
   const spacesOn = useWorkspaceStore((s) => spacesOffered(s.features));
+  const splitOn = useWorkspaceStore((s) => splitViewOffered(s.features));
   const runningJob = background?.jobs.some((job) => job.status === 'running');
   const backgroundTitle = runningJob ? 'Background job running' : 'Wake-up scheduled';
   // The state icon already shows the job or wake-up when nothing more urgent wins.
@@ -247,8 +254,15 @@ export function WorkbenchRow({
           <div
             role="button"
             tabIndex={0}
-            onClick={() => {
-              if (!rename.editing) onSelect();
+            onClick={(event) => {
+              if (rename.editing) return;
+              // ⌘- or Ctrl-click opens the session beside the others in split view.
+              if (splitOn && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                openInSplitView(workbench.id, 'sidebar_modifier_click');
+                return;
+              }
+              onSelect();
             }}
             onKeyDown={(event) => {
               if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
@@ -299,6 +313,12 @@ export function WorkbenchRow({
         </ContextMenuTrigger>
         <ContextMenuContent className="min-w-[10rem]">
           <ContextMenuItem onSelect={onSelect}>Open</ContextMenuItem>
+          {splitOn && (
+            <ContextMenuItem data-attr="sidebar-open-in-split-view" onSelect={() => openInSplitView(workbench.id, 'sidebar_menu')}>
+              <Columns2 className="h-3.5 w-3.5" />
+              Open in split view
+            </ContextMenuItem>
+          )}
           <ContextMenuItem onSelect={() => setTimeout(rename.start, 0)}>Rename</ContextMenuItem>
           {workbench.branch && (
             <ContextMenuItem onSelect={copyBranch}>
