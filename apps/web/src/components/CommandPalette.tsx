@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Archive, BarChart3, Columns2, GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
-import { INTEGRATION_CATALOG, integrationsOffered, mcpServersOffered, privateRoutesOffered, splitViewOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
+import { INTEGRATION_CATALOG, integrationsOffered, mcpServersOffered, splitViewOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
 import { formatKeys, getShortcut, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { goToShortcutIdForNavItem } from './layout/goToShortcuts';
 import { sessionPr, sessionState } from '../lib/sessionState';
@@ -34,9 +34,7 @@ const SETTINGS_LABEL: Record<SettingsSection, string> = {
   shortcuts: 'Shortcuts',
   workspace: 'Workspace',
   sandboxSetup: 'Sandbox setup',
-  privateRoutes: 'Private routes',
   integrations: 'Integrations',
-  slack: 'Slack',
   skills: 'Skills',
   instructions: 'Instructions',
   memory: 'Memory',
@@ -149,8 +147,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       items.push({ key: 'mcp_servers', label: 'MCP servers', icon: Settings, route: { view: 'mcp_servers' } });
     }
     for (const section of Object.keys(SETTINGS_LABEL) as SettingsSection[]) {
-      if ((section === 'sessions' || section === 'slack' || section === 'memory' || section === 'sandboxSetup') && !workbenchesOffered(features)) continue;
-      if (section === 'privateRoutes' && !privateRoutesOffered(features)) continue;
+      if ((section === 'sessions' || section === 'memory' || section === 'sandboxSetup') && !workbenchesOffered(features)) continue;
       items.push({
         key: `settings:${section}`,
         label: `Settings: ${SETTINGS_LABEL[section]}`,
