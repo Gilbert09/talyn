@@ -72,12 +72,13 @@ export const WARM_POOL_POLLER = 'workbench-warm-pool';
 export const WARM_POOL = {
   sweepMs: 60_000,
   /**
-   * The fleet suspends a box after 10 idle minutes (`TALYN_SANDBOX_IDLE_TTL_SEC`,
-   * every plan's ceiling), and an exec resets that clock. A suspended warm box
-   * would wake in ~1-5 s and, after the tiered-storage window, move to the
-   * bucket and wake in minutes. Every 4 minutes leaves two missed sweeps of slack.
+   * The fleet suspends a box after 3 idle minutes (`TALYN_SANDBOX_IDLE_TTL_SEC`),
+   * and an exec resets that clock. A suspended warm box would wake in ~1-5 s
+   * and, after the tiered-storage window, move to the bucket and wake in
+   * minutes. Under one sweep, so every sweep touches the box and one missed
+   * sweep still leaves a minute of slack.
    */
-  keepAliveMs: 4 * 60_000,
+  keepAliveMs: 50_000,
   /** How often a ready box is compared with the current create inputs and the default branch. */
   checkMs: 10 * 60_000,
   /** Replaced at this age whatever the checks say: its fetch, its image and its credentials all age. */

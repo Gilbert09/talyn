@@ -145,7 +145,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "Quick to start, free when idle",
         paragraphs: [
           "Talyn builds an image for each repository with its setup already run, plus your own setup steps and dotfiles. A new session starts from that image, not from a clean machine. Talyn also suggests setup steps it sees your sessions run again and again.",
-          "A sandbox that is idle for 10 minutes goes to sleep and costs nothing. Your next message wakes it. While it sleeps, you can still read its changes and files from Talyn's copy.",
+          "A sandbox that is idle for 3 minutes goes to sleep and costs nothing. Your next message wakes it. While it sleeps, you can still read its changes and files from Talyn's copy.",
         ],
       },
       {

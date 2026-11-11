@@ -176,7 +176,7 @@ export async function parkForCi(input: ParkInput): Promise<boolean> {
   } catch (err) {
     // A box that is gone cannot be resumed. Anything else (a full disk, a
     // suspend the guest refused) leaves an idle box that the fleet's own idle
-    // timeout suspends in ten minutes, and the meter sweep closes its interval.
+    // timeout suspends in three minutes, and the meter sweep closes its interval.
     if (err instanceof FleetRunNotFoundError) return false;
     console.warn(
       `[ci-park] suspending ${input.runId} failed; the idle timeout will suspend it:`,
