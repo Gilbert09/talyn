@@ -4,12 +4,12 @@ import { nextWorkbenchAction, prSummaryToNextActionPr, type Workbench, type Work
 import { sessionPr, type SessionPr } from '../../lib/status';
 import { workbenchKind } from '../../workflow/model';
 import { queueStateLabel } from '../prs/actions';
-import { canRetry, canWake, isArchived, runningChat } from './actions';
+import { canRetry, canWake, isArchived } from './actions';
 import { hasChanges, sessionUnavailable } from './model';
 
 /** The header cycle of web `workbenchActions.ts`: Create PR, Resolve conflicts, Fix checks, Merge, Archive. */
 export type CycleAction = Exclude<WorkbenchNextAction, null>;
-export type QuickActionKind = CycleAction | 'stop' | 'retry' | 'wake' | 'restore' | 'queue_add' | 'queue_status';
+export type QuickActionKind = CycleAction | 'retry' | 'wake' | 'restore' | 'queue_add' | 'queue_status';
 
 export interface QuickAction {
   kind: QuickActionKind;
@@ -36,7 +36,6 @@ export const QUICK_ACTION_HINT: Record<QuickActionKind, string> = {
   fix_checks: 'Asks the agent to fix the failing checks.',
   merge: 'Merges the pull request on GitHub.',
   archive: 'Archives this session.',
-  stop: 'Stops the agent turn that runs now.',
   retry: 'Starts the sandbox again.',
   wake: 'Wakes the sandbox so the next message starts sooner.',
   restore: 'Restores this session.',
@@ -103,18 +102,17 @@ export const canQueue = (item: Workbench, row: PRRow | null): row is PRRow =>
 
 /**
  * The quick actions above the transcript, most urgent first, at most `limit`.
- * Order: Stop a running turn, Retry a failed start, web's primary cycle
- * action, the merge queue, then Wake. Archived work only restores. A thread
- * has no PR actions.
+ * Order: Retry a failed start, web's primary cycle action, the merge queue,
+ * then Wake. Archived work only restores. A thread has no PR actions. Stop is
+ * in the composer and the menu, not here.
  */
 export function primaryActions(item: Workbench, row: PRRow | null,
-  options: { selectedChat?: string | null; offline?: boolean; limit?: number } = {}): QuickAction[] {
+  options: { offline?: boolean; limit?: number } = {}): QuickAction[] {
   const offline = options.offline === true;
   const make = (kind: QuickActionKind, label: string, reason: string | null = null): QuickAction =>
     ({ kind, label, hint: QUICK_ACTION_HINT[kind], disabledReason: offline ? OFFLINE : reason });
   if (isArchived(item)) return [make('restore', 'Restore')];
   const out: QuickAction[] = [];
-  if (runningChat(item, options.selectedChat)) out.push(make('stop', 'Stop'));
   if (canRetry(item)) out.push({ ...make('retry', 'Retry'), hint: item.error || item.statusMessage || QUICK_ACTION_HINT.retry });
   const primary = primaryCycleAction(item, row);
   if (primary) out.push(make(primary, cycleLabel(primary, row, item), cycleDisabledReason(primary, item, row)));

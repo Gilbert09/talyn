@@ -164,11 +164,11 @@ describe('quick actions', () => {
     await waitFor(() => expect(mockActive.api.workbenches.action).toHaveBeenCalledWith('session-one', action, 'chat-one'));
     expect(await screen.findByText('Sent to the agent.')).toBeVisible();
   });
-  it('stops a running turn from the row', async () => {
+  it('leaves Stop to the composer, not the row', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ status: 'running' })] }));
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await screen.findByRole('button', { name: 'Stop' }));
-    await waitFor(() => expect(mockActive.api.workbenches.cancel).toHaveBeenCalledWith('chat-one'));
+    expect(await screen.findByRole('button', { name: 'Stop the agent' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
   });
   it('disables every action offline and says why', async () => {
     mockNetwork = 'offline';

@@ -5,7 +5,7 @@ import { HeaderHeightContext } from 'expo-router/react-navigation';
 import { useContext, useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 
-import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
+import { useNetwork } from '../../auth/AuthProvider';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { AppText, Banner, Disclosure, IconButton, Row, SheetModal, useActionSheet, type SheetAction } from '../../components/UI';
 import { StateNotice, workflowStyles as styles } from '../../components/Workflow';
@@ -50,7 +50,6 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
   const params = useLocalSearchParams();
   const id = typeof params.id === 'string' ? params.id : '';
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
-  const { workflow } = useMobileRuntime();
   const state = useResource<Workbench>('workbench', id, Boolean(id), true);
   const valid = Boolean(state.data && workbenchKind(state.data) === kind);
   const children = useResource<Workbench[]>('children', id, valid && kind === 'thread');
@@ -77,8 +76,7 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
 
   let content = null;
   if (item) {
-    const selectedChat = workflow.local(`selected:${item.id}`).selectedChat;
-    const actions = primaryActions(item, row, { selectedChat, offline });
+    const actions = primaryActions(item, row, { offline });
     const problem = readinessProblem(readiness.data, item.agent);
     const notice = state.status === 'error' || offline;
     const fixed = notice || (Boolean(problem) && !keyboard.open) || (actions.length > 0 && !keyboard.open);
