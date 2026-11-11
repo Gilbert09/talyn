@@ -354,7 +354,8 @@ describe('Slack channel rules', () => {
 
     it.each([
       ['a linked author, default rule', 'US1', undefined, true],
-      ['an unlinked author, default rule', 'US9', undefined, false],
+      ['an unlinked author, default rule', 'US9', undefined, true],
+      ['an unlinked author, linked-only rule', 'US9', { kind: 'linked' }, false],
       ['an unlinked author, any author', 'US9', { kind: 'any' }, true],
       ['a listed user', 'US9', { kind: 'users', userIds: ['US9'] }, true],
       ['an unlisted linked user', 'US1', { kind: 'users', userIds: ['US9'] }, false],

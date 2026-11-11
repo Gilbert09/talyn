@@ -323,7 +323,7 @@ export interface WorkflowConditions {
   channels?: string[];
   /** Case-insensitive substring of the Slack message text. */
   textContains?: string;
-  /** Who may trigger the rule. Absent means `linked`. */
+  /** Who may trigger the rule. Absent means `any`. */
   slackAuthors?: WorkflowSlackAuthorMatch;
   /** Whether a reply inside a thread triggers the rule. Absent means no. */
   includeThreadReplies?: boolean;
@@ -332,9 +332,9 @@ export interface WorkflowConditions {
 /**
  * Who may trigger a Slack rule.
  *
- * `linked` is the default: Slack users who linked their Slack account to Talyn
- * in that Slack team. A channel is often shared with people outside the team
- * that pays for the session, so "anyone in the channel" has to be a choice.
+ * `any` is the default: anyone who posts in a watched channel. `linked` narrows
+ * a rule to Slack users who linked their Slack account to Talyn in that Slack
+ * team. The editors do not offer it, but MCP can set it.
  */
 export type WorkflowSlackAuthorMatch =
   | { kind: 'linked' }
@@ -1102,7 +1102,7 @@ export function slackAuthorMatches(
   match: WorkflowSlackAuthorMatch | undefined,
   facts: Pick<SlackEventFacts, 'userId' | 'authorLinked'>
 ): boolean {
-  const kind = match?.kind ?? 'linked';
+  const kind = match?.kind ?? 'any';
   switch (kind) {
     case 'any':
       return true;
@@ -1253,7 +1253,7 @@ function validateActorMatch(raw: unknown, at: string): WorkflowActorMatch | unde
  * no-op on anything that came through this door.
  */
 export function validateWorkflow(raw: unknown): NormalizedWorkflow {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('workflow must be an object');
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('automation must be an object');
   const w = raw as Record<string, unknown>;
 
   const name = typeof w.name === 'string' ? w.name.trim() : '';
@@ -1272,7 +1272,7 @@ export function validateWorkflow(raw: unknown): NormalizedWorkflow {
   const integration = workflowIntegrationOf(w as { integration?: WorkflowIntegration | null });
 
   const events = stringList(w.events, 'events') as WorkflowTriggerEvent[];
-  if (events.length === 0) fail('a workflow needs at least one trigger event');
+  if (events.length === 0) fail('an automation needs at least one trigger event');
   for (const e of events) validateEvent(e, integration);
 
   const conditions =
@@ -1310,7 +1310,7 @@ function validateEvent(event: string, integration: WorkflowIntegration): void {
     const otherLabel = WORKFLOW_INTEGRATION_LABELS[other];
     fail(
       `"${event}" is a ${otherLabel} event, and this is a ` +
-        `${WORKFLOW_INTEGRATION_LABELS[integration]} rule. Make a ${otherLabel} rule for it instead.`
+        `${WORKFLOW_INTEGRATION_LABELS[integration]} automation. Make a ${otherLabel} automation for it instead.`
     );
   }
   fail(
@@ -1334,7 +1334,7 @@ function refuseForeignConditions(
   const other: WorkflowIntegration = integration === 'slack' ? 'github' : 'slack';
   fail(
     `"${hit}" is a ${WORKFLOW_INTEGRATION_LABELS[other]} condition, and this is a ` +
-      `${WORKFLOW_INTEGRATION_LABELS[integration]} rule. Remove it.`
+      `${WORKFLOW_INTEGRATION_LABELS[integration]} automation. Remove it.`
   );
 }
 
@@ -1360,11 +1360,11 @@ function validateSlackConditions(raw: unknown): WorkflowConditions {
     fail('conditions.slackTeamId must be a string');
   }
   const team = typeof c.slackTeamId === 'string' ? c.slackTeamId.trim() : '';
-  if (!team) fail('A Slack rule needs a Slack workspace. Pick the Slack workspace to watch.');
+  if (!team) fail('A Slack automation needs a Slack workspace. Pick the Slack workspace to watch.');
   out.slackTeamId = team;
 
   const channels = c.channels === undefined ? [] : stringList(c.channels, 'conditions.channels');
-  if (channels.length === 0) fail('A Slack rule needs at least one channel to watch.');
+  if (channels.length === 0) fail('A Slack automation needs at least one channel to watch.');
   out.channels = channels;
 
   if (c.textContains !== undefined) {
@@ -1404,10 +1404,10 @@ function validateSlackAuthors(raw: unknown): WorkflowSlackAuthorMatch | undefine
     if (userIds.length === 0) fail(`${at} names no Slack users, so it can never match`);
     return { kind: 'users', userIds };
   }
-  // `linked` is the default, so it is dropped: the stored jsonb holds only what
-  // differs from it. `any` is kept, because it WIDENS the rule.
-  if (kind === 'linked') return undefined;
-  return { kind: 'any' };
+  // `any` is the default, so it is dropped: the stored jsonb holds only what
+  // differs from it. `linked` is kept, because it NARROWS the rule.
+  if (kind === 'any') return undefined;
+  return { kind: 'linked' };
 }
 
 /**
@@ -1451,7 +1451,7 @@ function validateConditions(
   const appliesTo = (allowed: readonly WorkflowTriggerEvent[], field: string): void => {
     if (!events.some((e) => allowed.includes(e))) {
       const names = allowed.map((e) => WORKFLOW_EVENT_LABELS[e]).join(', ');
-      fail(`"${field}" only applies to ${names}, which this workflow does not trigger on`);
+      fail(`"${field}" only applies to ${names}, which this automation does not trigger on`);
     }
   };
 
@@ -1541,7 +1541,7 @@ function validateConditions(
 
 function validateActions(raw: unknown, integration: WorkflowIntegration): WorkflowAction[] {
   if (!Array.isArray(raw)) fail('actions must be an array');
-  if (raw.length === 0) fail('a workflow needs at least one action');
+  if (raw.length === 0) fail('an automation needs at least one action');
   return raw.map((entry, i) => validateAction(entry, `actions[${i}]`, integration));
 }
 
@@ -1556,7 +1556,7 @@ function validateAction(
   if (typeof type !== 'string' || !(ALL_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)) {
     fail(
       integration === 'slack'
-        ? `${at}.type is not an action a Slack rule can take`
+        ? `${at}.type is not an action a Slack automation can take`
         : `${at}.type is not an action Talyn can take on a PR`
     );
   }
@@ -1564,9 +1564,9 @@ function validateAction(
     const label = WORKFLOW_ACTION_LABELS[type as WorkflowActionType];
     fail(
       integration === 'slack'
-        ? `${at}: "${label}" acts on a pull request, so a Slack rule cannot use it. ` +
+        ? `${at}: "${label}" acts on a pull request, so a Slack automation cannot use it. ` +
             'Use "Start a session", "Reply in the thread" or "Add a reaction".'
-        : `${at}: "${label}" acts on a Slack message, so a GitHub rule cannot use it.`
+        : `${at}: "${label}" acts on a Slack message, so a GitHub automation cannot use it.`
     );
   }
 
@@ -1605,8 +1605,8 @@ function validateAction(
       // storing a rule that silently fails every time it matches.
       if (skillKey.startsWith('local:')) {
         fail(
-          'A workflow cannot run a local skill — those live on your machine and Talyn runs ' +
-            'workflows on the server. Use a repo skill or one saved to the workspace.'
+          'An automation cannot run a local skill. Local skills stay on your machine. Talyn runs ' +
+            'automations on the server. Use a repository skill or one saved to the workspace.'
         );
       }
       const model = typeof a.model === 'string' && a.model.trim() ? a.model.trim() : undefined;
@@ -1856,7 +1856,7 @@ export const WORKFLOW_CONDITION_SPECS: readonly WorkflowConditionSpec[] = [
   {
     key: 'repos',
     label: 'Repository',
-    hint: 'Only these repositories. Leave a workflow without this to cover every repository the workspace watches.',
+    hint: 'Only these repositories. Leave an automation without this to cover every repository the workspace watches.',
     input: 'repos',
     appliesTo: null,
   },
@@ -1906,7 +1906,7 @@ export const WORKFLOW_CONDITION_SPECS: readonly WorkflowConditionSpec[] = [
     key: 'labelsNone',
     label: 'Has none of these labels',
     input: 'labels',
-    hint: 'Carrying any one of them stops the workflow.',
+    hint: 'Carrying any one of them stops the automation.',
     appliesTo: null,
   },
   {
@@ -2038,14 +2038,14 @@ export const SLACK_WORKFLOW_CONDITION_SPECS: readonly SlackWorkflowConditionSpec
   {
     key: 'channels',
     label: 'Channels',
-    hint: 'A message in any of these channels can trigger the rule. Invite Talyn to a channel first.',
+    hint: 'A message in any of these channels can trigger the automation. Invite Talyn to a channel first.',
     input: 'channels',
     required: true,
   },
   {
     key: 'slackAuthors',
     label: 'Who can trigger it',
-    hint: 'By default, only people who linked their Slack account to Talyn.',
+    hint: 'By default, anyone in the channel.',
     input: 'slackAuthors',
     required: false,
   },
@@ -2059,7 +2059,7 @@ export const SLACK_WORKFLOW_CONDITION_SPECS: readonly SlackWorkflowConditionSpec
   {
     key: 'includeThreadReplies',
     label: 'Replies in threads',
-    hint: 'By default, only new messages in the channel trigger the rule, not replies.',
+    hint: 'By default, only new messages in the channel trigger the automation, not replies.',
     input: 'threadReplies',
     required: false,
   },
@@ -2173,7 +2173,7 @@ export function workflowInputProblem(input: WorkflowInput): string | null {
     validateWorkflow(input);
     return null;
   } catch (err) {
-    return err instanceof Error ? err.message : 'This workflow is not valid';
+    return err instanceof Error ? err.message : 'This automation is not valid';
   }
 }
 
