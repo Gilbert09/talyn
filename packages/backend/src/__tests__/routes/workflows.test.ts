@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
+import { randomBytes } from 'node:crypto';
 import type { Features } from '@talyn/shared';
 import type { WorkflowWithStats } from '@talyn/shared';
 import { workflowRoutes } from '../../routes/workflows.js';
@@ -11,8 +12,9 @@ import { wrapAsyncRoutes } from '../../middleware/asyncHandler.js';
 import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
-import { workspaces as workspacesTable } from '../../db/schema.js';
+import { slackInstallations, slackUserLinks, workspaces as workspacesTable } from '../../db/schema.js';
 import { _resetWorkflowStore } from '../../services/workflows/store.js';
+import { encryptString } from '../../services/tokenCrypto.js';
 
 /**
  * The workflows API.
@@ -28,6 +30,7 @@ import { _resetWorkflowStore } from '../../services/workflows/store.js';
  */
 
 const OTHER_USER_ID = 'user-other';
+const priorTokenKey = process.env.TALYN_TOKEN_KEY;
 const headers = {
   ...internalProxyHeaders(TEST_USER_ID),
   'content-type': 'application/json',
@@ -67,6 +70,7 @@ describe('workflow routes', () => {
   let close: () => Promise<void>;
 
   beforeEach(async () => {
+    process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
     ({ db, cleanup } = await createTestDb());
     await seedUser(db, { id: TEST_USER_ID, email: 'tom@example.test' });
     await seedUser(db, { id: OTHER_USER_ID, email: 'other@example.test' });
@@ -80,6 +84,8 @@ describe('workflow routes', () => {
   });
 
   afterEach(async () => {
+    if (priorTokenKey === undefined) delete process.env.TALYN_TOKEN_KEY;
+    else process.env.TALYN_TOKEN_KEY = priorTokenKey;
     delete process.env.WORKFLOWS_ENABLED;
     _resetWorkflowStore();
     await close();
@@ -305,6 +311,17 @@ describe('workflow routes', () => {
       });
     }
 
+    async function seedInstall(teamId = 'T1', installedByUserId = TEST_USER_ID) {
+      await db.insert(slackInstallations).values({
+        teamId,
+        teamName: `Team ${teamId}`,
+        appId: 'A1',
+        botUserId: 'UBOT',
+        accessTokenEnc: encryptString('xoxb-secret'),
+        installedByUserId,
+      });
+    }
+
     afterEach(() => {
       delete process.env.SLACK_CHANNEL_RULES_ENABLED;
     });
@@ -333,6 +350,7 @@ describe('workflow routes', () => {
 
     it('creates a Slack rule when the flag is on, and returns its integration', async () => {
       process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+      await seedInstall();
       const res = await post(slackBody());
       expect(res.status).toBe(200);
       const made = ((await res.json()) as { data: WorkflowWithStats }).data;
@@ -341,6 +359,61 @@ describe('workflow routes', () => {
         events: ['slack_message'],
         conditions: { slackTeamId: 'T1', channels: ['C1'] },
       });
+    });
+
+    it.each([
+      { name: 'owner installed the team', installedBy: TEST_USER_ID, linkedBy: null, status: 200 },
+      { name: 'owner linked in the team', installedBy: null, linkedBy: TEST_USER_ID, status: 200 },
+      { name: 'nobody reaches the team', installedBy: null, linkedBy: null, status: 400 },
+      { name: 'another user installed the team', installedBy: OTHER_USER_ID, linkedBy: null, status: 400 },
+    ])('checks Slack team access when $name', async ({ installedBy, linkedBy, status }) => {
+      process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+      if (installedBy) await seedInstall('T1', installedBy);
+      if (linkedBy) {
+        await db.insert(slackUserLinks).values({
+          id: 'link-1',
+          teamId: 'T1',
+          slackUserId: 'U1',
+          userId: linkedBy,
+        });
+      }
+
+      const res = await post(slackBody());
+      expect(res.status).toBe(status);
+      const json = (await res.json()) as { success: boolean; data?: WorkflowWithStats; error?: string; code?: string };
+      if (status === 200) {
+        expect(json.data?.integration).toBe('slack');
+      } else {
+        expect(json).toEqual({
+          success: false,
+          error:
+            'Talyn is not installed in that Slack workspace for this account. Install Slack or link your Slack account first.',
+          code: 'slack_team_unavailable',
+        });
+      }
+    });
+
+    it('refuses a PATCH that changes the Slack team to an unreachable team', async () => {
+      process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+      await seedInstall();
+      const made = ((await (await post(slackBody())).json()) as { data: WorkflowWithStats }).data;
+
+      const res = await fetch(`${url}/api/v1/workflows/${made.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ conditions: { slackTeamId: 'T2', channels: ['C1'] } }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        success: false,
+        error:
+          'Talyn is not installed in that Slack workspace for this account. Install Slack or link your Slack account first.',
+        code: 'slack_team_unavailable',
+      });
+
+      const listed = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine`, { headers });
+      const rows = ((await listed.json()) as { data: WorkflowWithStats[] }).data;
+      expect(rows[0].conditions.slackTeamId).toBe('T1');
     });
 
     it('validates before it gates, so a bad Slack rule is a 400 either way', async () => {
@@ -356,6 +429,7 @@ describe('workflow routes', () => {
     ] as const)('lists by ?integration=%s', async (integration, expected) => {
       process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
       await create();
+      await seedInstall();
       expect((await post(slackBody())).status).toBe(200);
       const qs = integration ? `&integration=${integration}` : '';
       const res = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine${qs}`, { headers });
@@ -407,6 +481,7 @@ describe('workflow routes', () => {
       'refuses %s on a Slack rule once the flag is off again',
       async (verb) => {
         process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+        await seedInstall();
         const made = ((await (await post(slackBody())).json()) as { data: WorkflowWithStats }).data;
         process.env.SLACK_CHANNEL_RULES_ENABLED = 'false';
         const res =

@@ -118,6 +118,25 @@ export function slackTargetsQuery(teamId: string) {
     );
 }
 
+export async function ownerReachesSlackTeam(ownerId: string, teamId: string): Promise<boolean> {
+  const db = getPoolDbClient();
+  const installations = await db
+    .select({ id: slackInstallations.teamId })
+    .from(slackInstallations)
+    .where(
+      and(eq(slackInstallations.installedByUserId, ownerId), eq(slackInstallations.teamId, teamId))
+    )
+    .limit(1);
+  if (installations.length > 0) return true;
+
+  const links = await db
+    .select({ id: slackUserLinks.id })
+    .from(slackUserLinks)
+    .where(and(eq(slackUserLinks.userId, ownerId), eq(slackUserLinks.teamId, teamId)))
+    .limit(1);
+  return links.length > 0;
+}
+
 /** Whether a Slack user has linked a Talyn account in this team. */
 export async function slackAuthorLinked(teamId: string, slackUserId: string): Promise<boolean> {
   const rows = await getPoolDbClient()

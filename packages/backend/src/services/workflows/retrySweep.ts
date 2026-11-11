@@ -74,7 +74,7 @@ class WorkflowRetrySweep {
     debugBus.registerPoller(
       'workflow_retry_sweep',
       INTERVAL_MS,
-      'Re-runs workflow actions GitHub rate-limited. A parked run holds the instant its gate clears; this picks it up once it has.'
+      'Re-runs rule actions that were parked: a GitHub or Slack rate limit, or a box gate refusal. A parked run holds the instant its gate clears; this picks it up once it has.'
     );
     this.timer = setInterval(() => {
       void this.tick();

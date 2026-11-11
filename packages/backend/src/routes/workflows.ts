@@ -8,7 +8,7 @@ import {
 } from '@talyn/shared';
 import type { NormalizedWorkflow } from '@talyn/shared';
 import { captureWorkspaceEvent } from '../services/analytics.js';
-import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import {
   countWorkflows,
   createWorkflow,
@@ -25,6 +25,7 @@ import {
   workflowsRefusalReason,
 } from '../services/workflowsAccess.js';
 import { workflowSuggestions } from '../services/workflows/suggestions.js';
+import { ownerReachesSlackTeam } from '../services/workflows/sources/slack.js';
 
 /**
  * Workflows — user-defined PR automation.
@@ -135,6 +136,24 @@ export function workflowRoutes(): Router {
     return false;
   }
 
+  async function slackTeamGate(
+    req: Request,
+    res: Response,
+    workflow: NormalizedWorkflow
+  ): Promise<boolean> {
+    if (workflow.integration !== 'slack') return true;
+    if (await ownerReachesSlackTeam(assertUser(req).id, workflow.conditions.slackTeamId ?? '')) {
+      return true;
+    }
+    res.status(400).json({
+      success: false,
+      error:
+        'Talyn is not installed in that Slack workspace for this account. Install Slack or link your Slack account first.',
+      code: 'slack_team_unavailable',
+    });
+    return false;
+  }
+
   /**
    * `GET /?integration=github|slack` lists one integration's rules. Absent lists
    * every rule, which is what a client older than integrations expects.
@@ -227,6 +246,7 @@ export function workflowRoutes(): Router {
       });
     }
     if (!(await integrationGate(res, workspaceId, normalized.integration))) return;
+    if (!(await slackTeamGate(req, res, normalized))) return;
     // No plan caps how many workflows an owner keeps. A run a workflow starts
     // is gated where its task is created.
     const data = await createWorkflow(workspaceId, normalized);
@@ -271,6 +291,7 @@ export function workflowRoutes(): Router {
         error: err instanceof Error ? err.message : 'invalid workflow',
       });
     }
+    if (!(await slackTeamGate(req, res, normalized))) return;
     const data = await updateWorkflow(existing.id, existing.workspaceId, normalized);
     if (!data) return res.status(404).json({ success: false, error: 'Workflow not found' });
 
