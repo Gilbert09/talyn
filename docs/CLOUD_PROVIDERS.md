@@ -285,7 +285,7 @@ export interface CloudTaskProvider {
   displayName: string;
   defaultRenderer: EnvironmentRenderer; // 'structured'
 
-  /** Validate + persist credentials (Settings → Integrations). */
+  /** Validate and store credentials (Integrations). */
   validateCredentials(workspaceId: string, input: unknown): Promise<{ ok: boolean; error?: string }>;
   hasCredentials(workspaceId: string): Promise<boolean>;
 
@@ -399,7 +399,7 @@ export interface CloudTaskMetadata {
   `EnvironmentConfig` union (model/adapter/routine-id defaults as needed).
 
 ### 2e. Frontend generic surfaces
-- **Settings → Integrations**: render one panel per `GET /api/cloud-providers`
+- **Integrations**: render one panel per `GET /api/cloud-providers`
   entry instead of a hard-coded PostHog panel.
 - **Env picker / Add-Environment modal**: list cloud providers generically; each
   connected provider exposes its auto-provisioned env.

@@ -179,31 +179,32 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_update_skill` | Update the supplied platform skill fields. |
 | `talyn_delete_skill` | Delete a platform skill. |
 
-### Workflows
+### Integration rules
 
 | Tool | What it does |
 | --- | --- |
-| `talyn_list_workflows` | List definitions and run statistics. |
-| `talyn_get_workflow` | Read the editable definition as JSON. |
-| `talyn_get_workflow_vocabulary` | Read allowed events, conditions, and action fields. Get label, user, and branch suggestions. |
-| `talyn_create_workflow` | Create a definition from the `workflow` object. |
-| `talyn_update_workflow` | Merge supplied fields over the current definition before saving. |
-| `talyn_set_workflow_enabled` | Enable or disable a workflow while preserving its definition. |
-| `talyn_delete_workflow` | Delete a workflow and its history. |
-| `talyn_list_workflow_runs` | Read run history with `limit` and `cursor`. |
+| `talyn_list_workflows` | List rules and run statistics. Pass `integration` as `github` or `slack` to filter the list. Each row includes its integration. |
+| `talyn_get_workflow` | Read the editable rule as JSON, including `integration`. |
+| `talyn_get_workflow_vocabulary` | Pass optional `integration` as `github` or `slack`. The default is `github`. Read events, conditions, and actions. |
+| `talyn_create_workflow` | Create a rule from `workflow`. Set `workflow.integration` to `github` or `slack`. The result includes the integration. |
+| `talyn_update_workflow` | Merge supplied fields over the current rule. The result includes its integration. A rule cannot change integration. |
+| `talyn_set_workflow_enabled` | Enable or disable a rule while keeping its definition. |
+| `talyn_delete_workflow` | Delete a rule and its history. |
+| `talyn_list_workflow_runs` | Read rule runs with `limit` and `cursor`. |
+| `talyn_list_slack_channels` | Pass `{teamId}` to list channels the bot joined. Invite it with `/invite @Talyn` first. |
 
-### Loops
+### Schedule integration
 
 | Tool | What it does |
 | --- | --- |
-| `talyn_list_loops` | List recurring work and next run times. |
-| `talyn_get_loop` | Read the editable definition and next run time as JSON. |
-| `talyn_create_loop` | Create recurring work. Set `target` to `session` for a sandbox session, or `task` for a cloud task. Talyn gets the repository name from `repository_id`. |
-| `talyn_update_loop` | Merge supplied fields over the current definition before saving. |
-| `talyn_set_loop_enabled` | Enable or disable a loop while preserving its definition. |
-| `talyn_delete_loop` | Delete a loop and its history. |
-| `talyn_list_loop_runs` | Read run history with `limit` and `cursor`. |
-| `talyn_run_loop_now` | Start a run now, through the normal session or task checks. |
+| `talyn_list_loops` | List scheduled rules and their next run times. |
+| `talyn_get_loop` | Read a scheduled rule and its next run time as JSON. |
+| `talyn_create_loop` | Create a scheduled rule. Set `target` to `session` or `task`. Get the repository name from `repository_id`. |
+| `talyn_update_loop` | Merge supplied fields over the current scheduled rule. |
+| `talyn_set_loop_enabled` | Enable or disable a scheduled rule while keeping its definition. |
+| `talyn_delete_loop` | Delete a scheduled rule and its history. |
+| `talyn_list_loop_runs` | Read scheduled rule runs with `limit` and `cursor`. |
+| `talyn_run_loop_now` | Start a scheduled rule run now. Normal session or task checks apply. |
 
 ### Sessions
 
@@ -283,7 +284,7 @@ The table `memory_review_runs` (migration `0123`) keeps one row for each review.
 
 | Tool | What it does |
 | --- | --- |
-| `talyn_get_billing_status` | Read the plan and usage against task, queue, workflow, and loop limits. |
+| `talyn_get_billing_status` | Read the plan and usage against task, queue, integration rule, and scheduled rule limits. |
 | `talyn_list_cloud_providers` | Read connected providers, connected agents, required sign-ins, and the default provider. |
 | `talyn_whats_new` | Read the latest release. Pass a version in `since` to read newer releases. |
 
@@ -291,11 +292,11 @@ A task's `skill` reference contains `key`, `name`, and `source`.
 It can also contain `repositoryId` or `platformSkillId`.
 Include the skill instructions in `prompt`; the reference records which skill the task uses.
 
-Loop creation uses the desktop defaults, except that the timezone defaults to `UTC`.
+Scheduled rule creation uses the desktop defaults. The timezone defaults to `UTC`.
 These defaults include target `task`, PostHog Code, its default model, daily runs at 09:00, and concurrency `skip`.
 With target `session` and no provider, the provider is Talyn Fleet (`selfhosted`) with its default model.
 Internet access defaults to off. `mcpServerIds: null` uses the workspace's connected servers.
-Pass loop fields directly or in a `loop` object. Set the model when you change the provider.
+Pass scheduled rule fields directly or in a `loop` object. Set the model when you change the provider.
 
 For MCP connections, `authKind` accepts `oauth` or `none`.
 The tool maps `oauth` to the API's `bearer` value. Then use `talyn_connect_mcp_server` to start sign-in.

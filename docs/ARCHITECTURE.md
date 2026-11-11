@@ -106,6 +106,14 @@ Completed team requests still clear. A cached summary cannot make reconciliation
 
 ## Key Decisions
 
+### Integration rules and source adapters
+
+GitHub and Slack rules share one engine in `services/workflows/`.
+Source adapters in `services/workflows/sources/` turn GitHub and Slack events into rule facts.
+The `integration` column on `workflows` identifies each rule's source.
+It accepts `github` or `slack`. Existing rules use GitHub when the field is absent.
+Schedule runs scheduled rules through `services/loops/`.
+
 ### 0. Cloud-only pivot — 2026-06
 The local-execution model (bundled daemon, local/SSH environments, in-process Claude agents, approval gates, per-task git working trees) was removed wholesale. Every task runs on a cloud provider's sandbox; Talyn is a PR dashboard + delegation layer. This supersedes decisions 2–7 below, which are kept as history.
 

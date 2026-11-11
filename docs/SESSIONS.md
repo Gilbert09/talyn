@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Integrations area and rules (2026-11-11)
+
+Steps 1 to 4 brought connections, rules, and runs into one Integrations area.
+- Rules use the `integration` field. The vocabulary covers GitHub and Slack.
+- One rule engine uses GitHub and Slack adapters in `services/workflows/sources/`.
+- Slack channel rules use the `slackChannelRules` flag.
+- The Slack connection reports `canReply` from the `chat:write` scope. A channels route lists channels the bot joined.
+- Web, desktop, and mobile show Integrations in place of Automations.
+- MCP tools and public docs now describe integration rules and scheduled rules.
+
 ## Sessions can wait for CI (2026-11-11)
 
 A session that pushed had only a timed wake-up, so the agent guessed how long CI takes. A short guess woke the box to find CI still running. A long guess lost time after CI finished. Now `talyn_schedule_wakeup` takes `until_ci` and `head_sha`, and Talyn sends the turn when CI settles. This is the session form of CI park (below). A session needs no suspend or resume, because its box sleeps when idle and a wake-up turn wakes it. Behind the `session-ci-wait` PostHog flag (`sessionCiWait`, fallback OFF, `availability: 'gated'`, break glass `SESSION_CI_WAIT_ENABLED`), asked against the workspace owner when the wake-up is scheduled. With the flag off, the request gets 403 `ci_wait_unavailable` and the skills tell the agent to use a timed wake-up.
@@ -93,7 +103,10 @@ An on-device review of `apps/mobile` found it looked and worked like a form, not
 - **The store marked every entry stale on every socket event**, which kept a "Stale data" banner up and locked the composer on busy repos. Invalidation is now per id, refetches are silent and coalesced, and data stays on screen.
 - **Navigation is a drawer that mirrors the web sidebar**, not bottom tabs. Home is the new-session composer, as on web. Pinning every page above Settings left no room for sessions on a phone, so only the pull request lists stay pinned.
 - **Edge-to-edge Android does not resize for the keyboard.** A disabled `KeyboardAvoidingView` with `behavior="padding"` writes `paddingBottom: 0` over its own style, and the reported keyboard height leaves out the navigation bar. The inset now comes from the keyboard's `screenY`.
-- New: Markdown chat with tool rows, plan approval, stop, image attachments, session menu actions, PR actions and code review, changes and diffs, jobs, history, spaces, automations, usage, agents, insights, feature flags (`GET /features`), the owl boot and sign-in screens, and a native splash.
+- New: Markdown chat, tool rows, plan approval, stop, and image attachments.
+- The client added session menus, PR actions, code review, changes, diffs, jobs, and history.
+- It added spaces, integrations, usage, agents, insights, and feature flags through `GET /features`.
+- It also added the owl boot, sign-in screens, and a native splash.
 - Metro caches the worklets Babel plugin in memory. After adding reanimated or worklets, restart Metro with `--clear`, or the app fails with a version mismatch.
 
 ## Check ledger recompute reads one row (2026-11-09)

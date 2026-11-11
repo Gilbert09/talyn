@@ -32,15 +32,15 @@ export const DOCS_NAV: DocsNavSection[] = [
   },
   {
     title: "Sessions",
-    slugs: ["sessions", "sandboxes", "repository-setup"],
+    slugs: ["sessions", "sandboxes", "repository-setup", "skills"],
   },
   {
     title: "Pull requests",
     slugs: ["pull-requests", "fix-pull-requests", "merge-queue", "code-review"],
   },
   {
-    title: "Automation",
-    slugs: ["skills", "workflows", "loops", "slack", "mcp-servers"],
+    title: "Integrations",
+    slugs: ["integrations", "integrations-slack", "workflows", "loops", "slack", "mcp-servers"],
   },
   {
     title: "Account",

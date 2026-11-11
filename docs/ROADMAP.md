@@ -135,7 +135,8 @@ Follow-ups now that Loops has shipped:
 - [ ] **Analytics panel — token / cost usage** — surface an Analytics tab aggregating per-workspace spend, per-task spend + token breakdown, per-model mix, and a trend chart from whatever usage data each cloud provider's transcript/run exposes. Inspiration: how PostHog / Linear surface "insights" around usage.
 - [x] **Approve / Request changes on web and desktop** — all three apps have them on a pull request that asks for your review (`POST /pull-requests/:id/review`, sent as the person's own GitHub review). Web and desktop open a dialog from the PR detail header (2026-11-10).
 - [ ] **Show logged-in user in the app chrome** — bottom-left of the sidebar should display GitHub username + avatar so users know which account they're using (especially on laptops with multiple GitHub accounts).
-- [ ] **Auto-connect GitHub integration from the Supabase login session** — today users sign in with GitHub OAuth (Supabase), then *separately* click "Connect GitHub" in Settings → Integrations to run a second OAuth flow. Supabase's sign-in session already returns `provider_token` with `repo` scope — we should pull it off `session.provider_token` on first login and store it as the workspace's GitHub integration token, skipping the second flow.
+- [ ] **Auto-connect GitHub from the Supabase login session.** Users now sign in with GitHub, then connect it again under Integrations.
+  Supabase returns `session.provider_token` with `repo` scope. Store that token for the workspace and skip the second flow.
 - [ ] **Load-bearing eslint-disables** — a few `eslint-disable-next-line` / `@ts-ignore` sites exist (`middleware/auth.ts` namespace augmentation, `apps/desktop/src/main/main.ts` console usage, Electron ERB build scripts). All intentional and low-risk; noted for a future "lint-cleanup" pass if it's ever worth the churn.
 - [x] **Workspace endpoint returns empty `repos` + `integrations`** — Fixed 2026-04-19.
 - [x] **Change default ports** — Changed from 3001 to 4747 to avoid conflicts with common dev servers
@@ -365,7 +366,7 @@ Follow-ups now that Loops has shipped:
   - [x] Approve/Request changes (review submission)
 
 - [x] **6.5 GitHub UI** (COMPLETED)
-  - [x] Connect GitHub button (in Settings > Integrations)
+  - [x] Connect GitHub button (in Integrations > GitHub)
   - [x] Connection status display (shows connected user)
   - [x] Disconnect button
   - [x] Repository selector (in Settings > Workspace > Watched Repositories)
@@ -373,34 +374,19 @@ Follow-ups now that Loops has shipped:
   - [x] CI status indicators (check status icons in PR list)
   - [x] Dedicated GitHub panel in sidebar
 
-## Phase 7: Slack Integration
+## Phase 7: Slack integration
 
-- [ ] **7.1 Slack OAuth**
-  - [ ] OAuth flow implementation
-  - [ ] Token storage
-  - [ ] Workspace connection
+- [x] Install the Slack app and connect a workspace through OAuth.
+- [x] Link a Slack account to a Talyn account.
+- [x] Start personal sessions with an emoji, mention, or direct message.
+- [x] Create channel rules for new messages. The `slackChannelRules` flag controls rollout.
+- [x] Reply in a thread or react when a channel rule matches.
 
-- [ ] **7.2 Slack Service**
-  - [ ] Slack Web API client
-  - [ ] List channels
-  - [ ] Message queries
-  - [ ] Send messages
-  - [ ] Real-time events (Socket Mode or webhooks)
+### Integration follow-ups
 
-- [ ] **7.3 Slack Monitoring**
-  - [ ] Configure monitored channels
-  - [ ] Direct mentions → inbox
-  - [ ] Channel keywords → inbox
-
-- [ ] **7.4 Slack Actions**
-  - [ ] Reply to message
-  - [ ] View thread
-  - [ ] Open in Slack
-
-- [ ] **7.5 Slack UI**
-  - [ ] Connect Slack button
-  - [ ] Channel selector
-  - [ ] Message preview in inbox items
+- [ ] Add Linear as a rule source.
+- [ ] Add Sentry as a rule source.
+- [ ] Add a generic inbound webhook source.
 
 ## Phase 8: PostHog Integration
 

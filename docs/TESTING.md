@@ -62,7 +62,7 @@ Gate to `main` + pre-release. ~5 golden-path flows:
 1. **Cold start → create task → see it queued.** Launches Electron, opens the app, creates a `code_writing` task, asserts it lands in the queue list.
 2. **Approve an awaiting-review task.** Seeds a DB row via an exposed test-only HTTP endpoint (or direct DB write in a test mode), loads the task, clicks Approve, asserts it moves to completed.
 3. **Reject → requeue.** Same but click Reject.
-4. **GitHub disconnect flow.** Settings panel → Disconnect → integrations table updated.
+4. **GitHub disconnect flow.** Integrations → GitHub → Disconnect → integrations table updated.
 5. **WebSocket reconnect.** Kill backend mid-session, restart, assert the UI recovers (this catches a class of bug that silent reconnect logic hides).
 
 ## CI wiring

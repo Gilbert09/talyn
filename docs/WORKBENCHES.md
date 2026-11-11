@@ -229,7 +229,7 @@ inside it.
 | Menu chords | `main/menuCommands.ts`: the Electron menu owns ⌘N, ⌘W, ⌘T and the rest, and sends `menu:command` to the renderer. Close Window is ⌘⇧W. |
 | Home | `pages/NewWorkbenchPage.tsx`: one composer. Enter creates the workbench and starts it. Names come from the task (`workbenchNameFromTask`). |
 | Workbench | `WorkbenchView.tsx`, `WorkbenchHeader.tsx` (one action button: Create PR → Resolve conflicts → Fix checks → Merge → Archive), `GitPanel.tsx` (All files / Changes / Checks, terminal dock) |
-| Other pages | `pages/HistoryView.tsx`, `PullRequestsView.tsx` (the five PR panels), `AutomationsView.tsx` (Workflows, Loops, MCP servers) |
+| Other pages | `pages/HistoryView.tsx`, `PullRequestsView.tsx` (the five PR panels), `IntegrationsView.tsx` (connections, rules, runs) |
 | Readiness | `GET /workbenches/readiness` + Electron `workbench:readiness`, merged by `lib/readiness.ts`. A choice that cannot run is disabled with its reason, and create refuses before it inserts a row. |
 | Failure handling | One provisioning failure path (status and sandbox state `error`, a readable reason, queued messages cleared). `POST /workbenches/:id/retry`. |
 

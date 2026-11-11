@@ -57,7 +57,7 @@ the OAuth callback reopens your dev build instead of an installed production
 FastOwl.app).
 
 **This app is login only.** Connecting a workspace to GitHub (onboarding step 1,
-Settings → Integrations → GitHub) needs a dev **GitHub App** — see §3b. The
+Integrations → GitHub → Connection) needs a dev **GitHub App** — see §3b. The
 classic-OAuth connect flow and its `/api/v1/github/callback` route are gone, so a
 second OAuth app, or a `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` pair in
 `packages/backend/.env`, no longer connects anything.
@@ -190,7 +190,7 @@ Classic OAuth connections remain supported. User-to-server tokens use the user's
    GitHub → the App's page → *Install* (or *Configure* to add repos). One-time
    per account; a user can install it on their personal account **and** several
    orgs.
-2. In the desktop, Settings → Integrations → GitHub → **Connect GitHub**. This
+2. In the desktop, Integrations → GitHub → Connection → **Connect GitHub**. This
    runs the OAuth **user-authorization** flow (`/login/oauth/authorize`), which
    always redirects back to `/github/app/callback` with a signed `state` —
    whether or not the App is already installed. (We deliberately do NOT use
@@ -967,11 +967,11 @@ is the default, and no OAuth UI appears at all.
 
 ---
 
-### 6c. Slack sessions
+### 6c. Slack integration
 
-People start Talyn sessions from Slack: a trigger emoji reaction, an @mention
-of the bot, or a DM. Talyn never posts in Slack. It shows status only as
-reactions on the triggering message. Slack sessions use the `workbenches` flag.
+People start Talyn sessions from Slack with a trigger emoji, bot mention, or direct message.
+Talyn shows status as reactions. Channel rules can reply in a thread or react to messages.
+Slack sessions use the `workbenches` flag. Channel rules use `slackChannelRules`.
 The flag is OFF by default. Set `WORKBENCHES_ENABLED=true` to enable it locally.
 Set `WORKBENCHES_ENABLED=false` to disable it everywhere.
 
@@ -989,7 +989,8 @@ App settings (api.slack.com/apps → the app):
 - **Bot token scopes**: `app_mentions:read`, `reactions:read`, `reactions:write`,
   `channels:history`, `groups:history`, `im:history`, `mpim:history`,
   `channels:read`, `groups:read`, `users:read`, `emoji:read` (shows the workspace's
-  custom emoji in the trigger picker). No `chat:write`.
+  custom emoji in the trigger picker), and `chat:write` for channel rule replies.
+- Older installs must reinstall Slack to grant `chat:write`.
 - **User token scopes**: `openid`, `profile` (for "Sign in with Slack").
 - **Token rotation**: ON. Bot tokens then expire after about 12 hours. Talyn
   refreshes them with `oauth.v2.access` (`grant_type=refresh_token`) and stores
@@ -999,13 +1000,14 @@ App settings (api.slack.com/apps → the app):
   people can DM the bot.
 - **Event Subscriptions**: ON. Request URL
   `https://prod.talyn.dev/api/v1/webhooks/slack`. Bot events: `app_mention`,
-  `reaction_added`, `message.im`, `app_uninstalled`, `tokens_revoked`.
+  `reaction_added`, `message.im`, `message.channels`, `message.groups`,
+  `app_uninstalled`, `tokens_revoked`.
 
 Notes:
 
-- Installing links the installer's Slack account too. Other people link theirs
-  with "Sign in with Slack" in Settings. A link to a Slack workspace without the
-  app installed is refused.
+- Installing links the installer's Slack account too.
+  Other people link theirs with "Sign in with Slack" in Integrations → Slack.
+  Talyn refuses a link when the Slack app is absent from that workspace.
 - "Remove" in Talyn only forgets the bot token. To uninstall the app, remove it
   in Slack. Slack then sends `app_uninstalled`, and Talyn deletes the token and
   every link in that workspace.
