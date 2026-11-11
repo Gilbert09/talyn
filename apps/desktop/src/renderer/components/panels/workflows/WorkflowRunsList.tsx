@@ -61,13 +61,16 @@ const PARKED_CODES: ReadonlySet<string> = new Set(['usage_exhausted', 'box_limit
 function OutcomeLine({ outcome }: { outcome: WorkflowActionOutcome }) {
   const label = WORKFLOW_ACTION_LABELS[outcome.type] ?? outcome.type;
   const parked = !outcome.ok && outcome.code !== undefined && PARKED_CODES.has(outcome.code);
+  const detail = String(outcome.code) === 'slack_scope_missing'
+    ? 'Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.'
+    : outcome.detail ?? outcome.error ?? '';
   return (
     <div className="flex items-baseline gap-2 text-xs">
       <span className={outcome.ok ? 'text-green-500' : parked ? 'text-amber-500' : 'text-red-500'}>
         {outcome.ok ? '+' : parked ? '…' : 'x'}
       </span>
       <span className="font-medium">{label}</span>
-      <span className="text-muted-foreground">{outcome.detail ?? outcome.error ?? ''}</span>
+      <span className="text-muted-foreground">{detail}</span>
     </div>
   );
 }
@@ -92,7 +95,7 @@ export function WorkflowRunsList({
   if (runs.length === 0) {
     return (
       <p className="px-3 py-2 text-[13px] text-muted-foreground">
-        This workflow has not run yet. It fires on the next matching pull request event.
+        This workflow has not run yet. It fires on the next matching event.
       </p>
     );
   }
@@ -121,7 +124,7 @@ export function WorkflowRunsList({
               </a>
             ) : (
               <span className="font-medium">
-                {run.repoFullName}#{run.prNumber}
+                {run.subjectLabel || (run.integration === 'slack' ? 'Slack message' : `${run.repoFullName}#${run.prNumber}`)}
               </span>
             )}
             <span className="ml-auto text-xs text-muted-foreground">
@@ -132,6 +135,9 @@ export function WorkflowRunsList({
           {run.prTitle && (
             <p className="truncate text-xs text-muted-foreground">{run.prTitle}</p>
           )}
+          {run.error && <p className="text-xs text-red-500">{run.error === 'slack_scope_missing'
+            ? 'Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.'
+            : run.error}</p>}
 
           <div className="space-y-0.5">
             {run.actions.map((outcome, i) => (

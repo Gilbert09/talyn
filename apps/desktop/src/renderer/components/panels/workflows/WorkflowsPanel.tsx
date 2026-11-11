@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Pencil, Plus, Trash2, Workflow } from 'lucide-react';
-import type { WorkflowInput, WorkflowWithStats } from '@talyn/shared';
+import type { WorkflowInput, WorkflowIntegration, WorkflowWithStats } from '@talyn/shared';
 import {
   describeWorkflowActions,
   describeWorkflowTrigger,
@@ -138,7 +138,7 @@ function WorkflowRow({
   );
 }
 
-export function WorkflowsPanel() {
+export function WorkflowsPanel({ integration = 'github' }: { integration?: WorkflowIntegration }) {
   const {
     workflows,
     error,
@@ -149,7 +149,7 @@ export function WorkflowsPanel() {
     liveRuns,
     suggestions,
     loadGithubSuggestions,
-  } = useWorkflows();
+  } = useWorkflows(integration);
   /**
    * The editor is a PAGE, not a modal — but not a route either.
    *
@@ -166,6 +166,12 @@ export function WorkflowsPanel() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<WorkflowWithStats | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    setView({ mode: 'list' });
+    setExpandedId(null);
+    setPendingDelete(null);
+  }, [integration]);
 
   /**
    * The one workflow event the server cannot see.
@@ -241,6 +247,7 @@ export function WorkflowsPanel() {
   if (view.mode === 'edit') {
     return (
       <WorkflowEditorPage
+        integration={view.workflow?.integration ?? integration}
         editing={view.workflow}
         suggestions={suggestions}
         onNeedGithubSuggestions={loadGithubSuggestions}
@@ -284,8 +291,9 @@ export function WorkflowsPanel() {
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b px-4 py-1">
         <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-          Automate what happens on a pull request. Fires on every PR in the repositories this
-          workspace watches, including ones you did not open.
+          {integration === 'slack'
+            ? 'Run actions when a message appears in a selected Slack channel.'
+            : 'Automate what happens on a pull request. Fires on every PR in the repositories this workspace watches, including ones you did not open.'}
         </p>
         <FeedbackButton surface="workflows" />
         <Button size="sm" onClick={openNew} data-attr="workflow-new">
@@ -306,8 +314,9 @@ export function WorkflowsPanel() {
             <Workflow className="mx-auto mb-3 h-6 w-6 text-muted-foreground" />
             <h2 className="text-[13px] font-medium">No workflows yet</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              A workflow watches for something on a pull request and then acts: label it, pull in a
-              reviewer, comment, add it to My PRs, run a skill, or send it to the merge queue.
+              {integration === 'slack'
+                ? 'A rule watches Slack messages and starts sessions, replies, or reacts.'
+                : 'A workflow watches for something on a pull request and then acts: label it, pull in a reviewer, comment, add it to My PRs, run a skill, or send it to the merge queue.'}
             </p>
             <Button className="mt-4" onClick={openNew}>
               <Plus className="mr-1 h-3.5 w-3.5" />
