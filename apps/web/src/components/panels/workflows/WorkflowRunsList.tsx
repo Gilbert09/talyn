@@ -89,7 +89,7 @@ export function WorkflowRunsList({
   if (runs.length === 0) {
     return (
       <p className="p-4 text-sm text-muted-foreground">
-        This workflow has not run yet. It fires on the next matching event.
+        This automation has not run yet. It fires on the next matching event.
       </p>
     );
   }

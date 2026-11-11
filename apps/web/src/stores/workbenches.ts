@@ -266,9 +266,13 @@ interface WorkbenchState {
   setTerminalTab: (tab: WorkbenchTerminalTab) => void;
   setDraft: (key: string, text: string) => void;
   /** Show a sent prompt in the chat's transcript. Returns its id. `settled`: the send already finished. */
-  addOutgoingMessage: (chatId: string, message: { text: string; attachments?: WorkbenchAttachment[]; settled?: boolean }) => string;
-  /** The send request finished: the prompt stays until its event arrives or it stops being pending. */
-  settleOutgoingMessage: (chatId: string, messageId: string) => void;
+  /** `queued`: a turn is running, so the message is expected to wait in the chat's queue. */
+  addOutgoingMessage: (chatId: string, message: { text: string; attachments?: WorkbenchAttachment[]; settled?: boolean; queued?: boolean }) => string;
+  /**
+   * The send request finished: the prompt stays until its event arrives or it stops being pending.
+   * `queued` is the response's answer to whether the message waits in the queue.
+   */
+  settleOutgoingMessage: (chatId: string, messageId: string, queued?: boolean) => void;
   /** The send request failed: the prompt stays, with the error, until it is sent again or discarded. */
   failOutgoingMessage: (chatId: string, messageId: string, failure: { error: string; input: SendWorkbenchMessageInput }) => void;
   /** A failed prompt is being sent again: it shows as in flight. */
@@ -511,7 +515,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   },
   setTerminalTab: (terminalTab) => set({ terminalTab, terminalOpen: true, rightPanelOpen: true }),
 
-  addOutgoingMessage: (chatId, { text, attachments = [], settled = false }) => {
+  addOutgoingMessage: (chatId, { text, attachments = [], settled = false, queued = false }) => {
     outgoingSequence += 1;
     const id = `outgoing-${Date.now()}-${outgoingSequence}`;
     set((s) => {
@@ -522,20 +526,27 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         attachments,
         afterSeq: held.length ? held[held.length - 1].seq : null,
         ...(settled ? { settledAt: Date.now() } : {}),
+        ...(queued ? { queued: true } : {}),
       };
       return { outgoingMessages: { ...s.outgoingMessages, [chatId]: [...(s.outgoingMessages[chatId] ?? []), message] } };
     });
     return id;
   },
 
-  settleOutgoingMessage: (chatId, messageId) =>
-    set((s) => patchOutgoing(s, chatId, messageId, (message) => ({ ...message, settledAt: Date.now(), failed: undefined }))),
+  settleOutgoingMessage: (chatId, messageId, queued) =>
+    set((s) => patchOutgoing(s, chatId, messageId, (message) => ({
+      ...message,
+      settledAt: Date.now(),
+      failed: undefined,
+      ...(queued === undefined ? {} : { queued }),
+    }))),
 
   failOutgoingMessage: (chatId, messageId, failed) =>
     set((s) => patchOutgoing(s, chatId, messageId, (message) => ({ ...message, settledAt: undefined, failed }))),
 
+  // A retry stays in the transcript, where the failed message was, until the response says it queued.
   resendOutgoingMessage: (chatId, messageId) =>
-    set((s) => patchOutgoing(s, chatId, messageId, (message) => ({ ...message, settledAt: undefined, failed: undefined }))),
+    set((s) => patchOutgoing(s, chatId, messageId, (message) => ({ ...message, settledAt: undefined, failed: undefined, queued: false }))),
 
   removeOutgoingMessages: (chatId, messageIds) =>
     set((s) => {

@@ -20,7 +20,7 @@ describe('accessible notification settings', () => {
   it('explains value and permission before explicit device opt-in', async () => {
     const f = fixture(); await f.render();
     expect(screen.getByRole('header', { name: 'Notifications' })).toBeVisible();
-    expect(screen.getByText(/Every workflow works without notifications/)).toBeVisible();
+    expect(screen.getByText(/Every automation works without notifications/)).toBeVisible();
     expect(f.controller.enableDevice).not.toHaveBeenCalled();
     await fireEvent.press(screen.getByRole('button', { name: 'Enable notifications on this device' }));
     expect(f.controller.enableDevice).toHaveBeenCalledTimes(1);

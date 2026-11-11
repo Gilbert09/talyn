@@ -85,7 +85,7 @@ export function useWorkflows(integration: WorkflowIntegration = 'github'): UseWo
       .catch((err: unknown) => {
         if (workspaceRef.current !== workspaceId || integrationRef.current !== integration) return;
         setWorkflows([]);
-        setError(err instanceof Error ? err.message : 'Could not load workflows');
+        setError(err instanceof Error ? err.message : 'Could not load automations');
       });
   }, [workspaceId, integration]);
 

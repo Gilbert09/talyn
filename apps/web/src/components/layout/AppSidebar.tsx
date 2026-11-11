@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
-import { splitViewOffered, workbenchesOffered } from '@talyn/shared';
+import { INTEGRATION_CATALOG, integrationsOffered, splitViewOffered, workbenchesOffered } from '@talyn/shared';
 import {
   ArrowLeft,
   ArrowRight,
@@ -18,6 +18,7 @@ import {
   Workflow,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { INTEGRATION_LOGOS } from '../../assets/integrations/IntegrationLogos';
 import { formatKeys } from '../../lib/shortcuts';
 import { PR_PAGE_TABS } from '../../lib/routeLabels';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -193,6 +194,7 @@ export function AppSidebar() {
           <SidebarItem
             icon={Workflow}
             label="Integrations"
+            trailing={<IntegrationLogoStrip features={features} />}
             collapsed={collapsed}
             active={route.view === 'integrations'}
             onClick={() => {
@@ -245,11 +247,14 @@ function SidebarItem({
   onClick,
   className,
   dataAttr,
+  trailing,
 }: {
   icon: typeof Search;
   label: string;
   keys?: string;
   badge?: number;
+  /** Drawn after the label when expanded and there is no badge or shortcut. The label then keeps its full width. */
+  trailing?: ReactNode;
   active?: boolean;
   collapsed: boolean;
   onClick: () => void;
@@ -273,7 +278,7 @@ function SidebarItem({
       <Icon className="h-4 w-4 shrink-0" />
       {!collapsed && (
         <>
-          <span className="min-w-0 flex-1 truncate">{label}</span>
+          <span className={cn('min-w-0 truncate', trailing ? 'shrink-0' : 'flex-1')}>{label}</span>
           {badge !== undefined && badge > 0 && (
             <span
               data-attr={dataAttr ? `${dataAttr}-badge` : undefined}
@@ -285,6 +290,7 @@ function SidebarItem({
           {keys && badge === undefined && (
             <span className="shrink-0 text-[11px] text-muted-foreground">{formatKeys(keys)}</span>
           )}
+          {trailing && badge === undefined && !keys && trailing}
         </>
       )}
       {collapsed && badge !== undefined && badge > 0 && <span className="sr-only">{badge}</span>}
@@ -295,6 +301,25 @@ function SidebarItem({
     <WithTooltip label={label} keys={keys} badge={badge}>
       {button}
     </WithTooltip>
+  );
+}
+
+/** The vendor apps this workspace can connect, as small marks. Schedule is built in, so it has none. */
+function IntegrationLogoStrip({ features }: { features: Parameters<typeof integrationsOffered>[0] }) {
+  const kinds = integrationsOffered(features).filter((kind) => !INTEGRATION_CATALOG[kind].builtIn);
+  if (kinds.length === 0) return null;
+  return (
+    // One fixed-height row: in a narrow sidebar the marks that do not fit wrap out of sight, whole.
+    <span
+      className="flex h-3 min-w-0 flex-1 flex-wrap justify-end gap-x-1.5 overflow-hidden"
+      data-attr="nav-integrations-logos"
+      aria-hidden
+    >
+      {kinds.map((kind) => {
+        const Logo = INTEGRATION_LOGOS[INTEGRATION_CATALOG[kind].icon];
+        return <Logo key={kind} className="h-3 w-3 shrink-0" />;
+      })}
+    </span>
   );
 }
 

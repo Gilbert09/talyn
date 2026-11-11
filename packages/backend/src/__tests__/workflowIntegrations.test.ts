@@ -37,7 +37,7 @@ import { workflowFactsFromRun } from '../services/workflows/facts.js';
  * What is pinned: a rule's events, conditions and actions all belong to ONE
  * integration, and a mix is refused with a message that says what to change;
  * a Slack rule matches only its own team and channels, only top-level messages
- * by default, and only linked people by default; and the GitHub side of every
+ * by default, and anyone in the channel by default; and the GitHub side of every
  * helper reads exactly as it did before integrations existed.
  */
 
@@ -150,7 +150,7 @@ describe('validateWorkflow — Slack rules', () => {
           slackTeamId: ' T1 ',
           channels: [' C1 ', 'C1', '', 'C2'],
           textContains: '   ',
-          slackAuthors: { kind: 'linked' },
+          slackAuthors: { kind: 'any' },
           includeThreadReplies: false,
         },
       })
@@ -179,11 +179,11 @@ describe('validateWorkflow — Slack rules', () => {
     });
   });
 
-  it('keeps `any`, because it widens the rule', () => {
+  it('keeps `linked`, because it narrows the rule', () => {
     const out = validateWorkflow(
-      slackRule({ conditions: { slackTeamId: 'T1', channels: ['C1'], slackAuthors: { kind: 'any' } } })
+      slackRule({ conditions: { slackTeamId: 'T1', channels: ['C1'], slackAuthors: { kind: 'linked' } } })
     );
-    expect(out.conditions.slackAuthors).toEqual({ kind: 'any' });
+    expect(out.conditions.slackAuthors).toEqual({ kind: 'linked' });
   });
 
   it.each([
@@ -226,7 +226,7 @@ describe('validateWorkflow — Slack rules', () => {
     ['slack_react without an emoji', { type: 'slack_react', emoji: '::' }, /one emoji name/],
     ['slack_react with two emoji', { type: 'slack_react', emoji: 'eyes fire' }, /one emoji name/],
     ['slack_react with a number', { type: 'slack_react', emoji: 3 }, /emoji must be a string/],
-    ['an unknown action', { type: 'dance' }, /not an action a Slack rule can take/],
+    ['an unknown action', { type: 'dance' }, /not an action a Slack automation can take/],
   ])('refuses %s', (_label, action, message) => {
     expect(() => validateWorkflow(slackRule({ actions: [action] }))).toThrow(message);
   });
@@ -234,8 +234,8 @@ describe('validateWorkflow — Slack rules', () => {
 
 describe('validateWorkflow — cross-integration refusals', () => {
   it.each([
-    ['a PR event on a Slack rule', slackRule({ events: ['pr_opened'] }), /"pr_opened" is a GitHub event, and this is a Slack rule/],
-    ['a Slack event on a GitHub rule', githubRule({ events: ['slack_message'] }), /"slack_message" is a Slack event, and this is a GitHub rule/],
+    ['a PR event on a Slack rule', slackRule({ events: ['pr_opened'] }), /"pr_opened" is a GitHub event, and this is a Slack automation/],
+    ['a Slack event on a GitHub rule', githubRule({ events: ['slack_message'] }), /"slack_message" is a Slack event, and this is a GitHub automation/],
     ['an unknown event on a Slack rule', slackRule({ events: ['slack_reaction'] }), /not a Slack event Talyn can trigger on/],
     ['an unknown event on a GitHub rule', githubRule({ events: ['pr_exploded'] }), /not a PR event Talyn can trigger on/],
   ])('refuses %s', (_label, rule, message) => {
@@ -245,7 +245,7 @@ describe('validateWorkflow — cross-integration refusals', () => {
   it.each(GITHUB_WORKFLOW_CONDITION_KEYS)('refuses the GitHub condition "%s" on a Slack rule', (key) => {
     const rule = slackRule({ conditions: { slackTeamId: 'T1', channels: ['C1'], [key]: 'x' } });
     expect(() => validateWorkflow(rule)).toThrow(
-      new RegExp(`"${key}" is a GitHub condition, and this is a Slack rule`)
+      new RegExp(`"${key}" is a GitHub condition, and this is a Slack automation`)
     );
   });
 
@@ -257,20 +257,20 @@ describe('validateWorkflow — cross-integration refusals', () => {
   it.each(SLACK_WORKFLOW_CONDITION_KEYS)('refuses the Slack condition "%s" on a GitHub rule', (key) => {
     const rule = githubRule({ conditions: { [key]: 'x' } });
     expect(() => validateWorkflow(rule)).toThrow(
-      new RegExp(`"${key}" is a Slack condition, and this is a GitHub rule`)
+      new RegExp(`"${key}" is a Slack condition, and this is a GitHub automation`)
     );
   });
 
   it.each(WORKFLOW_ACTION_TYPES)('refuses the PR action "%s" on a Slack rule', (type) => {
     const rule = slackRule({ actions: [{ ...emptyWorkflowAction(type) }] });
     expect(() => validateWorkflow(rule)).toThrow(
-      new RegExp(`"${WORKFLOW_ACTION_LABELS[type]}" acts on a pull request, so a Slack rule cannot use it`)
+      new RegExp(`"${WORKFLOW_ACTION_LABELS[type]}" acts on a pull request, so a Slack automation cannot use it`)
     );
   });
 
   it.each(['slack_reply', 'slack_react'] as const)('refuses the Slack action "%s" on a GitHub rule', (type) => {
     const rule = githubRule({ actions: [emptyWorkflowAction(type)] });
-    expect(() => validateWorkflow(rule)).toThrow(/acts on a Slack message, so a GitHub rule cannot use it/);
+    expect(() => validateWorkflow(rule)).toThrow(/acts on a Slack message, so a GitHub automation cannot use it/);
   });
 
   it('accepts start_session on both integrations', () => {
@@ -392,8 +392,8 @@ describe('workflowMatches — Slack facts', () => {
   });
 
   it.each<[string, WorkflowSlackAuthorMatch | undefined, Partial<SlackEventFacts>, boolean]>([
-    ['default (linked), linked author', undefined, { authorLinked: true }, true],
-    ['default (linked), unlinked author', undefined, { authorLinked: false }, false],
+    ['default (any), linked author', undefined, { authorLinked: true }, true],
+    ['default (any), unlinked author', undefined, { authorLinked: false }, true],
     ['linked, linked author', { kind: 'linked' }, { authorLinked: true }, true],
     ['linked, unlinked author', { kind: 'linked' }, { authorLinked: false }, false],
     ['any, unlinked author', { kind: 'any' }, { authorLinked: false }, true],

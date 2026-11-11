@@ -26,12 +26,12 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 async function openSlackEditor() {
   render(<WorkflowsPanel integration="slack" />);
   await waitFor(() => expect(api.workflows.list).toHaveBeenCalledWith('ws1', 'slack'));
-  fireEvent.click(screen.getByText('New workflow'));
+  fireEvent.click(screen.getByText('New automation'));
   await screen.findByLabelText('Name');
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Start from Slack' } });
   fireEvent.change(screen.getByLabelText('Slack workspace'), { target: { value: 'T1' } });
-  await screen.findByLabelText(/#general/);
-  fireEvent.click(screen.getByLabelText(/#general/));
+  fireEvent.click(await screen.findByRole('button', { name: 'Add channels' }));
+  fireEvent.click(await screen.findByText('#general'));
 }
 
 async function addAction(label: string) {
@@ -39,7 +39,7 @@ async function addAction(label: string) {
   fireEvent.click(screen.getByRole('button', { name: new RegExp(label) }));
 }
 
-describe('Slack workflow rules', () => {
+describe('Slack automations', () => {
   it('lists with a filter and creates a valid Slack definition', async () => {
     const create = vi.spyOn(api.workflows, 'create').mockImplementation(async (_workspaceId, input) => ({
       id: 'wf1', workspaceId: 'ws1', ...input,

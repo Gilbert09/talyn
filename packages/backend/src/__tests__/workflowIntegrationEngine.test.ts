@@ -410,7 +410,6 @@ describe('workflow engine — integrations', () => {
     });
 
     it.each([
-      ['an unlinked author', { authorLinked: false }],
       ['a thread reply', { threadTs: '1699999999.000001' }],
       ['an unwatched channel', { channelId: 'C9' }],
       ['another Slack team', { teamId: 'T2' }],

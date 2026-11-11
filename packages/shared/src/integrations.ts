@@ -37,7 +37,7 @@ export const INTEGRATION_CATALOG: Record<IntegrationKind, IntegrationInfo> = {
   github: {
     kind: 'github',
     name: 'GitHub',
-    description: 'Track pull requests, and run rules when a pull request changes.',
+    description: 'An automation watches pull request events and can label, comment, request reviewers, start a session and more.',
     icon: 'github',
     hasRules: true,
     builtIn: false,
@@ -46,7 +46,7 @@ export const INTEGRATION_CATALOG: Record<IntegrationKind, IntegrationInfo> = {
   slack: {
     kind: 'slack',
     name: 'Slack',
-    description: 'Start sessions from Slack with an emoji, a mention or a direct message.',
+    description: 'An automation watches Slack messages and can start a session, reply or react.',
     icon: 'slack',
     hasRules: false,
     builtIn: false,
@@ -55,7 +55,7 @@ export const INTEGRATION_CATALOG: Record<IntegrationKind, IntegrationInfo> = {
   schedule: {
     kind: 'schedule',
     name: 'Schedule',
-    description: 'Run a prompt on a repository on a cron schedule.',
+    description: 'An automation runs on a schedule and starts a session or a task.',
     icon: 'clock',
     hasRules: true,
     builtIn: true,

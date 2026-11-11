@@ -154,7 +154,7 @@ describe('validateLoop', () => {
 
   describe('repository', () => {
     it('refuses a loop with no repository, and says why one is needed', () => {
-      expect(() => validateLoop(withField({ repositoryId: '' }))).toThrow(/something to clone/);
+      expect(() => validateLoop(withField({ repositoryId: '' }))).toThrow(/repository to clone/);
     });
 
     it.each(['', 'talyn', 'a/b/c', 'has space/repo'])('refuses repoFullName %j', (repoFullName) => {

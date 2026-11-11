@@ -70,7 +70,7 @@ export async function userMayUseLoops(subject: FlagSubject): Promise<boolean> {
  */
 export function loopsRefusalReason(): string {
   if (loopsKillSwitchPulled()) {
-    return `loops are switched off on this deployment (${FEATURE_FLAGS.loops.envOverride}=false)`;
+    return `automations are switched off on this deployment (${FEATURE_FLAGS.loops.envOverride}=false)`;
   }
   if (!process.env.TALYN_POSTHOG_KEY) {
     return `this deployment has no PostHog key, so loops stay off (set ${FEATURE_FLAGS.loops.envOverride}=true to run them anyway)`;

@@ -15,7 +15,7 @@ export default function Screen() {
     && !(kind === 'slack' && integrationOffered(features, kind) && slackRulesOffered(features))) return <Redirect href="/integrations" />;
   if (typeof id !== 'string' || !id) return <Redirect href={{ pathname: '/integrations/[kind]', params: { kind } }} />;
   return <DetailRoute list={{ pathname: '/integrations/[kind]', params: { kind } }}>
-    <Stack.Screen options={detailOptions('Rule')} />
+    <Stack.Screen options={detailOptions('Automation')} />
     <RuleDetailScreen kind={kind === 'schedule' ? 'loop' : 'workflow'} integration={kind === 'slack' ? 'slack' : 'github'} id={id} />
   </DetailRoute>;
 }

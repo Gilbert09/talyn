@@ -1,4 +1,5 @@
 import type { Workbench } from '@talyn/shared';
+import type { LegacyPanGesture } from 'react-native-gesture-handler';
 
 import { workbenchState, type SessionStateKind } from '../../lib/status';
 import type { PullsTab } from '../prs/lists';
@@ -135,4 +136,19 @@ export function activeTarget(pathname: string, tab?: string | string[] | null): 
 /** The narrowest of 85% of the screen and 360 points. */
 export function drawerWidth(screenWidth: number): number {
   return Math.round(Math.min(screenWidth * 0.85, 360));
+}
+
+/** The strip at the left edge of home where a swipe opens the drawer, in points. */
+export const DRAWER_SWIPE_EDGE = 64;
+/** A drag this far, or a quick flick, opens the drawer. Shorter, slow drags close it again. */
+export const DRAWER_SWIPE_MIN_DISTANCE = 40;
+/** Vertical drift that cancels the swipe before it moves 5 points across. */
+export const DRAWER_SWIPE_VERTICAL_SLOP = 20;
+
+/**
+ * The drawer library cancels the swipe after 5 points of vertical drift. A thumb swipe
+ * from the edge is rarely that straight, so many swipes did not open the drawer.
+ */
+export function configureDrawerSwipe(gesture: LegacyPanGesture): LegacyPanGesture {
+  return gesture.failOffsetY([-DRAWER_SWIPE_VERTICAL_SLOP, DRAWER_SWIPE_VERTICAL_SLOP]);
 }

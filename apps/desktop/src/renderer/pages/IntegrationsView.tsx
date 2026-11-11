@@ -1,18 +1,17 @@
 import { Suspense, useEffect, useState } from 'react';
-import { ArrowLeft, Check, Cloud, Clock, Github, MessageSquare, Network, Timer } from 'lucide-react';
+import { ArrowLeft, Check } from 'lucide-react';
 import {
   INTEGRATION_CATALOG,
   integrationOffered,
   integrationRulesOffered,
   slackRulesOffered,
   integrationsOffered,
-  type IntegrationInfo,
   type IntegrationKind,
 } from '@talyn/shared';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useNavigationStore } from '../stores/navigation';
 import { api } from '../lib/api';
-import { cn } from '../lib/utils';
+import { INTEGRATION_LOGOS } from '../assets/integrations/IntegrationLogos';
 import { PageHeader } from '../components/ui/page-header';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Badge } from '../components/ui/badge';
@@ -26,15 +25,6 @@ import { PrivateRoutesSettings } from '../components/settings/sections/PrivateRo
 
 import { WorkflowsPanel } from '../components/panels/workflows/WorkflowsPanel';
 import { LoopsPanel } from '../components/panels/loops/LoopsPanel';
-
-const ICONS: Record<IntegrationInfo['icon'], typeof Github> = {
-  github: Github,
-  slack: MessageSquare,
-  clock: Clock,
-  network: Network,
-  posthog: Cloud,
-  trunk: Timer,
-};
 
 type ConnectionState = 'connected' | 'not_connected' | 'built_in' | 'unknown';
 
@@ -113,12 +103,12 @@ function IntegrationsCatalog() {
       <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto max-w-4xl p-6">
           <p className="mb-4 text-sm text-muted-foreground">
-            Connect the places work comes from. Each integration holds its connection and the rules that start work.
+            Connect the places work comes from. Each integration holds its connection and the automations that start work.
           </p>
           <div className="grid gap-3 sm:grid-cols-2" data-attr="integrations-catalog">
             {kinds.map((kind) => {
               const info = INTEGRATION_CATALOG[kind];
-              const Icon = ICONS[info.icon];
+              const Logo = INTEGRATION_LOGOS[info.icon];
               const state = states[kind];
               return (
                 <button
@@ -130,13 +120,8 @@ function IntegrationsCatalog() {
                 >
                   <Card className="h-full p-4 transition-colors hover:bg-accent/40">
                     <div className="flex items-start gap-3">
-                      <div
-                        className={cn(
-                          'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg',
-                          state === 'connected' ? 'bg-green-500/10' : 'bg-secondary'
-                        )}
-                      >
-                        <Icon className={cn('h-5 w-5', state === 'connected' && 'text-green-500')} />
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-secondary">
+                        <Logo className="h-6 w-6" />
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
@@ -212,7 +197,7 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
           <Tabs value={section} onValueChange={(next) => setChosen(next as Section)}>
             <TabsList aria-label={`${info.name} sections`}>
               <TabsTrigger value="rules" data-attr={`integration-tab-rules-${kind}`}>
-                Rules
+                Automations
               </TabsTrigger>
               <TabsTrigger value="connection" data-attr={`integration-tab-connection-${kind}`}>
                 Connection

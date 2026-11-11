@@ -295,6 +295,17 @@ describe('AppSidebar', () => {
     expect(useNavigationStore.getState().route).toEqual({ view: 'integrations' });
   });
 
+  it('Integrations shows a mark for each offered app, none for built-in Schedule, and none when collapsed', () => {
+    // GitHub and PostHog Code are always offered, Slack rides workbenches; Tailscale and Trunk stay gated off.
+    setFeatures({ workbenches: true, loops: true });
+    render(<AppSidebar />);
+    const strip = document.querySelector('[data-attr="nav-integrations-logos"]');
+    expect(strip).not.toBeNull();
+    expect(strip!.querySelectorAll(':scope > svg')).toHaveLength(3);
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+    expect(document.querySelector('[data-attr="nav-integrations-logos"]')).toBeNull();
+  });
+
   it('hides the workbench list, History and New workbench when workbenches are not offered', () => {
     setFeatures({ workbenches: false });
     render(<AppSidebar />);

@@ -27,7 +27,7 @@ The free plan can use Small and Standard. Pro can use every size. See [Plans, us
 
 **Auto** lets Talyn pick a size for the repository and shows the reason. New sessions on the repository use this size.
 
-Work that runs without you, such as loops, workflows and fix runs, uses a Small box.
+Work that runs without you, such as automations and fix runs, uses a Small box.
 
 ### Move a session to another size
 
@@ -58,7 +58,7 @@ The **Internet on** / **Internet off** switch decides what a session's sandbox c
 
 Turn it off for work on code you do not trust, or when you do not want the agent to send anything outside.
 
-Runs that Talyn starts for you on a pull request, such as fix runs and code reviews, reach only the repository and the agent's API. Loops have their own switch. See [Loops](/docs/loops#internet-access).
+Runs that Talyn starts for you on a pull request, such as fix runs and code reviews, reach only the repository and the agent's API. Automations have their own switch. See [Automations](/docs/loops#internet-access).
 
 ## Run your app
 

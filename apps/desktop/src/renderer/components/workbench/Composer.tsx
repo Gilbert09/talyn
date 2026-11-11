@@ -47,6 +47,7 @@ import { AgentPicker, ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoC
 import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './useComposerImages';
 import { BackgroundChips } from './BackgroundChips';
 import { WakeLaterPopover } from './WakeLaterPopover';
+import { usePendingMessages } from './usePendingMessages';
 
 
 export function Composer({
@@ -105,6 +106,8 @@ export function Composer({
   const planMode = chat?.planMode ?? false;
   const running = chat?.status === 'running';
   const queue = ops.runtime === 'local' ? (localQueue ?? []) : (chat?.queuedMessages ?? []);
+  const chatEvents = useWorkbenchStore((s) => (chat ? s.chatEvents[chat.id]?.events : undefined));
+  const { queuing } = usePendingMessages(chat, chatEvents, ops);
   const waitText = sandboxWaitText(workbench);
   // Only the owner can change chat settings or wake the sandbox while typing.
   const owner = useIsWorkbenchOwner(workbench);
@@ -268,13 +271,15 @@ export function Composer({
       const target = chat ?? (await createChatTab(workbench));
       if (!target) return;
       outgoingChatId = target.id;
-      outgoingId = useWorkbenchStore.getState().addOutgoingMessage(target.id, { text, attachments: attachments.slice() });
+      // A running turn or a waiting queue means this message waits too: show it as queued, not in the transcript.
+      const queues = target.status === 'running' || (target === chat && queue.length > 0);
+      outgoingId = useWorkbenchStore.getState().addOutgoingMessage(target.id, { text, attachments: attachments.slice(), queued: queues });
       setDraft(draftKey, '');
       setAttachments([]);
       setImageNotReady(false);
       setTrigger(null);
       const res = await ops.send(target, input);
-      useWorkbenchStore.getState().settleOutgoingMessage(target.id, outgoingId);
+      useWorkbenchStore.getState().settleOutgoingMessage(target.id, outgoingId, res.queued);
       trackEvent('session_message_sent', { queued: res.queued, plan_mode: planMode, model_id: model, attachments_count: attachments.length });
       if (res.queued && workbench.status !== 'moving') {
         toast.info(
@@ -357,7 +362,7 @@ export function Composer({
   return (
     <div className="border-t bg-background px-3 pb-3 pt-2">
       <BackgroundChips workbenchId={workbench.id} chatId={chat?.id ?? null} canOpen={owner} />
-      {queue.length > 0 && (
+      {(queue.length > 0 || queuing.length > 0) && (
         <ul className="mb-2 space-y-1">
           {queue.map((m, index) => m.capacityWait ? (
             <CapacityWaitLine key={m.id} message={m} wait={m.capacityWait} chatId={chat?.id} ops={ops} />
@@ -382,6 +387,16 @@ export function Composer({
                   <X className="h-3 w-3" />
                 </button>
               )}
+            </li>
+          ))}
+          {queuing.map((m) => (
+            <li
+              key={m.id}
+              data-attr="workbench-queuing-message"
+              className="flex items-center gap-2 rounded border border-dashed px-2 py-1 text-xs text-muted-foreground"
+            >
+              <span className="shrink-0 text-[10px] uppercase tracking-wide">Queued</span>
+              <span className="min-w-0 flex-1 truncate">{m.text}</span>
             </li>
           ))}
         </ul>

@@ -1,7 +1,8 @@
 import type { Workbench } from '@talyn/shared';
+import { Gesture } from 'react-native-gesture-handler';
 
-import { activeTarget, badgeText, drawerEntries, drawerWidth, matchesQuery, needsYou, needsYouCount, normalizeQuery, toggled,
-  type DrawerEntry, type DrawerInput } from '../features/nav/model';
+import { activeTarget, badgeText, configureDrawerSwipe, DRAWER_SWIPE_VERTICAL_SLOP, drawerEntries, drawerWidth, matchesQuery, needsYou,
+  needsYouCount, normalizeQuery, toggled, type DrawerEntry, type DrawerInput } from '../features/nav/model';
 import { chat, session, thread } from './workflowFixtures';
 
 const none = new Set<string>();
@@ -134,6 +135,14 @@ describe('small helpers', () => {
 
   it.each([[320, 272], [400, 340], [430, 360], [1024, 360]])('drawer width on a %ipt screen is %ipt', (screen, expected) => {
     expect(drawerWidth(screen)).toBe(expected);
+  });
+
+  it('lets an edge swipe drift vertically before it cancels', () => {
+    const pan = Gesture.Pan().activeOffsetX([-5, 5]).failOffsetY([-5, 5]);
+    const config = configureDrawerSwipe(pan).config;
+    expect(config).toMatchObject({ failOffsetYStart: -DRAWER_SWIPE_VERTICAL_SLOP, failOffsetYEnd: DRAWER_SWIPE_VERTICAL_SLOP,
+      activeOffsetXStart: -5, activeOffsetXEnd: 5 });
+    expect(DRAWER_SWIPE_VERTICAL_SLOP).toBeGreaterThan(5);
   });
 
   it('toggles a key without changing the old set', () => {

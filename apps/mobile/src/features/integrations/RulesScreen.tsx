@@ -2,11 +2,11 @@ import type { LoopRunStatus, LoopWithStats, WorkflowIntegration, WorkflowRunStat
 import { Switch, View } from 'react-native';
 
 import { useNetwork } from '../../auth/AuthProvider';
-import { AppText, EmptyState, Group, Pill, Row, ui } from '../../components/UI';
-import { StateNotice } from '../../components/Workflow';
+import { AppText, Button, EmptyState, Group, Pill, Row, ui } from '../../components/UI';
+import { openExternal, StateNotice } from '../../components/Workflow';
 import { shortTime, useNow } from '../../lib/time';
 import { useTheme } from '../../theme/tokens';
-import { Loading, Page, WebRow } from '../more/Page';
+import { Loading, Page, WebRow, webUrl } from '../more/Page';
 import { integrationRuleRoute } from '../more/routes';
 import type { Remote } from '../more/useRemote';
 import { useLoopList, useToggle, useWorkflowList } from '../automations/data';
@@ -22,8 +22,7 @@ export function RulesScreen({ kind, integration = 'github' }: { kind: Automation
     {kind === 'workflow'
       ? <AutomationList kind="workflow" integration={integration} list={workflowList} />
       : <AutomationList kind="loop" list={loopList} />}
-    <Group footer={kind === 'loop' ? 'Create and edit scheduled rules in Talyn on the web.'
-      : integration === 'slack' ? 'Create and edit Slack rules in Talyn on the web.' : 'Create and edit rules in Talyn on the web.'}>
+    <Group footer="Create and edit automations in Talyn on the web.">
       <WebRow title="Edit on the web" path={`/integrations/${kind === 'loop' ? 'schedule' : integration}`} />
     </Group>
   </Page>;
@@ -37,10 +36,12 @@ function AutomationList<T extends WorkflowWithStats | LoopWithStats>({ kind, int
   const items = list.data;
   return <>
     {items === undefined && list.status === 'loading' ? <Loading /> : <StateNotice resource={list} offline={offline} refresh={() => { void list.refresh(); }} />}
-    {items?.length === 0 ? <EmptyState title={kind === 'loop' ? 'No scheduled rules yet' : integration === 'slack' ? 'No Slack rules yet' : 'No rules yet'}
-      detail={kind === 'loop' ? 'A scheduled rule runs the same prompt on a repository on a schedule.'
-        : integration === 'slack' ? 'A Slack rule starts a session or replies when a message arrives in a channel.'
-          : 'A workflow acts on pull requests for you, for example adding labels when one opens.'} /> : null}
+    {items?.length === 0 ? <EmptyState title="No automations yet"
+      detail={kind === 'loop' ? 'An automation runs on a schedule and starts a session or a task.'
+        : integration === 'slack' ? 'An automation watches Slack messages and can start a session, reply or react.'
+          : 'An automation watches pull request events and can label, comment, request reviewers, start a session and more.'}>
+      <Button title="Create an automation" onPress={() => openExternal(webUrl(`/integrations/${kind === 'loop' ? 'schedule' : integration}`))} />
+    </EmptyState> : null}
     {items?.length ? <Group>
       {items.map((item, index) => <AutomationRow key={item.id} kind={kind} integration={integration} item={item} divider={index < items.length - 1}
         disabled={offline || Boolean(busy[item.id])} onToggle={(enabled) => { void toggle(item, enabled); }} />)}
@@ -63,7 +64,7 @@ function AutomationRow({ kind, integration, item, divider, disabled, onToggle }:
   return <Row title={item.name} subtitle={summary} href={integrationRuleRoute(kind, item.id, integration)} divider={divider}
     accessibilityLabel={`${item.name}. ${item.enabled ? 'On' : 'Off'}. ${summary}`}
     trailing={<Switch value={item.enabled} disabled={disabled} onValueChange={onToggle}
-      accessibilityLabel={`${item.name} ${kind === 'workflow' ? 'workflow rule' : 'scheduled rule'}`} accessibilityHint={item.enabled ? 'Turns it off.' : 'Turns it on.'}
+      accessibilityLabel={`${item.name} automation`} accessibilityHint={item.enabled ? 'Turns it off.' : 'Turns it on.'}
       trackColor={{ false: c.surface, true: c.primaryAction }} thumbColor={c.elevated} ios_backgroundColor={c.surface} />}>
     <View style={ui.wrap}>
       {last ? <Pill label={when ? `${last.label} ${when}` : last.label} tone={last.tone} accessibilityLabel={`Last run: ${last.label}`} />

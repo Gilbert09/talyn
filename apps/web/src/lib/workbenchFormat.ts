@@ -134,6 +134,11 @@ export interface PendingUserMessage {
   /** When the send request finished. Absent while it is in flight. */
   settledAt?: number;
   /**
+   * The message waits in the chat's queue, because a turn was running when it
+   * was sent. The send response corrects the guess.
+   */
+  queued?: boolean;
+  /**
    * The send request failed, for example because the backend was down. The
    * message stays on screen with the error until the user sends it again or
    * discards it. `input` is the request to send again.
@@ -155,8 +160,9 @@ export function sendFailureText(err: unknown): string {
 }
 
 /**
- * What the transcript does with a sent message:
+ * What the chat does with a sent message:
  * - `show`: draw it as the user's bubble, until its own event arrives.
+ * - `queue`: the composer shows it as queued, until the chat's queue has it.
  * - `hide`: the composer queue shows it.
  * - `done`: its event arrived, or it will not run. Forget it.
  *
@@ -165,19 +171,25 @@ export function sendFailureText(err: unknown): string {
  * The backend writes the message's event only when its turn starts, and later
  * still when it has inline images. Without this, a new session showed an empty
  * chat with "Working…" until the sandbox woke.
+ *
+ * A message sent while a turn runs goes to the queue. It does not show in the
+ * transcript while the send is in flight, or before the chat update lists it.
  */
 export function pendingMessageState(
   message: PendingUserMessage,
   ctx: { events: WorkbenchEvent[]; queued: readonly { text: string }[]; running: boolean; now: number },
-): 'show' | 'hide' | 'done' {
+): 'show' | 'queue' | 'hide' | 'done' {
   const text = message.text.trim();
   const echoed = ctx.events.some(
     (e) => (message.afterSeq === null || e.seq > message.afterSeq) && userMessageText(e.event)?.trim() === text,
   );
   if (echoed) return 'done';
-  if (message.failed || message.settledAt === undefined) return 'show';
+  if (message.failed) return 'show';
+  if (message.settledAt === undefined) return message.queued ? 'queue' : 'show';
   if (ctx.queued.some((q) => q.text.trim() === text)) return 'hide';
-  if (ctx.running || ctx.now - message.settledAt < PENDING_MESSAGE_GRACE_MS) return 'show';
+  const inGrace = ctx.now - message.settledAt < PENDING_MESSAGE_GRACE_MS;
+  if (message.queued && inGrace) return 'queue';
+  if (ctx.running || inGrace) return 'show';
   return 'done';
 }
 

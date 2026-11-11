@@ -84,7 +84,7 @@ async function resolveTarget(
       runId,
       'failed',
       'loops_not_allowed',
-      'This workspace is no longer in the audience for Loops.'
+      'Scheduled automations are no longer available in this workspace.'
     );
   }
 
@@ -216,7 +216,7 @@ export async function dispatchRun(
       type: 'code_writing',
       source: 'loop',
       title: titleFor(loop, scheduledFor),
-      description: `Loop: ${loop.name}`,
+      description: `Automation: ${loop.name}`,
       prompt: loop.prompt,
       repositoryId: loop.repositoryId as string,
       assignedEnvironmentId: target.envId as string,

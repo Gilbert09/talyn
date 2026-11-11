@@ -32,7 +32,7 @@ const idSchema = { ...workspaceSchema, workflow_id: textSchema };
 const integrationSchema = {
   type: 'string',
   enum: WORKFLOW_INTEGRATIONS,
-  description: 'Which integration the rule belongs to. Default: github.',
+  description: 'Which integration the automation belongs to. Default: github.',
 };
 const workflowSchema = {
   type: 'object',
@@ -114,7 +114,7 @@ const actionFields: Record<(typeof ALL_WORKFLOW_ACTION_TYPES)[number], string> =
 export const WORKFLOWS = [
   defineTool(
     'list_workflows',
-    'List rules (workflows) and run statistics. Pass integration to list one integration only: github or slack.',
+    'List automations and run statistics. Pass integration to list one integration only: github or slack.',
     { ...workspaceSchema, integration: integrationSchema },
     [],
     { readOnlyHint: true },
@@ -123,7 +123,7 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'get_workflow',
-    'Get the full workflow definition as JSON for editing.',
+    'Get the full automation definition as JSON for editing.',
     idSchema,
     ['workflow_id'],
     { readOnlyHint: true },
@@ -139,7 +139,7 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'create_workflow',
-    'Create a rule (workflow) with integration (github or slack), name, events, conditions, and actions. Read talyn_get_workflow_vocabulary for the allowed values of that integration. Slack rules need the Slack channel rules feature.',
+    'Create an automation with integration (github or slack), name, events, conditions, and actions. Read talyn_get_workflow_vocabulary for the allowed values of that integration. Slack automations need the Slack automation feature.',
     { ...workspaceSchema, workflow: workflowSchema },
     ['workflow'],
     { openWorldHint: true },
@@ -156,7 +156,7 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'update_workflow',
-    'Merge supplied workflow fields into the current definition. Read talyn_get_workflow_vocabulary before editing events, conditions, or actions.',
+    'Merge supplied automation fields into the current definition. Read talyn_get_workflow_vocabulary before editing events, conditions, or actions.',
     { ...idSchema, workflow: workflowSchema },
     ['workflow_id', 'workflow'],
     { openWorldHint: true, idempotentHint: true },
@@ -187,7 +187,7 @@ export const WORKFLOWS = [
       if (integration === 'slack') {
         return [
           ...lines,
-          'slackAuthors: {kind: linked | any | users, users?: string[] of Slack user ids}',
+          'slackAuthors (optional, default anyone in the channel): {kind: any | linked | users, userIds?: string[] of Slack user ids}',
           'Use talyn_list_slack_channels to find channel ids. Only channels Talyn is in are listed.',
         ].join('\n');
       }
@@ -219,7 +219,7 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'set_workflow_enabled',
-    'Enable or disable a workflow while preserving its definition.',
+    'Enable or disable an automation while preserving its definition.',
     { ...idSchema, enabled: booleanSchema },
     ['workflow_id', 'enabled'],
     { openWorldHint: true, idempotentHint: true },
@@ -228,7 +228,7 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'delete_workflow',
-    'Delete a workflow and its run history.',
+    'Delete an automation and its run history.',
     { workflow_id: textSchema },
     ['workflow_id'],
     { destructiveHint: true },
@@ -241,7 +241,7 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'list_workflow_runs',
-    'List workflow runs. Use the returned cursor to fetch older runs.',
+    'List automation runs. Use the returned cursor to fetch older runs.',
     { workflow_id: textSchema, ...pageSchema },
     ['workflow_id'],
     { readOnlyHint: true },

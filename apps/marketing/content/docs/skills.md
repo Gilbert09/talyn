@@ -36,6 +36,6 @@ The skill runs as a cloud task on the pull request. A repo skill also tells the 
 ## Other places skills run
 
 - As a [code review](/docs/code-review#your-own-reviewers) reviewer.
-- As a **Run a skill** action in a [workflow](/docs/workflows).
+- As a **Run a skill** action in an [automation](/docs/workflows).
 
 Each run uses box-hours from your plan.

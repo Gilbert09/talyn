@@ -24,7 +24,7 @@ Every agent run happens in a sandbox, which Talyn calls a box. Usage is counted 
 
 For example, a ten-minute run on a Standard box uses a sixth of a box-hour.
 
-Sessions, threads, fix runs, code reviews, skills, workflow actions and loops all run on boxes. Local sessions in the desktop app run on your computer and use no box-hours.
+Sessions, threads, fix runs, code reviews, skills and automations all run on boxes. Local sessions in the desktop app run on your computer and use no box-hours.
 
 ## Plans
 
@@ -38,7 +38,7 @@ Sessions, threads, fix runs, code reviews, skills, workflow actions and loops al
 | Keep every new PR green automatically | No | Yes | Yes |
 | Review every new PR automatically | No | Yes | Yes |
 
-Everything else is on every plan: sessions, threads, the PR dashboard, fixing pull requests, keeping a pull request green when you turn it on for that pull request, the merge queue, code review, skills, workflows, loops, Slack and MCP servers.
+Everything else is on every plan: sessions, threads, the PR dashboard, fixing pull requests, keeping a pull request green when you turn it on for that pull request, the merge queue, code review, skills, automations, Slack and MCP servers.
 
 Box-hours and running boxes are counted for your account, across every workspace you own.
 
@@ -67,7 +67,7 @@ When your box-hours are used up:
 
 - Work that is already running finishes.
 - New boxes do not start, and the page says **Out of hours: new boxes are paused. Running turns finish.**
-- Work that Talyn starts for you, such as loops, workflow actions, merge queue fixes and automatic reviews, waits with a notice in the app. It starts when your hours reset or when you add credits.
+- Work that Talyn starts for you, such as automation runs, merge queue fixes and automatic reviews, waits with a notice in the app. It starts when your hours reset or when you add credits.
 
 On Free, you can wait for the next month or upgrade to Pro. On Pro, add credits or turn on auto top-up to keep going.
 

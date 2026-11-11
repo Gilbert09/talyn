@@ -5,7 +5,7 @@ import { defineTool, linesOrNone, requireId, textSchema } from './helpers.js';
 export const SLACK = [
   defineTool(
     'list_slack_channels',
-    'List the Slack channels Talyn is a member of in one Slack team. Use the channel ids in a Slack rule. Only channels the bot was invited to appear.',
+    'List the Slack channels Talyn is a member of in one Slack team. Use the channel ids in a Slack automation. Only channels the bot was invited to appear.',
     { teamId: textSchema },
     ['teamId'],
     { readOnlyHint: true, openWorldHint: true },

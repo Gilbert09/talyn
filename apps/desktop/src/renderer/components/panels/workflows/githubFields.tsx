@@ -331,7 +331,7 @@ export function GithubActionInput({
           <p className="text-xs text-muted-foreground">
             A repo skill (<code>repo:owner/repo:name</code>) or one saved to the workspace (
             <code>platform:id</code>). A skill on your own machine cannot be used, because
-            workflows run on the server.
+            automations run on the server.
           </p>
         </div>
       );

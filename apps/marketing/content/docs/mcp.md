@@ -133,8 +133,8 @@ Every tool name starts with `talyn_`. Most tools take a `workspace_id`. If you h
 | Memory | Save, search, read, list and forget short notes that later sessions can read |
 | Repositories | List, add and remove repositories, read setup steps, record or dismiss a setup step |
 | Skills | List, read, create and change skills |
-| GitHub and Slack rules | List, create, change, turn on or off, and read runs |
-| Schedule | List, create, change, turn on or off, run a scheduled rule now, and read runs |
+| GitHub and Slack automations | List, create, change, turn on or off, and read runs |
+| Schedule | List, create, change, turn on or off, run a scheduled automation now, and read runs |
 | MCP servers | List the servers your workspace connects, and connect one that uses OAuth or no auth |
 | Spaces | List your teams and their spaces, start a session in a space. Spaces are not yet available to all accounts. |
 | Account | Your plan and usage, your connected agents, and what is new |
@@ -142,10 +142,10 @@ Every tool name starts with `talyn_`. Most tools take a `workspace_id`. If you h
 Your client lists every tool with its description and parameters when it connects.
 
 The `talyn_list_workflows`, `talyn_create_workflow`, and `talyn_update_workflow` tools use `integration`.
-Set it to `github` or `slack` in a rule definition. Listed and saved rules include the integration.
+Set it to `github` or `slack` in an automation definition. Listed and saved automations include the integration.
 Use `talyn_get_workflow_vocabulary` with optional `integration` to read its fields. It defaults to `github`.
 Use `talyn_list_slack_channels` with `{teamId}` to list channels the bot joined.
-The `talyn_*loop*` tools manage scheduled rules. Their tool names stay the same.
+The `talyn_*loop*` tools manage scheduled automations. Their tool names stay the same.
 
 ## What it cannot do
 

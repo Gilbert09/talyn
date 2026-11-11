@@ -56,7 +56,7 @@ function AuthenticatedRoutes() {
       <RootStack.Screen name="spaces/[id]" options={detailOptions('Space')} />
       <RootStack.Screen name="integrations/index" options={detailOptions('Integrations')} />
       <RootStack.Screen name="integrations/[kind]" options={detailOptions('Integration')} />
-      <RootStack.Screen name="integrations/[kind]/[id]" options={detailOptions('Rule')} />
+      <RootStack.Screen name="integrations/[kind]/[id]" options={detailOptions('Automation')} />
       <RootStack.Screen name="automations/index" options={{ headerShown: false }} />
       <RootStack.Screen name="automations/[id]" options={{ headerShown: false }} />
       <RootStack.Screen name="automations/workflows/[id]" options={{ headerShown: false }} />

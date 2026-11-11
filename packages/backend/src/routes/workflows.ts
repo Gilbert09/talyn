@@ -108,7 +108,7 @@ export function workflowRoutes(): Router {
     if (!(await workspaceMayUseWorkflows(workspaceId))) {
       res.status(403).json({
         success: false,
-        error: `Workflows are not available: ${workflowsRefusalReason()}.`,
+        error: `Automations are not available: ${workflowsRefusalReason()}.`,
         code: 'workflows_unavailable',
       });
       return false;
@@ -130,7 +130,7 @@ export function workflowRoutes(): Router {
     if (await workspaceMayUseSlackRules(workspaceId)) return true;
     res.status(403).json({
       success: false,
-      error: `Slack rules are not available: ${slackRulesRefusalReason()}.`,
+      error: `Slack automations are not available: ${slackRulesRefusalReason()}.`,
       code: 'slack_rules_unavailable',
     });
     return false;
@@ -242,7 +242,7 @@ export function workflowRoutes(): Router {
       // rather than flattening every bad shape to "invalid workflow".
       return res.status(400).json({
         success: false,
-        error: err instanceof Error ? err.message : 'invalid workflow',
+        error: err instanceof Error ? err.message : 'invalid automation',
       });
     }
     if (!(await integrationGate(res, workspaceId, normalized.integration))) return;
@@ -262,7 +262,7 @@ export function workflowRoutes(): Router {
   router.patch('/:id', async (req, res) => {
     const existing = await getWorkflow(req.params.id);
     if (!existing) {
-      return res.status(404).json({ success: false, error: 'Workflow not found' });
+      return res.status(404).json({ success: false, error: 'Automation not found' });
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
     const integration = workflowIntegrationOf(existing);
@@ -274,7 +274,7 @@ export function workflowRoutes(): Router {
     if (askedIntegration !== undefined && askedIntegration !== integration) {
       return res.status(400).json({
         success: false,
-        error: 'A rule cannot move to another integration. Create a new rule there instead.',
+        error: 'An automation cannot move to another integration. Create a new automation there instead.',
       });
     }
 
@@ -288,12 +288,12 @@ export function workflowRoutes(): Router {
     } catch (err) {
       return res.status(400).json({
         success: false,
-        error: err instanceof Error ? err.message : 'invalid workflow',
+        error: err instanceof Error ? err.message : 'invalid automation',
       });
     }
     if (!(await slackTeamGate(req, res, normalized))) return;
     const data = await updateWorkflow(existing.id, existing.workspaceId, normalized);
-    if (!data) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    if (!data) return res.status(404).json({ success: false, error: 'Automation not found' });
 
     captureWorkspaceEvent(
       existing.workspaceId,
@@ -315,7 +315,7 @@ export function workflowRoutes(): Router {
   router.delete('/:id', async (req, res) => {
     const existing = await getWorkflow(req.params.id);
     if (!existing) {
-      return res.status(404).json({ success: false, error: 'Workflow not found' });
+      return res.status(404).json({ success: false, error: 'Automation not found' });
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
     if (!(await integrationGate(res, existing.workspaceId, workflowIntegrationOf(existing)))) return;
@@ -333,7 +333,7 @@ export function workflowRoutes(): Router {
   router.get('/:id/runs', async (req, res) => {
     const existing = await getWorkflow(req.params.id);
     if (!existing) {
-      return res.status(404).json({ success: false, error: 'Workflow not found' });
+      return res.status(404).json({ success: false, error: 'Automation not found' });
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
     if (!(await integrationGate(res, existing.workspaceId, workflowIntegrationOf(existing)))) return;

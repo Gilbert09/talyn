@@ -39,8 +39,7 @@ export function useToggle<T extends AutomationItem>(kind: AutomationKind, list: 
     } catch (error) {
       list.mutate((items) => withEnabled(items, item.id, item.enabled));
       void list.refresh();
-      const label = kind === 'loop' ? 'scheduled rule' : 'workflow rule';
-      showActionError(enabled ? `Could not turn on the ${label}` : `Could not turn off the ${label}`, error);
+      showActionError(enabled ? 'Could not turn on the automation' : 'Could not turn off the automation', error);
     } finally {
       setBusy((prev) => { const next = { ...prev }; delete next[item.id]; return next; });
     }
