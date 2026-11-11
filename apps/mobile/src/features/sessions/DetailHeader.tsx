@@ -26,7 +26,6 @@ export const QUICK_ACTION_ICON: Record<QuickActionKind | 'queue_remove', Symbol>
   fix_checks: { ios: 'wrench.and.screwdriver', android: 'build' },
   merge: { ios: 'arrow.triangle.merge', android: 'merge' },
   archive: { ios: 'archivebox', android: 'archive' },
-  stop: { ios: 'stop.circle', android: 'stop_circle' },
   retry: { ios: 'arrow.clockwise', android: 'refresh' },
   wake: { ios: 'sun.max', android: 'wb_sunny' },
   restore: { ios: 'arrow.uturn.backward', android: 'unarchive' },
@@ -79,7 +78,7 @@ export function useQuickActions({ item, row, runSession, toast }: {
   const run = (kind: RunnableKind) => {
     if (busy) return;
     switch (kind) {
-      case 'stop': case 'retry': case 'wake': case 'restore': void track(kind, () => runSession(kind, item)); return;
+      case 'retry': case 'wake': case 'restore': void track(kind, () => runSession(kind, item)); return;
       case 'archive': void runSession('archive', item); return;
       case 'create_pr': void attempt(kind, 'Could not create the pull request', () => sendCreatePullRequest(workflow, item)); return;
       case 'resolve_conflicts': case 'fix_checks':
@@ -100,7 +99,7 @@ export function useQuickActions({ item, row, runSession, toast }: {
   return { busy, run };
 }
 
-/** The menu entries for the PR cycle and the queue, after Stop, Retry and Wake. Mirrors web's header dropdown. */
+/** The menu entries for the PR cycle and the queue, after Stop, Retry and Wake in the session menu. Mirrors web's header dropdown. */
 export function quickMenuActions(item: Workbench, row: PRRow | null, options: { offline: boolean; busy: boolean; run(kind: RunnableKind): void }): SheetAction[] {
   const out: SheetAction[] = [];
   const reasonFor = (reason: string | null) => options.offline ? 'You are offline.' : reason ?? undefined;

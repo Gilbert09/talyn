@@ -29,13 +29,13 @@ describe('primaryActions', () => {
     ['a queued PR shows its queue state', session(), row(mergeable, { mergeQueued: true, mergeQueue: { position: 3, status: 'queued' } as never }), ['merge', 'queue_status']],
     ['a merged PR offers Archive', session(), row({}, { state: 'merged' }), ['archive']],
     ['a closed PR offers Archive', session(), row({}, { state: 'closed' }), ['archive']],
-    ['a running turn puts Stop first', session({ chats: [chat({ status: 'running' })] }), row(conflicts), ['stop', 'resolve_conflicts']],
+    ['a running turn leaves Stop to the composer', session({ chats: [chat({ status: 'running' })] }), row(conflicts), ['resolve_conflicts', 'queue_add']],
     ['a failed start offers Retry', noPr({ status: 'error', error: 'Boom.' }), null, ['retry']],
     ['a failed sandbox offers Retry before the PR action', session({ sandboxState: 'error' }), row(mergeable), ['retry', 'merge']],
     ['a sleeping sandbox offers Wake last', noPr({ sandboxState: 'suspended' }), null, ['wake']],
     ['Wake falls off when two actions come first', session({ sandboxState: 'suspended' }), row(mergeable), ['merge', 'queue_add']],
     ['a thread never gets PR actions', thread(), null, []],
-    ['a running thread can stop', { ...thread(), chats: [chat({ id: 'thread-chat', status: 'running' })] }, null, ['stop']],
+    ['a running thread has no quick actions', { ...thread(), chats: [chat({ id: 'thread-chat', status: 'running' })] }, null, []],
     ['a sleeping thread can wake', { ...thread(), sandboxState: 'suspended' }, null, ['wake']],
     ['a linked PR still loading waits instead of offering Create PR', session({ diffStat: changes.diffStat }), null, []],
     ['the workbench summary drives the cycle before the row loads', session({ pr: { number: 42, url: '', state: 'open', mergeable: 'conflicting', ciStatus: 'success' } }), null, ['resolve_conflicts']],
@@ -44,9 +44,9 @@ describe('primaryActions', () => {
   });
 
   it('keeps at most the limit', () => {
-    const item = session({ chats: [chat({ status: 'running' })], sandboxState: 'running' });
-    expect(kinds(item, row(conflicts), { limit: 3 })).toEqual(['stop', 'resolve_conflicts', 'queue_add']);
-    expect(kinds(item, row(conflicts), { limit: 1 })).toEqual(['stop']);
+    const item = session({ sandboxState: 'suspended' });
+    expect(kinds(item, row(conflicts), { limit: 3 })).toEqual(['resolve_conflicts', 'queue_add', 'wake']);
+    expect(kinds(item, row(conflicts), { limit: 1 })).toEqual(['resolve_conflicts']);
   });
 
   it.each([
@@ -71,19 +71,14 @@ describe('primaryActions', () => {
   });
 
   it('disables every action offline but the queue state, which only navigates', () => {
-    const actions = primaryActions(session({ chats: [chat({ status: 'running' })] }), row(mergeable, { mergeQueued: true }), { offline: true, limit: 5 });
+    const actions = primaryActions(session({ sandboxState: 'suspended' }), row(mergeable, { mergeQueued: true }), { offline: true, limit: 5 });
     expect(actions.map((action) => [action.kind, action.disabledReason])).toEqual([
-      ['stop', 'You are offline.'], ['merge', 'You are offline.'], ['queue_status', null],
+      ['merge', 'You are offline.'], ['queue_status', null], ['wake', 'You are offline.'],
     ]);
   });
 
   it('puts the failure in the Retry hint', () => {
     expect(primaryActions(noPr({ status: 'error', error: 'The sandbox did not start.' }), null)[0].hint).toBe('The sandbox did not start.');
-  });
-
-  it('stops the selected running chat when there are two', () => {
-    const item = session({ chats: [chat({ id: 'a', status: 'idle' }), chat({ id: 'b', status: 'running' })] });
-    expect(kinds(item, null, { selectedChat: 'a' })).toEqual(['stop']);
   });
 });
 
