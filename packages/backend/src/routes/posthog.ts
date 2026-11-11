@@ -19,6 +19,7 @@ import {
   ensureCloudEnvironment,
   notifyProviderConnected,
 } from '../services/cloudProviders/environment.js';
+import { captureCloudProviderConnected } from '../services/analytics.js';
 import { renderCallbackPage } from '../services/callbackPage.js';
 import { getWebAppUrl, webAppUrl } from '../services/webApp.js';
 import {
@@ -152,6 +153,8 @@ export function posthogPublicRoutes(): Router {
         type: 'posthog_code',
         detail: `PostHog project ${result.projectId}, via OAuth.`,
       });
+      // The browser redirect hides this outcome from every client.
+      captureCloudProviderConnected(result.workspaceId, 'posthog_code');
       return finish(pending.client, {
         ok: true,
         message: `Talyn can now run cloud tasks in PostHog project ${result.projectId}.`,
