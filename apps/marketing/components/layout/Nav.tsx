@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Menu, X } from "lucide-react";
+import { ChevronDown, Github, Menu, Star, X } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { Button } from "@/components/ui/button";
 import { DownloadButton } from "@/components/ui/DownloadButton";
@@ -9,6 +9,7 @@ import { WebAppButton } from "@/components/ui/WebAppButton";
 import { nav, site, type NavItem } from "@/lib/content";
 import { listFeaturePages } from "@/lib/features";
 import { isBlogEnabled } from "@/lib/flags";
+import { capture } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 
 export function Nav() {
@@ -158,13 +159,9 @@ export function Nav() {
         </div>
 
         <div className="hidden shrink-0 items-center gap-2 lg:flex">
-          <a href={site.githubUrl} target="_blank" rel="noreferrer">
-            <Button variant="ghost" size="sm">
-              GitHub
-            </Button>
-          </a>
+          <StarButton placement="nav" />
           <WebAppButton size="sm" placement="nav" showArrow={false}>
-            Open app
+            Start free
           </WebAppButton>
           {/* No children, so the label resolves to "Download for Windows" and
               the rest at runtime. It used to be the literal string "Download",
@@ -249,15 +246,47 @@ export function Nav() {
                 placement="nav-mobile"
                 showArrow={false}
               >
-                Open app
+                Start free
               </WebAppButton>
               {/* No hardcoded platform — DownloadButton resolves it at runtime
                   now that macOS, Windows and Linux all ship. */}
               <DownloadButton size="md" className="w-full" placement="nav-mobile" />
+              <StarButton placement="nav-mobile" size="md" className="w-full" />
             </div>
           </div>
         </div>
       )}
     </header>
+  );
+}
+
+/**
+ * "Star on GitHub". GitHub has no way to star from another site, so this
+ * opens the repository, where the Star button is one click away. No count:
+ * the repository is young, and a small number reads as "nobody is here".
+ */
+function StarButton({
+  placement,
+  size = "sm",
+  className,
+}: {
+  placement: string;
+  size?: "sm" | "md";
+  className?: string;
+}) {
+  return (
+    <a
+      href={site.githubUrl}
+      target="_blank"
+      rel="noreferrer"
+      className={className}
+      onClick={(e) => capture("github_star_click", { placement, trusted: e.isTrusted })}
+    >
+      <Button variant="ghost" size={size} className={cn("gap-1.5", className)}>
+        <Github className="h-4 w-4" />
+        <Star className="h-3.5 w-3.5" />
+        Star
+      </Button>
+    </a>
   );
 }

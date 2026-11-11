@@ -18,6 +18,9 @@
  * workflow runs `vercel pull` before `vercel build`, so the value comes from
  * project settings and no code change is involved. Production and Preview can
  * hold different values.
+ *
+ * BLOG_ENABLED is now set to 1 on the production build step in
+ * .github/workflows/deploy-marketing.yml, so the blog is live.
  */
 
 const TRUTHY = new Set(["1", "true", "on", "yes"]);

@@ -13,7 +13,7 @@ export const site = {
   domain: "talyn.dev",
   /** Canonical origin. The apex 308-redirects to www at the Vercel level. */
   url: "https://www.talyn.dev",
-  tagline: "Your coding agents keep working with the laptop closed.",
+  tagline: "Keep your coding agents working, even when you aren't.",
   description:
     "Run Claude Code and Codex in parallel cloud sandboxes, on the subscription you already pay for. Each session gets a branch, a diff and a path to a merged PR.",
   githubUrl: "https://github.com/Gilbert09/talyn",
@@ -82,7 +82,8 @@ export const hero = {
   // Leads with the cloud benefit: the agents run on our machines, not yours.
   // That is what a local tool cannot say, and the subhead then answers the two
   // FAQ questions visitors open most (which agents, where the work happens).
-  titleLead: "Your coding agents keep working",
+  // Active voice, addressed to the reader (marketer feedback, 2026-11-11).
+  titleLead: "Keep your coding agents working",
   /**
    * The accent line is typed out, one ending after another, under the fixed
    * lead. The first is the headline: it is what the server renders, what
@@ -92,14 +93,14 @@ export const hero = {
    * leaves a gap under the shorter ones.
    */
   titleAccents: [
+    "even when you aren't.",
     "with the laptop closed.",
     "in parallel, in the cloud.",
     "until the PR is merged.",
-    "on your own subscription.",
   ],
   sub: "Run Claude Code and Codex in parallel cloud sandboxes, on the plan you already pay for. Come back to a diff, or to a pull request that is already green.",
   primaryCta: "Download for {platform}",
-  webCta: "Open in browser",
+  webCta: "Get started free",
   // "For GitHub" stays: a GitLab user should find out in eight seconds, not
   // after an install.
   // Carries the price too: "What does it cost?" is a top FAQ question, and

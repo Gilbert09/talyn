@@ -6,7 +6,7 @@ import { capture } from "@/lib/analytics";
 import { site } from "@/lib/content";
 
 /**
- * "Open in browser" — the site's OTHER conversion, finally instrumented.
+ * The web app link, labelled "Get started free" — the site's OTHER conversion.
  *
  * Until now this was a bare `<a href={site.appUrl}>` repeated on every page
  * with three different labels, and nothing captured it. That made the second
@@ -22,7 +22,7 @@ import { site } from "@/lib/content";
  * default would quietly pool every page into one bucket.
  */
 export function WebAppButton({
-  children = "Open in browser",
+  children = "Get started free",
   size = "lg",
   variant = "secondary",
   className,

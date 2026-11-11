@@ -24,7 +24,7 @@ const mono = JetBrains_Mono({
 // The search title names what Talyn runs and where, in under 60 characters.
 // Social cards keep the headline, which reads better as a share.
 const title = `${site.name}: run Claude Code and Codex in cloud sandboxes`;
-const socialTitle = `${site.name}: your coding agents keep working with the laptop closed`;
+const socialTitle = `${site.name}: keep your coding agents working, even when you aren't`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(site.url),
