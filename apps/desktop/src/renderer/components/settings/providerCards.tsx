@@ -19,6 +19,7 @@ import {
 } from '../widgets/GetKeyLink';
 import { WorkspaceModelSelector } from './WorkspaceModelSelector';
 import { FleetAccountsList } from './FleetAccountsList';
+import { ipcErrorMessage } from '../../lib/ipcError';
 
 /**
  * The two provider connect cards (PostHog Code + Claude Code), shared by the
@@ -271,7 +272,7 @@ export function FleetAgentRow({
         ...(result.expiresIn ? { codexExpiresIn: String(result.expiresIn) } : {}),
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'ChatGPT sign-in failed');
+      setError(ipcErrorMessage(e, 'ChatGPT sign-in failed'));
       setBusy(false);
     }
   }, [save]);
