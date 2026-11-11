@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, History, Loader2, RotateCcw } from 'lucide-react';
-import { buildBlocks, findTurnPlan, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent, type WorkbenchQueuedMessage } from '@talyn/shared';
+import { buildBlocks, findTurnPlan, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
 import { AgentBlocks } from '../terminal/AgentConversation';
+import { usePendingMessages } from './usePendingMessages';
 import { renderMarkdownish } from '../../lib/markdown';
-import { chatTotals, compactCount, pendingMessageState, PENDING_MESSAGE_GRACE_MS, sendFailureText, splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
+import { chatTotals, compactCount, sendFailureText, splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { PlanCard, type PlanCardState } from './PlanCard';
@@ -42,7 +43,7 @@ export function WorkbenchTranscript({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
-  const outgoing = usePendingMessages(chat, events, ops);
+  const { shown: outgoing } = usePendingMessages(chat, events, ops);
   const turns = useStableTurns(events);
   const firstSeq = events.length ? events[0].seq : null;
   const prevFirstSeqRef = useRef(firstSeq);
@@ -178,48 +179,6 @@ export interface OlderHistory {
 }
 
 const NO_OLDER: OlderHistory = { hasOlder: false, loading: false, error: null, load: () => undefined };
-const EMPTY_OUTGOING_MESSAGES: OutgoingWorkbenchMessage[] = [];
-const EMPTY_QUEUE: WorkbenchQueuedMessage[] = [];
-
-/**
- * The prompts the user sent that the transcript does not show yet. The
- * backend writes a prompt's event only when its turn starts, so a new
- * session's first message would otherwise vanish until the sandbox woke.
- * Prompts whose event arrived, or that will not run, are forgotten.
- */
-function usePendingMessages(chat: WorkbenchChat, events: WorkbenchEvent[], ops: WorkbenchOps): OutgoingWorkbenchMessage[] {
-  const outgoing = useWorkbenchStore((state) => state.outgoingMessages[chat.id] ?? EMPTY_OUTGOING_MESSAGES);
-  const localQueue = useWorkbenchStore((state) => state.localQueues[chat.id]);
-  const queued = (ops.runtime === 'local' ? localQueue : chat.queuedMessages) ?? EMPTY_QUEUE;
-  const running = chat.status === 'running';
-  const [now, setNow] = useState(() => Date.now());
-  const states = useMemo(
-    () => outgoing.map((message) => pendingMessageState(message, { events, queued, running, now })),
-    [outgoing, events, queued, running, now],
-  );
-
-  const done = outgoing.filter((_, i) => states[i] === 'done').map((message) => message.id).join('\n');
-  useEffect(() => {
-    if (done) useWorkbenchStore.getState().removeOutgoingMessages(chat.id, done.split('\n'));
-  }, [chat.id, done]);
-
-  // Look again when the grace of a sent message ends.
-  const expiry = running
-    ? null
-    : outgoing.reduce<number | null>((soonest, message, i) => {
-        if (states[i] !== 'show' || message.settledAt === undefined) return soonest;
-        const end = message.settledAt + PENDING_MESSAGE_GRACE_MS;
-        return soonest === null ? end : Math.min(soonest, end);
-      }, null);
-  useEffect(() => {
-    if (expiry === null) return undefined;
-    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, expiry - Date.now()) + 50);
-    return () => clearTimeout(timer);
-  }, [expiry]);
-
-  return useMemo(() => outgoing.filter((_, i) => states[i] === 'show'), [outgoing, states]);
-}
-
 /**
  * Under a message whose send failed: the reason, and Retry and Discard. The
  * message stays in the chat until one of them is used, so a short backend
@@ -233,8 +192,8 @@ function FailedMessageFooter({ chat, ops, message }: { chat: WorkbenchChat; ops:
     const { input } = failed;
     useWorkbenchStore.getState().resendOutgoingMessage(chat.id, message.id);
     try {
-      await ops.send(chat, input);
-      useWorkbenchStore.getState().settleOutgoingMessage(chat.id, message.id);
+      const res = await ops.send(chat, input);
+      useWorkbenchStore.getState().settleOutgoingMessage(chat.id, message.id, res.queued);
     } catch (err) {
       captureWorkbenchFailure('retry_message', err, chat.workbenchId);
       useWorkbenchStore.getState().failOutgoingMessage(chat.id, message.id, { error: sendFailureText(err), input });
