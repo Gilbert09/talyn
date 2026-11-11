@@ -56,6 +56,14 @@ describe('start validation', () => {
       agent: 'claude', model: 'claude-sonnet-5-5', prompt: 'Fix the bug', internetAccess: false }],
   ])('builds the request for %s', (_name, patch, expected) => expect(createInput(form(patch), 'one')).toMatchObject(expected));
   it('refuses a session without a repository', () => expect(() => createInput(form({ repository: null }), 'one')).toThrow('Choose a repository.'));
+  it.each<[string, Partial<NewWorkForm>, boolean, object]>([
+    ['a session with images', {}, true, { prompt: undefined, namingText: 'Fix the bug', repositoryId: 'repo-one' }],
+    ['a thread with images', { mode: 'thread', repository: null }, true, { prompt: undefined, namingText: 'Fix the bug', kind: 'thread' }],
+    ['a session without images', {}, false, { prompt: 'Fix the bug', namingText: undefined }],
+    ['a thread without images', { mode: 'thread', repository: null }, false, { prompt: 'Fix the bug', namingText: undefined }],
+    ['an empty prompt with images', { prompt: '  ' }, true, { prompt: undefined, namingText: undefined }],
+  ])('names %s from the prompt only when the message goes later', (_name, patch, withImages, expected) =>
+    expect(createInput(form(patch), 'one', withImages)).toMatchObject(expected));
   it('prefers the last repository while it is still watched', () => {
     const repos = [{ id: 'a' }, { id: 'b' }];
     expect(defaultRepositoryId('ws-default', repos)).toBe('a');

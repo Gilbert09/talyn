@@ -1,11 +1,10 @@
 import type { Workbench } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
-import * as ImagePicker from 'expo-image-picker';
 import { useRef, useState, type ComponentRef, type Ref } from 'react';
-import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
-import { Button, showActionMenu, type Symbol } from '../../components/UI';
+import { Button, type Symbol } from '../../components/UI';
 import { trackEvent } from '../../lib/analytics';
 import { radius, type, useTheme } from '../../theme/tokens';
 import { useLocal } from '../../workflow/hooks';
@@ -14,6 +13,7 @@ import { chatActions } from './actions';
 import { ComposerImages } from './AttachmentViews';
 import { useImageDrafts } from './attachmentDrafts';
 import { buildMessageInput, checkImage, imageErrorMessage, sendBlock, type ImageDraft, type PickedImage } from './attachments';
+import { showImagePicker } from './imagePicker';
 
 /** About six lines of body text, then the field scrolls. */
 const MAX_INPUT_HEIGHT = 6 * 22 + 18;
@@ -98,26 +98,7 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
     updateImages((current) => [...current, ...added]);
     added.forEach((draft) => { void upload(draft); });
   };
-  const denied = (what: string) => Alert.alert(`Allow access to ${what}`, `Talyn cannot use ${what} yet. You can allow it in your phone settings.`, [
-    { text: 'Not now', style: 'cancel' }, { text: 'Open settings', onPress: () => { void Linking.openSettings(); } }]);
-  const choose = async (source: 'library' | 'camera') => {
-    try {
-      if (source === 'camera') {
-        const permission = await ImagePicker.requestCameraPermissionsAsync();
-        if (!permission.granted) { denied('the camera'); return; }
-      }
-      const options: ImagePicker.ImagePickerOptions = { mediaTypes: ['images'], quality: 0.8 };
-      const result = source === 'camera' ? await ImagePicker.launchCameraAsync(options)
-        : await ImagePicker.launchImageLibraryAsync({ ...options, allowsMultipleSelection: true });
-      if (!result.canceled) addImages(result.assets);
-    } catch {
-      Alert.alert('Could not add the image', source === 'camera' ? 'The camera did not open. Try again.' : 'Your photos did not open. If you turned off photo access, allow it in your phone settings.');
-    }
-  };
-  const attach = () => showActionMenu('Attach an image', [
-    { label: 'Photo library', onPress: () => { void choose('library'); } },
-    { label: 'Take photo', onPress: () => { void choose('camera'); } },
-  ]);
+  const attach = () => showImagePicker(addImages);
   const sendImages = async () => {
     if (imageBlock || sendingImages) return;
     setSendingImages(true); setImageSendError('');
