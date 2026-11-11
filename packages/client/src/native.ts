@@ -57,6 +57,7 @@ import type {
   TrunkIntegrationStatus,
   SlackAuthorizeResponse,
   SlackEmojiResponse,
+  SlackChannelsResponse,
   SlackForgetInstallationResponse,
   SlackPendingRequest,
   SlackStartInput,
@@ -2082,6 +2083,9 @@ export const slack = {
   /** The team's custom emoji (installer or linked). `needsScope` means the app must be reinstalled. */
   listEmoji: (teamId: string) =>
     request<SlackEmojiResponse>('GET', `/slack/teams/${encodeURIComponent(teamId)}/emoji`),
+  /** Channels the bot is a member of, for a channel rule. `needsScope` means the app must be reinstalled. */
+  listChannels: (teamId: string) =>
+    request<SlackChannelsResponse>('GET', `/slack/teams/${encodeURIComponent(teamId)}/channels`),
   /** Installer only. Forgets the bot token; the app stays installed in Slack. */
   forgetInstallation: (teamId: string) =>
     request<SlackForgetInstallationResponse>(

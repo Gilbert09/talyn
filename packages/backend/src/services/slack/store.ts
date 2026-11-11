@@ -5,6 +5,7 @@ import type {
   SlackStatus,
   SlackUserLinkView,
 } from '@talyn/shared';
+import { slackScopeGrants } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import {
   slackInstallations,
@@ -125,6 +126,7 @@ export async function slackStatusFor(userId: string): Promise<SlackStatus> {
       botName: slackInstallations.botName,
       installedByUserId: slackInstallations.installedByUserId,
       tokenError: slackInstallations.tokenError,
+      scope: slackInstallations.scope,
       createdAt: slackInstallations.createdAt,
     })
     .from(slackInstallations)
@@ -144,6 +146,7 @@ export async function slackStatusFor(userId: string): Promise<SlackStatus> {
     botName: i.botName,
     installedByMe: i.installedByUserId === userId,
     needsReinstall: i.tokenError !== null,
+    canReply: slackScopeGrants(i.scope, 'chat:write'),
     installedAt: i.createdAt.toISOString(),
   }));
   const linkViews: SlackUserLinkView[] = links.map((l) => ({

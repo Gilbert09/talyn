@@ -41,7 +41,7 @@ jest.mock('../lib/analytics', () => ({ trackEvent: (...a: unknown[]) => mockTrac
 jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn(async () => true) }));
 
 const install = (extra: Partial<SlackInstallationView> = {}): SlackInstallationView => ({
-  teamId: 'T1', teamName: 'Acme', teamUrl: null, botUserId: 'B1', botName: 'talyn', installedByMe: true, needsReinstall: false,
+  teamId: 'T1', teamName: 'Acme', teamUrl: null, botUserId: 'B1', botName: 'talyn', installedByMe: true, needsReinstall: false, canReply: true,
   installedAt: '2026-11-01T00:00:00Z', ...extra,
 });
 const link = (extra: Partial<SlackUserLinkView> = {}): SlackUserLinkView => ({

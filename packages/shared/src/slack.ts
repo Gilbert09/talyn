@@ -23,7 +23,31 @@ export interface SlackInstallationView {
    * Someone has to install the app again before anything can run.
    */
   needsReinstall: boolean;
+  /**
+   * The install granted `chat:write`, so a channel rule can reply in a thread.
+   * False on installs made before replies existed: install the app again.
+   */
+  canReply: boolean;
   installedAt: string;
+}
+
+/** Whether a stored Slack scope string (comma separated, as Slack returns it) grants `scope`. */
+export function slackScopeGrants(granted: string | null | undefined, scope: string): boolean {
+  return (granted ?? '').split(',').some((s) => s.trim() === scope);
+}
+
+/** A channel the Talyn bot is a member of. Rules can watch only these. */
+export interface SlackChannelSummary {
+  id: string;
+  name: string;
+  isPrivate: boolean;
+}
+
+/** `GET /slack/teams/:teamId/channels`. */
+export interface SlackChannelsResponse {
+  channels: SlackChannelSummary[];
+  /** Set when Slack refused the list because the bot lacks a scope. Install the app again. */
+  needsScope?: string;
 }
 
 /** The caller's link between their Slack identity in one team and their Talyn account. */

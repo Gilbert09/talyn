@@ -6,7 +6,7 @@ import {
 } from '../features/slack/model';
 
 const install = (teamId: string, extra: Partial<SlackInstallationView> = {}): SlackInstallationView => ({
-  teamId, teamName: `Team ${teamId}`, teamUrl: null, botUserId: 'B1', botName: 'talyn', installedByMe: false, needsReinstall: false,
+  teamId, teamName: `Team ${teamId}`, teamUrl: null, botUserId: 'B1', botName: 'talyn', installedByMe: false, needsReinstall: false, canReply: true,
   installedAt: '2026-11-01T00:00:00Z', ...extra,
 });
 const link = (teamId: string, extra: Partial<SlackUserLinkView> = {}): SlackUserLinkView => ({
