@@ -305,7 +305,7 @@ export function WorkbenchRow({
   const runningJob = background?.jobs.some((job) => job.status === 'running');
   const backgroundTitle = runningJob ? 'Background job running' : 'Wake-up scheduled';
   // The state icon already shows the job or wake-up when nothing more urgent wins.
-  const showBackgroundMark = isActiveBackground(background) && state.kind !== 'background_job' && state.kind !== 'wakeup';
+  const showBackgroundMark = isActiveBackground(background) && state.kind !== 'background_job' && state.kind !== 'wakeup' && state.kind !== 'waiting_ci';
 
   const prUrl = pr?.summary.url ?? workbench.pr?.url;
   const [confirming, setConfirming] = useState(false);

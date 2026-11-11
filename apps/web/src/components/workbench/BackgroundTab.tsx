@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { WorkbenchBackgroundJob, WorkbenchWakeup } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
-import { formatCountdown, formatRunTime, keepAwakeLabel } from '../../lib/sessionBackground';
+import { formatCountdown, formatRunTime, keepAwakeLabel, wakeupWhen } from '../../lib/sessionBackground';
 import { useNow } from '../../hooks/useSessionBackground';
 import { useJobLogs } from '../../hooks/useJobLogs';
 import { useBackground } from '../../stores/sessionBackground';
@@ -93,7 +93,8 @@ function WakeupRow({ workbenchId, wakeup, now }: { workbenchId: string; wakeup: 
     <div className="border-b py-2 last:border-b-0">
       <p className={cn('break-words font-medium', scheduled ? 'text-foreground' : 'text-muted-foreground')}>{wakeup.reason}</p>
       <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
-        <span>{scheduled ? formatCountdown(wakeup.wakeAt, now) : wakeup.status[0].toUpperCase() + wakeup.status.slice(1)}</span>
+        <span>{scheduled ? wakeupWhen(wakeup, now) : wakeup.status[0].toUpperCase() + wakeup.status.slice(1)}</span>
+        {scheduled && wakeup.ci && <span>{formatCountdown(wakeup.wakeAt, now)} at the latest</span>}
         <span>{wakeup.createdBy === 'user' ? 'Set by you' : 'Set by the agent'}</span>
         {scheduled && <button type="button" className="text-foreground hover:underline" onClick={() => void api.workbenches.cancelWakeup(workbenchId, wakeup.id).catch((cause: unknown) => toast.error('Could not cancel wake-up', errorMessage(cause)))}>Cancel</button>}
       </div>

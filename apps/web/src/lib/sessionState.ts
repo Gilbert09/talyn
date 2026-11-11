@@ -24,7 +24,7 @@ export function sessionPr(workbench: Pick<Workbench, 'pr'>, storeRow: PRRow | nu
  * One answer to "what is this session doing, and does it need me?", for the
  * sidebar row. In priority order: a failure, then live work, then a reply
  * that waits for you, then a running background job, then the pull request's
- * state, then a scheduled wake-up. A new pull request that is the only unseen
+ * state (a CI wake-up shows as waiting for CI), then a scheduled wake-up. A new pull request that is the only unseen
  * news (`prOnlyUnseen`) shows the PR mark, not the dot.
  *
  * The PR part reuses the header's next action, so the row and the header
@@ -45,6 +45,7 @@ export type SessionStateKind =
   | 'merged'
   | 'closed'
   | 'unshipped'
+  | 'waiting_ci'
   | 'wakeup'
   | 'idle';
 
@@ -128,6 +129,10 @@ export function sessionState(
   if (pr) {
     if (pr.state === 'merged') return { kind: 'merged', label: `Done: #${pr.number} merged` };
     if (pr.state === 'closed') return { kind: 'closed', label: `#${pr.number} closed` };
+    // The agent asked to be woken when CI finishes: say that, not "waiting on checks or review".
+    if (background?.wakeups.some((wakeup) => wakeup.status === 'scheduled' && wakeup.ci)) {
+      return { kind: 'waiting_ci', label: `#${pr.number}: waiting for CI, then the agent continues` };
+    }
     if (pr.summary.draft) return { kind: 'draft', label: `Draft PR #${pr.number}` };
     const next = primaryWorkbenchAction(workbench, { state: pr.state, summary: pr.summary });
     if (next === 'resolve_conflicts') return { kind: 'pr_attention', label: `#${pr.number} has conflicts` };

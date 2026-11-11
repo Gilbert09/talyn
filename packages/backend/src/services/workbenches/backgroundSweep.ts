@@ -2,6 +2,8 @@ import { BACKGROUND_EXIT_TAIL_LINES } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { debugBus } from '../debugBus.js';
+import { domainEvents, type DomainPrChecksEvent } from '../events.js';
+import { ciOutcomeNow, type CiOutcomeDeps } from './ciWakeups.js';
 import { existingBoxRefusal } from './boxGate.js';
 import { isWorkbenchDraining } from './ownership.js';
 import { wakeWithCredentials } from './sandboxRuntime.js';
@@ -19,9 +21,11 @@ import {
   cancelArchivedWakeups,
   dueWakeupsQuery,
   markJobsLost,
+  scheduledCiWakeups,
   setJobKeepAwake,
   settleJob,
   sweepJobsQuery,
+  type CiWakeupRow,
   type JobRow,
 } from './backgroundStore.js';
 
@@ -42,6 +46,10 @@ import {
  * it to stay up. The wake goes through the box gate as unattended work; a
  * refusal ends the keep-awake and is recorded on the job, never a 402.
  *
+ * A CI wake-up (`ciWakeups.ts`) also fires before its time: each pass reads
+ * its pull request and the check ledger, and so does the `pr:checks`
+ * listener for the pull requests a flush touched. Neither fires one while its
+ * chat runs a turn: the agent is awake, and a new CI wake-up replaces it.
  */
 export const BACKGROUND_POLLER = 'workbench-background';
 export const BACKGROUND_SWEEP_MS = 30_000;
@@ -50,6 +58,7 @@ const JOB_PASS_LIMIT = 50;
 /** Checks in flight at once: each one is an exec of up to 15 s. */
 const JOB_CHECK_PARALLEL = 8;
 const WAKEUP_PASS_LIMIT = 50;
+const CI_WAKEUP_PASS_LIMIT = 50;
 
 let timer: NodeJS.Timeout | undefined;
 let ticking = false;
@@ -110,6 +119,37 @@ async function sweepWakeups(now: Date): Promise<number> {
   return fired;
 }
 
+/** Fire one CI wake-up when its outcome is known. True when a turn was sent. */
+export async function tryFireCiWakeup(row: CiWakeupRow, now = new Date(), deps: CiOutcomeDeps = {}): Promise<boolean> {
+  if (row.chatStatus === 'running') return false;
+  const outcome = await ciOutcomeNow(row, false, deps);
+  if (!outcome) return false;
+  return fireWakeup(row.id, now, { ci: outcome });
+}
+
+/** CI wake-ups whose checks settled, whose head moved or whose PR closed, and a flush the listener missed. */
+export async function sweepCiWakeups(now = new Date(), deps: CiOutcomeDeps = {}): Promise<number> {
+  let fired = 0;
+  for (const row of await scheduledCiWakeups({ limit: CI_WAKEUP_PASS_LIMIT })) {
+    try {
+      if (await tryFireCiWakeup(row, now, deps)) fired++;
+    } catch (err) {
+      console.warn(`[background] CI wake-up ${row.id} failed:`, err);
+    }
+  }
+  return fired;
+}
+
+/** The `pr:checks` listener: a flush may be the one CI settled on. Returns the turns sent. */
+export async function onPrChecksForWakeups(evt: DomainPrChecksEvent, deps: CiOutcomeDeps = {}): Promise<number> {
+  const rows = await scheduledCiWakeups({ pullRequestIds: evt.prs.map((p) => p.prId), limit: CI_WAKEUP_PASS_LIMIT });
+  let fired = 0;
+  for (const row of rows) {
+    if (await tryFireCiWakeup(row, new Date(), deps)) fired++;
+  }
+  return fired;
+}
+
 /** One pass. Exported for tests; production runs it from the timer. */
 export async function sweepBackground(now = new Date()): Promise<{ checked: number; fired: number }> {
   if (ticking || isWorkbenchDraining()) return { checked: 0, fired: 0 };
@@ -119,7 +159,7 @@ export async function sweepBackground(now = new Date()): Promise<{ checked: numb
   try {
     const outcome = await guardCrossReplica(BACKGROUND_POLLER, async () => {
       const checked = await sweepJobs(now);
-      const fired = await sweepWakeups(now);
+      const fired = await sweepWakeups(now) + await sweepCiWakeups(now);
       return { checked, fired };
     });
     return outcome.result ?? { checked: 0, fired: 0 };
@@ -146,10 +186,22 @@ export async function markJobsLostAfterMove(workbenchId: string, workspaceId: st
   }
 }
 
+let subscribed = false;
+
 export function initBackgroundSweep(): void {
+  if (!subscribed) {
+    subscribed = true;
+    domainEvents.on('pr:checks', (evt) => {
+      runWithoutScope(() => {
+        void onPrChecksForWakeups(evt).catch((err) => {
+          console.warn(`[background] CI wake-up listener failed for ${evt.repoFullName}:`, err instanceof Error ? err.message : err);
+        });
+      });
+    });
+  }
   if (timer) return;
   debugBus.registerPoller(BACKGROUND_POLLER, BACKGROUND_SWEEP_MS,
-    'Check session background jobs and send due wake-up turns.');
+    'Check session background jobs, send due wake-up turns, and send CI wake-ups when the checks settle.');
   timer = setInterval(() => { void runWithoutScope(() => sweepBackground()); }, BACKGROUND_SWEEP_MS);
   timer.unref();
 }

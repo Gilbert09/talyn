@@ -2,7 +2,7 @@ import type { Workbench, WorkbenchChangedFile, WorkbenchChanges } from '@talyn/s
 
 import { archivedAtOf, archivedItems, emptyHistoryText, historyRows } from '../features/history/model';
 import { copyActions, copyEntry } from '../features/sessions/actions';
-import { formatCountdown, formatRunTime, jobStatus, keepAwakeLabel, runningJobs, sortWakeups } from '../features/sessions/background';
+import { formatCountdown, formatRunTime, jobStatus, keepAwakeLabel, runningJobs, sortWakeups, wakeupWhen } from '../features/sessions/background';
 import { changeGroups, clipLine, fileLabel, groupTotals, gutterDigits, needsWake, parseUnifiedDiff, splitPath, storedText,
   visibleDiff, type DiffLine } from '../features/sessions/changes';
 import { canCreatePullRequest, changesUnavailable, createPrSentText, hasChanges, sessionTabs, sessionUnavailable } from '../features/sessions/model';
@@ -215,6 +215,12 @@ describe('background jobs', () => {
     [24 * 3600_000, 'Wakes in 1 day'],
   ])('counts down %d ms', (delta, expected) => {
     expect(formatCountdown(new Date(now + delta).toISOString(), now)).toBe(expected);
+  });
+  it.each([
+    ['a timed wake-up', null, ['Wakes in 5 min']],
+    ['a CI wake-up', { pullRequestId: 'p1', headSha: 'abcdef1234567890abcdef1234567890abcdef12' }, ['Waits for CI on abcdef1', 'Wakes in 5 min at the latest']],
+  ])('says when %s fires', (_name, ci, expected) => {
+    expect(wakeupWhen({ wakeAt: new Date(now + 5 * 60_000).toISOString(), ci }, now)).toEqual(expected);
   });
   it.each<[{ status: 'running' | 'exited' | 'stopped' | 'lost'; exitCode: number | null }, { label: string; tone: string }]>([
     [{ status: 'running', exitCode: null }, { label: 'Running', tone: 'success' }],

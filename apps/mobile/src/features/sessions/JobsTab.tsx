@@ -8,7 +8,7 @@ import { AppText, Button, Dot, SectionLabel, toneColor } from '../../components/
 import { errorMessage, showActionError } from '../../lib/errors';
 import { relativeTimeLabel, useNow } from '../../lib/time';
 import { mono, useTheme } from '../../theme/tokens';
-import { formatCountdown, formatRunTime, jobStatus, keepAwakeLabel, sortWakeups } from './background';
+import { formatRunTime, jobStatus, keepAwakeLabel, sortWakeups, wakeupWhen } from './background';
 import { useJobLogs, type Load } from './data';
 
 function JobLogs({ workbenchId, job }: { workbenchId: string; job: WorkbenchBackgroundJob }) {
@@ -82,7 +82,7 @@ function WakeupRow({ wakeup, now, divider }: { wakeup: WorkbenchWakeup; now: num
   const scheduled = wakeup.status === 'scheduled';
   return <View style={[styles.wakeup, { borderBottomColor: divider ? c.border : 'transparent' }]}>
     <AppText variant="meta" tone={scheduled ? 'default' : 'muted'}>{wakeup.reason}</AppText>
-    <AppText variant="caption" tone="muted">{[scheduled ? formatCountdown(wakeup.wakeAt, now) : wakeup.status[0].toUpperCase() + wakeup.status.slice(1),
+    <AppText variant="caption" tone="muted">{[...(scheduled ? wakeupWhen(wakeup, now) : [wakeup.status[0].toUpperCase() + wakeup.status.slice(1)]),
       wakeup.createdBy === 'user' ? 'Set by you' : 'Set by the agent'].join(' · ')}</AppText>
     {wakeup.status === 'failed' && wakeup.failureDetail ? <AppText variant="caption" tone="destructive">{wakeup.failureDetail}</AppText> : null}
   </View>;

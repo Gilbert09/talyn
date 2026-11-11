@@ -7,9 +7,11 @@ import {
   BACKGROUND_LOG_TAIL_MAX,
   BACKGROUND_MAX_KEEP_AWAKE_SECONDS,
   BACKGROUND_NAME_MAX_CHARS,
+  CI_WAKEUP_DEFAULT_WAIT_SECONDS,
   formatDurationMs,
   shellQuote,
   WAKEUP_REASON_MAX_CHARS,
+  type CiWakeupOutcome,
   type ScheduleWorkbenchWakeupInput,
   type StartWorkbenchBackgroundJobInput,
   type WorkbenchBackground,
@@ -20,6 +22,7 @@ import {
   type WorkbenchWakeup,
   type WorkbenchWakeupCreatedBy,
 } from '@talyn/shared';
+import { ciFactsFor, ciOutcomeNow, ciWakeupPrompt, prRef, resolveCiTarget, type CiTarget } from './ciWakeups.js';
 import { pidFileFor } from './execFraming.js';
 import { durablePaths, fenceDurableExec, startDurableExec } from './durableExec.js';
 import { emitWorkbenchBackground } from './emit.js';
@@ -27,8 +30,10 @@ import { existingBoxRefusal } from './boxGate.js';
 import { localRuntimeError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
 import { killMarker, repoDirFor, runCapture, sandboxScriptEnv } from './sandboxRuntime.js';
 import { getChat, getWorkbench, listChats, type ChatRow, type WorkbenchRow } from './store.js';
+import { captureWorkspaceEvent } from '../analytics.js';
 import { payerRef, turnPayerFor } from '../teams/payer.js';
 import {
+  cancelScheduledCiWakeups,
   getJob,
   getWakeup,
   claimWakeup,
@@ -420,7 +425,10 @@ export async function readJobLogs(
 // Wake-ups
 // ============================================================================
 
-/** Schedule a wake-up turn. The time must be in the future; there is no upper bound. */
+/**
+ * Schedule a wake-up turn. The time must be in the future; there is no upper
+ * bound. With `untilCi`, the time is optional and is the latest it fires.
+ */
 export async function scheduleWakeup(
   row: WorkbenchRow,
   input: ScheduleWorkbenchWakeupInput,
@@ -433,11 +441,22 @@ export async function scheduleWakeup(
   if (reason.length > WAKEUP_REASON_MAX_CHARS) {
     throw bad(`The reason is over ${WAKEUP_REASON_MAX_CHARS} characters. Put long notes in a file, and name the file in the reason.`);
   }
+  if (input.untilCi !== undefined && input.untilCi !== null && typeof input.untilCi !== 'boolean') {
+    throw bad('untilCi must be true or false.');
+  }
+  const untilCi = input.untilCi === true;
+  if (!untilCi && input.headSha !== undefined && input.headSha !== null && input.headSha !== '') {
+    throw bad('headSha needs untilCi.');
+  }
   const hasDelay = input.delaySeconds !== undefined && input.delaySeconds !== null;
   const hasAt = input.at !== undefined && input.at !== null && input.at !== '';
-  if (hasDelay === hasAt) throw bad('Give exactly one of delaySeconds and at.');
+  if (untilCi ? hasDelay && hasAt : hasDelay === hasAt) {
+    throw bad(untilCi ? 'Give at most one of delaySeconds and at.' : 'Give exactly one of delaySeconds and at.');
+  }
   let wakeAt: Date;
-  if (hasDelay) {
+  if (!hasDelay && !hasAt) {
+    wakeAt = new Date(now.getTime() + CI_WAKEUP_DEFAULT_WAIT_SECONDS * 1000);
+  } else if (hasDelay) {
     if (typeof input.delaySeconds !== 'number' || !Number.isInteger(input.delaySeconds)) throw bad('delaySeconds must be a whole number.');
     if (input.delaySeconds < 1) throw bad('delaySeconds must be 1 or more. Talyn cannot wake a session in the past.', 'wakeup_in_past');
     wakeAt = new Date(now.getTime() + input.delaySeconds * 1000);
@@ -448,6 +467,11 @@ export async function scheduleWakeup(
   }
   if (!Number.isFinite(wakeAt.getTime())) throw bad('That time is too far away.');
   const chat = await resolveChat(row, input.chatId);
+  let ci: CiTarget | null = null;
+  if (untilCi) {
+    ci = await resolveCiTarget(row, input.headSha);
+    await cancelScheduledCiWakeups(row.id, chat.id, 'Replaced by a newer CI wake-up.');
+  }
   const wakeup = await insertWakeup({
     id: randomUUID(),
     workbenchId: row.id,
@@ -457,9 +481,18 @@ export async function scheduleWakeup(
     reason,
     createdBy,
     ...payerFor(chat, createdBy),
+    ...(ci ?? {}),
     createdAt: now,
   });
   if (!wakeup) throw new Error('The wake-up was not stored.');
+  if (ci) {
+    captureWorkspaceEvent(row.workspaceId, 'session_ci_wakeup_scheduled', {
+      workbench_id: row.id,
+      created_by: createdBy,
+      head_given: Boolean(input.headSha),
+      wait_seconds: Math.round((wakeAt.getTime() - now.getTime()) / 1000),
+    });
+  }
   await emitBackground(row.workspaceId, row.id);
   return publicWakeup(wakeup);
 }
@@ -482,14 +515,43 @@ export function wakeupPrompt(wakeup: Pick<WakeupRow, 'reason' | 'createdBy' | 'c
   ].join('\n');
 }
 
-export function wakeupTrigger(wakeup: WakeupRow, job: JobRow | null): WorkbenchMessageTrigger {
+export function wakeupTrigger(wakeup: WakeupRow, job: JobRow | null, ci: CiWakeupOutcome | null = null): WorkbenchMessageTrigger {
   if (wakeup.sourceJobId && job) {
     return {
       kind: 'job_exit', wakeupId: wakeup.id, reason: wakeup.reason,
       jobId: job.id, jobName: job.name, exitCode: job.exitCode,
     };
   }
-  return { kind: 'wakeup', wakeupId: wakeup.id, reason: wakeup.reason, createdBy: wakeup.createdBy as WorkbenchWakeupCreatedBy };
+  return {
+    kind: 'wakeup', wakeupId: wakeup.id, reason: wakeup.reason, createdBy: wakeup.createdBy as WorkbenchWakeupCreatedBy,
+    ...(ci ? { ci: ci.kind } : {}),
+  };
+}
+
+/**
+ * The text and outcome of a claimed wake-up's turn. A CI wake-up reads its
+ * outcome now unless the caller already has it; a time that came first
+ * without settled checks is `timed_out`.
+ */
+async function wakeupTurn(claimed: WakeupRow, ci: CiWakeupOutcome | undefined): Promise<{ text: string; ci: CiWakeupOutcome | null }> {
+  if (!claimed.ciPullRequestId || !claimed.ciHeadSha) {
+    return { text: claimed.prompt ?? wakeupPrompt(claimed), ci: null };
+  }
+  const facts = await ciFactsFor({
+    ciPullRequestId: claimed.ciPullRequestId,
+    ciHeadSha: claimed.ciHeadSha,
+    ciPrHeadAtSchedule: claimed.ciPrHeadAtSchedule,
+  });
+  const outcome = ci ?? (await ciOutcomeNow(facts, true)) ?? { kind: 'timed_out' as const };
+  const text = ciWakeupPrompt({
+    reason: claimed.reason,
+    createdBy: claimed.createdBy,
+    createdAt: claimed.createdAt,
+    ref: prRef(facts),
+    headSha: claimed.ciHeadSha,
+    outcome,
+  });
+  return { text, ci: outcome };
 }
 
 /**
@@ -501,7 +563,7 @@ export function wakeupTrigger(wakeup: WakeupRow, job: JobRow | null): WorkbenchM
  * The order is claim, then send. A crash between the two loses the wake-up
  * (it shows as fired with no turn); the other order could send it twice.
  */
-export async function fireWakeup(id: string, now = new Date()): Promise<boolean> {
+export async function fireWakeup(id: string, now = new Date(), opts: { ci?: CiWakeupOutcome } = {}): Promise<boolean> {
   const claimed = await claimWakeup(id, now);
   if (!claimed) return false;
   let sent = false;
@@ -523,14 +585,22 @@ export async function fireWakeup(id: string, now = new Date()): Promise<boolean>
         await settleWakeup(claimed.id, 'fired', 'failed', refusal.message);
       } else {
         const job = claimed.sourceJobId ? await getJob(claimed.sourceJobId) : null;
+        const turn = await wakeupTurn(claimed, opts.ci);
         // Loaded here: turns.ts reaches move.ts, which imports this file.
         const { sendMessage } = await import('./turns.js');
-        await sendMessage(chat.id, { text: claimed.prompt ?? wakeupPrompt(claimed) }, {
+        await sendMessage(chat.id, { text: turn.text }, {
           origin: 'talyn',
-          trigger: wakeupTrigger(claimed, job),
+          trigger: wakeupTrigger(claimed, job, turn.ci),
           ...(payer ? { payer } : {}),
         });
         sent = true;
+        if (turn.ci) {
+          captureWorkspaceEvent(claimed.workspaceId, 'session_ci_wakeup_fired', {
+            workbench_id: claimed.workbenchId,
+            outcome: turn.ci.kind,
+            waited_seconds: Math.round((now.getTime() - claimed.createdAt.getTime()) / 1000),
+          });
+        }
       }
     }
   } catch (err) {

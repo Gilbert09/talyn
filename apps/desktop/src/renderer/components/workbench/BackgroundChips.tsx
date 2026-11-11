@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Clock, X } from 'lucide-react';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
-import { formatCountdown, formatRunTime } from '../../lib/sessionBackground';
+import { formatRunTime, wakeupTitle, wakeupWhen } from '../../lib/sessionBackground';
 import { useNow } from '../../hooks/useSessionBackground';
 import { useRunningJobs, useScheduledWakeupsForChat } from '../../stores/sessionBackground';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -40,16 +40,16 @@ export function BackgroundChips({ workbenchId, chatId, canOpen }: { workbenchId:
         </OpenTarget>
       )}
       {wakeups.map((wakeup) => (
-        <span key={wakeup.id} data-testid="wakeup-chip" className={cn(CHIP, 'gap-1 pr-1')} title={`${formatCountdown(wakeup.wakeAt, now)}: ${wakeup.reason}`}>
+        <span key={wakeup.id} data-testid="wakeup-chip" className={cn(CHIP, 'gap-1 pr-1')} title={wakeupTitle(wakeup, now)}>
           {open ? (
             <button type="button" className="inline-flex min-w-0 items-center gap-1 hover:text-foreground" onClick={open}>
               <Clock className="h-3 w-3 shrink-0" aria-hidden />
-              <span className="min-w-0 truncate">{formatCountdown(wakeup.wakeAt, now)}: {wakeup.reason}</span>
+              <span className="min-w-0 truncate">{wakeupWhen(wakeup, now)}: {wakeup.reason}</span>
             </button>
           ) : (
             <>
               <Clock className="h-3 w-3 shrink-0" aria-hidden />
-              <span className="min-w-0 truncate">{formatCountdown(wakeup.wakeAt, now)}: {wakeup.reason}</span>
+              <span className="min-w-0 truncate">{wakeupWhen(wakeup, now)}: {wakeup.reason}</span>
             </>
           )}
           <button type="button" aria-label={`Cancel wake-up: ${wakeup.reason}`} className="rounded-full p-0.5 hover:bg-accent hover:text-foreground" onClick={() => {

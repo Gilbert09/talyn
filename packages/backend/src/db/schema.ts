@@ -3242,7 +3242,8 @@ export const workbenchBackgroundJobs = pgTable(
 
 /**
  * Session wake-ups (migration 0119). A turn Talyn sends into a chat at
- * `wakeAt`, claimed by the sweep with `status = 'scheduled'`. `prompt` holds a
+ * `wakeAt`, claimed by the sweep with `status = 'scheduled'`. A CI wake-up
+ * (`ci_pull_request_id` set) fires sooner when its checks settle. `prompt` holds a
  * job exit's message with its log tail; null means the text comes from
  * `reason`. Backend-pool-only.
  */
@@ -3268,11 +3269,20 @@ export const workbenchWakeups = pgTable(
     payerUserId: text('payer_user_id'),
     payerWorkspaceId: text('payer_workspace_id'),
     sourceJobId: text('source_job_id').references(() => workbenchBackgroundJobs.id, { onDelete: 'set null' }),
+    /** A CI wake-up (migration 0129): the pull request it waits on. Null on a timed one. */
+    ciPullRequestId: text('ci_pull_request_id'),
+    /** The commit whose checks it waits for. */
+    ciHeadSha: text('ci_head_sha'),
+    /** The PR row's head when it was scheduled. Until the push webhook lands, it can name the commit before. */
+    ciPrHeadAtSchedule: text('ci_pr_head_at_schedule'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     firedAt: timestamp('fired_at', { withTimezone: true }),
   },
   (t) => ({
     dueIdx: index('idx_workbench_wakeups_due').on(t.wakeAt).where(sql`${t.status} = 'scheduled'`),
+    ciIdx: index('idx_workbench_wakeups_ci')
+      .on(t.ciPullRequestId)
+      .where(sql`${t.status} = 'scheduled' AND ${t.ciPullRequestId} IS NOT NULL`),
     workbenchIdx: index('idx_workbench_wakeups_workbench').on(t.workbenchId, t.createdAt),
     sourceJobUq: uniqueIndex('uq_workbench_wakeups_source_job').on(t.sourceJobId).where(sql`${t.sourceJobId} IS NOT NULL`),
   })

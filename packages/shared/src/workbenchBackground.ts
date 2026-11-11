@@ -4,8 +4,11 @@
  * A background job is a shell command that an agent starts in its session's
  * sandbox. It outlives the turn that started it. A wake-up is a row that sends
  * a new turn into a chat at a stated time. Talyn sends one when a job exits
- * too, if the agent asked for it.
+ * too, if the agent asked for it. A CI wake-up waits for the checks on the
+ * session's pull request instead, and its time is only the latest it fires.
  */
+
+import type { AwaitCiOutcome } from './prMergeable.js';
 
 export type WorkbenchBackgroundJobStatus = 'running' | 'exited' | 'stopped' | 'lost';
 
@@ -55,10 +58,26 @@ export const WORKBENCH_WAKEUP_STATUSES: readonly WorkbenchWakeupStatus[] = [
 /** `agent`: the agent scheduled it, or asked for it when its job exits. `user`: a person did. */
 export type WorkbenchWakeupCreatedBy = 'agent' | 'user';
 
+/**
+ * What a CI wake-up found when it fired: the outcomes of a parked fix run
+ * (`AwaitCiOutcome`), plus a pull request that merged or closed while the
+ * session waited.
+ */
+export type CiWakeupOutcome = AwaitCiOutcome | { kind: 'merged' } | { kind: 'closed' };
+
+export type CiWakeupOutcomeKind = CiWakeupOutcome['kind'];
+
+/** The commit a CI wake-up waits for, on the session's pull request. */
+export interface WorkbenchWakeupCi {
+  pullRequestId: string;
+  headSha: string;
+}
+
 export interface WorkbenchWakeup {
   id: string;
   workbenchId: string;
   chatId: string;
+  /** For a CI wake-up, the latest time it fires: Talyn sends it sooner when CI settles. */
   wakeAt: string;
   reason: string;
   status: WorkbenchWakeupStatus;
@@ -67,6 +86,8 @@ export interface WorkbenchWakeup {
   createdBy: WorkbenchWakeupCreatedBy;
   /** Set when Talyn made the wake-up because a background job exited. */
   sourceJobId: string | null;
+  /** Set on a wake-up that waits for CI. Null on a timed one. */
+  ci: WorkbenchWakeupCi | null;
   createdAt: string;
   firedAt: string | null;
 }
@@ -99,7 +120,14 @@ export interface WorkbenchBackgroundLogs {
  * clients show such a turn as a system row, not as the person's prompt.
  */
 export type WorkbenchMessageTrigger =
-  | { kind: 'wakeup'; wakeupId: string; reason: string; createdBy: WorkbenchWakeupCreatedBy }
+  | {
+      kind: 'wakeup';
+      wakeupId: string;
+      reason: string;
+      createdBy: WorkbenchWakeupCreatedBy;
+      /** Set when a CI wake-up fired: what Talyn found. Older clients ignore it. */
+      ci?: CiWakeupOutcomeKind;
+    }
   | {
       kind: 'job_exit';
       wakeupId: string;
@@ -129,7 +157,10 @@ export interface KeepWorkbenchJobAwakeInput {
   seconds: number;
 }
 
-/** `POST /workbenches/:id/wakeups`. Exactly one of `delaySeconds` and `at`. */
+/**
+ * `POST /workbenches/:id/wakeups`. Exactly one of `delaySeconds` and `at`,
+ * except with `untilCi`, where both are optional and set the latest time.
+ */
 export interface ScheduleWorkbenchWakeupInput {
   /** Default: the session's running chat, else its newest open chat. */
   chatId?: string;
@@ -137,6 +168,14 @@ export interface ScheduleWorkbenchWakeupInput {
   /** An ISO time in the future. */
   at?: string;
   reason: string;
+  /**
+   * Fire when the checks on the session's pull request settle, its head
+   * moves or it closes. The time (default `CI_WAKEUP_DEFAULT_WAIT_SECONDS`)
+   * is the latest it fires. Needs a linked, open pull request.
+   */
+  untilCi?: boolean;
+  /** With `untilCi`: the commit to wait for, full or short. Default: the pull request's head. */
+  headSha?: string;
 }
 
 /** The default keep-awake of a new job: one hour. */
@@ -167,6 +206,23 @@ export const BACKGROUND_NAME_MAX_CHARS = 100;
  * turn. Longer notes belong in a file or in the session's memory.
  */
 export const WAKEUP_REASON_MAX_CHARS = 1000;
+/**
+ * The latest a CI wake-up fires when the agent gives no time: three hours,
+ * the same wait as a parked fix run. Then the agent reads CI itself.
+ */
+export const CI_WAKEUP_DEFAULT_WAIT_SECONDS = 3 * 3600;
+
+/** A short label for a CI wake-up's outcome. */
+export function ciWakeupOutcomeLabel(kind: CiWakeupOutcomeKind): string {
+  switch (kind) {
+    case 'passing': return 'CI passed';
+    case 'failing': return 'CI failed';
+    case 'head_moved': return 'The PR head moved';
+    case 'timed_out': return 'CI did not finish in time';
+    case 'merged': return 'The PR merged';
+    case 'closed': return 'The PR closed';
+  }
+}
 
 /** The trigger of a stored user-message event's `talyn` block, or null for a person's message. */
 export function messageTrigger(talyn: unknown): WorkbenchMessageTrigger | null {
@@ -179,7 +235,9 @@ export function messageTrigger(talyn: unknown): WorkbenchMessageTrigger | null {
 
 /** The one line a client shows for a turn that a trigger started. */
 export function messageTriggerText(trigger: WorkbenchMessageTrigger): string {
-  if (trigger.kind === 'wakeup') return `Woke up: ${trigger.reason}`;
+  if (trigger.kind === 'wakeup') {
+    return trigger.ci ? `${ciWakeupOutcomeLabel(trigger.ci)}: ${trigger.reason}` : `Woke up: ${trigger.reason}`;
+  }
   const code = trigger.exitCode === null ? 'an unknown code' : `code ${trigger.exitCode}`;
   return `Background job ${trigger.jobName} exited with ${code}`;
 }

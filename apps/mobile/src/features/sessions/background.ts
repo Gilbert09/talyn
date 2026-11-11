@@ -36,6 +36,12 @@ export function formatCountdown(wakeAt: string, now: number): string {
 }
 
 /** The status word and colour of a job, like web's status dot. */
+/** When a scheduled wake-up fires. A CI wake-up fires when CI finishes, and its time is the latest. */
+export function wakeupWhen(wakeup: Pick<WorkbenchWakeup, 'wakeAt' | 'ci'>, now: number): string[] {
+  if (!wakeup.ci) return [formatCountdown(wakeup.wakeAt, now)];
+  return [`Waits for CI on ${wakeup.ci.headSha.slice(0, 7)}`, `${formatCountdown(wakeup.wakeAt, now)} at the latest`];
+}
+
 export function jobStatus(job: Pick<WorkbenchBackgroundJob, 'status' | 'exitCode'>): { label: string; tone: Tone } {
   switch (job.status) {
     case 'running': return { label: 'Running', tone: 'success' };
