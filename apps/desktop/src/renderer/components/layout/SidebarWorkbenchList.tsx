@@ -47,7 +47,7 @@ import { moveToSpace } from '../spaces/MoveToSpace';
 import { isActiveBackground } from '../../lib/sessionBackground';
 import { useBackground, useSessionBackgroundStore } from '../../stores/sessionBackground';
 import { useSplitViewStore } from '../../stores/splitView';
-import { openInSplitView } from '../../lib/splitView';
+import { openInSplitView, sessionDragProps } from '../../lib/splitView';
 
 /**
  * The sidebar's workbench list: live sessions grouped by repository, in the
@@ -353,6 +353,7 @@ export function WorkbenchRow({
             }}
             data-attr="sidebar-workbench-row"
             aria-current={selected ? 'page' : undefined}
+            {...sessionDragProps(workbench.id, splitOn && !rename.editing)}
             className={cn(
               'app-region-no-drag flex w-full items-center gap-2 rounded-md px-3 py-1 text-left text-[13px] transition-colors',
               selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60'

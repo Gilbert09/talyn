@@ -44,6 +44,55 @@ export function moveSplitPane(panes: readonly string[], id: string, direction: -
   return next;
 }
 
+/** Where a session dropped on a pane goes: into the pane, or beside it. */
+export type SplitDropPosition = 'replace' | 'before' | 'after';
+
+/**
+ * Put a session dragged onto the pane `targetId`.
+ *
+ * - `replace` shows it in that pane. When the session already has a pane, the
+ *   two panes swap places, so no session closes.
+ * - `before` / `after` adds it beside the target, or moves it there when it
+ *   already has a pane. When a new session cannot fit, it replaces the target.
+ *
+ * A target that is not a pane adds the session as {@link addSplitPane} does.
+ */
+export function placeSplitPane(
+  panes: readonly string[],
+  id: string,
+  targetId: string,
+  position: SplitDropPosition,
+  max = MAX_SPLIT_PANES,
+): string[] {
+  if (!id || id === targetId) return [...panes];
+  const target = panes.indexOf(targetId);
+  if (target < 0) return addSplitPane(panes, id, max);
+  const from = panes.indexOf(id);
+  if (position === 'replace') {
+    const next = [...panes];
+    next[target] = id;
+    if (from >= 0) next[from] = targetId;
+    return next;
+  }
+  if (from < 0 && panes.length >= Math.max(1, max)) return placeSplitPane(panes, id, targetId, 'replace', max);
+  const rest = panes.filter((pane) => pane !== id);
+  const at = rest.indexOf(targetId) + (position === 'after' ? 1 : 0);
+  return [...rest.slice(0, at), id, ...rest.slice(at)];
+}
+
+/**
+ * The drop position for a pointer at `x` across a pane `width` wide. The outer
+ * quarter on each side adds beside the pane, when `canAddBeside`; the rest
+ * replaces the pane.
+ */
+export function splitDropPosition(x: number, width: number, canAddBeside: boolean): SplitDropPosition {
+  if (!canAddBeside || !(width > 0)) return 'replace';
+  const fraction = x / width;
+  if (fraction < 0.25) return 'before';
+  if (fraction > 0.75) return 'after';
+  return 'replace';
+}
+
 /**
  * The saved pane list, cleaned: strings only, no blanks, no repeats, at most
  * {@link MAX_SPLIT_PANES}. Anything else reads as no panes.

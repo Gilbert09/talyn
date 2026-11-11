@@ -1,13 +1,15 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react';
 import {
   MAX_SPLIT_PANES,
   addSplitPane,
   moveSplitPane,
   parseSplitPanes,
+  placeSplitPane,
   removeSplitPane,
+  splitDropPosition,
   splitGridShape,
   splitViewOffered,
   type Features,
@@ -19,7 +21,7 @@ import { useWorkbenchStore } from '../stores/workbenches';
 import { useNavigationStore } from '../stores/navigation';
 import { useWorkspaceStore } from '../stores/workspace';
 import { pathForRoute, routeForPath } from '../lib/routes';
-import { openInSplitView } from '../lib/splitView';
+import { SESSION_DRAG_TYPE, openInSplitView } from '../lib/splitView';
 
 vi.mock('../lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 vi.mock('../components/auth/AuthProvider', () => ({ useAuth: () => ({ user: null }) }));
@@ -78,6 +80,38 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+/** jsdom has no DataTransfer: enough of one for a session drag. */
+function transfer(id?: string) {
+  const data = new Map<string, string>();
+  if (id) data.set(SESSION_DRAG_TYPE, id);
+  return {
+    get types() {
+      return [...data.keys()];
+    },
+    getData: (type: string) => data.get(type) ?? '',
+    setData: (type: string, value: string) => void data.set(type, value),
+    dropEffect: 'none',
+    effectAllowed: 'all',
+  };
+}
+
+/** Fire a drag event at `x` pixels across an element 100 pixels wide. */
+function drag(kind: 'dragOver' | 'drop', element: HTMLElement, dataTransfer: ReturnType<typeof transfer>, x = 50) {
+  element.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100, x: 0, y: 0, toJSON: () => ({}) });
+  const event = createEvent[kind](element, { dataTransfer });
+  Object.defineProperty(event, 'clientX', { value: x });
+  fireEvent(element, event);
+}
+
+/** Drag from `source` and drop on `target` at `x`, as a person does. */
+function dragOnto(source: HTMLElement, target: HTMLElement, x = 50) {
+  const dataTransfer = transfer();
+  fireEvent.dragStart(source, { dataTransfer });
+  drag('dragOver', target, dataTransfer, x);
+  drag('drop', target, dataTransfer, x);
+  fireEvent.dragEnd(source, { dataTransfer });
+}
+
 describe('split view pane rules', () => {
   it('is offered only with the flag and the session surface', () => {
     expect(splitViewOffered({ splitView: true, workbenches: true })).toBe(true);
@@ -94,6 +128,38 @@ describe('split view pane rules', () => {
     expect(removeSplitPane(['a', 'b'], 'a')).toEqual(['b']);
     expect(moveSplitPane(['a', 'b', 'c'], 'b', -1)).toEqual(['b', 'a', 'c']);
     expect(moveSplitPane(['a', 'b'], 'a', -1)).toEqual(['a', 'b']);
+  });
+
+  it.each([
+    ['replaces the target with a new session', ['a', 'b'], 'c', 'b', 'replace', ['a', 'c']],
+    ['swaps two open panes', ['a', 'b', 'c'], 'a', 'c', 'replace', ['c', 'b', 'a']],
+    ['adds a new session before the target', ['a', 'b'], 'c', 'b', 'before', ['a', 'c', 'b']],
+    ['adds a new session after the target', ['a', 'b'], 'c', 'a', 'after', ['a', 'c', 'b']],
+    ['moves an open pane after the target', ['a', 'b', 'c'], 'a', 'c', 'after', ['b', 'c', 'a']],
+    ['moves an open pane before the target', ['a', 'b', 'c'], 'c', 'a', 'before', ['c', 'a', 'b']],
+    ['moves an open pane in full panes', ['a', 'b', 'c', 'd'], 'd', 'a', 'before', ['d', 'a', 'b', 'c']],
+    ['replaces the target when a new session cannot fit', ['a', 'b', 'c', 'd'], 'e', 'b', 'after', ['a', 'e', 'c', 'd']],
+    ['does nothing when dropped on itself', ['a', 'b'], 'a', 'a', 'replace', ['a', 'b']],
+    ['adds a session when the target is not a pane', ['a'], 'b', 'zzz', 'replace', ['a', 'b']],
+    ['ignores a blank session', ['a'], '', 'a', 'replace', ['a']],
+  ] as const)('a drop %s', (_name, panes, id, target, position, expected) => {
+    expect(placeSplitPane(panes, id, target, position)).toEqual(expected);
+  });
+
+  it.each([
+    [10, true, 'before'],
+    [24, true, 'before'],
+    [50, true, 'replace'],
+    [76, true, 'after'],
+    [99, true, 'after'],
+    [10, false, 'replace'],
+    [90, false, 'replace'],
+  ] as const)('a drop at %s of 100 (room beside: %s) goes %s', (x, canAddBeside, expected) => {
+    expect(splitDropPosition(x, 100, canAddBeside)).toBe(expected);
+  });
+
+  it('a drop on a pane with no width replaces it', () => {
+    expect(splitDropPosition(0, 0, true)).toBe('replace');
   });
 
   it('reads a saved list defensively', () => {
@@ -165,6 +231,107 @@ describe('SplitView', () => {
     render(<SplitView />);
     expect(screen.getByText('Work on several sessions at once')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /Add session/ }).length).toBeGreaterThan(0);
+  });
+});
+
+describe('SplitView drag and drop', () => {
+  it('shows a dropped session in the pane under the pointer', () => {
+    useSplitViewStore.setState({ panes: ['alpha', 'beta'], focusedId: 'alpha' });
+    render(<SplitView />);
+    const panes = screen.getAllByRole('region');
+    const dataTransfer = transfer('gamma');
+    drag('dragOver', panes[1], dataTransfer);
+    expect(within(panes[1]).getByText('Show here')).toBeInTheDocument();
+    drag('drop', panes[1], dataTransfer);
+    expect(useSplitViewStore.getState()).toMatchObject({ panes: ['alpha', 'gamma'], focusedId: 'gamma' });
+    expect(screen.queryByText('Show here')).not.toBeInTheDocument();
+  });
+
+  it('adds a dropped session beside a pane at its edge', () => {
+    useSplitViewStore.setState({ panes: ['alpha', 'beta'], focusedId: 'alpha' });
+    render(<SplitView />);
+    const panes = screen.getAllByRole('region');
+    const dataTransfer = transfer('gamma');
+    drag('dragOver', panes[0], dataTransfer, 90);
+    expect(within(panes[0]).getByText('Add beside')).toBeInTheDocument();
+    drag('drop', panes[0], dataTransfer, 90);
+    expect(useSplitViewStore.getState().panes).toEqual(['alpha', 'gamma', 'beta']);
+  });
+
+  it('replaces a pane at its edge when split view is full', () => {
+    useWorkbenchStore.getState().setWorkbenches('ws1', ['alpha', 'beta', 'gamma', 'delta', 'epsilon'].map((id) => wb(id)));
+    useSplitViewStore.setState({ panes: ['alpha', 'beta', 'gamma', 'delta'], focusedId: 'alpha' });
+    render(<SplitView />);
+    const panes = screen.getAllByRole('region');
+    drag('drop', panes[0], transfer('epsilon'), 5);
+    expect(useSplitViewStore.getState().panes).toEqual(['epsilon', 'beta', 'gamma', 'delta']);
+  });
+
+  it('swaps two panes when one header is dropped on the other pane', () => {
+    useSplitViewStore.setState({ panes: ['alpha', 'beta', 'gamma'], focusedId: 'alpha' });
+    render(<SplitView />);
+    const panes = screen.getAllByRole('region');
+    const header = panes[0].querySelector('[data-attr="split-view-pane-header"]') as HTMLElement;
+    dragOnto(header, panes[2]);
+    expect(useSplitViewStore.getState()).toMatchObject({ panes: ['gamma', 'beta', 'alpha'], focusedId: 'alpha' });
+  });
+
+  it('a pane is not a drop target for its own header', () => {
+    useSplitViewStore.setState({ panes: ['alpha', 'beta'], focusedId: 'alpha' });
+    render(<SplitView />);
+    const pane = screen.getAllByRole('region')[0];
+    const header = pane.querySelector('[data-attr="split-view-pane-header"]') as HTMLElement;
+    const dataTransfer = transfer();
+    fireEvent.dragStart(header, { dataTransfer });
+    drag('dragOver', pane, dataTransfer);
+    expect(pane.querySelector('[data-attr="split-view-drop-target"]')).toBeNull();
+    fireEvent.dragEnd(header, { dataTransfer });
+    expect(useSplitViewStore.getState().panes).toEqual(['alpha', 'beta']);
+  });
+
+  it('ignores a drag that carries no session', () => {
+    useSplitViewStore.setState({ panes: ['alpha'], focusedId: 'alpha' });
+    render(<SplitView />);
+    const pane = screen.getByRole('region');
+    const dataTransfer = transfer();
+    dataTransfer.setData('text/plain', 'beta');
+    drag('dragOver', pane, dataTransfer);
+    expect(pane.querySelector('[data-attr="split-view-drop-target"]')).toBeNull();
+    drag('drop', pane, dataTransfer);
+    expect(useSplitViewStore.getState().panes).toEqual(['alpha']);
+  });
+
+  it('adds a session dropped on the empty split view', () => {
+    render(<SplitView />);
+    const empty = screen.getByText('Work on several sessions at once').closest('[data-attr="split-view-empty"]') as HTMLElement;
+    drag('drop', empty, transfer('beta'));
+    expect(useSplitViewStore.getState()).toMatchObject({ panes: ['beta'], focusedId: 'beta' });
+  });
+
+  it('a sidebar row drags its session onto a pane', async () => {
+    const { SidebarWorkbenchList } = await import('../components/layout/SidebarWorkbenchList');
+    useNavigationStore.setState({ route: { view: 'split' } });
+    useSplitViewStore.setState({ panes: ['alpha'], focusedId: 'alpha' });
+    const all = Object.values(useWorkbenchStore.getState().workbenches);
+    render(
+      <>
+        <SidebarWorkbenchList workbenches={all} />
+        <SplitView />
+      </>,
+    );
+    const row = screen.getAllByText('gamma')[0].closest('[data-attr="sidebar-workbench-row"]') as HTMLElement;
+    expect(row).toHaveAttribute('draggable', 'true');
+    dragOnto(row, screen.getByRole('region'));
+    expect(useSplitViewStore.getState()).toMatchObject({ panes: ['gamma'], focusedId: 'gamma' });
+  });
+
+  it('a sidebar row does not drag when split view is off', async () => {
+    useWorkspaceStore.setState({ features: { workbenches: true, splitView: false } as Features });
+    const { SidebarWorkbenchList } = await import('../components/layout/SidebarWorkbenchList');
+    const all = Object.values(useWorkbenchStore.getState().workbenches);
+    render(<SidebarWorkbenchList workbenches={all} />);
+    const row = screen.getByText('gamma').closest('[data-attr="sidebar-workbench-row"]') as HTMLElement;
+    expect(row).not.toHaveAttribute('draggable');
   });
 });
 

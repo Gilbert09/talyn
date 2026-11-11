@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Archive, ChevronDown, ChevronRight, Plus } from 'lucide-react';
-import { workbenchDisplayName, type SpaceSessionRow, type Workbench, type WorkbenchChat } from '@talyn/shared';
+import { splitViewOffered, workbenchDisplayName, type SpaceSessionRow, type Workbench, type WorkbenchChat } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { sessionPr, sessionState, spaceSessionState } from '../../lib/sessionState';
 import { useBackground } from '../../stores/sessionBackground';
@@ -14,6 +14,7 @@ import { ArchiveWorkbenchDialog, archiveWorkbench } from '../workbench/archiveWo
 import { PrPill, SessionStateIcon } from '../workbench/WorkbenchBadges';
 import { openNewThread } from '../workbench/new/openNewWorkbench';
 import { spacesOffered } from '../../lib/spaces';
+import { sessionDragProps } from '../../lib/splitView';
 import { useSpacesStore } from '../../stores/spaces';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { moveToSpace } from '../spaces/MoveToSpace';
@@ -165,6 +166,7 @@ function ThreadRow({
   const unread = useWorkbenchStore((s) => s.unread);
   const background = useBackground(item.id);
   const spacesOn = useWorkspaceStore((s) => spacesOffered(s.features));
+  const splitOn = useWorkspaceStore((s) => splitViewOffered(s.features));
   const spaceId = thread ? thread.spaceId ?? null : item.row?.spaceId ?? null;
   const own = thread
     ? sessionState(thread, chats ?? [], unread, null, false, background)
@@ -202,6 +204,7 @@ function ThreadRow({
               onClick={onSelect}
               data-attr="sidebar-thread-row"
               aria-current={selected ? 'page' : undefined}
+              {...sessionDragProps(item.id, splitOn)}
               title={`${state.label}\n${name}`}
               className={cn('app-region-no-drag flex min-w-0 flex-1 items-center gap-2 py-1 pl-3 text-left', hasChildren ? 'pr-1' : 'pr-3')}
             >
@@ -285,12 +288,14 @@ function ThreadChildRow({
   const background = useBackground(session.id);
   const state = sessionState(session, chats ?? [], unread, pr, false, background);
   const repo = session.repoFullName.split('/').pop() || session.repoFullName;
+  const splitOn = useWorkspaceStore((s) => splitViewOffered(s.features));
   return (
     <button
       type="button"
       onClick={onSelect}
       data-attr="sidebar-thread-child"
       aria-current={selected ? 'page' : undefined}
+      {...sessionDragProps(session.id, splitOn)}
       title={`${state.label}\n${workbenchDisplayName(session)} · ${session.repoFullName} · ${session.branch}`}
       className={cn(
         'app-region-no-drag flex w-full items-center gap-1.5 rounded-md py-0.5 pl-8 pr-3 text-left text-xs transition-colors',
