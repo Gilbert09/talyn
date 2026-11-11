@@ -15,7 +15,7 @@ export const validRoutes: Href[] = [
   { pathname: '/integrations/[kind]/[id]', params: { kind: 'schedule', id: 'rule-id' } },
   // Settings editors and their browser return links.
   '/settings/sandboxSetup', '/settings/privateRoutes', '/settings/mcp', '/settings/apiTokens', '/settings/apiTokens/new',
-  '/settings/slack', '/settings/integrations', '/settings/skills', '/settings/instructions', '/settings/memory', '/settings/codeReview',
+  '/settings/slack', '/settings/integrations', '/settings/skills', '/settings/instructions', '/settings/memory', '/settings/codeReview', '/settings/whatsNew',
   '/mcp/callback', '/slack/callback', '/posthog/callback',
 ];
 

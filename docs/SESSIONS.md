@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Release notes split between desktop and mobile (2026-11-11)
+
+Mobile changes showed in the desktop and web "What's new" modal. `surfacesForScope` mapped every scope except `desktop` and `web` to both forks, so `feat(mobile)` commits counted as desktop and web.
+- `ReleaseSurface` has a third value, `mobile`. `RELEASE_SURFACES` lists all three, and the backend validates against it.
+- The `mobile` scope maps to `['mobile']` only. Mobile is never a default: other scopes still map to desktop and web.
+- The generator prompt tells the model to keep mobile highlights apart. The model adds `mobile` to a desktop or web change only when the mobile app clearly shows it.
+- Old desktop builds need no change: they filter by `surfaces.includes('desktop')`, so a mobile-only highlight never shows there.
+- The mobile app has Settings → About → What's new (`app/settings/whatsNew.tsx`). It shows only `mobile` highlights, and heads each release by date, because the release version is the desktop build number.
+- **Not covered:** rows published before this change keep their old surfaces. Mobile items in them stay on desktop and web, and are not on mobile.
+
 ## Integrations area and rules (2026-11-11)
 
 Steps 1 to 4 brought connections, rules, and runs into one Integrations area.

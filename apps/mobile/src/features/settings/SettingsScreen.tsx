@@ -91,6 +91,7 @@ export function SettingsScreen() {
       <Group title="About">
         <Row title="Version" trailing={<AppText variant="meta" tone="muted" selectable>{info.build ? `${info.version} (${info.build})` : info.version}</AppText>} />
         <AboutUpdates info={info} />
+        <Row title="What's new" subtitle="Recent changes to the mobile app" chevron href="/settings/whatsNew" />
         <Row title="Open Talyn on the web" chevron onPress={() => openExternal(WEB_APP_URL)} />
         <Row title="Help and documentation" chevron divider={false} onPress={() => openExternal(DOCS_URL)} />
       </Group>
