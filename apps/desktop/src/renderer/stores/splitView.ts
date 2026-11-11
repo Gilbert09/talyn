@@ -1,5 +1,12 @@
 import { create } from 'zustand';
-import { addSplitPane, moveSplitPane, parseSplitPanes, removeSplitPane } from '@talyn/shared';
+import {
+  addSplitPane,
+  moveSplitPane,
+  parseSplitPanes,
+  placeSplitPane,
+  removeSplitPane,
+  type SplitDropPosition,
+} from '@talyn/shared';
 import { trackEvent } from '../lib/analytics';
 
 /**
@@ -18,6 +25,8 @@ interface SplitViewState {
   focusedId: string | null;
   /** Add a session (or keep it where it is) and give it the keyboard. */
   addPane: (id: string, source: string) => void;
+  /** Put a dragged session into the pane `targetId`, or beside it, and give it the keyboard. */
+  placePane: (id: string, targetId: string, position: SplitDropPosition, source: string) => void;
   removePane: (id: string) => void;
   movePane: (id: string, direction: -1 | 1) => void;
   focusPane: (id: string) => void;
@@ -62,6 +71,14 @@ export const useSplitViewStore = create<SplitViewState>((set, get) => ({
   addPane: (id, source) => {
     const before = get().panes;
     const panes = addSplitPane(before, id);
+    if (!before.includes(id)) trackEvent('split_view_pane_added', { workbench_id: id, source, panes: panes.length });
+    set({ panes, focusedId: id });
+  },
+
+  placePane: (id, targetId, position, source) => {
+    const before = get().panes;
+    const panes = placeSplitPane(before, id, targetId, position);
+    if (!panes.includes(id)) return;
     if (!before.includes(id)) trackEvent('split_view_pane_added', { workbench_id: id, source, panes: panes.length });
     set({ panes, focusedId: id });
   },

@@ -1,6 +1,13 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import { AlertTriangle, ChevronLeft, ChevronRight, Columns2, Loader2, Maximize2, Plus, X } from 'lucide-react';
-import { MAX_SPLIT_PANES, splitGridShape, workbenchDisplayName, type Workbench } from '@talyn/shared';
+import {
+  MAX_SPLIT_PANES,
+  splitDropPosition,
+  splitGridShape,
+  workbenchDisplayName,
+  type SplitDropPosition,
+  type Workbench,
+} from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import {
@@ -15,6 +22,7 @@ import { loadWorkbench } from '../../lib/workbenchData';
 import { clientAttentionKey, useAttentionSeen } from '../../lib/contextRail';
 import { sessionPr, sessionState } from '../../lib/sessionState';
 import { loadExtraWorkbench, spacesOffered } from '../../lib/spaces';
+import { carriesSession, draggingSession, droppedSession, sessionDragProps } from '../../lib/splitView';
 import { useWorkbenchBackgroundLoad } from '../../hooks/useSessionBackground';
 import { useNavigationStore } from '../../stores/navigation';
 import { usePullRequestStore } from '../../stores/pullRequests';
@@ -97,6 +105,7 @@ function SplitPane({ id, index, count, focused }: { id: string; index: number; c
   const spacesOn = useWorkspaceStore((s) => spacesOffered(s.features));
   const extraLoad = useSpacesStore((s) => s.extraLoads[id]);
   const focusPane = useSplitViewStore((s) => s.focusPane);
+  const { drop, dropProps } = usePaneDrop(id);
 
   // A teammate's session is not in my list: fetch it, as the session page does.
   useEffect(() => {
@@ -111,17 +120,101 @@ function SplitPane({ id, index, count, focused }: { id: string; index: number; c
       aria-label={workbench ? workbenchDisplayName(workbench) : 'Session'}
       data-attr="split-view-pane"
       data-focused={focused ? 'true' : undefined}
+      {...dropProps}
     >
       {/* Over the pane's own backgrounds, so the focused pane reads at a glance. */}
       {focused && count > 1 && (
         <div aria-hidden className="pointer-events-none absolute inset-0 z-10 ring-1 ring-inset ring-primary/50" />
       )}
+      {drop && <PaneDropOverlay drop={drop} />}
       {workbench ? (
         <SessionPane workbench={workbench} index={index} count={count} focused={focused} />
       ) : (
         <MissingPane id={id} loading={!listLoaded || extraLoad === 'loading'} />
       )}
     </section>
+  );
+}
+
+interface PaneDrop {
+  position: SplitDropPosition;
+  /** The dragged session already has a pane: the drop moves it. */
+  moving: boolean;
+}
+
+/**
+ * Makes a pane a drop target for a session dragged from the sidebar or from
+ * another pane's header. The middle of the pane replaces its session (or swaps
+ * two panes); the outer edges add the session beside it while there is room.
+ */
+function usePaneDrop(id: string) {
+  const panes = useSplitViewStore((s) => s.panes);
+  const placePane = useSplitViewStore((s) => s.placePane);
+  const [drop, setDrop] = useState<PaneDrop | null>(null);
+
+  // A drag that ends anywhere else (or is cancelled) clears the highlight.
+  useEffect(() => {
+    if (!drop) return;
+    const clear = () => setDrop(null);
+    window.addEventListener('dragend', clear);
+    window.addEventListener('drop', clear);
+    return () => {
+      window.removeEventListener('dragend', clear);
+      window.removeEventListener('drop', clear);
+    };
+  }, [drop]);
+
+  const dropFor = (event: DragEvent<HTMLElement>): PaneDrop | null => {
+    if (!carriesSession(event)) return null;
+    const dragged = draggingSession();
+    if (dragged === id) return null;
+    const moving = dragged !== null && panes.includes(dragged);
+    const rect = event.currentTarget.getBoundingClientRect();
+    const position = splitDropPosition(event.clientX - rect.left, rect.width, moving || panes.length < MAX_SPLIT_PANES);
+    return { position, moving };
+  };
+
+  const dropProps = {
+    onDragOver: (event: DragEvent<HTMLElement>) => {
+      const next = dropFor(event);
+      if (!next) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      setDrop((current) => (current?.position === next.position && current.moving === next.moving ? current : next));
+    },
+    onDragLeave: (event: DragEvent<HTMLElement>) => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDrop(null);
+    },
+    onDrop: (event: DragEvent<HTMLElement>) => {
+      const next = dropFor(event);
+      setDrop(null);
+      if (!next) return;
+      event.preventDefault();
+      const dropped = droppedSession(event);
+      if (dropped) placePane(dropped, id, next.position, 'split_view_drag');
+    },
+  };
+
+  return { drop, dropProps };
+}
+
+function PaneDropOverlay({ drop }: { drop: PaneDrop }) {
+  const label =
+    drop.position === 'replace' ? (drop.moving ? 'Swap panes' : 'Show here') : drop.moving ? 'Move here' : 'Add beside';
+  return (
+    <div
+      aria-hidden
+      data-attr="split-view-drop-target"
+      data-position={drop.position}
+      className={cn(
+        'pointer-events-none absolute inset-y-0 z-20 flex items-center justify-center border-2 border-dashed border-primary/60 bg-primary/10 text-xs font-medium text-primary',
+        drop.position === 'replace' && 'inset-x-0',
+        drop.position === 'before' && 'left-0 w-1/2',
+        drop.position === 'after' && 'right-0 w-1/2',
+      )}
+    >
+      <span className="rounded bg-background/90 px-2 py-1 shadow-sm">{label}</span>
+    </div>
   );
 }
 
@@ -201,8 +294,13 @@ function PaneHeader({
 
   return (
     <div
-      className={cn('flex h-9 shrink-0 items-center gap-2 border-b px-2.5', focused ? 'bg-secondary/60' : 'bg-card')}
+      className={cn(
+        'flex h-9 shrink-0 cursor-grab items-center gap-2 border-b px-2.5 active:cursor-grabbing',
+        focused ? 'bg-secondary/60' : 'bg-card',
+      )}
       data-attr="split-view-pane-header"
+      title="Drag onto another pane to move or swap"
+      {...sessionDragProps(workbench.id)}
     >
       <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center" title={state.label}>
         <SessionStateIcon state={state} />
@@ -287,14 +385,39 @@ function MissingPane({ id, loading }: { id: string; loading: boolean }) {
 }
 
 function EmptySplitView() {
+  const addPane = useSplitViewStore((s) => s.addPane);
+  const [over, setOver] = useState(false);
+
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center" data-attr="split-view-empty">
+    <div
+      className={cn(
+        'm-2 flex flex-1 flex-col items-center justify-center gap-3 rounded-md border-2 border-dashed border-transparent px-6 text-center',
+        over && 'border-primary/60 bg-primary/10',
+      )}
+      data-attr="split-view-empty"
+      onDragOver={(event) => {
+        if (!carriesSession(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        setOver(true);
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(false);
+      }}
+      onDrop={(event) => {
+        setOver(false);
+        if (!carriesSession(event)) return;
+        event.preventDefault();
+        const dropped = droppedSession(event);
+        if (dropped) addPane(dropped, 'split_view_drag');
+      }}
+    >
       <Columns2 className="h-8 w-8 text-muted-foreground" aria-hidden />
       <div className="space-y-1">
         <p className="text-sm font-medium">Work on several sessions at once</p>
         <p className="max-w-sm text-xs text-muted-foreground">
           Add up to {MAX_SPLIT_PANES} sessions to read their transcripts side by side and prompt each one from here. You
-          can also right-click a session in the sidebar and choose Open in split view.
+          can also drag a session here from the sidebar, or right-click it and choose Open in split view.
         </p>
       </div>
       <AddSessionMenu variant="outline" />
