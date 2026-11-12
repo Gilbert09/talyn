@@ -113,9 +113,10 @@ export const WORKFLOW_TRIGGER_EVENTS = GITHUB_WORKFLOW_EVENTS;
 /**
  * The Slack events a rule can trigger on.
  *
- * `slack_message` is a new message from a person in a watched channel. Edits,
- * bot messages and Talyn's own messages are dropped before matching, by the
- * Slack source adapter.
+ * `slack_message` is a new message in a watched channel, from a person or from
+ * another app or bot (an alerting app is the usual reason to watch a channel).
+ * Edits and Talyn's own messages are dropped before matching, by the Slack
+ * source adapter.
  */
 export const SLACK_WORKFLOW_EVENTS = ['slack_message'] as const;
 
@@ -332,7 +333,8 @@ export interface WorkflowConditions {
 /**
  * Who may trigger a Slack rule.
  *
- * `any` is the default: anyone who posts in a watched channel. `linked` narrows
+ * `any` is the default: anyone who posts in a watched channel, apps and bots
+ * included. `linked` narrows
  * a rule to Slack users who linked their Slack account to Talyn in that Slack
  * team. The editors do not offer it, but MCP can set it.
  */
@@ -852,7 +854,7 @@ export type WorkflowEventFacts = GithubEventFacts;
  * The facts one Slack message yields.
  *
  * Built by the Slack source adapter from a Slack `message` event. The adapter
- * drops bot messages, edits and Talyn's own messages before this exists, and
+ * drops edits and Talyn's own messages before this exists, and
  * it fills `authorLinked` from `slack_user_links`, because the matcher is pure
  * and cannot read the database.
  */
@@ -863,8 +865,12 @@ export interface SlackEventFacts {
   channelId: string;
   /** Without the `#`. Absent when the adapter could not resolve it. */
   channelName?: string;
-  /** The Slack user who wrote the message. */
+  /**
+   * The Slack user who wrote the message. For an app, its bot user, or its
+   * `B…` bot id when Slack sends no user (a legacy integration or webhook).
+   */
   userId: string;
+  /** The message's words, with an app's blocks and attachments read in. */
   text: string;
   /** The message's own timestamp, which is also its id in the channel. */
   ts: string;
@@ -2045,7 +2051,7 @@ export const SLACK_WORKFLOW_CONDITION_SPECS: readonly SlackWorkflowConditionSpec
   {
     key: 'slackAuthors',
     label: 'Who can trigger it',
-    hint: 'By default, anyone in the channel.',
+    hint: 'By default, anyone in the channel, apps and bots included.',
     input: 'slackAuthors',
     required: false,
   },

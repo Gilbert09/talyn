@@ -36,8 +36,10 @@ describe('release configuration boundaries', () => {
     expect(result.ios?.buildNumber).toBe('42'); expect(result.android?.versionCode).toBe(42);
     expect(result.updates?.enabled).toBe(false);
     expect(result.extra?.release.profile).toBe(profile);
-    expect(result.plugins).toContainEqual(['expo-notifications', { mode: profile === 'development' ? 'development' : 'production', enableBackgroundRemoteNotifications: false,
-      icon: './assets/notification-icon.png', color: '#a94d2e' }]);
+    expect(result.plugins).toContainEqual(['expo-notifications', {
+      mode: profile === 'development' ? 'development' : 'production', enableBackgroundRemoteNotifications: false,
+      icon: './assets/notification-icon.png', color: '#a94d2e',
+    }]);
     expect(result.android?.intentFilters?.[0].data).toContainEqual({ scheme: 'https', host: 'mobile.fixture.dev', pathPrefix: '/sessions/' });
   });
   it.each(['MOBILE_BUILD_NUMBER', 'TALYN_MOBILE_SUPPORT_URL', 'TALYN_MOBILE_PRIVACY_URL', 'TALYN_MOBILE_DELETION_URL'])('blocks a store build without %s', (key) => {
