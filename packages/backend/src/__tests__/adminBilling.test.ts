@@ -161,10 +161,14 @@ describe('POST grant', () => {
     expect(await db.select().from(creditLots)).toHaveLength(0);
   });
 
-  it('refuses a grant to the operator themselves', async () => {
+  it('grants credits to the operator themselves, with an audit row', async () => {
     const res = await grant({ amountUsd: 5, reason: REASON }, 'self');
-    expect(res.status).toBe(403);
-    expect(await db.select().from(creditLots)).toHaveLength(0);
+    expect(res.status).toBe(200);
+    const lots = await db.select().from(creditLots);
+    expect(lots).toHaveLength(1);
+    expect(lots[0]).toMatchObject({ ownerId: TARGET, source: 'grant', totalMicros: 5_000_000 });
+    const [row] = await audit();
+    expect(row).toMatchObject({ action: 'billing.grant_credits', targetId: TARGET, reason: REASON, outcome: 'ok' });
   });
 
   it('404s for an unknown user', async () => {

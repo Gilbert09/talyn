@@ -22,7 +22,7 @@ import { deriveTier } from '../../services/billing/entitlements.js';
 import { creditBalance, grantCreditLot, reverseCreditLot } from '../../services/billing/usage/index.js';
 import { LOT_COLUMNS } from '../../services/billing/usage/credits.js';
 import { PERIOD_COLUMNS } from '../../services/billing/usage/periods.js';
-import { AdminGuardError, adminMutationLimit, adminReason, notSelf, requireReason, withGuards } from './guards.js';
+import { AdminGuardError, adminMutationLimit, adminReason, requireReason, withGuards } from './guards.js';
 
 /**
  * Usage billing on the operator console: read one account's meter, grant
@@ -302,7 +302,8 @@ export function adminBillingRoutes(): Router {
         res.status(404).json({ success: false, error: 'User not found' });
         return;
       }
-      notSelf(req, req.params.id);
+      // No notSelf: an operator may grant credits to their own account. The
+      // audit row records it with its reason, so it is not silent.
 
       const result = await withRemoteAudit(
         auditActor(req),
