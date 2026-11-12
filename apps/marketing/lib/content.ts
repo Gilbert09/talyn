@@ -459,6 +459,7 @@ export const footer = {
       links: [
         { label: "Privacy", href: "/privacy" },
         { label: "Terms", href: "/terms" },
+        { label: "Delete account", href: "/delete-account" },
       ],
     },
   ],
