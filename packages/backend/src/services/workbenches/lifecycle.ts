@@ -12,6 +12,7 @@ import { debugBus } from '../debugBus.js';
 import {
   FleetCapacityError,
   FleetDispatchUncertainError,
+  FleetHttpError,
   FleetRunNotFoundError,
   FleetThrottleError,
   type FleetClient,
@@ -228,6 +229,26 @@ export const NO_FREE_SANDBOX_MESSAGE = 'No sandbox became free in 30 minutes. Re
  * new id. The second form is the fleet's queue pump finding the same loss.
  */
 const QUEUE_LOST_ERRORS = ['lost while queued', 'queued run did not survive'];
+/**
+ * How many new ids a provision tries after a boot that failed. A boot fails
+ * when the host is too busy to stage a box in time, and a create sent again
+ * with the same id only finds the failed record. A field, not a constant, so
+ * tests can change it.
+ */
+export const PROVISION_BOOT_RETRIES = { max: 2 };
+
+/**
+ * Why the fleet's box did not boot, or null when it did not fail that way. Two
+ * shapes: fleetd's own 400 for the create that failed, and the failed record a
+ * later create with the same id gets back.
+ */
+function failedBootReason(created: CreatedWorkbenchSandbox | null, err: unknown): string | null {
+  if (err instanceof FleetHttpError) {
+    return err.status === 400 && err.message.startsWith('sandbox did not boot') ? err.message : null;
+  }
+  if (!created?.ok || created.record.status !== 'failed' || created.record.phase === 'queued') return null;
+  return created.record.error || 'the fleet gave no reason';
+}
 /** The start of the fleet's error on a queued box that reached the fleet's own queue limit. */
 const QUEUE_TIMEOUT_ERROR = 'waited';
 /** The states of a box that has booted. The synchronous create answers `idle`. */
@@ -325,13 +346,47 @@ async function createWaitingForCapacity(
   };
   const superseded = () => new ProvisionSupersededError(`the session moved on from sandbox ${ownSandboxId ?? '(none)'}`);
   const waited = () => (startedAt === null ? 0 : Date.now() - startedAt);
+  /** Nothing runs on the current id: create the box again on the next one, and move the row there. */
+  const moveToNextId = async (action: string, detail: (nextId: string) => string) => {
+    const nextId = nextSandboxId({ id: row.id, sandboxId, settings: row.settings });
+    assertOwned(claim);
+    const moved = await moveProvisionToSandboxId(row.id, ownSandboxId, nextId);
+    if (!moved) throw superseded();
+    recordWorkbenchEvent(moved, action, detail(nextId), false);
+    console.warn(`[workbench] ${row.id}: ${detail(nextId)}`);
+    row = moved;
+    ownSandboxId = nextId;
+    sandboxId = nextId;
+    await emitWorkbenchUpdated(await publicWorkbench(row));
+  };
+  let bootFailures = 0;
 
   try {
   for (let attempt = 0; ;) {
-    let created: CreatedWorkbenchSandbox;
+    let created: CreatedWorkbenchSandbox | null = null;
+    let createError: unknown = null;
     try {
       created = await createWorkbenchSandbox(row, sandboxId, { queueWhenFull: true });
     } catch (err) {
+      createError = err;
+    }
+    const bootFailed = failedBootReason(created, createError);
+    if (bootFailed !== null) {
+      // An answer, not a throw: the row may be on a new id now, and the caller fails the id this returns.
+      if (bootFailures++ >= PROVISION_BOOT_RETRIES.max) {
+        return { created: { ok: false, error: `The sandbox did not start: ${bootFailed}` }, ownSandboxId, waitMs: waited() };
+      }
+      if (isWorkbenchDraining()) return null;
+      assertOwned(claim);
+      // A short pause: the host that failed the boot was busy a moment ago.
+      if (!(await pauseProvision(PROVISION_CAPACITY_WAIT.firstDelayMs, claim))) return null;
+      if (!(await isProvisionOwned(row.id, ownSandboxId))) throw superseded();
+      const failedId = sandboxId;
+      await moveToNextId('sandbox_boot_failed', (nextId) => `sandbox ${failedId} did not boot (${bootFailed}); creating ${nextId}`);
+      continue;
+    }
+    if (createError !== null || created === null) {
+      const err = createError;
       // A 429 waits too: the fleet's per-tenant queue cap (queue_depth) and its
       // rate limit both clear with time, and the same bound applies.
       const throttled = err instanceof FleetThrottleError;
@@ -388,16 +443,8 @@ async function createWaitingForCapacity(
     }
 
     // A fleetd restart lost the queued box. Nothing ran, so create it again on the next id.
-    const nextId = nextSandboxId({ id: row.id, sandboxId, settings: row.settings });
-    assertOwned(claim);
-    const moved = await moveProvisionToSandboxId(row.id, ownSandboxId, nextId);
-    if (!moved) throw superseded();
-    recordWorkbenchEvent(moved, 'sandbox_queue_lost', `the fleet lost queued sandbox ${sandboxId}; creating ${nextId}`, false);
-    console.warn(`[workbench] the fleet lost queued sandbox ${sandboxId} of ${row.id}; creating ${nextId}`);
-    row = moved;
-    ownSandboxId = nextId;
-    sandboxId = nextId;
-    await emitWorkbenchUpdated(await publicWorkbench(row));
+    const lostId = sandboxId;
+    await moveToNextId('sandbox_queue_lost', (nextId) => `the fleet lost queued sandbox ${lostId}; creating ${nextId}`);
   }
   } finally {
     if (noted) await recordBootMetric(row.id, 'capacity_wait_end', { sandboxId, ms: waited() }).catch((err) =>

@@ -2,6 +2,23 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session boots cancelled on a busy host (2026-11-12)
+
+At 12:15 UTC nine posthog/posthog sessions on scaleway-1 ended with "The sandbox was lost. Retry to start a new one." No box was lost. None of them booted.
+
+What happened:
+- Eleven sessions asked for a box within 23 seconds. The same host started a posthog repo layer rebuild at the same time, because `pnpm-lock.yaml` changed. Staging a box usually takes about a second. Here it took 8 to 31 seconds, longer for each box in the queue.
+- A session's create is synchronous in fleetd: the boot runs inside the request, on the request's context (`sandbox_create.go`). Talyn sent it with the 20-second default timeout. When Talyn gave up, fleetd cancelled the boot (`context canceled`).
+- Talyn read the timeout as "unreachable" and sent the create again with the same id. fleetd answers an id it knows with that id's record, here a failed one. Provisioning went on, and the first call to the box answered "not found", which `userFacingError` shows as a lost sandbox.
+
+Two changes:
+- `createSandbox` waits `CREATE_TIMEOUT_MS` (45 s). fleetd allows a boot 30 s (`BootTimeout`, staging included) and the gateway waits 30 s for a host, so the fleet's own answer now arrives before Talyn cancels.
+- `createWaitingForCapacity` treats a failed boot as a reason to try a new id: a failed record that is not queued, or fleetd's 400 `sandbox did not boot`. It pauses `firstDelayMs`, moves the row to the next id (the move the lost-queue path already used, now one helper) and creates again, at most `PROVISION_BOOT_RETRIES.max` (2) times. After that the session fails with "The sandbox did not start: <fleet reason>". The failure is returned, not thrown, because the row is on a new id by then and `failProvision` writes only for the id it is given.
+
+Not done: the YAS side. A layer rebuild and many box stages share the disk with nothing to share it fairly. A lower I/O priority for rebuilds, or a limit on parallel staging, belongs in YAS.
+
+Running these suites locally needs `TMPDIR` set to a writable folder when the shell is sandboxed. The pglite template lives in `os.tmpdir()`, and a blocked write there fails every suite with `ErrnoError 20` before a test runs.
+
 ## Release notes split between desktop and mobile (2026-11-11)
 
 Mobile changes showed in the desktop and web "What's new" modal. `surfacesForScope` mapped every scope except `desktop` and `web` to both forks, so `feat(mobile)` commits counted as desktop and web.
