@@ -40,7 +40,7 @@ export const DOCS_NAV: DocsNavSection[] = [
   },
   {
     title: "Integrations",
-    slugs: ["integrations", "integrations-slack", "integrations-webhook", "workflows", "loops", "slack", "mcp-servers"],
+    slugs: ["integrations", "integrations-slack", "integrations-webhook", "integrations-linear", "integrations-github-issues", "workflows", "loops", "slack", "mcp-servers"],
   },
   {
     title: "Account",

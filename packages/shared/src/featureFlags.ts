@@ -497,6 +497,25 @@ export const FEATURE_FLAGS = {
     releaseScopes: ['webhook-rules', 'inbound'],
   },
 
+  /**
+   * Issue rules: a Linear or GitHub Issues event starts work (a session or a
+   * task), and Talyn writes back to the issue.
+   *
+   * Asked for the caller at the routes and for the workspace OWNER in the
+   * engine and the Linear receiver, because an issue event has no Talyn
+   * caller. Fallback OFF and gated: an issue anybody can file starts work
+   * that bills box-hours, so a PostHog outage must not switch it on for
+   * accounts nobody chose. `ISSUE_RULES_ENABLED=true` turns it on locally.
+   */
+  issueRules: {
+    posthogKey: 'issue-rules',
+    envOverride: 'ISSUE_RULES_ENABLED',
+    fallback: false,
+    description: 'Issue rules — a Linear or GitHub issue starts a session or a task',
+    availability: 'gated',
+    releaseScopes: ['issue-rules', 'linear'],
+  },
+
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */
@@ -627,6 +646,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'splitView',
   'slackChannelRules',
   'webhookRules',
+  'issueRules',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

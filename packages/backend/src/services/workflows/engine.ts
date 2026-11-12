@@ -1,5 +1,13 @@
 import type { WorkflowDefinition, WorkflowFacts } from '@talyn/shared';
-import { isSlackFacts, isWebhookFacts, workflowIntegrationOf, workflowMatches, workflowSubjectOf } from '@talyn/shared';
+import {
+  effectiveWorkflowActions,
+  isIssueFacts,
+  isSlackFacts,
+  isWebhookFacts,
+  workflowIntegrationOf,
+  workflowMatches,
+  workflowSubjectOf,
+} from '@talyn/shared';
 import { debugBus } from '../debugBus.js';
 import { captureWorkspaceEvent } from '../analytics.js';
 import { emitWorkflowRun } from '../websocket.js';
@@ -52,6 +60,7 @@ const REFUSAL_CODES: ReadonlySet<string> = new Set([
   'merge_queue_limit_reached',
   'not_open',
   'repository_unresolved',
+  'issue_already_running',
 ]);
 
 /**
@@ -164,6 +173,7 @@ async function evaluateForWorkspace<
  * The Slack team and channel ids for Slack, never the message text.
  */
 function subjectProps(facts: WorkflowFacts): Record<string, unknown> {
+  if (isIssueFacts(facts)) return { issue_integration: facts.integration, issue_id: facts.externalId };
   if (isWebhookFacts(facts)) return { webhook_connection_id: facts.connectionId };
   if (isSlackFacts(facts)) {
     return { slack_team_id: facts.teamId, slack_channel_id: facts.channelId };
@@ -188,7 +198,7 @@ async function runOne<Input, Target extends WorkflowSourceTarget, Facts extends 
     facts,
     deliveryId: source.deliveryId(input),
   };
-  const capNoun = isWebhookFacts(facts) ? 'webhook' : isSlackFacts(facts) ? 'channel' : 'PR';
+  const capNoun = isIssueFacts(facts) ? 'issue' : isWebhookFacts(facts) ? 'webhook' : isSlackFacts(facts) ? 'channel' : 'PR';
 
   // The rate cap first, so a loop costs one COUNT rather than a round of actions.
   const verdict = await checkRateCap({
@@ -223,8 +233,9 @@ async function runOne<Input, Target extends WorkflowSourceTarget, Facts extends 
   const claim = await claimRun(claimInput);
   if (!claim.claimed) return false;
 
+  // The rule's actions, plus the "Talyn started" comment an issue rule adds.
   const results = await runWorkflowActions(
-    workflow.actions,
+    effectiveWorkflowActions(workflow),
     source.actionContext(target, facts, {
       workspaceId: target.workspaceId,
       ownerId,

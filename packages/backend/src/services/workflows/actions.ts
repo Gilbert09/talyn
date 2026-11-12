@@ -8,6 +8,8 @@ import type {
   GithubEventFacts,
   SlackEventFacts,
   WebhookEventFacts,
+  IssueEventFacts,
+  IssueWorkflowIntegration,
   CodeReviewPreset,
 } from '@talyn/shared';
 import { buildSkillPrompt, renderWorkflowComment, SKILL_MAX_BYTES } from '@talyn/shared';
@@ -29,6 +31,8 @@ import type { PRSummary } from '../githubGraphql.js';
 import { boxRefused, no, ok, type OneResult } from './actionResult.js';
 import { startSession } from './sessionAction.js';
 import { startInboundTask } from './inboundActions.js';
+import { issueComment, issueSetStatus, startIssueTask } from './issueActions.js';
+import { taskLaunchUrl } from '../webApp.js';
 import { slackReact, slackReply } from './slackActions.js';
 
 /**
@@ -86,8 +90,24 @@ export interface WebhookActionContext extends BaseActionContext {
   facts: WebhookEventFacts;
 }
 
+/** Everything an issue rule's action needs. Built by the Linear or GitHub Issues source adapter. */
+export interface IssueActionContext extends BaseActionContext {
+  integration: IssueWorkflowIntegration;
+  /** GitHub Issues: the watched repository the issue is in. Linear: null. */
+  repositoryId: string | null;
+  facts: IssueEventFacts;
+}
+
 /** The context the action runner takes, tagged by integration. */
-export type WorkflowActionContext = GithubActionContext | SlackActionContext | WebhookActionContext;
+export type WorkflowActionContext =
+  | GithubActionContext
+  | SlackActionContext
+  | WebhookActionContext
+  | IssueActionContext;
+
+export function isIssueContext(ctx: WorkflowActionContext): ctx is IssueActionContext {
+  return ctx.integration === 'linear' || ctx.integration === 'github_issues';
+}
 
 export function isGithubContext(ctx: WorkflowActionContext): ctx is GithubActionContext {
   return ctx.integration === undefined || ctx.integration === 'github';
@@ -118,6 +138,8 @@ export interface RunActionsOptions {
    * retry passes the session its first attempt started.
    */
   sessionUrl?: string | null;
+  /** The link of a task this run already started, for `{{task.url}}`. */
+  taskUrl?: string | null;
 }
 
 /**
@@ -178,14 +200,17 @@ export async function runWorkflowActions(
   let workbenchId: string | null = null;
   let boxRetryAtMs = 0;
   // `{{session.url}}` in a later action of the same run.
-  const extras: WorkflowTemplateExtras = { sessionUrl: opts.sessionUrl ?? null };
+  const extras: WorkflowTemplateExtras = { sessionUrl: opts.sessionUrl ?? null, taskUrl: opts.taskUrl ?? null };
 
   for (const action of actions) {
     let outcome: WorkflowActionOutcome;
     try {
-      const result = await runOne(action, ctx, prRow, extras);
+      const result = await runOne(action, ctx, prRow, extras, outcomes[outcomes.length - 1]);
       outcome = result.outcome;
-      if (result.taskId) taskId = result.taskId;
+      if (result.taskId) {
+        taskId = result.taskId;
+        extras.taskUrl = taskLaunchUrl(result.taskId);
+      }
       if (result.pullRequestId) pullRequestId = result.pullRequestId;
       if (result.workbenchId) workbenchId = result.workbenchId;
       if (result.sessionUrl) extras.sessionUrl = result.sessionUrl;
@@ -209,15 +234,25 @@ async function runOne(
   action: WorkflowAction,
   ctx: WorkflowActionContext,
   prRow: PrRowCache | null,
-  extras: WorkflowTemplateExtras
+  extras: WorkflowTemplateExtras,
+  previous: WorkflowActionOutcome | undefined
 ): Promise<OneResult> {
   if (action.type === 'start_session') return startSession(action, ctx, prRow);
   if (action.type === 'start_task') {
+    if (isIssueContext(ctx)) return startIssueTask(action, ctx);
     if (ctx.integration !== 'webhook') {
       // The validator allows this action on inbound rules only.
-      return { outcome: no(action.type, 'error', 'This action is for webhook automations') };
+      return { outcome: no(action.type, 'error', 'This action is for webhook and issue automations') };
     }
     return startInboundTask(action, ctx);
+  }
+  if (action.type === 'issue_comment' || action.type === 'issue_set_status') {
+    if (!isIssueContext(ctx)) {
+      return { outcome: no(action.type, 'error', 'This action acts on an issue, and this automation has none') };
+    }
+    return action.type === 'issue_comment'
+      ? issueComment(action, ctx, extras, previous)
+      : issueSetStatus(action, ctx);
   }
   if (action.type === 'slack_reply' || action.type === 'slack_react') {
     if (ctx.integration !== 'slack') {
@@ -241,7 +276,10 @@ async function runOne(
 }
 
 async function runPrAction(
-  action: Exclude<WorkflowAction, { type: 'start_session' | 'slack_reply' | 'slack_react' | 'start_task' }>,
+  action: Exclude<
+    WorkflowAction,
+    { type: 'start_session' | 'slack_reply' | 'slack_react' | 'start_task' | 'issue_comment' | 'issue_set_status' }
+  >,
   ctx: GithubActionContext,
   prRow: PrRowCache,
   extras: WorkflowTemplateExtras

@@ -1,12 +1,22 @@
 import type { WorkflowAction, WorkflowActionOutcome, WorkflowFacts } from '@talyn/shared';
-import { isGithubFacts, isSlackFacts, isWebhookFacts, workflowSubjectOf } from '@talyn/shared';
+import {
+  effectiveWorkflowActions,
+  isGithubFacts,
+  isIssueFacts,
+  isSlackFacts,
+  isWebhookFacts,
+  ISSUE_MERGE_EVENT,
+  issueMergeActions,
+  workflowSubjectOf,
+} from '@talyn/shared';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { runWithoutScope } from '../../db/client.js';
 import { debugBus } from '../debugBus.js';
 import { githubRateGate } from '../githubRateGate.js';
 import { githubService } from '../github.js';
 import { TickGuard } from '../tickGuard.js';
-import { sessionLaunchUrl } from '../webApp.js';
+import { sessionLaunchUrl, taskLaunchUrl } from '../webApp.js';
+import { linearBlockedUntil } from '../linear/api.js';
 import { workflowsKillSwitchPulled } from '../workflowsAccess.js';
 import { runWorkflowActions, type BaseActionContext, type WorkflowActionContext } from './actions.js';
 import { workflowFactsFromRun } from './facts.js';
@@ -164,10 +174,13 @@ class WorkflowRetrySweep {
     // Still gated: re-park rather than spend an attempt on a call that cannot
     // succeed. The gate may have been extended since this run was scheduled.
     // GitHub's gate only: a Slack or webhook run does not call GitHub.
-    const gateUntil = (): number =>
-      isGithubFacts(runFacts)
-        ? githubRateGate.blockedUntil(githubService.accountKeyFor(run.workspaceId), 'rest')
-        : 0;
+    const gateUntil = (): number => {
+      if (isGithubFacts(runFacts) || (isIssueFacts(runFacts) && runFacts.integration === 'github_issues')) {
+        return githubRateGate.blockedUntil(githubService.accountKeyFor(run.workspaceId), 'rest');
+      }
+      if (isIssueFacts(runFacts) && runFacts.connectionId) return linearBlockedUntil(runFacts.connectionId);
+      return 0;
+    };
     const blockedUntilMs = gateUntil();
     if (blockedUntilMs > Date.now()) {
       await settleRun(run.id, {
@@ -192,10 +205,13 @@ class WorkflowRetrySweep {
 
     // Re-run ONLY what has not already succeeded. A run whose comment posted and
     // whose label was gated must not post the comment twice.
+    // The list the run's outcomes line up with: a merge write-back's own two
+    // actions, or the rule's actions with an issue rule's start comment.
+    const actions = run.event === ISSUE_MERGE_EVENT ? issueMergeActions(workflow) : effectiveWorkflowActions(workflow);
     const pending: Array<{ index: number; action: WorkflowAction }> = [];
     run.actions.forEach((outcome, index) => {
       if (!isRetryable(outcome)) return;
-      const action = workflow.actions[index];
+      const action = actions[index];
       // The workflow may have been edited while the run was parked. An action
       // that has changed shape is not the one that was owed, so it is dropped
       // rather than guessed at.
@@ -216,8 +232,11 @@ class WorkflowRetrySweep {
         workflowName: workflow.name,
         runId: run.id,
       }),
-      // A reply retried after its session started still links that session.
-      { sessionUrl: run.workbenchId ? sessionLaunchUrl(run.workbenchId) : null }
+      // A reply retried after its session or task started still links it.
+      {
+        sessionUrl: run.workbenchId ? sessionLaunchUrl(run.workbenchId) : null,
+        taskUrl: run.taskId ? taskLaunchUrl(run.taskId) : null,
+      }
     );
 
     // Merge back in place: the outcomes array is positional and the history
@@ -286,6 +305,7 @@ function retryContext(
 ): WorkflowActionContext {
   if (isSlackFacts(facts)) return { ...base, integration: 'slack', repositoryId, facts };
   if (isWebhookFacts(facts)) return { ...base, integration: 'webhook', repositoryId: null, facts };
+  if (isIssueFacts(facts)) return { ...base, integration: facts.integration, repositoryId, facts };
   const [owner = '', repo = ''] = facts.repoFullName.split('/');
   return { ...base, repositoryId: repositoryId ?? '', owner, repo, facts };
 }

@@ -107,9 +107,11 @@ const actionFields: Record<(typeof ALL_WORKFLOW_ACTION_TYPES)[number], string> =
   enqueue_merge_queue: 'method?: squash | merge | rebase',
   run_code_review: 'preset?: quick | standard | deep',
   start_session:
-    'repositoryId: string | null (null lets Talyn choose, Slack only; webhook needs one), prompt: string, model?: string, internetAccess?: boolean',
+    'repositoryId: string | null (null lets Talyn choose on Slack, and means the issue repository on github_issues; webhook and linear need one), prompt: string, model?: string, internetAccess?: boolean, issueStartComment?: boolean (issue rules, default true), issueDoneOnMerge?: boolean (issue rules, default true)',
   start_task:
-    'repositoryId: string, prompt: string (the request body is quoted below it as untrusted text; {{payload.<path>}} is quoted the same way), model?: string, internetAccess?: boolean',
+    'repositoryId: string | null (null only on github_issues: the issue repository), prompt: string (the request body or the issue is quoted below it as untrusted text), model?: string, internetAccess?: boolean, issueStartComment?: boolean, issueDoneOnMerge?: boolean',
+  issue_comment: 'body: string (may use {{issue.identifier}}, {{issue.url}}, {{session.url}}, {{task.url}})',
+  issue_set_status: 'status: string (done, a Linear state name, or open / closed on GitHub Issues)',
   slack_reply: 'text: string (may use {{session.url}} and {{message.permalink}})',
   slack_react: 'emoji: string (a name without colons, for example eyes)',
 };
@@ -117,7 +119,7 @@ const actionFields: Record<(typeof ALL_WORKFLOW_ACTION_TYPES)[number], string> =
 export const WORKFLOWS = [
   defineTool(
     'list_workflows',
-    'List automations and run statistics. Pass integration to list one integration only: github, slack or webhook.',
+    'List automations and run statistics. Pass integration to list one integration only: github, slack, webhook, linear or github_issues.',
     { ...workspaceSchema, integration: integrationSchema },
     [],
     { readOnlyHint: true },
@@ -142,7 +144,7 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'create_workflow',
-    'Create an automation with integration (github, slack or webhook), name, events, conditions, and actions. Read talyn_get_workflow_vocabulary for the allowed values of that integration. Slack and webhook automations need their own features. A webhook automation answers with its URL and signing secret ONCE: give them to the user, because Talyn cannot show them again.',
+    'Create an automation with integration (github, slack, webhook, linear or github_issues), name, events, conditions, and actions. Read talyn_get_workflow_vocabulary for the allowed values of that integration. Slack, webhook and issue (linear, github_issues) automations need their own features. A webhook automation answers with its URL and signing secret ONCE: give them to the user, because Talyn cannot show them again.',
     { ...workspaceSchema, workflow: workflowSchema },
     ['workflow'],
     { openWorldHint: true },
@@ -173,7 +175,7 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'get_workflow_vocabulary',
-    'Get the events, conditions, and actions of one integration (github, slack or webhook, default github). For github, pass repos to fetch their GitHub labels and users.',
+    'Get the events, conditions, and actions of one integration (github, slack, webhook, linear or github_issues, default github). For github, pass repos to fetch their GitHub labels and users.',
     { ...workspaceSchema, integration: integrationSchema, repos: { type: 'array', items: textSchema } },
     [],
     { readOnlyHint: true, openWorldHint: true },
@@ -197,6 +199,16 @@ export const WORKFLOWS = [
           ...lines,
           'payloadMatches (optional): [{path: string, op: equals | contains | exists, value?: string}]. path is a dot path with indexes, like issue.labels[0].name. Every test must pass.',
           'The automation gets its own URL when it is created. Use talyn_list_repositories to find repository ids.',
+        ].join('\n');
+      }
+      if (integration === 'linear' || integration === 'github_issues') {
+        return [
+          ...lines,
+          'issueAssignee (optional): {kind: talyn (linear only) | me (github_issues only) | unassigned | people, people?: string[]}',
+          ...(integration === 'linear'
+            ? ['connectionId is required: the Linear connection id. The Linear page in Talyn lists connections.']
+            : ['repos (optional): owner/repo names. Without it, every repository the workspace watches.']),
+          'An issue automation can have one start action (start_session or start_task). By default Talyn comments on the issue when it starts and, when the pull request merges, comments and moves the issue to done. Set issueStartComment: false or issueDoneOnMerge: false on the start action to turn either off.',
         ].join('\n');
       }
       if (integration === 'slack') {

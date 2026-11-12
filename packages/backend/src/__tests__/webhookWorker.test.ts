@@ -58,7 +58,7 @@ describe('webhook classification helpers', () => {
   });
 
   it('bounds repository events, including the access checks for incremental updates', () => {
-    for (const e of ['pull_request', 'pull_request_review', 'pull_request_review_comment', 'issue_comment', 'check_run', 'check_suite']) {
+    for (const e of ['issues', 'pull_request', 'pull_request_review', 'pull_request_review_comment', 'issue_comment', 'check_run', 'check_suite']) {
       expect(isSlowEvent(e)).toBe(true);
     }
     for (const e of ['push', 'installation', 'status']) {

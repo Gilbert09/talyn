@@ -57,7 +57,7 @@ interface WebhookEventFacts { integration: 'webhook'; event: 'webhook_received';
 
 ## Per adapter
 
-- **Linear**: OAuth app (scopes `read, write, issues:create, comments:create`, `actor=app`); webhooks created per org through the API at connect time with a Talyn secret. Events: `Issue` create and update, `Comment` create. Write-back: GraphQL `commentCreate`, `issueUpdate(stateId)`.
+- **Linear**: OAuth app (scopes `read, write, issues:create, comments:create, app:assignable`, `actor=app`, PKCE); one app-level webhook for every organization, signed with `LINEAR_WEBHOOK_SECRET`. Events: `Issue` create and update, `Comment` create. Write-back: GraphQL `commentCreate`, `issueUpdate(stateId)`.
 - **GitHub Issues**: no new auth or route. The App already delivers `issues` and `issue_comment` through `processWebhookDelivery`. `sources/githubIssues.ts` maps them to `IssueEventFacts`. Write-back with the installation token. Own catalog card.
 - **Sentry**: integration-platform app (webhook URL, `issue` and alert-rule resources, `event:read issue:write`). Events: issue created, regressed, alert fired. Write-back: comment, status.
 - **PostHog errors**: new kind `posthog_errors`, personal API key with `error_tracking:write`. Trigger by alert destination; the page shows the URL and body template.
@@ -73,10 +73,10 @@ interface WebhookEventFacts { integration: 'webhook'; event: 'webhook_received';
 ## Phases
 
 1. Shared layer and generic webhook (`webhookRules`), plus `start_task`. **Done 2026-11-12** (migration `0131`). See the note in `docs/SESSIONS.md`.
-2. Linear and GitHub Issues (`issueRules`), with `external_issue_links`, write-back and merge transitions.
+2. Linear and GitHub Issues (`issueRules`), with `external_issue_links`, write-back and merge transitions. **Done 2026-11-12** (migration `0132`). See the note in `docs/SESSIONS.md`. Linear uses one app-level webhook (`/webhooks/in/linear`), not a webhook per organization made at connect time.
 3. Sentry and PostHog errors (`errorRules`).
 4. Jira.
 
 ## Setup Tom does
 
-- Linear OAuth app (redirect `/integrations/linear/callback`), Sentry integration-platform app, later a Jira app. Each client id and secret is an env var.
+- Linear OAuth app (redirect `/api/v1/linear/oauth/callback`, app webhook `/api/v1/webhooks/in/linear`; see `docs/SETUP.md`), Sentry integration-platform app, later a Jira app. Each client id and secret is an env var.

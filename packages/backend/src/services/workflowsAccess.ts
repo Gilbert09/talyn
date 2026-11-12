@@ -116,3 +116,19 @@ export async function workspaceMayUseWebhookRules(workspaceId: string): Promise<
 export async function userMayUseWebhookRules(subject: FlagSubject): Promise<boolean> {
   return (await evaluateFlag('webhookRules', subject)).enabled;
 }
+
+/**
+ * Whether this workspace's owner may use issue rules (Linear, GitHub Issues).
+ *
+ * Asked IN ADDITION to {@link workspaceMayUseWorkflows} by the engine, and on
+ * its own by the Linear receiver. Keyed on the owner: an issue event has no
+ * Talyn caller.
+ */
+export async function workspaceMayUseIssueRules(workspaceId: string): Promise<boolean> {
+  return (await workspaceHasFeature('issueRules', workspaceId)).enabled;
+}
+
+/** Whether this signed-in user may use issue rules. The owner routes ask this. */
+export async function userMayUseIssueRules(subject: FlagSubject): Promise<boolean> {
+  return (await evaluateFlag('issueRules', subject)).enabled;
+}

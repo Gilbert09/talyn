@@ -15,6 +15,7 @@ import {
   emptyWorkflowAction,
   emptyWorkflowConditionValue,
   emptyWorkflowInput,
+  isIssueWorkflowIntegration,
   pruneWorkflowConditions,
   WORKFLOW_ACTION_LABELS,
   WORKFLOW_CONDITION_SPECS,
@@ -33,6 +34,7 @@ import { DropdownButton, EditorRow, Section, WorkflowEnabledButton, WorkflowName
 import { GithubActionInput, GithubConditionInput } from './githubFields';
 import { SlackActionInput, SlackConditions, SlackReplyNotice, StartSessionInput, useSlackRuleSettings } from './slackFields';
 import { WebhookPayloadConditions, WebhookUrlSection, withoutEmptyPayloadTests } from './webhookFields';
+import { IssueActionInput, IssueConditions, IssueWriteBackFields, pruneIssueConditions, useLinearRuleData } from './issueFields';
 
 /**
  * The workflow editor, as a page.
@@ -86,24 +88,32 @@ const ACTION_HINTS: Record<WorkflowActionType, string> = {
   slack_reply: 'Replies in the thread of the Slack message.',
   slack_react: 'Adds a reaction to the Slack message.',
   start_task: 'Starts a cloud task on the repository with this prompt.',
+  issue_comment: 'Talyn posts this comment on the issue.',
+  issue_set_status: 'Talyn moves the issue to this status.',
 };
 
 const BACK_LABELS: Record<WorkflowIntegration, string> = {
   github: 'Automations',
   slack: 'Slack automations',
   webhook: 'Webhook automations',
+  linear: 'Linear automations',
+  github_issues: 'GitHub Issues automations',
 };
 
 const TRIGGER_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
   github: 'Any one of these events on a pull request in the repositories this workspace watches.',
   slack: 'When a message appears in a selected channel.',
   webhook: 'When a request arrives at the URL of this automation.',
+  linear: 'Any one of these events on an issue in the Linear workspace you pick below.',
+  github_issues: 'Any one of these events on an issue in the repositories this workspace watches.',
 };
 
 const NO_ACTIONS: Record<WorkflowIntegration, string> = {
   github: 'Nothing yet. Add at least one action — labelling, asking for a review, commenting, running a skill, or sending the PR to the merge queue.',
   slack: 'Add an action for matching messages.',
   webhook: 'Add an action. It can start a session or a task.',
+  linear: 'Add an action. It can start a session or a task, comment on the issue, or change its status.',
+  github_issues: 'Add an action. It can start a session or a task, comment on the issue, or change its status.',
 };
 
 export function WorkflowEditorPage({
@@ -114,9 +124,14 @@ export function WorkflowEditorPage({
   onCancel,
   onSave,
 }: Props) {
-  const [input, setInput] = useState<WorkflowInput>(() =>
-    editing ? workflowToInput(editing) : emptyWorkflowInput(integration)
-  );
+  const [input, setInput] = useState<WorkflowInput>(() => {
+    if (editing) return workflowToInput(editing);
+    const blank = emptyWorkflowInput(integration);
+    // An issue rule starts a session by default.
+    return isIssueWorkflowIntegration(integration)
+      ? { ...blank, actions: [emptyWorkflowAction('start_session')] }
+      : blank;
+  });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -136,6 +151,8 @@ export function WorkflowEditorPage({
   const conditions = input.conditions ?? {};
   const slackSettings = useSlackRuleSettings(conditions.slackTeamId, kind === 'slack');
   const canReply = slackSettings.install?.canReply !== false;
+  const linear = useLinearRuleData(conditions.connectionId, kind === 'linear');
+  const hasStartAction = input.actions.some((a) => a.type === 'start_session' || a.type === 'start_task');
   // Empty payload tests are dropped, not refused: an added row that was never filled in means nothing.
   const prepared = useMemo(() => (kind === 'webhook' ? withoutEmptyPayloadTests(input) : input), [kind, input]);
   const problem = useMemo(() => workflowInputProblem(prepared), [prepared]);
@@ -185,7 +202,10 @@ export function WorkflowEditorPage({
       // Pruning here is what stops the save 400ing about a condition whose
       // trigger is no longer selected — and the condition row disappears with it,
       // so the page never shows a rule that cannot apply.
-      return { ...p, events, conditions: kind === 'github' ? pruneWorkflowConditions(p.conditions ?? {}, events) : p.conditions };
+      const pruned = kind === 'github'
+        ? pruneWorkflowConditions(p.conditions ?? {}, events)
+        : isIssueWorkflowIntegration(kind) ? pruneIssueConditions(kind, p.conditions ?? {}, events) : p.conditions;
+      return { ...p, events, conditions: pruned };
     });
 
   const save = async () => {
@@ -324,6 +344,18 @@ export function WorkflowEditorPage({
             <Section title="Only if" description={WEBHOOK_WORKFLOW_CONDITION_SPECS[0]!.hint}>
               <WebhookPayloadConditions conditions={conditions} onChange={setConditions} />
             </Section>
+          ) : isIssueWorkflowIntegration(kind) ? (
+            <Section title="Only if" description="Every condition has to hold.">
+              <IssueConditions
+                integration={kind}
+                conditions={conditions}
+                events={input.events}
+                setConditions={setConditions}
+                linear={linear}
+                suggestions={suggestions}
+                onNeedSuggestions={needSuggestions}
+              />
+            </Section>
           ) : (
           <Section
             title="Only if"
@@ -395,7 +427,8 @@ export function WorkflowEditorPage({
                   value: t,
                   label: WORKFLOW_ACTION_LABELS[t],
                   hint: ACTION_HINTS[t],
-                  disabled: t === 'slack_reply' && !canReply,
+                  disabled: (t === 'slack_reply' && !canReply)
+                    || (isIssueWorkflowIntegration(kind) && hasStartAction && (t === 'start_session' || t === 'start_task')),
                 }))}
                 onPick={(type) =>
                   setInput((p) => ({
@@ -422,7 +455,16 @@ export function WorkflowEditorPage({
                   }
                 >
                   {action.type === 'start_session' || action.type === 'start_task' ? (
-                    <StartSessionInput action={action} integration={kind} onChange={(next) => setInput((p) => ({ ...p, actions: p.actions.map((a, j) => j === i ? next : a) }))} />
+                    <div className="space-y-3">
+                      <StartSessionInput action={action} integration={kind} onChange={(next) => setInput((p) => ({ ...p, actions: p.actions.map((a, j) => j === i ? next : a) }))} />
+                      {isIssueWorkflowIntegration(kind) && (
+                        <IssueWriteBackFields action={action} integration={kind} onChange={(next) => setInput((p) => ({ ...p, actions: p.actions.map((a, j) => j === i ? next : a) }))} />
+                      )}
+                    </div>
+                  ) : action.type === 'issue_comment' || action.type === 'issue_set_status' ? (
+                    isIssueWorkflowIntegration(kind) && (
+                      <IssueActionInput action={action} integration={kind} linear={linear} onChange={(next) => setInput((p) => ({ ...p, actions: p.actions.map((a, j) => j === i ? next : a) }))} />
+                    )
                   ) : action.type === 'slack_reply' || action.type === 'slack_react' ? (
                     <SlackActionInput action={action} onChange={(next) => setInput((p) => ({ ...p, actions: p.actions.map((a, j) => j === i ? next : a) }))} />
                   ) : (

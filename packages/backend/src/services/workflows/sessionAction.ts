@@ -34,13 +34,17 @@ import { userFacingError, WorkbenchError } from '../workbenches/errors.js';
 import { liveWorkbenchForPr } from '../workbenches/prSessions.js';
 import type { ReadinessUser } from '../workbenches/readiness.js';
 import { boxRefused, no, ok, type OneResult } from './actionResult.js';
-import type {
-  GithubActionContext,
-  SlackActionContext,
-  WebhookActionContext,
-  WorkflowActionContext,
+import {
+  isGithubContext,
+  isIssueContext,
+  type GithubActionContext,
+  type IssueActionContext,
+  type SlackActionContext,
+  type WebhookActionContext,
+  type WorkflowActionContext,
 } from './actions.js';
 import { inboundRulePrompt, repositoryName } from './inboundActions.js';
+import { claimIssueForStart, finishIssueStart, issueRepository, issueRulePrompt, noRepository } from './issueActions.js';
 
 /**
  * The `start_session` action: a rule starts a session, as the workspace owner.
@@ -68,7 +72,8 @@ export async function startSession(
 ): Promise<OneResult> {
   if (ctx.integration === 'slack') return startSlackSession(action, ctx);
   if (ctx.integration === 'webhook') return startWebhookSession(action, ctx);
-  if (!prRow) return { outcome: no('start_session', 'error', 'A GitHub automation ran without its pull request.') };
+  if (isIssueContext(ctx)) return startIssueSession(action, ctx);
+  if (!isGithubContext(ctx) || !prRow) return { outcome: no('start_session', 'error', 'A GitHub automation ran without its pull request.') };
   return startGithubSession(action, ctx, prRow);
 }
 
@@ -221,6 +226,30 @@ async function startWebhookSession(action: StartSessionAction, ctx: WebhookActio
   });
   if (!created.ok) return created.result;
   return started(created.workbenchId);
+}
+
+// ---- Issues ---------------------------------------------------------------
+
+/**
+ * From a Linear or GitHub issue. On the rule's repository, or the issue's own
+ * on GitHub Issues. The issue is claimed BEFORE the create, so a second event
+ * on it cannot start a second session; the session is attached to the claim
+ * after, so the merge write-back can find it.
+ */
+async function startIssueSession(action: StartSessionAction, ctx: IssueActionContext): Promise<OneResult> {
+  const repo = await issueRepository(action, ctx);
+  if (!repo) return noRepository('start_session');
+  const claim = await claimIssueForStart('start_session', ctx);
+  if (!claim.ok) return claim.result;
+  const created = await createRuleSession(action, ctx, {
+    repositoryId: repo.id,
+    prompt: await issueRulePrompt(action.prompt, ctx, repo.name),
+    namingText: [ctx.facts.identifier, ctx.facts.title, action.prompt].filter(Boolean).join(' '),
+    source: { kind: 'workflow', workflowId: ctx.workflowId, runId: ctx.runId, integration: ctx.integration },
+  });
+  const result = created.ok ? started(created.workbenchId) : created.result;
+  await finishIssueStart(claim.link, result);
+  return result;
 }
 
 // ---- Slack ----------------------------------------------------------------

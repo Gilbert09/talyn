@@ -84,6 +84,9 @@ import type {
   CreatedWorkflow,
   WebhookConnectionSummary,
   WebhookSecretReveal,
+  LinearAuthorizeResponse,
+  LinearEditorOptions,
+  LinearStatus,
   InboundDelivery,
   InboundDeliverySummary,
   Workspace,
@@ -2217,6 +2220,36 @@ export const slack = {
 };
 
 // ============================================================================
+// Linear — the issue tracker integration. Behind `features.issueRules`; every
+// route answers 404 `code: 'issue_rules_unavailable'` when the flag is off,
+// and `connect` 503s `code: 'linear_not_configured'` with no Linear app.
+// ============================================================================
+
+export const linear = {
+  /** The workspace's Linear connections, and whether this deployment has a Linear app. */
+  getStatus: (workspaceId: string) =>
+    request<LinearStatus>('GET', `/linear?workspaceId=${encodeURIComponent(workspaceId)}`),
+  /**
+   * Start connecting a Linear workspace. Open `authorizeUrl` in a browser;
+   * re-read `getStatus` after. `returnTo` is the mobile app's return base.
+   */
+  connect: (input: { workspaceId: string; returnTo?: string }) =>
+    request<LinearAuthorizeResponse>('POST', '/linear/connect', input),
+  /** Disconnect. Talyn revokes its token, and the workspace's Linear rules stop matching. */
+  disconnect: (workspaceId: string, connectionId: string) =>
+    request<void>(
+      'DELETE',
+      `/linear/connections/${encodeURIComponent(connectionId)}?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+  /** Teams, labels, states and projects, for the rule editor. `partial` when Linear could not be read. */
+  options: (workspaceId: string, connectionId: string) =>
+    request<LinearEditorOptions>(
+      'GET',
+      `/linear/connections/${encodeURIComponent(connectionId)}/options?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+};
+
+// ============================================================================
 // Features (allow-listed capabilities)
 // ============================================================================
 
@@ -2897,6 +2930,7 @@ export const api = {
   pullRequests,
   trunk,
   slack,
+  linear,
   skills,
   mcpTokens,
   apiTokens,

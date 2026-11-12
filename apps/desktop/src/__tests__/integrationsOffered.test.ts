@@ -8,6 +8,8 @@ describe('integrationsOffered', () => {
     ['schedule on', { loops: true }, ['github', 'schedule', 'posthog']],
     ['private routes on', { privateRoutes: true }, ['github', 'tailscale', 'posthog']],
     ['Trunk on', { trunkMergeEta: true }, ['github', 'posthog', 'trunk']],
+    ['issue rules on', { workflows: true, issueRules: true }, ['github', 'github_issues', 'linear', 'posthog']],
+    ['issue rules need workflows', { workflows: false, issueRules: true }, ['github', 'posthog']],
     [
       'everything on',
       { workbenches: true, loops: true, privateRoutes: true, trunkMergeEta: true },
@@ -26,6 +28,10 @@ describe('integrationRulesOffered', () => {
     ['Schedule rules with the loops flag', 'schedule', { loops: true }, true],
     ['Slack has no rules yet', 'slack', { workbenches: true, workflows: true }, false],
     ['nothing while loading', 'github', null, false],
+    ['Linear rules need the issue rules flag', 'linear', { workflows: true }, false],
+    ['Linear rules with the issue rules flag', 'linear', { workflows: true, issueRules: true }, true],
+    ['GitHub Issues rules with the issue rules flag', 'github_issues', { workflows: true, issueRules: true }, true],
+    ['GitHub Issues rules need workflows', 'github_issues', { workflows: false, issueRules: true }, false],
   ])('%s', (_label, kind, features, expected) => {
     expect(integrationRulesOffered(features, kind)).toBe(expected);
   });

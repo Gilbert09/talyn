@@ -69,6 +69,12 @@ export function sessionLaunchUrl(sessionId: string): string {
   return webAppUrl(path) ?? new URL(path, HOSTED_WEB_APP_URL).toString();
 }
 
+/** A public task link, for an issue rule's "Talyn started" comment. */
+export function taskLaunchUrl(taskId: string): string {
+  const path = `/open/task/${encodeURIComponent(taskId)}`;
+  return webAppUrl(path) ?? new URL(path, HOSTED_WEB_APP_URL).toString();
+}
+
 /** Tests: drop the memoised value between cases. */
 export function resetWebAppUrlCacheForTests(): void {
   cached = undefined;

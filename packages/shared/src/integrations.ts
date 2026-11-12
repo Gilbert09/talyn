@@ -1,15 +1,26 @@
 import { loopsOffered } from './loops.js';
 import { privateRoutesOffered } from './privateRoutes.js';
-import { webhookRulesOffered, workflowsOffered } from './workflows.js';
+import { issueRulesOffered, webhookRulesOffered, workflowsOffered } from './workflows.js';
 
 /**
  * The Integrations area: one page per integration, each holding its
  * connection and its rules. Every front end draws the catalog from here.
  */
-export type IntegrationKind = 'github' | 'slack' | 'webhook' | 'schedule' | 'tailscale' | 'posthog' | 'trunk';
+export type IntegrationKind =
+  | 'github'
+  | 'github_issues'
+  | 'linear'
+  | 'slack'
+  | 'webhook'
+  | 'schedule'
+  | 'tailscale'
+  | 'posthog'
+  | 'trunk';
 
 export const INTEGRATION_KINDS: readonly IntegrationKind[] = [
   'github',
+  'github_issues',
+  'linear',
   'slack',
   'webhook',
   'schedule',
@@ -25,6 +36,7 @@ export type IntegrationGate =
   | 'privateRoutes'
   | 'trunkMergeEta'
   | 'webhookRules'
+  | 'issueRules'
   | null;
 
 export interface IntegrationInfo {
@@ -32,7 +44,7 @@ export interface IntegrationInfo {
   name: string;
   description: string;
   /** A key each client maps to its own icon. */
-  icon: 'github' | 'slack' | 'webhook' | 'clock' | 'network' | 'posthog' | 'trunk';
+  icon: 'github' | 'slack' | 'webhook' | 'clock' | 'network' | 'posthog' | 'trunk' | 'linear' | 'issues';
   /** True when the integration has rules (triggers that start work). */
   hasRules: boolean;
   /** True when there is nothing to connect: the integration is always on. */
@@ -49,6 +61,25 @@ export const INTEGRATION_CATALOG: Record<IntegrationKind, IntegrationInfo> = {
     hasRules: true,
     builtIn: false,
     gate: null,
+  },
+  github_issues: {
+    kind: 'github_issues',
+    name: 'GitHub Issues',
+    description: 'An automation watches GitHub issues and starts a session or a task. Talyn comments on the issue and closes it when the fix merges.',
+    icon: 'issues',
+    hasRules: true,
+    // It uses the GitHub App connection. There is nothing else to connect.
+    builtIn: true,
+    gate: 'issueRules',
+  },
+  linear: {
+    kind: 'linear',
+    name: 'Linear',
+    description: 'An automation watches Linear issues and starts a session or a task. Talyn comments on the issue and moves it to done when the fix merges.',
+    icon: 'linear',
+    hasRules: true,
+    builtIn: false,
+    gate: 'issueRules',
   },
   slack: {
     kind: 'slack',
@@ -119,6 +150,7 @@ type OfferedFeatures =
       trunkMergeEta?: boolean;
       workflows?: boolean;
       webhookRules?: boolean;
+      issueRules?: boolean;
     }
   | null
   | undefined;
@@ -136,6 +168,9 @@ export function integrationOffered(features: OfferedFeatures, kind: IntegrationK
       return features.trunkMergeEta === true;
     case 'webhook':
       return webhookRulesOffered(features);
+    case 'linear':
+    case 'github_issues':
+      return issueRulesOffered(features);
     default:
       return true;
   }
@@ -151,5 +186,6 @@ export function integrationRulesOffered(features: OfferedFeatures, kind: Integra
   if (!INTEGRATION_CATALOG[kind].hasRules || !integrationOffered(features, kind)) return false;
   if (kind === 'github') return workflowsOffered(features);
   if (kind === 'webhook') return webhookRulesOffered(features);
+  if (kind === 'linear' || kind === 'github_issues') return issueRulesOffered(features);
   return true;
 }

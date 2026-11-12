@@ -2,6 +2,40 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Issue rules: Linear and GitHub Issues, phase 2 (2026-11-12)
+
+Phase 2 of `docs/INBOUND_INTEGRATIONS.md`. A Linear or GitHub issue event starts a session (the default) or a task, and Talyn writes back to the issue. It is behind the `issueRules` flag (`issue-rules`, break glass `ISSUE_RULES_ENABLED`, fallback OFF, gated). The routes ask the caller; the engine and the Linear receiver ask the workspace owner. Migration `0132` (`external_issue_links`, `inbound_oauth_states`).
+
+Vocabulary (`packages/shared/src/workflows.ts`):
+- Two integrations, `linear` and `github_issues`, share `IssueEventFacts` and the events `issue_created | issue_labeled | issue_assigned | issue_status_changed | issue_commented | issue_updated`. The rate cap subject is `issue:<integration>:<externalId>`.
+- Conditions: `connectionId` (Linear, required), `repos` (GitHub Issues), `teams`, `projects`, `statuses`, `priorities`, the label lists, `labelName`, `issueAssignee` (`talyn` on Linear, `me` on GitHub, `unassigned`, `people`), `issueAuthors`, `titleContains`, `bodyContains` (the description, or the new comment). A Linear comment's payload has no issue, so the adapter reads the issue from Linear and marks the gaps `unknownFields` when it cannot.
+- Actions: `start_session`, `start_task` (`repositoryId: null` means the issue's own repository on GitHub Issues only), `issue_comment`, `issue_set_status` (`done` = Linear's first `completed` state by position, or GitHub "closed as completed"). One start action per rule. The start action carries `issueStartComment` and `issueDoneOnMerge`, both default on, only `false` stored.
+- `effectiveWorkflowActions` adds an `issue_comment { afterStart }` after the start action. The engine and the retry sweep both run that list, so outcomes stay positional. When the start did not happen, the comment takes the start's code, so a parked start retries both.
+
+Links (`services/inbound/issueLinks.ts`):
+- The start action claims the issue before the dispatch; the partial UNIQUE on active rows refuses a second start with `issue_already_running` (a refusal code). The run's own claim counts as its own, so a parked retry reuses it.
+- "Ended without a merge" is decided lazily, when the next event arrives (`linkIsLive`), from the task, the session and their pull request rows. A terminal task with no pull request, a session archived or deleted with no open pull request, a closed pull request, or a claim with no work whose run is not `pending_retry` and is older than 10 minutes, releases the issue. No archive or failure path has to remember the link.
+- `inbound/onMerge.ts` listens to `pr:snapshot`. A merged or closed pull request finds active links by `pull_request_id` on the link, the task or the session (structured ids only). Merged: CAS the link to `done`, then a workflow run claimed on `(workflow_id, 'merge:<link>')` with event `issue_pr_merged` runs `issueMergeActions` (comment with the PR link, then done unless turned off). Closed: the link is `failed`. The retry sweep reads `issueMergeActions` for a run with that event.
+
+Write-back (`services/workflows/issueActions.ts`) runs in the backend with the GitHub App token or the Linear app token. A vendor rate limit is `rate_gated`; Linear's is remembered per connection (`linearBlockedUntil`), so the next write-back on that connection waits too. Self-echo: the Talyn App bot on GitHub, Linear's app user id (`viewer.id`, stored at connect), and `our_comment_ids` on any link of the issue.
+
+GitHub Issues: `sources/githubIssues.ts`, called from `processWebhookDelivery` beside the PR rules, above the refresh gate. `issues` moved to the slow lane, because its rules call GitHub. An `issue_comment` on a pull request is ignored there.
+
+Linear:
+- OAuth app with `actor=app`, PKCE S256, `prompt=consent`, scopes `read,write,issues:create,comments:create,app:assignable` (`app:assignable` is documented for agents: assigning an issue to the app sets its `delegate`, which the adapter reads). Tokens last 24 h and the refresh token rotates; the refresh is advisory-locked per connection and re-reads inside the lock, as in `mcpServers/oauth.ts`. `invalid_grant` records `reauthRequiredAt`.
+- One app-level webhook, `POST /api/v1/webhooks/in/linear`. The receiver gained vendor routes (`InboundVendorRoute`): verify with the app secret before any database read, handle app messages (the `OAuthApp` `revoked` event marks the connection), then store one delivery per connection of that organization. An unknown organization answers 200 and is dropped, because Linear disables a webhook that keeps failing. `webhookTimestamp` must be within 60 s either way.
+- Routes `routes/linear.ts`: status, connect (`returnTo` for mobile), disconnect (revokes), editor options (60 s cache), and the public callback. A Linear rule save checks the connection is the workspace's (`linear_connection_unavailable`).
+
+Prompt: `buildInboundPrompt` gained text `fields` and an `issue` body label. The issue title, description and up to 10 newest comments are quoted in the fence. `{{issue.identifier}}`, `{{issue.url}}` and `{{issue.title}}` render inline only when they pass the identifier check.
+
+Clients: Linear and GitHub Issues catalog cards (GitHub Issues only when GitHub is connected), the Linear connection section with "Also connect as an MCP server" (the existing MCP flow; a separate grant), and the issue rule editor in web and desktop. Mobile has the cards, the Linear status screen with native connect, and the rules list. Task links are `/open/task/:id`.
+
+Not done or assumed:
+- Linear's Issue webhook payload is not documented field by field. The adapter reads `labelIds`, `labels`, `assigneeId`, `delegateId`, `stateId`, `state`, `team`, `project`, `priorityLabel` and `updatedFrom` defensively; a field that is absent fails its condition.
+- The `OAuthApp` revoked payload is documented only as fields (`oauthClientId`, `organizationId`). The handler reads `type: 'OAuthApp'` and `action: 'revoked'`.
+- Write-back is not shown on the issue link anywhere in the UI. The run history shows it.
+- An issue's work stays "running" while its session stays unarchived, even when nobody uses it.
+
 ## Webhook rules: inbound layer, phase 1 (2026-11-12)
 
 Phase 1 of `docs/INBOUND_INTEGRATIONS.md`. A rule of the new Webhooks integration gets its own URL, and a request to it starts a session (the default) or a task. It is behind the `webhookRules` flag (`webhook-rules`, break glass `WEBHOOK_RULES_ENABLED`, fallback OFF, gated). The routes ask the caller; the receiver and the engine ask the workspace owner.

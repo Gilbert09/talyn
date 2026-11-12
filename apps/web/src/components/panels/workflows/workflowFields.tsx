@@ -9,6 +9,8 @@ const NAME_PLACEHOLDERS: Record<WorkflowIntegration, string> = {
   github: 'Label new PRs from bots',
   slack: 'Start work from Slack',
   webhook: 'Fix bugs from our tracker',
+  linear: 'Fix issues labelled agent',
+  github_issues: 'Fix issues labelled agent',
 };
 
 const RUN_CAP_COPY: Record<WorkflowIntegration, { label: string; hint: string }> = {
@@ -23,6 +25,14 @@ const RUN_CAP_COPY: Record<WorkflowIntegration, { label: string; hint: string }>
   webhook: {
     label: 'Runs per hour',
     hint: 'This limit prevents a burst of requests from starting too many runs.',
+  },
+  linear: {
+    label: 'Runs per issue per hour',
+    hint: 'This limit prevents a busy issue from starting too many runs.',
+  },
+  github_issues: {
+    label: 'Runs per issue per hour',
+    hint: 'This limit prevents a busy issue from starting too many runs.',
   },
 };
 

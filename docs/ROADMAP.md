@@ -384,7 +384,7 @@ Follow-ups now that Loops has shipped:
 
 ### Integration follow-ups
 
-- [ ] Add Linear as a rule source.
+- [x] Add Linear as a rule source, with GitHub Issues. The `issueRules` flag controls rollout (2026-11-12).
 - [ ] Add Sentry as a rule source.
 - [ ] Add a generic inbound webhook source.
 

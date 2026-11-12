@@ -31,7 +31,7 @@ import type { SkillKey } from './skills.js';
 // ============================================================================
 
 /** The integrations a rule can belong to. */
-export const WORKFLOW_INTEGRATIONS = ['github', 'slack', 'webhook'] as const;
+export const WORKFLOW_INTEGRATIONS = ['github', 'slack', 'webhook', 'linear', 'github_issues'] as const;
 
 export type WorkflowIntegration = (typeof WORKFLOW_INTEGRATIONS)[number];
 
@@ -40,7 +40,18 @@ export const WORKFLOW_INTEGRATION_LABELS: Record<WorkflowIntegration, string> = 
   github: 'GitHub',
   slack: 'Slack',
   webhook: 'Webhook',
+  linear: 'Linear',
+  github_issues: 'GitHub Issues',
 };
+
+/** The integrations whose rules act on an issue in a tracker. */
+export const ISSUE_WORKFLOW_INTEGRATIONS = ['linear', 'github_issues'] as const;
+
+export type IssueWorkflowIntegration = (typeof ISSUE_WORKFLOW_INTEGRATIONS)[number];
+
+export function isIssueWorkflowIntegration(value: unknown): value is IssueWorkflowIntegration {
+  return typeof value === 'string' && (ISSUE_WORKFLOW_INTEGRATIONS as readonly string[]).includes(value);
+}
 
 export function isWorkflowIntegration(value: unknown): value is WorkflowIntegration {
   return typeof value === 'string' && (WORKFLOW_INTEGRATIONS as readonly string[]).includes(value);
@@ -131,14 +142,41 @@ export const WEBHOOK_WORKFLOW_EVENTS = ['webhook_received'] as const;
 
 export type WebhookWorkflowEvent = (typeof WEBHOOK_WORKFLOW_EVENTS)[number];
 
+/**
+ * The issue events a Linear or GitHub Issues rule can trigger on. One vendor
+ * update can yield several of them (a label and an assignee changed at once).
+ */
+export const ISSUE_WORKFLOW_EVENTS = [
+  'issue_created',
+  'issue_labeled',
+  'issue_assigned',
+  'issue_status_changed',
+  'issue_commented',
+  'issue_updated',
+] as const;
+
+/**
+ * The event of a merge write-back run: the pull request that a rule's work
+ * opened merged. Talyn records it on the rule's history. A rule cannot
+ * trigger on it, so it is not in {@link ISSUE_WORKFLOW_EVENTS}.
+ */
+export const ISSUE_MERGE_EVENT = 'issue_pr_merged' as const;
+
+export type IssueWorkflowEvent = (typeof ISSUE_WORKFLOW_EVENTS)[number] | typeof ISSUE_MERGE_EVENT;
+
 /** Every event any rule can trigger on. */
-export type WorkflowTriggerEvent = GithubWorkflowEvent | SlackWorkflowEvent | WebhookWorkflowEvent;
+export type WorkflowTriggerEvent =
+  | GithubWorkflowEvent
+  | SlackWorkflowEvent
+  | WebhookWorkflowEvent
+  | IssueWorkflowEvent;
 
 /** Every event, of every integration. */
 export const ALL_WORKFLOW_TRIGGER_EVENTS: readonly WorkflowTriggerEvent[] = [
   ...GITHUB_WORKFLOW_EVENTS,
   ...SLACK_WORKFLOW_EVENTS,
   ...WEBHOOK_WORKFLOW_EVENTS,
+  ...ISSUE_WORKFLOW_EVENTS,
 ];
 
 /** The events that belong to one integration. */
@@ -148,6 +186,9 @@ export function workflowEventsFor(integration: WorkflowIntegration): readonly Wo
       return SLACK_WORKFLOW_EVENTS;
     case 'webhook':
       return WEBHOOK_WORKFLOW_EVENTS;
+    case 'linear':
+    case 'github_issues':
+      return ISSUE_WORKFLOW_EVENTS;
     default:
       return GITHUB_WORKFLOW_EVENTS;
   }
@@ -180,6 +221,13 @@ export const WORKFLOW_EVENT_LABELS: Record<WorkflowTriggerEvent, string> = {
   pr_checks_passed: 'All checks passed',
   slack_message: 'New message in a channel',
   webhook_received: 'Webhook received',
+  issue_created: 'Issue created',
+  issue_labeled: 'Label added to the issue',
+  issue_assigned: 'Issue assigned',
+  issue_status_changed: 'Issue status changed',
+  issue_commented: 'Comment on the issue',
+  issue_updated: 'Issue title or description changed',
+  issue_pr_merged: 'Pull request merged',
 };
 
 /**
@@ -351,7 +399,52 @@ export interface WorkflowConditions {
 
   /** Tests on the JSON body of the request. All must pass. Absent means every request. */
   payloadMatches?: WebhookPayloadCondition[];
+
+  // ---- Issue rules (Linear, GitHub Issues) ------------------------------
+  //
+  // An issue rule also reads `repos` (GitHub Issues), `labelsAny`,
+  // `labelsAll`, `labelsNone`, `labelName`, `titleContains` and
+  // `bodyContains`, with the same meaning as on a pull request.
+
+  /** Linear only: the Linear connection (one organization) the rule watches. Required. */
+  connectionId?: string;
+  /** Linear team keys, like `ENG`. Matches ANY. */
+  teams?: string[];
+  /** Linear project names. Matches ANY. */
+  projects?: string[];
+  /** Status names: a Linear workflow state, or `open` / `closed` on GitHub. Matches ANY. */
+  statuses?: string[];
+  /** Linear priority names (`Urgent`, `High`, `Medium`, `Low`, `No priority`). Matches ANY. */
+  priorities?: string[];
+  /** Who the issue is assigned to. */
+  issueAssignee?: IssueAssigneeMatch;
+  /** GitHub Issues only: who opened the issue, by login. Matches ANY. */
+  issueAuthors?: string[];
 }
+
+/**
+ * Who an issue is assigned to.
+ *
+ * - `talyn`: Linear only. The issue is assigned or delegated to Talyn's app
+ *   user (the connection must have the `app:assignable` scope).
+ * - `me`: GitHub Issues only. The workspace's connected GitHub user.
+ * - `unassigned`: nobody.
+ * - `people`: any of these logins, names or ids (case-insensitive).
+ */
+export type IssueAssigneeMatch =
+  | { kind: 'talyn' }
+  | { kind: 'me' }
+  | { kind: 'unassigned' }
+  | { kind: 'people'; people: string[] };
+
+export const ISSUE_ASSIGNEE_KINDS = ['talyn', 'me', 'unassigned', 'people'] as const;
+
+export const ISSUE_ASSIGNEE_KIND_LABELS: Record<(typeof ISSUE_ASSIGNEE_KINDS)[number], string> = {
+  talyn: 'Talyn',
+  me: 'Me',
+  unassigned: 'Nobody',
+  people: 'Specific people',
+};
 
 /**
  * One test on a webhook's JSON body.
@@ -441,6 +534,36 @@ export const WEBHOOK_WORKFLOW_CONDITION_KEYS = ['payloadMatches'] as const satis
   keyof WorkflowConditions
 >;
 
+/** The condition keys a GitHub Issues rule may carry. */
+export const GITHUB_ISSUES_WORKFLOW_CONDITION_KEYS = [
+  'repos',
+  'labelsAny',
+  'labelsAll',
+  'labelsNone',
+  'labelName',
+  'issueAssignee',
+  'issueAuthors',
+  'statuses',
+  'titleContains',
+  'bodyContains',
+] as const satisfies ReadonlyArray<keyof WorkflowConditions>;
+
+/** The condition keys a Linear rule may carry. */
+export const LINEAR_WORKFLOW_CONDITION_KEYS = [
+  'connectionId',
+  'teams',
+  'projects',
+  'statuses',
+  'priorities',
+  'labelsAny',
+  'labelsAll',
+  'labelsNone',
+  'labelName',
+  'issueAssignee',
+  'titleContains',
+  'bodyContains',
+] as const satisfies ReadonlyArray<keyof WorkflowConditions>;
+
 /** The condition keys each integration's rules may carry. */
 export function workflowConditionKeysFor(integration: WorkflowIntegration): readonly string[] {
   switch (integration) {
@@ -448,6 +571,10 @@ export function workflowConditionKeysFor(integration: WorkflowIntegration): read
       return SLACK_WORKFLOW_CONDITION_KEYS;
     case 'webhook':
       return WEBHOOK_WORKFLOW_CONDITION_KEYS;
+    case 'linear':
+      return LINEAR_WORKFLOW_CONDITION_KEYS;
+    case 'github_issues':
+      return GITHUB_ISSUES_WORKFLOW_CONDITION_KEYS;
     default:
       return GITHUB_WORKFLOW_CONDITION_KEYS;
   }
@@ -489,12 +616,19 @@ export const SLACK_WORKFLOW_ACTION_TYPES = ['slack_reply', 'slack_react'] as con
  */
 export const INBOUND_WORKFLOW_ACTION_TYPES = ['start_task'] as const;
 
+/**
+ * Write back to the issue that triggered the rule. Issue rules only. Talyn
+ * writes with the connection's credential; the agent never holds it.
+ */
+export const ISSUE_WORKFLOW_ACTION_TYPES = ['issue_comment', 'issue_set_status'] as const;
+
 /** Every action type, of every integration. */
 export const ALL_WORKFLOW_ACTION_TYPES = [
   ...WORKFLOW_ACTION_TYPES,
   ...SHARED_WORKFLOW_ACTION_TYPES,
   ...SLACK_WORKFLOW_ACTION_TYPES,
   ...INBOUND_WORKFLOW_ACTION_TYPES,
+  ...ISSUE_WORKFLOW_ACTION_TYPES,
 ] as const;
 
 export type WorkflowActionType = (typeof ALL_WORKFLOW_ACTION_TYPES)[number];
@@ -506,6 +640,9 @@ export function workflowActionsFor(integration: WorkflowIntegration): readonly W
       return [...SHARED_WORKFLOW_ACTION_TYPES, ...SLACK_WORKFLOW_ACTION_TYPES];
     case 'webhook':
       return [...SHARED_WORKFLOW_ACTION_TYPES, ...INBOUND_WORKFLOW_ACTION_TYPES];
+    case 'linear':
+    case 'github_issues':
+      return [...SHARED_WORKFLOW_ACTION_TYPES, ...INBOUND_WORKFLOW_ACTION_TYPES, ...ISSUE_WORKFLOW_ACTION_TYPES];
     default:
       return [...WORKFLOW_ACTION_TYPES, ...SHARED_WORKFLOW_ACTION_TYPES];
   }
@@ -552,14 +689,17 @@ export type WorkflowAction =
    * `repositoryId: null` means "let Talyn choose", which only a Slack rule can
    * do: Talyn picks the repository from the message. A GitHub rule runs on the
    * pull request's own repository. A webhook rule must name one.
+   *
+   * On a GitHub Issues rule, `null` means the issue's own repository. A
+   * Linear rule must name one.
    */
-  | {
+  | ({
       type: 'start_session';
       repositoryId: string | null;
       prompt: string;
       model?: string;
       internetAccess?: boolean;
-    }
+    } & IssueWriteBackSettings)
   /** Reply in the thread of the Slack message that triggered the rule. */
   | { type: 'slack_reply'; text: string }
   /** React to the Slack message that triggered the rule. `emoji` has no colons. */
@@ -567,14 +707,90 @@ export type WorkflowAction =
   /**
    * Start a cloud task (`code_writing`) on the named repository with the
    * rule's prompt. The alternative to `start_session` for inbound rules.
+   * `null` is allowed on a GitHub Issues rule only: the issue's repository.
    */
-  | {
+  | ({
       type: 'start_task';
-      repositoryId: string;
+      repositoryId: string | null;
       prompt: string;
       model?: string;
       internetAccess?: boolean;
-    };
+    } & IssueWriteBackSettings)
+  /**
+   * Comment on the issue that triggered the rule. `afterStart` marks the
+   * comment Talyn adds after a start action ("Talyn started: <link>"); the
+   * validator never stores it.
+   */
+  | { type: 'issue_comment'; body: string; afterStart?: true }
+  /**
+   * Move the issue to a status. `done` is the team's first completed state on
+   * Linear and "closed as completed" on GitHub. Any other value is a Linear
+   * state name, or `open` / `closed` on GitHub.
+   */
+  | { type: 'issue_set_status'; status: string };
+
+/**
+ * The write-back an issue rule's start action does. Both default to ON, so
+ * only `false` is stored. Refused on rules that are not issue rules.
+ */
+export interface IssueWriteBackSettings {
+  /** Comment on the issue when the work starts: "Talyn started: <link>". */
+  issueStartComment?: boolean;
+  /** When the work's pull request merges, move the issue to done as well as comment. */
+  issueDoneOnMerge?: boolean;
+}
+
+/** The comment Talyn adds when an issue rule's session starts. */
+export const ISSUE_START_COMMENT_SESSION = 'Talyn started working on this: {{session.url}}';
+/** The comment Talyn adds when an issue rule's task starts. */
+export const ISSUE_START_COMMENT_TASK = 'Talyn started working on this: {{task.url}}';
+/** The comment Talyn adds when the work's pull request merges. */
+export const ISSUE_MERGE_COMMENT = 'Talyn merged a fix for this: {{pr.url}}';
+
+/**
+ * The actions a run of this rule takes, in order: the rule's own actions,
+ * plus the start comment after a start action on an issue rule. The engine
+ * and the retry sweep both run this list, so the outcomes of a run line up
+ * with it.
+ */
+export function effectiveWorkflowActions(
+  workflow: Pick<WorkflowDefinition, 'actions'> & { integration?: WorkflowIntegration }
+): WorkflowAction[] {
+  if (!isIssueWorkflowIntegration(workflowIntegrationOf(workflow))) return workflow.actions;
+  const out: WorkflowAction[] = [];
+  for (const action of workflow.actions) {
+    out.push(action);
+    if ((action.type === 'start_session' || action.type === 'start_task') && action.issueStartComment !== false) {
+      out.push({
+        type: 'issue_comment',
+        body: action.type === 'start_session' ? ISSUE_START_COMMENT_SESSION : ISSUE_START_COMMENT_TASK,
+        afterStart: true,
+      });
+    }
+  }
+  return out;
+}
+
+/** The start action of an issue rule, or null. The validator allows at most one. */
+export function issueStartAction(
+  workflow: Pick<WorkflowDefinition, 'actions'>
+): Extract<WorkflowAction, { type: 'start_session' | 'start_task' }> | null {
+  for (const action of workflow.actions) {
+    if (action.type === 'start_session' || action.type === 'start_task') return action;
+  }
+  return null;
+}
+
+/**
+ * The actions of a merge write-back run: a comment with the pull request's
+ * link, then the move to done unless the rule turned it off.
+ */
+export function issueMergeActions(workflow: Pick<WorkflowDefinition, 'actions'>): WorkflowAction[] {
+  const start = issueStartAction(workflow);
+  const actions: WorkflowAction[] = [{ type: 'issue_comment', body: ISSUE_MERGE_COMMENT }];
+  if (start?.issueDoneOnMerge !== false) actions.push({ type: 'issue_set_status', status: 'done' });
+  return actions;
+}
 
 export const WORKFLOW_ACTION_LABELS: Record<WorkflowActionType, string> = {
   add_labels: 'Add labels',
@@ -591,6 +807,8 @@ export const WORKFLOW_ACTION_LABELS: Record<WorkflowActionType, string> = {
   slack_reply: 'Reply in the thread',
   slack_react: 'Add a reaction',
   start_task: 'Start a task',
+  issue_comment: 'Comment on the issue',
+  issue_set_status: 'Change the issue status',
 };
 
 /** Actions that start a cloud task, and so consume a plan task slot. */
@@ -773,6 +991,15 @@ export type WorkflowActionFailureCode =
   | 'repository_unresolved'
   /** The session could not start (agent not connected, sessions not allowed). */
   | 'session_unavailable'
+  /**
+   * Work that an earlier event started on this issue is still running, so no
+   * second session or task is started for it.
+   */
+  | 'issue_already_running'
+  /** The issue tracker refused a write-back (not a rate limit). */
+  | 'issue_error'
+  /** The tracker connection is gone or needs a new sign-in, so Talyn cannot write back. */
+  | 'issue_unavailable'
   | 'error';
 
 /** One action's outcome inside one run. */
@@ -1006,8 +1233,83 @@ export interface WebhookEventFacts {
   headers: Record<string, string>;
 }
 
+/**
+ * The facts one issue event yields, from Linear or GitHub Issues.
+ *
+ * Built by the vendor's source adapter. Text fields are cut to
+ * {@link MAX_ISSUE_FACT_TEXT} so a run row stays small; the prompt quotes no
+ * more than that anyway.
+ */
+export interface IssueEventFacts {
+  integration: IssueWorkflowIntegration;
+  event: IssueWorkflowEvent;
+  /** Linear: `inbound_connections.id`. GitHub Issues: null (the GitHub App connection). */
+  connectionId: string | null;
+  /** The vendor's stable id: the Linear issue id, or the GitHub issue's numeric id. */
+  externalId: string;
+  /** What a person calls the issue: `ENG-123`, or `owner/repo#12`. */
+  identifier: string;
+  title: string;
+  /** The issue description. */
+  body: string;
+  url: string;
+  labels: string[];
+  /** The assignee's login or name, or null. */
+  assignee: string | null;
+  /** The assignee's vendor id, when the payload has it. */
+  assigneeId?: string | null;
+  /** Linear: the agent the issue is delegated to (an app user), when the payload has it. */
+  delegateId?: string | null;
+  /** Linear: whether the issue is assigned or delegated to Talyn's app user. Set by the adapter. */
+  assignedToApp?: boolean;
+  /** Linear team key. Null on GitHub. */
+  team: string | null;
+  /** Linear team id, for write-back. */
+  teamId?: string | null;
+  /** Linear project name. Null on GitHub. */
+  project: string | null;
+  /** Linear state name, or `open` / `closed` on GitHub. */
+  status: string;
+  /** Linear priority name. Null on GitHub. */
+  priority: string | null;
+  /** Who did this event, by login or name. Null when the payload does not say. */
+  actor: string | null;
+  /** The actor's vendor id. */
+  actorId?: string | null;
+  /** GitHub: who opened the issue. */
+  author?: string | null;
+  /** GitHub Issues: the repository, `owner/repo`. */
+  repoFullName?: string;
+  /** GitHub Issues: the issue number. */
+  number?: number;
+  /** `issue_labeled`: the label that was added. */
+  labelName?: string;
+  /** `issue_commented`: the new comment. */
+  comment?: { id: string; body: string; author: string | null };
+  /** A merge write-back run only: the pull request that merged. */
+  mergedPrUrl?: string;
+  /**
+   * Fields this event's payload could not supply. A condition on one fails,
+   * as on a pull request (see {@link GithubEventFacts.unknownFields}).
+   */
+  unknownFields?: ReadonlyArray<IssueFactField>;
+}
+
+/** An issue fact a payload may not carry. */
+export type IssueFactField = 'labels' | 'assignee' | 'team' | 'project' | 'status' | 'priority' | 'body';
+
+/**
+ * The longest issue text a fact keeps (the body, a comment). 16 KB is what
+ * the prompt quotes of a request body, and a run row stores its facts.
+ */
+export const MAX_ISSUE_FACT_TEXT = 16 * 1024;
+
 /** The facts any rule can match on, tagged by integration. */
-export type WorkflowFacts = GithubEventFacts | SlackEventFacts | WebhookEventFacts;
+export type WorkflowFacts = GithubEventFacts | SlackEventFacts | WebhookEventFacts | IssueEventFacts;
+
+export function isIssueFacts(facts: WorkflowFacts): facts is IssueEventFacts {
+  return facts.integration === 'linear' || facts.integration === 'github_issues';
+}
 
 export function isSlackFacts(facts: WorkflowFacts): facts is SlackEventFacts {
   return facts.integration === 'slack';
@@ -1040,6 +1342,9 @@ export function isSlackThreadReply(facts: Pick<SlackEventFacts, 'ts' | 'threadTs
  * because the rule's URL is the only subject a webhook has.
  */
 export function workflowSubjectOf(facts: WorkflowFacts): { key: string; label: string } {
+  if (isIssueFacts(facts)) {
+    return { key: `issue:${facts.integration}:${facts.externalId}`, label: facts.identifier };
+  }
   if (isWebhookFacts(facts)) {
     return { key: `webhook:${facts.ruleId}`, label: 'Webhook' };
   }
@@ -1169,6 +1474,7 @@ export function workflowMatches(
     if (!workflow.id || workflow.id !== facts.ruleId) return false;
     return webhookConditionsMatch(conditions, facts);
   }
+  if (isIssueFacts(facts)) return issueConditionsMatch(conditions, facts, viewerLogin);
   return isSlackFacts(facts)
     ? slackConditionsMatch(conditions, facts)
     : githubConditionsMatch(conditions, facts, viewerLogin);
@@ -1293,6 +1599,96 @@ function slackConditionsMatch(c: WorkflowConditions, facts: SlackEventFacts): bo
   return true;
 }
 
+/** Whether an issue's assignee passes a rule's `issueAssignee`. */
+export function issueAssigneeMatches(
+  match: IssueAssigneeMatch | undefined,
+  facts: Pick<IssueEventFacts, 'assignee' | 'assigneeId' | 'assignedToApp' | 'unknownFields'>,
+  viewerLogin?: string | null
+): boolean {
+  if (!match) return true;
+  if (facts.unknownFields?.includes('assignee')) return false;
+  const assignee = (facts.assignee ?? '').trim().toLowerCase();
+  switch (match.kind) {
+    case 'talyn':
+      return facts.assignedToApp === true;
+    case 'me': {
+      const viewer = (viewerLogin ?? '').trim().toLowerCase();
+      return viewer.length > 0 && viewer === assignee;
+    }
+    case 'unassigned':
+      return !assignee && !facts.assigneeId && facts.assignedToApp !== true;
+    case 'people': {
+      const people = normalizeList(match.people);
+      const id = (facts.assigneeId ?? '').trim().toLowerCase();
+      return people.some((p) => (assignee && p === assignee) || (id && p === id));
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * The issue half of {@link workflowMatches}. Every list matches ANY of its
+ * values, case-insensitive. A condition on a fact the payload lacked fails.
+ *
+ * A Linear rule must name its connection: a rule with none matches nothing,
+ * because one workspace can connect several Linear organizations.
+ */
+export function issueConditionsMatch(
+  c: WorkflowConditions,
+  facts: IssueEventFacts,
+  viewerLogin?: string | null
+): boolean {
+  const unknown = (f: IssueFactField): boolean => !!facts.unknownFields?.includes(f);
+  const inList = (list: string[] | undefined, value: string | null | undefined, field?: IssueFactField): boolean => {
+    const wanted = normalizeList(list);
+    if (wanted.length === 0) return true;
+    if (field && unknown(field)) return false;
+    return !!value && wanted.includes(value.trim().toLowerCase());
+  };
+
+  if (facts.integration === 'linear') {
+    const connection = (c.connectionId ?? '').trim();
+    if (!connection || connection !== facts.connectionId) return false;
+  }
+
+  if (!inList(c.repos, facts.repoFullName)) return false;
+  if (!inList(c.teams, facts.team, 'team')) return false;
+  if (!inList(c.projects, facts.project, 'project')) return false;
+  if (!inList(c.statuses, facts.status, 'status')) return false;
+  if (!inList(c.priorities, facts.priority, 'priority')) return false;
+  if (!inList(c.issueAuthors, facts.author)) return false;
+
+  const none = normalizeList(c.labelsNone);
+  const any = normalizeList(c.labelsAny);
+  const all = normalizeList(c.labelsAll);
+  if (none.length > 0 || any.length > 0 || all.length > 0) {
+    if (unknown('labels')) return false;
+    const have = normalizeList(facts.labels);
+    if (none.some((l) => have.includes(l))) return false;
+    if (any.length > 0 && !any.some((l) => have.includes(l))) return false;
+    if (all.length > 0 && !all.every((l) => have.includes(l))) return false;
+  }
+
+  const labelName = (c.labelName ?? '').trim().toLowerCase();
+  if (labelName && (facts.labelName ?? '').trim().toLowerCase() !== labelName) return false;
+
+  if (!issueAssigneeMatches(c.issueAssignee, facts, viewerLogin)) return false;
+
+  const title = (c.titleContains ?? '').trim().toLowerCase();
+  if (title && !facts.title.toLowerCase().includes(title)) return false;
+
+  // The issue description, and on `issue_commented` the new comment as well.
+  const body = (c.bodyContains ?? '').trim().toLowerCase();
+  if (body) {
+    const inComment = !!facts.comment && facts.comment.body.toLowerCase().includes(body);
+    const inBody = !unknown('body') && facts.body.toLowerCase().includes(body);
+    if (!inComment && !inBody) return false;
+  }
+
+  return true;
+}
+
 // ============================================================================
 // Webhook payload paths
 // ============================================================================
@@ -1386,6 +1782,10 @@ export function webhookConditionsMatch(c: WorkflowConditions, facts: WebhookEven
 export interface WorkflowTemplateExtras {
   /** The session a `start_session` action in the same run started. */
   sessionUrl?: string | null;
+  /** The task a `start_task` action in the same run started. */
+  taskUrl?: string | null;
+  /** The pull request a merge write-back is about. */
+  prUrl?: string | null;
 }
 
 /**
@@ -1412,6 +1812,16 @@ export function renderWorkflowTemplate(
   // where people read it, and only the prompt fence may carry sender text.
   const vars: Record<string, string> = isWebhookFacts(facts)
     ? { event: WORKFLOW_EVENT_LABELS[facts.event] }
+    : isIssueFacts(facts)
+    ? {
+        // Identifiers only: a template's output is posted on the issue, and
+        // the issue's own text has no place in Talyn's comment.
+        'issue.identifier': facts.identifier,
+        'issue.url': facts.url,
+        'issue.title': facts.title,
+        ...(facts.mergedPrUrl ? { 'pr.url': facts.mergedPrUrl } : {}),
+        event: WORKFLOW_EVENT_LABELS[facts.event],
+      }
     : isSlackFacts(facts)
     ? {
         'message.text': facts.text,
@@ -1433,6 +1843,8 @@ export function renderWorkflowTemplate(
         event: WORKFLOW_EVENT_LABELS[facts.event],
       };
   if (extras.sessionUrl) vars['session.url'] = extras.sessionUrl;
+  if (extras.taskUrl) vars['task.url'] = extras.taskUrl;
+  if (extras.prUrl) vars['pr.url'] = extras.prUrl;
   return body.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (whole, key: string) =>
     key in vars ? vars[key]! : whole
   );
@@ -1521,8 +1933,16 @@ export function validateWorkflow(raw: unknown): NormalizedWorkflow {
       ? validateSlackConditions(w.conditions)
       : integration === 'webhook'
         ? validateWebhookConditions(w.conditions)
-        : validateConditions(w.conditions, events);
+        : isIssueWorkflowIntegration(integration)
+          ? validateIssueConditions(w.conditions, integration, events)
+          : validateConditions(w.conditions, events);
   const actions = validateActions(w.actions, integration);
+  if (isIssueWorkflowIntegration(integration)) {
+    const starts = actions.filter((a) => a.type === 'start_session' || a.type === 'start_task');
+    // One issue gets one piece of work. A second start in the same run would
+    // start a second session on the same issue.
+    if (starts.length > 1) fail('An issue automation can start one session or one task, not more.');
+  }
 
   let maxRuns = DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR;
   if (w.maxRunsPerPrPerHour !== undefined) {
@@ -1623,6 +2043,107 @@ function validatePayloadCondition(raw: unknown, at: string): WebhookPayloadCondi
   if (typeof r.value !== 'string') fail(`${at}.value must be a string`);
   if (op === 'contains' && !r.value.trim()) fail(`${at}.value must not be empty`);
   return { path, op: op as WebhookPayloadOp, value: r.value };
+}
+
+/**
+ * An issue rule's conditions. A Linear rule must name its connection. A
+ * condition that belongs to the other tracker is refused with its name.
+ */
+function validateIssueConditions(
+  raw: unknown,
+  integration: IssueWorkflowIntegration,
+  events: WorkflowTriggerEvent[]
+): WorkflowConditions {
+  const given = raw === undefined || raw === null ? {} : raw;
+  if (typeof given !== 'object' || Array.isArray(given)) fail('conditions must be an object');
+  const c = given as Record<string, unknown>;
+  const label = WORKFLOW_INTEGRATION_LABELS[integration];
+
+  const own = workflowConditionKeysFor(integration);
+  const otherIssue = integration === 'linear' ? 'github_issues' : 'linear';
+  for (const key of Object.keys(c)) {
+    if (own.includes(key)) continue;
+    if (workflowConditionKeysFor(otherIssue).includes(key)) {
+      fail(`"${key}" is a ${WORKFLOW_INTEGRATION_LABELS[otherIssue]} condition, and this is a ${label} automation. Remove it.`);
+    }
+  }
+  refuseForeignConditions(c, integration);
+  const unknownKeys = Object.keys(c).filter((k) => !own.includes(k));
+  if (unknownKeys.length > 0) fail(`Unknown condition "${unknownKeys[0]}"`);
+
+  const out: WorkflowConditions = {};
+  if (integration === 'linear') {
+    const connection = typeof c.connectionId === 'string' ? c.connectionId.trim() : '';
+    if (c.connectionId !== undefined && typeof c.connectionId !== 'string') {
+      fail('conditions.connectionId must be a string');
+    }
+    if (!connection) fail('A Linear automation needs a Linear workspace. Pick the Linear workspace to watch.');
+    out.connectionId = connection;
+  }
+
+  const lists = ['repos', 'teams', 'projects', 'statuses', 'priorities', 'labelsAny', 'labelsAll', 'labelsNone', 'issueAuthors'] as const;
+  for (const key of lists) {
+    if (!own.includes(key)) continue;
+    const list = optionalStringList(c[key], `conditions.${key}`);
+    if (list) out[key] = list;
+  }
+
+  for (const key of ['titleContains', 'bodyContains', 'labelName'] as const) {
+    if (c[key] === undefined) continue;
+    if (typeof c[key] !== 'string') fail(`conditions.${key} must be a string`);
+    const trimmed = (c[key] as string).trim();
+    if (!trimmed) continue;
+    if (key === 'labelName' && !events.includes('issue_labeled')) {
+      fail(`"labelName" only applies to ${WORKFLOW_EVENT_LABELS.issue_labeled}, which this automation does not trigger on`);
+    }
+    out[key] = trimmed;
+  }
+
+  if (c.issueAssignee !== undefined) {
+    const match = validateIssueAssignee(c.issueAssignee, integration);
+    if (match) out.issueAssignee = match;
+  }
+  return out;
+}
+
+function validateIssueAssignee(raw: unknown, integration: IssueWorkflowIntegration): IssueAssigneeMatch | undefined {
+  const at = 'conditions.issueAssignee';
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail(`${at} must be an object`);
+  const kind = (raw as { kind?: unknown }).kind;
+  if (kind === 'any') return undefined;
+  if (typeof kind !== 'string' || !(ISSUE_ASSIGNEE_KINDS as readonly string[]).includes(kind)) {
+    fail(`${at}.kind must be one of ${ISSUE_ASSIGNEE_KINDS.join(', ')}`);
+  }
+  if (kind === 'talyn' && integration !== 'linear') {
+    fail('Only a Linear issue can be assigned to Talyn. On GitHub, choose "Me" or specific people.');
+  }
+  if (kind === 'me' && integration !== 'github_issues') {
+    fail('"Me" works on GitHub Issues only. On Linear, choose Talyn or specific people.');
+  }
+  if (kind === 'people') {
+    const people = stringList((raw as { people?: unknown }).people ?? [], `${at}.people`);
+    if (people.length === 0) fail(`${at} names nobody, so it can never match`);
+    return { kind: 'people', people };
+  }
+  return { kind: kind as 'talyn' | 'me' | 'unassigned' };
+}
+
+/** The write-back settings of an issue rule's start action. Only `false` is stored. */
+function validateIssueWriteBack(
+  a: Record<string, unknown>,
+  at: string,
+  integration: WorkflowIntegration
+): IssueWriteBackSettings {
+  const out: IssueWriteBackSettings = {};
+  for (const key of ['issueStartComment', 'issueDoneOnMerge'] as const) {
+    if (a[key] === undefined) continue;
+    if (typeof a[key] !== 'boolean') fail(`${at}.${key} must be a boolean`);
+    if (!isIssueWorkflowIntegration(integration)) {
+      fail(`${at}.${key} is for issue automations (Linear, GitHub Issues)`);
+    }
+    if (a[key] === false) out[key] = false;
+  }
+  return out;
 }
 
 /**
@@ -1855,8 +2376,10 @@ function validateAction(
     const reason = (SLACK_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)
       ? 'acts on a Slack message'
       : (INBOUND_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)
-        ? 'is for webhook automations'
-        : 'acts on a pull request';
+        ? 'is for webhook and issue automations'
+        : (ISSUE_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)
+          ? 'acts on an issue'
+          : 'acts on a pull request';
     fail(
       `${at}: "${label}" ${reason}, so a ${WORKFLOW_INTEGRATION_LABELS[integration]} automation ` +
         `cannot use it. Use ${allowed}.`
@@ -1943,9 +2466,10 @@ function validateAction(
         if (typeof a.repositoryId !== 'string') fail(`${at}.repositoryId must be a string or null`);
         repositoryId = a.repositoryId.trim() || null;
       }
-      // Only a Slack rule can leave the repository to Talyn: it reads the
-      // message to choose one. A webhook has nothing Talyn can choose from.
-      if (integration === 'webhook' && !repositoryId) {
+      // A Slack rule can leave the repository to Talyn: it reads the message
+      // to choose one. A GitHub Issues rule defaults to the issue's own
+      // repository. A webhook or a Linear issue has nothing to choose from.
+      if ((integration === 'webhook' || integration === 'linear') && !repositoryId) {
         fail(`${at}: choose the repository the session works on`);
       }
       if (a.internetAccess !== undefined && typeof a.internetAccess !== 'boolean') {
@@ -1958,6 +2482,7 @@ function validateAction(
         prompt: a.prompt.trim(),
         ...(model ? { model } : {}),
         ...(a.internetAccess === true ? { internetAccess: true } : {}),
+        ...validateIssueWriteBack(a, at, integration),
       };
     }
     case 'slack_reply': {
@@ -1979,19 +2504,39 @@ function validateAction(
       if (typeof a.prompt !== 'string' || !a.prompt.trim()) {
         fail(`${at}.prompt must be a non-empty string`);
       }
+      if (a.repositoryId !== undefined && a.repositoryId !== null && typeof a.repositoryId !== 'string') {
+        fail(`${at}.repositoryId must be a string or null`);
+      }
       const repositoryId = typeof a.repositoryId === 'string' ? a.repositoryId.trim() : '';
-      if (!repositoryId) fail(`${at}: choose the repository the task works on`);
+      // Only a GitHub Issues rule may leave it out: the issue's own repository.
+      if (!repositoryId && integration !== 'github_issues') fail(`${at}: choose the repository the task works on`);
       if (a.internetAccess !== undefined && typeof a.internetAccess !== 'boolean') {
         fail(`${at}.internetAccess must be a boolean`);
       }
       const model = typeof a.model === 'string' && a.model.trim() ? a.model.trim() : undefined;
       return {
         type: 'start_task',
-        repositoryId,
+        repositoryId: repositoryId || null,
         prompt: a.prompt.trim(),
         ...(model ? { model } : {}),
         ...(a.internetAccess === true ? { internetAccess: true } : {}),
+        ...validateIssueWriteBack(a, at, integration),
       };
+    }
+    case 'issue_comment': {
+      if (typeof a.body !== 'string' || !a.body.trim()) fail(`${at}.body must be a non-empty string`);
+      // `afterStart` is Talyn's own marker and is never stored.
+      return { type: 'issue_comment', body: a.body.trim() };
+    }
+    case 'issue_set_status': {
+      if (typeof a.status !== 'string' || !a.status.trim()) {
+        fail(`${at}.status must be a status name, or "done"`);
+      }
+      const status = a.status.trim();
+      if (integration === 'github_issues' && !['done', 'open', 'closed'].includes(status.toLowerCase())) {
+        fail(`${at}.status must be done, open or closed on GitHub Issues`);
+      }
+      return { type: 'issue_set_status', status: integration === 'github_issues' ? status.toLowerCase() : status };
     }
   }
 }
@@ -2059,11 +2604,33 @@ export function webhookRulesOffered(
 }
 
 /**
+ * Whether issue rules (Linear, GitHub Issues) should be drawn. The same
+ * three-state discipline as {@link workflowsOffered}, and also not
+ * authorisation: the routes and the engine gate on the `issueRules` flag.
+ */
+export function issueRulesOffered(
+  features: { workflows?: boolean; issueRules?: boolean } | null | undefined
+): boolean {
+  return workflowsOffered(features) && features?.issueRules === true;
+}
+
+/**
  * A blank workflow the editor opens on. Save stays refused until it has a name
  * and at least one action — see {@link workflowInputProblem}. A Slack rule also
  * needs its Slack workspace and a channel.
  */
 export function emptyWorkflowInput(integration: WorkflowIntegration = 'github'): WorkflowInput {
+  if (isIssueWorkflowIntegration(integration)) {
+    return {
+      integration,
+      name: '',
+      enabled: true,
+      events: ['issue_created'],
+      conditions: {},
+      actions: [],
+      maxRunsPerPrPerHour: DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR,
+    };
+  }
   if (integration === 'webhook') {
     return {
       integration: 'webhook',
@@ -2148,6 +2715,10 @@ export function emptyWorkflowAction(type: WorkflowActionType): WorkflowAction {
       return { type: 'slack_react', emoji: 'eyes' };
     case 'start_task':
       return { type: 'start_task', repositoryId: '', prompt: '' };
+    case 'issue_comment':
+      return { type: 'issue_comment', body: '' };
+    case 'issue_set_status':
+      return { type: 'issue_set_status', status: 'done' };
   }
 }
 
@@ -2429,6 +3000,167 @@ export const WEBHOOK_WORKFLOW_CONDITION_SPECS: readonly WebhookWorkflowCondition
   },
 ];
 
+/** The widget an issue condition is edited with. */
+export type IssueWorkflowConditionInput =
+  | 'connection'
+  | 'repos'
+  | 'teams'
+  | 'projects'
+  | 'statuses'
+  | 'priorities'
+  | 'labels'
+  | 'label'
+  | 'assignee'
+  | 'people'
+  | 'text';
+
+export interface IssueWorkflowConditionSpec {
+  key: (typeof LINEAR_WORKFLOW_CONDITION_KEYS)[number] | (typeof GITHUB_ISSUES_WORKFLOW_CONDITION_KEYS)[number];
+  label: string;
+  hint: string;
+  input: IssueWorkflowConditionInput;
+  required: boolean;
+  /** The integrations that have this condition. */
+  integrations: readonly IssueWorkflowIntegration[];
+  /** Events it applies to, or null for every issue event. */
+  appliesTo: readonly WorkflowTriggerEvent[] | null;
+}
+
+/** Every condition an issue rule can carry, as data. */
+export const ISSUE_WORKFLOW_CONDITION_SPECS: readonly IssueWorkflowConditionSpec[] = [
+  {
+    key: 'connectionId',
+    label: 'Linear workspace',
+    hint: 'The Linear workspace to watch.',
+    input: 'connection',
+    required: true,
+    integrations: ['linear'],
+    appliesTo: null,
+  },
+  {
+    key: 'repos',
+    label: 'Repository',
+    hint: 'Only issues in these repositories. Without this, every repository the workspace watches.',
+    input: 'repos',
+    required: false,
+    integrations: ['github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'teams',
+    label: 'Team',
+    hint: 'Only issues in these Linear teams.',
+    input: 'teams',
+    required: false,
+    integrations: ['linear'],
+    appliesTo: null,
+  },
+  {
+    key: 'projects',
+    label: 'Project',
+    hint: 'Only issues in these Linear projects.',
+    input: 'projects',
+    required: false,
+    integrations: ['linear'],
+    appliesTo: null,
+  },
+  {
+    key: 'statuses',
+    label: 'Status',
+    hint: 'Only issues in one of these statuses.',
+    input: 'statuses',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'priorities',
+    label: 'Priority',
+    hint: 'Only issues with one of these priorities.',
+    input: 'priorities',
+    required: false,
+    integrations: ['linear'],
+    appliesTo: null,
+  },
+  {
+    key: 'labelsAny',
+    label: 'Has any of these labels',
+    hint: 'Matches when the issue has at least one.',
+    input: 'labels',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'labelsAll',
+    label: 'Has all of these labels',
+    hint: 'Matches only when the issue has every one.',
+    input: 'labels',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'labelsNone',
+    label: 'Has none of these labels',
+    hint: 'Any one of them stops the automation.',
+    input: 'labels',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'labelName',
+    label: 'The label that was added',
+    hint: 'Only when this exact label was added.',
+    input: 'label',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: ['issue_labeled'],
+  },
+  {
+    key: 'issueAssignee',
+    label: 'Assigned to',
+    hint: 'Who the issue is assigned to.',
+    input: 'assignee',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'issueAuthors',
+    label: 'Opened by',
+    hint: 'GitHub logins of the people who opened the issue.',
+    input: 'people',
+    required: false,
+    integrations: ['github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'titleContains',
+    label: 'Title contains',
+    hint: 'Case-insensitive.',
+    input: 'text',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'bodyContains',
+    label: 'Description or comment contains',
+    hint: 'Case-insensitive. On a new comment, the comment counts too.',
+    input: 'text',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+];
+
+/** The issue condition specs of one tracker. */
+export function issueConditionSpecsFor(integration: IssueWorkflowIntegration): IssueWorkflowConditionSpec[] {
+  return ISSUE_WORKFLOW_CONDITION_SPECS.filter((spec) => spec.integrations.includes(integration));
+}
+
 /** A fresh payload test for the editor. Empty, so it saves as nothing until filled in. */
 export function emptyWebhookPayloadCondition(): WebhookPayloadCondition {
   return { path: '', op: 'equals', value: '' };
@@ -2469,7 +3201,15 @@ export function workflowVocabulary(integration: WorkflowIntegration): WorkflowVo
     label: WORKFLOW_ACTION_LABELS[type],
   }));
   const conditions: WorkflowConditionSummary[] =
-    integration === 'webhook'
+    isIssueWorkflowIntegration(integration)
+      ? issueConditionSpecsFor(integration).map((spec) => ({
+          key: spec.key,
+          label: spec.label,
+          hint: spec.hint,
+          required: spec.required,
+          appliesTo: spec.appliesTo,
+        }))
+      : integration === 'webhook'
       ? WEBHOOK_WORKFLOW_CONDITION_SPECS.map((spec) => ({
           key: spec.key,
           label: spec.label,
@@ -2589,6 +3329,10 @@ export function describeWorkflowAction(action: WorkflowAction): string {
       return `React with :${action.emoji}:`;
     case 'start_task':
       return 'Start a task';
+    case 'issue_comment':
+      return action.afterStart ? 'Comment that the work started' : 'Comment on the issue';
+    case 'issue_set_status':
+      return action.status === 'done' ? 'Move the issue to done' : `Move the issue to ${action.status}`;
   }
 }
 

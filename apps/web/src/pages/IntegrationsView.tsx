@@ -20,6 +20,7 @@ import { Card } from '../components/ui/card';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { GithubConnectionCard, PostHogCodeCard } from '../components/panels/SettingsPanel';
 import { SlackSettings } from '../components/panels/SlackSettings';
+import { LinearSettings } from '../components/panels/LinearSettings';
 import { TrunkSettingsCard } from '../components/panels/TrunkSettingsCard';
 import { PrivateRoutesSettings } from '../components/settings/sections/PrivateRoutesSettings';
 
@@ -39,6 +40,7 @@ function useConnectionStates(): Record<IntegrationKind, ConnectionState> {
   const [slack, setSlack] = useState<ConnectionState>('unknown');
   const [trunk, setTrunk] = useState<ConnectionState>('unknown');
   const [tailscale, setTailscale] = useState<ConnectionState>('unknown');
+  const [linear, setLinear] = useState<ConnectionState>('unknown');
 
   useEffect(() => {
     let cancelled = false;
@@ -57,6 +59,12 @@ function useConnectionStates(): Record<IntegrationKind, ConnectionState> {
         .then((st) => set(setTrunk, st.connected ? 'connected' : 'not_connected'))
         .catch(() => set(setTrunk, 'unknown'));
     }
+    if (workspaceId && integrationOffered(features, 'linear')) {
+      api.linear
+        .getStatus(workspaceId)
+        .then((st) => set(setLinear, st.connections.length > 0 ? 'connected' : 'not_connected'))
+        .catch(() => set(setLinear, 'unknown'));
+    }
     if (workspaceId && integrationOffered(features, 'tailscale')) {
       api.workspaces.privateConnector
         .get(workspaceId)
@@ -69,8 +77,12 @@ function useConnectionStates(): Record<IntegrationKind, ConnectionState> {
   }, [features, workspaceId]);
 
   const posthog = cloudProviders?.find((p) => p.type === 'posthog_code');
+  const github: ConnectionState = githubStatus ? (githubStatus.connected ? 'connected' : 'not_connected') : 'unknown';
   return {
-    github: githubStatus ? (githubStatus.connected ? 'connected' : 'not_connected') : 'unknown',
+    github,
+    // It uses the GitHub connection.
+    github_issues: github,
+    linear,
     slack,
     webhook: 'built_in',
     schedule: 'built_in',
@@ -94,11 +106,19 @@ function StateBadge({ state }: { state: ConnectionState }) {
   return null;
 }
 
+/** Whether the current workspace has GitHub connected. GitHub Issues needs it. */
+function useGithubConnected(): boolean {
+  const githubStatus = useWorkspaceStore((s) => s.githubStatus);
+  const workspace = useWorkspaceStore((s) => s.workspaces.find((w) => w.id === s.currentWorkspaceId));
+  return githubStatus?.connected ?? Boolean(workspace?.integrations?.github);
+}
+
 function IntegrationsCatalog() {
   const features = useWorkspaceStore((s) => s.features);
   const navigate = useNavigationStore((s) => s.navigate);
   const states = useConnectionStates();
-  const kinds = integrationsOffered(features);
+  const githubConnected = useGithubConnected();
+  const kinds = integrationsOffered(features).filter((kind) => kind !== 'github_issues' || githubConnected);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -151,6 +171,7 @@ function ConnectionSection({ kind }: { kind: IntegrationKind }) {
       <div className="max-w-2xl p-6">
         {kind === 'github' && <GithubConnectionCard />}
         {kind === 'slack' && <SlackSettings />}
+        {kind === 'linear' && <LinearSettings />}
         {kind === 'tailscale' && <PrivateRoutesSettings />}
         {kind === 'posthog' && <PostHogCodeCard />}
         {kind === 'trunk' && <TrunkSettingsCard />}
@@ -161,6 +182,25 @@ function ConnectionSection({ kind }: { kind: IntegrationKind }) {
 
 type Section = 'connection' | 'rules';
 
+function GithubIssuesConnectionNote() {
+  const navigate = useNavigationStore((s) => s.navigate);
+  const connected = useGithubConnected();
+  return (
+    <p className="border-b px-6 py-2 text-xs text-muted-foreground" data-attr="github-issues-connection">
+      Uses your GitHub connection.{' '}
+      {!connected && (
+        <button
+          type="button"
+          className="underline hover:text-foreground"
+          onClick={() => navigate({ view: 'integrations', kind: 'github' })}
+        >
+          Connect GitHub
+        </button>
+      )}
+    </p>
+  );
+}
+
 function IntegrationPage({ kind }: { kind: IntegrationKind }) {
   const features = useWorkspaceStore((s) => s.features);
   const navigate = useNavigationStore((s) => s.navigate);
@@ -170,7 +210,10 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
     ? features?.workbenches === true && slackRulesOffered(features)
     : integrationRulesOffered(features, kind);
   const hasConnection = !info.builtIn;
-  const [chosen, setChosen] = useState<Section | null>(null);
+  // Back from the Linear sign-in: open the tab that shows the result.
+  const [chosen, setChosen] = useState<Section | null>(() =>
+    kind === 'linear' && new URLSearchParams(window.location.search).has('linear') ? 'connection' : null
+  );
   const section: Section = chosen && (chosen === 'rules' ? hasRules : hasConnection) ? chosen : hasRules ? 'rules' : 'connection';
 
   useEffect(() => {
@@ -215,6 +258,15 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
           {section === 'rules' && kind === 'github' && <WorkflowsPanel integration="github" />}
           {section === 'rules' && kind === 'slack' && hasRules && <WorkflowsPanel integration="slack" />}
           {section === 'rules' && kind === 'webhook' && hasRules && <WorkflowsPanel integration="webhook" />}
+          {section === 'rules' && kind === 'linear' && hasRules && <WorkflowsPanel integration="linear" />}
+          {section === 'rules' && kind === 'github_issues' && hasRules && (
+            <div className="flex h-full flex-col">
+              <GithubIssuesConnectionNote />
+              <div className="min-h-0 flex-1">
+                <WorkflowsPanel integration="github_issues" />
+              </div>
+            </div>
+          )}
           {section === 'rules' && kind === 'schedule' && <LoopsPanel />}
         </Suspense>
       </div>

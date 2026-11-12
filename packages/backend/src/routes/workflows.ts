@@ -1,6 +1,8 @@
 import { Router, type Request, type Response } from 'express';
 import type { ApiResponse, CreatedWorkflow, WorkflowIntegration } from '@talyn/shared';
 import {
+  ISSUE_RULES_UNAVAILABLE_CODE,
+  isIssueWorkflowIntegration,
   isWorkflowIntegration,
   validateWorkflow,
   WORKFLOW_INTEGRATIONS,
@@ -20,6 +22,7 @@ import {
 } from '../services/workflows/store.js';
 import {
   slackRulesRefusalReason,
+  userMayUseIssueRules,
   userMayUseWebhookRules,
   workspaceMayUseSlackRules,
   workspaceMayUseWorkflows,
@@ -27,6 +30,7 @@ import {
 } from '../services/workflowsAccess.js';
 import { createWebhookRule, deleteConnectionsForRule } from '../services/inbound/store.js';
 import { webhookUrl } from '../services/inbound/url.js';
+import { getLinearConnection } from '../services/linear/store.js';
 import { workflowSuggestions } from '../services/workflows/suggestions.js';
 import { ownerReachesSlackTeam } from '../services/workflows/sources/slack.js';
 
@@ -131,6 +135,7 @@ export function workflowRoutes(): Router {
     integration: WorkflowIntegration
   ): Promise<boolean> {
     if (integration === 'webhook') return webhookGate(req, res);
+    if (isIssueWorkflowIntegration(integration)) return issueGate(req, res);
     if (integration !== 'slack') return true;
     if (await workspaceMayUseSlackRules(workspaceId)) return true;
     res.status(403).json({
@@ -152,6 +157,38 @@ export function workflowRoutes(): Router {
       success: false,
       error: 'Webhook automations are not available for this account.',
       code: 'webhook_rules_unavailable',
+    });
+    return false;
+  }
+
+  /**
+   * Issue rules (Linear, GitHub Issues): the `issueRules` flag, asked for the
+   * CALLER. A 404, like the webhook gate, so the feature stays invisible.
+   */
+  async function issueGate(req: Request, res: Response): Promise<boolean> {
+    const user = assertUser(req);
+    if (await userMayUseIssueRules({ distinctId: user.id, email: user.email })) return true;
+    res.status(404).json({
+      success: false,
+      error: 'Issue automations are not available for this account.',
+      code: ISSUE_RULES_UNAVAILABLE_CODE,
+    });
+    return false;
+  }
+
+  /** A Linear rule must name a Linear connection of its own workspace. */
+  async function linearConnectionGate(
+    res: Response,
+    workspaceId: string,
+    workflow: NormalizedWorkflow
+  ): Promise<boolean> {
+    if (workflow.integration !== 'linear') return true;
+    const connection = await getLinearConnection(workflow.conditions.connectionId ?? '');
+    if (connection && connection.workspaceId === workspaceId) return true;
+    res.status(400).json({
+      success: false,
+      error: 'That Linear workspace is not connected to this Talyn workspace. Connect Linear first.',
+      code: 'linear_connection_unavailable',
     });
     return false;
   }
@@ -267,6 +304,7 @@ export function workflowRoutes(): Router {
     }
     if (!(await integrationGate(req, res, workspaceId, normalized.integration))) return;
     if (!(await slackTeamGate(req, res, normalized))) return;
+    if (!(await linearConnectionGate(res, workspaceId, normalized))) return;
     // No plan caps how many workflows an owner keeps. A run a workflow starts
     // is gated where its task is created.
     let data: CreatedWorkflow;
@@ -327,6 +365,7 @@ export function workflowRoutes(): Router {
       });
     }
     if (!(await slackTeamGate(req, res, normalized))) return;
+    if (!(await linearConnectionGate(res, existing.workspaceId, normalized))) return;
     const data = await updateWorkflow(existing.id, existing.workspaceId, normalized);
     if (!data) return res.status(404).json({ success: false, error: 'Automation not found' });
 

@@ -53,8 +53,9 @@ export function inboundRulePrompt(
  * other rule run. A box refusal parks the run and the retry sweep tries again.
  */
 export async function startInboundTask(action: StartTaskAction, ctx: WebhookActionContext): Promise<OneResult> {
-  const repoName = await repositoryName(ctx.workspaceId, action.repositoryId);
-  if (!repoName) {
+  const repositoryId = action.repositoryId;
+  const repoName = repositoryId ? await repositoryName(ctx.workspaceId, repositoryId) : null;
+  if (!repositoryId || !repoName) {
     return {
       outcome: no(
         'start_task',
@@ -78,7 +79,7 @@ export async function startInboundTask(action: StartTaskAction, ctx: WebhookActi
       title: name,
       description: `Started by the "${name}" automation from a webhook.`,
       prompt: inboundRulePrompt(action.prompt, ctx, repoName),
-      repositoryId: action.repositoryId,
+      repositoryId,
       assignedEnvironmentId: env.envId,
       ...(action.model ? { model: action.model } : {}),
       ...(action.internetAccess ? { internetAccess: true } : {}),

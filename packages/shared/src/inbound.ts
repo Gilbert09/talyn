@@ -73,3 +73,81 @@ export interface InboundDelivery extends InboundDeliverySummary {
   payload: unknown;
   headers: Record<string, string>;
 }
+
+// ---- Linear -----------------------------------------------------------------
+
+/** The answer code when this deployment has no Linear OAuth app. */
+export const LINEAR_NOT_CONFIGURED_CODE = 'linear_not_configured';
+/** The answer code when the `issueRules` flag is off for the caller. */
+export const ISSUE_RULES_UNAVAILABLE_CODE = 'issue_rules_unavailable';
+
+/** One connected Linear organization. Never holds a credential. */
+export interface LinearConnection {
+  id: string;
+  workspaceId: string;
+  organizationId: string;
+  organizationName: string | null;
+  /** The organization's URL key: `linear.app/<urlKey>`. */
+  urlKey: string | null;
+  scopes: string[];
+  /** Whether the grant has `app:assignable`, so an issue can be assigned to Talyn. */
+  canAssign: boolean;
+  /** Set when Linear revoked the grant or a refresh failed for good. Connect again. */
+  reauthRequiredAt: string | null;
+  reauthReason: string | null;
+  createdAt: string;
+}
+
+/** What `GET /linear` answers. */
+export interface LinearStatus {
+  /** Whether this deployment has a Linear OAuth app. */
+  configured: boolean;
+  connections: LinearConnection[];
+}
+
+export interface LinearAuthorizeResponse {
+  authorizeUrl: string;
+}
+
+/** Editor data: one Linear team. */
+export interface LinearTeam {
+  id: string;
+  key: string;
+  name: string;
+}
+
+/** Editor data: one Linear label. `teamId` is null for a workspace label. */
+export interface LinearLabel {
+  id: string;
+  name: string;
+  teamId: string | null;
+}
+
+/** Editor data: one Linear workflow state. */
+export interface LinearWorkflowState {
+  id: string;
+  name: string;
+  /** Linear's state type: `triage`, `backlog`, `unstarted`, `started`, `completed`, `canceled`. */
+  type: string;
+  position: number;
+  teamId: string;
+}
+
+/** Editor data: one Linear project. */
+export interface LinearProject {
+  id: string;
+  name: string;
+}
+
+/** What `GET /linear/connections/:id/options` answers, for the rule editor. */
+export interface LinearEditorOptions {
+  teams: LinearTeam[];
+  labels: LinearLabel[];
+  states: LinearWorkflowState[];
+  projects: LinearProject[];
+  /** True when Linear could not be read; the fields still take typed values. */
+  partial: boolean;
+}
+
+/** Linear's priority names, in Linear's order (0 = no priority). */
+export const LINEAR_PRIORITY_NAMES = ['No priority', 'Urgent', 'High', 'Medium', 'Low'] as const;

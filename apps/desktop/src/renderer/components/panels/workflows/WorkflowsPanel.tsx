@@ -179,6 +179,10 @@ const PANEL_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
     'Automate what happens on a pull request. Fires on every PR in the repositories this workspace watches, including ones you did not open.',
   slack: 'Run actions when a message appears in a selected Slack channel.',
   webhook: 'Each automation gets its own URL. A request to the URL starts a session or a task.',
+  linear:
+    'Start a session or a task when an issue in Linear matches. Talyn comments on the issue and moves it to done when the fix merges.',
+  github_issues:
+    'Start a session or a task when an issue in a watched repository matches. Talyn comments on the issue and closes it when the fix merges.',
 };
 
 const EMPTY_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
@@ -187,6 +191,8 @@ const EMPTY_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
   slack: 'An automation watches Slack messages and can start a session, reply or react.',
   webhook:
     'An automation gets a URL. Another system sends a request to it, and Talyn starts a session or a task.',
+  linear: 'An automation watches Linear issues and can start a session or a task, comment, or change the status.',
+  github_issues: 'An automation watches GitHub issues and can start a session or a task, comment, or change the status.',
 };
 
 export function WorkflowsPanel({ integration = 'github' }: { integration?: WorkflowIntegration }) {

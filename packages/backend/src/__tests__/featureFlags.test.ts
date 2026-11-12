@@ -475,6 +475,7 @@ describe('featuresForUser', () => {
     // to DRAW, which is a question about the person at the screen — every route
     // gates again on the workspace owner.
     expect(Object.keys(features).sort()).toEqual([
+      'issueRules',
       'loops',
       'mcpServers',
       'privateRoutes',
@@ -513,6 +514,7 @@ describe('featuresForUser', () => {
       splitView: true,
       slackChannelRules: false,
       webhookRules: false,
+      issueRules: false,
     });
   });
 
@@ -540,6 +542,7 @@ describe('featuresForUser', () => {
       splitView: true,
       slackChannelRules: false,
       webhookRules: false,
+      issueRules: false,
     });
   });
 

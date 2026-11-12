@@ -1,9 +1,9 @@
 import type { PostHogCodeStatus } from '@talyn/client/native';
-import { DEFAULT_POSTHOG_CODE_MODEL_ID, INVALID_RETURN_TO_CODE, type TrunkIntegrationStatus } from '@talyn/shared';
+import { DEFAULT_POSTHOG_CODE_MODEL_ID, INVALID_RETURN_TO_CODE, type LinearConnection, type TrunkIntegrationStatus } from '@talyn/shared';
 
 import {
-  isHttpsUrl, keyFormOpen, postHogKeyConfig, postHogModelLabel, postHogModelOf, postHogOAuthOptions, postHogView, refusesReturnTarget,
-  TRUNK_DESCRIPTION, trunkFormOpen, trunkToken, trunkView, withAppReturn,
+  githubIssuesAvailable, isHttpsUrl, keyFormOpen, linearConnectionView, linearReturnError, postHogKeyConfig, postHogModelLabel, postHogModelOf, postHogOAuthOptions, postHogView, refusesReturnTarget,
+  ruleIntegration, TRUNK_DESCRIPTION, trunkFormOpen, trunkToken, trunkView, withAppReturn,
 } from '../features/integrations/model';
 
 describe('PostHog Code key form', () => {
@@ -155,5 +155,38 @@ describe('return target fallback', () => {
     [undefined, false],
   ])('accepts %p as a browser address: %p', (url, ok) => {
     expect(isHttpsUrl(url)).toBe(ok);
+  });
+});
+
+describe('issue integrations model', () => {
+  it.each([
+    ['slack', 'slack'], ['webhook', 'webhook'], ['linear', 'linear'], ['github_issues', 'github_issues'],
+    ['github', 'github'], ['schedule', 'github'], ['tailscale', 'github'],
+  ] as const)('opens the %s card on the %s rule list', (kind, expected) => {
+    expect(ruleIntegration(kind)).toBe(expected);
+  });
+
+  it.each([
+    [{ organizationName: 'Acme', urlKey: 'acme', reauthRequiredAt: null, reauthReason: null }, 'Acme', false, 'Connected'],
+    [{ organizationName: null, urlKey: 'acme', reauthRequiredAt: null, reauthReason: null }, 'acme', false, 'Connected'],
+    [{ organizationName: null, urlKey: null, reauthRequiredAt: null, reauthReason: null }, 'Linear workspace', false, 'Connected'],
+    [{ organizationName: 'Acme', urlKey: 'acme', reauthRequiredAt: '2026-11-10T00:00:00Z', reauthReason: 'Revoked.' }, 'Acme', true, 'Revoked.'],
+    [{ organizationName: 'Acme', urlKey: 'acme', reauthRequiredAt: '2026-11-10T00:00:00Z', reauthReason: null }, 'Acme', true,
+      'Linear ended the connection. Connect again.'],
+  ] as const)('describes a Linear connection %j', (partial, name, needsReconnect, detail) => {
+    expect(linearConnectionView({ id: 'c1', ...partial } as unknown as LinearConnection)).toEqual({ id: 'c1', name, needsReconnect, detail });
+  });
+
+  it.each([
+    ['talyn-mobile://linear/callback?linear=connected', null],
+    ['talyn-mobile://linear/callback?linear=error&message=Nope', 'Nope'],
+    ['talyn-mobile://linear/callback?linear=error', 'Linear sign-in did not finish.'],
+    ['not a url', null],
+  ])('reads the Linear return %s', (url, expected) => {
+    expect(linearReturnError(url)).toBe(expected);
+  });
+
+  it.each([[true], [false]])('offers GitHub Issues when GitHub connected is %s', (connected) => {
+    expect(githubIssuesAvailable(connected)).toBe(connected);
   });
 });

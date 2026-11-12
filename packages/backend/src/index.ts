@@ -26,6 +26,7 @@ import { handlePolarWebhook } from './services/billing/webhook.js';
 import { handleSlackWebhook, slackEventSweep } from './services/slack/events.js';
 import { mountInboundWebhooks } from './services/inbound/receiver.js';
 import { inboundDeliverySweep, initInboundDeliverySweep } from './services/inbound/sweep.js';
+import { initIssueMergeListener } from './services/inbound/onMerge.js';
 import { registerSlackStatusReactions } from './services/slack/statusReactions.js';
 import { startApiWebhooks, stopApiWebhooks } from './services/apiWebhooks/register.js';
 import { initDatabase } from './db/index.js';
@@ -295,6 +296,9 @@ async function main() {
   // Inbound webhooks: retries deliveries a crash left unprocessed and deletes
   // deliveries after 7 days. One indexed SELECT a minute when nothing waits.
   initInboundDeliverySweep();
+  // Issue rules: the merge write-back. One indexed read per merged or closed
+  // pull request, and it finds nothing when no issue link is active.
+  initIssueMergeListener();
   // Public API idempotency keys expire after 24 hours; one range delete an hour.
   startIdempotencySweep();
   // Slack sessions show their state as a reaction on the triggering message.

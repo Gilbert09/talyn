@@ -164,8 +164,9 @@ Classic OAuth connections remain supported. User-to-server tokens use the user's
    write paths), Checks **R**, Commit statuses **R**, Contents **R**, Metadata **R**,
    Members **R** (team-based review-request resolution).
 4. **Subscribe to events**: `pull_request`, `pull_request_review`,
-   `pull_request_review_comment`, `issue_comment`, `check_run`, `check_suite`,
+   `pull_request_review_comment`, `issue_comment`, `issues`, `check_run`, `check_suite`,
    `status`, `push`, `installation`, `installation_repositories`.
+   (`issues` feeds GitHub Issues rules and needs the Issues **R/W** permission, which PR comments already need.)
    (`push` is what lets us catch a PR becoming conflicting because its **base
    branch** advanced — GitHub sends no per-PR event for that; on a push we
    refresh every open PR based on the pushed branch.)
@@ -1027,6 +1028,39 @@ Set `WEBHOOK_RULES_ENABLED=true` to enable it locally. Set `WEBHOOK_RULES_ENABLE
 The URL that Talyn shows is `<public origin>/api/v1/webhooks/in/<connection id>/<token>`.
 The public origin is `TALYN_PUBLIC_API_URL`. Without it, Talyn uses the request host.
 Set it in production, so the URL does not show an internal host.
+
+### 6e. Linear app
+
+Linear rules start a session or a task when a Linear issue changes. The `issue-rules` PostHog flag gates them.
+Set `ISSUE_RULES_ENABLED=true` to enable them locally.
+
+Create an OAuth application in Linear (Settings > API > OAuth applications). Own it with the Talyn Linear workspace.
+
+| Variable | Value | Notes |
+| --- | --- | --- |
+| `LINEAR_CLIENT_ID` / `LINEAR_CLIENT_SECRET` | The application's client id and secret | Without them, "Connect Linear" is disabled. |
+| `LINEAR_OAUTH_REDIRECT_URI` | `https://prod.talyn.dev/api/v1/linear/oauth/callback` | Must match the callback URL exactly. Without it, "Connect Linear" is disabled. |
+| `LINEAR_WEBHOOK_SECRET` | The app webhook's signing secret | Without it, the webhook route answers 404. |
+
+Application settings:
+
+- **Callback URL**: `https://prod.talyn.dev/api/v1/linear/oauth/callback`. For development use `http://localhost:4747/api/v1/linear/oauth/callback`.
+- Talyn authorizes with `actor=app`, the scopes `read,write,issues:create,comments:create,app:assignable`, PKCE S256 and `prompt=consent`.
+- **Webhooks**: turn on the app's webhook. URL `https://prod.talyn.dev/api/v1/webhooks/in/linear`. Resource types: Issue and Comment.
+  Linear creates the webhook for each organization that installs the app. Copy the signing secret.
+
+How the receiver works:
+
+- It checks `Linear-Signature`, the hex HMAC-SHA256 of the raw body.
+- It refuses a `webhookTimestamp` older than 60 seconds.
+- It dedupes on `Linear-Delivery`.
+- It answers 200 and drops an event for an organization nobody connected, because Linear disables a webhook that keeps failing.
+- An "OAuth app revoked" event marks that connection "Reconnect needed".
+
+### 6f. GitHub Issues rules
+
+GitHub Issues rules use the existing GitHub App connection (see section 3b). They use the same `issue-rules` flag.
+The GitHub App must deliver the `issues` and `issue_comment` events, and have the `issues: write` permission.
 
 ## 🧰 Nice-to-have: MCP servers for Claude Code
 

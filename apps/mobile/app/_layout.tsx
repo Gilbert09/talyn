@@ -98,6 +98,7 @@ function AuthenticatedRoutes() {
       <RootStack.Screen name="mcp/callback" options={{ headerShown: false, animation: 'none' }} />
       <RootStack.Screen name="slack/callback" options={{ headerShown: false, animation: 'none' }} />
       <RootStack.Screen name="posthog/callback" options={{ headerShown: false, animation: 'none' }} />
+      <RootStack.Screen name="linear/callback" options={{ headerShown: false, animation: 'none' }} />
       <RootStack.Screen name="new" options={{ ...detailOptions('New'), animation: 'slide_from_bottom' }} />
     </RootStack.Protected>
   </RootStack>;

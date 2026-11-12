@@ -24,4 +24,18 @@ describe('integration catalog gates', () => {
     expect(integrationRulesOffered({ workflows: false }, 'github')).toBe(false);
     expect(integrationRulesOffered({ workflows: true }, 'github')).toBe(true);
   });
+
+  it.each([
+    [{ workflows: true, issueRules: true }, true],
+    [{ workflows: true, issueRules: false }, false],
+    [{ workflows: false, issueRules: true }, false],
+    [{}, false],
+    [null, false],
+  ] as const)('offers the issue cards for %j: %s', (features, offered) => {
+    const kinds = integrationsOffered(features);
+    expect(kinds.includes('linear')).toBe(offered);
+    expect(kinds.includes('github_issues')).toBe(offered);
+    expect(integrationRulesOffered(features, 'linear')).toBe(offered);
+    expect(integrationRulesOffered(features, 'github_issues')).toBe(offered);
+  });
 });

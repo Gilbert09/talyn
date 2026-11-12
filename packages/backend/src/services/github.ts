@@ -2055,19 +2055,74 @@ class GitHubService extends EventEmitter {
     );
   }
 
-  /** Post a comment on a PR (issue resource — needs `issues: write`). */
+  /**
+   * Post a comment on a PR or an issue (issue resource — needs `issues: write`).
+   * Answers the new comment's id, so an issue rule can tell its own comment
+   * from a person's.
+   */
   async createIssueComment(
     workspaceId: string,
     owner: string,
     repo: string,
     number: number,
     body: string
+  ): Promise<{ id: number | null }> {
+    const created = await this.apiRequest<{ id?: unknown } | null>(
+      workspaceId,
+      `/repos/${owner}/${repo}/issues/${number}/comments`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      }
+    );
+    return { id: typeof created?.id === 'number' ? created.id : null };
+  }
+
+  /**
+   * Open or close an issue. `completed` closes it as done; GitHub's other
+   * reason, `not_planned`, is not used.
+   */
+  async setIssueState(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    number: number,
+    state: 'open' | 'closed'
   ): Promise<void> {
-    await this.apiRequest(workspaceId, `/repos/${owner}/${repo}/issues/${number}/comments`, {
-      method: 'POST',
+    await this.apiRequest(workspaceId, `/repos/${owner}/${repo}/issues/${number}`, {
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body }),
+      body: JSON.stringify(state === 'closed' ? { state, state_reason: 'completed' } : { state }),
     });
+  }
+
+  /**
+   * The newest comments on an issue, oldest first, for an issue rule's prompt.
+   * `per_page` comments from the end of the thread: GitHub sorts ascending, so
+   * the call reads the last page of a thread longer than one page.
+   */
+  async listRecentIssueComments(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    number: number,
+    count: number
+  ): Promise<Array<{ id: number; body: string; login: string | null; createdAt: string | null }>> {
+    const issue = await this.apiRequest<{ comments?: unknown }>(workspaceId, `/repos/${owner}/${repo}/issues/${number}`);
+    const total = typeof issue?.comments === 'number' ? issue.comments : 0;
+    if (total === 0) return [];
+    const page = Math.max(1, Math.ceil(total / count));
+    const rows = await this.apiRequest<Array<{ id?: unknown; body?: unknown; user?: { login?: unknown } | null; created_at?: unknown }>>(
+      workspaceId,
+      `/repos/${owner}/${repo}/issues/${number}/comments?per_page=${count}&page=${page}`
+    );
+    return (Array.isArray(rows) ? rows : []).map((r) => ({
+      id: typeof r.id === 'number' ? r.id : 0,
+      body: typeof r.body === 'string' ? r.body : '',
+      login: typeof r.user?.login === 'string' ? r.user.login : null,
+      createdAt: typeof r.created_at === 'string' ? r.created_at : null,
+    }));
   }
 
   /** Label names defined on a repo (first 100 — enough to spot a submit label). */

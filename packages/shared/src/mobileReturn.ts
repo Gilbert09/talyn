@@ -31,6 +31,9 @@ export const MOBILE_SLACK_RETURN_PATH = 'slack/callback';
 /** Path (after `returnTo`) a PostHog Code sign-in finishes on: `?posthog=connected|error`. */
 export const MOBILE_POSTHOG_RETURN_PATH = 'posthog/callback';
 
+/** Path (after `returnTo`) a Linear connect finishes on: `?linear=connected|error`. */
+export const MOBILE_LINEAR_RETURN_PATH = 'linear/callback';
+
 /**
  * Why a GitHub connect failed, as `?github=error&reason=<code>`.
  * - `access_denied`: the person declined on GitHub.

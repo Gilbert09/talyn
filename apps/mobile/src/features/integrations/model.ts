@@ -1,7 +1,7 @@
 import type { PostHogCodeStatus } from '@talyn/client/native';
 import {
-  DEFAULT_POSTHOG_CODE_MODEL_ID, INVALID_RETURN_TO_CODE, POSTHOG_CODE_MODELS,
-  type TrunkIntegrationStatus, type WorkspaceSettings,
+  DEFAULT_POSTHOG_CODE_MODEL_ID, INVALID_RETURN_TO_CODE, isWorkflowIntegration, POSTHOG_CODE_MODELS,
+  type LinearConnection, type TrunkIntegrationStatus, type WorkflowIntegration, type WorkspaceSettings,
 } from '@talyn/shared';
 
 import type { Tone } from '../../components/UI';
@@ -159,4 +159,37 @@ export async function withAppReturn<T>(request: (returnTo?: string) => Promise<T
 export function isHttpsUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   try { return new URL(value).protocol === 'https:'; } catch { return false; }
+}
+
+// ---------------------------------------------------------------------------
+// Issue integrations
+// ---------------------------------------------------------------------------
+
+/** The rule list an integration card opens. Only the workflow integrations have their own; the rest read as GitHub. */
+export function ruleIntegration(kind: string): WorkflowIntegration {
+  return kind !== 'schedule' && isWorkflowIntegration(kind) ? kind : 'github';
+}
+
+/** GitHub Issues rides the GitHub connection, so its card needs GitHub connected as well as the flag. */
+export function githubIssuesAvailable(githubConnected: boolean): boolean {
+  return githubConnected;
+}
+
+export interface LinearConnectionView { id: string; name: string; needsReconnect: boolean; detail: string }
+
+export function linearConnectionView(connection: LinearConnection): LinearConnectionView {
+  const name = connection.organizationName ?? connection.urlKey ?? 'Linear workspace';
+  const needsReconnect = connection.reauthRequiredAt !== null;
+  return {
+    id: connection.id, name, needsReconnect,
+    detail: needsReconnect ? (connection.reauthReason ?? 'Linear ended the connection. Connect again.') : 'Connected',
+  };
+}
+
+/** The `linear=error` return carries a message; any other return carries none. */
+export function linearReturnError(url: string): string | null {
+  try {
+    const params = new URL(url).searchParams;
+    return params.get('linear') === 'error' ? (params.get('message') ?? 'Linear sign-in did not finish.') : null;
+  } catch { return null; }
 }

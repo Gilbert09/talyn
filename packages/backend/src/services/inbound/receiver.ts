@@ -2,7 +2,8 @@ import type { IncomingHttpHeaders } from 'node:http';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { rateLimit } from '../../middleware/rateLimit.js';
 import { debugBus } from '../debugBus.js';
-import { inboundAdapterFor } from './adapters/index.js';
+import type { InboundVendorRoute } from './adapter.js';
+import { INBOUND_VENDOR_ROUTES, inboundAdapterFor } from './adapters/index.js';
 import { processInboundDelivery } from './process.js';
 import { connectionSecrets, insertDelivery } from './store.js';
 
@@ -142,6 +143,82 @@ export async function handleInboundWebhook(req: Request, res: Response): Promise
   if (stored.inserted) scheduleProcessing(stored.id);
 }
 
+/**
+ * One request to an app-level vendor route (Linear). The order is: verify with
+ * the app secret (no database read), answer an app message, find the
+ * connections the event is for, store one delivery per connection, answer
+ * 200, process after the response.
+ *
+ * An event for an account nobody here connected, or one whose workspaces are
+ * all outside the flag, is answered 200 and dropped: the vendor disables a
+ * webhook whose deliveries keep failing, and that would cut off every other
+ * account.
+ */
+export async function handleVendorWebhook(route: InboundVendorRoute, req: Request, res: Response): Promise<void> {
+  if (!route.configured()) return notFound(res);
+  const rawBody: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from('');
+  const payload = parseInboundBody(rawBody);
+  const verdict = route.verify(rawBody, req.headers, payload, Date.now());
+  if (verdict !== 'valid') {
+    debugBus.recordEvent({ service: 'inbound', action: 'refused', ok: false, summary: `${route.path}: ${verdict}` });
+    res.status(401).json({ error: verdict === 'missing' ? 'missing signature' : verdict === 'stale' ? 'stale request' : 'invalid signature' });
+    return;
+  }
+  if (route.handleControl && (await route.handleControl(payload))) {
+    res.status(200).json({ received: true });
+    return;
+  }
+
+  const connections = await route.connectionsFor(payload);
+  const adapter = inboundAdapterFor(route.kind);
+  const allowed: typeof connections = [];
+  for (const connection of connections) {
+    if (adapter && (await adapter.workspaceAllowed(connection.workspaceId))) allowed.push(connection);
+  }
+  if (allowed.length === 0) {
+    res.status(200).json({ received: true, ignored: true });
+    return;
+  }
+
+  const deliveryId = route.deliveryId(rawBody, req.headers);
+  const eventType = route.eventType(payload, req.headers);
+  const toProcess: string[] = [];
+  try {
+    for (const connection of allowed) {
+      const stored = await insertDelivery({
+        connectionId: connection.id,
+        deliveryId,
+        eventType,
+        payload,
+        headers: keptHeaders(req.headers),
+        payloadBytes: rawBody.length,
+      });
+      if (stored.inserted) toProcess.push(stored.id);
+    }
+  } catch (err) {
+    // Not stored, so the vendor should try again. A delivery stored before the
+    // failure is a duplicate on the resend, and the unique index drops it.
+    console.error(`[inbound] could not store ${route.path} delivery:`, err);
+    res.status(500).json({ error: 'could not store the request' });
+    return;
+  }
+  res.status(200).json({ received: true, stored: toProcess.length });
+  debugBus.recordEvent({
+    service: 'inbound',
+    action: 'received',
+    summary: `${route.path} ${eventType} for ${allowed.length} connection(s)`,
+  });
+  for (const id of toProcess) scheduleProcessing(id);
+}
+
+/**
+ * Requests one IP may send a vendor route a minute. The signature is checked
+ * before any database read, so this bounds CPU only. A vendor sends every
+ * organization's events from a few addresses, so it is 10 times the per-IP
+ * limit of the per-rule URLs.
+ */
+const VENDOR_PER_IP_PER_MINUTE = 6000;
+
 /** Process a stored delivery after the response, off the request's async context. */
 export function scheduleProcessing(id: string): void {
   setImmediate(() => {
@@ -166,6 +243,17 @@ function readRawBody(req: Request, res: Response, next: NextFunction): void {
  * tests on a bare app.
  */
 export function mountInboundWebhooks(app: Express): void {
+  // Vendor routes first: `/linear` would otherwise reach the per-connection
+  // route and answer 404 as an unknown connection id.
+  const vendorPerIp = rateLimit({ windowMs: 60_000, max: VENDOR_PER_IP_PER_MINUTE, message: 'Too many requests.' });
+  for (const route of INBOUND_VENDOR_ROUTES) {
+    app.post(`${INBOUND_PATH}/${route.path}`, vendorPerIp, readRawBody, (req, res) => {
+      handleVendorWebhook(route, req, res).catch((err) => {
+        console.error(`[inbound] ${route.path} webhook failed:`, err);
+        if (!res.headersSent) res.status(500).json({ error: 'webhook processing failed' });
+      });
+    });
+  }
   const perIp = rateLimit({ windowMs: 60_000, max: PER_IP_PER_MINUTE, message: 'Too many requests.' });
   const perConnection = rateLimit({
     windowMs: 60_000,

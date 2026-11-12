@@ -3,6 +3,7 @@ import {
   INVALID_RETURN_TO_CODE,
   MOBILE_BILLING_RETURN_PATH,
   MOBILE_GITHUB_RETURN_PATH,
+  MOBILE_LINEAR_RETURN_PATH,
   MOBILE_MCP_RETURN_PATH,
   MOBILE_POSTHOG_RETURN_PATH,
   MOBILE_SLACK_RETURN_PATH,
@@ -119,6 +120,11 @@ export function mobileSlackReturnUrl(
     MOBILE_SLACK_RETURN_PATH,
     outcome.ok ? { slack: outcome.flow === 'install' ? 'installed' : 'linked' } : errorParams('slack', outcome.message)
   );
+}
+
+/** Where the Linear OAuth callback finishes for a mobile flow. */
+export function mobileLinearReturnUrl(returnTo: string, outcome: { ok: true } | { ok: false; message: string }): string {
+  return appUrl(returnTo, MOBILE_LINEAR_RETURN_PATH, outcome.ok ? { linear: 'connected' } : errorParams('linear', outcome.message));
 }
 
 /** Where the PostHog Code OAuth callback finishes for a mobile flow. */

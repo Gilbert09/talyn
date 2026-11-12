@@ -180,8 +180,9 @@ export function SlackConditions({ conditions, onChange, settings }: {
 
 /**
  * The form for an action that starts work: a session (every integration) or a
- * task (webhook rules). A GitHub rule runs on the PR's own repository, a Slack
- * rule can let Talyn choose, and a webhook rule must name one.
+ * task (webhook and issue rules). A GitHub rule runs on the PR's own
+ * repository, a Slack rule can let Talyn choose, a GitHub Issues rule can use
+ * the issue's repository, and a webhook or Linear rule must name one.
  */
 export function StartSessionInput({ action, onChange, integration }: {
   action: Extract<WorkflowAction, { type: 'start_session' | 'start_task' }>;
@@ -190,13 +191,17 @@ export function StartSessionInput({ action, onChange, integration }: {
 }) {
   const repositories = useWorkspaceStore((s) => s.repositories);
   useFleetModelCatalog();
-  const setRepository = (value: string) => onChange(action.type === 'start_task'
+  // A GitHub Issues rule can leave the repository empty: the issue's own repository.
+  const setRepository = (value: string) => onChange(action.type === 'start_task' && integration !== 'github_issues'
     ? { ...action, repositoryId: value }
     : { ...action, repositoryId: value || null });
+  const emptyRepository = integration === 'slack'
+    ? 'Let Talyn choose'
+    : integration === 'github_issues' ? 'The issue\'s repository' : 'Pick a repository';
   return <div className="space-y-3">
     {integration !== 'github' && <label className="block text-xs font-medium text-muted-foreground">Repository
       <Select className="mt-1 block" value={action.repositoryId ?? ''} onChange={(e) => setRepository(e.target.value)}>
-        <option value="">{integration === 'slack' ? 'Let Talyn choose' : 'Pick a repository'}</option>
+        <option value="">{emptyRepository}</option>
         {repositories.map((repo) => <option key={repo.id} value={repo.id}>{repo.fullName}</option>)}
       </Select>
     </label>}
@@ -205,6 +210,9 @@ export function StartSessionInput({ action, onChange, integration }: {
     </label>
     {integration === 'webhook' && <p className="text-xs text-muted-foreground">
       Talyn adds the request body below your prompt as untrusted text. {'{{payload.<path>}}'} in the prompt is quoted the same way.
+    </p>}
+    {(integration === 'linear' || integration === 'github_issues') && <p className="text-xs text-muted-foreground">
+      Talyn adds the issue title, description and link below your prompt as untrusted text.
     </p>}
     <label className="block text-xs font-medium text-muted-foreground">Model
       <Select className="mt-1 block" value={action.model ?? ''} onChange={(e) => onChange({ ...action, model: e.target.value || undefined })}>

@@ -3516,3 +3516,74 @@ export const inboundDeliveries = pgTable(
     receivedIdx: index('idx_inbound_deliveries_received').on(t.receivedAt),
   })
 );
+
+/**
+ * The work an issue rule started on one issue (migration 0132). The partial
+ * UNIQUE on active rows is what refuses a second start on the same issue.
+ * Backend-pool-only.
+ */
+export const externalIssueLinks = pgTable(
+  'external_issue_links',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** `IssueWorkflowIntegration`: 'linear' | 'github_issues'. */
+    integration: text('integration').notNull(),
+    connectionId: text('connection_id').references(() => inboundConnections.id, { onDelete: 'set null' }),
+    workflowId: text('workflow_id').references(() => workflows.id, { onDelete: 'set null' }),
+    runId: text('run_id'),
+    externalId: text('external_id').notNull(),
+    externalKey: text('external_key').notNull(),
+    externalUrl: text('external_url').notNull().default(''),
+    /** The issue facts, for the merge write-back. */
+    facts: jsonb('facts'),
+    taskId: text('task_id').references((): AnyPgColumn => tasks.id, { onDelete: 'set null' }),
+    workbenchId: text('workbench_id').references((): AnyPgColumn => workbenches.id, { onDelete: 'set null' }),
+    pullRequestId: text('pull_request_id').references((): AnyPgColumn => pullRequests.id, { onDelete: 'set null' }),
+    ourCommentIds: jsonb('our_comment_ids').$type<string[]>().notNull().default([]),
+    /** 'active' | 'done' | 'failed'. */
+    status: text('status').notNull().default('active'),
+    statusReason: text('status_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    settledAt: timestamp('settled_at', { withTimezone: true }),
+  },
+  (t) => ({
+    activeUq: uniqueIndex('uq_external_issue_links_active')
+      .on(t.workspaceId, t.integration, t.externalId)
+      .where(sql`${t.status} = 'active'`),
+    issueIdx: index('idx_external_issue_links_issue').on(t.integration, t.externalId),
+    taskIdx: index('idx_external_issue_links_task').on(t.taskId).where(sql`${t.taskId} IS NOT NULL`),
+    workbenchIdx: index('idx_external_issue_links_workbench')
+      .on(t.workbenchId)
+      .where(sql`${t.workbenchId} IS NOT NULL`),
+    pullRequestIdx: index('idx_external_issue_links_pull_request')
+      .on(t.pullRequestId)
+      .where(sql`${t.pullRequestId} IS NOT NULL`),
+  })
+);
+
+/** One pending OAuth sign-in for an inbound vendor (migration 0132). Single use. */
+export const inboundOauthStates = pgTable(
+  'inbound_oauth_states',
+  {
+    stateHash: text('state_hash').primaryKey(),
+    kind: text('kind').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    codeVerifierEnc: jsonb('code_verifier_enc').$type<EncryptedEnvelope>().notNull(),
+    client: text('client').notNull().default('desktop'),
+    mobileReturn: text('mobile_return'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    expiresIdx: index('idx_inbound_oauth_states_expires').on(t.expiresAt),
+  })
+);

@@ -932,6 +932,13 @@
       "when": 1790900000080,
       "tag": "0131_inbound_integrations",
       "breakpoints": true
+    },
+    {
+      "idx": 134,
+      "version": "7",
+      "when": 1790900000090,
+      "tag": "0132_issue_rules",
+      "breakpoints": true
     }
   ]
 }

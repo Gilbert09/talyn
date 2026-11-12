@@ -1,6 +1,7 @@
 import { ExternalLink } from 'lucide-react';
 import type { WorkflowActionOutcome, WorkflowRun, WorkflowRunStatus } from '@talyn/shared';
 import {
+  isIssueWorkflowIntegration,
   WORKFLOW_ACTION_LABELS,
   WORKFLOW_EVENT_LABELS,
   WORKFLOW_RUN_STATUS_LABELS,
@@ -118,7 +119,7 @@ export function WorkflowRunsList({
               </a>
             ) : (
               <span className="font-medium">
-                {run.subjectLabel || (run.integration === 'slack' ? 'Slack message' : run.integration === 'webhook' ? 'Webhook request' : `${run.repoFullName}#${run.prNumber}`)}
+                {run.subjectLabel || (run.integration === 'slack' ? 'Slack message' : run.integration === 'webhook' ? 'Webhook request' : isIssueWorkflowIntegration(run.integration) ? 'Issue' : `${run.repoFullName}#${run.prNumber}`)}
               </span>
             )}
             <span className="ml-auto text-xs text-muted-foreground">

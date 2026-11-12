@@ -8,8 +8,8 @@ import type { WorkflowSourceAdapter, WorkflowSourceTarget } from '../workflows/s
  * The receiver, the store, the processing claim and the sweep are the same for
  * every vendor. An adapter owns only what differs: how a request proves it came
  * from the sender, which id a resend repeats, what to call the event, and the
- * facts a rule matches on. Linear, Sentry and Jira are later adapters of this
- * shape. Only the generic webhook exists today.
+ * facts a rule matches on. The generic webhook and Linear exist today;
+ * Sentry and Jira are later adapters of this shape.
  */
 
 export type InboundVerifyResult = 'valid' | 'invalid' | 'missing' | 'stale';
@@ -75,6 +75,32 @@ export interface InboundAdapter<Facts extends WorkflowFacts, Target extends Work
   readonly workflowSource: WorkflowSourceAdapter<InboundWorkflowInput<Facts>, Target, Facts>;
   /** Whether this workspace's owner may use this vendor's rules (its feature flag). */
   workspaceAllowed(workspaceId: string): Promise<boolean>;
+}
+
+/**
+ * A vendor that posts every organization's events to ONE app-level URL
+ * (`/webhooks/in/<path>`) and signs them with one app secret, as Linear's
+ * OAuth app webhook does. The receiver verifies with the app secret first
+ * (no database read), then asks the route which connections the event is
+ * for, and stores one delivery per connection.
+ */
+export interface InboundVendorRoute {
+  /** The path segment after `/webhooks/in/`, like `linear`. */
+  readonly path: string;
+  readonly kind: InboundKind;
+  /** False when this deployment has no app secret: the route then answers 404. */
+  configured(): boolean;
+  /** Whether the request came from the vendor. Constant-time comparisons only. */
+  verify(rawBody: Buffer, headers: IncomingHttpHeaders, payload: unknown, now: number): InboundVerifyResult;
+  /**
+   * A message about the app itself, not an event (Linear's "app revoked").
+   * Returns true when it handled the payload, and nothing is stored.
+   */
+  handleControl?(payload: unknown): Promise<boolean>;
+  /** The connections an event is for: every workspace that connected this vendor account. */
+  connectionsFor(payload: unknown): Promise<InboundConnectionRef[]>;
+  deliveryId(rawBody: Buffer, headers: IncomingHttpHeaders): string;
+  eventType(payload: unknown, headers: IncomingHttpHeaders): string;
 }
 
 /** Read one header as a single trimmed string, or null. */

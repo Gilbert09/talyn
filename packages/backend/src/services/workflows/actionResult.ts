@@ -3,7 +3,7 @@ import { boxRefusalReason } from '@talyn/shared';
 import { captureWorkspaceEvent } from '../analytics.js';
 import { deferralRetryAt } from '../billing/boxDeferral.js';
 import type { BoxGateError } from '../billing/entitlements.js';
-import type { WorkflowActionContext } from './actions.js';
+import { isIssueContext, type WorkflowActionContext } from './actions.js';
 
 /**
  * The outcome helpers every action module shares. Their own module so the
@@ -69,7 +69,9 @@ export function recordDeferral(ctx: WorkflowActionContext, gate: WorkflowActionF
       ? { slack_team_id: ctx.facts.teamId, slack_channel_id: ctx.facts.channelId }
       : ctx.integration === 'webhook'
         ? { webhook_connection_id: ctx.facts.connectionId }
-        : { repo: `${ctx.owner}/${ctx.repo}`, pr_number: ctx.facts.number };
+        : isIssueContext(ctx)
+          ? { issue_integration: ctx.integration, issue_id: ctx.facts.externalId }
+          : { repo: `${ctx.owner}/${ctx.repo}`, pr_number: ctx.facts.number };
   captureWorkspaceEvent(ctx.workspaceId, 'paywall_deferred', {
     source: 'workflow',
     gate,

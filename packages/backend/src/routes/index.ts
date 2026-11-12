@@ -30,6 +30,7 @@ import { workflowWebhookRoutes } from './workflowWebhooks.js';
 import { trunkPullRequestRoutes, trunkRoutes } from './trunk.js';
 import { billingPublicRoutes, billingRoutes } from './billing.js';
 import { slackPublicRoutes, slackRoutes } from './slack.js';
+import { linearPublicRoutes, linearRoutes } from './linear.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
 import { apiTokenRoutes } from './apiTokens.js';
 import { releaseNotesPublicRoutes, releaseNotesRoutes } from './releaseNotes.js';
@@ -131,6 +132,8 @@ export function setupRoutes(app: Express): void {
   // Slack's OAuth redirect (install and "Sign in with Slack" share it). A
   // browser hop with no session; the single-use state row authenticates it.
   app.use(`${api}/slack`, mount(slackPublicRoutes()));
+  // Linear's OAuth redirect. The same shape as Slack's.
+  app.use(`${api}/linear`, mount(linearPublicRoutes()));
 
   // Everything below is authenticated. The middleware populates req.user
   // and refuses requests without a valid Supabase JWT.
@@ -213,6 +216,10 @@ export function setupRoutes(app: Express): void {
   // backend-only, so every read is on the pool and each handler scopes to
   // req.user.id itself. See routes/slack.ts.
   app.use(`${api}/slack`, mount(slackRoutes()));
+
+  // Linear connections. Pre-ownerScope like Slack: `inbound_connections` is
+  // backend-pool only, and each handler checks workspace access itself.
+  app.use(`${api}/linear`, mount(linearRoutes()));
 
   // Which allow-listed features this account may see. Pre-ownerScope: the
   // answer is about the caller, not about any workspace's rows, so there is

@@ -244,6 +244,7 @@ describe('workflow routes', () => {
         splitView: true,
         slackChannelRules: false,
         webhookRules: false,
+        issueRules: false,
       });
     });
 
@@ -276,6 +277,7 @@ describe('workflow routes', () => {
         splitView: true,
         slackChannelRules: false,
         webhookRules: false,
+        issueRules: false,
       });
     });
   });
@@ -440,7 +442,7 @@ describe('workflow routes', () => {
     });
 
     it('refuses an unknown ?integration with 400', async () => {
-      const res = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine&integration=linear`, {
+      const res = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine&integration=jira`, {
         headers,
       });
       expect(res.status).toBe(400);

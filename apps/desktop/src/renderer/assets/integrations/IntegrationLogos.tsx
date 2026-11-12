@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import { Clock, Webhook } from 'lucide-react';
+import { CircleDot, Clock, Webhook } from 'lucide-react';
 import type { IntegrationInfo } from '@talyn/shared';
 
 /**
@@ -99,6 +99,15 @@ function TrunkLogo({ className }: LogoProps) {
 }
 
 /** Schedule and Webhooks are ours, not a vendor's, so they keep plain icons. */
+// The Linear mark, from simple-icons. Monochrome, so it follows the theme.
+function LinearLogo({ className }: LogoProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
+      <path d="M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z" />
+    </svg>
+  );
+}
+
 export const INTEGRATION_LOGOS: Record<IntegrationInfo['icon'], ComponentType<LogoProps>> = {
   github: GithubLogo,
   slack: SlackLogo,
@@ -107,4 +116,6 @@ export const INTEGRATION_LOGOS: Record<IntegrationInfo['icon'], ComponentType<Lo
   network: TailscaleLogo,
   posthog: PostHogLogo,
   trunk: TrunkLogo,
+  linear: LinearLogo,
+  issues: CircleDot,
 };

@@ -119,7 +119,7 @@ describe('integration of a rule', () => {
     expect(validateWorkflow(githubRule({ integration })).integration).toBe('github');
   });
 
-  it.each(['linear', 'GitHub', 3, true])('refuses integration=%j', (integration) => {
+  it.each(['jira', 'GitHub', 3, true])('refuses integration=%j', (integration) => {
     expect(() => validateWorkflow(githubRule({ integration }))).toThrow(/integration must be one of/);
   });
 

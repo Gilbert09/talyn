@@ -16,7 +16,8 @@ import {
 } from './checkCounts.js';
 import { noteIssueComment } from './externalQueueState.js';
 import { terminalOutcomeFromPayload, type WebhookDelivery } from './webhookPayload.js';
-import { evaluateWorkflowsForDelivery } from './workflows/engine.js';
+import { evaluateWorkflows, evaluateWorkflowsForDelivery } from './workflows/engine.js';
+import { githubIssuesWorkflowSource } from './workflows/sources/githubIssues.js';
 // Re-exported so the receiver, the tests and everything else keep importing the
 // delivery envelope and the terminal-state reader from here. They live in
 // webhookPayload.ts only to keep that module a leaf — see its header.
@@ -76,6 +77,8 @@ const SLOW_ADMISSION_MAX = 64;
 /** Repository events need a user access check, including incremental check updates. */
 export function isSlowEvent(eventType: string): boolean {
   return [
+    // An issue event can run issue rules, which write back to GitHub.
+    'issues',
     'pull_request',
     'pull_request_review',
     'pull_request_review_comment',
@@ -332,6 +335,18 @@ export async function processWebhookDelivery(
       err instanceof Error ? err.message : err,
     );
   });
+  // GitHub Issues rules, beside the PR rules and above the refresh gate for the
+  // same reasons. The source ignores everything but `issues` and an
+  // `issue_comment` on a plain issue.
+  if (delivery.eventType === 'issues' || delivery.eventType === 'issue_comment') {
+    await evaluateWorkflows(githubIssuesWorkflowSource, { delivery, targets }).catch((err: unknown) => {
+      console.warn(
+        `[webhookWorker] issue rule evaluation ${delivery.repoFullName} ` +
+          `${delivery.eventType}/${delivery.action ?? '-'}:`,
+        err instanceof Error ? err.message : err,
+      );
+    });
+  }
 
   if (!isRefreshEvent(delivery.eventType)) {
     whTrace(`  └ ${delivery.eventType}: not a refresh event — ignored`);

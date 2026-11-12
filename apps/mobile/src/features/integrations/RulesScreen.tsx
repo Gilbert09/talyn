@@ -6,7 +6,7 @@ import { AppText, Button, EmptyState, Group, Pill, Row, ui } from '../../compone
 import { openExternal, StateNotice } from '../../components/Workflow';
 import { shortTime, useNow } from '../../lib/time';
 import { useTheme } from '../../theme/tokens';
-import { Loading, Page, WebRow, webUrl } from '../more/Page';
+import { Intro, Loading, Page, WebRow, webUrl } from '../more/Page';
 import { integrationRuleRoute } from '../more/routes';
 import type { Remote } from '../more/useRemote';
 import { useLoopList, useToggle, useWorkflowList } from '../automations/data';
@@ -19,6 +19,7 @@ export function RulesScreen({ kind, integration = 'github' }: { kind: Automation
   const loopList = useLoopList(kind === 'loop');
   const list = kind === 'workflow' ? workflowList : loopList;
   return <Page refreshing={list.refreshing && list.data !== undefined} onRefresh={() => { void list.refresh(); }}>
+    {integration === 'github_issues' ? <Intro>GitHub Issues uses your GitHub connection.</Intro> : null}
     {kind === 'workflow'
       ? <AutomationList kind="workflow" integration={integration} list={workflowList} />
       : <AutomationList kind="loop" list={loopList} />}
@@ -39,6 +40,8 @@ function AutomationList<T extends WorkflowWithStats | LoopWithStats>({ kind, int
     {items?.length === 0 ? <EmptyState title="No automations yet"
       detail={kind === 'loop' ? 'An automation runs on a schedule and starts a session or a task.'
         : integration === 'slack' ? 'An automation watches Slack messages and can start a session, reply or react.'
+          : integration === 'linear' ? 'An automation watches Linear issues and can start a session or a task.'
+          : integration === 'github_issues' ? 'An automation watches GitHub issues and can start a session or a task.'
           : integration === 'webhook' ? 'An automation gets its own URL. A request to it starts a session or a task.'
             : 'An automation watches pull request events and can label, comment, request reviewers, start a session and more.'}>
       <Button title="Create an automation" onPress={() => openExternal(webUrl(`/integrations/${kind === 'loop' ? 'schedule' : integration}`))} />

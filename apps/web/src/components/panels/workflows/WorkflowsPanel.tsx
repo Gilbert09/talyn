@@ -37,6 +37,16 @@ const PANEL_COPY: Record<WorkflowIntegration, { title: string; description: stri
     description: 'Each automation has its own URL. A request to the URL starts a session or a task.',
     empty: 'An automation gets its own URL. A request to it can start a session or a task.',
   },
+  linear: {
+    title: 'Linear automations',
+    description: 'Start a session or a task when an issue in Linear matches. Talyn comments on the issue and moves it to done when the fix merges.',
+    empty: 'An automation watches Linear issues and can start a session or a task, comment, or change the status.',
+  },
+  github_issues: {
+    title: 'GitHub Issues automations',
+    description: 'Start a session or a task when an issue in a watched repository matches. Talyn comments on the issue and closes it when the fix merges.',
+    empty: 'An automation watches GitHub issues and can start a session or a task, comment, or change the status.',
+  },
 };
 
 /** A webhook rule's expanded row: its URL, then its runs or the requests it received. */

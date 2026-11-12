@@ -13,6 +13,7 @@ import { AuthCallback } from './routes/AuthCallback';
 import { McpCallback } from './routes/McpCallback';
 import { MobileCallback } from './components/auth/MobileCallback';
 import { OpenSession } from './routes/OpenSession';
+import { OpenTask } from './routes/OpenTask';
 
 export default function App() {
   // Before anything else: if this window is the GitHub-connect popup coming
@@ -38,6 +39,7 @@ function SessionRoutes() {
       <Routes>
         <Route path="/login" element={<LoginScreen />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/open/task/:id" element={<OpenTask />} />
         <Route path="/*" element={<RequireAuth />} />
       </Routes>
       <Toaster />
