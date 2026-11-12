@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import {
-  defaultMobileNotificationPreferences, normalizeMobileNotificationPreferences,
+  DESK_PRESENCE_TTL_MS, defaultMobileNotificationPreferences, normalizeMobileNotificationPreferences,
   type MobileNotificationPreferencesInput,
 } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
@@ -146,7 +146,7 @@ describe('away-only delivery', () => {
     if (how === 'expired') {
       vi.useFakeTimers({ toFake: ['Date'] });
       await deskPresence.report(owner, 'desktop', true);
-      vi.setSystemTime(Date.now() + 60_000);
+      vi.setSystemTime(Date.now() + DESK_PRESENCE_TTL_MS);
     }
     const push = provider();
     await dispatchMobileNotifications(push, new Date());

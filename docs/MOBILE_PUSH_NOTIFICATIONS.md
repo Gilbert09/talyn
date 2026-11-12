@@ -187,7 +187,7 @@ The socket sends the latest state again after a reconnect.
 
 The backend keeps one record for each authenticated socket (`services/deskPresence.ts`).
 The user ID comes from the socket's authentication. The backend ignores IDs in the message body.
-A person is at the desk while any of their sockets sent `active` in the last 60 seconds.
+A person is at the desk while any of their sockets sent `active` in the last 3 minutes. The limit was 60 seconds until 2026-11-12, but a hidden desktop window's timers run only about once a minute, so the record lapsed between beats.
 `away` and a closed socket remove the record immediately.
 When the beats stop (sleep, quit, or network loss), the record expires after 60 seconds.
 With `REDIS_URL`, the records are in one Redis hash for each user, so all replicas give the same answer.

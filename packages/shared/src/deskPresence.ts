@@ -18,5 +18,10 @@ export interface DeskPresenceMessage {
 export const DESK_PRESENCE_BEAT_MS = 30_000;
 /** No keyboard or pointer input for this long reads as away. */
 export const DESK_PRESENCE_IDLE_MS = 180_000;
-/** How long the backend trusts the last `active` without a new one. */
-export const DESK_PRESENCE_TTL_MS = 60_000;
+/**
+ * How long the backend trusts the last `active` without a new one. Three minutes, not two beats: Chromium throttles
+ * the timers of a hidden window (Talyn behind other apps on macOS) to about once a minute, and with a 60 s TTL the
+ * record lapsed between beats, so phone alerts went out while the person was working (2026-11-12). Lock, sleep and
+ * quit still send `away` at once; only a crash or a lost network waits for the TTL.
+ */
+export const DESK_PRESENCE_TTL_MS = 180_000;

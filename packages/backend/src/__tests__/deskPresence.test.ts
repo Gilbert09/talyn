@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { WebSocket, type WebSocketServer } from 'ws';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DESK_PRESENCE_TTL_MS } from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
 import * as auth from '../middleware/auth.js';
 import { debugBus } from '../services/debugBus.js';
@@ -48,17 +49,17 @@ describe.each(['memory', 'redis'] as const)('desk presence store with %s', (mode
     expect(await store.atDesk('user')).toBe(false);
   });
 
-  it('holds an active beat for 60 seconds and renews it on the next beat', async () => {
+  it('holds an active beat for the TTL and renews it on the next beat', async () => {
     await store.report('user', 'socket', true);
     expect(await store.atDesk('user')).toBe(true);
-    await vi.advanceTimersByTimeAsync(59_999);
+    await vi.advanceTimersByTimeAsync(DESK_PRESENCE_TTL_MS - 1);
     expect(await store.atDesk('user')).toBe(true);
     await store.report('user', 'socket', true);
-    await vi.advanceTimersByTimeAsync(59_999);
+    await vi.advanceTimersByTimeAsync(DESK_PRESENCE_TTL_MS - 1);
     expect(await store.atDesk('user')).toBe(true);
     await vi.advanceTimersByTimeAsync(1);
     expect(await store.atDesk('user')).toBe(false);
-    if (mode === 'redis') expect(redis.expiries.get('talyn:desk:user')).toBe(60_000);
+    if (mode === 'redis') expect(redis.expiries.get('talyn:desk:user')).toBe(DESK_PRESENCE_TTL_MS);
   });
 
   it('clears at once on away and on a closed socket', async () => {
@@ -96,7 +97,7 @@ it('removes silent users from memory on a later write', async () => {
   vi.useFakeTimers();
   const store = new DeskPresenceStore(() => null);
   await store.report('gone', 'socket', true);
-  await vi.advanceTimersByTimeAsync(60_000);
+  await vi.advanceTimersByTimeAsync(DESK_PRESENCE_TTL_MS);
   await store.report('user', 'socket', true);
   expect((store as unknown as { memory: Map<string, unknown> }).memory.has('gone')).toBe(false);
   vi.useRealTimers();
