@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, FolderOpen, Github, Plus, RefreshCw, X } from 'lucide-react';
 import { SANDBOX_SIZES, type RepositoryPreviewResponse, type RepositorySandboxSizeResponse, type RepositorySetup, type WorkbenchConfig } from '@talyn/shared';
 import { api, GitHubRepo, loadAllRepos, mergeRepos } from '../../../lib/api';
+import { queuedRowRequest } from '../../../lib/rowRequestQueue';
 import { cn } from '../../../lib/utils';
 import { isOwnerCovered, parseRepoInput } from '../../../lib/githubInstall';
 import { autoDetectCheckouts } from '../../../lib/checkoutDetection';
@@ -567,9 +568,9 @@ function RepoRow({
   const previewsEnabled = useWorkspaceStore((s) => s.features?.workbenches === true);
   useEffect(() => {
     let active = true;
-    void api.repositories.sandboxSize.get(repo.id).then((value) => { if (active) setSize(value); }).catch(() => undefined);
-    if (previewsEnabled) void api.repositories.preview.get(repo.id).then((value) => { if (active) setPreview(value); }).catch(() => undefined);
-    if (previewsEnabled) void api.repositories.setup.get(repo.id).then((value) => { if (active) setSetup(value); }).catch(() => undefined);
+    void queuedRowRequest(() => api.repositories.sandboxSize.get(repo.id)).then((value) => { if (active) setSize(value); }).catch(() => undefined);
+    if (previewsEnabled) void queuedRowRequest(() => api.repositories.preview.get(repo.id)).then((value) => { if (active) setPreview(value); }).catch(() => undefined);
+    if (previewsEnabled) void queuedRowRequest(() => api.repositories.setup.get(repo.id)).then((value) => { if (active) setSetup(value); }).catch(() => undefined);
     return () => { active = false; };
   }, [repo.id, previewsEnabled]);
 
