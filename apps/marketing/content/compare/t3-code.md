@@ -63,7 +63,7 @@ These are real, and several of them we have no answer to.
 - **Six harnesses to our two.** Claude Code, Codex, Cursor, Grok Build,
   OpenCode and Antigravity, with model switching mid-thread and a shift-click
   that fans one prompt out to several models at once, each in its own worktree.
-  Talyn runs Claude Code and Codex, and PR fixes and loops can also run on
+  Talyn runs Claude Code and Codex, and PR fixes and scheduled automations can also run on
   PostHog Code.
 - **Six git hosts to our one.** GitHub, GitLab, Forgejo, Gitea, Bitbucket and
   Azure DevOps. Talyn is GitHub only. If you are not on GitHub, this comparison
@@ -112,9 +112,9 @@ nobody present:
   behind, conflicts, or a check fails. Nobody presses anything.
 - **A merge queue** that lands ready pull requests in order and sends an agent
   when one breaks.
-- **Workflows** that run on pull request events in a connected repository,
+- **GitHub automations** that run on pull request events in a connected repository,
   including ones you did not open, with the app closed.
-- **Loops**: a prompt on a cron schedule.
+- **Scheduled automations**: a prompt on a cron schedule.
 
 T3 Code needs *"That machine must stay running and reachable while you work."*
 Talyn needs nothing of yours to be awake.

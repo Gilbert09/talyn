@@ -99,7 +99,7 @@ Both products let you write rules. Mergify's are configuration in your
 repository, expressed as conditions and actions, and they are more powerful
 than ours for the merge-adjacent cases.
 
-Talyn's workflows live in the app rather than in a committed file (no YAML, no
+Talyn's automations live in the app rather than in a committed file (no YAML, no
 pull request to change a rule) and their distinguishing action is not a label
 or a comment but *send a coding agent*. A rule that says "when checks fail on a
 dependency bump, fix it" is not something a rule engine without an agent behind

@@ -105,7 +105,7 @@ session starts a new conversation on top of it.
   ready pull requests in order and sends an agent when one breaks.
 - **Code review in the app.** Several reviewers read a change, then a check
   drops what it cannot back up. Nothing reaches GitHub unless you post it.
-- **Work that starts without you.** Loops run a prompt on a schedule. Workflows
+- **Work that starts without you.** Scheduled automations run a prompt on a schedule. GitHub automations
   run on pull request events. Both run in the cloud with the app closed.
 - **Slack, MCP servers and a public API.** Start a session from a Slack
   message, give the agent your Linear or Sentry tools without putting the keys

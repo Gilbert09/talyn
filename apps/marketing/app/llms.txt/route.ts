@@ -23,7 +23,7 @@ export function GET(): Response {
     "",
     `> ${site.description}`,
     "",
-    "Talyn runs first-party Claude Code (on a Claude Pro or Max plan) and Codex (on a ChatGPT Plus or Pro plan) in cloud sandboxes. Each session is one task with its own branch, agent, Firecracker microVM, diff and terminal, so many can run at once and they keep working with the laptop closed. Talyn then opens the pull request, fixes failing checks and conflicts, and merges through a merge queue. It also runs loops (prompts on a schedule) and workflows (rules on pull request events). GitHub only. Desktop apps for macOS, Windows and Linux, and a web app at app.talyn.dev.",
+    "Talyn runs first-party Claude Code (on a Claude Pro or Max plan) and Codex (on a ChatGPT Plus or Pro plan) in cloud sandboxes. Each session is one task with its own branch, agent, Firecracker microVM, diff and terminal, so many can run at once and they keep working with the laptop closed. Talyn then opens the pull request, fixes failing checks and conflicts, and merges through a merge queue. It also runs automations through Integrations: GitHub automations (rules on pull request events) and scheduled automations (prompts on a schedule). GitHub only. Desktop apps for macOS, Windows and Linux, and a web app at app.talyn.dev.",
     "",
     `Pricing: Free is ${free?.priceMonthly ?? "$0"} with 10 box-hours a month. Pro is ${pro?.priceMonthly ?? "$40"} a month (${pro?.priceAnnualTotal ?? "$400"} a year) with 200 box-hours. Max is $100 a month (monthly only) with 1,000 box-hours. A box-hour is one standard sandbox awake for one hour, billed per second; a sleeping sandbox is free. The model runs on your own subscription, so Talyn bills machines, not tokens.`,
     "",

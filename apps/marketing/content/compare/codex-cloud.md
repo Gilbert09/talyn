@@ -64,8 +64,8 @@ ready pull requests in order and sends an agent when one breaks.
 or need to review, blocked ones first. That includes ones from teammates and
 Dependabot. A fix pushes to the existing branch, so the review history stays.
 
-**Work that starts without you.** Workflows run on pull request events with the
-app closed. Loops run a prompt on a cron schedule. Both start Codex runs from
+**Work that starts without you.** GitHub automations run on pull request events with the
+app closed. Scheduled automations run a prompt on a cron schedule. Both start Codex runs from
 our backend.
 
 **Code review in the app.** Several reviewers read the change, then a check
@@ -84,7 +84,7 @@ sleeps after 10 idle minutes.
 
 Each session has an **Internet on** / **Internet off** switch. You set the
 default for new sessions in Settings. Fix runs and code reviews reach
-only the repository and the agent's API, and loops have their own switch. You
+only the repository and the agent's API, and scheduled automations have their own switch. You
 can also connect MCP servers (Linear, Sentry, Supabase, your own). Talyn holds
 their keys outside the sandbox.
 

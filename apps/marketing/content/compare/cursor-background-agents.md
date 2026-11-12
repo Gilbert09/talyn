@@ -72,7 +72,7 @@ lands ready pull requests in order and sends an agent when one breaks.
 request you own or need to review, including ones from teammates, other
 agents or Dependabot. Send an agent at one and it pushes to that same branch.
 
-**It keeps going without you.** Loops run a prompt on a schedule. Workflows
+**It keeps going without you.** Scheduled automations run a prompt on a schedule. GitHub automations
 run on pull request events, with the app closed.
 
 **The credential never enters the sandbox.** Each session runs in its own
@@ -85,7 +85,7 @@ minutes and costs nothing while it sleeps.
 - **No editor integration.** If the appeal of Cursor's agents is that they
   start where you already are, Talyn does not offer that.
 - **No GitHub comment, Bitbucket or Linear trigger.** You start a session from
-  the app, Slack or the API, or a loop or workflow starts one for you.
+  the app, Slack or the API, or an automation starts one for you.
 - **No public mobile app yet.**
 - **GitHub only.**
 - **Finite hardware.** Talyn's sandboxes run on our own machines. You cannot

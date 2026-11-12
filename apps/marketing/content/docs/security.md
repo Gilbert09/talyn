@@ -26,7 +26,7 @@ You can disconnect an agent at any time in **Settings > Agents** (desktop) or **
 
 - **Sessions** have internet access on by default, so the agent can install tools and read docs. Turn it off for a session, or as your default in **Settings > Sessions**. With it off, the sandbox reaches only its repository, the package registries and the agent's API.
 - **Fix runs, code reviews and skill runs** on pull requests reach only the repository and the agent's API.
-- **Loops** reach only the repository and the agent's API, unless you choose **Allow the internet** for that loop.
+- **Scheduled automations** reach only the repository and the agent's API, unless you choose **Allow the internet** for that automation.
 
 A sandbox cannot reach your computer or a private network.
 

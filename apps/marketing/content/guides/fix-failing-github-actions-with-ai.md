@@ -139,6 +139,6 @@ for, inside a per-task virtual machine where your credentials are attached from
 outside the sandbox: the machine running agent-generated code never holds your
 tokens, and it is destroyed when the task ends.
 
-If you would rather not press the button each time, a **workflow** can do it on
+If you would rather not press the button each time, a **GitHub automation** can do it on
 the `checks failed` event for every matching pull request in a repo, including
 ones you did not open.

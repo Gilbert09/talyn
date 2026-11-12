@@ -390,7 +390,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "Does it show pull requests I did not open?",
-        a: "Your own pull requests are the main list. Review requests (every open pull request where you are a requested reviewer and have not reviewed yet) live on their own page. Workflows act on every pull request in a connected repository, including ones you did not open.",
+        a: "Your own pull requests are the main list. Review requests (every open pull request where you are a requested reviewer and have not reviewed yet) live on their own page. GitHub automations act on every pull request in a connected repository, including ones you did not open.",
       },
       {
         q: "Does Talyn store my source code?",
@@ -664,33 +664,33 @@ export const FEATURE_PAGES: FeaturePage[] = [
 
   {
     slug: "workflows",
-    navLabel: "Workflows",
-    eyebrow: "Workflows",
+    navLabel: "GitHub automations",
+    eyebrow: "GitHub integration",
     tagline: "Rules that run themselves",
     title: "Write the rule once. It runs on every pull request.",
     seoTitle: "GitHub pull request automation without writing YAML",
     description:
-      "When this happens on a pull request, do these things. Label it, request a reviewer, post a comment, send an agent to fix it, or drop it in the merge queue. It watches every pull request in your repositories (including ones you did not open) and it runs with the app closed.",
+      "The GitHub integration runs automations on pull request events: on these events, matching these conditions, do these actions. Label it, request a reviewer, post a comment, send an agent to fix it, or drop it in the merge queue. It watches every pull request in your repositories (including ones you did not open) and it runs with the app closed.",
     heroMock: "workflows",
     bullets: [
       "Triggers on what actually happens: opened, checks failed, review requested, approved, commented, merged",
       "Narrow it with conditions: this repository, this base branch, this label, this author, drafts or not",
       "Actions that do real work: labels, reviewers, comments, a skill or prompt run, the merge queue",
-      "Every run is logged, per rule, so you can see what fired and what it did",
+      "Every run is logged, per automation, on the Runs tab of the GitHub integration",
     ],
     sections: [
       {
         heading: "The decision you keep making",
         paragraphs: [
           "Every time a pull request touches the migrations directory you add the database reviewer. Every time CI fails on a dependency bump you send an agent at it. Every time something is approved and green you queue it. None of these are decisions any more: they are a rule you are executing by hand because nowhere holds it.",
-          "A workflow is that rule, written down once, in the app. No YAML, nothing committed to the repository, and nothing that needs the app to be open.",
+          "An automation is that rule, written down once, in the app. Open Integrations, choose GitHub, and add it under Automations. No YAML, nothing committed to the repository, and nothing that needs the app to be open.",
         ],
         mock: "workflows",
       },
       {
         heading: "It reads the event, not your list",
         paragraphs: [
-          "A workflow fires off the GitHub webhook payload, not off Talyn's own list of tracked pull requests. That is a deliberate design choice and it is what makes the feature worth having: a rule applies to every pull request in a repository you have connected, including ones you did not open and ones nobody has looked at yet.",
+          "A GitHub automation fires off the webhook payload, not off Talyn's own list of tracked pull requests. This is a deliberate choice. It makes the feature worth having: a rule applies to every pull request in a repository you have connected, including ones you did not open and ones nobody has looked at yet.",
           "Where the event does not carry a fact (an issue comment payload describes an issue, so it has no base branch) a condition on that fact fails rather than quietly passing. A gate that passes when it cannot see is not a gate.",
         ],
       },
@@ -710,7 +710,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         heading: "The guards, because automation that loops is expensive",
         paragraphs: [
-          "Two of them. Talyn ignores events its own GitHub App produced, so a rule that adds a label does not then fire on the label it just added. And each pull request has a ceiling on how many workflow runs it can trigger in an hour, defaulting to five, with the refusal announced once rather than silently.",
+          "Two of them. Talyn ignores events its own GitHub App produced, so a rule that adds a label does not then fire on the label it just added. And each pull request has a ceiling on how many automation runs it can trigger in an hour, defaulting to five, with the refusal announced once rather than silently.",
           "A rate-limited action is parked and retried when the limit clears, not lost, and the retry re-runs only the actions that had not already succeeded, so a rule whose comment posted and whose label was gated does not comment twice.",
         ],
       },
@@ -723,24 +723,24 @@ export const FEATURE_PAGES: FeaturePage[] = [
     ],
     faq: [
       {
-        q: "What are workflows?",
-        a: "Rules you set up once that run on their own: when this happens on a pull request, do these things. Pick the trigger, narrow it with conditions, and pick the actions. They watch every pull request in the repositories you connect, including ones you did not open, and they keep running with the app closed.",
+        q: "What are GitHub automations?",
+        a: "Rules you set up once in the GitHub integration. They run on their own: when this happens on a pull request, do these things. Pick the trigger, narrow it with conditions, and pick the actions. They watch every pull request in the repositories you connect, including ones you did not open, and they keep running with the app closed.",
       },
       {
         q: "Do they need anything committed to my repository?",
-        a: "No. A workflow lives in Talyn, not in your repository. There is no YAML file, nothing to review, and turning one off does not need a pull request.",
+        a: "No. An automation lives in Talyn, not in your repository. There is no YAML file, nothing to review, and turning one off does not need a pull request.",
       },
       {
-        q: "Can a workflow run one of my skills?",
+        q: "Can an automation run one of my skills?",
         a: "Yes, as long as the skill is one the backend can read: committed in the repository or saved to your workspace. Skills that only exist in ~/.claude/skills on your machine are refused when you save the rule, because the server cannot see your disk.",
       },
       {
-        q: "Is there a limit on how many workflows I can have?",
-        a: "No. You can define as many workflows as you want on any plan. What costs box-hours is a workflow that runs a skill or a prompt, because that starts an agent on a box. Labels, comments and reviewers cost nothing.",
+        q: "Is there a limit on how many automations I can have?",
+        a: "No. You can define as many automations as you want on any plan. What costs box-hours is an automation that runs a skill or a prompt, because that starts an agent on a box. Labels, comments and reviewers cost nothing.",
       },
     ],
     planNote:
-      "No limit on how many workflows you define. Workflows that start an agent use box-hours.",
+      "No limit on how many automations you define. Automations that start an agent use box-hours.",
     related: ["loops", "merge-queue", "skills"],
     relatedCompare: ["mergify"],
     updated: UPDATED,
@@ -748,13 +748,13 @@ export const FEATURE_PAGES: FeaturePage[] = [
 
   {
     slug: "loops",
-    navLabel: "Loops",
-    eyebrow: "Loops",
+    navLabel: "Scheduled automations",
+    eyebrow: "Schedule integration",
     tagline: "Prompts on a schedule",
     title: "Work that happens on a schedule, not on a trigger.",
     seoTitle: "Run an AI coding agent on a schedule, on your own repository",
     description:
-      "A prompt, a repository, an agent, and a time. Sweep yesterday's failing checks every weekday morning. Keep dependencies current every Monday. Draft the release notes every Friday at five. It opens a pull request when the work warrants one.",
+      "The Schedule integration runs automations at a time you choose: a prompt, a repository, an agent, and a time. Sweep yesterday's failing checks every weekday morning. Keep dependencies current every Monday. Draft the release notes every Friday at five. It opens a pull request when the work warrants one.",
     heroMock: "loops",
     bullets: [
       "Say when in plain terms: hourly, daily, weekdays, weekly, or a cron expression if you want one",
@@ -766,49 +766,49 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         heading: "Not everything is a reaction",
         paragraphs: [
-          "A workflow fires because something happened. A loop fires because it is Monday. That sounds like a small distinction and it is the whole difference between automation that keeps up with you and automation that does the work nobody ever gets to.",
+          "A GitHub automation fires because something happened. A scheduled automation fires because it is Monday. That sounds like a small distinction and it is the whole difference between automation that keeps up with you and automation that does the work nobody ever gets to.",
           "The dependency bump nobody schedules. The flaky test sweep everyone agrees is worth doing. The release notes somebody writes on a Friday afternoon from the commit log. Each one is a prompt you could write in a minute and will not run consistently for a year.",
         ],
         mock: "loops",
       },
       {
-        heading: "A loop is four choices",
+        heading: "A scheduled automation is five choices",
         paragraphs: [
-          "The repository, the prompt, the agent and model, the run type, and the schedule. Choose a reviewable Talyn session or a cloud task. Both use the same agent, pull request, and plan rules as work you start yourself. What loops add is the clock.",
+          "The repository, the prompt, the agent and model, the run type, and the schedule. Choose a reviewable Talyn session or a cloud task. Both use the same agent, pull request, and plan rules as work you start yourself. The Schedule integration adds the clock. You find your automations under Integrations, then Schedule.",
         ],
         bullets: [
           "Hourly, daily, weekdays, weekly, or a raw cron expression",
           "Your timezone, correctly, including across daylight saving",
-          "Pick the agent per loop: Claude, Codex, or PostHog Code",
+          "Pick the agent per automation: Claude, Codex, or PostHog Code",
           "Choose what happens if the last run is still going: skip is the default",
         ],
       },
       {
         heading: "Missed occurrences fire once, not six times",
         paragraphs: [
-          "If Talyn is down or deploying when a loop is due, it catches up (once) and then carries on from now. It does not replay every occurrence it missed, because six near-identical tasks at once is not what anybody wanted, and if you were out of box-hours it would be one run and five refusals.",
-          "Re-enabling a loop you switched off is a resume, not a backfill. It starts from the next occurrence.",
+          "If Talyn is down or deploying when a scheduled automation is due, it catches up (once) and then carries on from now. It does not replay every occurrence it missed, because six near-identical tasks at once is not what anybody wanted, and if you were out of box-hours it would be one run and five refusals.",
+          "Re-enabling an automation you switched off is a resume, not a backfill. It starts from the next occurrence.",
         ],
       },
       {
         heading: "The internet switch, off by default",
         paragraphs: [
-          "A loop's sandbox normally reaches its repository and its agent's API and nothing else. That is not a limitation we ran into; it is deliberate. A prompt that has just read untrusted pull request text should not have a route out to post it somewhere.",
-          "Some jobs genuinely need the web: checking an upstream changelog, reading an advisory. So internet access is a per-loop switch, off unless you turn it on, and the posture travels with the task rather than the loop, so a run that is retried later gets the setting it was created with. The choice is offered as 'Repository only' or 'Allow the internet'; you never have to think about routing tables. It is available on Talyn Fleet only.",
+          "The sandbox of a scheduled automation normally reaches its repository and its agent's API and nothing else. That is not a limitation we ran into; it is deliberate. A prompt that has just read untrusted pull request text should not have a route out to post it somewhere.",
+          "Some jobs genuinely need the web: checking an upstream changelog, reading an advisory. So internet access is a per-automation switch, off unless you turn it on, and the posture travels with the task rather than the loop, so a run that is retried later gets the setting it was created with. The choice is offered as 'Repository only' or 'Allow the internet'; you never have to think about routing tables. It is available on Talyn Fleet only.",
         ],
       },
       {
         heading: "When the subscription runs out",
         paragraphs: [
-          "A scheduled run that fires at 3am and hits an exhausted monthly quota should not just fail. If your Claude subscription is spent, Talyn moves that run to your Codex subscription if you have one, and then to PostHog Code. The exhaustion is remembered, so the next loop does not boot a machine to learn the same thing, and it is cleared by proof: a successful run, a fresh sign-in, or the vendor's own stated reset time.",
+          "A scheduled run that fires at 3am and hits an exhausted monthly quota should not just fail. If your Claude subscription is spent, Talyn moves that run to your Codex subscription if you have one, and then to PostHog Code. The exhaustion is remembered, so the next scheduled run does not boot a machine to learn the same thing, and it is cleared by proof: a successful run, a fresh sign-in, or the vendor's own stated reset time.",
           "A rate limit is treated differently and deliberately: that clears by waiting, and moving off it would spend money to avoid a short pause.",
         ],
       },
     ],
     faq: [
       {
-        q: "What are loops?",
-        a: "Prompts that run on a schedule instead of waiting for something to happen. Pick a repository, write what you want done, and say when (hourly, daily, weekdays, weekly, or a cron expression) and an agent runs it on its own, opening a pull request when the work warrants one.",
+        q: "What are scheduled automations?",
+        a: "Automations in the Schedule integration. They run a prompt on a schedule instead of waiting for something to happen. Pick a repository, write what you want done, and say when (hourly, daily, weekdays, weekly, or a cron expression) and an agent runs it on its own, opening a pull request when the work warrants one.",
       },
       {
         q: "Do schedules survive the clocks changing?",
@@ -816,15 +816,15 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "What if a run is still going when the next one is due?",
-        a: "That is a per-loop setting, and skipping is the default: the skipped occurrence is recorded in the history rather than silently dropped. It is also what makes a tight schedule self-limiting, which is why there is no minimum interval.",
+        a: "That is a per-automation setting, and skipping is the default: the skipped occurrence is recorded in the history rather than silently dropped. It is also what makes a tight schedule self-limiting, which is why there is no minimum interval.",
       },
       {
-        q: "Is there a limit on how many loops I can have?",
-        a: "No. You can have as many loops as you want on any plan. Each firing creates a session or cloud task that runs on a box, so what a loop costs is the box-hours its runs use.",
+        q: "Is there a limit on how many scheduled automations I can have?",
+        a: "No. You can have as many as you want on any plan. Each firing creates a session or cloud task that runs on a box, so the cost is the box-hours its runs use.",
       },
     ],
     planNote:
-      "No limit on how many loops you have. Each firing runs on a box and uses box-hours.",
+      "No limit on how many scheduled automations you have. Each firing runs on a box and uses box-hours.",
     related: ["workflows", "fix-pull-requests", "agents"],
     updated: UPDATED,
   },
@@ -858,19 +858,19 @@ export const FEATURE_PAGES: FeaturePage[] = [
         heading: "Three places, no setup",
         paragraphs: [
           "Talyn looks for skills where they already are rather than asking you to import them. Committed in the repository, so the whole team gets them and they version with the code. Sitting in `~/.claude/skills` on your machine, which is where yours probably already are. Or saved to your workspace, for the ones that are not repository-specific and are not just yours.",
-          "One caveat worth knowing before you rely on it: reading `~/.claude/skills` needs the desktop app, because the browser cannot see your disk. Skills used by a workflow or a loop have to be repository or workspace ones for the same reason: those run on the server, with the app closed.",
+          "One caveat worth knowing before you rely on it: reading `~/.claude/skills` needs the desktop app, because the browser cannot see your disk. Skills used by an automation have to be repository or workspace ones for the same reason: those run on the server, with the app closed.",
         ],
         bullets: [
           "In the repository: versioned with the code, shared with the team",
           "In ~/.claude/skills: desktop app only",
-          "Saved to the workspace: shared, and reachable by workflows and loops",
+          "Saved to the workspace: shared, and reachable by automations",
         ],
       },
       {
         heading: "What comes back",
         paragraphs: [
           "It depends what the skill asks for. A review-shaped skill posts a single review comment on the pull request. A fix-shaped skill commits to the branch. Either way it is one artefact, not a running commentary: the same restraint the code review feature is built around.",
-          "Skills compose with the rest of Talyn: a workflow can run one automatically when a pull request opens, and a loop can run one on a schedule.",
+          "Skills compose with the rest of Talyn: a GitHub automation can run one when a pull request opens, and a scheduled automation can run one on a schedule.",
         ],
       },
     ],
@@ -884,7 +884,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
         a: "No, it is the standard SKILL.md format. A skill is a markdown file with some frontmatter. Nothing about it is Talyn-specific, and skills you write for Talyn work in Claude Code too.",
       },
       {
-        q: "Can a workflow or a loop run a skill?",
+        q: "Can an automation run a skill?",
         a: "Yes, as long as it is a repository or workspace skill. A skill that only exists in ~/.claude/skills is refused when you save the rule, because the backend genuinely cannot read your machine: a rule that failed silently at 3am would be worse than one that refuses while you are looking at it.",
       },
     ],

@@ -13,7 +13,7 @@ import { compareCardTitle, listComparePages } from "@/lib/compare";
 
 const title = "Everything Talyn does";
 const description =
-  "Sessions and threads for agent coding, a PR list that sends fixes, a merge queue, AI code review, loops, workflows, Slack and MCP servers. All on your own Claude or ChatGPT plan.";
+  "Sessions and threads for agent coding, a PR list that sends fixes, a merge queue, AI code review, GitHub and scheduled automations, Slack and MCP servers. All on your own Claude or ChatGPT plan.";
 
 // The page heading stays "Everything Talyn does"; the search title says what
 // that is.

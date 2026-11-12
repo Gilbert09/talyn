@@ -188,7 +188,7 @@ export const why = {
     },
     {
       title: "Runs with the app closed",
-      body: "Loops run on a schedule and workflows run on pull request events, with the app closed.",
+      body: "Scheduled automations run at a time you set and GitHub automations run on pull request events, with the app closed.",
     },
   ],
 };
@@ -216,7 +216,7 @@ export const pricing = {
         "Small and standard boxes",
         "Up to 2 boxes running at once",
         "Sessions, threads and the whole PR dashboard",
-        "Skills, the merge queue, workflows, loops and code review",
+        "Skills, the merge queue, automations and code review",
         "Keep a PR mergeable on any PR you flag by hand",
       ],
       cta: "Download for {platform}",
@@ -340,7 +340,7 @@ export const pricingFaq = [
   },
   {
     q: "What happens when my hours run out?",
-    a: "Work that is already running finishes. Nothing new starts until you add credits or your hours reset at the start of the next month. Runs that Talyn starts for you, such as loops and merge queue fixes, wait with a notice in the app and start once there is room. Talyn never stops a run part way through.",
+    a: "Work that is already running finishes. Nothing new starts until you add credits or your hours reset at the start of the next month. Runs that Talyn starts for you, such as scheduled automations and merge queue fixes, wait with a notice in the app and start once there is room. Talyn never stops a run part way through.",
   },
   {
     q: "Do idle boxes cost anything?",
@@ -396,7 +396,7 @@ export const faq = [
   },
   {
     q: "Which agents does it use?",
-    a: "Claude Code on your Claude Pro or Max plan, and Codex on your ChatGPT Plus or Pro plan. You sign in with the account; there is no API key. Connect both and pick per session. PR fixes and loops can also run on PostHog Code.",
+    a: "Claude Code on your Claude Pro or Max plan, and Codex on your ChatGPT Plus or Pro plan. You sign in with the account; there is no API key. Connect both and pick per session. PR fixes and scheduled automations can also run on PostHog Code.",
   },
   {
     q: "Where does my code run?",

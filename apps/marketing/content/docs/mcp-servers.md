@@ -3,7 +3,7 @@ title: MCP servers
 description: Connect Linear, Sentry, Stripe or your own MCP server. Allow all repositories or only selected ones. The keys stay with Talyn and never enter the sandbox.
 ---
 
-Connect an MCP server, and the agents in your sessions, fix runs, reviews and loops get its tools. For example, connect Linear and the agent can read the issue it is working on. Connect Sentry and it can read the stack trace.
+Connect an MCP server, and the agents in your sessions, fix runs, reviews and scheduled automations get its tools. For example, connect Linear and the agent can read the issue it is working on. Connect Sentry and it can read the stack trace.
 
 This page is about giving Talyn's agents more tools. To use Talyn itself from Claude Code or Cursor, see [Talyn MCP server](/docs/mcp).
 
@@ -62,7 +62,7 @@ Select **Only selected repositories** to limit access. Then select each reposito
 
 Each server has an On/Off switch. A server that is off is not given to any run.
 
-A [loop](/docs/loops#mcp-servers) can use every server that is on, or a set you choose for that loop.
+A [scheduled automation](/docs/loops#mcp-servers) can use every server that is on, or a set you choose for that automation.
 
 ## Remove a server
 

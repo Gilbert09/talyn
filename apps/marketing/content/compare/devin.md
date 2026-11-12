@@ -58,7 +58,7 @@ you are paying per unit of work at API rates.
 - **A merge queue** that lands ready pull requests in order and sends an agent
   when one breaks.
 - **Code review in the app.** Findings reach GitHub only if you post them.
-- **Work that starts without you.** Loops run a prompt on a schedule. Workflows
+- **Work that starts without you.** Scheduled automations run a prompt on a schedule. GitHub automations
   run on pull request events.
 
 ## The billing difference

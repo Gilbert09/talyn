@@ -25,7 +25,7 @@ const LIMITS: Array<{ label: string; free: string; pro: string; max: string }> =
   { label: "Credits and auto top-up", free: "Not included", pro: "Included", max: "Included" },
   { label: "Pull request dashboard, all repositories", free: "Included", pro: "Included", max: "Included" },
   { label: "Agent providers (Claude, Codex, PostHog Code)", free: "All of them", pro: "All of them", max: "All of them" },
-  { label: "Merge queue, workflows, loops and code review", free: "Included", pro: "Included", max: "Included" },
+  { label: "Merge queue, automations and code review", free: "Included", pro: "Included", max: "Included" },
   { label: "Connected MCP servers", free: "Included", pro: "Included", max: "Included" },
   { label: "Keep a pull request mergeable, flagged by hand", free: "Included", pro: "Included", max: "Included" },
   { label: "Keep every new pull request mergeable automatically", free: "Not included", pro: "Included", max: "Included" },

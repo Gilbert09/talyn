@@ -67,9 +67,9 @@ changes: the findings live in the app, several reviewers read the diff from
 different angles, and a judging pass throws out what it cannot stand behind.
 Then you tick what is worth fixing and get one commit.
 
-**Work that starts without you.** Workflows fire on pull request events (on
+**Work that starts without you.** GitHub automations fire on pull request events (on
 every pull request in a connected repository, including ones you did not open)
-and loops run a prompt on a schedule. Neither has an equivalent in Graphite:
+and scheduled automations run a prompt on a schedule. Neither has an equivalent in Graphite:
 they are about an agent doing work, not about moving a pull request through a
 process.
 
@@ -97,7 +97,7 @@ before you rely on them.
 
 - Fixing the pull request: its queue orders and lands, and we found nothing
   that sends an agent at a failing test, a conflict or a review comment.
-- Scheduled work: we found no equivalent of a loop, a prompt that runs every
+- Scheduled work: we found no equivalent of a scheduled automation, a prompt that runs every
   weekday morning against a repository.
 - Your own agent subscription: Graphite's AI is listed as part of its per-seat
   tiers.
