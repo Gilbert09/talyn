@@ -16,6 +16,21 @@ export const channelNames = {
 };
 export const installationKey = (namespace: string, user: string) => `${namespace}.push.${user}`;
 
+/**
+ * The last device token this app saw. Android emits the push token event on EVERY fetch, not only on rotation, and a
+ * registration fetches the token. Re-registering on each event looped once a second until the API rate limit
+ * (2026-11-12), so only a token that differs from this one counts as a rotation.
+ */
+let knownDeviceToken: string | null = null;
+const deviceTokenText = (token: Notifications.DevicePushToken) => typeof token.data === 'string' ? token.data : JSON.stringify(token.data);
+/** Records `token` and says whether it differs from the last one seen. */
+export function noteDeviceToken(token: Notifications.DevicePushToken): boolean {
+  const text = deviceTokenText(token);
+  if (text === knownDeviceToken) return false;
+  knownDeviceToken = text;
+  return true;
+}
+
 export async function createNotificationChannels() {
   if (Platform.OS !== 'android') return;
   await Promise.all(MOBILE_NOTIFICATION_CATEGORIES.map((category) => Notifications.setNotificationChannelAsync(category, {
@@ -38,7 +53,11 @@ export function notificationDevice(config: MobileConfig, namespace: string): Pus
       });
       return result.granted;
     },
-    async token() { return (await Notifications.getExpoPushTokenAsync({ projectId })).data; },
+    async token() {
+      const devicePushToken = await Notifications.getDevicePushTokenAsync();
+      noteDeviceToken(devicePushToken);
+      return (await Notifications.getExpoPushTokenAsync({ projectId, devicePushToken })).data;
+    },
     metadata: () => ({
       platform: Platform.OS === 'ios' ? 'ios' : 'android', environment: config.environment,
       appIdentity: (Platform.OS === 'ios' ? Constants.expoConfig?.ios?.bundleIdentifier : Constants.expoConfig?.android?.package) ?? '',
@@ -73,7 +92,7 @@ export function bindNativeNotifications(controller: NotificationController) {
     Notifications.clearLastNotificationResponse();
   };
   const taps = Notifications.addNotificationResponseReceivedListener(receive);
-  const tokens = Notifications.addPushTokenListener(() => controller.tokenChanged());
+  const tokens = Notifications.addPushTokenListener((token) => { if (noteDeviceToken(token)) controller.tokenChanged(); });
   receive(Notifications.getLastNotificationResponse());
   return () => { disposed = true; taps.remove(); tokens.remove(); Notifications.setNotificationHandler(null); };
 }

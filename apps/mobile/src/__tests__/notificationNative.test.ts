@@ -5,6 +5,8 @@ import { Platform } from 'react-native';
 import type { NotificationController } from '../notifications/controller';
 import { bindNativeNotifications, createNotificationChannels, notificationDevice } from '../notifications/native';
 
+const deviceToken = (data: string) => ({ type: 'android' as const, data });
+
 jest.mock('expo-constants', () => ({
   expoConfig: { extra: { eas: { projectId: '10000000-0000-4000-8000-000000000001' } },
     ios: { bundleIdentifier: 'dev.example.mobile' }, android: { package: 'dev.example.mobile' }, version: '0.1.0' },
@@ -16,6 +18,7 @@ jest.mock('expo-notifications', () => ({
   setNotificationChannelAsync: jest.fn(async () => {}), getPermissionsAsync: jest.fn(async () => ({ granted: false, canAskAgain: true })),
   requestPermissionsAsync: jest.fn(async () => ({ granted: true })),
   getExpoPushTokenAsync: jest.fn(async () => ({ data: 'ExpoPushToken[synthetic-device-value]' })),
+  getDevicePushTokenAsync: jest.fn(async () => ({ type: 'android', data: 'synthetic-fcm-token' })),
   setNotificationHandler: jest.fn(), addNotificationResponseReceivedListener: jest.fn(() => ({ remove: jest.fn() })),
   addPushTokenListener: jest.fn(() => ({ remove: jest.fn() })),
   getLastNotificationResponse: jest.fn(() => null), clearLastNotificationResponse: jest.fn(),
@@ -43,7 +46,9 @@ describe('native push binding', () => {
   it('uses the public EAS project and stores only the installation ID securely', async () => {
     const device = notificationDevice(config, 'environment'); expect(device.available()).toBe(true);
     await device.token(); await device.installation('alice', true);
-    expect(Notifications.getExpoPushTokenAsync).toHaveBeenCalledWith({ projectId: '10000000-0000-4000-8000-000000000001' });
+    expect(Notifications.getExpoPushTokenAsync).toHaveBeenCalledWith({
+      projectId: '10000000-0000-4000-8000-000000000001', devicePushToken: deviceToken('synthetic-fcm-token'),
+    });
     expect(SecureStore.setItemAsync).toHaveBeenCalledWith('environment.push.alice', '20000000-0000-4000-8000-000000000002', { keychainAccessible: 'device-only' });
     expect(JSON.stringify(jest.mocked(SecureStore.setItemAsync).mock.calls)).not.toContain('ExpoPushToken');
   });
@@ -57,8 +62,23 @@ describe('native push binding', () => {
     const handle = jest.mocked(Notifications.setNotificationHandler).mock.calls[0][0]!;
     expect(await handle.handleNotification(response.notification as never)).toMatchObject({ shouldShowBanner: false, shouldPlaySound: false });
     const warm = jest.mocked(Notifications.addNotificationResponseReceivedListener).mock.calls[0][0]; warm(response as never);
-    const rotate = jest.mocked(Notifications.addPushTokenListener).mock.calls[0][0]; rotate({} as never);
+    const rotate = jest.mocked(Notifications.addPushTokenListener).mock.calls[0][0]; rotate(deviceToken('rotated-fcm-token'));
     expect(controller.receiveTap).toHaveBeenCalledTimes(2); expect(controller.tokenChanged).toHaveBeenCalledTimes(1);
     dispose(); expect(Notifications.setNotificationHandler).toHaveBeenLastCalledWith(null);
+  });
+  it('re-registers only when the device token changes, not on every fetch', async () => {
+    const controller = { receiveTap: jest.fn(), shouldAlert: jest.fn(() => false), tokenChanged: jest.fn() };
+    const dispose = bindNativeNotifications(controller as unknown as NotificationController);
+    const event = jest.mocked(Notifications.addPushTokenListener).mock.calls.at(-1)![0];
+    jest.mocked(Notifications.getDevicePushTokenAsync).mockResolvedValue(deviceToken('fetched-fcm-token'));
+    await notificationDevice(config, 'environment').token();
+    // Android emits the event for the fetch itself: the same token is not a rotation.
+    event(deviceToken('fetched-fcm-token')); event(deviceToken('fetched-fcm-token'));
+    expect(controller.tokenChanged).not.toHaveBeenCalled();
+    event(deviceToken('new-fcm-token'));
+    expect(controller.tokenChanged).toHaveBeenCalledTimes(1);
+    event(deviceToken('new-fcm-token'));
+    expect(controller.tokenChanged).toHaveBeenCalledTimes(1);
+    dispose();
   });
 });
