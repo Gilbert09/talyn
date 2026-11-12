@@ -107,7 +107,7 @@ describe('plan and billing screen', () => {
   it('sells credit packs on a paid plan', async () => {
     mockStatus = proStatus();
     await draw(<BillingScreen />);
-    expect(screen.getByText('$12.00')).toBeVisible();
+    expect(screen.getByText('$12')).toBeVisible();
     await act(async () => { fireEvent.press(screen.getByRole('button', { name: /Buy \$100 of credits/ })); });
     expect(mockCreditCheckout).toHaveBeenCalledWith('100');
   });
@@ -144,7 +144,7 @@ describe('plan and billing screen', () => {
     mockStatus = proStatus();
     await draw(<BillingScreen reason="usage_exhausted" />);
     expect(screen.getByLabelText('Pro plan, your plan')).toBeVisible();
-    expect(screen.getByText('$12.00')).toBeVisible();
+    expect(screen.getByText('$12')).toBeVisible();
     expect(screen.queryByRole('button', { name: /Upgrade|Move to|Switch to annual|Buy \$/ })).toBeNull();
     expect(screen.queryByText('Manage subscription')).toBeNull();
     expect(screen.queryByRole('tablist', { name: 'Billing period' })).toBeNull();

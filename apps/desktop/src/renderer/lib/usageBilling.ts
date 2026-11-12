@@ -76,7 +76,7 @@ export function leftPercent(percent: number, exhausted: boolean): number {
 export function formatLeftPercent(percent: number, exhausted: boolean): string {
   const left = leftPercent(percent, exhausted);
   if (left > 0 && left < 1) return 'Less than 1% left';
-  return `${left.toFixed(left < 10 && left > 0 ? 1 : 0)}% left`;
+  return `${Number(left.toFixed(left < 10 && left > 0 ? 1 : 0))}% left`;
 }
 
 export const GAUGE_BAR_CLASS: Record<GaugeTone, string> = {

@@ -35,6 +35,7 @@ import {
   formatBoxHoursLabel,
   formatBoxHoursPrecise,
   formatBoxHoursUsage,
+  formatCreditBalance,
   formatCreditPack,
   formatPricePerHour,
   formatSizePrice,
@@ -673,6 +674,18 @@ describe('formatting', () => {
     [1, 6, '$0.000001'],
   ])('formatUsd(%s, %s) = %s', (micros, digits, text) => {
     expect(formatUsd(micros, digits)).toBe(text);
+  });
+
+  it.each<[number, string]>([
+    [0, '$0'],
+    [100_000_000, '$100'],
+    [105_000_000, '$105'],
+    [98_370_000, '$98.37'],
+    [12_500_000, '$12.50'],
+    [4_999_999, '$5'],
+    [1_234_000_000, '$1,234'],
+  ])('formatCreditBalance(%s) = %s', (micros, text) => {
+    expect(formatCreditBalance(micros)).toBe(text);
   });
 
   it.each<[number, string]>([

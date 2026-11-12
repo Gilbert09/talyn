@@ -158,7 +158,7 @@ describe('BillingSettings', () => {
     ];
     show(status);
     expect(screen.getByText('150 of 200 box-hours used')).toBeInTheDocument();
-    expect(document.querySelector('[data-attr="credit-balance"]')).toHaveTextContent('$42.00');
+    expect(document.querySelector('[data-attr="credit-balance"]')).toHaveTextContent('$42');
     expect(screen.getByText('$2.00 expires in the next 30 days.')).toBeInTheDocument();
     expect(screen.getByText('$40.00 of $105.00')).toBeInTheDocument();
     expect(screen.queryByText('+5% bonus: $105 of credits')).toBeNull();
@@ -281,7 +281,7 @@ describe('BillingSettings', () => {
   it.each([
     [0, false, '100', '100% left'],
     [26, false, '87', '87% left'],
-    [199, false, '1', '1.0% left'],
+    [199, false, '1', '1% left'],
     [210, false, '0', '0% left'],
     [20, true, '0', '0% left'],
   ])('shows usage left for %s hours and exhausted=%s', (usedHours, exhausted, value, label) => {

@@ -129,7 +129,7 @@ describe('usage', () => {
   });
 
   it.each([
-    [25, false, 75, '75% left'], [95, false, 5, '5.0% left'], [99.5, false, 0.5, 'Less than 1% left'], [100, false, 0, '0% left'],
+    [25, false, 75, '75% left'], [95, false, 5, '5% left'], [99.5, false, 0.5, 'Less than 1% left'], [100, false, 0, '0% left'],
     [120, false, 0, '0% left'], [10, true, 0, '0% left'],
   ])('left at %s%% used', (percent, exhausted, left, text) => {
     expect(leftPercent(percent, exhausted)).toBe(left);

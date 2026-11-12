@@ -121,7 +121,7 @@ describe('SidebarUsageSlot', () => {
     const title = button.getAttribute('title') ?? '';
     expect(title).toContain('Pro plan');
     expect(title).toContain('50% left (100 of 200 box-hours used)');
-    expect(title).toContain('$5.00 credits');
+    expect(title).toContain('$5 credits');
     expect(title).toContain('Claude needs reconnecting');
     expect(button.querySelector('svg')).not.toBeNull();
     expect(button.querySelectorAll('circle')[1]).toHaveAttribute('stroke-dashoffset', `${Math.PI * 7}`);

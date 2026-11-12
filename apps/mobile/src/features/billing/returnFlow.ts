@@ -1,5 +1,5 @@
 import {
-  MOBILE_BILLING_RETURN_KINDS, MOBILE_BILLING_RETURN_RESULTS, PLAN_TIER_LABELS, formatUsd, isPlanTier,
+  MOBILE_BILLING_RETURN_KINDS, MOBILE_BILLING_RETURN_RESULTS, PLAN_TIER_LABELS, formatCreditBalance, isPlanTier,
   type BillingStatus, type MobileBillingReturnKind, type MobileBillingReturnResult,
 } from '@talyn/shared';
 
@@ -48,7 +48,7 @@ export function returnBanner(kind: ReturnKind, result: ReturnResult, landed: boo
   if (kind === 'portal') return null;
   if (landed && kind === 'reset') return { tone: 'success', message: 'Usage reset. Your box-hours are back.' };
   if (landed && kind === 'credits') {
-    return { tone: 'success', message: `Credits added. Your balance is ${formatUsd(after?.credits?.balanceMicros ?? 0)}.` };
+    return { tone: 'success', message: `Credits added. Your balance is ${formatCreditBalance(after?.credits?.balanceMicros ?? 0)}.` };
   }
   if (landed) {
     const tier = after && isPlanTier(after.tier) ? PLAN_TIER_LABELS[after.tier] : null;
