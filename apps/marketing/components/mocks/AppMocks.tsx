@@ -905,13 +905,13 @@ export function MockWorkflows(_props: MockProps) {
         <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
           <Workflow className="h-4 w-4 text-clay" />
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold text-ink">Workflows</p>
+            <p className="text-xs font-semibold text-ink">GitHub automations</p>
             <p className="truncate text-[10px] text-ink-400">
               Fires on every PR in the repos this workspace watches
             </p>
           </div>
           <span className="inline-flex items-center gap-1 rounded-lg bg-clay px-2.5 py-1 text-[10px] font-semibold text-white">
-            <Plus className="h-3 w-3" /> New workflow
+            <Plus className="h-3 w-3" /> New automation
           </span>
         </div>
 
@@ -1012,13 +1012,13 @@ export function MockLoops(_props: MockProps) {
         <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
           <Repeat className="h-4 w-4 text-clay" />
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold text-ink">Loops</p>
+            <p className="text-xs font-semibold text-ink">Scheduled automations</p>
             <p className="truncate text-[10px] text-ink-400">
               Runs a prompt on a schedule, whether or not the app is open
             </p>
           </div>
           <span className="inline-flex items-center gap-1 rounded-lg bg-clay px-2.5 py-1 text-[10px] font-semibold text-white">
-            <Plus className="h-3 w-3" /> New loop
+            <Plus className="h-3 w-3" /> New automation
           </span>
         </div>
 
