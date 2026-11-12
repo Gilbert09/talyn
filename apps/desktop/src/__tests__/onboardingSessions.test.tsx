@@ -2,7 +2,7 @@ import '@testing-library/jest-dom';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { defaultFleetModelForAgent, PLAN_LIMITS, type Workbench } from '@talyn/shared';
-import { api, type CloudProviderInfo } from '../renderer/lib/api';
+import { api, loadAllRepos, type CloudProviderInfo } from '../renderer/lib/api';
 import { captureAnalyticsException, trackEvent } from '../renderer/lib/analytics';
 import { OnboardingWizard } from '../renderer/components/onboarding/OnboardingWizard';
 import { SidebarWorkbenchList } from '../renderer/components/layout/SidebarWorkbenchList';
@@ -11,13 +11,14 @@ import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { useNavigationStore } from '../renderer/stores/navigation';
 
 jest.mock('../renderer/lib/api', () => ({
+  loadAllRepos: jest.fn(),
+  mergeRepos: jest.fn(),
   ApiError: class ApiError extends Error {},
   ApiNetworkError: class ApiNetworkError extends Error {},
   api: {
     github: {
       getStatus: jest.fn(),
       getUser: jest.fn().mockResolvedValue({ login: 'octocat' }),
-      listAllRepos: jest.fn(),
       listInstallations: jest.fn().mockResolvedValue([]),
     },
     repositories: { add: jest.fn(), remove: jest.fn().mockResolvedValue(undefined) },
@@ -60,7 +61,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   localStorage.clear();
   jest.mocked(api.github.getStatus).mockResolvedValue({ configured: true, connected: true } as never);
-  jest.mocked(api.github.listAllRepos).mockResolvedValue([
+  jest.mocked(loadAllRepos).mockResolvedValue([
     { id: 1, owner: { login: 'acme' }, name: 'app', full_name: 'acme/app' },
     { id: 3, owner: { login: 'acme' }, name: 'unwatched', full_name: 'acme/unwatched' },
   ] as never);

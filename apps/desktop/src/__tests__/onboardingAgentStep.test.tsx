@@ -9,10 +9,11 @@ import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/re
  */
 
 jest.mock('../renderer/lib/api', () => ({
+  loadAllRepos: jest.fn().mockResolvedValue([]),
+  mergeRepos: jest.fn(),
   api: {
     github: {
       getStatus: jest.fn().mockResolvedValue({ configured: true, connected: true }),
-      listAllRepos: jest.fn().mockResolvedValue([]),
       listInstallations: jest.fn().mockResolvedValue([]),
       getUser: jest.fn().mockResolvedValue({ login: 'octocat' }),
       installViaApp: jest.fn().mockResolvedValue({ installUrl: 'x', manageUrl: 'y' }),

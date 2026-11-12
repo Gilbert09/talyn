@@ -494,7 +494,104 @@ export const github = {
       'GET',
       `/github/orgs/${encodeURIComponent(org)}/repos?workspaceId=${workspaceId}`
     ),
+  /** One page (up to 100) of `listRepos`. `page` starts at 1. */
+  listReposPage: (workspaceId: string, page: number) =>
+    request<GitHubRepo[]>('GET', `/github/repos?workspaceId=${workspaceId}&page=${page}`),
+  /** One page (up to 100) of `listOrgRepos`. `page` starts at 1. */
+  listOrgReposPage: (workspaceId: string, org: string, page: number) =>
+    request<GitHubRepo[]>(
+      'GET',
+      `/github/orgs/${encodeURIComponent(org)}/repos?workspaceId=${workspaceId}&page=${page}`
+    ),
 };
+
+/** GitHub's largest page. A shorter page is the last one. */
+const REPO_PAGE_SIZE = 100;
+/** The same page cap the backend's all-pages walk uses. */
+const REPO_MAX_PAGES = 20;
+/** Orgs read at the same time, next to the user's own list. */
+const ORG_REPO_CONCURRENCY = 4;
+
+export interface LoadAllReposOptions {
+  /** Called with the merged list after each page that adds repositories. */
+  onProgress?: (repos: GitHubRepo[]) => void;
+  /** When this returns true, no new page is requested and no progress is sent. */
+  isCancelled?: () => boolean;
+}
+
+/**
+ * Every repository the user can see: their own list plus every org's list,
+ * deduplicated by full name, like `listAllRepos`. Pages are read one at a
+ * time and the orgs in parallel, so `onProgress` can show the first
+ * repositories while large orgs still load. Each source is best effort. The
+ * promise rejects only when no source answered.
+ */
+export async function loadAllRepos(
+  workspaceId: string,
+  { onProgress, isCancelled = () => false }: LoadAllReposOptions = {}
+): Promise<GitHubRepo[]> {
+  const byFullName = new Map<string, GitHubRepo>();
+  let answered = false;
+  let firstError: unknown;
+  const fail = (err: unknown) => {
+    if (firstError === undefined) firstError = err;
+  };
+
+  const walk = async (pageOf: (page: number) => Promise<GitHubRepo[]>) => {
+    for (let page = 1; page <= REPO_MAX_PAGES; page++) {
+      if (isCancelled()) return;
+      let batch: GitHubRepo[];
+      try {
+        batch = await pageOf(page);
+      } catch (err) {
+        fail(err);
+        return;
+      }
+      answered = true;
+      for (const repo of batch) byFullName.set(repo.full_name, repo);
+      if (batch.length > 0 && !isCancelled()) onProgress?.(Array.from(byFullName.values()));
+      if (batch.length < REPO_PAGE_SIZE) return;
+    }
+  };
+
+  const walkOrgs = async () => {
+    let orgs: string[];
+    try {
+      orgs = (await github.listOrgs(workspaceId)).map((org) => org.login);
+    } catch (err) {
+      fail(err);
+      return;
+    }
+    let next = 0;
+    const worker = async () => {
+      while (next < orgs.length) {
+        const org = orgs[next++];
+        await walk((page) => github.listOrgReposPage(workspaceId, org, page));
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(ORG_REPO_CONCURRENCY, orgs.length) }, worker)
+    );
+  };
+
+  await Promise.all([
+    walk((page) => github.listReposPage(workspaceId, page)),
+    walkOrgs(),
+  ]);
+  if (!answered && firstError !== undefined) throw firstError;
+  return Array.from(byFullName.values());
+}
+
+/**
+ * `base` plus every repository in `extra` that `base` does not hold. A screen
+ * that refreshes a cached list shows this while the new list loads, so no row
+ * disappears and then comes back.
+ */
+export function mergeRepos(base: readonly GitHubRepo[], extra: readonly GitHubRepo[]): GitHubRepo[] {
+  const seen = new Set(base.map((repo) => repo.full_name));
+  const added = extra.filter((repo) => !seen.has(repo.full_name));
+  return added.length === 0 ? (base as GitHubRepo[]) : [...base, ...added];
+}
 
 // PostHog Code (cloud tasks) integration — per-workspace credentials.
 export interface PostHogCodeStatus {

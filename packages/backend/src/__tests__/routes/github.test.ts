@@ -282,6 +282,33 @@ describe('routes/github', () => {
       const body = await res.json();
       expect(body.data).toHaveLength(1);
     });
+
+    it.each([
+      ['', undefined],
+      ['&page=1', 1],
+      ['&page=7', 7],
+      ['&page=20', 20],
+    ])('passes the page query %j to listRepositories as %j', async (query, page) => {
+      const spy = vi.spyOn(githubService, 'listRepositories').mockResolvedValue([]);
+      const res = await fetch(`${serverUrl}/api/v1/github/repos?workspaceId=ws1${query}`, {
+        headers: authHeaders,
+      });
+      expect(res.status).toBe(200);
+      expect(spy).toHaveBeenCalledWith('ws1', page);
+    });
+
+    it.each(['0', '21', '-1', '1.5', 'abc', ''])(
+      'refuses the page %j with a 400 and does not call GitHub',
+      async (page) => {
+        const spy = vi.spyOn(githubService, 'listRepositories').mockResolvedValue([]);
+        const res = await fetch(
+          `${serverUrl}/api/v1/github/repos?workspaceId=ws1&page=${encodeURIComponent(page)}`,
+          { headers: authHeaders }
+        );
+        expect(res.status).toBe(400);
+        expect(spy).not.toHaveBeenCalled();
+      }
+    );
   });
 
   describe('GET /api/v1/github/all-repos', () => {
@@ -335,7 +362,27 @@ describe('routes/github', () => {
       const body = await res.json();
       expect(body.data).toHaveLength(1);
       expect(body.data[0].full_name).toBe('PostHog/posthog');
-      expect(spy).toHaveBeenCalledWith('ws1', 'posthog');
+      expect(spy).toHaveBeenCalledWith('ws1', 'posthog', undefined);
+    });
+
+    it('passes the page query to listOrgRepositories', async () => {
+      const spy = vi.spyOn(githubService, 'listOrgRepositories').mockResolvedValue([]);
+      const res = await fetch(
+        `${serverUrl}/api/v1/github/orgs/posthog/repos?workspaceId=ws1&page=3`,
+        { headers: authHeaders }
+      );
+      expect(res.status).toBe(200);
+      expect(spy).toHaveBeenCalledWith('ws1', 'posthog', 3);
+    });
+
+    it('refuses a page past the cap with a 400', async () => {
+      const spy = vi.spyOn(githubService, 'listOrgRepositories').mockResolvedValue([]);
+      const res = await fetch(
+        `${serverUrl}/api/v1/github/orgs/posthog/repos?workspaceId=ws1&page=21`,
+        { headers: authHeaders }
+      );
+      expect(res.status).toBe(400);
+      expect(spy).not.toHaveBeenCalled();
     });
   });
 
