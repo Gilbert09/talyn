@@ -168,7 +168,7 @@ function DailyBars({ days, bucket }: { days: Point[]; bucket: Bucket }) {
   const ticks = [0, Math.floor((days.length - 1) / 2), days.length - 1].filter((v, i, all) => all.indexOf(v) === i);
 
   return (
-    <div>
+    <div className="relative">
       <div className="flex gap-2">
         <div className="flex h-40 w-10 flex-col justify-between text-right text-[10px] tabular-nums text-muted-foreground">
           <span>{hours(max)} h</span>
@@ -225,19 +225,22 @@ function DailyBars({ days, bucket }: { days: Point[]; bucket: Bucket }) {
           </div>
         </div>
       </div>
-      <table className="sr-only">
-        <caption>Box-hours per {bucket}</caption>
-        <thead>
-          <tr><th>{bucket === 'hour' ? 'Hour' : 'Day'}</th><th>Box-hours</th><th>Wall-clock hours</th><th>Boxes started</th></tr>
-        </thead>
-        <tbody>
-          {days.map((day) => (
-            <tr key={day.start}>
-              <td>{bucket === 'hour' ? day.start : day.day}</td><td>{hours(day.hours)}</td><td>{hours(day.wall_hours)}</td><td>{day.boxes_started}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {/* A table ignores sr-only's 1px height, so a wrapper div does the clipping. */}
+      <div className="sr-only">
+        <table>
+          <caption>Box-hours per {bucket}</caption>
+          <thead>
+            <tr><th>{bucket === 'hour' ? 'Hour' : 'Day'}</th><th>Box-hours</th><th>Wall-clock hours</th><th>Boxes started</th></tr>
+          </thead>
+          <tbody>
+            {days.map((day) => (
+              <tr key={day.start}>
+                <td>{bucket === 'hour' ? day.start : day.day}</td><td>{hours(day.hours)}</td><td>{hours(day.wall_hours)}</td><td>{day.boxes_started}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
