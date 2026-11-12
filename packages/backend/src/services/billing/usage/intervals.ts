@@ -22,6 +22,8 @@ export interface OpenIntervalInput {
   startedAt?: Date;
   /** A teammate who pays for this box (Teams and Spaces). `ownerId` is then that teammate. */
   payerUserId?: string | null;
+  /** The box's memory reading at open (MiB), when the caller has one. Starts the interval's peak. */
+  memUsedMib?: number | null;
 }
 
 /** What the charge step reads. No column here is large. */
@@ -60,10 +62,38 @@ export async function insertOpenInterval(input: OpenIntervalInput): Promise<bool
       startedAt,
       billedThrough: startedAt,
       payerUserId: input.payerUserId ?? null,
+      peakMemUsedMib: peakMib(input.memUsedMib),
     })
     .onConflictDoNothing({ target: usageIntervals.sandboxId, where: sql`${usageIntervals.endedAt} IS NULL` })
     .returning({ id: usageIntervals.id });
   return rows.length > 0;
+}
+
+/** A memory reading as a whole MiB, or null when it is not a usable figure. */
+export function peakMib(memUsedMib: number | null | undefined): number | null {
+  return typeof memUsedMib === 'number' && Number.isFinite(memUsedMib) && memUsedMib > 0 ? Math.ceil(memUsedMib) : null;
+}
+
+/**
+ * Raise each open interval's peak memory to this reading when it is higher.
+ * One statement for the whole tick. A closed interval keeps its peak.
+ */
+export async function raiseIntervalPeaks(readings: ReadonlyArray<{ id: string; memUsedMib: number }>): Promise<number> {
+  const rows = readings.flatMap((r) => {
+    const mib = peakMib(r.memUsedMib);
+    return mib === null ? [] : [sql`(${r.id}::text, ${mib}::integer)`];
+  });
+  if (rows.length === 0) return 0;
+  const updated = await db().execute(sql`
+    UPDATE usage_intervals AS u
+    SET peak_mem_used_mib = GREATEST(COALESCE(u.peak_mem_used_mib, 0), r.mib)
+    FROM (VALUES ${sql.join(rows, sql`, `)}) AS r(id, mib)
+    WHERE u.id = r.id AND u.ended_at IS NULL
+      AND (u.peak_mem_used_mib IS NULL OR u.peak_mem_used_mib < r.mib)
+    RETURNING u.id
+  `);
+  const list = Array.isArray(updated) ? updated : ((updated as { rows?: unknown[] }).rows ?? []);
+  return list.length;
 }
 
 /**

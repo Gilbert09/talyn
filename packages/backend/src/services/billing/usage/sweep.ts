@@ -17,7 +17,7 @@ import { listFleetHosts } from '../../fleetHosts.js';
 import { FleetClient, type FleetSandbox, type FleetSandboxStatus } from '../../selfHosted/client.js';
 import { fleetApiToken, fleetGatewayToken, fleetPinnedEndpoint } from '../../selfHosted/credentials.js';
 import { pruneResourceSamples, recordResourceSamples, sampleFromFleet, type ResourceSample } from '../../workbenches/resourceSamples.js';
-import { insertOpenInterval, markIntervalClosed, openIntervalsQuery, type EndReason, type IntervalRow } from './intervals.js';
+import { insertOpenInterval, markIntervalClosed, openIntervalsQuery, raiseIntervalPeaks, type EndReason, type IntervalRow } from './intervals.js';
 
 /**
  * Hooks give precision; this sweep gives truth. Every minute it compares the
@@ -257,6 +257,7 @@ export class UsageSweep {
     }
 
     let resized = 0;
+    const peaks: Array<{ id: string; memUsedMib: number }> = [];
     for (const interval of open) {
       const key = logicalSandboxId(interval.sandboxId);
       const box = boxes.get(key);
@@ -269,7 +270,10 @@ export class UsageSweep {
       }
       const decision = decideOpenInterval(box, missingTicks, now);
       if (!decision.close) {
-        if (box && RUNNING.has(box.status) && (await this.resizeIfNeeded(interval, box, now))) resized += 1;
+        if (!box || !RUNNING.has(box.status)) continue;
+        // A resize opens the next interval with this reading as its peak.
+        if (await this.resizeIfNeeded(interval, box, now)) resized += 1;
+        else if (typeof box.memUsedMib === 'number') peaks.push({ id: interval.id, memUsedMib: box.memUsedMib });
         continue;
       }
       if (await markIntervalClosed(interval.sandboxId, decision.at, decision.reason)) {
@@ -309,6 +313,7 @@ export class UsageSweep {
         size: billedSizeFor(sizeForBox(box, subject.kind), box.memUsedMib),
         startedAt: now,
         payerUserId: resolved.payerUserId ?? null,
+        memUsedMib: box.memUsedMib,
       });
       if (subject.kind === 'workbench') sessionBoxes.set(sandboxId, resolved.subjectId);
       if (!inserted) continue;
@@ -316,6 +321,7 @@ export class UsageSweep {
       if (subject.kind === 'workbench') await setWorkbenchSandboxState({ workbenchId: resolved.subjectId }, 'suspended', 'running');
     }
 
+    await this.recordPeaks(peaks);
     await this.recordSamples(boxes, sessionBoxes, now);
     return { opened, closed, resized, listErrors };
   }
@@ -360,6 +366,7 @@ export class UsageSweep {
       size: decision.resize,
       startedAt,
       payerUserId: interval.payerUserId,
+      memUsedMib,
     });
     debugBus.recordEvent({
       service: 'billing',
@@ -370,6 +377,15 @@ export class UsageSweep {
       ...(interval.workspaceId ? { workspaceId: interval.workspaceId } : {}),
     });
     return true;
+  }
+
+  /** Peak memory is shown, not billed: a failure here costs one reading, never a bill. */
+  private async recordPeaks(peaks: Array<{ id: string; memUsedMib: number }>): Promise<void> {
+    try {
+      await raiseIntervalPeaks(peaks);
+    } catch (error) {
+      debugBus.recordEvent({ service: 'billing', action: 'usage_peak_failed', summary: 'Could not store box peak memory', ok: false, error });
+    }
   }
 
   /** A failure here costs one chart point, never a bill. */

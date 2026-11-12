@@ -18,12 +18,18 @@ import {
   periodViewQuery,
   recentIntervalsQuery,
   RECENT_INTERVAL_LIMIT,
+  SUBJECT_LIMIT,
+  SUBJECT_LOOKBACK_DAYS,
+  subjectsQuery,
+  taskTitlesQuery,
+  workbenchTitlesQuery,
+  heaviestSize,
 } from '../routes/admin/billing.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
-import { adminAuditLog, autoTopupSettings, creditLots, usageIntervals, usagePeriods } from '../db/schema.js';
+import { adminAuditLog, autoTopupSettings, creditLots, tasks, usageIntervals, usagePeriods, workbenches, workspaces } from '../db/schema.js';
 import { grantCreditLot } from '../services/billing/usage/credits.js';
-import { usagePeriodFor } from '@talyn/shared';
+import { costMicrosForWeightedSeconds, usagePeriodFor } from '@talyn/shared';
 
 const TARGET = 'user-target';
 const REASON = 'goodwill after the Nov outage';
@@ -140,6 +146,130 @@ describe('GET billing view', () => {
     );
     const { data } = await (await call('GET', `/users/${TARGET}/billing`, 'admin')).json();
     expect(data.recentIntervals).toHaveLength(RECENT_INTERVAL_LIMIT);
+  });
+
+  it('shows each interval and open box with its peak memory and cost', async () => {
+    const now = new Date();
+    await db.insert(usageIntervals).values([
+      {
+        id: 'i-open', ownerId: TARGET, subjectKind: 'task', subjectId: 't1', sandboxId: 'sb-1', size: 'standard',
+        weight: '1.00', startedAt: now, billedThrough: now, billedWsec: 3600, peakMemUsedMib: 2048,
+      },
+      {
+        id: 'i-old', ownerId: TARGET, subjectKind: 'task', subjectId: 't2', sandboxId: 'sb-2', size: 'small',
+        weight: '0.50', startedAt: new Date(now.getTime() - 60_000), endedAt: now, billedThrough: now, billedWsec: 30,
+      },
+    ]);
+    const { data } = await (await call('GET', `/users/${TARGET}/billing`, 'admin')).json();
+    expect(data.recentIntervals).toEqual([
+      expect.objectContaining({ id: 'i-open', peakMemUsedMib: 2048, billedWsec: 3600, costMicros: costMicrosForWeightedSeconds(3600) }),
+      expect.objectContaining({ id: 'i-old', peakMemUsedMib: null, billedWsec: 30, costMicros: costMicrosForWeightedSeconds(30) }),
+    ]);
+    expect(data.openBoxes).toEqual([expect.objectContaining({ id: 'i-open', peakMemUsedMib: 2048, billedWsec: 3600 })]);
+  });
+});
+
+describe('GET billing view: sessions and tasks', () => {
+  const TASK_ID = 'task-1';
+  const DAY = 86_400_000;
+
+  beforeEach(async () => {
+    await db.insert(workspaces).values({ id: 'ws', ownerId: TARGET, name: 'W' });
+    await db.insert(tasks).values({ id: TASK_ID, workspaceId: 'ws', type: 'code_writing', title: 'Fix the flaky test', description: '' });
+    await db.insert(workbenches).values([
+      {
+        id: 'wb-1', workspaceId: 'ws', repoFullName: 'acme/app', name: 'wb-branch', title: 'Speed up CI', branch: 'b', baseBranch: 'main',
+        runtime: 'sandbox', agent: 'claude', sandboxId: 'talyn-wb-one', sandboxState: 'running', status: 'ready',
+      },
+      {
+        id: 'wb-2', workspaceId: 'ws', repoFullName: 'acme/app', name: 'untitled-branch', branch: 'c', baseBranch: 'main',
+        runtime: 'sandbox', agent: 'claude', sandboxId: 'talyn-wb-two', sandboxState: 'suspended', status: 'ready',
+      },
+    ]);
+  });
+
+  type Row = typeof usageIntervals.$inferInsert;
+  const interval = (id: string, over: Partial<Row> & Pick<Row, 'subjectKind' | 'subjectId' | 'startedAt'>): Row => ({
+    id, ownerId: TARGET, sandboxId: `sb-${id}`, size: 'standard', weight: '1.00',
+    billedThrough: over.endedAt ?? over.startedAt, ...over,
+  });
+
+  async function subjects() {
+    const { data } = await (await call('GET', `/users/${TARGET}/billing`, 'admin')).json();
+    return data.subjects as Array<Record<string, unknown>>;
+  }
+
+  it('sums each subject across its intervals, newest first, with title, peak memory and cost', async () => {
+    const now = Date.now();
+    const t = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
+    await db.insert(usageIntervals).values([
+      // wb-1: booted large, billed standard, then large, now open at standard.
+      interval('a', { subjectKind: 'workbench', subjectId: 'wb-1', startedAt: t(30), endedAt: t(20), endReason: 'resize', billedWsec: 600, peakMemUsedMib: 3000 }),
+      interval('b', { subjectKind: 'workbench', subjectId: 'wb-1', size: 'large', weight: '2.00', startedAt: t(20), endedAt: t(10), endReason: 'resize', billedWsec: 1200, peakMemUsedMib: 9000 }),
+      interval('c', { subjectKind: 'workbench', subjectId: 'wb-1', startedAt: t(10), billedWsec: 600, peakMemUsedMib: 2500 }),
+      interval('d', { subjectKind: 'task', subjectId: TASK_ID, size: 'small', weight: '0.50', startedAt: t(60), endedAt: t(40), endReason: 'terminal', billedWsec: 600, peakMemUsedMib: 1200 }),
+      interval('e', { subjectKind: 'workbench', subjectId: 'wb-2', startedAt: t(90), endedAt: t(80), endReason: 'suspended', billedWsec: 600 }),
+      interval('f', { subjectKind: 'review_unit', subjectId: 'ru-1', size: 'small', weight: '0.50', startedAt: t(120), endedAt: t(115), endReason: 'terminal', billedWsec: 150 }),
+      interval('g', { subjectKind: 'task', subjectId: 'gone-task', startedAt: t(200), endedAt: t(190), endReason: 'deleted', billedWsec: 600, peakMemUsedMib: 100 }),
+    ]);
+    expect(await subjects()).toEqual([
+      {
+        subjectKind: 'workbench', subjectId: 'wb-1', title: 'Speed up CI', firstStartedAt: t(30).toISOString(), lastEndedAt: null,
+        running: true, intervals: 3, peakMemUsedMib: 9000, peakSize: 'large', billedWsec: 2400, costMicros: costMicrosForWeightedSeconds(2400),
+      },
+      {
+        subjectKind: 'task', subjectId: TASK_ID, title: 'Fix the flaky test', firstStartedAt: t(60).toISOString(), lastEndedAt: t(40).toISOString(),
+        running: false, intervals: 1, peakMemUsedMib: 1200, peakSize: 'small', billedWsec: 600, costMicros: costMicrosForWeightedSeconds(600),
+      },
+      expect.objectContaining({ subjectId: 'wb-2', title: 'untitled-branch', peakMemUsedMib: null, running: false }),
+      expect.objectContaining({ subjectKind: 'review_unit', subjectId: 'ru-1', title: null, billedWsec: 150 }),
+      expect.objectContaining({ subjectId: 'gone-task', title: null, peakMemUsedMib: 100 }),
+    ]);
+  });
+
+  it.each([
+    ['inside the window', SUBJECT_LOOKBACK_DAYS * DAY - 60_000, 1],
+    ['outside the window', SUBJECT_LOOKBACK_DAYS * DAY + 60_000, 0],
+  ])('reads only intervals that started in the lookback window: %s', async (_label, ageMs, count) => {
+    const startedAt = new Date(Date.now() - ageMs);
+    await db.insert(usageIntervals).values(
+      interval('old', { subjectKind: 'task', subjectId: TASK_ID, startedAt, endedAt: new Date(startedAt.getTime() + 1000), billedWsec: 1 })
+    );
+    expect(await subjects()).toHaveLength(count);
+  });
+
+  it("does not show another owner's usage", async () => {
+    await seedUser(db, { id: 'someone-else' });
+    await db.insert(usageIntervals).values(
+      interval('x', { ownerId: 'someone-else', subjectKind: 'task', subjectId: TASK_ID, startedAt: new Date(), billedWsec: 1 })
+    );
+    expect(await subjects()).toEqual([]);
+  });
+
+  it('bounds the list', async () => {
+    const now = Date.now();
+    await db.insert(usageIntervals).values(
+      Array.from({ length: SUBJECT_LIMIT + 5 }, (_, i) =>
+        interval(`s-${i}`, { subjectKind: 'task', subjectId: `t-${i}`, startedAt: new Date(now - i * 1000), billedWsec: 1 })
+      )
+    );
+    const rows = await subjects();
+    expect(rows).toHaveLength(SUBJECT_LIMIT);
+    expect(rows[0].subjectId).toBe('t-0');
+  });
+});
+
+describe('heaviestSize', () => {
+  it.each<[string[] | null, string]>([
+    [null, ''],
+    [[], ''],
+    [['standard'], 'standard'],
+    [['standard', 'large', 'medium'], 'large'],
+    [['xlarge', 'small'], 'xlarge'],
+    [['mystery', 'small'], 'small'],
+    [['mystery'], 'mystery'],
+  ])('%j -> %s', (sizes, expected) => {
+    expect(heaviestSize(sizes)).toBe(expected);
   });
 });
 
@@ -288,6 +418,9 @@ describe('projection egress', () => {
       lotsQuery(TARGET).toSQL().sql,
       autoTopupViewQuery(TARGET).toSQL().sql,
       periodViewQuery(TARGET, new Date()).toSQL().sql,
+      subjectsQuery(TARGET, new Date()).toSQL().sql,
+      workbenchTitlesQuery(['wb-1']).toSQL().sql,
+      taskTitlesQuery(['t-1']).toSQL().sql,
     ];
     for (const sql of queries) {
       expect(sql).not.toMatch(/select\s+\*/i);
@@ -298,5 +431,7 @@ describe('projection egress', () => {
     expect(queries[0]).toContain('limit');
     expect(queries[1]).toContain('limit');
     expect(queries[2]).toContain('limit');
+    expect(queries[5]).toContain('limit');
+    expect(queries[5]).toContain('"started_at" >=');
   });
 });

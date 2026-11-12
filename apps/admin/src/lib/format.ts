@@ -34,6 +34,17 @@ export function usd(value: number | null | undefined): string {
 }
 
 /**
+ * Micro-dollars as a cost an operator can compare: "$0", "<$0.001", "$0.042",
+ * "$12.50". Under a dollar it keeps three decimals, so short runs do not all
+ * read as "$0.00".
+ */
+export function costMicros(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value <= 0) return '$0';
+  if (value < 1000) return '<$0.001';
+  return value < 999_500 ? `$${(value / 1_000_000).toFixed(3)}` : `$${(value / 1_000_000).toFixed(2)}`;
+}
+
+/**
  * A percentage from a part and a whole.
  *
  * Returns null on a zero denominator rather than NaN. A fleet host reporting

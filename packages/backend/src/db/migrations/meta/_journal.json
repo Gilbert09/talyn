@@ -939,6 +939,13 @@
       "when": 1790900000090,
       "tag": "0132_issue_rules",
       "breakpoints": true
+    },
+    {
+      "idx": 135,
+      "version": "7",
+      "when": 1790900000100,
+      "tag": "0133_usage_interval_peak_memory",
+      "breakpoints": true
     }
   ]
 }
