@@ -95,6 +95,19 @@ describe('gaugeAction', () => {
     const view = usageBillingOf(usageStatus(tier, { usedHours, exhausted }))!;
     expect(gaugeAction(view)).toBe(action);
   });
+
+  it.each([
+    ['pro', 191, false, null],
+    ['pro', 200, true, null],
+    ['max', 951, false, null],
+    ['max', 1000, true, null],
+    ['legacy_pro', 48, false, 'upgrade'],
+    ['legacy_pro', 50, true, 'upgrade'],
+    ['free', 10, true, 'upgrade'],
+  ] as const)('%s with %i hours used, exhausted=%s and credits left offers %s', (tier, usedHours, exhausted, action) => {
+    const view = usageBillingOf(usageStatus(tier, { usedHours, exhausted, balanceMicros: 100_000_000 }))!;
+    expect(gaugeAction(view)).toBe(action);
+  });
 });
 
 describe('gaugeSummary', () => {
