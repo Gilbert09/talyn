@@ -1,8 +1,8 @@
-import type { PRRow } from '@talyn/client/native';
+import type { MergeQueuePublic, PRRow } from '@talyn/client/native';
 import { reviewPriorityOffered, type PRFilterDefinition, type Workspace } from '@talyn/shared';
 import { Stack } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { FlatList, Pressable, RefreshControl, SectionList, StyleSheet, View } from 'react-native';
 import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 
@@ -20,7 +20,7 @@ import { effectiveReviewSort, filterMine, filterQueue, filterReviews, filtersAct
   NO_FILTERS, repoChoices, requestedViaOptions, reviewSortModes, SORT_LABEL, toggled, type PrFilters } from './filters';
 import { buildQueueGroups, hiddenReviewCohort, mineCohort, PULLS_TITLES, queueCohort, queueParentStatus, reviewCohort,
   type PullsTab, type ReviewSortMode, type SortDir } from './lists';
-import { PrRow } from './PrRow';
+import { PrRow, type PrRowVariant } from './PrRow';
 import { useReviewSortMode } from './reviewSort';
 import { prLinkTarget, usePrLinkMenu } from './usePrLinkMenu';
 import { useQueueToggle } from './useQueueToggle';
@@ -95,6 +95,8 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
   const hiddenCount = hidden.length;
   const parents = useMemo(() => tab === 'queue' ? queueParentStatus(queueCohort(rows ?? [])) : null, [tab, rows]);
   const listKey = `list:pulls:${tab}`;
+  // Read once. A changed `contentOffset` prop moves the list, so a later render must not hand back an older position.
+  const [initialOffset] = useState(() => workflow.local(listKey).offset);
   const clear = () => setFilters(NO_FILTERS);
   const patch = (next: Partial<PrFilters>) => setFilters((current) => ({ ...current, ...next }));
 
@@ -135,27 +137,23 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
   const common = {
     accessibilityRole: 'list' as const, accessibilityLabel: PULLS_TITLES[tab], initialNumToRender: 14, maxToRenderPerBatch: 10, windowSize: 7,
     contentContainerStyle: styles.content, keyboardShouldPersistTaps: 'handled' as const, keyboardDismissMode: 'on-drag' as const,
-    contentOffset: { x: 0, y: workflow.local(listKey).offset }, scrollEventThrottle: 150,
-    onScroll: (event: { nativeEvent: { contentOffset: { y: number } } }) => workflow.updateLocal(listKey, { offset: event.nativeEvent.contentOffset.y }),
+    contentOffset: { x: 0, y: initialOffset }, scrollEventThrottle: 150,
+    onScroll: (event: { nativeEvent: { contentOffset: { y: number } } }) => workflow.rememberOffset(listKey, event.nativeEvent.contentOffset.y),
     refreshControl: <RefreshControl refreshing={state.refreshing && state.data !== undefined} onRefresh={() => { void state.refresh(); }}
       tintColor={colors.muted} colors={[colors.primaryAction]} progressBackgroundColor={colors.elevated} />,
     ListHeaderComponent: header, ListEmptyComponent: empty,
   };
-  const onQueue = (pr: PRRow) => { void queueToggle.toggle(pr, !(tab === 'queue' || pr.mergeQueued)); };
-  const onLongPress = (pr: PRRow) => {
+  const onQueue = useStableHandler((pr: PRRow) => { void queueToggle.toggle(pr, !(tab === 'queue' || pr.mergeQueued)); });
+  const onLongPress = useStableHandler((pr: PRRow) => {
     const extra: SheetAction[] = queueToggle.canQueue(pr) ? [{
       label: tab === 'queue' || pr.mergeQueued ? 'Leave merge queue' : 'Add to merge queue', icon: QUEUE_ICON,
       disabled: queueToggle.busyId === pr.id, onPress: () => onQueue(pr),
     }] : [];
     links.open(prLinkTarget(pr), extra);
-  };
-  const drawRow = (item: PRRow, variant: 'mine' | 'review' | 'queue', divider: boolean, stackedOn?: number | null) => {
-    const canQueue = queueToggle.canQueue(item);
-    const content = <PrRow row={item} now={now} variant={variant} divider={divider} stackedOn={stackedOn}
-      onLongPress={onLongPress} onQueue={canQueue ? onQueue : undefined} />;
-    return canQueue ? <QueueSwipeRow row={item} busy={queueToggle.busyId === item.id} openSwipe={openSwipe}
-      onQueue={onQueue}>{content}</QueueSwipeRow> : content;
-  };
+  });
+  const drawRow = (item: PRRow, variant: PrRowVariant, divider: boolean, extra: { stackedOn?: number | null; parentStatus?: MergeQueuePublic['status'] } = {}) =>
+    <PullRequestListRow row={item} now={now} variant={variant} divider={divider} stackedOn={extra.stackedOn} parentStatus={extra.parentStatus}
+      swipe={queueToggle.canQueue(item)} busy={queueToggle.busyId === item.id} openSwipe={openSwipe} onLongPress={onLongPress} onQueue={onQueue} />;
 
   return <ScreenContainer>
     <Stack.Screen options={{ title: PULLS_TITLES[tab] }} />
@@ -165,13 +163,7 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
           {section.warning ? <AppText variant="caption" tone="warning">{section.warning}</AppText> : null}
           {section.detail ? <AppText variant="caption" tone="muted">{section.detail}</AppText> : null}
         </View>} />}
-      renderItem={({ item, index, section }) => {
-        const canQueue = queueToggle.canQueue(item);
-        const content = <PrRow row={item} now={now} variant="queue" parentStatus={parents?.get(item.id)}
-          divider={index < section.data.length - 1} onLongPress={onLongPress} onQueue={canQueue ? onQueue : undefined} />;
-        return canQueue ? <QueueSwipeRow row={item} queued busy={queueToggle.busyId === item.id} openSwipe={openSwipe}
-          onQueue={onQueue}>{content}</QueueSwipeRow> : content;
-      }} />
+      renderItem={({ item, index, section }) => drawRow(item, 'queue', index < section.data.length - 1, { parentStatus: parents?.get(item.id) })} />
       : <FlatList {...common} data={mine?.rows ?? reviews ?? []} keyExtractor={(item) => item.id}
         // Hidden review requests sit under a toggle at the foot, like web. A short list, so it is not virtualized.
         ListFooterComponent={hiddenCount > 0 ? <View>
@@ -180,7 +172,7 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
             onLongPress={onLongPress} onQueue={queueToggle.canQueue(row) ? onQueue : undefined} />) : null}
         </View> : undefined}
         renderItem={({ item, index }) => drawRow(item, tab === 'mine' ? 'mine' : 'review',
-          index < (mine?.rows ?? reviews ?? []).length - 1, mine?.meta.get(item.id)?.parentNumber)} />}
+          index < (mine?.rows ?? reviews ?? []).length - 1, { stackedOn: mine?.meta.get(item.id)?.parentNumber })} />}
     {sheet ? <PickerSheet visible onClose={() => setPicker(null)} {...sheet} /> : null}
     {links.toast}
     {queueToggle.toast}
@@ -188,8 +180,32 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
   </ScreenContainer>;
 }
 
-function QueueSwipeRow({ row, queued = row.mergeQueued, busy, openSwipe, onQueue, children }: {
-  row: PRRow; queued?: boolean; busy: boolean; openSwipe: React.RefObject<SwipeableMethods | null>;
+/** A function with a fixed identity that always calls the latest `handler`, so memoized rows keep their props. */
+function useStableHandler<A extends unknown[]>(handler: (...args: A) => void): (...args: A) => void {
+  const latest = useRef(handler);
+  latest.current = handler;
+  return useCallback((...args: A) => latest.current(...args), []);
+}
+
+type ListRowProps = {
+  row: PRRow; now: number; variant: PrRowVariant; divider: boolean; stackedOn?: number | null; parentStatus?: MergeQueuePublic['status'];
+  /** The row can join or leave the merge queue, so it gets the swipe action. */
+  swipe: boolean; busy: boolean; openSwipe: React.RefObject<SwipeableMethods | null>;
+  onLongPress(row: PRRow): void; onQueue(row: PRRow): void;
+};
+
+/**
+ * One list row. Memoized: a live update or a refetch re-renders only the rows
+ * whose data changed, not every mounted row and its swipe handler.
+ */
+const PullRequestListRow = memo(function PullRequestListRow({ swipe, busy, openSwipe, ...props }: ListRowProps) {
+  const content = <PrRow {...props} onQueue={swipe ? props.onQueue : undefined} />;
+  return swipe ? <QueueSwipeRow row={props.row} queued={props.variant === 'queue' || props.row.mergeQueued} busy={busy}
+    openSwipe={openSwipe} onQueue={props.onQueue}>{content}</QueueSwipeRow> : content;
+});
+
+function QueueSwipeRow({ row, queued, busy, openSwipe, onQueue, children }: {
+  row: PRRow; queued: boolean; busy: boolean; openSwipe: React.RefObject<SwipeableMethods | null>;
   onQueue(row: PRRow): void; children: ReactNode;
 }) {
   const c = useTheme();
