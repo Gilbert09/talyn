@@ -2,9 +2,8 @@ import type { PRRow } from '@talyn/client/native';
 import { reviewPriorityOffered, type PRFilterDefinition, type Workspace } from '@talyn/shared';
 import { Stack } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, SectionList, StyleSheet, View } from 'react-native';
-import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { PickerSheet, type PickerSection } from '../../components/PickerSheet';
@@ -21,6 +20,7 @@ import { effectiveReviewSort, filterMine, filterQueue, filterReviews, filtersAct
 import { buildQueueGroups, hiddenReviewCohort, mineCohort, PULLS_TITLES, queueCohort, queueParentStatus, reviewCohort,
   type PullsTab, type ReviewSortMode, type SortDir } from './lists';
 import { PrRow } from './PrRow';
+import { QUEUE_ICON, QueueSwipeRow } from './QueueSwipeRow';
 import { useReviewSortMode } from './reviewSort';
 import { prLinkTarget, usePrLinkMenu } from './usePrLinkMenu';
 import { useQueueToggle } from './useQueueToggle';
@@ -30,7 +30,7 @@ interface QueueSection { key: string; title: string; detail?: string; warning?: 
 const EMPTY: Record<PullsTab, { title: string; detail: string }> = {
   mine: { title: 'No open pull requests', detail: 'Pull requests you open or watch show here.' },
   reviews: { title: 'Nothing to review', detail: 'Pull requests where someone asks for your review show here.' },
-  queue: { title: 'The merge queue is empty.', detail: 'Queue a pull request from its page and it merges by itself when it is clean. Conflicts get fixed on the way.' },
+  queue: { title: 'The merge queue is empty.', detail: 'Swipe a pull request in My PRs, or queue it from its page. It merges by itself when it is clean. Conflicts get fixed on the way.' },
 };
 const NO_MATCH = 'No pull requests match these filters.';
 const SORT_DETAIL: Record<ReviewSortMode, string> = {
@@ -39,7 +39,6 @@ const SORT_DETAIL: Record<ReviewSortMode, string> = {
   priority: 'By state, size and how long it has waited',
 };
 const NO_DEFINITIONS: PRFilterDefinition[] = [];
-const QUEUE_ICON = { ios: 'list.number', android: 'format_list_numbered' } as const;
 
 type Picker = 'sort' | 'repo' | 'requested' | 'saved';
 
@@ -66,7 +65,6 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
   const colors = useTheme();
   const links = usePrLinkMenu();
   const queueToggle = useQueueToggle();
-  const openSwipe = useRef<SwipeableMethods | null>(null);
   const now = useNow();
   const [showHidden, setShowHidden] = useState(false);
   const [filters, setFilters] = useState<PrFilters>(NO_FILTERS);
@@ -153,7 +151,7 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
     const canQueue = queueToggle.canQueue(item);
     const content = <PrRow row={item} now={now} variant={variant} divider={divider} stackedOn={stackedOn}
       onLongPress={onLongPress} onQueue={canQueue ? onQueue : undefined} />;
-    return canQueue ? <QueueSwipeRow row={item} busy={queueToggle.busyId === item.id} openSwipe={openSwipe}
+    return canQueue ? <QueueSwipeRow row={item} busy={queueToggle.busyId === item.id}
       onQueue={onQueue}>{content}</QueueSwipeRow> : content;
   };
 
@@ -169,7 +167,7 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
         const canQueue = queueToggle.canQueue(item);
         const content = <PrRow row={item} now={now} variant="queue" parentStatus={parents?.get(item.id)}
           divider={index < section.data.length - 1} onLongPress={onLongPress} onQueue={canQueue ? onQueue : undefined} />;
-        return canQueue ? <QueueSwipeRow row={item} queued busy={queueToggle.busyId === item.id} openSwipe={openSwipe}
+        return canQueue ? <QueueSwipeRow row={item} queued busy={queueToggle.busyId === item.id}
           onQueue={onQueue}>{content}</QueueSwipeRow> : content;
       }} />
       : <FlatList {...common} data={mine?.rows ?? reviews ?? []} keyExtractor={(item) => item.id}
@@ -186,29 +184,6 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
     {queueToggle.toast}
     {links.sheet}
   </ScreenContainer>;
-}
-
-function QueueSwipeRow({ row, queued = row.mergeQueued, busy, openSwipe, onQueue, children }: {
-  row: PRRow; queued?: boolean; busy: boolean; openSwipe: React.RefObject<SwipeableMethods | null>;
-  onQueue(row: PRRow): void; children: ReactNode;
-}) {
-  const c = useTheme();
-  const swipe = useRef<SwipeableMethods | null>(null);
-  return <ReanimatedSwipeable ref={swipe} friction={2} rightThreshold={40} overshootRight={false}
-    onSwipeableOpen={() => {
-      if (openSwipe.current && openSwipe.current !== swipe.current) openSwipe.current.close();
-      openSwipe.current = swipe.current;
-    }}
-    onSwipeableClose={() => { if (openSwipe.current === swipe.current) openSwipe.current = null; }}
-    renderRightActions={() => <Pressable accessibilityRole="button" accessibilityLabel={queued ? 'Dequeue' : 'Queue'}
-      accessibilityState={{ disabled: busy }} disabled={busy} onPress={() => { swipe.current?.close(); onQueue(row); }}
-      style={[local.swipeAction, { backgroundColor: queued ? c.surface : c.primaryAction }]}>
-      <SymbolView name={QUEUE_ICON} size={18} tintColor={queued ? c.text : c.primaryText} />
-      <AppText variant="meta" style={{ color: queued ? c.text : c.primaryText }}>{queued ? 'Dequeue' : 'Queue'}</AppText>
-    </Pressable>}>
-    {/* Opaque, or the action behind the row shows through before any swipe. */}
-    <View style={{ backgroundColor: c.background }}>{children}</View>
-  </ReanimatedSwipeable>;
 }
 
 /** The picker a menu chip opens. Saved filters stay open, so several can be ticked. */
@@ -261,7 +236,6 @@ function HiddenToggle({ count, open, onPress }: { count: number; open: boolean; 
 }
 
 const local = StyleSheet.create({
-  swipeAction: { width: 88, alignItems: 'center', justifyContent: 'center', gap: 4 },
   sectionMeta: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   toggle: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44, paddingHorizontal: 4, marginTop: 8, borderTopWidth: StyleSheet.hairlineWidth },
 });

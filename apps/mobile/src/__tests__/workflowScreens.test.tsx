@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { Alert, I18nManager, Linking } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { NativeText, safeExternalUrl, StateNotice } from '../components/Workflow';
 import { AttentionScreen } from '../features/prs/AttentionScreen';
@@ -72,7 +73,8 @@ describe('native lists and useful states', () => {
   });
   it('keeps PR lists read-only with one status and a separate review fact', async () => {
     mockActive.api.pullRequests.list.mockResolvedValueOnce([pr({ authored: true, summary: { ...pr().summary, ciStatus: undefined } })]);
-    await render(<AttentionScreen />);
+    // Queueable rows swipe, and a gesture needs the root view the app wraps every screen in.
+    await render(<AttentionScreen />, { wrapper: GestureHandlerRootView });
     expect(await screen.findByRole('link', { name: /Status: Unknown\. Review: Needs approval\./ })).toBeVisible();
     expect(screen.getByText('#42')).toBeVisible();
     expect(screen.queryByText(/Review: Review required/)).toBeNull();

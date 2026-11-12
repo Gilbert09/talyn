@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Share } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import type { PRRow } from '@talyn/client/native';
 
@@ -9,6 +10,9 @@ import { PullRequestDetailScreen } from '../features/prs/PullRequestDetailScreen
 import { PullRequestsScreen } from '../features/prs/PullRequestsScreen';
 import { prLinkTarget } from '../features/prs/usePrLinkMenu';
 import { fixture, pr } from './workflowFixtures';
+
+// Queueable rows swipe, and a gesture needs the root view the app wraps every screen in.
+const inGestureRoot = { wrapper: GestureHandlerRootView };
 
 jest.setTimeout(15000);
 
@@ -67,7 +71,7 @@ describe('PR link copy model', () => {
 describe('PR link copy on screens', () => {
   it('a long press on a row opens the menu, and each copy writes its text', async () => {
     mockActive.api.pullRequests.list.mockResolvedValue([pr({ authored: true, reviewRequested: false })]);
-    await render(<PullRequestsScreen tab="mine" />);
+    await render(<PullRequestsScreen tab="mine" />, inGestureRoot);
     const row = await screen.findByRole('link', { name: /^Review current work\./ });
     await fireEvent(row, 'longPress');
     expect(screen.getByText('example/project #42')).toBeVisible();
@@ -83,7 +87,7 @@ describe('PR link copy on screens', () => {
   it('shares the plain link', async () => {
     const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction', activityType: undefined });
     mockActive.api.pullRequests.list.mockResolvedValue([pr({ authored: true, reviewRequested: false })]);
-    await render(<PullRequestsScreen tab="mine" />);
+    await render(<PullRequestsScreen tab="mine" />, inGestureRoot);
     await fireEvent(await screen.findByRole('link', { name: /^Review current work\./ }), 'longPress');
     await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Share' })); });
     expect(share).toHaveBeenCalledWith({ message: URL, url: URL });

@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { Alert } from 'react-native';
+import { GestureHandlerRootView, State } from 'react-native-gesture-handler';
+import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-handler/jest-utils';
 
 import type { MergeQueuePublic, PRRow } from '@talyn/client/native';
 
@@ -7,6 +9,9 @@ import { PullRequestDetailScreen } from '../features/prs/PullRequestDetailScreen
 import { PullRequestsScreen } from '../features/prs/PullRequestsScreen';
 import { forgetReviewSortMode } from '../features/prs/reviewSort';
 import { finding, fixture, pr, review } from './workflowFixtures';
+
+// Queueable rows swipe, and a gesture needs the root view the app wraps every screen in.
+const inGestureRoot = { wrapper: GestureHandlerRootView };
 
 jest.setTimeout(15000);
 
@@ -50,7 +55,7 @@ describe('pull request pages', () => {
 
   it('lists My PRs newest first in one list, and a chip narrows it', async () => {
     mockActive.api.pullRequests.list.mockResolvedValueOnce(mineRows());
-    await render(<PullRequestsScreen tab="mine" />);
+    await render(<PullRequestsScreen tab="mine" />, inGestureRoot);
     expect(await screen.findByRole('link', { name: /^Conflicted\./ })).toBeVisible();
     expect(linkNames()).toEqual(['Plain', 'Conflicted']);
     // No section split: the old headers are gone.
@@ -68,7 +73,7 @@ describe('pull request pages', () => {
 
   it('flips My PRs to oldest first', async () => {
     mockActive.api.pullRequests.list.mockResolvedValueOnce(mineRows());
-    await render(<PullRequestsScreen tab="mine" />);
+    await render(<PullRequestsScreen tab="mine" />, inGestureRoot);
     await screen.findByRole('link', { name: /^Plain\./ });
     await fireEvent.press(screen.getByRole('button', { name: 'Sort: Newest' }));
     await fireEvent.press(await screen.findByRole('button', { name: 'Oldest' }));
@@ -78,7 +83,7 @@ describe('pull request pages', () => {
 
   it('searches by number and offers to clear when nothing matches', async () => {
     mockActive.api.pullRequests.list.mockResolvedValueOnce(mineRows());
-    await render(<PullRequestsScreen tab="mine" />);
+    await render(<PullRequestsScreen tab="mine" />, inGestureRoot);
     await screen.findByRole('link', { name: /^Plain\./ });
     await fireEvent.changeText(screen.getByLabelText('Search title, repo, #number or URL'), '#2');
     expect(linkNames()).toEqual(['Plain']);
@@ -94,7 +99,7 @@ describe('pull request pages', () => {
     const rows = mineRows();
     rows[0] = { ...rows[0], repositoryId: 'repo-two', repo: 'other' };
     mockActive.api.pullRequests.list.mockResolvedValueOnce(rows);
-    await render(<PullRequestsScreen tab="mine" />);
+    await render(<PullRequestsScreen tab="mine" />, inGestureRoot);
     await screen.findByRole('link', { name: /^Plain\./ });
     await fireEvent.press(screen.getByRole('button', { name: 'Repository: All repos' }));
     await fireEvent.press(await screen.findByRole('button', { name: 'example/other' }));
@@ -110,7 +115,7 @@ describe('pull request pages', () => {
     rows[0] = { ...rows[0], summary: { ...rows[0].summary, labels: ['bug'] } };
     rows[1] = { ...rows[1], summary: { ...rows[1].summary, labels: ['ui'] } };
     mockActive.api.pullRequests.list.mockResolvedValueOnce(rows);
-    await render(<PullRequestsScreen tab="mine" />);
+    await render(<PullRequestsScreen tab="mine" />, inGestureRoot);
     await fireEvent.press(await screen.findByRole('button', { name: 'Saved filters' }));
     await fireEvent.press(await screen.findByRole('button', { name: 'Label bug' }));
     expect(linkNames()).toEqual(['Conflicted']);
@@ -127,7 +132,7 @@ describe('pull request pages', () => {
 
   it('sorts review requests from the sort chip and saves the choice', async () => {
     mockActive.api.pullRequests.list.mockResolvedValueOnce(reviewRows());
-    await render(<PullRequestsScreen tab="reviews" />);
+    await render(<PullRequestsScreen tab="reviews" />, inGestureRoot);
     await screen.findByRole('link', { name: /^Newer review\./ });
     // A stored Priority falls back to Newest when the account does not have it.
     expect(linkNames()).toEqual(['Newer review', 'Older review']);
@@ -142,7 +147,7 @@ describe('pull request pages', () => {
     mockStorage.getItem.mockResolvedValue('oldest');
     mockActive.api.features.get.mockResolvedValue({ workbenches: true, reviewPriorityMode: true });
     mockActive.api.pullRequests.list.mockResolvedValueOnce(reviewRows());
-    await render(<PullRequestsScreen tab="reviews" />);
+    await render(<PullRequestsScreen tab="reviews" />, inGestureRoot);
     expect(await screen.findByRole('button', { name: 'Sort: Oldest' })).toBeVisible();
     expect(linkNames()).toEqual(['Older review', 'Newer review']);
     await fireEvent.press(screen.getByRole('button', { name: 'Sort: Oldest' }));
@@ -151,7 +156,7 @@ describe('pull request pages', () => {
 
   it('filters review requests by who was asked', async () => {
     mockActive.api.pullRequests.list.mockResolvedValueOnce(reviewRows());
-    await render(<PullRequestsScreen tab="reviews" />);
+    await render(<PullRequestsScreen tab="reviews" />, inGestureRoot);
     await fireEvent.press(await screen.findByRole('button', { name: 'Requested via: Any requested' }));
     await fireEvent.press(await screen.findByRole('button', { name: '@org/web' }));
     expect(linkNames()).toEqual(['Newer review']);
@@ -165,7 +170,7 @@ describe('pull request pages', () => {
       pr({ id: 'a', number: 1, ...queued, summary: summary({ title: 'First queued', headBranch: 'a' }) }),
       pr({ id: 'b', number: 2, ...queued, summary: summary({ title: 'Second queued', headBranch: 'b' }) }),
     ]);
-    await render(<PullRequestsScreen tab="queue" />);
+    await render(<PullRequestsScreen tab="queue" />, inGestureRoot);
     await screen.findByRole('link', { name: /^First queued\./ });
     expect(screen.queryByRole('button', { name: /^Sort:/ })).toBeNull();
     await fireEvent.changeText(screen.getByLabelText('Search title, repo, #number or URL'), 'second');
@@ -178,7 +183,7 @@ describe('pull request pages', () => {
     ['queue', 'The merge queue is empty.'],
   ] as const)('shows the %s empty state', async (tab, title) => {
     mockActive.api.pullRequests.list.mockResolvedValueOnce([]);
-    await render(<PullRequestsScreen tab={tab} />);
+    await render(<PullRequestsScreen tab={tab} />, inGestureRoot);
     expect(await screen.findByText(title)).toBeVisible();
   });
 
@@ -187,7 +192,7 @@ describe('pull request pages', () => {
       pr({ summary: summary({ reviewRequestVia: { direct: false, teams: ['org/core', 'org/web'] } }) }),
       pr({ id: 'hidden', number: 9, reviewHiddenAt: '2026-11-08T10:00:00Z', summary: summary({ title: 'Skipped one' }) }),
     ]);
-    await render(<PullRequestsScreen tab="reviews" />);
+    await render(<PullRequestsScreen tab="reviews" />, inGestureRoot);
     expect(await screen.findByRole('link', { name: /Requested: @org\/core \+1\./ })).toBeVisible();
     expect(screen.queryByRole('link', { name: /^Skipped one\./ })).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Show 1 hidden pull request' }));
@@ -200,7 +205,7 @@ describe('pull request pages', () => {
       pr({ id: 'a', number: 1, ...queued({ status: 'awaiting_ci', position: 2 }), summary: summary({ title: 'Waiting', headBranch: 'a' }) }),
       pr({ id: 'b', number: 2, ...queued({ status: 'blocked', position: 1, reason: 'Checks fail.' }), summary: summary({ title: 'Stuck', headBranch: 'b' }) }),
     ]);
-    await render(<PullRequestsScreen tab="queue" />);
+    await render(<PullRequestsScreen tab="queue" />, inGestureRoot);
     expect(await screen.findByRole('link', { name: /^Waiting\..*Queue: position 2, Waiting for CI\./ })).toBeVisible();
     expect(screen.getByText('Checks fail. It clears on a new push. Requeue to retry now.')).toBeVisible();
     expect(screen.getByText('example/project → main')).toBeVisible();
@@ -211,7 +216,7 @@ describe('pull request pages', () => {
       pr({ id: 'queueable', number: 123, authored: true, reviewRequested: false,
         summary: summary({ title: 'Queueable', reviewDecision: undefined }) }),
     ]);
-    await render(<PullRequestsScreen tab="mine" />);
+    await render(<PullRequestsScreen tab="mine" />, inGestureRoot);
     const row = await screen.findByRole('link', { name: /^Queueable\./ });
     await fireEvent(row, 'longPress');
     await fireEvent.press(screen.getByRole('button', { name: 'Add to merge queue' }));
@@ -225,7 +230,7 @@ describe('pull request pages', () => {
       pr({ id: 'reviewer', number: 124, authored: false, reviewRequested: true,
         summary: summary({ title: 'Reviewer', reviewDecision: undefined }) }),
     ]);
-    await render(<PullRequestsScreen tab="reviews" />);
+    await render(<PullRequestsScreen tab="reviews" />, inGestureRoot);
     const row = await screen.findByRole('link', { name: /^Reviewer\./ });
     expect(row.props.accessibilityActions).toEqual([{ name: 'longpress', label: 'Link actions for Reviewer' }]);
     await fireEvent(row, 'longPress');
@@ -238,11 +243,60 @@ describe('pull request pages', () => {
         mergeQueue: { status: 'queued', position: 3 } as MergeQueuePublic,
         summary: summary({ title: 'Queued PR', reviewDecision: undefined }) }),
     ]);
-    await render(<PullRequestsScreen tab="mine" />);
+    await render(<PullRequestsScreen tab="mine" />, inGestureRoot);
     const row = await screen.findByRole('link', { name: /In merge queue #3\./ });
     await fireEvent(row, 'longPress');
     await fireEvent.press(screen.getByRole('button', { name: 'Leave merge queue' }));
     expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledWith('queued', false);
+  });
+
+  // The test window is 750 points wide, so a swipe acts once it passes 225 points.
+  const swipe = async (id: string, translationX: number) => {
+    const pan = getByGestureTestId(`queue-swipe-${id}`);
+    await act(async () => {
+      fireGestureHandler(pan, [{ state: State.BEGAN }, { state: State.ACTIVE, translationX }, { state: State.END, translationX }]);
+    });
+  };
+
+  it.each([
+    ['left', 'mine', false, -300, true],
+    ['right', 'mine', false, 300, true],
+    ['left when queued', 'mine', true, -300, false],
+    ['right when queued', 'mine', true, 300, false],
+    ['left on the queue page', 'queue', true, -300, false],
+    ['right on the queue page', 'queue', true, 300, false],
+  ] as const)('a full swipe %s on the %s list sets the merge queue', async (_name, tab, mergeQueued, translationX, enabled) => {
+    mockActive.api.pullRequests.list.mockResolvedValue([
+      pr({ id: 'swiped', number: 123, authored: true, reviewRequested: false, mergeQueued,
+        mergeQueue: mergeQueued ? { status: 'queued', position: 1 } as MergeQueuePublic : undefined,
+        summary: summary({ title: 'Swiped PR', reviewDecision: undefined }) }),
+    ]);
+    await render(<PullRequestsScreen tab={tab} />, inGestureRoot);
+    await screen.findByRole('link', { name: /^Swiped PR\./ });
+    await swipe('swiped', translationX);
+    await waitFor(() => expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledWith('swiped', enabled));
+    expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([-224, -100, 0, 100, 224])('a short swipe of %i points leaves the queue alone', async (translationX) => {
+    mockActive.api.pullRequests.list.mockResolvedValueOnce([
+      pr({ id: 'short', number: 123, authored: true, reviewRequested: false,
+        summary: summary({ title: 'Short swipe', reviewDecision: undefined }) }),
+    ]);
+    await render(<PullRequestsScreen tab="mine" />, inGestureRoot);
+    await screen.findByRole('link', { name: /^Short swipe\./ });
+    await swipe('short', translationX);
+    expect(mockActive.api.pullRequests.setMergeQueue).not.toHaveBeenCalled();
+  });
+
+  it('gives a review request no swipe', async () => {
+    mockActive.api.pullRequests.list.mockResolvedValueOnce([
+      pr({ id: 'reviewer', number: 124, authored: false, reviewRequested: true,
+        summary: summary({ title: 'Reviewer', reviewDecision: undefined }) }),
+    ]);
+    await render(<PullRequestsScreen tab="reviews" />, inGestureRoot);
+    await screen.findByRole('link', { name: /^Reviewer\./ });
+    expect(() => getByGestureTestId('queue-swipe-reviewer')).toThrow();
   });
 });
 
