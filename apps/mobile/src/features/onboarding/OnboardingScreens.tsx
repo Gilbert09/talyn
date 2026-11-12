@@ -2,7 +2,7 @@ import { Redirect, router, type Href } from 'expo-router';
 import { useEffect, type PropsWithChildren } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { useMobileRuntime, useWorkspace } from '../../auth/AuthProvider';
+import { useMobileRuntime, useNetwork, useWorkspace } from '../../auth/AuthProvider';
 import { AppText, Button } from '../../components/UI';
 import { trackEvent } from '../../lib/analytics';
 import { AppLoading } from '../../navigation/AppLoading';
@@ -14,12 +14,13 @@ import { ConnectAgentPanel } from '../agents/connect/ConnectAgentSheet';
 import { RepositoriesPanel } from '../repositories/RepositoriesScreen';
 import { ConnectGitHubStep } from './ConnectGitHubStep';
 import { useGithubConnection } from './githubFlow';
+import { enableNotifications, notificationStepAction, NotificationsStep, useNotificationSnapshot } from './NotificationsStep';
 import { OnboardingShell } from './OnboardingShell';
 import { useOnboardingProgress } from './progress';
 import { ReadinessChecklist } from './ReadinessChecklist';
 
 export const stepRoute = (step: OnboardingStep): Href => `/onboarding/${step}` as Href;
-const PREVIOUS: Record<OnboardingStep, OnboardingStep | null> = { github: null, repos: 'github', agent: 'repos' };
+const PREVIOUS: Record<OnboardingStep, OnboardingStep | null> = { github: null, repos: 'github', agent: 'repos', notifications: 'agent' };
 
 /**
  * The onboarding stack waits for a workspace like home does, and records that
@@ -48,8 +49,8 @@ function back(step: OnboardingStep) {
   else if (previous) router.replace(stepRoute(previous));
 }
 
-function Footer({ step, next, nextLabel = 'Next', canAdvance, skip }: {
-  step: OnboardingStep; next(): void; nextLabel?: string; canAdvance: boolean; skip?(): void;
+function Footer({ step, next, nextLabel = 'Next', canAdvance, skip, loading = false }: {
+  step: OnboardingStep; next(): void; nextLabel?: string; canAdvance: boolean; skip?(): void; loading?: boolean;
 }) {
   return <>
     <View style={styles.side}>
@@ -57,7 +58,7 @@ function Footer({ step, next, nextLabel = 'Next', canAdvance, skip }: {
     </View>
     <View style={[styles.side, styles.end]}>
       {skip ? <Button variant="quiet" title="Skip for now" onPress={skip} /> : null}
-      <Button title={nextLabel} disabled={!canAdvance} onPress={next} />
+      <Button title={nextLabel} disabled={!canAdvance || loading} loading={loading} onPress={next} />
     </View>
   </>;
 }
@@ -87,21 +88,43 @@ export function ReposStepScreen() {
 }
 
 export function AgentStepScreen() {
-  const { readiness, repositories } = useOnboardingGate();
-  const { finish } = useOnboardingProgress();
+  const { readiness } = useOnboardingGate();
   const { workflow } = useMobileRuntime();
   const ready = agentReady(readiness.data);
-  const done = () => { finish(); router.replace(HOME); };
-  const next = () => {
-    completed('agent');
-    trackEvent('onboarding_completed', { github_connected: true, repos_watched: repositories.data?.length ?? 0, agent_connected: true });
-    done();
-  };
-  return <OnboardingShell step="agent" footer={<Footer step="agent" nextLabel="Start using Talyn" canAdvance={ready} next={next} skip={!ready && agentStepSkippable(readiness.data) ? done : undefined} />}>
+  const notifications = () => router.push(stepRoute('notifications'));
+  const next = () => { completed('agent'); notifications(); };
+  return <OnboardingShell step="agent" footer={<Footer step="agent" canAdvance={ready} next={next} skip={!ready && agentStepSkippable(readiness.data) ? notifications : undefined} />}>
     <AppText variant="meta" tone="muted">Use your Claude or ChatGPT subscription. Sessions run on your own plan.</AppText>
     <ConnectAgentPanel onConnected={() => { workflow.refresh('readiness'); workflow.refresh('providers'); }} />
     <ReadinessChecklist readiness={readiness.data} />
     {ready || agentStepSkippable(readiness.data) ? null : <AppText variant="meta" tone="muted">Connect Claude or ChatGPT to continue.</AppText>}
+  </OnboardingShell>;
+}
+
+/** The optional last step. Skip and finish both open home; only an agent connection counts as a completed setup. */
+export function NotificationsStepScreen() {
+  const { readiness, repositories } = useOnboardingGate();
+  const { finish } = useOnboardingProgress();
+  const { notifications } = useMobileRuntime();
+  const offline = useNetwork() === 'offline';
+  const snapshot = useNotificationSnapshot(notifications);
+  const action = notificationStepAction(snapshot, offline);
+  const done = () => {
+    const enabled = snapshot.state === 'ready';
+    if (enabled) completed('notifications');
+    if (agentReady(readiness.data)) {
+      trackEvent('onboarding_completed', { github_connected: true, repos_watched: repositories.data?.length ?? 0, agent_connected: true,
+        notifications_enabled: enabled });
+    }
+    finish();
+    router.replace(HOME);
+  };
+  const footer = action === 'finish'
+    ? <Footer step="notifications" nextLabel="Start using Talyn" canAdvance next={done} />
+    : <Footer step="notifications" nextLabel="Turn on notifications" canAdvance loading={snapshot.state === 'loading'}
+      next={() => { void enableNotifications(notifications); }} skip={done} />;
+  return <OnboardingShell step="notifications" footer={footer}>
+    <NotificationsStep controller={notifications} offline={offline} />
   </OnboardingShell>;
 }
 
