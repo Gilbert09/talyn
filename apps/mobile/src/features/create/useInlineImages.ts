@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 
-import { imageName, type ImageDraft, type PickedImage } from '../chat/attachments';
+import { attachmentName, type ImageDraft, type PickedImage } from '../chat/attachments';
 import { useImageDrafts } from '../chat/attachmentDrafts';
 import { inlineImage, inlineSize, jpegName, MAX_INLINE_BASE64 } from '../chat/inlineImage';
 
@@ -34,7 +34,7 @@ export function useInlineImages(key: string) {
   const add = (assets: PickedImage[]) => {
     const added: ImageDraft[] = assets.map((asset) => {
       const index = picked.current++;
-      return { id: `${Date.now()}-${index}`, uri: asset.uri, name: jpegName(imageName(asset, 'image/jpeg', index)), mimeType: 'image/jpeg', status: 'uploading' };
+      return { id: `${Date.now()}-${index}`, uri: asset.uri, name: jpegName(attachmentName(asset, 'image/jpeg', index)), mimeType: 'image/jpeg', status: 'uploading' };
     });
     if (!added.length) return;
     update((current) => [...current, ...added]);

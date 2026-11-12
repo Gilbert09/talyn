@@ -124,7 +124,7 @@ it('shows the ready note without an upload or message change', async () => {
   const starting = { ...workbench, status: 'provisioning' as const };
   render(<Composer workbench={starting} chat={chat} ops={sandboxOps(starting)} todos={null} contextUsage={null} slashCommands={null} />);
   paste();
-  expect(screen.getByText('Images can be attached once the sandbox is ready.')).toBeInTheDocument();
+  expect(screen.getByText('Files can be attached once the sandbox is ready.')).toBeInTheDocument();
   expect(upload).not.toHaveBeenCalled();
   expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue('');
   expect(screen.getByRole('textbox', { name: 'Message the agent' })).toBeEnabled();

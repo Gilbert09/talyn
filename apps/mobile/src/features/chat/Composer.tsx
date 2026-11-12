@@ -13,7 +13,7 @@ import { isStarting } from '../sessions/Starting';
 import { chatActions } from './actions';
 import { ComposerImages } from './AttachmentViews';
 import { useImageDrafts } from './attachmentDrafts';
-import { buildMessageInput, checkImage, imageErrorMessage, sendBlock, type ImageDraft, type PickedImage } from './attachments';
+import { buildMessageInput, checkAttachment, imageErrorMessage, sendBlock, type ImageDraft, type PickedImage } from './attachments';
 import { showImagePicker } from './imagePicker';
 
 /** About six lines of body text, then the field scrolls. */
@@ -79,7 +79,7 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
   const upload = async (draft: ImageDraft) => {
     updateImages((current) => current.map((value) => value.id === draft.id ? { ...value, status: 'uploading', error: undefined } : value));
     try {
-      const attachment = await chatActions.uploadImage(item.id, { uri: draft.uri, name: draft.name, mimeType: draft.mimeType }, async () => (await auth?.getAccessToken?.()) ?? null);
+      const attachment = await chatActions.uploadAttachment(item.id, { uri: draft.uri, name: draft.name, mimeType: draft.mimeType }, async () => (await auth?.getAccessToken?.()) ?? null);
       updateImages((current) => current.map((value) => value.id === draft.id ? { ...value, status: 'ready', attachment } : value));
     } catch (error) {
       const reason = error instanceof Error && error.message ? error.message : 'The upload failed.';
@@ -89,7 +89,7 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
   const addImages = (assets: PickedImage[]) => {
     const added: ImageDraft[] = []; const errors: string[] = [];
     for (const asset of assets) {
-      const check = checkImage(asset, picked.current++);
+      const check = checkAttachment(asset, picked.current++);
       if (check.ok) added.push({ id: `${Date.now()}-${picked.current}`, uri: asset.uri, name: check.name, mimeType: check.mimeType, status: 'uploading' });
       else errors.push(imageErrorMessage(check.name, check.reason));
     }
@@ -99,7 +99,7 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
     updateImages((current) => [...current, ...added]);
     added.forEach((draft) => { void upload(draft); });
   };
-  const attach = () => showImagePicker(addImages);
+  const attach = () => showImagePicker(addImages, { videos: true });
   const sendImages = async () => {
     if (imageBlock || sendingImages) return;
     setSendingImages(true); setImageSendError('');
@@ -112,7 +112,7 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
       void workflow.load('workbench', item.id);
       void workflow.load('transcript', chatId);
     } catch {
-      setImageSendError('The message may not have been sent. Your text and images are still here. Check the conversation before sending again.');
+      setImageSendError('The message may not have been sent. Your text and attachments are still here. Check the conversation before sending again.');
     } finally { setSendingImages(false); }
   };
   const queued = chat?.queuedMessages.length ?? 0;
@@ -146,7 +146,7 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
       onRetry={(id) => { const draft = images.find((value) => value.id === id); if (draft) void upload(draft); }}
       onDismissError={(index) => setImageErrors((current) => current.filter((_, at) => at !== index))} />
     <View style={[styles.field, { borderColor: focused ? c.primary : c.border, backgroundColor: c.elevated }]}>
-      <Pressable accessibilityRole="button" accessibilityLabel="Attach an image" hitSlop={6} onPress={attach} disabled={!allowed}
+      <Pressable accessibilityRole="button" accessibilityLabel="Attach a photo or video" hitSlop={6} onPress={attach} disabled={!allowed}
         style={[styles.attach, { opacity: allowed ? 1 : 0.4 }]}>
         <SymbolView name={{ ios: 'plus', android: 'add' }} size={18} tintColor={c.muted} />
       </Pressable>

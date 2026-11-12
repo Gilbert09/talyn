@@ -46,11 +46,10 @@ import { useWorkbenchStore } from '../stores/workbenches';
  */
 export type WorkbenchPromptActionKind = Exclude<WorkbenchPromptAction, 'rename_branch'>;
 
-export interface PastedFile {
-  name: string;
-  mimeType: string;
-  dataBase64: string;
-}
+/** A file to attach. An image comes as `dataBase64`; a video comes as its `blob`, which is too large to encode twice. */
+export type PastedFile =
+  | { name: string; mimeType: string; dataBase64: string; blob?: undefined }
+  | { name: string; mimeType: string; blob: Blob; dataBase64?: undefined };
 
 export interface WorkbenchOps {
   readonly runtime: Workbench['runtime'];
@@ -63,7 +62,7 @@ export interface WorkbenchOps {
   readonly readUnavailable: string | null;
   /** Whether a queued message can be taken back. */
   readonly canRemoveQueued: boolean;
-  /** Whether pasted images can be attached. */
+  /** Whether pasted images and videos can be attached. */
   readonly canAttach: boolean;
   send(chat: WorkbenchChat, input: SendWorkbenchMessageInput): Promise<{ queued: boolean }>;
   cancel(chatId: string): Promise<void>;
@@ -154,7 +153,8 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
     },
     attach: (file) => api.workbenches.uploadAttachment(
       id,
-      new Blob([Uint8Array.from(atob(file.dataBase64), (char) => char.charCodeAt(0))], { type: file.mimeType }),
+      // `slice` relabels the bytes without copying them: a `.mov` file can arrive with no type.
+      file.blob ? file.blob.slice(0, file.blob.size, file.mimeType) : new Blob([Uint8Array.from(atob(file.dataBase64), (char) => char.charCodeAt(0))], { type: file.mimeType }),
       file.name
     ),
     attachmentBlob: (path) => api.workbenches.attachmentBlob(id, path),
@@ -336,9 +336,10 @@ export function localOps(
       const local = need();
       // The data goes over IPC. An argv holds about 1 MiB, less than many screenshots.
       if (local.writeAttachment) {
-        const rel = await local.writeAttachment(path, file.name, file.dataBase64);
+        const rel = await local.writeAttachment(path, file.name, file.dataBase64 ?? (await blobBase64(file.blob)));
         return { name: file.name, mimeType: file.mimeType, path: rel };
       }
+      if (file.blob) throw new Error('Update Talyn to attach videos to a local session.');
       const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+/, '') || 'attachment';
       const rel = `${ATTACHMENT_DIR}/${Date.now()}-${safe}`;
       await run([
@@ -359,6 +360,18 @@ export function localOps(
     },
   };
   return ops;
+}
+
+function blobBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result);
+      resolve(url.slice(url.indexOf(',') + 1));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read the file.'));
+    reader.readAsDataURL(blob);
+  });
 }
 
 export function opsFor(workbench: Workbench): WorkbenchOps {

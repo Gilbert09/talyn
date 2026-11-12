@@ -183,6 +183,18 @@ describe('workbench turn launch', () => {
     expect(fleet.scripts.find((script) => isAgentTurn(script))).toContain(`/work/app/${path} (image/png)`);
   });
 
+  it.each([
+    ['a video', 'video/mp4', true],
+    ['only an image', 'image/png', false],
+  ])('tells the agent how to look at %s', async (_label, mimeType, noted) => {
+    const path = `.context/attachments/abc-clip.${mimeType === 'video/mp4' ? 'mp4' : 'png'}`;
+    await sendMessage('chat', { text: 'What breaks here?', attachments: [{ name: 'clip', mimeType, path }] });
+    await settled('idle');
+    const script = fleet.scripts.find((candidate) => isAgentTurn(candidate)) ?? '';
+    expect(script).toContain(`/work/app/${path} (${mimeType})`);
+    expect(script.includes('extract frames from it')).toBe(noted);
+  });
+
   it.each(['credentials', 'attachments', 'instructions', 'skills'] as const)('propagates a fatal %s failure after other steps finish', async (step) => {
     const failure = new FleetRunNotFoundError('missing sandbox');
     vi.spyOn(runtime, 'refreshSandboxCredentials').mockImplementation(async () => {

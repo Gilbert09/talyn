@@ -1,5 +1,6 @@
+import { WORKBENCH_MAX_IMAGE_BYTES, WORKBENCH_MAX_VIDEO_BYTES } from '@talyn/shared';
 import {
-  MAX_IMAGE_BYTES, attachmentUrl, buildMessageInput, checkImage, eventAttachments, imageMimeType, sendBlock, type ImageDraft,
+  attachmentUrl, buildMessageInput, checkAttachment, eventAttachments, attachmentMimeType, sendBlock, type ImageDraft,
 } from '../features/chat/attachments';
 
 const draft = (patch: Partial<ImageDraft> = {}): ImageDraft => ({
@@ -7,7 +8,7 @@ const draft = (patch: Partial<ImageDraft> = {}): ImageDraft => ({
   attachment: { name: 'a.jpg', mimeType: 'image/jpeg', path: '.context/attachments/x-a.jpg' }, ...patch,
 });
 
-describe('image types', () => {
+describe('attachment types', () => {
   it.each([
     [{ uri: 'file:///a', mimeType: 'image/jpeg' }, 'image/jpeg'],
     [{ uri: 'file:///a', mimeType: 'image/jpg' }, 'image/jpeg'],
@@ -16,27 +17,57 @@ describe('image types', () => {
     [{ uri: 'file:///a', fileName: 'shot.GIF', mimeType: 'application/octet-stream' }, 'image/gif'],
     [{ uri: 'file:///a.heic', mimeType: 'image/heic' }, null],
     [{ uri: 'file:///a.pdf', mimeType: null }, null],
-  ])('reads %j as %s', (image, expected) => { expect(imageMimeType(image)).toBe(expected); });
+    [{ uri: 'file:///a', mimeType: 'video/mp4' }, 'video/mp4'],
+    [{ uri: 'file:///a', mimeType: 'video/quicktime' }, 'video/quicktime'],
+    [{ uri: 'file:///a', mimeType: 'VIDEO/WEBM' }, 'video/webm'],
+    [{ uri: 'file:///a', mimeType: 'video/mov' }, 'video/quicktime'],
+    [{ uri: 'file:///a', mimeType: 'video/x-m4v' }, 'video/mp4'],
+    [{ uri: 'file:///clip.MOV?x=1', mimeType: null }, 'video/quicktime'],
+    [{ uri: 'file:///a', fileName: 'clip.m4v', mimeType: 'application/octet-stream' }, 'video/mp4'],
+    [{ uri: 'file:///clip.webm', mimeType: undefined }, 'video/webm'],
+    [{ uri: 'file:///a.avi', mimeType: 'video/x-msvideo' }, null],
+    [{ uri: 'file:///a.mkv', mimeType: null }, null],
+  ])('reads %j as %s', (image, expected) => { expect(attachmentMimeType(image)).toBe(expected); });
 });
 
-describe('checkImage', () => {
+describe('checkAttachment', () => {
   it.each([
     [{ uri: 'file:///a.jpg', mimeType: 'image/jpeg', fileName: 'cat.jpg', fileSize: 1000 }, true, 'cat.jpg'],
     [{ uri: 'file:///a', mimeType: 'image/png' }, true, 'photo-1.png'],
-    [{ uri: 'file:///a', mimeType: 'image/png', fileSize: MAX_IMAGE_BYTES }, true, 'photo-1.png'],
-    [{ uri: 'file:///a', mimeType: 'image/png', fileSize: MAX_IMAGE_BYTES + 1 }, false, 'photo-1.png'],
+    [{ uri: 'file:///a', mimeType: 'image/png', fileSize: WORKBENCH_MAX_IMAGE_BYTES }, true, 'photo-1.png'],
+    [{ uri: 'file:///a', mimeType: 'image/png', fileSize: WORKBENCH_MAX_IMAGE_BYTES + 1 }, false, 'photo-1.png'],
     [{ uri: 'file:///a.heic', mimeType: 'image/heic' }, false, 'photo-1.jpg'],
+    [{ uri: 'file:///a', mimeType: 'video/mp4' }, true, 'video-1.mp4'],
+    [{ uri: 'file:///a', mimeType: 'video/quicktime' }, true, 'video-1.mov'],
+    [{ uri: 'file:///a', mimeType: 'video/webm', fileName: ' ' }, true, 'video-1.webm'],
+    [{ uri: 'file:///a', mimeType: 'video/mp4', fileName: 'demo.mp4' }, true, 'demo.mp4'],
+    [{ uri: 'file:///a', mimeType: 'video/mp4', fileSize: WORKBENCH_MAX_VIDEO_BYTES }, true, 'video-1.mp4'],
+    [{ uri: 'file:///a', mimeType: 'video/mp4', fileSize: WORKBENCH_MAX_VIDEO_BYTES + 1 }, false, 'video-1.mp4'],
+    [{ uri: 'file:///a', mimeType: 'video/mp4', fileSize: WORKBENCH_MAX_IMAGE_BYTES + 1 }, true, 'video-1.mp4'],
+    [{ uri: 'file:///a.avi', mimeType: 'video/x-msvideo' }, false, 'photo-1.jpg'],
   ])('checks %j', (image, ok, name) => {
-    const result = checkImage(image, 0);
+    const result = checkAttachment(image, 0);
     expect(result.ok).toBe(ok);
     expect(result.name).toBe(name);
   });
+  it.each([
+    [{ uri: 'file:///a.heic', mimeType: 'image/heic' }, 'Only PNG, JPEG, WebP and GIF images and MP4, MOV and WebM videos can be attached.'],
+    [{ uri: 'file:///a', mimeType: 'image/png', fileSize: WORKBENCH_MAX_IMAGE_BYTES + 1 }, 'The image is larger than 10 MB.'],
+    [{ uri: 'file:///a', mimeType: 'video/mp4', fileSize: WORKBENCH_MAX_VIDEO_BYTES + 1 }, 'The video is larger than 50 MB.'],
+  ])('explains why %j fails', (image, reason) => { expect(checkAttachment(image, 0)).toMatchObject({ ok: false, reason }); });
+  it('numbers default names by pick index', () => { expect(checkAttachment({ uri: 'file:///a', mimeType: 'video/mp4' }, 2).name).toBe('video-3.mp4'); });
 });
 
 describe('buildMessageInput', () => {
   it('sends text only when there are no images', () => { expect(buildMessageInput('hi', [])).toEqual({ text: 'hi' }); });
   it('sends the uploaded attachments in the web shape', () => {
     expect(buildMessageInput('look', [draft()])).toEqual({ text: 'look', attachments: [{ name: 'a.jpg', mimeType: 'image/jpeg', path: '.context/attachments/x-a.jpg' }] });
+  });
+  it('sends a video next to an image', () => {
+    const video = draft({ id: 'v', name: 'clip.mov', mimeType: 'video/quicktime', attachment: { name: 'clip.mov', mimeType: 'video/quicktime', path: '.context/attachments/x-clip.mov' } });
+    expect(buildMessageInput('watch', [draft(), video])).toEqual({ text: 'watch', attachments: [
+      { name: 'a.jpg', mimeType: 'image/jpeg', path: '.context/attachments/x-a.jpg' },
+      { name: 'clip.mov', mimeType: 'video/quicktime', path: '.context/attachments/x-clip.mov' }] });
   });
   it('leaves out images that are not uploaded', () => {
     expect(buildMessageInput('look', [draft({ status: 'error', attachment: undefined }), draft({ status: 'uploading', attachment: undefined })])).toEqual({ text: 'look' });
@@ -48,9 +79,11 @@ describe('sendBlock', () => {
     ['hi', [], null],
     ['', [], null],
     ['hi', [draft()], null],
-    ['  ', [draft()], 'Add a message to send with the images.'],
-    ['hi', [draft({ status: 'uploading' })], 'Waiting for the images to upload.'],
-    ['hi', [draft({ status: 'error' })], 'Remove the images that failed, or try them again.'],
+    ['  ', [draft()], 'Add a message to send with the attachments.'],
+    ['hi', [draft({ status: 'uploading' })], 'Waiting for the attachments to upload.'],
+    ['hi', [draft({ status: 'error' })], 'Remove the attachments that failed, or try them again.'],
+    ['  ', [draft({ mimeType: 'video/mp4' })], 'Add a message to send with the attachments.'],
+    ['hi', [draft({ mimeType: 'video/mp4', status: 'uploading' })], 'Waiting for the attachments to upload.'],
   ] as const)('text %j with %#', (text, drafts, expected) => { expect(sendBlock({ text, drafts: [...drafts] })).toBe(expected); });
 });
 
