@@ -828,6 +828,14 @@ export function resetFleetDispatcherCache(): void {
  * either.
  */
 const DEFAULT_TIMEOUT_MS = 20_000;
+/**
+ * How long a create may take. A bare create boots the box inside the request,
+ * on the request's context, so giving up cancels the boot. fleetd allows a boot
+ * 30s (`BootTimeout`, staging included) and the gateway waits 30s for a host,
+ * so this waits longer than both and the fleet's own answer arrives first. At
+ * 20s a busy host had nine boots cancelled in a row on 2026-11-12.
+ */
+export const CREATE_TIMEOUT_MS = 45_000;
 /** How long a resume may take. The fleet itself allows two hours; ten minutes covers a multi-gigabyte pull. */
 const RESUME_TIMEOUT_MS = 10 * 60_000;
 
@@ -1145,7 +1153,7 @@ export class FleetClient {
     const { data, host } = await this.requestWithMeta<FleetSandbox>('/v1/sandboxes', {
       method: 'POST',
       body: JSON.stringify(input),
-    });
+    }, { timeoutMs: Math.max(this.timeoutMs, CREATE_TIMEOUT_MS) });
     return { sandbox: data, host };
   }
 

@@ -1,8 +1,8 @@
 import type { WorkbenchReadiness } from '@talyn/shared';
 
-import { agentChoice, agentForModel, blockedReason, branchSuggestions, chipLabel, composerChips, createInput, defaultRepositoryId,
+import { activePullRequest, agentChoice, agentForModel, blockedReason, branchSuggestions, chipLabel, composerChips, createInput, defaultRepositoryId,
   effectiveBranch, filterBranches, filterRepositories, forgetLastRepositories, internetMessage, lastRepositoryKey, loadLastRepository, modelFor, modelSections, modelsFor, rememberRepository,
-  sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm } from '../features/create/model';
+  pullRequestChoices, pullRequestSource, sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm } from '../features/create/model';
 
 const mockStorage = { getItem: jest.fn(async (_key: string): Promise<string | null> => null), setItem: jest.fn(async (_key: string, _value: string) => {}) };
 jest.mock('@react-native-async-storage/async-storage', () => ({ __esModule: true, default: mockStorage }));
@@ -131,7 +131,9 @@ describe('composer controls', () => {
     ['repository', {}, 'PostHog/posthog', 'Repository: PostHog/posthog. Change repository'],
     ['repository', { repository: null }, 'Repository', 'Repository: none. Choose a repository'],
     ['repository', { repository: null, repositoriesLoading: true }, 'Loading', 'Repositories are loading'],
-    ['branch', {}, 'master', 'Base branch: master. Change base branch'],
+    ['branch', {}, 'master', 'Base branch: master. Change what to start from'],
+    ['branch', { pullRequest: { number: 42, title: 'Add billing' } }, '#42', 'Starts from pull request 42, Add billing. Change what to start from'],
+    ['branch', { pullRequest: { number: 7, title: '' } }, '#7', 'Starts from pull request 7. Change what to start from'],
     ['internet', {}, 'Internet on', 'Internet access'],
     ['internet', { internetAccess: false }, 'Internet off', 'Internet access'],
     ['model', {}, 'Opus 5.5', 'Model: Opus 5.5, Claude. Change model'],
@@ -196,4 +198,54 @@ describe('composer controls', () => {
   it.each([
     ['', ['master', 'staging', 'release']], ['sta', ['staging']], ['MAS', ['master']], ['new-branch', []],
   ])('filters branch suggestions by %j', (typed, expected) => expect(filterBranches(['master', 'staging', 'release'], typed)).toEqual(expected));
+});
+
+describe('starting from a pull request', () => {
+  const pr = { id: 'pr-1', repositoryId: 'repo-one', number: 42, title: 'Add billing', headBranch: 'tom/billing', baseBranch: 'main' };
+  const row = (patch: Partial<{ id: string; repositoryId: string; number: number; state: string; authored: boolean }> = {}) => ({
+    id: 'pr-1', repositoryId: 'repo-one', number: 42, state: 'open', authored: false,
+    summary: { title: 'Add billing', headBranch: 'tom/billing', baseBranch: 'main' }, ...patch });
+
+  it.each<[string, Partial<NewWorkForm>, object]>([
+    ['the pull request branch', { pullRequest: pr },
+      { repositoryId: 'repo-one', branch: 'tom/billing', fromPullRequestId: 'pr-1', baseBranch: 'main', prompt: 'Fix the bug' }],
+    ['a typed base branch over the pull request base', { pullRequest: pr, baseBranch: ' develop ' },
+      { branch: 'tom/billing', fromPullRequestId: 'pr-1', baseBranch: 'develop' }],
+    ['no head branch', { pullRequest: { ...pr, headBranch: '' } }, { branch: undefined, fromPullRequestId: 'pr-1' }],
+    ['no base branch', { pullRequest: { ...pr, baseBranch: '' } }, { baseBranch: undefined, fromPullRequestId: 'pr-1' }],
+  ])('sends %s', (_name, patch, expected) => expect(createInput(form(patch), 'one')).toMatchObject(expected));
+
+  it.each<[string, Partial<NewWorkForm>]>([
+    ['no pull request', { pullRequest: null }],
+    ['a pull request in another repository', { pullRequest: { ...pr, repositoryId: 'repo-two' } }],
+    ['a thread', { mode: 'thread', repository: null, pullRequest: pr }],
+  ])('sends no pull request for %s', (_name, patch) => {
+    const input = createInput(form(patch), 'one');
+    expect(input).not.toHaveProperty('fromPullRequestId');
+    expect(input).not.toHaveProperty('branch');
+  });
+
+  it.each([
+    ['the same repository', { id: 'repo-one' }, pr],
+    ['another repository', { id: 'repo-two' }, null],
+    ['no repository', null, null],
+  ])('keeps the pull request for %s', (_name, repository, expected) => expect(activePullRequest(pr, repository)).toEqual(expected));
+
+  it('reads a row into a source', () => {
+    expect(pullRequestSource(row())).toEqual(pr);
+    expect(pullRequestSource({ ...row(), summary: {} })).toEqual({ ...pr, title: '', headBranch: '', baseBranch: '' });
+  });
+
+  it('lists the open pull requests of the repository, own first, then newest', () => {
+    const rows = [
+      row({ id: 'a', number: 1, authored: false }),
+      row({ id: 'b', number: 5, authored: false }),
+      row({ id: 'c', number: 2, authored: true }),
+      row({ id: 'd', number: 9, state: 'closed' }),
+      row({ id: 'e', number: 8, repositoryId: 'repo-two' }),
+    ];
+    expect(pullRequestChoices({ id: 'repo-one' }, rows).map((item) => item.id)).toEqual(['c', 'b', 'a']);
+    expect(pullRequestChoices(null, rows)).toEqual([]);
+    expect(pullRequestChoices({ id: 'repo-one' })).toEqual([]);
+  });
 });

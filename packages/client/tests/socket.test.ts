@@ -183,6 +183,7 @@ describe('native lifecycle and reachability', () => {
     client.subscribe('old-workspace');
     client.subscribeSpace('old-space');
     client.sendPresence('old-space', 'old-session', 'active');
+    client.setDeskPresence('active');
     client.setCapabilities(['threads']);
     client.setDebugFilter('old-owner');
     const old = await connect();
@@ -215,6 +216,34 @@ describe('native lifecycle and reachability', () => {
 });
 
 describe('protocol and scheduling', () => {
+  it('sends desk presence only once accepted and re-sends the latest state after a reconnect', async () => {
+    client.setDeskPresence('active');
+    const first = await connect();
+    expect(first.sent).toEqual([{ type: 'auth', token: 'token' }]);
+    first.accept();
+    expect(first.sent.slice(1)).toEqual([{ type: 'desk_presence', state: 'active' }]);
+    client.setDeskPresence('away');
+    expect(first.sent.at(-1)).toEqual({ type: 'desk_presence', state: 'away' });
+    first.reject(1006);
+    client.setDeskPresence('active');
+    await vi.advanceTimersByTimeAsync(1000);
+    const next = sockets[1];
+    next.open();
+    next.accept();
+    expect(next.sent.filter((frame) => frame.type === 'desk_presence')).toEqual([{ type: 'desk_presence', state: 'active' }]);
+  });
+
+  it('does not send desk presence before it is reported, and forgets it on disconnect', async () => {
+    const first = await connect();
+    first.accept();
+    expect(first.sent.some((frame) => frame.type === 'desk_presence')).toBe(false);
+    client.setDeskPresence('active');
+    client.disconnect();
+    const next = await connect();
+    next.accept();
+    expect(next.sent.some((frame) => frame.type === 'desk_presence')).toBe(false);
+  });
+
   it('authenticates first and restores subscriptions, capabilities, presence, and filters after acceptance', async () => {
     client.setCapabilities(['threads']);
     client.subscribe('workspace');

@@ -106,6 +106,10 @@ export function NotificationSettings({ controller, offline }: { controller: Noti
           disabled={childDisabled} last={index === MOBILE_NOTIFICATION_CATEGORIES.length - 1}
           change={(value) => change({ ...draft, categories: { ...draft.categories, [category]: value } })} />)}
       </Group>
+      <Group title="Delivery" footer="Talyn on your computer shows the alert instead while you are using it.">
+        <Toggle label="Only when I'm away from my computer" value={draft.onlyWhenAway} disabled={childDisabled} last
+          change={(onlyWhenAway) => change({ ...draft, onlyWhenAway })} />
+      </Group>
       <Group title="Quiet hours" footer={`Times use ${draft.timezone}.`}>
         <Toggle label="Quiet hours" value={draft.quietHours.enabled} disabled={childDisabled}
           change={(enabled) => change({ ...draft, quietHours: { ...draft.quietHours, enabled },

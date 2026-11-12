@@ -72,7 +72,7 @@ Disabled installation records are removed after another 30 days.
 
 Operators can read counters at `GET /api/v1/admin/mobile-notifications/metrics`.
 The existing admin guard protects this route.
-Counters cover queued rows, tickets, retries, expiry, permanent errors, receipts, latency totals, and active installations.
+Counters cover queued rows, tickets, retries, expiry, permanent errors, receipts, latency totals, active installations, and pushes skipped at the desk (`atDesk`).
 Counters are local to each process and reset on restart. They contain no account or destination labels.
 Use deployment monitoring to collect snapshots when historical rates are needed.
 
@@ -90,7 +90,7 @@ The native client owns request transport.
 | `PATCH /mobile/installations/:installationId` | Refresh authorized installation metadata and last-seen time. |
 | `DELETE /mobile/installations/:installationId` | Disable one installation. Repeated removal is safe. |
 | `GET /mobile/notification-preferences?workspaceId=…` | Read preferences for an accessible workspace. |
-| `PUT /mobile/notification-preferences` | Replace the caller's version 1 workspace preferences. |
+| `PUT /mobile/notification-preferences` | Replace the caller's version 1 workspace preferences. `onlyWhenAway` is optional; when it is absent, the stored value stays. |
 | `GET /mobile/notifications/:eventId` | Resolve an unexpired event with current owner, workspace, and entity checks. |
 
 Mobile writes share the existing limiter with 30 requests per minute for each authenticated user.
@@ -159,6 +159,52 @@ Equal start and end times pause alerts all day while quiet hours are enabled.
 Category switches and the workspace global switch apply before delivery.
 Expired events cannot cause navigation.
 Product screens retain their normal authoritative refresh behavior.
+
+## Away-only delivery
+
+A push goes to the phone only when the person is away from their computer (Tom's call, 2026-11-12).
+While Talyn on the computer is in use, the desktop notification or the open app shows the alert.
+No feature flag controls this. The `onlyWhenAway` preference controls it for each workspace.
+
+The desktop app and the web app send a WebSocket message `{ "type": "desk_presence", "state": "active" | "away" }`.
+The message has no other fields. It has no idle time, no app name, and no window title.
+The vocabulary and the times are in `packages/shared/src/deskPresence.ts`.
+The 30-second beat and the change rules are in `packages/client/src/deskPresence.ts`.
+
+- **Desktop**: the main process reads system input, not only input in Talyn (`apps/desktop/src/main/deskPresence.ts`).
+  The state is `active` when `powerMonitor.getSystemIdleState(180)` is `active`, the screen is unlocked, and the computer is awake.
+  If Electron reports `unknown`, the desktop uses `getSystemIdleTime()` less than 180 seconds.
+  `lock-screen`, `unlock-screen`, `suspend`, and `resume` tell the renderer to check at once.
+- **Web**: the state is `active` when the tab is visible and the page had pointer or keyboard input in the last three minutes.
+  The web does not use the Idle Detection API, so it shows no permission prompt.
+  Input in a different app reads as idle in the browser.
+- **Mobile**: the phone never sends desk presence.
+
+While the state is `active`, the client sends `active` immediately and then every 30 seconds.
+When the state changes to `away` (idle for three minutes, a lock, sleep, or a hidden tab), the client sends `away` one time.
+Then it sends nothing until the state is `active` again. The first input after idle sends `active` immediately.
+The socket sends the latest state again after a reconnect.
+
+The backend keeps one record for each authenticated socket (`services/deskPresence.ts`).
+The user ID comes from the socket's authentication. The backend ignores IDs in the message body.
+A person is at the desk while any of their sockets sent `active` in the last 60 seconds.
+`away` and a closed socket remove the record immediately.
+When the beats stop (sleep, quit, or network loss), the record expires after 60 seconds.
+With `REDIS_URL`, the records are in one Redis hash for each user, so all replicas give the same answer.
+A Lua script writes the field and the key expiry together. Without Redis, the records are in process memory.
+The WebSocket debug trace records a change of state only, not each beat.
+
+The dispatch preflight checks presence after the workspace and category switches.
+If `onlyWhenAway` is on and the person is at the desk, the row becomes `cancelled` with `lastErrorClass: 'at_desk'`.
+The push is skipped, not delayed. A dispatch pass does one presence lookup for each owner.
+If the presence lookup fails, the push is sent.
+
+`onlyWhenAway` defaults to `true`. No migration is necessary, because the preferences column is jsonb.
+A stored row without the field reads as `true`.
+App builds from before this change send preferences without the field.
+For such a PUT, the backend keeps the stored value, so an older app cannot turn a stored `false` back to `true`.
+The mobile app reads a missing field from an older backend as `true`.
+The mobile setting is **Only when I'm away from my computer** in the workspace notification settings.
 
 ## Removal and device checks
 

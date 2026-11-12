@@ -3390,7 +3390,8 @@ export const mobileInstallations = pgTable('mobile_installations', {
 export const mobileNotificationPreferences = pgTable('mobile_notification_preferences', {
   ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
-  preferences: jsonb('preferences').$type<import('@talyn/shared').MobileNotificationPreferences>().notNull(),
+  // Rows saved before `onlyWhenAway` existed lack it; read through normalizeMobileNotificationPreferences.
+  preferences: jsonb('preferences').$type<import('@talyn/shared').MobileNotificationPreferencesInput>().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ pk: primaryKey({ columns: [t.ownerId, t.workspaceId] }) }));
 

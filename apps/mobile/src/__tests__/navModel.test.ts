@@ -49,7 +49,7 @@ describe('drawer entries', () => {
   });
 
   it('says there are no sessions yet and keeps the Threads heading', () => {
-    expect(keys(drawerEntries(input({})))).toEqual(['heading:threads', 'heading:sessions', 'notice:sessions']);
+    expect(keys(drawerEntries(input({})))).toEqual(['heading:threads', 'heading:sessions', 'starters:sessions']);
   });
 
   it('orders Needs you, Threads with sessions, then repositories newest first', () => {

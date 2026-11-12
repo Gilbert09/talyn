@@ -40,6 +40,23 @@ describe('accessible notification settings', () => {
     const f = fixture('ready', false); await f.render();
     expect(screen.getByRole('switch', { name: label })).toBeDisabled();
   });
+  it('shows the away-only switch on by default with its explanation', async () => {
+    const f = fixture('ready', true); await f.render();
+    const away = screen.getByRole('switch', { name: "Only when I'm away from my computer" });
+    expect(away).toBeEnabled();
+    expect(away.props.value).toBe(true);
+    expect(screen.getByText('Talyn on your computer shows the alert instead while you are using it.')).toBeVisible();
+  });
+  it.each([true, false])('saves onlyWhenAway when switched to %s', async (value) => {
+    const f = fixture('ready', true, { onlyWhenAway: !value }); await f.render();
+    await fireEvent(screen.getByRole('switch', { name: "Only when I'm away from my computer" }), 'valueChange', value);
+    await flush();
+    expect(f.controller.save).toHaveBeenCalledWith(expect.objectContaining({ onlyWhenAway: value, enabled: true }));
+  });
+  it('disables the away-only switch while workspace notifications are off', async () => {
+    const f = fixture('ready', false); await f.render();
+    expect(screen.getByRole('switch', { name: "Only when I'm away from my computer" })).toBeDisabled();
+  });
   it('saves once after a run of edits, without a save button', async () => {
     const f = fixture('ready', true); await f.render();
     await fireEvent(screen.getByRole('switch', { name: 'CI failures' }), 'valueChange', false);

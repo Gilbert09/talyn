@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CREATE_TIMEOUT_MS,
   FleetClient,
   FleetHttpError,
   FleetRunNotFoundError,
@@ -50,6 +51,29 @@ describe('fleet client: workbench methods', () => {
       path: '/v1/sandboxes',
       body: { id: 'talyn-wb-1', workspaceId: 'ws', provider: 'openai', openaiKey: 'k' },
     });
+  });
+
+  it.each([
+    ['the default client', undefined, CREATE_TIMEOUT_MS],
+    ['a client with a shorter timeout', 5_000, CREATE_TIMEOUT_MS],
+    ['a client with a longer timeout', 120_000, 120_000],
+  ])('gives a create longer than the fleet boot budget (%s)', async (_name, timeoutMs, expected) => {
+    const timeouts = vi.spyOn(AbortSignal, 'timeout');
+    respond = () => json({ id: 'talyn-wb-1', status: 'idle' });
+    const sized = new FleetClient('https://fleet.test', 'tok', timeoutMs === undefined ? {} : { timeoutMs });
+    await sized.createSandbox({ id: 'talyn-wb-1', workspaceId: 'ws' });
+    expect(timeouts).toHaveBeenLastCalledWith(expected);
+    expect(CREATE_TIMEOUT_MS).toBeGreaterThan(30_000);
+    timeouts.mockRestore();
+  });
+
+  it('keeps the default timeout for a read', async () => {
+    const timeouts = vi.spyOn(AbortSignal, 'timeout');
+    respond = () => json({ id: 'talyn-wb-1', status: 'idle' });
+    await client.getSandbox('talyn-wb-1').catch(() => undefined);
+    expect(timeouts).toHaveBeenCalledWith(20_000);
+    expect(timeouts).not.toHaveBeenCalledWith(CREATE_TIMEOUT_MS);
+    timeouts.mockRestore();
   });
 
   it('runs a wait-mode exec and returns its frame', async () => {

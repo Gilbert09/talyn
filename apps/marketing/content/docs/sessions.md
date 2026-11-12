@@ -15,9 +15,12 @@ A session is one task. It has its own branch, its own agent and its own cloud sa
 
 Talyn names the session, creates a branch, starts a sandbox and gives your message to the agent. Press Shift+Enter for a new line in the message.
 
+If you have no sessions yet, the sidebar suggests a few to start. A suggestion on one of your pull requests comes first: fix its failing checks, resolve its merge conflicts, address its review comments, or review a pull request that asks for your review. A suggestion fills in the message and the pull request, and you can change both before you start.
+
 Other options in the composer:
 
-- **Create from…** starts the session on an existing branch or an open pull request, instead of a new branch.
+- **Create from…** starts the session on an existing branch or an open pull request, instead of a new branch. In the mobile app, the branch control above the message opens **Start from**, which lists a base branch for a new branch and the repository's open pull requests.
+- To start a session from a pull request, you can also use **Open in session** on the pull request. On mobile, it is in the pull request's menu.
 - **Plan** turns on plan mode. The agent reads the code and writes a plan, and changes nothing until you approve it. Press Shift+Tab to switch plan mode.
 - **Internet on** / **Internet off** controls whether the sandbox can reach the internet. See [Internet access](/docs/sandboxes#internet-access).
 - The image button attaches screenshots. You can also paste an image.

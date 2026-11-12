@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import type { PRRow } from '@talyn/client/native';
 import { Alert, Keyboard } from 'react-native';
 
 import { forgetLastRepositories } from '../features/create/model';
@@ -152,6 +153,26 @@ describe('pull request actions', () => {
     expect(await screen.findByText('Merged #42.')).toBeVisible();
     expect(screen.getByText('Ready to merge')).toBeVisible();
   });
+  it('opens a new session on the pull request from the menu', async () => {
+    await render(<PullRequestDetailScreen />);
+    await waitFor(() => expect(mockActive.api.features.get).toHaveBeenCalled());
+    await openMenu();
+    await fireEvent.press(await screen.findByRole('button', { name: 'Open in session' }));
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/new', params: { mode: 'session', pullRequest: 'pr-one' } });
+  });
+  it.each<[string, Partial<PRRow>, Record<string, boolean>]>([
+    ['a pull request with a session', { session: { id: 'session-one', name: 'Current work', status: 'active' } }, { workbenches: true }],
+    ['a closed pull request', { state: 'closed' }, { workbenches: true }],
+    ['an account without sessions', {}, { workbenches: false }],
+  ])('offers no Open in session for %s', async (_name, patch, features) => {
+    mockActive.api.features.get.mockResolvedValue(features);
+    mockActive.api.pullRequests.get.mockResolvedValue({ row: pr(patch), fresh: null });
+    await render(<PullRequestDetailScreen />);
+    await waitFor(() => expect(mockActive.api.features.get).toHaveBeenCalled());
+    await openMenu();
+    expect(await screen.findByRole('button', { name: 'Refresh' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Open in session' })).toBeNull();
+  });
   it('toggles the merge queue and auto-keep', async () => {
     mockActive.api.pullRequests.get.mockResolvedValue({ row: mine(), fresh: null });
     await render(<PullRequestDetailScreen />);
@@ -268,15 +289,51 @@ describe('start new work', () => {
   });
   it('picks the base branch in its sheet', async () => {
     await render(<NewWorkScreen />);
-    const chip = await screen.findByRole('button', { name: /^Base branch: .*\. Change base branch$/ });
+    const chip = await screen.findByRole('button', { name: /^Base branch: .*\. Change what to start from$/ });
     await fireEvent.press(chip);
     await fireEvent.changeText(screen.getByLabelText('Base branch'), 'develop');
     await fireEvent.press(screen.getByRole('button', { name: 'Close' }));
-    expect(await screen.findByRole('button', { name: 'Base branch: develop. Change base branch' })).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Base branch: develop. Change what to start from' })).toBeVisible();
     await fireEvent.changeText(screen.getByLabelText('Task'), 'On develop');
     await waitFor(() => expect(sendButton()).toBeEnabled());
     await fireEvent.press(sendButton());
     await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({ baseBranch: 'develop' })));
+  });
+  it('starts from the pull request the route asks for', async () => {
+    await render(<NewWorkScreen initialPullRequestId="pr-one" />);
+    expect(await screen.findByRole('button', { name: 'Starts from pull request 42, Review current work. Change what to start from' })).toBeVisible();
+    await fireEvent.changeText(screen.getByLabelText('Task'), 'Fix the checks');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({
+      repositoryId: 'repo-one', branch: 'tom/example', fromPullRequestId: 'pr-one', baseBranch: 'main', prompt: 'Fix the checks' })));
+  });
+  it('starts on a new branch when the route asks for a closed pull request', async () => {
+    mockActive.api.pullRequests.list.mockResolvedValue([pr({ state: 'closed' })]);
+    await render(<NewWorkScreen initialPullRequestId="pr-one" />);
+    await waitFor(() => expect(mockActive.api.pullRequests.list).toHaveBeenCalled());
+    expect(await screen.findByRole('button', { name: /^Base branch: .*\. Change what to start from$/ })).toBeVisible();
+    await fireEvent.changeText(screen.getByLabelText('Task'), 'New work');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalled());
+    expect(mockActive.api.workbenches.create.mock.calls[0][0]).not.toHaveProperty('fromPullRequestId');
+  });
+  it('picks a pull request in the Start from sheet, and a typed branch drops it', async () => {
+    await render(<NewWorkScreen />);
+    await fireEvent.press(await screen.findByRole('button', { name: /^Base branch: .*\. Change what to start from$/ }));
+    expect(screen.getByRole('header', { name: 'Start from' })).toBeVisible();
+    await fireEvent.press(await screen.findByRole('button', { name: '#42 Review current work' }));
+    expect(await screen.findByRole('button', { name: /^Starts from pull request 42/ })).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: /^Starts from pull request 42/ }));
+    await fireEvent.changeText(screen.getByLabelText('Base branch'), 'develop');
+    await fireEvent.press(screen.getByRole('button', { name: 'Close' }));
+    expect(await screen.findByRole('button', { name: 'Base branch: develop. Change what to start from' })).toBeVisible();
+    await fireEvent.changeText(screen.getByLabelText('Task'), 'On develop');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({ baseBranch: 'develop' })));
+    expect(mockActive.api.workbenches.create.mock.calls[0][0]).not.toHaveProperty('fromPullRequestId');
   });
   it('toggles internet access from its chip', async () => {
     await render(<NewWorkScreen />);

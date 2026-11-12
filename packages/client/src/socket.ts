@@ -1,4 +1,4 @@
-import type { WSEvent, WSClientMessage, SpacePresenceMember, SpacePresenceMessage } from '@talyn/shared';
+import type { WSEvent, WSClientMessage, SpacePresenceMember, SpacePresenceMessage, DeskPresenceState } from '@talyn/shared';
 import { getConfig, getRuntime, getWebSocketUrl, onConfigChange, type ApiClientConfig } from './config.js';
 import { canRun, resolveRuntime, type ClientSocket, type ClientState } from './runtime.js';
 
@@ -63,6 +63,8 @@ export class WebSocketClient {
   private presenceTimer: (() => void) | null = null;
   private spacePresence = new Map<string, SpacePresenceMessage>();
   private subscribedSpaces = new Set<string>();
+  /** The last desk presence reported, re-sent after a reconnect. Null = never reported. */
+  private deskPresence: DeskPresenceState | null = null;
   private subscribedWorkspaces: Set<string> = new Set();
   /** Sent with every subscribe. The server holds back events a client did not opt in to. */
   private capabilities: string[] = [];
@@ -192,6 +194,7 @@ export class WebSocketClient {
               this.send({ type: 'subscribe_space', spaceId });
             }
             for (const presence of this.spacePresence.values()) this.send(presence);
+            if (this.deskPresence) this.send({ type: 'desk_presence', state: this.deskPresence } satisfies WSClientMessage);
             if (this.debugFilter !== undefined) {
               this.send({ type: 'debug:filter', owner: this.debugFilter });
             }
@@ -268,6 +271,7 @@ export class WebSocketClient {
     this.unbindLifecycle = null;
     this.lifecycleBinding = null;
     this.spacePresence.clear();
+    this.deskPresence = null;
     this.reconnectAttempts = 0;
     this.retryNotBefore = 0;
     this.stopConnection();
@@ -328,6 +332,17 @@ export class WebSocketClient {
     const message: SpacePresenceMessage = { type: 'presence', spaceId, sessionId, state };
     this.spacePresence.set(spaceId, message);
     if (this.authenticated) this.send(message);
+  }
+
+  /**
+   * Tell the server whether the person is using this computer. The caller
+   * repeats `active` while it holds; the server forgets it after a minute
+   * without one. Safe while disconnected: the latest state goes out on the
+   * next accepted connection.
+   */
+  setDeskPresence(state: DeskPresenceState): void {
+    this.deskPresence = state;
+    if (this.authenticated) this.send({ type: 'desk_presence', state } satisfies WSClientMessage);
   }
 
   /**
