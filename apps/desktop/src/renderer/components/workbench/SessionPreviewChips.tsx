@@ -42,7 +42,7 @@ export function SessionPreviewChips({ workbench, ops }: { workbench: Workbench; 
   if (config?.target === 'coder') return (
     <button
       type="button"
-      className="app-region-no-drag inline-flex min-w-0 max-w-[8rem] shrink items-center gap-1.5 rounded border bg-background px-2 py-0.5 text-xs text-foreground hover:bg-accent disabled:opacity-50"
+      className="app-region-no-drag inline-flex !max-w-[15rem] shrink-0 items-center gap-1.5 rounded border bg-background px-2 py-0.5 text-xs text-foreground hover:bg-accent disabled:opacity-50"
       disabled={activity.status === 'starting' || Boolean(ops.unavailable)}
       onClick={() => void startCoder()}
       title={ops.unavailable ?? activity.label}
@@ -59,10 +59,10 @@ export function SessionPreviewChips({ workbench, ops }: { workbench: Workbench; 
     // With preview links on, the chip opens the hosted link and takes no local port.
     const name = `${shareable ? `preview :${port}` : `localhost:${port}`}${label ? ` (${label})` : ''}`;
     return (
-      <span key={port} className="inline-flex min-w-0 shrink items-center gap-0.5">
+      <span key={port} className="inline-flex !max-w-none shrink-0 items-center gap-0.5">
         <button
           type="button"
-          className="app-region-no-drag inline-flex min-w-0 max-w-[15rem] shrink items-center gap-1.5 rounded border bg-background px-2 py-0.5 text-xs text-foreground hover:bg-accent disabled:opacity-50"
+          className="app-region-no-drag inline-flex max-w-[15rem] shrink-0 items-center gap-1.5 rounded border bg-background px-2 py-0.5 text-xs text-foreground hover:bg-accent disabled:opacity-50"
           disabled={(busy && state !== 'starting') || Boolean(ops.unavailable)}
           onClick={() => void openPreview(port, ops)}
           data-attr="session-preview-chip"

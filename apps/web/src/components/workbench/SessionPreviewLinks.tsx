@@ -95,7 +95,7 @@ export function SessionPreviewLinks({ workbench, ops }: { workbench: Workbench; 
     <button
       key={port}
       type="button"
-      className="inline-flex min-w-0 max-w-[15rem] shrink items-center gap-1.5 rounded border bg-background px-2 py-0.5 text-xs text-foreground hover:bg-accent disabled:opacity-50"
+      className="inline-flex !max-w-[15rem] shrink-0 items-center gap-1.5 rounded border bg-background px-2 py-0.5 text-xs text-foreground hover:bg-accent disabled:opacity-50"
       disabled={opening || Boolean(ops.unavailable)}
       onClick={() => void open(port)}
       data-attr="session-preview-link"
