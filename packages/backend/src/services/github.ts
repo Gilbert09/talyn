@@ -1788,17 +1788,17 @@ class GitHubService extends EventEmitter {
    * Every repo the user can access (owner + collaborator + org member),
    * across all pages. GitHub caps `per_page` at 100, so we walk pages
    * until a short page signals the end. A hard page cap guards against
-   * runaway loops on pathological accounts.
+   * runaway loops on pathological accounts. With `page`, return only that
+   * page, so a client can show the first repositories while the rest load.
    */
-  async listRepositories(workspaceId: string): Promise<GitHubRepo[]> {
+  async listRepositories(workspaceId: string, page?: number): Promise<GitHubRepo[]> {
     // "What can the human see" — user-token scoped.
-    return this.paginate<GitHubRepo>(
-      workspaceId,
-      (page) =>
-        `/user/repos?per_page=100&page=${page}&sort=pushed&affiliation=owner,collaborator,organization_member`,
-      20,
-      'user'
-    );
+    const urlForPage = (n: number) =>
+      `/user/repos?per_page=100&page=${n}&sort=pushed&affiliation=owner,collaborator,organization_member`;
+    if (page !== undefined) {
+      return this.apiRequest<GitHubRepo[]>(workspaceId, urlForPage(page), {}, 'user');
+    }
+    return this.paginate<GitHubRepo>(workspaceId, urlForPage, 20, 'user');
   }
 
   /**
@@ -1845,14 +1845,16 @@ class GitHubService extends EventEmitter {
    * Repos in a specific org. `type=all` returns private repos too when
    * the token has access (org approved the app); public org repos always
    * come back regardless of OAuth-app approval, since public data is
-   * exempt from third-party-app restrictions.
+   * exempt from third-party-app restrictions. With `page`, return only that
+   * page.
    */
-  async listOrgRepositories(workspaceId: string, org: string): Promise<GitHubRepo[]> {
-    return this.paginate<GitHubRepo>(
-      workspaceId,
-      (page) =>
-        `/orgs/${encodeURIComponent(org)}/repos?per_page=100&page=${page}&type=all&sort=pushed`
-    );
+  async listOrgRepositories(workspaceId: string, org: string, page?: number): Promise<GitHubRepo[]> {
+    const urlForPage = (n: number) =>
+      `/orgs/${encodeURIComponent(org)}/repos?per_page=100&page=${n}&type=all&sort=pushed`;
+    if (page !== undefined) {
+      return this.apiRequest<GitHubRepo[]>(workspaceId, urlForPage(page));
+    }
+    return this.paginate<GitHubRepo>(workspaceId, urlForPage);
   }
 
   /**

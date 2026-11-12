@@ -8,10 +8,11 @@ import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/re
  */
 
 vi.mock('../lib/api', () => ({
+  loadAllRepos: vi.fn().mockResolvedValue([]),
+  mergeRepos: vi.fn(),
   api: {
     github: {
       getStatus: vi.fn().mockResolvedValue({ configured: true, connected: true }),
-      listAllRepos: vi.fn().mockResolvedValue([]),
       listInstallations: vi.fn().mockResolvedValue([]),
       getUser: vi.fn().mockResolvedValue({ login: 'octocat' }),
       installViaApp: vi.fn().mockResolvedValue({ installUrl: 'x', manageUrl: 'y' }),

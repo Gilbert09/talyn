@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Github, RefreshCw, Trash2 } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { Badge } from '../../ui/badge';
-import { api, type GitHubRepo } from '../../../lib/api';
+import { api, loadAllRepos, mergeRepos, type GitHubRepo } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { useWorkspaceActions } from '../../../hooks/useApi';
 import { useGithubInstallations } from '../../../hooks/useGithubInstallations';
@@ -34,33 +34,44 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
   const [loadFailed, setLoadFailed] = useState(false);
   const [mutating, setMutating] = useState(false);
   const [search, setSearch] = useState('');
+  // Each load gets a number. A load stops when a newer one starts or the
+  // step unmounts, so a slow load cannot overwrite a newer list.
+  const loadRun = useRef(0);
 
   const refreshRepos = useCallback(async () => {
+    const run = ++loadRun.current;
+    const cancelled = () => loadRun.current !== run;
     setReposLoading(true);
     setLoadFailed(false);
     try {
-      const repos = await api.github.listAllRepos(workspaceId);
+      // Show each page as it arrives. A large org can take many pages.
+      const repos = await loadAllRepos(workspaceId, {
+        isCancelled: cancelled,
+        onProgress: (partial) => setAvailableRepos((prev) => mergeRepos(prev, partial)),
+      });
+      if (cancelled()) return;
       const now = Date.now();
       setAvailableRepos(repos);
       setFetchedAt(now);
       writeRepoCache(workspaceId, repos, now);
     } catch {
       // Keep whatever the cache gave us.
-      setLoadFailed(true);
+      if (!cancelled()) setLoadFailed(true);
     } finally {
-      setReposLoading(false);
+      if (!cancelled()) setReposLoading(false);
     }
   }, [workspaceId]);
 
   useEffect(() => {
     const cached = readRepoCache(workspaceId);
-    if (cached) {
-      setAvailableRepos(cached.repos);
-      setFetchedAt(cached.fetchedAt);
-    }
+    setAvailableRepos(cached?.repos ?? []);
+    setFetchedAt(cached?.fetchedAt ?? null);
     if (!cached || Date.now() - cached.fetchedAt > REPO_CACHE_TTL_MS) {
       void refreshRepos();
     }
+    return () => {
+      loadRun.current++;
+    };
   }, [workspaceId, refreshRepos]);
 
   async function handleAddRepo(repo: GitHubRepo) {
@@ -164,7 +175,15 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
       </div>
       <p className="text-xs text-muted-foreground">
         Your repos + every org you belong to.{' '}
-        {reposLoading ? 'Refreshing…' : fetchedAt ? `Updated ${formatAge(fetchedAt)}.` : ''}
+        {reposLoading
+          ? fetchedAt
+            ? 'Refreshing…'
+            : availableRepos.length > 0
+              ? `Loading more… ${availableRepos.length} found so far.`
+              : ''
+          : fetchedAt
+            ? `Updated ${formatAge(fetchedAt)}.`
+            : ''}
       </p>
 
       {firstLoad ? (
@@ -210,7 +229,9 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
       ) : (
         <p className="p-2 text-[13px] text-muted-foreground">
           {search
-            ? 'No matching repositories. Try Refresh if a repo is missing.'
+            ? reposLoading
+              ? 'No matching repositories yet. Still loading…'
+              : 'No matching repositories. Try Refresh if a repo is missing.'
             : 'No repositories found. Try Refresh.'}
         </p>
       )}

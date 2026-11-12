@@ -1,4 +1,4 @@
-import { github, repositories, type GitHubRepo, type WatchedRepo } from '@talyn/client/native';
+import { loadAllRepos, mergeRepos, repositories, type GitHubRepo, type WatchedRepo } from '@talyn/client/native';
 import type { RepositorySandboxSizeResponse, SandboxSizeSetting } from '@talyn/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -12,37 +12,56 @@ interface Cached { repos: GitHubRepo[]; fetchedAt: number }
 const cache = new Map<string, Cached>();
 export function clearRepoCache() { cache.clear(); }
 
-/** Every repository the GitHub account can see, cached per workspace like web. */
+interface AllReposState {
+  cached: Cached | null;
+  /** Repositories from the load in progress, shown before it finishes. */
+  partial: GitHubRepo[];
+  loading: boolean;
+  failed: boolean;
+}
+
+/**
+ * Every repository the GitHub account can see, cached per workspace like web.
+ * A load shows each page as it arrives, so a large org does not hide the list.
+ */
 export function useAllRepos(workspaceId: string) {
-  const [state, setState] = useState<{ cached: Cached | null; loading: boolean; failed: boolean }>(
-    () => ({ cached: cache.get(workspaceId) ?? null, loading: false, failed: false }));
-  const latest = useRef(workspaceId);
-  latest.current = workspaceId;
+  const [state, setState] = useState<AllReposState>(
+    () => ({ cached: cache.get(workspaceId) ?? null, partial: [], loading: false, failed: false }));
+  // A newer load, a workspace change or an unmount stops a load.
+  const run = useRef(0);
 
   const refresh = useCallback(async () => {
     const target = workspaceId;
-    setState((prev) => ({ ...prev, loading: true, failed: false }));
+    const mine = ++run.current;
+    const cancelled = () => run.current !== mine;
+    setState((prev) => ({ ...prev, partial: [], loading: true, failed: false }));
     try {
-      const repos = await github.listAllRepos(target);
+      const repos = await loadAllRepos(target, {
+        isCancelled: cancelled,
+        onProgress: (partial) => setState((prev) => ({ ...prev, partial })),
+      });
+      if (cancelled()) return;
       const next = { repos, fetchedAt: Date.now() };
       cache.set(target, next);
-      if (latest.current === target) setState({ cached: next, loading: false, failed: false });
+      setState({ cached: next, partial: [], loading: false, failed: false });
     } catch {
       // Keep what the cache gave.
-      if (latest.current === target) setState((prev) => ({ ...prev, loading: false, failed: true }));
+      if (!cancelled()) setState((prev) => ({ ...prev, loading: false, failed: true }));
     }
   }, [workspaceId]);
 
   useEffect(() => {
     const cached = cache.get(workspaceId) ?? null;
-    setState({ cached, loading: false, failed: false });
+    setState({ cached, partial: [], loading: false, failed: false });
     if (!cached || Date.now() - cached.fetchedAt > REPO_CACHE_TTL_MS) void refresh();
+    return () => { run.current++; };
   }, [workspaceId, refresh]);
 
-  const { cached, loading, failed } = state;
-  // Loading until the first answer, so an empty list never reads as "No repositories found".
-  const firstLoad = !cached && !failed;
-  return { repos: cached?.repos ?? [], fetchedAt: cached?.fetchedAt ?? null, loading, failed, firstLoad, refresh };
+  const { cached, partial, loading, failed } = state;
+  const repos = useMemo(() => mergeRepos(cached?.repos ?? [], partial), [cached, partial]);
+  // Loading until the first repositories arrive, so an empty list never reads as "No repositories found".
+  const firstLoad = !cached && !failed && repos.length === 0;
+  return { repos, fetchedAt: cached?.fetchedAt ?? null, loading, failed, firstLoad, refresh };
 }
 
 /**

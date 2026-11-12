@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { defaultFleetModelForAgent, PLAN_LIMITS, SESSION_STARTER_PROMPTS, type Workbench } from '@talyn/shared';
-import { api, type CloudProviderInfo, type PRRow } from '../lib/api';
+import { api, loadAllRepos, type CloudProviderInfo, type PRRow } from '../lib/api';
 import { captureAnalyticsException, trackEvent } from '../lib/analytics';
 import { OnboardingWizard } from '../components/onboarding/OnboardingWizard';
 import { SidebarWorkbenchList } from '../components/layout/SidebarWorkbenchList';
@@ -13,13 +13,14 @@ import { useNavigationStore } from '../stores/navigation';
 import { usePullRequestStore } from '../stores/pullRequests';
 
 vi.mock('../lib/api', () => ({
+  loadAllRepos: vi.fn(),
+  mergeRepos: vi.fn(),
   ApiError: class ApiError extends Error {},
   ApiNetworkError: class ApiNetworkError extends Error {},
   api: {
     github: {
       getStatus: vi.fn(),
       getUser: vi.fn().mockResolvedValue({ login: 'octocat' }),
-      listAllRepos: vi.fn(),
       listInstallations: vi.fn().mockResolvedValue([]),
     },
     repositories: { add: vi.fn(), remove: vi.fn().mockResolvedValue(undefined) },
@@ -61,7 +62,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   vi.mocked(api.github.getStatus).mockResolvedValue({ configured: true, connected: true } as never);
-  vi.mocked(api.github.listAllRepos).mockResolvedValue([
+  vi.mocked(loadAllRepos).mockResolvedValue([
     { id: 1, owner: { login: 'acme' }, name: 'app', full_name: 'acme/app' },
     { id: 3, owner: { login: 'acme' }, name: 'unwatched', full_name: 'acme/unwatched' },
   ] as never);
