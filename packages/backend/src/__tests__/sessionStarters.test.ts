@@ -3,7 +3,6 @@ import {
   SESSION_STARTER_PROMPTS,
   sessionStarters,
   starterKindForPr,
-  starterPromptWithPr,
   type SessionStarterPr,
 } from '@talyn/shared';
 
@@ -19,7 +18,7 @@ function pr(overrides: Partial<SessionStarterPr> & { summary?: Partial<SessionSt
     authored: true,
     reviewRequested: false,
     ...rest,
-    summary: { title: 'Title', url: 'https://github.com/acme/app/pull/1', mergeable: 'MERGEABLE', blockingReason: null, ...summary },
+    summary: { title: 'Title', mergeable: 'MERGEABLE', blockingReason: null, ...summary },
   };
 }
 
@@ -69,7 +68,7 @@ describe('sessionStarters', () => {
     ];
     const starters = sessionStarters(rows);
     expect(starters.map((s) => s.key)).toEqual(['fix_checks:new', 'explain', 'tests']);
-    expect(starters[0].pr).toEqual({ id: 'new', repositoryId: 'r1', owner: 'acme', repo: 'app', number: 9, url: 'https://github.com/acme/app/pull/1' });
+    expect(starters[0].pr).toEqual({ id: 'new', repositoryId: 'r1', owner: 'acme', repo: 'app', number: 9 });
   });
 
   it('fills up with general starters after pull request jobs', () => {
@@ -96,25 +95,8 @@ describe('sessionStarters', () => {
   });
 });
 
-describe('starterPromptWithPr', () => {
-  it.each(['fix_checks', 'resolve_conflicts', 'address_review', 'review'] as const)('names the pull request for %s', (kind) => {
+describe('SESSION_STARTER_PROMPTS', () => {
+  it.each(['fix_checks', 'resolve_conflicts', 'address_review', 'review'] as const)('%s speaks of "this pull request"', (kind) => {
     expect(SESSION_STARTER_PROMPTS[kind]).toContain('this pull request');
-  });
-
-  it('puts the URL in place of "this pull request"', () => {
-    const [starter] = sessionStarters([pr({ summary: { blockingReason: 'checks_failed' } })]);
-    expect(starterPromptWithPr(starter)).toBe(
-      'Find out why the CI checks fail on pull request https://github.com/acme/app/pull/1. Fix the cause and push the fix.',
-    );
-  });
-
-  it('falls back to owner/repo#number without a URL', () => {
-    const [starter] = sessionStarters([pr({ number: 4, summary: { blockingReason: 'changes_requested', url: undefined } })]);
-    expect(starterPromptWithPr(starter)).toContain('on pull request acme/app#4.');
-  });
-
-  it('leaves a general prompt alone', () => {
-    const starter = sessionStarters([]).find((s) => s.kind === 'explain');
-    expect(starter && starterPromptWithPr(starter)).toBe(SESSION_STARTER_PROMPTS.explain);
   });
 });

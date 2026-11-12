@@ -89,6 +89,39 @@ export function defaultRepositoryId(workspaceId: string, repositories: ReadonlyA
   return repositories[0]?.id ?? '';
 }
 
+/** An open pull request a session starts from: it checks out the pull request's branch. Like web's "Create from…". */
+export interface NewWorkPullRequest {
+  id: string;
+  repositoryId: string;
+  number: number;
+  title: string;
+  headBranch: string;
+  baseBranch: string;
+}
+
+interface SourceRow {
+  id: string; repositoryId: string; number: number; state: string; authored?: boolean;
+  summary: { title?: string; headBranch?: string; baseBranch?: string };
+}
+
+export function pullRequestSource(row: SourceRow): NewWorkPullRequest {
+  return { id: row.id, repositoryId: row.repositoryId, number: row.number, title: row.summary.title ?? '',
+    headBranch: row.summary.headBranch ?? '', baseBranch: row.summary.baseBranch ?? '' };
+}
+
+/** The repository's open pull requests to start from, own first, then newest. Like web's "Create from…" list. */
+export function pullRequestChoices<T extends SourceRow>(repository: Pick<WatchedRepo, 'id'> | null, rows: readonly T[] = []): T[] {
+  if (!repository) return [];
+  return rows.filter((row) => row.state === 'open' && row.repositoryId === repository.id)
+    .sort((a, b) => Number(Boolean(b.authored)) - Number(Boolean(a.authored)) || b.number - a.number);
+}
+
+/** The pull request the session starts from, when it belongs to the chosen repository. */
+export function activePullRequest(pullRequest: NewWorkPullRequest | null | undefined,
+  repository: Pick<WatchedRepo, 'id'> | null | undefined): NewWorkPullRequest | null {
+  return pullRequest && repository && pullRequest.repositoryId === repository.id ? pullRequest : null;
+}
+
 export interface NewWorkForm {
   mode: NewWorkMode;
   prompt: string;
@@ -97,6 +130,8 @@ export interface NewWorkForm {
   model: string;
   baseBranch: string;
   internetAccess: boolean;
+  /** Start from this pull request's branch instead of a new branch. */
+  pullRequest?: NewWorkPullRequest | null;
 }
 
 /**
@@ -128,8 +163,11 @@ export function createInput(form: NewWorkForm, workspaceId: string, withImages =
     return { workspaceId, kind: 'thread', runtime: 'sandbox', agent: form.agent, model: form.model, prompt, namingText, internetAccess: form.internetAccess };
   }
   if (!form.repository) throw new Error('Choose a repository.');
+  const pr = activePullRequest(form.pullRequest, form.repository);
   return { workspaceId, repositoryId: form.repository.id, runtime: 'sandbox', agent: form.agent, model: form.model,
-    baseBranch: form.baseBranch.trim() || undefined, prompt, namingText, internetAccess: form.internetAccess, autoCreatePr: true };
+    baseBranch: form.baseBranch.trim() || pr?.baseBranch || undefined,
+    ...(pr ? { branch: pr.headBranch || undefined, fromPullRequestId: pr.id } : {}),
+    prompt, namingText, internetAccess: form.internetAccess, autoCreatePr: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +208,8 @@ export interface ChipState {
   /** True while the repository list is still loading. */
   repositoriesLoading?: boolean;
   branch: string;
+  /** Set when the session starts from a pull request. The branch chip names it. */
+  pullRequest?: Pick<NewWorkPullRequest, 'number' | 'title'> | null;
   internetAccess: boolean;
   agent: WorkbenchAgent;
   model: string;
@@ -185,7 +225,12 @@ export function chipLabel(chip: ComposerChip, state: ChipState): { text: string;
       const text = state.repositoriesLoading ? 'Loading' : 'Repository';
       return { text, accessibilityLabel: state.repositoriesLoading ? 'Repositories are loading' : 'Repository: none. Choose a repository' };
     }
-    case 'branch': return { text: state.branch, accessibilityLabel: `Base branch: ${state.branch}. Change base branch` };
+    case 'branch': {
+      const pr = state.pullRequest;
+      if (pr) return { text: `#${pr.number}`,
+        accessibilityLabel: `Starts from pull request ${pr.number}${pr.title ? `, ${pr.title}` : ''}. Change what to start from` };
+      return { text: state.branch, accessibilityLabel: `Base branch: ${state.branch}. Change what to start from` };
+    }
     case 'internet': return { text: state.internetAccess ? 'Internet on' : 'Internet off', accessibilityLabel: 'Internet access' };
     case 'model': {
       const label = labelForModel(state.model, state.agent);

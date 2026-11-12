@@ -12,10 +12,11 @@ import { AppText, BottomBar, Button, IconButton, Notice, PromptSheet, Row, useAc
   type Symbol } from '../../components/UI';
 import { Heading, NativeText, openExternal, safeExternalUrl, StateNotice, workflowStyles as styles } from '../../components/Workflow';
 import { trackEvent } from '../../lib/analytics';
+import { featureOffered, useFeatures } from '../../lib/features';
 import { errorMessage, showActionError } from '../../lib/errors';
 import { relativeTimeLabel, shortTime, useNow } from '../../lib/time';
 import { completeIntent } from '../../navigation/intents';
-import { sessionRoute } from '../../navigation/routes';
+import { newWorkRoute, sessionRoute } from '../../navigation/routes';
 import { sans, useTheme, withAlpha, type Theme } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
 import { stackLabel } from '../../workflow/model';
@@ -128,6 +129,7 @@ export function PullRequestDetailScreen() {
   const links = usePrLinkMenu();
   const [busy, setBusy] = useState<Busy>(null);
   const [reviewSheet, setReviewSheet] = useState(false);
+  const sessionsOffered = featureOffered(useFeatures(), 'workbenches');
   const [reviewPrompt, setReviewPrompt] = useState<PRReviewEvent | null>(null);
   const toast = useToast();
   const [taskRunning, setTaskRunning] = useState(false);
@@ -290,6 +292,9 @@ export function PullRequestDetailScreen() {
     if (actions.fix && kind !== 'fix') items.push({ label: 'Fix with agent', icon: PRIMARY_ICON.fix, disabled: busyAny,
       detail: actions.fixBlocked ? fixBlockedMessage(actions.fixBlocked) : undefined, onPress: pressFix });
     if (actions.merge && kind !== 'merge') items.push({ label: 'Merge', icon: PRIMARY_ICON.merge, disabled: busyAny, onPress: merge });
+    // Like web's "Open in session": a new session on this pull request's branch. A PR with a session has "View session" instead.
+    if (sessionsOffered && row.state === 'open' && !row.session) items.push({ label: 'Open in session',
+      icon: { ios: 'terminal', android: 'terminal' }, onPress: () => router.push(newWorkRoute('session', { pullRequest: row.id })) });
     if (row.state === 'open' && kind !== 'review') items.push({ label: 'Review with Talyn', icon: PRIMARY_ICON.review, onPress: () => setReviewSheet(true) });
     if (actions.queue) items.push({ label: row.mergeQueued ? 'Leave merge queue' : 'Add to merge queue', icon: PRIMARY_ICON.queue,
       disabled: queueBusy, onPress: () => toggleQueue(!row.mergeQueued) });

@@ -21,7 +21,6 @@ export interface SessionStarterPr {
   reviewRequested: boolean;
   summary: {
     title?: string;
-    url?: string;
     mergeable?: string;
     blockingReason?: string | null;
     unresolvedReviewThreads?: number;
@@ -39,7 +38,7 @@ export interface SessionStarter {
   /** The first message, put in the composer. The person can edit it before they send it. */
   prompt: string;
   /** The pull request the session starts from. Null for a general starter. */
-  pr: { id: string; repositoryId: string; owner: string; repo: string; number: number; url: string | null } | null;
+  pr: { id: string; repositoryId: string; owner: string; repo: string; number: number } | null;
 }
 
 export const SESSION_STARTER_PROMPTS: Record<SessionStarterKind, string> = {
@@ -97,21 +96,11 @@ export function sessionStarters(rows: readonly SessionStarterPr[], limit = 3): S
       label: LABELS[kind],
       detail: row.summary.title ? `#${row.number} ${row.summary.title}` : `${row.owner}/${row.repo}#${row.number}`,
       prompt: SESSION_STARTER_PROMPTS[kind],
-      pr: { id: row.id, repositoryId: row.repositoryId, owner: row.owner, repo: row.repo, number: row.number, url: row.summary.url ?? null },
+      pr: { id: row.id, repositoryId: row.repositoryId, owner: row.owner, repo: row.repo, number: row.number },
     });
   }
   for (const kind of ['explain', 'tests'] as const) {
     out.push({ key: kind, kind, label: LABELS[kind], detail: null, prompt: SESSION_STARTER_PROMPTS[kind], pr: null });
   }
   return out.slice(0, max);
-}
-
-/**
- * The prompt for a client that cannot start a session from a pull request
- * (mobile): the same job, with the pull request named in the text.
- */
-export function starterPromptWithPr(starter: SessionStarter): string {
-  if (!starter.pr) return starter.prompt;
-  const ref = starter.pr.url ?? `${starter.pr.owner}/${starter.pr.repo}#${starter.pr.number}`;
-  return starter.prompt.replace('this pull request', `pull request ${ref}`);
 }

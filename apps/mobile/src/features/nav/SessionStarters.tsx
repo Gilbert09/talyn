@@ -1,5 +1,5 @@
 import type { PRRow } from '@talyn/client/native';
-import { sessionStarters, starterPromptWithPr, type SessionStarter, type SessionStarterKind } from '@talyn/shared';
+import { sessionStarters, type SessionStarter, type SessionStarterKind } from '@talyn/shared';
 import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useMemo } from 'react';
@@ -26,8 +26,8 @@ const NEW_WORK_DRAFT = 'new:prompt';
 
 /**
  * The drawer for somebody with no sessions yet, like web's sidebar: what a
- * session is, and a few jobs to start one with. Mobile cannot start a session
- * from a pull request, so a pull request job names the pull request in its text.
+ * session is, and a few jobs to start one with. A job on a pull request starts
+ * the session from that pull request.
  */
 export function SessionStarters() {
   const c = useTheme();
@@ -38,8 +38,8 @@ export function SessionStarters() {
 
   const start = (starter: SessionStarter) => {
     trackEvent('session_starter_clicked', { kind: starter.kind, from_pull_request: starter.pr !== null });
-    workflow.updateLocal(NEW_WORK_DRAFT, { draft: starterPromptWithPr(starter) });
-    router.push(newWorkRoute('session', starter.pr?.repositoryId));
+    workflow.updateLocal(NEW_WORK_DRAFT, { draft: starter.prompt });
+    router.push(newWorkRoute('session', starter.pr ? { pullRequest: starter.pr.id } : {}));
   };
 
   return <View style={[styles.card, { backgroundColor: c.background, borderColor: c.border }]}>
