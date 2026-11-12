@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, screen, waitFor, fireEvent } from '@testing-library/react';
-import type { AdminBillingView } from '@talyn/shared';
+import { render, cleanup, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import type { AdminBillingInterval, AdminBillingSubject, AdminBillingView } from '@talyn/shared';
 
 const billing = vi.fn();
 const grantCredits = vi.fn();
@@ -12,6 +13,7 @@ vi.mock('../lib/api', () => ({
 
 const { BillingCard } = await import('../components/admin/BillingCard');
 const { UsageTile } = await import('../components/admin/UsageTile');
+const { costMicros } = await import('../lib/format');
 
 const VIEW: AdminBillingView = {
   tier: 'pro',
@@ -125,6 +127,107 @@ describe('BillingCard', () => {
     billing.mockRejectedValue(new Error('boom'));
     render(<BillingCard userId="u1" email="a@b.test" canMutate />);
     expect(await screen.findByText('boom')).toBeTruthy();
+  });
+});
+
+describe('BillingCard: peak memory and cost', () => {
+  const subject = (over: Partial<AdminBillingSubject>): AdminBillingSubject => ({
+    subjectKind: 'workbench', subjectId: 'wb-1', title: 'Speed up CI', firstStartedAt: '2026-11-12T10:00:00.000Z',
+    lastEndedAt: null, running: true, intervals: 3, peakMemUsedMib: 9216, peakSize: 'large', billedWsec: 7200,
+    costMicros: 440_000, ...over,
+  });
+  const interval = (over: Partial<AdminBillingInterval>): AdminBillingInterval => ({
+    id: 'i-1', subjectKind: 'workbench', subjectId: 'wb-1', sandboxId: 'sb-1', size: 'standard',
+    startedAt: '2026-11-12T10:00:00.000Z', endedAt: '2026-11-12T10:05:00.000Z', endReason: 'resize', billedWsec: 300, ...over,
+  });
+
+  async function show(view: Partial<AdminBillingView>) {
+    billing.mockResolvedValue({ ...VIEW, ...view });
+    render(
+      <MemoryRouter>
+        <BillingCard userId="u1" email="a@b.test" canMutate={false} />
+      </MemoryRouter>
+    );
+    await screen.findByText('Credit lots');
+  }
+
+  it('lists each session and task with its title link, peak memory, billed size and cost', async () => {
+    await show({
+      subjects: [
+        subject({}),
+        subject({
+          subjectKind: 'task', subjectId: 't-1', title: 'Fix the flaky test', running: false, lastEndedAt: '2026-11-12T11:00:00.000Z',
+          intervals: 1, peakMemUsedMib: 812, peakSize: 'small', billedWsec: 30, costMicros: 1833,
+        }),
+        subject({ subjectKind: 'review_unit', subjectId: 'ru-1', title: null, peakMemUsedMib: null, costMicros: 0, intervals: 1 }),
+      ],
+    });
+    const list = screen.getByRole('list', { name: 'Sessions and tasks' });
+    const rows = within(list).getAllByRole('listitem');
+    expect(rows).toHaveLength(3);
+    expect(within(rows[0]).getByRole('link', { name: 'Speed up CI' }).getAttribute('href')).toBe('/product/sessions/wb-1');
+    expect(rows[0].textContent).toContain('peak 9.0 GiB');
+    expect(rows[0].textContent).toContain('billed up to large');
+    expect(rows[0].textContent).toContain('$0.440');
+    expect(rows[0].textContent).toContain('2 box-hours · 3 intervals');
+    expect(within(rows[0]).getByText('running')).toBeTruthy();
+    expect(within(rows[1]).getByRole('link', { name: 'Fix the flaky test' }).getAttribute('href')).toBe('/product/tasks/t-1');
+    expect(rows[1].textContent).toContain('peak 812 MiB');
+    expect(rows[1].textContent).toContain('$0.002');
+    expect(rows[1].textContent).toContain('1 interval');
+    expect(rows[1].textContent).toMatch(/ended .* ago/);
+    // A review unit has no page: its id shows as text.
+    expect(within(rows[2]).queryByRole('link')).toBeNull();
+    expect(rows[2].textContent).toContain('ru-1');
+    expect(rows[2].textContent).toContain('no memory reading');
+    expect(rows[2].textContent).toContain('$0');
+  });
+
+  it.each([
+    [[], 'No usage in the last 30 days.', true],
+    [undefined, 'No usage in the last 30 days.', false],
+  ])('with subjects=%j the empty note shows: %s', async (subjects, text, shown) => {
+    await show({ subjects });
+    expect(Boolean(screen.queryByText(text))).toBe(shown);
+    expect(Boolean(screen.queryByText('Sessions and tasks, last 30 days'))).toBe(shown);
+  });
+
+  it('shows peak memory and cost on each interval and on an open box', async () => {
+    const open = interval({ id: 'i-open', endedAt: null, endReason: null, billedWsec: 3600, peakMemUsedMib: 2048, costMicros: 220_000 });
+    await show({
+      openBoxes: [open],
+      recentIntervals: [open, interval({ peakMemUsedMib: null, costMicros: 500 })],
+    });
+    const peaks = screen.getAllByTestId('peak-memory').map((n) => n.textContent);
+    expect(peaks).toEqual(['peak 2.0 GiB', 'peak 2.0 GiB', 'no memory reading']);
+    expect(screen.getAllByText(/1 box-hours billed so far · \$0\.220/)).toHaveLength(2);
+    expect(screen.getByText(/ended resize · 0\.083 box-hours billed · <\$0\.001/)).toBeTruthy();
+  });
+
+  it('shows no peak or cost from an older backend that sends neither', async () => {
+    await show({ recentIntervals: [interval({})] });
+    expect(screen.queryByTestId('peak-memory')).toBeNull();
+    expect(screen.getByText('ended resize · 0.083 box-hours billed')).toBeTruthy();
+  });
+});
+
+describe('costMicros', () => {
+  it.each([
+    [null, '$0'],
+    [undefined, '$0'],
+    [Number.NaN, '$0'],
+    [-5, '$0'],
+    [0, '$0'],
+    [1, '<$0.001'],
+    [999, '<$0.001'],
+    [1000, '$0.001'],
+    [42_000, '$0.042'],
+    [999_499, '$0.999'],
+    [999_999, '$1.00'],
+    [1_000_000, '$1.00'],
+    [12_500_000, '$12.50'],
+  ])('%s -> %s', (micros, text) => {
+    expect(costMicros(micros)).toBe(text);
   });
 });
 

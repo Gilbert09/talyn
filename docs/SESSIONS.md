@@ -89,6 +89,17 @@ Not covered:
 
 The copy says it in each app (web Billing and the size picker, desktop Plan and usage, the mobile size sheet) with `MEASURED_BILLING_NOTE`, and in `docs/billing.md` and `docs/sandboxes.md`.
 
+### Peak memory and cost in the admin console (2026-11-12)
+
+The admin console's billing card now shows, for each workbench and task, the peak memory and what it cost.
+
+- `usage_intervals.peak_mem_used_mib` (migration 0133) holds the highest `memUsedMib` the sweep read for the interval, in whole MiB (rounded up). NULL means no reading yet.
+- The sweep raises the peak of each running box's open interval in one `UPDATE … FROM (VALUES …)` per tick (`raiseIntervalPeaks`). It never lowers a peak and never writes a closed interval. A failed write is a `usage_peak_failed` debug-bus event and does not stop the sweep, because the peak is shown, not billed.
+- An interval the sweep opens, or the next interval after a resize, starts with the reading of that tick. The interval that a resize closes keeps its own peak. An interval that a hook opens has no peak until the next sweep.
+- `GET /admin/users/:id/billing` returns `subjects`: up to 25 workbenches, tasks and review units with intervals that started in the last 30 days, newest first. Each row has the title, the interval count, the peak memory over all intervals, the heaviest billed size, the box-hours and the cost. Each interval and open box also carries `peakMemUsedMib` and `costMicros`.
+- The cost is `billedWsec` at the box-hour list price (`costMicrosForWeightedSeconds`). It does not subtract included hours, so it is not what the user paid in cash.
+- Peak memory is sampled once a minute. A spike between two reads does not show.
+
 ## Slack channel rules run on app and bot messages (2026-11-12)
 
 A channel automation on #alerts-warehouse-sources never ran. Every message there comes from the incident.io app, and the Slack source adapter dropped every message with a `bot_id` or the `bot_message` subtype.

@@ -111,12 +111,42 @@ export interface AdminBillingBox {
   sandboxId: string;
   size: string;
   startedAt: string;
+  /** Billed so far. Absent on an older backend. */
+  billedWsec?: number;
+  /** The highest memory the box used in this interval (MiB). Null: no reading. Absent on an older backend. */
+  peakMemUsedMib?: number | null;
+  /** `billedWsec` at the box-hour list price. Absent on an older backend. */
+  costMicros?: number;
 }
 
 export interface AdminBillingInterval extends AdminBillingBox {
   endedAt: string | null;
   endReason: string | null;
   billedWsec: number;
+}
+
+/**
+ * One workbench, task or review unit and all its usage intervals in the
+ * lookback window. A box bills the size its memory needs, so one subject can
+ * have many intervals; this is their sum.
+ */
+export interface AdminBillingSubject {
+  subjectKind: string;
+  subjectId: string;
+  /** The session's or task's title, when the row still exists. */
+  title: string | null;
+  firstStartedAt: string;
+  /** The last interval's end. Null while the box runs. */
+  lastEndedAt: string | null;
+  running: boolean;
+  intervals: number;
+  /** The highest memory any of its intervals measured (MiB). Null: no reading. */
+  peakMemUsedMib: number | null;
+  /** The heaviest size it was billed at. */
+  peakSize: string;
+  billedWsec: number;
+  /** `billedWsec` at the box-hour list price. */
+  costMicros: number;
 }
 
 export interface AdminBillingView {
@@ -148,6 +178,8 @@ export interface AdminBillingView {
     lastFailureAt: string | null;
   } | null;
   recentIntervals: AdminBillingInterval[];
+  /** Recent workbenches and tasks with their peak memory and cost. Absent on an older backend. */
+  subjects?: AdminBillingSubject[];
 }
 
 export interface AdminGrantCreditsRequest extends AdminMutationRequest {

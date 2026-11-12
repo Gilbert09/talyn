@@ -1,13 +1,17 @@
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNull, max, min, sql } from 'drizzle-orm';
 import { Router } from 'express';
 import {
+  costMicrosForWeightedSeconds,
+  isSandboxSize,
   MICROS_PER_CENT,
   MICROS_PER_DOLLAR,
+  SIZE_WEIGHT,
   usagePeriodFor,
   type AdminBillingBox,
   type AdminBillingInterval,
   type AdminBillingLot,
+  type AdminBillingSubject,
   type AdminBillingView,
   type AdminGrantCreditsResult,
   type AdminReverseLotResult,
@@ -15,7 +19,7 @@ import {
   type ApiResponse,
 } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
-import { autoTopupSettings, creditLots, usageIntervals, usagePeriods } from '../../db/schema.js';
+import { autoTopupSettings, creditLots, tasks, usageIntervals, usagePeriods, workbenches } from '../../db/schema.js';
 import { auditActor, withRemoteAudit } from '../../services/admin/audit.js';
 import { getAdminUserEmail } from '../../services/admin/queries.js';
 import { deriveTier } from '../../services/billing/entitlements.js';
@@ -41,6 +45,10 @@ import { AdminGuardError, adminMutationLimit, adminReason, requireReason, withGu
 export const RECENT_INTERVAL_LIMIT = 25;
 /** Open boxes shown. An owner is capped far below this, so it only bounds a runaway. */
 export const OPEN_BOX_LIMIT = 100;
+/** Workbenches and tasks shown, most recently started first. */
+export const SUBJECT_LIMIT = 25;
+/** How far back the per-subject summary reads. Bounds the scan of an owner's intervals. */
+export const SUBJECT_LOOKBACK_DAYS = 30;
 /** Lots shown, newest first. */
 export const LOT_LIMIT = 50;
 
@@ -57,13 +65,14 @@ export const OPEN_BOX_COLUMNS = {
   sandboxId: usageIntervals.sandboxId,
   size: usageIntervals.size,
   startedAt: usageIntervals.startedAt,
+  billedWsec: usageIntervals.billedWsec,
+  peakMemUsedMib: usageIntervals.peakMemUsedMib,
 } as const;
 
 export const INTERVAL_VIEW_COLUMNS = {
   ...OPEN_BOX_COLUMNS,
   endedAt: usageIntervals.endedAt,
   endReason: usageIntervals.endReason,
-  billedWsec: usageIntervals.billedWsec,
 } as const;
 
 export const TOPUP_VIEW_COLUMNS = {
@@ -97,6 +106,85 @@ export function recentIntervalsQuery(ownerId: string) {
     .limit(RECENT_INTERVAL_LIMIT);
 }
 
+/**
+ * Each workbench, task and review unit the owner ran in the lookback window,
+ * with all its intervals summed. Served by the (owner_id, started_at) index.
+ */
+export function subjectsQuery(ownerId: string, since: Date) {
+  return db()
+    .select({
+      subjectKind: usageIntervals.subjectKind,
+      subjectId: usageIntervals.subjectId,
+      firstStartedAt: min(usageIntervals.startedAt),
+      lastStartedAt: max(usageIntervals.startedAt),
+      lastEndedAt: max(usageIntervals.endedAt),
+      openCount: sql<number>`count(*) FILTER (WHERE ${usageIntervals.endedAt} IS NULL)`.mapWith(Number),
+      intervals: count(),
+      peakMemUsedMib: max(usageIntervals.peakMemUsedMib),
+      sizes: sql<string[]>`array_agg(DISTINCT ${usageIntervals.size})`,
+      billedWsec: sql<number>`COALESCE(SUM(${usageIntervals.billedWsec}), 0)`.mapWith(Number),
+    })
+    .from(usageIntervals)
+    .where(and(eq(usageIntervals.ownerId, ownerId), gte(usageIntervals.startedAt, since)))
+    .groupBy(usageIntervals.subjectKind, usageIntervals.subjectId)
+    .orderBy(desc(max(usageIntervals.startedAt)))
+    .limit(SUBJECT_LIMIT);
+}
+
+export function workbenchTitlesQuery(ids: string[]) {
+  return db()
+    .select({ id: workbenches.id, title: workbenches.title, name: workbenches.name })
+    .from(workbenches)
+    .where(inArray(workbenches.id, ids));
+}
+
+export function taskTitlesQuery(ids: string[]) {
+  return db().select({ id: tasks.id, title: tasks.title }).from(tasks).where(inArray(tasks.id, ids));
+}
+
+type SubjectRow = Awaited<ReturnType<typeof subjectsQuery>>[number];
+
+/** The heaviest of the sizes a subject was billed at. */
+export function heaviestSize(sizes: readonly string[] | null): string {
+  let best = '';
+  for (const size of sizes ?? []) {
+    if (!best || (isSandboxSize(size) && (!isSandboxSize(best) || SIZE_WEIGHT[size] > SIZE_WEIGHT[best]))) best = size;
+  }
+  return best;
+}
+
+async function buildSubjects(ownerId: string, now: Date): Promise<AdminBillingSubject[]> {
+  const since = new Date(now.getTime() - SUBJECT_LOOKBACK_DAYS * 86_400_000);
+  const rows: SubjectRow[] = await subjectsQuery(ownerId, since);
+  const idsOf = (kind: string) => rows.filter((r) => r.subjectKind === kind).map((r) => r.subjectId);
+  const workbenchIds = idsOf('workbench');
+  const taskIds = idsOf('task');
+  const [workbenchRows, taskRows] = await Promise.all([
+    workbenchIds.length ? workbenchTitlesQuery(workbenchIds) : [],
+    taskIds.length ? taskTitlesQuery(taskIds) : [],
+  ]);
+  const titles = new Map<string, string>();
+  for (const w of workbenchRows) titles.set(`workbench:${w.id}`, w.title || w.name);
+  for (const t of taskRows) titles.set(`task:${t.id}`, t.title);
+  return rows.map((r) => {
+    const running = r.openCount > 0;
+    const peak = r.peakMemUsedMib === null ? null : Number(r.peakMemUsedMib);
+    return {
+      subjectKind: r.subjectKind,
+      subjectId: r.subjectId,
+      title: titles.get(`${r.subjectKind}:${r.subjectId}`) ?? null,
+      firstStartedAt: (r.firstStartedAt ?? now).toISOString(),
+      lastEndedAt: running ? null : iso(r.lastEndedAt),
+      running,
+      intervals: Number(r.intervals),
+      peakMemUsedMib: peak,
+      peakSize: heaviestSize(r.sizes),
+      billedWsec: r.billedWsec,
+      costMicros: costMicrosForWeightedSeconds(r.billedWsec),
+    };
+  });
+}
+
 export function lotsQuery(ownerId: string) {
   return db()
     .select(LOT_COLUMNS)
@@ -120,7 +208,17 @@ export function periodViewQuery(ownerId: string, periodStart: Date) {
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
 
-function toBox(r: { id: string; subjectKind: string; subjectId: string; sandboxId: string; size: string; startedAt: Date }): AdminBillingBox {
+function toBox(r: {
+  id: string;
+  subjectKind: string;
+  subjectId: string;
+  sandboxId: string;
+  size: string;
+  startedAt: Date;
+  billedWsec: number;
+  peakMemUsedMib: number | null;
+}): AdminBillingBox & { billedWsec: number } {
+  const billedWsec = Number(r.billedWsec);
   return {
     id: r.id,
     subjectKind: r.subjectKind,
@@ -128,19 +226,23 @@ function toBox(r: { id: string; subjectKind: string; subjectId: string; sandboxI
     sandboxId: r.sandboxId,
     size: r.size,
     startedAt: r.startedAt.toISOString(),
+    billedWsec,
+    peakMemUsedMib: r.peakMemUsedMib,
+    costMicros: costMicrosForWeightedSeconds(billedWsec),
   };
 }
 
 export async function buildAdminBillingView(ownerId: string, now = new Date()): Promise<AdminBillingView> {
   const { tier, source, periodAnchor } = await deriveTier(ownerId);
   const period = usagePeriodFor({ now, anchor: periodAnchor });
-  const [periodRows, boxes, intervals, lots, balance, topupRows] = await Promise.all([
+  const [periodRows, boxes, intervals, lots, balance, topupRows, subjects] = await Promise.all([
     periodViewQuery(ownerId, period.start),
     openBoxesQuery(ownerId),
     recentIntervalsQuery(ownerId),
     lotsQuery(ownerId),
     creditBalance(ownerId, now),
     autoTopupViewQuery(ownerId),
+    buildSubjects(ownerId, now),
   ]);
   const p = periodRows[0];
   const t = topupRows[0];
@@ -189,9 +291,9 @@ export async function buildAdminBillingView(ownerId: string, now = new Date()): 
         ...toBox(r),
         endedAt: iso(r.endedAt),
         endReason: r.endReason,
-        billedWsec: Number(r.billedWsec),
       })
     ),
+    subjects,
   };
 }
 

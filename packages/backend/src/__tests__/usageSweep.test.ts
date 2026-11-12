@@ -17,7 +17,7 @@ import {
 import type { SandboxSize } from '@talyn/shared';
 import type { FleetClient, FleetSandbox } from '../services/selfHosted/client.js';
 import * as websocketModule from '../services/websocket.js';
-import { insertOpenInterval, markIntervalClosed } from '../services/billing/usage/intervals.js';
+import { insertOpenInterval, markIntervalClosed, raiseIntervalPeaks } from '../services/billing/usage/intervals.js';
 import { chargeOwnerAt } from '../services/billing/usage/charge.js';
 import {
   decideOpenInterval,
@@ -492,6 +492,66 @@ describe('usage sweep against the fleet', () => {
       expect(next).toMatchObject({ size: 'standard', billedWsec: 60, startedAt: NOW, billedThrough: at(60) });
       const [period] = await db.select().from(usagePeriods).where(eq(usagePeriods.ownerId, OWNER));
       expect(period.usedWsec).toBe(180);
+    });
+
+    describe('peak memory per interval', () => {
+      // A small box always bills small, so these readings never resize it.
+      const SMALL = { memMib: 4096, vcpuCount: 2 };
+      const peaks = async () => (await rows()).map((r) => r.peakMemUsedMib);
+
+      it.each<[string, Array<number | undefined>, number | null]>([
+        ['keeps the highest reading', [1000, 3000, 2000], 3000],
+        ['rises with each higher reading', [500, 900, 1800], 1800],
+        ['rounds a fraction up to a whole MiB', [1500.2], 1501],
+        ['ignores a tick with no reading', [2000, undefined, 1000], 2000],
+        ['stays null with no reading', [undefined, undefined], null],
+        ['ignores zero and negative readings', [0, -5], null],
+        ['ignores a non-finite reading', [Number.NaN, Number.POSITIVE_INFINITY], null],
+      ])('%s', async (_label, readings, peak) => {
+        await openSized('small');
+        let i = 0;
+        const sweep = new UsageSweep(async () => [host([{ id: SB, status: 'busy', ...SMALL, memUsedMib: readings[i] }])]);
+        for (; i < readings.length; i++) expect((await sweep.run(at(i * 60))).resized).toBe(0);
+        expect(await peaks()).toEqual([peak]);
+      });
+
+      it.each([
+        [1500, 1500],
+        [undefined, null],
+      ])('a new interval starts with the reading it opened at (%s)', async (memUsedMib, peak) => {
+        await sweepOf(() => ({ memUsedMib })).run(NOW);
+        expect(await peaks()).toEqual([peak]);
+      });
+
+      it('a resize keeps the old peak and starts the new interval at the reading that moved it', async () => {
+        await openSized('standard', at(-600), at(-60));
+        let mem = 2000;
+        const sweep = sweepOf(() => ({ memUsedMib: mem }));
+        expect((await sweep.run(NOW)).resized).toBe(0);
+        mem = 9000;
+        expect((await sweep.run(at(60))).resized).toBe(1);
+        expect(await peaks()).toEqual([2000, 9000]);
+      });
+
+      it('a closing box does not raise the peak of the interval it closes', async () => {
+        await openSized('small');
+        await new UsageSweep(async () => [host([{ id: SB, status: 'busy', ...SMALL, memUsedMib: 1000 }])]).run(NOW);
+        const closing = new UsageSweep(async () => [host([{ id: SB, status: 'suspended', ...SMALL, memUsedMib: 3500 }])]);
+        expect((await closing.run(at(60))).closed).toBe(1);
+        expect(await peaks()).toEqual([1000]);
+      });
+
+      it('raiseIntervalPeaks never lowers a peak and leaves a closed interval alone', async () => {
+        await openSized('small');
+        const [row] = await rows();
+        expect(await raiseIntervalPeaks([{ id: row.id, memUsedMib: 2000 }])).toBe(1);
+        expect(await raiseIntervalPeaks([{ id: row.id, memUsedMib: 1000 }])).toBe(0);
+        expect(await peaks()).toEqual([2000]);
+        await markIntervalClosed(SB, NOW, 'terminal');
+        expect(await raiseIntervalPeaks([{ id: row.id, memUsedMib: 5000 }])).toBe(0);
+        expect(await raiseIntervalPeaks([])).toBe(0);
+        expect(await peaks()).toEqual([2000]);
+      });
     });
 
     it('charges add up across a move up', async () => {

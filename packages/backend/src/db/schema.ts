@@ -328,6 +328,8 @@ export const usageIntervals = pgTable(
     endReason: text('end_reason'), // EndReason
     billedThrough: timestamp('billed_through', { withTimezone: true }).notNull(),
     billedWsec: bigint('billed_wsec', { mode: 'number' }).notNull().default(0),
+    /** The highest memory the box used in this interval (MiB), raised by the usage sweep. Null: no reading yet. */
+    peakMemUsedMib: integer('peak_mem_used_mib'),
     /** A teammate who prompted the session and pays for this interval. `ownerId` is then that teammate. */
     payerUserId: text('payer_user_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

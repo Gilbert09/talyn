@@ -1,8 +1,20 @@
 import { useState } from 'react';
-import { formatBoxHours, formatBoxHoursPrecise, formatBoxHoursUsage, formatUsd, type AdminBillingLot, type AdminBillingView } from '@talyn/shared';
+import { Link } from 'react-router-dom';
+import {
+  BOX_HOUR_PRICE_MICROS,
+  formatBoxHours,
+  formatBoxHoursPrecise,
+  formatBoxHoursUsage,
+  formatPricePerHour,
+  formatUsd,
+  type AdminBillingLot,
+  type AdminBillingSubject,
+  type AdminBillingView,
+} from '@talyn/shared';
 import { api } from '../../lib/api';
 import { useAdminQuery } from '../../hooks/useAdminQuery';
-import { absolute, relativeAge } from '../../lib/format';
+import { absolute, costMicros, mib, relativeAge } from '../../lib/format';
+import { ROUTES, routeTo } from '../../lib/routes';
 import { Pill } from '../layout/Page';
 import { StatCard } from '../ui/StatCard';
 import { toast } from '../../stores/toast';
@@ -167,11 +179,30 @@ export function BillingCard({ userId, email, canMutate }: { userId: string; emai
         </ul>
       )}
 
+      {data.subjects && (
+        <>
+          <h3 className="mb-1 mt-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Sessions and tasks, last 30 days
+          </h3>
+          <p className="mb-1 text-[11px] text-muted-foreground">
+            A box bills the size its memory needs, up to its booted size. Cost is at the{' '}
+            {formatPricePerHour(BOX_HOUR_PRICE_MICROS)} box-hour list price, before included hours.
+          </p>
+          {data.subjects.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No usage in the last 30 days.</p>
+          ) : (
+            <SubjectList rows={data.subjects} />
+          )}
+        </>
+      )}
+
       <h3 className="mb-1 mt-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Open boxes</h3>
       {data.openBoxes.length === 0 ? (
         <p className="text-xs text-muted-foreground">None running.</p>
       ) : (
-        <IntervalList rows={data.openBoxes.map((b) => ({ ...b, endedAt: null, endReason: null, billedWsec: 0 }))} />
+        <IntervalList
+          rows={data.openBoxes.map((b) => ({ ...b, endedAt: null, endReason: null, billedWsec: b.billedWsec ?? 0 }))}
+        />
       )}
 
       <h3 className="mb-1 mt-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -192,28 +223,92 @@ function Heading() {
   );
 }
 
+/** "peak 1.4 GiB", or "no memory reading" before the sweep read the box. Nothing on an older backend. */
+function PeakMemory({ value }: { value: number | null | undefined }) {
+  if (value === undefined) return null;
+  return (
+    <span data-testid="peak-memory" title="Highest memory the box used, read once a minute">
+      {value === null ? 'no memory reading' : `peak ${mib(value)}`}
+    </span>
+  );
+}
+
+function subjectLink(r: AdminBillingSubject): string | null {
+  if (r.subjectKind === 'workbench') return routeTo(ROUTES.session, { sessionId: r.subjectId });
+  if (r.subjectKind === 'task') return routeTo(ROUTES.task, { taskId: r.subjectId });
+  return null;
+}
+
+function SubjectList({ rows }: { rows: AdminBillingSubject[] }) {
+  return (
+    <ul aria-label="Sessions and tasks" className="divide-y divide-border rounded-lg border border-border bg-card text-xs">
+      {rows.map((r) => {
+        const href = subjectLink(r);
+        const label = r.title || r.subjectId;
+        return (
+          <li key={`${r.subjectKind}:${r.subjectId}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5">
+            <span className="font-mono">{r.subjectKind}</span>
+            {href ? (
+              <Link to={href} className="max-w-[24rem] truncate hover:underline" title={r.subjectId}>
+                {label}
+              </Link>
+            ) : (
+              <span className="max-w-[24rem] truncate" title={r.subjectId}>
+                {label}
+              </span>
+            )}
+            <PeakMemory value={r.peakMemUsedMib} />
+            <span className="text-muted-foreground" title="The heaviest size it was billed at">
+              billed up to {r.peakSize}
+            </span>
+            <span className="font-medium" data-testid="subject-cost">
+              {costMicros(r.costMicros)}
+            </span>
+            <span className="text-muted-foreground">
+              {formatBoxHoursPrecise(r.billedWsec)} box-hours · {r.intervals} interval{r.intervals === 1 ? '' : 's'}
+            </span>
+            {r.running ? (
+              <Pill tone="warn">running</Pill>
+            ) : (
+              r.lastEndedAt && (
+                <span className="text-muted-foreground" title={absolute(r.lastEndedAt)}>
+                  ended {relativeAge(r.lastEndedAt)} ago
+                </span>
+              )
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function IntervalList({ rows }: { rows: AdminBillingView['recentIntervals'] }) {
   return (
     <ul className="divide-y divide-border rounded-lg border border-border bg-card text-xs">
-      {rows.map((r) => (
-        <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5">
-          <span className="font-mono">{r.subjectKind}</span>
-          <span>{r.size}</span>
-          <span title={absolute(r.startedAt)}>started {relativeAge(r.startedAt)} ago</span>
-          {r.endedAt ? (
-            <span className="text-muted-foreground">
-              ended {r.endReason ?? ''} · {formatBoxHoursPrecise(r.billedWsec)} box-hours billed
-            </span>
-          ) : (
-            <>
-              <Pill tone="warn">running</Pill>
+      {rows.map((r) => {
+        const cost = r.costMicros === undefined ? '' : ` · ${costMicros(r.costMicros)}`;
+        return (
+          <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5">
+            <span className="font-mono">{r.subjectKind}</span>
+            <span>{r.size}</span>
+            <span title={absolute(r.startedAt)}>started {relativeAge(r.startedAt)} ago</span>
+            <PeakMemory value={r.peakMemUsedMib} />
+            {r.endedAt ? (
               <span className="text-muted-foreground">
-                {formatBoxHoursPrecise(r.billedWsec)} box-hours billed so far
+                ended {r.endReason ?? ''} · {formatBoxHoursPrecise(r.billedWsec)} box-hours billed{cost}
               </span>
-            </>
-          )}
-        </li>
-      ))}
+            ) : (
+              <>
+                <Pill tone="warn">running</Pill>
+                <span className="text-muted-foreground">
+                  {formatBoxHoursPrecise(r.billedWsec)} box-hours billed so far{cost}
+                </span>
+              </>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }
