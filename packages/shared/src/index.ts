@@ -153,6 +153,7 @@ export * from './talynBriefing.js';
 export * from './previewDetect.js';
 export * from './sandboxSize.js';
 export * from './workbenchSandboxStatus.js';
+export * from './sessionGlance.js';
 export * from './workbenchStartProgress.js';
 export * from './pricing.js';
 export * from './bake.js';

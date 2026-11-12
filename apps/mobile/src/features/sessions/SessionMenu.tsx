@@ -14,6 +14,7 @@ import { threadRoute } from '../../navigation/routes';
 import { workbenchKind, workbenchTitle } from '../../workflow/model';
 import { spacesOffered } from '../spaces/model';
 import { useMoveToSpace, type MoveToSpaceAction } from '../spaces/actions';
+import { sessionGlanceText } from './glance';
 import { archiveCopy, copyActions, copyEntry, runningChat, SESSION_ACTION_LABEL, sessionActions, webLink, type SessionActionKind } from './actions';
 
 const ICONS: Record<SessionActionKind, Symbol> = {
@@ -137,7 +138,8 @@ export function useSessionMenu({ onArchived, onThreadScreen = false }: { onArchi
     const move = moveBuilder?.build(item);
     if (move) actions.push({ label: move.label, icon: move.icon, disabled: move.disabled, detail: move.detail, onPress: move.run });
     if (last) actions.push(last);
-    sheet.open({ title: workbenchTitle(item), actions });
+    // A row's long press shows the session at a glance, as hover does on web. The detail screen already shows it.
+    sheet.open({ title: workbenchTitle(item), message: more.views ? undefined : sessionGlanceText(item), actions });
   };
   const elements = <>
     {spaces ? <MoveToSpaceBinding openSheet={sheet.open} onMoved={onMoved} onChange={onMoveChange} /> : null}

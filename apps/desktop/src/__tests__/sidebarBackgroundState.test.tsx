@@ -59,9 +59,9 @@ function show() {
   render(<SidebarWorkbenchList workbenches={Object.values(store.workbenches)} />);
 }
 
-/** The small timer at the end of the row, with its own title. */
+/** The small timer at the end of the row, with its own label. */
 function trailingMark(title: string) {
-  return document.querySelector(`span[title="${title}"]`);
+  return document.querySelector(`span[aria-label="${title}"]`);
 }
 
 beforeAll(() => {
