@@ -2,7 +2,10 @@
 
 Push delivery uses Expo Push Service through a backend provider interface.
 Direct APNs and FCM providers are outside this phase.
-Keep push disabled until privacy and device checks are complete.
+Push is ON in production since 2026-11-12 (Tom's call): `TALYN_MOBILE_PUSH_ENABLED=true`, and the allowlist is
+`dev.talyn.mobile.preview@preview,dev.talyn.mobile.development@development,dev.talyn.mobile@production`.
+Android registration was checked on a Pixel. iOS waits for the Apple push key (Apple Developer account in EAS).
+To stop all dispatch, set `TALYN_MOBILE_PUSH_ENABLED` to anything but `true`.
 The app remains usable when push is disabled, delayed, duplicated, or absent.
 
 ## Deployment configuration
