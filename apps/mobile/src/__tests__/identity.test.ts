@@ -88,7 +88,7 @@ describe('push configuration', () => {
   const previous = process.env;
   // The release job exports its own profile, build number and identity; each case states its own.
   const base = Object.fromEntries(Object.entries(previous)
-    .filter(([name]) => !/^(APP_ENV|EAS_BUILD_PROFILE|MOBILE_|TALYN_MOBILE_|EXPO_PUBLIC_)/.test(name)));
+    .filter(([name]) => !/^(APP_ENV|EAS_BUILD_PROFILE|MOBILE_|TALYN_MOBILE_|EXPO_PUBLIC_)/.test(name))) as NodeJS.ProcessEnv;
   afterEach(() => { process.env = previous; });
   const build = () => appConfig({ config: {} } as Parameters<typeof appConfig>[0]);
   it.each(['production', 'preview', 'development'])('uses the Talyn EAS project for %s when none is set', (environment) => {
