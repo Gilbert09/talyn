@@ -10,6 +10,8 @@ import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { useWorkflowRuns } from './useWorkflows';
 import { useWorkspaceStore } from '../../../stores/workspace';
+import { useWorkbenchStore } from '../../../stores/workbenches';
+import { navigateToWorkbench } from '../../../lib/workbenchNavigation';
 
 /**
  * One workflow's history.
@@ -60,7 +62,10 @@ function OutcomeLine({ outcome }: { outcome: WorkflowActionOutcome }) {
   const label = WORKFLOW_ACTION_LABELS[outcome.type] ?? outcome.type;
   const detail = String(outcome.code) === 'slack_scope_missing'
     ? 'Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.'
-    : outcome.detail ?? outcome.error ?? '';
+    // Older runs stored the session id here; the button below links the session instead.
+    : outcome.type === 'start_session' && outcome.ok
+      ? 'started a session'
+      : outcome.detail ?? outcome.error ?? '';
   return (
     <div className="flex items-baseline gap-2 text-xs">
       <span className={outcome.ok ? 'text-green-500' : 'text-red-500'}>{outcome.ok ? '+' : 'x'}</span>
@@ -80,6 +85,8 @@ export function WorkflowRunsList({
   const { runs, loading, error, loadMore, hasMore } = useWorkflowRuns(workflowId, liveRuns);
   const setActivePanel = useWorkspaceStore((s) => s.setActivePanel);
   const selectTask = useWorkspaceStore((s) => s.selectTask);
+  // Only live sessions are in the store; an archived one has nothing to open.
+  const liveSessions = useWorkbenchStore((s) => s.workbenches);
 
   if (error) {
     return <p className="p-4 text-sm text-red-500">{error}</p>;
@@ -148,6 +155,20 @@ export function WorkflowRunsList({
               {run.retryAfter ? ` ${until(run.retryAfter)}` : ' shortly'}
               {run.attempts > 1 ? ` (attempt ${run.attempts + 1})` : ''}.
             </p>
+          )}
+
+          {run.workbenchId && liveSessions[run.workbenchId] && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => {
+                const workbenchId = run.workbenchId;
+                if (workbenchId) navigateToWorkbench(workbenchId);
+              }}
+            >
+              Open the session it started
+            </Button>
           )}
 
           {run.taskId && (

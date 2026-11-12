@@ -68,6 +68,7 @@ The editor offers only the conditions that make sense for the triggers you picke
 
 Open **GitHub > Runs** to see automation runs. Each run shows the pull request, event, and action results.
 A run is **Running**, **Waiting to retry**, **Done**, **Partly done**, **Failed**, or **Stood down**.
+When a run starts a session, click **Open the session it started** to go to that session. On mobile, tap the run.
 
 **Waiting to retry** means GitHub rate-limited an action. Talyn tries it again later, and does not repeat the actions that already worked.
 

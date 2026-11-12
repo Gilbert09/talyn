@@ -10,6 +10,7 @@ const mockLifecycle = fixture().lifecycle;
 const mockList = jest.fn();
 const mockLoopList = jest.fn();
 const mockRuns = jest.fn();
+const mockHrefs: unknown[] = [];
 let mockParams: { kind: string; id?: string } = { kind: 'slack' };
 let mockFeatures: Record<string, boolean> = { workbenches: true, workflows: true, slackChannelRules: true };
 
@@ -32,7 +33,7 @@ jest.mock('../features/privateRoutes/PrivateRoutesScreen', () => ({ PrivateRoute
 jest.mock('../features/integrations/IntegrationsScreen', () => ({ IntegrationsScreen: () => null }));
 jest.mock('expo-router', () => ({
   useLocalSearchParams: () => mockParams,
-  Link: ({ children }: { children: React.ReactNode }) => children,
+  Link: ({ children, href }: { children: React.ReactNode; href: unknown }) => { mockHrefs.push(href); return children; },
   Redirect: () => null,
   Stack: { Screen: () => null },
 }));
@@ -68,6 +69,7 @@ beforeEach(() => {
     : integration === 'webhook' ? [webhookRule] : [githubRule]);
   mockLoopList.mockResolvedValue([]);
   mockRuns.mockResolvedValue([slackRun]);
+  mockHrefs.length = 0;
 });
 
 describe('integration rules', () => {
@@ -155,5 +157,17 @@ describe('integration rules', () => {
     expect(await screen.findByText('Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.')).toBeVisible();
     expect(screen.getByText('#support')).toBeVisible();
     expect(screen.queryByText(/repo#null/)).toBeNull();
+  });
+
+  it.each([
+    ['links the session it started', 'wb-1', [{ pathname: '/sessions/[id]', params: { id: 'wb-1' } }]],
+    ['has no session link without a session', null, []],
+  ] as const)('%s', async (_name, workbenchId, hrefs) => {
+    mockParams = { kind: 'slack', id: 'slack-1' };
+    mockRuns.mockResolvedValue([{ ...slackRun, workbenchId, status: 'succeeded',
+      actions: [{ type: 'start_session', ok: true, detail: 'started a session' }] }]);
+    await render(<RuleDetailRoute />);
+    expect(await screen.findByText('#support')).toBeVisible();
+    expect([...new Set(mockHrefs.map((href) => JSON.stringify(href)))].map((href) => JSON.parse(href))).toEqual(hrefs);
   });
 });

@@ -142,7 +142,7 @@ async function createRuleSession(
 
 function started(workbenchId: string, pullRequestId: string | null = null): OneResult {
   return {
-    outcome: ok('start_session', `started session ${workbenchId}`),
+    outcome: ok('start_session', 'started a session'),
     workbenchId,
     sessionUrl: sessionLaunchUrl(workbenchId),
     pullRequestId,

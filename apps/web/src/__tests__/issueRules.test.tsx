@@ -13,6 +13,8 @@ import {
 import { api } from '../lib/api';
 import { useBillingStore } from '../stores/billing';
 import { useWorkspaceStore } from '../stores/workspace';
+import { useWorkbenchStore } from '../stores/workbenches';
+import { setWorkbenchNavigator } from '../lib/workbenchNavigation';
 import { IntegrationsView } from '../pages/IntegrationsView';
 import { LinearSettings } from '../components/panels/LinearSettings';
 import { WorkflowsPanel } from '../components/panels/workflows/WorkflowsPanel';
@@ -365,6 +367,42 @@ describe('Issue run history', () => {
     render(<WorkflowRunsList workflowId="wf1" liveRuns={undefined} />);
     expect(await screen.findByText('ENG-12')).toBeTruthy();
     expect(screen.getByText(label)).toBeTruthy();
+  });
+});
+
+describe('Run history session link', () => {
+  const sessionRun = (over: Partial<WorkflowRun> = {}) => ({
+    id: 'r2', workflowId: 'wf1', workspaceId: 'ws1', integration: 'slack', subjectLabel: '#alerts',
+    repositoryId: null, repoFullName: '', prNumber: 0, prTitle: '', prUrl: '', prAuthor: '', pullRequestId: null,
+    taskId: null, workbenchId: 'wb-1', event: 'slack_message', status: 'succeeded',
+    actions: [{ type: 'start_session', ok: true, detail: 'started session wb-1' }],
+    error: null, retryAfter: null, attempts: 1, createdAt: new Date().toISOString(), ...over,
+  }) as WorkflowRun;
+
+  afterEach(() => {
+    setWorkbenchNavigator(null);
+    useWorkbenchStore.setState({ workbenches: {} });
+  });
+
+  it.each([
+    ['a live session', { 'wb-1': { id: 'wb-1' } }, {}, true],
+    ['an archived session', {}, {}, false],
+    ['no session', { 'wb-1': { id: 'wb-1' } }, { workbenchId: null }, false],
+  ] as const)('links the session for %s', async (_name, workbenches, over, linked) => {
+    useWorkbenchStore.setState({ workbenches: workbenches as never });
+    const open = vi.fn();
+    setWorkbenchNavigator(open);
+    vi.mocked(api.workflows.runs).mockResolvedValue([sessionRun(over)]);
+    render(<WorkflowRunsList workflowId="wf1" liveRuns={undefined} />);
+    expect(await screen.findByText('#alerts')).toBeTruthy();
+    expect(screen.getByText('started a session')).toBeTruthy();
+    expect(screen.queryByText(/wb-1/)).toBeNull();
+    const button = screen.queryByRole('button', { name: 'Open the session it started' });
+    expect(Boolean(button)).toBe(linked);
+    if (button) {
+      fireEvent.click(button);
+      expect(open).toHaveBeenCalledWith('wb-1');
+    }
   });
 });
 

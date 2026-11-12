@@ -78,8 +78,11 @@ function WorkflowRunRow({ run, divider }: { run: WorkflowRun; divider: boolean }
   const now = useNow();
   const badge = workflowRunBadge(run.status);
   const text = workflowRunText(run);
-  return <Row title={text.title} subtitle={text.detail} divider={divider} titleLines={1}
-    onPress={run.prUrl ? () => openExternal(run.prUrl) : undefined} accessibilityRole={run.prUrl ? 'link' : undefined}
+  // A run that started a session opens it; otherwise the pull request it acted on.
+  const href = run.workbenchId ? sessionRoute(run.workbenchId) : undefined;
+  return <Row title={text.title} subtitle={text.detail} divider={divider} titleLines={1} href={href}
+    onPress={!href && run.prUrl ? () => openExternal(run.prUrl) : undefined}
+    accessibilityRole={!href && run.prUrl ? 'link' : undefined}
     accessibilityLabel={`${text.title}. ${badge.label}. ${longTime(run.createdAt)}`}
     trailing={<AppText variant="meta" tone="muted">{shortTime(run.createdAt, now)}</AppText>}>
     <RunPills badge={badge} number={run.prNumber} />
