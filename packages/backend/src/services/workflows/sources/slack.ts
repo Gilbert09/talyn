@@ -7,7 +7,7 @@ import {
   workflows as workflowsTable,
   workspaces as workspacesTable,
 } from '../../../db/schema.js';
-import { channelName, mentionedUserIds, messagePermalink, PERSON_SUBTYPES } from '../../slack/context.js';
+import { channelName, mentionedUserIds, messagePermalink, PERSON_SUBTYPES, slackMessageText } from '../../slack/context.js';
 import { workspaceMayUseSlackRules } from '../../workflowsAccess.js';
 import type { WorkflowSourceAdapter, WorkflowSourceTarget } from '../source.js';
 
@@ -28,6 +28,8 @@ export interface SlackWorkflowInput {
   event: Record<string, unknown>;
   /** The install's own bot user, so its messages and its mentions are dropped. */
   botUserId: string;
+  /** The install's own Slack app, so a message Talyn's app posted is dropped however Slack labels it. */
+  appId: string;
 }
 
 /** One workspace whose enabled Slack rules watch this team. */
@@ -40,16 +42,49 @@ export interface SlackWorkflowTarget extends WorkflowSourceTarget {
 /** The channel types a rule can watch: public and private channels. Never a DM. */
 const CHANNEL_TYPES = new Set(['channel', 'group']);
 
+/**
+ * The message subtypes a channel rule reads: a person writing, plus
+ * `bot_message`, which is how Slack marks a message from a legacy integration
+ * or an incoming webhook. A modern app's message has no subtype and carries a
+ * `bot_id`. Both are wanted: the usual reason to watch a channel is the alerts
+ * an app posts there.
+ */
+const RULE_SUBTYPES: ReadonlySet<string | undefined> = new Set([...PERSON_SUBTYPES, 'bot_message']);
+
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+/**
+ * PURE: whether a `message` event could start a channel rule at all. The
+ * cheap part of {@link slackFactsFromEvent}, so the caller can skip the
+ * install read for an edit, a delete or a join.
+ */
+export function isChannelRuleMessage(e: Record<string, unknown>): boolean {
+  if (str(e.type) !== 'message' || !CHANNEL_TYPES.has(str(e.channel_type))) return false;
+  if (e.edited || !RULE_SUBTYPES.has(e.subtype as string | undefined)) return false;
+  return !!(str(e.user) || str(e.bot_id)) && !!str(e.channel) && !!str(e.ts);
+}
+
+/** Whether Talyn's own app posted the message: its bot user, or its app id. */
+function isTalynMessage(e: Record<string, unknown>, input: SlackWorkflowInput): boolean {
+  if (input.botUserId && str(e.user) === input.botUserId) return true;
+  if (!input.appId) return false;
+  const profile = (e.bot_profile ?? {}) as Record<string, unknown>;
+  return str(e.app_id) === input.appId || str(profile.app_id) === input.appId;
+}
 
 /**
  * PURE: the facts one Slack event yields, or `[]`.
  *
+ * A message from another app or bot IS a fact: alert channels are written by
+ * apps (incident.io, Alertmanager), and a rule on one is the point. The author
+ * of such a message is its bot user, or its `bot_id` when Slack sends no user.
+ * The per-channel rate cap bounds a noisy bot.
+ *
  * Dropped, so no rule can see them:
  *  - anything but a channel or private channel message (a DM is the personal
  *    trigger's);
- *  - a message from a bot (`bot_id`), from Talyn's own bot user, or with a
- *    subtype that is not a person writing (an edit, a delete, a join);
+ *  - a message Talyn's own app posted, so a rule cannot answer itself;
+ *  - a subtype that is not a message being written (an edit, a delete, a join);
  *  - an edit, however Slack marks it;
  *  - a message that mentions Talyn's bot. That message belongs to the
  *    personal @mention trigger, and one message must not start two sessions.
@@ -59,14 +94,11 @@ const str = (v: unknown): string => (typeof v === 'string' ? v : '');
  */
 export function slackFactsFromEvent(input: SlackWorkflowInput): SlackEventFacts[] {
   const e = input.event;
-  if (str(e.type) !== 'message' || !CHANNEL_TYPES.has(str(e.channel_type))) return [];
-  if (e.bot_id || e.edited || !PERSON_SUBTYPES.has(e.subtype as string | undefined)) return [];
-  const userId = str(e.user);
+  if (!input.teamId || !isChannelRuleMessage(e) || isTalynMessage(e, input)) return [];
+  const userId = str(e.user) || str(e.bot_id);
   const channelId = str(e.channel);
   const ts = str(e.ts);
-  if (!userId || !channelId || !ts || !input.teamId) return [];
-  if (userId === input.botUserId) return [];
-  const text = str(e.text);
+  const text = slackMessageText(e);
   if (input.botUserId && mentionedUserIds(text).includes(input.botUserId)) return [];
   return [
     {

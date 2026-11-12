@@ -28,8 +28,11 @@ Channel automations are rolling out behind the `slackChannelRules` flag. Create 
 Each automation runs on a new message in a channel. Choose the Slack team and one or more channels.
 Add **Text contains** to match words. Choose whether replies inside threads can start the automation.
 
-By default, only people who linked their Slack account to Talyn can start an automation.
-You can allow anyone in the channel or only given Slack user IDs instead.
+By default, anyone in the channel can start an automation. This includes apps and bots, so an alert from incident.io or Alertmanager can start a session.
+You can allow only people who linked their Slack account to Talyn, or only given Slack user IDs, instead.
+Messages from Talyn itself never start an automation.
+
+Talyn reads the full message, including the blocks and attachments that apps use. **Message contains** matches that full text.
 
 Choose one or more actions:
 

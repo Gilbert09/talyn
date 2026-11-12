@@ -2,6 +2,18 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Slack channel rules run on app and bot messages (2026-11-12)
+
+A channel automation on #alerts-warehouse-sources never ran. Every message there comes from the incident.io app, and the Slack source adapter dropped every message with a `bot_id` or the `bot_message` subtype.
+
+Changes:
+- `slackFactsFromEvent` accepts app and bot messages. `isChannelRuleMessage` is the cheap check that `onChannelMessage` runs before the install read. The author is the message's bot user, or its `bot_id` when Slack sends no user (a legacy integration or webhook).
+- Talyn's own messages stay out: the bot user id, plus the install's `app_id` on the message or on `bot_profile`. Without this, a rule could answer itself.
+- `slackMessageText` reads the whole message. For a bot, Block Kit blocks replace `text`, which is only a fallback. Attachments are added for every message. Buttons, images and dividers are skipped. A person's rich text blocks are not read, because `text` already has the same words. The facts, `textContains` and the quoted Slack text in a session prompt (rules and personal triggers) all use it.
+- The personal triggers did not change: a bot still cannot mention Talyn or DM it to start a session.
+
+The per-channel rate cap (`maxRunsPerPrPerHour`) is the guard against a noisy bot. The `linked` author setting excludes bots, because a bot never has a Talyn link.
+
 ## Session boots cancelled on a busy host (2026-11-12)
 
 At 12:15 UTC nine posthog/posthog sessions on scaleway-1 ended with "The sandbox was lost. Retry to start a new one." No box was lost. None of them booted.

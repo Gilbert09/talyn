@@ -208,7 +208,7 @@ describe('Slack channel rules', () => {
   }
 
   function input(event: Event, eventId = 'Ev1') {
-    return { eventId, teamId: 'T1', event, botUserId: BOT };
+    return { eventId, teamId: 'T1', event, botUserId: BOT, appId: 'A1' };
   }
 
   // -------------------------------------------------------------------------
@@ -225,7 +225,36 @@ describe('Slack channel rules', () => {
       ['a mention of someone else', { text: 'ping <@US2>' }, { text: 'ping <@US2>' }],
       ['a DM', { channel_type: 'im', channel: 'D1' }, null],
       ['a group DM', { channel_type: 'mpim' }, null],
-      ['a bot message', { bot_id: 'B1' }, null],
+      ['an app message with a bot user', { user: 'UALERT', bot_id: 'B1' }, { userId: 'UALERT' }],
+      ['a legacy bot message with no user', { subtype: 'bot_message', user: undefined, bot_id: 'B1' }, { userId: 'B1' }],
+      ['a bot message with neither user nor bot id', { subtype: 'bot_message', user: undefined }, null],
+      ['Talyn’s own app (app_id)', { user: 'UOTHER', bot_id: 'BT', app_id: 'A1' }, null],
+      ['Talyn’s own app (bot_profile)', { user: undefined, subtype: 'bot_message', bot_id: 'BT', bot_profile: { app_id: 'A1' } }, null],
+      [
+        'an app whose alert is in blocks',
+        {
+          user: 'UALERT',
+          bot_id: 'B1',
+          text: 'fallback',
+          blocks: [
+            { type: 'header', text: { type: 'plain_text', text: 'Firing: Debugbear imports failing' } },
+            { type: 'section', text: { type: 'mrkdwn', text: '*Environment:* prod-us' }, fields: [{ type: 'mrkdwn', text: 'source_type: Debugbear' }] },
+            { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Resolve' } }] },
+          ],
+        },
+        { text: 'Firing: Debugbear imports failing\n*Environment:* prod-us\nsource_type: Debugbear' },
+      ],
+      [
+        'an app whose alert is in attachments',
+        {
+          user: 'UALERT',
+          bot_id: 'B1',
+          text: '*Escalated*',
+          attachments: [{ title: 'Firing', title_link: 'https://x.test/a', text: 'imports failing', fields: [{ title: 'alertname', value: 'GA' }] }],
+        },
+        { text: '*Escalated*\n<https://x.test/a|Firing>\nimports failing\nalertname: GA' },
+      ],
+      ['a person’s rich text is not read twice', { blocks: [{ type: 'rich_text', elements: [] }] }, { text: 'checkout is broken on acme/web-app' }],
       ['an edit (subtype)', { subtype: 'message_changed' }, null],
       ['an edit (edited)', { edited: { user: 'US1', ts: '101.0' } }, null],
       ['a delete', { subtype: 'message_deleted' }, null],
@@ -325,8 +354,18 @@ describe('Slack channel rules', () => {
       expect(slack.reactionLog()).toEqual(['add:eyes@100.0']);
     });
 
+    it('runs a rule on a message an alerting app posted', async () => {
+      await addRule();
+      const { outcome } = await deliver(message({ user: 'UALERT', bot_id: 'B1' }));
+      expect(outcome).toBe('handled');
+      const [run] = await runs();
+      expect(run).toMatchObject({ status: 'succeeded' });
+      expect(run.facts).toMatchObject({ userId: 'UALERT', authorLinked: false });
+    });
+
     it.each([
-      ['a bot message', message({ bot_id: 'B1' })],
+      ['Talyn’s own bot user', message({ user: BOT, bot_id: 'BT' })],
+      ['Talyn’s own app', message({ user: 'UOTHER', bot_id: 'BT', app_id: 'A1' })],
       ['a mention of Talyn', message({ text: '<@UBOT> please fix' })],
       ['a channel no rule watches', message({ channel: 'C9' })],
     ])('runs nothing for %s', async (_label, event) => {

@@ -14,7 +14,7 @@ import type { ReadinessUser } from '../workbenches/readiness.js';
 import { getWorkbench, listChats } from '../workbenches/store.js';
 import { sendMessage } from '../workbenches/turns.js';
 import { evaluateWorkflows } from '../workflows/engine.js';
-import { slackWorkflowSource } from '../workflows/sources/slack.js';
+import { isChannelRuleMessage, slackWorkflowSource } from '../workflows/sources/slack.js';
 import { userMayUseSlack } from './access.js';
 import { SlackApiError } from './api.js';
 import {
@@ -27,6 +27,7 @@ import {
   messagePermalink,
   namesFor,
   PERSON_SUBTYPES,
+  slackMessageText,
   slackToPlainText,
   slackTsToTime,
   stripBotMention,
@@ -96,6 +97,7 @@ export function baseReactionName(name: string): string {
 }
 
 interface Installation {
+  appId: string;
   botUserId: string;
   teamName: string | null;
   tokenError: string | null;
@@ -109,7 +111,12 @@ interface Link {
 
 async function loadInstallation(teamId: string): Promise<Installation | null> {
   const rows = await getPoolDbClient()
-    .select({ botUserId: slackInstallations.botUserId, teamName: slackInstallations.teamName, tokenError: slackInstallations.tokenError })
+    .select({
+      appId: slackInstallations.appId,
+      botUserId: slackInstallations.botUserId,
+      teamName: slackInstallations.teamName,
+      tokenError: slackInstallations.tokenError,
+    })
     .from(slackInstallations)
     .where(eq(slackInstallations.teamId, teamId))
     .limit(1);
@@ -201,12 +208,12 @@ export async function onMessage(ctx: TriggerContext): Promise<TriggerOutcome> {
  * throws. The `slack_events` claim above it is what makes a redelivery a
  * no-op, with the run's own claim on `slack:<event_id>` behind it.
  *
- * The cheap checks come first, so a bot's message or an edit costs no query.
+ * The cheap checks come first, so an edit or a join costs no query. A bot's
+ * message goes on: a rule may watch a channel that an alerting app writes.
  */
 async function onChannelMessage(ctx: TriggerContext): Promise<TriggerOutcome> {
   const e = ctx.event;
-  if (!ctx.teamId || e.bot_id || e.edited || !PERSON_SUBTYPES.has(e.subtype as string | undefined)) return 'ignored';
-  if (!str(e.user) || !str(e.channel) || !str(e.ts)) return 'ignored';
+  if (!ctx.teamId || !isChannelRuleMessage(e)) return 'ignored';
   const install = await loadInstallation(ctx.teamId);
   if (!install || install.tokenError) return 'ignored';
   const ran = await evaluateWorkflows(slackWorkflowSource, {
@@ -214,6 +221,7 @@ async function onChannelMessage(ctx: TriggerContext): Promise<TriggerOutcome> {
     teamId: ctx.teamId,
     event: e,
     botUserId: install.botUserId,
+    appId: install.appId,
   });
   return ran > 0 ? 'handled' : 'ignored';
 }
@@ -303,7 +311,7 @@ function sourceFor(t: Trigger, install: Installation, threadTs: string, channel:
 }
 
 function quote(m: SlackMessage, names: Map<string, string>): QuotedMessage {
-  return { author: authorOf(m, names), at: slackTsToTime(m.ts), text: slackToPlainText(m.text ?? '', names).trim() };
+  return { author: authorOf(m, names), at: slackTsToTime(m.ts), text: slackToPlainText(slackMessageText(m), names).trim() };
 }
 
 async function startSession(

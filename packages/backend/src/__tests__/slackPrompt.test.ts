@@ -4,6 +4,7 @@ import {
   buildSlackPrompt,
   fenceFor,
   mentionedUserIds,
+  slackMessageText,
   slackToPlainText,
   slackTsToTime,
   stripBotMention,
@@ -11,6 +12,7 @@ import {
   type QuotedMessage,
 } from '../services/slack/context.js';
 import { baseReactionName } from '../services/slack/triggers.js';
+import { isChannelRuleMessage, slackFactsFromEvent } from '../services/workflows/sources/slack.js';
 
 /**
  * Turning a Slack thread into a session prompt: the user's instruction first,
@@ -137,5 +139,115 @@ describe('Slack markup', () => {
     ['seven', 'a ~~~~~~~ b', '~~~~~~~~'],
   ])('fenceFor: %s', (_n, text, fence) => {
     expect(fenceFor(text)).toBe(fence);
+  });
+
+  const header = { type: 'header', text: { type: 'plain_text', text: 'Firing: imports failing' } };
+  const section = {
+    type: 'section',
+    text: { type: 'mrkdwn', text: '*Environment:* prod-us' },
+    fields: [{ type: 'mrkdwn', text: 'source_type: Debugbear' }, { type: 'plain_text', text: '' }],
+  };
+  const buttons = { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Resolve' } }] };
+  const context = { type: 'context', elements: [{ type: 'mrkdwn', text: 'via' }, { type: 'image' }, { type: 'plain_text', text: 'Alertmanager' }] };
+  const richText = {
+    type: 'rich_text',
+    elements: [
+      {
+        type: 'rich_text_section',
+        elements: [
+          { type: 'text', text: 'see ' },
+          { type: 'link', url: 'https://x.test', text: 'docs' },
+          { type: 'text', text: ' and ' },
+          { type: 'link', url: 'https://y.test' },
+          { type: 'text', text: ' cc ' },
+          { type: 'user', user_id: 'U1' },
+          { type: 'text', text: ' ' },
+          { type: 'emoji', name: 'fire' },
+          { type: 'text', text: ' ' },
+          { type: 'broadcast', range: 'here' },
+        ],
+      },
+      { type: 'rich_text_list', elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'item' }] }] },
+    ],
+  };
+
+  it.each<[string, Record<string, unknown>, string]>([
+    ['a person: text only', { text: 'hello' }, 'hello'],
+    ['a person: rich text blocks are not read twice', { text: 'hello', blocks: [richText] }, 'hello'],
+    ['a bot with no blocks keeps its text', { bot_id: 'B1', text: 'deploy done' }, 'deploy done'],
+    ['a bot with only skipped blocks keeps its text', { bot_id: 'B1', text: 'fallback', blocks: [buttons, { type: 'divider' }] }, 'fallback'],
+    [
+      'a bot: blocks replace the fallback text',
+      { bot_id: 'B1', text: 'fallback', blocks: [header, section, buttons, context] },
+      'Firing: imports failing\n*Environment:* prod-us\nsource_type: Debugbear\nvia Alertmanager',
+    ],
+    [
+      'a bot: rich text elements',
+      { bot_id: 'B1', blocks: [richText] },
+      'see <https://x.test|docs> and <https://y.test> cc <@U1> :fire: <!here>\nitem',
+    ],
+    [
+      'attachments are added to the text',
+      {
+        text: '*Escalated*',
+        attachments: [
+          {
+            pretext: 'Alert',
+            author_name: 'Alertmanager',
+            title: 'Firing',
+            title_link: 'https://x.test/a',
+            text: 'imports failing',
+            fields: [{ title: 'alertname', value: 'GA' }, { title: 'only title' }, { value: 'only value' }],
+            footer: 'incident.io',
+          },
+        ],
+      },
+      '*Escalated*\nAlert\nAlertmanager\n<https://x.test/a|Firing>\nimports failing\nalertname: GA\nonly title\nonly value\nincident.io',
+    ],
+    ['an attachment title with no link', { attachments: [{ title: 'Firing' }] }, 'Firing'],
+    ['an attachment with blocks', { bot_id: 'B1', attachments: [{ blocks: [header] }] }, 'Firing: imports failing'],
+    ['an attachment with only a fallback', { text: 'a', attachments: [{ fallback: 'b' }] }, 'a\nb'],
+    ['an empty attachment says nothing', { text: 'a', attachments: [{}] }, 'a'],
+    ['junk shapes are ignored', { text: 7, blocks: 'x', attachments: [null, 3, { fields: 'x' }] }, ''],
+    ['no text at all', {}, ''],
+  ])('slackMessageText: %s', (_n, message, expected) => {
+    expect(slackMessageText(message)).toBe(expected);
+  });
+
+  const channelMessage = (over: Record<string, unknown> = {}) => ({
+    type: 'message',
+    channel_type: 'channel',
+    channel: 'C1',
+    user: 'US1',
+    text: 'hi',
+    ts: '1.0',
+    ...over,
+  });
+
+  it.each<[string, Record<string, unknown>, boolean]>([
+    ['a person', {}, true],
+    ['an app with a bot user', { bot_id: 'B1' }, true],
+    ['a legacy bot message', { subtype: 'bot_message', user: undefined, bot_id: 'B1' }, true],
+    ['a bot message with no author at all', { subtype: 'bot_message', user: undefined }, false],
+    ['an edit', { subtype: 'message_changed' }, false],
+    ['an edited flag', { edited: { ts: '2.0' } }, false],
+    ['a join', { subtype: 'channel_join' }, false],
+    ['a DM', { channel_type: 'im' }, false],
+    ['no channel', { channel: undefined }, false],
+    ['no ts', { ts: undefined }, false],
+  ])('isChannelRuleMessage: %s', (_n, over, expected) => {
+    expect(isChannelRuleMessage(channelMessage(over))).toBe(expected);
+  });
+
+  it.each<[string, Record<string, unknown>, string | null]>([
+    ['an alerting app', { user: 'UALERT', bot_id: 'B1' }, 'UALERT'],
+    ['a legacy integration', { subtype: 'bot_message', user: undefined, bot_id: 'B1' }, 'B1'],
+    ['Talyn’s bot user', { user: 'UBOT', bot_id: 'BT' }, null],
+    ['Talyn’s app id', { user: 'UOTHER', bot_id: 'BT', app_id: 'A1' }, null],
+    ['Talyn’s app on the bot profile', { subtype: 'bot_message', user: undefined, bot_id: 'BT', bot_profile: { app_id: 'A1' } }, null],
+    ['another app', { user: 'UOTHER', bot_id: 'B2', app_id: 'A2' }, 'UOTHER'],
+  ])('slackFactsFromEvent: %s', (_n, over, userId) => {
+    const facts = slackFactsFromEvent({ eventId: 'Ev1', teamId: 'T1', event: channelMessage(over), botUserId: 'UBOT', appId: 'A1' });
+    expect(facts.map((f) => f.userId)).toEqual(userId === null ? [] : [userId]);
   });
 });

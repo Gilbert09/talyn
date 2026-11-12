@@ -12,7 +12,11 @@ import { callSlackAsBot } from './tokens.js';
  * header.
  */
 
-/** Message subtypes that are a person writing. Everything else (edits, deletes, joins, bots) is ignored. */
+/**
+ * Message subtypes that are a person writing. Everything else (edits, deletes,
+ * joins, bots) is ignored by the personal triggers. Channel rules also accept
+ * `bot_message`: see `sources/slack.ts`.
+ */
 export const PERSON_SUBTYPES: ReadonlySet<string | undefined> = new Set([undefined, 'file_share', 'thread_broadcast']);
 
 /** The fields of a Slack message this module reads. */
@@ -24,7 +28,112 @@ export interface SlackMessage {
   username?: string;
   subtype?: string;
   text?: string;
-  bot_profile?: { name?: string };
+  bot_profile?: { name?: string; app_id?: string };
+  app_id?: string;
+  /** Legacy attachments. Alerting apps put most of a message here. */
+  attachments?: unknown;
+  /** Block Kit. For an app, the real content; `text` is only its fallback. */
+  blocks?: unknown;
+}
+
+const asRecord = (v: unknown): Record<string, unknown> | null =>
+  v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+const strOf = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+/** The `text` of a Block Kit text object, mrkdwn or plain. */
+const textObject = (v: unknown): string => strOf(asRecord(v)?.text);
+
+/** One rich text element (a run of text, a link, a mention, an emoji). */
+function richTextElement(v: unknown): string {
+  const e = asRecord(v);
+  if (!e) return '';
+  switch (e.type) {
+    case 'text':
+      return typeof e.text === 'string' ? e.text : '';
+    case 'link':
+      return strOf(e.text) ? `<${strOf(e.url)}|${strOf(e.text)}>` : `<${strOf(e.url)}>`;
+    case 'user':
+      return `<@${strOf(e.user_id)}>`;
+    case 'channel':
+      return `<#${strOf(e.channel_id)}>`;
+    case 'emoji':
+      return `:${strOf(e.name)}:`;
+    case 'broadcast':
+      return `<!${strOf(e.range)}>`;
+    default:
+      // A section, list, quote or preformatted block nests its own elements.
+      return asArray(e.elements).map(richTextElement).join('');
+  }
+}
+
+/**
+ * The words in Block Kit blocks. Buttons, images and dividers carry no
+ * message, so they are skipped.
+ */
+function blocksText(blocks: unknown): string[] {
+  const out: string[] = [];
+  for (const raw of asArray(blocks)) {
+    const b = asRecord(raw);
+    if (!b) continue;
+    switch (b.type) {
+      case 'header':
+        out.push(textObject(b.text));
+        break;
+      case 'section':
+        out.push(textObject(b.text), ...asArray(b.fields).map(textObject));
+        break;
+      case 'context':
+        out.push(asArray(b.elements).map(textObject).filter(Boolean).join(' '));
+        break;
+      case 'rich_text':
+        out.push(asArray(b.elements).map(richTextElement).join('\n').trim());
+        break;
+    }
+  }
+  return out.filter(Boolean);
+}
+
+/** The words in legacy attachments: pretext, title, text, fields and nested blocks. */
+function attachmentsText(attachments: unknown): string[] {
+  const out: string[] = [];
+  for (const raw of asArray(attachments)) {
+    const a = asRecord(raw);
+    if (!a) continue;
+    const title = strOf(a.title);
+    const link = strOf(a.title_link);
+    const parts = [
+      strOf(a.pretext),
+      strOf(a.author_name),
+      title && link ? `<${link}|${title}>` : title,
+      strOf(a.text),
+      ...asArray(a.fields).map((f) => {
+        const field = asRecord(f);
+        const name = strOf(field?.title);
+        const value = strOf(field?.value);
+        return name && value ? `${name}: ${value}` : name || value;
+      }),
+      ...blocksText(a.blocks),
+      strOf(a.footer),
+    ].filter(Boolean);
+    // An attachment with only a fallback still says something.
+    out.push(parts.length > 0 ? parts.join('\n') : strOf(a.fallback));
+  }
+  return out.filter(Boolean);
+}
+
+/**
+ * Everything a message says, in Slack's own markup.
+ *
+ * A person's message keeps its words in `text`; its rich text blocks repeat
+ * them, so they are not read again. An app (incident.io, Alertmanager, a CI
+ * bot) often puts the content in blocks and attachments and leaves `text` as a
+ * short fallback, so for a bot the blocks replace `text` when they say
+ * anything. Attachments are added for both, because `text` never repeats them.
+ */
+export function slackMessageText(m: { text?: unknown; bot_id?: unknown; blocks?: unknown; attachments?: unknown }): string {
+  const fromBlocks = m.bot_id ? blocksText(m.blocks) : [];
+  const body = fromBlocks.length > 0 ? fromBlocks.join('\n') : strOf(m.text);
+  return [body, ...attachmentsText(m.attachments)].filter(Boolean).join('\n');
 }
 
 /**
@@ -191,7 +300,7 @@ export async function namesFor(teamId: string, messages: SlackMessage[], extra: 
   const ids = new Set<string>(extra);
   for (const m of messages) {
     if (m.user) ids.add(m.user);
-    for (const id of mentionedUserIds(m.text ?? '')) ids.add(id);
+    for (const id of mentionedUserIds(slackMessageText(m))) ids.add(id);
   }
   const names = new Map<string, string>();
   await Promise.all([...ids].map(async (id) => names.set(id, await userDisplayName(teamId, id))));

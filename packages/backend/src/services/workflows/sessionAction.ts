@@ -13,6 +13,7 @@ import {
   buildSlackPrompt,
   fetchThread,
   namesFor,
+  slackMessageText,
   slackToPlainText,
   slackTsToTime,
   type QuotedMessage,
@@ -189,7 +190,7 @@ async function startGithubSession(
 // ---- Slack ----------------------------------------------------------------
 
 function quote(m: SlackMessage, names: Map<string, string>): QuotedMessage {
-  return { author: authorOf(m, names), at: slackTsToTime(m.ts), text: slackToPlainText(m.text ?? '', names).trim() };
+  return { author: authorOf(m, names), at: slackTsToTime(m.ts), text: slackToPlainText(slackMessageText(m), names).trim() };
 }
 
 /**
@@ -227,16 +228,18 @@ async function startSlackSession(action: StartSessionAction, ctx: SlackActionCon
   }
   let trigger = messages.find((m) => m.ts === facts.ts);
   if (!trigger) {
-    trigger = { ts: facts.ts, user: facts.userId, text: facts.text };
+    // A legacy integration has no user, only the bot id the facts carry.
+    const botOnly = facts.userId.startsWith('B');
+    trigger = { ts: facts.ts, text: facts.text, ...(botOnly ? { bot_id: facts.userId } : { user: facts.userId }) };
     messages = [...messages, trigger];
   }
-  const names = await namesFor(facts.teamId, messages, [facts.userId]);
+  const names = await namesFor(facts.teamId, messages);
   const request = quote(trigger, names);
   const others = boundThread(messages.filter((m) => m.ts !== facts.ts).map((m) => quote(m, names)));
   const prompt = buildSlackPrompt({
     instruction: action.prompt,
     request,
-    requestedBy: names.get(facts.userId) ?? 'A teammate',
+    requestedBy: request.author,
     channelName: facts.channelName ?? null,
     thread: others.kept,
     omitted: others.omitted,
