@@ -53,11 +53,16 @@ const refreshing = new Set<string>();
  * Run a detection without making the request wait. Detections answer from
  * their own store while it is fresh, so this costs nothing most of the time.
  * One refresh per key runs at a time in this process.
+ *
+ * It runs on the pool, outside the request's owner scope. Inside the scope its
+ * queries went to the request transaction after that transaction had ended,
+ * and they hung or ran in another request's transaction. On 2026-11-12 that
+ * held row locks on `repositories` and filled the pool.
  */
-function refreshInBackground(key: string, run: () => Promise<unknown>): void {
+export function refreshInBackground(key: string, run: () => Promise<unknown>): void {
   if (refreshing.has(key)) return;
   refreshing.add(key);
-  void run().catch(() => undefined).finally(() => refreshing.delete(key));
+  void runWithoutScope(run).catch(() => undefined).finally(() => refreshing.delete(key));
 }
 
 export function repositoryRoutes(): Router {
