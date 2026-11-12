@@ -26,10 +26,6 @@ const github = {
   getStatus: jest.fn(async () => ({ configured: true, connected: false })),
   getUser: jest.fn(async () => ({ id: 1, login: 'alice', name: null, avatar_url: '' })),
   listInstallations: jest.fn(async () => [{ accountLogin: 'acme', accountType: 'Organization', suspended: false, repositorySelection: 'all' }]),
-  listAllRepos: jest.fn(async () => [
-    { id: 1, name: 'api', full_name: 'acme/api', private: true, html_url: '', default_branch: 'main', owner: { login: 'acme', avatar_url: '' } },
-    { id: 2, name: 'tool', full_name: 'other/tool', private: false, html_url: '', default_branch: 'main', owner: { login: 'other', avatar_url: '' } },
-  ]),
   installViaApp: jest.fn(async () => ({ installUrl: 'https://github.com/install', manageUrl: 'https://github.com/manage', state: 's' })),
 };
 const repositories = {
@@ -39,7 +35,12 @@ const repositories = {
   sandboxSize: { get: jest.fn(async () => ({ setting: 'auto', detected: null, effective: 'standard' })), set: jest.fn() },
 };
 
-  return { ...jest.requireActual('@talyn/client/native'), github, repositories };
+const loadAllRepos = jest.fn(async () => [
+  { id: 1, name: 'api', full_name: 'acme/api', private: true, html_url: '', default_branch: 'main', owner: { login: 'acme', avatar_url: '' } },
+  { id: 2, name: 'tool', full_name: 'other/tool', private: false, html_url: '', default_branch: 'main', owner: { login: 'other', avatar_url: '' } },
+]);
+
+  return { ...jest.requireActual('@talyn/client/native'), github, repositories, loadAllRepos };
 });
 const { github: mockGithub, repositories: mockRepositories } = jest.requireMock('@talyn/client/native') as {
   github: Record<string, jest.Mock>; repositories: Record<string, jest.Mock>;

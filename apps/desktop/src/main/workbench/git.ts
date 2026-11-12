@@ -7,6 +7,7 @@ import {
   isValidBranchName,
   LOCAL_WORKTREE_STATUS_FILES_MAX,
   resolveStepArgv,
+  WORKBENCH_MAX_VIDEO_BYTES,
   type GitStep,
   type LocalWorktreeStatus,
   type LocalArchiveResult,
@@ -21,7 +22,8 @@ import { chooseRemote, repoFullNameFromRemote, type GitRemote } from './remotes'
 
 const children = new Set<ChildProcess>();
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+// The largest attachment, a video. The renderer holds images to the smaller image limit.
+const MAX_ATTACHMENT_BYTES = WORKBENCH_MAX_VIDEO_BYTES;
 
 export async function readFileBase64(root: string, relative: string): Promise<string> {
   if (!/^\.context\/attachments\/[A-Za-z0-9._-]+$/.test(relative) || relative.includes('..')) {
@@ -32,9 +34,9 @@ export async function readFileBase64(root: string, relative: string): Promise<st
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) throw new Error('Path is not a regular file');
-    if (stat.size > MAX_ATTACHMENT_BYTES) throw new Error('File exceeds the 10 MiB limit');
+    if (stat.size > MAX_ATTACHMENT_BYTES) throw new Error('File exceeds the 50 MiB limit');
     const data = await handle.readFile();
-    if (data.length > MAX_ATTACHMENT_BYTES) throw new Error('File exceeds the 10 MiB limit');
+    if (data.length > MAX_ATTACHMENT_BYTES) throw new Error('File exceeds the 50 MiB limit');
     return data.toString('base64');
   } finally {
     await handle.close();
@@ -52,9 +54,9 @@ export async function writeAttachment(
   dataBase64: string,
 ): Promise<string> {
   if (typeof dataBase64 !== 'string' || dataBase64.length > Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4)
-    throw new Error('File exceeds the 10 MiB limit');
+    throw new Error('File exceeds the 50 MiB limit');
   const data = Buffer.from(dataBase64, 'base64');
-  if (data.length > MAX_ATTACHMENT_BYTES) throw new Error('File exceeds the 10 MiB limit');
+  if (data.length > MAX_ATTACHMENT_BYTES) throw new Error('File exceeds the 50 MiB limit');
   const safe =
     String(name ?? '')
       .replace(/[^A-Za-z0-9._-]+/g, '-')

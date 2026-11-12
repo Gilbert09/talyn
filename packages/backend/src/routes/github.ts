@@ -336,6 +336,18 @@ async function completeAppConnection(
  * query) and we verify the caller owns that workspace before touching the
  * stored integration tokens.
  */
+/**
+ * The optional `page` query of the repo-list routes. `undefined` means "every
+ * page"; `null` means the value is not a page from 1 to 20 (the same cap the
+ * all-pages walk uses).
+ */
+export function parseRepoPage(value: unknown): number | undefined | null {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) return null;
+  const page = Number(value);
+  return page >= 1 && page <= 20 ? page : null;
+}
+
 export function githubRoutes(): Router {
   const router = Router();
 
@@ -486,11 +498,18 @@ export function githubRoutes(): Router {
     }
   });
 
+  // `?page=N` returns one page of 100, so a client can show repos as they
+  // arrive. Without it, every page is returned at once.
   router.get('/repos', async (req, res) => {
+    const page = parseRepoPage(req.query.page);
+    if (page === null) {
+      res.status(400).json({ success: false, error: 'page must be a whole number from 1 to 20' });
+      return;
+    }
     const workspaceId = await gateWorkspace(req, res);
     if (!workspaceId) return;
     try {
-      const repos = await githubService.listRepositories(workspaceId);
+      const repos = await githubService.listRepositories(workspaceId, page);
       res.json({ success: true, data: repos });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -528,11 +547,17 @@ export function githubRoutes(): Router {
 
   // Repos in a specific org. Lets the user watch repos in orgs they
   // belong to (e.g. public org repos) that don't surface in /user/repos.
+  // Takes the same optional `?page=N` as /repos.
   router.get('/orgs/:org/repos', async (req, res) => {
+    const page = parseRepoPage(req.query.page);
+    if (page === null) {
+      res.status(400).json({ success: false, error: 'page must be a whole number from 1 to 20' });
+      return;
+    }
     const workspaceId = await gateWorkspace(req, res);
     if (!workspaceId) return;
     try {
-      const repos = await githubService.listOrgRepositories(workspaceId, req.params.org);
+      const repos = await githubService.listOrgRepositories(workspaceId, req.params.org, page);
       res.json({ success: true, data: repos });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';

@@ -7606,3 +7606,13 @@ Before, a session that needed me kept its red count on the context rail until th
 Now opening a session marks its current alert as seen. `sessionAttentionKey` (`packages/shared/src/contextAttention.ts`) names the alert: `error`, `chat_error:<chat>@<turn>`, `reply:<chat>@<turn>` or `conflict:<pr>:<headSha>`. `POST /workbenches/:id/attention/seen` stores the current key in `workbenches.attention_ack` (migration 0126), and `contextAttention` does not count a session whose key equals it. A new alert has a new key, so it counts again: a question in a later turn, a failure in a later turn, or conflicts on a new head.
 The route is owner-only through `attentionSessionsQuery`, so a teammate who opens a space session does not clear the owner's badge.
 In both apps, `useAttentionSeen` (`lib/contextRail.ts`) runs in `WorkbenchView` when the session opens, when its alert changes while it is open, and on window focus with an alert showing. It then asks the rail again (`refreshContextAttention`), so the badge clears at once.
+
+### 2026-11-12 — Video attachments in sessions
+
+Before, a session took only image attachments. Now the session composer on web, desktop and mobile also takes MP4, MOV and WebM videos.
+The types and limits are in `packages/shared/src/workbench.ts` (`WORKBENCH_VIDEO_TYPES`, `WORKBENCH_MAX_VIDEO_BYTES`, `workbenchAttachmentMaxBytes`). An image stays at 10 MB. A video can be 50 MB, because the backend holds the upload in memory and writes it into the sandbox in ~288 KB execs.
+`POST /workbenches/:id/attachments` checks the first bytes of a video (`ftyp` and the other QuickTime boxes, or the WebM EBML header). It gives the stored file an extension that agrees with the type (`workbenchAttachmentFileName`), because the raw route reads the type back from the extension.
+A video goes up as it is: no re-encoding, and never inline. The JSON body of a message is capped at 2 MB, so the new-session page (web, desktop and mobile) still takes images only. A video can be attached once the session has started.
+The agent gets the video path under "Attached files" with `WORKBENCH_VIDEO_PROMPT_NOTE`: it cannot watch a video, but it can extract frames. Codex gets no `--image` for a video.
+Web and desktop show a sent video as a chip that loads and plays the file only when it is opened. The CSPs gain `media-src 'self' blob:`. Mobile picks videos from the library only (no recording: the microphone permission is off, and turning it on needs a new binary) and shows a sent video as a tile with no playback, because playback needs a native module.
+A local desktop session writes a video over IPC. Main's attachment limit is now the video limit.

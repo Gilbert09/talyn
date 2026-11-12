@@ -20,11 +20,13 @@ function Zone({ onFiles }: { onFiles: (files: File[]) => void }) {
 const png = new File(['a'], 'shot.png', { type: 'image/png' });
 const jpg = new File(['b'], 'photo.jpg', { type: 'image/jpeg' });
 const pdf = new File(['c'], 'notes.pdf', { type: 'application/pdf' });
+const mp4 = new File(['d'], 'clip.mp4', { type: 'video/mp4' });
+const untypedMov = new File(['e'], 'clip.mov', { type: '' });
 
 const fileDrag = (files: File[] = [png]) => ({ dataTransfer: { types: ['Files'], files, dropEffect: 'none' } });
 const textDrag = { dataTransfer: { types: ['text/plain'], files: [], dropEffect: 'none' } };
 
-const overlay = () => screen.queryByText('Drop images to attach');
+const overlay = () => screen.queryByText('Drop images or videos to attach');
 
 function setup() {
   const onFiles = jest.fn();
@@ -77,12 +79,18 @@ describe('useImageDropZone', () => {
     expect(overlay()).not.toBeInTheDocument();
   });
 
-  it('tells the person when no dropped file is an image', () => {
+  it('passes videos on with images, including a .mov file with no type', () => {
+    const { onFiles, zone } = setup();
+    fireEvent.drop(zone, fileDrag([png, mp4, pdf, untypedMov]));
+    expect(onFiles).toHaveBeenCalledWith([png, mp4, untypedMov]);
+  });
+
+  it('tells the person when no dropped file is an image or a video', () => {
     const error = jest.spyOn(toast, 'error');
     const { onFiles, zone } = setup();
     fireEvent.drop(zone, fileDrag([pdf]));
     expect(onFiles).not.toHaveBeenCalled();
-    expect(error).toHaveBeenCalledWith('Could not attach the file', 'Only images can be attached.');
+    expect(error).toHaveBeenCalledWith('Could not attach the file', 'Only images and videos can be attached.');
   });
 
   it('ignores drags that carry no files', () => {

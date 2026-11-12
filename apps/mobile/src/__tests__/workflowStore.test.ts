@@ -55,6 +55,23 @@ describe('authoritative reads and boundaries', () => {
     network({ activity: 'suspended' }); network({ activity: 'active' });
     store.setScope({ ...scope }); expect(store.local('chat-one')).toMatchObject({ draft: 'Unsent', offset: 1840, following: false });
   });
+  it('remembers a list position without notifying subscribers', () => {
+    const { store } = active; const listener = jest.fn(); const stop = store.subscribe(listener);
+    store.rememberOffset('list:pulls:mine', 320); store.rememberOffset('list:pulls:mine', 320);
+    expect(listener).not.toHaveBeenCalled(); expect(store.local('list:pulls:mine').offset).toBe(320);
+    store.setScope({ ...scope }); expect(store.local('list:pulls:mine').offset).toBe(320);
+    stop();
+  });
+  it('keeps unchanged PR rows when the open list is fetched again', async () => {
+    const { store, api } = active; await store.load('attention');
+    const held = store.read<PRRow[]>('attention').data!;
+    await store.load('attention');
+    expect(store.read<PRRow[]>('attention').data).toBe(held);
+    api.pullRequests.list.mockResolvedValueOnce([pr(), pr({ id: 'pr-two', number: 43 })]);
+    await store.load('attention');
+    const next = store.read<PRRow[]>('attention').data!;
+    expect(next).not.toBe(held); expect(next[0]).toBe(held[0]); expect(next[1].id).toBe('pr-two');
+  });
   it('makes no requests while offline and never retries failed snapshots in a loop', async () => {
     const { store, api, network } = active; network({ reachability: 'offline' }); await store.load('sessions');
     expect(api.workbenches.list).not.toHaveBeenCalled(); expect(store.read('sessions').status).toBe('offline');

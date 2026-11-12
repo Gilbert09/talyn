@@ -23,7 +23,9 @@ Other options in the composer:
 - To start a session from a pull request, you can also use **Open in session** on the pull request. On mobile, it is in the pull request's menu.
 - **Plan** turns on plan mode. The agent reads the code and writes a plan, and changes nothing until you approve it. Press Shift+Tab to switch plan mode.
 - **Internet on** / **Internet off** controls whether the sandbox can reach the internet. See [Internet access](/docs/sandboxes#internet-access).
-- The image button attaches screenshots. You can also paste an image.
+- The attach button adds images and videos. You can also paste or drop them into the chat. Images can be PNG, JPEG, WebP or GIF, up to 10 MB. Videos can be MP4, MOV or WebM, up to 50 MB. On the phone, pick a video from your library.
+- You can attach a video only after the session starts. When you start a new session, attach images only.
+- The agent gets a video as a file in the sandbox. It cannot watch the video. It can take still frames from the video with a tool such as ffmpeg, if the sandbox has one.
 
 Your defaults for new sessions are in **Settings > Sessions**: the agent, the model, the reasoning effort, plan mode, internet access, a branch prefix such as `yourname/`, and a notification when an agent finishes.
 

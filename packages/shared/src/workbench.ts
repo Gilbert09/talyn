@@ -293,6 +293,67 @@ export interface WorkbenchPullRequestSummary {
   ciStatus: 'success' | 'failure' | 'pending' | 'none';
 }
 
+/** The image types a session upload accepts (`POST /workbenches/:id/attachments`). */
+export const WORKBENCH_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const;
+/** The video types a session upload accepts. The agent gets the file path, not the frames. */
+export const WORKBENCH_VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/webm'] as const;
+export const WORKBENCH_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+/**
+ * Larger than the image limit, but bounded: the backend holds the upload in
+ * memory and writes it into the sandbox in ~288 KB execs.
+ */
+export const WORKBENCH_MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+
+/** File extension → type, for the attachment types a session accepts. */
+export const WORKBENCH_ATTACHMENT_EXTENSIONS: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  mp4: 'video/mp4',
+  m4v: 'video/mp4',
+  mov: 'video/quicktime',
+  webm: 'video/webm',
+};
+
+/** Type → the extension a stored attachment gets, so its preview can be read back. */
+export const WORKBENCH_ATTACHMENT_FILE_EXTENSION: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+  'video/webm': 'webm',
+};
+
+/**
+ * `name` with an extension that agrees with `mimeType`. A name whose own
+ * extension already agrees keeps it, so `clip.m4v` stays `clip.m4v`.
+ */
+export function workbenchAttachmentFileName(name: string, mimeType: string): string {
+  const wanted = WORKBENCH_ATTACHMENT_FILE_EXTENSION[mimeType.toLowerCase()];
+  if (!wanted) return name;
+  const dot = name.lastIndexOf('.');
+  const own = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+  if (WORKBENCH_ATTACHMENT_EXTENSIONS[own] === mimeType.toLowerCase()) return name;
+  return `${dot > 0 ? name.slice(0, dot) : name}.${wanted}`;
+}
+
+export function isWorkbenchVideoType(mimeType: string): boolean {
+  return (WORKBENCH_VIDEO_TYPES as readonly string[]).includes(mimeType.toLowerCase());
+}
+
+/** The upload limit for one attachment of this type. */
+export function workbenchAttachmentMaxBytes(mimeType: string): number {
+  return isWorkbenchVideoType(mimeType) ? WORKBENCH_MAX_VIDEO_BYTES : WORKBENCH_MAX_IMAGE_BYTES;
+}
+
+/** Added to the prompt when a video is attached: no agent can watch one directly. */
+export const WORKBENCH_VIDEO_PROMPT_NOTE =
+  'An agent cannot watch a video directly. To see a video, extract frames from it (for example with ffmpeg, when it is installed) and read them as images.';
+
 /** A file attached to a message. Exactly one of `dataBase64` / `path` is set. */
 export interface WorkbenchAttachment {
   name: string;

@@ -29,9 +29,13 @@ const { workbenchAttachmentRoutes } = await import('../routes/workbenchAttachmen
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 
 const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom'), Buffer.alloc(16)]);
+const mov = Buffer.concat([Buffer.from([0, 0, 0, 0x14]), Buffer.from('ftypqt  '), Buffer.alloc(16)]);
+const oldMov = Buffer.concat([Buffer.from([0, 0, 0, 0x08]), Buffer.from('wide'), Buffer.alloc(16)]);
+const webm = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(16)]);
 const ready = { id: 'wb-1', workspaceId: 'ws-a', runtime: 'sandbox', status: 'ready', sandboxId: 'box-1', archivedAt: null };
 
-describe('workbench image uploads', () => {
+describe('workbench attachment uploads', () => {
   const router = wrapAsyncRoutes(workbenchAttachmentRoutes());
 
   async function raw(path: string, user = 'owner-a') {
@@ -52,9 +56,9 @@ describe('workbench image uploads', () => {
     });
   }
 
-  async function upload(body: Buffer, type = 'image/png', user = 'owner-a') {
+  async function upload(body: Buffer, type = 'image/png', user = 'owner-a', fileName = 'my shot.png') {
     return new Promise<{ status: number; body: { success: boolean; data?: { path: string; mimeType: string; name: string }; code?: string } }>((resolve, reject) => {
-      const headers = { 'content-type': type, 'content-length': String(body.length), 'x-attachment-name': 'my shot.png' };
+      const headers = { 'content-type': type, 'content-length': String(body.length), 'x-attachment-name': encodeURIComponent(fileName) };
       const req = Object.assign(Readable.from([body]), {
         method: 'POST', url: '/wb-1/attachments', originalUrl: '/wb-1/attachments', headers,
         user: { id: user, email: 'user@example.test', isAdmin: false },
@@ -111,9 +115,41 @@ describe('workbench image uploads', () => {
   });
 
   it.each([
+    ['an MP4', mp4, 'video/mp4', 'screen recording.mp4', /-screen-recording\.mp4$/],
+    ['a QuickTime movie', mov, 'video/quicktime', 'IMG_0001.MOV', /-IMG_0001\.MOV$/],
+    ['an old QuickTime movie', oldMov, 'video/quicktime', 'clip.mov', /-clip\.mov$/],
+    ['a WebM video', webm, 'video/webm', 'capture.webm', /-capture\.webm$/],
+    ['an M4V file as MP4', mp4, 'video/mp4', 'clip.m4v', /-clip\.m4v$/],
+    ['a video with no extension', mp4, 'video/mp4', 'recording', /-recording\.mp4$/],
+    ['a video with the wrong extension', webm, 'video/webm', 'recording.mp4', /-recording\.webm$/],
+    ['an image with no extension', png, 'image/png', 'pasted', /-pasted\.png$/],
+  ])('stores %s with a readable extension', async (_label, body, type, name, path) => {
+    const response = await upload(body, type, 'owner-a', name);
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual({ name, mimeType: type, path: expect.stringMatching(path) });
+    expect(writeSandboxFiles.mock.calls[0][1][0].base64).toBe(body.toString('base64'));
+  });
+
+  it('accepts a video larger than the image limit', async () => {
+    const large = Buffer.concat([mp4, Buffer.alloc(20 * 1024 * 1024)]);
+    expect((await upload(large, 'video/mp4', 'owner-a', 'long.mp4')).status).toBe(200);
+  });
+
+  it('refuses an image larger than 10 MB', async () => {
+    const large = Buffer.concat([png, Buffer.alloc(10 * 1024 * 1024)]);
+    const response = await upload(large);
+    expect(response.status).toBe(413);
+    expect(writeSandboxFiles).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['wrong bytes', Buffer.from('not png'), 'image/png', 415],
+    ['wrong video bytes', png, 'video/mp4', 415],
+    ['WebM bytes as QuickTime', webm, 'video/quicktime', 415],
+    ['an unsupported video type', mp4, 'video/x-msvideo', 415],
     ['wrong type', png, 'text/plain', 415],
     ['empty body', Buffer.alloc(0), 'image/png', 400],
+    ['empty video', Buffer.alloc(0), 'video/mp4', 400],
   ])('rejects %s', async (_label, body, type, status) => {
     expect((await upload(body, type)).status).toBe(status);
     expect(writeSandboxFiles).not.toHaveBeenCalled();
@@ -171,6 +207,30 @@ describe('workbench image uploads', () => {
     runCapture.mockResolvedValueOnce({ exitCode: 0, stdout: String(10 * 1024 * 1024 + 1), stderr: '' });
     expect((await raw('.context/attachments/large.png')).status).toBe(413);
     expect(runCapture).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['clip.mp4', 'video/mp4'],
+    ['clip.m4v', 'video/mp4'],
+    ['clip.MOV', 'video/quicktime'],
+    ['clip.webm', 'video/webm'],
+  ])('serves the video %s with its type', async (name, type) => {
+    runCapture.mockResolvedValueOnce({ exitCode: 0, stdout: String(mp4.length), stderr: '' });
+    runCapture.mockResolvedValueOnce({ exitCode: 0, stdout: mp4.toString('base64'), stderr: '' });
+    const response = await raw(`.context/attachments/${name}`);
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toBe(type);
+  });
+
+  it('allows a video over 10 MB but refuses one over 50 MB', async () => {
+    runCapture.mockResolvedValueOnce({ exitCode: 0, stdout: String(50 * 1024 * 1024 + 1), stderr: '' });
+    expect((await raw('.context/attachments/large.mp4')).status).toBe(413);
+    expect(runCapture).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an unknown extension', async () => {
+    expect((await raw('.context/attachments/notes.txt')).status).toBe(400);
+    expect(runCapture).not.toHaveBeenCalled();
   });
 
   it('reads images over 2 MB in bounded chunks', async () => {

@@ -6,11 +6,11 @@ import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, View } from 're
 import { useMobileRuntime } from '../../auth/AuthProvider';
 import { AppText, IconButton } from '../../components/UI';
 import { radius, useTheme, withAlpha } from '../../theme/tokens';
-import { attachmentUrl, isImage, type ImageDraft, type MessageImage } from './attachments';
+import { attachmentUrl, isImage, isVideo, type ImageDraft, type MessageImage } from './attachments';
 
 const THUMB = 56;
 
-/** Thumbnails above the text field, each with a remove button and its own upload state. */
+/** Thumbnails (a video glyph and name for videos) above the text field, each with a remove button and its own upload state. */
 export function ComposerImages({ drafts, errors, onRemove, onRetry, onDismissError }: {
   drafts: ImageDraft[]; errors: string[]; onRemove(id: string): void; onRetry(id: string): void; onDismissError(index: number): void;
 }) {
@@ -19,11 +19,12 @@ export function ComposerImages({ drafts, errors, onRemove, onRetry, onDismissErr
   return <View style={styles.strip}>
     {drafts.length ? <View style={styles.thumbs}>
       {drafts.map((draft) => <View key={draft.id} style={styles.thumbWrap}>
-        <Pressable accessibilityRole={draft.status === 'error' ? 'button' : 'image'}
+        <Pressable accessibilityRole={draft.status === 'error' ? 'button' : draft.mimeType.startsWith('video/') ? 'text' : 'image'}
           accessibilityLabel={draft.status === 'error' ? `Retry ${draft.name}. ${draft.error ?? 'The upload failed.'}` : `${draft.name}${draft.status === 'uploading' ? ', uploading' : ''}`}
           disabled={draft.status !== 'error'} onPress={() => onRetry(draft.id)}
           style={[styles.thumb, { borderColor: draft.status === 'error' ? c.destructive : c.border, backgroundColor: c.surface }]}>
-          <Image source={{ uri: draft.uri }} style={[styles.thumbImage, draft.status !== 'ready' && { opacity: 0.45 }]} />
+          {draft.mimeType.startsWith('video/') ? <VideoGlyph name={draft.name} faded={draft.status !== 'ready'} />
+            : <Image source={{ uri: draft.uri }} style={[styles.thumbImage, draft.status !== 'ready' && { opacity: 0.45 }]} />}
           {draft.status === 'uploading' ? <View style={styles.overlay}><ActivityIndicator size="small" color={c.text} /></View> : null}
           {draft.status === 'error' ? <View style={styles.overlay}><SymbolView name={{ ios: 'arrow.clockwise', android: 'refresh' }} size={18} tintColor={c.destructive} /></View> : null}
         </Pressable>
@@ -41,15 +42,34 @@ export function ComposerImages({ drafts, errors, onRemove, onRetry, onDismissErr
   </View>;
 }
 
-/** Image attachments on a sent message. Tap one to see it full screen. */
+/** A video has no thumbnail without a native module, so it shows a glyph and its name. */
+function VideoGlyph({ name, faded }: { name: string; faded?: boolean }) {
+  const c = useTheme();
+  return <View style={[styles.videoGlyph, faded && { opacity: 0.45 }]}>
+    <SymbolView name={{ ios: 'video.fill', android: 'videocam' }} size={20} tintColor={c.muted} />
+    <AppText variant="caption" tone="muted" numberOfLines={1} style={styles.videoName}>{name}</AppText>
+  </View>;
+}
+
+/** Image and video attachments on a sent message. Tap an image to see it full screen. */
 export function MessageImages({ workbenchId, attachments }: { workbenchId: string; attachments: MessageImage[] }) {
-  const images = attachments.filter(isImage);
+  const items = attachments.filter((item) => isImage(item) || isVideo(item));
   const [viewing, setViewing] = useState<MessageImage | null>(null);
-  if (!images.length) return null;
+  if (!items.length) return null;
   return <View style={styles.thumbs}>
-    {images.map((image, index) => <MessageThumb key={`${image.path ?? image.name}:${index}`} workbenchId={workbenchId} image={image} onOpen={() => setViewing(image)} />)}
+    {items.map((item, index) => {
+      const key = `${item.path ?? item.name}:${index}`;
+      return isVideo(item) ? <MessageVideo key={key} video={item} />
+        : <MessageThumb key={key} workbenchId={workbenchId} image={item} onOpen={() => setViewing(item)} />;
+    })}
     {viewing ? <ImageViewer workbenchId={workbenchId} image={viewing} onClose={() => setViewing(null)} /> : null}
   </View>;
+}
+
+function MessageVideo({ video }: { video: MessageImage }) {
+  const c = useTheme();
+  return <View accessible accessibilityRole="text" accessibilityLabel={`Video: ${video.name}`}
+    style={[styles.thumb, { borderColor: c.border, backgroundColor: c.surface }]}><VideoGlyph name={video.name} /></View>;
 }
 
 /** The image request carries the sign-in token, so the source is built once the token is known. */
@@ -95,6 +115,8 @@ const styles = StyleSheet.create({
   thumbWrap: { width: THUMB, height: THUMB },
   thumb: { width: THUMB, height: THUMB, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   thumbImage: { width: '100%', height: '100%' },
+  videoGlyph: { alignItems: 'center', justifyContent: 'center', gap: 2, paddingHorizontal: 4 },
+  videoName: { maxWidth: THUMB - 8, fontSize: 9 },
   overlay: { ...StyleSheet.absoluteFill as object, alignItems: 'center', justifyContent: 'center' },
   remove: { position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   error: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 28 },
