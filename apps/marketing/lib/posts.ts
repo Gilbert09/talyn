@@ -23,6 +23,7 @@ interface RawFrontmatter {
   title?: unknown;
   description?: unknown;
   date?: unknown;
+  author?: unknown;
   draft?: unknown;
   tags?: unknown;
 }
@@ -34,6 +35,10 @@ export interface PostMeta {
   description: string;
   /** ISO `YYYY-MM-DD`. Sort key and the only date the page displays. */
   date: string;
+  /** Byline. Defaults to Tom, who writes them. */
+  author: string;
+  /** Whole minutes at about 230 words a minute, never less than 1. */
+  readingMinutes: number;
   draft: boolean;
   tags: string[];
 }
@@ -81,6 +86,8 @@ function readPost(fileName: string): Post {
     title,
     description,
     date,
+    author: asString(fm.author) || "Tom Owers",
+    readingMinutes: Math.max(1, Math.round(content.split(/\s+/).filter(Boolean).length / 230)),
     // Anything but an explicit `false` is a draft. A post is unfinished until
     // somebody says it is not, which is the same direction as the section gate.
     draft: fm.draft !== false,

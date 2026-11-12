@@ -5,6 +5,8 @@ const config: Config = {
     "./app/**/*.{ts,tsx}",
     "./components/**/*.{ts,tsx}",
     "./lib/**/*.{ts,tsx}",
+    // Posts may carry a figure or a stat row written as HTML with site classes.
+    "./content/**/*.md",
   ],
   theme: {
     container: {

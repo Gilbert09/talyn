@@ -44,6 +44,7 @@ export function Prose({
       [&_table]:block [&_table]:overflow-x-auto [&_table]:text-[14px]
       [&_th]:border-b [&_th]:border-line [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:font-semibold [&_th]:text-ink
       [&_td]:border-b [&_td]:border-line [&_td]:px-3 [&_td]:py-2 [&_td]:align-top
+      [&_figure]:my-8 [&_figcaption]:mt-3 [&_figcaption]:text-center [&_figcaption]:text-xs [&_figcaption]:text-ink-400
     `,
     className
   );

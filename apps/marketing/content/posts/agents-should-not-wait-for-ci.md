@@ -13,6 +13,12 @@ most of what we told them to do was wait.
 The lesson is general. If your agent loop contains a step where the agent waits
 for something outside itself, the agent is the wrong thing to do the waiting.
 
+<div class="my-8 grid gap-3 sm:grid-cols-3">
+<div class="rounded-xl border border-line bg-paper-50 p-4"><p class="font-display !text-3xl font-semibold text-ink">228 min</p><p class="mt-1 !text-sm leading-snug text-ink-500">one fix run kept its sandbox awake</p></div>
+<div class="rounded-xl border border-line bg-paper-50 p-4"><p class="font-display !text-3xl font-semibold text-ink">52 min</p><p class="mt-1 !text-sm leading-snug text-ink-500">of that run was spent in <code>sleep</code></p></div>
+<div class="rounded-xl border border-line bg-paper-50 p-4"><p class="font-display !text-3xl font-semibold text-clay">430 min</p><p class="mt-1 !text-sm leading-snug text-ink-500">asleep and not billed, on the first day of the fix</p></div>
+</div>
+
 ## Where the time went
 
 The runs in question fix pull requests. An agent gets a PR with failing checks
@@ -55,6 +61,46 @@ You cannot change the size of a running machine for the minutes it is idle.
 
 All three fixes keep the same shape: the agent owns the wait. The fix is to take
 the wait away from it.
+
+<figure>
+<div class="overflow-x-auto rounded-xl border border-line bg-paper-50 p-4">
+<svg viewBox="0 0 560 228" class="min-w-[520px]" role="img" aria-labelledby="ciwait-t ciwait-d" font-family="ui-sans-serif, system-ui, sans-serif">
+<title id="ciwait-t">One fix run, before and after</title>
+<desc id="ciwait-d">Before, the sandbox stays awake while CI runs after each push. After, the sandbox is suspended while CI runs, and only the working time is awake.</desc>
+<text x="0" y="16" font-size="13" font-weight="600" fill="#23201b">Before: the agent waits</text>
+<rect x="0" y="26" width="58" height="34" rx="5" fill="#c25e3a"/>
+<rect x="60" y="26" width="108" height="34" rx="5" fill="#e7ded1"/>
+<rect x="170" y="26" width="48" height="34" rx="5" fill="#c25e3a"/>
+<rect x="220" y="26" width="108" height="34" rx="5" fill="#e7ded1"/>
+<rect x="330" y="26" width="40" height="34" rx="5" fill="#c25e3a"/>
+<rect x="372" y="26" width="108" height="34" rx="5" fill="#e7ded1"/>
+<rect x="482" y="26" width="78" height="34" rx="5" fill="#c25e3a"/>
+<text x="114" y="48" font-size="12" text-anchor="middle" fill="#5c554a">sleep, poll</text>
+<text x="274" y="48" font-size="12" text-anchor="middle" fill="#5c554a">sleep, poll</text>
+<text x="426" y="48" font-size="12" text-anchor="middle" fill="#5c554a">sleep, poll</text>
+<text x="0" y="84" font-size="12" fill="#7a7264">Sandbox awake and billed from start to end.</text>
+<text x="0" y="122" font-size="13" font-weight="600" fill="#23201b">After: the system waits</text>
+<rect x="0" y="132" width="58" height="34" rx="5" fill="#c25e3a"/>
+<rect x="60.5" y="132.5" width="107" height="33" rx="5" fill="none" stroke="#dbd1c2" stroke-dasharray="4 3"/>
+<rect x="170" y="132" width="48" height="34" rx="5" fill="#c25e3a"/>
+<rect x="220.5" y="132.5" width="107" height="33" rx="5" fill="none" stroke="#dbd1c2" stroke-dasharray="4 3"/>
+<rect x="330" y="132" width="40" height="34" rx="5" fill="#c25e3a"/>
+<rect x="372.5" y="132.5" width="107" height="33" rx="5" fill="none" stroke="#dbd1c2" stroke-dasharray="4 3"/>
+<rect x="482" y="132" width="78" height="34" rx="5" fill="#c25e3a"/>
+<text x="114" y="154" font-size="12" text-anchor="middle" fill="#9a9183">suspended</text>
+<text x="274" y="154" font-size="12" text-anchor="middle" fill="#9a9183">suspended</text>
+<text x="426" y="154" font-size="12" text-anchor="middle" fill="#9a9183">suspended</text>
+<text x="0" y="190" font-size="12" fill="#7a7264">Awake only while the agent works. A check webhook wakes it.</text>
+<rect x="0" y="206" width="12" height="12" rx="2" fill="#c25e3a"/>
+<text x="18" y="216" font-size="12" fill="#5c554a">agent working</text>
+<rect x="120" y="206" width="12" height="12" rx="2" fill="#e7ded1"/>
+<text x="138" y="216" font-size="12" fill="#5c554a">waiting for CI, awake</text>
+<rect x="290.5" y="206.5" width="11" height="11" rx="2" fill="none" stroke="#9a9183" stroke-dasharray="3 2"/>
+<text x="308" y="216" font-size="12" fill="#5c554a">waiting for CI, suspended</text>
+</svg>
+</div>
+<figcaption>One fix run with three pushes. A schematic, not to scale.</figcaption>
+</figure>
 
 ## What we built
 
