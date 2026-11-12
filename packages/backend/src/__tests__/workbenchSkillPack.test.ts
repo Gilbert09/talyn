@@ -195,6 +195,21 @@ describe('session skill pack', () => {
       expect(section).toContain('Never record secrets.');
       expect(section.match(/\btalyn_[a-z0-9_]+\b/g)).toEqual(['talyn_resize_session', 'talyn_record_setup_step']);
     });
+
+    it('the briefing tells the agent to wait through Talyn, not its own tools', () => {
+      const section = TALYN_BRIEFING.split('## Waiting\n')[1]?.split('\n## ')[0] ?? '';
+      expect(section).not.toBe('');
+      expect(section).toContain('`until_ci: true`');
+      expect(section).toContain('`head_sha`');
+      expect(section).toContain('git rev-parse HEAD');
+      expect(section).toContain('end your turn');
+      expect(section).toContain('`delay_seconds`');
+      expect(section).toContain('`Monitor`');
+      expect(section).toContain('ToolSearch');
+      expect(new Set(section.match(/\btalyn_[a-z0-9_]+\b/g))).toEqual(new Set(['talyn_schedule_wakeup', 'talyn_run_background']));
+      const props = (toolsByName.get('talyn_schedule_wakeup')!.inputSchema as { properties: Record<string, unknown> }).properties;
+      for (const arg of ['until_ci', 'head_sha', 'delay_seconds']) expect(Object.keys(props)).toContain(arg);
+    });
   });
 
   describe('parseSkillFrontmatter', () => {

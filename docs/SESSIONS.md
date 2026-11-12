@@ -2,6 +2,19 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Sessions wait for CI through Talyn (2026-11-12)
+
+**Symptom.** A PostHog/posthog session pushed, said "the background poll checks every 5 minutes", and its Background tab showed no jobs and no wake-ups. The agent waited with Claude Code's own tools: a blocked foreground `sleep`, then `Monitor`, then a background Bash loop of 14 polls. That kept the box awake and the turn open, and the person could not see the wait.
+
+**Causes.**
+- `session-ci-wait` was gated with fallback OFF, and PostHog project 459813 had no flag with that key. So every `until_ci` request got 403 `ci_wait_unavailable`.
+- The always-loaded briefing (`talynBriefing.ts`) did not name wake-ups. Only `talyn-ci-triage` and `talyn-speed` did, and the agent loads them only for failing CI or a slow build. Claude Code also defers the `talyn` tools behind ToolSearch, while its own `run_in_background` and `Monitor` are always in view.
+
+**Fix.**
+- `sessionCiWait` is released: fallback ON, `availability: 'general'`. `SESSION_CI_WAIT_ENABLED=false` still turns it off.
+- The briefing has a `## Waiting` section: `talyn_schedule_wakeup` with `until_ci` after a push, a timed wake-up for anything else, `talyn_run_background` for a command that outlives the turn, no waits with the agent's own tools, and load deferred `talyn` tools first. A test in `workbenchSkillPack.test.ts` pins it.
+- Not done: a deny list for Claude Code's `Monitor` and `ScheduleWakeup` in session turns. The guest in YAS starts `claude`, so that change goes there.
+
 ## Background refreshes ran on a closed request transaction (2026-11-12)
 
 **Symptom.** Settings → Repositories showed no sandbox size picker, and the Setup row stayed on "Loading the setup…". At 22:36 UTC the backend stopped answering. The DB watchdog then restarted it at 22:38.
