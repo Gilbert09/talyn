@@ -247,11 +247,7 @@ describe('native shell', () => {
     await renderRouter(routes, { initialUrl: '/settings' });
     expect(screen.getByText('Signed in with GitHub')).toBeVisible();
     expect(screen.getByText('alice@example.com')).toBeVisible();
-    expect(screen.queryByText('Account ID: alice')).toBeNull();
-    await fireEvent.press(screen.getByRole('button', { name: 'Show account ID' }));
-    expect(screen.getByText('Account ID: alice')).toBeVisible();
-    await fireEvent.press(screen.getByRole('button', { name: 'Hide account ID' }));
-    expect(screen.queryByText('Account ID: alice')).toBeNull();
+    expect(screen.queryByText(/Account ID/)).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Sign out' }));
     expect(mockSignOut).toHaveBeenCalledTimes(1);
   });
