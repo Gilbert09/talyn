@@ -13,7 +13,14 @@ import { useNavigationStore } from '../stores/navigation';
 import { useSpacesStore } from '../stores/spaces';
 
 vi.mock('../lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
-vi.mock('../lib/api', () => ({ api: { workbenches: { list: vi.fn(), restore: vi.fn(), get: vi.fn() }, pullRequests: {} } }));
+vi.mock('../lib/api', () => ({
+  api: {
+    workbenches: { list: vi.fn(), restore: vi.fn(), get: vi.fn() },
+    workflows: { list: vi.fn(() => Promise.resolve([])) },
+    loops: { list: vi.fn(() => Promise.resolve([])) },
+    pullRequests: {},
+  },
+}));
 
 function wb(id: string, over: Partial<Workbench> = {}): Workbench {
   return {

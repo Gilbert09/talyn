@@ -3,8 +3,6 @@ import { ArrowLeft, Check } from 'lucide-react';
 import {
   INTEGRATION_CATALOG,
   integrationOffered,
-  integrationRulesOffered,
-  slackRulesOffered,
   integrationsOffered,
   type IntegrationKind,
 } from '@talyn/shared';
@@ -12,6 +10,7 @@ import { useWorkspaceStore } from '../stores/workspace';
 import { useNavigationStore } from '../stores/navigation';
 import { api } from '../lib/api';
 import { INTEGRATION_LOGOS } from '../assets/integrations/IntegrationLogos';
+import { automationsShown, useAutomationFocus } from '../lib/automationFocus';
 import { PageHeader } from '../components/ui/page-header';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Badge } from '../components/ui/badge';
@@ -204,11 +203,14 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
   const navigate = useNavigationStore((s) => s.navigate);
   const info = INTEGRATION_CATALOG[kind];
   const offered = integrationOffered(features, kind);
-  const hasRules = kind === 'slack'
-    ? features?.workbenches === true && slackRulesOffered(features)
-    : integrationRulesOffered(features, kind);
+  const hasRules = automationsShown(features, kind);
   const hasConnection = !info.builtIn;
   const [chosen, setChosen] = useState<Section | null>(null);
+  // The palette opened one of this page's automations: show the Automations tab.
+  const focusKind = useAutomationFocus((s) => s.target?.kind);
+  useEffect(() => {
+    if (focusKind === kind) setChosen('rules');
+  }, [focusKind, kind]);
   const section: Section = chosen && (chosen === 'rules' ? hasRules : hasConnection) ? chosen : hasRules ? 'rules' : 'connection';
 
   useEffect(() => {

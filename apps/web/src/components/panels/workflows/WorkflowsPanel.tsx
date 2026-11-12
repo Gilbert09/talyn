@@ -16,6 +16,7 @@ import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
 import { FeedbackButton } from './FeedbackButton';
 import { useWorkflows } from './useWorkflows';
+import { takeAutomationTarget, useAutomationFocus } from '../../../lib/automationFocus';
 import { WorkflowEditorPage } from './WorkflowEditorPage';
 import { WorkflowRunsList } from './WorkflowRunsList';
 import { WebhookDeliveriesList } from './WebhookDeliveriesList';
@@ -230,6 +231,13 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
     setExpandedId(null);
     setPendingDelete(null);
   }, [integration]);
+
+  // The command palette asked for one of these rules: open its editor once the list is here.
+  const focus = useAutomationFocus((s) => s.target);
+  useEffect(() => {
+    const workflow = takeAutomationTarget('workflow', integration, workflows);
+    if (workflow) openEditor(workflow);
+  }, [focus, integration, workflows]);
 
   /**
    * The one workflow event the server cannot see.

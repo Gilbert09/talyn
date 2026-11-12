@@ -19,6 +19,9 @@ Talyn runs automations on its servers, so the app can stay closed.
 
 Any one of the triggers starts the automation. Every condition must hold.
 
+To open an automation from anywhere in the desktop or web app, press **⌘K** (**Ctrl+K** on Windows and Linux) and type its name.
+The command palette lists every automation in the workspace, including Slack, webhook, issue and schedule automations.
+
 ## Triggers
 
 | Group | Triggers |

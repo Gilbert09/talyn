@@ -16,7 +16,14 @@ import { useNavigationStore } from '../renderer/stores/navigation';
 import { useSpacesStore } from '../renderer/stores/spaces';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
-jest.mock('../renderer/lib/api', () => ({ api: { workbenches: { list: jest.fn(), restore: jest.fn(), get: jest.fn() }, pullRequests: {} } }));
+jest.mock('../renderer/lib/api', () => ({
+  api: {
+    workbenches: { list: jest.fn(), restore: jest.fn(), get: jest.fn() },
+    workflows: { list: jest.fn(() => Promise.resolve([])) },
+    loops: { list: jest.fn(() => Promise.resolve([])) },
+    pullRequests: {},
+  },
+}));
 
 function wb(id: string, over: Partial<Workbench> = {}): Workbench {
   return {

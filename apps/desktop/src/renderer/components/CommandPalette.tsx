@@ -17,6 +17,7 @@ import { openNewThread, openNewWorkbench } from './workbench/new/openNewWorkbenc
 import { claudeImportAvailable, useClaudeImportDialog } from './workbench/new/ContinueClaudeConversation';
 import { SessionStateIcon } from './workbench/WorkbenchBadges';
 import { PaletteAppCommands } from './PaletteAppCommands';
+import { PaletteAutomations } from './PaletteAutomations';
 import { SlackSessionMark } from './workbench/SlackThreadChip';
 import { slackSourceOf } from '../lib/slackSession';
 import { workbenchPlaceLabel } from '../lib/threads';
@@ -176,7 +177,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
 
   return (
     <CommandDialog open onOpenChange={(next) => !next && onClose()}>
-      <CommandInput placeholder="Search sessions, pages, spaces, settings and actions…" value={query} onValueChange={setQuery} autoFocus />
+      <CommandInput placeholder="Search sessions, automations, pages, spaces, settings and actions…" value={query} onValueChange={setQuery} autoFocus />
       <CommandList>
         <CommandEmpty>Nothing matches.</CommandEmpty>
         {workbenches.length > 0 && (
@@ -207,6 +208,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
             ))}
           </CommandGroup>
         )}
+        <PaletteAutomations query={query} pick={pick} />
         <CommandGroup heading="Navigate">
           {workbenchesOffered(features) && (
             <CommandItem
