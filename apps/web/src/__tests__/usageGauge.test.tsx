@@ -67,6 +67,16 @@ describe('SidebarUsageSlot', () => {
     expect(screen.getByRole('progressbar').firstElementChild).toHaveClass(barClass);
   });
 
+  it.each([
+    ['nearly out', 198, false],
+    ['out', 200, true],
+  ])('hides Add credits when Pro is %s but has credits left', (_label, usedHours, exhausted) => {
+    setup(usageStatus('pro', { usedHours, exhausted, balanceMicros: 100_000_000 }));
+    render(<SidebarUsageSlot collapsed={false} />);
+    expect(screen.getByText(/\$100\.00 credits/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add credits' })).toBeNull();
+  });
+
   it('says plainly when the hours are out', () => {
     setup(usageStatus('free', { usedHours: 10, exhausted: true }));
     render(<SidebarUsageSlot collapsed={false} />);

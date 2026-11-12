@@ -102,14 +102,16 @@ export const ADD_CREDITS_BELOW_LEFT_PCT = 5;
 /**
  * The card's button, or null for none. Free cannot buy credits, so it always
  * gets "Upgrade". A paid plan gets "Add credits" only when less than
- * ADD_CREDITS_BELOW_LEFT_PCT of its hours is left, or none is. Otherwise Pro
- * and Max get no button and Legacy Pro gets "Upgrade".
+ * ADD_CREDITS_BELOW_LEFT_PCT of its hours is left, or none is, and it has no
+ * credits left. Otherwise Pro and Max get no button and Legacy Pro gets
+ * "Upgrade".
  */
 export function gaugeAction(status: UsageBillingStatus): GaugeAction | null {
   if (status.tier === 'free') return 'upgrade';
   const { includedWsec, usedWsec, exhausted } = status.usage;
   const low = exhausted || 100 * (includedWsec - usedWsec) < ADD_CREDITS_BELOW_LEFT_PCT * includedWsec;
-  if (low) return 'add_credits';
+  const hasCredits = (status.credits?.balanceMicros ?? 0) > 0;
+  if (low && !hasCredits) return 'add_credits';
   return status.tier === 'legacy_pro' ? 'upgrade' : null;
 }
 

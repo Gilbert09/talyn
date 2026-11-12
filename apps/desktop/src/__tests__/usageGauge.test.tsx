@@ -114,6 +114,16 @@ describe('SidebarAccountStatus', () => {
   });
 
   it.each([
+    ['nearly out', 198, false],
+    ['out', 200, true],
+  ])('hides Add credits when Pro is %s but has credits left', (_label, usedHours, exhausted) => {
+    useBillingStore.setState({ status: usageStatus('pro', { usedHours, exhausted, balanceMicros: 100_000_000 }) });
+    renderGauge();
+    expect(screen.getByText('Credits $100.00')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add credits' })).toBeNull();
+  });
+
+  it.each([
     [10, 'Upgrade'],
     [48, 'Add credits'],
   ])('Legacy Pro at %i of 50 box-hours offers %s', (usedHours, label) => {
