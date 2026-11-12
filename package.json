@@ -42,7 +42,7 @@
     "mobile:build:packages": "npm run build -w @talyn/shared && npm run build -w @talyn/client",
     "mobile:check:graph": "npm run check:graph -w @talyn/mobile",
     "mobile:release:check": "npm run release:check -w @talyn/mobile",
-    "mobile:release:plan": "npm run release:plan -w @talyn/mobile",
+    "mobile:release:plan": "npm run release:plan -w @talyn/mobile --",
     "mobile:native:generate": "npm run native:generate -w @talyn/mobile",
     "mobile:native:inspect": "npm run native:inspect -w @talyn/mobile",
     "mobile:test:release": "npm run test:release -w @talyn/mobile",
