@@ -1,8 +1,12 @@
 import type { WorkbenchReadiness } from '@talyn/shared';
 
 import { agentChoice, agentForModel, blockedReason, branchSuggestions, chipLabel, composerChips, createInput, defaultRepositoryId,
-  effectiveBranch, filterBranches, filterRepositories, internetMessage, modelFor, modelSections, modelsFor, rememberRepository,
+  effectiveBranch, filterBranches, filterRepositories, forgetLastRepositories, internetMessage, lastRepositoryKey, loadLastRepository, modelFor, modelSections, modelsFor, rememberRepository,
   sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm } from '../features/create/model';
+
+const mockStorage = { getItem: jest.fn(async (_key: string): Promise<string | null> => null), setItem: jest.fn(async (_key: string, _value: string) => {}) };
+jest.mock('@react-native-async-storage/async-storage', () => ({ __esModule: true, default: mockStorage }));
+beforeEach(() => { forgetLastRepositories(); mockStorage.getItem.mockReset().mockResolvedValue(null); mockStorage.setItem.mockReset().mockResolvedValue(); });
 
 type Sandbox = WorkbenchReadiness['sandbox'];
 const ready: Sandbox = { ok: true, reasons: [], agents: { claude: { ok: true }, codex: { ok: true } } };
@@ -71,6 +75,40 @@ describe('start validation', () => {
     expect(defaultRepositoryId('ws-default', repos)).toBe('b');
     expect(defaultRepositoryId('ws-default', [{ id: 'a' }])).toBe('a');
     expect(defaultRepositoryId('ws-default', [])).toBe('');
+    expect(mockStorage.setItem).toHaveBeenCalledWith('ws-default', 'b');
+  });
+  it.each([
+    ['nothing saved', null, null],
+    ['a saved repository', 'b', 'b'],
+  ])('loads %s from the device', async (_name, saved, expected) => {
+    mockStorage.getItem.mockResolvedValue(saved);
+    await expect(loadLastRepository('space:s1')).resolves.toBe(expected);
+    expect(mockStorage.getItem).toHaveBeenCalledWith('space:s1');
+    expect(defaultRepositoryId('space:s1', [{ id: 'a' }, { id: 'b' }])).toBe(expected ?? 'a');
+  });
+  it.each([
+    ['a workspace', 'user-one', 'ws-1', 'talyn.new-work-repo.user-one.ws-1'],
+    ['a space', 'user-one', 'space:s1', 'talyn.new-work-repo.user-one.space%3As1'],
+    ['an id with a slash', 'a/b', 'ws-1', 'talyn.new-work-repo.a%2Fb.ws-1'],
+  ])('keys the saved repository by user and %s', (_name, user, place, key) => expect(lastRepositoryKey(user, place)).toBe(key));
+  it('reads the device once per run and prefers a start made during the read', async () => {
+    let resolve: (value: string | null) => void = () => {};
+    mockStorage.getItem.mockReturnValue(new Promise((done) => { resolve = done; }));
+    const loading = loadLastRepository('ws');
+    rememberRepository('ws', 'new');
+    resolve('old');
+    await expect(loading).resolves.toBe('new');
+    await expect(loadLastRepository('ws')).resolves.toBe('new');
+    expect(mockStorage.getItem).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    ['a failed read', () => mockStorage.getItem.mockRejectedValue(new Error('disk'))],
+    ['a failed write', () => mockStorage.setItem.mockRejectedValue(new Error('disk'))],
+  ])('ignores %s', async (_name, fail) => {
+    fail();
+    rememberRepository('other', 'x');
+    forgetLastRepositories();
+    await expect(loadLastRepository('ws')).resolves.toBeNull();
   });
 });
 

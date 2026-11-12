@@ -3,10 +3,10 @@ import type { SpaceRepository, Workbench, WorkbenchAgent, WorkbenchReadiness, Wo
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import { HeaderHeightContext } from 'expo-router/react-navigation';
-import { useContext, useEffect, useMemo, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
+import { useAuth, useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { PickerSheet, type PickerSection } from '../../components/PickerSheet';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { AppText, Banner, Button, EmptyState, Spinner, useToast, type Symbol } from '../../components/UI';
@@ -30,7 +30,7 @@ import { showImagePicker } from '../chat/imagePicker';
 import { useActiveContext } from '../spaces/context';
 import { ConnectAgentSheet } from '../agents/connect/ConnectAgentSheet';
 import { agentForModel, blockedReason, branchSuggestions, chipLabel, composerChips, CONNECT_ACTION, connectNotice, createInput, defaultRepositoryId,
-  effectiveBranch, filterBranches, filterRepositories, internetMessage, MODES, modelFor, modelSections, modelsFor, PLACEHOLDER,
+  effectiveBranch, filterBranches, filterRepositories, internetMessage, lastRepositoryKey, loadLastRepository, MODES, modelFor, modelSections, modelsFor, PLACEHOLDER,
   rememberRepository, sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm, type NewWorkMode } from './model';
 import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spaceRepositories } from './space';
 import { useInlineImages } from './useInlineImages';
@@ -74,6 +74,7 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
   const android = Platform.OS === 'android';
   const workspaceId = workflow.getScope()?.workspace ?? '';
+  const user = useAuth().user?.id ?? '';
   const draftKey = 'new:prompt';
   // In a space, new work goes through the space and runs in my home workspace for its team, like web.
   const place = useActiveContext();
@@ -87,7 +88,7 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const homeWorkspace = useRemote<Workspace>(offered && remoteHome ? `workspace:${remoteHome}` : null, () => workspaceApi.get(remoteHome ?? ''));
   const readinessSource = remoteHome ? homeReadiness : readiness;
   const settingsSource = remoteHome ? homeWorkspace.data : workspace.data;
-  const repoKey = spaceId ? `space:${spaceId}` : workspaceId;
+  const repoKey = lastRepositoryKey(user, spaceId ? `space:${spaceId}` : workspaceId);
   const prompt = useLocal(draftKey).draft;
   // Web's space composer takes no images, so a space start takes none either.
   const images = useInlineImages(draftKey);
@@ -112,9 +113,19 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const repos = useMemo(() => spaceId ? spaceRepositories(spaceId, spaceRepos.data) : repositories.data ?? [],
     [spaceId, spaceRepos.data, repositories.data]);
   const reposStatus = spaceId ? spaceRepos.status : repositories.status;
+  // The repository last started here, saved on the device. It loads after the first draw; a pick made before that wins.
+  const [saved, setSaved] = useState<{ key: string; id: string | null } | null>(null);
+  const pickedFor = useRef<string | null>(null);
   useEffect(() => {
+    let live = true;
+    void loadLastRepository(repoKey).then((id) => { if (live) setSaved({ key: repoKey, id }); });
+    return () => { live = false; };
+  }, [repoKey]);
+  useEffect(() => {
+    const last = saved?.key === repoKey && pickedFor.current !== repoKey ? saved.id : null;
+    if (last && last !== repositoryId && repos.some((repo) => repo.id === last)) { setRepositoryId(last); setBaseBranch(''); return; }
     if (!repos.some((repo) => repo.id === repositoryId)) setRepositoryId(defaultRepositoryId(repoKey, repos));
-  }, [repos, repositoryId, repoKey]);
+  }, [repos, repositoryId, repoKey, saved]);
   const repository = repos.find((repo) => repo.id === repositoryId) ?? null;
   // A failed readiness read is reported like web: the server or the connection, not the agents.
   const sandbox = readinessSource.data?.sandbox ?? (readinessSource.status === 'error' || readinessSource.status === 'offline' || offline
@@ -159,7 +170,7 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
       const withImages = attached.length > 0;
       const item = await workflow.createWorkbench(createInput(form, workspaceId, withImages));
       trackCreated(item, form, withImages);
-      if (mode === 'session' && repository) rememberRepository(workspaceId, repository.id);
+      if (mode === 'session' && repository) rememberRepository(repoKey, repository.id);
       // When the first message could not go to the new chat, the text and images stay here.
       const kept = withImages && !(await sendFirstMessage(item, form, attached));
       if (!kept) { workflow.updateLocal(draftKey, { draft: '' }); images.clear(); }
@@ -290,7 +301,7 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
     <PickerSheet visible={sheet === 'repository'} title="Repository" onClose={closeSheet}
       search={repos.length > 6 ? { value: repoQuery, onChange: setRepoQuery, placeholder: 'Find a repository' } : undefined}
       sections={[{ key: 'repositories', items: filterRepositories(repos, repoQuery).map((repo) => ({ key: repo.id, label: repo.fullName,
-        selected: repo.id === repositoryId, onPress: () => { setRepositoryId(repo.id); setBaseBranch(''); } })) }]}
+        selected: repo.id === repositoryId, onPress: () => { pickedFor.current = repoKey; setRepositoryId(repo.id); setBaseBranch(''); } })) }]}
       empty={repos.length ? <EmptyState title="No repository matches." />
         : <EmptyState title="No repositories yet." detail="Add repositories in Talyn on the web.">
           <Button variant="quiet" size="sm" title="Open web" onPress={() => openExternal(WEB_APP_URL)} />

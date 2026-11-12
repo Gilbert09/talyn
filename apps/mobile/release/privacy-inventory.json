@@ -173,11 +173,12 @@
         "theme",
         "onboarding progress",
         "chosen team space",
+        "last repository used to start a session, by workspace or space",
         "analytics choice"
       ],
       "purpose": "Restore the person's choices on this device",
       "location": "AsyncStorage, scoped by environment and user where it names account data",
-      "retention": "Onboarding progress and space choice clear on sign-out; theme and the analytics choice stay until changed or the app is removed"
+      "retention": "Onboarding progress and space choice clear on sign-out; theme, the analytics choice and the last repository stay until changed or the app is removed"
     },
     {
       "category": "Billing",
