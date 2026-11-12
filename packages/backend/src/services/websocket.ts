@@ -485,9 +485,16 @@ async function handleMessage(
       const previous = deskStates.get(ws);
       deskStates.set(ws, state);
       if (state === 'away' && previous !== 'active') break;
-      await deskPresence.report(user.id, socketId, state === 'active');
+      try {
+        await deskPresence.report(user.id, socketId, state === 'active');
+      } catch (err) {
+        // A presence write that fails costs a skipped push at most; it must not close the socket.
+        console.warn('[desk] presence write failed:', err);
+        break;
+      }
       if (previous !== state) {
         debugBus.recordWs({ action: 'recv', summary: `recv desk_presence ${state}`, meta: { type: 'desk_presence', state } });
+        console.log(`[desk] ${state}: user=${user.id.slice(0, 8)} socket=${socketId.slice(0, 8)}`);
       }
       break;
     }

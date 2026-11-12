@@ -61,7 +61,14 @@ function atDesk(ownerId: string, cache: DeskCache): Promise<boolean> {
   let answer = cache.get(ownerId);
   if (!answer) {
     // A presence store that cannot answer must not cost the person their push.
-    answer = deskPresence.atDesk(ownerId).catch(() => false);
+    answer = deskPresence.inspect(ownerId).then((seen) => {
+      // One line per owner per dispatch pass, only when a push may go out: it says why the desk did not hold it.
+      if (!seen.atDesk) console.log(`[desk] push not held: user=${ownerId.slice(0, 8)} sockets=${seen.sockets} newestAgeMs=${seen.newestAgeMs ?? 'none'}`);
+      return seen.atDesk;
+    }, (err: unknown) => {
+      console.warn('[desk] presence lookup failed; sending the push:', err);
+      return false;
+    });
     cache.set(ownerId, answer);
   }
   return answer;

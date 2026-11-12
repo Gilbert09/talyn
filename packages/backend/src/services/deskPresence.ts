@@ -62,12 +62,18 @@ export class DeskPresenceStore {
 
   /** True while any of the user's sockets said `active` within the TTL. */
   async atDesk(userId: string): Promise<boolean> {
+    return (await this.inspect(userId)).atDesk;
+  }
+
+  /** The answer plus what it rests on, for the dispatch log: how many sockets beat, and the newest beat's age. */
+  async inspect(userId: string): Promise<{ atDesk: boolean; sockets: number; newestAgeMs: number | null }> {
     const redis = this.redis();
-    const beats = redis
+    const beats = (redis
       ? Object.values(await redis.hgetall(PREFIX + userId)).map(Number)
-      : [...(this.memory.get(userId)?.values() ?? [])];
+      : [...(this.memory.get(userId)?.values() ?? [])]).filter(Number.isFinite);
     const now = this.now();
-    return beats.some((at) => Number.isFinite(at) && now - at < DESK_PRESENCE_TTL_MS);
+    const newestAgeMs = beats.length ? now - Math.max(...beats) : null;
+    return { atDesk: newestAgeMs !== null && newestAgeMs < DESK_PRESENCE_TTL_MS, sockets: beats.length, newestAgeMs };
   }
 
   // Memory only: drop users whose sockets all went silent without closing.

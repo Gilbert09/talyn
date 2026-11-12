@@ -170,7 +170,7 @@ describe('away-only delivery', () => {
   it('looks up presence once per owner in a batch', async () => {
     await setup(true);
     await enqueue(); await enqueue();
-    const lookup = vi.spyOn(deskPresence, 'atDesk');
+    const lookup = vi.spyOn(deskPresence, 'inspect');
     await dispatchMobileNotifications(provider());
     expect(lookup).toHaveBeenCalledTimes(1);
     lookup.mockRestore();
@@ -178,7 +178,7 @@ describe('away-only delivery', () => {
 
   it('sends when the presence store fails', async () => {
     await setup(true);
-    const lookup = vi.spyOn(deskPresence, 'atDesk').mockRejectedValue(new Error('redis down'));
+    const lookup = vi.spyOn(deskPresence, 'inspect').mockRejectedValue(new Error('redis down'));
     const push = provider();
     await dispatchMobileNotifications(push);
     expect(push.send).toHaveBeenCalledOnce();
@@ -189,7 +189,7 @@ describe('away-only delivery', () => {
     await register();
     await saveMobilePreferences(owner, defaultMobileNotificationPreferences(workspaceId));
     await enqueue();
-    const lookup = vi.spyOn(deskPresence, 'atDesk');
+    const lookup = vi.spyOn(deskPresence, 'inspect');
     await dispatchMobileNotifications(provider());
     expect(lookup).not.toHaveBeenCalled();
     expect((await fixture.db.select().from(outbox).where(eq(outbox.ownerId, owner)))[0].lastErrorClass).toBe('preferences_disabled');
