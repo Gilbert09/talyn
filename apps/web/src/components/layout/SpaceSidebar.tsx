@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import { CheckCircle2, Circle, CircleDot, Clock, ExternalLink, Loader2, XCircle } from 'lucide-react';
 import type { SpaceSessionRow, SpaceTaskRow } from '@talyn/shared';
 import { cn } from '../../lib/utils';
@@ -12,6 +13,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
 import { MemberAvatar, SessionViewers } from '../spaces/SpaceAvatars';
 import { moveToSpace } from '../spaces/MoveToSpace';
 import { SessionStateIcon } from '../workbench/WorkbenchBadges';
+import { SpaceSessionHoverCard } from '../workbench/SessionHoverCard';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { timeAgo } from '../workbench/new/RecentWorkbenches';
 import { spaceSessionState, type SessionState } from '../../lib/sessionState';
@@ -152,7 +154,6 @@ export function SpaceSessionItem({
       }}
       data-attr="space-session-row"
       aria-current={selected ? 'page' : undefined}
-      title={`${state.label}\n${name}\n${row.repoFullName} · ${row.creator.githubLogin ?? 'A teammate'}${shortcut ? ` (${formatKeys(`mod+alt+${shortcut}`)})` : ''}`}
       className={cn(
         'flex w-full items-center gap-2 rounded-md px-3 py-1 text-left text-[13px] transition-colors',
         selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60',
@@ -165,10 +166,15 @@ export function SpaceSessionItem({
       <SpaceRowPeople row={row} spaceId={spaceId} />
     </div>
   );
-  if (!owner) return item;
+  const card = (trigger: ReactElement) => (
+    <SpaceSessionHoverCard row={row} state={state} shortcut={shortcut ? formatKeys(`mod+alt+${shortcut}`) : null}>
+      {trigger}
+    </SpaceSessionHoverCard>
+  );
+  if (!owner) return card(item);
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{item}</ContextMenuTrigger>
+      {card(<ContextMenuTrigger asChild>{item}</ContextMenuTrigger>)}
       <ContextMenuContent className="min-w-[10rem]">
         <ContextMenuItem onSelect={open}>Open</ContextMenuItem>
         <ContextMenuSeparator />

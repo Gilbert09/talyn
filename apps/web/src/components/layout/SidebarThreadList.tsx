@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { cloneElement, useMemo, useState, type ReactElement } from 'react';
 import { Archive, ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import { splitViewOffered, workbenchDisplayName, type SpaceSessionRow, type Workbench, type WorkbenchChat } from '@talyn/shared';
 import { cn } from '../../lib/utils';
-import { sessionPr, sessionState, spaceSessionState } from '../../lib/sessionState';
+import { sessionPr, sessionState, spaceSessionState, type SessionState } from '../../lib/sessionState';
 import { useBackground } from '../../stores/sessionBackground';
 import { liveThreads, runningSessionCount, threadChildren, threadSummary } from '../../lib/threads';
 import { newestSessions } from '../../lib/sessionOrder';
@@ -11,6 +11,7 @@ import { useNavigationStore } from '../../stores/navigation';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '../ui/context-menu';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from '../workbench/archiveWorkbench';
+import { SpaceSessionHoverCard, WorkbenchHoverCard } from '../workbench/SessionHoverCard';
 import { PrPill, SessionStateIcon } from '../workbench/WorkbenchBadges';
 import { openNewThread } from '../workbench/new/openNewWorkbench';
 import { spacesOffered } from '../../lib/spaces';
@@ -199,25 +200,26 @@ function ThreadRow({
               selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60'
             )}
           >
-            <button
-              type="button"
-              onClick={onSelect}
-              data-attr="sidebar-thread-row"
-              aria-current={selected ? 'page' : undefined}
-              {...sessionDragProps(item.id, splitOn)}
-              title={`${state.label}\n${name}`}
-              className={cn('app-region-no-drag flex min-w-0 flex-1 items-center gap-2 py-1 pl-3 text-left', hasChildren ? 'pr-1' : 'pr-3')}
-            >
-              <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-                <SessionStateIcon state={state} />
-              </span>
-              <span className={cn('min-w-0 flex-1 truncate', state.kind === 'needs_reply' && 'font-semibold')}>{name}</span>
-              {summary && (
-                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground" data-attr="sidebar-thread-summary">
-                  {summary}
+            <ThreadHoverCard thread={thread} state={state} name={name}>
+              <button
+                type="button"
+                onClick={onSelect}
+                data-attr="sidebar-thread-row"
+                aria-current={selected ? 'page' : undefined}
+                {...sessionDragProps(item.id, splitOn)}
+                className={cn('app-region-no-drag flex min-w-0 flex-1 items-center gap-2 py-1 pl-3 text-left', hasChildren ? 'pr-1' : 'pr-3')}
+              >
+                <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                  <SessionStateIcon state={state} />
                 </span>
-              )}
-            </button>
+                <span className={cn('min-w-0 flex-1 truncate', state.kind === 'needs_reply' && 'font-semibold')}>{name}</span>
+                {summary && (
+                  <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground" data-attr="sidebar-thread-summary">
+                    {summary}
+                  </span>
+                )}
+              </button>
+            </ThreadHoverCard>
             <button
               type="button"
               onClick={onToggle}
@@ -290,13 +292,13 @@ function ThreadChildRow({
   const repo = session.repoFullName.split('/').pop() || session.repoFullName;
   const splitOn = useWorkspaceStore((s) => splitViewOffered(s.features));
   return (
+    <WorkbenchHoverCard workbench={session} state={state}>
     <button
       type="button"
       onClick={onSelect}
       data-attr="sidebar-thread-child"
       aria-current={selected ? 'page' : undefined}
       {...sessionDragProps(session.id, splitOn)}
-      title={`${state.label}\n${workbenchDisplayName(session)} · ${session.repoFullName} · ${session.branch}`}
       className={cn(
         'app-region-no-drag flex w-full items-center gap-1.5 rounded-md py-0.5 pl-8 pr-3 text-left text-xs transition-colors',
         selected ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
@@ -313,6 +315,7 @@ function ThreadChildRow({
       {pr && <PrPill number={pr.number} state={pr.state} draft={pr.summary.draft} />}
       {spaceId && <SessionViewers spaceId={spaceId} sessionId={session.id} />}
     </button>
+    </WorkbenchHoverCard>
   );
 }
 
@@ -333,12 +336,12 @@ function SpaceThreadChildRow({
   const name = row.title || row.name;
   const prState = row.pullRequest?.state === 'merged' || row.pullRequest?.state === 'closed' ? row.pullRequest.state : 'open';
   return (
+    <SpaceSessionHoverCard row={row} state={state}>
     <button
       type="button"
       onClick={onSelect}
       data-attr="sidebar-thread-child"
       aria-current={selected ? 'page' : undefined}
-      title={`${state.label}\n${name} · ${row.repoFullName} · ${row.branch}`}
       className={cn(
         'app-region-no-drag flex w-full items-center gap-1.5 rounded-md py-0.5 pl-8 pr-3 text-left text-xs transition-colors',
         selected ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
@@ -355,5 +358,26 @@ function SpaceThreadChildRow({
       {row.pullRequest && <PrPill number={row.pullRequest.number} state={prState} />}
       {spaceId && <SessionViewers spaceId={spaceId} sessionId={row.id} />}
     </button>
+    </SpaceSessionHoverCard>
+  );
+}
+
+/** A loaded thread gets the session hover card. A thread known only from a space list keeps a plain title. */
+function ThreadHoverCard({
+  thread,
+  state,
+  name,
+  children,
+}: {
+  thread: Workbench | null | undefined;
+  state: SessionState;
+  name: string;
+  children: ReactElement<{ title?: string }>;
+}) {
+  if (!thread) return cloneElement(children, { title: `${state.label}\n${name}` });
+  return (
+    <WorkbenchHoverCard workbench={thread} state={state}>
+      {children}
+    </WorkbenchHoverCard>
   );
 }

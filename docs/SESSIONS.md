@@ -15,6 +15,14 @@ Chronological notes from development sessions. Most recent first. See [`CLAUDE.m
 - The briefing has a `## Waiting` section: `talyn_schedule_wakeup` with `until_ci` after a push, a timed wake-up for anything else, `talyn_run_background` for a command that outlives the turn, no waits with the agent's own tools, and load deferred `talyn` tools first. A test in `workbenchSkillPack.test.ts` pins it.
 - Not done: a deny list for Claude Code's `Monitor` and `ScheduleWakeup` in session turns. The guest in YAS starts `claude`, so that change goes there.
 
+## Session hover card in the sidebar (2026-11-12)
+
+A sidebar session row used a native `title` tooltip. It waited about a second and showed two lines of text. Web and desktop now show a card with no delay (`components/workbench/SessionHoverCard.tsx`, a Radix tooltip with `delayDuration={0}`). The card shows the state, the full title, the repository and the branch with its base, and the pull request: title, compact CI pill, review pill, check counts, size and author. It then lists the session facts and the last-activity and start times.
+
+The facts come from `packages/shared/src/sessionGlance.ts`, so the three front ends say the same thing: error, uncommitted and committed changes, background jobs and wake-ups, agent and model (catalogue label), sandbox state and source. The card mounts only while it is open, so a row does no extra store reads until someone points at it. `WorkbenchHoverCard` covers my sessions, thread children and loaded threads. `SpaceSessionHoverCard` covers space rows and adds who started the session. The card stays closed while a row is being renamed. The row and its diff counts lost their `title`, because a native tooltip would show on top of the card.
+
+Mobile has no hover. A long press on a session row puts the same facts (`features/sessions/glance.ts`) in the action sheet's message. The detail screen's menu does not, because the screen already shows them.
+
 ## Background refreshes ran on a closed request transaction (2026-11-12)
 
 **Symptom.** Settings → Repositories showed no sandbox size picker, and the Setup row stayed on "Loading the setup…". At 22:36 UTC the backend stopped answering. The DB watchdog then restarted it at 22:38.

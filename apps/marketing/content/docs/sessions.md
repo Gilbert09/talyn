@@ -31,6 +31,19 @@ Your defaults for new sessions are in **Settings > Sessions**: the agent, the mo
 
 Claude adds itself as a commit co-author by default. Turn this off under **Settings > Sessions > Commits**.
 
+## See a session at a glance
+
+Hover over a session in the sidebar to see its details immediately. The card shows:
+
+- The session's state, its full title, the repository and the branch.
+- The pull request: its title, its checks and their counts, its review status and its size.
+- Uncommitted changes, and committed changes when there is no pull request yet.
+- The agent and the model, and whether the sandbox is awake or asleep.
+- Running background jobs, a scheduled wake-up, where the session started (for example a Slack channel), and an error if there is one.
+- When the session was last active and when it started.
+
+A session in a space also shows who started it. In the mobile app, press and hold a session. The menu shows its state, branch, changes, agent, sandbox and times above the actions.
+
 ## The session screen
 
 The chat is in the middle. Each message you send shows when you sent it, for example "5 minutes ago". Each finished agent reply shows when it ended. Hover over a time to see the full date and time. The session header shows **Last message** with the time of the newest message in the session.

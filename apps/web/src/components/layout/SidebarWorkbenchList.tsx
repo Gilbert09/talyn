@@ -18,6 +18,7 @@ import { usePullRequestStore } from '../../stores/pullRequests';
 import { isPrOnlyUnseen, useWorkbenchStore } from '../../stores/workbenches';
 import { useNavigationStore } from '../../stores/navigation';
 import { SessionStateIcon } from '../workbench/WorkbenchBadges';
+import { WorkbenchHoverCard } from '../workbench/SessionHoverCard';
 import { ThreadTag } from '../threads/ThreadChip';
 import { SlackSessionMark } from '../workbench/SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
@@ -240,6 +241,12 @@ export function WorkbenchRow({
   return (
     <>
       <ContextMenu>
+        <WorkbenchHoverCard
+          workbench={workbench}
+          state={state}
+          shortcut={shortcut ? formatKeys(`mod+alt+${shortcut}`) : null}
+          disabled={rename.editing}
+        >
         <ContextMenuTrigger asChild>
           <div
             role="button"
@@ -267,7 +274,6 @@ export function WorkbenchRow({
               'flex w-full items-center gap-2 rounded-md px-3 py-1 text-left text-[13px] transition-colors',
               selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60'
             )}
-            title={`${state.label}\n${workbenchDisplayName(workbench)} · ${workbench.branch}${shortcut ? ` (${formatKeys(`mod+alt+${shortcut}`)})` : ''}`}
           >
             <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
               <SessionStateIcon state={state} />
@@ -285,10 +291,7 @@ export function WorkbenchRow({
             )}
             {diff && !done && (
               // All or nothing: when the counts do not fit, they wrap to a hidden second line.
-              <span
-                className="flex h-4 min-w-0 shrink flex-wrap justify-end overflow-hidden font-mono text-[11px] leading-4 tabular-nums"
-                title={`+${diff.added} −${diff.removed}`}
-              >
+              <span className="flex h-4 min-w-0 shrink flex-wrap justify-end overflow-hidden font-mono text-[11px] leading-4 tabular-nums">
                 <span className="w-0" aria-hidden />
                 <span className="whitespace-nowrap">
                   <span className="text-success">+{compactCount(diff.added)}</span>{' '}
@@ -298,10 +301,11 @@ export function WorkbenchRow({
             )}
             <ThreadTag threadId={workbench.threadId} />
             <SlackSessionMark source={slackSourceOf(workbench)} />
-            {showBackgroundMark && <span title={backgroundTitle} aria-label={backgroundTitle}><Timer className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground', runningJob && 'text-emerald-500')} aria-hidden /></span>}
+            {showBackgroundMark && <span aria-label={backgroundTitle}><Timer className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground', runningJob && 'text-emerald-500')} aria-hidden /></span>}
             {trailing}
           </div>
         </ContextMenuTrigger>
+        </WorkbenchHoverCard>
         <ContextMenuContent className="min-w-[10rem]">
           <ContextMenuItem onSelect={onSelect}>Open</ContextMenuItem>
           {splitOn && (
