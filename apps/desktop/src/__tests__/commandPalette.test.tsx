@@ -44,6 +44,19 @@ function wb(id: string, over: Partial<Workbench> = {}): Workbench {
   } as Workbench;
 }
 
+/** The palette rows in screen order, by their id. */
+function rowIds(): string[] {
+  return screen.queryAllByRole('option').map((option) => option.getAttribute('data-value') ?? '');
+}
+
+function rowsOfKind(kind: string): HTMLElement[] {
+  return screen.queryAllByRole('option').filter((option) => option.querySelector('[data-palette-kind]')?.textContent === kind);
+}
+
+function search(term: string): void {
+  fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: term } });
+}
+
 beforeAll(() => {
   (global as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
     observe() {}
@@ -141,8 +154,7 @@ describe('CommandPalette', () => {
     const input = screen.getByPlaceholderText(/Search sessions/);
     for (const term of ['report', 'fix/hidden', 'hidden/service']) {
       fireEvent.change(input, { target: { value: term } });
-      const group = await screen.findByText('Archived');
-      expect(within(group.closest('[cmdk-group]') as HTMLElement).getAllByRole('option')).toHaveLength(1);
+      await waitFor(() => expect(rowsOfKind('Archived')).toHaveLength(1));
     }
     expect(jest.mocked(api.workbenches.list)).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('other')).not.toBeInTheDocument();
@@ -154,8 +166,7 @@ describe('CommandPalette', () => {
     ));
     render(<CommandPalette />);
     fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'past-' } });
-    const group = await screen.findByText('Archived');
-    expect(within(group.closest('[cmdk-group]') as HTMLElement).getAllByRole('option')).toHaveLength(8);
+    await waitFor(() => expect(rowsOfKind('Archived')).toHaveLength(8));
   });
 
   it('opens an archived session without restoring it', async () => {
@@ -176,7 +187,7 @@ describe('CommandPalette', () => {
     render(<CommandPalette />);
     fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'gone' } });
     await waitFor(() => expect(jest.mocked(api.workbenches.list)).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText('Archived')).not.toBeInTheDocument();
+    expect(rowsOfKind('Archived')).toHaveLength(0);
     expect(screen.getByPlaceholderText(/Search sessions/)).toBeInTheDocument();
   });
 
@@ -245,6 +256,72 @@ describe('CommandPalette', () => {
     fireEvent.click(screen.getByText('Toggle Sidebar'));
     expect(useNavigationStore.getState().paletteOpen).toBe(false);
     expect(useWorkspaceStore.getState().sidebarCollapsed).toBe(true);
+  });
+});
+
+describe('CommandPalette search ranking', () => {
+  it('puts the best match first, whatever its type', () => {
+    useWorkbenchStore.getState().setWorkbenches('ws1', [wb('chart', { branch: 'feat/insights-chart' })]);
+    render(<CommandPalette />);
+    search('insights');
+    expect(rowIds()).toEqual(['go:insights', 'session:chart']);
+    expect(document.querySelectorAll('[cmdk-group-heading]')).toHaveLength(0);
+    expect(rowsOfKind('Navigate')).toHaveLength(1);
+    expect(rowsOfKind('Session')).toHaveLength(1);
+  });
+
+  it('ranks an exact label, then a prefix, a word, a substring, a keyword and a fuzzy match', () => {
+    useWorkbenchStore.getState().setWorkbenches('ws1', [
+      wb('fuzzy', { name: 'o-s-l-o', updatedAt: '2026-10-13T06:00:00Z' }),
+      wb('keyword', { name: 'keyword', repoFullName: 'acme/oslo', updatedAt: '2026-10-13T05:00:00Z' }),
+      wb('substring', { name: 'gosloop', updatedAt: '2026-10-13T04:00:00Z' }),
+      wb('word', { name: 'trip to oslo', updatedAt: '2026-10-13T03:00:00Z' }),
+      wb('prefix', { name: 'oslo trip', updatedAt: '2026-10-13T02:00:00Z' }),
+      wb('exact', { name: 'Oslo', updatedAt: '2026-10-13T01:00:00Z' }),
+    ]);
+    render(<CommandPalette />);
+    search('oslo');
+    expect(rowIds()).toEqual([
+      'session:exact',
+      'session:prefix',
+      'session:word',
+      'session:substring',
+      'session:keyword',
+      'session:fuzzy',
+    ]);
+  });
+
+  it('selects the best match, so Enter opens it', () => {
+    useWorkbenchStore.getState().setWorkbenches('ws1', [wb('lisbon', { branch: 'fix/billing' })]);
+    render(<CommandPalette />);
+    search('billing');
+    expect(rowIds()).toEqual(['go:settings:billing', 'session:lisbon']);
+    expect(screen.getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(screen.getByPlaceholderText(/Search sessions/), { key: 'Enter' });
+    expect(useNavigationStore.getState().route).toEqual({ view: 'settings', section: 'billing' });
+  });
+
+  it('matches words in any order', () => {
+    render(<CommandPalette />);
+    search('billing settings');
+    expect(rowIds()[0]).toBe('go:settings:billing');
+  });
+
+  it('shows the groups again when the search is cleared', () => {
+    render(<CommandPalette />);
+    search('oslo');
+    expect(document.querySelectorAll('[cmdk-group-heading]')).toHaveLength(0);
+    search('');
+    expect(screen.getByText('Sessions')).toBeInTheDocument();
+    expect(screen.getByText('Navigate')).toBeInTheDocument();
+    expect(rowsOfKind('Session')).toHaveLength(0);
+  });
+
+  it('says so when nothing matches', () => {
+    render(<CommandPalette />);
+    search('zzzzqqq');
+    expect(rowIds()).toEqual([]);
+    expect(screen.getByText('Nothing matches.')).toBeInTheDocument();
   });
 });
 
