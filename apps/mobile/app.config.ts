@@ -169,6 +169,13 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     android: {
       package: identity.androidPackage,
+      // Android 8+ masks launcher icons, and Android 16 also shows this icon on notifications. A plain square icon is
+      // shrunk onto a white circle; the adaptive layers fill the shape. Sources: assets/adaptive-*.svg.
+      adaptiveIcon: {
+        foregroundImage: './assets/adaptive-foreground.png',
+        backgroundImage: './assets/adaptive-background.png',
+        monochromeImage: './assets/adaptive-monochrome.png',
+      },
       ...(googleServicesFile ? { googleServicesFile } : {}),
       versionCode: Number(release.build),
       permissions: ['android.permission.INTERNET', 'android.permission.ACCESS_NETWORK_STATE', 'android.permission.VIBRATE', 'android.permission.POST_NOTIFICATIONS'],

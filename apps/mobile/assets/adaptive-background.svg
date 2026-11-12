@@ -1,0 +1,17 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Android adaptive icon background: the desktop icon's gradient and halo, full bleed (Android applies the mask). -->
+  <defs>
+    <linearGradient id="bg" x1="512" y1="0" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#cf7553"/>
+      <stop offset="0.5" stop-color="#c25e3a"/>
+      <stop offset="1" stop-color="#9a4524"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="512" cy="480" r="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe6cf" stop-opacity="0.35"/>
+      <stop offset="0.6" stop-color="#f3c8a8" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#9a4524" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#halo)"/>
+</svg>
