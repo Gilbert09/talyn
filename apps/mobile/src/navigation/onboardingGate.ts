@@ -2,10 +2,14 @@ import type { WorkbenchReadiness, WorkspaceIntegrations } from '@talyn/shared';
 
 import type { LoadState } from '../workflow/model';
 
-export type OnboardingStep = 'github' | 'repos' | 'agent';
+/**
+ * `notifications` is optional and comes last. The gate never opens it: a
+ * restart after the agent step goes home, and Settings can turn alerts on.
+ */
+export type OnboardingStep = 'github' | 'repos' | 'agent' | 'notifications';
 export type OnboardingGate = 'loading' | OnboardingStep | 'done';
 
-export const ONBOARDING_STEPS: readonly OnboardingStep[] = ['github', 'repos', 'agent'];
+export const ONBOARDING_STEPS: readonly OnboardingStep[] = ['github', 'repos', 'agent', 'notifications'];
 
 interface Loaded<T> { status: LoadState; data?: T }
 

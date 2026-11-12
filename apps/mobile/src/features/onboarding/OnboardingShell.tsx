@@ -14,6 +14,7 @@ export const STEP_TITLES: Record<OnboardingStep, string> = {
   github: 'Connect GitHub',
   repos: 'Choose where your agent will work.',
   agent: 'Connect your agent',
+  notifications: 'Turn on notifications',
 };
 
 /** Numbered dots: done steps are green with a check, the current one is outlined in the accent. */

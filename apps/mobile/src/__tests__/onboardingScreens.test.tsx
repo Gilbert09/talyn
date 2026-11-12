@@ -7,6 +7,20 @@ import { fixture } from './workflowFixtures';
 let mockWorkflow = fixture();
 const mockContextSnapshot = { status: 'ready', spaceId: null };
 const mockWorkspace = { status: 'ready', choices: [{ id: 'one', name: 'One' }], selected: 'one' };
+type MockPushState = 'disabled' | 'loading' | 'ready' | 'denied' | 'unavailable' | 'failed';
+const mockPreferences = { schemaVersion: 1, workspaceId: 'one', enabled: false,
+  categories: { session_update: true, pr_review: true, ci_failure: true, merge_ready: true, human_gate: true },
+  quietHours: { enabled: false, start: '22:00', end: '08:00' }, timezone: 'UTC', sensitivePreview: false };
+const mockNotifications = {
+  snapshot: { state: 'disabled' as MockPushState, preferences: mockPreferences as typeof mockPreferences | null, providerAvailable: true, tapIssue: null },
+  listeners: new Set<() => void>(),
+  set(state: MockPushState) { this.snapshot = { ...this.snapshot, state }; this.listeners.forEach((listener) => listener()); },
+  getSnapshot: () => mockNotifications.snapshot,
+  subscribe: (listener: () => void) => { mockNotifications.listeners.add(listener); return () => { mockNotifications.listeners.delete(listener); }; },
+  enableDevice: jest.fn(async () => { mockNotifications.set('ready'); }),
+  refresh: jest.fn(async () => {}),
+  setNavigation: jest.fn(), retryTap: jest.fn(), clearTapIssue: jest.fn(),
+};
 jest.mock('@talyn/client/native', () => {
 const github = {
   getStatus: jest.fn(async () => ({ configured: true, connected: false })),
@@ -35,11 +49,12 @@ jest.mock('../auth/AuthProvider', () => ({
   useAuth: () => ({ status: 'signedIn', user: { id: 'alice', email: 'alice@example.com' }, issue: null }),
   useNetwork: () => 'online',
   useWorkspace: () => mockWorkspace,
-  useMobileRuntime: () => ({ workflow: mockWorkflow.store, lifecycle: mockWorkflow.lifecycle,
+  useMobileRuntime: () => ({ workflow: mockWorkflow.store, lifecycle: mockWorkflow.lifecycle, notifications: mockNotifications,
     auth: { signIn: jest.fn(), signOut: jest.fn(), cancelSignIn: jest.fn(), restore: jest.fn() },
     workspace: { getSnapshot: () => mockWorkspace, load: jest.fn(), select: jest.fn() },
     context: { getSnapshot: () => mockContextSnapshot, subscribe: () => () => {}, select: jest.fn() } }),
 }));
+jest.mock('../lib/analytics', () => ({ ...jest.requireActual('../lib/analytics'), trackEvent: jest.fn() }));
 jest.mock('../features/usage/data', () => ({ useBillingStatus: () => ({ status: 'idle', data: undefined, stale: false, refreshing: false }) }));
 jest.mock('../features/agents/connect/ConnectAgentSheet', () => ({ ConnectAgentPanel: () => null, ConnectAgentSheet: () => null }));
 
@@ -52,6 +67,8 @@ import OnboardingIndex from '../../app/onboarding';
 import GithubStep from '../../app/onboarding/github';
 import ReposStep from '../../app/onboarding/repos';
 import AgentStep from '../../app/onboarding/agent';
+import NotificationsStep from '../../app/onboarding/notifications';
+import { trackEvent } from '../lib/analytics';
 import { onboardingProgress, progressKey } from '../features/onboarding/progress';
 import { RepositoriesPanel } from '../features/repositories/RepositoriesScreen';
 import { clearRepoCache } from '../features/repositories/data';
@@ -59,7 +76,7 @@ import { clearRepoCache } from '../features/repositories/data';
 const routes = {
   _layout: RootLayout, index: Index, '(drawer)/_layout': DrawerLayout, '(drawer)/home': HomeRoute,
   'onboarding/_layout': OnboardingLayout, 'onboarding/index': OnboardingIndex, 'onboarding/github': GithubStep,
-  'onboarding/repos': ReposStep, 'onboarding/agent': AgentStep,
+  'onboarding/repos': ReposStep, 'onboarding/agent': AgentStep, 'onboarding/notifications': NotificationsStep,
 };
 const insets = { frame: { x: 0, y: 0, width: 400, height: 900 }, insets: { top: 0, left: 0, right: 0, bottom: 0 } };
 const key = progressKey('alice', 'one');
@@ -75,6 +92,10 @@ beforeEach(() => {
   mockWorkflow = fixture();
   onboardingProgress.finish(key);
   clearRepoCache();
+  mockNotifications.snapshot = { state: 'disabled', preferences: mockPreferences, providerAvailable: true, tapIssue: null };
+  mockNotifications.enableDevice.mockClear();
+  mockNotifications.refresh.mockClear();
+  jest.mocked(trackEvent).mockClear();
 });
 afterEach(() => { mockWorkflow.store.dispose(); });
 
@@ -85,7 +106,7 @@ describe('onboarding gate', () => {
     await waitFor(() => expect(routerScreen).toHavePathname('/onboarding/github'));
     expect(await routerScreen.findByRole('header', { name: 'Connect GitHub' })).toBeVisible();
     expect(routerScreen.getByRole('button', { name: 'Connect GitHub' })).toBeVisible();
-    expect(routerScreen.getByRole('progressbar', { name: 'Step 1 of 3' })).toBeVisible();
+    expect(routerScreen.getByRole('progressbar', { name: 'Step 1 of 4' })).toBeVisible();
     expect(routerScreen.getByRole('button', { name: 'Next' })).toBeDisabled();
     expect(onboardingProgress.read(key)).toBe(true);
   });
@@ -117,7 +138,7 @@ describe('onboarding gate', () => {
     await renderRouter(routes, { initialUrl: '/home' });
     await waitFor(() => expect(routerScreen).toHavePathname('/onboarding/agent'));
     expect(await routerScreen.findByLabelText('Claude Code: Connect Claude.')).toBeVisible();
-    expect(routerScreen.getByRole('button', { name: 'Start using Talyn' })).toBeDisabled();
+    expect(routerScreen.getByRole('button', { name: 'Next' })).toBeDisabled();
     expect(routerScreen.getByText('Connect Claude or ChatGPT to continue.')).toBeVisible();
     expect(routerScreen.queryByRole('button', { name: 'Skip for now' })).toBeNull();
   });
@@ -130,8 +151,83 @@ describe('onboarding gate', () => {
     await renderRouter(routes, { initialUrl: '/home' });
     await waitFor(() => expect(routerScreen).toHavePathname('/onboarding/agent'));
     await act(async () => { fireEvent.press(await routerScreen.findByRole('button', { name: 'Skip for now' })); });
+    await waitFor(() => expect(routerScreen).toHavePathname('/onboarding/notifications'));
+    await act(async () => { fireEvent.press(await routerScreen.findByRole('button', { name: 'Skip for now' })); });
     await waitFor(() => expect(routerScreen).toHavePathname('/home'));
     expect(onboardingProgress.read(key)).toBe(false);
+    expect(trackEvent).not.toHaveBeenCalledWith('onboarding_completed', expect.anything());
+  });
+});
+
+describe('notifications step', () => {
+  const agentReadiness = { sandbox: { ok: true, reasons: [], agents: { claude: { ok: true }, codex: { ok: false } } } };
+  async function openStep() {
+    onboardingProgress.start(key);
+    mockWorkflow.api.workspaces.get.mockResolvedValue(githubWorkspace as never);
+    mockWorkflow.api.workbenches.readiness.mockResolvedValue(agentReadiness as never);
+    await renderRouter(routes, { initialUrl: '/onboarding/notifications' });
+    expect(await routerScreen.findByRole('header', { name: 'Turn on notifications' })).toBeVisible();
+  }
+
+  it('opens after the agent step', async () => {
+    onboardingProgress.start(key);
+    mockWorkflow.api.workspaces.get.mockResolvedValue(githubWorkspace as never);
+    mockWorkflow.api.workbenches.readiness.mockResolvedValue(agentReadiness as never);
+    await renderRouter(routes, { initialUrl: '/onboarding/agent' });
+    await act(async () => { fireEvent.press(await routerScreen.findByRole('button', { name: 'Next' })); });
+    await waitFor(() => expect(routerScreen).toHavePathname('/onboarding/notifications'));
+    expect(routerScreen.getByRole('progressbar', { name: 'Step 4 of 4' })).toBeVisible();
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_step_completed', { step: 'agent' });
+  });
+
+  it('asks for permission only when the person taps, then finishes', async () => {
+    await openStep();
+    expect(routerScreen.getByText('A session needs your input')).toBeVisible();
+    expect(mockNotifications.enableDevice).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.press(routerScreen.getByRole('button', { name: 'Turn on notifications' })); });
+    expect(mockNotifications.enableDevice).toHaveBeenCalledTimes(1);
+    expect(await routerScreen.findByText('Notifications are on for this device.')).toBeVisible();
+    expect(routerScreen.queryByRole('button', { name: 'Skip for now' })).toBeNull();
+    await act(async () => { fireEvent.press(routerScreen.getByRole('button', { name: 'Start using Talyn' })); });
+    await waitFor(() => expect(routerScreen).toHavePathname('/home'));
+    expect(onboardingProgress.read(key)).toBe(false);
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_step_completed', { step: 'notifications' });
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', expect.objectContaining({ agent_connected: true, notifications_enabled: true }));
+  });
+
+  it('lets the person skip without a permission request', async () => {
+    await openStep();
+    await act(async () => { fireEvent.press(routerScreen.getByRole('button', { name: 'Skip for now' })); });
+    await waitFor(() => expect(routerScreen).toHavePathname('/home'));
+    expect(mockNotifications.enableDevice).not.toHaveBeenCalled();
+    expect(trackEvent).not.toHaveBeenCalledWith('onboarding_step_completed', { step: 'notifications' });
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', expect.objectContaining({ notifications_enabled: false }));
+  });
+
+  it.each([
+    ['denied', /permission is denied/, 'Open device notification settings'],
+    ['unavailable', /not available on this device/, null],
+  ] as const)('lets the person finish when permission is %s', async (state, message, extra) => {
+    mockNotifications.snapshot = { ...mockNotifications.snapshot, state };
+    await openStep();
+    expect(routerScreen.getByRole('alert', { name: message })).toBeVisible();
+    if (extra) expect(routerScreen.getByRole('button', { name: extra })).toBeVisible();
+    expect(routerScreen.queryByRole('button', { name: 'Turn on notifications' })).toBeNull();
+    expect(routerScreen.getByRole('button', { name: 'Start using Talyn' })).toBeEnabled();
+  });
+
+  it('retries after a failure', async () => {
+    mockNotifications.snapshot = { ...mockNotifications.snapshot, state: 'failed' };
+    await openStep();
+    expect(routerScreen.getByRole('alert', { name: /could not be turned on/ })).toBeVisible();
+    await act(async () => { fireEvent.press(routerScreen.getByRole('button', { name: 'Turn on notifications' })); });
+    expect(mockNotifications.enableDevice).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads missing settings before it asks', async () => {
+    mockNotifications.snapshot = { ...mockNotifications.snapshot, preferences: null };
+    await openStep();
+    expect(mockNotifications.refresh).toHaveBeenCalled();
   });
 });
 

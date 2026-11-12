@@ -55,5 +55,5 @@ describe('onboarding gate', () => {
     ['a sandbox that is down', ready({}, false), true],
   ])('agentStepSkippable with %s', (_name, readiness, expected) => expect(agentStepSkippable(readiness)).toBe(expected));
 
-  it.each([['github', 0], ['repos', 1], ['agent', 2]] as const)('puts %s at position %i', (step, index) => expect(stepIndex(step)).toBe(index));
+  it.each([['github', 0], ['repos', 1], ['agent', 2], ['notifications', 3]] as const)('puts %s at position %i', (step, index) => expect(stepIndex(step)).toBe(index));
 });
