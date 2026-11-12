@@ -7,7 +7,7 @@ import { useAdminQuery } from '../../hooks/useAdminQuery';
 import { Page, Pill } from '../../components/layout/Page';
 import { DataTable, type Column } from '../../components/ui/DataTable';
 import { StatCard } from '../../components/ui/StatCard';
-import { COMPUTE_RANGES, ComputeHoursPanel } from '../../components/admin/ComputeHoursPanel';
+import { COMPUTE_RANGES, ComputeHoursPanel, type ComputeRange } from '../../components/admin/ComputeHoursPanel';
 import { absolute, pct, relativeAge } from '../../lib/format';
 import { ROUTES, routeTo } from '../../lib/routes';
 
@@ -15,14 +15,21 @@ type Sort = 'period_hours' | 'all_time_hours' | 'sessions' | 'running' | 'last_a
 
 const hours = (value: number) => value.toFixed(1);
 
+// `range=today|yesterday` or `days=N`, as the API takes them. 30 days is the default.
+function readRange(params: URLSearchParams): ComputeRange {
+  const range = params.get('range');
+  if (range === 'today' || range === 'yesterday') return range;
+  const days = Number(params.get('days'));
+  return (COMPUTE_RANGES as readonly unknown[]).includes(days) ? (days as ComputeRange) : 30;
+}
+
 export function ComputeUsagePage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const q = params.get('q') ?? '';
   const sort = (params.get('sort') ?? 'period_hours') as Sort;
   const order = params.get('order') === 'asc' ? 'asc' : 'desc';
-  const rawDays = Number(params.get('days'));
-  const days = (COMPUTE_RANGES as readonly number[]).includes(rawDays) ? rawDays : 30;
+  const range = readRange(params);
   const userId = params.get('user') ?? '';
   const [search, setSearch] = useState(q);
 
@@ -45,8 +52,10 @@ export function ComputeUsagePage() {
     { deps: [q, sort, order] }
   );
   const daily = useAdminQuery(
-    () => api.admin.computeDaily({ days, userId: userId || undefined }),
-    { deps: [days, userId] }
+    () => api.admin.computeDaily(
+      typeof range === 'number' ? { days: range, userId: userId || undefined } : { range, userId: userId || undefined }
+    ),
+    { deps: [range, userId] }
   );
 
   function setParam(key: string, value: string) {
@@ -54,6 +63,17 @@ export function ComputeUsagePage() {
       const next = new URLSearchParams(current);
       if (value) next.set(key, value);
       else next.delete(key);
+      return next;
+    }, { replace: true });
+  }
+
+  function setRange(value: ComputeRange) {
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete('days');
+      next.delete('range');
+      if (typeof value === 'string') next.set('range', value);
+      else if (value !== 30) next.set('days', String(value));
       return next;
     }, { replace: true });
   }
@@ -186,9 +206,9 @@ export function ComputeUsagePage() {
       <ComputeHoursPanel
         data={daily.data}
         error={daily.error}
-        days={days}
+        range={range}
         userId={userId}
-        onDaysChange={(value) => setParam('days', value === 30 ? '' : String(value))}
+        onRangeChange={setRange}
         onUserChange={(value) => setParam('user', value)}
       />
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
