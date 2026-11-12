@@ -49,13 +49,10 @@ export interface NavItem {
 }
 
 /**
- * Five entries. The desktop bar has a logo and three buttons to fit beside
- * them, and "Download for Windows" is wide, so keep the labels to one word.
- * Sessions and threads lead because the relaunch leads with them.
+ * Kept short on purpose (2026-11-12): the Features menu already lists
+ * sessions, threads and the rest, and a short bar is easier to scan.
  */
 export const nav: NavItem[] = [
-  { label: "Sessions", href: "features/sessions" },
-  { label: "Threads", href: "features/threads" },
   { label: "Features", href: "features", group: "features" },
   { label: "Pricing", href: "pricing" },
   { label: "Docs", href: "docs" },
@@ -76,7 +73,7 @@ export const hero = {
    * down, at the latest).
    */
   announcement: {
-    label: "Leaving Conductor Cloud? Your conductor.json works here",
+    label: "Conductor Cloud closes Nov 20. See how to move",
     href: "/compare/conductor",
   } as { label: string; href: string } | null,
   // Leads with the cloud benefit: the agents run on our machines, not yours.
@@ -108,167 +105,61 @@ export const hero = {
   microtrust: "Free with 10 box-hours a month. For GitHub, on macOS, Windows, Linux or your browser.",
 };
 
-/** How a session works. Carries the `#how` anchor older links point at. */
-export const sessions = {
-  kicker: "Sessions",
-  title: "From prompt to pull request.",
-  sub: "Describe the task. Talyn makes the branch, starts the sandbox and hands it to your agent.",
-  steps: [
-    {
-      title: "Describe it",
-      body: "Type what you want done. Talyn names the session and its branch from your words.",
-    },
-    {
-      title: "Let it work",
-      body: "The agent reads, edits and runs commands in its own sandbox. Send more messages while it works and they wait their turn.",
-    },
-    {
-      title: "Check it",
-      body: "Read the diff, browse the files, open a terminal or start your app with a run script. Roll the files back to any earlier message.",
-    },
-    {
-      title: "Ship it",
-      body: "One button opens the pull request. The same button then fixes checks, resolves conflicts and merges.",
-    },
-  ],
-  link: "How sessions work",
-};
-
-/** The sandbox facts: parallel, fast, free when asleep, safe. */
-export const sandboxes = {
-  kicker: "Sandboxes",
-  title: "Run sessions side by side.",
-  sub: "Every session gets its own sandbox. Start the next task while the last one runs.",
-  items: [
-    {
-      title: "Ready in seconds",
-      body: "Talyn builds an image of your repository with its setup already done. A new session starts from that image, not from a clean machine.",
-    },
-    {
-      title: "Asleep costs nothing",
-      body: "A sandbox that sits idle for 3 minutes goes to sleep, and a sleeping sandbox is free. Your next message wakes it.",
-    },
-    {
-      title: "Read it without waking it",
-      body: "Talyn keeps a copy of each session's changes and files. You can review a sleeping session without starting its sandbox.",
-    },
-    {
-      title: "Your setup, every time",
-      body: "Add setup steps and your dotfiles once. Talyn builds them into the image, and suggests steps it sees your sessions repeat.",
-    },
-    {
-      title: "Work is saved as you go",
-      body: "After every turn, Talyn saves the work you have not pushed. If a sandbox is lost, the next one restores it.",
-    },
-    {
-      title: "Sessions remember",
-      body: "Agents save short notes as they learn your codebase. The next session reads them, so you explain things once.",
-    },
-  ],
-};
-
-/** Threads: one conversation that runs sessions across repositories. */
-export const threads = {
-  kicker: "Threads",
-  title: "One conversation, many repositories.",
-  sub: "Give a thread a goal. It starts a session on every repository that needs a change.",
-  bullets: [
-    "It hears when a session finishes, opens a pull request or needs an answer.",
-    "Open any of its sessions to read the diff or step in.",
-    "It stops when its sessions stop making progress, and waits for you.",
-  ],
-  link: "How threads work",
-};
-
-/** PRs on autopilot: the GitHub panel, fix runs, the merge queue, review. */
-export const pullRequests = {
-  kicker: "Pull requests",
-  title: "Your pull requests, kept green.",
-  sub: "Every PR you own and every review you owe, blocked ones first. One click sends the fix.",
-  items: [
-    {
-      title: "Fix it in one click",
-      body: "Failing checks, a merge conflict or a review comment. The agent pushes the fix to the same branch.",
-      href: "/features/fix-pull-requests",
-    },
-    {
-      title: "A merge queue that fixes",
-      body: "Queue a ready pull request and Talyn merges it when it is green. If it falls behind or breaks first, an agent fixes it.",
-      href: "/features/merge-queue",
-    },
-    {
-      title: "Code review in the app",
-      body: "Several reviewers read the change, then a check drops what it cannot back up. Findings reach GitHub only if you post them.",
-      href: "/features/code-review",
-    },
-  ],
-};
-
-/** Automation: loops, workflows, Slack, MCP servers, skills, the API. */
-export const automation = {
-  kicker: "Automation",
-  title: "Work that starts without you.",
-  sub: "Set it up once. It runs in the cloud, even with the app closed.",
-  items: [
-    {
-      title: "Loops",
-      body: "Run a prompt on a schedule. Every weekday at 9, every Monday, or any cron expression.",
-      href: "/features/loops",
-    },
-    {
-      title: "Workflows",
-      body: "Rules for pull request events. When checks fail on a dependency bump, send an agent. When a PR is approved and green, queue it.",
-      href: "/features/workflows",
-    },
-    {
-      title: "Slack",
-      body: "React with your emoji, mention Talyn or send it a message, and a session starts. Its status shows as reactions on your message.",
-      href: "/features/slack",
-    },
-    {
-      title: "MCP servers",
-      body: "Connect Linear, Sentry or your own server. The agent uses the tools, and the keys stay outside the sandbox.",
-      href: "/features/mcp-servers",
-    },
-    {
-      title: "Skills",
-      body: "Run your SKILL.md playbooks on any pull request: a security pass, a review checklist, a changelog.",
-      href: "/features/skills",
-    },
-    {
-      title: "Public API",
-      body: "Start sessions, send messages and read the results from your own scripts with a personal access token.",
-      href: site.apiDocsUrl,
-    },
-  ],
-};
-
 /**
- * Headed by the AGENTS, not by our provider names. What a reader recognises
- * is Claude and ChatGPT; "Talyn Fleet" is the one name on the page they have
- * no reason to know. The fleet is stated once, in `note`, as a description.
+ * The three reasons to use Talyn, directly under the hero. Competitors each
+ * claim one or two of these (Codex and Devin: laptop closed; T3 Code and
+ * Sculptor: your own plan; Devin: to the merged PR). None claims all three.
  */
-export const providers = {
-  kicker: "Agents",
-  title: "Bring your Claude or ChatGPT plan.",
-  sub: "Claude Code or Codex, on the plan you already pay for. Talyn charges for sandboxes, not tokens.",
-  items: [
-    {
-      name: "Claude Code",
-      mark: "claude" as const,
-      meta: "On your Claude Pro or Max plan",
-      body: "Sign in with Claude and every session uses that subscription. No API key and no metered credits.",
-    },
-    {
-      name: "Codex",
-      mark: "codex" as const,
-      meta: "On your ChatGPT Plus or Pro plan",
-      body: "Sign in with ChatGPT and sessions run Codex on your plan. Connect both and pick per session.",
-    },
-  ],
-  note: "Each sandbox is a Firecracker microVM on our own hardware. Your credentials are added from outside it, so no token is ever inside the machine that runs your code. PR fixes and loops can also run on PostHog Code.",
-  link: "How the sandbox and your credentials work",
-};
+export const reasons: Array<{ icon: "cloud" | "key" | "merge"; title: string; body: string }> = [
+  {
+    icon: "cloud",
+    title: "Runs in the cloud, not on your laptop",
+    body: "Every task gets its own sandbox. Close the laptop and the agents keep working. A sleeping sandbox costs nothing.",
+  },
+  {
+    icon: "key",
+    title: "On the Claude or ChatGPT plan you have",
+    body: "Claude Code and Codex sign in with your own subscription. We charge for sandboxes, never for tokens.",
+  },
+  {
+    icon: "merge",
+    title: "Finishes at a merged pull request",
+    body: "It opens the PR, then fixes failing checks, conflicts and review comments until it is green.",
+  },
+];
+
+/** The home page body, one row per promise. Details live behind each link. */
+export const showcase = [
+  {
+    id: "parallel",
+    title: "Run as many as you need.",
+    body: "Each session has its own branch and sandbox, so agents never touch each other's files. Give a thread a goal and it starts a session on every repository that needs one.",
+    link: "How sessions work",
+    href: "/features/sessions",
+  },
+  {
+    id: "pull-requests",
+    title: "Every task ends in a merged PR.",
+    body: "Talyn opens the pull request and keeps it green. Failing checks, a merge conflict or a review comment each get a fix on the same branch. Queue it and it merges when it is ready.",
+    link: "How pull requests work",
+    href: "/features/fix-pull-requests",
+  },
+  {
+    id: "integrations",
+    title: "Work that starts without you.",
+    body: "Connect GitHub, Slack or a schedule, and add automations. A failing check, a Slack message or 9 a.m. on a weekday starts the session for you.",
+    link: "See integrations",
+    href: "/docs/integrations",
+  },
+] as const;
+
+/** The questions kept on the home page: the ones visitors open before they download. */
+export const homeFaqQuestions = [
+  "Is my code safe?",
+  "Will it merge something without me asking?",
+  "How is a session different from Claude Code on my laptop?",
+  "Does it work with GitLab or Bitbucket?",
+];
 
 /** The /features hub's "why" grid. */
 export const why = {
