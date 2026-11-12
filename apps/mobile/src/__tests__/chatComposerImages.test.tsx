@@ -28,7 +28,7 @@ const mockPicker = jest.requireMock('expo-image-picker') as Record<'launchImageL
 const mockActions = {
   stop: jest.fn(), approvePlan: jest.fn(), setPlanMode: jest.fn(),
   send: jest.fn(async () => ({ queued: false })),
-  uploadImage: jest.fn(async (_id: string, file: { name: string; mimeType: string }) => ({ name: file.name, mimeType: file.mimeType, path: `.context/attachments/${file.name}` })),
+  uploadAttachment: jest.fn(async (_id: string, file: { name: string; mimeType: string }) => ({ name: file.name, mimeType: file.mimeType, path: `.context/attachments/${file.name}` })),
 };
 jest.mock('../features/chat/actions', () => ({ get chatActions() { return mockActions; } }));
 
@@ -48,9 +48,9 @@ describe('composer images', () => {
   it('attaches a photo, shows it, and removes it', async () => {
     pickLibrary();
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await screen.findByRole('button', { name: 'Attach an image' }));
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Remove cat.jpg' })).toBeVisible());
-    expect(mockActions.uploadImage).toHaveBeenCalledWith('session-one', expect.objectContaining({ name: 'cat.jpg', mimeType: 'image/jpeg' }), expect.any(Function));
+    expect(mockActions.uploadAttachment).toHaveBeenCalledWith('session-one', expect.objectContaining({ name: 'cat.jpg', mimeType: 'image/jpeg' }), expect.any(Function));
     await fireEvent.press(screen.getByRole('button', { name: 'Remove cat.jpg' }));
     expect(screen.queryByRole('button', { name: 'Remove cat.jpg' })).toBeNull();
   });
@@ -58,7 +58,7 @@ describe('composer images', () => {
   it('sends the text with the uploaded attachment, and clears both', async () => {
     pickLibrary();
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await screen.findByRole('button', { name: 'Attach an image' }));
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Remove cat.jpg' })).toBeVisible());
     await fireEvent.changeText(screen.getByLabelText('Message'), 'What is this?');
     await fireEvent.press(screen.getByRole('button', { name: 'Send message' }));
@@ -69,9 +69,9 @@ describe('composer images', () => {
   it('does not send images without text', async () => {
     pickLibrary();
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await screen.findByRole('button', { name: 'Attach an image' }));
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Remove cat.jpg' })).toBeVisible());
-    expect(screen.getByText('Add a message to send with the images.')).toBeVisible();
+    expect(screen.getByText('Add a message to send with the attachments.')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Send message' })).toBeDisabled();
   });
 
@@ -80,7 +80,7 @@ describe('composer images', () => {
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     jest.spyOn(ActionSheetIOS, 'showActionSheetWithOptions').mockImplementation((_options, callback) => callback(1));
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await screen.findByRole('button', { name: 'Attach an image' }));
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
     await waitFor(() => expect(alert).toHaveBeenCalledWith('Allow access to the camera', expect.stringContaining('phone settings'), expect.any(Array)));
     expect(mockPicker.launchCameraAsync).not.toHaveBeenCalled();
   });
@@ -89,13 +89,67 @@ describe('composer images', () => {
     mockPicker.launchImageLibraryAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file:///a.heic', fileName: 'a.heic', mimeType: 'image/heic' }] });
     jest.spyOn(ActionSheetIOS, 'showActionSheetWithOptions').mockImplementation((_options, callback) => callback(0));
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await screen.findByRole('button', { name: 'Attach an image' }));
-    await waitFor(() => expect(screen.getByText('a.heic: Only PNG, JPEG, WebP and GIF images can be attached.')).toBeVisible());
-    expect(mockActions.uploadImage).not.toHaveBeenCalled();
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
+    await waitFor(() => expect(screen.getByText('a.heic: Only PNG, JPEG, WebP and GIF images and MP4, MOV and WebM videos can be attached.')).toBeVisible());
+    expect(mockActions.uploadAttachment).not.toHaveBeenCalled();
+  });
+});
+
+describe('composer videos', () => {
+  const pickVideo = (asset: Record<string, unknown>) => {
+    mockPicker.launchImageLibraryAsync.mockResolvedValue({ canceled: false, assets: [asset] });
+    jest.spyOn(ActionSheetIOS, 'showActionSheetWithOptions').mockImplementation((_options, callback) => callback(0));
+  };
+  it('asks the library for photos and videos, and the camera for photos only', async () => {
+    pickVideo({ uri: 'file:///clip.mov', fileName: 'clip.mov', mimeType: 'video/quicktime', fileSize: 1000 });
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
+    await waitFor(() => expect(mockPicker.launchImageLibraryAsync).toHaveBeenCalledWith(expect.objectContaining({ mediaTypes: ['images', 'videos'] })));
+    jest.spyOn(ActionSheetIOS, 'showActionSheetWithOptions').mockImplementation((_options, callback) => callback(1));
+    mockPicker.launchCameraAsync.mockResolvedValue({ canceled: true, assets: null });
+    await fireEvent.press(screen.getByRole('button', { name: 'Attach a photo or video' }));
+    await waitFor(() => expect(mockPicker.launchCameraAsync).toHaveBeenCalledWith(expect.objectContaining({ mediaTypes: ['images'] })));
+  });
+  it('attaches a video as a named chip, uploads it with its type, and sends it', async () => {
+    pickVideo({ uri: 'file:///clip.mov', fileName: 'clip.mov', mimeType: 'video/quicktime', fileSize: 1000 });
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove clip.mov' })).toBeVisible());
+    expect(screen.getByText('clip.mov')).toBeVisible();
+    expect(mockActions.uploadAttachment).toHaveBeenCalledWith('session-one', expect.objectContaining({ name: 'clip.mov', mimeType: 'video/quicktime' }), expect.any(Function));
+    await fireEvent.changeText(screen.getByPlaceholderText(/./), 'Why does it stutter?');
+    await fireEvent.press(screen.getByRole('button', { name: /^Send/ }));
+    await waitFor(() => expect(mockActions.send).toHaveBeenCalledWith('chat-one', { text: 'Why does it stutter?', attachments: [{ name: 'clip.mov', mimeType: 'video/quicktime', path: '.context/attachments/clip.mov' }] }));
+  });
+  it('names an unnamed video and blocks send without text', async () => {
+    pickVideo({ uri: 'file:///x', mimeType: 'video/mp4' });
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove video-1.mp4' })).toBeVisible());
+    expect(screen.getByText('Add a message to send with the attachments.')).toBeVisible();
+  });
+  it.each([
+    [{ uri: 'file:///big.mp4', fileName: 'big.mp4', mimeType: 'video/mp4', fileSize: 50 * 1024 * 1024 + 1 }, 'big.mp4: The video is larger than 50 MB.'],
+    [{ uri: 'file:///a.avi', fileName: 'a.avi', mimeType: 'video/x-msvideo' }, 'a.avi: Only PNG, JPEG, WebP and GIF images and MP4, MOV and WebM videos can be attached.'],
+  ])('shows an error for %j', async (asset, message) => {
+    pickVideo(asset);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
+    await waitFor(() => expect(screen.getByText(message)).toBeVisible());
+    expect(mockActions.uploadAttachment).not.toHaveBeenCalled();
   });
 });
 
 describe('message images', () => {
+  it('shows a video attachment as a tile with its name', async () => {
+    const events: WorkbenchEvent[] = [{ chatId: 'chat-one', seq: 1, turn: 1, createdAt: '2026-11-08T11:00:00Z', event: { seq: 1, type: 'user', talyn_user_message: true,
+      message: { content: [{ type: 'text', text: 'See this' }] }, talyn: { attachments: [{ name: 'clip.mp4', mimeType: 'video/mp4', path: '.context/attachments/clip.mp4' }] } } as AgentEvent }];
+    mockActive.api.workbenches.events.mockResolvedValue({ events, cursor: 1, oldestSeq: 1, hasOlder: false });
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(await screen.findByLabelText('Video: clip.mp4')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Open clip.mp4' })).toBeNull();
+  });
+
   it('shows an attached image in the user bubble and opens it full screen', async () => {
     const events: WorkbenchEvent[] = [{ chatId: 'chat-one', seq: 1, turn: 1, createdAt: '2026-11-08T11:00:00Z', event: { seq: 1, type: 'user', talyn_user_message: true,
       message: { content: [{ type: 'text', text: 'See this' }] }, talyn: { attachments: [{ name: 'cat.jpg', mimeType: 'image/jpeg', path: '.context/attachments/cat.jpg' }] } } as AgentEvent }];

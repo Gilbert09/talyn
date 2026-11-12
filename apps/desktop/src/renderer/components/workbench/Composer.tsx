@@ -452,7 +452,7 @@ export function Composer({
           aria-label="Message the agent"
         />
         <div className="flex items-center gap-1 px-2 pb-1.5">
-          <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} />
+          <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} videos />
           <AgentPicker value={agent} onChange={(next) => void patchChat({ agent: next, model: fleetModelForAgentSwitch(model, next) })} disabled={!owner || !chat || Boolean(ops.unavailable) || ops.runtime === 'local'} />
           <ModelPicker agent={agent} value={model} onChange={(m) => void patchChat({ model: m })} disabled={!owner || !chat || Boolean(ops.unavailable)} />
           <EffortPicker value={effort} onChange={(v) => void patchChat({ effort: v })} disabled={!owner || !chat || Boolean(ops.unavailable)} />

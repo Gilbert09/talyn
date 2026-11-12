@@ -461,7 +461,7 @@ export function Composer({
           aria-label="Message the agent"
         />
         <div className="flex items-center gap-1 px-2 pb-1.5">
-          <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} />
+          <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} videos />
           <AgentPicker
             value={agent}
             onChange={(next) => void patchChat({ agent: next, model: fleetModelForAgentSwitch(model, next) })}

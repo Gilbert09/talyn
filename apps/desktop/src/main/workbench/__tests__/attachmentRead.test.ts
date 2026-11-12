@@ -51,8 +51,8 @@ describe('writeAttachment', () => {
     }
   });
 
-  test('refuses data over the 10 MiB limit', async () => {
-    await expect(writeAttachment(root, 'a.png', 'A'.repeat(14 * 1024 * 1024 + 4))).rejects.toThrow('10 MiB');
+  test('refuses data over the 50 MiB limit', async () => {
+    await expect(writeAttachment(root, 'a.mp4', 'A'.repeat(Math.ceil((50 * 1024 * 1024) / 3) * 4 + 4))).rejects.toThrow('50 MiB');
   });
 });
 

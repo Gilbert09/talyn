@@ -24,6 +24,8 @@ import {
   DEFAULT_WORKBENCH_EFFORT,
   WORKBENCH_EFFORTS,
   WORKBENCH_MESSAGE_INTENTS,
+  WORKBENCH_VIDEO_PROMPT_NOTE,
+  isWorkbenchVideoType,
   type AgentEventDraft,
   type AgentStreamParser,
   type SendWorkbenchMessageInput,
@@ -1239,7 +1241,8 @@ export async function endCapacityWait(chatId: string, messageId?: string): Promi
 function promptWith(text: string, files: Array<{ path: string; mimeType: string }>): string {
   if (files.length === 0) return text;
   const list = files.map((f) => `- ${f.path} (${f.mimeType})`).join('\n');
-  return `${text}\n\nAttached files:\n${list}`;
+  const note = files.some((f) => isWorkbenchVideoType(f.mimeType)) ? `\n\n${WORKBENCH_VIDEO_PROMPT_NOTE}` : '';
+  return `${text}\n\nAttached files:\n${list}${note}`;
 }
 
 /**

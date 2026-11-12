@@ -1,13 +1,18 @@
 import type { SendWorkbenchMessageInput, WorkbenchAttachment } from '@talyn/shared';
 
+import {
+  WORKBENCH_ATTACHMENT_EXTENSIONS, WORKBENCH_ATTACHMENT_FILE_EXTENSION, WORKBENCH_IMAGE_TYPES, WORKBENCH_VIDEO_TYPES,
+  isWorkbenchVideoType, workbenchAttachmentMaxBytes,
+} from '@talyn/shared';
+
 /** The types the upload route accepts (`workbenchAttachments.ts` in the backend). */
-export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const;
-/** The upload route's own limit. Web has no smaller one. */
-export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const ATTACHMENT_TYPES: readonly string[] = [...WORKBENCH_IMAGE_TYPES, ...WORKBENCH_VIDEO_TYPES];
+/** Names some pickers use for the same type. */
+const TYPE_ALIASES: Record<string, string> = { 'image/jpg': 'image/jpeg', 'video/mov': 'video/quicktime', 'video/x-quicktime': 'video/quicktime', 'video/x-m4v': 'video/mp4' };
 
 export interface PickedImage { uri: string; fileName?: string | null; mimeType?: string | null; fileSize?: number | null }
 
-/** One image in the composer. `attachment` is what the server returned, and is what gets sent. */
+/** One picked image or video in the composer. `attachment` is what the server returned, and is what gets sent. */
 export interface ImageDraft {
   id: string;
   uri: string;
@@ -18,31 +23,33 @@ export interface ImageDraft {
   error?: string;
 }
 
-const EXTENSIONS: Record<string, (typeof IMAGE_TYPES)[number]> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
-const FILE_EXTENSION: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
-
-export function imageMimeType(image: Pick<PickedImage, 'uri' | 'fileName' | 'mimeType'>): string | null {
-  const declared = image.mimeType?.toLowerCase().replace('image/jpg', 'image/jpeg');
-  if (declared && (IMAGE_TYPES as readonly string[]).includes(declared)) return declared;
+export function attachmentMimeType(image: Pick<PickedImage, 'uri' | 'fileName' | 'mimeType'>): string | null {
+  const lower = image.mimeType?.toLowerCase();
+  const declared = lower && (TYPE_ALIASES[lower] ?? lower);
+  if (declared && ATTACHMENT_TYPES.includes(declared)) return declared;
   if (declared && declared !== 'application/octet-stream') return null;
   const extension = (image.fileName ?? image.uri).split('?')[0].split('.').pop()?.toLowerCase() ?? '';
-  return EXTENSIONS[extension] ?? null;
+  return WORKBENCH_ATTACHMENT_EXTENSIONS[extension] ?? null;
 }
 
-/** A name the server keeps: the picker's own, or "photo-N" with the right extension. */
-export function imageName(image: Pick<PickedImage, 'fileName'>, mimeType: string, index: number): string {
+/** A name the server keeps: the picker's own, or "photo-N" / "video-N" with the right extension. */
+export function attachmentName(image: Pick<PickedImage, 'fileName'>, mimeType: string, index: number): string {
   const name = image.fileName?.trim();
-  return name ? name : `photo-${index + 1}.${FILE_EXTENSION[mimeType] ?? 'jpg'}`;
+  if (name) return name;
+  const video = isWorkbenchVideoType(mimeType);
+  return `${video ? 'video' : 'photo'}-${index + 1}.${WORKBENCH_ATTACHMENT_FILE_EXTENSION[mimeType] ?? (video ? 'mp4' : 'jpg')}`;
 }
 
-export type ImageCheck = { ok: true; name: string; mimeType: string } | { ok: false; name: string; reason: string };
+export type AttachmentCheck = { ok: true; name: string; mimeType: string } | { ok: false; name: string; reason: string };
 
-/** Checks one picked image against the server's types and size before any upload starts. */
-export function checkImage(image: PickedImage, index: number): ImageCheck {
-  const mimeType = imageMimeType(image);
-  const name = imageName(image, mimeType ?? 'image/jpeg', index);
-  if (!mimeType) return { ok: false, name, reason: 'Only PNG, JPEG, WebP and GIF images can be attached.' };
-  if (typeof image.fileSize === 'number' && image.fileSize > MAX_IMAGE_BYTES) return { ok: false, name, reason: 'The image is larger than 10 MB.' };
+export const oversizeReason = (mimeType: string) => isWorkbenchVideoType(mimeType) ? 'The video is larger than 50 MB.' : 'The image is larger than 10 MB.';
+
+/** Checks one picked image or video against the server's types and size before any upload starts. */
+export function checkAttachment(image: PickedImage, index: number): AttachmentCheck {
+  const mimeType = attachmentMimeType(image);
+  const name = attachmentName(image, mimeType ?? 'image/jpeg', index);
+  if (!mimeType) return { ok: false, name, reason: 'Only PNG, JPEG, WebP and GIF images and MP4, MOV and WebM videos can be attached.' };
+  if (typeof image.fileSize === 'number' && image.fileSize > workbenchAttachmentMaxBytes(mimeType)) return { ok: false, name, reason: oversizeReason(mimeType) };
   return { ok: true, name, mimeType };
 }
 
@@ -55,11 +62,11 @@ export function buildMessageInput(text: string, drafts: ImageDraft[]): SendWorkb
 }
 
 export interface SendGate { text: string; drafts: ImageDraft[] }
-/** The server rejects a message with no text, so images alone cannot be sent. */
+/** The server rejects a message with no text, so attachments alone cannot be sent. */
 export function sendBlock({ text, drafts }: SendGate): string | null {
-  if (drafts.some((draft) => draft.status === 'uploading')) return 'Waiting for the images to upload.';
-  if (drafts.some((draft) => draft.status === 'error')) return 'Remove the images that failed, or try them again.';
-  if (drafts.length > 0 && !text.trim()) return 'Add a message to send with the images.';
+  if (drafts.some((draft) => draft.status === 'uploading')) return 'Waiting for the attachments to upload.';
+  if (drafts.some((draft) => draft.status === 'error')) return 'Remove the attachments that failed, or try them again.';
+  if (drafts.length > 0 && !text.trim()) return 'Add a message to send with the attachments.';
   return null;
 }
 
@@ -78,3 +85,4 @@ export function eventAttachments(raw: unknown): MessageImage[] {
   });
 }
 export const isImage = (attachment: MessageImage) => attachment.mimeType.startsWith('image/');
+export const isVideo = (attachment: MessageImage) => attachment.mimeType.startsWith('video/');

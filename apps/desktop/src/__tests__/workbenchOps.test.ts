@@ -197,6 +197,29 @@ describe('localOps', () => {
     expect(exec).not.toHaveBeenCalled();
     expect(attachment).toEqual({ name: 'shot.png', mimeType: 'image/png', path: '.context/attachments/1-abc-shot.png' });
   });
+
+  it('encodes a video blob and sends it over IPC', async () => {
+    const { bridge, exec } = bridgeWith(() => undefined);
+    const writeAttachment = jest.fn(async () => '.context/attachments/1-abc-clip.mp4');
+    const attachment = await localOps(wb(), { ...bridge, writeAttachment }, null).attach({
+      name: 'clip.mp4',
+      mimeType: 'video/mp4',
+      blob: new Blob(['hello'], { type: 'video/mp4' }),
+    });
+    expect(writeAttachment).toHaveBeenCalledWith('/work/lisbon', 'clip.mp4', 'aGVsbG8=');
+    expect(exec).not.toHaveBeenCalled();
+    expect(attachment).toEqual({ name: 'clip.mp4', mimeType: 'video/mp4', path: '.context/attachments/1-abc-clip.mp4' });
+  });
+
+  it('refuses a video when main cannot write it over IPC', async () => {
+    const { bridge, exec } = bridgeWith(() => undefined);
+    await expect(localOps(wb(), { ...bridge, writeAttachment: undefined }, null).attach({
+      name: 'clip.mp4',
+      mimeType: 'video/mp4',
+      blob: new Blob(['hello'], { type: 'video/mp4' }),
+    })).rejects.toThrow('Update Talyn');
+    expect(exec).not.toHaveBeenCalled();
+  });
 });
 
 describe('openLocalPullRequest', () => {

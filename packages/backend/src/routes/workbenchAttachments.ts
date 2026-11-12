@@ -1,6 +1,16 @@
 import express, { Router, type Request, type Response } from 'express';
 import { v4 as uuid } from 'uuid';
-import { shellQuote, type ApiResponse, type WorkbenchAttachment } from '@talyn/shared';
+import {
+  shellQuote,
+  WORKBENCH_ATTACHMENT_EXTENSIONS,
+  WORKBENCH_IMAGE_TYPES,
+  WORKBENCH_MAX_VIDEO_BYTES,
+  WORKBENCH_VIDEO_TYPES,
+  workbenchAttachmentFileName,
+  workbenchAttachmentMaxBytes,
+  type ApiResponse,
+  type WorkbenchAttachment,
+} from '@talyn/shared';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { fleetErrorAsRefusal, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
@@ -8,15 +18,18 @@ import { recordWorkbenchEvent, repoDirFor, runCapture } from '../services/workbe
 import { writeSandboxFiles } from '../services/workbenches/sandboxFiles.js';
 import { getWorkbench, isThread } from '../services/workbenches/store.js';
 
-const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+const ATTACHMENT_TYPES: readonly string[] = [...WORKBENCH_IMAGE_TYPES, ...WORKBENCH_VIDEO_TYPES];
 const ATTACHMENT_PATH = /^\.context\/attachments\/[A-Za-z0-9._-]+$/;
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const READ_CHUNK_BYTES = 2 * 1024 * 1024;
-const IMAGE_EXTENSIONS: Record<string, string> = {
-  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif',
-};
+const megabytes = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
 
-function matchesImage(type: string, data: Buffer): boolean {
+/** True when the first bytes agree with the declared type. */
+export function matchesAttachmentType(type: string, data: Buffer): boolean {
+  // MP4 and QuickTime files start with a box whose type is `ftyp`. Older
+  // QuickTime files can start with another top-level box.
+  if (type === 'video/mp4') return data.subarray(4, 8).toString('ascii') === 'ftyp';
+  if (type === 'video/quicktime') return ['ftyp', 'moov', 'mdat', 'wide', 'free', 'skip', 'pnot'].includes(data.subarray(4, 8).toString('ascii'));
+  if (type === 'video/webm') return data.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
   if (type === 'image/png') return data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   if (type === 'image/jpeg') return data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
   if (type === 'image/gif') return data.subarray(0, 6).toString('ascii') === 'GIF87a' || data.subarray(0, 6).toString('ascii') === 'GIF89a';
@@ -47,15 +60,16 @@ export function workbenchAttachmentRoutes(): Router {
       const path = req.query.path;
       if (typeof path !== 'string' || !ATTACHMENT_PATH.test(path) || path.includes('..')) return bad(400, 'Invalid attachment path.');
       const extension = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
-      const mimeType = IMAGE_EXTENSIONS[extension];
-      if (!mimeType) return bad(400, 'Unsupported image type.');
+      const mimeType = WORKBENCH_ATTACHMENT_EXTENSIONS[extension];
+      if (!mimeType) return bad(400, 'Unsupported attachment type.');
       const target = shellQuote(path);
       const stat = await runCapture(row, `[ -f ${target} ] || exit 3\nwc -c < ${target}`, { quiet: true, timeoutMs: 60_000 });
       if (stat.exitCode === 3) return bad(404, 'Attachment not found.');
       if (stat.exitCode !== 0) throw new Error(`Reading attachment size failed (exit ${stat.exitCode}).`);
       const size = Number(stat.stdout.trim());
       if (!Number.isSafeInteger(size) || size < 0) throw new Error('Invalid attachment size.');
-      if (size > MAX_ATTACHMENT_BYTES) return bad(413, 'Attachment exceeds 10 MB.');
+      const maxBytes = workbenchAttachmentMaxBytes(mimeType);
+      if (size > maxBytes) return bad(413, `Attachment exceeds ${megabytes(maxBytes)}.`);
       const chunks: Buffer[] = [];
       for (let offset = 0; offset < size; offset += READ_CHUNK_BYTES) {
         const index = offset / READ_CHUNK_BYTES;
@@ -75,10 +89,10 @@ export function workbenchAttachmentRoutes(): Router {
       const refusal = fleetErrorAsRefusal(err);
       if (refusal) return bad(refusal.status, refusal.message, refusal.code);
       console.error(`[workbench] attachment read for ${row.id} failed:`, err);
-      return bad(500, 'Could not read the image from the sandbox.');
+      return bad(500, 'Could not read the attachment from the sandbox.');
     }
   });
-  router.post('/:id/attachments', express.raw({ type: IMAGE_TYPES, limit: '10mb' }), async (req: Request, res: Response) => {
+  router.post('/:id/attachments', express.raw({ type: [...ATTACHMENT_TYPES], limit: WORKBENCH_MAX_VIDEO_BYTES }), async (req: Request, res: Response) => {
     const bad = (status: number, error: string, code?: string) =>
       res.status(status).json({ success: false, error, ...(code ? { code } : {}) });
     const row = await getWorkbench(req.params.id);
@@ -98,22 +112,28 @@ export function workbenchAttachmentRoutes(): Router {
       if (row.status !== 'ready' || !row.sandboxId) throw notReadyError(row.status);
 
       const mimeType = req.headers['content-type']?.split(';', 1)[0]?.toLowerCase() ?? '';
-      if (!IMAGE_TYPES.includes(mimeType)) return bad(415, 'Unsupported image type.');
+      if (!ATTACHMENT_TYPES.includes(mimeType)) return bad(415, 'Unsupported attachment type.');
       const data = req.body;
-      if (!Buffer.isBuffer(data) || data.length === 0) return bad(400, 'The image is empty.');
-      if (!matchesImage(mimeType, data)) return bad(415, 'Image bytes do not match the declared type.');
+      if (!Buffer.isBuffer(data) || data.length === 0) return bad(400, 'The attachment is empty.');
+      const maxBytes = workbenchAttachmentMaxBytes(mimeType);
+      if (data.length > maxBytes) return bad(413, `Attachment exceeds ${megabytes(maxBytes)}.`);
+      if (!matchesAttachmentType(mimeType, data)) return bad(415, 'Attachment bytes do not match the declared type.');
 
       let requestedName: string;
       try {
-        requestedName = decodeURIComponent(req.get('X-Attachment-Name') || 'image');
+        requestedName = decodeURIComponent(req.get('X-Attachment-Name') || 'attachment');
       } catch {
         return bad(400, 'Invalid attachment name.');
       }
       const name = Array.from(requestedName)
         .filter((char) => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127)
         .join('')
-        .slice(0, 200) || 'image';
-      const safe = name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '').slice(0, 80) || 'image';
+        .slice(0, 200) || 'attachment';
+      // The raw route reads the type back from the extension, so the stored name must carry the right one.
+      const safe = workbenchAttachmentFileName(
+        name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '').slice(0, 75) || 'attachment',
+        mimeType,
+      );
       const path = `.context/attachments/${uuid()}-${safe}`;
       const exclude = `exclude=$(git rev-parse --git-path info/exclude)\nmkdir -p "$(dirname "$exclude")"\ntouch "$exclude"\ngrep -qxF ${shellQuote('.context/')} "$exclude" || printf '%s\\n' ${shellQuote('.context/')} >> "$exclude"`;
       // A thread has no repository, so there is no git exclude file to update.
@@ -131,7 +151,7 @@ export function workbenchAttachmentRoutes(): Router {
       if (refusal) return bad(refusal.status, refusal.message, refusal.code);
       // Express 4 does not catch a rejected handler, so a throw here would hang the request.
       console.error(`[workbench] attachment upload for ${row.id} failed:`, err);
-      return bad(500, 'Could not save the image in the sandbox.');
+      return bad(500, 'Could not save the attachment in the sandbox.');
     }
   });
   return router;
