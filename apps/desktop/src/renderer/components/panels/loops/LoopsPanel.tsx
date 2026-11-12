@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Pencil, Play, Plus, Repeat, Trash2 } from 'lucide-react';
 import type { LoopInput, LoopWithStats } from '@talyn/shared';
 import {
@@ -15,6 +15,7 @@ import { toast } from '../../../stores/toast';
 import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
 import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
+import { takeAutomationTarget, useAutomationFocus } from '../../../lib/automationFocus';
 import { FeedbackButton } from '../workflows/FeedbackButton';
 import { useLoops } from './useLoops';
 import { LoopEditorPage } from './LoopEditorPage';
@@ -187,6 +188,13 @@ export function LoopsPanel() {
     trackEvent('loop_editor_opened', { mode: loop ? 'edit' : 'create' });
     setView({ mode: 'edit', loop });
   };
+
+  // The command palette asked for one of these loops: open its editor once the list is here.
+  const focus = useAutomationFocus((s) => s.target);
+  useEffect(() => {
+    const loop = takeAutomationTarget('loop', 'schedule', loops);
+    if (loop) openEditor(loop);
+  }, [focus, loops]);
 
   /**
    * Start a new loop — unless the free plan has no slot left, in which case

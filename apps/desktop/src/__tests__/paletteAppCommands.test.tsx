@@ -17,7 +17,14 @@ import { useSpacesStore } from '../renderer/stores/spaces';
 import { openExternal } from '../renderer/lib/openExternal';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
-jest.mock('../renderer/lib/api', () => ({ api: { workbenches: { list: jest.fn(), restore: jest.fn() }, pullRequests: {} } }));
+jest.mock('../renderer/lib/api', () => ({
+  api: {
+    workbenches: { list: jest.fn(), restore: jest.fn() },
+    workflows: { list: jest.fn(() => Promise.resolve([])) },
+    loops: { list: jest.fn(() => Promise.resolve([])) },
+    pullRequests: {},
+  },
+}));
 jest.mock('../renderer/lib/openExternal', () => ({ openExternal: jest.fn() }));
 
 function wb(id: string, over: Partial<Workbench> = {}): Workbench {
