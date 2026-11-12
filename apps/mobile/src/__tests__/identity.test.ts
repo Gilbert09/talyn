@@ -86,22 +86,25 @@ it('requires explicit production identity', () => {
 
 describe('push configuration', () => {
   const previous = process.env;
+  // The release job exports its own profile, build number and identity; each case states its own.
+  const base = Object.fromEntries(Object.entries(previous)
+    .filter(([name]) => !/^(APP_ENV|EAS_BUILD_PROFILE|MOBILE_|TALYN_MOBILE_|EXPO_PUBLIC_)/.test(name)));
   afterEach(() => { process.env = previous; });
   const build = () => appConfig({ config: {} } as Parameters<typeof appConfig>[0]);
   it.each(['production', 'preview', 'development'])('uses the Talyn EAS project for %s when none is set', (environment) => {
-    process.env = { ...previous, ...publicValues, APP_ENV: environment };
+    process.env = { ...base, ...publicValues, APP_ENV: environment };
     delete process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
     const result = build();
     expect(result.owner).toBe('talyn-app');
     expect(result.extra?.eas?.projectId).toBe('69499768-c478-44c0-8588-355c674515df');
   });
   it.each(['not-a-uuid', '69499768c47844c08588355c674515df'])('rejects the malformed project ID %s', (projectId) => {
-    process.env = { ...previous, ...publicValues, APP_ENV: 'production', EXPO_PUBLIC_EAS_PROJECT_ID: projectId };
+    process.env = { ...base, ...publicValues, APP_ENV: 'production', EXPO_PUBLIC_EAS_PROJECT_ID: projectId };
     expect(build).toThrow('valid public EAS project ID');
   });
   it('exports the public project and only alert capabilities', () => {
     const projectId = '10000000-0000-4000-8000-000000000001';
-    process.env = { ...previous, ...publicValues, APP_ENV: 'production', EXPO_PUBLIC_EAS_PROJECT_ID: projectId };
+    process.env = { ...base, ...publicValues, APP_ENV: 'production', EXPO_PUBLIC_EAS_PROJECT_ID: projectId };
     const result = build();
     expect(result.extra?.eas?.projectId).toBe(projectId);
     expect(result.android?.blockedPermissions).toContain('android.permission.RECEIVE_BOOT_COMPLETED');
