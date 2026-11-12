@@ -170,6 +170,7 @@ export function NewWorkbenchPage() {
   const applyPrefill = useCallback(
     (prefill: NewWorkbenchPrefill) => {
       if (prefill.repositoryId) setRepositoryId(prefill.repositoryId);
+      if (prefill.prompt !== undefined) setPrompt(prefill.prompt);
       setBaseBranch(prefill.baseBranch ?? '');
       if (prefill.runtime) {
         setRuntime(prefill.runtime);

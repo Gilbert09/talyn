@@ -34,6 +34,8 @@ export type DrawerEntry =
   | { type: 'thread'; key: string; item: Workbench; expanded: boolean; childCount: number; running: number }
   | { type: 'row'; key: string; item: Workbench; indent: boolean }
   | { type: 'notice'; key: string; text: string }
+  /** What a session is, and jobs to start one with. Shown when there are no sessions at all. */
+  | { type: 'starters'; key: string }
   | { type: 'loading'; key: string };
 
 export interface DrawerInput {
@@ -85,7 +87,7 @@ export function drawerEntries({ sessions, threads, query: raw, collapsedGroups, 
   if (matched.length || !searching) {
     entries.push({ type: 'heading', key: 'heading:sessions', section: 'sessions', title: 'Sessions' });
     if (sessions === undefined) entries.push({ type: 'loading', key: 'loading:sessions' });
-    else if (!matched.length) entries.push({ type: 'notice', key: 'notice:sessions', text: 'No sessions yet.' });
+    else if (!matched.length) entries.push({ type: 'starters', key: 'starters:sessions' });
   }
   for (const group of groupByRepository(matched)) {
     const repo = group.repo || NO_REPOSITORY;

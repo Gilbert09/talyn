@@ -2,8 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { Archive, ChevronDown, ChevronRight, Cloud, Columns2, Copy, ExternalLink, Laptop, Timer } from 'lucide-react';
 import { splitViewOffered, workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
-import { Button } from '../ui/button';
-import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
+import { SessionStarters } from './SessionStarters';
 import { openExternal } from '../../lib/openExternal';
 import { toast } from '../../stores/toast';
 import {
@@ -78,16 +77,7 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
     [live, activeIds, sidebarOrder],
   );
 
-  if (groups.length === 0) {
-    return (
-      <div className="space-y-2 px-3 py-2 text-xs text-muted-foreground">
-        <p>No sessions yet.</p>
-        <Button variant="outline" size="sm" onClick={() => openNewWorkbench()}>
-          Start a session
-        </Button>
-      </div>
-    );
-  }
+  if (groups.length === 0) return <SessionStarters />;
 
   return (
     <div className="space-y-1" data-attr="sidebar-workbenches">

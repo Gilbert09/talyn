@@ -2,14 +2,15 @@ import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { defaultFleetModelForAgent, PLAN_LIMITS, type Workbench } from '@talyn/shared';
-import { api, type CloudProviderInfo } from '../lib/api';
+import { defaultFleetModelForAgent, PLAN_LIMITS, SESSION_STARTER_PROMPTS, type Workbench } from '@talyn/shared';
+import { api, type CloudProviderInfo, type PRRow } from '../lib/api';
 import { captureAnalyticsException, trackEvent } from '../lib/analytics';
 import { OnboardingWizard } from '../components/onboarding/OnboardingWizard';
 import { SidebarWorkbenchList } from '../components/layout/SidebarWorkbenchList';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useNavigationStore } from '../stores/navigation';
+import { usePullRequestStore } from '../stores/pullRequests';
 
 vi.mock('../lib/api', () => ({
   ApiError: class ApiError extends Error {},
@@ -254,9 +255,35 @@ it('skips the first session, completes onboarding, and opens Home', async () => 
 });
 
 it('opens the normal new-session UI from the sidebar empty state', () => {
+  usePullRequestStore.setState({ rows: [] });
   render(<SidebarWorkbenchList workbenches={[]} />);
-  expect(screen.getByText('No sessions yet.')).toBeInTheDocument();
+  expect(screen.getByText('Hand work to an agent')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Start a session' }));
   expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
   expect(useWorkbenchStore.getState().newWorkbench).toEqual({ seq: 1, prefill: null });
+});
+
+it('offers general starters when no pull request needs work', () => {
+  usePullRequestStore.setState({ rows: [] });
+  render(<SidebarWorkbenchList workbenches={[]} />);
+  fireEvent.click(screen.getByRole('button', { name: /Explain a repository/ }));
+  expect(useWorkbenchStore.getState().newWorkbench.prefill).toEqual({ prompt: SESSION_STARTER_PROMPTS.explain });
+  expect(trackEvent).toHaveBeenCalledWith('session_starter_clicked', { kind: 'explain', from_pull_request: false });
+});
+
+it('starts a session on a pull request with failing checks from the sidebar', () => {
+  const row = {
+    id: 'pr-1', workspaceId: 'ws1', repositoryId: 'r1', owner: 'acme', repo: 'app', number: 42, state: 'open',
+    authored: true, reviewRequested: false,
+    summary: { title: 'Add billing', headBranch: 'tom/billing', baseBranch: 'main', blockingReason: 'checks_failed' },
+  } as unknown as PRRow;
+  usePullRequestStore.setState({ rows: [row] });
+  render(<SidebarWorkbenchList workbenches={[]} />);
+  expect(screen.getByText('#42 Add billing')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /Fix the failing checks/ }));
+  expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
+  expect(useWorkbenchStore.getState().newWorkbench.prefill).toEqual({
+    repositoryId: 'r1', fromPullRequestId: 'pr-1', baseBranch: 'main', branch: 'tom/billing',
+    prompt: SESSION_STARTER_PROMPTS.fix_checks,
+  });
 });

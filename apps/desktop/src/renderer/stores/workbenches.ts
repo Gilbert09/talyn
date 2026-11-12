@@ -66,6 +66,8 @@ export interface NewWorkbenchPrefill {
   baseBranch?: string;
   /** An existing branch to check out. */
   branch?: string;
+  /** Text for the composer, from a starter suggestion. The person can edit it before sending. */
+  prompt?: string;
   runtime?: 'sandbox' | 'local';
 }
 

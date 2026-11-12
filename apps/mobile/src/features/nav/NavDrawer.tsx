@@ -20,6 +20,7 @@ import { WorkbenchRow } from '../sessions/WorkbenchRow';
 import { useActiveContext } from '../spaces/context';
 import { ContextSwitcher } from './ContextSwitcher';
 import { GroupHeader, Heading } from './DrawerParts';
+import { SessionStarters } from './SessionStarters';
 import { SpaceDrawerList } from './SpaceDrawer';
 import { useDrawerWork } from './data';
 import { activeTarget, badgeText, drawerEntries, toggled, type DrawerEntry, type DrawerTarget } from './model';
@@ -75,6 +76,7 @@ export function NavDrawer({ close }: { close(): void }) {
         <WorkbenchRow item={item.item} now={now} divider={false} onLongPress={menu.open} />
       </View>;
       case 'notice': return <AppText variant="meta" tone="muted" style={styles.notice}>{item.text}</AppText>;
+      case 'starters': return <SessionStarters />;
       case 'loading': return <View accessibilityState={{ busy: true }} style={styles.loading}><Spinner /></View>;
     }
   };

@@ -16,6 +16,7 @@ export const pullRequestRoute = (id: string) => ({
 }) satisfies Href;
 
 export type NewWorkMode = 'session' | 'thread';
-export const newWorkRoute = (mode: NewWorkMode) => ({
-  pathname: '/new', params: { mode },
+/** `repository` picks the repository, for a starter aimed at one pull request. */
+export const newWorkRoute = (mode: NewWorkMode, repository?: string) => ({
+  pathname: '/new', params: repository ? { mode, repository } : { mode },
 }) satisfies Href;

@@ -57,7 +57,9 @@ const PROMPT_MAX_HEIGHT = 8 * 22 + 20;
  * the home screen (`presentation="home"`) and as a pushed route. After a start
  * a route replaces itself and home pushes.
  */
-export function NewWorkScreen({ initialMode = 'session', presentation = 'route' }: { initialMode?: NewWorkMode; presentation?: 'home' | 'route' }) {
+export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, presentation = 'route' }: {
+  initialMode?: NewWorkMode; initialRepositoryId?: string; presentation?: 'home' | 'route';
+}) {
   const { workflow, workspace: workspaces } = useMobileRuntime();
   const router = useRouter();
   const c = useTheme();
@@ -116,16 +118,26 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   // The repository last started here, saved on the device. It loads after the first draw; a pick made before that wins.
   const [saved, setSaved] = useState<{ key: string; id: string | null } | null>(null);
   const pickedFor = useRef<string | null>(null);
+  // A repository the route asks for (a starter on a pull request) wins over the saved one, once it has loaded.
+  const wanted = useRef(initialRepositoryId ?? null);
+  useEffect(() => { wanted.current = initialRepositoryId ?? null; }, [initialRepositoryId]);
   useEffect(() => {
     let live = true;
     void loadLastRepository(repoKey).then((id) => { if (live) setSaved({ key: repoKey, id }); });
     return () => { live = false; };
   }, [repoKey]);
   useEffect(() => {
+    if (wanted.current && repos.some((repo) => repo.id === wanted.current)) {
+      const id = wanted.current;
+      wanted.current = null;
+      pickedFor.current = repoKey;
+      if (id !== repositoryId) { setRepositoryId(id); setBaseBranch(''); }
+      return;
+    }
     const last = saved?.key === repoKey && pickedFor.current !== repoKey ? saved.id : null;
     if (last && last !== repositoryId && repos.some((repo) => repo.id === last)) { setRepositoryId(last); setBaseBranch(''); return; }
     if (!repos.some((repo) => repo.id === repositoryId)) setRepositoryId(defaultRepositoryId(repoKey, repos));
-  }, [repos, repositoryId, repoKey, saved]);
+  }, [repos, repositoryId, repoKey, saved, initialRepositoryId]);
   const repository = repos.find((repo) => repo.id === repositoryId) ?? null;
   // A failed readiness read is reported like web: the server or the connection, not the agents.
   const sandbox = readinessSource.data?.sandbox ?? (readinessSource.status === 'error' || readinessSource.status === 'offline' || offline
