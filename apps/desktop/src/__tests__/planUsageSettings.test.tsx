@@ -119,7 +119,7 @@ describe('BillingSettings with usage billing', () => {
   it('shows Free credits it still holds, without packs to buy', () => {
     show(usageStatus('free', { balanceMicros: 3_000_000 }));
     expect(screen.queryByTestId('credits-card')).toBeNull();
-    expect(screen.getByText('$3.00')).not.toBeVisible();
+    expect(screen.getByText('$3')).not.toBeVisible();
     expect(screen.queryByTestId('credit-packs')).toBeNull();
   });
 
@@ -232,7 +232,7 @@ describe('BillingSettings with usage billing', () => {
     expect(screen.queryByTestId('move-to-pro')).toBeNull();
     expect(screen.getByTestId('usage-card')).toHaveTextContent('37.5 of 200 box-hours');
     const credits = screen.getByTestId('credits-card');
-    expect(credits).toHaveTextContent('$30.00');
+    expect(credits).toHaveTextContent('$30');
     expect(credits).toHaveTextContent('$5.00 expires in the next 30 days.');
     const lots = screen.getByTestId('credit-lots');
     expect(lots).toHaveTextContent('$5.00 of $25.00 · Purchase');
@@ -304,7 +304,7 @@ describe('BillingSettings with usage billing', () => {
   it.each([
     [0, false, '100', '100% left'],
     [26, false, '87', '87% left'],
-    [199, false, '1', '1.0% left'],
+    [199, false, '1', '1% left'],
     [210, false, '0', '0% left'],
     [20, true, '0', '0% left'],
   ])('shows usage left for %s hours and exhausted=%s', (usedHours, exhausted, value, label) => {

@@ -8,6 +8,7 @@ import {
   formatBoxHoursUsage,
   formatPricePerHour,
   formatPlanPeriodLine,
+  formatCreditBalance,
   formatUsd,
   isSellableTier,
   MEASURED_BILLING_NOTE,
@@ -308,7 +309,7 @@ function CreditsCard({ view }: { view: UsageBillingView }) {
         <div>
           <p className="text-sm text-muted-foreground">Balance</p>
           <p className="text-2xl font-semibold tabular-nums" data-attr="credit-balance">
-            {formatUsd(balance)}
+            {formatCreditBalance(balance)}
           </p>
           <p className="text-sm text-muted-foreground">Auto top-up: {view.status.autoTopup?.enabled ? 'On' : 'Off'}</p>
           {view.status.autoTopup?.lastFailure && (

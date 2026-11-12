@@ -294,7 +294,7 @@ describe('billing return', () => {
     ['reset', 'success', false, status(), { tone: 'warning', message: 'Your usage reset has not arrived yet. It can take a minute. Pull down to refresh.' }],
     ['reset', 'unknown', false, status(), null],
     ['checkout', 'success', true, status({ tier: 'max' }), { tone: 'success', message: 'You are on Max now.' }],
-    ['credits', 'success', true, status({ credits: { balanceMicros: 25e6, expiringSoonMicros: 0, lots: [] } }), { tone: 'success', message: 'Credits added. Your balance is $25.00.' }],
+    ['credits', 'success', true, status({ credits: { balanceMicros: 25e6, expiringSoonMicros: 0, lots: [] } }), { tone: 'success', message: 'Credits added. Your balance is $25.' }],
     ['checkout', 'success', false, status(), { tone: 'warning', message: 'Your plan has not updated yet. It can take a minute. Pull down to refresh.' }],
     ['checkout', 'unknown', false, status(), null],
     ['portal', 'success', true, status(), null],

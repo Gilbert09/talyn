@@ -441,15 +441,19 @@ export const FEATURE_FLAGS = {
    * settle, the head moves or the PR closes, instead of at a guessed time.
    *
    * Server-only, asked against the workspace owner when the agent schedules
-   * one. Fallback OFF and gated while it is tried out; with it off, the
-   * request is refused and the agent schedules a timed wake-up instead.
+   * one. With it off, the request is refused and the agent schedules a timed
+   * wake-up instead.
+   *
+   * RELEASED 2026-11-12: fallback ON and 'general'. While it was gated, no
+   * PostHog flag existed, so every agent was refused and polled CI from its
+   * own shell, which kept the box awake for the whole run.
    */
   sessionCiWait: {
     posthogKey: 'session-ci-wait',
     envOverride: 'SESSION_CI_WAIT_ENABLED',
-    fallback: false,
+    fallback: true,
     description: 'Session CI wait — wake a session when the checks on its pull request settle',
-    availability: 'gated',
+    availability: 'general',
     releaseScopes: ['session-ci-wait'],
   },
 

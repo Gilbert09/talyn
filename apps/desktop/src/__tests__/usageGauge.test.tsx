@@ -114,6 +114,16 @@ describe('SidebarAccountStatus', () => {
   });
 
   it.each([
+    ['nearly out', 198, false],
+    ['out', 200, true],
+  ])('hides Add credits when Pro is %s but has credits left', (_label, usedHours, exhausted) => {
+    useBillingStore.setState({ status: usageStatus('pro', { usedHours, exhausted, balanceMicros: 100_000_000 }) });
+    renderGauge();
+    expect(screen.getByText('Credits $100.00')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add credits' })).toBeNull();
+  });
+
+  it.each([
     [10, 'Upgrade'],
     [48, 'Add credits'],
   ])('Legacy Pro at %i of 50 box-hours offers %s', (usedHours, label) => {
@@ -171,7 +181,7 @@ describe('SidebarAccountStatus', () => {
     expect(ring).toHaveAccessibleName(expect.stringContaining('82% left (37.5 of 200 box-hours used)'));
     const stroke = ring.querySelectorAll('circle')[1];
     expect(Number(stroke.getAttribute('stroke-dasharray')?.split(' ')[0])).toBeCloseTo(2 * Math.PI * 6 * 0.82);
-    expect(ring).toHaveAccessibleName(expect.stringContaining('Credits $5.00'));
+    expect(ring).toHaveAccessibleName(expect.stringContaining('Credits $5'));
     expect(ring).toHaveAccessibleName(expect.stringContaining('Claude needs reconnecting'));
     expect(screen.queryByRole('progressbar')).toBeNull();
     fireEvent.click(ring);

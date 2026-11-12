@@ -4,7 +4,7 @@ import {
   cloudProviderStatus,
   fleetAgentLabel,
   formatBoxHoursUsage,
-  formatUsd,
+  formatCreditBalance,
   type FleetAgent,
 } from '@talyn/shared';
 import type { CloudProviderInfo } from '@talyn/client';
@@ -93,7 +93,7 @@ function UsageGauge({ status, collapsed }: { status: UsageBillingStatus; collaps
     ...(exhausted ? ['Out of hours: new boxes paused'] : []),
     usageDetail,
     `Resets ${reset}`,
-    ...(balance > 0 ? [`Credits ${formatUsd(balance)}`] : []),
+    ...(balance > 0 ? [`Credits ${formatCreditBalance(balance)}`] : []),
     ...warnings,
   ].join('. ');
 
@@ -120,7 +120,7 @@ function UsageGauge({ status, collapsed }: { status: UsageBillingStatus; collaps
             {exhausted && <p>Out of hours: new boxes paused</p>}
             <p>{usageDetail}</p>
             <p className="text-muted-foreground">Resets {reset}</p>
-            {balance > 0 && <p className="text-muted-foreground">Credits {formatUsd(balance)}</p>}
+            {balance > 0 && <p className="text-muted-foreground">Credits {formatCreditBalance(balance)}</p>}
             {warnings.map((w) => (
               <p key={w} className="text-amber-600 dark:text-amber-400">
                 {w}
@@ -167,7 +167,7 @@ function UsageGauge({ status, collapsed }: { status: UsageBillingStatus; collaps
               {leftText}
             </p>
           )}
-          {balance > 0 && <p className="text-[11px] text-muted-foreground">Credits {formatUsd(balance)}</p>}
+          {balance > 0 && <p className="text-[11px] text-muted-foreground">Credits {formatCreditBalance(balance)}</p>}
         </button>
         {action !== null && (
           <button

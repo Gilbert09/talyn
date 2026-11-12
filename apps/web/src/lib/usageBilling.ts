@@ -8,7 +8,7 @@ import {
   USAGE_EXHAUSTED_ERROR_CODE,
   formatBoxHoursLabel,
   formatBoxHoursUsage,
-  formatUsd,
+  formatCreditBalance,
   isPlanTier,
   sellableTierPrices,
   type BillingStatus,
@@ -105,7 +105,7 @@ export function leftPercent(percent: number, exhausted: boolean): number {
 export function formatLeftPercent(percent: number, exhausted: boolean): string {
   const left = leftPercent(percent, exhausted);
   if (left > 0 && left < 1) return 'Less than 1% left';
-  return `${left.toFixed(left < 10 && left > 0 ? 1 : 0)}% left`;
+  return `${Number(left.toFixed(left < 10 && left > 0 ? 1 : 0))}% left`;
 }
 
 export const GAUGE_BAR_CLASS: Record<GaugeTone, string> = {
@@ -130,15 +130,17 @@ export const ADD_CREDITS_BELOW_LEFT_PCT = 5;
 /**
  * The card's button, or null for none. Free cannot buy credits, so it always
  * gets "Upgrade". A paid plan gets "Add credits" only when less than
- * ADD_CREDITS_BELOW_LEFT_PCT of its hours is left, or none is. Otherwise Pro
- * and Max get no button and Legacy Pro gets "Upgrade".
+ * ADD_CREDITS_BELOW_LEFT_PCT of its hours is left, or none is, and it has no
+ * credits left. Otherwise Pro and Max get no button and Legacy Pro gets
+ * "Upgrade".
  */
 export function gaugeAction(view: UsageBillingView): GaugeAction | null {
   const creditsAllowed = PLAN_LIMITS[view.tier].creditsAllowed;
   if (!creditsAllowed) return 'upgrade';
   const { includedWsec, usedWsec, exhausted } = view.usage;
   const low = exhausted || 100 * (includedWsec - usedWsec) < ADD_CREDITS_BELOW_LEFT_PCT * includedWsec;
-  if (low) return 'add_credits';
+  const hasCredits = (view.status.credits?.balanceMicros ?? 0) > 0;
+  if (low && !hasCredits) return 'add_credits';
   return view.tier === 'legacy_pro' ? 'upgrade' : null;
 }
 
@@ -175,7 +177,7 @@ export function gaugeSummary(view: UsageBillingView): {
     leftText: formatLeftPercent(view.usage.percent, view.usage.exhausted),
     usageText: `${formatLeftPercent(view.usage.percent, view.usage.exhausted)} (${formatBoxHoursUsage(view.usage.usedWsec, view.usage.includedWsec)} used)`,
     resetText: `Resets ${formatShortDate(view.usage.periodEnd)}`,
-    creditsText: balance > 0 ? `${formatUsd(balance)} credits` : null,
+    creditsText: balance > 0 ? `${formatCreditBalance(balance)} credits` : null,
     exhaustedText: view.usage.exhausted ? 'Out of hours: new boxes paused' : null,
   };
 }

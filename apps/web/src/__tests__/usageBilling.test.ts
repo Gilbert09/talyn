@@ -64,7 +64,9 @@ describe('leftPercent and formatLeftPercent', () => {
     [4.5, false, 95.5, '96% left'],
     [13.2, false, 86.8, '87% left'],
     [95.5, false, 4.5, '4.5% left'],
-    [99, false, 1, '1.0% left'],
+    [92, false, 8, '8% left'],
+    [90.04, false, 9.96, '10% left'],
+    [99, false, 1, '1% left'],
     [99.75, false, 0.25, 'Less than 1% left'],
     [100, false, 0, '0% left'],
     [120, false, 0, '0% left'],
@@ -93,6 +95,19 @@ describe('gaugeAction', () => {
     ['legacy_pro', 50, true, 'add_credits'],
   ] as const)('%s with %i hours used and exhausted=%s offers %s', (tier, usedHours, exhausted, action) => {
     const view = usageBillingOf(usageStatus(tier, { usedHours, exhausted }))!;
+    expect(gaugeAction(view)).toBe(action);
+  });
+
+  it.each([
+    ['pro', 191, false, null],
+    ['pro', 200, true, null],
+    ['max', 951, false, null],
+    ['max', 1000, true, null],
+    ['legacy_pro', 48, false, 'upgrade'],
+    ['legacy_pro', 50, true, 'upgrade'],
+    ['free', 10, true, 'upgrade'],
+  ] as const)('%s with %i hours used, exhausted=%s and credits left offers %s', (tier, usedHours, exhausted, action) => {
+    const view = usageBillingOf(usageStatus(tier, { usedHours, exhausted, balanceMicros: 100_000_000 }))!;
     expect(gaugeAction(view)).toBe(action);
   });
 });

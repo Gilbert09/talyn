@@ -67,6 +67,16 @@ describe('SidebarUsageSlot', () => {
     expect(screen.getByRole('progressbar').firstElementChild).toHaveClass(barClass);
   });
 
+  it.each([
+    ['nearly out', 198, false],
+    ['out', 200, true],
+  ])('hides Add credits when Pro is %s but has credits left', (_label, usedHours, exhausted) => {
+    setup(usageStatus('pro', { usedHours, exhausted, balanceMicros: 100_000_000 }));
+    render(<SidebarUsageSlot collapsed={false} />);
+    expect(screen.getByText(/\$100\.00 credits/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add credits' })).toBeNull();
+  });
+
   it('says plainly when the hours are out', () => {
     setup(usageStatus('free', { usedHours: 10, exhausted: true }));
     render(<SidebarUsageSlot collapsed={false} />);
@@ -121,7 +131,7 @@ describe('SidebarUsageSlot', () => {
     const title = button.getAttribute('title') ?? '';
     expect(title).toContain('Pro plan');
     expect(title).toContain('50% left (100 of 200 box-hours used)');
-    expect(title).toContain('$5.00 credits');
+    expect(title).toContain('$5 credits');
     expect(title).toContain('Claude needs reconnecting');
     expect(button.querySelector('svg')).not.toBeNull();
     expect(button.querySelectorAll('circle')[1]).toHaveAttribute('stroke-dashoffset', `${Math.PI * 7}`);
