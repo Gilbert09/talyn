@@ -50,9 +50,38 @@ export function modelsFor(agent: WorkbenchAgent) {
   return FLEET_MODELS.filter((model) => model.provider === (agent === 'codex' ? 'openai' : 'anthropic'));
 }
 
-// The last repository chosen per workspace, for this app run.
+interface RepositoryStorage { getItem(key: string): Promise<string | null>; setItem(key: string, value: string): Promise<void> }
+/** The device key for the last repository a person started in a workspace or space. */
+export const lastRepositoryKey = (user: string, place: string) => `talyn.new-work-repo.${encodeURIComponent(user)}.${encodeURIComponent(place)}`;
+
+function repositoryStorage(): RepositoryStorage | null {
+  try {
+    // Loaded on first use, so tests without the native module still run.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const module = require('@react-native-async-storage/async-storage') as { default?: RepositoryStorage };
+    return module.default ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// The last repository started, by `lastRepositoryKey`. The device keeps it between app runs; this map is the run's copy.
 const lastRepository = new Map<string, string>();
-export function rememberRepository(workspaceId: string, repositoryId: string) { lastRepository.set(workspaceId, repositoryId); }
+export function rememberRepository(key: string, repositoryId: string) {
+  lastRepository.set(key, repositoryId);
+  void repositoryStorage()?.setItem(key, repositoryId).catch(() => {});
+}
+/** The saved last repository for `key`, read from the device once per app run. */
+export async function loadLastRepository(key: string): Promise<string | null> {
+  const known = lastRepository.get(key);
+  if (known) return known;
+  const saved = await repositoryStorage()?.getItem(key).catch(() => null);
+  // A start during the read wins over the older saved value.
+  if (saved && !lastRepository.has(key)) lastRepository.set(key, saved);
+  return lastRepository.get(key) ?? null;
+}
+/** Forget the run's copy. For tests. */
+export function forgetLastRepositories() { lastRepository.clear(); }
 /** The last repository when it is still watched, else the first one. */
 export function defaultRepositoryId(workspaceId: string, repositories: ReadonlyArray<Pick<WatchedRepo, 'id'>>): string {
   const last = lastRepository.get(workspaceId);

@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { Alert, Keyboard } from 'react-native';
 
+import { forgetLastRepositories } from '../features/create/model';
 import { NewWorkScreen } from '../features/create/NewWorkScreen';
 import { PullRequestDetailScreen } from '../features/prs/PullRequestDetailScreen';
 import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
@@ -34,8 +35,11 @@ jest.mock('../auth/AuthProvider', () => ({
   useNetwork: () => mockNetwork, useAuth: () => ({ user: { id: 'user-one' } }),
   useWorkspace: () => mockWorkspace,
 }));
+const mockStorage = { getItem: jest.fn(async (_key: string): Promise<string | null> => null), setItem: jest.fn(async (_key: string, _value: string) => {}) };
+jest.mock('@react-native-async-storage/async-storage', () => ({ __esModule: true, default: mockStorage }));
 beforeEach(() => {
   mockActive.store.dispose(); mockActive = fixture(); mockParams = { id: 'session-one' }; mockNetwork = 'online';
+  forgetLastRepositories(); mockStorage.getItem.mockReset().mockResolvedValue(null); mockStorage.setItem.mockClear();
   mockWorkspace = { status: 'ready', selected: 'one', choices: [{ id: 'one', name: 'Test workspace' }] };
   Object.values(mockRouter).forEach((value) => { if (jest.isMockFunction(value)) value.mockClear(); });
 });
@@ -194,6 +198,44 @@ describe('start new work', () => {
     await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId: 'one', repositoryId: 'repo-one', runtime: 'sandbox', prompt: 'Fix the flaky test' })));
     expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'session-new' } });
+  });
+  const twoRepos = () => mockActive.api.repositories.list.mockResolvedValue([
+    { id: 'repo-one', workspaceId: 'one', owner: 'example', repo: 'project', fullName: 'example/project', defaultBranch: 'main' },
+    { id: 'repo-two', workspaceId: 'one', owner: 'example', repo: 'second', fullName: 'example/second', defaultBranch: 'main' }]);
+  it.each([
+    ['the saved repository', 'repo-two', 'example/second', 'repo-two'],
+    ['the first repository when nothing is saved', null, 'example/project', 'repo-one'],
+    ['the first repository when the saved one is gone', 'repo-gone', 'example/project', 'repo-one'],
+  ])('defaults the repository to %s', async (_name, saved, fullName, repositoryId) => {
+    twoRepos();
+    mockStorage.getItem.mockResolvedValue(saved);
+    await render(<NewWorkScreen />);
+    expect(await screen.findByRole('button', { name: `Repository: ${fullName}. Change repository` })).toBeVisible();
+    expect(mockStorage.getItem).toHaveBeenCalledWith('talyn.new-work-repo.user-one.one');
+    await fireEvent.changeText(screen.getByLabelText('Task'), 'Use the default');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({ repositoryId })));
+    expect(mockStorage.setItem).toHaveBeenCalledWith('talyn.new-work-repo.user-one.one', repositoryId);
+  });
+  it('switches to the saved repository when it loads after the list', async () => {
+    twoRepos();
+    let resolve: (value: string | null) => void = () => {};
+    mockStorage.getItem.mockReturnValue(new Promise((done) => { resolve = done; }));
+    await render(<NewWorkScreen />);
+    expect(await screen.findByRole('button', { name: 'Repository: example/project. Change repository' })).toBeVisible();
+    await act(async () => resolve('repo-two'));
+    expect(await screen.findByRole('button', { name: 'Repository: example/second. Change repository' })).toBeVisible();
+  });
+  it('keeps a picked repository when the saved one loads later', async () => {
+    twoRepos();
+    let resolve: (value: string | null) => void = () => {};
+    mockStorage.getItem.mockReturnValue(new Promise((done) => { resolve = done; }));
+    await render(<NewWorkScreen />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Repository: example/project. Change repository' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'example/second' }));
+    await act(async () => resolve('repo-one'));
+    expect(await screen.findByRole('button', { name: 'Repository: example/second. Change repository' })).toBeVisible();
   });
   it('starts a thread without a repository', async () => {
     await render(<NewWorkScreen initialMode="thread" />);
