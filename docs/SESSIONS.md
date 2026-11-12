@@ -2,6 +2,31 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Webhook rules: inbound layer, phase 1 (2026-11-12)
+
+Phase 1 of `docs/INBOUND_INTEGRATIONS.md`. A rule of the new Webhooks integration gets its own URL, and a request to it starts a session (the default) or a task. It is behind the `webhookRules` flag (`webhook-rules`, break glass `WEBHOOK_RULES_ENABLED`, fallback OFF, gated). The routes ask the caller; the receiver and the engine ask the workspace owner.
+
+The shared inbound layer (`services/inbound/`), built so Linear, Sentry and Jira are thin adapters:
+- Tables `inbound_connections` and `inbound_deliveries` (migration `0131`), backend-pool only. A generic connection belongs to one rule (`rule_id`, unique, cascade). Talyn keeps only the sha256 of the URL token, so it shows the URL once (on create and on rotate). The signing secret is encrypted.
+- `adapter.ts` is the vendor seam: `verify`, `deliveryId`, `eventType`, `toFacts`, a rules-engine source and the flag. `adapters/webhook.ts` is the only adapter. The token is compared in constant time against the hash. `X-Talyn-Signature: sha256=<hex>` is optional, and a present but wrong one is refused. The delivery id is `X-Talyn-Delivery`, else `body:<sha256 of the body>`.
+- `receiver.ts`: `POST /api/v1/webhooks/in/:connectionId/:token`, mounted before `express.json` with its own raw parser. 1 MB body cap (413), 120 requests a minute per URL and 600 per IP. 404 for an unknown URL and for the flag off, 401 for a bad token or signature. It stores, answers 200, and processes after the response.
+- `process.ts` generalises `processSlackEvent`: claim CAS, `runWithoutScope`, 5 attempts. `sweep.ts` retries what a crash left and deletes deliveries 7 days after they arrived (`inbound_delivery_sweep` poller).
+- `prompt.ts` `buildInboundPrompt` mirrors `buildSlackPrompt`. Identifier placeholders (`{{repo}}`, `{{webhook.delivery}}`, `{{webhook.received_at}}`) render inline only when the value is one token of identifier characters, 200 characters or fewer. Otherwise they move into the fence. `{{payload.<path>}}` never renders inline. The body is quoted up to 16 KB, with a note outside the fence when it was cut.
+
+Rules engine:
+- `webhook` is a `WorkflowIntegration` with one event, `webhook_received`, and one condition, `payloadMatches` (`{ path, op: equals | contains | exists, value? }`, ANDed, dot paths with indexes). `workflowMatches` also requires the rule id to equal the facts' `ruleId`. The rate cap subject is `webhook:<ruleId>`.
+- A run row stores webhook facts WITHOUT the body (`storedFacts`), because a body can be 1 MB and the run history reads `facts`. The retry sweep reads the body again from `inbound_deliveries` by `deliveryRowId`, and gives the run up when the row is gone.
+- `start_task` is new and inbound-only: `createCloudTask({ type: 'code_writing', source: 'workflow' })`, so the box gate, the unattended deferral and the attribution are unchanged. `start_session` on a webhook rule needs a repository (the validator refuses `null`).
+
+Routes: creating a webhook rule writes the rule and its connection in one pool transaction (`createWebhookRule`), because the connection table has no grant for the scoped role and points at the rule. The answer carries `webhook: { connectionId, url, signingSecret }` once. `routes/workflowWebhooks.ts` adds `GET /workflows/:id/webhook`, `POST /:id/webhook/rotate`, `GET /:id/deliveries` (no body), `GET /:id/deliveries/:deliveryId`, and `POST /:id/deliveries/:deliveryId/replay` (`<orig>:replay:<n>`, so the run claim is fresh). Rotate also repairs a rule that lost its connection. The URL uses `TALYN_PUBLIC_API_URL` when set, else the caller's host. Set it in production, because the MCP tools call over loopback.
+
+Clients: a Webhooks catalog card and rules page in web and desktop, with the payload test editor, the start forms, a once-only URL dialog, a URL section with Rotate, and a Requests list with Replay. Mobile shows the card and the rules list with the toggle and "Edit on the web". MCP `create_workflow` returns the URL once. Docs: `integrations-webhook.md`.
+
+Not done:
+- No "require a signature" setting: a sender that signs cannot stop an unsigned request that has the URL.
+- Deliveries do not update live. There is no WebSocket event for them, so the list loads on open and after a replay.
+- `IssueEventFacts` and `ErrorEventFacts` are not added yet. They belong to phases 2 and 3.
+
 ## Bill boxes on measured memory (2026-11-12)
 
 A posthog/posthog session boots as Large (12 GB, 6 vCPU, weight 2). Compose-file detection sees ClickHouse and Kafka and picks that size. But a session uses about 1.5 GB, so the user paid two box-hours for each hour of a box that used an eighth of its memory. The box still boots at the detected size, so a session that starts the full stack has room. The bill now follows the memory the box uses.

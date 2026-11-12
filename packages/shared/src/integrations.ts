@@ -1,16 +1,17 @@
 import { loopsOffered } from './loops.js';
 import { privateRoutesOffered } from './privateRoutes.js';
-import { workflowsOffered } from './workflows.js';
+import { webhookRulesOffered, workflowsOffered } from './workflows.js';
 
 /**
  * The Integrations area: one page per integration, each holding its
  * connection and its rules. Every front end draws the catalog from here.
  */
-export type IntegrationKind = 'github' | 'slack' | 'schedule' | 'tailscale' | 'posthog' | 'trunk';
+export type IntegrationKind = 'github' | 'slack' | 'webhook' | 'schedule' | 'tailscale' | 'posthog' | 'trunk';
 
 export const INTEGRATION_KINDS: readonly IntegrationKind[] = [
   'github',
   'slack',
+  'webhook',
   'schedule',
   'tailscale',
   'posthog',
@@ -18,14 +19,20 @@ export const INTEGRATION_KINDS: readonly IntegrationKind[] = [
 ];
 
 /** The account feature that decides whether an integration is offered. `null` means always. */
-export type IntegrationGate = 'workbenches' | 'loops' | 'privateRoutes' | 'trunkMergeEta' | null;
+export type IntegrationGate =
+  | 'workbenches'
+  | 'loops'
+  | 'privateRoutes'
+  | 'trunkMergeEta'
+  | 'webhookRules'
+  | null;
 
 export interface IntegrationInfo {
   kind: IntegrationKind;
   name: string;
   description: string;
   /** A key each client maps to its own icon. */
-  icon: 'github' | 'slack' | 'clock' | 'network' | 'posthog' | 'trunk';
+  icon: 'github' | 'slack' | 'webhook' | 'clock' | 'network' | 'posthog' | 'trunk';
   /** True when the integration has rules (triggers that start work). */
   hasRules: boolean;
   /** True when there is nothing to connect: the integration is always on. */
@@ -51,6 +58,16 @@ export const INTEGRATION_CATALOG: Record<IntegrationKind, IntegrationInfo> = {
     hasRules: false,
     builtIn: false,
     gate: 'workbenches',
+  },
+  webhook: {
+    kind: 'webhook',
+    name: 'Webhooks',
+    description: 'An automation gets its own URL. A request to it starts a session or a task.',
+    icon: 'webhook',
+    hasRules: true,
+    // Nothing to connect: each automation mints its own URL.
+    builtIn: true,
+    gate: 'webhookRules',
   },
   schedule: {
     kind: 'schedule',
@@ -101,6 +118,7 @@ type OfferedFeatures =
       privateRoutes?: boolean;
       trunkMergeEta?: boolean;
       workflows?: boolean;
+      webhookRules?: boolean;
     }
   | null
   | undefined;
@@ -116,6 +134,8 @@ export function integrationOffered(features: OfferedFeatures, kind: IntegrationK
       return privateRoutesOffered(features);
     case 'trunk':
       return features.trunkMergeEta === true;
+    case 'webhook':
+      return webhookRulesOffered(features);
     default:
       return true;
   }
@@ -130,5 +150,6 @@ export function integrationsOffered(features: OfferedFeatures): IntegrationKind[
 export function integrationRulesOffered(features: OfferedFeatures, kind: IntegrationKind): boolean {
   if (!INTEGRATION_CATALOG[kind].hasRules || !integrationOffered(features, kind)) return false;
   if (kind === 'github') return workflowsOffered(features);
+  if (kind === 'webhook') return webhookRulesOffered(features);
   return true;
 }

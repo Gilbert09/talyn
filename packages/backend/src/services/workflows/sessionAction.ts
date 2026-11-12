@@ -34,7 +34,13 @@ import { userFacingError, WorkbenchError } from '../workbenches/errors.js';
 import { liveWorkbenchForPr } from '../workbenches/prSessions.js';
 import type { ReadinessUser } from '../workbenches/readiness.js';
 import { boxRefused, no, ok, type OneResult } from './actionResult.js';
-import type { GithubActionContext, SlackActionContext, WorkflowActionContext } from './actions.js';
+import type {
+  GithubActionContext,
+  SlackActionContext,
+  WebhookActionContext,
+  WorkflowActionContext,
+} from './actions.js';
+import { inboundRulePrompt, repositoryName } from './inboundActions.js';
 
 /**
  * The `start_session` action: a rule starts a session, as the workspace owner.
@@ -61,6 +67,7 @@ export async function startSession(
   prRow: PrRowSource | null
 ): Promise<OneResult> {
   if (ctx.integration === 'slack') return startSlackSession(action, ctx);
+  if (ctx.integration === 'webhook') return startWebhookSession(action, ctx);
   if (!prRow) return { outcome: no('start_session', 'error', 'A GitHub automation ran without its pull request.') };
   return startGithubSession(action, ctx, prRow);
 }
@@ -185,6 +192,35 @@ async function startGithubSession(
   });
   if (!created.ok) return created.result;
   return started(created.workbenchId, resolved?.id ?? null);
+}
+
+// ---- Webhook --------------------------------------------------------------
+
+/**
+ * From a webhook request. On the rule's own repository: a webhook carries
+ * nothing Talyn can choose a repository from, so the validator requires one.
+ * The rule's prompt comes first, and the request body follows, quoted and
+ * marked UNTRUSTED (`buildInboundPrompt`).
+ */
+async function startWebhookSession(action: StartSessionAction, ctx: WebhookActionContext): Promise<OneResult> {
+  const repoName = action.repositoryId ? await repositoryName(ctx.workspaceId, action.repositoryId) : null;
+  if (!action.repositoryId || !repoName) {
+    return {
+      outcome: no(
+        'start_session',
+        'repository_unresolved',
+        'The automation has no repository in this workspace. Choose a repository on the automation.'
+      ),
+    };
+  }
+  const created = await createRuleSession(action, ctx, {
+    repositoryId: action.repositoryId,
+    prompt: inboundRulePrompt(action.prompt, ctx, repoName),
+    namingText: action.prompt,
+    source: { kind: 'workflow', workflowId: ctx.workflowId, runId: ctx.runId, integration: 'webhook' },
+  });
+  if (!created.ok) return created.result;
+  return started(created.workbenchId);
 }
 
 // ---- Slack ----------------------------------------------------------------

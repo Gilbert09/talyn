@@ -31,7 +31,7 @@ import type { SkillKey } from './skills.js';
 // ============================================================================
 
 /** The integrations a rule can belong to. */
-export const WORKFLOW_INTEGRATIONS = ['github', 'slack'] as const;
+export const WORKFLOW_INTEGRATIONS = ['github', 'slack', 'webhook'] as const;
 
 export type WorkflowIntegration = (typeof WORKFLOW_INTEGRATIONS)[number];
 
@@ -39,6 +39,7 @@ export type WorkflowIntegration = (typeof WORKFLOW_INTEGRATIONS)[number];
 export const WORKFLOW_INTEGRATION_LABELS: Record<WorkflowIntegration, string> = {
   github: 'GitHub',
   slack: 'Slack',
+  webhook: 'Webhook',
 };
 
 export function isWorkflowIntegration(value: unknown): value is WorkflowIntegration {
@@ -54,7 +55,7 @@ export function isWorkflowIntegration(value: unknown): value is WorkflowIntegrat
 export function workflowIntegrationOf(
   value: { integration?: WorkflowIntegration | null } | null | undefined
 ): WorkflowIntegration {
-  return value?.integration === 'slack' ? 'slack' : 'github';
+  return isWorkflowIntegration(value?.integration) ? value.integration : 'github';
 }
 
 // ============================================================================
@@ -122,18 +123,34 @@ export const SLACK_WORKFLOW_EVENTS = ['slack_message'] as const;
 
 export type SlackWorkflowEvent = (typeof SLACK_WORKFLOW_EVENTS)[number];
 
+/**
+ * The webhook events a rule can trigger on: one request to the rule's own URL.
+ * A webhook rule has its own URL, so the event needs no other name.
+ */
+export const WEBHOOK_WORKFLOW_EVENTS = ['webhook_received'] as const;
+
+export type WebhookWorkflowEvent = (typeof WEBHOOK_WORKFLOW_EVENTS)[number];
+
 /** Every event any rule can trigger on. */
-export type WorkflowTriggerEvent = GithubWorkflowEvent | SlackWorkflowEvent;
+export type WorkflowTriggerEvent = GithubWorkflowEvent | SlackWorkflowEvent | WebhookWorkflowEvent;
 
 /** Every event, of every integration. */
 export const ALL_WORKFLOW_TRIGGER_EVENTS: readonly WorkflowTriggerEvent[] = [
   ...GITHUB_WORKFLOW_EVENTS,
   ...SLACK_WORKFLOW_EVENTS,
+  ...WEBHOOK_WORKFLOW_EVENTS,
 ];
 
 /** The events that belong to one integration. */
 export function workflowEventsFor(integration: WorkflowIntegration): readonly WorkflowTriggerEvent[] {
-  return integration === 'slack' ? SLACK_WORKFLOW_EVENTS : GITHUB_WORKFLOW_EVENTS;
+  switch (integration) {
+    case 'slack':
+      return SLACK_WORKFLOW_EVENTS;
+    case 'webhook':
+      return WEBHOOK_WORKFLOW_EVENTS;
+    default:
+      return GITHUB_WORKFLOW_EVENTS;
+  }
 }
 
 /**
@@ -162,6 +179,7 @@ export const WORKFLOW_EVENT_LABELS: Record<WorkflowTriggerEvent, string> = {
   pr_checks_completed: 'A check suite finished',
   pr_checks_passed: 'All checks passed',
   slack_message: 'New message in a channel',
+  webhook_received: 'Webhook received',
 };
 
 /**
@@ -328,7 +346,43 @@ export interface WorkflowConditions {
   slackAuthors?: WorkflowSlackAuthorMatch;
   /** Whether a reply inside a thread triggers the rule. Absent means no. */
   includeThreadReplies?: boolean;
+
+  // ---- Webhook rules only -----------------------------------------------
+
+  /** Tests on the JSON body of the request. All must pass. Absent means every request. */
+  payloadMatches?: WebhookPayloadCondition[];
 }
+
+/**
+ * One test on a webhook's JSON body.
+ *
+ * `path` is a dot path with array indices: `issue.labels[0].name` or
+ * `issue.labels.0.name`. A path that does not resolve fails every test.
+ *
+ * - `equals`: the value at the path, as text, is exactly `value`.
+ * - `contains`: for text, `value` appears in it (case-insensitive). For an
+ *   array, one item, as text, is `value` (case-insensitive).
+ * - `exists`: the path resolves to a value that is not null.
+ *
+ * No expression language on purpose: a short list of these is legible in the
+ * editor, and a rule that needs OR is two rules.
+ */
+export interface WebhookPayloadCondition {
+  path: string;
+  op: WebhookPayloadOp;
+  /** Required for `equals` and `contains`. Absent for `exists`. */
+  value?: string;
+}
+
+export const WEBHOOK_PAYLOAD_OPS = ['equals', 'contains', 'exists'] as const;
+
+export type WebhookPayloadOp = (typeof WEBHOOK_PAYLOAD_OPS)[number];
+
+export const WEBHOOK_PAYLOAD_OP_LABELS: Record<WebhookPayloadOp, string> = {
+  equals: 'equals',
+  contains: 'contains',
+  exists: 'is present',
+};
 
 /**
  * Who may trigger a Slack rule.
@@ -382,6 +436,23 @@ export const SLACK_WORKFLOW_CONDITION_KEYS = [
   'includeThreadReplies',
 ] as const satisfies ReadonlyArray<keyof WorkflowConditions>;
 
+/** The condition keys a webhook rule may carry. */
+export const WEBHOOK_WORKFLOW_CONDITION_KEYS = ['payloadMatches'] as const satisfies ReadonlyArray<
+  keyof WorkflowConditions
+>;
+
+/** The condition keys each integration's rules may carry. */
+export function workflowConditionKeysFor(integration: WorkflowIntegration): readonly string[] {
+  switch (integration) {
+    case 'slack':
+      return SLACK_WORKFLOW_CONDITION_KEYS;
+    case 'webhook':
+      return WEBHOOK_WORKFLOW_CONDITION_KEYS;
+    default:
+      return GITHUB_WORKFLOW_CONDITION_KEYS;
+  }
+}
+
 // ============================================================================
 // Actions
 // ============================================================================
@@ -406,26 +477,38 @@ export const WORKFLOW_ACTION_TYPES = [
  */
 export type GithubPrWorkflowActionType = (typeof WORKFLOW_ACTION_TYPES)[number];
 
-/** Start a session. Both GitHub and Slack rules can use it. */
+/** Start a session. Every integration's rules can use it. */
 export const SHARED_WORKFLOW_ACTION_TYPES = ['start_session'] as const;
 
 /** Act on the Slack message that triggered the rule. Slack rules only. */
 export const SLACK_WORKFLOW_ACTION_TYPES = ['slack_reply', 'slack_react'] as const;
+
+/**
+ * Start a cloud task on a named repository. Inbound rules only (webhooks
+ * today): a GitHub rule has `run_prompt`, which runs on the pull request.
+ */
+export const INBOUND_WORKFLOW_ACTION_TYPES = ['start_task'] as const;
 
 /** Every action type, of every integration. */
 export const ALL_WORKFLOW_ACTION_TYPES = [
   ...WORKFLOW_ACTION_TYPES,
   ...SHARED_WORKFLOW_ACTION_TYPES,
   ...SLACK_WORKFLOW_ACTION_TYPES,
+  ...INBOUND_WORKFLOW_ACTION_TYPES,
 ] as const;
 
 export type WorkflowActionType = (typeof ALL_WORKFLOW_ACTION_TYPES)[number];
 
 /** The action types one integration's rules may use. */
 export function workflowActionsFor(integration: WorkflowIntegration): readonly WorkflowActionType[] {
-  return integration === 'slack'
-    ? [...SHARED_WORKFLOW_ACTION_TYPES, ...SLACK_WORKFLOW_ACTION_TYPES]
-    : [...WORKFLOW_ACTION_TYPES, ...SHARED_WORKFLOW_ACTION_TYPES];
+  switch (integration) {
+    case 'slack':
+      return [...SHARED_WORKFLOW_ACTION_TYPES, ...SLACK_WORKFLOW_ACTION_TYPES];
+    case 'webhook':
+      return [...SHARED_WORKFLOW_ACTION_TYPES, ...INBOUND_WORKFLOW_ACTION_TYPES];
+    default:
+      return [...WORKFLOW_ACTION_TYPES, ...SHARED_WORKFLOW_ACTION_TYPES];
+  }
 }
 
 export type WorkflowMergeMethod = 'squash' | 'merge' | 'rebase';
@@ -468,7 +551,7 @@ export type WorkflowAction =
    *
    * `repositoryId: null` means "let Talyn choose", which only a Slack rule can
    * do: Talyn picks the repository from the message. A GitHub rule runs on the
-   * pull request's own repository.
+   * pull request's own repository. A webhook rule must name one.
    */
   | {
       type: 'start_session';
@@ -480,7 +563,18 @@ export type WorkflowAction =
   /** Reply in the thread of the Slack message that triggered the rule. */
   | { type: 'slack_reply'; text: string }
   /** React to the Slack message that triggered the rule. `emoji` has no colons. */
-  | { type: 'slack_react'; emoji: string };
+  | { type: 'slack_react'; emoji: string }
+  /**
+   * Start a cloud task (`code_writing`) on the named repository with the
+   * rule's prompt. The alternative to `start_session` for inbound rules.
+   */
+  | {
+      type: 'start_task';
+      repositoryId: string;
+      prompt: string;
+      model?: string;
+      internetAccess?: boolean;
+    };
 
 export const WORKFLOW_ACTION_LABELS: Record<WorkflowActionType, string> = {
   add_labels: 'Add labels',
@@ -496,11 +590,12 @@ export const WORKFLOW_ACTION_LABELS: Record<WorkflowActionType, string> = {
   start_session: 'Start a session',
   slack_reply: 'Reply in the thread',
   slack_react: 'Add a reaction',
+  start_task: 'Start a task',
 };
 
 /** Actions that start a cloud task, and so consume a plan task slot. */
 export function workflowActionStartsTask(action: WorkflowAction): boolean {
-  return action.type === 'run_skill' || action.type === 'run_prompt';
+  return action.type === 'run_skill' || action.type === 'run_prompt' || action.type === 'start_task';
 }
 
 // ============================================================================
@@ -885,11 +980,50 @@ export interface SlackEventFacts {
   authorLinked: boolean;
 }
 
+/**
+ * The facts one webhook request yields.
+ *
+ * Built by the webhook source adapter from a stored inbound delivery. A
+ * webhook rule owns its URL, so `ruleId` names the one rule the request is
+ * for, and the matcher refuses every other rule.
+ *
+ * `payload` is the parsed JSON body (or the body as text when it is not
+ * JSON). A run's stored facts drop it to keep `workflow_runs` small, and a
+ * retry reads it again from `inbound_deliveries` by `deliveryRowId`.
+ */
+export interface WebhookEventFacts {
+  integration: 'webhook';
+  event: WebhookWorkflowEvent;
+  ruleId: string;
+  connectionId: string;
+  /** `inbound_deliveries.id` of the stored request. */
+  deliveryRowId: string;
+  /** The sender's delivery id (`X-Talyn-Delivery`), or a hash of the body. */
+  deliveryId: string;
+  receivedAt: string;
+  payload: unknown;
+  /** The request headers Talyn keeps: never a credential or a signature. */
+  headers: Record<string, string>;
+}
+
 /** The facts any rule can match on, tagged by integration. */
-export type WorkflowFacts = GithubEventFacts | SlackEventFacts;
+export type WorkflowFacts = GithubEventFacts | SlackEventFacts | WebhookEventFacts;
 
 export function isSlackFacts(facts: WorkflowFacts): facts is SlackEventFacts {
   return facts.integration === 'slack';
+}
+
+export function isWebhookFacts(facts: WorkflowFacts): facts is WebhookEventFacts {
+  return facts.integration === 'webhook';
+}
+
+export function isGithubFacts(facts: WorkflowFacts): facts is GithubEventFacts {
+  return facts.integration === undefined || facts.integration === 'github';
+}
+
+/** The integration a set of facts came from. Untagged facts are GitHub's. */
+export function factsIntegration(facts: WorkflowFacts): WorkflowIntegration {
+  return facts.integration ?? 'github';
 }
 
 /** Whether a Slack message is a reply inside a thread, not a top-level message. */
@@ -902,9 +1036,13 @@ export function isSlackThreadReply(facts: Pick<SlackEventFacts, 'ts' | 'threadTs
  *
  * The key is what the per-hour rate cap counts by. A GitHub rule is capped per
  * pull request (`pr:<owner/repo>#<number>`), a Slack rule per channel
- * (`slack:<team>:<channel>`).
+ * (`slack:<team>:<channel>`), a webhook rule per rule (`webhook:<ruleId>`),
+ * because the rule's URL is the only subject a webhook has.
  */
 export function workflowSubjectOf(facts: WorkflowFacts): { key: string; label: string } {
+  if (isWebhookFacts(facts)) {
+    return { key: `webhook:${facts.ruleId}`, label: 'Webhook' };
+  }
   if (isSlackFacts(facts)) {
     return {
       key: `slack:${facts.teamId}:${facts.channelId}`,
@@ -1006,6 +1144,8 @@ export function actorMatches(
 export function workflowMatches(
   workflow: Pick<WorkflowDefinition, 'events' | 'conditions'> & {
     integration?: WorkflowIntegration;
+    /** Required to match webhook facts: a webhook names its one rule. */
+    id?: string;
   },
   facts: WorkflowFacts,
   /**
@@ -1020,9 +1160,15 @@ export function workflowMatches(
   // not overlap, so this is also implied by the event test below; it is said
   // here so a rule with no events stored cannot fall through to the other side.
   const integration = workflowIntegrationOf(workflow);
-  if (integration !== (isSlackFacts(facts) ? 'slack' : 'github')) return false;
+  if (integration !== factsIntegration(facts)) return false;
   if (!workflow.events.includes(facts.event)) return false;
   const conditions = workflow.conditions ?? {};
+  if (isWebhookFacts(facts)) {
+    // A webhook's URL belongs to one rule. Without the id, no match: a rule
+    // must never act on a request sent to another rule's URL.
+    if (!workflow.id || workflow.id !== facts.ruleId) return false;
+    return webhookConditionsMatch(conditions, facts);
+  }
   return isSlackFacts(facts)
     ? slackConditionsMatch(conditions, facts)
     : githubConditionsMatch(conditions, facts, viewerLogin);
@@ -1148,6 +1294,91 @@ function slackConditionsMatch(c: WorkflowConditions, facts: SlackEventFacts): bo
 }
 
 // ============================================================================
+// Webhook payload paths
+// ============================================================================
+
+/** One step of a payload path: an object key or an array index. */
+export type WebhookPathStep = string | number;
+
+/**
+ * Parse a payload path (`a.b[0].c` or `a.b.0.c`) into steps, or null when it
+ * is not a path. A key is letters, digits, `_`, `-` or `$`. A step that is all
+ * digits is an index into an array and a key into an object.
+ */
+export function parseWebhookPath(path: string): WebhookPathStep[] | null {
+  const trimmed = path.trim();
+  if (!trimmed) return null;
+  const steps: WebhookPathStep[] = [];
+  for (const segment of trimmed.split('.')) {
+    const m = /^([A-Za-z0-9_$-]*)((?:\[\d+\])*)$/.exec(segment);
+    if (!m) return null;
+    const [, key, indices] = m;
+    if (!key && !indices) return null;
+    if (key) steps.push(/^\d+$/.test(key) ? Number(key) : key);
+    for (const idx of indices.matchAll(/\[(\d+)\]/g)) steps.push(Number(idx[1]));
+  }
+  return steps;
+}
+
+/** The value at `path` in `payload`, or `undefined` when the path does not resolve. */
+export function webhookValueAt(payload: unknown, path: string): unknown {
+  const steps = parseWebhookPath(path);
+  if (!steps) return undefined;
+  let current: unknown = payload;
+  for (const step of steps) {
+    if (current === null || typeof current !== 'object') return undefined;
+    if (Array.isArray(current)) {
+      const index = typeof step === 'number' ? step : /^\d+$/.test(step) ? Number(step) : NaN;
+      if (!Number.isInteger(index) || index >= current.length) return undefined;
+      current = current[index];
+    } else {
+      const key = String(step);
+      if (!Object.prototype.hasOwnProperty.call(current, key)) return undefined;
+      current = (current as Record<string, unknown>)[key];
+    }
+  }
+  return current;
+}
+
+/** A payload value as text, for `equals` and `contains`. Objects are JSON. */
+function webhookValueText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value) ?? '';
+}
+
+/** Whether one payload condition passes. A path that does not resolve fails. */
+export function webhookConditionPasses(payload: unknown, c: WebhookPayloadCondition): boolean {
+  const value = webhookValueAt(payload, c.path);
+  if (value === undefined) return false;
+  switch (c.op) {
+    case 'exists':
+      return value !== null;
+    case 'equals':
+      if (value === null || c.value === undefined) return false;
+      return webhookValueText(value) === c.value;
+    case 'contains': {
+      if (value === null || c.value === undefined) return false;
+      const needle = c.value.toLowerCase();
+      if (Array.isArray(value)) {
+        return value.some(
+          (item) => item !== null && typeof item !== 'object' && webhookValueText(item).toLowerCase() === needle
+        );
+      }
+      if (typeof value === 'object') return false;
+      return webhookValueText(value).toLowerCase().includes(needle);
+    }
+    default:
+      return false;
+  }
+}
+
+/** The webhook half of {@link workflowMatches}. Every payload condition must pass. */
+export function webhookConditionsMatch(c: WorkflowConditions, facts: WebhookEventFacts): boolean {
+  return (c.payloadMatches ?? []).every((condition) => webhookConditionPasses(facts.payload, condition));
+}
+
+// ============================================================================
 // Comment templating
 // ============================================================================
 
@@ -1177,7 +1408,11 @@ export function renderWorkflowTemplate(
   facts: WorkflowFacts,
   extras: WorkflowTemplateExtras = {}
 ): string {
-  const vars: Record<string, string> = isSlackFacts(facts)
+  // A webhook's payload is never rendered here: a template's output is posted
+  // where people read it, and only the prompt fence may carry sender text.
+  const vars: Record<string, string> = isWebhookFacts(facts)
+    ? { event: WORKFLOW_EVENT_LABELS[facts.event] }
+    : isSlackFacts(facts)
     ? {
         'message.text': facts.text,
         ...(facts.permalink ? { 'message.permalink': facts.permalink } : {}),
@@ -1284,7 +1519,9 @@ export function validateWorkflow(raw: unknown): NormalizedWorkflow {
   const conditions =
     integration === 'slack'
       ? validateSlackConditions(w.conditions)
-      : validateConditions(w.conditions, events);
+      : integration === 'webhook'
+        ? validateWebhookConditions(w.conditions)
+        : validateConditions(w.conditions, events);
   const actions = validateActions(w.actions, integration);
 
   let maxRuns = DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR;
@@ -1307,12 +1544,14 @@ export function validateWorkflow(raw: unknown): NormalizedWorkflow {
   };
 }
 
-/** Refuse an event that is unknown, or that belongs to the other integration. */
+/** Refuse an event that is unknown, or that belongs to another integration. */
 function validateEvent(event: string, integration: WorkflowIntegration): void {
   const own = workflowEventsFor(integration) as readonly string[];
   if (own.includes(event)) return;
-  const other: WorkflowIntegration = integration === 'slack' ? 'github' : 'slack';
-  if ((workflowEventsFor(other) as readonly string[]).includes(event)) {
+  const other = WORKFLOW_INTEGRATIONS.find(
+    (i) => i !== integration && (workflowEventsFor(i) as readonly string[]).includes(event)
+  );
+  if (other) {
     const otherLabel = WORKFLOW_INTEGRATION_LABELS[other];
     fail(
       `"${event}" is a ${otherLabel} event, and this is a ` +
@@ -1320,28 +1559,70 @@ function validateEvent(event: string, integration: WorkflowIntegration): void {
     );
   }
   fail(
-    integration === 'slack'
-      ? `"${event}" is not a Slack event Talyn can trigger on`
-      : `"${event}" is not a PR event Talyn can trigger on`
+    integration === 'github'
+      ? `"${event}" is not a PR event Talyn can trigger on`
+      : `"${event}" is not a ${WORKFLOW_INTEGRATION_LABELS[integration]} event Talyn can trigger on`
   );
 }
 
-/** Refuse a condition that belongs to the other integration, with a message that names it. */
+/** Refuse a condition that belongs to another integration, with a message that names it. */
 function refuseForeignConditions(
   c: Record<string, unknown>,
   integration: WorkflowIntegration
 ): void {
-  const foreign: readonly string[] =
-    integration === 'slack'
-      ? [...GITHUB_WORKFLOW_CONDITION_KEYS, 'targetIsViewer']
-      : SLACK_WORKFLOW_CONDITION_KEYS;
-  const hit = Object.keys(c).find((k) => foreign.includes(k));
-  if (!hit) return;
-  const other: WorkflowIntegration = integration === 'slack' ? 'github' : 'slack';
-  fail(
-    `"${hit}" is a ${WORKFLOW_INTEGRATION_LABELS[other]} condition, and this is a ` +
-      `${WORKFLOW_INTEGRATION_LABELS[integration]} automation. Remove it.`
+  // `targetIsViewer` is the legacy GitHub field that `target` replaced.
+  const keysOf = (i: WorkflowIntegration): readonly string[] =>
+    i === 'github' ? [...workflowConditionKeysFor(i), 'targetIsViewer'] : workflowConditionKeysFor(i);
+  for (const key of Object.keys(c)) {
+    if (keysOf(integration).includes(key)) continue;
+    const other = WORKFLOW_INTEGRATIONS.find((i) => i !== integration && keysOf(i).includes(key));
+    if (!other) continue;
+    fail(
+      `"${key}" is a ${WORKFLOW_INTEGRATION_LABELS[other]} condition, and this is a ` +
+        `${WORKFLOW_INTEGRATION_LABELS[integration]} automation. Remove it.`
+    );
+  }
+}
+
+/**
+ * A webhook rule's conditions: an optional list of payload tests. No
+ * conditions is legal and means every request to the rule's URL.
+ */
+function validateWebhookConditions(raw: unknown): WorkflowConditions {
+  const given = raw === undefined || raw === null ? {} : raw;
+  if (typeof given !== 'object' || Array.isArray(given)) fail('conditions must be an object');
+  const c = given as Record<string, unknown>;
+
+  refuseForeignConditions(c, 'webhook');
+  const unknown = Object.keys(c).filter(
+    (k) => !(WEBHOOK_WORKFLOW_CONDITION_KEYS as readonly string[]).includes(k)
   );
+  if (unknown.length > 0) fail(`Unknown condition "${unknown[0]}"`);
+
+  if (c.payloadMatches === undefined) return {};
+  if (!Array.isArray(c.payloadMatches)) fail('conditions.payloadMatches must be an array');
+  const out: WebhookPayloadCondition[] = c.payloadMatches.map((entry, i) =>
+    validatePayloadCondition(entry, `conditions.payloadMatches[${i}]`)
+  );
+  return out.length > 0 ? { payloadMatches: out } : {};
+}
+
+function validatePayloadCondition(raw: unknown, at: string): WebhookPayloadCondition {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail(`${at} must be an object`);
+  const r = raw as Record<string, unknown>;
+  const path = typeof r.path === 'string' ? r.path.trim() : '';
+  if (!path) fail(`${at}.path must be a non-empty string, like "issue.title"`);
+  if (!parseWebhookPath(path)) {
+    fail(`${at}.path "${path}" is not a path. Use keys and indexes, like "issue.labels[0].name".`);
+  }
+  const op = r.op;
+  if (typeof op !== 'string' || !(WEBHOOK_PAYLOAD_OPS as readonly string[]).includes(op)) {
+    fail(`${at}.op must be one of ${WEBHOOK_PAYLOAD_OPS.join(', ')}`);
+  }
+  if (op === 'exists') return { path, op: 'exists' };
+  if (typeof r.value !== 'string') fail(`${at}.value must be a string`);
+  if (op === 'contains' && !r.value.trim()) fail(`${at}.value must not be empty`);
+  return { path, op: op as WebhookPayloadOp, value: r.value };
 }
 
 /**
@@ -1561,18 +1842,24 @@ function validateAction(
   const type = a.type;
   if (typeof type !== 'string' || !(ALL_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)) {
     fail(
-      integration === 'slack'
-        ? `${at}.type is not an action a Slack automation can take`
-        : `${at}.type is not an action Talyn can take on a PR`
+      integration === 'github'
+        ? `${at}.type is not an action Talyn can take on a PR`
+        : `${at}.type is not an action a ${WORKFLOW_INTEGRATION_LABELS[integration]} automation can take`
     );
   }
   if (!(workflowActionsFor(integration) as readonly string[]).includes(type)) {
     const label = WORKFLOW_ACTION_LABELS[type as WorkflowActionType];
+    const allowed = workflowActionsFor(integration)
+      .map((t) => `"${WORKFLOW_ACTION_LABELS[t]}"`)
+      .join(', ');
+    const reason = (SLACK_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)
+      ? 'acts on a Slack message'
+      : (INBOUND_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)
+        ? 'is for webhook automations'
+        : 'acts on a pull request';
     fail(
-      integration === 'slack'
-        ? `${at}: "${label}" acts on a pull request, so a Slack automation cannot use it. ` +
-            'Use "Start a session", "Reply in the thread" or "Add a reaction".'
-        : `${at}: "${label}" acts on a Slack message, so a GitHub automation cannot use it.`
+      `${at}: "${label}" ${reason}, so a ${WORKFLOW_INTEGRATION_LABELS[integration]} automation ` +
+        `cannot use it. Use ${allowed}.`
     );
   }
 
@@ -1656,6 +1943,11 @@ function validateAction(
         if (typeof a.repositoryId !== 'string') fail(`${at}.repositoryId must be a string or null`);
         repositoryId = a.repositoryId.trim() || null;
       }
+      // Only a Slack rule can leave the repository to Talyn: it reads the
+      // message to choose one. A webhook has nothing Talyn can choose from.
+      if (integration === 'webhook' && !repositoryId) {
+        fail(`${at}: choose the repository the session works on`);
+      }
       if (a.internetAccess !== undefined && typeof a.internetAccess !== 'boolean') {
         fail(`${at}.internetAccess must be a boolean`);
       }
@@ -1682,6 +1974,24 @@ function validateAction(
         fail(`${at}.emoji must be one emoji name, like "eyes" or ":white_check_mark:"`);
       }
       return { type: 'slack_react', emoji };
+    }
+    case 'start_task': {
+      if (typeof a.prompt !== 'string' || !a.prompt.trim()) {
+        fail(`${at}.prompt must be a non-empty string`);
+      }
+      const repositoryId = typeof a.repositoryId === 'string' ? a.repositoryId.trim() : '';
+      if (!repositoryId) fail(`${at}: choose the repository the task works on`);
+      if (a.internetAccess !== undefined && typeof a.internetAccess !== 'boolean') {
+        fail(`${at}.internetAccess must be a boolean`);
+      }
+      const model = typeof a.model === 'string' && a.model.trim() ? a.model.trim() : undefined;
+      return {
+        type: 'start_task',
+        repositoryId,
+        prompt: a.prompt.trim(),
+        ...(model ? { model } : {}),
+        ...(a.internetAccess === true ? { internetAccess: true } : {}),
+      };
     }
   }
 }
@@ -1738,11 +2048,33 @@ export function slackRulesOffered(
 }
 
 /**
+ * Whether webhook rules should be drawn. The same three-state discipline as
+ * {@link workflowsOffered}, and also not authorisation: the routes, the
+ * receiver and the engine gate on the `webhookRules` flag themselves.
+ */
+export function webhookRulesOffered(
+  features: { workflows?: boolean; webhookRules?: boolean } | null | undefined
+): boolean {
+  return workflowsOffered(features) && features?.webhookRules === true;
+}
+
+/**
  * A blank workflow the editor opens on. Save stays refused until it has a name
  * and at least one action — see {@link workflowInputProblem}. A Slack rule also
  * needs its Slack workspace and a channel.
  */
 export function emptyWorkflowInput(integration: WorkflowIntegration = 'github'): WorkflowInput {
+  if (integration === 'webhook') {
+    return {
+      integration: 'webhook',
+      name: '',
+      enabled: true,
+      events: ['webhook_received'],
+      conditions: {},
+      actions: [],
+      maxRunsPerPrPerHour: DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR,
+    };
+  }
   if (integration === 'slack') {
     return {
       integration: 'slack',
@@ -1814,6 +2146,8 @@ export function emptyWorkflowAction(type: WorkflowActionType): WorkflowAction {
       return { type: 'slack_reply', text: '' };
     case 'slack_react':
       return { type: 'slack_react', emoji: 'eyes' };
+    case 'start_task':
+      return { type: 'start_task', repositoryId: '', prompt: '' };
   }
 }
 
@@ -2071,6 +2405,35 @@ export const SLACK_WORKFLOW_CONDITION_SPECS: readonly SlackWorkflowConditionSpec
   },
 ];
 
+/** The widget a webhook condition is edited with. */
+export type WebhookWorkflowConditionInput = 'payloadMatches';
+
+export interface WebhookWorkflowConditionSpec {
+  key: (typeof WEBHOOK_WORKFLOW_CONDITION_KEYS)[number];
+  label: string;
+  hint: string;
+  input: WebhookWorkflowConditionInput;
+  required: boolean;
+}
+
+/** Every condition a webhook rule can carry, as data. */
+export const WEBHOOK_WORKFLOW_CONDITION_SPECS: readonly WebhookWorkflowConditionSpec[] = [
+  {
+    key: 'payloadMatches',
+    label: 'Payload matches',
+    hint:
+      'Tests on the JSON body, like "action equals opened" or "issue.labels contains bug". ' +
+      'Every test must pass. Without tests, every request starts the automation.',
+    input: 'payloadMatches',
+    required: false,
+  },
+];
+
+/** A fresh payload test for the editor. Empty, so it saves as nothing until filled in. */
+export function emptyWebhookPayloadCondition(): WebhookPayloadCondition {
+  return { path: '', op: 'equals', value: '' };
+}
+
 /** One condition as a vocabulary listing shows it. */
 export interface WorkflowConditionSummary {
   key: keyof WorkflowConditions;
@@ -2106,7 +2469,15 @@ export function workflowVocabulary(integration: WorkflowIntegration): WorkflowVo
     label: WORKFLOW_ACTION_LABELS[type],
   }));
   const conditions: WorkflowConditionSummary[] =
-    integration === 'slack'
+    integration === 'webhook'
+      ? WEBHOOK_WORKFLOW_CONDITION_SPECS.map((spec) => ({
+          key: spec.key,
+          label: spec.label,
+          hint: spec.hint,
+          required: spec.required,
+          appliesTo: null,
+        }))
+      : integration === 'slack'
       ? SLACK_WORKFLOW_CONDITION_SPECS.map((spec) => ({
           key: spec.key,
           label: spec.label,
@@ -2216,6 +2587,8 @@ export function describeWorkflowAction(action: WorkflowAction): string {
       return 'Reply in the thread';
     case 'slack_react':
       return `React with :${action.emoji}:`;
+    case 'start_task':
+      return 'Start a task';
   }
 }
 

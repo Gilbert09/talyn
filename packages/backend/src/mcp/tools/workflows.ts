@@ -10,6 +10,7 @@ import {
   type WorkflowRun,
   type WorkflowSuggestions,
   type WorkflowWithStats,
+  type CreatedWorkflow,
 } from '@talyn/shared';
 import { callApi } from '../api.js';
 import {
@@ -106,7 +107,9 @@ const actionFields: Record<(typeof ALL_WORKFLOW_ACTION_TYPES)[number], string> =
   enqueue_merge_queue: 'method?: squash | merge | rebase',
   run_code_review: 'preset?: quick | standard | deep',
   start_session:
-    'repositoryId: string | null (null lets Talyn choose, Slack only), prompt: string, model?: string, internetAccess?: boolean',
+    'repositoryId: string | null (null lets Talyn choose, Slack only; webhook needs one), prompt: string, model?: string, internetAccess?: boolean',
+  start_task:
+    'repositoryId: string, prompt: string (the request body is quoted below it as untrusted text; {{payload.<path>}} is quoted the same way), model?: string, internetAccess?: boolean',
   slack_reply: 'text: string (may use {{session.url}} and {{message.permalink}})',
   slack_react: 'emoji: string (a name without colons, for example eyes)',
 };
@@ -114,7 +117,7 @@ const actionFields: Record<(typeof ALL_WORKFLOW_ACTION_TYPES)[number], string> =
 export const WORKFLOWS = [
   defineTool(
     'list_workflows',
-    'List automations and run statistics. Pass integration to list one integration only: github or slack.',
+    'List automations and run statistics. Pass integration to list one integration only: github, slack or webhook.',
     { ...workspaceSchema, integration: integrationSchema },
     [],
     { readOnlyHint: true },
@@ -139,18 +142,23 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'create_workflow',
-    'Create an automation with integration (github or slack), name, events, conditions, and actions. Read talyn_get_workflow_vocabulary for the allowed values of that integration. Slack automations need the Slack automation feature.',
+    'Create an automation with integration (github, slack or webhook), name, events, conditions, and actions. Read talyn_get_workflow_vocabulary for the allowed values of that integration. Slack and webhook automations need their own features. A webhook automation answers with its URL and signing secret ONCE: give them to the user, because Talyn cannot show them again.',
     { ...workspaceSchema, workflow: workflowSchema },
     ['workflow'],
     { openWorldHint: true },
     async (ownerId, args) => {
       const workflow = objectArg(args, 'workflow');
-      return workflowLine(
-        await callApi<WorkflowWithStats>(ownerId, 'POST', '/workflows', {
-          ...workflow,
-          workspaceId: await resolveWorkspace(ownerId, args),
-        })
-      );
+      const created = await callApi<CreatedWorkflow>(ownerId, 'POST', '/workflows', {
+        ...workflow,
+        workspaceId: await resolveWorkspace(ownerId, args),
+      });
+      if (!created.webhook) return workflowLine(created);
+      return [
+        workflowLine(created),
+        `webhook url (shown once): ${created.webhook.url}`,
+        `signing secret (shown once, optional): ${created.webhook.signingSecret}`,
+        'Send a POST with a JSON body. To sign, set X-Talyn-Signature: sha256=<hex HMAC-SHA256 of the raw body with the signing secret>.',
+      ].join('\n');
     },
     'workflows'
   ),
@@ -165,7 +173,7 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'get_workflow_vocabulary',
-    'Get the events, conditions, and actions of one integration (github or slack, default github). For github, pass repos to fetch their GitHub labels and users.',
+    'Get the events, conditions, and actions of one integration (github, slack or webhook, default github). For github, pass repos to fetch their GitHub labels and users.',
     { ...workspaceSchema, integration: integrationSchema, repos: { type: 'array', items: textSchema } },
     [],
     { readOnlyHint: true, openWorldHint: true },
@@ -184,6 +192,13 @@ export const WORKFLOWS = [
             `${action.type}  ${action.label}  {type: ${action.type}, ${actionFields[action.type]}}`
         ),
       ];
+      if (integration === 'webhook') {
+        return [
+          ...lines,
+          'payloadMatches (optional): [{path: string, op: equals | contains | exists, value?: string}]. path is a dot path with indexes, like issue.labels[0].name. Every test must pass.',
+          'The automation gets its own URL when it is created. Use talyn_list_repositories to find repository ids.',
+        ].join('\n');
+      }
       if (integration === 'slack') {
         return [
           ...lines,

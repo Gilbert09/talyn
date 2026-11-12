@@ -9,6 +9,7 @@ Open **Integrations** in Talyn to see the catalog. Each integration has its own 
 | --- | --- |
 | [GitHub](/docs/workflows) | Watches pull requests and runs automations on their events. |
 | [Slack](/docs/integrations-slack) | Starts sessions from personal triggers or channel automations. |
+| [Webhooks](/docs/integrations-webhook) | Gives an automation its own URL. A request to it starts a session or a task. |
 | [Schedule](/docs/loops) | Starts a scheduled automation at the time you choose. |
 | Tailscale | Connects private routes for Talyn Fleet sandboxes. |
 | PostHog Code | Connects an agent that runs work in the cloud. |
@@ -16,7 +17,7 @@ Open **Integrations** in Talyn to see the catalog. Each integration has its own 
 
 ## Automations
 
-An automation says: on these events, matching these conditions, do these actions. GitHub and Slack automations use this pattern.
+An automation says: on these events, matching these conditions, do these actions. GitHub, Slack and webhook automations use this pattern.
 
 GitHub and schedule automations keep working after this name change.
 
@@ -24,3 +25,4 @@ Open an integration to see **Connection**, **Automations**, and **Runs**. Connec
 Automations shows the actions Talyn will take. Runs shows what happened when each automation fired.
 
 Slack channel automations are rolling out. The `slackChannelRules` flag controls access.
+Webhook automations are in early access.

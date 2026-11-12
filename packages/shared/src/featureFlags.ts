@@ -478,6 +478,25 @@ export const FEATURE_FLAGS = {
     releaseScopes: ['slack-rules'],
   },
 
+  /**
+   * Webhook rules: a request to a rule's own URL starts work (a session or a
+   * task), as a rule of the Webhooks integration.
+   *
+   * Asked for the caller at the routes and for the workspace OWNER in the
+   * engine and the receiver, because a webhook has no Talyn caller. Fallback
+   * OFF and gated: anybody who holds the URL can start work that bills
+   * box-hours, so a PostHog outage must not switch that on for accounts nobody
+   * chose. `WEBHOOK_RULES_ENABLED=true` turns it on locally.
+   */
+  webhookRules: {
+    posthogKey: 'webhook-rules',
+    envOverride: 'WEBHOOK_RULES_ENABLED',
+    fallback: false,
+    description: 'Webhook rules — a request to a rule URL starts a session or a task',
+    availability: 'gated',
+    releaseScopes: ['webhook-rules', 'inbound'],
+  },
+
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */
@@ -607,6 +626,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'publicApi',
   'splitView',
   'slackChannelRules',
+  'webhookRules',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

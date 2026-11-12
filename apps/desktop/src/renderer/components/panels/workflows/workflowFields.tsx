@@ -1,39 +1,51 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Plus, X } from 'lucide-react';
-import { MAX_WORKFLOW_NAME_LENGTH } from '@talyn/shared';
+import { MAX_WORKFLOW_NAME_LENGTH, type WorkflowIntegration } from '@talyn/shared';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { cn } from '../../../lib/utils';
 
+const NAME_PLACEHOLDERS: Record<WorkflowIntegration, string> = {
+  github: 'Label new PRs from bots',
+  slack: 'Start work from Slack',
+  webhook: 'Start work from a webhook',
+};
+
 export function WorkflowNameField({ value, integration, onChange }: {
   value: string;
-  integration: 'github' | 'slack';
+  integration: WorkflowIntegration;
   onChange: (name: string) => void;
 }) {
   return <div className="space-y-1.5">
     <label className="text-sm font-medium" htmlFor="workflow-name">Name</label>
     <Input id="workflow-name" className="h-10 text-base" value={value}
       maxLength={MAX_WORKFLOW_NAME_LENGTH}
-      placeholder={integration === 'slack' ? 'Start work from Slack' : 'Label new PRs from bots'}
+      placeholder={NAME_PLACEHOLDERS[integration]}
       onChange={(event) => onChange(event.target.value)} />
   </div>;
 }
 
 export function WorkflowRunCapField({ value, integration, onChange }: {
   value: number;
-  integration: 'github' | 'slack';
+  integration: WorkflowIntegration;
   onChange: (value: number) => void;
 }) {
   return <div className="mt-2 rounded-lg border p-4">
     <label className="text-xs font-medium text-muted-foreground">
-      {integration === 'slack' ? 'Runs per PR or channel per hour' : 'Stop after this many runs on one PR per hour'}
+      {integration === 'slack'
+        ? 'Runs per PR or channel per hour'
+        : integration === 'webhook'
+          ? 'Runs per hour'
+          : 'Stop after this many runs on one PR per hour'}
     </label>
     <Input type="number" min={1} className="mt-1 max-w-32" value={value}
       onChange={(event) => onChange(Number(event.target.value))} />
     <p className="mt-1 text-xs text-muted-foreground">
       {integration === 'slack'
         ? 'This limit prevents a message from starting too many runs.'
-        : 'A loop breaker. Talyn already ignores its own actions; this bounds an echo from somebody else reacting to them.'}
+        : integration === 'webhook'
+          ? 'This limit stops a sender from starting too many runs.'
+          : 'A loop breaker. Talyn already ignores its own actions; this bounds an echo from somebody else reacting to them.'}
     </p>
   </div>;
 }

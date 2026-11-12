@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import { Clock } from 'lucide-react';
+import { Clock, Webhook } from 'lucide-react';
 import type { IntegrationInfo } from '@talyn/shared';
 
 /**
@@ -98,10 +98,11 @@ function TrunkLogo({ className }: LogoProps) {
   );
 }
 
-/** Schedule is ours, not a vendor's, so it keeps a plain clock. */
+/** Schedule and Webhooks are ours, not a vendor's, so they keep plain icons. */
 export const INTEGRATION_LOGOS: Record<IntegrationInfo['icon'], ComponentType<LogoProps>> = {
   github: GithubLogo,
   slack: SlackLogo,
+  webhook: Webhook,
   clock: Clock,
   network: TailscaleLogo,
   posthog: PostHogLogo,

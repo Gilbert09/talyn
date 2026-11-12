@@ -488,6 +488,7 @@ describe('featuresForUser', () => {
       'splitView',
       'teams',
       'trunkMergeEta',
+      'webhookRules',
       'workbenches',
       'workflows',
     ]);
@@ -511,6 +512,7 @@ describe('featuresForUser', () => {
       publicApi: false,
       splitView: true,
       slackChannelRules: false,
+      webhookRules: false,
     });
   });
 
@@ -537,6 +539,7 @@ describe('featuresForUser', () => {
       publicApi: false,
       splitView: true,
       slackChannelRules: false,
+      webhookRules: false,
     });
   });
 

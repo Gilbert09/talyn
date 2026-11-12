@@ -81,6 +81,11 @@ import type {
   WorkflowRun,
   WorkflowSuggestions,
   WorkflowWithStats,
+  CreatedWorkflow,
+  WebhookConnectionSummary,
+  WebhookSecretReveal,
+  InboundDelivery,
+  InboundDeliverySummary,
   Workspace,
   Environment,
   Task,
@@ -2336,8 +2341,12 @@ export const workflows = {
     return request<WorkflowSuggestions>('GET', `/workflows/suggestions?${qs.toString()}`);
   },
 
+  /**
+   * A webhook rule's answer carries `webhook`: its URL and signing secret.
+   * They are shown this once. Talyn keeps only a hash of the URL token.
+   */
   create: (workspaceId: string, input: WorkflowInput) =>
-    request<WorkflowWithStats>('POST', '/workflows', { workspaceId, ...input }),
+    request<CreatedWorkflow>('POST', '/workflows', { workspaceId, ...input }),
 
   /**
    * Whole-workflow replace, not a field merge — the trigger, the conditions and
@@ -2360,6 +2369,36 @@ export const workflows = {
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request<WorkflowRun[]>('GET', `/workflows/${id}/runs${suffix}`);
   },
+
+  /** A webhook rule's URL, without its token. */
+  webhook: (id: string) => request<WebhookConnectionSummary>('GET', `/workflows/${id}/webhook`),
+
+  /**
+   * Replace a webhook rule's URL token and signing secret. The old URL stops
+   * working at once. The new ones are shown this once.
+   */
+  rotateWebhook: (id: string) =>
+    request<WebhookSecretReveal>('POST', `/workflows/${id}/webhook/rotate`),
+
+  /** A webhook rule's stored requests, newest first, without their bodies. */
+  deliveries: (id: string, opts: { limit?: number; cursor?: string | null } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.limit) qs.set('limit', String(opts.limit));
+    if (opts.cursor) qs.set('cursor', opts.cursor);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<InboundDeliverySummary[]>('GET', `/workflows/${id}/deliveries${suffix}`);
+  },
+
+  /** One stored request with its body and the headers Talyn kept. */
+  delivery: (id: string, deliveryId: string) =>
+    request<InboundDelivery>('GET', `/workflows/${id}/deliveries/${encodeURIComponent(deliveryId)}`),
+
+  /** Run a stored request through the rule again, as a new delivery. */
+  replayDelivery: (id: string, deliveryId: string) =>
+    request<InboundDeliverySummary>(
+      'POST',
+      `/workflows/${id}/deliveries/${encodeURIComponent(deliveryId)}/replay`
+    ),
 };
 
 // ============================================================================

@@ -24,6 +24,8 @@ import { prReconcileSweep } from './services/prReconcileSweep.js';
 import { handleGithubWebhook } from './routes/webhooks.js';
 import { handlePolarWebhook } from './services/billing/webhook.js';
 import { handleSlackWebhook, slackEventSweep } from './services/slack/events.js';
+import { mountInboundWebhooks } from './services/inbound/receiver.js';
+import { inboundDeliverySweep, initInboundDeliverySweep } from './services/inbound/sweep.js';
 import { registerSlackStatusReactions } from './services/slack/statusReactions.js';
 import { startApiWebhooks, stopApiWebhooks } from './services/apiWebhooks/register.js';
 import { initDatabase } from './db/index.js';
@@ -290,6 +292,9 @@ async function main() {
   // processed ones after 7 days. Cheap when Slack is not in use: one indexed
   // SELECT a minute that finds nothing.
   slackEventSweep.init();
+  // Inbound webhooks: retries deliveries a crash left unprocessed and deletes
+  // deliveries after 7 days. One indexed SELECT a minute when nothing waits.
+  initInboundDeliverySweep();
   // Public API idempotency keys expire after 24 hours; one range delete an hour.
   startIdempotencySweep();
   // Slack sessions show their state as a reaction on the triggering message.
@@ -391,6 +396,11 @@ async function main() {
       });
     }
   );
+
+  // Inbound webhooks (a rule's own URL). Raw body for the optional HMAC,
+  // pre-json, no auth: the URL token IS the auth. Verifies, stores, answers
+  // 200; processing is after the response (services/inbound/receiver.ts).
+  mountInboundWebhooks(app);
 
   // 2mb (vs the 100kb default) leaves comfortable room for inline
   // workspace-logo image uploads; the per-logo cap in the workspaces route is
@@ -547,6 +557,7 @@ async function main() {
 codeReviewPoller.stop();
 codeReviewReconciler.stop();
     slackEventSweep.stop();
+    inboundDeliverySweep.stop();
     stopApiWebhooks();
     stopMobileNotifications();
     // posthog-node batches the `$feature_flag_called` events that make a flag's

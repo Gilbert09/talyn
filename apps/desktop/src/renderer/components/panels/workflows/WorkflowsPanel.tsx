@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Pencil, Plus, Trash2, Workflow } from 'lucide-react';
-import type { WorkflowInput, WorkflowIntegration, WorkflowWithStats } from '@talyn/shared';
+import type { WebhookSecretReveal, WorkflowInput, WorkflowIntegration, WorkflowWithStats } from '@talyn/shared';
 import {
   describeWorkflowActions,
   describeWorkflowTrigger,
@@ -8,6 +8,7 @@ import {
 } from '@talyn/shared';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
+import { Tabs, TabsList, TabsTrigger } from '../../ui/tabs';
 import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { toast } from '../../../stores/toast';
 import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
@@ -17,6 +18,8 @@ import { FeedbackButton } from './FeedbackButton';
 import { useWorkflows } from './useWorkflows';
 import { WorkflowEditorPage } from './WorkflowEditorPage';
 import { WorkflowRunsList } from './WorkflowRunsList';
+import { WebhookDeliveriesList } from './WebhookDeliveriesList';
+import { WebhookSecretDialog, WebhookUrlSection } from './webhookFields';
 
 /**
  * Workflows — user-defined PR automation.
@@ -131,12 +134,60 @@ function WorkflowRow({
 
       {expanded && (
         <div className="border-t">
-          <WorkflowRunsList workflowId={workflow.id} liveRuns={liveRuns[workflow.id]} />
+          {workflow.integration === 'webhook' ? (
+            <WebhookRuleDetails workflow={workflow} liveRuns={liveRuns} />
+          ) : (
+            <WorkflowRunsList workflowId={workflow.id} liveRuns={liveRuns[workflow.id]} />
+          )}
         </div>
       )}
     </div>
   );
 }
+
+/** A webhook rule's URL, then its runs and the requests it received. */
+function WebhookRuleDetails({
+  workflow,
+  liveRuns,
+}: {
+  workflow: WorkflowWithStats;
+  liveRuns: ReturnType<typeof useWorkflows>['liveRuns'];
+}) {
+  const [tab, setTab] = useState<'runs' | 'deliveries'>('deliveries');
+  return (
+    <div>
+      <WebhookUrlSection ruleId={workflow.id} />
+      <div className="border-t px-4 pt-2">
+        <Tabs value={tab} onValueChange={(next) => setTab(next as 'runs' | 'deliveries')}>
+          <TabsList aria-label="Webhook history">
+            <TabsTrigger value="deliveries" data-attr="webhook-tab-deliveries">Deliveries</TabsTrigger>
+            <TabsTrigger value="runs" data-attr="webhook-tab-runs">Runs</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+      {tab === 'deliveries' ? (
+        <WebhookDeliveriesList ruleId={workflow.id} />
+      ) : (
+        <WorkflowRunsList workflowId={workflow.id} liveRuns={liveRuns[workflow.id]} />
+      )}
+    </div>
+  );
+}
+
+const PANEL_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
+  github:
+    'Automate what happens on a pull request. Fires on every PR in the repositories this workspace watches, including ones you did not open.',
+  slack: 'Run actions when a message appears in a selected Slack channel.',
+  webhook: 'Each automation gets its own URL. A request to the URL starts a session or a task.',
+};
+
+const EMPTY_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
+  github:
+    'An automation watches pull request events and can label, comment, request reviewers, start a session and more.',
+  slack: 'An automation watches Slack messages and can start a session, reply or react.',
+  webhook:
+    'An automation gets a URL. Another system sends a request to it, and Talyn starts a session or a task.',
+};
 
 export function WorkflowsPanel({ integration = 'github' }: { integration?: WorkflowIntegration }) {
   const {
@@ -166,6 +217,7 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<WorkflowWithStats | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [reveal, setReveal] = useState<WebhookSecretReveal | null>(null);
 
   useEffect(() => {
     setView({ mode: 'list' });
@@ -223,8 +275,9 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
       trackEvent('workflow_saved', { new: false, actions_count: input.actions.length, events_count: input.events.length });
       toast.success('Automation saved');
     } else {
+      let created: WebhookSecretReveal | null;
       try {
-        await create(input);
+        created = await create(input);
       } catch (err) {
         // A free plan that filled its last slot elsewhere (another window, another
         // workspace) only finds out here. The modal explains it, so swallow the
@@ -240,6 +293,7 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
       // Keep the owner-wide count current, so the NEXT click is pre-empted
       // rather than round-tripping to the same refusal.
       void useBillingStore.getState().refresh();
+      if (created) setReveal(created);
     }
     setView({ mode: 'list' });
   };
@@ -291,9 +345,7 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b px-4 py-1">
         <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-          {integration === 'slack'
-            ? 'Run actions when a message appears in a selected Slack channel.'
-            : 'Automate what happens on a pull request. Fires on every PR in the repositories this workspace watches, including ones you did not open.'}
+          {PANEL_DESCRIPTIONS[integration]}
         </p>
         <FeedbackButton surface="workflows" />
         <Button size="sm" onClick={openNew} data-attr="workflow-new">
@@ -314,9 +366,7 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
             <Workflow className="mx-auto mb-3 h-6 w-6 text-muted-foreground" />
             <h2 className="text-[13px] font-medium">No automations yet</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              {integration === 'slack'
-                ? 'An automation watches Slack messages and can start a session, reply or react.'
-                : 'An automation watches pull request events and can label, comment, request reviewers, start a session and more.'}
+              {EMPTY_DESCRIPTIONS[integration]}
             </p>
             <Button className="mt-4" onClick={openNew}>
               <Plus className="mr-1 h-3.5 w-3.5" />
@@ -365,6 +415,8 @@ export function WorkflowsPanel({ integration = 'github' }: { integration?: Workf
         onConfirm={() => void doDelete()}
         onCancel={() => setPendingDelete(null)}
       />
+
+      {reveal && <WebhookSecretDialog reveal={reveal} onClose={() => setReveal(null)} />}
 
     </div>
   );

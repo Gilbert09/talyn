@@ -30,6 +30,7 @@ export function CatalogScreen() {
   const states: Record<IntegrationKind, ConnectionState> = {
     github: workspace.data?.id === workspaceId ? (workspace.data.integrations?.github?.enabled ? 'connected' : 'not_connected') : 'unknown',
     slack: slackStatus.data ? (slackStatus.data.installations.length > 0 ? 'connected' : 'not_connected') : 'unknown',
+    webhook: 'built_in',
     schedule: 'built_in',
     tailscale: tailscaleStatus.data === undefined ? 'unknown' : tailscaleStatus.data ? 'connected' : 'not_connected',
     posthog: posthogStatus.data ? (posthogStatus.data.connected ? 'connected' : 'not_connected') : 'unknown',

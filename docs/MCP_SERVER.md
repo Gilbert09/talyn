@@ -183,10 +183,10 @@ Use `talyn_list_workspaces` to find workspace ids.
 
 | Tool | What it does |
 | --- | --- |
-| `talyn_list_workflows` | List automations and run statistics. Pass `integration` as `github` or `slack` to filter the list. Each row includes its integration. |
+| `talyn_list_workflows` | List automations and run statistics. Pass `integration` as `github`, `slack` or `webhook` to filter the list. Each row includes its integration. |
 | `talyn_get_workflow` | Read the editable automation as JSON, including `integration`. |
-| `talyn_get_workflow_vocabulary` | Pass optional `integration` as `github` or `slack`. The default is `github`. Read events, conditions, and actions. |
-| `talyn_create_workflow` | Create an automation from `workflow`. Set `workflow.integration` to `github` or `slack`. The result includes the integration. |
+| `talyn_get_workflow_vocabulary` | Pass optional `integration` as `github`, `slack` or `webhook`. The default is `github`. Read events, conditions, and actions. The `webhook` vocabulary includes the `start_task` action and payload tests. |
+| `talyn_create_workflow` | Create an automation from `workflow`. Set `workflow.integration` to `github`, `slack` or `webhook`. The result includes the integration. Creating a webhook automation also answers with its URL and signing secret. Talyn shows them once. |
 | `talyn_update_workflow` | Merge supplied fields over the current automation. The result includes its integration. An automation cannot change integration. |
 | `talyn_set_workflow_enabled` | Enable or disable an automation while keeping its definition. |
 | `talyn_delete_workflow` | Delete an automation and its history. |

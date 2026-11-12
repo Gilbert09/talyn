@@ -26,6 +26,7 @@ import { workbenchBackgroundRoutes } from './workbenchBackground.js';
 import { codeReviewRoutes } from './codeReviews.js';
 import { mcpServerRoutes, mcpOAuthCallbackRoutes } from './mcpServers.js';
 import { workflowRoutes } from './workflows.js';
+import { workflowWebhookRoutes } from './workflowWebhooks.js';
 import { trunkPullRequestRoutes, trunkRoutes } from './trunk.js';
 import { billingPublicRoutes, billingRoutes } from './billing.js';
 import { slackPublicRoutes, slackRoutes } from './slack.js';
@@ -297,6 +298,9 @@ export function setupRoutes(app: Express): void {
   // Workflows — user-defined PR automation. Below ownerScope like every other
   // workspace-scoped router; each handler also gates on the allow-list.
   app.use(`${api}/workflows`, mount(workflowRoutes()));
+  // A webhook rule's URL and its stored requests. Its own paths under
+  // `/:id/`, gated on the `webhookRules` flag for the caller.
+  app.use(`${api}/workflows`, mount(workflowWebhookRoutes()));
   // Loops — recurring prompts on a cron schedule. Same shape as workflows:
   // below ownerScope, and every handler gates on the flag independently of
   // whether the client drew the tab.

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  WebhookSecretReveal,
   WorkflowInput,
   WorkflowIntegration,
   WorkflowRun,
@@ -24,7 +25,8 @@ export interface UseWorkflows {
   workflows: WorkflowWithStats[] | null;
   error: string | null;
   reload: () => void;
-  create: (input: WorkflowInput) => Promise<void>;
+  /** Resolves to a webhook rule's URL and signing secret, which the server shows only once. */
+  create: (input: WorkflowInput) => Promise<WebhookSecretReveal | null>;
   update: (id: string, input: WorkflowInput) => Promise<void>;
   remove: (id: string) => Promise<void>;
   setEnabled: (workflow: WorkflowWithStats, enabled: boolean) => Promise<void>;
@@ -173,9 +175,11 @@ export function useWorkflows(integration: WorkflowIntegration = 'github'): UseWo
 
   const create = useCallback(
     async (input: WorkflowInput) => {
-      if (!workspaceId) return;
-      const made = await api.workflows.create(workspaceId, { ...input, integration });
+      if (!workspaceId) return null;
+      const { webhook, ...made } = await api.workflows.create(workspaceId, { ...input, integration });
       setWorkflows((prev) => [made, ...(prev ?? [])]);
+      // The URL and secret go to the caller only, so they never sit in the list state.
+      return webhook ?? null;
     },
     [workspaceId, integration]
   );

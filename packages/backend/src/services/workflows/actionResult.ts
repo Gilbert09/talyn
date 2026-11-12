@@ -67,7 +67,9 @@ export function recordDeferral(ctx: WorkflowActionContext, gate: WorkflowActionF
   const subject =
     ctx.integration === 'slack'
       ? { slack_team_id: ctx.facts.teamId, slack_channel_id: ctx.facts.channelId }
-      : { repo: `${ctx.owner}/${ctx.repo}`, pr_number: ctx.facts.number };
+      : ctx.integration === 'webhook'
+        ? { webhook_connection_id: ctx.facts.connectionId }
+        : { repo: `${ctx.owner}/${ctx.repo}`, pr_number: ctx.facts.number };
   captureWorkspaceEvent(ctx.workspaceId, 'paywall_deferred', {
     source: 'workflow',
     gate,

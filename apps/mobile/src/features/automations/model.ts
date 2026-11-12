@@ -90,9 +90,10 @@ export function workflowRunText(run: Pick<WorkflowRun, 'integration' | 'subjectL
     ? 'Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.'
     : failed ? `${WORKFLOW_ACTION_LABELS[failed.type] ?? failed.type}: ${failed.error ?? 'did not run'}` : run.error;
   const slack = run.integration === 'slack' || run.event === 'slack_message';
+  const webhook = run.integration === 'webhook' || run.event === 'webhook_received';
   return {
-    title: slack ? run.subjectLabel || 'Slack message' : run.prTitle || `Pull request #${run.prNumber}`,
-    detail: problem ?? [slack ? null : run.repoFullName, WORKFLOW_EVENT_LABELS[run.event] ?? run.event].filter(Boolean).join(' · '),
+    title: webhook ? run.subjectLabel || 'Webhook request' : slack ? run.subjectLabel || 'Slack message' : run.prTitle || `Pull request #${run.prNumber}`,
+    detail: problem ?? [slack || webhook ? null : run.repoFullName, WORKFLOW_EVENT_LABELS[run.event] ?? run.event].filter(Boolean).join(' · '),
   };
 }
 

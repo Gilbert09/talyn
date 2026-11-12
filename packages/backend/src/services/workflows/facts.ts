@@ -1,4 +1,4 @@
-import type { GithubWorkflowEvent, SlackEventFacts, WorkflowFacts } from '@talyn/shared';
+import type { GithubWorkflowEvent, SlackEventFacts, WebhookEventFacts, WorkflowFacts } from '@talyn/shared';
 import { loginLooksLikeBot } from '@talyn/shared';
 
 /**
@@ -33,7 +33,14 @@ export function workflowFactsFromRun(run: {
 }): WorkflowFacts | null {
   const stored = run.facts as Partial<WorkflowFacts> | null | undefined;
   if (stored && typeof stored === 'object') {
-    if (stored.integration === 'slack') {
+    if (stored.integration === 'webhook') {
+      // The body is not stored on the run. The retry reads it again from
+      // `inbound_deliveries` by `deliveryRowId`.
+      const webhook = stored as Partial<WebhookEventFacts>;
+      if (typeof webhook.ruleId === 'string' && typeof webhook.deliveryRowId === 'string') {
+        return stored as WebhookEventFacts;
+      }
+    } else if (stored.integration === 'slack') {
       const slack = stored as Partial<SlackEventFacts>;
       if (typeof slack.teamId === 'string' && typeof slack.channelId === 'string') {
         return stored as SlackEventFacts;
@@ -43,7 +50,7 @@ export function workflowFactsFromRun(run: {
     }
   }
 
-  if (run.integration === 'slack') return null;
+  if (run.integration === 'slack' || run.integration === 'webhook') return null;
   if (!run.repoFullName || typeof run.prNumber !== 'number') return null;
 
   const author = { login: run.prAuthor, isBot: loginLooksLikeBot(run.prAuthor) };

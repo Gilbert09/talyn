@@ -3448,3 +3448,71 @@ export const mobileNotificationSourceEvents = pgTable('mobile_notification_sourc
   owner: index('idx_mobile_notification_source_events_owner').on(t.ownerId, t.workspaceId),
   dedup: uniqueIndex('uq_mobile_notification_source_events_dedup').on(t.ownerId, t.deduplicationKey),
 }));
+
+/**
+ * Inbound connections (migration 0131): one source of requests to Talyn. The
+ * generic webhook has one per rule (`ruleId`) and keeps only the sha256 of its
+ * URL token (`tokenHash`). `secretEnc` is the HMAC signing secret. Later
+ * vendors set `externalAccountId` and the write-back credential.
+ * Backend-pool-only.
+ */
+export const inboundConnections = pgTable(
+  'inbound_connections',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** `InboundKind`: 'webhook' today; 'linear' | 'jira' | 'sentry' | 'posthog_errors' later. */
+    kind: text('kind').notNull(),
+    externalAccountId: text('external_account_id'),
+    tokenHash: text('token_hash'),
+    secretEnc: jsonb('secret_enc').$type<EncryptedEnvelope>(),
+    credentialEnc: jsonb('credential_enc').$type<EncryptedEnvelope>(),
+    credentialMeta: jsonb('credential_meta').$type<Record<string, unknown>>().notNull().default({}),
+    ruleId: text('rule_id').references(() => workflows.id, { onDelete: 'cascade' }),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    rotatedAt: timestamp('rotated_at', { withTimezone: true }),
+  },
+  (t) => ({
+    accountUq: uniqueIndex('uq_inbound_connections_account').on(t.workspaceId, t.kind, t.externalAccountId),
+    ruleUq: uniqueIndex('uq_inbound_connections_rule').on(t.ruleId).where(sql`${t.ruleId} IS NOT NULL`),
+  })
+);
+
+/**
+ * Inbound deliveries (migration 0131): each request, stored before it is
+ * processed. UNIQUE (connection_id, delivery_id) is the idempotency. Deleted
+ * 7 days after it arrived. Backend-pool-only.
+ */
+export const inboundDeliveries = pgTable(
+  'inbound_deliveries',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => inboundConnections.id, { onDelete: 'cascade' }),
+    deliveryId: text('delivery_id').notNull(),
+    eventType: text('event_type').notNull(),
+    payload: jsonb('payload'),
+    headers: jsonb('headers').$type<Record<string, string>>().notNull().default({}),
+    payloadBytes: integer('payload_bytes').notNull().default(0),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    processedAt: timestamp('processed_at', { withTimezone: true }),
+    attempts: integer('attempts').notNull().default(0),
+    /** 'handled' | 'ignored' | 'failed', null while waiting. */
+    outcome: text('outcome'),
+    error: text('error'),
+    /** The delivery row this one replays. */
+    replayOf: text('replay_of'),
+  },
+  (t) => ({
+    deliveryUq: uniqueIndex('uq_inbound_deliveries_delivery').on(t.connectionId, t.deliveryId),
+    connectionReceivedIdx: index('idx_inbound_deliveries_connection_received').on(t.connectionId, t.receivedAt),
+    pendingIdx: index('idx_inbound_deliveries_pending').on(t.receivedAt).where(sql`${t.processedAt} IS NULL`),
+    receivedIdx: index('idx_inbound_deliveries_received').on(t.receivedAt),
+  })
+);

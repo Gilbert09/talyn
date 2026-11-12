@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import type { ApiResponse, WorkflowIntegration } from '@talyn/shared';
+import type { ApiResponse, CreatedWorkflow, WorkflowIntegration } from '@talyn/shared';
 import {
   isWorkflowIntegration,
   validateWorkflow,
@@ -20,10 +20,13 @@ import {
 } from '../services/workflows/store.js';
 import {
   slackRulesRefusalReason,
+  userMayUseWebhookRules,
   workspaceMayUseSlackRules,
   workspaceMayUseWorkflows,
   workflowsRefusalReason,
 } from '../services/workflowsAccess.js';
+import { createWebhookRule, deleteConnectionsForRule } from '../services/inbound/store.js';
+import { webhookUrl } from '../services/inbound/url.js';
 import { workflowSuggestions } from '../services/workflows/suggestions.js';
 import { ownerReachesSlackTeam } from '../services/workflows/sources/slack.js';
 
@@ -122,16 +125,33 @@ export function workflowRoutes(): Router {
    * straight through, so this never changes what a GitHub rule can do.
    */
   async function integrationGate(
+    req: Request,
     res: Response,
     workspaceId: string,
     integration: WorkflowIntegration
   ): Promise<boolean> {
+    if (integration === 'webhook') return webhookGate(req, res);
     if (integration !== 'slack') return true;
     if (await workspaceMayUseSlackRules(workspaceId)) return true;
     res.status(403).json({
       success: false,
       error: `Slack automations are not available: ${slackRulesRefusalReason()}.`,
       code: 'slack_rules_unavailable',
+    });
+    return false;
+  }
+
+  /**
+   * Webhook rules: the `webhookRules` flag, asked for the CALLER. A 404, like
+   * every webhook route when the flag is off, so the feature stays invisible.
+   */
+  async function webhookGate(req: Request, res: Response): Promise<boolean> {
+    const user = assertUser(req);
+    if (await userMayUseWebhookRules({ distinctId: user.id, email: user.email })) return true;
+    res.status(404).json({
+      success: false,
+      error: 'Webhook automations are not available for this account.',
+      code: 'webhook_rules_unavailable',
     });
     return false;
   }
@@ -171,7 +191,7 @@ export function workflowRoutes(): Router {
         });
       }
       integration = asked;
-      if (!(await integrationGate(res, workspaceId, integration))) return;
+      if (!(await integrationGate(req, res, workspaceId, integration))) return;
     }
     const data = await listWorkflows(workspaceId, integration ? { integration } : {});
     res.json({ success: true, data } as ApiResponse<typeof data>);
@@ -245,11 +265,26 @@ export function workflowRoutes(): Router {
         error: err instanceof Error ? err.message : 'invalid automation',
       });
     }
-    if (!(await integrationGate(res, workspaceId, normalized.integration))) return;
+    if (!(await integrationGate(req, res, workspaceId, normalized.integration))) return;
     if (!(await slackTeamGate(req, res, normalized))) return;
     // No plan caps how many workflows an owner keeps. A run a workflow starts
     // is gated where its task is created.
-    const data = await createWorkflow(workspaceId, normalized);
+    let data: CreatedWorkflow;
+    if (normalized.integration === 'webhook') {
+      // The rule and its URL are written together. The URL and the signing
+      // secret are in this answer only: Talyn keeps a hash of the token.
+      const created = await createWebhookRule(workspaceId, normalized, assertUser(req).id);
+      data = {
+        ...created.workflow,
+        webhook: {
+          connectionId: created.connectionId,
+          url: webhookUrl(req, created.connectionId, created.secrets.token),
+          signingSecret: created.secrets.signingSecret,
+        },
+      };
+    } else {
+      data = await createWorkflow(workspaceId, normalized);
+    }
     // Server-side, not from the client: `workflow_ran` can tell us how often
     // workflows FIRE but not how many people build one, and a user whose three
     // workflows never match is indistinguishable from a user who built none.
@@ -266,7 +301,7 @@ export function workflowRoutes(): Router {
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
     const integration = workflowIntegrationOf(existing);
-    if (!(await integrationGate(res, existing.workspaceId, integration))) return;
+    if (!(await integrationGate(req, res, existing.workspaceId, integration))) return;
 
     // A rule never moves to another integration: its events, conditions and
     // actions all belong to the one it was made for. Make a new rule instead.
@@ -318,7 +353,10 @@ export function workflowRoutes(): Router {
       return res.status(404).json({ success: false, error: 'Automation not found' });
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
-    if (!(await integrationGate(res, existing.workspaceId, workflowIntegrationOf(existing)))) return;
+    if (!(await integrationGate(req, res, existing.workspaceId, workflowIntegrationOf(existing)))) return;
+    // The URL goes with the rule. Explicit, on the pool, because the
+    // connection table has no grant for the request's scoped role.
+    if (workflowIntegrationOf(existing) === 'webhook') await deleteConnectionsForRule(existing.id);
     await deleteWorkflow(existing.id, existing.workspaceId);
     captureWorkspaceEvent(existing.workspaceId, 'workflow_deleted', {
       ...workflowShape(existing.id, existing),
@@ -336,7 +374,7 @@ export function workflowRoutes(): Router {
       return res.status(404).json({ success: false, error: 'Automation not found' });
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
-    if (!(await integrationGate(res, existing.workspaceId, workflowIntegrationOf(existing)))) return;
+    if (!(await integrationGate(req, res, existing.workspaceId, workflowIntegrationOf(existing)))) return;
     const asked = Number(req.query.limit);
     const limit = Number.isInteger(asked) && asked > 0 ? Math.min(asked, MAX_RUN_PAGE) : DEFAULT_RUN_PAGE;
     const data = await listWorkflowRuns(existing.id, {

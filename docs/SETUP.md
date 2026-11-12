@@ -1014,6 +1014,20 @@ Notes:
 - Events are stored in `slack_events` (one row per Slack `event_id`) and
   deleted 7 days after processing.
 
+### 6d. Webhook rules
+
+A webhook rule has its own URL. A request to it starts a session or a task.
+The `webhook-rules` PostHog flag gates it. It is gated and OFF by default.
+Set `WEBHOOK_RULES_ENABLED=true` to enable it locally. Set `WEBHOOK_RULES_ENABLED=false` to disable it everywhere.
+
+| Flag | Name | Override | Default | Availability |
+| --- | --- | --- | --- | --- |
+| `webhook-rules` | Webhook rules | `WEBHOOK_RULES_ENABLED` | OFF | gated |
+
+The URL that Talyn shows is `<public origin>/api/v1/webhooks/in/<connection id>/<token>`.
+The public origin is `TALYN_PUBLIC_API_URL`. Without it, Talyn uses the request host.
+Set it in production, so the URL does not show an internal host.
+
 ## 🧰 Nice-to-have: MCP servers for Claude Code
 
 Wiring these up lets Claude Code answer questions about GitHub state, DB schema, PostHog events without manual copy-pasting. Add them to `~/.claude/mcp_servers.json` or via `claude mcp add`.
@@ -1057,6 +1071,7 @@ its public origin: set `TALYN_PUBLIC_API_URL` (for example
 `https://prod.talyn.dev`). Without it, the backend reads the origin of
 `POSTHOG_OAUTH_REDIRECT_URI` or `SLACK_OAUTH_REDIRECT_URI`. It must be https on
 a public host, so a local backend gives its sessions no `talyn` server.
+The webhook URL that Talyn shows for a webhook rule uses it too (see 6d).
 
 After adding any MCP server, restart Claude Code. Verify with `/mcp` in the prompt.
 

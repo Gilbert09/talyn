@@ -33,7 +33,7 @@ export default function Screen() {
     <View style={{ flex: 1 }}>
       {rules && connection ? <View style={{ paddingHorizontal: 16, paddingTop: 12 }}><Segmented<Section> accessibilityLabel={`${INTEGRATION_CATALOG[kind].name} sections`} value={section}
         onChange={setChosen} options={[{ value: 'rules', label: 'Automations' }, { value: 'connection', label: 'Connection' }]} /></View> : null}
-      {section === 'rules' ? <RulesScreen kind={kind === 'schedule' ? 'loop' : 'workflow'} integration={kind === 'slack' ? 'slack' : 'github'} /> : null}
+      {section === 'rules' ? <RulesScreen kind={kind === 'schedule' ? 'loop' : 'workflow'} integration={kind === 'slack' || kind === 'webhook' ? kind : 'github'} /> : null}
       {section === 'connection' && kind === 'github' ? <GitHubSettingsScreen /> : null}
       {section === 'connection' && kind === 'slack' ? <SlackScreen /> : null}
       {section === 'connection' && kind === 'tailscale' ? <PrivateRoutesScreen /> : null}

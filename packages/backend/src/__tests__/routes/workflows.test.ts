@@ -243,6 +243,7 @@ describe('workflow routes', () => {
         privateRoutes: false,
         splitView: true,
         slackChannelRules: false,
+        webhookRules: false,
       });
     });
 
@@ -274,6 +275,7 @@ describe('workflow routes', () => {
         privateRoutes: false,
         splitView: true,
         slackChannelRules: false,
+        webhookRules: false,
       });
     });
   });

@@ -11,7 +11,7 @@ const mockList = jest.fn();
 const mockLoopList = jest.fn();
 const mockRuns = jest.fn();
 let mockParams: { kind: string; id?: string } = { kind: 'slack' };
-let mockFeatures = { workbenches: true, workflows: true, slackChannelRules: true };
+let mockFeatures: Record<string, boolean> = { workbenches: true, workflows: true, slackChannelRules: true };
 
 jest.mock('@talyn/client/native', () => {
   const actual = jest.requireActual('@talyn/client/native');
@@ -45,6 +45,10 @@ const slackRule: WorkflowWithStats = {
   actions: [{ type: 'start_session', repositoryId: null, prompt: 'Help' }], maxRunsPerPrPerHour: 5,
   createdAt: '', updatedAt: '', stats,
 };
+const webhookRule: WorkflowWithStats = {
+  ...slackRule, id: 'webhook-1', integration: 'webhook', name: 'Triage reports', events: ['webhook_received'], conditions: {},
+  actions: [{ type: 'start_task', repositoryId: 'repo-1', prompt: 'Triage' }],
+};
 const githubRule: WorkflowWithStats = {
   ...slackRule, id: 'github-1', integration: 'github', name: 'Label PRs', events: ['pr_opened'], conditions: {},
   actions: [{ type: 'add_labels', labels: ['triage'] }],
@@ -60,7 +64,8 @@ const slackRun: WorkflowRun = {
 beforeEach(() => {
   mockParams = { kind: 'slack' };
   mockFeatures = { workbenches: true, workflows: true, slackChannelRules: true };
-  mockList.mockImplementation(async (_workspace: string, integration: string) => integration === 'slack' ? [slackRule] : [githubRule]);
+  mockList.mockImplementation(async (_workspace: string, integration: string) => integration === 'slack' ? [slackRule]
+    : integration === 'webhook' ? [webhookRule] : [githubRule]);
   mockLoopList.mockResolvedValue([]);
   mockRuns.mockResolvedValue([slackRun]);
 });
@@ -105,6 +110,39 @@ describe('integration rules', () => {
       expect(screen.queryByRole('tab', { name: 'Automations' })).toBeNull();
       await waitFor(() => expect(mockList).not.toHaveBeenCalled());
     }
+  });
+
+  it.each([true, false])('shows webhook rules only when the flag is %s', async (enabled) => {
+    mockParams = { kind: 'webhook' };
+    mockFeatures = { workflows: true, webhookRules: enabled };
+    await render(<IntegrationRoute />);
+    if (enabled) {
+      expect(await screen.findByText(webhookRule.name)).toBeVisible();
+      expect(mockList).toHaveBeenCalledWith('ws-1', 'webhook');
+      expect(screen.getByText('Edit on the web')).toBeVisible();
+      expect(screen.getByRole('switch', { name: `${webhookRule.name} automation` })).toBeVisible();
+      expect(screen.queryByRole('tab', { name: 'Connection' })).toBeNull();
+    } else {
+      expect(screen.queryByText(webhookRule.name)).toBeNull();
+      await waitFor(() => expect(mockList).not.toHaveBeenCalled());
+    }
+  });
+
+  it('shows the webhook empty state', async () => {
+    mockList.mockResolvedValue([]);
+    await render(<RulesScreen kind="workflow" integration="webhook" />);
+    expect(await screen.findByText('An automation gets its own URL. A request to it starts a session or a task.')).toBeVisible();
+    expect(screen.getByText('Edit on the web')).toBeVisible();
+  });
+
+  it('opens a webhook rule as a read-only summary', async () => {
+    mockParams = { kind: 'webhook', id: 'webhook-1' };
+    mockFeatures = { workflows: true, webhookRules: true };
+    mockRuns.mockResolvedValue([{ ...slackRun, integration: 'webhook', event: 'webhook_received', subjectLabel: '', actions: [] , status: 'succeeded' }]);
+    await render(<RuleDetailRoute />);
+    expect(await screen.findByText('Start a task')).toBeVisible();
+    expect(await screen.findByText('Webhook request')).toBeVisible();
+    expect(screen.getByText('Edit on the web')).toBeVisible();
   });
 
   it('opens a Slack rule and shows the reply permission failure', async () => {

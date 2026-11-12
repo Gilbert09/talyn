@@ -39,7 +39,8 @@ function AutomationList<T extends WorkflowWithStats | LoopWithStats>({ kind, int
     {items?.length === 0 ? <EmptyState title="No automations yet"
       detail={kind === 'loop' ? 'An automation runs on a schedule and starts a session or a task.'
         : integration === 'slack' ? 'An automation watches Slack messages and can start a session, reply or react.'
-          : 'An automation watches pull request events and can label, comment, request reviewers, start a session and more.'}>
+          : integration === 'webhook' ? 'An automation gets its own URL. A request to it starts a session or a task.'
+            : 'An automation watches pull request events and can label, comment, request reviewers, start a session and more.'}>
       <Button title="Create an automation" onPress={() => openExternal(webUrl(`/integrations/${kind === 'loop' ? 'schedule' : integration}`))} />
     </EmptyState> : null}
     {items?.length ? <Group>

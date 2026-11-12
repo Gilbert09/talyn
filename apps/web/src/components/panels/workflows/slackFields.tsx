@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Check, Loader2, Lock, Plus, X } from 'lucide-react';
-import type { SlackChannelsResponse, SlackChannelSummary, SlackStatus, WorkflowAction, WorkflowConditions } from '@talyn/shared';
+import type { SlackChannelsResponse, SlackChannelSummary, SlackStatus, WorkflowAction, WorkflowConditions, WorkflowIntegration } from '@talyn/shared';
 import { FLEET_MODELS } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { cn } from '../../../lib/utils';
@@ -178,23 +178,34 @@ export function SlackConditions({ conditions, onChange, settings }: {
   </div>;
 }
 
+/**
+ * The form for an action that starts work: a session (every integration) or a
+ * task (webhook rules). A GitHub rule runs on the PR's own repository, a Slack
+ * rule can let Talyn choose, and a webhook rule must name one.
+ */
 export function StartSessionInput({ action, onChange, integration }: {
-  action: Extract<WorkflowAction, { type: 'start_session' }>;
+  action: Extract<WorkflowAction, { type: 'start_session' | 'start_task' }>;
   onChange: (next: WorkflowAction) => void;
-  integration: 'github' | 'slack';
+  integration: WorkflowIntegration;
 }) {
   const repositories = useWorkspaceStore((s) => s.repositories);
   useFleetModelCatalog();
+  const setRepository = (value: string) => onChange(action.type === 'start_task'
+    ? { ...action, repositoryId: value }
+    : { ...action, repositoryId: value || null });
   return <div className="space-y-3">
-    {integration === 'slack' && <label className="block text-xs font-medium text-muted-foreground">Repository
-      <Select className="mt-1 block" value={action.repositoryId ?? ''} onChange={(e) => onChange({ ...action, repositoryId: e.target.value || null })}>
-        <option value="">Let Talyn choose</option>
+    {integration !== 'github' && <label className="block text-xs font-medium text-muted-foreground">Repository
+      <Select className="mt-1 block" value={action.repositoryId ?? ''} onChange={(e) => setRepository(e.target.value)}>
+        <option value="">{integration === 'slack' ? 'Let Talyn choose' : 'Pick a repository'}</option>
         {repositories.map((repo) => <option key={repo.id} value={repo.id}>{repo.fullName}</option>)}
       </Select>
     </label>}
     <label className="block text-xs font-medium text-muted-foreground">Prompt
       <Textarea className="mt-1" rows={4} value={action.prompt} onChange={(e) => onChange({ ...action, prompt: e.target.value })} />
     </label>
+    {integration === 'webhook' && <p className="text-xs text-muted-foreground">
+      Talyn adds the request body below your prompt as untrusted text. {'{{payload.<path>}}'} in the prompt is quoted the same way.
+    </p>}
     <label className="block text-xs font-medium text-muted-foreground">Model
       <Select className="mt-1 block" value={action.model ?? ''} onChange={(e) => onChange({ ...action, model: e.target.value || undefined })}>
         <option value="">Workspace default</option>

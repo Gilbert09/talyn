@@ -101,3 +101,18 @@ export function slackRulesRefusalReason(): string {
     ? `Slack automations are switched off on this deployment (${FEATURE_FLAGS.slackChannelRules.envOverride}=false)`
     : 'this account is not in the audience for the "slack-channel-rules" feature flag';
 }
+
+/**
+ * Whether this workspace's owner may use webhook rules.
+ *
+ * Asked IN ADDITION to {@link workspaceMayUseWorkflows} by the engine, and on
+ * its own by the receiver. Keyed on the owner: a webhook has no Talyn caller.
+ */
+export async function workspaceMayUseWebhookRules(workspaceId: string): Promise<boolean> {
+  return (await workspaceHasFeature('webhookRules', workspaceId)).enabled;
+}
+
+/** Whether this signed-in user may use webhook rules. The owner routes ask this. */
+export async function userMayUseWebhookRules(subject: FlagSubject): Promise<boolean> {
+  return (await evaluateFlag('webhookRules', subject)).enabled;
+}

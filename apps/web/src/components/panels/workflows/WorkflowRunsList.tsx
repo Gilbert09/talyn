@@ -118,7 +118,7 @@ export function WorkflowRunsList({
               </a>
             ) : (
               <span className="font-medium">
-                {run.subjectLabel || (run.integration === 'slack' ? 'Slack message' : `${run.repoFullName}#${run.prNumber}`)}
+                {run.subjectLabel || (run.integration === 'slack' ? 'Slack message' : run.integration === 'webhook' ? 'Webhook request' : `${run.repoFullName}#${run.prNumber}`)}
               </span>
             )}
             <span className="ml-auto text-xs text-muted-foreground">

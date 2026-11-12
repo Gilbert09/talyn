@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  CreatedWorkflow,
   WorkflowInput,
   WorkflowIntegration,
   WorkflowRun,
@@ -24,7 +25,8 @@ export interface UseWorkflows {
   workflows: WorkflowWithStats[] | null;
   error: string | null;
   reload: () => void;
-  create: (input: WorkflowInput) => Promise<void>;
+  /** Answers the new rule. A webhook rule's answer carries its URL and secret, once. */
+  create: (input: WorkflowInput) => Promise<CreatedWorkflow | undefined>;
   update: (id: string, input: WorkflowInput) => Promise<void>;
   remove: (id: string) => Promise<void>;
   setEnabled: (workflow: WorkflowWithStats, enabled: boolean) => Promise<void>;
@@ -173,9 +175,12 @@ export function useWorkflows(integration: WorkflowIntegration = 'github'): UseWo
 
   const create = useCallback(
     async (input: WorkflowInput) => {
-      if (!workspaceId) return;
+      if (!workspaceId) return undefined;
       const made = await api.workflows.create(workspaceId, { ...input, integration });
-      setWorkflows((prev) => [made, ...(prev ?? [])]);
+      // The list keeps the rule only. The URL and secret go to the caller once.
+      const { webhook: _webhook, ...row } = made;
+      setWorkflows((prev) => [row, ...(prev ?? [])]);
+      return made;
     },
     [workspaceId, integration]
   );

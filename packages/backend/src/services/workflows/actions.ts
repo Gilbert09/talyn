@@ -7,6 +7,7 @@ import type {
   WorkflowTemplateExtras,
   GithubEventFacts,
   SlackEventFacts,
+  WebhookEventFacts,
   CodeReviewPreset,
 } from '@talyn/shared';
 import { buildSkillPrompt, renderWorkflowComment, SKILL_MAX_BYTES } from '@talyn/shared';
@@ -27,6 +28,7 @@ import { workspacePromptTemplate } from '../promptTemplates.js';
 import type { PRSummary } from '../githubGraphql.js';
 import { boxRefused, no, ok, type OneResult } from './actionResult.js';
 import { startSession } from './sessionAction.js';
+import { startInboundTask } from './inboundActions.js';
 import { slackReact, slackReply } from './slackActions.js';
 
 /**
@@ -55,6 +57,8 @@ export interface BaseActionContext {
   /** The workspace's owner — the identity every plan gate is keyed on. */
   ownerId: string;
   workflowId: string;
+  /** The rule's name, for a task title. Absent on contexts built before it was passed. */
+  workflowName?: string;
   runId: string;
 }
 
@@ -75,8 +79,19 @@ export interface SlackActionContext extends BaseActionContext {
   facts: SlackEventFacts;
 }
 
+/** Everything a webhook rule's action needs. Built by the webhook source adapter. */
+export interface WebhookActionContext extends BaseActionContext {
+  integration: 'webhook';
+  repositoryId: null;
+  facts: WebhookEventFacts;
+}
+
 /** The context the action runner takes, tagged by integration. */
-export type WorkflowActionContext = GithubActionContext | SlackActionContext;
+export type WorkflowActionContext = GithubActionContext | SlackActionContext | WebhookActionContext;
+
+export function isGithubContext(ctx: WorkflowActionContext): ctx is GithubActionContext {
+  return ctx.integration === undefined || ctx.integration === 'github';
+}
 
 /** What one run produced beyond its outcomes. */
 export interface ActionResults {
@@ -156,7 +171,7 @@ export async function runWorkflowActions(
   ctx: WorkflowActionContext,
   opts: RunActionsOptions = {}
 ): Promise<ActionResults> {
-  const prRow = ctx.integration === 'slack' ? null : new PrRowCache(ctx);
+  const prRow = isGithubContext(ctx) ? new PrRowCache(ctx) : null;
   const outcomes: WorkflowActionOutcome[] = [];
   let taskId: string | null = null;
   let pullRequestId: string | null = null;
@@ -197,6 +212,13 @@ async function runOne(
   extras: WorkflowTemplateExtras
 ): Promise<OneResult> {
   if (action.type === 'start_session') return startSession(action, ctx, prRow);
+  if (action.type === 'start_task') {
+    if (ctx.integration !== 'webhook') {
+      // The validator allows this action on inbound rules only.
+      return { outcome: no(action.type, 'error', 'This action is for webhook automations') };
+    }
+    return startInboundTask(action, ctx);
+  }
   if (action.type === 'slack_reply' || action.type === 'slack_react') {
     if (ctx.integration !== 'slack') {
       // The validator refuses a Slack action on a GitHub rule. A stored rule
@@ -207,18 +229,19 @@ async function runOne(
       ? slackReply(action.text, ctx, extras)
       : slackReact(action.emoji, ctx);
   }
-  if (ctx.integration === 'slack' || !prRow) {
-    // The validator refuses a PR action on a Slack rule. Reaching here means a
-    // stored rule bypassed it, so record a refusal rather than guess at a PR.
+  if (!isGithubContext(ctx) || !prRow) {
+    // The validator refuses a PR action on a Slack or webhook rule. Reaching
+    // here means a stored rule bypassed it, so record a refusal rather than
+    // guess at a PR.
     return {
-      outcome: no(action.type, 'error', 'This action works on a pull request, and a Slack automation has none'),
+      outcome: no(action.type, 'error', 'This action works on a pull request, and this automation has none'),
     };
   }
   return runPrAction(action, ctx, prRow, extras);
 }
 
 async function runPrAction(
-  action: Exclude<WorkflowAction, { type: 'start_session' | 'slack_reply' | 'slack_react' }>,
+  action: Exclude<WorkflowAction, { type: 'start_session' | 'slack_reply' | 'slack_react' | 'start_task' }>,
   ctx: GithubActionContext,
   prRow: PrRowCache,
   extras: WorkflowTemplateExtras

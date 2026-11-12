@@ -1,5 +1,5 @@
 import type { WorkflowAction, WorkflowActionOutcome, WorkflowFacts } from '@talyn/shared';
-import { isSlackFacts, workflowSubjectOf } from '@talyn/shared';
+import { isGithubFacts, isSlackFacts, isWebhookFacts, workflowSubjectOf } from '@talyn/shared';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { runWithoutScope } from '../../db/client.js';
 import { debugBus } from '../debugBus.js';
@@ -14,6 +14,7 @@ import { dueRetries, isRetryable, MAX_RETRY_ATTEMPTS, settlementFor, settleRun }
 import { getWorkflow } from './store.js';
 import { emitWorkflowRun } from '../websocket.js';
 import { ownerOfWorkspace } from './owner.js';
+import { deliveryBody } from '../inbound/store.js';
 
 /**
  * Re-runs workflow actions that GitHub rate-limited.
@@ -144,19 +145,29 @@ class WorkflowRetrySweep {
   }
 
   private async retryOne(run: Awaited<ReturnType<typeof dueRetries>>[number]): Promise<boolean> {
-    const facts = workflowFactsFromRun(run);
+    let facts = workflowFactsFromRun(run);
     if (!facts) {
       await this.giveUp(run, 'Talyn no longer knows what this run was acting on');
       return false;
     }
+    if (isWebhookFacts(facts)) {
+      // The run row keeps no body. Read it again from the stored delivery.
+      const body = await deliveryBody(facts.deliveryRowId);
+      if (!body) {
+        await this.giveUp(run, 'the webhook request is no longer stored');
+        return false;
+      }
+      facts = { ...facts, payload: body.payload, headers: body.headers };
+    }
+    const runFacts = facts;
 
     // Still gated: re-park rather than spend an attempt on a call that cannot
     // succeed. The gate may have been extended since this run was scheduled.
-    // GitHub's gate only: a Slack run does not call GitHub.
+    // GitHub's gate only: a Slack or webhook run does not call GitHub.
     const gateUntil = (): number =>
-      isSlackFacts(facts)
-        ? 0
-        : githubRateGate.blockedUntil(githubService.accountKeyFor(run.workspaceId), 'rest');
+      isGithubFacts(runFacts)
+        ? githubRateGate.blockedUntil(githubService.accountKeyFor(run.workspaceId), 'rest')
+        : 0;
     const blockedUntilMs = gateUntil();
     if (blockedUntilMs > Date.now()) {
       await settleRun(run.id, {
@@ -198,10 +209,11 @@ class WorkflowRetrySweep {
     const attempts = run.attempts + 1;
     const results = await runWorkflowActions(
       pending.map((p) => p.action),
-      retryContext(run.repositoryId, facts, {
+      retryContext(run.repositoryId, runFacts, {
         workspaceId: run.workspaceId,
         ownerId,
         workflowId: run.workflowId,
+        workflowName: workflow.name,
         runId: run.id,
       }),
       // A reply retried after its session started still links that session.
@@ -236,7 +248,7 @@ class WorkflowRetrySweep {
       service: 'workflows',
       action: 'workflow:retry',
       summary:
-        `retried ${pending.length} action(s) on ${workflowSubjectOf(facts).label} ` +
+        `retried ${pending.length} action(s) on ${workflowSubjectOf(runFacts).label} ` +
         `(attempt ${attempts}/${MAX_RETRY_ATTEMPTS}) → ${status}`,
       ok: status === 'succeeded',
       workspaceId: run.workspaceId,
@@ -273,6 +285,7 @@ function retryContext(
   base: BaseActionContext
 ): WorkflowActionContext {
   if (isSlackFacts(facts)) return { ...base, integration: 'slack', repositoryId, facts };
+  if (isWebhookFacts(facts)) return { ...base, integration: 'webhook', repositoryId: null, facts };
   const [owner = '', repo = ''] = facts.repoFullName.split('/');
   return { ...base, repositoryId: repositoryId ?? '', owner, repo, facts };
 }

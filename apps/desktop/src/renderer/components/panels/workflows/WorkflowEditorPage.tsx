@@ -25,12 +25,14 @@ import {
   workflowToInput,
   workflowVocabulary,
   workflowIntegrationOf,
+  WEBHOOK_WORKFLOW_CONDITION_SPECS,
 } from '@talyn/shared';
 import { Button } from '../../ui/button';
 import { cn } from '../../../lib/utils';
 import { DropdownButton, EditorRow, Section, WorkflowEnabledButton, WorkflowNameField, WorkflowRunCapField } from './workflowFields';
 import { GithubActionInput, GithubConditionInput } from './githubFields';
 import { SlackActionInput, SlackConditions, SlackReplyNotice, StartSessionInput, useSlackRuleSettings } from './slackFields';
+import { WebhookPayloadConditions, WebhookUrlSection, withoutEmptyPayloadTests } from './webhookFields';
 
 /**
  * The workflow editor, as a page.
@@ -83,6 +85,25 @@ const ACTION_HINTS: Record<WorkflowActionType, string> = {
   start_session: 'Starts a session with this prompt.',
   slack_reply: 'Replies in the thread of the Slack message.',
   slack_react: 'Adds a reaction to the Slack message.',
+  start_task: 'Starts a cloud task on the repository with this prompt.',
+};
+
+const BACK_LABELS: Record<WorkflowIntegration, string> = {
+  github: 'Automations',
+  slack: 'Slack automations',
+  webhook: 'Webhook automations',
+};
+
+const TRIGGER_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
+  github: 'Any one of these events on a pull request in the repositories this workspace watches.',
+  slack: 'When a message appears in a selected channel.',
+  webhook: 'When a request arrives at the URL of this automation.',
+};
+
+const NO_ACTIONS: Record<WorkflowIntegration, string> = {
+  github: 'Nothing yet. Add at least one action — labelling, asking for a review, commenting, running a skill, or sending the PR to the merge queue.',
+  slack: 'Add an action for matching messages.',
+  webhook: 'Add an action. It can start a session or a task.',
 };
 
 export function WorkflowEditorPage({
@@ -115,7 +136,9 @@ export function WorkflowEditorPage({
   const conditions = input.conditions ?? {};
   const slackSettings = useSlackRuleSettings(conditions.slackTeamId, kind === 'slack');
   const canReply = slackSettings.install?.canReply !== false;
-  const problem = useMemo(() => workflowInputProblem(input), [input]);
+  // Empty payload tests are dropped, not refused: an added row that was never filled in means nothing.
+  const prepared = useMemo(() => (kind === 'webhook' ? withoutEmptyPayloadTests(input) : input), [kind, input]);
+  const problem = useMemo(() => workflowInputProblem(prepared), [prepared]);
 
   // The scope every GitHub-backed field asks within: the repositories this
   // workflow names. Empty means the workflow is unscoped, which the backend
@@ -131,7 +154,7 @@ export function WorkflowEditorPage({
   // so "Add condition" never offers a duplicate, and never offers a condition the
   // current trigger cannot carry.
   const addableConditions = useMemo(
-    () => kind === 'slack' ? [] : availableWorkflowConditions(input.events, conditions),
+    () => kind === 'github' ? availableWorkflowConditions(input.events, conditions) : [],
     [kind, input.events, conditions]
   );
   const activeConditionKeys = useMemo(
@@ -162,7 +185,7 @@ export function WorkflowEditorPage({
       // Pruning here is what stops the save 400ing about a condition whose
       // trigger is no longer selected — and the condition row disappears with it,
       // so the page never shows a rule that cannot apply.
-      return { ...p, events, conditions: kind === 'slack' ? p.conditions : pruneWorkflowConditions(p.conditions ?? {}, events) };
+      return { ...p, events, conditions: kind === 'github' ? pruneWorkflowConditions(p.conditions ?? {}, events) : p.conditions };
     });
 
   const save = async () => {
@@ -177,9 +200,9 @@ export function WorkflowEditorPage({
     setSaveError(null);
     try {
       await onSave(kind === 'github'
-        ? { ...input, actions: input.actions.map((action) => action.type === 'start_session'
+        ? { ...prepared, actions: prepared.actions.map((action) => action.type === 'start_session'
           ? { ...action, repositoryId: null } : action) }
-        : input);
+        : prepared);
     } catch (err) {
       captureAnalyticsException(err, { flow: 'workflow_save' });
       setSaveError(err instanceof Error ? err.message : 'Could not save this automation');
@@ -193,7 +216,7 @@ export function WorkflowEditorPage({
       <header className="flex items-center gap-3 border-b px-6 py-4">
         <Button variant="ghost" size="sm" onClick={onCancel} data-attr="workflow-editor-back">
           <ArrowLeft className="mr-1 h-4 w-4" />
-          {kind === 'slack' ? 'Slack automations' : 'Automations'}
+          {BACK_LABELS[kind]}
         </Button>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-lg font-semibold">
@@ -219,10 +242,16 @@ export function WorkflowEditorPage({
 
           <WorkflowNameField value={input.name} integration={kind} onChange={(name) => setInput((p) => ({ ...p, name }))} />
 
+          {kind === 'webhook' && editing && (
+            <div className="rounded-lg border">
+              <WebhookUrlSection ruleId={editing.id} />
+            </div>
+          )}
+
           {/* ---- WHEN ---- */}
           <Section
             title="When this happens"
-            description={kind === 'slack' ? 'When a message appears in a selected channel.' : 'Any one of these events on a pull request in the repositories this workspace watches.'}
+            description={TRIGGER_DESCRIPTIONS[kind]}
             action={
               <DropdownButton
                 label="Add trigger"
@@ -259,13 +288,13 @@ export function WorkflowEditorPage({
                       )}
                     >
                       {WORKFLOW_EVENT_LABELS[e]}
-                      <button
+                      {kind !== 'webhook' && <button
                         className="rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
                         onClick={() => removeEvent(e)}
                         aria-label={`Remove ${WORKFLOW_EVENT_LABELS[e]}`}
                       >
                         <X className="h-3.5 w-3.5" />
-                      </button>
+                      </button>}
                     </span>
                   ))}
                 </div>
@@ -290,6 +319,10 @@ export function WorkflowEditorPage({
           {kind === 'slack' ? (
             <Section title="Only if" description="Choose a Slack workspace and its channels.">
               <SlackConditions conditions={conditions} onChange={setConditions} settings={slackSettings} />
+            </Section>
+          ) : kind === 'webhook' ? (
+            <Section title="Only if" description={WEBHOOK_WORKFLOW_CONDITION_SPECS[0]!.hint}>
+              <WebhookPayloadConditions conditions={conditions} onChange={setConditions} />
             </Section>
           ) : (
           <Section
@@ -376,7 +409,7 @@ export function WorkflowEditorPage({
             {kind === 'slack' && !canReply && <SlackReplyNotice />}
             {input.actions.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                {kind === 'slack' ? 'Add an action for matching messages.' : 'Nothing yet. Add at least one action — labelling, asking for a review, commenting, running a skill, or sending the PR to the merge queue.'}
+                {NO_ACTIONS[kind]}
               </p>
             ) : (
               input.actions.map((action, i) => (
@@ -388,7 +421,7 @@ export function WorkflowEditorPage({
                     setInput((p) => ({ ...p, actions: p.actions.filter((_, j) => j !== i) }))
                   }
                 >
-                  {action.type === 'start_session' ? (
+                  {action.type === 'start_session' || action.type === 'start_task' ? (
                     <StartSessionInput action={action} integration={kind} onChange={(next) => setInput((p) => ({ ...p, actions: p.actions.map((a, j) => j === i ? next : a) }))} />
                   ) : action.type === 'slack_reply' || action.type === 'slack_react' ? (
                     <SlackActionInput action={action} onChange={(next) => setInput((p) => ({ ...p, actions: p.actions.map((a, j) => j === i ? next : a) }))} />

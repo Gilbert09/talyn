@@ -274,7 +274,7 @@ export interface WorkflowSessionSource {
    * The rule's integration. `slack` means a Slack thread follows the session:
    * the status reactions on the trigger message track it. Absent means GitHub.
    */
-  integration?: 'github' | 'slack';
+  integration?: 'github' | 'slack' | 'webhook';
 }
 
 /** Where a session came from when the app composer did not start it. */

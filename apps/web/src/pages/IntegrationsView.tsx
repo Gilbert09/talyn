@@ -72,6 +72,7 @@ function useConnectionStates(): Record<IntegrationKind, ConnectionState> {
   return {
     github: githubStatus ? (githubStatus.connected ? 'connected' : 'not_connected') : 'unknown',
     slack,
+    webhook: 'built_in',
     schedule: 'built_in',
     tailscale,
     posthog: posthog ? (posthog.connected ? 'connected' : 'not_connected') : 'unknown',
@@ -213,6 +214,7 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
           {section === 'connection' && hasConnection && <ConnectionSection kind={kind} />}
           {section === 'rules' && kind === 'github' && <WorkflowsPanel integration="github" />}
           {section === 'rules' && kind === 'slack' && hasRules && <WorkflowsPanel integration="slack" />}
+          {section === 'rules' && kind === 'webhook' && hasRules && <WorkflowsPanel integration="webhook" />}
           {section === 'rules' && kind === 'schedule' && <LoopsPanel />}
         </Suspense>
       </div>

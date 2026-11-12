@@ -6,7 +6,7 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
 } from '@talyn/shared';
-import { isSlackFacts, workflowSubjectOf } from '@talyn/shared';
+import { factsIntegration, isGithubFacts, isWebhookFacts, workflowSubjectOf } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { workflowRuns as runsTable } from '../../db/schema.js';
 import { rowToWorkflowRun } from './store.js';
@@ -44,11 +44,11 @@ export interface ClaimInput {
 }
 
 /**
- * The PR snapshot columns. A Slack run has no pull request: the repository and
- * number are NULL, and the text columns keep their '' default.
+ * The PR snapshot columns. A Slack or webhook run has no pull request: the
+ * repository and number are NULL, and the text columns keep their '' default.
  */
 function prSnapshot(facts: WorkflowFacts) {
-  if (isSlackFacts(facts)) {
+  if (!isGithubFacts(facts)) {
     return { repoFullName: null, prNumber: null, prTitle: '', prUrl: '', prAuthor: '' };
   }
   return {
@@ -60,6 +60,15 @@ function prSnapshot(facts: WorkflowFacts) {
   };
 }
 
+/**
+ * The facts as the run row stores them. A webhook's body is dropped: it can be
+ * up to 1 MB and is already in `inbound_deliveries`, where a retry reads it
+ * again by `deliveryRowId`. The run history never ships it.
+ */
+export function storedFacts(facts: WorkflowFacts): WorkflowFacts {
+  return isWebhookFacts(facts) ? { ...facts, payload: null, headers: {} } : facts;
+}
+
 export async function claimRun(input: ClaimInput): Promise<ClaimResult> {
   const { facts } = input;
   const subject = workflowSubjectOf(facts);
@@ -67,7 +76,7 @@ export async function claimRun(input: ClaimInput): Promise<ClaimResult> {
     id: uuid(),
     workflowId: input.workflowId,
     workspaceId: input.workspaceId,
-    integration: isSlackFacts(facts) ? 'slack' : 'github',
+    integration: factsIntegration(facts),
     subjectKey: subject.key,
     subjectLabel: subject.label,
     repositoryId: input.repositoryId,
@@ -84,7 +93,7 @@ export async function claimRun(input: ClaimInput): Promise<ClaimResult> {
     attempts: 1,
     // Kept so a retry is faithful — see the column's note. The webhook payload
     // is gone by the time a rate-limit gate clears.
-    facts,
+    facts: storedFacts(facts),
     createdAt: new Date(),
   };
 

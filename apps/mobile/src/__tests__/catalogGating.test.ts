@@ -10,6 +10,16 @@ describe('integration catalog gates', () => {
     expect(integrationsOffered(features)).toEqual(kinds);
   });
 
+  it.each([
+    [{ workflows: true, webhookRules: true }, true],
+    [{ webhookRules: true }, false],
+    [{ webhookRules: false }, false],
+    [{}, false],
+    [null, false],
+  ] as const)('offers the webhook card for %j: %s', (features, offered) => {
+    expect(integrationsOffered(features).includes('webhook')).toBe(offered);
+  });
+
   it('shows GitHub rules only with the workflow feature', () => {
     expect(integrationRulesOffered({ workflows: false }, 'github')).toBe(false);
     expect(integrationRulesOffered({ workflows: true }, 'github')).toBe(true);

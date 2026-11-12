@@ -63,6 +63,8 @@ export * from './reviewRankingLocalLog.js';
 // with. Same argument as prFilters: two copies of the predicate would let one
 // workflow claim different matches on each client.
 export * from './workflows.js';
+// Inbound integrations: the webhook URL, delivery and signature shapes.
+export * from './inbound.js';
 export * from './exceptionFilter.js';
 
 // Release notes — the "What's new" feed: version ordering, the commit filter
