@@ -1,5 +1,5 @@
 import { billing } from '@talyn/client/native';
-import { CREDIT_PACKS, CREDIT_PACK_IDS, formatUsd, type AutoTopupSettings, type BillingStatus, type CreditPackId, type UsageResetOffer } from '@talyn/shared';
+import { CREDIT_PACKS, CREDIT_PACK_IDS, formatCreditBalance, formatUsd, type AutoTopupSettings, type BillingStatus, type CreditPackId, type UsageResetOffer } from '@talyn/shared';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
@@ -19,7 +19,7 @@ export function CreditsSection({ status, mode, busyPack, disabled, onBuy }: {
   const lots = creditLotLines(status);
   const expiring = credits?.expiringSoonMicros ?? 0;
   return <Group title="Credits" footer="Credits pay for boxes after your included hours run out. They expire 12 months after you buy them.">
-    <Fact label="Balance" value={formatUsd(credits?.balanceMicros ?? 0)} divider={expiring > 0 || lots.length > 0 || mode === 'external'} />
+    <Fact label="Balance" value={formatCreditBalance(credits?.balanceMicros ?? 0)} divider={expiring > 0 || lots.length > 0 || mode === 'external'} />
     {expiring > 0 ? <Fact label="Expiring soon" tone="warning" value={`${formatUsd(expiring)} in the next 30 days`}
       divider={lots.length > 0 || mode === 'external'} /> : null}
     {lots.map((lot, index) => <Row key={lot.id} title={lot.amount} subtitle={lot.expires}

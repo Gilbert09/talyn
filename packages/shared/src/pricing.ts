@@ -806,6 +806,11 @@ export function formatUsd(micros: Micros, fractionDigits = 2): string {
   return digits ? `${sign}$${wholeText}.${String(frac).padStart(digits, '0')}` : `${sign}$${wholeText}`;
 }
 
+/** A credit balance: "$100" when it has no cents, else "$98.37". */
+export function formatCreditBalance(micros: Micros): string {
+  return formatUsd(micros).replace(/\.00$/, '');
+}
+
 /** "$0.22/h", "$0.275/h": two decimals, or three when the price needs them. */
 export function formatPricePerHour(micros: Micros): string {
   const needsThree = Math.round(micros / 1000) % 10 !== 0;

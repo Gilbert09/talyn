@@ -1,5 +1,5 @@
 import {
-  PLAN_LIMITS, PLAN_TIER_LABELS, formatBoxHoursUsage, formatUsd, isPlanTier,
+  PLAN_LIMITS, PLAN_TIER_LABELS, formatBoxHoursUsage, formatCreditBalance, formatUsd, isPlanTier,
   type BillingStatus, type PlanTier, type UsageSummary,
 } from '@talyn/shared';
 
@@ -37,7 +37,7 @@ export function leftPercent(percent: number, exhausted: boolean): number {
 export function formatLeftPercent(percent: number, exhausted: boolean): string {
   const left = leftPercent(percent, exhausted);
   if (left > 0 && left < 1) return 'Less than 1% left';
-  return `${left.toFixed(left < 10 && left > 0 ? 1 : 0)}% left`;
+  return `${Number(left.toFixed(left < 10 && left > 0 ? 1 : 0))}% left`;
 }
 
 /** "30 Nov". The reset is near, so the year adds nothing. */
@@ -78,7 +78,7 @@ export function usageLines(view: UsageView): UsageLines {
     reset: `Resets ${shortDate(usage.periodEnd)}`,
     exhausted: usage.exhausted ? 'Out of hours: new boxes paused' : null,
     boxes: boxes ? `${boxes.used} of ${limit} running` : `Up to ${limit} at the same time`,
-    credits: credits ? formatUsd(balance) : null,
+    credits: credits ? formatCreditBalance(balance) : null,
     expiring: credits && expiring > 0 ? `${formatUsd(expiring)} expires in the next 30 days` : null,
     autoTopup: !credits || !topup ? null : topup.enabled ? `On, below ${formatUsd(topup.triggerMicros, 0)}` : 'Off',
     autoTopupProblem: topup?.lastFailure ? `The last top-up failed: ${topup.lastFailure}` : null,

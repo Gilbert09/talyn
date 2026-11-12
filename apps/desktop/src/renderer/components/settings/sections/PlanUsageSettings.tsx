@@ -12,6 +12,7 @@ import {
   formatCreditPack,
   formatPlanPeriodLine,
   formatPricePerHour,
+  formatCreditBalance,
   formatUsd,
   isSellableTier,
   sellableTierPrices,
@@ -373,7 +374,7 @@ function CreditBalance({ credits }: { credits: UsageBillingStatus['credits'] }) 
     <>
       <div>
         <p className="text-xs text-muted-foreground">Balance</p>
-        <p className="text-lg font-semibold tabular-nums">{formatUsd(balance)}</p>
+        <p className="text-lg font-semibold tabular-nums">{formatCreditBalance(balance)}</p>
         {expiring > 0 && (
           <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
             {formatUsd(expiring)} expires in the next 30 days.
