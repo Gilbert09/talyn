@@ -105,7 +105,9 @@ describe('push configuration', () => {
     const result = build();
     expect(result.extra?.eas?.projectId).toBe(projectId);
     expect(result.android?.blockedPermissions).toContain('android.permission.RECEIVE_BOOT_COMPLETED');
-    expect(result.plugins).toContainEqual(['expo-notifications', { mode: 'production', enableBackgroundRemoteNotifications: false }]);
+    expect(result.plugins).toContainEqual(['expo-notifications', {
+      mode: 'production', enableBackgroundRemoteNotifications: false, icon: './assets/notification-icon.png', color: '#a94d2e',
+    }]);
   });
 });
 

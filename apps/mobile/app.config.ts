@@ -187,6 +187,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     plugins: ['expo-router', 'expo-dev-client', 'expo-secure-store', ['expo-navigation-bar', { enforceContrast: false }], ['expo-splash-screen', { image: './assets/splash-owl.png', imageWidth: 120, resizeMode: 'contain', backgroundColor: '#fcfbf8', dark: { image: './assets/splash-owl-dark.png', backgroundColor: '#211d18' } }], ['expo-image-picker', { photosPermission: 'Talyn uses your photos when you attach an image to a message.', cameraPermission: 'Talyn uses the camera when you take a photo to attach to a message.', microphonePermission: false }], ['expo-notifications', {
       mode: release.profile === 'development' ? 'development' : 'production', enableBackgroundRemoteNotifications: false,
+      // Android draws the small icon as a white silhouette; without one it uses the opaque app icon, a white square.
+      icon: './assets/notification-icon.png', color: '#a94d2e',
     }]],
     experiments: { typedRoutes: true },
     extra: { release: { profile: release.profile, urls: release.urls }, appEnvironment: identity.environment, mobile,

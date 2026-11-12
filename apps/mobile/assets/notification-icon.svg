@@ -1,0 +1,11 @@
+<svg width="96" height="96" viewBox="111 106 802 802" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Android notification icon: white on transparent (the system tints it). Glyph from apps/desktop/assets/icon-small.svg. -->
+  <g stroke="#ffffff" stroke-width="56" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M 302 330 C 350 220 674 220 722 330"/>
+    <path d="M 282 390 C 206 478 206 700 302 794"/>
+    <path d="M 742 390 C 818 478 818 700 722 794"/>
+    <circle cx="396" cy="478" r="74"/>
+    <circle cx="628" cy="478" r="74"/>
+    <path d="M 454 600 L 512 674 L 570 600"/>
+  </g>
+</svg>
