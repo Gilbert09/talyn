@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "dev.talyn.mobile",
+      "sha256_cert_fingerprints": [
+        "8F:44:07:32:41:7B:DD:29:75:9E:D4:53:92:AC:71:BE:1B:33:0A:87:0A:A2:64:6E:1A:48:95:61:F7:B2:94:DD"
+      ]
+    }
+  }
+]
