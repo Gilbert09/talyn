@@ -208,6 +208,7 @@ import { wsClient } from './socket.js';
 export { ApiError, ApiNetworkError, ClientInactiveError } from './http.js';
 export { mobileNotifications };
 export { WebSocketClient, wsClient } from './socket.js';
+export { startDeskPresenceHeartbeat, type DeskActivitySource, type DeskPresenceTimers } from './deskPresence.js';
 export type * from './runtime.js';
 
 export {

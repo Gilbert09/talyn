@@ -32,6 +32,7 @@ import { trackEvent } from '../lib/analytics';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { reconcileWorkbenches } from '../lib/workbenchData';
 import { installWorkbenchNotifications, toastPullRequestFailures } from '../lib/workbenchNotify';
+import { installDeskPresence } from '../lib/deskPresence';
 import { useSessionBackgroundStore } from '../stores/sessionBackground';
 
 // ---------------------------------------------------------------------------
@@ -288,6 +289,11 @@ export function useApiConnection() {
     updateEnvironment,
     addEnvironment,
   } = useWorkspaceStore();
+
+  // Desk presence: phone pushes wait while the person uses this tab.
+  // Declared before the connect effect so its cleanup sends `away` while the
+  // socket is still open.
+  useEffect(() => installDeskPresence(), []);
 
   // Connect to WebSocket on mount. `connect()` is async because it needs
   // to fetch the auth token before opening the socket.

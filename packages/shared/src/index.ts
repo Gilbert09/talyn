@@ -167,6 +167,7 @@ export * from './claudeSessionImport.js';
 export * from './sessionLinks.js';
 export * from './sessionStarters.js';
 export * from './mobileNotifications.js';
+export * from './deskPresence.js';
 
 import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './skills.js';
 import type { PromptTemplateSettings } from './promptTemplates.js';
@@ -1443,6 +1444,7 @@ export interface AgentEvent {
 
 export type WSClientMessage =
   | import('./teams.js').SpaceClientMessage
+  | import('./deskPresence.js').DeskPresenceMessage
   | { type: 'auth'; token: string }
   | { type: 'subscribe'; workspaceId: string; capabilities?: string[] }
   | { type: 'unsubscribe'; workspaceId: string }

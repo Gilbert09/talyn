@@ -21,5 +21,7 @@ export const preferencesInput = z.object({
   schemaVersion: z.literal(1), workspaceId: z.string().uuid(), enabled: z.boolean(),
   categories: z.object(Object.fromEntries(MOBILE_NOTIFICATION_CATEGORIES.map((category) => [category, z.boolean()])) as Record<typeof MOBILE_NOTIFICATION_CATEGORIES[number], z.ZodBoolean>).strict(),
   quietHours: z.object({ enabled: z.boolean(), start: time, end: time }).strict(), timezone, sensitivePreview: z.boolean(),
+  // Optional: app builds before it send no value, and the stored one is kept.
+  onlyWhenAway: z.boolean().optional(),
 }).strict();
 export const identifierInput = z.string().uuid();

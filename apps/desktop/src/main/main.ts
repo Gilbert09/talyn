@@ -35,6 +35,7 @@ import {
 } from './localAgentKit';
 import { readWindowState, restoredWindowOptions, trackWindowState } from './windowState';
 import { registerReviewRankingExport } from './reviewRankingExport';
+import { registerDeskPresence } from './deskPresence';
 import { drainMainErrors, markRendererUnavailable, reportMainFailure, setMainErrorSender } from './mainErrorBridge';
 
 let mainWindow: BrowserWindow | null = null;
@@ -68,6 +69,7 @@ ipcMain.handle('analytics:drain-main-errors', (event) => {
 });
 
 registerReviewRankingExport(() => mainWindow);
+registerDeskPresence(() => mainWindow);
 
 /**
  * Only ever hand http(s) URLs to the OS. Renderer-supplied input (IPC,
