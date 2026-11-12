@@ -1,5 +1,13 @@
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
-import { sandboxSizeForResources, UNATTENDED_SANDBOX_SIZE, type SandboxSize, type UsageSubjectKind } from '@talyn/shared';
+import {
+  billedSizeFor,
+  isSandboxSize,
+  sandboxSizeForResources,
+  SIZE_WEIGHT,
+  UNATTENDED_SANDBOX_SIZE,
+  type SandboxSize,
+  type UsageSubjectKind,
+} from '@talyn/shared';
 import { getPoolDbClient } from '../../../db/client.js';
 import { prCodeReviewRuns, tasks, workbenches, workspaces } from '../../../db/schema.js';
 import { debugBus } from '../../debugBus.js';
@@ -22,7 +30,10 @@ import { insertOpenInterval, markIntervalClosed, openIntervalsQuery, type EndRea
  * - an open interval whose box no host lists closes after two clean ticks in
  *   a row (`'sweep'`), never on a tick where a host listing failed;
  * - a running box (`starting | idle | busy`) with no open interval opens one
- *   at now, when its id maps to a Talyn task, review unit or workbench.
+ *   at now, when its id maps to a Talyn task, review unit or workbench;
+ * - a running box bills the size its measured memory needs, up to the size it
+ *   booted at ({@link billedSizeFor}). When that size changes, the interval
+ *   closes (`'resize'`) and a new one opens at the new size.
  *
  * The same list also gives each running session box's CPU and memory sample
  * for the Sandbox panel's chart, so the chart costs no extra fleet read.
@@ -53,6 +64,19 @@ const ENDED: ReadonlySet<FleetSandboxStatus> = new Set(['stopped', 'failed', 'ca
 
 /** Ticks in a row a box must be missing from every list before its interval closes. */
 export const MISSING_TICKS_TO_CLOSE = 2;
+
+/**
+ * Ticks in a row a box must measure lighter than its interval before the
+ * interval moves down. The sweep reads memory once a minute, so it does not
+ * see a short peak between two reads. Five lighter minutes stop a build whose
+ * memory drops for a moment from billing at the small size, and they limit how
+ * many intervals a box makes. The count is in memory: a deploy loses it, which
+ * only delays a move down. That bills the higher size, the safe direction.
+ */
+export const DOWNSIZE_AFTER_TICKS = 5;
+
+/** The longest time before now that a resize reprices. */
+const RESIZE_LOOKBACK_MS = 60_000;
 
 type SweptBox = Pick<FleetSandbox, 'id' | 'status' | 'endedAt' | 'memMib' | 'vcpuCount' | 'milliVcpu' | 'memUsedMib' | 'cpuSeconds'> & {
   suspendedAt?: string;
@@ -146,15 +170,35 @@ async function resolveSubject(kind: UsageSubjectKind, key: string, sandboxId: st
   return payer ? { ...row, ownerId: payer.userId, payerUserId: payer.userId } : row;
 }
 
-/** The size a box runs at: from its booted resources, else the default for its kind. */
+/** The size a box booted at: from its resources, else the default for its kind. */
 export function sizeForBox(box: Pick<FleetSandbox, 'memMib' | 'vcpuCount'>, kind: UsageSubjectKind): SandboxSize {
   const fromResources = sandboxSizeForResources(box.memMib, box.vcpuCount ? box.vcpuCount * 1000 : undefined);
   return fromResources ?? (kind === 'review_unit' ? UNATTENDED_SANDBOX_SIZE : 'standard');
 }
 
+/**
+ * What to do with an open interval of a running box, given the size it bills
+ * at now. Pure. `lighterTicks` counts the ticks in a row before this one that
+ * measured lighter; `lighterSize` is the heaviest size those ticks measured.
+ */
+export function decideResize(
+  current: SandboxSize,
+  measured: SandboxSize,
+  lighter: { ticks: number; size: SandboxSize } | undefined,
+): { resize: SandboxSize } | { lighter: { ticks: number; size: SandboxSize } | null } {
+  if (SIZE_WEIGHT[measured] > SIZE_WEIGHT[current]) return { resize: measured };
+  if (SIZE_WEIGHT[measured] === SIZE_WEIGHT[current]) return { lighter: null };
+  const ticks = (lighter?.ticks ?? 0) + 1;
+  // Bill the heaviest size the lighter run measured, never the last one alone.
+  const size = lighter && SIZE_WEIGHT[lighter.size] > SIZE_WEIGHT[measured] ? lighter.size : measured;
+  return ticks >= DOWNSIZE_AFTER_TICKS ? { resize: size } : { lighter: { ticks, size } };
+}
+
 export interface SweepResult {
   opened: number;
   closed: number;
+  /** Intervals closed and opened again at a new measured size. */
+  resized: number;
   /** Hosts whose list failed this tick. */
   listErrors: number;
 }
@@ -162,6 +206,8 @@ export interface SweepResult {
 export class UsageSweep {
   /** Consecutive ticks each sandbox with an open interval was missing from every list. */
   private missing = new Map<string, number>();
+  /** Per sandbox: ticks in a row the box measured lighter than its interval. */
+  private lighter = new Map<string, { ticks: number; size: SandboxSize }>();
 
   constructor(private readonly clients: () => Promise<TenantClient[]> = tenantClients) {}
 
@@ -210,6 +256,7 @@ export class UsageSweep {
       }
     }
 
+    let resized = 0;
     for (const interval of open) {
       const key = logicalSandboxId(interval.sandboxId);
       const box = boxes.get(key);
@@ -221,10 +268,14 @@ export class UsageSweep {
         this.missing.set(key, missingTicks);
       }
       const decision = decideOpenInterval(box, missingTicks, now);
-      if (!decision.close) continue;
+      if (!decision.close) {
+        if (box && RUNNING.has(box.status) && (await this.resizeIfNeeded(interval, box, now))) resized += 1;
+        continue;
+      }
       if (await markIntervalClosed(interval.sandboxId, decision.at, decision.reason)) {
         closed += 1;
         this.missing.delete(key);
+        this.lighter.delete(key);
         if (interval.subjectKind === 'workbench' && decision.reason === 'suspended') {
           await setWorkbenchSandboxState({ workbenchId: interval.subjectId }, 'running', 'suspended');
         }
@@ -232,6 +283,9 @@ export class UsageSweep {
     }
     for (const sandboxId of this.missing.keys()) {
       if (!openBySandbox.has(sandboxId)) this.missing.delete(sandboxId);
+    }
+    for (const sandboxId of this.lighter.keys()) {
+      if (!openBySandbox.has(sandboxId)) this.lighter.delete(sandboxId);
     }
 
     const sessionBoxes = new Map<string, string>();
@@ -252,7 +306,7 @@ export class UsageSweep {
         subjectKind: subject.kind,
         subjectId: resolved.subjectId,
         sandboxId,
-        size: sizeForBox(box, subject.kind),
+        size: billedSizeFor(sizeForBox(box, subject.kind), box.memUsedMib),
         startedAt: now,
         payerUserId: resolved.payerUserId ?? null,
       });
@@ -263,7 +317,59 @@ export class UsageSweep {
     }
 
     await this.recordSamples(boxes, sessionBoxes, now);
-    return { opened, closed, listErrors };
+    return { opened, closed, resized, listErrors };
+  }
+
+  /**
+   * Move a running box's interval to the size its memory needs now. A heavier
+   * size moves at once; a lighter one after {@link DOWNSIZE_AFTER_TICKS}. A box
+   * that reports no memory figure, or no resources to name its booted size,
+   * keeps its interval. True when the interval moved.
+   */
+  private async resizeIfNeeded(interval: IntervalRow, box: SweptBox, now: Date): Promise<boolean> {
+    const key = logicalSandboxId(interval.sandboxId);
+    const current = interval.size;
+    const booted = sandboxSizeForResources(box.memMib, box.vcpuCount ? box.vcpuCount * 1000 : box.milliVcpu);
+    const memUsedMib = box.memUsedMib;
+    if (!booted || !isSandboxSize(current) || typeof memUsedMib !== 'number' || !Number.isFinite(memUsedMib) || memUsedMib <= 0) {
+      this.lighter.delete(key);
+      return false;
+    }
+    const decision = decideResize(current, billedSizeFor(booted, memUsedMib), this.lighter.get(key));
+    if (!('resize' in decision)) {
+      if (decision.lighter) this.lighter.set(key, decision.lighter);
+      else this.lighter.delete(key);
+      return false;
+    }
+    this.lighter.delete(key);
+    // Reprice at most the last minute: the time since the last charge, which
+    // the meter charges right after this sweep.
+    const lookback = new Date(now.getTime() - RESIZE_LOOKBACK_MS);
+    const splitAt = interval.billedThrough.getTime() > lookback.getTime() ? interval.billedThrough : lookback;
+    const closedRow = await markIntervalClosed(interval.sandboxId, splitAt, 'resize', interval.id);
+    if (!closedRow) return false;
+    // A charge can move the cursor after the read above; the close then ends
+    // at the cursor, and the next interval must start there too.
+    const startedAt = closedRow.endedAt ?? splitAt;
+    await insertOpenInterval({
+      ownerId: interval.ownerId,
+      workspaceId: interval.workspaceId,
+      subjectKind: interval.subjectKind as UsageSubjectKind,
+      subjectId: interval.subjectId,
+      sandboxId: interval.sandboxId,
+      size: decision.resize,
+      startedAt,
+      payerUserId: interval.payerUserId,
+    });
+    debugBus.recordEvent({
+      service: 'billing',
+      action: 'usage_resize',
+      summary: `Billed ${interval.sandboxId} as ${decision.resize} (was ${current})`,
+      ok: true,
+      meta: { sandboxId: interval.sandboxId, from: current, to: decision.resize, memUsedMib },
+      ...(interval.workspaceId ? { workspaceId: interval.workspaceId } : {}),
+    });
+    return true;
   }
 
   /** A failure here costs one chart point, never a bill. */

@@ -4,8 +4,12 @@ import { SIZE_WEIGHT, type SandboxSize, type UsageSubjectKind } from '@talyn/sha
 import { getPoolDbClient } from '../../../db/client.js';
 import { usageIntervals } from '../../../db/schema.js';
 
-/** Why an interval closed. */
-export type EndReason = 'terminal' | 'suspended' | 'deleted' | 'vanished' | 'exhausted' | 'sweep' | 'payer_change';
+/**
+ * Why an interval closed. `resize` means the box still runs: the sweep closed
+ * the interval because the box's measured size changed, and opened the next
+ * one at the same instant.
+ */
+export type EndReason = 'terminal' | 'suspended' | 'deleted' | 'vanished' | 'exhausted' | 'sweep' | 'payer_change' | 'resize';
 
 export interface OpenIntervalInput {
   ownerId: string;
@@ -63,23 +67,38 @@ export async function insertOpenInterval(input: OpenIntervalInput): Promise<bool
 }
 
 /**
- * Close the box's open interval at `endedAt`. Returns the owner when a row
- * closed, null when none was open.
+ * Close the box's open interval at `endedAt`. Returns the owner and the end
+ * actually written when a row closed, null when none was open.
  *
  * The end never falls before what the meter already billed (the CAS cursor),
  * so a late close (a sweep that saw a suspend after a charge) cannot leave an
  * interval billed past its own end. The bound is passed as an ISO string: a
  * Date in a raw `sql` fragment reaches postgres-js unencoded and throws.
+ *
+ * `intervalId` closes only that interval. A caller that read the interval
+ * earlier uses it, so a hook that replaced the interval meanwhile (a payer
+ * change) does not get its new interval closed.
  */
-export async function markIntervalClosed(sandboxId: string, endedAt: Date, reason: EndReason): Promise<{ ownerId: string } | null> {
+export async function markIntervalClosed(
+  sandboxId: string,
+  endedAt: Date,
+  reason: EndReason,
+  intervalId?: string,
+): Promise<{ ownerId: string; endedAt: Date | null } | null> {
   const rows = await db()
     .update(usageIntervals)
     .set({
       endedAt: sql`GREATEST(${endedAt.toISOString()}::timestamptz, ${usageIntervals.billedThrough})`,
       endReason: reason,
     })
-    .where(and(eq(usageIntervals.sandboxId, sandboxId), isNull(usageIntervals.endedAt)))
-    .returning({ ownerId: usageIntervals.ownerId });
+    .where(
+      and(
+        eq(usageIntervals.sandboxId, sandboxId),
+        isNull(usageIntervals.endedAt),
+        intervalId ? eq(usageIntervals.id, intervalId) : undefined,
+      ),
+    )
+    .returning({ ownerId: usageIntervals.ownerId, endedAt: usageIntervals.endedAt });
   return rows[0] ?? null;
 }
 

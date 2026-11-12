@@ -101,6 +101,8 @@ async function seed(db: Database) {
   await db.insert(usageIntervals).values([
     interval('i1', 'ws', 'workbench', 'wb-1', 'standard', IN(1), 3600),
     interval('i2', 'ws', 'workbench', 'wb-1', 'large', IN(30), 7200),
+    // The same box as i2 before a measured-size change: its time counts, the box does not count twice.
+    { ...interval('i2-resized', 'ws', 'workbench', 'wb-1', 'large', IN(29), 0), sandboxId: 'sb-i2', endReason: 'resize' },
     interval('i3', 'ws', 'workbench', 'wb-2', 'standard', IN(50), 1800),
     interval('i4', 'ws', 'task', 't-code', 'small', IN(2), 900),
     interval('i5', 'ws', 'review_unit', 'run-1', 'small', IN(3), 600),

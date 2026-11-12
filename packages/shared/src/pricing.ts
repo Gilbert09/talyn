@@ -23,7 +23,7 @@
  * {@link weightedSecondsDelta} and {@link consumeBudget}). The sum of the steps
  * then equals the conversion of the total, whatever the step size.
  */
-import type { SandboxSize } from './sandboxSize.js';
+import { SANDBOX_SIZES, type SandboxSize } from './sandboxSize.js';
 
 /** Integer micro-dollars: USD × 1,000,000. */
 export type Micros = number;
@@ -292,6 +292,24 @@ export const SIZE_WEIGHT: Record<SandboxSize, number> = mapSizes((size) => SIZE_
 export const SIZE_PRICE_MICROS_PER_HOUR: Record<SandboxSize, Micros> = mapSizes(
   (size) => (BOX_HOUR_PRICE_MICROS * SIZE_WEIGHT_HUNDREDTHS[size]) / 100,
 );
+
+/** The sizes a measured box can bill at, lightest first. `small` is never a measured size: it differs from `standard` in CPU only. */
+const MEASURED_SIZES: readonly SandboxSize[] = ['standard', 'medium', 'large', 'xlarge'];
+
+/**
+ * The size a running box bills at: the smallest size whose memory holds what
+ * the box uses now, never above the size it booted at. An unknown figure bills
+ * the booted size. A `small` box always bills `small`.
+ */
+export function billedSizeFor(booted: SandboxSize, memUsedMib: number | null | undefined): SandboxSize {
+  if (typeof memUsedMib !== 'number' || !Number.isFinite(memUsedMib) || memUsedMib <= 0) return booted;
+  const fits = MEASURED_SIZES.find((size) => SANDBOX_SIZES[size].memMib >= memUsedMib) ?? 'xlarge';
+  return SIZE_WEIGHT_HUNDREDTHS[fits] < SIZE_WEIGHT_HUNDREDTHS[booted] ? fits : booted;
+}
+
+/** The line every app shows next to the size prices. It states {@link billedSizeFor} in plain words. */
+export const MEASURED_BILLING_NOTE =
+  'A box is billed for the memory it uses, up to its size. A box that uses 4 GB or less is billed at the Standard rate, and a Small box always at the Small rate.';
 
 /** The size unattended runs (reviews, loops, merge-queue fixes, auto-keep, workflows) use. */
 export const UNATTENDED_SANDBOX_SIZE: SandboxSize = 'small';

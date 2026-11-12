@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import {
@@ -14,11 +14,15 @@ import {
   workbenches,
   workspaces,
 } from '../db/schema.js';
+import type { SandboxSize } from '@talyn/shared';
 import type { FleetClient, FleetSandbox } from '../services/selfHosted/client.js';
 import * as websocketModule from '../services/websocket.js';
-import { insertOpenInterval } from '../services/billing/usage/intervals.js';
+import { insertOpenInterval, markIntervalClosed } from '../services/billing/usage/intervals.js';
+import { chargeOwnerAt } from '../services/billing/usage/charge.js';
 import {
   decideOpenInterval,
+  decideResize,
+  DOWNSIZE_AFTER_TICKS,
   MISSING_TICKS_TO_CLOSE,
   sizeForBox,
   subjectForSandboxId,
@@ -98,6 +102,27 @@ describe('usage sweep: pure parts', () => {
   });
 });
 
+describe('usage sweep: decideResize', () => {
+  it.each([
+    ['heavier moves at once', 'standard', 'large', undefined, { resize: 'large' }],
+    ['heavier moves at once even mid-streak', 'medium', 'large', { ticks: 4, size: 'standard' }, { resize: 'large' }],
+    ['equal clears the streak', 'large', 'large', { ticks: 4, size: 'standard' }, { lighter: null }],
+    ['equal with no streak', 'small', 'small', undefined, { lighter: null }],
+    ['first lighter tick starts a streak', 'large', 'standard', undefined, { lighter: { ticks: 1, size: 'standard' } }],
+    ['a lighter tick adds to the streak', 'large', 'standard', { ticks: 2, size: 'standard' }, { lighter: { ticks: 3, size: 'standard' } }],
+    ['the streak keeps its heaviest size', 'large', 'standard', { ticks: 2, size: 'medium' }, { lighter: { ticks: 3, size: 'medium' } }],
+    ['a heavier lighter size replaces a lighter one', 'xlarge', 'large', { ticks: 1, size: 'standard' }, { lighter: { ticks: 2, size: 'large' } }],
+    ['the last tick of the streak moves down', 'large', 'standard', { ticks: DOWNSIZE_AFTER_TICKS - 1, size: 'standard' }, { resize: 'standard' }],
+    ['the last tick moves to the heaviest size seen', 'large', 'standard', { ticks: DOWNSIZE_AFTER_TICKS - 1, size: 'medium' }, { resize: 'medium' }],
+  ] as const)('%s', (_label, current, measured, lighter, expected) => {
+    expect(decideResize(current, measured, lighter)).toEqual(expected);
+  });
+
+  it('waits five ticks before a move down', () => {
+    expect(DOWNSIZE_AFTER_TICKS).toBe(5);
+  });
+});
+
 describe('usage sweep against the fleet', () => {
   let db: Database;
   let cleanup: () => Promise<void>;
@@ -129,7 +154,7 @@ describe('usage sweep against the fleet', () => {
     await open('talyn-wb-one', 'workbench', 'wb-1');
     await db.update(workbenches).set({ sandboxState: 'running' });
     const sweep = new UsageSweep(async () => [host([{ id: 'talyn-wb-one', status: 'suspended', suspendedAt: '2026-11-10T11:55:00Z' }])]);
-    expect(await sweep.run(NOW)).toEqual({ opened: 0, closed: 1, listErrors: 0 });
+    expect(await sweep.run(NOW)).toEqual({ opened: 0, closed: 1, resized: 0, listErrors: 0 });
     const row = (await intervals())['talyn-wb-one'];
     expect(row.endReason).toBe('suspended');
     expect(row.endedAt?.toISOString()).toBe('2026-11-10T11:55:00.000Z');
@@ -247,7 +272,7 @@ describe('usage sweep against the fleet', () => {
   it('reads each box through a gateway, which lists no status', async () => {
     await open(`talyn-${TASK_ID}`);
     const sweep = new UsageSweep(async () => [host([{ id: `talyn-${TASK_ID}`, status: 'stopped', endedAt: '2026-11-10T11:59:30Z' }, { id: 'talyn-wb-one', status: 'busy' }], { gateway: true })]);
-    expect(await sweep.run(NOW)).toEqual({ opened: 1, closed: 1, listErrors: 0 });
+    expect(await sweep.run(NOW)).toEqual({ opened: 1, closed: 1, resized: 0, listErrors: 0 });
     expect((await intervals())[`talyn-${TASK_ID}`].endReason).toBe('terminal');
   });
 
@@ -257,8 +282,8 @@ describe('usage sweep against the fleet', () => {
     it('matches the interval the hook opened under the Talyn id, and opens no second one', async () => {
       await open('talyn-wb-one', 'workbench', 'wb-1');
       const sweep = new UsageSweep(async () => [gatewayBox()]);
-      expect(await sweep.run(NOW)).toEqual({ opened: 0, closed: 0, listErrors: 0 });
-      expect(await sweep.run(new Date(NOW.getTime() + 60_000))).toEqual({ opened: 0, closed: 0, listErrors: 0 });
+      expect(await sweep.run(NOW)).toEqual({ opened: 0, closed: 0, resized: 0, listErrors: 0 });
+      expect(await sweep.run(new Date(NOW.getTime() + 60_000))).toEqual({ opened: 0, closed: 0, resized: 0, listErrors: 0 });
       expect(Object.keys(await intervals())).toEqual(['talyn-wb-one']);
     });
 
@@ -280,7 +305,7 @@ describe('usage sweep against the fleet', () => {
       const laterStart = new Date(NOW.getTime() - 60_000);
       await insertOpenInterval({ ownerId: OWNER, workspaceId: 'ws', subjectKind: 'workbench', subjectId: 'wb-1', sandboxId: 'talyn-wb-one--3542ee', size: 'standard', startedAt: laterStart });
       const sweep = new UsageSweep(async () => [gatewayBox()]);
-      expect(await sweep.run(NOW)).toEqual({ opened: 0, closed: 1, listErrors: 0 });
+      expect(await sweep.run(NOW)).toEqual({ opened: 0, closed: 1, resized: 0, listErrors: 0 });
       const rows = await intervals();
       expect(rows['talyn-wb-one'].endedAt).toBeNull();
       expect(rows['talyn-wb-one--3542ee'].endedAt?.toISOString()).toBe(laterStart.toISOString());
@@ -291,6 +316,191 @@ describe('usage sweep against the fleet', () => {
       const sweep = new UsageSweep(async () => [host([], { gateway: true })]);
       expect((await sweep.run(NOW)).closed).toBe(0);
       expect((await sweep.run(new Date(NOW.getTime() + 60_000))).closed).toBe(1);
+    });
+  });
+
+  describe('bills the memory a running box uses', () => {
+    const SB = `talyn-${TASK_ID}`;
+    const LARGE = { memMib: 12288, vcpuCount: 6 };
+    const at = (seconds: number) => new Date(NOW.getTime() + seconds * 1000);
+    const rows = () => db.select().from(usageIntervals).orderBy(asc(usageIntervals.startedAt));
+    const openSized = async (size: SandboxSize, startedAt = at(-600), billedThrough?: Date) => {
+      await insertOpenInterval({ ownerId: OWNER, workspaceId: 'ws', subjectKind: 'task', subjectId: TASK_ID, sandboxId: SB, size, startedAt });
+      if (billedThrough) await db.update(usageIntervals).set({ billedThrough });
+    };
+    /** A sweep whose one box reports `memUsedMib` (undefined = not reported) on each run. */
+    const sweepOf = (box: () => Partial<FleetSandbox>) => new UsageSweep(async () => [host([{ id: SB, status: 'busy', ...LARGE, ...box() }])]);
+
+    it('moves up at once, closing at the last charge and opening the heavier size there', async () => {
+      await openSized('standard', at(-600), at(-60));
+      const result = await sweepOf(() => ({ memUsedMib: 9000 })).run(NOW);
+      expect(result).toEqual({ opened: 0, closed: 0, resized: 1, listErrors: 0 });
+      const [old, next] = await rows();
+      expect(old).toMatchObject({ size: 'standard', endReason: 'resize', endedAt: at(-60) });
+      expect(next).toMatchObject({ size: 'large', weight: '2.00', endedAt: null, startedAt: at(-60), billedThrough: at(-60) });
+    });
+
+    it('does not close an interval a hook opened after the sweep read the old one', async () => {
+      await openSized('standard', at(-600), at(-60));
+      // A payer change lands while the sweep lists the fleet.
+      const sweep = new UsageSweep(async () => {
+        await markIntervalClosed(SB, at(-10), 'payer_change');
+        await insertOpenInterval({ ownerId: OWNER, workspaceId: 'ws', subjectKind: 'task', subjectId: TASK_ID, sandboxId: SB, size: 'standard', startedAt: at(-10) });
+        return [host([{ id: SB, status: 'busy', ...LARGE, memUsedMib: 9000 }])];
+      });
+      expect((await sweep.run(NOW)).resized).toBe(0);
+      const all = await rows();
+      expect(all).toHaveLength(2);
+      expect(all[0]).toMatchObject({ endReason: 'payer_change' });
+      expect(all[1]).toMatchObject({ size: 'standard', endedAt: null, startedAt: at(-10) });
+    });
+
+    it.each([
+      ['a stale cursor reprices one minute only', at(-600), at(-60)],
+      ['a cursor inside the last minute is the split', at(-30), at(-30)],
+      ['a cursor exactly one minute back', at(-60), at(-60)],
+      ['a cursor at now', NOW, NOW],
+    ])('splits at max(billedThrough, now - 60 s): %s', async (_label, billedThrough, splitAt) => {
+      await openSized('standard', at(-900), billedThrough);
+      expect((await sweepOf(() => ({ memUsedMib: 9000 })).run(NOW)).resized).toBe(1);
+      const [old, next] = await rows();
+      expect(old.endedAt).toEqual(splitAt);
+      expect(next.startedAt).toEqual(splitAt);
+      expect(next.billedThrough).toEqual(splitAt);
+    });
+
+    it('moves down only after five lighter ticks in a row', async () => {
+      await openSized('large');
+      const sweep = sweepOf(() => ({ memUsedMib: 1536 }));
+      for (let i = 0; i < DOWNSIZE_AFTER_TICKS - 1; i++) {
+        expect((await sweep.run(at(i * 60))).resized).toBe(0);
+      }
+      expect((await rows()).map((r) => r.size)).toEqual(['large']);
+      const last = at((DOWNSIZE_AFTER_TICKS - 1) * 60);
+      expect((await sweep.run(last)).resized).toBe(1);
+      const [old, next] = await rows();
+      expect(old).toMatchObject({ size: 'large', endReason: 'resize' });
+      expect(next).toMatchObject({ size: 'standard', endedAt: null, startedAt: new Date(last.getTime() - 60_000) });
+      // The next lighter tick does nothing: the interval already bills standard.
+      expect((await sweep.run(at(DOWNSIZE_AFTER_TICKS * 60))).resized).toBe(0);
+    });
+
+    it.each([
+      ['an equal tick', 10_000],
+      ['a heavier-than-booted reading (still the booted size)', 20_000],
+      ['an unknown reading', undefined],
+    ])('%s resets the lighter count', async (_label, breakMem) => {
+      await openSized('large');
+      const mem: (number | undefined)[] = [1536, 1536, 1536, 1536, breakMem, 1536, 1536, 1536, 1536];
+      let i = 0;
+      const sweep = sweepOf(() => ({ memUsedMib: mem[i] }));
+      for (; i < mem.length; i++) expect((await sweep.run(at(i * 60))).resized).toBe(0);
+      mem.push(1536);
+      expect((await sweep.run(at(i * 60))).resized).toBe(1);
+      expect((await rows()).map((r) => r.size)).toEqual(['large', 'standard']);
+    });
+
+    it('moves down to the heaviest size the lighter ticks measured', async () => {
+      await openSized('large');
+      const mem = [1536, 6000, 1536, 1536, 1536];
+      let i = 0;
+      const sweep = sweepOf(() => ({ memUsedMib: mem[i] }));
+      for (; i < mem.length - 1; i++) expect((await sweep.run(at(i * 60))).resized).toBe(0);
+      expect((await sweep.run(at(i * 60))).resized).toBe(1);
+      expect((await rows()).map((r) => r.size)).toEqual(['large', 'medium']);
+    });
+
+    it.each([
+      ['no memory figure', { memUsedMib: undefined }],
+      ['a zero memory figure', { memUsedMib: 0 }],
+      ['no booted resources', { memMib: undefined, vcpuCount: undefined, memUsedMib: 1536 }],
+    ])('never splits with %s', async (_label, box) => {
+      await openSized('large');
+      const sweep = sweepOf(() => box);
+      for (let i = 0; i < DOWNSIZE_AFTER_TICKS * 2; i++) expect((await sweep.run(at(i * 60))).resized).toBe(0);
+      expect((await rows()).map((r) => r.size)).toEqual(['large']);
+    });
+
+    it('never bills above the booted size', async () => {
+      await openSized('medium');
+      const sweep = new UsageSweep(async () => [host([{ id: SB, status: 'busy', memMib: 8192, vcpuCount: 4, memUsedMib: 15_000 }])]);
+      for (let i = 0; i < 3; i++) expect((await sweep.run(at(i * 60))).resized).toBe(0);
+      expect((await rows()).map((r) => r.size)).toEqual(['medium']);
+    });
+
+    it('caps a move up at the booted size', async () => {
+      await openSized('standard');
+      const sweep = new UsageSweep(async () => [host([{ id: SB, status: 'busy', memMib: 8192, vcpuCount: 4, memUsedMib: 15_000 }])]);
+      expect((await sweep.run(NOW)).resized).toBe(1);
+      expect((await rows()).map((r) => r.size)).toEqual(['standard', 'medium']);
+    });
+
+    it.each([1536, 4096, 8000, 16_000])('a small box stays small at %s MiB', async (memUsedMib) => {
+      await openSized('small');
+      const sweep = new UsageSweep(async () => [host([{ id: SB, status: 'busy', memMib: 4096, vcpuCount: 2, memUsedMib }])]);
+      for (let i = 0; i < DOWNSIZE_AFTER_TICKS + 1; i++) expect((await sweep.run(at(i * 60))).resized).toBe(0);
+      expect((await rows()).map((r) => r.size)).toEqual(['small']);
+    });
+
+    it('does not resize a box that is closing this tick', async () => {
+      await openSized('standard');
+      const sweep = new UsageSweep(async () => [host([{ id: SB, status: 'suspended', ...LARGE, memUsedMib: 9000 }])]);
+      expect(await sweep.run(NOW)).toMatchObject({ closed: 1, resized: 0 });
+      expect((await rows()).map((r) => [r.size, r.endReason])).toEqual([['standard', 'suspended']]);
+    });
+
+    it('keeps the owner, payer, workspace and subject on the new interval', async () => {
+      await seedUser(db, { id: 'payer-b' });
+      await insertOpenInterval({
+        ownerId: 'payer-b', workspaceId: 'ws', subjectKind: 'workbench', subjectId: 'wb-1', sandboxId: 'talyn-wb-one',
+        size: 'standard', startedAt: at(-600), payerUserId: 'payer-b',
+      });
+      const sweep = new UsageSweep(async () => [host([{ id: 'talyn-wb-one', status: 'idle', ...LARGE, memUsedMib: 9000 }])]);
+      expect((await sweep.run(NOW)).resized).toBe(1);
+      const [, next] = await rows();
+      expect(next).toMatchObject({
+        ownerId: 'payer-b', payerUserId: 'payer-b', workspaceId: 'ws', subjectKind: 'workbench', subjectId: 'wb-1',
+        sandboxId: 'talyn-wb-one', size: 'large', endedAt: null,
+      });
+    });
+
+    it('resizes the interval a gateway lists under a suffixed id', async () => {
+      await openSized('standard');
+      const sweep = new UsageSweep(async () => [host([{ id: `${SB}--3542ee`, status: 'busy', ...LARGE, memUsedMib: 9000 }], { gateway: true })]);
+      expect((await sweep.run(NOW)).resized).toBe(1);
+      expect((await rows()).map((r) => [r.sandboxId, r.size])).toEqual([[SB, 'standard'], [SB, 'large']]);
+    });
+
+    it.each([
+      ['light', 1500, 'standard'],
+      ['heavy', 9000, 'large'],
+      ['unknown', undefined, 'large'],
+    ])('opens a new interval at the measured size (%s)', async (_label, memUsedMib, size) => {
+      const sweep = new UsageSweep(async () => [host([{ id: SB, status: 'busy', ...LARGE, memUsedMib }])]);
+      expect((await sweep.run(NOW)).opened).toBe(1);
+      expect((await rows()).map((r) => r.size)).toEqual([size]);
+    });
+
+    it('charges add up across a split: one minute at large, then one at standard', async () => {
+      await openSized('large', at(-60));
+      await chargeOwnerAt(OWNER, NOW);
+      const sweep = sweepOf(() => ({ memUsedMib: 1536 }));
+      for (let i = 0; i < DOWNSIZE_AFTER_TICKS; i++) await sweep.run(at(60));
+      await chargeOwnerAt(OWNER, at(60));
+      const [old, next] = await rows();
+      expect(old).toMatchObject({ size: 'large', billedWsec: 120, endedAt: NOW, billedThrough: NOW });
+      expect(next).toMatchObject({ size: 'standard', billedWsec: 60, startedAt: NOW, billedThrough: at(60) });
+      const [period] = await db.select().from(usagePeriods).where(eq(usagePeriods.ownerId, OWNER));
+      expect(period.usedWsec).toBe(180);
+    });
+
+    it('charges add up across a move up', async () => {
+      await openSized('standard', at(-60));
+      await chargeOwnerAt(OWNER, NOW);
+      await sweepOf(() => ({ memUsedMib: 9000 })).run(at(60));
+      await chargeOwnerAt(OWNER, at(60));
+      const [period] = await db.select().from(usagePeriods).where(eq(usagePeriods.ownerId, OWNER));
+      expect(period.usedWsec).toBe(60 + 120);
     });
   });
 

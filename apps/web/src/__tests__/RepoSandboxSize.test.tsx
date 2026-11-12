@@ -89,6 +89,18 @@ describe('RepoSandboxSize', () => {
     expect(screen.getByText('Standard · 4 GB uses 1 box-hour per running hour, then $0.22/h from credits.')).toBeTruthy();
   });
 
+  it.each([
+    ['small', 'Small · 2 vCPU uses 0.5 box-hours per running hour, then $0.11/h from credits.'],
+    ['standard', 'Standard · 4 GB uses 1 box-hour per running hour, then $0.22/h from credits.'],
+    ['medium', 'Medium · 8 GB uses up to 1.25 box-hours per running hour, then up to $0.275/h from credits. A box is billed for the memory it uses, up to its size.'],
+    ['large', 'Large · 12 GB uses up to 2 box-hours per running hour, then up to $0.44/h from credits. A box is billed for the memory it uses, up to its size.'],
+  ] as const)('shows the %s rate as a ceiling only when memory billing can lower it', async (size, text) => {
+    useBillingStore.setState({ status: usageStatus('pro') });
+    get.mockResolvedValue({ setting: size, effective: size, detected: null });
+    render(<RepoSandboxSize repositoryId="r1" />);
+    expect(await screen.findByText(text)).toBeTruthy();
+  });
+
   it('says a size the plan cannot start needs Pro', async () => {
     useBillingStore.setState({ status: usageStatus('free') });
     get.mockResolvedValue(auto);

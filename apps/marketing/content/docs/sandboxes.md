@@ -17,6 +17,8 @@ Sandboxes are separate from each other. Two sessions on the same repository cann
 | Large | 6 | 12 GB | Full test stacks | 2 |
 | X-Large | 8 | 16 GB | The heaviest stacks | 2.5 |
 
+A box is billed for the memory it uses, up to its size. A box that uses 4 GB or less is billed at the Standard rate, and a Small box always at the Small rate. So a Large box keeps its room for a full stack, but you pay the Large rate only while it uses more than 8 GB.
+
 The free plan can use Small and Standard. Pro can use every size. See [Plans, usage and billing](/docs/billing).
 
 ### Set the size for a repository

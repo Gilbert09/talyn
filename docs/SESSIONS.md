@@ -2,6 +2,34 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Bill boxes on measured memory (2026-11-12)
+
+A posthog/posthog session boots as Large (12 GB, 6 vCPU, weight 2). Compose-file detection sees ClickHouse and Kafka and picks that size. But a session uses about 1.5 GB, so the user paid two box-hours for each hour of a box that used an eighth of its memory. The box still boots at the detected size, so a session that starts the full stack has room. The bill now follows the memory the box uses.
+
+The rule (`billedSizeFor` in `packages/shared/src/pricing.ts`):
+- Take the smallest of Standard, Medium, Large and X-Large whose memory holds the box's `memUsedMib` (the VMM's resident size). If none holds it, X-Large.
+- Never bill above the booted size. A Small box always bills Small, because Small and Standard differ only in CPU.
+- An unknown, zero or non-finite reading bills the booted size, which is the old bill.
+
+How the sweep applies it (`UsageSweep.resizeIfNeeded` in `services/billing/usage/sweep.ts`):
+- Each minute, for each running box it read, the sweep compares the measured size with the open interval's size. A heavier size splits the interval at once.
+- A lighter size splits only after five lighter ticks in a row (`DOWNSIZE_AFTER_TICKS`). The sweep reads memory once a minute and cannot see a peak between two reads. Five minutes stop a build whose memory drops for a moment from billing small, and they limit interval churn. The move goes to the heaviest size the lighter ticks measured. An equal, heavier or unknown tick resets the count. The count is in memory, so a deploy only delays a move down, which bills the higher size.
+- A split closes the interval with `end_reason` `resize` and opens the next one at the same instant, with the same owner, payer, workspace and subject. The split point is `max(billedThrough, now - 60 s)`: the minute since the last charge bills at the new size, and a stale cursor never reprices more than one minute. The new interval starts where the close actually ended, so a charge that moved the cursor in between cannot make two intervals overlap. `end_reason` is plain text with no CHECK, so no migration.
+- No split when the box reports no memory figure, or no resources to name its booted size.
+- An interval the sweep opens for a running box with none starts at the measured size.
+- Each split is a `usage_resize` debug-bus event (sandbox id, from, to, `memUsedMib`) and counts in `SweepResult.resized`.
+
+What the hooks do: `meterBoxOpened` still opens at the booted size, but `insertOpenInterval` does nothing while an interval is open, so a hook only opens on boot, wake, a payer change or a move to a new box. The next sweep then corrects the size: up at once, down after five minutes. The hooks and the sweep do not fight.
+
+What reads the size: the box gate's `size_requires_pro` check uses the REQUESTED size, and the concurrent-box count counts open intervals, so a split changes neither. The usage report and the admin console show the billed size of each interval, which is correct. The Insights box count skips intervals that ended with `resize`, so a resized box counts once. The admin console's "started" count still counts each segment.
+
+Not covered:
+- CPU is not billed on its own. A Large box that uses 1.5 GB and all six vCPUs bills Standard.
+- The fleet still reserves the booted size for host capacity. A light Large box still takes Large room on the host, so this change moves margin from us to the user on those boxes.
+- `memUsedMib` is the VMM's resident size. Pages the guest touched and freed can stay resident until the balloon takes them back, so a box can bill a step higher after a peak until that happens.
+
+The copy says it in each app (web Billing and the size picker, desktop Plan and usage, the mobile size sheet) with `MEASURED_BILLING_NOTE`, and in `docs/billing.md` and `docs/sandboxes.md`.
+
 ## Slack channel rules run on app and bot messages (2026-11-12)
 
 A channel automation on #alerts-warehouse-sources never ran. Every message there comes from the incident.io app, and the Slack source adapter dropped every message with a `bot_id` or the `bot_message` subtype.

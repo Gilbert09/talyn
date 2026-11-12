@@ -4,6 +4,7 @@ import {
   AUTO_TOPUP_DEFAULTS,
   autoTopupMonthKey,
   BOX_HOUR_PRICE_MICROS,
+  billedSizeFor,
   boxHoursToWeightedSeconds,
   breakEvenBoxHourMicros,
   FLEET_BOX_HOUR_COST_ESTIMATE_MICROS,
@@ -730,5 +731,47 @@ describe('formatting', () => {
     [1800, HOUR, '0.5 of 1 box-hour'],
   ])('formatBoxHoursUsage(%s, %s) = %s', (used, included, text) => {
     expect(formatBoxHoursUsage(used, included)).toBe(text);
+  });
+});
+
+describe('billedSizeFor: a box bills the memory it uses, up to its booted size', () => {
+  const MEMORY = [null, undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, 1, 1536, 4096, 4097, 8192, 8193, 12288, 12289, 16384, 20000] as const;
+  // The size the memory alone needs, before the booted cap. Unknown memory is null.
+  const fits = (mem: number | null | undefined): SandboxSize | null => {
+    if (typeof mem !== 'number' || !Number.isFinite(mem) || mem <= 0) return null;
+    if (mem <= 4096) return 'standard';
+    if (mem <= 8192) return 'medium';
+    if (mem <= 12288) return 'large';
+    return 'xlarge';
+  };
+  const ORDER: SandboxSize[] = ['small', 'standard', 'medium', 'large', 'xlarge'];
+  const cases = ORDER.flatMap((booted) =>
+    MEMORY.map((mem) => {
+      const need = fits(mem);
+      const expected = booted === 'small' || need === null ? booted : ORDER.indexOf(need) < ORDER.indexOf(booted) ? need : booted;
+      return [booted, mem, expected] as const;
+    }),
+  );
+
+  it.each(cases)('booted %s using %s MiB bills %s', (booted, mem, expected) => {
+    expect(billedSizeFor(booted, mem)).toBe(expected);
+  });
+
+  it.each([
+    ['large', 1536, 'standard'],
+    ['large', 9000, 'large'],
+    ['medium', 10_000, 'medium'],
+    ['xlarge', 20_000, 'xlarge'],
+    ['xlarge', 8193, 'large'],
+    ['small', 16_384, 'small'],
+    ['standard', 12_000, 'standard'],
+  ] as const)('the stated examples: %s at %s MiB bills %s', (booted, mem, expected) => {
+    expect(billedSizeFor(booted, mem)).toBe(expected);
+  });
+
+  it('never bills a heavier weight than the booted size', () => {
+    for (const [booted, mem] of cases) {
+      expect(SIZE_WEIGHT[billedSizeFor(booted, mem)]).toBeLessThanOrEqual(SIZE_WEIGHT[booted]);
+    }
   });
 });

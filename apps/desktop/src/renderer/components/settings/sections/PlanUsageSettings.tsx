@@ -15,6 +15,7 @@ import {
   formatUsd,
   isSellableTier,
   sellableTierPrices,
+  MEASURED_BILLING_NOTE,
   sizePriceTable,
   validateAutoTopupConfig,
   type AutoTopupConfig,
@@ -347,6 +348,7 @@ function SizesCard({
           </tbody>
         </table>
       </Card>
+      <p className="mt-1.5 text-xs text-muted-foreground" data-testid="measured-billing-note">{MEASURED_BILLING_NOTE}</p>
     </div>
   );
 }

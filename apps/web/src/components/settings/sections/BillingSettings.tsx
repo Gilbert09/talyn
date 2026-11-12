@@ -10,6 +10,7 @@ import {
   formatPlanPeriodLine,
   formatUsd,
   isSellableTier,
+  MEASURED_BILLING_NOTE,
   sizePriceTable,
   type BillingOrder,
   type PlanTier,
@@ -290,6 +291,7 @@ export function SizesCard({
           );
         })}
       </Card>
+      <p className="mt-2 text-xs text-muted-foreground" data-attr="measured-billing-note">{MEASURED_BILLING_NOTE}</p>
     </div>
   );
 }

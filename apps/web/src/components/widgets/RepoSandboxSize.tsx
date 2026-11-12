@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   SANDBOX_SIZES,
+  billedSizeFor,
   formatPricePerHour,
   sizePriceTable,
   type RepositorySandboxSizeResponse,
@@ -67,6 +68,8 @@ export function RepoSandboxSize({ repositoryId, hideLabel = false, onInfoChange 
     : info.detected?.reason ?? null;
   const effectivePrice = prices?.get(info.effective) ?? null;
   const lockedEffective = effectivePrice && !effectivePrice.allowed;
+  // A box that can be billed at a lower size than it booted at shows its rate as a ceiling.
+  const upTo = billedSizeFor(info.effective, 1) === info.effective ? '' : 'up to ';
 
   return (
     <div className="space-y-1">
@@ -100,7 +103,7 @@ export function RepoSandboxSize({ repositoryId, hideLabel = false, onInfoChange 
         <p className="text-xs text-muted-foreground" data-attr="sandbox-size-price">
           {lockedEffective
             ? `${SANDBOX_SIZES[info.effective].label.split(' · ')[0]} boxes need Pro. On your plan a new session here cannot start until you pick Standard or Small.`
-            : `${SANDBOX_SIZES[info.effective].label} uses ${effectivePrice.weight} box-hour${effectivePrice.weight === 1 ? '' : 's'} per running hour, then ${formatPricePerHour(effectivePrice.priceMicrosPerHour)} from credits.`}
+            : `${SANDBOX_SIZES[info.effective].label} uses ${upTo}${effectivePrice.weight} box-hour${effectivePrice.weight === 1 ? '' : 's'} per running hour, then ${upTo}${formatPricePerHour(effectivePrice.priceMicrosPerHour)} from credits.${upTo ? ' A box is billed for the memory it uses, up to its size.' : ''}`}
         </p>
       )}
     </div>

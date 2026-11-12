@@ -24,6 +24,8 @@ Every agent run happens in a sandbox, which Talyn calls a box. Usage is counted 
 
 For example, a ten-minute run on a Standard box uses a sixth of a box-hour.
 
+A box is billed for the memory it uses, up to its size. Talyn checks the memory once a minute. A box that uses 4 GB or less is billed at the Standard rate, and a Small box always at the Small rate. For example, a Large box that uses 2 GB is billed as Standard. When a box uses more memory, the higher rate starts at once. When it uses less, the lower rate starts after five minutes.
+
 Sessions, threads, fix runs, code reviews, skills and automations all run on boxes. Local sessions in the desktop app run on your computer and use no box-hours.
 
 ## Plans

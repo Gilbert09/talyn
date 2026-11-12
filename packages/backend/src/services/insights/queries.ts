@@ -98,7 +98,8 @@ export function computeDaysSql(s: InsightsScope): SQL {
 
 export function computeBreakdownSql(s: InsightsScope): SQL {
   return sql`
-    SELECT size, subject_kind AS kind, COALESCE(sum(billed_wsec), 0) AS wsec, count(*) AS boxes
+    SELECT size, subject_kind AS kind, COALESCE(sum(billed_wsec), 0) AS wsec,
+      count(*) FILTER (WHERE end_reason IS DISTINCT FROM 'resize') AS boxes
     FROM usage_intervals WHERE ${intervalScope(s)}
     GROUP BY size, subject_kind`;
 }

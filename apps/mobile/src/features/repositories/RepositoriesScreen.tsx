@@ -1,5 +1,5 @@
 import type { GitHubRepo, WatchedRepo } from '@talyn/client/native';
-import { sizePriceTable, type SandboxSizeSetting } from '@talyn/shared';
+import { MEASURED_BILLING_NOTE, sizePriceTable, type SandboxSizeSetting } from '@talyn/shared';
 import { router, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useState } from 'react';
@@ -149,6 +149,7 @@ function SandboxSizeSheet({ repo, size, onClose }: {
       {info && locked ? <AppText variant="meta" tone="warning">
         {`${sizeName(info.effective)} boxes need Pro. On your plan a new session here cannot start until you pick Standard or Small.`}
       </AppText> : null}
+      {plan ? <AppText variant="meta" tone="muted">{MEASURED_BILLING_NOTE}</AppText> : null}
     </View>}
     sections={[{ key: 'sizes', items: options.map((option) => ({
       key: option.setting, label: option.label, detail: option.detail, selected: option.selected, disabled: saving,
