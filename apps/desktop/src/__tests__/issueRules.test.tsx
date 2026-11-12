@@ -12,6 +12,8 @@ import {
 import { api } from '../renderer/lib/api';
 import { useBillingStore } from '../renderer/stores/billing';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
+import { useWorkbenchStore } from '../renderer/stores/workbenches';
+import { useNavigationStore } from '../renderer/stores/navigation';
 import { IntegrationsView } from '../renderer/pages/IntegrationsView';
 import { LinearSettings } from '../renderer/components/panels/LinearSettings';
 import { WorkflowsPanel } from '../renderer/components/panels/workflows/WorkflowsPanel';
@@ -352,5 +354,44 @@ describe('Issue run history', () => {
     render(<WorkflowRunsList workflowId="wf1" liveRuns={undefined} />);
     expect(await screen.findByText('ENG-12')).toBeTruthy();
     expect(screen.getByText(label)).toBeTruthy();
+  });
+});
+
+describe('Run history session link', () => {
+  const sessionRun = (over: Partial<WorkflowRun> = {}) => ({
+    id: 'r2', workflowId: 'wf1', workspaceId: 'ws1', integration: 'slack', subjectLabel: '#alerts',
+    repositoryId: null, repoFullName: '', prNumber: 0, prTitle: '', prUrl: '', prAuthor: '', pullRequestId: null,
+    taskId: null, workbenchId: 'wb-1', event: 'slack_message', status: 'succeeded',
+    actions: [{ type: 'start_session', ok: true, detail: 'started session wb-1' }],
+    error: null, retryAfter: null, attempts: 1, createdAt: new Date().toISOString(), ...over,
+  }) as WorkflowRun;
+
+  afterEach(() => {
+    useNavigationStore.getState().navigate({ view: 'home' });
+    useWorkbenchStore.setState({ workbenches: {}, selectedWorkbenchId: null });
+  });
+
+  it.each([
+    ['a live session', { 'wb-1': { id: 'wb-1' } }, {}, true],
+    ['an archived session', {}, {}, false],
+    ['no session', { 'wb-1': { id: 'wb-1' } }, { workbenchId: null }, false],
+  ] as const)('links the session for %s', async (_name, workbenches, over, linked) => {
+    useWorkbenchStore.setState({ workbenches: workbenches as never });
+    const routes: unknown[] = [];
+    const unsubscribe = useNavigationStore.subscribe((state, prev) => {
+      if (state.route !== prev.route) routes.push(state.route);
+    });
+    jest.mocked(api.workflows.runs).mockResolvedValue([sessionRun(over)]);
+    render(<WorkflowRunsList workflowId="wf1" liveRuns={undefined} />);
+    expect(await screen.findByText('#alerts')).toBeTruthy();
+    expect(screen.getByText('started a session')).toBeTruthy();
+    expect(screen.queryByText(/wb-1/)).toBeNull();
+    const button = screen.queryByRole('button', { name: 'Open the session it started' });
+    expect(Boolean(button)).toBe(linked);
+    if (button) {
+      fireEvent.click(button);
+    }
+    unsubscribe();
+    expect(routes).toEqual(linked ? [{ view: 'workbench', id: 'wb-1' }] : []);
   });
 });
