@@ -75,14 +75,17 @@ describe('CommandPalette automations', () => {
     await waitFor(() => expect(api.loops.list).toHaveBeenCalledWith('ws1'));
     expect(api.workflows.list).toHaveBeenCalledTimes(1);
     expect(api.workflows.list).toHaveBeenCalledWith('ws1');
-    expect(screen.queryByText('Automations')).toBeNull();
+    await act(async () => {});
+    expect(screen.queryByText('Label risky PRs')).toBeNull();
+    expect(screen.queryByText('Morning triage')).toBeNull();
 
     search('automation');
 
-    expect(await screen.findByText('Automations')).toBeInTheDocument();
-    for (const name of ['Label risky PRs', 'Triage support channel', 'Deploy hook', 'Morning triage']) {
+    expect(await screen.findByText('Label risky PRs')).toBeInTheDocument();
+    for (const name of ['Triage support channel', 'Deploy hook', 'Morning triage']) {
       expect(screen.getByText(name)).toBeInTheDocument();
     }
+    expect(screen.getAllByText('Automation')).toHaveLength(4);
     expect(screen.getByText('Off')).toBeInTheDocument();
   });
 
@@ -96,6 +99,17 @@ describe('CommandPalette automations', () => {
     search(query);
     expect(await screen.findByText(shown)).toBeInTheDocument();
     for (const name of hidden) expect(screen.queryByText(name)).toBeNull();
+  });
+
+  it('ranks a name match above a match on the integration', async () => {
+    vi.mocked(api.workflows.list).mockResolvedValue([rule('wf1', 'Notify on Slack'), rule('wf2', 'Slack triage', 'slack')]);
+    render(<CommandPalette />);
+    await waitFor(() => expect(api.loops.list).toHaveBeenCalled());
+    search('slack');
+    await screen.findByText('Slack triage');
+    const rows = screen.getAllByText('Automation').map((tag) => tag.closest('[cmdk-item]')?.textContent ?? '');
+    expect(rows[0]).toContain('Slack triage');
+    expect(rows[1]).toContain('Notify on Slack');
   });
 
   it.each([
@@ -131,7 +145,7 @@ describe('CommandPalette automations', () => {
     await act(async () => {});
     expect(api.workflows.list).not.toHaveBeenCalled();
     expect(api.loops.list).not.toHaveBeenCalled();
-    expect(screen.queryByText('Automations')).toBeNull();
+    expect(screen.queryByText('Automation')).toBeNull();
   });
 
   it('shows the loops when the rules fail to load', async () => {
@@ -177,8 +191,8 @@ describe('opening an automation from the palette', () => {
     vi.mocked(api.workflows.list).mockResolvedValue([rule('wf1', 'Label risky PRs')]);
     render(<WorkflowsPanel integration="github" />);
     expect(await screen.findByText('Label risky PRs')).toBeInTheDocument();
+    await waitFor(() => expect(useAutomationFocus.getState().target).toBeNull());
     expect(screen.queryByTestId('workflow-editor')).toBeNull();
-    expect(useAutomationFocus.getState().target).toBeNull();
   });
 
   it('opens the loop editor', async () => {

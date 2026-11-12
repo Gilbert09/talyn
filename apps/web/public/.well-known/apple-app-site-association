@@ -1,0 +1,15 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["5KQY9SJDWG.dev.talyn.mobile"],
+        "components": [
+          { "/": "/callback", "comment": "GitHub sign-in return" },
+          { "/": "/sessions/*" },
+          { "/": "/threads/*" },
+          { "/": "/attention/*" }
+        ]
+      }
+    ]
+  }
+}

@@ -3,8 +3,8 @@ import { Repeat, Workflow } from 'lucide-react';
 import { INTEGRATION_CATALOG, workflowIntegrationOf } from '@talyn/shared';
 import { api } from '../lib/api';
 import { automationsShown, openAutomation, type AutomationTarget } from '../lib/automationFocus';
+import type { PaletteSection } from '../lib/paletteSearch';
 import { useWorkspaceStore } from '../stores/workspace';
-import { CommandGroup, CommandItem } from './ui/command';
 
 interface PaletteAutomation extends AutomationTarget {
   name: string;
@@ -12,11 +12,11 @@ interface PaletteAutomation extends AutomationTarget {
 }
 
 /**
- * The palette's Automations group: every rule and scheduled loop in the
- * workspace, read once when the palette opens. Drawn only while the person
- * types, like the archived sessions, so the open palette stays short.
+ * The palette's Automations section: every rule and scheduled loop in the
+ * workspace, read once when the palette opens. Search only, like the archived
+ * sessions, so the open palette stays short.
  */
-export function PaletteAutomations({ query, pick }: { query: string; pick: (fn: () => void) => void }) {
+export function usePaletteAutomationsSection(pick: (fn: () => void) => void): PaletteSection | null {
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const features = useWorkspaceStore((s) => s.features);
   const [cache, setCache] = useState<{ workspaceId: string; rows: PaletteAutomation[] } | null>(null);
@@ -72,26 +72,29 @@ export function PaletteAutomations({ query, pick }: { query: string; pick: (fn: 
     [cache, workspaceId, features]
   );
 
-  if (!query.trim() || rows.length === 0) return null;
-
-  return (
-    <CommandGroup heading="Automations">
-      {rows.map((row) => {
-        const integration = INTEGRATION_CATALOG[row.kind].name;
-        const Icon = row.type === 'loop' ? Repeat : Workflow;
-        return (
-          <CommandItem
-            key={`${row.type}:${row.id}`}
-            value={`automation ${row.name} ${integration} ${row.id}`}
-            onSelect={() => pick(() => openAutomation({ type: row.type, id: row.id, kind: row.kind }))}
-          >
+  if (rows.length === 0) return null;
+  return {
+    id: 'automations',
+    heading: 'Automations',
+    kind: 'Automation',
+    searchOnly: true,
+    entries: rows.map((row) => {
+      const integration = INTEGRATION_CATALOG[row.kind].name;
+      const Icon = row.type === 'loop' ? Repeat : Workflow;
+      return {
+        id: `automation:${row.type}:${row.id}`,
+        label: row.name,
+        keywords: [integration, 'automation', row.id],
+        onSelect: () => pick(() => openAutomation({ type: row.type, id: row.id, kind: row.kind })),
+        content: (
+          <>
             <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <span className="truncate">{row.name}</span>
             <span className="truncate text-[11px] text-muted-foreground">{integration}</span>
             {!row.enabled && <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">Off</span>}
-          </CommandItem>
-        );
-      })}
-    </CommandGroup>
-  );
+          </>
+        ),
+      };
+    }),
+  };
 }
