@@ -1,4 +1,8 @@
-import appConfig, { getAppIdentity, readMobileConfig } from '../../app.config';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import appConfig, { getAppIdentity, readMobileConfig, writeGoogleServicesFile } from '../../app.config';
 
 describe('app identity', () => {
   it.each([
@@ -102,5 +106,36 @@ describe('push configuration', () => {
     expect(result.extra?.eas?.projectId).toBe(projectId);
     expect(result.android?.blockedPermissions).toContain('android.permission.RECEIVE_BOOT_COMPLETED');
     expect(result.plugins).toContainEqual(['expo-notifications', { mode: 'production', enableBackgroundRemoteNotifications: false }]);
+  });
+});
+
+describe('google-services.json', () => {
+  const file = (packages: string[]) => Buffer.from(JSON.stringify({
+    project_info: { project_id: 'fixture' },
+    client: packages.map((name) => ({ client_info: { android_client_info: { package_name: name } } })),
+  })).toString('base64');
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'google-services-')); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it.each([undefined, '', '  '])('writes nothing when the value is %p', (value) => {
+    expect(writeGoogleServicesFile({ TALYN_MOBILE_GOOGLE_SERVICES_JSON: value }, 'dev.talyn.mobile', dir)).toBeUndefined();
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it('writes the decoded file for a listed package', () => {
+    const encoded = file(['dev.talyn.mobile', 'dev.talyn.mobile.preview']);
+    const written = writeGoogleServicesFile({ TALYN_MOBILE_GOOGLE_SERVICES_JSON: encoded }, 'dev.talyn.mobile.preview', dir);
+    expect(written).toBe(path.join(dir, 'google-services.json'));
+    expect(fs.readFileSync(written!, 'utf8')).toBe(Buffer.from(encoded, 'base64').toString('utf8'));
+  });
+
+  it('refuses a file without the build package', () => {
+    expect(() => writeGoogleServicesFile({ TALYN_MOBILE_GOOGLE_SERVICES_JSON: file(['dev.talyn.mobile']) }, 'dev.talyn.mobile.preview', dir))
+      .toThrow('no Android app for dev.talyn.mobile.preview');
+  });
+
+  it.each([Buffer.from('not json').toString('base64'), '%%%'])('refuses a value that is not the encoded file', (value) => {
+    expect(() => writeGoogleServicesFile({ TALYN_MOBILE_GOOGLE_SERVICES_JSON: value }, 'dev.talyn.mobile', dir)).toThrow('must be the base64');
   });
 });

@@ -25,6 +25,27 @@ Use separate app identities and environments for development, preview, and produ
 Reject incomplete production configuration before building the app.
 Missing backend enablement, encryption key, or app allowlist disables dispatch.
 
+## Android credentials (FCM)
+
+Expo sends Android alerts through Firebase Cloud Messaging. The Firebase project is `talyn-514510` (set up 2026-11-12).
+It has one Android app for each package: `dev.talyn.mobile`, `dev.talyn.mobile.preview` and `dev.talyn.mobile.development`.
+
+- **FCM V1 service account key.** It is stored in EAS (account `talyn-app`) and assigned to all three packages.
+  The original is the 1Password item "Talyn FCM V1 service account key (Firebase talyn-514510)" in the `Private` vault.
+  Expo uses it to send. The app and the backend never read it.
+- **`google-services.json`.** It is the EAS text variable `TALYN_MOBILE_GOOGLE_SERVICES_JSON` (base64, sensitive) in the
+  development, preview and production environments. The original is the 1Password item
+  "Talyn mobile google-services.json (Firebase talyn-514510)". `app.config.ts` decodes it into `.expo/google-services.json`
+  and sets `android.googleServicesFile`. Without the variable, a build has no Firebase config and cannot get a push token.
+  It is a text variable and not an EAS file variable, because `eas update` does not receive the contents of a file
+  variable. The fingerprint hashes the file contents, so a build and an update must see the same file.
+  Never commit the file: GitHub secret scanning flags the API key in it.
+- A local build needs the variable too, for example
+  `export TALYN_MOBILE_GOOGLE_SERVICES_JSON="$(op document get <item> | base64 | tr -d '\n')"`.
+- Adding, changing or removing the variable changes the fingerprint. Installed binaries then need a new build.
+
+iOS needs no Firebase. Expo sends iOS alerts through APNs with the Apple push key from the Apple Developer account.
+
 ## Worker schedule and limits
 
 The backend starts one sweep at startup, then every 30 seconds.

@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
 import type { AnalyticsConfig, AppEnvironment, MobileConfig, PurchaseMode } from './src/config';
@@ -93,6 +96,29 @@ export function getAppIdentity(env: IdentityEnvironment) {
   };
 }
 
+/**
+ * Firebase's Android config for push (FCM). `TALYN_MOBILE_GOOGLE_SERVICES_JSON` holds the file as base64: a sensitive
+ * EAS text variable, because `eas update` does not receive the contents of an EAS file variable. The fingerprint hashes
+ * the file's contents, so a build and an update that decode the same value get the same runtime. Absent means no push.
+ */
+export function writeGoogleServicesFile(env: Record<string, string | undefined>, androidPackage: string, dir: string): string | undefined {
+  const encoded = env.TALYN_MOBILE_GOOGLE_SERVICES_JSON?.trim();
+  if (!encoded) return undefined;
+  const contents = Buffer.from(encoded, 'base64').toString('utf8');
+  let packages: string[];
+  try {
+    const parsed = JSON.parse(contents) as { client?: { client_info?: { android_client_info?: { package_name?: string } } }[] };
+    packages = (parsed.client ?? []).map((client) => client.client_info?.android_client_info?.package_name ?? '');
+  } catch {
+    throw new Error('TALYN_MOBILE_GOOGLE_SERVICES_JSON must be the base64 of google-services.json.');
+  }
+  if (!packages.includes(androidPackage)) throw new Error(`google-services.json has no Android app for ${androidPackage}.`);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'google-services.json');
+  fs.writeFileSync(file, contents, { mode: 0o600 });
+  return file;
+}
+
 /** The Expo account that owns the EAS project. */
 export const EAS_OWNER = 'talyn-app';
 /** `@talyn-app/talyn-mobile`. A public identifier, not a credential. */
@@ -114,6 +140,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   const release = readReleaseSettings(process.env, identity.environment, projectId);
   const mobile = readMobileConfig(process.env, identity.environment, identity.scheme);
   const httpsCallback = mobile?.callbackUrl.startsWith('https:') ? new URL(mobile.callbackUrl) : null;
+  // `.expo` is ignored by git and by EAS uploads.
+  const googleServicesFile = writeGoogleServicesFile(process.env, identity.androidPackage, path.join(__dirname, '.expo'));
 
   // PostHog source map and native symbol uploads, on when the build has POSTHOG_CLI_API_KEY (plugins/withPostHogSymbolUploads.cjs).
   return withPostHogSymbolUploads({
@@ -141,6 +169,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     android: {
       package: identity.androidPackage,
+      ...(googleServicesFile ? { googleServicesFile } : {}),
       versionCode: Number(release.build),
       permissions: ['android.permission.INTERNET', 'android.permission.ACCESS_NETWORK_STATE', 'android.permission.VIBRATE', 'android.permission.POST_NOTIFICATIONS'],
       blockedPermissions: [
