@@ -40,7 +40,8 @@ Open Settings after sign-in and workspace selection. Read the explanation, then 
 The app requests operating system permission only after that action.
 Permission denial does not block any workflow. Settings shows denied, disabled, failed, and unavailable states.
 Global and category choices apply to the selected workspace. Quiet hours use the saved IANA timezone.
-The sensitive preview choice is reserved. Every current alert uses generic text.
+Alerts show the session name and a short summary, or the PR reference and title, as on desktop.
+Android hides the alert text on a locked device. The sensitive preview choice is not used.
 
 Push needs a physical device and a development build.
 The config uses the Talyn EAS project (`@talyn-app/talyn-mobile`) unless `EXPO_PUBLIC_EAS_PROJECT_ID` names another one.

@@ -107,9 +107,10 @@
         "timezone",
         "app identity",
         "app version",
-        "opaque event IDs"
+        "opaque event IDs",
+        "alert text: session names, agent summaries, questions and errors, PR references and titles"
       ],
-      "purpose": "Optional generic alerts and authorized tap resolution",
+      "purpose": "Optional alerts with desktop-style text (Tom's call, 2026-11-12) and authorized tap resolution. Expo, FCM, and APNs receive the alert text; the data payload holds only opaque IDs",
       "location": "SecureStore installation ID; encrypted backend token; Expo Push Service; APNs; FCM",
       "retention": "See docs/MOBILE_PUSH_NOTIFICATIONS.md; approve processors before activation"
     },

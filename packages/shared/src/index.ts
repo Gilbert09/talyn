@@ -140,6 +140,8 @@ export * from './contextAttention.js';
 // Insights: per-workspace usage analytics (compute, tokens, output, speed).
 export * from './insights.js';
 export * from './workbenchTitle.js';
+// The text of a finished-turn alert: desktop, web and mobile push share it.
+export * from './notificationText.js';
 export * from './workbenchBranchName.js';
 export * from './workbenchGit.js';
 export * from './agentStream.js';

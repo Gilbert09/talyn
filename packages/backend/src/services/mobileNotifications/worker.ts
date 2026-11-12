@@ -12,6 +12,7 @@ import { notificationStillActionable, reconcileMobileNotificationEvents } from '
 import { destinationCurrentlyAccessible } from './store.js';
 import { ExpoPushProvider, mobileProviderAvailable, PushProviderError,
   type MobilePushProvider, type PushErrorClass, type PushMessage } from './provider.js';
+import { composeMobilePushText } from './text.js';
 
 export const MAX_PUSH_ATTEMPTS = 6;
 export const MOBILE_INSTALLATION_MAX_AGE_MS = 30 * 86_400_000;
@@ -74,7 +75,8 @@ async function preflight(row: OutboxRow, now: Date): Promise<PushMessage | null>
   }
   const data = { schemaVersion: 1 as const, eventId: row.eventId, category: row.category, destination: row.destination };
   if (!isMobileNotificationPayload(data)) { await failed(row, 'permanent', now); return null; }
-  try { return { token: decryptString(device.tokenEnvelope), data, ttlSeconds: Math.max(1, Math.min(3600, Math.floor((row.expiresAt.getTime() - now.getTime()) / 1000))) }; }
+  const { title, body } = await composeMobilePushText(row.category, row.destination, db);
+  try { return { token: decryptString(device.tokenEnvelope), data, title, body, ttlSeconds: Math.max(1, Math.min(3600, Math.floor((row.expiresAt.getTime() - now.getTime()) / 1000))) }; }
   catch { await failed(row, 'permanent', now); return null; }
 }
 export async function dispatchMobileNotifications(provider: MobilePushProvider = new ExpoPushProvider(), now = new Date()): Promise<void> {

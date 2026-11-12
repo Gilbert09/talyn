@@ -111,12 +111,26 @@ Account deletion removes installation records and related notification data.
 Dispatch rechecks access before each attempt.
 Workspace access loss prevents delivery and event resolution.
 
-Only generic alerts leave the backend.
-Payload fields are `schemaVersion`, `eventId`, `category`, and `destination`.
+Alert text uses the same words as the desktop notification (Tom's call, 2026-11-12).
+This replaces the earlier rule that only generic alerts leave the backend.
+`services/mobileNotifications/text.ts` makes the title and body when the worker sends the alert.
+A session alert has the session name and status, for example "Done: Fix login".
+Its body is a short summary of the latest turn: the PR it opened, the agent's question, the error, or the last reply.
+The session text comes from `notificationText` in `packages/shared`. Desktop and web use the same function.
+A PR alert has the repository, the PR number, and the PR title, for example "posthog/posthog#12 Fix login".
+A merge queue block has its blocked reason. A human gate has the gate name.
+The title is 80 characters or fewer. The body is 178 characters or fewer.
+If the worker cannot make the text, it sends the generic text for the category.
+This text goes through Expo, Google FCM, and Apple APNs.
+Android channels use private lock-screen visibility, so a locked Android device hides the text.
+On iOS, the system "Show Previews" setting controls the lock-screen text.
+
+The data payload does not change. Its fields are `schemaVersion`, `eventId`, `category`, and `destination`.
 Destinations contain an internal kind, workspace ID, and entity ID.
-No prompt, transcript, code, repository name, PR title, or CI log enters the payload.
+The app uses only the data payload to open the destination.
+No prompt, transcript, code, or CI log enters the data payload.
 Tokens do not enter route responses, logs, metric labels, or audit records.
-Sensitive preview settings are reserved. They do not enable private alert text.
+The sensitive preview setting is not used. Every alert has the text above.
 
 ## Delivery semantics
 
@@ -167,6 +181,8 @@ Exports and test doubles do not establish these results.
 - Privacy and security owners must approve Expo as a processor before activation.
 - Review the Expo service terms, subprocessors, transfer terms, retention, and incident process.
 - Record the approved field inventory, including device tokens and opaque account-linked event identifiers.
+- Record that alert text contains session names, agent summaries, questions and errors, and PR references and titles.
+  Expo, FCM, and APNs process this text. Disclose it as user content in the store privacy answers.
 - Update Apple App Privacy disclosures and required privacy manifests for the final native binary.
 - Update Google Play Data safety and the privacy policy for push processing and deletion.
 - Confirm retention, backup removal, and deletion support procedures with backend and privacy owners.

@@ -61,8 +61,8 @@ and [#126](https://github.com/Gilbert09/talyn/pull/126).
   Leases allow crash recovery. Temporary failures use bounded retries.
   Expo tickets and receipts have separate processing. A ticket does not prove delivery.
   Permanent token errors disable the installation.
-- Alerts contain generic text. Data contains only the schema version, opaque event ID, category, and internal destination.
-  Sensitive previews remain reserved. Enabling that preference does not add private text.
+- Alerts use desktop-style text: the session name and a short summary, or the PR reference and title (Tom's call, 2026-11-12).
+  Data contains only the schema version, opaque event ID, category, and internal destination.
   Logs, audit events, and metric labels contain no tokens or private content.
 - Settings explains notification value before the operating system prompt.
   Permission requests require an explicit action. Denial leaves product workflows available.
@@ -712,7 +712,7 @@ If safe resend becomes required, add server-supported message identifiers in a s
 It routes delivery through APNs and FCM. A push ticket is not proof of device delivery. [E15]
 Keep a provider interface so direct APNs/FCM can replace the relay later.
 Do not put repository text, prompts, diffs, tokens, or CI logs in a push payload.
-Default alert text should be generic, such as “A session needs your attention.”
+Alert text mirrors the desktop notification (decision of 2026-11-12, see `docs/MOBILE_PUSH_NOTIFICATIONS.md`). Generic text, such as “A session needs your attention.”, is the fallback.
 Payload data should contain an opaque event ID and a validated internal destination.
 
 Proposed event categories:

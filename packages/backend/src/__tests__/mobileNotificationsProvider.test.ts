@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ExpoPushProvider, mobileProviderAvailable } from '../services/mobileNotifications/provider.js';
+import { ExpoPushProvider, genericPushText, mobileProviderAvailable } from '../services/mobileNotifications/provider.js';
 import { defaultMobileNotificationPreferences } from '@talyn/shared';
 import { inMobileQuietHours, retryDelayMs } from '../services/mobileNotifications/worker.js';
 const event = { schemaVersion: 1 as const, eventId: '00000000-0000-4000-8000-000000000001', category: 'session_update' as const,
@@ -12,12 +12,29 @@ function provider(response: unknown, status = 200) {
 }
 afterEach(() => vi.unstubAllEnvs());
 describe('Expo provider', () => {
-  it('sends only a generic alert and the explicit safe payload', async () => {
+  it('sends the composed title and body with the explicit safe payload', async () => {
     const { fetcher, subject } = provider({ data: [{ status: 'ok', id: ticketId }] });
-    expect(await subject.send([message])).toEqual([{ status: 'ok', ticketId }]);
-    expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)).toEqual([{ to: message.token,
-      body: 'A session needs your attention.', data: event, channelId: 'session_update', sound: 'default', ttl: 3600 }]);
+    expect(await subject.send([{ ...message, title: 'Done: Fix login', body: 'Opened PR #42' }])).toEqual([{ status: 'ok', ticketId }]);
+    expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)).toEqual([{ to: message.token, title: 'Done: Fix login',
+      body: 'Opened PR #42', data: event, channelId: 'session_update', sound: 'default', ttl: 3600 }]);
     expect(fetcher.mock.calls[0][1]!.headers).not.toHaveProperty('Authorization');
+  });
+  it.each([
+    ['session_update', 'Session update', 'A session needs your attention.'],
+    ['human_gate', 'Needs your input', 'Something in Talyn is waiting for you.'],
+    ['pr_review', 'Pull request review', 'A pull request review changed.'],
+    ['ci_failure', 'Checks failed', 'Required checks failed on a pull request.'],
+    ['merge_ready', 'Ready to merge', 'A pull request is ready to merge.'],
+  ] as const)('falls back to the generic %s text when the message has none', async (category, title, body) => {
+    const { fetcher, subject } = provider({ data: [{ status: 'ok', id: ticketId }] });
+    await subject.send([{ token: message.token, data: { ...event, category } }]);
+    expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)[0]).toMatchObject({ title, body, channelId: category });
+    expect(genericPushText(category)).toEqual({ title, body });
+  });
+  it.each([['empty', '', ''], ['blank', '  ', ' \n ']])('falls back for %s text', async (_name, title, body) => {
+    const { fetcher, subject } = provider({ data: [{ status: 'ok', id: ticketId }] });
+    await subject.send([{ ...message, title, body }]);
+    expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)[0]).toMatchObject({ title: 'Session update', body: 'A session needs your attention.' });
   });
   it('bounds delivery TTL to the remaining event lifetime', async () => {
     const { fetcher, subject } = provider({ data: [{ status: 'ok', id: ticketId }] });
