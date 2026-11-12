@@ -421,5 +421,6 @@ export function buildSlackPrompt(input: SlackPromptInput): string {
     }
   }
   if (input.permalink) parts.push(`Slack thread: ${input.permalink}`);
+  parts.push('To post in this Slack thread, use the talyn_slack_reply tool. It posts as the Talyn bot. Do not post in Slack with any other tool.');
   return parts.join('\n\n');
 }

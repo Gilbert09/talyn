@@ -124,6 +124,8 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_list_loop_runs',
   // Slack channel list: a read of which channels the bot is in.
   'talyn_list_slack_channels',
+  // A session may reply as the bot in its own Slack thread.
+  'talyn_slack_reply',
 ]);
 
 export function toolAllowedForCaller(name: string, session: unknown): boolean {

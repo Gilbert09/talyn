@@ -147,6 +147,7 @@ Creating a webhook automation answers with its URL and signing secret once. Taly
 A Linear rule needs `conditions.connectionId`. Issue automations (`linear` and `github_issues`) need the `issue-rules` feature.
 Use `talyn_get_workflow_vocabulary` with optional `integration` to read its fields. It defaults to `github`.
 Use `talyn_list_slack_channels` with `{teamId}` to list channels the bot joined.
+Use `talyn_slack_reply` with `text` to reply as the Talyn bot in the Slack thread that started a session. A user token must also pass `session_id`.
 The `talyn_*loop*` tools manage scheduled automations. Their tool names stay the same.
 
 ## What it cannot do

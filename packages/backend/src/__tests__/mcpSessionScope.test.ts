@@ -132,6 +132,7 @@ describe('session token tool scope', () => {
     'talyn_create_task', 'talyn_list_loops', 'talyn_get_workflow', 'talyn_get_skill', 'talyn_list_repositories',
     'talyn_memory_write', 'talyn_memory_search', 'talyn_memory_read', 'talyn_memory_forget', 'talyn_memory_list',
     'talyn_list_setup_steps', 'talyn_close_pull_request', 'talyn_track_pull_request', 'talyn_list_slack_channels',
+    'talyn_slack_reply',
   ])('allows %s', (name) => {
     expect(SESSION_TOKEN_TOOLS.has(name)).toBe(true);
   });
@@ -166,6 +167,18 @@ describe('session token tool scope', () => {
     const { calls } = mockApi({ 'GET /api/v1/workbenches': () => [session()] });
     const result = await callTool(SELF, 'talyn_list_sessions', { workspace_id: 'ws1' });
     expect(result.isError).toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  it('posts a Slack reply for the calling session only', async () => {
+    const { calls } = mockApi({ 'POST /api/v1/workbenches/s1/slack-reply': () => ({ ts: '123.456' }) });
+    const result = await callTool(SELF, 'talyn_slack_reply', { text: 'Hello' });
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain('123.456');
+    expect(calls).toEqual([expect.objectContaining({ method: 'POST', body: { text: 'Hello' } })]);
+
+    const refused = await callTool(SELF, 'talyn_slack_reply', { text: 'Hello', session_id: 's2' });
+    expect(refused.isError).toBe(true);
     expect(calls).toHaveLength(1);
   });
 

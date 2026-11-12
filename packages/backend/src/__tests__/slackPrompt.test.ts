@@ -23,6 +23,7 @@ import { isChannelRuleMessage, slackFactsFromEvent } from '../services/workflows
 const msg = (author: string, text: string, at = '2026-10-28 10:15 UTC'): QuotedMessage => ({ author, at, text });
 
 describe('buildSlackPrompt', () => {
+  const replyInstruction = 'To post in this Slack thread, use the talyn_slack_reply tool. It posts as the Talyn bot. Do not post in Slack with any other tool.';
   const base = {
     instruction: 'Fix the login redirect',
     requestedBy: 'Tom',
@@ -38,7 +39,7 @@ describe('buildSlackPrompt', () => {
     expect(p).toContain('#eng');
     expect(p).toMatch(/UNTRUSTED/);
     expect(p).toContain('~~~~ slack-thread\n[2026-10-28 10:15 UTC] Alice: login loops forever\n[2026-10-28 10:15 UTC] Bob: since the deploy\n~~~~');
-    expect(p.endsWith('Slack thread: https://acme.slack.com/archives/C1/p1')).toBe(true);
+    expect(p.endsWith(`Slack thread: https://acme.slack.com/archives/C1/p1\n\n${replyInstruction}`)).toBe(true);
     expect(p.indexOf('Fix the login')).toBeLessThan(p.indexOf('slack-thread'));
   });
 
@@ -65,7 +66,7 @@ describe('buildSlackPrompt', () => {
   });
 
   it('works with no thread and no link', () => {
-    expect(buildSlackPrompt({ ...base, thread: [], permalink: null })).toBe('Fix the login redirect');
+    expect(buildSlackPrompt({ ...base, thread: [], permalink: null })).toBe(`Fix the login redirect\n\n${replyInstruction}`);
   });
 });
 

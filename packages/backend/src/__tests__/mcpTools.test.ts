@@ -123,7 +123,7 @@ describe('mcp tool registry', () => {
 
   it('covers the full surface (listing, context, actions, tasks)', () => {
     const names = TOOLS.map((t) => t.name);
-    expect(names).toHaveLength(104);
+    expect(names).toHaveLength(105);
     for (const expected of [
       'talyn_list_workspaces',
       'talyn_get_workspace',
@@ -200,6 +200,7 @@ describe('mcp tool registry', () => {
       'talyn_delete_loop',
       'talyn_list_loop_runs',
       'talyn_list_slack_channels',
+      'talyn_slack_reply',
       'talyn_run_loop_now',
       'talyn_list_mcp_servers',
       'talyn_get_mcp_server',

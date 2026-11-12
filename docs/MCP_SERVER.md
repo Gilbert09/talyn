@@ -192,6 +192,7 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_delete_workflow` | Delete an automation and its history. |
 | `talyn_list_workflow_runs` | Read automation runs with `limit` and `cursor`. |
 | `talyn_list_slack_channels` | Pass `{teamId}` to list channels the bot joined. Invite it with `/invite @Talyn` first. |
+| `talyn_slack_reply` | Reply as the Talyn bot in the Slack thread that started a session. Pass `text`. A user token must also pass `session_id`. |
 
 ### Schedule integration
 
