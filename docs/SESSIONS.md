@@ -2,6 +2,21 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Background refreshes ran on a closed request transaction (2026-11-12)
+
+**Symptom.** Settings → Repositories showed no sandbox size picker, and the Setup row stayed on "Loading the setup…". At 22:36 UTC the backend stopped answering. The DB watchdog then restarted it at 22:38.
+
+**Cause.** Two places started work without waiting for it, inside the request's owner scope:
+
+- `refreshInBackground` in `routes/repositories.ts`, which refreshes the sandbox-size and preview detection when the stored answer is stale (older than 6 hours).
+- `refreshWebhookIndex()`, which the add-repository, PR, and space routes call without `await`.
+
+AsyncLocalStorage gave that work the request transaction handle. Its queries ran after the transaction had ended. Production logged `owner scope used after its transaction ended` from `githubService.resolveAuth` and from `mergeSandboxSize` / `mergePreview`. The `UPDATE "repositories"` statements then waited on row locks until the statement timeout. The settings page sends three requests for each repository (sandbox size, preview, setup). Each request holds one of the 20 pool connections for its full duration. The pool filled: "pool demand 294 > max 20", with 17 owner transactions. Every route stalled, not only these. The `select "integrations"` reads that an index rebuild started at 20:09 were still open 2.5 hours later. That rebuild also checked other owners' access under the caller's RLS scope.
+
+**Fix.** Both paths now call `runWithoutScope`. In `webhookIndex.ts` the call is in `build()` itself, because the index covers every owner and must never use one caller's RLS scope. `backgroundWorkLeavesOwnerScope.test.ts` pins both paths.
+
+**Not done.** Each repository row still sends its sandbox-size request twice (once from the row, once from `RepoSandboxSize`). The page also sends all requests for all rows at the same time. Neither causes the hang, but both add load to the pool.
+
 ## Issue rules: Linear and GitHub Issues, phase 2 (2026-11-12)
 
 Phase 2 of `docs/INBOUND_INTEGRATIONS.md`. A Linear or GitHub issue event starts a session (the default) or a task, and Talyn writes back to the issue. It is behind the `issueRules` flag (`issue-rules`, break glass `ISSUE_RULES_ENABLED`, fallback OFF, gated). The routes ask the caller; the engine and the Linear receiver ask the workspace owner. Migration `0132` (`external_issue_links`, `inbound_oauth_states`).
