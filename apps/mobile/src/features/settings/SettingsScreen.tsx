@@ -30,7 +30,6 @@ export function SettingsScreen() {
   const offline = useNetwork() === 'offline';
   const theme = useThemePreference();
   const sheet = useActionSheet();
-  const [showId, setShowId] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const info = appInfo();
@@ -54,9 +53,6 @@ export function SettingsScreen() {
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <Group title="Account">
         <Row title={auth.user?.email ?? 'GitHub account'} subtitle="Signed in with GitHub" />
-        <Row title={showId ? 'Hide account ID' : 'Show account ID'} onPress={() => setShowId(!showId)}>
-          {showId ? <AppText selectable variant="meta" tone="muted">Account ID: {auth.user?.id}</AppText> : null}
-        </Row>
         <AnalyticsSetting divider />
         <Row title="Sign out" disabled={deleting} divider={false} onPress={() => { void (signOut ? signOut() : controller.signOut()); }} />
       </Group>
