@@ -6,7 +6,7 @@ import type { CreateWorkbenchInput, Workbench, WorkbenchChat, WorkbenchEvent } f
 import { cacheKey, canCompose, canStartSend, deliveryReducer, EMPTY_DELIVERY, EMPTY_RESOURCE, emptyTranscript, explicitSendFailure,
   failureState, mergeEvents, PAGE_CEILING, PAGE_SIZE, releaseOlder, sameScope, windowFull, selectWorkbenches, upsertWorkbench, withChat, workbenchKind, workbenchTitle,
   type Delivery, type Entity, type Resource, type Scope, type Transcript } from './model';
-import { applyPrUpdate, jsonEqual, mergeRowUpdate, type PullRequestUpdate } from './prPatch';
+import { applyPrUpdate, jsonEqual, mergeRowUpdate, reuseRows, type PullRequestUpdate } from './prPatch';
 
 export const workflowApi = { workbenches, pullRequests, features, repositories, cloudProviders, workspaces, environments, tasks };
 export type WorkflowApi = typeof workflowApi;
@@ -286,8 +286,9 @@ export class WorkflowStore {
         const kind = entity === 'sessions' ? 'session' : 'thread';
         return selectWorkbenches(await this.api.workbenches.list(scope.workspace, { kinds: [kind] }), kind, scope.workspace);
       }
-      case 'attention': return (await this.api.pullRequests.list({ workspaceId: scope.workspace, state: 'open', relationship: 'all' }))
-        .filter((row) => row.workspaceId === scope.workspace);
+      case 'attention': return reuseRows(data as PRRow[] | undefined,
+        (await this.api.pullRequests.list({ workspaceId: scope.workspace, state: 'open', relationship: 'all' }))
+          .filter((row) => row.workspaceId === scope.workspace));
       case 'workbench': return this.authorizedWorkbench(id, scope);
       case 'children': {
         await this.authorizedWorkbench(id, scope);
@@ -403,6 +404,12 @@ export class WorkflowStore {
   updateLocal(id: string, patch: Partial<LocalState>) {
     const key = this.localKey(id); if (!key) return;
     this.locals.set(key, { ...this.local(id), ...patch }); this.emit();
+  }
+  /** Keep a list's scroll position without a store update. A scroll fires many times a second, and no screen reads the offset live. */
+  rememberOffset(id: string, offset: number) {
+    const key = this.localKey(id); if (!key) return;
+    const held = this.local(id);
+    if (held.offset !== offset) this.locals.set(key, { ...held, offset });
   }
   private clearEntityDrafts(entity: Entity, id: string) {
     if (entity === 'transcript') { const key = this.localKey(id); if (key) this.locals.delete(key); }
