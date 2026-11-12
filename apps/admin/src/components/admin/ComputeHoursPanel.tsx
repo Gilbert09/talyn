@@ -4,7 +4,16 @@ import { StatCard } from '../ui/StatCard';
 import { pctLabel } from '../../lib/format';
 import { cn } from '../../lib/utils';
 
-export const COMPUTE_RANGES = [7, 30, 90] as const;
+export const COMPUTE_RANGES = ['today', 'yesterday', 7, 30, 90] as const;
+export type ComputeRange = (typeof COMPUTE_RANGES)[number];
+type Bucket = AdminComputeDaily['bucket'];
+type Point = AdminComputeDaily['days'][number];
+
+export function rangeLabel(range: ComputeRange): string {
+  if (range === 'today') return 'Today';
+  if (range === 'yesterday') return 'Yesterday';
+  return `${range}d`;
+}
 
 const KIND_LABELS: Record<string, string> = {
   workbench: 'Sessions',
@@ -18,8 +27,13 @@ export function dayLabel(day: string): string {
   return new Date(`${day}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
+/** `14:00` for an hour bucket, `Nov 12` for a day bucket. Both in UTC. */
+function pointLabel(point: Point, bucket: Bucket): string {
+  return bucket === 'hour' ? point.start.slice(11, 16) : dayLabel(point.day);
+}
+
 /**
- * Box-hours per UTC day, with a range and an account filter.
+ * Box-hours per UTC day (per UTC hour for today and yesterday), with a range and an account filter.
  *
  * Presentational: the page owns the query so one Refresh button reloads the
  * chart and the table together.
@@ -27,22 +41,23 @@ export function dayLabel(day: string): string {
 export function ComputeHoursPanel({
   data,
   error,
-  days,
+  range,
   userId,
-  onDaysChange,
+  onRangeChange,
   onUserChange,
 }: {
   data: AdminComputeDaily | null;
   error: string | null;
-  days: number;
+  range: ComputeRange;
   userId: string;
-  onDaysChange: (days: number) => void;
+  onRangeChange: (range: ComputeRange) => void;
   onUserChange: (userId: string) => void;
 }) {
+  const bucket: Bucket = data?.bucket ?? (typeof range === 'number' ? 'day' : 'hour');
   const options = data?.users ?? [];
   const selectedMissing = userId !== '' && !options.some((row) => row.user_id === userId);
   const allHours = options.reduce((sum, row) => sum + row.hours, 0);
-  const activeDays = data?.days.filter((point) => point.hours > 0).length ?? 0;
+  const activeBuckets = data?.days.filter((point) => point.hours > 0).length ?? 0;
 
   return (
     <section aria-label="Compute hours over time" className="mb-6 rounded-lg border border-border bg-card p-4">
@@ -50,7 +65,7 @@ export function ComputeHoursPanel({
         <div>
           <h2 className="text-sm font-semibold">Compute hours over time</h2>
           <p className="text-xs text-muted-foreground">
-            Box-hours per UTC day: wall-clock hours times the box size weight.
+            Box-hours per UTC {bucket}: wall-clock hours times the box size weight.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -69,18 +84,18 @@ export function ComputeHoursPanel({
             ))}
           </select>
           <div role="group" aria-label="Range" className="flex overflow-hidden rounded-md border border-border text-xs">
-            {COMPUTE_RANGES.map((range) => (
+            {COMPUTE_RANGES.map((option) => (
               <button
-                key={range}
+                key={option}
                 type="button"
-                aria-pressed={days === range}
-                onClick={() => onDaysChange(range)}
+                aria-pressed={range === option}
+                onClick={() => onRangeChange(option)}
                 className={cn(
                   'px-2 py-1.5',
-                  days === range ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'
+                  range === option ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'
                 )}
               >
-                {range}d
+                {rangeLabel(option)}
               </button>
             ))}
           </div>
@@ -96,14 +111,14 @@ export function ComputeHoursPanel({
           hint={data ? `${hours(data.totals.wall_hours)} wall-clock hours` : undefined}
         />
         <StatCard
-          label="Per day"
+          label={`Per ${bucket}`}
           value={data ? `${hours(data.totals.hours / data.days.length)} h` : '—'}
-          hint={data ? `${activeDays} of ${data.days.length} days active` : undefined}
+          hint={data ? `${activeBuckets} of ${data.days.length} ${bucket}s active` : undefined}
         />
         <StatCard
-          label="Peak day"
+          label={`Peak ${bucket}`}
           value={data ? `${hours(data.totals.peak_hours)} h` : '—'}
-          hint={data?.totals.peak_day ? dayLabel(data.totals.peak_day) : undefined}
+          hint={peakHint(data, bucket)}
         />
         <StatCard label="Boxes started" value={data?.totals.boxes_started ?? '—'} />
         {userId ? (
@@ -113,7 +128,7 @@ export function ComputeHoursPanel({
         )}
       </div>
 
-      {data && <DailyBars days={data.days} />}
+      {data && <DailyBars days={data.days} bucket={bucket} />}
 
       {data && (
         <div className="mt-4 grid gap-4 md:grid-cols-3">
@@ -141,7 +156,12 @@ export function ComputeHoursPanel({
   );
 }
 
-function DailyBars({ days }: { days: AdminComputeDaily['days'] }) {
+function peakHint(data: AdminComputeDaily | null, bucket: Bucket): string | undefined {
+  if (bucket === 'hour') return data?.totals.peak_start ? `${data.totals.peak_start.slice(11, 16)} UTC` : undefined;
+  return data?.totals.peak_day ? dayLabel(data.totals.peak_day) : undefined;
+}
+
+function DailyBars({ days, bucket }: { days: Point[]; bucket: Bucket }) {
   const [hover, setHover] = useState<number | null>(null);
   const max = Math.max(...days.map((point) => point.hours), 0);
   const point = hover == null ? null : days[hover];
@@ -159,9 +179,9 @@ function DailyBars({ days }: { days: AdminComputeDaily['days'] }) {
           <div className="flex h-40 items-end gap-[2px] border-b border-border">
             {days.map((day, index) => (
               <div
-                key={day.day}
+                key={day.start}
                 data-testid="compute-day"
-                aria-label={`${dayLabel(day.day)}: ${hours(day.hours)} box-hours`}
+                aria-label={`${pointLabel(day, bucket)}: ${hours(day.hours)} box-hours`}
                 onMouseEnter={() => setHover(index)}
                 className="flex h-full flex-1 items-end"
               >
@@ -181,7 +201,9 @@ function DailyBars({ days }: { days: AdminComputeDaily['days'] }) {
               className="pointer-events-none absolute top-2 z-10 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1.5 text-xs shadow-md"
               style={{ left: `${((hover + 0.5) / days.length) * 100}%` }}
             >
-              <div className="font-medium">{dayLabel(point.day)}</div>
+              <div className="font-medium">
+                {bucket === 'hour' ? `${dayLabel(point.day)}, ${pointLabel(point, bucket)} UTC` : dayLabel(point.day)}
+              </div>
               <div className="tabular-nums">{hours(point.hours)} box-hours</div>
               <div className="tabular-nums text-muted-foreground">{hours(point.wall_hours)} wall-clock hours</div>
               <div className="tabular-nums text-muted-foreground">{point.boxes_started} boxes started</div>
@@ -197,21 +219,21 @@ function DailyBars({ days }: { days: AdminComputeDaily['days'] }) {
                 )}
                 style={index !== 0 && index !== days.length - 1 ? { left: `${((index + 0.5) / days.length) * 100}%` } : undefined}
               >
-                {dayLabel(days[index].day)}
+                {pointLabel(days[index], bucket)}
               </span>
             ))}
           </div>
         </div>
       </div>
       <table className="sr-only">
-        <caption>Box-hours per day</caption>
+        <caption>Box-hours per {bucket}</caption>
         <thead>
-          <tr><th>Day</th><th>Box-hours</th><th>Wall-clock hours</th><th>Boxes started</th></tr>
+          <tr><th>{bucket === 'hour' ? 'Hour' : 'Day'}</th><th>Box-hours</th><th>Wall-clock hours</th><th>Boxes started</th></tr>
         </thead>
         <tbody>
           {days.map((day) => (
-            <tr key={day.day}>
-              <td>{day.day}</td><td>{hours(day.hours)}</td><td>{hours(day.wall_hours)}</td><td>{day.boxes_started}</td>
+            <tr key={day.start}>
+              <td>{bucket === 'hour' ? day.start : day.day}</td><td>{hours(day.hours)}</td><td>{hours(day.wall_hours)}</td><td>{day.boxes_started}</td>
             </tr>
           ))}
         </tbody>

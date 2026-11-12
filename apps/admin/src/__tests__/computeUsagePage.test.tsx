@@ -20,13 +20,17 @@ const USAGE = {
 function daily(userId: string | null = null) {
   return {
     start: '2026-11-09T00:00:00.000Z', end: '2026-11-11T12:00:00.000Z',
+    bucket: 'day' as const,
     user_id: userId, user_email: userId === 'carol' ? 'carol@example.test' : null,
     days: [
-      { day: '2026-11-09', hours: 2, wall_hours: 2, boxes_started: 1 },
-      { day: '2026-11-10', hours: 0, wall_hours: 0, boxes_started: 0 },
-      { day: '2026-11-11', hours: 6, wall_hours: 3, boxes_started: 2 },
+      { day: '2026-11-09', start: '2026-11-09T00:00:00.000Z', hours: 2, wall_hours: 2, boxes_started: 1 },
+      { day: '2026-11-10', start: '2026-11-10T00:00:00.000Z', hours: 0, wall_hours: 0, boxes_started: 0 },
+      { day: '2026-11-11', start: '2026-11-11T00:00:00.000Z', hours: 6, wall_hours: 3, boxes_started: 2 },
     ],
-    totals: { hours: 8, wall_hours: 5, boxes_started: 3, peak_day: '2026-11-11', peak_hours: 6 },
+    totals: {
+      hours: 8, wall_hours: 5, boxes_started: 3,
+      peak_day: '2026-11-11', peak_start: '2026-11-11T00:00:00.000Z', peak_hours: 6,
+    },
     by_kind: [{ key: 'workbench', hours: 6 }, { key: 'task', hours: 2 }],
     by_size: [{ key: 'large', hours: 6 }, { key: 'small', hours: 2 }],
     users: [
@@ -36,13 +40,26 @@ function daily(userId: string | null = null) {
   };
 }
 
+function hourly(day: string) {
+  return {
+    ...daily(),
+    start: `${day}T00:00:00.000Z`, end: `${day}T03:30:00.000Z`,
+    bucket: 'hour' as const,
+    days: [0, 1, 2, 3].map((hour) => ({
+      day, start: `${day}T0${hour}:00:00.000Z`, hours: hour === 2 ? 3 : 0, wall_hours: hour === 2 ? 3 : 0, boxes_started: hour === 2 ? 1 : 0,
+    })),
+    totals: { hours: 3, wall_hours: 3, boxes_started: 1, peak_day: day, peak_start: `${day}T02:00:00.000Z`, peak_hours: 3 },
+  };
+}
+
 function renderPage(path = '/') {
   return render(<MemoryRouter initialEntries={[path]}><ComputeUsagePage /></MemoryRouter>);
 }
 
 beforeEach(() => {
   vi.mocked(api.admin.computeUsage).mockResolvedValue(USAGE);
-  vi.mocked(api.admin.computeDaily).mockImplementation(async (params) => daily(params?.userId ?? null));
+  vi.mocked(api.admin.computeDaily).mockImplementation(async (params) =>
+    params?.range ? hourly(params.range === 'today' ? '2026-11-12' : '2026-11-11') : daily(params?.userId ?? null));
 });
 
 afterEach(() => {
@@ -109,11 +126,34 @@ describe('compute usage page', () => {
   });
 
   it.each([
-    ['/?days=90&user=carol', 90, 'carol'],
-    ['/?days=12', 30, undefined],
-  ])('reads the range and user from the URL: %s', async (path, days, userId) => {
+    ['Today', 'today', '02:00', '2026-11-12'],
+    ['Yesterday', 'yesterday', '02:00', '2026-11-11'],
+  ])('charts box-hours per hour for %s', async (label, range, hour, day) => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: label }));
+    await waitFor(() => expect(api.admin.computeDaily).toHaveBeenLastCalledWith({ range, userId: undefined }));
+    expect(await screen.findByText('Per hour')).toBeTruthy();
+    expect(screen.getByText('1 of 4 hours active')).toBeTruthy();
+    expect(screen.getByText('Peak hour')).toBeTruthy();
+    expect(screen.getByText('02:00 UTC')).toBeTruthy();
+    expect(screen.getAllByTestId('compute-day')).toHaveLength(4);
+    fireEvent.mouseEnter(screen.getByLabelText(`${hour}: 3.0 box-hours`));
+    expect(screen.getByRole('tooltip').textContent).toContain(`${day === '2026-11-12' ? 'Nov 12' : 'Nov 11'}, 02:00 UTC`);
+    expect(screen.getByRole('button', { name: label }).getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(screen.getByRole('button', { name: '30d' }));
+    await waitFor(() => expect(api.admin.computeDaily).toHaveBeenLastCalledWith({ days: 30, userId: undefined }));
+  });
+
+  it.each([
+    ['/?days=90&user=carol', { days: 90, userId: 'carol' }],
+    ['/?days=12', { days: 30, userId: undefined }],
+    ['/?range=today', { range: 'today', userId: undefined }],
+    ['/?range=yesterday&user=carol', { range: 'yesterday', userId: 'carol' }],
+    ['/?range=week', { days: 30, userId: undefined }],
+  ])('reads the range and user from the URL: %s', async (path, params) => {
     renderPage(path);
-    await waitFor(() => expect(api.admin.computeDaily).toHaveBeenCalledWith({ days, userId }));
+    await waitFor(() => expect(api.admin.computeDaily).toHaveBeenCalledWith(params));
   });
 
   it('keeps an account without usage selectable', async () => {

@@ -1865,8 +1865,10 @@ export interface AdminComputeUsage {
 }
 
 export interface AdminComputeDailyPoint {
-  /** UTC day, `YYYY-MM-DD`. */
+  /** UTC day of the bucket, `YYYY-MM-DD`. */
   day: string;
+  /** Bucket start, ISO timestamp. */
+  start: string;
   /** Box-hours: wall-clock hours times the size weight. */
   hours: number;
   wall_hours: number;
@@ -1876,6 +1878,8 @@ export interface AdminComputeDailyPoint {
 export interface AdminComputeDaily {
   start: string;
   end: string;
+  /** `hour` for the today and yesterday ranges, else `day`. */
+  bucket: 'day' | 'hour';
   user_id: string | null;
   user_email: string | null;
   days: AdminComputeDailyPoint[];
@@ -1884,6 +1888,8 @@ export interface AdminComputeDaily {
     wall_hours: number;
     boxes_started: number;
     peak_day: string | null;
+    /** Start of the peak bucket, ISO timestamp. */
+    peak_start: string | null;
     peak_hours: number;
   };
   by_kind: { key: string; hours: number }[];
@@ -1954,8 +1960,8 @@ export const admin = {
   usageSummary: () => request<AdminUsageSummary>('GET', '/admin/billing/summary'),
   computeUsage: (params?: { sort?: string; order?: 'asc' | 'desc'; limit?: number; q?: string }) =>
     request<AdminComputeUsage>('GET', `/admin/usage/compute${adminQuery({ ...params })}`),
-  /** Box-hours per UTC day, for every account or one. */
-  computeDaily: (params?: { days?: number; userId?: string }) =>
+  /** Box-hours per UTC day, or per UTC hour for `range` today or yesterday, for every account or one. */
+  computeDaily: (params?: { days?: number; range?: 'today' | 'yesterday'; userId?: string }) =>
     request<AdminComputeDaily>('GET', `/admin/usage/compute/daily${adminQuery({ ...params })}`),
   workspaces: {
     list: (params?: { q?: string; ownerId?: string; limit?: number; before?: string }) =>
