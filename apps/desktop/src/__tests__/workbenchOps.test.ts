@@ -240,9 +240,9 @@ describe('openLocalPullRequest', () => {
   const fakeApi = () => ({ createPullRequest: jest.fn(async () => result as never) });
 
   it.each([
-    ['dirty: commits with the agent’s message, as one argv element', ' M a.ts\n', input, ['git', 'commit', '-m', 'feat: the change']],
-    ['dirty, no message: commits with the title', '?? b.ts\n', { ...input, commitMessage: '' }, ['git', 'commit', '-m', 'feat: add it']],
-    ['a message with shell syntax stays one argument', ' M a.ts\n', { ...input, commitMessage: 'fix: $(rm -rf /) `x`' }, ['git', 'commit', '-m', 'fix: $(rm -rf /) `x`']],
+    ['dirty: commits with the agent’s message, as one argv element', ' M a.ts\n', input, ['git', 'commit', '--no-verify', '-m', 'feat: the change']],
+    ['dirty, no message: commits with the title', '?? b.ts\n', { ...input, commitMessage: '' }, ['git', 'commit', '--no-verify', '-m', 'feat: add it']],
+    ['a message with shell syntax stays one argument', ' M a.ts\n', { ...input, commitMessage: 'fix: $(rm -rf /) `x`' }, ['git', 'commit', '--no-verify', '-m', 'fix: $(rm -rf /) `x`']],
     ['clean: no commit', '', input, null],
   ] as const)('%s, then pushes and asks the backend to open the PR', async (_n, status, given, commitArgv) => {
     const { bridge, exec } = gitBridge({ status });

@@ -307,10 +307,11 @@ export function workingTreeStatus(): GitStep {
  * runtime runs it with `execFile` (no shell), and the sandbox's script quotes
  * it with `shellQuote`, so no message can run as a command.
  *
- * `skipHooks` is for the sandbox: its commit shell lacks the agent's tool PATH,
- * so a hook such as husky's `pnpm lint-staged` fails with "not found", and the
- * agent has already run the checks that CI runs again. A user's own machine
- * keeps its hooks.
+ * `skipHooks` is for Talyn's own commits, in the sandbox and in a local
+ * session alike. The sandbox's commit shell lacks the agent's tool PATH, and a
+ * local session's worktree has no installed dependencies, so a hook such as
+ * husky's `pnpm lint-staged` fails with "not found" or ENOENT. The agent has
+ * already run the checks, and CI runs them again.
  */
 export function commitAllSteps(message: string, opts: { skipHooks?: boolean } = {}): GitStep[] {
   return [

@@ -38,7 +38,7 @@ export async function openLocalPullRequest(
     throw new Error(`Could not read the git status.\n${gitStderrTail(status.stderr)}`.trim());
   }
   if (status.stdout.trim()) {
-    const commit = await bridge.exec(path, commitAllSteps(prCommitMessage(input)));
+    const commit = await bridge.exec(path, commitAllSteps(prCommitMessage(input), { skipHooks: true }));
     if (commit.exitCode !== 0) {
       throw new Error(`Could not commit the changes.\n${gitStderrTail(commit.stderr || commit.stdout)}`.trim());
     }
