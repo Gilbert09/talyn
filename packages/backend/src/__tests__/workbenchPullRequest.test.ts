@@ -661,6 +661,157 @@ describe('workbench Create PR', () => {
       expect((await getChat(chatId))?.status).toBe('idle');
     });
 
+    describe('when the agent can fix the failure', () => {
+      const REJECTED: ExecReply = { exitCode: 1, stderr: ' ! [rejected]        HEAD -> x (fetch first)' };
+
+      /** Push replies in order; the last one repeats. */
+      function pushReplies(...replies: ExecReply[]): void {
+        const base = fleet.handler;
+        let pushes = 0;
+        fleet.handler = async (script, req) => {
+          if (script.includes('git push -u origin HEAD') && !isAgentTurn(script)) return replies[Math.min(pushes++, replies.length - 1)];
+          return base(script, req);
+        };
+      }
+
+      /** Wait until the chat is idle with nothing queued: every retry has run. */
+      async function settleRetries(chatId: string): Promise<Loose[]> {
+        await vi.waitFor(async () => {
+          const chat = await getChat(chatId);
+          expect(chat?.status).toBe('idle');
+          expect(chat?.queuedMessages ?? []).toEqual([]);
+        }, { timeout: 10_000 });
+        return (await listEvents(chatId, 0, 500)).events.map((e: Loose) => e.event);
+      }
+
+      const agentTurns = () => scriptsSinceMark().filter((s) => isAgentTurn(s));
+
+      it('gives a rejected push back to the agent, and opens the PR when the retry fixes it', async () => {
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        mark = fleet.scripts.length;
+        pushReplies(REJECTED, { exitCode: 0 });
+        await call('POST', `/workbenches/chats/${chatId}/messages`, createPrMessage);
+        const events = await settleRetries(chatId);
+
+        expect(prEvents(events)).toEqual([
+          expect.objectContaining({ ok: false, message: expect.stringMatching(/^GitHub rejected the push: the remote branch has commits/) }),
+          expect.objectContaining({ ok: true, number: 7 }),
+        ]);
+        expect(createPr).toHaveBeenCalledTimes(1);
+
+        const turns = agentTurns();
+        expect(turns).toHaveLength(2);
+        expect(turns[0]).not.toContain('git merge origin/');
+        expect(turns[1]).toContain(`\`git merge origin/${wb.branch}\``);
+        expect(turns[1]).toContain('(fetch first)');
+        expect(turns[1]).not.toContain('Do not commit, push or open the pull request');
+
+        const retry = events.filter((e) => e.type === 'user' && e.talyn?.kind === 'user_message')[1];
+        expect(retry.talyn).toMatchObject({
+          origin: 'talyn',
+          intent: 'create_pr',
+          planMode: false,
+          trigger: { kind: 'pr_retry', attempt: 1, error: expect.stringMatching(/^GitHub rejected the push/) },
+        });
+        expect(retry.message.content[0].text).toMatch(/^Talyn could not open the pull request:\n\nGitHub rejected the push/);
+        expect(buildBlocks(events)).toContainEqual(expect.objectContaining({
+          kind: 'system', subtype: 'talyn_message', trigger: expect.objectContaining({ kind: 'pr_retry' }),
+        }));
+        expect((await getWorkbench(wb.id))?.pullRequestId).toBe('pr-7');
+      });
+
+      it('stops after two retries when the push keeps failing', async () => {
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        mark = fleet.scripts.length;
+        pushReplies(REJECTED);
+        await call('POST', `/workbenches/chats/${chatId}/messages`, createPrMessage);
+        const events = await settleRetries(chatId);
+
+        expect(agentTurns()).toHaveLength(3);
+        expect(prEvents(events).map((e) => e.ok)).toEqual([false, false, false]);
+        const triggers = events.filter((e) => e.type === 'user' && e.talyn?.trigger).map((e) => e.talyn.trigger.attempt);
+        expect(triggers).toEqual([1, 2]);
+        expect(createPr).not.toHaveBeenCalled();
+      });
+
+      it('gives a failed commit back to the agent', async () => {
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        mark = fleet.scripts.length;
+        world.status = ' M a.ts\n';
+        const base = fleet.handler;
+        let commits = 0;
+        fleet.handler = async (script, req) => {
+          if (script.includes('git commit --no-verify -m') && !isAgentTurn(script)) {
+            return commits++ === 0 ? { exitCode: 128, stderr: 'fatal: Unable to create index.lock: File exists.' } : { exitCode: 0 };
+          }
+          return base(script, req);
+        };
+        await call('POST', `/workbenches/chats/${chatId}/messages`, createPrMessage);
+        const events = await settleRetries(chatId);
+        expect(agentTurns()).toHaveLength(2);
+        expect(agentTurns()[1]).toContain('index.lock');
+        expect(prEvents(events).map((e) => e.ok)).toEqual([false, true]);
+      });
+
+      it('retries an automatic PR from an ordinary message too', async () => {
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        mark = fleet.scripts.length;
+        pushReplies(REJECTED, { exitCode: 0 });
+        await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'Tidy up the tests' });
+        const events = await settleRetries(chatId);
+        expect(agentTurns()).toHaveLength(2);
+        expect(prEvents(events).map((e) => e.ok)).toEqual([false, true]);
+      });
+
+      it.each<[string, ExecReply]>([
+        ['a 403', { exitCode: 128, stderr: 'remote: Write access to repository not granted.\nfatal: error: 403' }],
+        ['a workflow refusal', { exitCode: 1, stderr: ' ! [remote rejected] HEAD -> x (refusing to allow a GitHub App to create or update workflow `.github/workflows/a.yml`)' }],
+        ['an unknown failure', { exitCode: 1, stderr: 'fatal: unable to connect' }],
+      ])('does not retry %s, which only a person can fix', async (_name, reply) => {
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        mark = fleet.scripts.length;
+        pushReplies(reply);
+        await call('POST', `/workbenches/chats/${chatId}/messages`, createPrMessage);
+        const events = await settleRetries(chatId);
+        expect(agentTurns()).toHaveLength(1);
+        expect(prEvents(events).map((e) => e.ok)).toEqual([false]);
+      });
+
+      it('does not retry when the person already queued a message', async () => {
+        const wb = await sandboxWorkbench();
+        const chatId = (await listChats(wb.id))[0].id;
+        mark = fleet.scripts.length;
+        pushReplies(REJECTED);
+        let release!: () => void;
+        const hold = new Promise<void>((resolve) => { release = resolve; });
+        let first = true;
+        const base = fleet.handler;
+        fleet.handler = async (script, req) => {
+          if (isAgentTurn(script) && first) {
+            first = false;
+            return { ...turnReply, hold };
+          }
+          // The person's turn ends with no PR block, so it opens nothing itself.
+          if (isAgentTurn(script)) return { stdout: claudeResult('Understood.') };
+          return base(script, req);
+        };
+        await call('POST', `/workbenches/chats/${chatId}/messages`, createPrMessage);
+        await vi.waitFor(() => expect(agentTurns()).toHaveLength(1));
+        expect((await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'Leave it, I will fix the branch' })).status).toBe(200);
+        release();
+        const events = await settleRetries(chatId);
+        const turns = agentTurns();
+        expect(turns).toHaveLength(2);
+        expect(turns[1]).toContain('Leave it, I will fix the branch');
+        expect(events.some((e) => e.type === 'user' && e.talyn?.trigger)).toBe(false);
+      });
+    });
+
     it('opens a PR from an ordinary message when the setting is on', async () => {
       const wb = await sandboxWorkbench();
       const chatId = (await listChats(wb.id))[0].id;

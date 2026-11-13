@@ -668,6 +668,66 @@ describe('LocalTurnController Create PR', () => {
     expect(toast.error).toHaveBeenCalledWith('Could not open the pull request', outcome.message);
   });
 
+  describe('a failure the agent can fix', () => {
+    const REJECTED = { exitCode: 1, stderr: ' ! [rejected]        HEAD -> lisbon (fetch first)' };
+    const startCalls = (bridge: ReturnType<typeof setup>['bridge']) =>
+      bridge.startTurn.mock.calls.map((c) => (c as unknown[])[0] as { prompt: string; appendSystemPrompt?: string; turn: number });
+    const userEvents = () =>
+      useWorkbenchStore.getState().chatEvents.c1.events
+        .map((e) => e.event as { type: string; talyn?: { origin?: string; trigger?: { kind: string; attempt: number; error: string } } })
+        .filter((e) => e.type === 'user');
+
+    it('starts a retry turn that gives the agent the error', async () => {
+      const { controller, bridge } = setup();
+      gitWorld(bridge, { push: REJECTED });
+      await controller.send(WB, chat(), CREATE_PR);
+      await controller.handleTurnEnd('c1', ok());
+
+      const calls = startCalls(bridge);
+      expect(calls).toHaveLength(2);
+      expect(calls[1].turn).toBe(2);
+      expect(calls[1].appendSystemPrompt).toContain('`git merge origin/lisbon`');
+      expect(calls[1].appendSystemPrompt).toContain('(fetch first)');
+      expect(calls[1].appendSystemPrompt).not.toContain('Do not commit, push or open the pull request');
+      const retry = userEvents()[1];
+      expect(retry.talyn).toEqual({
+        kind: 'user_message',
+        origin: 'talyn',
+        trigger: { kind: 'pr_retry', attempt: 1, error: expect.stringMatching(/^GitHub rejected the push/) },
+      });
+    });
+
+    it('stops after two retries', async () => {
+      const { controller, bridge } = setup();
+      gitWorld(bridge, { push: REJECTED });
+      await controller.send(WB, chat(), CREATE_PR);
+      await controller.handleTurnEnd('c1', ok());
+      await controller.handleTurnEnd('c1', ok());
+      await controller.handleTurnEnd('c1', ok());
+      expect(startCalls(bridge)).toHaveLength(3);
+      expect(userEvents().map((e) => e.talyn?.trigger?.attempt ?? null)).toEqual([null, 1, 2]);
+      expect(prEvents()).toHaveLength(3);
+    });
+
+    it('runs the message the person queued instead of a retry', async () => {
+      const { controller, bridge } = setup();
+      gitWorld(bridge, { push: REJECTED });
+      await controller.send(WB, chat(), CREATE_PR);
+      expect((await controller.send(WB, chat({ status: 'running' }), { text: 'leave it' })).queued).toBe(true);
+      await controller.handleTurnEnd('c1', ok());
+      expect(startCalls(bridge)).toHaveLength(2);
+      expect(startCalls(bridge)[1].prompt).toBe('leave it');
+    });
+
+    it('does not retry a refused push', async () => {
+      const { controller, bridge } = setup();
+      gitWorld(bridge, { push: { exitCode: 128, stderr: 'remote: Permission to acme/app.git denied to tom.' } });
+      await controller.send(WB, chat(), CREATE_PR);
+      await controller.handleTurnEnd('c1', ok());
+      expect(startCalls(bridge)).toHaveLength(1);
+    });
+  });
+
   it.each([
     ['a failed turn', { isError: true, cancelled: false }],
     ['a cancelled turn', { isError: false, cancelled: true }],

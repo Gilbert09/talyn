@@ -384,7 +384,8 @@ export interface WorkbenchQueuedMessage {
    */
   origin?: 'user' | 'talyn';
   /**
-   * Why Talyn wrote it: a wake-up, or a background job that exited. Set only
+   * Why Talyn wrote it: a wake-up, a background job that exited, or a pull
+   * request retry after a failure the agent can fix. Set only
    * with `origin: 'talyn'`. The transcript's user-message event carries it as
    * `talyn.trigger`, so the clients show the turn as a system row.
    */

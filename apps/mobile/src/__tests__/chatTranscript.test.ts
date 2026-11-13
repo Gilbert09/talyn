@@ -167,6 +167,24 @@ describe('transcript rows', () => {
       pullRequest: { number: 132020 } });
   });
 
+  it.each([
+    ['a pull request retry', { kind: 'pr_retry', attempt: 1, error: 'GitHub rejected the push' }, 'Talyn could not open the pull request. The agent tries to fix the cause.'],
+    ['a wake-up', { kind: 'wakeup', wakeupId: 'w', reason: 'Check CI', createdBy: 'agent' }, 'Woke up: Check CI'],
+  ])('shows %s from Talyn as one short line', (_name, trigger, text) => {
+    const rows = transcriptRows('chat-one', [at({
+      type: 'user', message: { content: [{ type: 'text', text: 'The full message body' }] },
+      talyn: { kind: 'user_message', origin: 'talyn', trigger },
+    } as unknown as AgentEvent)]);
+    expect(rows).toEqual([expect.objectContaining({ kind: 'system', subtype: 'talyn_message', text })]);
+  });
+
+  it('keeps a Talyn message with no trigger as a bubble', () => {
+    const rows = transcriptRows('chat-one', [at({
+      type: 'user', message: { content: [{ type: 'text', text: 'Session finished' }] }, talyn: { kind: 'user_message', origin: 'talyn' },
+    } as unknown as AgentEvent)]);
+    expect(rows).toEqual([expect.objectContaining({ kind: 'user', text: 'Session finished' })]);
+  });
+
   it('bounds long text', () => {
     const rows = transcriptRows('chat-one', [assistant([{ type: 'text', text: 'x'.repeat(ROW_TEXT_LIMIT + 50) }])]);
     expect(rows[0].kind === 'text' && rows[0].text.length).toBe(ROW_TEXT_LIMIT);
