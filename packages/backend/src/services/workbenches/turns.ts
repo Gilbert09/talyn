@@ -1,4 +1,5 @@
 import { cancelLimitResume, chatLimitAgent, handleChatLimit } from './limitResume.js';
+import { autoResumeEnabled, chatOutageAgent } from './outageResume.js';
 import { assertSandboxAgent, validateAgentModel } from './credentialPolicy.js';
 import { archiveIdleSession } from './autoArchive.js';
 import { suspendWorkbenchIfExhausted } from '../billing/usage/index.js';
@@ -12,6 +13,7 @@ import {
   buildCodexArgv,
   checkpointCreateSteps,
   checkpointRestoreSteps,
+  CLAUDE_OUTAGE_RETRY_ENV,
   CLAUDE_SANDBOX_ENV,
   createAgentStreamParser,
   parseAutoPrDetails,
@@ -482,7 +484,7 @@ async function runTurnLoopBody(
       if (wb?.status === 'ready') await startQueuedIfIdle(chatId);
     }
     if (fin && !fin.started && !outcome.cancelled && outcome.status === 'error' &&
-        outcome.statusMessage && chatLimitAgent(fin.chat, outcome.statusMessage)) {
+        outcome.statusMessage && (chatLimitAgent(fin.chat, outcome.statusMessage) || chatOutageAgent(fin.chat, outcome.statusMessage))) {
       await handleChatLimit(fin.chat, outcome.statusMessage).catch((err) => {
         console.warn(`[workbench] resuming chat ${chatId} failed:`, err);
       });
@@ -855,8 +857,11 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       agent === 'claude'
         ? claudeCoAuthoredBySetting(payer?.workspaceId ?? wb.workspaceId)
         : Promise.resolve(undefined),
+      agent === 'claude'
+        ? autoResumeEnabled(payer?.workspaceId ?? wb.workspaceId).catch(() => false)
+        : Promise.resolve(false),
     ] as const;
-    const [refreshed, , { talynTools, talynSkills, memory }, attached, claudeCoAuthoredBy] = await Promise.all(jobs).catch(async (err: unknown) => {
+    const [refreshed, , { talynTools, talynSkills, memory }, attached, claudeCoAuthoredBy, outageResume] = await Promise.all(jobs).catch(async (err: unknown) => {
       // Finish every write before recovery, a retry, or another turn can start.
       await Promise.allSettled(jobs);
       if (needsUserMessage) {
@@ -910,7 +915,9 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     };
     let argv = buildArgv();
     const env = {
-      ...sandboxScriptEnv(wb), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}), ...gitIdentity, TALYN_TURN_QUEUED_AT: message.queuedAt,
+      ...sandboxScriptEnv(wb), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}),
+      // Talyn retries the turn on a suspended box, so Claude Code need not retry long on an awake one.
+      ...(outageResume ? CLAUDE_OUTAGE_RETRY_ENV : {}), ...gitIdentity, TALYN_TURN_QUEUED_AT: message.queuedAt,
       // The chat Talyn's background and wake-up tools act on.
       TALYN_CHAT_ID: chatId,
     };

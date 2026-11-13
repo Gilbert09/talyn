@@ -147,6 +147,7 @@ export * from './notificationText.js';
 export * from './workbenchBranchName.js';
 export * from './workbenchGit.js';
 export * from './agentStream.js';
+export * from './agentOutage.js';
 export * from './workbenchConfig.js';
 export * from './workbenchDetect.js';
 export * from './talynBriefing.js';

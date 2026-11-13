@@ -1,6 +1,6 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, History, Loader2, RotateCcw } from 'lucide-react';
-import { buildBlocks, findTurnPlan, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
+import { agentOutageFrom, buildBlocks, findTurnPlan, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
 import { AgentBlocks } from '../terminal/AgentConversation';
 import { usePendingMessages } from './usePendingMessages';
 import { renderMarkdownish } from '../../lib/markdown';
@@ -370,7 +370,7 @@ function RetryTurn({ chat, ops, reason }: { chat: WorkbenchChat; ops: WorkbenchO
   };
   if (chat.resumeAt) return (
     <div className="mt-2 text-xs text-muted-foreground" data-attr="limit-resume">
-      <p>Waiting for usage. Resumes at {new Date(chat.resumeAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}.</p>
+      <p>{agentOutageFrom(chat.resumeReason) ? 'The model API is failing. The box is suspended until Talyn tries again at' : 'Waiting for usage. Resumes at'} {new Date(chat.resumeAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}.</p>
       <button type="button" disabled={sending} onClick={() => void send()} className="mr-3 underline">Resume now</button>
       <button type="button" onClick={() => void api.workbenches.cancelResume(chat.id).catch(() => toast.error('Could not cancel the wait'))}
         className="underline">Cancel</button>
