@@ -15,6 +15,8 @@ A session is one task. It has its own branch, its own agent and its own cloud sa
 
 Talyn names the session, creates a branch, starts a sandbox and gives your message to the agent. Press Shift+Enter for a new line in the message.
 
+On the home page, **Recent** under the composer lists your newest sessions and threads. Select one to open it. In the mobile app, the composer stays in the middle of the screen with **Recent** below it until you start to type. Each row shows the live state, the repository, the lines added and removed, and the pull request. When you tap the message field, the composer moves to the bottom of the screen above the keyboard. Press and hold a row to open its menu.
+
 If you have no sessions yet, the sidebar suggests a few to start. A suggestion on one of your pull requests comes first: fix its failing checks, resolve its merge conflicts, address its review comments, or review a pull request that asks for your review. A suggestion fills in the message and the pull request, and you can change both before you start.
 
 Other options in the composer:

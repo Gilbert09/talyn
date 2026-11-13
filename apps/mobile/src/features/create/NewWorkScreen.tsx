@@ -2,9 +2,9 @@ import { spaces, workbenches, workspaces as workspaceApi, type PRRow, type Watch
 import type { SpaceRepository, Workbench, WorkbenchAgent, WorkbenchReadiness, Workspace } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
-import { HeaderHeightContext } from 'expo-router/react-navigation';
-import { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import Animated, { FadeIn, FadeOut, LinearTransition } from 'react-native-reanimated';
 
 import { useAuth, useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { PickerSheet, type PickerSection } from '../../components/PickerSheet';
@@ -33,6 +33,8 @@ import { activePullRequest, agentForModel, blockedReason, branchSuggestions, chi
   effectiveBranch, filterBranches, filterRepositories, internetMessage, lastRepositoryKey, loadLastRepository, MODES, modelFor, modelSections, modelsFor, PLACEHOLDER,
   pullRequestChoices, pullRequestSource, rememberRepository, sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm,
   type NewWorkMode, type NewWorkPullRequest } from './model';
+import { composerLayout } from './recent';
+import { RecentWork } from './RecentWork';
 import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spaceRepositories } from './space';
 import { useInlineImages } from './useInlineImages';
 
@@ -50,13 +52,17 @@ const CHIP_ICON: Record<Exclude<ComposerChip, 'mode'>, Symbol> = {
 };
 // About eight lines of body text, then the field scrolls.
 const PROMPT_MAX_HEIGHT = 8 * 22 + 20;
+// The composer and heading glide between the middle and the bottom. Reduced motion is respected by default.
+const MOVE = LinearTransition.springify().damping(26).stiffness(260).mass(0.9);
 
 /**
- * Start a session or a thread, like web `NewWorkbenchPage`: a calm page with
- * one composer at the bottom. Repository, branch and internet sit in a row
- * above it, and the mode and model sit inside it. Each opens a sheet. Works as
- * the home screen (`presentation="home"`) and as a pushed route. After a start
- * a route replaces itself and home pushes.
+ * Start a session or a thread, like web `NewWorkbenchPage`. With nothing typed
+ * the composer waits in the middle of the page with the recent work below it.
+ * Typing or the keyboard moves it to the bottom, and the list fades out.
+ * Repository, branch and internet sit in a row above the composer, and the
+ * mode and model sit inside it. Each opens a sheet. Works as the home screen
+ * (`presentation="home"`) and as a pushed route. After a start a route
+ * replaces itself and home pushes.
  */
 export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, initialPullRequestId, presentation = 'route' }: {
   initialMode?: NewWorkMode; initialRepositoryId?: string; initialPullRequestId?: string; presentation?: 'home' | 'route';
@@ -74,8 +80,6 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   const workspace = useResource<Workspace>('workspace', '', offered);
   const keyboard = useKeyboardInset();
   const toast = useToast();
-  const headerHeight = useContext(HeaderHeightContext) ?? 0;
-  const android = Platform.OS === 'android';
   const workspaceId = workflow.getScope()?.workspace ?? '';
   const user = useAuth().user?.id ?? '';
   const draftKey = 'new:prompt';
@@ -282,18 +286,23 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
       disabled={busy} onPress={() => openSheet('model')} />;
   };
 
+  const centered = composerLayout({ prompt, images: attached.length, focused, keyboardOpen: keyboard.open, busy }) === 'centered';
+
+  // One composer for both places, so the field keeps its focus and the keyboard stays up while it moves.
+  // The keyboard inset is bottom padding on both platforms, so the move and the keyboard animate as one layout change.
   return <ScreenContainer topInset={presentation === 'home'}>
-    <KeyboardAvoidingView style={[styles.page, android && { paddingBottom: keyboard.inset }]}
-      behavior={android ? undefined : 'padding'} keyboardVerticalOffset={presentation === 'route' ? headerHeight : 0}>
-      <Pressable accessible={false} onPress={Keyboard.dismiss} style={styles.greeting}>
-        <Text accessibilityRole="header" style={[styles.heading, { color: c.text }]}>What do you want to build?</Text>
-        {inSpace ? <View accessible accessibilityLabel={`In ${inSpace.space.name}`} style={styles.inSpace}>
-          <SpaceTile name={inSpace.space.name} color={inSpace.space.color} image={inSpace.space.image} size={14} />
-          <Text numberOfLines={1} style={[styles.inSpaceText, { color: c.muted }]}>In {inSpace.space.name}</Text>
-        </View> : null}
+    <View style={[styles.page, { paddingBottom: keyboard.inset }]}>
+      <Pressable accessible={false} onPress={Keyboard.dismiss} style={[styles.greeting, centered && styles.greetingCentered]}>
+        <Animated.View layout={MOVE} style={styles.greetingText}>
+          <Text accessibilityRole="header" style={[styles.heading, { color: c.text }]}>What do you want to build?</Text>
+          {inSpace ? <View accessible accessibilityLabel={`In ${inSpace.space.name}`} style={styles.inSpace}>
+            <SpaceTile name={inSpace.space.name} color={inSpace.space.color} image={inSpace.space.image} size={14} />
+            <Text numberOfLines={1} style={[styles.inSpaceText, { color: c.muted }]}>In {inSpace.space.name}</Text>
+          </View> : null}
+        </Animated.View>
         {toast.element}
       </Pressable>
-      <View style={styles.dock}>
+      <Animated.View layout={MOVE} style={styles.dock}>
         {notices}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
           style={styles.contextScroll} contentContainerStyle={styles.contextRow}>
@@ -321,8 +330,11 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
               onPress={() => { void start(); }} />
           </View>
         </View>
-      </View>
-    </KeyboardAvoidingView>
+      </Animated.View>
+      {centered ? <Animated.View entering={FadeIn.duration(240).delay(60)} exiting={FadeOut.duration(120)} style={styles.below}>
+        {inSpace ? null : <RecentWork />}
+      </Animated.View> : null}
+    </View>
 
     <PickerSheet visible={sheet === 'mode'} title="Start" onClose={closeSheet}
       sections={[{ key: 'modes', items: MODES.map((option) => ({ key: option.value, label: option.label, detail: option.detail,
@@ -452,6 +464,10 @@ const styles = StyleSheet.create({
   page: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   greeting: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, overflow: 'hidden' },
+  // Centred, the heading sits just above the composer, and the composer sits in the middle of the page.
+  greetingCentered: { justifyContent: 'flex-end', paddingBottom: 20 },
+  greetingText: { alignItems: 'center', maxWidth: '100%' },
+  below: { flex: 1 },
   heading: { fontSize: 24, lineHeight: 30, letterSpacing: -0.3, textAlign: 'center', ...display(600) },
   inSpace: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, maxWidth: '100%' },
   inSpaceText: { fontSize: 13, lineHeight: 18, ...sans(500), flexShrink: 1 },

@@ -4,18 +4,10 @@ jest.mock('expo-font', () => ({ ...jest.requireActual('expo-font'), useFonts: ()
 require('react-native-gesture-handler/jestSetup');
 
 // Reanimated and Worklets have no native side in Jest. These stand-ins jump
-// each animation to its end and run worklet callbacks at once.
+// each animation to its end and run worklet callbacks at once. The Reanimated
+// one is in `jest.reanimated.js`.
 jest.mock('react-native-worklets', () => ({ scheduleOnRN: (fn, ...args) => fn(...args) }));
-jest.mock('react-native-reanimated', () => {
-  const { View } = require('react-native');
-  const last = (...values) => values[values.length - 1];
-  return {
-    __esModule: true, default: { View },
-    useSharedValue: (value) => require('react').useRef({ value }).current,
-    useAnimatedStyle: (fn) => fn(),
-    withTiming: (value) => value, withSpring: (value) => value, withSequence: last,
-  };
-});
+jest.mock('react-native-reanimated', () => require('./jest.reanimated'));
 // Gesture Handler then runs its callbacks on the JS thread, as without Reanimated.
 jest.mock('react-native-gesture-handler/src/handlers/gestures/reanimatedWrapper', () => ({ Reanimated: undefined, Worklets: undefined }));
 jest.mock('react-native-gesture-handler/lib/module/handlers/gestures/reanimatedWrapper', () => ({ Reanimated: undefined, Worklets: undefined }));

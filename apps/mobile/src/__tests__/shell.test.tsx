@@ -1,4 +1,4 @@
-import { act, fireEvent, renderRouter, screen, testRouter } from 'expo-router/testing-library';
+import { act, fireEvent, renderRouter, screen, testRouter, within } from 'expo-router/testing-library';
 
 import { router } from 'expo-router';
 import { Alert, BackHandler } from 'react-native';
@@ -85,6 +85,9 @@ const routes = {
  * A session or thread title sits in the native header, which Jest does not
  * draw. The composer under it shows the detail screen opened.
  */
+/** The open drawer. Home lists recent work too, so drawer rows are looked up inside it. */
+const inDrawer = () => within(screen.getByTestId('navigation-drawer'));
+
 async function expectOpened(label: string) {
   if (label === 'Review current work') expect(await screen.findByRole('header', { name: label })).toBeVisible();
   else expect(await screen.findByLabelText('Message')).toBeVisible();
@@ -97,6 +100,10 @@ describe('native shell', () => {
     expect(await screen.findByText('What do you want to build?')).toBeVisible();
     expect(screen.getByRole('header', { name: 'One' })).toBeVisible();
     expect(screen.queryByTestId('navigation-drawer')).toBeNull();
+    // Recent work sits under the composer, one tap from each session.
+    expect(await screen.findByLabelText('Recent sessions')).toBeVisible();
+    await fireEvent.press(screen.getByRole('link', { name: /^Current work\./ }));
+    expect(screen).toHavePathname('/sessions/session-one');
   });
 
   it('goes home from an unknown route', async () => {
@@ -113,7 +120,7 @@ describe('native shell', () => {
     await renderRouter(routes, { initialUrl: url });
     expect(screen).toHavePathname('/home');
     expect(await screen.findByTestId('navigation-drawer')).toBeVisible();
-    await fireEvent.press(await screen.findByRole('link', { name: new RegExp(label) }));
+    await fireEvent.press(await inDrawer().findByRole('link', { name: new RegExp(label) }));
     expect(screen).toHavePathname(destination);
     await expectOpened(label);
     // Leaving home closed the drawer, so Back shows home itself.
@@ -175,14 +182,15 @@ describe('native shell', () => {
 
   it('searches the drawer lists and clears the search', async () => {
     await renderRouter(routes, { initialUrl: '/sessions' });
-    expect(await screen.findByRole('link', { name: /Current work/ })).toBeVisible();
+    expect(await screen.findByTestId('navigation-drawer')).toBeVisible();
+    expect(await inDrawer().findByRole('link', { name: /Current work/ })).toBeVisible();
     await fireEvent.changeText(screen.getByLabelText('Search sessions and threads'), 'planning');
-    expect(screen.queryByRole('link', { name: /Current work/ })).toBeNull();
-    expect(screen.getByRole('link', { name: /Planning work/ })).toBeVisible();
+    expect(inDrawer().queryByRole('link', { name: /Current work/ })).toBeNull();
+    expect(inDrawer().getByRole('link', { name: /Planning work/ })).toBeVisible();
     await fireEvent.changeText(screen.getByLabelText('Search sessions and threads'), 'nothing like this');
     expect(screen.getByText('No sessions or threads match.')).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Clear search' }));
-    expect(screen.getByRole('link', { name: /Current work/ })).toBeVisible();
+    expect(inDrawer().getByRole('link', { name: /Current work/ })).toBeVisible();
   });
 
   it('collapses a repository group and a thread', async () => {
@@ -190,11 +198,12 @@ describe('native shell', () => {
       session(), session({ id: 'child-one', title: 'Child work', threadId: 'thread-one' }), thread()]);
     await renderRouter(routes, { initialUrl: '/sessions' });
     // Under its thread and under its repository, like web.
-    expect(await screen.findAllByRole('link', { name: /Child work/ })).toHaveLength(2);
+    expect(await screen.findByTestId('navigation-drawer')).toBeVisible();
+    expect(await inDrawer().findAllByRole('link', { name: /Child work/ })).toHaveLength(2);
     await fireEvent.press(screen.getByRole('button', { name: 'Hide sessions of Planning work' }));
-    expect(screen.getAllByRole('link', { name: /Child work/ })).toHaveLength(1);
+    expect(inDrawer().getAllByRole('link', { name: /Child work/ })).toHaveLength(1);
     await fireEvent.press(screen.getByRole('button', { name: 'example/project' }));
-    expect(screen.queryByRole('link', { name: /Current work/ })).toBeNull();
+    expect(inDrawer().queryByRole('link', { name: /Current work/ })).toBeNull();
     expect(screen.getByRole('button', { name: 'example/project', expanded: false })).toBeVisible();
   });
 
@@ -205,7 +214,7 @@ describe('native shell', () => {
     expect(await screen.findByTestId('menu-attention-dot')).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Open menu' }));
     expect(screen.getByRole('header', { name: 'Needs you' })).toBeVisible();
-    expect(screen.getAllByRole('link', { name: /Current work/ })).toHaveLength(2);
+    expect(inDrawer().getAllByRole('link', { name: /Current work/ })).toHaveLength(2);
   });
 
   it('restores a cold session link after authentication', async () => {
