@@ -178,6 +178,10 @@ npm run mobile:release:plan -- build production android --dry-run
 
 `--execute` rejects local shells, pull requests, push jobs, wrong refs, dirty source, missing secrets, and absent approvals.
 Do not bypass the wrapper with a direct publication command.
+Exception, 2026-11-13 (Tom's call): iOS build 1 (EAS 03e81edc) went to TestFlight with a direct `eas submit`. The submit gates
+need device, link and push evidence, and for iOS that evidence only exists after a TestFlight install. Later submissions use
+the workflow. `eas.json` holds the App Store Connect app ID (6834161436) and team ID (5KQY9SJDWG) as literals: EAS does not
+expand environment variables in `eas.json`, so the earlier `$MOBILE_ASC_APP_ID` placeholders failed every iOS submit.
 In GitHub Actions, choose **Mobile release → Run workflow** on `main`.
 Select one action, profile, and platform. Supply the approved full source SHA and reserved build number.
 For submit, update, or rollback, supply the exact platform runtime. Submission also needs the inspected EAS build ID.

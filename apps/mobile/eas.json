@@ -63,8 +63,8 @@
         "changesNotSentForReview": true
       },
       "ios": {
-        "ascAppId": "$MOBILE_ASC_APP_ID",
-        "appleTeamId": "$MOBILE_APPLE_TEAM_ID"
+        "ascAppId": "6834161436",
+        "appleTeamId": "5KQY9SJDWG"
       }
     },
     "production": {
@@ -74,8 +74,8 @@
         "changesNotSentForReview": true
       },
       "ios": {
-        "ascAppId": "$MOBILE_ASC_APP_ID",
-        "appleTeamId": "$MOBILE_APPLE_TEAM_ID"
+        "ascAppId": "6834161436",
+        "appleTeamId": "5KQY9SJDWG"
       }
     }
   }
