@@ -2,6 +2,7 @@ import type { Workbench, WorkbenchChat } from '@talyn/shared';
 
 import { safeExternalUrl } from '../../components/Workflow';
 import { workbenchKind } from '../../workflow/model';
+import { prMarkdownLink } from '../prs/copyLink';
 import { WEB_APP_URL } from '../settings/about';
 
 export type SessionActionKind = 'stop' | 'wake' | 'retry' | 'rename' | 'open_pr' | 'share' | 'parent' | 'archive' | 'restore';
@@ -67,21 +68,35 @@ export function archiveCopy(item: Workbench) {
   };
 }
 
-export type CopyActionKind = 'copy_link' | 'copy_branch' | 'copy_id';
+export type CopyActionKind = 'copy_link' | 'copy_pr_link' | 'copy_pr_markdown' | 'copy_branch' | 'copy_id';
 
-/** The copy entries of the menu, like web's sidebar and header menus. A branch name only for a session that has one. */
-export function copyActions(item: Pick<Workbench, 'kind' | 'branch'>): CopyActionKind[] {
+/**
+ * The copy entries of the menu, like web's sidebar and header menus. The PR link (plain or Markdown) when the
+ * session has a PR with a safe URL, and a branch name only for a session that has one.
+ */
+export function copyActions(item: Pick<Workbench, 'kind' | 'branch' | 'pr'>): CopyActionKind[] {
   const actions: CopyActionKind[] = ['copy_link'];
+  if (item.pr?.url && safeExternalUrl(item.pr.url)) actions.push('copy_pr_link', 'copy_pr_markdown');
   if ((item.kind ?? 'session') === 'session' && item.branch) actions.push('copy_branch');
   actions.push('copy_id');
   return actions;
 }
 
-/** The menu label of a copy entry, the text it copies, and the words that confirm it. */
-export function copyEntry(kind: CopyActionKind, item: Pick<Workbench, 'id' | 'kind' | 'branch'>): { label: string; text: string; done: string } {
+/**
+ * The menu label of a copy entry, the text it copies, and the words that confirm it. `prTitle` names the
+ * Markdown link, as on web; without it the link reads `PR #<number>`.
+ */
+export function copyEntry(kind: CopyActionKind, item: Pick<Workbench, 'id' | 'kind' | 'branch' | 'pr'>, prTitle?: string): { label: string; text: string; done: string } {
   const noun = (item.kind ?? 'session') === 'thread' ? 'thread' : 'session';
+  const prUrl = item.pr?.url ?? '';
   switch (kind) {
     case 'copy_link': return { label: 'Copy link', text: webLink(item.id), done: 'Link copied.' };
+    case 'copy_pr_link': return { label: 'Copy pull request link', text: prUrl, done: 'Pull request link copied.' };
+    case 'copy_pr_markdown': return {
+      label: 'Copy pull request as Markdown link',
+      text: prMarkdownLink(prTitle?.trim() || `PR #${item.pr?.number ?? ''}`, prUrl),
+      done: 'Markdown link copied.',
+    };
     case 'copy_branch': return { label: 'Copy branch name', text: item.branch, done: 'Branch name copied.' };
     case 'copy_id': return { label: `Copy ${noun} ID`, text: item.id, done: `${noun[0].toUpperCase()}${noun.slice(1)} ID copied.` };
   }

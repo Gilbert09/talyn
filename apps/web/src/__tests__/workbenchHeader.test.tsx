@@ -1,4 +1,4 @@
-import { vi, describe, it, expect, beforeAll, afterEach, type Mock } from 'vitest';
+import { vi, describe, it, expect, beforeAll, beforeEach, afterEach, type Mock } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -610,6 +610,67 @@ describe('WorkbenchHeader merge queue', () => {
       }
     }
   );
+});
+
+describe('WorkbenchHeader PR link copy', () => {
+  const URL = 'https://github.com/acme/app/pull/42';
+  const writeText = vi.fn(async () => {});
+  const write = vi.fn(async () => {});
+  const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+
+  beforeEach(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText, write } });
+  });
+  afterEach(() => {
+    if (original) Object.defineProperty(navigator, 'clipboard', original);
+    else delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+    delete (globalThis as unknown as { ClipboardItem?: unknown }).ClipboardItem;
+  });
+
+  const openMenu = () => {
+    render(<WorkbenchHeader workbench={WB} pr={prRow({})} chat={chat} ops={ops()} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Copy the link to #42' }), { key: 'Enter' });
+  };
+
+  it('offers the plain link and the Markdown link', () => {
+    openMenu();
+    expect(screen.getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['Copy link', 'Copy as Markdown link']);
+  });
+
+  it.each([
+    ['Copy link', URL],
+    ['Copy as Markdown link', `[Add a thing](${URL})`],
+  ])('%s writes the right text', async (item, expected) => {
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: item }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(expected));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copy the link to #42' })).toHaveAttribute('title', 'Copied!'));
+  });
+
+  it('copies the Markdown link as rich HTML too, where the browser allows it', async () => {
+    class FakeClipboardItem {
+      constructor(public items: Record<string, Blob>) {}
+    }
+    (globalThis as unknown as { ClipboardItem: unknown }).ClipboardItem = FakeClipboardItem;
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy as Markdown link' }));
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+    const [item] = (write.mock.calls[0] as unknown as [FakeClipboardItem[]])[0];
+    expect(Object.keys(item.items)).toEqual(['text/html', 'text/plain']);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it('says so when the clipboard refuses', async () => {
+    writeText.mockRejectedValueOnce(new Error('denied'));
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy link' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not copy to clipboard'));
+  });
+
+  it.each(['merged', 'closed'] as const)('has no copy button for a %s PR', (state) => {
+    render(<WorkbenchHeader workbench={WB} pr={prRow({}, state)} chat={chat} ops={ops()} />);
+    expect(screen.queryByRole('button', { name: 'Copy the link to #42' })).not.toBeInTheDocument();
+  });
 });
 
 describe('WorkbenchHeader last message', () => {

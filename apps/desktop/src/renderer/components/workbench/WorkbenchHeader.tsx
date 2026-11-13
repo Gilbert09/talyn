@@ -55,6 +55,7 @@ import {
 import type { WorkbenchOps, WorkbenchPromptActionKind } from '../../lib/workbenchOps';
 import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PrPill } from './WorkbenchBadges';
+import { PrCopyLinkButton } from './PrCopyLinkButton';
 import { ArchiveWorkbenchDialog, archiveWorkbench, restoreWorkbench, type ArchiveOptions } from './archiveWorkbench';
 import { createSessionChat } from './createSessionChat';
 import { SandboxStatusChip } from './SandboxStatusPanel';
@@ -377,6 +378,7 @@ export function WorkbenchHeader({
               >
                 <ExternalLink className="h-3.5 w-3.5" />
               </Button>
+              <PrCopyLinkButton number={pr.number} title={pr.summary.title} url={pr.summary.url} />
             </div>
           )}
           {archived && owner && (
