@@ -4,6 +4,7 @@ import { activeSpace, contextEntries, inPersonalList, isWorkbenchOwner, openSpac
 import { useSpacesStore } from '../../stores/spaces';
 import { useSessionBackgroundStore } from '../../stores/sessionBackground';
 import { MENU_COMMANDS } from '../../../main/menuCommands';
+import type { ZoomStep } from '../../../main/zoomSteps';
 import {
   FOCUS_COMPOSER_EVENT,
   OPEN_REPOSITORY_PICKER_EVENT,
@@ -106,6 +107,12 @@ const ownsCurrent = () => {
 };
 const inOwnWorkbench = () => inWorkbench() && ownsCurrent();
 
+const ZOOM_SHORTCUTS: Array<[string, ZoomStep]> = [
+  ['view.zoomIn', 'in'],
+  ['view.zoomOut', 'out'],
+  ['view.zoomReset', 'reset'],
+];
+
 type Def = Omit<Shortcut, 'keys' | 'label' | 'menu'> & { keys?: string; label?: string };
 
 /** A shortcut whose keys and label come from main/menuCommands.ts. */
@@ -206,6 +213,15 @@ export function buildAppShortcuts(): Shortcut[] {
       allowInInput: true,
       run: () => useWorkspaceStore.getState().toggleSidebar(),
     }),
+    ...ZOOM_SHORTCUTS.map(([id, step]) =>
+      fromMenu({
+        id,
+        group: 'General',
+        allowInInput: true,
+        when: () => typeof window.electron?.zoom?.step === 'function',
+        run: () => void window.electron.zoom.step(step),
+      }),
+    ),
     fromMenu({
       id: 'nav.back',
       group: 'General',
