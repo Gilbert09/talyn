@@ -1,17 +1,34 @@
-import type { WatchedRepo } from '@talyn/client/native';
+import type { PRRow, WatchedRepo } from '@talyn/client/native';
 import type { CreateSpaceSessionRequest, SpaceRepository, SpacesTeam, WorkbenchReadiness, Workspace } from '@talyn/shared';
 
-import { blockedReason, type NewWorkForm, type NewWorkMode } from './model';
+import { activePullRequest, blockedReason, type NewWorkForm, type NewWorkMode } from './model';
 
 /**
  * A space's repositories in the shape the composer's repository sheet takes.
  * The full name is the id, like web, because the space create path takes the
  * name and adds the repository to my home workspace when it is missing.
+ * The default branch comes from my home workspace, when it has the repository.
  */
-export function spaceRepositories(spaceId: string, repositories: readonly SpaceRepository[] | undefined): WatchedRepo[] {
+export function spaceRepositories(spaceId: string, repositories: readonly SpaceRepository[] | undefined,
+  homeRepos: readonly Pick<Workspace['repos'][number], 'name' | 'defaultBranch'>[] = []): WatchedRepo[] {
   return (repositories ?? []).map((repo) => {
     const [owner = '', name = ''] = repo.repoFullName.split('/');
-    return { id: repo.repoFullName, workspaceId: spaceId, owner, repo: name, fullName: repo.repoFullName, defaultBranch: '' };
+    const wanted = repo.repoFullName.toLowerCase();
+    const defaultBranch = homeRepos.find((item) => item.name.toLowerCase() === wanted)?.defaultBranch ?? '';
+    return { id: repo.repoFullName, workspaceId: spaceId, owner, repo: name, fullName: repo.repoFullName, defaultBranch };
+  });
+}
+
+/**
+ * Pull request rows of the workspace shown, for the space's repositories.
+ * A space repository id is its full name, so each kept row takes that id. Other rows drop out.
+ */
+export function spacePullRequestRows<T extends Pick<PRRow, 'owner' | 'repo' | 'repositoryId'>>(
+  rows: readonly T[] | undefined, repos: readonly Pick<WatchedRepo, 'id' | 'fullName'>[]): T[] {
+  const ids = new Map(repos.map((repo) => [repo.fullName.toLowerCase(), repo.id]));
+  return (rows ?? []).flatMap((row) => {
+    const id = ids.get(`${row.owner}/${row.repo}`.toLowerCase());
+    return id ? [{ ...row, repositoryId: id }] : [];
   });
 }
 
@@ -22,12 +39,21 @@ export function spaceBlockedReason(form: NewWorkForm, team: Pick<SpacesTeam, 'ho
   return blockedReason(form, sandbox, offline);
 }
 
-/** The space create request, like web: a thread takes no repository, and neither takes a base branch. */
-export function spaceCreateBody(form: NewWorkForm): CreateSpaceSessionRequest {
-  const prompt = form.prompt.trim() || undefined;
-  if (form.mode === 'thread') return { kind: 'thread', agent: form.agent, model: form.model, prompt, internetAccess: form.internetAccess };
+/**
+ * The space create request, like web. A thread takes no repository or branch.
+ * With images, the first message goes after the create, so the body has no prompt and the text names the session.
+ */
+export function spaceCreateBody(form: NewWorkForm, withImages = false): CreateSpaceSessionRequest {
+  const text = form.prompt.trim() || undefined;
+  const prompt = withImages ? undefined : text;
+  const namingText = withImages ? text : undefined;
+  if (form.mode === 'thread') return { kind: 'thread', agent: form.agent, model: form.model, prompt, namingText, internetAccess: form.internetAccess };
   if (!form.repository) throw new Error('Choose a repository.');
-  return { repoFullName: form.repository.fullName, agent: form.agent, model: form.model, prompt, internetAccess: form.internetAccess };
+  const pr = activePullRequest(form.pullRequest, form.repository);
+  return { repoFullName: form.repository.fullName, agent: form.agent, model: form.model,
+    baseBranch: form.baseBranch.trim() || pr?.baseBranch || undefined,
+    ...(pr ? { branch: pr.headBranch || undefined, fromPullRequestId: pr.id } : {}),
+    prompt, namingText, internetAccess: form.internetAccess, autoCreatePr: true };
 }
 
 /** "Adds owner/repo to Home" when a session would add the repository to my home workspace first. */

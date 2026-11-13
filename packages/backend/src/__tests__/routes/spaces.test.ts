@@ -536,6 +536,26 @@ describe('space routes', () => {
       await vi.waitFor(async () => expect((await getWorkbench(res.body.data.workbench.id))?.status).toBe('ready'), { timeout: 5000 });
     });
 
+    it('takes the base branch, branch, naming text and auto PR setting like a personal session', async () => {
+      const res = await call('POST', '/spaces/space-1/sessions', ANA, {
+        repoFullName: 'acme/app', agent: 'claude', baseBranch: 'develop', branch: 'feature/login',
+        namingText: 'Fix the login page', autoCreatePr: false, internetAccess: false,
+      });
+      expect(res.status, res.body.error).toBe(200);
+      expect(res.body.data.workbench).toMatchObject({
+        baseBranch: 'develop', branch: 'feature/login', name: 'fix-login-page',
+        settings: { autoCreatePr: false, internetAccess: false },
+      });
+      await vi.waitFor(async () => expect((await getWorkbench(res.body.data.workbench.id))?.status).toBe('ready'), { timeout: 5000 });
+    });
+
+    it('refuses a pull request that is not in the home workspace', async () => {
+      const res = await call('POST', '/spaces/space-1/sessions', ANA, { repoFullName: 'acme/app', agent: 'claude', fromPullRequestId: 'pr-missing' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('That pull request is not in this repository, or its branch is not known yet.');
+      expect(await testDb.db.select({ id: workbenches.id }).from(workbenches)).toEqual([]);
+    });
+
     it.each([
       ['a repository outside the space', 'space-1', BEN, { repoFullName: 'acme/other', agent: 'claude' }, 400],
       ['a bad repository name', 'space-1', BEN, { repoFullName: 'nope', agent: 'claude' }, 400],
@@ -567,11 +587,12 @@ describe('space routes', () => {
       ['a repository', { repoFullName: 'acme/app' }],
       ['a branch', { branch: 'feature' }],
       ['a base branch', { baseBranch: 'main' }],
+      ['a pull request', { fromPullRequestId: 'pr-1' }],
       ['an empty repository', { repoFullName: '' }],
     ])('refuses a thread with %s', async (_name, extra) => {
       const res = await call('POST', '/spaces/space-1/sessions', BEN, { kind: 'thread', agent: 'claude', ...extra });
       expect(res.status).toBe(400);
-      expect(res.body.error).toBe('A thread takes no repository, branch or base branch.');
+      expect(res.body.error).toBe('A thread takes no repository, branch, base branch or pull request.');
       expect(await testDb.db.select({ id: workbenches.id }).from(workbenches)).toEqual([]);
     });
 

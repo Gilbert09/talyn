@@ -485,8 +485,13 @@ export async function createSessionInSpace(
     throw new TeamError(400, 'kind must be "session" or "thread".');
   }
   if (body.kind === 'thread') {
-    if (body.repoFullName !== undefined || body.branch !== undefined || body.baseBranch !== undefined) {
-      throw new TeamError(400, 'A thread takes no repository, branch or base branch.');
+    if (
+      body.repoFullName !== undefined ||
+      body.branch !== undefined ||
+      body.baseBranch !== undefined ||
+      body.fromPullRequestId !== undefined
+    ) {
+      throw new TeamError(400, 'A thread takes no repository, branch, base branch or pull request.');
     }
     const workspaceId = await homeWorkspaceFor(space.teamId, actor.id, expectedWorkspaceId);
     const workbench = await createWorkbench(
@@ -498,6 +503,7 @@ export async function createSessionInSpace(
         ...(body.model !== undefined ? { model: body.model } : {}),
         ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
         ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.namingText !== undefined ? { namingText: body.namingText } : {}),
         ...(body.internetAccess !== undefined ? { internetAccess: body.internetAccess } : {}),
         spaceId,
       },
@@ -533,7 +539,10 @@ export async function createSessionInSpace(
       ...(body.name !== undefined ? { name: body.name } : {}),
       ...(body.baseBranch !== undefined ? { baseBranch: body.baseBranch } : {}),
       ...(body.branch !== undefined ? { branch: body.branch } : {}),
+      ...(body.fromPullRequestId !== undefined ? { fromPullRequestId: body.fromPullRequestId } : {}),
+      ...(body.namingText !== undefined ? { namingText: body.namingText } : {}),
       ...(body.internetAccess !== undefined ? { internetAccess: body.internetAccess } : {}),
+      ...(body.autoCreatePr !== undefined ? { autoCreatePr: body.autoCreatePr } : {}),
       spaceId,
     },
     actor,

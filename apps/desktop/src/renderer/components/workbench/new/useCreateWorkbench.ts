@@ -27,6 +27,11 @@ export interface NewWorkbenchSpec {
   /** The first message. Empty creates the workbench with nothing to do yet. */
   prompt: string;
   attachments?: WorkbenchAttachment[];
+  /**
+   * Start it in this space. It runs in my home workspace for the space's
+   * team (`workspaceId`), and the space takes the repository by its full name.
+   */
+  spaceId?: string;
   baseBranch?: string;
   /** An existing branch to check out instead of a new one. */
   branch?: string;
@@ -67,7 +72,9 @@ export function useCreateWorkbench(): CreateWorkbenchState {
         trackEvent('session_message_sent', { queued: true, plan_mode: spec.planMode, model_id: spec.model, attachments_count: 0 });
       }
       const store = useWorkbenchStore.getState();
-      store.upsertWorkbench(wb);
+      // A space session can run in a workspace other than the one shown.
+      if (!spec.spaceId || store.workspaceId === wb.workspaceId) store.upsertWorkbench(wb);
+      else store.addExtraWorkbench(wb);
       // The session opens with the prompt already in its chat, not an empty
       // one: the prompt's own event comes only when the sandbox starts the turn.
       const firstChat = wb.chats?.[0];
@@ -117,6 +124,7 @@ export function useCreateWorkbench(): CreateWorkbenchState {
 
 async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
   const prompt = spec.prompt.trim();
+  if (spec.spaceId) return createInSpace(spec.spaceId, spec, prompt);
   if (spec.kind === 'thread') {
     return api.workbenches.create({
       workspaceId: spec.workspaceId,
@@ -166,8 +174,40 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
     internetAccess: spec.internetAccess,
     autoCreatePr: spec.autoCreatePr ?? true,
   });
-  // The queued first message takes the chat's plan mode and effort when it
-  // runs, and the box takes far longer to boot than this one request.
+  await applyFirstChatSettings(wb, spec);
+  return wb;
+}
+
+/** The same session or thread, started in a space by the space's create route. */
+async function createInSpace(spaceId: string, spec: NewWorkbenchSpec, prompt: string): Promise<Workbench> {
+  const shared = {
+    agent: spec.agent,
+    model: spec.model,
+    prompt: spec.attachments?.length ? undefined : prompt || undefined,
+    namingText: namingTextFor(spec, prompt),
+    internetAccess: spec.internetAccess,
+  };
+  if (spec.kind === 'thread') {
+    return (await api.spaces.createSession(spaceId, { kind: 'thread', ...shared })).workbench;
+  }
+  if (!spec.repoFullName) throw new Error('Choose a repository.');
+  const { workbench } = await api.spaces.createSession(spaceId, {
+    repoFullName: spec.repoFullName,
+    ...shared,
+    baseBranch: spec.baseBranch?.trim() || undefined,
+    branch: spec.branch?.trim() || undefined,
+    fromPullRequestId: spec.fromPullRequestId,
+    autoCreatePr: spec.autoCreatePr ?? true,
+  });
+  await applyFirstChatSettings(workbench, spec);
+  return workbench;
+}
+
+/**
+ * The queued first message takes the chat's plan mode and effort when it
+ * runs, and the box takes far longer to boot than this one request.
+ */
+async function applyFirstChatSettings(wb: Workbench, spec: NewWorkbenchSpec): Promise<void> {
   const chat = wb.chats?.[0];
   if (chat && (spec.planMode || spec.effort !== DEFAULT_WORKBENCH_EFFORT)) {
     await api.workbenches
@@ -175,7 +215,6 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
       .then((updated) => useWorkbenchStore.getState().upsertChat(updated))
       .catch((error) => captureWorkbenchFailure('update_first_chat', error, wb.id));
   }
-  return wb;
 }
 
 /** The first prompt, as the new session's transcript shows it before its event arrives. */
