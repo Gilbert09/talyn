@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Code review on ReviewBench (2026-11-13)
+
+`benchmarks/review-bench/` runs the review pipeline as a [ReviewBench](https://github.com/review-bench/ReviewBench) reviewer image. It reuses the prompt builders, parser, dedupe key and judge matching. Only the order of the units is new. The pure helpers moved from `executor.ts` to `unitPure.ts`, so the bundle has no database code.
+
+**Result.** On the 25-PR test set, Standard scores 66.7% high-severity grounded F1 at 100% precision (recall 50%). The leaderboard middle row is 67.2% F1 at 97.2% precision. Our judge was `gpt-6.1-sol` on a ChatGPT subscription, not the leaderboard's Claude judge, so the numbers are local only.
+
+**The first 0% score was a harness bug.** Codex's `read-only` sandbox uses bubblewrap, which Docker does not allow. Every agent command failed and the reviewers saw only the diff. The container now runs Codex without its sandbox, and a unit whose commands fail for an environment reason fails.
+
+**Prompt experiments did not generalize.** A counterexample pass plus a "second defect in the same workflow" sweep raised dev F1 from 62.9% to 70.3%. On the held-out PRs it fell from 73.7% to 58.8%, and the 25-PR total did not move. The production prompts are unchanged. The diff is in `benchmarks/review-bench/experiments/`. One finding moves F1 by about 2 points, so a prompt change needs repeated runs or the 219-PR corpus. See `benchmarks/review-bench/FINDINGS.md`.
+
 ## Sessions wait for CI through Talyn (2026-11-12)
 
 **Symptom.** A PostHog/posthog session pushed, said "the background poll checks every 5 minutes", and its Background tab showed no jobs and no wake-ups. The agent waited with Claude Code's own tools: a blocked foreground `sleep`, then `Monitor`, then a background Bash loop of 14 polls. That kept the box awake and the turn open, and the person could not see the wait.

@@ -1,0 +1,16 @@
+**
+!packages
+!packages/shared
+!packages/shared/**
+!packages/backend
+!packages/backend/src
+!packages/backend/src/services
+!packages/backend/src/services/codeReview
+!packages/backend/src/services/codeReview/**
+!benchmarks
+!benchmarks/review-bench
+!benchmarks/review-bench/**
+**/node_modules
+**/dist
+**/.work
+**/.env*

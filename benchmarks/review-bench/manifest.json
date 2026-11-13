@@ -1,0 +1,18 @@
+{
+  "name": "talyn-review",
+  "display_name": "Talyn Review",
+  "provider": "Talyn",
+  "image": "ghcr.io/gilbert09/talyn-review-bench@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "configuration": [
+    { "key": "preset", "value": "standard", "display_value": "Standard" },
+    { "key": "model", "value": "gpt-6.1-terra", "display_value": "GPT 6.1 Terra" }
+  ],
+  "secrets": {
+    "env": ["CODEX_AUTH_JSON_B64"],
+    "files": ["/root/.codex/auth.json"]
+  },
+  "egress": ["chatgpt.com", "api.openai.com", "auth.openai.com"],
+  "pr_timeout_seconds": 3600,
+  "contacts": ["Gilbert09"],
+  "notes": "Replace the image digest before submission. Talyn runs its review prompts through Codex."
+}

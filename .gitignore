@@ -61,3 +61,5 @@ posthog_work/
 
 # Throwaway Phase 0 provider spikes (not part of the app)
 scripts/spikes/
+
+benchmarks/review-bench/.work/

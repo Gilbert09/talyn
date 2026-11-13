@@ -1,0 +1,48 @@
+diff --git a/packages/backend/src/services/codeReview/lenses.ts b/packages/backend/src/services/codeReview/lenses.ts
+index e9ed5d4158..5830f6da7c 100644
+--- a/packages/backend/src/services/codeReview/lenses.ts
++++ b/packages/backend/src/services/codeReview/lenses.ts
+@@ -247,6 +247,18 @@ function preamble(ctx: ReviewPromptContext, diffBudget: number = MAX_INLINE_DIFF
+   ].join('\n');
+ }
+ 
++const COUNTEREXAMPLE_PASS = [
++  '## Check your assumptions',
++  '',
++  'For each changed behavior, state the assumption that must hold for it to work.',
++  'Try to falsify that assumption with a small input or state allowed by a real caller.',
++  'Trace the counterexample through callers, validation, and error handling.',
++  'Check an alternate entry point or consumer before concluding that a safeguard is complete.',
++  'Use a bounded, isolated check when runtime behavior is uncertain.',
++  'Do not change tracked files during these checks.',
++  'Keep independent defects separate. Give each one its own trigger and consequence.',
++].join('\n');
++
+ /** A single lens's prompt. */
+ export function buildLensPrompt(lens: ReviewLens, ctx: ReviewPromptContext): string {
+   return [
+@@ -261,6 +273,8 @@ export function buildLensPrompt(lens: ReviewLens, ctx: ReviewPromptContext): str
+     'reviewers are reading the same code through different lenses and the overlap is',
+     'sorted out afterwards.',
+     '',
++    COUNTEREXAMPLE_PASS,
++    '',
+     '## The bar',
+     '',
+     'Report a problem only when you can name a concrete trigger and a concrete',
+@@ -420,6 +434,15 @@ export function buildSweepPrompt(
+     'You are not scoped to one specialty: anything real is in scope as long as no',
+     'reviewer above already raised it.',
+     '',
++    'The list covers specific defects, not complete files or workflows.',
++    'Do not skip a component because another reviewer found one problem in it.',
++    'For each changed workflow, check its producer, transport, consumer, and failure result.',
++    'Assume the reported defects are fixed. Check whether a different defect still breaks that workflow.',
++    'Report it only if it needs a separate fix and has its own concrete trigger and consequence.',
++    'Do not split one root cause into multiple comments for different callers.',
++    '',
++    COUNTEREXAMPLE_PASS,
++    '',
+     '## The bar',
+     '',
+     'Only genuinely NEW problems. Do not restate or slightly reword anything above.',
