@@ -1,4 +1,4 @@
-import { useState, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import {
   agentGlance,
   checksGlance,
@@ -17,6 +17,7 @@ import type { SessionState } from '../../lib/sessionState';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { useBackground } from '../../stores/sessionBackground';
+import { anyDialogOpen, useAnyDialogOpen } from '../ui/dialog';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PRReviewPill } from '../widgets/PRReviewPill';
@@ -40,9 +41,18 @@ function HoverCardShell({
   children: ReactElement;
 }) {
   const [open, setOpen] = useState(false);
+  const dialogOpen = useAnyDialogOpen();
+  useEffect(() => {
+    if (dialogOpen) setOpen(false);
+  }, [dialogOpen]);
   return (
     <TooltipProvider delayDuration={0} skipDelayDuration={0} disableHoverableContent>
-      <Tooltip open={open && !disabled} onOpenChange={setOpen}>
+      <Tooltip
+        open={open && !disabled && !dialogOpen}
+        // A row menu gives focus back to the row when it closes, and focus opens the card.
+        // The card must not open on top of the dialog that the menu opened.
+        onOpenChange={(next) => setOpen(next && !anyDialogOpen())}
+      >
         <TooltipTrigger asChild>{children}</TooltipTrigger>
         <TooltipContent
           side="right"
