@@ -1,5 +1,5 @@
 {
-  "status": "Engineering inventory; privacy owner must approve store answers and retention before beta.",
+  "status": "Approved by the privacy owner (Tom Owers) on 2026-11-13: the Google Play Data safety and Apple App Privacy answers match this inventory. Re-approve after any change to collected data.",
   "lockfileSha256": "fe6c346af955ca16a365a9d3d57d9a0aa8f7f8eea295f134902b72237b232abc",
   "mobileDependencies": {
     "@expo-google-fonts/inter": "^0.4.2",
