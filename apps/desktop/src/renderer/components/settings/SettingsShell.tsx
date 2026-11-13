@@ -1,5 +1,6 @@
 import { useState, type ComponentType } from 'react';
 import {
+  Bell,
   Bot,
   Box,
   Brain,
@@ -47,6 +48,7 @@ import { BillingSettings } from './sections/BillingSettings';
 import { DeveloperSettings } from './sections/DeveloperSettings';
 import { IntegrationsSettings } from './sections/IntegrationsSettings';
 import { MCPServerSettings } from './sections/McpSettings';
+import { NotificationsSettings } from './sections/NotificationsSettings';
 import { ApiTokensSettings } from './sections/ApiTokensSettings';
 import { PullRequestsSettings } from './sections/PullRequestsSettings';
 import { RepositoriesSettings } from './sections/RepositoriesSettings';
@@ -62,7 +64,7 @@ interface NavEntry {
 }
 
 const SETTINGS_SEARCH_TERMS: Record<SettingsSection, string> = {
-  sessions: 'defaults runtime agent model reasoning effort plan mode internet access notifications archive idle branch prefix sidebar order usage limits',
+  sessions: 'defaults runtime agent model reasoning effort plan mode internet access archive idle branch prefix sidebar order usage limits',
   agents: 'Claude Codex subscriptions accounts providers API keys models usage rate limits',
   repositories: 'GitHub watched repositories local checkouts scan setup run command preview',
   sandboxSetup: 'dotfiles setup steps install commands branch repository',
@@ -71,12 +73,13 @@ const SETTINGS_SEARCH_TERMS: Record<SettingsSection, string> = {
   memory: 'notes session remember forget review clean up cleanup schedule overlap contradict',
   skills: 'SKILL.md local repository workspace tools',
   mcpServers: 'model context protocol tools servers integrations',
-  pullRequests: 'auto keep mergeable fix runs tasks defaults model notifications merge queue blocked labels human comments',
+  pullRequests: 'auto keep mergeable fix runs tasks defaults model merge queue labels human comments',
   codeReview: 'automatic reviews depth reviewers attention findings fixes inline comments summary',
   workspace: 'name logo delete',
   integrations: 'GitHub Anthropic Claude Codex PostHog providers API keys connect',
   teams: 'members roles invite spaces home workspace seats',
   billing: 'plan usage box hours limits upgrade invoices orders payment auto top-up balance',
+  notifications: 'alerts desktop phone mobile push agent finishes merge queue blocked quiet hours timezone away',
   account: 'email sign out privacy analytics usage data session replays',
   appearance: 'theme light dark system look',
   developer: 'build version commit GitHub rate limits events account delete data local storage',
@@ -150,6 +153,7 @@ const SECTION_BODY: Record<SettingsSection, ComponentType> = {
   integrations: IntegrationsSettings,
   teams: TeamPage,
   billing: BillingSettings,
+  notifications: NotificationsSettings,
   account: AccountSettings,
   appearance: AppearanceSettings,
   developer: DeveloperSettings,
@@ -216,6 +220,7 @@ export function SettingsShell() {
       label: 'App',
       entries: [
         { id: 'account', icon: User, label: 'Account' },
+        { id: 'notifications', icon: Bell, label: 'Notifications' },
         { id: 'appearance', icon: Palette, label: 'Appearance' },
         { id: 'developer', icon: Bug, label: 'Developer' },
         { id: 'mcp', icon: Plug, label: 'Talyn MCP server' },

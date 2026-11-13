@@ -394,14 +394,6 @@ export function SessionsSettings() {
       <ClaudeCoAuthorshipSection />
       <LimitResumeSection />
       <AutoArchiveSection />
-      <SettingsSection title="Notifications">
-        <SettingToggle
-          label="Notify me when an agent finishes"
-          description="Get a browser notification when a chat stops while Talyn is in the background."
-          checked={defaults.notifyOnFinish}
-          onChange={(notifyOnFinish) => writeSessionDefaults({ notifyOnFinish })}
-        />
-      </SettingsSection>
     </SettingsPage>
   );
 }

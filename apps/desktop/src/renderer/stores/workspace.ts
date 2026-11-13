@@ -113,6 +113,7 @@ export type SettingsSection =
   | 'instructions'
   | 'memory'
   | 'codeReview'
+  | 'notifications'
   | 'account'
   | 'billing'
   | 'teams'

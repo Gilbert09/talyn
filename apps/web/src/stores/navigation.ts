@@ -29,6 +29,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'instructions',
   'memory',
   'codeReview',
+  'notifications',
   'account',
   'billing',
   'teams',
