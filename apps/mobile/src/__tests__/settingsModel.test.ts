@@ -46,6 +46,7 @@ describe('connections and plan lines', () => {
     [{ billingEnabled: false }, 'No plan limits'],
     [{ billingEnabled: true }, null],
     [{ billingEnabled: true, tier: 'pro', usage }, 'Pro · 45% left'],
+    [{ billingEnabled: true, tier: 'pro', usage: { ...usage, usedWsec: 720_000, percent: 100 }, credits: { balanceMicros: 93_840_000, expiringSoonMicros: 0, lots: [], drawStartMicros: 120_000_000 } }, 'Pro · Using credits · $93.84 left'],
   ])('plan line for %j', (status, line) => {
     expect(billingLine(status as BillingStatus | undefined)).toBe(line);
   });

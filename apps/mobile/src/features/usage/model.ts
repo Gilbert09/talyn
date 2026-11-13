@@ -1,6 +1,7 @@
 import {
-  PLAN_LIMITS, PLAN_TIER_LABELS, formatBoxHoursUsage, formatCreditBalance, formatUsd, isPlanTier,
-  type BillingStatus, type PlanTier, type UsageSummary,
+  PLAN_LIMITS, PLAN_TIER_LABELS, creditDrawDetail, creditDrawHeadline, creditDrawOf, formatBoxHoursUsage,
+  formatCreditBalance, formatUsd, isCreditDrawLow, isPlanTier,
+  type BillingStatus, type CreditDraw, type PlanTier, type UsageSummary,
 } from '@talyn/shared';
 
 import type { Tone } from '../../components/UI';
@@ -29,6 +30,16 @@ export function gaugeLevel(usage: Pick<UsageSummary, 'percent' | 'exhausted'>): 
   return 'ok';
 }
 export const GAUGE_TONE: Record<GaugeLevel, Tone> = { ok: 'primary', half: 'warning', high: 'warning', full: 'destructive' };
+
+/** The view's credit draw, or null while the included hours last. Mirrors web `creditDrawOfView`. */
+export function creditDrawOfView(view: UsageView): CreditDraw | null {
+  return creditDrawOf(view.usage, view.status.credits);
+}
+
+/** The credit bar has its own colour, so it never reads as included hours. */
+export function creditDrawToneOf(draw: CreditDraw): Tone {
+  return isCreditDrawLow(draw) ? 'warning' : 'information';
+}
 
 export function leftPercent(percent: number, exhausted: boolean): number {
   return exhausted ? 0 : Math.min(100, Math.max(0, 100 - percent));
@@ -60,6 +71,8 @@ export interface UsageLines {
   autoTopup: string | null;
   autoTopupProblem: string | null;
   team: string | null;
+  /** Set while the account draws on credit; `left` and `used` then describe the credit. */
+  credit: CreditDraw | null;
 }
 
 /** Every line the Usage screen shows, from the billing status. Mirrors web `gaugeSummary` and the plan page. */
@@ -71,10 +84,11 @@ export function usageLines(view: UsageView): UsageLines {
   const boxes = status.concurrentBoxes;
   const limit = boxes?.limit ?? PLAN_LIMITS[tier].concurrentBoxes;
   const topup = status.autoTopup;
+  const credit = creditDrawOfView(view);
   return {
     plan: PLAN_TIER_LABELS[tier],
-    left: formatLeftPercent(usage.percent, usage.exhausted),
-    used: `${formatBoxHoursUsage(usage.usedWsec, usage.includedWsec)} used`,
+    left: credit ? creditDrawHeadline(credit) : formatLeftPercent(usage.percent, usage.exhausted),
+    used: credit ? creditDrawDetail(credit) : `${formatBoxHoursUsage(usage.usedWsec, usage.includedWsec)} used`,
     reset: `Resets ${shortDate(usage.periodEnd)}`,
     exhausted: usage.exhausted ? 'Out of hours: new boxes paused' : null,
     boxes: boxes ? `${boxes.used} of ${limit} running` : `Up to ${limit} at the same time`,
@@ -83,5 +97,6 @@ export function usageLines(view: UsageView): UsageLines {
     autoTopup: !credits || !topup ? null : topup.enabled ? `On, below ${formatUsd(topup.triggerMicros, 0)}` : 'Off',
     autoTopupProblem: topup?.lastFailure ? `The last top-up failed: ${topup.lastFailure}` : null,
     team: status.team ? status.team.hasSeat ? `Seat on ${status.team.name}` : `Admin of ${status.team.name}` : null,
+    credit,
   };
 }

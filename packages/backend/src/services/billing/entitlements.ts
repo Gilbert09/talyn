@@ -17,6 +17,7 @@ import {
   autoTopupMonthKey,
   boxHoursToWeightedSeconds,
   creditBalanceMicros,
+  creditDrawOf,
   expiringSoonMicros,
   formatBoxHoursLabel,
   isCreditPackId,
@@ -60,7 +61,7 @@ import {
 } from '../../db/schema.js';
 import { advisoryLockKey } from '../advisoryLock.js';
 import { readBudget, type UsageBudget } from './usage/charge.js';
-import { liveLots } from './usage/credits.js';
+import { creditDrawStartMicros, liveLots } from './usage/credits.js';
 import { getBudget } from './usage/index.js';
 import { countUsageResets, usageResetAvailability } from './usage/resets.js';
 
@@ -1065,6 +1066,11 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     ])
   );
   const resets = await runWithoutScope(() => countUsageResets(ownerId, budget.period.start));
+  if (credits && creditDrawOf(budget, credits)) {
+    credits.drawStartMicros = await runWithoutScope(() =>
+      creditDrawStartMicros(ownerId, budget.period.start, credits.balanceMicros)
+    );
+  }
   const reset = usageResetAvailability({ tier, usedWsec: budget.usedWsec });
 
   return {

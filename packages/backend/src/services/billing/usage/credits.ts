@@ -56,6 +56,29 @@ export async function creditBalance(ownerId: string, now: Date): Promise<Micros>
   return Number(row?.micros ?? 0);
 }
 
+/**
+ * The balance when the current credit draw started: the balance now plus the
+ * credit burned since the latest of the period start, the latest credit
+ * added, and the latest usage reset in this period. A top-up therefore starts
+ * a new draw at the new, larger balance. Reads the ledger, so call it only
+ * while the owner draws on credit.
+ */
+export async function creditDrawStartMicros(ownerId: string, periodStart: Date, balanceMicros: Micros): Promise<Micros> {
+  const start = periodStart.toISOString();
+  const result = await db().execute(sql`
+    SELECT COALESCE(SUM(-delta_micros), 0) AS burned FROM credit_ledger
+    WHERE owner_id = ${ownerId} AND reason = 'burn'
+      AND created_at >= GREATEST(
+        ${start}::timestamptz,
+        (SELECT MAX(created_at) FROM credit_ledger WHERE owner_id = ${ownerId} AND delta_micros > 0),
+        (SELECT MAX(created_at) FROM usage_resets
+          WHERE owner_id = ${ownerId} AND period_start = ${start}::timestamptz AND refunded_at IS NULL)
+      )
+  `);
+  const [row] = rowsOf<{ burned: string | number | null }>(result);
+  return balanceMicros + Math.max(0, Number(row?.burned ?? 0));
+}
+
 function rowsOf<T>(result: unknown): T[] {
   if (Array.isArray(result)) return result as T[];
   const rows = (result as { rows?: T[] } | null)?.rows;

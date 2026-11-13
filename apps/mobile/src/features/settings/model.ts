@@ -1,11 +1,11 @@
 import {
-  DEFAULT_AUTO_ARCHIVE_IDLE_DAYS, PLAN_TIER_LABELS, mcpServersOffered, privateRoutesOffered, workbenchesOffered,
+  DEFAULT_AUTO_ARCHIVE_IDLE_DAYS, PLAN_TIER_LABELS, creditDrawHeadline, mcpServersOffered, privateRoutesOffered, workbenchesOffered,
   type BillingStatus, type Features, type Workspace, type WorkspaceSettings,
 } from '@talyn/shared';
 import type { Href } from 'expo-router';
 
 import type { ThemePreference } from '../../theme/tokens';
-import { formatLeftPercent, usageViewOf } from '../usage/model';
+import { creditDrawOfView, formatLeftPercent, usageViewOf } from '../usage/model';
 
 /** Archive idle sessions after this many days. 0 is off. The same choices as web. */
 export const IDLE_DAY_OPTIONS = [0, 1, 3, 7, 14, 30] as const;
@@ -60,7 +60,8 @@ export function githubStateLabel(state: GitHubState): string {
 export function billingLine(status: BillingStatus | null | undefined): string | null {
   const view = usageViewOf(status);
   if (!view) return status && !status.billingEnabled ? 'No plan limits' : null;
-  return `${PLAN_TIER_LABELS[view.tier]} · ${formatLeftPercent(view.usage.percent, view.usage.exhausted)}`;
+  const credit = creditDrawOfView(view);
+  return `${PLAN_TIER_LABELS[view.tier]} · ${credit ? creditDrawHeadline(credit) : formatLeftPercent(view.usage.percent, view.usage.exhausted)}`;
 }
 
 export const APPEARANCE_OPTIONS: ReadonlyArray<{ value: ThemePreference; label: string }> = [
