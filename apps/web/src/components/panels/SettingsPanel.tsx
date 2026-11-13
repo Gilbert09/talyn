@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
+  Bell,
   FileText,
   Brain,
   Users,
@@ -92,6 +93,7 @@ import type {
 } from '@talyn/shared';
 import { FleetAccountsList } from '../settings/FleetAccountsList';
 import { SessionsSettings } from '../settings/sections/SessionsSettings';
+import { NotificationsSettings } from '../settings/sections/NotificationsSettings';
 import { ShortcutsSettings } from '../settings/sections/ShortcutsSettings';
 import {
   POSTHOG_CODE_MODELS,
@@ -105,11 +107,7 @@ import {
 } from '@talyn/shared';
 import { useWorkspaceStore, type SettingsSection, type Theme } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
-import {
-  useWorkspaceActions,
-  getMergeBlockedNotifyEnabled,
-  setMergeBlockedNotifyEnabled,
-} from '../../hooks/useApi';
+import { useWorkspaceActions } from '../../hooks/useApi';
 import { useAuth } from '../auth/AuthProvider';
 import {
   trackEvent,
@@ -125,7 +123,7 @@ import {
 } from '../../lib/repoCache';
 
 const SETTINGS_SEARCH_TERMS: Record<SettingsSection, string> = {
-  sessions: 'defaults runtime agent model reasoning effort plan mode internet access notifications archive idle branch prefix sidebar order usage limits',
+  sessions: 'defaults runtime agent model reasoning effort plan mode internet access archive idle branch prefix sidebar order usage limits',
   shortcuts: 'keyboard hotkeys keys navigation',
   workspace: 'name logo repositories GitHub delete code review',
   sandboxSetup: 'dotfiles setup steps install commands branch repository',
@@ -134,6 +132,7 @@ const SETTINGS_SEARCH_TERMS: Record<SettingsSection, string> = {
   instructions: 'AGENTS.md CLAUDE.md prompts templates plan implement review fix repository files',
   memory: 'notes session remember forget review clean up cleanup schedule overlap contradict',
   codeReview: 'automatic reviews depth reviewers attention findings fixes inline comments summary',
+  notifications: 'alerts browser phone mobile push agent finishes merge queue blocked quiet hours timezone away',
   account: 'email sign out privacy analytics usage data session replays',
   billing: 'plan usage box hours limits upgrade invoices orders payment auto top-up balance',
   teams: 'members roles invite spaces home workspace seats',
@@ -170,6 +169,7 @@ export function SettingsPanel() {
     { id: 'codeReview' as const, icon: ScanSearch, label: 'Code review' },
 
     { id: 'account' as const, icon: User, label: 'Account' },
+    { id: 'notifications' as const, icon: Bell, label: 'Notifications' },
     { id: 'billing' as const, icon: CreditCard, label: 'Billing' },
     // Drawn for anyone the flag offers teams to, and for anyone already on a
     // team whatever the flag says: a seated member must always be able to
@@ -271,6 +271,7 @@ export function SettingsPanel() {
               </SettingsPage>
             )}
             {activeSection === 'account' && <AccountSettings />}
+            {activeSection === 'notifications' && <NotificationsSettings />}
             {activeSection === 'billing' && <BillingSettings />}
             {activeSection === 'teams' && (features?.spaces === true ? <TeamsSettings /> : <TeamSettings />)}
             {activeSection === 'appearance' && <AppearanceSettings />}
@@ -2327,24 +2328,6 @@ export function PostHogCodeCard() {
 
 function AppearanceSettings() {
   const { theme, setTheme } = useWorkspaceStore();
-  const [notifyBlocked, setNotifyBlocked] = useState(getMergeBlockedNotifyEnabled());
-  const [notifyPermission, setNotifyPermission] = useState<NotificationPermission>(
-    typeof Notification !== 'undefined' ? Notification.permission : 'denied'
-  );
-
-  const toggleNotifyBlocked = async (next: boolean) => {
-    setMergeBlockedNotifyEnabled(next);
-    setNotifyBlocked(next);
-    // Request OS permission eagerly on enable so the first real block doesn't
-    // race the browser permission prompt.
-    if (next && typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      try {
-        setNotifyPermission(await Notification.requestPermission());
-      } catch {
-        // ignore
-      }
-    }
-  };
 
   const themeOptions: { value: Theme; label: string; icon: typeof Sun; description: string }[] = [
     {
@@ -2414,35 +2397,6 @@ function AppearanceSettings() {
           transcript included: {formatKeys('mod+=')} zooms in, {formatKeys('mod+-')} zooms
           out and {formatKeys('mod+0')} resets. Your browser remembers the size for Talyn.
         </p>
-      </Card>
-
-      <Card className="p-4">
-        <h4 className="font-medium mb-3">Notifications</h4>
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={notifyBlocked}
-            onChange={(e) => void toggleNotifyBlocked(e.target.checked)}
-            className="mt-1"
-          />
-          <div className="flex-1">
-            <div className="font-medium text-sm">
-              Notify me when a merge-queue PR is blocked
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Shows a desktop notification and an in-app alert when a PR in the merge
-              queue gives up after its retry budget and needs manual intervention.
-              Click the notification to jump to it.
-            </p>
-            {notifyPermission === 'denied' && (
-              <p className="text-xs text-yellow-500 mt-1">
-                Desktop notifications are blocked at the OS level — grant Talyn
-                permission in your system settings to receive them. (The in-app alert
-                still shows.)
-              </p>
-            )}
-          </div>
-        </label>
       </Card>
     </div>
   );

@@ -29,7 +29,12 @@ Other options in the composer:
 - You can attach a video only after the session starts. When you start a new session, attach images only.
 - The agent gets a video as a file in the sandbox. It cannot watch the video. It can take still frames from the video with a tool such as ffmpeg, if the sandbox has one.
 
-Your defaults for new sessions are in **Settings > Sessions**: the agent, the model, the reasoning effort, plan mode, internet access, a branch prefix such as `yourname/`, and a notification when an agent finishes.
+Your defaults for new sessions are in **Settings > Sessions**: the agent, the model, the reasoning effort, plan mode, internet access and a branch prefix such as `yourname/`.
+
+In the desktop app and the web app, **Settings > Notifications** holds all notification settings. In the mobile app, they are in the **Notifications** group in **Settings**.
+
+- On a computer, turn on a notification when an agent finishes, and a notification when a merge-queue pull request is blocked. These settings apply only to that computer or browser.
+- For your phone, turn workspace notifications on or off, and choose the types: session updates, PR reviews, CI failures, ready to merge and human input. You can get alerts only when you are away from your computer, and you can set quiet hours. A change on one device also applies to the others. Each phone must also allow notifications in the Talyn mobile app.
 
 Claude adds itself as a commit co-author by default. Turn this off under **Settings > Sessions > Commits**.
 

@@ -39,12 +39,12 @@ it('finds every settings section that matches a search term', () => {
   const nav = screen.getByRole('navigation', { name: 'Settings sections' });
 
   fireEvent.change(within(nav).getByRole('searchbox', { name: 'Search settings' }), {
-    target: { value: 'notifications' },
+    target: { value: 'merge queue' },
   });
 
   expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual([
-    'Sessions',
     'Pull requests',
+    'Notifications',
   ]);
 });
 

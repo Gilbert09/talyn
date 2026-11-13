@@ -47,6 +47,7 @@ const SETTINGS_LABEL: Record<SettingsSection, string> = {
   instructions: 'Instructions',
   memory: 'Memory',
   codeReview: 'Code review',
+  notifications: 'Notifications',
   account: 'Account',
   billing: 'Billing',
   teams: 'Teams',
