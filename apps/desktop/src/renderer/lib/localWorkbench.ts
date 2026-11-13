@@ -12,6 +12,8 @@ import {
   parseAutoPrDetails,
   pickWorkbenchName,
   pullRequestOutcomeEvent,
+  pullRequestRetryMessage,
+  PR_RETRY_MAX,
   withSeq,
   workbenchBranchFromTask,
   workbenchNameFromTask,
@@ -25,6 +27,7 @@ import {
   type PullRequestOutcome,
   type WorkbenchLocalBridge,
   type WorkbenchMessageIntent,
+  type WorkbenchMessageTrigger,
   type WorkbenchQueuedMessage,
   type WorkbenchTurnOutcome,
 } from '@talyn/shared';
@@ -32,7 +35,7 @@ import { api } from './api';
 import { getDeviceId, getWorkbenchBridge, newClientId } from './workbenchBridge';
 import { ensureChatHistory } from './workbenchData';
 import { makeUserMessageEvent } from './workbenchFormat';
-import { adoptLocalPullRequest, openLocalPullRequest } from './localPullRequest';
+import { adoptLocalPullRequest, FixablePullRequestError, openLocalPullRequest } from './localPullRequest';
 import { toast } from '../stores/toast';
 import { lastSeq, lastTurn, useWorkbenchStore } from '../stores/workbenches';
 import { useWorkspaceStore } from '../stores/workspace';
@@ -82,9 +85,16 @@ interface RunningTurn {
   /** The message that started the turn, for the branch-name prompt. */
   text: string;
   intent?: WorkbenchMessageIntent;
+  /** Set when Talyn wrote the message, for example a pull request retry. */
+  trigger?: WorkbenchMessageTrigger;
   /** Set once the turn's pull request is under way, so a second end cannot open another. */
   pullRequestStarted?: boolean;
 }
+
+/** A message the controller runs: a person's, or one Talyn wrote with a trigger. */
+type LocalTurnInput = SendWorkbenchMessageInput & { trigger?: WorkbenchMessageTrigger };
+
+const PR_RETRY_ERROR_MAX_CHARS = 2000;
 
 export class LocalTurnController {
   private readonly deps: LocalControllerDeps;
@@ -327,17 +337,20 @@ export class LocalTurnController {
     return { queued: false };
   }
 
-  private async startTurn(workbench: Workbench, chat: WorkbenchChat, input: SendWorkbenchMessageInput): Promise<void> {
+  private async startTurn(workbench: Workbench, chat: WorkbenchChat, input: LocalTurnInput): Promise<void> {
     const path = workbench.localPath;
     if (!path) throw new Error('This session has no local path.');
     const events = useWorkbenchStore.getState().chatEvents[chat.id]?.events ?? [];
     const turn = Math.max(lastTurn(events), this.running.get(chat.id)?.turn ?? 0) + 1;
     this.started.add(chat.id);
-    this.running.set(chat.id, { workbenchId: workbench.id, turn, text: input.text, intent: input.intent });
+    this.running.set(chat.id, { workbenchId: workbench.id, turn, text: input.text, intent: input.intent, trigger: input.trigger });
     this.setStatus(chat, 'running');
 
     await this.checkpoint(path, chat.id, turn);
-    this.record(chat.id, turn, makeUserMessageEvent(input.text, input.attachments));
+    const userEvent = makeUserMessageEvent(input.text, input.attachments);
+    // A Talyn message: the clients show the turn as a system row, not as the person's prompt.
+    if (input.trigger) userEvent.talyn = { kind: 'user_message', origin: 'talyn', trigger: input.trigger };
+    this.record(chat.id, turn, userEvent);
     void this.report(chat.id, { status: 'running' });
     if (turn === 1) void this.generateTitle(workbench, chat.agent, input.text);
 
@@ -349,7 +362,12 @@ export class LocalTurnController {
       text,
       planMode,
       intent: input.intent,
-      createPr: { branch: workbench.branch, baseBranch: workbench.baseBranch, extra: workbench.settings?.prompts?.create_pr },
+      createPr: {
+        branch: workbench.branch,
+        baseBranch: workbench.baseBranch,
+        extra: workbench.settings?.prompts?.create_pr,
+        retryError: input.trigger?.kind === 'pr_retry' ? input.trigger.error : null,
+      },
       autoCreatePr: workbench.settings?.autoCreatePr,
       hasPullRequest: Boolean(workbench.pullRequestId),
     });
@@ -443,11 +461,13 @@ export class LocalTurnController {
     const succeeded = Boolean(wasRunning) && !outcome.isError && !outcome.cancelled;
     if (wasRunning && succeeded && wasRunning.intent === 'rename_branch') await this.followBranchRename(wasRunning);
     let nameAfter = false;
+    let retry: LocalTurnInput | null = null;
     if (wasRunning && (wasRunning.intent === 'create_pr' || autoPr) && !wasRunning.pullRequestStarted && succeeded) {
       wasRunning.pullRequestStarted = true;
       // The push fixes the branch name, so a better one comes first, from the agent's PR title.
       await this.nameBranchBeforePullRequest(chatId, wasRunning, outcome.resultText);
-      await this.openPullRequest(chatId, wasRunning, outcome.resultText);
+      const fixableError = await this.openPullRequest(chatId, wasRunning, outcome.resultText);
+      if (fixableError) retry = pullRequestRetryInput(wasRunning, fixableError);
     } else if (wasRunning && succeeded && wasRunning.turn === 1 && wasRunning.intent !== 'rename_branch') {
       nameAfter = true;
     }
@@ -472,7 +492,8 @@ export class LocalTurnController {
       void this.nameBranch(chatId, wasRunning, { finalMessage: outcome.resultText });
     }
 
-    const next = useWorkbenchStore.getState().dequeueLocal(chatId);
+    // A message the person queued says what is next, so it goes before a pull request retry.
+    const next: LocalTurnInput | null = useWorkbenchStore.getState().dequeueLocal(chatId) ?? retry;
     if (!next) return;
     const workbenchId = wasRunning?.workbenchId ?? chat?.workbenchId;
     const nextWorkbench = workbenchId ? useWorkbenchStore.getState().workbenches[workbenchId] : undefined;
@@ -613,10 +634,12 @@ export class LocalTurnController {
   }
 
   /** Open the PR from the agent's block, and record the result. */
-  private async openPullRequest(chatId: string, run: RunningTurn, finalText: string): Promise<void> {
+  /** Opens the turn's pull request. Answers the error when the agent can fix the failure, else null. */
+  private async openPullRequest(chatId: string, run: RunningTurn, finalText: string): Promise<string | null> {
     const workbench = useWorkbenchStore.getState().workbenches[run.workbenchId];
     const parsed = parsePrDetails(finalText);
     let outcome: PullRequestOutcome;
+    let fixableError: string | null = null;
     if (!parsed.ok) outcome = (workbench && (await this.adoptPullRequest(workbench))) || { ok: false, message: parsed.error };
     else if (!workbench) outcome = { ok: false, message: 'The session is no longer loaded.' };
     else {
@@ -629,10 +652,12 @@ export class LocalTurnController {
         outcome = { ok: true, ...result.pullRequest, existing: result.existing };
       } catch (err) {
         outcome = { ok: false, message: err instanceof Error ? err.message : String(err) };
+        if (err instanceof FixablePullRequestError) fixableError = err.message;
       }
     }
     this.record(chatId, run.turn, pullRequestOutcomeEvent(outcome) as AgentEventDraft);
     if (!outcome.ok) toast.error('Could not open the pull request', outcome.message);
+    return fixableError;
   }
 
   /**
@@ -847,4 +872,20 @@ async function detectDefaultBranch(bridge: WorkbenchLocalBridge, repoPath?: stri
   } catch {
     return null;
   }
+}
+
+/**
+ * The turn that gives a fixable pull request failure back to the agent, as the
+ * sandbox does. Null after `PR_RETRY_MAX` retries in a row.
+ */
+function pullRequestRetryInput(run: RunningTurn, error: string): LocalTurnInput | null {
+  const attempt = (run.trigger?.kind === 'pr_retry' ? run.trigger.attempt : 0) + 1;
+  if (attempt > PR_RETRY_MAX) return null;
+  const detail = error.slice(0, PR_RETRY_ERROR_MAX_CHARS);
+  return {
+    text: pullRequestRetryMessage(detail),
+    intent: 'create_pr',
+    planMode: false,
+    trigger: { kind: 'pr_retry', attempt, error: detail },
+  };
 }

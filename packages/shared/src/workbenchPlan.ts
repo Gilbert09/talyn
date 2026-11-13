@@ -100,7 +100,7 @@ export function workbenchTurnPrompt(input: {
   text: string;
   planMode: boolean;
   intent?: WorkbenchMessageIntent;
-  createPr: { branch: string; baseBranch: string; extra?: string | null };
+  createPr: { branch: string; baseBranch: string; extra?: string | null; retryError?: string | null };
   internetAccess?: boolean;
   autoCreatePr?: boolean;
   hasPullRequest?: boolean;

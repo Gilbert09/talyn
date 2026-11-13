@@ -90,6 +90,8 @@ One button in the session header moves the work on. Its label changes as the pul
 
 To have the agent open the pull request by itself when it finishes, turn on **Open a PR when the agent is done** in **Settings > Agents**.
 
+Sometimes Talyn cannot push the branch or commit the changes for a reason that the agent can fix. For example, the branch on GitHub has commits that the session does not have. Then Talyn gives the error back to the agent in a new turn. The agent merges the remote commits or fixes the commit, and Talyn tries again. The chat shows this turn as one line, **Talyn could not open the pull request**, and **Show error** shows the error. Talyn tries at most two times. It does not try again when GitHub refuses access, because only you can fix that. It also does not try again when you already sent the next message.
+
 To link a pull request that already exists, open the **More actions** menu in the header and select **Link pull request…**.
 
 ## Threads

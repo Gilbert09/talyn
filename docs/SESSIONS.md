@@ -7762,3 +7762,18 @@ A video goes up as it is: no re-encoding, and never inline. The JSON body of a m
 The agent gets the video path under "Attached files" with `WORKBENCH_VIDEO_PROMPT_NOTE`: it cannot watch a video, but it can extract frames. Codex gets no `--image` for a video.
 Web and desktop show a sent video as a chip that loads and plays the file only when it is opened. The CSPs gain `media-src 'self' blob:`. Mobile picks videos from the library only (no recording: the microphone permission is off, and turning it on needs a new binary) and shows a sent video as a tile with no playback, because playback needs a native module.
 A local desktop session writes a video over IPC. Main's attachment limit is now the video limit.
+
+### 2026-11-13 — The agent fixes a failed Create PR push
+
+Before, a Create PR turn (or an automatic PR) ended with a red `talyn_pr` line when Talyn's own push or commit failed. A common case was "the remote branch has commits this branch does not have", and the person then had to ask the agent to merge.
+Now a failure that the agent can fix queues one more turn with `origin: 'talyn'`, `intent: 'create_pr'` and a new trigger kind `pr_retry` (`{ attempt, error }`, `packages/shared/src/workbenchBackground.ts`). The agent can fix these failures:
+- A push that `classifyPushFailure` calls `behind` (`[rejected]`, `fetch first`, `non-fast-forward`).
+- The signed-commit path when GitHub has commits that HEAD does not contain.
+- A failed commit.
+- A title that is empty or too long.
+On the backend these throw `AgentFixablePullRequestError` (`services/workbenches/errors.ts`; it is in that file because `pullRequest.ts` is on an import cycle). `openPullRequestFromTurn` returns `fixableError`, and `queuePullRequestRetry` in `turns.ts` sends the turn.
+The retry turn gets `buildCreatePrTurnInstructions({ retryError })`. Those instructions replace "do not commit" with "fetch and merge `origin/<branch>`, no rebase or reset", and they still forbid a push, `gh` and `fleet-publish`. The agent ends with a new `talyn-pr` block. Then the usual end-of-turn path opens the PR.
+Limits: `PR_RETRY_MAX` (2) retries in a row, counted from the trigger of the turn that just ran. No retry when the person already has a message in the queue. No retry for a 403, a workflow refusal or an unknown push failure.
+The desktop local runtime does the same in `LocalTurnController.handleTurnEnd` (`FixablePullRequestError` in `localPullRequest.ts`). It records the user event with `talyn.origin`/`trigger`, so all clients show a system row.
+Web and desktop `TriggerRow` show the line with **Show error**. Mobile now shows every triggered Talyn turn (wake-up, job exit, PR retry) as one system line, as web does. Before, it showed these turns as a user bubble.
+

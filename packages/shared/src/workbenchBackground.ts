@@ -136,6 +136,14 @@ export type WorkbenchMessageTrigger =
       jobName: string;
       /** Null when the job's exit code is not known. */
       exitCode: number | null;
+    }
+  | {
+      /** Talyn could not open the pull request, and the agent can fix the cause. */
+      kind: 'pr_retry';
+      /** 1 for the first automatic retry, up to `PR_RETRY_MAX`. */
+      attempt: number;
+      /** Talyn's words for the failure. */
+      error: string;
     };
 
 /** `POST /workbenches/:id/background/jobs`. Talyn's MCP server calls it for the agent. */
@@ -230,7 +238,7 @@ export function messageTrigger(talyn: unknown): WorkbenchMessageTrigger | null {
   const trigger = (talyn as { trigger?: unknown }).trigger;
   if (!trigger || typeof trigger !== 'object') return null;
   const kind = (trigger as { kind?: unknown }).kind;
-  return kind === 'wakeup' || kind === 'job_exit' ? (trigger as WorkbenchMessageTrigger) : null;
+  return kind === 'wakeup' || kind === 'job_exit' || kind === 'pr_retry' ? (trigger as WorkbenchMessageTrigger) : null;
 }
 
 /** The one line a client shows for a turn that a trigger started. */
@@ -238,6 +246,7 @@ export function messageTriggerText(trigger: WorkbenchMessageTrigger): string {
   if (trigger.kind === 'wakeup') {
     return trigger.ci ? `${ciWakeupOutcomeLabel(trigger.ci)}: ${trigger.reason}` : `Woke up: ${trigger.reason}`;
   }
+  if (trigger.kind === 'pr_retry') return 'Talyn could not open the pull request. The agent tries to fix the cause.';
   const code = trigger.exitCode === null ? 'an unknown code' : `code ${trigger.exitCode}`;
   return `Background job ${trigger.jobName} exited with ${code}`;
 }

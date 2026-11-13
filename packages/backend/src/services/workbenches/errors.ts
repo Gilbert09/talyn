@@ -52,6 +52,18 @@ export class WorkbenchError extends Error {
   }
 }
 
+/**
+ * A failure the agent can fix in the box: the remote branch has commits the
+ * box lacks, a commit failed, or the title is too long. After a turn, Talyn
+ * gives it back to the agent instead of ending there.
+ */
+export class AgentFixablePullRequestError extends WorkbenchError {
+  constructor(message: string, status: number, code: string) {
+    super(message, status, code);
+    this.name = 'AgentFixablePullRequestError';
+  }
+}
+
 /** A resize the fleet refused for its size. The move fails and the session keeps its box. */
 export class SandboxSizeRefusedError extends WorkbenchError {
   constructor(readonly size: SandboxSize, reason: string) {

@@ -1,5 +1,5 @@
 import {
-  PLAN_APPROVED_MESSAGE, buildBlocks, findTurnPlan, groupToolRuns, isClaudeInterruptionEvent, mergeToolBlocks,
+  PLAN_APPROVED_MESSAGE, buildBlocks, findTurnPlan, groupToolRuns, isClaudeInterruptionEvent, mergeToolBlocks, messageTrigger, messageTriggerText,
   stripAutoPrBlock, stripPlanBlocks, type AgentEvent, type GroupedBlock, type ThreadSessionEvent, type ToolBlock,
   type ToolGroupBlock, type WorkbenchEvent,
 } from '@talyn/shared';
@@ -68,7 +68,8 @@ function splitTurns(turn: number, events: WorkbenchEvent[], interruption: (entry
     // Claude's "[Request interrupted…]" user echo reads as a system line in the turn it stopped.
     const interrupted = interruption(entry);
     const event: AgentEvent = interrupted ? { seq: entry.seq, type: 'system', subtype: 'talyn_interruption' } as AgentEvent : { ...entry.event, seq: entry.seq };
-    const text = interrupted ? null : userMessageText(event);
+    // A turn Talyn started for a trigger (a wake-up, a job exit, a pull request retry) is a system line, as on web.
+    const text = interrupted || messageTrigger(event.talyn) ? null : userMessageText(event);
     if (!current || (text !== null && current.user !== null)) {
       current = { turn, user: null, events: [], times: new Map() };
       turns.push(current);
@@ -110,7 +111,8 @@ function turnRows(chatId: string, turn: Turn, partial: ReadonlySet<string>): Tra
         break;
       }
       case 'permission': rows.push({ key, timestamp, kind: 'permission', toolName: block.toolName, toolInput: block.toolInput, status: block.status, persist: Boolean(block.persist) }); break;
-      case 'system': rows.push({ key, timestamp, kind: 'system', text: clip(block.text), subtype: block.subtype, url: block.url, isError: Boolean(block.isError),
+      // A wake-up, a job exit or a pull request retry: one short line, as on web.
+      case 'system': rows.push({ key, timestamp, kind: 'system', text: clip(block.trigger ? messageTriggerText(block.trigger) : block.text), subtype: block.subtype, url: block.url, isError: Boolean(block.isError),
         pullRequest: block.pullRequest, thread: block.thread }); break;
       case 'result':
         if (cancelled) rows.push({ key, timestamp, kind: 'stopped' });

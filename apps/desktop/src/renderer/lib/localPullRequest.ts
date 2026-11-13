@@ -1,4 +1,5 @@
 import {
+  classifyPushFailure,
   commitAllSteps,
   commitsAheadSteps,
   describePushFailure,
@@ -16,6 +17,17 @@ import {
   type Workbench,
   type WorkbenchLocalBridge,
 } from '@talyn/shared';
+
+/**
+ * A failure the agent can fix in the worktree: a commit failed, or the remote
+ * branch has commits the worktree lacks. Talyn gives it back to the agent.
+ */
+export class FixablePullRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FixablePullRequestError';
+  }
+}
 
 export interface PullRequestApi {
   createPullRequest(id: string, input: CreateWorkbenchPullRequestInput): Promise<CreateWorkbenchPullRequestResult>;
@@ -40,14 +52,15 @@ export async function openLocalPullRequest(
   if (status.stdout.trim()) {
     const commit = await bridge.exec(path, commitAllSteps(prCommitMessage(input), { skipHooks: true }));
     if (commit.exitCode !== 0) {
-      throw new Error(`Could not commit the changes.\n${gitStderrTail(commit.stderr || commit.stdout)}`.trim());
+      throw new FixablePullRequestError(`Could not commit the changes.\n${gitStderrTail(commit.stderr || commit.stdout)}`.trim());
     }
   }
   const ahead = await bridge.exec(path, commitsAheadSteps(input.base));
   if (parseCommitsAhead(ahead.stdout) === 0) throw new Error(nothingToOpenMessage(input.base));
   const push = await bridge.exec(path, [pushHeadStep()]);
   if (push.exitCode !== 0) {
-    throw new Error(describePushFailure({ stderr: push.stderr, runtime: 'local', repoFullName: workbench.repoFullName }));
+    const message = describePushFailure({ stderr: push.stderr, runtime: 'local', repoFullName: workbench.repoFullName });
+    throw classifyPushFailure(push.stderr) === 'behind' ? new FixablePullRequestError(message) : new Error(message);
   }
   return api.createPullRequest(workbench.id, { ...input, pushed: true });
 }

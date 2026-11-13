@@ -18,6 +18,8 @@ import {
   createAgentStreamParser,
   parseAutoPrDetails,
   parsePrDetails,
+  pullRequestRetryMessage,
+  PR_RETRY_MAX,
   resolveFleetModel,
   workbenchTurnPrompt,
   shellQuote,
@@ -888,7 +890,12 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         text,
         planMode,
         intent: message.intent,
-        createPr: { branch: wb.branch, baseBranch: wb.baseBranch, extra: wb.settings?.prompts?.create_pr },
+        createPr: {
+          branch: wb.branch,
+          baseBranch: wb.baseBranch,
+          extra: wb.settings?.prompts?.create_pr,
+          retryError: message.trigger?.kind === 'pr_retry' ? message.trigger.error : null,
+        },
         internetAccess: wb.settings?.internetAccess,
         // A thread has no branch to open a pull request from.
         autoCreatePr: isThread(wb) ? false : wb.settings?.autoCreatePr,
@@ -1524,8 +1531,41 @@ async function finishSuccessfulAgent(
   if (message.intent === 'rename_branch') fresh = (await followBranchRename(fresh)) ?? fresh;
   if (message.intent === 'create_pr' || (wb.settings?.autoCreatePr !== false &&
       (await getChat(chatId))?.status !== 'awaiting_input' && !fresh.pullRequestId && parseAutoPrDetails(text).ok)) {
-    events.add(await openPullRequestFromTurn(await nameBeforePush(fresh, chatId, message, text), text));
+    const opened = await openPullRequestFromTurn(await nameBeforePush(fresh, chatId, message, text), text);
+    events.add(opened.event);
     await events.flush();
+    if (opened.fixableError) await queuePullRequestRetry(chatId, message, opened.fixableError);
+  }
+}
+
+/**
+ * The push or the commit failed for a reason the agent can fix (the remote
+ * branch moved, a commit failed): queue a turn that gives the agent the error
+ * and runs the pull request again when it ends. At most `PR_RETRY_MAX` in a
+ * row. Not when the person already queued a message: theirs says what is next.
+ */
+const PR_RETRY_ERROR_MAX_CHARS = 2000;
+
+async function queuePullRequestRetry(chatId: string, message: WorkbenchQueuedMessage, error: string): Promise<void> {
+  const attempt = (message.trigger?.kind === 'pr_retry' ? message.trigger.attempt : 0) + 1;
+  if (attempt > PR_RETRY_MAX) return;
+  try {
+    const chat = await getChat(chatId);
+    if (!chat || chat.queuedMessages.length > 0) return;
+    const detail = error.slice(0, PR_RETRY_ERROR_MAX_CHARS);
+    await sendMessage(chatId, {
+      text: pullRequestRetryMessage(detail),
+      intent: 'create_pr',
+      planMode: false,
+      ...(message.model ? { model: message.model } : {}),
+      ...(message.effort ? { effort: message.effort } : {}),
+    }, {
+      origin: 'talyn',
+      trigger: { kind: 'pr_retry', attempt, error: detail },
+      ...(message.payer ? { payer: message.payer } : {}),
+    });
+  } catch (err) {
+    console.warn(`[workbench] queueing a pull request retry for chat ${chatId} failed:`, err);
   }
 }
 

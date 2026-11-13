@@ -5,7 +5,12 @@ import {
   buildBlocks,
   buildClaudeArgv,
   buildCreatePrTurnInstructions,
+  classifyPushFailure,
+  messageTrigger,
+  messageTriggerText,
   parseAutoPrDetails,
+  PR_RETRY_MAX,
+  pullRequestRetryMessage,
   stripAutoPrBlock,
   commitAllSteps,
   commitsAheadSteps,
@@ -144,6 +149,84 @@ describe('buildCreatePrTurnInstructions', () => {
   });
 });
 
+describe('buildCreatePrTurnInstructions for a retry', () => {
+  const error = 'GitHub rejected the push: the remote branch has commits this branch does not have. Pull or merge them first.\n ! [rejected] HEAD -> oslo (fetch first)';
+  const text = buildCreatePrTurnInstructions({ branch: 'oslo', baseBranch: 'develop', retryError: error });
+
+  it.each([
+    ['the failure, line by line', '    GitHub rejected the push: the remote branch has commits'],
+    ['the git detail', '     ! [rejected] HEAD -> oslo (fetch first)'],
+    ['the branch and the base', 'push `oslo` and open its pull request into `develop`'],
+    ['how to merge the remote branch', '`git fetch origin oslo`'],
+    ['the merge itself', '`git merge origin/oslo`'],
+    ['no rebase', 'Do not rebase and do not reset'],
+    ['the branch rule', 'Stay on branch `oslo`. Do not create, rename or switch branches.'],
+    ['the push rule', 'Do not push or open the pull request.'],
+    ['the tools it must not use', 'Do not run `gh`, `fleet-publish` or `git push`, and do not call the GitHub API.'],
+    ['the way out', 'If you cannot fix the cause, say why and do not write the ```talyn-pr block.'],
+    ['the block', '"commitMessage"'],
+  ])('names %s', (_name, part) => {
+    expect(text).toContain(part);
+  });
+
+  it.each([
+    ['the rule against commits, which a merge needs', 'Do not commit, push or open the pull request'],
+    ['the Create PR press', 'The person pressed Create PR'],
+  ])('leaves out %s', (_name, part) => {
+    expect(text).not.toContain(part);
+  });
+
+  it.each([
+    ['blank', '  '],
+    ['null', null],
+  ])('is the ordinary Create PR text when the error is %s', (_name, retryError) => {
+    expect(buildCreatePrTurnInstructions({ branch: 'oslo', baseBranch: 'develop', retryError }))
+      .toBe(buildCreatePrTurnInstructions({ branch: 'oslo', baseBranch: 'develop' }));
+  });
+
+  it('keeps the extra instructions', () => {
+    const extra = buildCreatePrTurnInstructions({ branch: 'oslo', baseBranch: 'develop', retryError: error, extra: 'Link the ticket.' });
+    expect(extra.trimEnd().endsWith('Link the ticket.')).toBe(true);
+  });
+
+  it('reaches the agent through workbenchTurnPrompt', () => {
+    const turn = workbenchTurnPrompt({
+      agent: 'claude', text: 'retry', planMode: false, intent: 'create_pr',
+      createPr: { branch: 'oslo', baseBranch: 'develop', retryError: error },
+    });
+    expect(turn.appendSystemPrompt).toContain('`git merge origin/oslo`');
+    expect(turn.prompt).toContain('`git merge origin/oslo`');
+  });
+});
+
+describe('pull request retry message and trigger', () => {
+  it('the visible message holds the error and asks for a new block', () => {
+    expect(pullRequestRetryMessage('  Could not commit the changes.\nfatal: lock  ')).toBe(
+      'Talyn could not open the pull request:\n\nCould not commit the changes.\nfatal: lock\n\n' +
+        'Fix the cause, then end your reply with a new ```talyn-pr block. Talyn then tries again.',
+    );
+  });
+
+  it('allows two retries', () => {
+    expect(PR_RETRY_MAX).toBe(2);
+  });
+
+  it('reads the trigger back off a stored event and names it in one line', () => {
+    const trigger = { kind: 'pr_retry', attempt: 1, error: 'boom' } as const;
+    expect(messageTrigger({ origin: 'talyn', trigger })).toEqual(trigger);
+    expect(messageTriggerText(trigger)).toBe('Talyn could not open the pull request. The agent tries to fix the cause.');
+  });
+
+  it('shows the turn as a Talyn row with the trigger', () => {
+    const trigger = { kind: 'pr_retry', attempt: 2, error: 'boom' } as const;
+    const blocks = buildBlocks([{
+      seq: 1, type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'body' }] },
+      talyn: { kind: 'user_message', origin: 'talyn', trigger },
+    } as AgentEvent]);
+    expect(blocks).toEqual([expect.objectContaining({ kind: 'system', subtype: 'talyn_message', text: 'body', trigger })]);
+  });
+});
+
 describe('workbenchTurnPrompt for a Create PR turn', () => {
   const createPr = { branch: 'tom/x', baseBranch: 'main' };
 
@@ -261,6 +344,20 @@ describe('commit and push steps', () => {
 
   it('pushes HEAD with tracking and never prompts for a password', () => {
     expect(pushHeadStep()).toEqual({ argv: ['git', 'push', '-u', 'origin', 'HEAD'], env: { GIT_TERMINAL_PROMPT: '0' } });
+  });
+});
+
+describe('classifyPushFailure', () => {
+  it.each<[string, string, ReturnType<typeof classifyPushFailure>]>([
+    ['a fetch-first rejection', ' ! [rejected]        HEAD -> oslo (fetch first)', 'behind'],
+    ['a non-fast-forward', ' ! [rejected]        HEAD -> oslo (non-fast-forward)', 'behind'],
+    ['a 403', 'fatal: unable to access: The requested URL returned error: 403', 'refused'],
+    ['a denied push', 'remote: Permission to acme/app.git denied to tom.', 'refused'],
+    ['a workflow refusal', ' ! [remote rejected] HEAD -> x (refusing to allow a GitHub App to create or update workflow `.github/workflows/a.yml`)', 'workflow_refused'],
+    ['a network failure', 'fatal: unable to connect', 'other'],
+    ['nothing', '', 'other'],
+  ])('%s is %s', (_name, stderr, expected) => {
+    expect(classifyPushFailure(stderr)).toBe(expected);
   });
 });
 

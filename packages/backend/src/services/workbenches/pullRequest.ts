@@ -5,6 +5,7 @@ import { workbenches, pullRequests } from '../../db/schema.js';
 import {
   afterSignedPublishSteps,
   checkedOutBranchStep,
+  classifyPushFailure,
   commitAllSteps,
   commitsAheadSteps,
   describePushFailure,
@@ -42,7 +43,7 @@ import { prMonitorService } from '../prMonitor.js';
 import { sessionLaunchUrl } from '../webApp.js';
 import { emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { emitPrSession } from './prSessions.js';
-import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
+import { AgentFixablePullRequestError, localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
 import { linkPullRequest, prSummaries, publicWorkbench } from './prLink.js';
 import { notifyThreadOfLinkedPr } from './threads.js';
 import { recordWorkbenchEvent, refreshSandboxCredentials, runCapture, runGitSteps, withOwnerCredentials } from './sandboxRuntime.js';
@@ -88,9 +89,9 @@ export function normalisePullRequestInput(
   row: Pick<WorkbenchRow, 'baseBranch'>,
 ): Required<Omit<CreateWorkbenchPullRequestInput, 'commitMessage'>> & { commitMessage: string } {
   const title = typeof raw?.title === 'string' ? raw.title.replace(/\s+/g, ' ').trim() : '';
-  if (!title) throw new WorkbenchError('A pull request needs a title.', 400, 'bad_title');
+  if (!title) throw new AgentFixablePullRequestError('A pull request needs a title.', 400, 'bad_title');
   if (title.length > PR_TITLE_MAX) {
-    throw new WorkbenchError(`The title is longer than ${PR_TITLE_MAX} characters.`, 400, 'bad_title');
+    throw new AgentFixablePullRequestError(`The title is longer than ${PR_TITLE_MAX} characters.`, 400, 'bad_title');
   }
   if (raw?.body !== undefined && typeof raw.body !== 'string') throw new WorkbenchError('body must be a string', 400, 'bad_body');
   if (raw?.draft !== undefined && typeof raw.draft !== 'boolean') throw new WorkbenchError('draft must be a boolean', 400, 'bad_draft');
@@ -144,7 +145,7 @@ async function commitAndPushAsOwner(row: WorkbenchRow, input: { title: string; c
   if (status.stdout.trim()) {
     const commit = await runGitSteps(row, commitAllSteps(prCommitMessage(input), { skipHooks: true }), { timeoutMs: GIT_TIMEOUT_MS });
     if (commit.exitCode !== 0) {
-      throw new WorkbenchError(
+      throw new AgentFixablePullRequestError(
         `Could not commit the changes.\n${gitStderrTail(commit.stderr || commit.stdout)}`.trim(),
         409,
         'commit_failed',
@@ -159,11 +160,9 @@ async function commitAndPushAsOwner(row: WorkbenchRow, input: { title: string; c
     await publishSigned(row, { message: input.title, base: input.base });
     return;
   }
-  throw new WorkbenchError(
-    describePushFailure({ stderr: push.stderr, runtime: 'sandbox', repoFullName: row.repoFullName }),
-    409,
-    'push_failed',
-  );
+  const message = describePushFailure({ stderr: push.stderr, runtime: 'sandbox', repoFullName: row.repoFullName });
+  if (classifyPushFailure(push.stderr) === 'behind') throw new AgentFixablePullRequestError(message, 409, 'push_failed');
+  throw new WorkbenchError(message, 409, 'push_failed');
 }
 
 /**
@@ -179,7 +178,7 @@ async function publishSigned(row: WorkbenchRow, input: { message: string; base: 
   if (remoteSha) {
     const contained = await runGitSteps(row, remoteHeadContainedSteps(row.branch, remoteSha), { timeoutMs: GIT_TIMEOUT_MS });
     if (contained.exitCode !== 0) {
-      throw new WorkbenchError(
+      throw new AgentFixablePullRequestError(
         'GitHub has commits on this branch that the session does not have. Pull or merge them first.',
         409,
         'push_failed',
@@ -335,27 +334,36 @@ async function trackAndLink(row: WorkbenchRow, number: number, strict = false): 
   return linkPullRequest(row).catch(() => row);
 }
 
+export interface PullRequestFromTurn {
+  /** The transcript event that says what happened. */
+  event: Record<string, unknown>;
+  /** Set when the agent can fix the failure: the error to give it in a retry turn. */
+  fixableError?: string;
+}
+
 /**
  * The end of a sandbox Create PR turn: read the agent's ```talyn-pr block and
- * open the pull request from it. Never throws; the answer is the transcript
- * event that says what happened.
+ * open the pull request from it. Never throws.
  */
-export async function openPullRequestFromTurn(row: WorkbenchRow, finalText: string): Promise<Record<string, unknown>> {
+export async function openPullRequestFromTurn(row: WorkbenchRow, finalText: string): Promise<PullRequestFromTurn> {
   const parsed = parsePrDetails(finalText);
   if (!parsed.ok) {
     const adopted = await adoptFromSandbox(row);
-    if (adopted) return pullRequestOutcomeEvent({ ok: true, ...adopted, existing: true, adopted: true });
+    if (adopted) return { event: pullRequestOutcomeEvent({ ok: true, ...adopted, existing: true, adopted: true }) };
     recordWorkbenchEvent(row, 'pr_create', 'no pull request block in the reply', false);
-    return pullRequestOutcomeEvent({ ok: false, message: parsed.error });
+    return { event: pullRequestOutcomeEvent({ ok: false, message: parsed.error }) };
   }
   try {
     const result = await createWorkbenchPullRequest(row, { ...parsed.details, base: row.baseBranch });
-    return pullRequestOutcomeEvent({ ok: true, ...result.pullRequest, existing: result.existing });
+    return { event: pullRequestOutcomeEvent({ ok: true, ...result.pullRequest, existing: result.existing }) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (!(err instanceof WorkbenchError)) console.warn(`[workbench] opening a PR for ${row.id} failed:`, err);
     recordWorkbenchEvent(row, 'pr_create', `failed: ${message.slice(0, 120)}`, false);
-    return pullRequestOutcomeEvent({ ok: false, message });
+    return {
+      event: pullRequestOutcomeEvent({ ok: false, message }),
+      ...(err instanceof AgentFixablePullRequestError ? { fixableError: message } : {}),
+    };
   }
 }
 
