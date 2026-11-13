@@ -7,7 +7,7 @@ import React, {
 } from 'react';
 import { ChevronDown, ChevronRight, GitPullRequest, PauseCircle, Shield } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { renderMarkdownish } from '../../lib/markdown';
+import { PROSE_MEASURE, renderMarkdownish } from '../../lib/markdown';
 import { skillInstructionsByToolId } from '../../lib/skillInstructions';
 import { MemoryChangeCard } from '../memory/MemoryChangeCard';
 import { BoxRefusalAction } from '../billing/BoxRefusalAction';
@@ -283,12 +283,11 @@ function TextBlock({ text }: { text: string }) {
   const shown = stripPlanBlocks(stripAutoPrBlock(text));
   if (!shown) return null;
   return (
-    // Paragraph spacing is renderMarkdownish's own (`my-1 leading-relaxed` on
-    // its `p`), so this sets size and colour only. Overriding it from here
-    // would be two single-class rules at equal specificity fighting over
-    // stylesheet order.
-    <div className="text-[13px] text-foreground min-w-0 [overflow-wrap:anywhere]">
-      {shown ? renderMarkdownish(shown, 'surface') : null}
+    // Block spacing is the `prose` variant's own, so this sets size, colour and
+    // line length only. Overriding spacing from here would be two single-class
+    // rules at equal specificity fighting over stylesheet order.
+    <div className={cn('text-[13px] text-foreground min-w-0 [overflow-wrap:anywhere]', PROSE_MEASURE)}>
+      {renderMarkdownish(shown, 'prose')}
     </div>
   );
 }

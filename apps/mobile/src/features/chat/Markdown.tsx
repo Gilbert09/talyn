@@ -85,7 +85,7 @@ function Blocks({ blocks, depth = 0 }: { blocks: MdBlock[]; depth?: number }) {
     switch (block.type) {
       case 'paragraph': return <Paragraph key={index}>{block.children}</Paragraph>;
       case 'heading': return <Text key={index} accessibilityRole="header" selectable
-        style={[block.depth <= 1 ? styles.h1 : block.depth === 2 ? styles.h2 : styles.h3, { color: c.text }]}>{renderInline(block.children, c)}</Text>;
+        style={[block.depth <= 1 ? styles.h1 : block.depth === 2 ? styles.h2 : styles.h3, index > 0 && styles.headingAfter, { color: c.text }]}>{renderInline(block.children, c)}</Text>;
       case 'code': return <CodeBlock key={index} lang={block.lang} text={block.text} />;
       case 'list': return <List key={index} block={block} depth={depth} />;
       case 'blockquote': return <View key={index} style={[styles.quote, { borderColor: c.border }]}><Blocks blocks={block.children} depth={depth + 1} /></View>;
@@ -124,5 +124,7 @@ const styles = StyleSheet.create({
   h1: { fontSize: 18, lineHeight: 24, ...sans(700) },
   h2: { fontSize: 16, lineHeight: 22, ...sans(600) },
   h3: { fontSize: 15, lineHeight: 21, ...sans(600) },
+  // A heading starts a new section. Give it more space above than below.
+  headingAfter: { marginTop: 8 },
   hr: { height: StyleSheet.hairlineWidth, marginVertical: 4 },
 });
