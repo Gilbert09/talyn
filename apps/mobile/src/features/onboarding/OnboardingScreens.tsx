@@ -88,16 +88,24 @@ export function ReposStepScreen() {
 }
 
 export function AgentStepScreen() {
-  const { readiness } = useOnboardingGate();
+  const { readiness, repositories } = useOnboardingGate();
+  const { finish } = useOnboardingProgress();
   const { workflow } = useMobileRuntime();
   const ready = agentReady(readiness.data);
-  const notifications = () => router.push(stepRoute('notifications'));
-  const next = () => { completed('agent'); notifications(); };
-  return <OnboardingShell step="agent" footer={<Footer step="agent" canAdvance={ready} next={next} skip={!ready && agentStepSkippable(readiness.data) ? notifications : undefined} />}>
+  const fleetDown = agentStepSkippable(readiness.data);
+  const next = () => { completed('agent'); router.push(stepRoute('notifications')); };
+  // Skipping ends onboarding on this device and goes home, where a notice asks for an agent.
+  const skip = () => {
+    trackEvent('onboarding_agent_skipped', { github_connected: true, repos_watched: repositories.data?.length ?? 0, fleet_usable: !fleetDown });
+    finish();
+    router.replace(HOME);
+  };
+  return <OnboardingShell step="agent" footer={<Footer step="agent" canAdvance={ready} next={next} skip={ready ? undefined : skip} />}>
     <AppText variant="meta" tone="muted">Use your Claude or ChatGPT subscription. Sessions run on your own plan.</AppText>
-    <ConnectAgentPanel onConnected={() => { workflow.refresh('readiness'); workflow.refresh('providers'); }} />
+    <ConnectAgentPanel onChoose={(agent) => trackEvent('onboarding_agent_option_selected', { agent })}
+      onConnected={() => { workflow.refresh('readiness'); workflow.refresh('providers'); }} />
     <ReadinessChecklist readiness={readiness.data} />
-    {ready || agentStepSkippable(readiness.data) ? null : <AppText variant="meta" tone="muted">Connect Claude or ChatGPT to continue.</AppText>}
+    {ready ? null : <AppText variant="meta" tone="muted">You need a connected agent to start sessions. You can connect one later.</AppText>}
   </OnboardingShell>;
 }
 

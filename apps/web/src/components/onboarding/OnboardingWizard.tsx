@@ -11,6 +11,7 @@ import { ConnectGitHubStep } from './steps/ConnectGitHubStep';
 import { WatchReposStep } from './steps/WatchReposStep';
 import { SourceSurvey, type SignupSource } from './SourceSurvey';
 import { useNavigationStore } from '../../stores/navigation';
+import { sessionAgentConnected } from '../../lib/agentConnection';
 
 const GITHUB_POLL_MS = 4000;
 
@@ -59,9 +60,7 @@ export function OnboardingWizard() {
   const codexConnected = fleet?.connectedAgents?.includes('codex') ?? false;
   const posthogConnected = posthogStatus?.connected === true;
   const agentConnected = claudeConnected || codexConnected || posthogConnected;
-  // A session runs on the fleet, so where the fleet is offered only a fleet agent can start one.
-  // Where the fleet is not offered, PostHog Code is the only agent, so it stays the way through.
-  const sessionAgentConnected = fleet ? claudeConnected || codexConnected : posthogConnected;
+  const canStartSessions = sessionAgentConnected(cloudProviders, posthogConnected);
 
   useEffect(() => {
     if (step !== 2) return;
@@ -73,7 +72,7 @@ export function OnboardingWizard() {
     }
   }, [step, claudeConnected, codexConnected, posthogConnected]);
 
-  const canAdvance = step === 0 ? githubConnected : step === 1 ? repositories.length > 0 : sessionAgentConnected;
+  const canAdvance = step === 0 ? githubConnected : step === 1 ? repositories.length > 0 : canStartSessions;
   const isLast = step === STEPS.length - 1;
   const blockedHint = canAdvance
     ? null
@@ -83,15 +82,16 @@ export function OnboardingWizard() {
         ? 'Choose at least one repository to continue.'
         : step === 2
           ? cloudProviders && !fleet
-            ? 'Connect PostHog Code to continue.'
-            : 'Connect Claude or ChatGPT to continue.'
+            ? 'Connect PostHog Code to start sessions, or skip for now.'
+            : 'Connect Claude or ChatGPT to start sessions, or skip for now.'
           : null;
 
-  function finishOnboarding() {
+  function finishOnboarding({ agentSkipped = false }: { agentSkipped?: boolean } = {}) {
     trackEvent('onboarding_completed', {
       github_connected: githubConnected,
       repos_watched: repositories.length,
       agent_connected: agentConnected,
+      agent_skipped: agentSkipped,
       // The answer can change while the session request is pending.
       signup_source: latestSignupSource.current,
     });
@@ -115,6 +115,13 @@ export function OnboardingWizard() {
     trackEvent('onboarding_first_session_skipped');
     navigate({ view: 'home' }, { replace: true });
     finishOnboarding();
+  }
+
+  // The first-session step needs an agent, so a skip here ends onboarding.
+  function handleSkipAgent() {
+    trackEvent('onboarding_agent_skipped');
+    navigate({ view: 'home' }, { replace: true });
+    finishOnboarding({ agentSkipped: true });
   }
 
   return (
@@ -182,6 +189,17 @@ export function OnboardingWizard() {
           <p className="text-center text-[13px] text-muted-foreground" role="status">
             {blockedHint}
           </p>
+        )}
+        {step === 2 && !canAdvance && (
+          <div className="-mt-4 text-center">
+            <button
+              type="button"
+              onClick={handleSkipAgent}
+              className="text-[13px] font-medium text-foreground underline-offset-4 hover:underline"
+            >
+              Skip for now
+            </button>
+          </div>
         )}
 
         {/* Footer nav */}

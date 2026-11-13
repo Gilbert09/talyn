@@ -4,6 +4,7 @@ import { useRouteUrlSync } from '../../hooks/useRouteUrlSync';
 import { AppSidebar } from './AppSidebar';
 import { ContextRail } from './ContextRail';
 import { SystemStatusBanner } from './SystemStatusBanner';
+import { ConnectAgentBanner } from './ConnectAgentBanner';
 import { useAppShortcuts } from './appShortcuts';
 import { CreateWorkspaceModal } from '../modals/CreateWorkspaceModal';
 import { UpgradeModal } from '../modals/UpgradeModal';
@@ -63,6 +64,7 @@ export function AppShell() {
         <AppSidebar />
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <SystemStatusBanner />
+          <ConnectAgentBanner />
           <div className="min-h-0 flex-1 overflow-hidden">
             <Suspense fallback={null}>
               <RoutedView />

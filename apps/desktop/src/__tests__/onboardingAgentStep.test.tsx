@@ -92,7 +92,7 @@ describe('agent step gating', () => {
     expect(screen.getByRole('button', { name: /Codex/ })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /PostHog Code/ })).toBeNull();
     expect(nextButton()?.hasAttribute('disabled')).toBe(!canAdvance);
-    expect(screen.queryByText('Connect Claude or ChatGPT to continue.') !== null).toBe(!canAdvance);
+    expect(screen.queryByText('Connect Claude or ChatGPT to start sessions, or skip for now.') !== null).toBe(!canAdvance);
   });
 
   it.each([
@@ -105,7 +105,56 @@ describe('agent step gating', () => {
     await screen.findByRole('button', { name: /PostHog Code/ });
     expect(screen.queryByRole('button', { name: /Claude/ })).toBeNull();
     expect(nextButton()?.hasAttribute('disabled')).toBe(!canAdvance);
-    expect(screen.queryByText('Connect PostHog Code to continue.') !== null).toBe(!canAdvance);
+    expect(screen.queryByText('Connect PostHog Code to start sessions, or skip for now.') !== null).toBe(!canAdvance);
+  });
+});
+
+function skipButton() {
+  return screen.queryByRole('button', { name: 'Skip for now' });
+}
+
+describe('skip at the agent step', () => {
+  it('shows Skip for now only while no session agent is connected', async () => {
+    await setup({ providers: [{ type: 'selfhosted', connected: true, connectedAgents: ['claude'] }] });
+    await walkToAgentStep();
+    await waitFor(() => expect(nextButton()?.hasAttribute('disabled')).toBe(false));
+    expect(skipButton()).toBeNull();
+  });
+
+  it.each([
+    ['fleet offered', [{ type: 'selfhosted', connected: false, connectedAgents: [] }]],
+    ['no fleet', [{ type: 'posthog_code', connected: false }]],
+  ])('%s: skipping tracks the event, goes home and finishes onboarding', async (_name, providers) => {
+    const { trackEvent } = await import('../renderer/lib/analytics');
+    const { useWorkspaceStore } = await import('../renderer/stores/workspace');
+    const { useNavigationStore } = await import('../renderer/stores/navigation');
+    const originalNavigate = useNavigationStore.getState().navigate;
+    const navigate = jest.fn();
+    useNavigationStore.setState({ navigate } as never);
+    await setup({ providers });
+    await walkToAgentStep();
+    await waitFor(() => expect(screen.queryByText('Checking your agents...')).toBeNull());
+
+    fireEvent.click(skipButton()!);
+
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_agent_skipped');
+    expect(trackEvent).toHaveBeenCalledWith(
+      'onboarding_completed',
+      expect.objectContaining({ agent_skipped: true, agent_connected: false })
+    );
+    expect(trackEvent).not.toHaveBeenCalledWith('onboarding_step_completed', { step: 'agent' });
+    expect(navigate).toHaveBeenCalledWith({ view: 'home' }, { replace: true });
+    expect(useWorkspaceStore.getState().onboardingComplete).toBe(true);
+    expect(useWorkspaceStore.getState().justOnboarded).toBe(true);
+    useNavigationStore.setState({ navigate: originalNavigate });
+  });
+
+  it('tracks the option the user picks', async () => {
+    const { trackEvent } = await import('../renderer/lib/analytics');
+    await setup({ providers: [{ type: 'selfhosted', connected: false, connectedAgents: [] }] });
+    await walkToAgentStep();
+    fireEvent.click(await screen.findByRole('button', { name: /Codex/ }));
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_agent_option_selected', { agent: 'codex' });
   });
 });
 

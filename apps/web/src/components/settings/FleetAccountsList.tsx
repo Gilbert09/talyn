@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, RefreshCw, Trash2 } from 'lucide-react';
 import type { FleetAccountView, FleetAgent } from '@talyn/shared';
 import { ApiError, api } from '../../lib/api';
-import { openExternal } from '../../lib/openExternal';
+import { trackEvent } from '../../lib/analytics';
+import { prepareSignInWindow } from '../../lib/openExternal';
 import { FleetAgentMark } from '../../lib/providerMeta';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -15,6 +16,27 @@ function errorMessage(error: unknown): string {
     return 'Adding more accounts is turned off for this workspace.';
   }
   return error instanceof Error ? error.message : 'Could not update the account';
+}
+
+type ConnectMethod = 'claude_oauth' | 'codex_paste' | 'codex_oauth' | 'claude_api_key' | 'codex_api_key';
+type ConnectStage = 'start' | 'finish' | 'save' | 'parse';
+
+function trackStarted(agent: FleetAgent, method: ConnectMethod) {
+  trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent, method });
+}
+
+function trackConnected(agent: FleetAgent) {
+  trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent });
+}
+
+// Report a failed connect attempt, then rethrow so `run` still shows the error.
+async function trackFailure<T>(agent: FleetAgent, stage: ConnectStage, action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (e) {
+    trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent, stage, error: errorMessage(e).slice(0, 200) });
+    throw e;
+  }
 }
 
 function formatTimeAt(iso: string, action: string, now = new Date()): string {
@@ -97,6 +119,13 @@ export function codexConfig(pasted: string) {
   };
 }
 
+function SignInLink({ url }: { url: string }) {
+  return <p className="text-xs text-muted-foreground">
+    Your browser blocked the sign-in tab.{' '}
+    <a href={url} target="_blank" rel="noopener noreferrer" className="font-medium text-foreground underline underline-offset-2">Open the Claude sign-in page</a>
+  </p>;
+}
+
 export function FleetAccountRow({
   account, active, switchAtPercent, index, ids, workspaceId, onChanged,
 }: {
@@ -117,6 +146,7 @@ export function FleetAccountRow({
   const [code, setCode] = useState('');
   const [authJson, setAuthJson] = useState('');
   const [codexStep, setCodexStep] = useState(false);
+  const [blockedUrl, setBlockedUrl] = useState<string | null>(null);
   const [usageExpanded, setUsageExpanded] = useState(false);
   const windows = account.usage && 'windows' in account.usage ? account.usage.windows : [];
   const summaryWindow = windows.find((window) => window.key === 'weekly_all')
@@ -160,9 +190,20 @@ export function FleetAccountRow({
 
   const reconnect = async () => {
     if (account.kind === 'claude_oauth') {
+      // Reserve the tab before the await. Safari and Firefox block a popup opened after it.
+      const browser = prepareSignInWindow();
+      trackStarted(account.agent, 'claude_oauth');
+      setBlockedUrl(null);
       await run(async () => {
-        const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { accountId: account.id });
-        await openExternal(url);
+        try {
+          await trackFailure(account.agent, 'start', async () => {
+            const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { accountId: account.id });
+            if (!(await browser.open(url))) setBlockedUrl(url);
+          });
+        } catch (e) {
+          browser.close();
+          throw e;
+        }
         setCodeStep(true);
       });
     } else if (account.kind === 'codex_oauth') {
@@ -218,14 +259,17 @@ export function FleetAccountRow({
         </Button>}
       </div>
       {usageExpanded && <div className="space-y-2 pt-1">{windows.map((window) => <UsageWindowRow key={window.key} window={window} switchAtPercent={switchAtPercent} />)}</div>}
-      {codeStep && <div className="flex gap-2">
-        <Input aria-label={`Code for ${account.label}`} value={code} onChange={(e) => setCode(e.target.value)} />
-        <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await api.cloudProviders.completeClaudeSignIn(workspaceId, code, { accountId: account.id }); setCodeStep(false); setCode(''); })}>Finish sign-in</Button>
+      {codeStep && <div className="space-y-2">
+        {blockedUrl && <SignInLink url={blockedUrl} />}
+        <div className="flex gap-2">
+          <Input aria-label={`Code for ${account.label}`} value={code} onChange={(e) => setCode(e.target.value)} />
+          <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await trackFailure(account.agent, 'finish', () => api.cloudProviders.completeClaudeSignIn(workspaceId, code, { accountId: account.id })); trackConnected(account.agent); setCodeStep(false); setCode(''); setBlockedUrl(null); })}>Finish sign-in</Button>
+        </div>
       </div>}
       {codexStep && <div className="space-y-2">
         <p className="text-xs text-muted-foreground">Run `codex login`, then paste ~/.codex/auth.json.</p>
         <textarea aria-label={`Codex auth JSON for ${account.label}`} value={authJson} onChange={(e) => setAuthJson(e.target.value)} className="w-full rounded-md border border-input bg-background p-2 text-xs" rows={3} />
-        <Button size="sm" disabled={busy || !authJson.trim()} onClick={() => void run(async () => { await api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(authJson), { codexFleetAccountId: account.id }); setCodexStep(false); setAuthJson(''); })}>Save sign-in</Button>
+        <Button size="sm" disabled={busy || !authJson.trim()} onClick={() => void run(async () => { trackStarted(account.agent, 'codex_paste'); const config = await trackFailure(account.agent, 'parse', async () => codexConfig(authJson)); await trackFailure(account.agent, 'save', () => api.cloudProviders.saveConfig('selfhosted', workspaceId, config, { codexFleetAccountId: account.id })); trackConnected(account.agent); setCodexStep(false); setAuthJson(''); })}>Save sign-in</Button>
       </div>}
       {confirmRemove && <div className="flex items-center gap-2 text-xs">
         <span>Remove {account.label}?</span>
@@ -255,6 +299,7 @@ export function FleetAccountsList({ agent, workspaceId, accounts, activeId, swit
   const [code, setCode] = useState('');
   const [codeStep, setCodeStep] = useState(false);
   const [authJson, setAuthJson] = useState('');
+  const [blockedUrl, setBlockedUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const chosenLabel = label.trim();
@@ -279,20 +324,26 @@ export function FleetAccountsList({ agent, workspaceId, accounts, activeId, swit
     setCode('');
     setCodeStep(false);
     setAuthJson('');
+    setBlockedUrl(null);
   };
 
   const startSignIn = () => {
+    // Reserve the tab before the await. Safari and Firefox block a popup opened after it.
+    const browser = agent === 'claude' ? prepareSignInWindow() : null;
+    if (browser) trackStarted(agent, 'claude_oauth');
     setMethod('sign_in');
+    setBlockedUrl(null);
     void run(async () => {
       try {
-        if (agent === 'claude') {
-          const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { label: chosenLabel });
-          await openExternal(url);
-          setCodeStep(true);
-        } else {
-          setCodeStep(true);
+        if (browser) {
+          await trackFailure(agent, 'start', async () => {
+            const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { label: chosenLabel });
+            if (!(await browser.open(url))) setBlockedUrl(url);
+          });
         }
+        setCodeStep(true);
       } catch (e) {
+        browser?.close();
         setMethod(null);
         throw e;
       }
@@ -312,16 +363,17 @@ export function FleetAccountsList({ agent, workspaceId, accounts, activeId, swit
         </div>}
         {method === 'key' && <div className="space-y-2">
           <Input label={`${agentLabel} API key`} aria-label={`${agentLabel} API key`} type="password" value={key} onChange={(e) => setKey(e.target.value)} disabled={busy} />
-          <Button size="sm" disabled={busy || !chosenLabel || !key.trim()} onClick={() => void run(async () => { await api.cloudProviders.fleetAccounts.add(workspaceId, agent, agent === 'claude' ? 'anthropic_key' : 'openai_key', key.trim(), chosenLabel); await done(); })}>Add account</Button>
+          <Button size="sm" disabled={busy || !chosenLabel || !key.trim()} onClick={() => void run(async () => { trackStarted(agent, agent === 'claude' ? 'claude_api_key' : 'codex_api_key'); await trackFailure(agent, 'save', () => api.cloudProviders.fleetAccounts.add(workspaceId, agent, agent === 'claude' ? 'anthropic_key' : 'openai_key', key.trim(), chosenLabel)); trackConnected(agent); await done(); })}>Add account</Button>
         </div>}
         {method === 'sign_in' && agent === 'claude' && codeStep && <div className="space-y-2">
+          {blockedUrl && <SignInLink url={blockedUrl} />}
           <Input label="Code from Anthropic" aria-label="Code from Anthropic" value={code} onChange={(e) => setCode(e.target.value)} disabled={busy} />
-          <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await api.cloudProviders.completeClaudeSignIn(workspaceId, code, { label: chosenLabel }); await done(); })}>Finish sign-in</Button>
+          <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await trackFailure(agent, 'finish', () => api.cloudProviders.completeClaudeSignIn(workspaceId, code, { label: chosenLabel })); trackConnected(agent); await done(); })}>Finish sign-in</Button>
         </div>}
         {method === 'sign_in' && agent === 'codex' && codeStep && <div className="space-y-2">
           <p className="text-xs text-muted-foreground">Run `codex login`, then paste ~/.codex/auth.json.</p>
           <textarea aria-label="Codex auth JSON" value={authJson} onChange={(e) => setAuthJson(e.target.value)} className="w-full rounded-md border border-input bg-background p-2 text-xs" rows={3} disabled={busy} />
-          <Button size="sm" disabled={busy || !authJson.trim()} onClick={() => void run(async () => { await api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(authJson), { codexLabel: chosenLabel }); await done(); })}>Save sign-in</Button>
+          <Button size="sm" disabled={busy || !authJson.trim()} onClick={() => void run(async () => { trackStarted(agent, 'codex_paste'); const config = await trackFailure(agent, 'parse', async () => codexConfig(authJson)); await trackFailure(agent, 'save', () => api.cloudProviders.saveConfig('selfhosted', workspaceId, config, { codexLabel: chosenLabel })); trackConnected(agent); await done(); })}>Save sign-in</Button>
         </div>}
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setAdding(false); setMethod(null); setCodeStep(false); setError(null); }}>Cancel</Button>
         {error && <p role="alert" className="text-xs text-destructive">{error}</p>}

@@ -14,7 +14,7 @@ import { useResource } from '../../../workflow/hooks';
 import { webUrl } from '../../more/Page';
 import { useRemote } from '../../more/useRemote';
 import { ApiKeyForm } from './ApiKeyForm';
-import { accountErrorMessage, AGENT_SHORT, agentState, apiKeyLabel, CODEX_SETTINGS_PATH, CODEX_STEPS, connectTarget, FLEET_AGENTS,
+import { accountErrorMessage, errorText, AGENT_SHORT, agentState, apiKeyLabel, CODEX_SETTINGS_PATH, CODEX_STEPS, connectTarget, FLEET_AGENTS,
   looksLikeClaudeCode, REAUTH_DETAIL, type ConnectTarget } from './model';
 
 export interface ConnectAgentPanelProps {
@@ -28,6 +28,8 @@ export interface ConnectAgentPanelProps {
   add?: boolean;
   /** The workspace to connect. Defaults to the selected one. */
   workspaceId?: string;
+  /** Called when the person picks an agent from the list. */
+  onChoose?(agent: FleetAgent): void;
 }
 
 const DETAIL: Record<FleetAgent, string> = { claude: 'Use your Claude Pro or Max subscription.', codex: 'Use your ChatGPT subscription.' };
@@ -45,7 +47,7 @@ export async function loadFleetAccounts(workspaceId: string): Promise<FleetAccou
  * computer, so the panel says how and offers an API key. Embeddable, for
  * onboarding; `ConnectAgentSheet` wraps it for everywhere else.
  */
-export function ConnectAgentPanel({ agent, onConnected, accountId, add = false, workspaceId }: ConnectAgentPanelProps) {
+export function ConnectAgentPanel({ agent, onConnected, accountId, add = false, workspaceId, onChoose }: ConnectAgentPanelProps) {
   const { workflow } = useMobileRuntime();
   const selected = useWorkspace().selected ?? '';
   const ws = workspaceId ?? selected;
@@ -69,7 +71,7 @@ export function ConnectAgentPanel({ agent, onConnected, accountId, add = false, 
         {FLEET_AGENTS.map((item, index) => {
           const state = agentState(item, accounts.data, fleet);
           return <Row key={item} title={AGENT_SHORT[item]} subtitle={DETAIL[item]} chevron divider={index < FLEET_AGENTS.length - 1}
-            accessibilityLabel={`${AGENT_SHORT[item]}: ${state.label}`} onPress={() => setChoice(item)}
+            accessibilityLabel={`${AGENT_SHORT[item]}: ${state.label}`} onPress={() => { onChoose?.(item); setChoice(item); }}
             trailing={state.connected ? <Pill label={state.label} tone={state.tone} /> : undefined} />;
         })}
       </Group>
@@ -155,12 +157,14 @@ function ClaudeSignIn({ workspaceId, target, reconnecting, onConnected }: {
 
   const start = async () => {
     setBusy(true); setError(null);
+    trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent: 'claude', method: 'claude_oauth' });
     try {
       const result = await cloudProviders.startClaudeSignIn(workspaceId, targetOptions(target));
       setUrl(result.url); setStarted(target); setStep('code');
       setBusy(false);
       await open(result.url);
     } catch (failure) {
+      trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent: 'claude', stage: 'start', error: errorText(failure) });
       if (mounted.current) setError(accountErrorMessage(failure, 'Could not start the Claude sign-in.'));
     } finally { if (mounted.current) setBusy(false); }
   };
@@ -173,6 +177,7 @@ function ClaudeSignIn({ workspaceId, target, reconnecting, onConnected }: {
       setCode('');
       await onConnected();
     } catch (failure) {
+      trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent: 'claude', stage: 'finish', error: errorText(failure) });
       if (mounted.current) setError(accountErrorMessage(failure, 'Could not finish the Claude sign-in.'));
     } finally { if (mounted.current) setBusy(false); }
   };

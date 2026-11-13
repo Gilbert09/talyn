@@ -3,6 +3,7 @@ import { ArrowLeft, Check } from 'lucide-react';
 import { POSTHOG_LOGO } from '../../../assets/providers/logos';
 import { useAgentConnections } from '../../../hooks/useAgentConnections';
 import { FleetAgentMark } from '../../../lib/providerMeta';
+import { trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import {
@@ -69,7 +70,7 @@ export function ConnectAgentStep() {
           {
             id: 'claude' as const,
             name: 'Claude',
-            detail: 'Use your Claude Pro or Max subscription.',
+            detail: 'Use your Claude Pro or Max subscription, or an Anthropic API key.',
             connected: connectedAgents.includes('claude'),
             icon: <FleetAgentMark agent="claude" className="w-5 h-5" />,
           },
@@ -108,7 +109,10 @@ export function ConnectAgentStep() {
           <button
               key={option.id}
               type="button"
-              onClick={() => setChoice(option.id)}
+              onClick={() => {
+                trackEvent('onboarding_agent_option_selected', { agent: option.id });
+                setChoice(option.id);
+              }}
               className={cn(
                 'w-full flex items-center gap-3 rounded-lg border p-4 text-left transition-colors',
                 'hover:border-primary/60 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'

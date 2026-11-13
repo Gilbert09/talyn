@@ -99,11 +99,12 @@ export function ConnectAgentModal() {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Bot className="h-5 w-5" />
-            Connect an agent to run this
+            {pending ? 'Connect an agent to run this' : 'Connect an agent'}
           </DialogTitle>
           <DialogDescription>
-            Talyn hands the actual work to a cloud coding agent. Connect one below and your
-            task starts the moment it&rsquo;s ready. You only do this once.
+            {pending
+              ? 'Talyn hands the actual work to a cloud coding agent. Connect one below and your task starts the moment it’s ready. You only do this once.'
+              : 'Talyn hands the work to a cloud coding agent. Connect one below to start sessions. You only do this once.'}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-2">
