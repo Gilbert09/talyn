@@ -59,6 +59,7 @@ import { setLogoutReason } from '../../lib/logoutReason';
 import { useFleetModelCatalog } from '../../lib/fleetModelCatalog';
 import { downscaleImage } from '../../lib/imageDownscale';
 import { cn } from '../../lib/utils';
+import { formatKeys } from '../../lib/shortcuts';
 import { FleetAgentMark } from '../../lib/providerMeta';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { Button } from '../ui/button';
@@ -2403,6 +2404,15 @@ function AppearanceSettings() {
         </div>
         <p className="text-sm text-muted-foreground mt-4">
           {themeOptions.find((o) => o.value === theme)?.description}
+        </p>
+      </Card>
+
+      <Card className="p-4">
+        <h4 className="font-medium mb-1">Zoom</h4>
+        <p className="text-sm text-muted-foreground">
+          Use your browser's zoom to make everything bigger or smaller, the session
+          transcript included: {formatKeys('mod+=')} zooms in, {formatKeys('mod+-')} zooms
+          out and {formatKeys('mod+0')} resets. Your browser remembers the size for Talyn.
         </p>
       </Card>
 

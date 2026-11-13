@@ -11,6 +11,7 @@ import type {
   LocalAgentKitStatus,
 } from './localAgentKit';
 import { MENU_COMMAND_CHANNEL } from './menuCommands';
+import { ZOOM_CHANGED_CHANNEL, ZOOM_GET_CHANNEL, ZOOM_STEP_CHANNEL, type ZoomStep } from './zoomSteps';
 import { DESK_PRESENCE_CHANNEL, DESK_PRESENCE_CHANGED_CHANNEL, type DeskState } from './deskPresenceChannels';
 
 /** A SKILL.md found under ~/.claude/skills/<dirName>/. */
@@ -143,6 +144,19 @@ const electronHandler = {
    */
   onMenuCommand(cb: (id: string) => void): () => void {
     return subscribe<string>(MENU_COMMAND_CHANNEL, cb);
+  },
+  /** Window zoom (⌘= / ⌘- / ⌘0), saved across restarts. */
+  zoom: {
+    get(): Promise<number> {
+      return ipcRenderer.invoke(ZOOM_GET_CHANNEL);
+    },
+    step(step: ZoomStep): Promise<number> {
+      return ipcRenderer.invoke(ZOOM_STEP_CHANNEL, step);
+    },
+    /** Fires with the new factor after any change, the menu and keys included. */
+    onChange(cb: (factor: number) => void): () => void {
+      return subscribe<number>(ZOOM_CHANGED_CHANNEL, cb);
+    },
   },
   reviewRanking: {
     export(data: string): Promise<ReviewRankingExportResult> {

@@ -34,6 +34,7 @@ import {
   type LocalAgent,
 } from './localAgentKit';
 import { readWindowState, restoredWindowOptions, trackWindowState } from './windowState';
+import { registerZoomIpc, trackWindowZoom } from './zoom';
 import { registerReviewRankingExport } from './reviewRankingExport';
 import { registerDeskPresence } from './deskPresence';
 import { drainMainErrors, markRendererUnavailable, reportMainFailure, setMainErrorSender } from './mainErrorBridge';
@@ -262,6 +263,7 @@ ipcMain.handle('app:get-version', () => app.getVersion());
 // Whether this is a local dev build — the renderer uses it to flag the UI
 // (e.g. a "DEV" badge on the profile) so a dev build is unmistakable.
 ipcMain.handle('app:is-dev', () => IS_DEV_BUILD);
+registerZoomIpc();
 
 // A workbench notification click brings the window to the front
 // (renderer/lib/workbenchNotify.ts). The renderer's own window.focus() does
@@ -414,6 +416,7 @@ const createWindow = async () => {
 
   mainWindow.loadURL(resolveHtmlPath('index.html'));
   trackWindowState(mainWindow);
+  trackWindowZoom(mainWindow);
 
   mainWindow.on('ready-to-show', () => {
     if (!mainWindow) {
