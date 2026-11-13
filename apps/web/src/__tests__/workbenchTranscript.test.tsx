@@ -289,6 +289,14 @@ it.each(['API 429', 'The sandbox stopped', 'No sandbox was found'])('keeps Retry
   expect(retryButton()).toBeInTheDocument();
 });
 
+it('names an API outage as the reason for the wait', () => {
+  const waiting = { ...chat, status: 'error', resumeAt: '2026-11-06T13:10:00Z',
+    resumeReason: 'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}' } as WorkbenchChat;
+  render(<WorkbenchTranscript chat={waiting} events={[userEvent(1, 1), errorResult(2, 1)]} loading={false} error={null} ops={ops} />);
+  expect(screen.getByText(/The model API is failing. The box is suspended until Talyn tries again at/)).toBeInTheDocument();
+  expect(screen.queryByText(/Waiting for usage/)).not.toBeInTheDocument();
+});
+
 it('shows the wait and lets the user resume now', async () => {
   const send = vi.fn(async () => ({ queued: false }));
   const waiting = { ...chat, status: 'error', resumeAt: '2026-11-06T13:10:00Z', resumeReason: 'The agent reached its limit' } as WorkbenchChat;

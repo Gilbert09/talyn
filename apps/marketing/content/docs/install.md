@@ -58,6 +58,14 @@ Most of Talyn works the same in both. The desktop app adds a few things that nee
 - Your own instruction files, such as `~/.claude/CLAUDE.md`, copied into sandbox sessions.
 - One-click sign-in to ChatGPT for Codex.
 
+## Make Talyn bigger or smaller
+
+Press ⌘= to zoom in, ⌘- to zoom out and ⌘0 to go back to normal size (Ctrl on Windows and Linux). The whole window changes size, the session transcript included.
+
+- **Desktop:** the same items are in the View menu, and Settings → Appearance shows the current size. The size stays after a restart.
+- **Web:** these keys use your browser's own zoom.
+- **Mobile:** the app follows the text size in your phone's settings.
+
 ## Updates
 
 The desktop app updates itself. A new release goes out every six hours when there is something new in it.

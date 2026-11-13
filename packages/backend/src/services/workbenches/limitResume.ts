@@ -1,7 +1,7 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { FleetAgent } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
-import { workbenchChats, workspaces } from '../../db/schema.js';
+import { workbenchChats } from '../../db/schema.js';
 import { fleetAgentStatus } from '../selfHosted/credentials.js';
 import { setFleetAccountExhausted } from '../selfHosted/accounts.js';
 import {
@@ -17,6 +17,7 @@ import { workbenchFleetAccountId } from './sandboxRuntime.js';
 import { appendEvents, CHAT_COLUMNS, getChat, getWorkbench, rowToChat, type ChatRow } from './store.js';
 import { sendMessage } from './turns.js';
 import { turnPayerFor } from '../teams/payer.js';
+import { autoResumeEnabled, handleChatOutage, outageAgentFrom } from './outageResume.js';
 
 export function chatLimitAgent(chat: Pick<ChatRow, 'agent'>, text: string): FleetAgent | null {
   const agent = exhaustedAgentFrom(text) ?? rateLimitedAgentFrom(text);
@@ -39,12 +40,6 @@ export async function cancelLimitResume(chatId: string): Promise<void> {
   if (row) emitWorkbenchChat(row.workspaceId, rowToChat(row));
 }
 
-async function enabled(workspaceId: string): Promise<boolean> {
-  const [row] = await getDbClient().select({ settings: workspaces.settings }).from(workspaces)
-    .where(eq(workspaces.id, workspaceId));
-  return Boolean(row) && (row.settings as { autoResumeOnLimit?: boolean } | null)?.autoResumeOnLimit !== false;
-}
-
 /**
  * Record a new refusal once. A sweep only reads the existing holds.
  *
@@ -54,13 +49,15 @@ async function enabled(workspaceId: string): Promise<boolean> {
  * payer of the turn that stopped, since no turn has started after it.
  */
 export async function handleChatLimit(chat: ChatRow, text: string, retry = false): Promise<void> {
+  // An API outage waits on its own ladder, with the box suspended.
+  if (outageAgentFrom(text)) return handleChatOutage(chat, text, retry);
   const agent = retry && (exhaustedAgentFrom(text) || rateLimitedAgentFrom(text))
     ? chat.agent as FleetAgent : chatLimitAgent(chat, text);
   const payer = chat.payerUserId && chat.payerWorkspaceId
     ? { userId: chat.payerUserId, workspaceId: chat.payerWorkspaceId }
     : null;
   const workspaceId = payer?.workspaceId ?? chat.workspaceId;
-  if (!agent || !(await enabled(workspaceId))) return;
+  if (!agent || !(await autoResumeEnabled(workspaceId))) return;
   const wb = await getWorkbench(chat.workbenchId);
   if (!wb || wb.archivedAt || wb.archivePendingAt || wb.runtime !== 'sandbox' || chat.closedAt) return;
   const db = getDbClient();

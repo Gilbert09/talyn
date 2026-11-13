@@ -75,6 +75,14 @@ export interface ClaudeArgvOptions {
 export const CLAUDE_SANDBOX_ENV: Readonly<Record<string, string>> = { IS_SANDBOX: '1' };
 
 /**
+ * Env for a Claude turn that Talyn retries itself when the API fails. Claude
+ * Code retries a failed request 10 times by default, with growing waits, on an
+ * awake box that bills. Fewer retries end the turn sooner; Talyn then suspends
+ * the box and retries the turn later.
+ */
+export const CLAUDE_OUTAGE_RETRY_ENV: Readonly<Record<string, string>> = { CLAUDE_CODE_MAX_RETRIES: '5' };
+
+/**
  * `claude -p --output-format stream-json --verbose --include-partial-messages …`.
  *
  * The prompt goes LAST, after `--`: a prompt that starts with `-` ("- fix the

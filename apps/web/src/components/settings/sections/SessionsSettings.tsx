@@ -84,7 +84,7 @@ function LimitResumeSection() {
   };
   return <SettingsSection title="Usage limits">
     <SettingToggle label="Continue when an agent hits its limit"
-      description="Move the chat to your other agent, or wait for the limit to reset and continue."
+      description="Move the chat to your other agent, or wait for the limit to reset and continue. When the model API fails, suspend the box and try again later."
       checked={workspace?.settings?.autoResumeOnLimit !== false} disabled={saving || !workspace}
       onChange={(value) => void save(value)} />
   </SettingsSection>;

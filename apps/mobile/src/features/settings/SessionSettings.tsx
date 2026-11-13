@@ -65,7 +65,7 @@ export function SessionSettings({ workspace, refresh, offline, openSheet }: {
         trailing={<AppText variant="meta" tone="muted">{modelLabel(storedFleetModelForAgent(settings, agent), agent)}</AppText>}
         onPress={() => pickModel(agent, label)} />)}
       <Row title="Continue when an agent hits its limit" titleLines={3}
-        subtitle={<AppText variant="meta" tone="muted">Move the chat to your other agent, or wait for the limit to reset and continue.</AppText>}
+        subtitle={<AppText variant="meta" tone="muted">Move the chat to your other agent, or wait for the limit to reset and continue. When the model API fails, suspend the box and try again later.</AppText>}
         trailing={<Toggle accessibilityLabel="Continue when an agent hits its limit" value={view.continueOnLimit} disabled={disabled}
           onValueChange={(value) => { void save({ autoResumeOnLimit: value }, 'Could not save the setting'); }} />} />
       <Row title="Archive idle sessions" chevron disabled={disabled} onPress={pickIdleDays}
