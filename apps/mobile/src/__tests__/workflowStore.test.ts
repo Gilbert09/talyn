@@ -72,6 +72,23 @@ describe('authoritative reads and boundaries', () => {
     const next = store.read<PRRow[]>('attention').data!;
     expect(next).not.toBe(held); expect(next[0]).toBe(held[0]); expect(next[1].id).toBe('pr-two');
   });
+  it('asks GitHub before it re-reads the PR list on pull to refresh', async () => {
+    const { store, api } = active; const order: string[] = [];
+    api.repositories.forcePoll.mockImplementationOnce(async () => { order.push('poll'); return { message: 'Poll triggered' }; });
+    api.pullRequests.list.mockImplementationOnce(async () => { order.push('list'); return [pr({ id: 'pr-new', number: 99 })]; });
+    await store.refreshPullRequests();
+    expect(order).toEqual(['poll', 'list']); expect(store.read<PRRow[]>('attention').data?.[0].id).toBe('pr-new');
+  });
+  it('still re-reads the PR list when the GitHub poll fails', async () => {
+    const { store, api } = active; api.repositories.forcePoll.mockRejectedValueOnce(new Error('Could not reach GitHub'));
+    await store.refreshPullRequests();
+    expect(api.pullRequests.list).toHaveBeenCalledTimes(1); expect(store.read('attention').status).toBe('ready');
+  });
+  it('does not ask GitHub while offline', async () => {
+    const { store, api, network } = active; network({ reachability: 'offline' });
+    await store.refreshPullRequests();
+    expect(api.repositories.forcePoll).not.toHaveBeenCalled(); expect(api.pullRequests.list).not.toHaveBeenCalled();
+  });
   it('makes no requests while offline and never retries failed snapshots in a loop', async () => {
     const { store, api, network } = active; network({ reachability: 'offline' }); await store.load('sessions');
     expect(api.workbenches.list).not.toHaveBeenCalled(); expect(store.read('sessions').status).toBe('offline');

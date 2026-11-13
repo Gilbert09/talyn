@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, Suspense } from 'react';
-import { Github, Settings, Search, RefreshCw, Copy, X, GitPullRequest, Loader2 } from 'lucide-react';
+import { Github, Settings, Search, Copy, X, GitPullRequest, Loader2 } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { ScrollArea } from '../../ui/scroll-area';
@@ -10,7 +10,6 @@ import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useGitHubActions } from './useGitHubActions';
 import type { StackMeta } from './stacks';
-import { refreshPullRequests } from '../../../hooks/usePullRequestSync';
 
 /**
  * Lazy: it only mounts when a PR row is clicked, and it is the sole importer
@@ -25,7 +24,7 @@ const PRDetailSheet = lazyWithReload(() =>
 
 /**
  * Shared chrome for the three GitHub pages (My PRs, Reviews, Merge Queue):
- * the header (title + Copy list / Refresh / Settings), the filter bar (a
+ * the header (title + Copy list / Settings), the filter bar (a
  * page-specific `filters` slot + a common search box with ⌘F), the loading /
  * error / empty / disconnected states, and the list+detail split layout.
  *
@@ -161,15 +160,6 @@ export function GitHubPageShell({
           >
             <Copy className="mr-1 h-4 w-4" />
             Copy list
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => void refreshPullRequests()}
-            disabled={loading}
-            title="Refresh list"
-          >
-            <RefreshCw className={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
           </Button>
           <Button
             variant="ghost"

@@ -103,7 +103,8 @@ export function fixture() {
     },
     features: { get: jest.fn(async () => ({ workbenches: true } as Record<string, boolean>)) },
     repositories: { list: jest.fn(async () => [{ id: 'repo-one', workspaceId: 'one', owner: 'example', repo: 'project',
-      fullName: 'example/project', defaultBranch: 'main' }]) },
+      fullName: 'example/project', defaultBranch: 'main' }]),
+      forcePoll: jest.fn(async () => ({ message: 'Poll triggered' })) },
     cloudProviders: { list: jest.fn(async () => [{ type: 'selfhosted', displayName: 'Talyn Fleet', connected: true, connectedAgents: ['claude'] },
       { type: 'posthog_code', displayName: 'PostHog Code', connected: true }]) },
     // An onboarded workspace: GitHub is connected, so home opens without the setup steps.
