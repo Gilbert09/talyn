@@ -108,7 +108,10 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
       onPress: () => { if (target.pullRequestId) router.push(pullRequestRoute(target.pullRequestId)); else setView('pr'); } });
     if (tabs.includes('jobs')) views.push({ label: 'Background jobs', icon: VIEW_ICON.jobs, detail: running ? `${running} running` : undefined,
       onPress: () => setView('jobs') });
-    menu.open(target, { views, extra: session ? quickMenuActions(target, row, { offline, busy: quick.busy !== null, run: quick.run }) : [] });
+    menu.open(target, {
+      views, prTitle: row?.summary.title,
+      extra: session ? quickMenuActions(target, row, { offline, busy: quick.busy !== null, run: quick.run }) : [],
+    });
   };
   const retry = () => {
     if (!item) return;

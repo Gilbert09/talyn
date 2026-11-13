@@ -92,6 +92,8 @@ To have the agent open the pull request by itself when it finishes, turn on **Op
 
 Sometimes Talyn cannot push the branch or commit the changes for a reason that the agent can fix. For example, the branch on GitHub has commits that the session does not have. Then Talyn gives the error back to the agent in a new turn. The agent merges the remote commits or fixes the commit, and Talyn tries again. The chat shows this turn as one line, **Talyn could not open the pull request**, and **Show error** shows the error. Talyn tries at most two times. It does not try again when GitHub refuses access, because only you can fix that. It also does not try again when you already sent the next message.
 
+When the session has an open pull request, the header shows its number. Select the copy button next to it to copy the link to the pull request. You can copy the plain link, or a Markdown link that uses the pull request's title. In the mobile app, the session menu has **Copy pull request link** and **Copy pull request as Markdown link**.
+
 To link a pull request that already exists, open the **More actions** menu in the header and select **Link pull request…**.
 
 ## Threads

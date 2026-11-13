@@ -8,6 +8,9 @@ import { changeGroups, clipLine, fileLabel, groupTotals, gutterDigits, needsWake
 import { canCreatePullRequest, changesUnavailable, createPrSentText, hasChanges, sessionTabs, sessionUnavailable } from '../features/sessions/model';
 import { session, thread } from './workflowFixtures';
 
+const PR: NonNullable<Workbench['pr']> = {
+  number: 42, url: 'https://github.com/example/project/pull/42', state: 'open', mergeable: 'mergeable', ciStatus: 'success',
+};
 const stat = (files: number) => ({ added: files * 2, removed: files, files });
 const file = (patch: Partial<WorkbenchChangedFile> = {}): WorkbenchChangedFile => ({ path: 'src/app.ts', status: 'modified', added: 3, removed: 1, binary: false, ...patch });
 
@@ -253,6 +256,9 @@ describe('copy and create PR copy', () => {
     [session(), ['copy_link', 'copy_branch', 'copy_id']],
     [session({ branch: '' }), ['copy_link', 'copy_id']],
     [thread(), ['copy_link', 'copy_id']],
+    [session({ pr: PR }), ['copy_link', 'copy_pr_link', 'copy_pr_markdown', 'copy_branch', 'copy_id']],
+    [session({ pr: { ...PR, state: 'merged' } }), ['copy_link', 'copy_pr_link', 'copy_pr_markdown', 'copy_branch', 'copy_id']],
+    [session({ pr: { ...PR, url: 'javascript:alert(1)' } }), ['copy_link', 'copy_branch', 'copy_id']],
   ])('offers copy entries', (item, expected) => {
     expect(copyActions(item)).toEqual(expected);
   });
@@ -261,8 +267,18 @@ describe('copy and create PR copy', () => {
     ['copy_branch', session(), { label: 'Copy branch name', text: 'tom/example', done: 'Branch name copied.' }],
     ['copy_id', session(), { label: 'Copy session ID', text: 'session-one', done: 'Session ID copied.' }],
     ['copy_id', thread(), { label: 'Copy thread ID', text: 'thread-one', done: 'Thread ID copied.' }],
+    ['copy_pr_link', session({ pr: PR }), { label: 'Copy pull request link', text: PR.url, done: 'Pull request link copied.' }],
+    ['copy_pr_markdown', session({ pr: PR }),
+      { label: 'Copy pull request as Markdown link', text: `[PR #42](${PR.url})`, done: 'Markdown link copied.' }],
   ] as const)('%s', (kind, item, expected) => {
     expect(copyEntry(kind, item)).toEqual(expected);
+  });
+  it.each([
+    ['Fix the bug', `[Fix the bug](${PR.url})`],
+    ['  ', `[PR #42](${PR.url})`],
+    [undefined, `[PR #42](${PR.url})`],
+  ])('names the Markdown PR link with the title %j', (title, expected) => {
+    expect(copyEntry('copy_pr_markdown', session({ pr: PR }), title).text).toBe(expected);
   });
   it.each<[boolean, Partial<Workbench>, string]>([
     [false, {}, 'Sent to the agent. It opens the pull request when its turn ends.'],

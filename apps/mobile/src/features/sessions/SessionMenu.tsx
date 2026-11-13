@@ -115,9 +115,9 @@ export function useSessionMenu({ onArchived, onThreadScreen = false }: { onArchi
   /**
    * Opens the menu. The detail screen adds `views` (Changes, Jobs, Details)
    * first and `extra` actions (the PR cycle and the queue) after Stop, Retry
-   * and Wake.
+   * and Wake. `prTitle` names the Markdown PR link.
    */
-  const open = (item: Workbench, more: { views?: SheetAction[]; extra?: SheetAction[] } = {}) => {
+  const open = (item: Workbench, more: { views?: SheetAction[]; extra?: SheetAction[]; prTitle?: string } = {}) => {
     const selectedChat = workflow.local(`selected:${item.id}`).selectedChat;
     const entry = (kind: SessionActionKind): SheetAction => ({
       label: SESSION_ACTION_LABEL[kind], icon: ICONS[kind], destructive: kind === 'archive' || kind === 'stop',
@@ -132,7 +132,7 @@ export function useSessionMenu({ onArchived, onThreadScreen = false }: { onArchi
     // Archive or Restore stays last, after the copy entries and the move.
     const last = actions.pop();
     for (const kind of copyActions(item)) {
-      const copy = copyEntry(kind, item);
+      const copy = copyEntry(kind, item, more.prTitle);
       actions.push({ label: copy.label, icon: COPY_ICON, onPress: () => copyText(copy.text, copy.done) });
     }
     const move = moveBuilder?.build(item);
