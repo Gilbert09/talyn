@@ -5,7 +5,7 @@ import React, { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, GitPullRequest, PauseCircle, Shield } from 'lucide-react';
 import { useBillingStore } from '../../stores/billing';
 import { cn } from '../../lib/utils';
-import { renderMarkdownish } from '../../lib/markdown';
+import { PROSE_MEASURE, renderMarkdownish } from '../../lib/markdown';
 import { skillInstructionsByToolId } from '../../lib/skillInstructions';
 import { MemoryChangeCard } from '../memory/MemoryChangeCard';
 import { Button } from '../ui/button';
@@ -162,8 +162,11 @@ function TextBlock({ text }: { text: string }) {
   const shown = stripPlanBlocks(stripAutoPrBlock(text));
   if (!shown) return null;
   return (
-    <div className="text-[13px] text-foreground min-w-0 [overflow-wrap:anywhere]">
-      {shown ? renderMarkdownish(shown, 'surface') : null}
+    // Block spacing is the `prose` variant's own, so this sets size, colour and
+    // line length only. Overriding spacing from here would be two single-class
+    // rules at equal specificity fighting over stylesheet order.
+    <div className={cn('text-[13px] text-foreground min-w-0 [overflow-wrap:anywhere]', PROSE_MEASURE)}>
+      {renderMarkdownish(shown, 'prose')}
     </div>
   );
 }

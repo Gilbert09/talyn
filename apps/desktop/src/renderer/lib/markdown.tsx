@@ -14,11 +14,55 @@ import { cn } from './utils';
  * (e.g. collapsible `<details>` sections) renders safely. ```mermaid
  * fences render as diagrams, as they do on GitHub — see `mermaid.tsx`.
  *
- * Two variants because the colour palette differs by surface:
+ * Variants:
  *   - `feed`    — the always-dark agent transcript (bg #1a1a1a).
  *   - `surface` — theme-adaptive panels like the PR detail sheet.
+ *   - `prose`   — `surface` colours with more room, for the agent's replies.
+ *                 A reply can be a long report with headings, lists and many
+ *                 code spans, and the compact spacing packs it into one dense
+ *                 block. The caller also caps the line length (`PROSE_MEASURE`).
+ *   - `inline`  — inline marks only, for a heading or a table cell.
  */
-export type MarkdownVariant = 'feed' | 'surface' | 'inline';
+export type MarkdownVariant = 'feed' | 'surface' | 'prose' | 'inline';
+
+/**
+ * A comfortable line length for a `prose` reply. A full-width line in a wide
+ * window holds 180+ characters, and the eye loses its place on the way back.
+ */
+export const PROSE_MEASURE = 'max-w-[76ch]';
+
+/** Spacing and type sizes that differ between `prose` and the compact variants. */
+interface MdSpacing {
+  p: string;
+  h1: string;
+  h2: string;
+  h3: string;
+  list: string;
+  inlineCode: string;
+  fence: string;
+}
+
+const COMPACT: MdSpacing = {
+  p: 'my-1 leading-relaxed',
+  h1: 'mt-2 mb-1 text-base font-semibold',
+  h2: 'mt-2 mb-1 text-sm font-semibold',
+  h3: 'mt-2 mb-1 text-sm font-medium',
+  list: 'my-1 space-y-0.5',
+  inlineCode: 'px-1 text-xs',
+  fence: 'my-1',
+};
+
+// `first:mt-0` / `last:mb-0` keep the reply flush with its container: the
+// block margins are for the gaps between blocks, not around the reply.
+const ROOMY: MdSpacing = {
+  p: 'my-2.5 leading-[1.65] first:mt-0 last:mb-0',
+  h1: 'mt-6 mb-2 text-base font-semibold first:mt-0',
+  h2: 'mt-6 mb-2 text-[15px] font-semibold first:mt-0',
+  h3: 'mt-5 mb-1.5 text-sm font-semibold first:mt-0',
+  list: 'my-2.5 space-y-1.5 leading-[1.65] marker:text-muted-foreground first:mt-0 last:mb-0',
+  inlineCode: 'px-[0.3em] py-px text-[0.9em]',
+  fence: 'my-3 first:mt-0 last:mb-0',
+};
 
 interface MdClasses {
   heading: string;
@@ -72,10 +116,10 @@ const REMARK_PLUGINS = [remarkGfm];
 // hast nodes, which sanitize then prunes against the schema.
 const REHYPE_PLUGINS = [rehypeRaw, [rehypeSanitize, SANITIZE_SCHEMA]] as const;
 
-function makeComponents(c: MdClasses, forceDark: boolean): Components {
+function makeComponents(c: MdClasses, forceDark: boolean, s: MdSpacing = COMPACT): Components {
   return {
     p: ({ children }) => (
-      <p className="my-1 leading-relaxed [overflow-wrap:anywhere]">{children}</p>
+      <p className={cn(s.p, '[overflow-wrap:anywhere]')}>{children}</p>
     ),
     a: ({ href, children }) => (
       <a
@@ -87,26 +131,14 @@ function makeComponents(c: MdClasses, forceDark: boolean): Components {
         {children}
       </a>
     ),
-    h1: ({ children }) => (
-      <div className={cn('mt-2 mb-1 text-base font-semibold', c.heading)}>{children}</div>
-    ),
-    h2: ({ children }) => (
-      <div className={cn('mt-2 mb-1 text-sm font-semibold', c.heading)}>{children}</div>
-    ),
-    h3: ({ children }) => (
-      <div className={cn('mt-2 mb-1 text-sm font-medium', c.heading)}>{children}</div>
-    ),
-    h4: ({ children }) => (
-      <div className={cn('mt-2 mb-1 text-sm font-medium', c.heading)}>{children}</div>
-    ),
-    h5: ({ children }) => (
-      <div className={cn('mt-2 mb-1 text-sm font-medium', c.heading)}>{children}</div>
-    ),
-    h6: ({ children }) => (
-      <div className={cn('mt-2 mb-1 text-sm font-medium', c.heading)}>{children}</div>
-    ),
-    ul: ({ children }) => <ul className="my-1 ml-5 list-disc space-y-0.5">{children}</ul>,
-    ol: ({ children }) => <ol className="my-1 ml-5 list-decimal space-y-0.5">{children}</ol>,
+    h1: ({ children }) => <div className={cn(s.h1, c.heading)}>{children}</div>,
+    h2: ({ children }) => <div className={cn(s.h2, c.heading)}>{children}</div>,
+    h3: ({ children }) => <div className={cn(s.h3, c.heading)}>{children}</div>,
+    h4: ({ children }) => <div className={cn(s.h3, c.heading)}>{children}</div>,
+    h5: ({ children }) => <div className={cn(s.h3, c.heading)}>{children}</div>,
+    h6: ({ children }) => <div className={cn(s.h3, c.heading)}>{children}</div>,
+    ul: ({ children }) => <ul className={cn('ml-5 list-disc', s.list)}>{children}</ul>,
+    ol: ({ children }) => <ol className={cn('ml-5 list-decimal', s.list)}>{children}</ol>,
     li: ({ children }) => <li className="[overflow-wrap:anywhere]">{children}</li>,
     blockquote: ({ children }) => (
       <blockquote
@@ -133,7 +165,8 @@ function makeComponents(c: MdClasses, forceDark: boolean): Components {
       return (
         <pre
           className={cn(
-            'my-1 max-w-full overflow-x-auto whitespace-pre-wrap rounded p-2 font-mono text-xs [overflow-wrap:anywhere]',
+            s.fence,
+            'max-w-full overflow-x-auto whitespace-pre-wrap rounded p-2 font-mono text-xs [overflow-wrap:anywhere]',
             // A fence with no language reaches `code` below with no
             // `language-*` class and gets the inline pill. Inside a block the
             // pill draws a band behind every line, so the block clears it.
@@ -155,7 +188,7 @@ function makeComponents(c: MdClasses, forceDark: boolean): Components {
       }
       return (
         <code
-          className={cn('rounded px-1 font-mono text-xs [overflow-wrap:anywhere]', c.inlineCode)}
+          className={cn('rounded font-mono [overflow-wrap:anywhere]', s.inlineCode, c.inlineCode)}
         >
           {children}
         </code>
@@ -188,6 +221,7 @@ function makeComponents(c: MdClasses, forceDark: boolean): Components {
 
 const FEED_COMPONENTS = makeComponents(FEED, true);
 const SURFACE_COMPONENTS = makeComponents(SURFACE, false);
+const PROSE_COMPONENTS = makeComponents(SURFACE, false, ROOMY);
 
 /**
  * Markdown inside a line of text, for a heading or a table cell.
@@ -235,9 +269,11 @@ export function Markdown({
       components={
         variant === 'inline'
           ? INLINE_COMPONENTS
-          : variant === 'surface'
-            ? SURFACE_COMPONENTS
-            : FEED_COMPONENTS
+          : variant === 'prose'
+            ? PROSE_COMPONENTS
+            : variant === 'surface'
+              ? SURFACE_COMPONENTS
+              : FEED_COMPONENTS
       }
     >
       {text}
