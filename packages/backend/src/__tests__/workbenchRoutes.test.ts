@@ -581,7 +581,7 @@ describe('workbench routes', () => {
       expect(turn.script).not.toContain('--resume');
       expect(turn.script.endsWith(`-- '- fix '\\''it'\\'''`)).toBe(true);
       expect(turn.req.cwd).toBe('/work/app');
-      expect(turn.req.env).toMatchObject({ IS_SANDBOX: '1', TALYN_WORKBENCH_NAME: wb.name, CONDUCTOR_PORT: '3000' });
+      expect(turn.req.env).toMatchObject({ IS_SANDBOX: '1', CLAUDE_CODE_MAX_RETRIES: '5', TALYN_WORKBENCH_NAME: wb.name, CONDUCTOR_PORT: '3000' });
       expect(turn.req.env?.TALYN_PID_FILE).toContain(turnMarker(chatId));
       // The credential push includes both vendors before the agent runs.
       const order = fleet.scripts.map((s) => (s.includes('git commit-tree') ? 'checkpoint' : isAgentTurn(s) ? 'agent' : ''));
