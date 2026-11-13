@@ -194,11 +194,10 @@ export type ComposerChip = 'mode' | 'repository' | 'branch' | 'internet' | 'mode
 
 /**
  * The context row above the composer, and the controls inside it. A thread
- * has no repository, so its context row keeps only internet access. A space
- * session takes no base branch, like web.
+ * has no repository, so its context row keeps only internet access.
  */
-export function composerChips(mode: NewWorkMode, repository: unknown, inSpace = false): { context: ComposerChip[]; card: ComposerChip[] } {
-  const context: ComposerChip[] = mode === 'thread' ? ['internet'] : repository && !inSpace ? ['repository', 'branch', 'internet'] : ['repository', 'internet'];
+export function composerChips(mode: NewWorkMode, repository: unknown): { context: ComposerChip[]; card: ComposerChip[] } {
+  const context: ComposerChip[] = mode === 'thread' ? ['internet'] : repository ? ['repository', 'branch', 'internet'] : ['repository', 'internet'];
   return { context, card: ['mode', 'model'] };
 }
 

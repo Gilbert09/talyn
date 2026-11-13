@@ -1,7 +1,7 @@
 import type { Space, SpacePresenceMember, SpaceSessionRow, SpacesTeam, SpaceTaskRow } from '@talyn/shared';
 
-import { composerChips, type NewWorkForm } from '../features/create/model';
-import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spaceRepositories } from '../features/create/space';
+import { composerChips, type NewWorkForm, type NewWorkPullRequest } from '../features/create/model';
+import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spacePullRequestRows, spaceRepositories } from '../features/create/space';
 import type { SpaceItems } from '../features/spaces/data';
 import { ACTIVE_GROUP, isActiveState, spaceDrawerEntries, spaceRowState, type SpaceDrawerEntry, type SpaceDrawerInput } from '../features/spaces/drawer';
 import { inPersonalList, openTarget, personalItems } from '../features/spaces/model';
@@ -236,17 +236,54 @@ describe('new work in a space', () => {
     agent: 'claude', model: 'claude-sonnet', baseBranch: 'ignored', internetAccess: false, ...patch });
   const sandbox = { ok: true, reasons: [], agents: { claude: { ok: true }, codex: { ok: true } } };
 
-  it.each<[string, NewWorkForm, ReturnType<typeof spaceCreateBody>]>([
-    ['session takes the repository name and no branch', form(),
-      { repoFullName: 'acme/app', agent: 'claude', model: 'claude-sonnet', prompt: 'Fix it', internetAccess: false }],
-    ['thread takes no repository', form({ mode: 'thread', internetAccess: true }),
+  const pr: NewWorkPullRequest = { id: 'pr-1', repositoryId: 'acme/app', number: 7, title: 'Fix', headBranch: 'tom/fix', baseBranch: 'develop' };
+  const base = { repoFullName: 'acme/app', agent: 'claude', model: 'claude-sonnet', internetAccess: false, autoCreatePr: true } as const;
+
+  it.each<[string, NewWorkForm, boolean, ReturnType<typeof spaceCreateBody>]>([
+    ['session with a typed base branch', form({ baseBranch: ' release ' }), false, { ...base, prompt: 'Fix it', baseBranch: 'release' }],
+    ['session with no base branch', form({ baseBranch: '' }), false, { ...base, prompt: 'Fix it', baseBranch: undefined }],
+    ['blank base branch is left out', form({ baseBranch: '  ' }), false, { ...base, prompt: 'Fix it', baseBranch: undefined }],
+    ['thread takes no repository or branch', form({ mode: 'thread', internetAccess: true, baseBranch: 'x', pullRequest: pr }), false,
       { kind: 'thread', agent: 'claude', model: 'claude-sonnet', prompt: 'Fix it', internetAccess: true }],
-    ['empty prompt is left out', form({ prompt: '  ' }),
-      { repoFullName: 'acme/app', agent: 'claude', model: 'claude-sonnet', prompt: undefined, internetAccess: false }],
-  ])('body: %s', (_name, value, expected) => { expect(spaceCreateBody(value)).toEqual(expected); });
+    ['empty prompt is left out', form({ prompt: '  ', baseBranch: '' }), false, { ...base, prompt: undefined, baseBranch: undefined }],
+    ['pull request sets branch, id and its base', form({ baseBranch: '', pullRequest: pr }), false,
+      { ...base, prompt: 'Fix it', baseBranch: 'develop', branch: 'tom/fix', fromPullRequestId: 'pr-1' }],
+    ['typed base branch wins over the pull request base', form({ baseBranch: 'release', pullRequest: pr }), false,
+      { ...base, prompt: 'Fix it', baseBranch: 'release', branch: 'tom/fix', fromPullRequestId: 'pr-1' }],
+    ['pull request with no head or base branch', form({ baseBranch: '', pullRequest: { ...pr, headBranch: '', baseBranch: '' } }), false,
+      { ...base, prompt: 'Fix it', baseBranch: undefined, branch: undefined, fromPullRequestId: 'pr-1' }],
+    ['pull request of another repository is ignored', form({ baseBranch: '', pullRequest: { ...pr, repositoryId: 'acme/other' } }), false,
+      { ...base, prompt: 'Fix it', baseBranch: undefined }],
+    ['images: no prompt, naming text', form({ baseBranch: '' }), true, { ...base, prompt: undefined, namingText: 'Fix it', baseBranch: undefined }],
+    ['images with empty text', form({ prompt: ' ', baseBranch: '' }), true, { ...base, prompt: undefined, namingText: undefined, baseBranch: undefined }],
+    ['thread with images: naming text only', form({ mode: 'thread', internetAccess: true }), true,
+      { kind: 'thread', agent: 'claude', model: 'claude-sonnet', prompt: undefined, namingText: 'Fix it', internetAccess: true }],
+    ['images with a pull request', form({ baseBranch: '', pullRequest: pr }), true,
+      { ...base, prompt: undefined, namingText: 'Fix it', baseBranch: 'develop', branch: 'tom/fix', fromPullRequestId: 'pr-1' }],
+  ])('body: %s', (_name, value, withImages, expected) => {
+    expect(spaceCreateBody(value, withImages)).toEqual(expected);
+  });
+
+  it.each<[string, NewWorkForm, boolean, string[]]>([
+    ['thread', form({ mode: 'thread', baseBranch: 'x', pullRequest: pr }), false, ['branch', 'baseBranch', 'fromPullRequestId', 'repoFullName', 'autoCreatePr']],
+    ['thread with images', form({ mode: 'thread', baseBranch: 'x', pullRequest: pr }), true, ['branch', 'baseBranch', 'fromPullRequestId', 'repoFullName', 'autoCreatePr']],
+    ['session without a pull request', form(), false, ['branch', 'fromPullRequestId']],
+  ])('body keys left out: %s', (_name, value, withImages, absent) => {
+    const body = spaceCreateBody(value, withImages) as unknown as Record<string, unknown>;
+    for (const key of absent) expect(body[key]).toBeUndefined();
+  });
 
   it('refuses a session body with no repository', () => {
     expect(() => spaceCreateBody(form({ repository: null }))).toThrow('Choose a repository.');
+    expect(() => spaceCreateBody(form({ repository: null }), true)).toThrow('Choose a repository.');
+  });
+
+  it('maps pull request rows to space repository ids and drops other rows', () => {
+    const prRow = (patch: Record<string, unknown>) => ({ id: 'p', owner: 'Acme', repo: 'App', repositoryId: 'w-repo', ...patch });
+    const repos = [{ id: 'acme/app', fullName: 'acme/app' }];
+    expect(spacePullRequestRows([prRow({}), prRow({ id: 'q', repo: 'other' })], repos)).toEqual([prRow({ repositoryId: 'acme/app' })]);
+    expect(spacePullRequestRows(undefined, repos)).toEqual([]);
+    expect(spacePullRequestRows([prRow({})], [])).toEqual([]);
   });
 
   it.each<[string, NewWorkForm, string | null, string | null]>([
@@ -275,15 +312,26 @@ describe('new work in a space', () => {
   });
 
   it.each([
+    ['same case', 'acme/app', 'main'],
+    ['other case', 'Acme/App', 'main'],
+    ['not in home', 'acme/other', ''],
+  ])('default branch from home: %s', (_name, homeName, expected) => {
+    const [result] = spaceRepositories('s1', [{ spaceId: 's1', repoFullName: 'acme/app', githubRepoId: 1, createdAt: '' }],
+      [{ name: homeName, defaultBranch: 'main' }]);
+    expect(result?.defaultBranch).toBe(expected);
+  });
+
+  it.each([
     ['session', 'Start a session in Design. Your teammates can see it.'],
     ['thread', 'Start a thread in Design. It can work across repositories. Only you can see it.'],
   ] as const)('placeholder %s', (mode, text) => { expect(spacePlaceholder(mode, 'Design')).toBe(text); });
 
-  it.each([
-    [false, ['repository', 'branch', 'internet']],
-    [true, ['repository', 'internet']],
-  ])('a space session has no branch chip (%s)', (inSpace, expected) => {
-    expect(composerChips('session', { id: 'r' }, inSpace).context).toEqual(expected);
+  it.each<[string, Parameters<typeof composerChips>, string[]]>([
+    ['session with a repository', ['session', { id: 'r' }], ['repository', 'branch', 'internet']],
+    ['session without a repository', ['session', null], ['repository', 'internet']],
+    ['thread', ['thread', { id: 'r' }], ['internet']],
+  ])('a space composer has the personal chips: %s', (_name, args, expected) => {
+    expect(composerChips(...args).context).toEqual(expected);
   });
 });
 

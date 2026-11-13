@@ -175,7 +175,13 @@ export interface CreateSpaceSessionRequest {
   name?: string;
   baseBranch?: string;
   branch?: string;
+  /** Start from an open pull request of my home workspace on this repository. Session only. */
+  fromPullRequestId?: string;
   internetAccess?: boolean;
+  /** Session only. */
+  autoCreatePr?: boolean;
+  /** Names the session when the first message goes separately, as on `CreateWorkbenchInput`. */
+  namingText?: string;
 }
 
 export interface CreateSpaceSessionResponse {

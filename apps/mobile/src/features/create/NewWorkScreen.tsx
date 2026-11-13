@@ -35,7 +35,7 @@ import { activePullRequest, agentForModel, blockedReason, branchSuggestions, chi
   type NewWorkMode, type NewWorkPullRequest } from './model';
 import { composerLayout } from './recent';
 import { RecentWork } from './RecentWork';
-import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spaceRepositories } from './space';
+import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spacePullRequestRows, spaceRepositories } from './space';
 import { useInlineImages } from './useInlineImages';
 
 type SheetKind = 'mode' | 'repository' | 'branch' | 'model';
@@ -97,9 +97,11 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   const settingsSource = remoteHome ? homeWorkspace.data : workspace.data;
   const repoKey = lastRepositoryKey(user, spaceId ? `space:${spaceId}` : workspaceId);
   const prompt = useLocal(draftKey).draft;
-  // Web's space composer takes no images, so a space start takes none either.
   const images = useInlineImages(draftKey);
-  const attached = inSpace ? [] : images.drafts;
+  const attached = images.drafts;
+  // Pull requests belong to the workspace shown, so a space offers them only when that is my home workspace.
+  const homePrs = Boolean(inSpace) && home === workspaceId;
+  const prsOn = !inSpace || homePrs;
 
   const [mode, setMode] = useState<NewWorkMode>(initialMode);
   const [repositoryId, setRepositoryId] = useState('');
@@ -119,10 +121,11 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   const [wantedPr, setWantedPr] = useState(initialPullRequestId ?? null);
   useEffect(() => { setWantedPr(initialPullRequestId ?? null); }, [initialPullRequestId]);
   // Open pull requests fill the "Start from" sheet, so they load while it is open or a pull request is wanted.
-  const openPrs = useResource<PRRow[]>('attention', '', offered && (sheet === 'branch' || Boolean(wantedPr)));
+  const openPrs = useResource<PRRow[]>('attention', '', offered && prsOn && (sheet === 'branch' || Boolean(wantedPr)));
 
-  const repos = useMemo(() => spaceId ? spaceRepositories(spaceId, spaceRepos.data) : repositories.data ?? [],
-    [spaceId, spaceRepos.data, repositories.data]);
+  const repos = useMemo(() => spaceId ? spaceRepositories(spaceId, spaceRepos.data, settingsSource?.repos) : repositories.data ?? [],
+    [spaceId, spaceRepos.data, repositories.data, settingsSource?.repos]);
+  const prRows = useMemo(() => inSpace ? spacePullRequestRows(openPrs.data, repos) : openPrs.data, [inSpace, openPrs.data, repos]);
   const reposStatus = spaceId ? spaceRepos.status : repositories.status;
   // The repository last started here, saved on the device. It loads after the first draw; a pick made before that wins.
   const [saved, setSaved] = useState<{ key: string; id: string | null } | null>(null);
@@ -146,10 +149,11 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
     if (last && last !== repositoryId && repos.some((repo) => repo.id === last)) { setRepositoryId(last); setBaseBranch(''); return; }
     if (!repos.some((repo) => repo.id === repositoryId)) setRepositoryId(defaultRepositoryId(repoKey, repos));
   }, [repos, repositoryId, repoKey, saved, wantedRepo]);
-  // A space session takes no base branch or pull request, like web, so a wanted pull request applies outside spaces only.
   useEffect(() => {
-    if (!wantedPr || inSpace) return;
-    const row = openPrs.data?.find((item) => item.id === wantedPr) ?? workflow.findPr(wantedPr);
+    if (!wantedPr || !prsOn) return;
+    const found = prRows?.find((item) => item.id === wantedPr);
+    const stored = workflow.findPr(wantedPr);
+    const row = found ?? (stored && inSpace ? spacePullRequestRows([stored], repos)[0] : stored);
     if (!row) return;
     setWantedPr(null);
     if (row.state !== 'open') return;
@@ -157,7 +161,7 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
     setPullRequest(pullRequestSource(row));
     setBaseBranch('');
     setWantedRepo(row.repositoryId);
-  }, [wantedPr, inSpace, openPrs.data, workflow]);
+  }, [wantedPr, prsOn, inSpace, prRows, repos, workflow]);
   const repository = repos.find((repo) => repo.id === repositoryId) ?? null;
   // A failed readiness read is reported like web: the server or the connection, not the agents.
   const sandbox = readinessSource.data?.sandbox ?? (readinessSource.status === 'error' || readinessSource.status === 'offline' || offline
@@ -165,9 +169,9 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
       agents: { claude: { ok: false }, codex: { ok: false } } } as WorkbenchReadiness['sandbox'] : null);
   const agent = usableAgent(sandbox, wantedAgent);
   const model = pickedModel && modelsFor(agent).some((item) => item.id === pickedModel) ? pickedModel : modelFor(settingsSource?.settings, agent);
-  const startFrom = inSpace ? null : activePullRequest(pullRequest, repository);
+  const startFrom = prsOn ? activePullRequest(pullRequest, repository) : null;
   const form: NewWorkForm = { mode, prompt, repository, agent, model, baseBranch, internetAccess, pullRequest: startFrom };
-  const blocked = inSpace ? spaceBlockedReason(form, inSpace.team, sandbox, offline) : blockedReason(form, sandbox, offline) ?? images.block;
+  const blocked = (inSpace ? spaceBlockedReason(form, inSpace.team, sandbox, offline) : blockedReason(form, sandbox, offline)) ?? images.block;
   const send = sendState(blocked, busy, workspaceId);
   const sandboxOk = sandboxChoice(sandbox);
   const connect = connectNotice(sandbox, agent);
@@ -175,7 +179,7 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   const branch = effectiveBranch(baseBranch, repository);
   const chipState: ChipState = { mode, repository, repositoriesLoading: reposStatus !== 'ready' && !repos.length,
     branch, pullRequest: startFrom, internetAccess, agent, model };
-  const chips = composerChips(mode, repository, Boolean(inSpace));
+  const chips = composerChips(mode, repository);
   const addsNote = inSpace && home ? addsRepositoryNote(mode, repository?.fullName, settingsSource) : null;
 
   const start = async () => {
@@ -186,11 +190,15 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
         const href = mode === 'thread' ? threadRoute(id) : sessionRoute(id);
         if (presentation === 'route') router.replace(href); else router.push(href);
       };
+      const withImages = attached.length > 0;
       if (inSpace) {
-        const created = await spaces.createSession(inSpace.space.id, spaceCreateBody(form));
-        trackCreated(created.workbench, form);
+        const created = await spaces.createSession(inSpace.space.id, spaceCreateBody(form, withImages));
+        trackCreated(created.workbench, form, withImages);
         if (mode === 'session' && repository) rememberRepository(repoKey, repository.id);
-        workflow.updateLocal(draftKey, { draft: '' });
+        const kept = withImages && !(await sendFirstMessage(created.workbench, form, attached));
+        if (!kept) { workflow.updateLocal(draftKey, { draft: '' }); images.clear(); }
+        setBaseBranch('');
+        setPullRequest(null);
         // The detail screens read the selected workspace, so a session in another of mine switches to it first.
         if (created.workspaceId === workspaceId) { workflow.applyWorkbench(created.workbench); open(created.workbench.id); }
         else {
@@ -200,7 +208,6 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
         }
         return;
       }
-      const withImages = attached.length > 0;
       const item = await workflow.createWorkbench(createInput(form, workspaceId, withImages));
       trackCreated(item, form, withImages);
       if (mode === 'session' && repository) rememberRepository(repoKey, repository.id);
@@ -318,11 +325,11 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
             onChangeText={(text) => { workflow.updateLocal(draftKey, { draft: text }); if (error) setError(null); }}
             style={[styles.prompt, { color: c.text }]} />
           <View style={styles.controls}>
-            {inSpace ? null : <Pressable accessibilityRole="button" accessibilityLabel="Attach an image" accessibilityState={{ disabled: busy }}
+            <Pressable accessibilityRole="button" accessibilityLabel="Attach an image" accessibilityState={{ disabled: busy }}
               disabled={busy} hitSlop={6} onPress={() => { Keyboard.dismiss(); showImagePicker(images.add); }}
               style={({ pressed }) => [styles.attach, { borderColor: c.border, backgroundColor: pressed ? c.surface : 'transparent', opacity: busy ? 0.5 : 1 }]}>
               <SymbolView name={{ ios: 'plus', android: 'add' }} size={16} tintColor={c.muted} />
-            </Pressable>}
+            </Pressable>
             {chip('mode')}
             <View style={styles.spacer} />
             {chip('model')}
@@ -350,7 +357,7 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
         </EmptyState>} />
 
     <BranchSheet visible={sheet === 'branch'} onClose={closeSheet} repository={repository} value={baseBranch}
-      onChange={(value) => { setBaseBranch(value); setPullRequest(null); }} rows={openPrs.data} loading={openPrs.status === 'loading'}
+      onChange={(value) => { setBaseBranch(value); setPullRequest(null); }} rows={prRows} loading={prsOn && openPrs.status === 'loading'} pullRequests={prsOn}
       pullRequest={startFrom} onPickPullRequest={(row) => { setPullRequest(pullRequestSource(row)); setBaseBranch(''); closeSheet(); }} />
 
     <PickerSheet visible={sheet === 'model'} title="Model" onClose={closeSheet} sections={modelSections(sandbox, agent).map((section): PickerSection => ({
@@ -377,9 +384,11 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
  * "Start from": a new branch from a base branch, or an open pull request's
  * branch. Like web's "Create from…", in one sheet.
  */
-function BranchSheet({ visible, onClose, repository, value, onChange, rows, loading, pullRequest, onPickPullRequest }: {
+function BranchSheet({ visible, onClose, repository, value, onChange, rows, loading, pullRequest, onPickPullRequest, pullRequests = true }: {
   visible: boolean; onClose(): void; repository: WatchedRepo | null; value: string; onChange(value: string): void; rows?: PRRow[];
   loading?: boolean; pullRequest: NewWorkPullRequest | null; onPickPullRequest(row: PRRow): void;
+  /** False when this composer cannot start from a pull request. */
+  pullRequests?: boolean;
 }) {
   const c = useTheme();
   const current = pullRequest ? null : effectiveBranch(value, repository);
@@ -401,7 +410,9 @@ function BranchSheet({ visible, onClose, repository, value, onChange, rows, load
         style={[styles.branchInput, { color: c.text, backgroundColor: c.surface }]} />
       <AppText variant="meta" tone="muted">{pullRequest
         ? `The session checks out the branch of pull request #${pullRequest.number}. Type a branch to start a new branch instead.`
-        : 'The session starts a new branch from this one. Or pick a pull request to work on its branch.'}</AppText>
+        : pullRequests
+          ? 'The session starts a new branch from this one. Or pick a pull request to work on its branch.'
+          : 'The session starts a new branch from this one.'}</AppText>
     </View>}
     sections={sections} />;
 }
