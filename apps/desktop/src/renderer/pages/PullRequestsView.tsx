@@ -7,6 +7,7 @@ import { QueuePanel } from '../components/panels/QueuePanel';
 import { MyPRsPanel } from '../components/panels/github/MyPRsPanel';
 import { ReviewsPanel } from '../components/panels/github/ReviewsPanel';
 import { MergeQueuePanel } from '../components/panels/github/MergeQueuePanel';
+import { PrRefreshButton } from '../components/panels/github/PrRefreshButton';
 import { CodeReviewsPanel } from '../components/panels/codeReview/CodeReviewsPanel';
 
 /**
@@ -19,10 +20,12 @@ export function PullRequestsView({ tab }: { tab: PrTab }) {
   const counts = usePrBadgeCounts();
   const inPage = PR_PAGE_TABS.includes(tab);
   const title = tab === 'reviews' ? 'Review requests' : tab === 'merge_queue' ? 'Merge queue' : 'Pull requests';
+  // The tabs that show the open-PR list. Code review and Tasks have their own data.
+  const showsPrList = tab === 'my_prs' || tab === 'reviews' || tab === 'merge_queue';
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <PageHeader title={title} className="gap-4">
+      <PageHeader title={title} className="gap-4" actions={showsPrList ? <PrRefreshButton /> : undefined}>
         {inPage && (
           <Tabs value={tab} onValueChange={(next) => navigate({ view: 'prs', tab: next as PrTab })}>
             <TabsList aria-label="Pull requests">

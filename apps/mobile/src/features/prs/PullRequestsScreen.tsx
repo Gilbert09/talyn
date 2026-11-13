@@ -67,6 +67,12 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
   const queueToggle = useQueueToggle();
   const now = useNow();
   const [showHidden, setShowHidden] = useState(false);
+  // True while a pull to refresh asks GitHub. That takes seconds, before the list itself reloads.
+  const [pulling, setPulling] = useState(false);
+  const onPull = () => {
+    setPulling(true);
+    void workflow.refreshPullRequests().finally(() => setPulling(false));
+  };
   const [filters, setFilters] = useState<PrFilters>(NO_FILTERS);
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [reviewMode, setReviewMode] = useReviewSortMode();
@@ -137,7 +143,7 @@ export function PullRequestsScreen({ tab }: { tab: PullsTab }) {
     contentContainerStyle: styles.content, keyboardShouldPersistTaps: 'handled' as const, keyboardDismissMode: 'on-drag' as const,
     contentOffset: { x: 0, y: initialOffset }, scrollEventThrottle: 150,
     onScroll: (event: { nativeEvent: { contentOffset: { y: number } } }) => workflow.rememberOffset(listKey, event.nativeEvent.contentOffset.y),
-    refreshControl: <RefreshControl refreshing={state.refreshing && state.data !== undefined} onRefresh={() => { void state.refresh(); }}
+    refreshControl: <RefreshControl refreshing={pulling || (state.refreshing && state.data !== undefined)} onRefresh={onPull}
       tintColor={colors.muted} colors={[colors.primaryAction]} progressBackgroundColor={colors.elevated} />,
     ListHeaderComponent: header, ListEmptyComponent: empty,
   };

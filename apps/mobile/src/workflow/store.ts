@@ -474,6 +474,14 @@ export class WorkflowStore {
   }
   /** Owe one entry a quiet refetch, e.g. after an action the socket may not echo. */
   refresh(entity: Entity, id = '') { this.invalidateEntry(this.entry(entity, id, false), false); }
+  /**
+   * Pull to refresh on the PR list. It asks GitHub first, as the Refresh button on desktop and web does.
+   * Without that, it only re-reads the backend's cached list. A failed poll still re-reads the list.
+   */
+  async refreshPullRequests(): Promise<void> {
+    if (this.canRead()) await this.api.repositories.forcePoll().catch(() => undefined);
+    await this.load('attention');
+  }
 
   // -------------------------------------------------------------------------
   // Actions. Each updates held rows first where web does, then the server row wins.
