@@ -11,6 +11,7 @@ vi.mock('../stores/toast', () => ({
 
 import { SidebarWorkbenchList } from '../components/layout/SidebarWorkbenchList';
 import { SpaceSessionHoverCard } from '../components/workbench/SessionHoverCard';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { installNavigation, useNavigationStore } from '../stores/navigation';
 import { usePullRequestStore } from '../stores/pullRequests';
@@ -95,6 +96,17 @@ beforeAll(() => {
     unobserve() {}
     disconnect() {}
   };
+  // jsdom has no DOMRect.fromRect, which the Radix context menu uses to place itself.
+  (globalThis as { DOMRect: unknown }).DOMRect = class {
+    constructor(public x = 0, public y = 0, public width = 0, public height = 0) {}
+    static fromRect(rect: { x?: number; y?: number; width?: number; height?: number } = {}) {
+      return new (globalThis.DOMRect as new (...args: (number | undefined)[]) => DOMRect)(rect.x, rect.y, rect.width, rect.height);
+    }
+    get left() { return this.x; }
+    get top() { return this.y; }
+    get right() { return this.x + this.width; }
+    get bottom() { return this.y + this.height; }
+  };
 });
 
 beforeEach(() => {
@@ -160,6 +172,42 @@ describe('session hover card', () => {
     expect(card()).not.toBeNull();
     act(() => {
       fireEvent.pointerDown(row());
+    });
+    expect(card()).toBeNull();
+  });
+
+  it('opens when the row gets keyboard focus', async () => {
+    show();
+    await act(async () => {
+      row().focus();
+    });
+    expect(card()).not.toBeNull();
+  });
+
+  it('stays closed when the row menu opens the archive dialog and gives focus back to the row', async () => {
+    show();
+    act(() => {
+      fireEvent.contextMenu(row());
+    });
+    act(() => {
+      fireEvent.click(screen.getByRole('menuitem', { name: /Archive/ }));
+    });
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Archive Add signal sources for incident tables?');
+    await act(async () => {
+      row().focus();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await hover(row());
+    expect(card()).toBeNull();
+  });
+
+  it('closes when a dialog opens over it', async () => {
+    show();
+    await hover(row());
+    expect(card()).not.toBeNull();
+    await act(async () => {
+      render(<ConfirmDialog open title="Archive?" confirmLabel="Archive" onConfirm={() => {}} onCancel={() => {}} />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(card()).toBeNull();
   });
