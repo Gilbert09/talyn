@@ -23,7 +23,7 @@ The integration grant is only for Talyn's own triggers and write-back. See [MCP 
 
 ## Create a rule
 
-A rule says: on this event, if the conditions match, do these actions. Create rules under **Integrations > Linear > Rules**.
+A rule says: on this event, if the conditions match, do these actions. Create rules under **Integrations > Linear > Automations**.
 
 | Event | Fires when |
 | --- | --- |
@@ -48,12 +48,12 @@ To use **Assigned to Talyn**, assign the issue to Talyn in Linear, or delegate i
 
 ## Actions
 
-A rule starts a session by default (**Start session**). It can start a cloud task instead (**Start task**).
+A rule starts a session by default (**Start a session**). It can start a cloud task instead (**Start a task**).
 A rule has one start action. The start action must name a repository.
 
 | Action | What it does |
 | --- | --- |
-| **Start session** or **Start task** | Starts the work on the repository you choose. Set the prompt, model and internet access. |
+| **Start a session** or **Start a task** | Starts the work on the repository you choose. Set the prompt, model and internet access. |
 | **Comment on the issue** | Posts a comment. Use `{{issue.identifier}}`, `{{issue.url}}`, `{{issue.title}}`, `{{session.url}}` and `{{task.url}}`. |
 | **Change the issue status** | Moves the issue to `done`, or to a Linear status name you give. |
 
@@ -95,4 +95,4 @@ Your prompt comes first. Below it, Talyn adds the issue title, the description a
 
 ## Runs
 
-Open **Runs** to see each result.
+Select **Show history** on a rule to see each result. A run that starts a session links to it.

@@ -21,10 +21,10 @@ Open **Integrations** in Talyn to see the catalog. Each integration has its own 
 
 An automation says: on these events, matching these conditions, do these actions. GitHub, Slack, webhook, Linear and GitHub Issues automations use this pattern.
 
-GitHub and schedule automations keep working after this name change.
+Scheduled automations were called loops before. They work the same way.
 
-Open an integration to see **Connection**, **Automations**, and **Runs**. Connection shows access and settings.
-Automations shows the actions Talyn will take. Runs shows what happened when each automation fired.
+Open an integration to see **Automations** and **Connection**. Connection shows access and settings.
+Automations lists the actions Talyn takes. Select **Show history** on an automation to see what happened when it fired.
 
 Slack channel automations are rolling out. The `slackChannelRules` flag controls access.
 Webhook automations are in early access.

@@ -37,7 +37,9 @@ The filters at the top narrow the list. Each shows a count.
 | **Ready to merge** | Pull requests that can merge now: checks done, no conflicts, no review outstanding. |
 | **Watching** | Pull requests you track by hand. |
 
-You can also filter by repository, sort by **Newest** or **Oldest**, and search by title, repository or number. Press ⌘F on a Mac to search.
+You can also filter by repository, sort by **Newest** or **Oldest**, and search by title, repository or number. You can also paste a GitHub pull request link into the search box. Press ⌘F on a Mac to search.
+
+To ask GitHub for fresh data, select **Refresh** (the circular arrow) in the page header. It is on the **Pull requests**, **Review requests** and **Merge queue** pages. In the mobile app, pull down on the list.
 
 To save a set of filters, use the saved filters bar. A saved filter can match repositories, labels, words in the title, authors and review state (approved or not approved).
 

@@ -56,6 +56,13 @@ If no repository is a clear match, Talyn does not guess. It asks you to pick one
 
 The session links back to the Slack thread.
 
+## Reply in the thread
+
+A session that started from Slack can post in its own Slack thread as the Talyn bot. It cannot post in any other thread.
+The reply shows as Talyn, not as you. The agent uses the `talyn_slack_reply` tool for this.
+
+The bot needs the `chat:write` permission. If the app was installed before Talyn asked for it, reinstall the Slack app from **Integrations > Slack > Connection**. A session started in a Slack thread then replies as Talyn.
+
 ## Slack text is untrusted
 
 Anyone in a channel can write a message. Talyn keeps your instruction apart from the quoted Slack text, and tells the agent that the quoted text is untrusted.

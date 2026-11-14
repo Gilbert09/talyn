@@ -94,9 +94,9 @@ These placeholders go in the prompt text:
 
 A value that is not a plain identifier moves into the fenced block.
 
-## Deliveries
+## Requests
 
-Each automation lists the requests it received in the last 7 days. Each one shows an outcome: **Handled**, **No rule matched**, or **Failed**.
+Open an automation and select **Requests** to see what it received in the last 7 days. Each one shows an outcome: **Handled**, **No rule matched**, or **Failed**.
 
 Open a delivery to see the body and the headers Talyn kept. Talyn never keeps `authorization`, `cookie` or signature headers.
 Select **Replay** to run the automation again with that request.

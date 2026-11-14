@@ -25,21 +25,21 @@ See [Slack sessions](/docs/slack) for repository selection and progress reaction
 
 Channel automations are rolling out behind the `slackChannelRules` flag. Create them under **Integrations > Slack > Automations**.
 
-Each automation runs on a new message in a channel. Choose the Slack team and one or more channels.
-Add **Text contains** to match words. Choose whether replies inside threads can start the automation.
+Each automation runs on a new message in a channel. Choose the Slack workspace and one or more channels.
+Add **Text contains** to match words. Select **Include thread replies** to let replies inside threads start the automation.
 
 By default, anyone in the channel can start an automation. This includes apps and bots, so an alert from incident.io or Alertmanager can start a session.
-You can allow only people who linked their Slack account to Talyn, or only given Slack user IDs, instead.
+The editor has no setting for this. To allow only people who linked their Slack account, or only given Slack user IDs, set the rule through the [Talyn MCP server](/docs/mcp).
 Messages from Talyn itself never start an automation.
 
-Talyn reads the full message, including the blocks and attachments that apps use. **Message contains** matches that full text.
+Talyn reads the full message, including the blocks and attachments that apps use. **Text contains** matches that full text.
 
 Choose one or more actions:
 
 | Action | What it does |
 | --- | --- |
-| **Start session** | Choose a repository or **Let Talyn choose**. Set the prompt, model, and internet access. |
-| **Reply in thread** | Post text in the message thread. Use `{{session.url}}` or `{{message.permalink}}` in the text. |
-| **React** | Add an emoji to the message. |
+| **Start a session** | Choose a repository or **Let Talyn choose**. Set the prompt, model, and internet access. |
+| **Reply in the thread** | Post text in the message thread. Use `{{session.url}}` or `{{message.permalink}}` in the text. |
+| **Add a reaction** | Add an emoji to the message. |
 
-The workspace owner pays for the box-hours that an automation uses. Check **Runs** to see each result.
+The workspace owner pays for the box-hours that an automation uses. Select **Show history** on an automation to see each result. A run that starts a session links to it.

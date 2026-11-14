@@ -7,13 +7,13 @@ GitHub Issues rules are in early access. The cards show only for accounts that h
 
 ## Connection
 
-GitHub Issues has its own card, separate from GitHub. It uses your existing GitHub App connection. You connect nothing new.
+GitHub Issues has its own card, separate from GitHub. It uses your existing GitHub App connection. You connect nothing new. The card shows once your workspace has connected GitHub.
 
 Rules work on issues in repositories the workspace watches. A comment on a pull request is not an issue comment here. Use a [GitHub pull request rule](/docs/workflows) for that.
 
 ## Create a rule
 
-A rule says: on this event, if the conditions match, do these actions. Create rules under **Integrations > GitHub Issues > Rules**.
+A rule says: on this event, if the conditions match, do these actions. Create rules under **Integrations > GitHub Issues > Automations**.
 
 | Event | Fires when |
 | --- | --- |
@@ -36,12 +36,12 @@ A rule says: on this event, if the conditions match, do these actions. Create ru
 
 ## Actions
 
-A rule starts a session by default (**Start session**). It can start a cloud task instead (**Start task**).
+A rule starts a session by default (**Start a session**). It can start a cloud task instead (**Start a task**).
 A rule has one start action. The repository defaults to the issue's own repository. You can choose another watched repository.
 
 | Action | What it does |
 | --- | --- |
-| **Start session** or **Start task** | Starts the work. Set the prompt, model and internet access. |
+| **Start a session** or **Start a task** | Starts the work. Set the prompt, model and internet access. |
 | **Comment on the issue** | Posts a comment. Use `{{issue.identifier}}`, `{{issue.url}}`, `{{issue.title}}`, `{{session.url}}` and `{{task.url}}`. |
 | **Change the issue status** | Sets the issue to `open` or `closed`. |
 
@@ -83,4 +83,4 @@ Your prompt comes first. Below it, Talyn adds the issue title, the description a
 
 ## Runs
 
-Open **Runs** to see each result.
+Select **Show history** on a rule to see each result. A run that starts a session links to it.
