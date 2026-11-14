@@ -126,14 +126,15 @@ function canDeliver(ws: WebSocket): boolean {
 }
 
 /**
- * Fan a debug event out only to ADMIN clients, and only to those whose current
- * owner filter matches — so a non-admin never receives debug data and an admin
- * watching a single user isn't fed everyone else's traffic over the wire.
- * Bypasses `broadcast()` (which would hit every client) for exactly this reason.
+ * Fan a debug event out only to ADMIN clients that opted in with `debug:filter`
+ * (the Debug panel), and only when their owner filter matches. Every DB query
+ * and outbound call is a debug event, so streaming them to every admin socket,
+ * panel open or not, cost several GB of egress per day per open app.
+ * Bypasses `broadcast()` (which would hit every client) for the same reason.
  */
 function fanOutDebugEvent(event: DebugEvent): void {
   let message: string | null = null;
-  for (const client of clients) {
+  for (const client of debugFilters.keys()) {
     if (!canDeliver(client)) continue;
     if (!connectionUsers.get(client)?.isAdmin) continue;
     if (!matchesOwnerFilter(event.ownerId, debugFilters.get(client))) continue;
@@ -542,6 +543,11 @@ async function handleMessage(
       debugFilters.set(ws, typeof owner === 'string' ? owner : undefined);
       break;
     }
+
+    case 'debug:unsubscribe':
+      // The Debug panel closed: stop the live debug stream to this client.
+      debugFilters.delete(ws);
+      break;
 
     case 'ping':
       sendToClient(ws, {

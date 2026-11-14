@@ -1453,6 +1453,7 @@ export type WSClientMessage =
   | { type: 'subscribe'; workspaceId: string; capabilities?: string[] }
   | { type: 'unsubscribe'; workspaceId: string }
   | { type: 'debug:filter'; owner: string | null }
+  | { type: 'debug:unsubscribe' }
   | { type: 'ping' };
 
 export type WSEventType =

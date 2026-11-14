@@ -452,18 +452,48 @@ describe('websocket service', () => {
     }
     const settle = () => new Promise((r) => setTimeout(r, 120));
 
-    it('streams debug:event to an admin client', async () => {
+    it('streams debug:event to an admin client that opted in', async () => {
       const admin = await authed(serverUrl, 'token-admin');
       await admin.waitFor('connection:status');
+      admin.ws.send(JSON.stringify({ type: 'debug:filter', owner: null }));
+      await settle();
       debugBus.recordEvent({ service: 'test', action: 'x', summary: 'hello-admin' });
       await settle();
       expect(debugEvents(admin, (p) => p.summary === 'hello-admin')).toHaveLength(1);
       await closeClient(admin);
     });
 
-    it('withholds debug:event from a non-admin client', async () => {
+    it('withholds debug:event from an admin client that never opted in', async () => {
+      // Every DB query is a debug event. An open app with no Debug panel must
+      // not pay egress for that stream.
+      const admin = await authed(serverUrl, 'token-admin');
+      await admin.waitFor('connection:status');
+      debugBus.recordEvent({ service: 'test', action: 'x', summary: 'not-watching' });
+      await settle();
+      expect(debugEvents(admin, () => true)).toHaveLength(0);
+      await closeClient(admin);
+    });
+
+    it('stops the admin stream after debug:unsubscribe', async () => {
+      const admin = await authed(serverUrl, 'token-admin');
+      await admin.waitFor('connection:status');
+      admin.ws.send(JSON.stringify({ type: 'debug:filter', owner: 'all' }));
+      await settle();
+      debugBus.recordEvent({ service: 'test', action: 'x', summary: 'before-stop' });
+      admin.ws.send(JSON.stringify({ type: 'debug:unsubscribe' }));
+      await settle();
+      debugBus.recordEvent({ service: 'test', action: 'x', summary: 'after-stop' });
+      await settle();
+      expect(debugEvents(admin, (p) => p.summary === 'before-stop')).toHaveLength(1);
+      expect(debugEvents(admin, (p) => p.summary === 'after-stop')).toHaveLength(0);
+      await closeClient(admin);
+    });
+
+    it('withholds debug:event from a non-admin client, even one that asks for it', async () => {
       const user = await authed(serverUrl, 'token-mine');
       await user.waitFor('connection:status');
+      user.ws.send(JSON.stringify({ type: 'debug:filter', owner: 'all' }));
+      await settle();
       debugBus.recordEvent({ service: 'test', action: 'x', summary: 'secret' });
       await settle();
       // A non-admin must receive NO debug events at all — not even its own
