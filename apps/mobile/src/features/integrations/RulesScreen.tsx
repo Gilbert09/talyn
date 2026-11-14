@@ -42,6 +42,7 @@ function AutomationList<T extends WorkflowWithStats | LoopWithStats>({ kind, int
         : integration === 'slack' ? 'An automation watches Slack messages and can start a session, reply or react.'
           : integration === 'linear' ? 'An automation watches Linear issues and can start a session or a task.'
           : integration === 'github_issues' ? 'An automation watches GitHub issues and can start a session or a task.'
+          : integration === 'posthog_inbox' ? 'An automation watches PostHog Inbox reports and can start a session or a task when one is ready for work.'
           : integration === 'webhook' ? 'An automation gets its own URL. A request to it starts a session or a task.'
             : 'An automation watches pull request events and can label, comment, request reviewers, start a session and more.'}>
       <Button title="Create an automation" onPress={() => openExternal(webUrl(`/integrations/${kind === 'loop' ? 'schedule' : integration}`))} />

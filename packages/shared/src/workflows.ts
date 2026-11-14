@@ -31,7 +31,7 @@ import type { SkillKey } from './skills.js';
 // ============================================================================
 
 /** The integrations a rule can belong to. */
-export const WORKFLOW_INTEGRATIONS = ['github', 'slack', 'webhook', 'linear', 'github_issues'] as const;
+export const WORKFLOW_INTEGRATIONS = ['github', 'slack', 'webhook', 'linear', 'github_issues', 'posthog_inbox'] as const;
 
 export type WorkflowIntegration = (typeof WORKFLOW_INTEGRATIONS)[number];
 
@@ -42,6 +42,7 @@ export const WORKFLOW_INTEGRATION_LABELS: Record<WorkflowIntegration, string> = 
   webhook: 'Webhook',
   linear: 'Linear',
   github_issues: 'GitHub Issues',
+  posthog_inbox: 'PostHog Inbox',
 };
 
 /** The integrations whose rules act on an issue in a tracker. */
@@ -164,12 +165,23 @@ export const ISSUE_MERGE_EVENT = 'issue_pr_merged' as const;
 
 export type IssueWorkflowEvent = (typeof ISSUE_WORKFLOW_EVENTS)[number] | typeof ISSUE_MERGE_EVENT;
 
+/**
+ * The PostHog Inbox events a rule can trigger on. `report_ready` is a PostHog
+ * self-driving report that is ready for work. Talyn finds it by polling the
+ * workspace's PostHog project (and, later, from a PostHog webhook), and always
+ * reads the report again from PostHog before it acts.
+ */
+export const POSTHOG_INBOX_WORKFLOW_EVENTS = ['report_ready'] as const;
+
+export type PostHogInboxWorkflowEvent = (typeof POSTHOG_INBOX_WORKFLOW_EVENTS)[number];
+
 /** Every event any rule can trigger on. */
 export type WorkflowTriggerEvent =
   | GithubWorkflowEvent
   | SlackWorkflowEvent
   | WebhookWorkflowEvent
-  | IssueWorkflowEvent;
+  | IssueWorkflowEvent
+  | PostHogInboxWorkflowEvent;
 
 /** Every event, of every integration. */
 export const ALL_WORKFLOW_TRIGGER_EVENTS: readonly WorkflowTriggerEvent[] = [
@@ -177,6 +189,7 @@ export const ALL_WORKFLOW_TRIGGER_EVENTS: readonly WorkflowTriggerEvent[] = [
   ...SLACK_WORKFLOW_EVENTS,
   ...WEBHOOK_WORKFLOW_EVENTS,
   ...ISSUE_WORKFLOW_EVENTS,
+  ...POSTHOG_INBOX_WORKFLOW_EVENTS,
 ];
 
 /** The events that belong to one integration. */
@@ -189,6 +202,8 @@ export function workflowEventsFor(integration: WorkflowIntegration): readonly Wo
     case 'linear':
     case 'github_issues':
       return ISSUE_WORKFLOW_EVENTS;
+    case 'posthog_inbox':
+      return POSTHOG_INBOX_WORKFLOW_EVENTS;
     default:
       return GITHUB_WORKFLOW_EVENTS;
   }
@@ -228,6 +243,7 @@ export const WORKFLOW_EVENT_LABELS: Record<WorkflowTriggerEvent, string> = {
   issue_commented: 'Comment on the issue',
   issue_updated: 'Issue title or description changed',
   issue_pr_merged: 'Pull request merged',
+  report_ready: 'Report ready for work',
 };
 
 /**
@@ -420,6 +436,40 @@ export interface WorkflowConditions {
   issueAssignee?: IssueAssigneeMatch;
   /** GitHub Issues only: who opened the issue, by login. Matches ANY. */
   issueAuthors?: string[];
+
+  // ---- PostHog Inbox rules ------------------------------------------------
+  //
+  // A PostHog Inbox rule also reads `priorities` (`P0`–`P4`) and
+  // `titleContains`.
+
+  /** Actionability judgments. Matches ANY. Absent means `immediately_actionable` only. */
+  actionability?: string[];
+  /** PostHog source products, like `error_tracking`. Matches when the report has ANY of them. */
+  sourceProducts?: string[];
+  /** The scout that wrote the report, by skill name. */
+  scouts?: PostHogInboxScoutMatch;
+  /**
+   * `owner/repo` names. The report's repository must be one of them. Without
+   * this, any repository connected to the Talyn workspace. A report whose
+   * repository is not connected never runs.
+   */
+  repositories?: string[];
+  /** GitHub logins. Matches when PostHog suggests ANY of them as a reviewer. */
+  suggestedReviewers?: string[];
+  /** Case-insensitive substring of the report summary. */
+  summaryContains?: string;
+  /** The report must group at least this many signals. */
+  minSignalCount?: number;
+}
+
+/**
+ * Which scouts a PostHog Inbox rule takes reports from, by skill name.
+ * `include`: the report's scout must be one of them. `exclude`: it must not be.
+ * A report with no scout fails `include` and passes `exclude`.
+ */
+export interface PostHogInboxScoutMatch {
+  include?: string[];
+  exclude?: string[];
 }
 
 /**
@@ -564,6 +614,19 @@ export const LINEAR_WORKFLOW_CONDITION_KEYS = [
   'bodyContains',
 ] as const satisfies ReadonlyArray<keyof WorkflowConditions>;
 
+/** The condition keys a PostHog Inbox rule may carry. */
+export const POSTHOG_INBOX_WORKFLOW_CONDITION_KEYS = [
+  'priorities',
+  'actionability',
+  'sourceProducts',
+  'scouts',
+  'repositories',
+  'suggestedReviewers',
+  'titleContains',
+  'summaryContains',
+  'minSignalCount',
+] as const satisfies ReadonlyArray<keyof WorkflowConditions>;
+
 /** The condition keys each integration's rules may carry. */
 export function workflowConditionKeysFor(integration: WorkflowIntegration): readonly string[] {
   switch (integration) {
@@ -575,6 +638,8 @@ export function workflowConditionKeysFor(integration: WorkflowIntegration): read
       return LINEAR_WORKFLOW_CONDITION_KEYS;
     case 'github_issues':
       return GITHUB_ISSUES_WORKFLOW_CONDITION_KEYS;
+    case 'posthog_inbox':
+      return POSTHOG_INBOX_WORKFLOW_CONDITION_KEYS;
     default:
       return GITHUB_WORKFLOW_CONDITION_KEYS;
   }
@@ -643,6 +708,8 @@ export function workflowActionsFor(integration: WorkflowIntegration): readonly W
     case 'linear':
     case 'github_issues':
       return [...SHARED_WORKFLOW_ACTION_TYPES, ...INBOUND_WORKFLOW_ACTION_TYPES, ...ISSUE_WORKFLOW_ACTION_TYPES];
+    case 'posthog_inbox':
+      return [...SHARED_WORKFLOW_ACTION_TYPES];
     default:
       return [...WORKFLOW_ACTION_TYPES, ...SHARED_WORKFLOW_ACTION_TYPES];
   }
@@ -691,7 +758,8 @@ export type WorkflowAction =
    * pull request's own repository. A webhook rule must name one.
    *
    * On a GitHub Issues rule, `null` means the issue's own repository. A
-   * Linear rule must name one.
+   * Linear rule must name one. A PostHog Inbox rule always works on the
+   * report's own repository, so it must leave this `null`.
    */
   | ({
       type: 'start_session';
@@ -838,6 +906,17 @@ export function workflowActionStartsTask(action: WorkflowAction): boolean {
  */
 export const DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR = 5;
 
+/**
+ * How many runs a PostHog Inbox rule may make in a day, when the rule does not
+ * say. Every run starts a session that bills box-hours, and one PostHog
+ * project can make thousands of reports a week, so these rules always carry a
+ * daily cap.
+ */
+export const DEFAULT_POSTHOG_INBOX_RUNS_PER_DAY = 10;
+
+/** The largest daily cap a rule may set. */
+export const MAX_WORKFLOW_RUNS_PER_DAY = 1000;
+
 export const MAX_WORKFLOW_NAME_LENGTH = 80;
 
 /** A workflow as stored and as both front ends render it. */
@@ -856,6 +935,11 @@ export interface WorkflowDefinition {
   conditions: WorkflowConditions;
   actions: WorkflowAction[];
   maxRunsPerPrPerHour: number;
+  /**
+   * How many runs the rule may make in 24 hours, counted over all subjects.
+   * Absent or null means no daily cap. PostHog Inbox rules always have one.
+   */
+  maxRunsPerDay?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -870,6 +954,8 @@ export interface WorkflowInput {
   conditions?: WorkflowConditions;
   actions: WorkflowAction[];
   maxRunsPerPrPerHour?: number;
+  /** Absent or null means no daily cap (a PostHog Inbox rule gets the default). */
+  maxRunsPerDay?: number | null;
 }
 
 /** The validated, normalised core of a workflow — what the DB columns hold. */
@@ -881,6 +967,8 @@ export interface NormalizedWorkflow {
   conditions: WorkflowConditions;
   actions: WorkflowAction[];
   maxRunsPerPrPerHour: number;
+  /** Absent or null means no daily cap. */
+  maxRunsPerDay?: number | null;
 }
 
 // ============================================================================
@@ -1304,8 +1392,68 @@ export type IssueFactField = 'labels' | 'assignee' | 'team' | 'project' | 'statu
  */
 export const MAX_ISSUE_FACT_TEXT = 16 * 1024;
 
+/**
+ * The facts one PostHog Inbox report yields.
+ *
+ * Built by the PostHog Inbox source adapter from the report as PostHog serves
+ * it at `GET /api/projects/:id/signals/reports/:id/`, never from a pushed
+ * payload. `summary` is cut to {@link MAX_ISSUE_FACT_TEXT}.
+ */
+export interface PostHogInboxFacts {
+  integration: 'posthog_inbox';
+  event: PostHogInboxWorkflowEvent;
+  /** The `integrations` row of the workspace's PostHog connection. */
+  connectionId: string;
+  /** The PostHog project (team) id. */
+  projectId: string;
+  reportId: string;
+  /** The report's `updated_at`, as PostHog sent it. Part of the dedupe key. */
+  updatedAt: string;
+  title: string;
+  summary: string;
+  /** The report in the PostHog app. */
+  url: string;
+  /** `ready`, `in_progress`, `suppressed` and so on. */
+  status: string;
+  /** `P0`–`P4`, or null when PostHog has not judged it. */
+  priority: string | null;
+  /** `immediately_actionable`, `requires_human_input`, `not_actionable`, or null. */
+  actionability: string | null;
+  /** Whether PostHog says somebody already handles the problem. Null when unknown. */
+  alreadyAddressed: boolean | null;
+  /** Who suppressed the report (`safety_judge`, `dismissed`, ...), or null. */
+  suppressionSource: string | null;
+  sourceProducts: string[];
+  /** The skill name of the scout that wrote the report, or null. */
+  scout: string | null;
+  /** `owner/repo` from the report's repository selection, or null. */
+  repository: string | null;
+  /** GitHub logins PostHog suggests as reviewers. */
+  suggestedReviewers: string[];
+  signalCount: number;
+  /**
+   * Set by the adapter for one workspace: the Talyn repository that matches
+   * {@link repository}, or null when that repository is not connected there.
+   */
+  workspaceRepositoryId?: string | null;
+  /** Fields PostHog could not supply. A condition on one fails. */
+  unknownFields?: ReadonlyArray<PostHogInboxFactField>;
+}
+
+/** A PostHog Inbox fact a read may not carry. */
+export type PostHogInboxFactField = 'sourceProducts' | 'scout' | 'suggestedReviewers';
+
 /** The facts any rule can match on, tagged by integration. */
-export type WorkflowFacts = GithubEventFacts | SlackEventFacts | WebhookEventFacts | IssueEventFacts;
+export type WorkflowFacts =
+  | GithubEventFacts
+  | SlackEventFacts
+  | WebhookEventFacts
+  | IssueEventFacts
+  | PostHogInboxFacts;
+
+export function isPostHogInboxFacts(facts: WorkflowFacts): facts is PostHogInboxFacts {
+  return facts.integration === 'posthog_inbox';
+}
 
 export function isIssueFacts(facts: WorkflowFacts): facts is IssueEventFacts {
   return facts.integration === 'linear' || facts.integration === 'github_issues';
@@ -1347,6 +1495,13 @@ export function workflowSubjectOf(facts: WorkflowFacts): { key: string; label: s
   }
   if (isWebhookFacts(facts)) {
     return { key: `webhook:${facts.ruleId}`, label: 'Webhook' };
+  }
+  if (isPostHogInboxFacts(facts)) {
+    const title = facts.title.trim();
+    return {
+      key: `posthog_inbox:${facts.reportId}`,
+      label: title ? (title.length > 80 ? `${title.slice(0, 79)}…` : title) : `Report ${facts.reportId}`,
+    };
   }
   if (isSlackFacts(facts)) {
     return {
@@ -1475,6 +1630,7 @@ export function workflowMatches(
     return webhookConditionsMatch(conditions, facts);
   }
   if (isIssueFacts(facts)) return issueConditionsMatch(conditions, facts, viewerLogin);
+  if (isPostHogInboxFacts(facts)) return posthogInboxConditionsMatch(conditions, facts);
   return isSlackFacts(facts)
     ? slackConditionsMatch(conditions, facts)
     : githubConditionsMatch(conditions, facts, viewerLogin);
@@ -1689,6 +1845,83 @@ export function issueConditionsMatch(
   return true;
 }
 
+/**
+ * Whether PostHog says no automation may act on this report, whatever a rule
+ * says: the safety judge suppressed it, it is not `ready`, or somebody already
+ * handles it.
+ */
+export function posthogInboxReportBlocked(
+  facts: Pick<PostHogInboxFacts, 'status' | 'suppressionSource' | 'alreadyAddressed'>
+): 'safety' | 'not_ready' | 'already_addressed' | null {
+  if ((facts.suppressionSource ?? '').trim().toLowerCase() === 'safety_judge') return 'safety';
+  if (facts.status.trim().toLowerCase() !== 'ready') return 'not_ready';
+  if (facts.alreadyAddressed === true) return 'already_addressed';
+  return null;
+}
+
+/** The actionability a PostHog Inbox rule takes when it does not say. */
+export const DEFAULT_POSTHOG_INBOX_ACTIONABILITY = ['immediately_actionable'] as const;
+
+/**
+ * The PostHog Inbox half of {@link workflowMatches}. Every list matches ANY of
+ * its values, case-insensitive.
+ *
+ * Two tests apply to every rule. A report PostHog blocked (see
+ * {@link posthogInboxReportBlocked}) never matches, and neither does a report
+ * whose repository is not connected to the workspace
+ * (`workspaceRepositoryId`, which the adapter sets).
+ */
+export function posthogInboxConditionsMatch(c: WorkflowConditions, facts: PostHogInboxFacts): boolean {
+  if (posthogInboxReportBlocked(facts)) return false;
+  if (!facts.repository || !facts.workspaceRepositoryId) return false;
+  const unknown = (f: PostHogInboxFactField): boolean => !!facts.unknownFields?.includes(f);
+
+  const repositories = normalizeList(c.repositories);
+  if (repositories.length > 0 && !repositories.includes(facts.repository.trim().toLowerCase())) return false;
+
+  const priorities = normalizeList(c.priorities);
+  if (priorities.length > 0 && !(facts.priority && priorities.includes(facts.priority.trim().toLowerCase()))) {
+    return false;
+  }
+
+  const actionability = normalizeList(c.actionability ?? [...DEFAULT_POSTHOG_INBOX_ACTIONABILITY]);
+  if (!(facts.actionability && actionability.includes(facts.actionability.trim().toLowerCase()))) return false;
+
+  const products = normalizeList(c.sourceProducts);
+  if (products.length > 0) {
+    if (unknown('sourceProducts')) return false;
+    const have = normalizeList(facts.sourceProducts);
+    if (!products.some((p) => have.includes(p))) return false;
+  }
+
+  const include = normalizeList(c.scouts?.include);
+  const exclude = normalizeList(c.scouts?.exclude);
+  if (include.length > 0 || exclude.length > 0) {
+    if (unknown('scout')) return false;
+    const scout = (facts.scout ?? '').trim().toLowerCase();
+    if (include.length > 0 && !(scout && include.includes(scout))) return false;
+    if (scout && exclude.includes(scout)) return false;
+  }
+
+  const reviewers = normalizeList(c.suggestedReviewers);
+  if (reviewers.length > 0) {
+    if (unknown('suggestedReviewers')) return false;
+    const have = normalizeList(facts.suggestedReviewers);
+    if (!reviewers.some((r) => have.includes(r))) return false;
+  }
+
+  const title = (c.titleContains ?? '').trim().toLowerCase();
+  if (title && !facts.title.toLowerCase().includes(title)) return false;
+
+  const summary = (c.summaryContains ?? '').trim().toLowerCase();
+  if (summary && !facts.summary.toLowerCase().includes(summary)) return false;
+
+  if (typeof c.minSignalCount === 'number' && c.minSignalCount > 0 && facts.signalCount < c.minSignalCount) {
+    return false;
+  }
+  return true;
+}
+
 // ============================================================================
 // Webhook payload paths
 // ============================================================================
@@ -1812,6 +2045,13 @@ export function renderWorkflowTemplate(
   // where people read it, and only the prompt fence may carry sender text.
   const vars: Record<string, string> = isWebhookFacts(facts)
     ? { event: WORKFLOW_EVENT_LABELS[facts.event] }
+    : isPostHogInboxFacts(facts)
+    ? {
+        'report.id': facts.reportId,
+        'report.url': facts.url,
+        'report.title': facts.title,
+        event: WORKFLOW_EVENT_LABELS[facts.event],
+      }
     : isIssueFacts(facts)
     ? {
         // Identifiers only: a template's output is posted on the issue, and
@@ -1935,7 +2175,9 @@ export function validateWorkflow(raw: unknown): NormalizedWorkflow {
         ? validateWebhookConditions(w.conditions)
         : isIssueWorkflowIntegration(integration)
           ? validateIssueConditions(w.conditions, integration, events)
-          : validateConditions(w.conditions, events);
+          : integration === 'posthog_inbox'
+            ? validatePostHogInboxConditions(w.conditions)
+            : validateConditions(w.conditions, events);
   const actions = validateActions(w.actions, integration);
   if (isIssueWorkflowIntegration(integration)) {
     const starts = actions.filter((a) => a.type === 'start_session' || a.type === 'start_task');
@@ -1953,6 +2195,15 @@ export function validateWorkflow(raw: unknown): NormalizedWorkflow {
     maxRuns = n;
   }
 
+  let maxRunsPerDay: number | null = integration === 'posthog_inbox' ? DEFAULT_POSTHOG_INBOX_RUNS_PER_DAY : null;
+  if (w.maxRunsPerDay !== undefined && w.maxRunsPerDay !== null) {
+    const n = w.maxRunsPerDay;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > MAX_WORKFLOW_RUNS_PER_DAY) {
+      fail(`maxRunsPerDay must be a whole number from 1 to ${MAX_WORKFLOW_RUNS_PER_DAY}`);
+    }
+    maxRunsPerDay = n;
+  }
+
   return {
     integration,
     name,
@@ -1961,6 +2212,8 @@ export function validateWorkflow(raw: unknown): NormalizedWorkflow {
     conditions,
     actions,
     maxRunsPerPrPerHour: maxRuns,
+    // Only when set, so a rule without a daily cap normalises as it always has.
+    ...(maxRunsPerDay !== null ? { maxRunsPerDay } : {}),
   };
 }
 
@@ -2126,6 +2379,96 @@ function validateIssueAssignee(raw: unknown, integration: IssueWorkflowIntegrati
     return { kind: 'people', people };
   }
   return { kind: kind as 'talyn' | 'me' | 'unassigned' };
+}
+
+/** The values PostHog uses for a report's priority. */
+export const POSTHOG_INBOX_PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'] as const;
+
+/** The values PostHog uses for a report's actionability judgment. */
+export const POSTHOG_INBOX_ACTIONABILITY = ['immediately_actionable', 'requires_human_input', 'not_actionable'] as const;
+
+export const POSTHOG_INBOX_ACTIONABILITY_LABELS: Record<(typeof POSTHOG_INBOX_ACTIONABILITY)[number], string> = {
+  immediately_actionable: 'Ready to fix',
+  requires_human_input: 'Needs a person',
+  not_actionable: 'Not actionable',
+};
+
+/** A PostHog Inbox rule's conditions. Every one is optional. */
+function validatePostHogInboxConditions(raw: unknown): WorkflowConditions {
+  const given = raw === undefined || raw === null ? {} : raw;
+  if (typeof given !== 'object' || Array.isArray(given)) fail('conditions must be an object');
+  const c = given as Record<string, unknown>;
+
+  refuseForeignConditions(c, 'posthog_inbox');
+  const own = POSTHOG_INBOX_WORKFLOW_CONDITION_KEYS as readonly string[];
+  const unknownKeys = Object.keys(c).filter((k) => !own.includes(k));
+  if (unknownKeys.length > 0) fail(`Unknown condition "${unknownKeys[0]}"`);
+
+  const out: WorkflowConditions = {};
+
+  const priorities = optionalStringList(c.priorities, 'conditions.priorities');
+  if (priorities) {
+    const normalized = priorities.map((p) => p.toUpperCase());
+    for (const p of normalized) {
+      if (!(POSTHOG_INBOX_PRIORITIES as readonly string[]).includes(p)) {
+        fail(`"${p}" is not a PostHog priority. Use ${POSTHOG_INBOX_PRIORITIES.join(', ')}.`);
+      }
+    }
+    out.priorities = [...new Set(normalized)];
+  }
+
+  const actionability = optionalStringList(c.actionability, 'conditions.actionability');
+  if (actionability) {
+    const normalized = actionability.map((a) => a.toLowerCase());
+    for (const a of normalized) {
+      if (!(POSTHOG_INBOX_ACTIONABILITY as readonly string[]).includes(a)) {
+        fail(`"${a}" is not a PostHog actionability. Use ${POSTHOG_INBOX_ACTIONABILITY.join(', ')}.`);
+      }
+    }
+    out.actionability = [...new Set(normalized)];
+  }
+
+  for (const key of ['sourceProducts', 'suggestedReviewers'] as const) {
+    const list = optionalStringList(c[key], `conditions.${key}`);
+    if (list) out[key] = list;
+  }
+
+  const repositories = optionalStringList(c.repositories, 'conditions.repositories');
+  if (repositories) {
+    for (const r of repositories) {
+      if (!/^[^/\s]+\/[^/\s]+$/.test(r)) fail(`"${r}" is not a repository. Use owner/repo.`);
+    }
+    out.repositories = repositories;
+  }
+
+  if (c.scouts !== undefined && c.scouts !== null) {
+    if (typeof c.scouts !== 'object' || Array.isArray(c.scouts)) fail('conditions.scouts must be an object');
+    const scouts = c.scouts as Record<string, unknown>;
+    const extra = Object.keys(scouts).filter((k) => k !== 'include' && k !== 'exclude');
+    if (extra.length > 0) fail(`conditions.scouts has an unknown field "${extra[0]}". Use include or exclude.`);
+    const include = optionalStringList(scouts.include, 'conditions.scouts.include');
+    const exclude = optionalStringList(scouts.exclude, 'conditions.scouts.exclude');
+    if (include && exclude && include.some((s) => exclude.map((e) => e.toLowerCase()).includes(s.toLowerCase()))) {
+      fail('A scout cannot be both included and excluded.');
+    }
+    if (include || exclude) out.scouts = { ...(include ? { include } : {}), ...(exclude ? { exclude } : {}) };
+  }
+
+  for (const key of ['titleContains', 'summaryContains'] as const) {
+    if (c[key] === undefined) continue;
+    if (typeof c[key] !== 'string') fail(`conditions.${key} must be a string`);
+    const trimmed = (c[key] as string).trim();
+    if (trimmed) out[key] = trimmed;
+  }
+
+  if (c.minSignalCount !== undefined && c.minSignalCount !== null) {
+    const n = c.minSignalCount;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) {
+      fail('conditions.minSignalCount must be a whole number of 1 or more');
+    }
+    if (n > 1) out.minSignalCount = n;
+  }
+  return out;
 }
 
 /** The write-back settings of an issue rule's start action. Only `false` is stored. */
@@ -2472,6 +2815,14 @@ function validateAction(
       if ((integration === 'webhook' || integration === 'linear') && !repositoryId) {
         fail(`${at}: choose the repository the session works on`);
       }
+      // A PostHog report names its repository. A rule limits it with the
+      // Repository condition instead.
+      if (integration === 'posthog_inbox' && repositoryId) {
+        fail(
+          `${at}: a PostHog Inbox automation works on the report's own repository. ` +
+            'To limit the repositories, use the Repository condition.'
+        );
+      }
       if (a.internetAccess !== undefined && typeof a.internetAccess !== 'boolean') {
         fail(`${at}.internetAccess must be a boolean`);
       }
@@ -2615,6 +2966,17 @@ export function issueRulesOffered(
 }
 
 /**
+ * Whether PostHog Inbox rules should be drawn. The same three-state
+ * discipline as {@link workflowsOffered}, and also not authorisation: the
+ * routes, the poller and the engine gate on the `posthogInboxRules` flag.
+ */
+export function posthogInboxRulesOffered(
+  features: { workflows?: boolean; posthogInboxRules?: boolean } | null | undefined
+): boolean {
+  return workflowsOffered(features) && features?.posthogInboxRules === true;
+}
+
+/**
  * A blank workflow the editor opens on. Save stays refused until it has a name
  * and at least one action — see {@link workflowInputProblem}. A Slack rule also
  * needs its Slack workspace and a channel.
@@ -2629,6 +2991,18 @@ export function emptyWorkflowInput(integration: WorkflowIntegration = 'github'):
       conditions: {},
       actions: [],
       maxRunsPerPrPerHour: DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR,
+    };
+  }
+  if (integration === 'posthog_inbox') {
+    return {
+      integration: 'posthog_inbox',
+      name: '',
+      enabled: true,
+      events: ['report_ready'],
+      conditions: {},
+      actions: [],
+      maxRunsPerPrPerHour: DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR,
+      maxRunsPerDay: DEFAULT_POSTHOG_INBOX_RUNS_PER_DAY,
     };
   }
   if (integration === 'webhook') {
@@ -2679,6 +3053,7 @@ export function workflowToInput(workflow: WorkflowDefinition): WorkflowInput {
     conditions: { ...workflow.conditions },
     actions: workflow.actions.map((a) => ({ ...a })),
     maxRunsPerPrPerHour: workflow.maxRunsPerPrPerHour,
+    ...(workflow.maxRunsPerDay !== undefined ? { maxRunsPerDay: workflow.maxRunsPerDay } : {}),
   };
 }
 
@@ -3161,6 +3536,134 @@ export function issueConditionSpecsFor(integration: IssueWorkflowIntegration): I
   return ISSUE_WORKFLOW_CONDITION_SPECS.filter((spec) => spec.integrations.includes(integration));
 }
 
+/** The widget a PostHog Inbox condition is edited with. */
+export type PostHogInboxConditionInput =
+  | 'priorities'
+  | 'actionability'
+  | 'list'
+  | 'scouts'
+  | 'repos'
+  | 'people'
+  | 'text'
+  | 'number';
+
+export interface PostHogInboxConditionSpec {
+  key: (typeof POSTHOG_INBOX_WORKFLOW_CONDITION_KEYS)[number];
+  label: string;
+  hint: string;
+  input: PostHogInboxConditionInput;
+  required: boolean;
+}
+
+/** Every condition a PostHog Inbox rule can carry, as data. */
+export const POSTHOG_INBOX_CONDITION_SPECS: readonly PostHogInboxConditionSpec[] = [
+  {
+    key: 'repositories',
+    label: 'Repository',
+    hint:
+      "Only reports for these repositories. Without this, any repository connected to the workspace. " +
+      "A report for a repository that is not connected never starts a session.",
+    input: 'repos',
+    required: false,
+  },
+  {
+    key: 'priorities',
+    label: 'Priority',
+    hint: 'Only reports with one of these priorities. P0 is the most urgent.',
+    input: 'priorities',
+    required: false,
+  },
+  {
+    key: 'actionability',
+    label: 'Actionability',
+    hint: 'Without this, only reports PostHog judged ready to fix.',
+    input: 'actionability',
+    required: false,
+  },
+  {
+    key: 'sourceProducts',
+    label: 'Source product',
+    hint: 'Only reports with signals from one of these PostHog products, like error_tracking or session_replay.',
+    input: 'list',
+    required: false,
+  },
+  {
+    key: 'scouts',
+    label: 'Scout',
+    hint: 'Include or exclude reports by the scout that wrote them, by skill name.',
+    input: 'scouts',
+    required: false,
+  },
+  {
+    key: 'suggestedReviewers',
+    label: 'Suggested reviewer',
+    hint: 'GitHub logins. Only reports where PostHog suggests one of them as a reviewer.',
+    input: 'people',
+    required: false,
+  },
+  {
+    key: 'titleContains',
+    label: 'Title contains',
+    hint: 'Case-insensitive.',
+    input: 'text',
+    required: false,
+  },
+  {
+    key: 'summaryContains',
+    label: 'Summary contains',
+    hint: 'Case-insensitive.',
+    input: 'text',
+    required: false,
+  },
+  {
+    key: 'minSignalCount',
+    label: 'At least this many signals',
+    hint: 'A report groups signals. More signals usually means a wider problem.',
+    input: 'number',
+    required: false,
+  },
+];
+
+/**
+ * The rule a PostHog Inbox preview validates: the editor's conditions with a
+ * stand-in name and action, so a rule can be previewed before it has a name
+ * or a prompt. The dry-run route validates the same input.
+ */
+export function posthogInboxPreviewInput(conditions: WorkflowConditions | undefined): WorkflowInput {
+  return {
+    integration: 'posthog_inbox',
+    name: 'Preview',
+    events: ['report_ready'],
+    conditions: conditions ?? {},
+    actions: [{ type: 'start_session', repositoryId: null, prompt: 'Preview' }],
+  };
+}
+
+/**
+ * Why a PostHog Inbox rule does not match a report, in a few words, or null
+ * when it matches. For the editor's dry run. It runs the matcher one
+ * condition at a time, so it cannot disagree with {@link workflowMatches}.
+ */
+export function posthogInboxMismatchReason(conditions: WorkflowConditions, facts: PostHogInboxFacts): string | null {
+  const blocked = posthogInboxReportBlocked(facts);
+  if (blocked === 'safety') return "PostHog's safety judge held it back";
+  if (blocked === 'not_ready') return `It is ${facts.status || 'not ready'}, not ready`;
+  if (blocked === 'already_addressed') return 'PostHog says it is already being handled';
+  if (!facts.repository) return 'PostHog did not pick a repository for it';
+  if (!facts.workspaceRepositoryId) return `${facts.repository} is not connected to this workspace`;
+  const base: WorkflowConditions = conditions.actionability ? { actionability: conditions.actionability } : {};
+  if (!posthogInboxConditionsMatch(base, facts)) {
+    return `Actionability is ${facts.actionability ?? 'not judged yet'}`;
+  }
+  for (const spec of POSTHOG_INBOX_CONDITION_SPECS) {
+    if (spec.key === 'actionability' || conditions[spec.key] === undefined) continue;
+    if (!posthogInboxConditionsMatch({ ...base, [spec.key]: conditions[spec.key] }, facts)) {
+      return `${spec.label} does not match`;
+    }
+  }
+  return null;
+}
+
 /** A fresh payload test for the editor. Empty, so it saves as nothing until filled in. */
 export function emptyWebhookPayloadCondition(): WebhookPayloadCondition {
   return { path: '', op: 'equals', value: '' };
@@ -3208,6 +3711,14 @@ export function workflowVocabulary(integration: WorkflowIntegration): WorkflowVo
           hint: spec.hint,
           required: spec.required,
           appliesTo: spec.appliesTo,
+        }))
+      : integration === 'posthog_inbox'
+      ? POSTHOG_INBOX_CONDITION_SPECS.map((spec) => ({
+          key: spec.key,
+          label: spec.label,
+          hint: spec.hint,
+          required: spec.required,
+          appliesTo: null,
         }))
       : integration === 'webhook'
       ? WEBHOOK_WORKFLOW_CONDITION_SPECS.map((spec) => ({

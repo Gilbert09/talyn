@@ -39,12 +39,14 @@ import {
   isIssueContext,
   type GithubActionContext,
   type IssueActionContext,
+  type PostHogInboxActionContext,
   type SlackActionContext,
   type WebhookActionContext,
   type WorkflowActionContext,
 } from './actions.js';
 import { inboundRulePrompt, repositoryName } from './inboundActions.js';
 import { claimIssueForStart, finishIssueStart, issueRepository, issueRulePrompt, noRepository } from './issueActions.js';
+import { posthogInboxRulePrompt } from './posthogInboxActions.js';
 
 /**
  * The `start_session` action: a rule starts a session, as the workspace owner.
@@ -73,6 +75,7 @@ export async function startSession(
   if (ctx.integration === 'slack') return startSlackSession(action, ctx);
   if (ctx.integration === 'webhook') return startWebhookSession(action, ctx);
   if (isIssueContext(ctx)) return startIssueSession(action, ctx);
+  if (ctx.integration === 'posthog_inbox') return startPostHogInboxSession(action, ctx);
   if (!isGithubContext(ctx) || !prRow) return { outcome: no('start_session', 'error', 'A GitHub automation ran without its pull request.') };
   return startGithubSession(action, ctx, prRow);
 }
@@ -246,6 +249,42 @@ async function startIssueSession(action: StartSessionAction, ctx: IssueActionCon
     prompt: await issueRulePrompt(action.prompt, ctx, repo.name),
     namingText: [ctx.facts.identifier, ctx.facts.title, action.prompt].filter(Boolean).join(' '),
     source: { kind: 'workflow', workflowId: ctx.workflowId, runId: ctx.runId, integration: ctx.integration },
+  });
+  const result = created.ok ? started(created.workbenchId) : created.result;
+  await finishIssueStart(claim.link, result);
+  return result;
+}
+
+// ---- PostHog Inbox --------------------------------------------------------
+
+/**
+ * From a PostHog Inbox report. Always on the report's own repository, which
+ * the adapter matched to a repository connected to the workspace. The report
+ * is claimed BEFORE the create (`external_issue_links`), so a later change to
+ * the same report cannot start a second session while this one works on it.
+ */
+async function startPostHogInboxSession(
+  action: StartSessionAction,
+  ctx: PostHogInboxActionContext
+): Promise<OneResult> {
+  const repositoryId = ctx.repositoryId ?? ctx.facts.workspaceRepositoryId ?? null;
+  const repoName = repositoryId ? await repositoryName(ctx.workspaceId, repositoryId) : null;
+  if (!repositoryId || !repoName) {
+    return {
+      outcome: no(
+        'start_session',
+        'repository_unresolved',
+        `The report's repository (${ctx.facts.repository ?? 'none'}) is not connected to this workspace. Add it to Talyn first.`
+      ),
+    };
+  }
+  const claim = await claimIssueForStart('start_session', ctx);
+  if (!claim.ok) return claim.result;
+  const created = await createRuleSession(action, ctx, {
+    repositoryId,
+    prompt: posthogInboxRulePrompt(action.prompt, ctx, repoName),
+    namingText: [ctx.facts.title, action.prompt].filter(Boolean).join(' '),
+    source: { kind: 'workflow', workflowId: ctx.workflowId, runId: ctx.runId, integration: 'posthog_inbox' },
   });
   const result = created.ok ? started(created.workbenchId) : created.result;
   await finishIssueStart(claim.link, result);

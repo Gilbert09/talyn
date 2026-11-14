@@ -17,6 +17,7 @@ import {
   recordOurComment,
   settleLink,
   type IssueLinkRow,
+  type LinkableFacts,
 } from '../inbound/issueLinks.js';
 import { buildInboundPrompt } from '../inbound/prompt.js';
 import { LinearRateLimitError } from '../linear/api.js';
@@ -25,7 +26,7 @@ import { LinearConnectionUnavailableError } from '../linear/store.js';
 import { resolveCloudEnv } from '../prCloudFix.js';
 import { createCloudTask, TaskReferenceError } from '../taskCreate.js';
 import { boxRefused, no, ok, type OneResult } from './actionResult.js';
-import type { IssueActionContext } from './actions.js';
+import type { BaseActionContext, IssueActionContext } from './actions.js';
 import { repositoryName } from './inboundActions.js';
 
 /**
@@ -69,7 +70,7 @@ export function noRepository(type: WorkflowActionType): OneResult {
  */
 export async function claimIssueForStart(
   type: WorkflowActionType,
-  ctx: IssueActionContext
+  ctx: Pick<BaseActionContext, 'workspaceId' | 'workflowId' | 'runId'> & { facts: LinkableFacts }
 ): Promise<{ ok: true; link: IssueLinkRow } | { ok: false; result: OneResult }> {
   const claim = await claimIssue({
     workspaceId: ctx.workspaceId,
@@ -78,13 +79,17 @@ export async function claimIssueForStart(
     facts: ctx.facts,
   });
   if (claim.claimed) return { ok: true, link: claim.link };
+  const subject =
+    ctx.facts.integration === 'posthog_inbox'
+      ? `the report "${ctx.facts.title || ctx.facts.reportId}"`
+      : ctx.facts.identifier || 'this issue';
   return {
     ok: false,
     result: {
       outcome: no(
         type,
         'issue_already_running',
-        `Talyn is already working on ${ctx.facts.identifier || 'this issue'}. It starts again when that work ends without a merge.`
+        `Talyn is already working on ${subject}. It starts again when that work ends without a merge.`
       ),
     },
   };

@@ -20,7 +20,7 @@ export function usePaletteAutomationsSection(pick: (fn: () => void) => void): Pa
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const features = useWorkspaceStore((s) => s.features);
   const [cache, setCache] = useState<{ workspaceId: string; rows: PaletteAutomation[] } | null>(null);
-  const rulesShown = (['github', 'github_issues', 'linear', 'slack', 'webhook'] as const).some((kind) =>
+  const rulesShown = (['github', 'github_issues', 'linear', 'slack', 'webhook', 'posthog_inbox'] as const).some((kind) =>
     automationsShown(features, kind)
   );
   const loopsShown = automationsShown(features, 'schedule');

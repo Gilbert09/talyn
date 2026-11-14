@@ -182,7 +182,8 @@ export function SlackConditions({ conditions, onChange, settings }: {
  * The form for an action that starts work: a session (every integration) or a
  * task (webhook and issue rules). A GitHub rule runs on the PR's own
  * repository, a Slack rule can let Talyn choose, a GitHub Issues rule can use
- * the issue's repository, and a webhook or Linear rule must name one.
+ * the issue's repository, and a webhook or Linear rule must name one. A
+ * PostHog Inbox rule always runs on the report's repository.
  */
 export function StartSessionInput({ action, onChange, integration }: {
   action: Extract<WorkflowAction, { type: 'start_session' | 'start_task' }>;
@@ -199,7 +200,7 @@ export function StartSessionInput({ action, onChange, integration }: {
     ? 'Let Talyn choose'
     : integration === 'github_issues' ? 'The issue\'s repository' : 'Pick a repository';
   return <div className="space-y-3">
-    {integration !== 'github' && <label className="block text-xs font-medium text-muted-foreground">Repository
+    {integration !== 'github' && integration !== 'posthog_inbox' && <label className="block text-xs font-medium text-muted-foreground">Repository
       <Select className="mt-1 block" value={action.repositoryId ?? ''} onChange={(e) => setRepository(e.target.value)}>
         <option value="">{emptyRepository}</option>
         {repositories.map((repo) => <option key={repo.id} value={repo.id}>{repo.fullName}</option>)}
@@ -213,6 +214,9 @@ export function StartSessionInput({ action, onChange, integration }: {
     </p>}
     {(integration === 'linear' || integration === 'github_issues') && <p className="text-xs text-muted-foreground">
       Talyn adds the issue title, description and link below your prompt as untrusted text.
+    </p>}
+    {integration === 'posthog_inbox' && <p className="text-xs text-muted-foreground" data-attr="posthog-inbox-repository-hint">
+      The session works on the report's own repository. To limit the repositories, add a Repository condition.
     </p>}
     <label className="block text-xs font-medium text-muted-foreground">Model
       <Select className="mt-1 block" value={action.model ?? ''} onChange={(e) => onChange({ ...action, model: e.target.value || undefined })}>

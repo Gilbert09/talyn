@@ -3,6 +3,7 @@ import {
   effectiveWorkflowActions,
   isGithubFacts,
   isIssueFacts,
+  isPostHogInboxFacts,
   isSlackFacts,
   isWebhookFacts,
   ISSUE_MERGE_EVENT,
@@ -306,6 +307,9 @@ function retryContext(
   if (isSlackFacts(facts)) return { ...base, integration: 'slack', repositoryId, facts };
   if (isWebhookFacts(facts)) return { ...base, integration: 'webhook', repositoryId: null, facts };
   if (isIssueFacts(facts)) return { ...base, integration: facts.integration, repositoryId, facts };
+  if (isPostHogInboxFacts(facts)) {
+    return { ...base, integration: 'posthog_inbox', repositoryId: repositoryId ?? facts.workspaceRepositoryId ?? null, facts };
+  }
   const [owner = '', repo = ''] = facts.repoFullName.split('/');
   return { ...base, repositoryId: repositoryId ?? '', owner, repo, facts };
 }

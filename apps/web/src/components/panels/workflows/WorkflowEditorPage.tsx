@@ -27,6 +27,7 @@ import {
   workflowToInput,
   workflowVocabulary,
   workflowIntegrationOf,
+  posthogInboxPreviewInput,
 } from '@talyn/shared';
 import { Button } from '../../ui/button';
 import { cn } from '../../../lib/utils';
@@ -35,6 +36,13 @@ import { GithubActionInput, GithubConditionInput } from './githubFields';
 import { SlackActionInput, SlackConditions, SlackReplyNotice, StartSessionInput, useSlackRuleSettings } from './slackFields';
 import { WebhookPayloadConditions, WebhookUrlSection } from './webhookFields';
 import { IssueActionInput, IssueConditions, IssueWriteBackFields, pruneIssueConditions, useLinearRuleData } from './issueFields';
+import {
+  PostHogInboxConditions,
+  PostHogInboxConnectionNotice,
+  PostHogInboxDailyCapField,
+  PostHogInboxPreview,
+  usePostHogInboxStatus,
+} from './posthogInboxFields';
 
 /**
  * The workflow editor, as a page.
@@ -98,6 +106,7 @@ const BACK_LABELS: Record<WorkflowIntegration, string> = {
   webhook: 'Webhook automations',
   linear: 'Linear automations',
   github_issues: 'GitHub Issues automations',
+  posthog_inbox: 'PostHog Inbox automations',
 };
 
 const TRIGGER_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
@@ -106,6 +115,7 @@ const TRIGGER_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
   webhook: 'When a request arrives at the URL of this automation.',
   linear: 'Any one of these events on an issue in the Linear workspace you pick below.',
   github_issues: 'Any one of these events on an issue in the repositories this workspace watches.',
+  posthog_inbox: 'When a PostHog self-driving report in your PostHog project is ready for work.',
 };
 
 const EMPTY_ACTIONS: Record<WorkflowIntegration, string> = {
@@ -114,6 +124,7 @@ const EMPTY_ACTIONS: Record<WorkflowIntegration, string> = {
   webhook: 'Add an action: start a session or a task.',
   linear: 'Add an action: start a session or a task, comment on the issue, or change its status.',
   github_issues: 'Add an action: start a session or a task, comment on the issue, or change its status.',
+  posthog_inbox: 'Add an action: start a session on the report\'s repository.',
 };
 
 const WEBHOOK_PAYLOAD_SPEC = WEBHOOK_WORKFLOW_CONDITION_SPECS[0]!;
@@ -129,8 +140,8 @@ export function WorkflowEditorPage({
   const [input, setInput] = useState<WorkflowInput>(() => {
     if (editing) return workflowToInput(editing);
     const blank = emptyWorkflowInput(integration);
-    // An issue rule starts a session by default.
-    return isIssueWorkflowIntegration(integration)
+    // An issue or PostHog Inbox rule starts a session by default.
+    return isIssueWorkflowIntegration(integration) || integration === 'posthog_inbox'
       ? { ...blank, actions: [emptyWorkflowAction('start_session')] }
       : blank;
   });
@@ -154,14 +165,28 @@ export function WorkflowEditorPage({
   const slackSettings = useSlackRuleSettings(conditions.slackTeamId, kind === 'slack');
   const canReply = slackSettings.install?.canReply !== false;
   const linear = useLinearRuleData(conditions.connectionId, kind === 'linear');
+  const inboxStatus = usePostHogInboxStatus(kind === 'posthog_inbox');
+  // Issue and PostHog Inbox rules start one piece of work per subject.
+  const oneStartAction = isIssueWorkflowIntegration(kind) || kind === 'posthog_inbox';
+  // The trigger of a webhook or PostHog Inbox rule is fixed.
+  const fixedTrigger = kind === 'webhook' || kind === 'posthog_inbox';
   const hasStartAction = input.actions.some((a) => a.type === 'start_session' || a.type === 'start_task');
   const problem = useMemo(() => workflowInputProblem(input), [input]);
+  // The preview reads only the conditions, so it runs before the rule has a
+  // name or a prompt. The dry-run route validates the same stand-in rule.
+  const previewProblem = useMemo(
+    () => (kind === 'posthog_inbox' ? workflowInputProblem(posthogInboxPreviewInput(input.conditions)) : null),
+    [kind, input.conditions]
+  );
 
   // The scope every GitHub-backed field asks within: the repositories this
   // workflow names. Empty means the workflow is unscoped, which the backend
   // answers from a bounded sample and flags `partial` — there is no honest way
   // to offer "the labels" of eighty repositories in one dropdown.
-  const scopedRepos = useMemo(() => conditions.repos ?? [], [conditions.repos]);
+  const scopedRepos = useMemo(
+    () => (kind === 'posthog_inbox' ? conditions.repositories : conditions.repos) ?? [],
+    [kind, conditions.repos, conditions.repositories]
+  );
   const needSuggestions = useCallback(
     () => onNeedGithubSuggestions(scopedRepos),
     [onNeedGithubSuggestions, scopedRepos]
@@ -219,7 +244,8 @@ export function WorkflowEditorPage({
     setSaving(true);
     setSaveError(null);
     try {
-      await onSave(kind === 'github'
+      // A GitHub or PostHog Inbox session runs on the subject's own repository.
+      await onSave(kind === 'github' || kind === 'posthog_inbox'
         ? { ...input, actions: input.actions.map((action) => action.type === 'start_session'
           ? { ...action, repositoryId: null } : action) }
         : input);
@@ -264,11 +290,13 @@ export function WorkflowEditorPage({
 
           {kind === 'webhook' && editing && <WebhookUrlSection ruleId={editing.id} />}
 
+          {kind === 'posthog_inbox' && <PostHogInboxConnectionNotice {...inboxStatus} />}
+
           {/* ---- WHEN ---- */}
           <Section
             title="When this happens"
             description={TRIGGER_DESCRIPTIONS[kind]}
-            action={kind === 'webhook' ? undefined :
+            action={fixedTrigger ? undefined :
               <DropdownButton
                 label="Add trigger"
                 options={addableEvents.map((e) => ({
@@ -304,7 +332,7 @@ export function WorkflowEditorPage({
                       )}
                     >
                       {WORKFLOW_EVENT_LABELS[e]}
-                      {kind !== 'webhook' && <button
+                      {!fixedTrigger && <button
                         className="rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
                         onClick={() => removeEvent(e)}
                         aria-label={`Remove ${WORKFLOW_EVENT_LABELS[e]}`}
@@ -339,6 +367,18 @@ export function WorkflowEditorPage({
           ) : kind === 'slack' ? (
             <Section title="Only if" description="Choose a Slack workspace and its channels.">
               <SlackConditions conditions={conditions} onChange={setConditions} settings={slackSettings} />
+            </Section>
+          ) : kind === 'posthog_inbox' ? (
+            <Section
+              title="Only if"
+              description="Every condition has to hold. Talyn never acts on a report PostHog suppressed, a report that is not ready, or a report somebody already handles."
+            >
+              <PostHogInboxConditions
+                conditions={conditions}
+                setConditions={setConditions}
+                suggestions={suggestions}
+                onNeedSuggestions={needSuggestions}
+              />
             </Section>
           ) : isIssueWorkflowIntegration(kind) ? (
             <Section title="Only if" description="Every condition has to hold.">
@@ -424,7 +464,7 @@ export function WorkflowEditorPage({
                   label: WORKFLOW_ACTION_LABELS[t],
                   hint: ACTION_HINTS[t],
                   disabled: (t === 'slack_reply' && !canReply)
-                    || (isIssueWorkflowIntegration(kind) && hasStartAction && (t === 'start_session' || t === 'start_task')),
+                    || (oneStartAction && hasStartAction && (t === 'start_session' || t === 'start_task')),
                 }))}
                 onPick={(type) =>
                   setInput((p) => ({
@@ -471,6 +511,8 @@ export function WorkflowEditorPage({
             )}
           </Section>
 
+          {kind === 'posthog_inbox' && <PostHogInboxPreview input={input} problem={previewProblem} />}
+
           {/* ---- Advanced ---- */}
           <div>
             <Button variant="ghost" size="sm" onClick={() => setShowAdvanced((v) => !v)}>
@@ -480,6 +522,7 @@ export function WorkflowEditorPage({
               Advanced
             </Button>
             {showAdvanced && <WorkflowRunCapField value={input.maxRunsPerPrPerHour ?? 5} integration={kind} onChange={(maxRunsPerPrPerHour) => setInput((p) => ({ ...p, maxRunsPerPrPerHour }))} />}
+            {showAdvanced && kind === 'posthog_inbox' && <PostHogInboxDailyCapField value={input.maxRunsPerDay} onChange={(maxRunsPerDay) => setInput((p) => ({ ...p, maxRunsPerDay }))} />}
           </div>
 
           {/* The same action as the header's, where you finish reading. The header

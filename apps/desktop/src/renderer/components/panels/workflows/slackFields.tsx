@@ -181,7 +181,8 @@ export function SlackConditions({ conditions, onChange, settings }: {
 /**
  * Edits `start_session`, and `start_task` on a webhook or issue rule. A webhook
  * or Linear rule must name its repository. A GitHub Issues rule can use the
- * issue's own repository.
+ * issue's own repository. A PostHog Inbox rule always uses the report's
+ * repository, so it shows no repository picker.
  */
 export function StartSessionInput({ action, onChange, integration }: {
   action: Extract<WorkflowAction, { type: 'start_session' | 'start_task' }>;
@@ -213,6 +214,9 @@ export function StartSessionInput({ action, onChange, integration }: {
     </p>}
     {(integration === 'linear' || integration === 'github_issues') && <p className="text-xs text-muted-foreground">
       Talyn adds the issue title, description and link below your prompt as untrusted text.
+    </p>}
+    {integration === 'posthog_inbox' && <p className="text-xs text-muted-foreground" data-attr="posthog-inbox-repository-hint">
+      The session works on the report's own repository. To limit the repositories, add a Repository condition.
     </p>}
     <label className="block text-xs font-medium text-muted-foreground">Model
       <Select className="mt-1 block" value={action.model ?? ''} onChange={(e) => onChange({ ...action, model: e.target.value || undefined })}>

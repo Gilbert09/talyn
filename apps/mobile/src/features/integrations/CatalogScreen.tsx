@@ -30,6 +30,7 @@ export function CatalogScreen() {
   if (!features) return <Page><Loading /></Page>;
   if (!workspaceId) return <Page><EmptyState title="No Workspace Selected" detail="Choose a workspace to see integrations." /></Page>;
 
+  const posthogState: ConnectionState = posthogStatus.data ? (posthogStatus.data.connected ? 'connected' : 'not_connected') : 'unknown';
   const states: Record<IntegrationKind, ConnectionState> = {
     github: workspace.data?.id === workspaceId ? (workspace.data.integrations?.github?.enabled ? 'connected' : 'not_connected') : 'unknown',
     slack: slackStatus.data ? (slackStatus.data.installations.length > 0 ? 'connected' : 'not_connected') : 'unknown',
@@ -38,7 +39,8 @@ export function CatalogScreen() {
     webhook: 'built_in',
     schedule: 'built_in',
     tailscale: tailscaleStatus.data === undefined ? 'unknown' : tailscaleStatus.data ? 'connected' : 'not_connected',
-    posthog: posthogStatus.data ? (posthogStatus.data.connected ? 'connected' : 'not_connected') : 'unknown',
+    posthog: posthogState,
+    posthog_inbox: posthogState,
     trunk: trunkStatus.data ? (trunkStatus.data.connected ? 'connected' : 'not_connected') : 'unknown',
   };
   return <Page>

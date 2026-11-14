@@ -386,6 +386,10 @@ Follow-ups now that Loops has shipped:
 
 - [x] Add Linear as a rule source, with GitHub Issues. The `issueRules` flag controls rollout (2026-11-12).
 - [ ] Add Sentry as a rule source.
+- [x] Add PostHog Inbox (self-driving reports) as a rule source: poller, ingest by report id, filters, daily cap, dry run. The `posthogInboxRules` flag controls rollout (2026-11-14).
+- [ ] PostHog Inbox step 2: claim the report in PostHog when the session starts, attach the pull request URL to the claim, and release the claim when the work ends without a merge (needs `inbox:write`).
+- [ ] PostHog Inbox step 3: receive PostHog's `$signals_report_ready` push (a PostHog webhook destination) and call `ingestPostHogReport` with only the report id.
+- [ ] PostHog Inbox on mobile: an editor (mobile shows the rules read-only today).
 - [ ] Add a generic inbound webhook source.
 
 ## Phase 8: PostHog Integration

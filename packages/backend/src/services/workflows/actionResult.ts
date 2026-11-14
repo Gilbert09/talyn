@@ -71,7 +71,9 @@ export function recordDeferral(ctx: WorkflowActionContext, gate: WorkflowActionF
         ? { webhook_connection_id: ctx.facts.connectionId }
         : isIssueContext(ctx)
           ? { issue_integration: ctx.integration, issue_id: ctx.facts.externalId }
-          : { repo: `${ctx.owner}/${ctx.repo}`, pr_number: ctx.facts.number };
+          : ctx.integration === 'posthog_inbox'
+            ? { posthog_report_id: ctx.facts.reportId }
+            : { repo: `${ctx.owner}/${ctx.repo}`, pr_number: ctx.facts.number };
   captureWorkspaceEvent(ctx.workspaceId, 'paywall_deferred', {
     source: 'workflow',
     gate,

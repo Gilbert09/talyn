@@ -10,6 +10,7 @@ import type {
   WebhookEventFacts,
   IssueEventFacts,
   IssueWorkflowIntegration,
+  PostHogInboxFacts,
   CodeReviewPreset,
 } from '@talyn/shared';
 import { buildSkillPrompt, renderWorkflowComment, SKILL_MAX_BYTES } from '@talyn/shared';
@@ -98,12 +99,21 @@ export interface IssueActionContext extends BaseActionContext {
   facts: IssueEventFacts;
 }
 
+/** Everything a PostHog Inbox rule's action needs. Built by the PostHog Inbox source adapter. */
+export interface PostHogInboxActionContext extends BaseActionContext {
+  integration: 'posthog_inbox';
+  /** The Talyn repository that matches the report's repository, or null. */
+  repositoryId: string | null;
+  facts: PostHogInboxFacts;
+}
+
 /** The context the action runner takes, tagged by integration. */
 export type WorkflowActionContext =
   | GithubActionContext
   | SlackActionContext
   | WebhookActionContext
-  | IssueActionContext;
+  | IssueActionContext
+  | PostHogInboxActionContext;
 
 export function isIssueContext(ctx: WorkflowActionContext): ctx is IssueActionContext {
   return ctx.integration === 'linear' || ctx.integration === 'github_issues';
