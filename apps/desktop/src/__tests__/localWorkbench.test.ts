@@ -573,7 +573,7 @@ describe('LocalTurnController Create PR', () => {
     await controller.send(WB, chat(), CREATE_PR);
     await controller.handleTurnEnd('c1', ok());
 
-    expect(gitArgvs(bridge)).toContainEqual(['git', 'commit', '-m', 'feat: wip']);
+    expect(gitArgvs(bridge)).toContainEqual(['git', 'commit', '--no-verify', '-m', 'feat: wip']);
     expect(gitArgvs(bridge)).toContainEqual(['git', 'push', '-u', 'origin', 'HEAD']);
     expect(api.createPullRequest).toHaveBeenCalledWith('wb1', {
       title: 'feat: add the thing',
