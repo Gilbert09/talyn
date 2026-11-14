@@ -2,6 +2,7 @@ import type {
   BillingStatus, FleetAccountView, InsightsAgentsResponse, InsightsComputeResponse, InsightsOutputResponse, InsightsSpeedResponse,
   LoopRunStatus, LoopWithStats, SpacePresenceMember, SpaceSessionRow, SpacesTeam, Workbench, WorkflowRunStatus, WorkflowWithStats,
 } from '@talyn/shared';
+import { formatCreditBalance } from '@talyn/shared';
 
 import {
   accountBadge, accountKindLabel, accountUsageText, accountsFor, defaultFleetModel, defaultProviderLabel, formatTimeAt, providerRows, summaryWindow,
@@ -18,7 +19,7 @@ import {
   activeLogins, canMoveToSpace, findSpace, groupSpaceSessions, hiddenText, moveChoices, openTarget, placeLabel, presenceSentence,
   spaceInitials, spaceSessionState, viewersOf,
 } from '../features/spaces/model';
-import { formatLeftPercent, gaugeLevel, leftPercent, shortDate, usageLines, usageViewOf } from '../features/usage/model';
+import { creditDrawToneOf, formatLeftPercent, gaugeLevel, leftPercent, shortDate, usageLines, usageViewOf } from '../features/usage/model';
 
 const mockMoveSession = jest.fn();
 jest.mock('@talyn/client/native', () => ({
@@ -149,8 +150,42 @@ describe('usage', () => {
     expect(lines).toEqual({
       plan: 'Pro', left: '75% left', used: '50 of 200 box-hours used', reset: 'Resets 30 Nov', exhausted: null,
       boxes: '3 of 100 running', credits: '$12.50', expiring: '$2.00 expires in the next 30 days', autoTopup: 'On, below $5',
-      autoTopupProblem: 'The last top-up failed: Card declined', team: null,
+      autoTopupProblem: 'The last top-up failed: Card declined', team: null, credit: null,
     });
+  });
+
+  it.each([
+    ['at the start of the draw', 200, 25_000_000, 25_000_000, 100, '$25 of $25'],
+    ['part way through', 230, 75_000_000, 100_000_000, 75, '$75 of $100'],
+    ['after a top-up', 240, 125_000_000, 125_000_000, 100, '$125 of $125'],
+    ['an old backend without a start', 200, 10_000_000, undefined, 100, '$10 of $10'],
+  ] as const)('describes the credit draw %s', (_name, usedHours, balanceMicros, drawStartMicros, leftPct, detail) => {
+    const lines = usageLines(usageViewOf(billing({
+      usage: usage({ usedWsec: usedHours * 3600, percent: 100 }),
+      credits: { balanceMicros, expiringSoonMicros: 0, lots: [], ...(drawStartMicros ? { drawStartMicros } : {}) },
+    }))!);
+    expect(lines.credit?.leftPercent).toBe(leftPct);
+    expect(lines.left).toBe(`Using credits · ${formatCreditBalance(balanceMicros)} left`);
+    expect(lines.used).toBe(`Included hours used up. Using credits: ${detail} left`);
+  });
+
+  it.each([
+    ['hours left', 199, 10_000_000, false],
+    ['no credit', 200, 0, false],
+    ['credit and hours both spent', 200, 10_000_000, true],
+  ] as const)('draws no credit bar with %s', (_name, usedHours, balanceMicros, exhausted) => {
+    const lines = usageLines(usageViewOf(billing({
+      usage: usage({ usedWsec: usedHours * 3600, percent: 100, exhausted }),
+      credits: { balanceMicros, expiringSoonMicros: 0, lots: [], drawStartMicros: 50_000_000 },
+    }))!);
+    expect(lines.credit).toBeNull();
+  });
+
+  it.each([
+    [{ leftPercent: 50 }, 'information'],
+    [{ leftPercent: 19 }, 'warning'],
+  ] as const)('colours the credit bar for %j as %s', (draw, tone) => {
+    expect(creditDrawToneOf({ balanceMicros: 1, startMicros: 1, ...draw })).toBe(tone);
   });
 
   it.each([

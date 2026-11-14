@@ -27,6 +27,9 @@ import {
   CREDIT_PACK_IDS,
   CREDIT_PACKS,
   creditBalanceMicros,
+  creditDrawDetail,
+  creditDrawHeadline,
+  creditDrawOf,
   creditExpiresAt,
   creditPackBonusMicros,
   crossedUsageThresholds,
@@ -38,6 +41,7 @@ import {
   formatCreditBalance,
   formatCreditPack,
   formatPricePerHour,
+  isCreditDrawLow,
   formatSizePrice,
   formatUsd,
   includedWeightedSeconds,
@@ -786,5 +790,49 @@ describe('billedSizeFor: a box bills the memory it uses, up to its booted size',
     for (const [booted, mem] of cases) {
       expect(SIZE_WEIGHT[billedSizeFor(booted, mem)]).toBeLessThanOrEqual(SIZE_WEIGHT[booted]);
     }
+  });
+});
+
+describe('creditDrawOf: the credit bar once the included hours are used up', () => {
+  const usage = (usedWsec: number, exhausted = false) => ({ usedWsec, includedWsec: 1000, exhausted });
+
+  it.each([
+    ['hours left', usage(999), { balanceMicros: 10_000_000, drawStartMicros: 20_000_000 }],
+    ['exhausted', usage(1000, true), { balanceMicros: 10_000_000, drawStartMicros: 20_000_000 }],
+    ['no credit', usage(1000), { balanceMicros: 0, drawStartMicros: 20_000_000 }],
+    ['no credit summary', usage(1000), undefined],
+    ['null credit summary', usage(1000), null],
+  ] as const)('%s: no draw', (_label, u, credits) => {
+    expect(creditDrawOf(u, credits)).toBeNull();
+  });
+
+  it.each([
+    ['full bar at the start', 1000, 25_000_000, 25_000_000, 100],
+    ['a quarter spent', 1000, 75_000_000, 100_000_000, 75],
+    ['past the included hours', 5000, 1_000_000, 4_000_000, 25],
+    ['an old backend without a start reads as full', 1000, 9_384_000, undefined, 100],
+    ['a start below the balance clamps to the balance', 1000, 9_384_000, 1_000_000, 100],
+  ] as const)('%s', (_label, usedWsec, balanceMicros, drawStartMicros, leftPercent) => {
+    const draw = creditDrawOf(usage(usedWsec), { balanceMicros, drawStartMicros });
+    expect(draw).toEqual({
+      balanceMicros,
+      startMicros: Math.max(balanceMicros, drawStartMicros ?? 0),
+      leftPercent,
+    });
+  });
+
+  it.each([
+    [21, false],
+    [20, false],
+    [19.9, true],
+    [0.5, true],
+  ] as const)('%s%% left is low: %s', (leftPercent, low) => {
+    expect(isCreditDrawLow({ leftPercent })).toBe(low);
+  });
+
+  it('writes the headline and the detail', () => {
+    const draw = { balanceMicros: 93_840_000, startMicros: 120_000_000 };
+    expect(creditDrawHeadline(draw)).toBe('Using credits · $93.84 left');
+    expect(creditDrawDetail(draw)).toBe('Included hours used up. Using credits: $93.84 of $120 left');
   });
 });

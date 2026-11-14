@@ -8,10 +8,15 @@ import {
   USAGE_EXHAUSTED_ERROR_CODE,
   formatBoxHoursLabel,
   formatBoxHoursUsage,
+  creditDrawDetail,
+  creditDrawHeadline,
+  creditDrawOf,
   formatCreditBalance,
+  isCreditDrawLow,
   isPlanTier,
   sellableTierPrices,
   type BillingStatus,
+  type CreditDraw,
   type PlanTier,
   type SandboxSize,
   type UsageBillingErrorCode,
@@ -122,6 +127,19 @@ export const GAUGE_TEXT_CLASS: Record<GaugeTone, string> = {
   full: 'text-destructive',
 };
 
+/** The credit bar has its own colour, so it never reads as included hours. */
+export const CREDIT_BAR_CLASS = { normal: 'bg-sky-500', low: 'bg-orange-500' } as const;
+export const CREDIT_TEXT_CLASS = { normal: 'text-sky-600 dark:text-sky-400', low: 'text-orange-500' } as const;
+
+/** The view's credit draw, or null while the included hours last. */
+export function creditDrawOfView(view: UsageBillingView): CreditDraw | null {
+  return creditDrawOf(view.usage, view.status.credits);
+}
+
+export function creditDrawTone(draw: CreditDraw): keyof typeof CREDIT_BAR_CLASS {
+  return isCreditDrawLow(draw) ? 'low' : 'normal';
+}
+
 export type GaugeAction = 'upgrade' | 'add_credits';
 
 /** "Add credits" shows only when less than this share of the period's hours is left. */
@@ -170,8 +188,21 @@ export function gaugeSummary(view: UsageBillingView): {
   resetText: string;
   creditsText: string | null;
   exhaustedText: string | null;
+  credit: CreditDraw | null;
 } {
   const balance = view.status.credits?.balanceMicros ?? 0;
+  const credit = creditDrawOfView(view);
+  if (credit) {
+    return {
+      tierLabel: PLAN_TIER_LABELS[view.tier],
+      leftText: creditDrawHeadline(credit),
+      usageText: creditDrawDetail(credit),
+      resetText: `Resets ${formatShortDate(view.usage.periodEnd)}`,
+      creditsText: null,
+      exhaustedText: null,
+      credit,
+    };
+  }
   return {
     tierLabel: PLAN_TIER_LABELS[view.tier],
     leftText: formatLeftPercent(view.usage.percent, view.usage.exhausted),
@@ -179,6 +210,7 @@ export function gaugeSummary(view: UsageBillingView): {
     resetText: `Resets ${formatShortDate(view.usage.periodEnd)}`,
     creditsText: balance > 0 ? `${formatCreditBalance(balance)} credits` : null,
     exhaustedText: view.usage.exhausted ? 'Out of hours: new boxes paused' : null,
+    credit: null,
   };
 }
 

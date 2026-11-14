@@ -134,6 +134,32 @@ describe('gaugeSummary', () => {
   });
 });
 
+describe('gaugeSummary while drawing on credit', () => {
+  it.each([
+    ['at the start of the draw', 200, 25_000_000, 25_000_000, 100, 'Using credits · $25 left', '$25 of $25'],
+    ['part way through', 230, 93_840_000, 120_000_000, 78.2, 'Using credits · $93.84 left', '$93.84 of $120'],
+    ['an old backend without a start', 200, 10_000_000, undefined, 100, 'Using credits · $10 left', '$10 of $10'],
+  ] as const)('%s', (_label, usedHours, balanceMicros, drawStartMicros, leftPct, leftText, detail) => {
+    const view = usageBillingOf(usageStatus('pro', { usedHours, balanceMicros, drawStartMicros }))!;
+    const summary = gaugeSummary(view);
+    expect(summary.credit?.leftPercent).toBe(leftPct);
+    expect(summary.leftText).toBe(leftText);
+    expect(summary.usageText).toBe(`Included hours used up. Using credits: ${detail} left`);
+    expect(summary.creditsText).toBeNull();
+    expect(summary.exhaustedText).toBeNull();
+    expect(summary.resetText).toMatch(/^Resets /);
+  });
+
+  it.each([
+    ['hours left', 199, 10_000_000, false],
+    ['no credit', 200, 0, false],
+    ['credit and hours both spent', 200, 10_000_000, true],
+  ] as const)('no credit bar with %s', (_label, usedHours, balanceMicros, exhausted) => {
+    const view = usageBillingOf(usageStatus('pro', { usedHours, balanceMicros, exhausted, drawStartMicros: 50_000_000 }))!;
+    expect(gaugeSummary(view).credit).toBeNull();
+  });
+});
+
 describe('boxRefusalFromError', () => {
   it('reads the notice of a usage-billing 402', () => {
     const notice = { code: 'usage_exhausted', message: 'Out.', tier: 'free', periodEnd: '2026-11-30T00:00:00Z', creditsAllowed: false };

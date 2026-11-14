@@ -4,9 +4,11 @@ import {
   PLAN_PRICES,
   SIZE_REQUIRES_PRO_ERROR_CODE,
   USAGE_EXHAUSTED_ERROR_CODE,
+  isCreditDrawLow,
   sellableTierPrices,
   type BillingPricing,
   type BillingStatus,
+  type CreditDraw,
   type PlanTier,
   type SandboxSize,
   type UsageAlertThreshold,
@@ -91,6 +93,28 @@ export const GAUGE_TEXT_CLASS: Record<GaugeTone, string> = {
   notice: 'text-amber-600 dark:text-amber-400',
   warning: 'text-orange-600 dark:text-orange-400',
   danger: 'text-destructive',
+};
+
+/** The credit bar has its own colour, so it never reads as included hours. */
+export type CreditTone = 'normal' | 'low';
+
+export function creditDrawTone(draw: CreditDraw): CreditTone {
+  return isCreditDrawLow(draw) ? 'low' : 'normal';
+}
+
+export const CREDIT_BAR_CLASS: Record<CreditTone, string> = {
+  normal: 'bg-sky-500',
+  low: 'bg-orange-500',
+};
+
+export const CREDIT_TEXT_CLASS: Record<CreditTone, string> = {
+  normal: 'text-sky-600 dark:text-sky-400',
+  low: 'text-orange-600 dark:text-orange-400',
+};
+
+export const CREDIT_RING_STROKE: Record<CreditTone, string> = {
+  normal: 'stroke-sky-500',
+  low: 'stroke-orange-500',
 };
 
 /** The gauge's one action. */

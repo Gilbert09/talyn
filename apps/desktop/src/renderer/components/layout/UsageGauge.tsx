@@ -2,6 +2,9 @@ import { AlertTriangle } from 'lucide-react';
 import {
   PLAN_TIER_LABELS,
   cloudProviderStatus,
+  creditDrawDetail,
+  creditDrawHeadline,
+  creditDrawOf,
   fleetAgentLabel,
   formatBoxHoursUsage,
   formatCreditBalance,
@@ -11,9 +14,13 @@ import type { CloudProviderInfo } from '@talyn/client';
 import { cn } from '../../lib/utils';
 import { trackEvent } from '../../lib/analytics';
 import {
+  CREDIT_BAR_CLASS,
+  CREDIT_RING_STROKE,
+  CREDIT_TEXT_CLASS,
   GAUGE_ACTION_LABELS,
   GAUGE_BAR_CLASS,
   GAUGE_TEXT_CLASS,
+  creditDrawTone,
   formatLeftPercent,
   formatShortDate,
   gaugeAction,
@@ -74,11 +81,20 @@ function UsageGauge({ status, collapsed }: { status: UsageBillingStatus; collaps
   const action = gaugeAction(status);
   const exhausted = usage.exhausted;
   const usageText = formatBoxHoursUsage(usage.usedWsec, usage.includedWsec);
-  const left = leftPercent(usage.percent, exhausted);
-  const leftText = formatLeftPercent(usage.percent, exhausted);
-  const usageDetail = `${leftText} (${usageText} used)`;
+  const credit = creditDrawOf(usage, status.credits);
+  const creditTone = credit ? creditDrawTone(credit) : null;
+  const left = credit ? credit.leftPercent : leftPercent(usage.percent, exhausted);
+  const leftText = credit ? creditDrawHeadline(credit) : formatLeftPercent(usage.percent, exhausted);
+  const usageDetail = credit ? creditDrawDetail(credit) : `${leftText} (${usageText} used)`;
   const reset = formatShortDate(usage.periodEnd);
-  const balance = status.credits?.balanceMicros ?? 0;
+  // While the gauge draws on credit, the bar already shows the balance.
+  const balance = credit ? 0 : (status.credits?.balanceMicros ?? 0);
+  const barClass = creditTone ? CREDIT_BAR_CLASS[creditTone] : GAUGE_BAR_CLASS[tone];
+  const leftClass = creditTone
+    ? cn('font-medium', CREDIT_TEXT_CLASS[creditTone])
+    : tone === 'ok'
+      ? 'text-foreground'
+      : GAUGE_TEXT_CLASS[tone];
   const warnings = agentWarnings(providers, posthogNeedsReauth);
   const tierLabel = PLAN_TIER_LABELS[tier];
 
@@ -109,7 +125,7 @@ function UsageGauge({ status, collapsed }: { status: UsageBillingStatus; collaps
               data-attr="usage-gauge-collapsed"
               className="relative flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
             >
-              <UsageRing percent={left} tone={tone} />
+              <UsageRing percent={left} strokeClass={creditTone ? CREDIT_RING_STROKE[creditTone] : RING_STROKE[tone]} />
               {warnings.length > 0 && (
                 <span aria-hidden className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-amber-500 ring-2 ring-card" />
               )}
@@ -150,22 +166,20 @@ function UsageGauge({ status, collapsed }: { status: UsageBillingStatus; collaps
           <div
             className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted"
             role="progressbar"
-            aria-label="Box-hours left"
+            aria-label={credit ? 'Credit left' : 'Box-hours left'}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={left}
           >
             <div
-              className={cn('h-full rounded-full transition-all', GAUGE_BAR_CLASS[tone])}
+              className={cn('h-full rounded-full transition-all', barClass)}
               style={{ width: `${left}%` }}
             />
           </div>
           {exhausted ? (
             <p className="mt-1 text-xs font-medium text-destructive">Out of hours: new boxes paused</p>
           ) : (
-            <p className={cn('mt-1 text-xs', tone === 'ok' ? 'text-foreground' : GAUGE_TEXT_CLASS[tone])}>
-              {leftText}
-            </p>
+            <p className={cn('mt-1 text-xs', leftClass)}>{leftText}</p>
           )}
           {balance > 0 && <p className="text-[11px] text-muted-foreground">Credits {formatCreditBalance(balance)}</p>}
         </button>
@@ -210,7 +224,7 @@ const RING_STROKE: Record<GaugeTone, string> = {
   danger: 'stroke-destructive',
 };
 
-function UsageRing({ percent, tone }: { percent: number; tone: GaugeTone }) {
+function UsageRing({ percent, strokeClass }: { percent: number; strokeClass: string }) {
   const filled = (Math.min(100, Math.max(0, percent)) / 100) * RING_CIRCUMFERENCE;
   return (
     <svg viewBox="0 0 16 16" className="h-4 w-4 -rotate-90" aria-hidden>
@@ -222,7 +236,7 @@ function UsageRing({ percent, tone }: { percent: number; tone: GaugeTone }) {
         fill="none"
         strokeWidth="2.5"
         strokeLinecap="round"
-        className={RING_STROKE[tone]}
+        className={strokeClass}
         strokeDasharray={`${filled} ${RING_CIRCUMFERENCE}`}
       />
     </svg>

@@ -73,7 +73,7 @@ describe('SidebarUsageSlot', () => {
   ])('hides Add credits when Pro is %s but has credits left', (_label, usedHours, exhausted) => {
     setup(usageStatus('pro', { usedHours, exhausted, balanceMicros: 100_000_000 }));
     render(<SidebarUsageSlot collapsed={false} />);
-    expect(screen.getByText(/\$100\.00 credits/)).toBeInTheDocument();
+    expect(screen.getByText(/\$100 credits/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add credits' })).toBeNull();
   });
 
@@ -85,6 +85,42 @@ describe('SidebarUsageSlot', () => {
     expect(screen.getByRole('progressbar').firstElementChild).toHaveClass('bg-destructive');
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
     expect(screen.getByRole('progressbar').firstElementChild).toHaveStyle({ width: '0%' });
+  });
+
+  it('turns into a credit bar once the included hours are used up', () => {
+    setup(usageStatus('pro', { usedHours: 230, balanceMicros: 75_000_000, drawStartMicros: 100_000_000 }));
+    render(<SidebarUsageSlot collapsed={false} />);
+    expect(screen.getByText('Using credits · $75 left')).toBeInTheDocument();
+    expect(screen.queryByText('0% left')).toBeNull();
+    expect(screen.queryByText(/\$75 credits/)).toBeNull();
+    const bar = screen.getByRole('progressbar', { name: 'Credit left' });
+    expect(bar).toHaveAttribute('aria-valuenow', '75');
+    expect(bar.firstElementChild).toHaveStyle({ width: '75%' });
+    expect(bar.firstElementChild).toHaveClass('bg-sky-500');
+    expect(screen.getByRole('button', { name: /Open plan and usage/ })).toHaveAccessibleName(
+      expect.stringContaining('Included hours used up. Using credits: $75 of $100 left'),
+    );
+  });
+
+  it('refills the credit bar after a top-up', () => {
+    setup(usageStatus('pro', { usedHours: 230, balanceMicros: 125_000_000, drawStartMicros: 125_000_000 }));
+    render(<SidebarUsageSlot collapsed={false} />);
+    expect(screen.getByRole('progressbar', { name: 'Credit left' })).toHaveAttribute('aria-valuenow', '100');
+  });
+
+  it('colours a low credit bar orange', () => {
+    setup(usageStatus('pro', { usedHours: 230, balanceMicros: 10_000_000, drawStartMicros: 100_000_000 }));
+    render(<SidebarUsageSlot collapsed={false} />);
+    expect(screen.getByRole('progressbar', { name: 'Credit left' }).firstElementChild).toHaveClass('bg-orange-500');
+  });
+
+  it('draws the credit draw in the collapsed ring', () => {
+    setup(usageStatus('pro', { usedHours: 230, balanceMicros: 50_000_000, drawStartMicros: 100_000_000 }));
+    render(<SidebarUsageSlot collapsed />);
+    const button = document.querySelector('[data-attr="usage-gauge"]') as HTMLElement;
+    expect(button.getAttribute('title')).toContain('Included hours used up. Using credits: $50 of $100 left');
+    expect(button.querySelector('svg')).toHaveClass('text-sky-600');
+    expect(button.querySelectorAll('circle')[1]).toHaveAttribute('stroke-dashoffset', `${Math.PI * 7}`);
   });
 
   it('opens the plan page on a click and the modal from the action', () => {

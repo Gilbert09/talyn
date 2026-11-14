@@ -112,6 +112,17 @@ describe('plan and billing screen', () => {
     expect(mockCreditCheckout).toHaveBeenCalledWith('100');
   });
 
+  it('turns the gauge into a credit bar once the included hours are used up', async () => {
+    mockStatus = proStatus({
+      usage: { ...usage, includedWsec: 720_000, usedWsec: 800_000, percent: 100 },
+      credits: { balanceMicros: 75e6, expiringSoonMicros: 0, lots: [], drawStartMicros: 100e6 },
+    });
+    await draw(<BillingScreen />);
+    expect(screen.getByText('Using credits · $75 left')).toBeVisible();
+    expect(screen.getByText('Included hours used up. Using credits: $75 of $100 left')).toBeVisible();
+    expect(screen.getByLabelText('Credit left')).toHaveProp('accessibilityValue', { min: 0, max: 100, now: 75 });
+  });
+
   it('hides the usage reset without an offer', async () => {
     mockStatus = proStatus();
     await draw(<BillingScreen />);

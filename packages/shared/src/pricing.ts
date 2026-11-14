@@ -726,6 +726,35 @@ export interface CreditSummary {
   balanceMicros: Micros;
   expiringSoonMicros: Micros;
   lots: CreditLot[];
+  /**
+   * The balance when the current credit draw started: when this period's
+   * included hours ran out, or the latest top-up or usage reset after that.
+   * Sent only while the account draws on credit. See {@link creditDrawOf}.
+   */
+  drawStartMicros?: Micros;
+}
+
+/** The credit the account spends now that its included hours are used up. */
+export interface CreditDraw {
+  balanceMicros: Micros;
+  /** 100% of the credit bar. Never less than the balance. */
+  startMicros: Micros;
+  /** The share of `startMicros` left, 0..100. */
+  leftPercent: number;
+}
+
+/**
+ * The credit draw, or null while the included hours last (or when there is
+ * no credit to draw). A backend without `drawStartMicros` reads as a full bar.
+ */
+export function creditDrawOf(
+  usage: Pick<UsageSummary, 'usedWsec' | 'includedWsec' | 'exhausted'>,
+  credits: Pick<CreditSummary, 'balanceMicros' | 'drawStartMicros'> | null | undefined
+): CreditDraw | null {
+  const balance = credits?.balanceMicros ?? 0;
+  if (usage.exhausted || balance <= 0 || usage.usedWsec < usage.includedWsec) return null;
+  const start = Math.max(balance, credits?.drawStartMicros ?? 0);
+  return { balanceMicros: balance, startMicros: start, leftPercent: Math.min(100, (balance * 100) / start) };
 }
 
 export interface ConcurrentBoxUsage {
@@ -809,6 +838,23 @@ export function formatUsd(micros: Micros, fractionDigits = 2): string {
 /** A credit balance: "$100" when it has no cents, else "$98.37". */
 export function formatCreditBalance(micros: Micros): string {
   return formatUsd(micros).replace(/\.00$/, '');
+}
+
+/** "Using credits · $93.84 left": the gauge's headline while it draws on credit. */
+export function creditDrawHeadline(draw: Pick<CreditDraw, 'balanceMicros'>): string {
+  return `Using credits · ${formatCreditBalance(draw.balanceMicros)} left`;
+}
+
+/** "Included hours used up. Using credits: $93.84 of $120 left". */
+export function creditDrawDetail(draw: Pick<CreditDraw, 'balanceMicros' | 'startMicros'>): string {
+  return `Included hours used up. Using credits: ${formatCreditBalance(draw.balanceMicros)} of ${formatCreditBalance(draw.startMicros)} left`;
+}
+
+/** Below this share of the credit bar, the gauge shows it as low. */
+export const CREDIT_DRAW_LOW_LEFT_PCT = 20;
+
+export function isCreditDrawLow(draw: Pick<CreditDraw, 'leftPercent'>): boolean {
+  return draw.leftPercent < CREDIT_DRAW_LOW_LEFT_PCT;
 }
 
 /** "$0.22/h", "$0.275/h": two decimals, or three when the price needs them. */

@@ -119,7 +119,7 @@ describe('SidebarAccountStatus', () => {
   ])('hides Add credits when Pro is %s but has credits left', (_label, usedHours, exhausted) => {
     useBillingStore.setState({ status: usageStatus('pro', { usedHours, exhausted, balanceMicros: 100_000_000 }) });
     renderGauge();
-    expect(screen.getByText('Credits $100.00')).toBeInTheDocument();
+    expect(screen.getByText('Credits $100')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add credits' })).toBeNull();
   });
 
@@ -131,6 +131,47 @@ describe('SidebarAccountStatus', () => {
     renderGauge();
     expect(screen.getByText('Legacy Pro')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
+  });
+
+  it('turns into a credit bar once the included hours are used up', () => {
+    useBillingStore.setState({
+      status: usageStatus('pro', { usedHours: 230, balanceMicros: 93_840_000, drawStartMicros: 120_000_000 }),
+    });
+    renderGauge();
+    expect(screen.getByText('Using credits · $93.84 left')).toBeInTheDocument();
+    expect(screen.queryByText('0% left')).toBeNull();
+    expect(screen.queryByText(/^Credits/)).toBeNull();
+    const bar = screen.getByRole('progressbar', { name: 'Credit left' });
+    expect(Number(bar.getAttribute('aria-valuenow'))).toBeCloseTo(78.2);
+    expect(bar.firstChild).toHaveStyle({ width: '78.2%' });
+    expect(bar.firstChild).toHaveClass('bg-sky-500');
+    expect(screen.getByRole('button', { name: /Plan and usage/ })).toHaveAccessibleName(
+      expect.stringContaining('Included hours used up. Using credits: $93.84 of $120 left'),
+    );
+  });
+
+  it.each([
+    ['refills to a full bar after a top-up', 125_000_000, 125_000_000, '100', 'bg-sky-500'],
+    ['reads an old backend without a start as full', 40_000_000, undefined, '100', 'bg-sky-500'],
+    ['colours a low credit bar orange', 10_000_000, 100_000_000, '10', 'bg-orange-500'],
+  ])('%s', (_label, balanceMicros, drawStartMicros, valueNow, barClass) => {
+    useBillingStore.setState({ status: usageStatus('pro', { usedHours: 230, balanceMicros, drawStartMicros }) });
+    renderGauge();
+    const bar = screen.getByRole('progressbar', { name: 'Credit left' });
+    expect(bar).toHaveAttribute('aria-valuenow', valueNow);
+    expect(bar.firstChild).toHaveClass(barClass);
+  });
+
+  it('draws the credit draw in the collapsed ring', () => {
+    useBillingStore.setState({
+      status: usageStatus('pro', { usedHours: 230, balanceMicros: 50_000_000, drawStartMicros: 100_000_000 }),
+    });
+    renderGauge(true);
+    const ring = screen.getByRole('button', { name: /Pro plan/ });
+    expect(ring).toHaveAccessibleName(expect.stringContaining('Included hours used up. Using credits: $50 of $100 left'));
+    const stroke = ring.querySelectorAll('circle')[1];
+    expect(stroke).toHaveClass('stroke-sky-500');
+    expect(Number(stroke.getAttribute('stroke-dasharray')?.split(' ')[0])).toBeCloseTo(2 * Math.PI * 6 * 0.5);
   });
 
   it('says so plainly when the hours are gone', () => {

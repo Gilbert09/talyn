@@ -7,11 +7,14 @@ import { trackEvent } from '../../lib/analytics';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
 import {
+  CREDIT_BAR_CLASS,
+  CREDIT_TEXT_CLASS,
   GAUGE_BAR_CLASS,
   GAUGE_TEXT_CLASS,
   gaugeAction,
   gaugeActionLabel,
   gaugeSummary,
+  creditDrawTone,
   gaugeTone,
   leftPercent,
   usageBillingOf,
@@ -72,7 +75,11 @@ export function UsageGauge({ view, collapsed }: { view: UsageBillingView; collap
   const summary = gaugeSummary(view);
   const action = gaugeAction(view);
   const warnings = agentWarnings(providers, posthogNeedsReauth);
-  const left = leftPercent(view.usage.percent, view.usage.exhausted);
+  const credit = summary.credit;
+  const left = credit ? credit.leftPercent : leftPercent(view.usage.percent, view.usage.exhausted);
+  const creditTone = credit ? creditDrawTone(credit) : null;
+  const barClass = creditTone ? CREDIT_BAR_CLASS[creditTone] : GAUGE_BAR_CLASS[tone];
+  const textClass = creditTone ? CREDIT_TEXT_CLASS[creditTone] : GAUGE_TEXT_CLASS[tone];
 
   const tooltip = [
     `${summary.tierLabel} plan`,
@@ -96,7 +103,7 @@ export function UsageGauge({ view, collapsed }: { view: UsageBillingView; collap
           aria-label={tooltip}
           className="relative flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
         >
-          <UsageRing percent={left} className={GAUGE_TEXT_CLASS[tone]} />
+          <UsageRing percent={left} className={textClass} />
           {warnings.length > 0 && (
             <span
               aria-hidden
@@ -140,17 +147,17 @@ export function UsageGauge({ view, collapsed }: { view: UsageBillingView; collap
           <div
             className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
             role="progressbar"
-            aria-label="Box-hours left"
+            aria-label={credit ? 'Credit left' : 'Box-hours left'}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={left}
           >
-            <div className={cn('h-full rounded-full transition-all', GAUGE_BAR_CLASS[tone])} style={{ width: `${left}%` }} />
+            <div className={cn('h-full rounded-full transition-all', barClass)} style={{ width: `${left}%` }} />
           </div>
           {summary.exhaustedText ? (
             <p className="mt-1 text-xs font-medium text-destructive">{summary.exhaustedText}</p>
           ) : (
-            <p className="mt-1 text-xs text-foreground">{summary.leftText}</p>
+            <p className={cn('mt-1 text-xs', credit ? cn('font-medium', textClass) : 'text-foreground')}>{summary.leftText}</p>
           )}
           <p className="text-[11px] text-muted-foreground">
             {summary.resetText}
