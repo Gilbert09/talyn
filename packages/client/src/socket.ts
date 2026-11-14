@@ -68,9 +68,11 @@ export class WebSocketClient {
   private subscribedWorkspaces: Set<string> = new Set();
   /** Sent with every subscribe. The server holds back events a client did not opt in to. */
   private capabilities: string[] = [];
-  // Admin Debug-panel owner filter, re-sent on (re)connect so the server keeps
-  // streaming only the selected account's events. undefined = all.
+  // Admin Debug-panel owner filter, re-sent on (re)connect while the panel is
+  // open. The server streams debug events only to a client that sent one.
+  // undefined = all accounts.
   private debugFilter: string | undefined;
+  private debugStreaming = false;
   private authenticated = false;
   private shouldReconnect = false;
   private connectGeneration = 0;
@@ -195,8 +197,8 @@ export class WebSocketClient {
             }
             for (const presence of this.spacePresence.values()) this.send(presence);
             if (this.deskPresence) this.send({ type: 'desk_presence', state: this.deskPresence } satisfies WSClientMessage);
-            if (this.debugFilter !== undefined) {
-              this.send({ type: 'debug:filter', owner: this.debugFilter });
+            if (this.debugStreaming) {
+              this.send({ type: 'debug:filter', owner: this.debugFilter ?? null });
             }
           }
           this.emit(data.type, data.payload);
@@ -285,6 +287,7 @@ export class WebSocketClient {
     this.subscribedSpaces.clear();
     this.capabilities = [];
     this.debugFilter = undefined;
+    this.debugStreaming = false;
     this.disconnect();
     this.unbindConfig?.();
     this.unbindConfig = null;
@@ -366,15 +369,26 @@ export class WebSocketClient {
   }
 
   /**
-   * Admin Debug panel: tell the server which account's debug events to stream
-   * to this client (account id, 'system', 'all', or undefined for all). The
-   * server only fans matching events to us, so a single-user filter doesn't
-   * pull everyone's traffic over the wire.
+   * Admin Debug panel: start the live debug stream to this client, for one
+   * account (account id, 'system', 'all', or undefined for all). The server
+   * only fans matching events to us, so a single-user filter doesn't pull
+   * everyone's traffic over the wire.
    */
   setDebugFilter(owner: string | undefined): void {
     this.debugFilter = owner;
+    this.debugStreaming = true;
     if (this.ws?.readyState === 1) {
       this.send({ type: 'debug:filter', owner: owner ?? null });
+    }
+  }
+
+  /** Admin Debug panel closed: stop the live debug stream to this client. */
+  stopDebugStream(): void {
+    if (!this.debugStreaming) return;
+    this.debugFilter = undefined;
+    this.debugStreaming = false;
+    if (this.ws?.readyState === 1) {
+      this.send({ type: 'debug:unsubscribe' });
     }
   }
 

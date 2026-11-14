@@ -272,6 +272,30 @@ describe('protocol and scheduling', () => {
     expect(next.sent.at(-1)).toEqual(restored[2]);
   });
 
+  it('restores an all-accounts debug stream, and sends no debug frame once it stops', async () => {
+    client.setDebugFilter(undefined);
+    const first = await connect();
+    first.accept();
+    expect(first.sent.filter((frame) => frame.type.startsWith('debug:'))).toEqual([{ type: 'debug:filter', owner: null }]);
+    client.stopDebugStream();
+    expect(first.sent.at(-1)).toEqual({ type: 'debug:unsubscribe' });
+    client.stopDebugStream();
+    expect(first.sent.filter((frame) => frame.type === 'debug:unsubscribe')).toHaveLength(1);
+    first.reject(1006);
+    await vi.advanceTimersByTimeAsync(1000);
+    const next = sockets[1];
+    next.open();
+    next.accept();
+    expect(next.sent.some((frame) => frame.type.startsWith('debug:'))).toBe(false);
+  });
+
+  it('sends no debug frame when the debug stream was never started', async () => {
+    const first = await connect();
+    first.accept();
+    client.stopDebugStream();
+    expect(first.sent.some((frame) => frame.type.startsWith('debug:'))).toBe(false);
+  });
+
   it.each([null, 'throw', 'constructor'] as const)(
     'backs off and caps retries for %s failures',
     async (failure) => {

@@ -516,8 +516,9 @@ export function DebugPanel() {
     if (admin !== true) return;
     api.ws.setDebugFilter(owner);
     return () => {
-      // Reset to "all" when the panel unmounts so we don't pin a stale filter.
-      api.ws.setDebugFilter(undefined);
+      // Stop the live stream when the panel unmounts or the filter changes.
+      // The next run of this effect starts it again with the new filter.
+      api.ws.stopDebugStream();
     };
   }, [admin, owner]);
 
