@@ -58,6 +58,7 @@ function Detail({ kind, features }: { kind: IntegrationKind; features: NonNullab
       {section === 'connection' && kind === 'slack' ? <SlackScreen /> : null}
       {section === 'connection' && kind === 'tailscale' ? <PrivateRoutesScreen /> : null}
       {section === 'connection' && (kind === 'posthog' || kind === 'trunk') ? <IntegrationsScreen kind={kind} /> : null}
+      {section === 'connection' && kind === 'posthog_inbox' ? <IntegrationsScreen kind="posthog" /> : null}
     </View>
   </DetailRoute>;
 }

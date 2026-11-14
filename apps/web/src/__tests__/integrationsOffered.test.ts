@@ -11,6 +11,8 @@ describe('integrationsOffered', () => {
     ['Trunk on', { trunkMergeEta: true }, ['github', 'posthog', 'trunk']],
     ['issue rules on', { workflows: true, issueRules: true }, ['github', 'github_issues', 'linear', 'posthog']],
     ['issue rules need workflows', { workflows: false, issueRules: true }, ['github', 'posthog']],
+    ['PostHog Inbox rules on', { workflows: true, posthogInboxRules: true }, ['github', 'posthog', 'posthog_inbox']],
+    ['PostHog Inbox rules need workflows', { workflows: false, posthogInboxRules: true }, ['github', 'posthog']],
     [
       'everything on',
       { workbenches: true, loops: true, privateRoutes: true, trunkMergeEta: true },
@@ -33,6 +35,10 @@ describe('integrationRulesOffered', () => {
     ['Linear rules with the issue rules flag', 'linear', { workflows: true, issueRules: true }, true],
     ['GitHub Issues rules with the issue rules flag', 'github_issues', { workflows: true, issueRules: true }, true],
     ['GitHub Issues rules need workflows', 'github_issues', { workflows: false, issueRules: true }, false],
+    ['PostHog Inbox rules need their flag', 'posthog_inbox', { workflows: true }, false],
+    ['PostHog Inbox rules with their flag', 'posthog_inbox', { workflows: true, posthogInboxRules: true }, true],
+    ['PostHog Inbox rules need workflows', 'posthog_inbox', { workflows: false, posthogInboxRules: true }, false],
+    ['PostHog Inbox rules are not issue rules', 'posthog_inbox', { workflows: true, issueRules: true }, false],
   ])('%s', (_label, kind, features, expected) => {
     expect(integrationRulesOffered(features, kind)).toBe(expected);
   });

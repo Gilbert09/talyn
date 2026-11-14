@@ -910,9 +910,12 @@ the user sees and we don't:
    fetches the document at `/authorize` time, so pointing at a 404 breaks the
    flow for everyone.
 
-Scopes requested: `openid task:read task:write`, narrowed to the single project
-the user picks on PostHog's consent screen (`required_access_level=project`). No
-analytics, flags, or query access is asked for, and none is granted.
+Scopes requested: `openid task:read task:write inbox:read inbox:write`, narrowed
+to the single project the user picks on PostHog's consent screen
+(`required_access_level=project`). `inbox:*` is for PostHog Inbox rules (6g). A
+grant made before it was asked for keeps working for PostHog Code; the PostHog
+Inbox editor asks the user to reconnect. No analytics, flags, or query access is
+asked for, and none is granted.
 
 #### Running the flow against a LOCAL backend
 
@@ -1061,6 +1064,23 @@ How the receiver works:
 
 GitHub Issues rules use the existing GitHub App connection (see section 3b). They use the same `issue-rules` flag.
 The GitHub App must deliver the `issues` and `issue_comment` events, and have the `issues: write` permission.
+
+### 6g. PostHog Inbox rules
+
+A PostHog Inbox rule starts a session when a PostHog self-driving report is ready for work. It uses the workspace's PostHog Code connection (6b): an OAuth grant with `inbox:read`, or a personal API key with that scope.
+
+| Flag | Name | Override | Default | Availability |
+| --- | --- | --- | --- | --- |
+| `posthog-inbox-rules` | PostHog Inbox rules | `POSTHOG_INBOX_RULES_ENABLED` | OFF | gated |
+
+How it works:
+
+- `services/posthogInbox/poller.ts` runs every minute when the workflows engine is armed. It polls each PostHog connection that has an enabled rule about every 3 minutes. Its state is in `posthog_inbox_pollers` (migration 0134). A replica takes a connection with a conditional UPDATE and a 15-minute lease.
+- It lists `GET /api/projects/:id/signals/reports/` with `status=ready`, `already_addressed=false`, `unclaimed=true`, the rules' actionability (default `immediately_actionable`) and `ordering=-updated_at`, and pages down to its cursor. PostHog has no "updated after" filter.
+- Every report goes through `ingestPostHogReport(connection, reportId)`, which reads the report by id and runs the rules. A later PostHog webhook calls the same function with only the id.
+- The run's dedupe key is `posthog_inbox:<reportId>:<updated_at>`. The report is claimed in `external_issue_links`, so a second session never starts beside live work on it.
+- A report that PostHog's safety judge suppressed (`suppression_source = safety_judge`) never starts work.
+- Each rule has a daily cap (`workflows.max_runs_per_day`, default 10).
 
 ## 🧰 Nice-to-have: MCP servers for Claude Code
 

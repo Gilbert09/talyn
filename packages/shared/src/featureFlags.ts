@@ -520,6 +520,26 @@ export const FEATURE_FLAGS = {
     releaseScopes: ['issue-rules', 'linear'],
   },
 
+  /**
+   * PostHog Inbox rules: a PostHog self-driving report that is ready for work
+   * starts a session that opens a pull request.
+   *
+   * Asked for the caller at the routes and for the workspace OWNER in the
+   * poller and the engine, because a report has no Talyn caller. Fallback OFF
+   * and gated: one PostHog project can make thousands of reports a week, and
+   * each run bills box-hours, so a PostHog outage must not switch it on for
+   * accounts nobody chose. `POSTHOG_INBOX_RULES_ENABLED=true` turns it on
+   * locally.
+   */
+  posthogInboxRules: {
+    posthogKey: 'posthog-inbox-rules',
+    envOverride: 'POSTHOG_INBOX_RULES_ENABLED',
+    fallback: false,
+    description: 'PostHog Inbox rules — a ready PostHog self-driving report starts a session that opens a PR',
+    availability: 'gated',
+    releaseScopes: ['posthog-inbox-rules', 'posthog-inbox'],
+  },
+
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */
@@ -651,6 +671,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'slackChannelRules',
   'webhookRules',
   'issueRules',
+  'posthogInboxRules',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

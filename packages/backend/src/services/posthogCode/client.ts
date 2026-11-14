@@ -247,7 +247,7 @@ export class PostHogCodeClient {
     await this.request<unknown>('GET', `/tasks/?limit=1`);
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  protected async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const { data } = await this.requestWithHeaders<T>(method, path, body);
     return data;
   }

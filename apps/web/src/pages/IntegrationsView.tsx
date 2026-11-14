@@ -22,6 +22,10 @@ import { SlackSettings } from '../components/panels/SlackSettings';
 import { LinearSettings } from '../components/panels/LinearSettings';
 import { TrunkSettingsCard } from '../components/panels/TrunkSettingsCard';
 import { PrivateRoutesSettings } from '../components/settings/sections/PrivateRoutesSettings';
+import {
+  PostHogInboxConnectionNote,
+  PostHogInboxConnectionSection,
+} from '../components/panels/workflows/posthogInboxFields';
 
 const WorkflowsPanel = lazyWithReload(() =>
   import('../components/panels/workflows/WorkflowsPanel').then((m) => ({ default: m.WorkflowsPanel }))
@@ -75,7 +79,8 @@ function useConnectionStates(): Record<IntegrationKind, ConnectionState> {
     };
   }, [features, workspaceId]);
 
-  const posthog = cloudProviders?.find((p) => p.type === 'posthog_code');
+  const posthogProvider = cloudProviders?.find((p) => p.type === 'posthog_code');
+  const posthog: ConnectionState = posthogProvider ? (posthogProvider.connected ? 'connected' : 'not_connected') : 'unknown';
   const github: ConnectionState = githubStatus ? (githubStatus.connected ? 'connected' : 'not_connected') : 'unknown';
   return {
     github,
@@ -86,7 +91,9 @@ function useConnectionStates(): Record<IntegrationKind, ConnectionState> {
     webhook: 'built_in',
     schedule: 'built_in',
     tailscale,
-    posthog: posthog ? (posthog.connected ? 'connected' : 'not_connected') : 'unknown',
+    posthog,
+    // It uses the PostHog connection of the PostHog Code page.
+    posthog_inbox: posthog,
     trunk,
   };
 }
@@ -173,6 +180,7 @@ function ConnectionSection({ kind }: { kind: IntegrationKind }) {
         {kind === 'linear' && <LinearSettings />}
         {kind === 'tailscale' && <PrivateRoutesSettings />}
         {kind === 'posthog' && <PostHogCodeCard />}
+        {kind === 'posthog_inbox' && <PostHogInboxConnectionSection />}
         {kind === 'trunk' && <TrunkSettingsCard />}
       </div>
     </ScrollArea>
@@ -266,6 +274,14 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
               <GithubIssuesConnectionNote />
               <div className="min-h-0 flex-1">
                 <WorkflowsPanel integration="github_issues" />
+              </div>
+            </div>
+          )}
+          {section === 'rules' && kind === 'posthog_inbox' && hasRules && (
+            <div className="flex h-full flex-col">
+              <PostHogInboxConnectionNote />
+              <div className="min-h-0 flex-1">
+                <WorkflowsPanel integration="posthog_inbox" />
               </div>
             </div>
           )}

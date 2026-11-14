@@ -38,4 +38,15 @@ describe('integration catalog gates', () => {
     expect(integrationRulesOffered(features, 'linear')).toBe(offered);
     expect(integrationRulesOffered(features, 'github_issues')).toBe(offered);
   });
+
+  it.each([
+    [{ workflows: true, posthogInboxRules: true }, true],
+    [{ workflows: true, posthogInboxRules: false }, false],
+    [{ workflows: false, posthogInboxRules: true }, false],
+    [{}, false],
+    [null, false],
+  ] as const)('offers the PostHog Inbox card for %j: %s', (features, offered) => {
+    expect(integrationsOffered(features).includes('posthog_inbox')).toBe(offered);
+    expect(integrationRulesOffered(features, 'posthog_inbox')).toBe(offered);
+  });
 });

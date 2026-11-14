@@ -478,6 +478,7 @@ describe('featuresForUser', () => {
       'issueRules',
       'loops',
       'mcpServers',
+      'posthogInboxRules',
       'privateRoutes',
       'publicApi',
       'reviewPriority',
@@ -515,6 +516,7 @@ describe('featuresForUser', () => {
       slackChannelRules: false,
       webhookRules: false,
       issueRules: false,
+      posthogInboxRules: false,
     });
   });
 
@@ -543,6 +545,7 @@ describe('featuresForUser', () => {
       slackChannelRules: false,
       webhookRules: false,
       issueRules: false,
+      posthogInboxRules: false,
     });
   });
 

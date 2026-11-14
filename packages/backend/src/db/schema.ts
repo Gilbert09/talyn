@@ -1569,6 +1569,8 @@ export const workflows = pgTable(
     actions: jsonb('actions').notNull(),
     /** The loop breaker — see DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR. */
     maxRunsPerPrPerHour: integer('max_runs_per_pr_per_hour').notNull().default(5),
+    /** Most runs in 24 hours. Null means no daily cap (migration 0134). */
+    maxRunsPerDay: integer('max_runs_per_day'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1579,6 +1581,10 @@ export const workflows = pgTable(
     slackTeamIdx: index('idx_workflows_slack_team')
       .on(sql`(${t.conditions} ->> 'slackTeamId')`)
       .where(sql`${t.integration} = 'slack' AND ${t.enabled}`),
+    // How the PostHog Inbox poller finds the workspaces to poll. See migration 0134.
+    posthogInboxIdx: index('idx_workflows_posthog_inbox')
+      .on(t.workspaceId)
+      .where(sql`${t.integration} = 'posthog_inbox' AND ${t.enabled}`),
   })
 );
 
@@ -3564,6 +3570,36 @@ export const externalIssueLinks = pgTable(
     pullRequestIdx: index('idx_external_issue_links_pull_request')
       .on(t.pullRequestId)
       .where(sql`${t.pullRequestId} IS NOT NULL`),
+  })
+);
+
+/**
+ * The PostHog Inbox poller's state, one row per PostHog connection
+ * (migration 0134). `next_poll_at` + `lease_until` are the cross-replica
+ * claim; `cursor_updated_at` is PostHog's own timestamp text. Backend-pool-only.
+ */
+export const posthogInboxPollers = pgTable(
+  'posthog_inbox_pollers',
+  {
+    integrationId: text('integration_id')
+      .primaryKey()
+      .references(() => integrations.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    cursorUpdatedAt: text('cursor_updated_at'),
+    cursorReportIds: jsonb('cursor_report_ids').$type<string[]>().notNull().default([]),
+    nextPollAt: timestamp('next_poll_at', { withTimezone: true }).notNull().defaultNow(),
+    leaseUntil: timestamp('lease_until', { withTimezone: true }),
+    lastPolledAt: timestamp('last_polled_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    lastErrorStatus: integer('last_error_status'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    nextPollIdx: index('idx_posthog_inbox_pollers_next_poll').on(t.nextPollAt),
+    workspaceIdx: index('idx_posthog_inbox_pollers_workspace').on(t.workspaceId),
   })
 );
 

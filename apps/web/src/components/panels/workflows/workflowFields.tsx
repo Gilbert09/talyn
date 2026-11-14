@@ -11,6 +11,7 @@ const NAME_PLACEHOLDERS: Record<WorkflowIntegration, string> = {
   webhook: 'Fix bugs from our tracker',
   linear: 'Fix issues labelled agent',
   github_issues: 'Fix issues labelled agent',
+  posthog_inbox: 'Fix urgent PostHog reports',
 };
 
 const RUN_CAP_COPY: Record<WorkflowIntegration, { label: string; hint: string }> = {
@@ -33,6 +34,10 @@ const RUN_CAP_COPY: Record<WorkflowIntegration, { label: string; hint: string }>
   github_issues: {
     label: 'Runs per issue per hour',
     hint: 'This limit prevents a busy issue from starting too many runs.',
+  },
+  posthog_inbox: {
+    label: 'Runs per report per hour',
+    hint: 'This limit prevents one report from starting too many runs.',
   },
 };
 

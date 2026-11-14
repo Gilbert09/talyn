@@ -2055,7 +2055,7 @@ export function cloudProviderOffered(
  * - **OAuth** — offered when the backend has `POSTHOG_OAUTH_*` configured. The
  *   user authorizes Talyn on PostHog and picks the project on PostHog's own
  *   consent screen, so no credential ever passes through this window and the
- *   grant is narrowed to one project + `task:read`/`task:write`. It's revocable
+ *   grant is narrowed to one project + `task:*` and `inbox:*`. It's revocable
  *   from PostHog's Connected Apps screen.
  * - **Personal API key** — now offered ONLY where OAuth is not configured
  *   (self-hosted, local dev), which SETUP §6b documents as the fall-back. It
@@ -2228,7 +2228,7 @@ export function PostHogCodeCard() {
               OAuth works, because a personal API key is a long-lived credential
               with the user's whole project behind it, pasted through this
               window, while the OAuth grant is narrowed to one project and
-              `task:read`/`task:write` and is revocable from PostHog's own
+              `task:*` (PostHog Code) plus `inbox:*` (PostHog Inbox rules) and is revocable from PostHog's own
               Connected Apps screen. Offering both made the weaker one a
               one-click default for anyone who did not know the difference.
               A deployment with no POSTHOG_OAUTH_* configured still gets the key

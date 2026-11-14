@@ -126,7 +126,7 @@ export function WorkflowRunsList({
               </a>
             ) : (
               <span className="font-medium">
-                {run.subjectLabel || (run.integration === 'slack' ? 'Slack message' : run.integration === 'webhook' ? 'Webhook request' : isIssueWorkflowIntegration(run.integration) ? 'Issue' : `${run.repoFullName}#${run.prNumber}`)}
+                {run.subjectLabel || (run.integration === 'slack' ? 'Slack message' : run.integration === 'webhook' ? 'Webhook request' : isIssueWorkflowIntegration(run.integration) ? 'Issue' : run.integration === 'posthog_inbox' ? 'PostHog report' : `${run.repoFullName}#${run.prNumber}`)}
               </span>
             )}
             <span className="ml-auto text-xs text-muted-foreground">

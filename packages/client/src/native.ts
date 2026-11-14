@@ -76,6 +76,8 @@ import type {
   FleetAccountsResponse,
   FleetAgent,
   WorkflowCounts,
+  PostHogInboxDryRun,
+  PostHogInboxStatus,
   WorkflowInput,
   WorkflowIntegration,
   WorkflowRun,
@@ -2432,6 +2434,24 @@ export const workflows = {
       'POST',
       `/workflows/${id}/deliveries/${encodeURIComponent(deliveryId)}/replay`
     ),
+
+  /**
+   * Whether Talyn can read the workspace's PostHog Inbox, for the PostHog
+   * Inbox editor. `access: 'reconnect'` means the PostHog connection must be
+   * made again to grant the Inbox permissions.
+   */
+  posthogInboxStatus: (workspaceId: string) =>
+    request<PostHogInboxStatus>(
+      'GET',
+      `/workflows/posthog-inbox/status?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+
+  /**
+   * The PostHog reports a rule would act on now, from its unsaved definition.
+   * Starts nothing.
+   */
+  posthogInboxDryRun: (workspaceId: string, input: WorkflowInput) =>
+    request<PostHogInboxDryRun>('POST', '/workflows/posthog-inbox/dry-run', { workspaceId, workflow: input }),
 };
 
 // ============================================================================

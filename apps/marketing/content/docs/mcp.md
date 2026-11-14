@@ -142,9 +142,9 @@ Every tool name starts with `talyn_`. Most tools take a `workspace_id`. If you h
 Your client lists every tool with its description and parameters when it connects.
 
 The `talyn_list_workflows`, `talyn_create_workflow`, and `talyn_update_workflow` tools use `integration`.
-Set it to `github`, `slack`, `webhook`, `linear` or `github_issues` in an automation definition. Listed and saved automations include the integration.
+Set it to `github`, `slack`, `webhook`, `linear`, `github_issues` or `posthog_inbox` in an automation definition. Listed and saved automations include the integration.
 Creating a webhook automation answers with its URL and signing secret once. Talyn cannot show them again. A webhook automation can use the `start_task` action.
-A Linear rule needs `conditions.connectionId`. Issue automations (`linear` and `github_issues`) need the `issue-rules` feature.
+A Linear rule needs `conditions.connectionId`. Issue automations (`linear` and `github_issues`) need the `issue-rules` feature. PostHog Inbox automations need the `posthog-inbox-rules` feature, and their `start_session` action has `repositoryId: null`.
 Use `talyn_get_workflow_vocabulary` with optional `integration` to read its fields. It defaults to `github`.
 Use `talyn_list_slack_channels` with `{teamId}` to list channels the bot joined.
 Use `talyn_slack_reply` with `text` to reply as the Talyn bot in the Slack thread that started a session. A user token must also pass `session_id`.

@@ -2,7 +2,9 @@ import { Router, type Request, type Response } from 'express';
 import type { ApiResponse, CreatedWorkflow, WorkflowIntegration } from '@talyn/shared';
 import {
   ISSUE_RULES_UNAVAILABLE_CODE,
+  POSTHOG_INBOX_RULES_UNAVAILABLE_CODE,
   isIssueWorkflowIntegration,
+  posthogInboxPreviewInput,
   isWorkflowIntegration,
   validateWorkflow,
   WORKFLOW_INTEGRATIONS,
@@ -23,6 +25,7 @@ import {
 import {
   slackRulesRefusalReason,
   userMayUseIssueRules,
+  userMayUsePostHogInboxRules,
   userMayUseWebhookRules,
   workspaceMayUseSlackRules,
   workspaceMayUseWorkflows,
@@ -33,6 +36,9 @@ import { webhookUrl } from '../services/inbound/url.js';
 import { getLinearConnection } from '../services/linear/store.js';
 import { workflowSuggestions } from '../services/workflows/suggestions.js';
 import { ownerReachesSlackTeam } from '../services/workflows/sources/slack.js';
+import { getPostHogInboxConnection } from '../services/posthogInbox/connection.js';
+import { posthogInboxDryRun, posthogInboxStatus } from '../services/posthogInbox/preview.js';
+import { PostHogCodeApiError } from '../services/posthogCode/client.js';
 
 /**
  * Workflows — user-defined PR automation.
@@ -136,6 +142,7 @@ export function workflowRoutes(): Router {
   ): Promise<boolean> {
     if (integration === 'webhook') return webhookGate(req, res);
     if (isIssueWorkflowIntegration(integration)) return issueGate(req, res);
+    if (integration === 'posthog_inbox') return posthogInboxGate(req, res);
     if (integration !== 'slack') return true;
     if (await workspaceMayUseSlackRules(workspaceId)) return true;
     res.status(403).json({
@@ -172,6 +179,21 @@ export function workflowRoutes(): Router {
       success: false,
       error: 'Issue automations are not available for this account.',
       code: ISSUE_RULES_UNAVAILABLE_CODE,
+    });
+    return false;
+  }
+
+  /**
+   * PostHog Inbox rules: the `posthogInboxRules` flag, asked for the CALLER.
+   * A 404, like the other gated integrations, so the feature stays invisible.
+   */
+  async function posthogInboxGate(req: Request, res: Response): Promise<boolean> {
+    const user = assertUser(req);
+    if (await userMayUsePostHogInboxRules({ distinctId: user.id, email: user.email })) return true;
+    res.status(404).json({
+      success: false,
+      error: 'PostHog Inbox automations are not available for this account.',
+      code: POSTHOG_INBOX_RULES_UNAVAILABLE_CODE,
     });
     return false;
   }
@@ -286,6 +308,60 @@ export function workflowRoutes(): Router {
       includeGithub: req.query.github === '1',
     });
     res.json({ success: true, data } as ApiResponse<typeof data>);
+  });
+
+  /**
+   * Whether Talyn can read the workspace's PostHog Inbox, for the editor's
+   * notice. Never holds a credential. Mounted ABOVE `/:id`.
+   */
+  router.get('/posthog-inbox/status', async (req, res) => {
+    const workspaceId = req.query.workspaceId as string;
+    if (!(await gate(req, res, workspaceId))) return;
+    if (!(await posthogInboxGate(req, res))) return;
+    const data = await posthogInboxStatus(workspaceId);
+    res.json({ success: true, data } as ApiResponse<typeof data>);
+  });
+
+  /**
+   * The reports a PostHog Inbox rule would act on now, from its UNSAVED
+   * definition. Only the conditions are read, so a rule without a name or a
+   * prompt yet can be previewed. Starts nothing and writes nothing.
+   */
+  router.post('/posthog-inbox/dry-run', async (req, res) => {
+    const body = (req.body ?? {}) as { workspaceId?: string; workflow?: { conditions?: unknown } };
+    const workspaceId = body.workspaceId ?? '';
+    if (!(await gate(req, res, workspaceId))) return;
+    if (!(await posthogInboxGate(req, res))) return;
+    let normalized: NormalizedWorkflow;
+    try {
+      normalized = validateWorkflow(
+        posthogInboxPreviewInput((body.workflow?.conditions ?? {}) as NormalizedWorkflow['conditions'])
+      );
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err instanceof Error ? err.message : 'invalid automation' });
+    }
+    const connection = await getPostHogInboxConnection(workspaceId);
+    if (!connection) {
+      return res.status(409).json({
+        success: false,
+        error: 'Talyn cannot read this workspace\'s PostHog Inbox. Connect PostHog on the PostHog Code page, with the Inbox permission.',
+        code: 'posthog_inbox_unavailable',
+      });
+    }
+    try {
+      const data = await posthogInboxDryRun(connection, normalized);
+      res.json({ success: true, data } as ApiResponse<typeof data>);
+    } catch (err) {
+      const status = err instanceof PostHogCodeApiError ? err.status : null;
+      res.status(502).json({
+        success: false,
+        error:
+          status === 401 || status === 403
+            ? 'PostHog refused to show the Inbox. Connect PostHog again to grant the Inbox permission.'
+            : 'Talyn could not read the PostHog Inbox. Try again in a minute.',
+        code: status === 401 || status === 403 ? 'posthog_inbox_forbidden' : 'posthog_inbox_unreachable',
+      });
+    }
   });
 
   router.post('/', async (req, res) => {

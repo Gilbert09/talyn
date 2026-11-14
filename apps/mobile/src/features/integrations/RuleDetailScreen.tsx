@@ -11,6 +11,7 @@ import { openExternal, StateNotice } from '../../components/Workflow';
 import { modelLabel } from '../../lib/models';
 import { longTime, shortTime, useNow } from '../../lib/time';
 import { sessionRoute } from '../../navigation/routes';
+import { dailyCapText, postHogInboxConditionFacts } from './model';
 import { Fact, Loading, Page, WebRow } from '../more/Page';
 import { useLoopList, useRuns, useWorkflowList } from '../automations/data';
 import {
@@ -31,7 +32,7 @@ export function RuleDetailScreen({ kind, id, integration = 'github' }: { kind: A
     {!item && list.status === 'loading' ? <Loading /> : <StateNotice resource={list} offline={offline} refresh={refresh} />}
     {missing ? <EmptyState title="Automation not found" detail="It may have been deleted." /> : null}
     {item ? <>
-      {kind === 'workflow' ? <WorkflowFacts workflow={item as WorkflowWithStats} /> : <LoopFacts loop={item as LoopWithStats} />}
+      {kind === 'workflow' ? <WorkflowFacts workflow={item as WorkflowWithStats} integration={integration} /> : <LoopFacts loop={item as LoopWithStats} />}
       <Group title="Recent runs">
         {runs.data === undefined ? runs.status === 'loading' ? <Loading /> : <StateNotice resource={runs} offline={offline} refresh={() => { void runs.refresh(); }} />
           : runs.data.length === 0 ? <Row title="No runs yet" divider={false} />
@@ -46,16 +47,22 @@ export function RuleDetailScreen({ kind, id, integration = 'github' }: { kind: A
   </Page>;
 }
 
-function WorkflowFacts({ workflow }: { workflow: WorkflowWithStats }) {
+function WorkflowFacts({ workflow, integration }: { workflow: WorkflowWithStats; integration: WorkflowIntegration }) {
   const problems = problemsText(workflow.stats.failures7d);
-  return <Group title="Automation">
+  const inbox = integration === 'posthog_inbox' ? postHogInboxConditionFacts(workflow.conditions) : [];
+  const cap = integration === 'posthog_inbox' ? dailyCapText(workflow.maxRunsPerDay) : null;
+  return <><Group title="Automation">
     <Fact label="Status" value={workflow.enabled ? 'On' : 'Off'} />
     <Fact label="When" value={describeWorkflowTrigger(workflow)} />
     <Fact label="Then" value={describeWorkflowActions(workflow) || 'Nothing'} />
     <Fact label="Runs" value={`${workflow.stats.runs24h} today · ${workflow.stats.runs7d} this week · ${workflow.stats.runsTotal} in all`} />
     <Fact label="Tasks started" value={String(workflow.stats.tasksStarted)} divider={Boolean(problems)} />
     {problems ? <Fact label="Problems" value={problems} tone="warning" divider={false} /> : null}
-  </Group>;
+  </Group>
+  {inbox.length || cap ? <Group title="Only when">
+    {inbox.map((fact, index) => <Fact key={fact.label} label={fact.label} value={fact.value} divider={Boolean(cap) || index < inbox.length - 1} />)}
+    {cap ? <Fact label="Daily cap" value={cap} divider={false} /> : null}
+  </Group> : null}</>;
 }
 
 function LoopFacts({ loop }: { loop: LoopWithStats }) {
