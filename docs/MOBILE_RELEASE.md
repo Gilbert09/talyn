@@ -1,7 +1,6 @@
 # Mobile release operations
 
 Phase 5 supplies release tooling. It does not approve launch or prove store acceptance.
-Merge [#128](https://github.com/Gilbert09/talyn/pull/128), then [#129](https://github.com/Gilbert09/talyn/pull/129), then this release change.
 Earlier work: [#116](https://github.com/Gilbert09/talyn/pull/116), [#119](https://github.com/Gilbert09/talyn/pull/119),
 [#121](https://github.com/Gilbert09/talyn/pull/121), and [#126](https://github.com/Gilbert09/talyn/pull/126).
 
@@ -93,7 +92,7 @@ Configuration tests use inert fixtures. They do not verify domain ownership or p
 ## Protected release workflow and credentials
 
 The workflow is `.github/workflows/mobile-release.yml`. It accepts only manual dispatch on `main`.
-It rejects source commits outside `origin/main`. This stacked PR cannot release before its parents merge.
+It rejects source commits outside `origin/main`.
 Create `mobile-preview` and `mobile-production` GitHub environments before enabling the workflow.
 Restrict both environments to `main`. Require reviewers. Disable self-approval and administrative bypass where available.
 Set environment variable `MOBILE_RELEASE_APPROVED=true` only after these rules exist.

@@ -62,7 +62,7 @@ summaries, permission cards, live streaming). Sessions 24+ attack (1) and
   backend tests. UI regressions go uncaught — this is *why* polish
   decays. Add component/hook tests (`AgentConversation` block rendering,
   `useApi` task:event coalescing, `PRDetailSheet` tabs) and a Playwright
-  E2E pass over the golden flows. (Plan in `TESTING.md` Phases D/E.)
+  E2E pass over the golden flows. (No browser E2E suite exists; see `TESTING.md`.)
 - [ ] **Profile the task list** under many concurrent running tasks; the
   per-frame coalescing fixed the detail view, verify the list is clean.
 
