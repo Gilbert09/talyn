@@ -5,7 +5,7 @@ import { View } from 'react-native';
 
 import { AppText, Button, Field, Input } from '../../../components/UI';
 import { trackEvent } from '../../../lib/analytics';
-import { accountErrorMessage, API_KEY_KIND, API_KEY_LABEL, API_KEY_PLACEHOLDER, apiKeyError, SUBSCRIPTION } from './model';
+import { accountErrorMessage, errorText, API_KEY_KIND, API_KEY_LABEL, API_KEY_PLACEHOLDER, apiKeyError, SUBSCRIPTION } from './model';
 
 /**
  * Add an agent account from an API key, like web's "Paste an API key". The
@@ -22,12 +22,14 @@ export function ApiKeyForm({ agent, workspaceId, label, onAdded, disabled = fals
     const invalid = apiKeyError(agent, key);
     if (invalid) { setError(invalid); return; }
     setBusy(true); setError(null);
+    trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent, method: `${agent}_api_key` });
     try {
       await cloudProviders.fleetAccounts.add(workspaceId, agent, API_KEY_KIND[agent], key.trim(), label);
       trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent });
       setKey('');
       onAdded();
     } catch (failure) {
+      trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent, stage: 'save', error: errorText(failure) });
       setError(accountErrorMessage(failure, 'Could not add the key.'));
     } finally { setBusy(false); }
   };

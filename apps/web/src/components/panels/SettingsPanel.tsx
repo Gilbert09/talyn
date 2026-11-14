@@ -82,7 +82,7 @@ import { useGithubInstallations } from '../../hooks/useGithubInstallations';
 import { useIsDevBuild } from '../../hooks/useIsDevBuild';
 import { isOwnerCovered, parseRepoInput } from '../../lib/githubInstall';
 import { WebRepoRow } from '../settings/RepositoryRow';
-import { openExternal } from '../../lib/openExternal';
+import { openExternal, prepareSignInWindow } from '../../lib/openExternal';
 import { openGithubAppFlow } from '../../lib/githubInstall';
 import { APP_VERSION } from '../../lib/env';
 import type {
@@ -1357,9 +1357,23 @@ export function FleetAgentRow({
   const [claudeToken, setClaudeToken] = useState('');
   const [awaitingClaudeCode, setAwaitingClaudeCode] = useState(false);
   const [claudeCode, setClaudeCode] = useState('');
+  // Set only when the browser blocked the sign-in tab, so the user can open it by hand.
+  const [blockedClaudeUrl, setBlockedClaudeUrl] = useState<string | null>(null);
   const [pasted, setPasted] = useState('');
 
   const label = agent === 'claude' ? 'Claude subscription' : 'Codex (ChatGPT) subscription';
+
+  const reportFailure = useCallback(
+    (stage: 'start' | 'finish' | 'save' | 'parse', message: string) => {
+      trackEvent('cloud_provider_connect_failed', {
+        provider: 'selfhosted',
+        agent,
+        stage,
+        error: message.slice(0, 200),
+      });
+    },
+    [agent]
+  );
 
   /**
    * Refresh from the server rather than patching the store optimistically.
@@ -1390,12 +1404,14 @@ export function FleetAgentRow({
         setEditing(false);
         await refresh();
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to save credentials');
+        const message = e instanceof Error ? e.message : 'Failed to save credentials';
+        setError(message);
+        if (!config.clearClaude && !config.clearCodex) reportFailure('save', message);
       } finally {
         setBusy(false);
       }
     },
-    [agent, currentWorkspaceId, refresh]
+    [agent, currentWorkspaceId, refresh, reportFailure]
   );
 
   const disconnect = useCallback(async () => {
@@ -1413,16 +1429,21 @@ export function FleetAgentRow({
    * to swap them.
    */
   const savePasted = useCallback(async () => {
+    trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent: 'codex', method: 'codex_paste' });
+    const fail = (message: string) => {
+      setError(message);
+      reportFailure('parse', message);
+    };
     let parsed: { tokens?: { access_token?: string; refresh_token?: string; account_id?: string } };
     try {
       parsed = JSON.parse(pasted);
     } catch {
-      setError('That is not valid JSON. Paste the whole contents of ~/.codex/auth.json.');
+      fail('That is not valid JSON. Paste the whole contents of ~/.codex/auth.json.');
       return;
     }
-    const tokens = parsed.tokens ?? (parsed as unknown as { access_token?: string; refresh_token?: string; account_id?: string });
-    if (!tokens.access_token || !tokens.refresh_token) {
-      setError('That JSON has no access_token / refresh_token pair. Run `codex login` first.');
+    const tokens = parsed?.tokens ?? (parsed as unknown as { access_token?: string; refresh_token?: string; account_id?: string } | null);
+    if (!tokens?.access_token || !tokens.refresh_token) {
+      fail('That JSON has no access_token / refresh_token pair. Run `codex login` first.');
       return;
     }
     await save({
@@ -1430,7 +1451,7 @@ export function FleetAgentRow({
       codexRefreshToken: tokens.refresh_token,
       ...(tokens.account_id ? { codexAccountId: tokens.account_id } : {}),
     });
-  }, [pasted, save]);
+  }, [pasted, save, reportFailure]);
 
   /**
    * Claude sign-in: open Anthropic's page, take the code back.
@@ -1442,18 +1463,26 @@ export function FleetAgentRow({
    */
   const startClaudeSignIn = useCallback(async () => {
     if (!currentWorkspaceId) return;
+    // Reserve the tab before the await. Safari and Firefox block a popup opened after it.
+    const browser = prepareSignInWindow();
+    trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent: 'claude', method: 'claude_oauth' });
     setBusy(true);
     setError(null);
+    setBlockedClaudeUrl(null);
     try {
       const { url } = await api.cloudProviders.startClaudeSignIn(currentWorkspaceId);
-      void openExternal(url);
+      const opened = await browser.open(url);
+      if (!opened) setBlockedClaudeUrl(url);
       setAwaitingClaudeCode(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not start the Claude sign-in');
+      browser.close();
+      const message = e instanceof Error ? e.message : 'Could not start the Claude sign-in';
+      setError(message);
+      reportFailure('start', message);
     } finally {
       setBusy(false);
     }
-  }, [currentWorkspaceId]);
+  }, [currentWorkspaceId, reportFailure]);
 
   const finishClaudeSignIn = useCallback(async () => {
     if (!currentWorkspaceId) return;
@@ -1463,17 +1492,20 @@ export function FleetAgentRow({
       await api.cloudProviders.completeClaudeSignIn(currentWorkspaceId, claudeCode);
       setAwaitingClaudeCode(false);
       setClaudeCode('');
+      setBlockedClaudeUrl(null);
       trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent: 'claude' });
       setEditing(false);
       // Re-read rather than guess: the card renders off `connectedAgents`,
       // which only the backend can compute.
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not finish the Claude sign-in');
+      const message = e instanceof Error ? e.message : 'Could not finish the Claude sign-in';
+      setError(message);
+      reportFailure('finish', message);
     } finally {
       setBusy(false);
     }
-  }, [currentWorkspaceId, claudeCode, refresh]);
+  }, [currentWorkspaceId, claudeCode, refresh, reportFailure]);
 
   const showForm = editing || !connected;
 
@@ -1536,6 +1568,19 @@ export function FleetAgentRow({
                   <p className="text-xs text-muted-foreground">
                     Approve the request in your browser, then paste the code Anthropic shows you.
                   </p>
+                  {blockedClaudeUrl && (
+                    <p className="text-xs text-muted-foreground">
+                      Your browser blocked the sign-in tab.{' '}
+                      <a
+                        href={blockedClaudeUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium text-foreground underline underline-offset-2"
+                      >
+                        Open the Claude sign-in page
+                      </a>
+                    </p>
+                  )}
                   <Input
                     label="Code from Anthropic"
                     value={claudeCode}
@@ -1553,7 +1598,10 @@ export function FleetAgentRow({
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => setAwaitingClaudeCode(false)}
+                      onClick={() => {
+                        setAwaitingClaudeCode(false);
+                        setBlockedClaudeUrl(null);
+                      }}
                       disabled={busy}
                     >
                       Back
@@ -1565,8 +1613,8 @@ export function FleetAgentRow({
               {/* The metered path stays. A workspace billing per token has no
                   subscription to sign in to, so removing this would strand it. */}
               <details className="pt-1">
-                <summary className="cursor-pointer text-xs text-muted-foreground">
-                  Use a Console API key instead
+                <summary className="cursor-pointer text-xs font-medium text-foreground hover:underline">
+                  No Claude subscription? Use an Anthropic API key
                 </summary>
                 <div className="mt-2 space-y-2">
                   <Input
@@ -1584,7 +1632,14 @@ export function FleetAgentRow({
                   />
                   <Button
                     size="sm"
-                    onClick={() => save({ claudeToken })}
+                    onClick={() => {
+                      trackEvent('cloud_provider_signin_started', {
+                        provider: 'selfhosted',
+                        agent: 'claude',
+                        method: 'claude_api_key',
+                      });
+                      void save({ claudeToken });
+                    }}
                     disabled={busy || !claudeToken.trim()}
                   >
                     {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save & verify'}

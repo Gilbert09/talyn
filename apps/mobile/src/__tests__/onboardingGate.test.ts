@@ -29,6 +29,7 @@ describe('onboarding gate', () => {
     ['GitHub has no integrations object', { workspace: loaded({ integrations: null }) }, 'github'],
     ['GitHub was disconnected mid-setup', { workspace: noGithub, repositories: loaded([]) }, 'github'],
     ['a returning account with GitHub and nothing else', { inProgress: false, repositories: loaded([]), readiness: loaded(ready({})) }, 'done'],
+    ['the agent step was skipped with no agent ready', { inProgress: false, readiness: loaded(ready({})) }, 'done'],
     ['the device progress is still loading', { inProgress: undefined }, 'loading'],
     ['repositories are loading', { repositories: state('loading') }, 'loading'],
     ['repositories failed to load', { repositories: state('error') }, 'repos'],

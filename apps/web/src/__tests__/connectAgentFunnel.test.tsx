@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
-import { render, cleanup, waitFor } from '@testing-library/react';
+import { render, cleanup, waitFor, screen } from '@testing-library/react';
 import type { PRRow } from '../lib/api';
 import { trackEvent } from '../lib/analytics';
 import { ConnectAgentModal } from '../components/modals/ConnectAgentModal';
@@ -137,6 +137,14 @@ describe('connect_agent_opened — the ask', () => {
   it('says nothing while it is closed', () => {
     render(<ConnectAgentModal />);
     expect(calls('connect_agent_opened')).toHaveLength(0);
+  });
+
+  it('opens from the banner with no stashed task and shows the connect cards', () => {
+    Object.assign(h(), { open: true, source: 'banner', pending: null });
+    render(<ConnectAgentModal />);
+    expect(calls('connect_agent_opened')[0][1]).toMatchObject({ source: 'banner', pending_kind: 'none' });
+    expect(screen.getByText('Connect an agent')).toBeTruthy();
+    expect(screen.queryByText('Connect an agent to run this')).toBeNull();
   });
 });
 

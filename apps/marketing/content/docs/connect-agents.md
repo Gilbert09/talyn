@@ -17,9 +17,11 @@ You need a Claude Pro or Max subscription.
 4. Paste it into **Code from Anthropic**.
 5. Select **Finish sign-in**.
 
+In the web app, your browser can block the sign-in tab. If it does, select **Open the Claude sign-in page** to open it.
+
 The row shows **Connected**.
 
-If you want to pay per token instead of using a subscription, open **Use a Console API key instead** and paste an Anthropic Console API key. Usage on that key is billed by Anthropic per token.
+If you do not have a Claude subscription, or you want to pay per token, open **No Claude subscription? Use an Anthropic API key** and paste an Anthropic Console API key. Usage on that key is billed by Anthropic per token.
 
 ## Codex
 

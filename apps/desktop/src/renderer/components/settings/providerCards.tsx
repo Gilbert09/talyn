@@ -214,6 +214,18 @@ export function FleetAgentRow({
 
   const label = agent === 'claude' ? 'Claude subscription' : 'Codex (ChatGPT) subscription';
 
+  const reportFailure = useCallback(
+    (stage: 'start' | 'finish' | 'save', message: string) => {
+      trackEvent('cloud_provider_connect_failed', {
+        provider: 'selfhosted',
+        agent,
+        stage,
+        error: message.slice(0, 200),
+      });
+    },
+    [agent]
+  );
+
   /**
    * Refresh from the server rather than patching the store optimistically.
    *
@@ -243,12 +255,14 @@ export function FleetAgentRow({
         await refresh();
         await onChanged?.();
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to save credentials');
+        const message = e instanceof Error ? e.message : 'Failed to save credentials';
+        setError(message);
+        if (!config.clearClaude && !config.clearCodex) reportFailure('save', message);
       } finally {
         setBusy(false);
       }
     },
-    [agent, currentWorkspaceId, refresh, onChanged]
+    [agent, currentWorkspaceId, refresh, onChanged, reportFailure]
   );
 
   const disconnect = useCallback(async () => {
@@ -261,6 +275,7 @@ export function FleetAgentRow({
   const [claudeCode, setClaudeCode] = useState('');
 
   const signInToCodex = useCallback(async () => {
+    trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent: 'codex', method: 'codex_oauth' });
     setBusy(true);
     setError(null);
     try {
@@ -272,10 +287,12 @@ export function FleetAgentRow({
         ...(result.expiresIn ? { codexExpiresIn: String(result.expiresIn) } : {}),
       });
     } catch (e) {
-      setError(ipcErrorMessage(e, 'ChatGPT sign-in failed'));
+      const message = ipcErrorMessage(e, 'ChatGPT sign-in failed');
+      setError(message);
+      reportFailure('start', message);
       setBusy(false);
     }
-  }, [save]);
+  }, [save, reportFailure]);
 
   /**
    * Claude sign-in: open Anthropic's page, take the code back.
@@ -287,6 +304,7 @@ export function FleetAgentRow({
    */
   const startClaudeSignIn = useCallback(async () => {
     if (!currentWorkspaceId) return;
+    trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent: 'claude', method: 'claude_oauth' });
     setBusy(true);
     setError(null);
     try {
@@ -294,11 +312,13 @@ export function FleetAgentRow({
       void openExternal(url);
       setAwaitingClaudeCode(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not start the Claude sign-in');
+      const message = e instanceof Error ? e.message : 'Could not start the Claude sign-in';
+      setError(message);
+      reportFailure('start', message);
     } finally {
       setBusy(false);
     }
-  }, [currentWorkspaceId]);
+  }, [currentWorkspaceId, reportFailure]);
 
   const finishClaudeSignIn = useCallback(async () => {
     if (!currentWorkspaceId) return;
@@ -315,11 +335,13 @@ export function FleetAgentRow({
       await refresh();
       await onChanged?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not finish the Claude sign-in');
+      const message = e instanceof Error ? e.message : 'Could not finish the Claude sign-in';
+      setError(message);
+      reportFailure('finish', message);
     } finally {
       setBusy(false);
     }
-  }, [currentWorkspaceId, claudeCode, refresh, onChanged]);
+  }, [currentWorkspaceId, claudeCode, refresh, onChanged, reportFailure]);
 
   const showForm = editing || !connected;
 
@@ -411,8 +433,8 @@ export function FleetAgentRow({
               {/* The metered path stays. A workspace billing per token has no
                   subscription to sign in to, so removing this would strand it. */}
               <details className="pt-1">
-                <summary className="cursor-pointer text-xs text-muted-foreground">
-                  Use a Console API key instead
+                <summary className="cursor-pointer text-xs font-medium text-foreground hover:underline">
+                  No Claude subscription? Use an Anthropic API key
                 </summary>
                 <div className="mt-2 space-y-2">
                   <Input
@@ -430,7 +452,14 @@ export function FleetAgentRow({
                   />
                   <Button
                     size="sm"
-                    onClick={() => save({ claudeToken })}
+                    onClick={() => {
+                      trackEvent('cloud_provider_signin_started', {
+                        provider: 'selfhosted',
+                        agent: 'claude',
+                        method: 'claude_api_key',
+                      });
+                      void save({ claudeToken });
+                    }}
                     disabled={busy || !claudeToken.trim()}
                   >
                     {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Save & verify'}

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, RefreshCw, Trash2 } from 'lucide-react';
 import type { FleetAccountView, FleetAgent } from '@talyn/shared';
 import { ApiError, api } from '../../lib/api';
+import { trackEvent } from '../../lib/analytics';
 import { openExternal } from '../../lib/openExternal';
 import { FleetAgentMark } from '../../lib/providerMeta';
 import { Badge } from '../ui/badge';
@@ -16,6 +17,27 @@ function errorMessage(error: unknown): string {
     return 'Adding more accounts is turned off for this workspace.';
   }
   return ipcErrorMessage(error, 'Could not update the account');
+}
+
+type ConnectMethod = 'claude_oauth' | 'codex_paste' | 'codex_oauth' | 'claude_api_key' | 'codex_api_key';
+type ConnectStage = 'start' | 'finish' | 'save' | 'parse';
+
+function trackStarted(agent: FleetAgent, method: ConnectMethod) {
+  trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent, method });
+}
+
+function trackConnected(agent: FleetAgent) {
+  trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent });
+}
+
+// Report a failed connect attempt, then rethrow so `run` still shows the error.
+async function trackFailure<T>(agent: FleetAgent, stage: ConnectStage, action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (e) {
+    trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent, stage, error: errorMessage(e).slice(0, 200) });
+    throw e;
+  }
 }
 
 function formatTimeAt(iso: string, action: string, now = new Date()): string {
@@ -148,14 +170,19 @@ export function FleetAccountRow({
   const reconnect = async () => {
     if (account.kind === 'claude_oauth') {
       await run(async () => {
-        const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { accountId: account.id });
-        await openExternal(url);
+        trackStarted(account.agent, 'claude_oauth');
+        await trackFailure(account.agent, 'start', async () => {
+          const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { accountId: account.id });
+          await openExternal(url);
+        });
         setCodeStep(true);
       });
     } else if (account.kind === 'codex_oauth') {
       await run(async () => {
-        const result = await window.electron.codex.signIn();
-        await api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(result), { codexFleetAccountId: account.id });
+        trackStarted(account.agent, 'codex_oauth');
+        const result = await trackFailure(account.agent, 'start', () => window.electron.codex.signIn());
+        await trackFailure(account.agent, 'save', () => api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(result), { codexFleetAccountId: account.id }));
+        trackConnected(account.agent);
       });
     }
   };
@@ -210,7 +237,7 @@ export function FleetAccountRow({
       {usageExpanded && <div className="space-y-2 pt-1">{windows.map((window) => <UsageWindowRow key={window.key} window={window} switchAtPercent={switchAtPercent} />)}</div>}
       {codeStep && <div className="flex gap-2">
         <Input aria-label={`Code for ${account.label}`} value={code} onChange={(e) => setCode(e.target.value)} />
-        <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await api.cloudProviders.completeClaudeSignIn(workspaceId, code, { accountId: account.id }); setCodeStep(false); setCode(''); })}>Finish sign-in</Button>
+        <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await trackFailure(account.agent, 'finish', () => api.cloudProviders.completeClaudeSignIn(workspaceId, code, { accountId: account.id })); trackConnected(account.agent); setCodeStep(false); setCode(''); })}>Finish sign-in</Button>
       </div>}
       {confirmRemove && <div className="flex items-center gap-2 text-xs">
         <span>Remove {account.label}?</span>
@@ -269,12 +296,17 @@ export function FleetAccountsList({ agent, workspaceId, accounts, activeId, swit
     void run(async () => {
       try {
         if (agent === 'claude') {
-          const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { label: chosenLabel });
-          await openExternal(url);
+          trackStarted(agent, 'claude_oauth');
+          await trackFailure(agent, 'start', async () => {
+            const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { label: chosenLabel });
+            await openExternal(url);
+          });
           setCodeStep(true);
         } else {
-          const result = await window.electron.codex.signIn();
-          await api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(result), { codexLabel: chosenLabel });
+          trackStarted(agent, 'codex_oauth');
+          const result = await trackFailure(agent, 'start', () => window.electron.codex.signIn());
+          await trackFailure(agent, 'save', () => api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(result), { codexLabel: chosenLabel }));
+          trackConnected(agent);
           await done();
         }
       } catch (e) {
@@ -297,11 +329,11 @@ export function FleetAccountsList({ agent, workspaceId, accounts, activeId, swit
         </div>}
         {method === 'key' && <div className="space-y-2">
           <Input label={`${agentLabel} API key`} aria-label={`${agentLabel} API key`} type="password" value={key} onChange={(e) => setKey(e.target.value)} disabled={busy} />
-          <Button size="sm" disabled={busy || !chosenLabel || !key.trim()} onClick={() => void run(async () => { await api.cloudProviders.fleetAccounts.add(workspaceId, agent, agent === 'claude' ? 'anthropic_key' : 'openai_key', key.trim(), chosenLabel); await done(); })}>Add account</Button>
+          <Button size="sm" disabled={busy || !chosenLabel || !key.trim()} onClick={() => void run(async () => { trackStarted(agent, agent === 'claude' ? 'claude_api_key' : 'codex_api_key'); await trackFailure(agent, 'save', () => api.cloudProviders.fleetAccounts.add(workspaceId, agent, agent === 'claude' ? 'anthropic_key' : 'openai_key', key.trim(), chosenLabel)); trackConnected(agent); await done(); })}>Add account</Button>
         </div>}
         {method === 'sign_in' && agent === 'claude' && codeStep && <div className="space-y-2">
           <Input label="Code from Anthropic" aria-label="Code from Anthropic" value={code} onChange={(e) => setCode(e.target.value)} disabled={busy} />
-          <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await api.cloudProviders.completeClaudeSignIn(workspaceId, code, { label: chosenLabel }); await done(); })}>Finish sign-in</Button>
+          <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await trackFailure(agent, 'finish', () => api.cloudProviders.completeClaudeSignIn(workspaceId, code, { label: chosenLabel })); trackConnected(agent); await done(); })}>Finish sign-in</Button>
         </div>}
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setAdding(false); setMethod(null); setCodeStep(false); setError(null); }}>Cancel</Button>
         {error && <p role="alert" className="text-xs text-destructive">{error}</p>}

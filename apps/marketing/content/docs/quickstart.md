@@ -46,12 +46,14 @@ A repository marked **App not installed** belongs to an account that does not ha
 
 Talyn runs the agent on your own subscription. Pick one:
 
-- **Claude** uses your Claude Pro or Max subscription.
+- **Claude** uses your Claude Pro or Max subscription, or an Anthropic API key.
 - **Codex** uses your ChatGPT subscription.
 
 Follow the sign-in steps on the card. [Connect an agent](/docs/connect-agents) has the details for each one. You can connect both, and add the second one later.
 
-You must connect Claude or Codex to continue. **Next** stays off until you do, and a line under it says what is missing. PostHog Code is not part of this step. You can add it later in **Settings**. If OpenAI does not offer ChatGPT sign-in in your region, connect Claude instead.
+You must connect Claude or Codex to start sessions. **Next** stays off until you do, and a line under it says what is missing. PostHog Code is not part of this step. You can add it later in **Settings**. If OpenAI does not offer ChatGPT sign-in in your region, connect Claude instead.
+
+If you do not have a subscription now, select **Skip for now**. Talyn skips the first session and opens the home page. Talyn shows your pull requests, but you cannot start a session until you connect an agent. A banner at the top of the app stays until you connect one. Select **Connect an agent** in the banner to connect one.
 
 ## 6. Start your first session
 

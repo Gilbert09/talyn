@@ -124,6 +124,12 @@ export function movedOrder(ids: readonly string[], index: number, direction: -1 
   return next;
 }
 
+/** A failure's message for analytics, cut to 200 characters. */
+export function errorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : (error as { message?: unknown } | null)?.message;
+  return String(typeof message === 'string' ? message : error).slice(0, 200);
+}
+
 /** The server's sentence for a failed account change, with web's words for a turned-off second account. */
 export function accountErrorMessage(error: unknown, fallback: string): string {
   if (error && typeof error === 'object') {

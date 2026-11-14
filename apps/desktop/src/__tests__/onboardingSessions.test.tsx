@@ -170,7 +170,7 @@ it('offers only the subscription cards, in order, where the fleet is offered', a
   const choices = screen.getAllByRole('button').filter((button) => /^(Claude|Codex|PostHog Code)/.test(button.textContent ?? ''));
   expect(choices.map((button) => button.textContent?.split('Use')[0])).toEqual(['Claude', 'Codex']);
   expect(screen.queryByRole('heading', { name: 'Other options' })).not.toBeInTheDocument();
-  expect(screen.getByText('Connect Claude or ChatGPT to continue.')).toBeInTheDocument();
+  expect(screen.getByText('Connect Claude or ChatGPT to start sessions, or skip for now.')).toBeInTheDocument();
 });
 
 it.each(['claude', 'codex'] as const)('creates and opens a real session through the API with %s', async (agent) => {
@@ -198,7 +198,7 @@ it.each(['claude', 'codex'] as const)('creates and opens a real session through 
   expect(useWorkspaceStore.getState().justOnboarded).toBe(true);
   expect(trackEvent).toHaveBeenCalledWith('first_session_created', { from: 'onboarding' });
   expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', {
-    github_connected: true, repos_watched: 2, agent_connected: true, signup_source: 'reddit',
+    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, signup_source: 'reddit',
   });
   for (const step of ['github', 'repos', 'agent', 'first_session']) {
     expect(trackEvent).toHaveBeenCalledWith('onboarding_step_viewed', { step });
@@ -251,7 +251,7 @@ it('skips the first session, completes onboarding, and opens Home', async () => 
   expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
   expect(trackEvent).toHaveBeenCalledWith('onboarding_first_session_skipped');
   expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', {
-    github_connected: true, repos_watched: 2, agent_connected: true, signup_source: null,
+    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, signup_source: null,
   });
 });
 

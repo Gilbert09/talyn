@@ -9,6 +9,7 @@ import { SpaceHomePage } from '../spaces/SpaceHomePage';
 import { AppSidebar } from './AppSidebar';
 import { ContextRail } from './ContextRail';
 import { SystemStatusBanner } from './SystemStatusBanner';
+import { ConnectAgentBanner } from './ConnectAgentBanner';
 import { useAppShortcuts } from './appShortcuts';
 import { SettingsPanel } from '../panels/SettingsPanel';
 import { CommandPalette } from '../CommandPalette';
@@ -82,6 +83,7 @@ export function AppShell() {
         {/* The banner sits in the main column, so the sidebar reaches the window top where the traffic lights are. */}
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <SystemStatusBanner />
+          <ConnectAgentBanner />
           <div className="min-h-0 flex-1 overflow-hidden">
             <RoutedView />
           </div>

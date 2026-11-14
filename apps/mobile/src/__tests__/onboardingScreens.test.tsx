@@ -57,7 +57,10 @@ jest.mock('../auth/AuthProvider', () => ({
 }));
 jest.mock('../lib/analytics', () => ({ ...jest.requireActual('../lib/analytics'), trackEvent: jest.fn() }));
 jest.mock('../features/usage/data', () => ({ useBillingStatus: () => ({ status: 'idle', data: undefined, stale: false, refreshing: false }) }));
-jest.mock('../features/agents/connect/ConnectAgentSheet', () => ({ ConnectAgentPanel: () => null, ConnectAgentSheet: () => null }));
+jest.mock('../features/agents/connect/ConnectAgentSheet', () => {
+  const { Text } = jest.requireActual('react-native');
+  return { ConnectAgentPanel: () => null, ConnectAgentSheet: ({ visible }: { visible: boolean }) => visible ? <Text>Connect sheet open</Text> : null };
+});
 
 import RootLayout from '../../app/_layout';
 import Index from '../../app';
@@ -81,6 +84,9 @@ const routes = {
 };
 const insets = { frame: { x: 0, y: 0, width: 400, height: 900 }, insets: { top: 0, left: 0, right: 0, bottom: 0 } };
 const key = progressKey('alice', 'one');
+const noAgent = { sandbox: { ok: true, reasons: [], agents: {
+  claude: { ok: false, reason: { code: 'agent_not_connected', message: 'Connect Claude.' } },
+  codex: { ok: false, reason: { code: 'agent_not_connected', message: 'Connect Codex.' } } } } };
 const githubWorkspace = { id: 'one', name: 'One', settings: {}, repos: [], integrations: { github: { enabled: true, watchedRepos: [] } } };
 
 // The root layout names every app screen. This test mounts only the setup ones.
@@ -140,8 +146,22 @@ describe('onboarding gate', () => {
     await waitFor(() => expect(routerScreen).toHavePathname('/onboarding/agent'));
     expect(await routerScreen.findByLabelText('Claude Code: Connect Claude.')).toBeVisible();
     expect(routerScreen.getByRole('button', { name: 'Next' })).toBeDisabled();
-    expect(routerScreen.getByText('Connect Claude or ChatGPT to continue.')).toBeVisible();
-    expect(routerScreen.queryByRole('button', { name: 'Skip for now' })).toBeNull();
+    expect(routerScreen.getByText('You need a connected agent to start sessions. You can connect one later.')).toBeVisible();
+    expect(routerScreen.getByRole('button', { name: 'Skip for now' })).toBeVisible();
+  });
+
+  it('lets a person skip the agent step, which ends setup and opens home with the notice', async () => {
+    onboardingProgress.start(key);
+    mockWorkflow.api.workspaces.get.mockResolvedValue(githubWorkspace as never);
+    mockWorkflow.api.workbenches.readiness.mockResolvedValue(noAgent as never);
+    await renderRouter(routes, { initialUrl: '/home' });
+    await waitFor(() => expect(routerScreen).toHavePathname('/onboarding/agent'));
+    await act(async () => { fireEvent.press(await routerScreen.findByRole('button', { name: 'Skip for now' })); });
+    await waitFor(() => expect(routerScreen).toHavePathname('/home'));
+    expect(onboardingProgress.read(key)).toBe(false);
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_agent_skipped', expect.objectContaining({ github_connected: true }));
+    expect(trackEvent).not.toHaveBeenCalledWith('onboarding_completed', expect.anything());
+    expect(await routerScreen.findByText('Connect an agent to start sessions')).toBeVisible();
   });
 
   it('lets a person skip the agent step when the sandbox is unavailable', async () => {
@@ -152,11 +172,45 @@ describe('onboarding gate', () => {
     await renderRouter(routes, { initialUrl: '/home' });
     await waitFor(() => expect(routerScreen).toHavePathname('/onboarding/agent'));
     await act(async () => { fireEvent.press(await routerScreen.findByRole('button', { name: 'Skip for now' })); });
-    await waitFor(() => expect(routerScreen).toHavePathname('/onboarding/notifications'));
-    await act(async () => { fireEvent.press(await routerScreen.findByRole('button', { name: 'Skip for now' })); });
     await waitFor(() => expect(routerScreen).toHavePathname('/home'));
     expect(onboardingProgress.read(key)).toBe(false);
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_agent_skipped', expect.anything());
     expect(trackEvent).not.toHaveBeenCalledWith('onboarding_completed', expect.anything());
+    expect(routerScreen.queryByText('Connect an agent to start sessions')).toBeNull();
+  });
+});
+
+describe('connect agent notice on home', () => {
+  const returning = () => {
+    mockWorkflow.api.workspaces.get.mockResolvedValue(githubWorkspace as never);
+  };
+  it('shows when no agent is ready, tracks view and click, and opens the connect flow', async () => {
+    returning();
+    mockWorkflow.api.workbenches.readiness.mockResolvedValue(noAgent as never);
+    await renderRouter(routes, { initialUrl: '/home' });
+    expect(await routerScreen.findByText('Connect an agent to start sessions')).toBeVisible();
+    expect(trackEvent).toHaveBeenCalledWith('connect_agent_banner_viewed');
+    expect(routerScreen.queryByText('Connect sheet open')).toBeNull();
+    await act(async () => { fireEvent.press(routerScreen.getByRole('button', { name: 'Connect an agent' })); });
+    expect(trackEvent).toHaveBeenCalledWith('connect_agent_banner_clicked');
+    expect(routerScreen.getByText('Connect sheet open')).toBeVisible();
+  });
+
+  it('is hidden when an agent is ready', async () => {
+    returning();
+    mockWorkflow.api.workbenches.readiness.mockResolvedValue({ sandbox: { ok: true, reasons: [], agents: { claude: { ok: true } } } } as never);
+    await renderRouter(routes, { initialUrl: '/home' });
+    expect(await routerScreen.findByText('What do you want to build?')).toBeVisible();
+    expect(routerScreen.queryByText('Connect an agent to start sessions')).toBeNull();
+    expect(trackEvent).not.toHaveBeenCalledWith('connect_agent_banner_viewed');
+  });
+
+  it('is hidden when the fleet is not usable', async () => {
+    returning();
+    mockWorkflow.api.workbenches.readiness.mockResolvedValue({ sandbox: { ok: false, reasons: [{ code: 'fleet_disabled', message: 'Paused.' }], agents: {} } } as never);
+    await renderRouter(routes, { initialUrl: '/home' });
+    await waitFor(() => expect(mockWorkflow.api.workbenches.readiness).toHaveBeenCalled());
+    expect(routerScreen.queryByText('Connect an agent to start sessions')).toBeNull();
   });
 });
 

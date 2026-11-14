@@ -71,7 +71,7 @@ import type {
  * rather than a free string: these values are read as a breakdown in the
  * connect funnel, and a typo there is a silently separate bucket.
  */
-export type ConnectAgentSource = 'task_button' | 'pr_detail_banner' | 'unknown';
+export type ConnectAgentSource = 'task_button' | 'pr_detail_banner' | 'banner' | 'unknown';
 
 export type PendingCloudTask =
   | { kind: 'fix'; row: PRRow; providerType?: string; model?: string }
