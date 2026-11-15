@@ -306,18 +306,23 @@ export const FEATURE_FLAGS = {
   },
 
   /**
-   * Retire PostHog Code, step one: hide it from workspaces that have not
-   * connected it, and stop new work falling back to it. A workspace that is
-   * already connected keeps its connection and is told to move.
+   * PostHog Code is retired for everyone. With this flag on, a workspace that
+   * has not connected it never sees it, and new work never falls back to it.
+   * A workspace that is already connected keeps its connection and is told to
+   * move to Claude or Codex.
    *
    * Asked for the caller at the connect routes and for the workspace OWNER in
-   * the resolver, the code review spill and quota failover. Fallback OFF: an
-   * outage or a flag nobody created yet keeps today's behaviour.
+   * the resolver, the code review spill and quota failover.
+   *
+   * Fallback ON, so a PostHog outage or an absent flag keeps PostHog Code
+   * hidden. To bring it back for one account, create the flag in PostHog and
+   * answer `false` for that account. `POSTHOG_CODE_RETIRED=false` brings it
+   * back for the whole deployment.
    */
   posthogCodeRetired: {
     posthogKey: 'posthog-code-retired',
     envOverride: 'POSTHOG_CODE_RETIRED',
-    fallback: false,
+    fallback: true,
     description: 'PostHog Code retired: no new connections and no fall-back onto it',
     availability: 'general',
     releaseScopes: [],

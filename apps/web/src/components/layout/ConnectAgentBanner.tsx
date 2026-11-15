@@ -4,6 +4,7 @@ import { Button } from '../ui/button';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { trackEvent } from '../../lib/analytics';
 import { sessionAgentConnected } from '../../lib/agentConnection';
+import { usePostHogCodeOffered } from '../widgets/PostHogCodeRetirement';
 
 /**
  * Tells a workspace with no session agent that it cannot start sessions yet.
@@ -20,6 +21,7 @@ export function ConnectAgentBanner() {
     sessionAgentConnected(s.cloudProviders, s.posthogStatus?.connected === true)
   );
   const openConnectAgent = useWorkspaceStore((s) => s.openConnectAgent);
+  const posthogOffered = usePostHogCodeOffered();
   const viewed = useRef(false);
 
   // Without the fleet the answer depends on PostHog Code, so wait for its status too.
@@ -33,7 +35,8 @@ export function ConnectAgentBanner() {
 
   if (!show) return null;
 
-  const body = fleetOffered
+  // With PostHog Code retired, the copy names only Claude or Codex.
+  const body = fleetOffered || !posthogOffered
     ? 'Talyn shows your pull requests now. To start a session, fix a pull request or review code, connect your Claude or ChatGPT subscription.'
     : 'Talyn shows your pull requests now. To start a session, fix a pull request or review code, connect PostHog Code.';
 

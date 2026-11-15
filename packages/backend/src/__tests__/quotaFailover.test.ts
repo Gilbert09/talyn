@@ -157,6 +157,9 @@ describe('quota failover', () => {
       registerCloudProvider(fakeProvider(t));
     }
     process.env.FLEET_ALLOWED = 'true';
+    // PostHog Code is retired by default. Most tests here cover the hop onto
+    // it, which still runs where the flag is off. The retired cases set it.
+    process.env.POSTHOG_CODE_RETIRED = 'false';
     resetFeatureFlagsForTests();
   });
 
@@ -167,6 +170,7 @@ describe('quota failover', () => {
     originals.clear();
     await cleanup();
     delete process.env.FLEET_ALLOWED;
+    delete process.env.POSTHOG_CODE_RETIRED;
     resetFeatureFlagsForTests();
   });
 
@@ -358,10 +362,18 @@ describe('quota failover', () => {
       resetFeatureFlagsForTests();
     });
 
-    function retire(value: 'true' | 'false') {
-      process.env.POSTHOG_CODE_RETIRED = value;
+    function retire(value: 'true' | 'false' | 'unset') {
+      if (value === 'unset') delete process.env.POSTHOG_CODE_RETIRED;
+      else process.env.POSTHOG_CODE_RETIRED = value;
       resetFeatureFlagsForTests();
     }
+
+    it('stops at the fleet with the flag unset, because the fallback is on', async () => {
+      retire('unset');
+      await connectAgents(db, ['claude']);
+      expect(await run()).toBe(false);
+      expect((await task()).assignedEnvironmentId).toBe('fleet1');
+    });
 
     it('still moves to the other fleet agent', async () => {
       retire('true');

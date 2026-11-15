@@ -107,7 +107,8 @@ describe('PostHog OAuth', () => {
       return payload?.data.find((provider) => provider.type === 'posthog_code');
     };
 
-    expect(await list()).toMatchObject({ connected: false, needsReconnect: false });
+    // PostHog Code is retired, so the list leaves it out until a row exists.
+    expect(await list()).toBeUndefined();
     await db.insert(integrationsTable).values({
       id: 'int-reconnect', workspaceId: WS, type: 'posthog', enabled: true,
       config: {

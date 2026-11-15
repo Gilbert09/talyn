@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { randomBytes } from 'crypto';
 import { eq } from 'drizzle-orm';
 import { CODE_REVIEW_FINDINGS_SENTINEL, type FleetAgent } from '@talyn/shared';
@@ -523,19 +523,19 @@ describe('spilling a fresh unit to PostHog Code when the fleet is full', () => {
     resetFeatureFlagsForTests();
   });
 
-  it.each([
-    ['unset', undefined],
-    ['off', 'false'],
-  ])('spills as today with the flag %s', async (_label, value) => {
-    if (value !== undefined) process.env.POSTHOG_CODE_RETIRED = value;
+  it('spills with the flag off', async () => {
+    process.env.POSTHOG_CODE_RETIRED = 'false';
     resetFeatureFlagsForTests();
     await dispatchUnit((await getReview('rev1'))!, LENS);
     expect(startCodeRun).toHaveBeenCalledTimes(1);
     expect(await unitRow()).toMatchObject({ status: 'running', provider: 'posthog_code' });
   });
 
-  it('waits for the fleet instead with the flag on', async () => {
-    process.env.POSTHOG_CODE_RETIRED = 'true';
+  it.each([
+    ['on', 'true'],
+    ['unset', undefined],
+  ])('waits for the fleet instead with the flag %s', async (_label, value) => {
+    if (value !== undefined) process.env.POSTHOG_CODE_RETIRED = value;
     resetFeatureFlagsForTests();
     await dispatchUnit((await getReview('rev1'))!, LENS);
     expect(startCodeRun).not.toHaveBeenCalled();
@@ -629,7 +629,14 @@ describe('not learning a limit once per unit', () => {
   });
 
   it('still spills a first dispatch to the fall-back provider when the fleet is full', async () => {
-    // The bounded spill is a rule about capacity, and it is unchanged.
+    // The bounded spill is a rule about capacity, and it is unchanged where
+    // PostHog Code is not retired.
+    process.env.POSTHOG_CODE_RETIRED = 'false';
+    resetFeatureFlagsForTests();
+    onTestFinished(() => {
+      delete process.env.POSTHOG_CODE_RETIRED;
+      resetFeatureFlagsForTests();
+    });
     createSandbox.mockRejectedValue(new FleetCapacityError('all hosts busy'));
     startCodeRun.mockResolvedValue({ ok: true, model: 'm', remoteTaskId: 't', remoteRunId: 'r' });
     await dispatchUnit((await getReview('rev1'))!, SECURITY);

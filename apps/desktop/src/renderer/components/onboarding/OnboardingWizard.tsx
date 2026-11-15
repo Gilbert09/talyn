@@ -12,6 +12,7 @@ import { WatchReposStep } from './steps/WatchReposStep';
 import { SourceSurvey, type SignupSource } from './SourceSurvey';
 import { useNavigationStore } from '../../stores/navigation';
 import { sessionAgentConnected } from '../../lib/agentConnection';
+import { usePostHogCodeOffered } from '../widgets/PostHogCodeRetirement';
 
 const GITHUB_POLL_MS = 4000;
 
@@ -30,6 +31,7 @@ export function OnboardingWizard() {
   // so the GitHub step also re-checks every few seconds until it connects.
   const { status, user } = useGithubConnection(currentWorkspaceId, { pollMs: GITHUB_POLL_MS });
   const navigate = useNavigationStore((s) => s.navigate);
+  const posthogOffered = usePostHogCodeOffered();
   const [step, setStep] = useState(0);
   const [creatingSession, setCreatingSession] = useState(false);
   const viewedStep = useRef<string | null>(null);
@@ -81,7 +83,7 @@ export function OnboardingWizard() {
       : step === 1
         ? 'Choose at least one repository to continue.'
         : step === 2
-          ? cloudProviders && !fleet
+          ? cloudProviders && !fleet && posthogOffered
             ? 'Connect PostHog Code to start sessions, or skip for now.'
             : 'Connect Claude or ChatGPT to start sessions, or skip for now.'
           : null;

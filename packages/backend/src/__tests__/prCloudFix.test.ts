@@ -223,7 +223,8 @@ describe('prCloudFix helpers', () => {
 
       it.each<[string, 'on' | 'off' | 'unset', { phc: boolean; fleet: boolean; fleetAllowed?: boolean; pinned?: string }, string[]]>([
         ['flag off keeps PostHog Code as the fall-back', 'off', { phc: true, fleet: true }, ['selfhosted', 'posthog_code']],
-        ['flag unset keeps PostHog Code as the fall-back', 'unset', { phc: true, fleet: true }, ['selfhosted', 'posthog_code']],
+        ['flag unset drops it behind the fleet', 'unset', { phc: true, fleet: true }, ['selfhosted']],
+        ['flag unset keeps it as the only provider', 'unset', { phc: true, fleet: false }, ['posthog_code']],
         ['flag off keeps it behind a pinned fleet', 'off', { phc: true, fleet: true, pinned: 'selfhosted' }, ['selfhosted', 'posthog_code']],
         ['flag on drops it behind the fleet', 'on', { phc: true, fleet: true }, ['selfhosted']],
         ['flag on drops it for ask', 'on', { phc: true, fleet: true, pinned: 'ask' }, ['selfhosted']],

@@ -17,7 +17,8 @@ import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 /**
  * The `posthogCodeRetired` flag at the connect routes. With it on, a workspace
  * that has no PostHog Code row cannot make one, and one that has a row keeps
- * every route. With it off, nothing changes.
+ * every route. With it off, nothing changes. Unset reads as on: the fallback
+ * is ON.
  */
 
 vi.mock('../../services/posthogCode/client.js', async (importOriginal) => {
@@ -130,8 +131,8 @@ describe('PostHog Code retirement at the connect routes', () => {
   const routeNames = Object.keys(calls) as (keyof typeof calls)[];
 
   describe.each(routeNames)('%s', (name) => {
-    it('refuses with 410 posthog_code_retired when the flag is on and nothing is connected', async () => {
-      setFlag('on');
+    it.each(['on', 'unset'] as const)('refuses with 410 posthog_code_retired when the flag is %s and nothing is connected', async (state) => {
+      setFlag(state);
       const res = await calls[name]();
       expect(res.status).toBe(410);
       expect(await res.json()).toMatchObject({ success: false, code: 'posthog_code_retired' });
@@ -139,7 +140,7 @@ describe('PostHog Code retirement at the connect routes', () => {
       expect(rows).toEqual([]);
     });
 
-    it.each(['on', 'off'] as const)('lets a connected workspace reconnect with the flag %s', async (state) => {
+    it.each(['on', 'off', 'unset'] as const)('lets a connected workspace reconnect with the flag %s', async (state) => {
       await seedRow();
       setFlag(state);
       const res = await calls[name]();
@@ -152,8 +153,8 @@ describe('PostHog Code retirement at the connect routes', () => {
       expect((await calls[name]()).status).toBe(200);
     });
 
-    it.each(['off', 'unset'] as const)('connects as today with the flag %s', async (state) => {
-      setFlag(state);
+    it('connects with the flag off', async () => {
+      setFlag('off');
       expect((await calls[name]()).status).toBe(200);
     });
   });
@@ -178,7 +179,8 @@ describe('PostHog Code retirement at the connect routes', () => {
       ['hides it when the flag is on and nothing is connected', 'on', false, false],
       ['keeps it when the flag is on and it is connected', 'on', true, true],
       ['keeps it when the flag is off', 'off', false, true],
-      ['keeps it when the flag is unset', 'unset', false, true],
+      ['hides it when the flag is unset', 'unset', false, false],
+      ['keeps it when the flag is unset and it is connected', 'unset', true, true],
     ])('%s', async (_label, state, connected, listed) => {
       if (connected) await seedRow();
       setFlag(state);

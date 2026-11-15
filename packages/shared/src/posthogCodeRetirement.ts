@@ -1,8 +1,8 @@
 /**
- * PostHog Code is being retired, behind the `posthogCodeRetired` flag. With the
- * flag on, a workspace that has not connected it is never offered it, and a
- * workspace that has is told to move. Every front end reads these helpers, so
- * the three apps draw the same thing.
+ * PostHog Code is retired, behind the `posthogCodeRetired` flag (fallback ON).
+ * With the flag on, a workspace that has not connected it is never offered it,
+ * and a workspace that has is told to move. Every front end reads these
+ * helpers, so the three apps draw the same thing.
  */
 
 /** The `code` on the 410 a connect route answers when the flag is on. */
@@ -18,7 +18,10 @@ export const POSTHOG_CODE_RETIRED_NOTICE =
 
 type RetirementFeatures = { posthogCodeRetired?: boolean } | null | undefined;
 
-/** Is the flag on? Unknown features read as off, which is today's behaviour. */
+/**
+ * Is the flag on? Features that are not loaded yet read as off, so a client
+ * never hides a connection on a guess. The connect routes refuse on their own.
+ */
 export function posthogCodeRetired(features: RetirementFeatures): boolean {
   return features?.posthogCodeRetired === true;
 }

@@ -123,6 +123,17 @@ describe('with PostHog Code retired', () => {
     if (shown) await screen.findByRole('button', { name: /PostHog Code/ });
     else await waitFor(() => expect(screen.queryByRole('button', { name: /PostHog Code/ })).toBeNull());
   });
+
+  it('names only Claude or Codex when nothing can be connected', async () => {
+    await setup({ providers: [], posthogConnected: false });
+    const { useWorkspaceStore } = await import('../renderer/stores/workspace');
+    useWorkspaceStore.setState({ features: { posthogCodeRetired: true } as never });
+    await walkToAgentStep();
+
+    await screen.findByText(/Sessions run on Claude or Codex\./);
+    expect(screen.getByText('Connect Claude or ChatGPT to start sessions, or skip for now.')).toBeTruthy();
+    expect(screen.queryByText(/Connect PostHog Code/)).toBeNull();
+  });
 });
 
 function skipButton() {

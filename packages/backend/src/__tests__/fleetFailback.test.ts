@@ -108,6 +108,9 @@ describe('provider fail-back', () => {
       originals.set(t, getCloudProvider(t));
     }
     process.env.FLEET_ALLOWED = 'true';
+    // PostHog Code is retired by default. These tests cover the fail-back onto
+    // it, which still runs where the flag is off.
+    process.env.POSTHOG_CODE_RETIRED = 'false';
     resetFeatureFlagsForTests();
   });
 
@@ -118,6 +121,7 @@ describe('provider fail-back', () => {
     originals.clear();
     await cleanup();
     delete process.env.FLEET_ALLOWED;
+    delete process.env.POSTHOG_CODE_RETIRED;
     resetFeatureFlagsForTests();
   });
 
