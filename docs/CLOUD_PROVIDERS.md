@@ -5,7 +5,7 @@
 > | Provider | Wire value | Status |
 > |---|---|---|
 > | **Talyn Fleet** | `selfhosted` | **Live, and the DEFAULT.** Firecracker microVMs on hardware we own, dispatched through the sandbox gateway. Runs on the workspace's OWN Claude or Codex subscription. |
-> | PostHog Code | `posthog_code` | Live. The fall-back: what a workspace with no fleet credential runs on, and where a full fleet or a spent quota fails over to (the fleet is released to every workspace since 2026-09-16, so the `talyn-fleet` flag is now a kill switch). **Being retired, step 1** behind the `posthogCodeRetired` flag (`posthog-code-retired`, break glass `POSTHOG_CODE_RETIRED`, fallback OFF). With it on: the connect routes answer 410 `posthog_code_retired` for a workspace with no PostHog Code row, `GET /cloud-providers` lists it only for a workspace that has a row, the resolver keeps it only as the chosen default or the only provider, and neither the code review spill nor quota failover moves work onto it. An existing connection keeps working, and every client shows it a move-to-Claude-or-Codex notice. Helpers: `services/posthogCodeRetirement.ts`, `packages/shared/src/posthogCodeRetirement.ts`. Step 2 deletes the provider. |
+> | PostHog Code | `posthog_code` | **Retired** (step 1, 2026-11-15). The `posthogCodeRetired` flag (`posthog-code-retired`, break glass `POSTHOG_CODE_RETIRED`) hides it for everyone, and its fallback is ON, so a PostHog outage or an absent flag keeps it hidden. A `false` answer in PostHog, or `POSTHOG_CODE_RETIRED=false`, brings it back. With the flag on: the connect routes answer 410 `posthog_code_retired` for a workspace with no PostHog Code row, and `GET /cloud-providers` lists it only for a workspace that has a row. The resolver keeps it only as the chosen default or the only connected provider. Neither the code review spill nor quota failover moves work onto it, so it is no longer a fall-back. An existing connection keeps working, and every client shows it a move-to-Claude-or-Codex notice. Helpers: `services/posthogCodeRetirement.ts`, `packages/shared/src/posthogCodeRetirement.ts`. The code stays for now. Step 2 deletes the provider (see `ROADMAP.md`). |
 > | Codex Cloud | `codex_cloud` | Deferred — OpenAI exposes no server-to-server cloud-task API. Note this is a different thing from running **Codex on the fleet**, which works today. |
 > | ~~Claude Code~~ | ~~`claude_code`~~ | **Removed** (migration `0050`, commit `9c5689f37c`, 2026-09-05; `services/claudeCode/` is gone). Anthropic Managed Agents billed metered API credits with no subscription option — the opposite of what the fleet offers — and the fleet runs Claude on the user's own subscription instead. |
 >
@@ -471,6 +471,8 @@ instead. The Phase 0 spike notes above are kept as a record of the contract.
 ---
 
 ## PostHog Code auth — OAuth alongside the personal API key (August 2026)
+
+> PostHog Code is retired (see the table at the top). New users cannot connect it. This section describes code that still runs for existing connections, until step 2 deletes it.
 
 PostHog Code originally authenticated with a **personal API key** the user pasted
 into Settings, plus a project id they had to go and find. Both are still

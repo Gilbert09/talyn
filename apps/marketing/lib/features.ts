@@ -633,7 +633,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         heading: "Where the run actually happens",
         paragraphs: [
-          "On Talyn Fleet, each task gets its own Firecracker microVM on our hardware, running on your Claude or ChatGPT subscription. The credentials are attached by a proxy outside the machine, so no token is ever inside the box running your code, and the machine is destroyed when the task ends. With PostHog Code the run happens in their cloud under your own account instead.",
+          "On Talyn Fleet, each task gets its own Firecracker microVM on our hardware, running on your Claude or ChatGPT subscription. The credentials are attached by a proxy outside the machine, so no token is ever inside the box running your code, and the machine is destroyed when the task ends.",
         ],
       },
     ],
@@ -779,7 +779,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
         bullets: [
           "Hourly, daily, weekdays, weekly, or a raw cron expression",
           "Your timezone, correctly, including across daylight saving",
-          "Pick the agent per automation: Claude, Codex, or PostHog Code",
+          "Pick the agent per automation: Claude or Codex",
           "Choose what happens if the last run is still going: skip is the default",
         ],
       },
@@ -800,7 +800,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         heading: "When the subscription runs out",
         paragraphs: [
-          "A scheduled run that fires at 3am and hits an exhausted monthly quota should not just fail. If your Claude subscription is spent, Talyn moves that run to your Codex subscription if you have one, and then to PostHog Code. The exhaustion is remembered, so the next scheduled run does not boot a machine to learn the same thing, and it is cleared by proof: a successful run, a fresh sign-in, or the vendor's own stated reset time.",
+          "A scheduled run that fires at 3am and hits an exhausted monthly quota should not just fail. If your Claude subscription is spent, Talyn moves that run to your Codex subscription if you have one. The exhaustion is remembered, so the next scheduled run does not boot a machine to learn the same thing, and it is cleared by proof: a successful run, a fresh sign-in, or the vendor's own stated reset time.",
           "A rate limit is treated differently and deliberately: that clears by waiting, and moving off it would spend money to avoid a short pause.",
         ],
       },
@@ -1046,7 +1046,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       "Runs on your Claude Pro or Max plan, or your ChatGPT Plus or Pro plan",
       "A fresh Firecracker microVM per task, destroyed when the task ends",
       "Credentials attached by a proxy outside the machine: no token inside the box running your code",
-      "Switch agent per task; PostHog Code is supported too",
+      "Switch agent per task",
     ],
     sections: [
       {
@@ -1074,14 +1074,13 @@ export const FEATURE_PAGES: FeaturePage[] = [
         bullets: [
           "Claude: on your Claude Pro or Max plan",
           "Codex: on your ChatGPT Plus or Pro plan",
-          "PostHog Code: in your own PostHog project",
         ],
       },
       {
         heading: "What happens when a plan runs out",
         paragraphs: [
           "A monthly quota that is spent is a different problem from a credential that is broken, and Talyn treats them differently. A revoked or expired grant fails visibly and asks you to reconnect, because somebody who chose to run on their own subscription should not be quietly moved onto metered credits to fix it.",
-          "An exhausted quota is just the month running out, and the work is still wanted, so that run moves to your other subscription if you have one, and then to PostHog Code. Each hop is recorded on the task. The exhaustion is remembered so the next task does not boot a machine to discover the same thing, and the hold clears on the vendor's own stated reset time, a successful run, or a fresh sign-in.",
+          "An exhausted quota is just the month running out, and the work is still wanted, so that run moves to your other subscription if you have one. Each hop is recorded on the task. The exhaustion is remembered so the next task does not boot a machine to discover the same thing, and the hold clears on the vendor's own stated reset time, a successful run, or a fresh sign-in.",
         ],
       },
       {
@@ -1096,11 +1095,11 @@ export const FEATURE_PAGES: FeaturePage[] = [
     faq: [
       {
         q: "Which AI agents does Talyn use?",
-        a: "You bring your own. Sign in with Claude or ChatGPT and Talyn Fleet runs your tasks on that subscription: no separate API bill. PostHog Code is supported too. Talyn conducts whichever one you connect, and you can switch per task.",
+        a: "You bring your own. Sign in with Claude or ChatGPT and Talyn Fleet runs your tasks on that subscription: no separate API bill. Talyn conducts whichever one you connect, and you can switch per task.",
       },
       {
         q: "Where does the work actually happen?",
-        a: "On Talyn Fleet, each task runs in its own Firecracker microVM on our hardware, using your agent subscription. The VM reaches your repository and your agent through a proxy that attaches the credentials from outside, so no token is ever inside the machine running the code, and the VM is destroyed when the task ends. With PostHog Code the run happens in their cloud under your account instead.",
+        a: "On Talyn Fleet, each task runs in its own Firecracker microVM on our hardware, using your agent subscription. The VM reaches your repository and your agent through a proxy that attaches the credentials from outside, so no token is ever inside the machine running the code, and the VM is destroyed when the task ends.",
       },
       {
         q: "Do I need an API key?",
@@ -1168,12 +1167,6 @@ export const FEATURE_PAGES: FeaturePage[] = [
           "Box-hours and the number of boxes running at once are limited by your plan. MCP servers are not limited on any plan. A connected server costs nothing until a run uses one, and the run already uses box-hours, so charging for the connection would be charging twice for the same thing.",
         ],
       },
-      {
-        heading: "Fleet only",
-        paragraphs: [
-          "This works on Talyn Fleet, which is where the proxy that holds your credentials lives. PostHog Code has no equivalent, so the option is hidden there and refused by the API if something asks anyway.",
-        ],
-      },
     ],
     faq: [
       {
@@ -1191,10 +1184,6 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         q: "Does this cost anything on the free plan?",
         a: "No, and there is no cap. A connected server spends nothing until a run uses it, and the run uses box-hours like any other.",
-      },
-      {
-        q: "Does it work with PostHog Code?",
-        a: "No, it is Talyn Fleet only. The credential-attaching proxy is part of the fleet.",
       },
     ],
     related: ["agents", "fix-pull-requests", "loops"],

@@ -8,7 +8,15 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 
 ## Priority Queue (Next Up)
 
-1. **Cloud provider abstraction: remaining follow-ups** (see `CLOUD_PROVIDERS.md`). The seam is done. Talyn Fleet and PostHog Code are live, Codex Cloud is deferred (no server-to-server API), and Claude Code was removed in `9c5689f37c`.
+1. **Cloud provider abstraction: remaining follow-ups** (see `CLOUD_PROVIDERS.md`). The seam is done. Talyn Fleet is live. PostHog Code is retired (step 1 done 2026-11-15). Codex Cloud is deferred (no server-to-server API), and Claude Code was removed in `9c5689f37c`.
+   - [ ] **Step 2: delete the PostHog Code provider.** Step 1 hides it for everyone with the `posthog-code-retired` flag (fallback ON). Existing connections still run. Before the delete, move or stop the workspaces that still have a PostHog Code row. The delete covers:
+     - the provider module: `services/cloudProviders/posthog/`, `services/posthogCode/` and `routes/posthog.ts`, with their tests;
+     - the code review spill onto PostHog Code in `services/codeReview/executor.ts`, and its poller;
+     - the PostHog Code hop in `services/cloudProviders/quotaFailover.ts`;
+     - the `posthog_code` option in the loop editor and the loop validator, and the `posthog_code` default in `emptyLoopInput` (the MCP `create_loop` tool still uses it for a task loop with no provider);
+     - the PostHog Code settings card, onboarding option and retirement notice in web, desktop and mobile;
+     - the `posthogCodeRetired` flag, `POSTHOG_CODE_RETIRED`, and the helpers in `services/posthogCodeRetirement.ts` and `packages/shared/src/posthogCodeRetirement.ts`;
+     - the `POSTHOG_OAUTH_*` setup in `docs/SETUP.md` § 6b and the CIMD route in `apps/marketing/app/oauth-client/`.
    - The deferred `TranscriptSource`/`TranscriptConverter` generalisation.
    - Measure the real ChatGPT access-token lifetime. It decides whether server-side Codex refresh is worth its ToS exposure.
 2. ~~**Desktop generalisation**~~: done. Each PR row has a per-task agent menu, and the Settings cards and default agent follow the provider list.

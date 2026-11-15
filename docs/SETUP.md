@@ -69,8 +69,8 @@ never at Railway/prod values (those live only in Railway service variables).
 
 **Nothing in the backend or either front end reads `ANTHROPIC_API_KEY`.** Talyn
 never calls Anthropic on a first-party key: the fleet runs on the *workspace's
-own* subscription credential (`sk-ant-oat…`, see "Connecting the backend to a self-hosted fleet", step 3) and PostHog Code runs on
-PostHog's token. That is the whole point of the fleet — see
+own* subscription credential (`sk-ant-oat…`, see "Connecting the backend to a self-hosted fleet", step 3), and the retired PostHog Code
+provider runs on PostHog's token for the connections that still exist. That is the whole point of the fleet — see
 [`docs/CLOUD_PROVIDERS.md`](./CLOUD_PROVIDERS.md).
 
 This section used to say the key powered
@@ -351,6 +351,7 @@ reads as OFF only for `false`/`0`/`off`/`no`:
 | --- | --- | --- | --- | --- |
 | `CI_PARK_ENABLED` | `ci-park` | Suspend fleet fix runs while CI runs, then resume them | OFF | gated |
 | `FLEET_MULTI_ACCOUNT_ENABLED` | `fleet-multi-account` | More than one Claude or Codex account per workspace | ON | general |
+| `POSTHOG_CODE_RETIRED` | `posthog-code-retired` | PostHog Code retired: hidden for workspaces that have not connected it, no new connections, no fall-back onto it. Set `false` to bring it back | ON | general |
 | `REVIEW_PRIORITY_ENABLED` | `review-priority` | Ranked ordering of the Reviews tab | ON | general |
 | `REVIEW_RANKING_CANDIDATE_ENABLED` | `review-ranking-candidate-v1` | Fixed shared ranking candidate for the production experiment | OFF | gated |
 | `REVIEW_RANKING_EXPORT_ENABLED` | `review-ranking-export` | Export ranking data stored on this device | OFF | gated |
@@ -425,8 +426,9 @@ queued.
 heads `CLOUD_PROVIDER_ORDER` (`services/prCloudFix.ts`), but
 `resolveCloudEnvChain` drops that link entirely for a workspace that may not use
 the fleet — so a workspace outside the audience gets exactly the behaviour it
-had before: the chain heads at PostHog Code, no fleet card is offered, and a
-credential write is 403'd. The fleet was released to every workspace on
+had before: no fleet card is offered and a credential write is 403'd. Its
+chain heads at PostHog Code only if it still has a PostHog Code connection,
+because PostHog Code is retired (see the `POSTHOG_CODE_RETIRED` row above). The fleet was released to every workspace on
 2026-09-16, so the `talyn-fleet` flag is now a kill switch and a way to take the
 hardware away from one account. It is no longer an allow-list. Keep the gate: it
 is what drops the fleet from a chain when the flag is off.
@@ -864,6 +866,10 @@ Single source of truth for analytics + error tracking + logs (Phase 18.8).
 - **Backend** (Railway env) — `TALYN_POSTHOG_KEY` / `TALYN_POSTHOG_HOST` enable server-side task-lifecycle events (`task_dispatched` / `task_completed` / `task_failed`), attributed to the workspace owner. Unset ⇒ server analytics is a no-op (see `packages/backend/src/services/analytics.ts`). **The same key also powers feature flags** — unset there means every flag answers its built-in fallback. See **Feature flags (PostHog)** above, and add `TALYN_POSTHOG_PERSONAL_API_KEY` so flags evaluate locally.
 
 ### 6b. "Connect with PostHog" — the PostHog Code OAuth app
+
+> PostHog Code is retired, so new users cannot connect it. Keep these variables
+> only while existing connections may need to reconnect. A new deployment does
+> not need them. Step 2 of the retirement deletes this flow.
 
 Nothing to register anywhere. PostHog supports **CIMD** (OAuth Client ID Metadata
 Document), so Talyn's `client_id` IS a URL we host, and PostHog fetches it during

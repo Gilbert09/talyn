@@ -14,7 +14,6 @@ Open **Integrations** in Talyn to see the catalog. Each integration has its own 
 | [GitHub Issues](/docs/integrations-github-issues) | Starts a session or a task when a GitHub issue changes, and writes back to the issue. |
 | [Schedule](/docs/loops) | Starts a scheduled automation at the time you choose. |
 | Tailscale | Connects private routes for Talyn Fleet sandboxes. |
-| PostHog Code | Connects an agent that runs work in the cloud. |
 | Trunk | Shows merge queue status and timing. |
 
 ## Automations

@@ -26,7 +26,8 @@ For the proposed native mobile client, see [`MOBILE_APP_PLAN.md`](./MOBILE_APP_P
         │                      │                        │
   GitHub App             Cloud providers          Supabase Postgres
   (webhooks in,          (Talyn Fleet,            + Supabase Auth
-  REST/GraphQL out)      PostHog Code)            (RLS), Redis
+  REST/GraphQL out)      PostHog Code,            (RLS), Redis
+                         retired)
 ```
 
 `apps/web` (browser) and `apps/mobile` (Expo) talk to the same backend through `@talyn/client`.
@@ -140,10 +141,10 @@ Branch management moved to the provider sandbox; Talyn tracks the resulting PR.
 The provider opens a normal PR; GitHub review IS the approval gate.
 
 ### 8. Reference Architecture: PostHog Code — 2024-04
-Reference: https://github.com/PostHog/code — informed session persistence, permission modes, and store/service layering; today PostHog Code is a live provider rather than a pattern source.
+Reference: https://github.com/PostHog/code — informed session persistence, permission modes, and store/service layering; PostHog Code later became a live provider, and is now retired (see decision 9).
 
 ### 9. Pluggable cloud providers — 2026-06
-One `CloudTaskProvider` interface (registry + per-provider `dispatch`/`reconcile`/credentials/`cancel`), so a new vendor lands as a self-contained module with no core changes. **Talyn Fleet (`selfhosted`) is the default** and PostHog Code is the fall-back; Codex Cloud stays deferred until OpenAI ships a server-to-server API. Claude Code (Anthropic Managed Agents) was removed in September 2026 — it billed metered API credits with no subscription option, which is the opposite of what the fleet offers, and the fleet runs Claude on the workspace's own subscription instead.
+One `CloudTaskProvider` interface (registry + per-provider `dispatch`/`reconcile`/credentials/`cancel`), so a new vendor lands as a self-contained module with no core changes. **Talyn Fleet (`selfhosted`) is the default.** PostHog Code is retired (2026-11-15): the `posthog-code-retired` flag (fallback ON) hides it for everyone, existing connections keep working, and no work falls back onto it. Deleting its code is the next step. Codex Cloud stays deferred until OpenAI ships a server-to-server API. Claude Code (Anthropic Managed Agents) was removed in September 2026 — it billed metered API credits with no subscription option, which is the opposite of what the fleet offers, and the fleet runs Claude on the workspace's own subscription instead.
 
 ### 10. GitHub App over OAuth — 2026-06/07
 A shared GitHub App supplies installations and webhooks. Workspace reads and writes use the connected user's token.
