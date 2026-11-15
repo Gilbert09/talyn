@@ -71,8 +71,8 @@ beforeEach(() => {
   refreshUsage.mockResolvedValue(null);
   update.mockResolvedValue({});
   startClaudeSignIn.mockResolvedValue({ url: 'https://example.com/sign-in' });
-  completeClaudeSignIn.mockResolvedValue(undefined);
-  saveConfig.mockResolvedValue(undefined);
+  completeClaudeSignIn.mockResolvedValue({ connected: true });
+  saveConfig.mockResolvedValue({ connected: true });
   openExternal.mockResolvedValue(undefined);
   codexSignIn.mockResolvedValue({ accessToken: 'access', refreshToken: 'refresh' });
   Object.defineProperty(window, 'electron', { configurable: true, value: { codex: { signIn: codexSignIn } } });
@@ -210,21 +210,21 @@ it('renames on Enter and cancels on Escape', async () => {
   expect(rename).toHaveBeenCalledTimes(1);
 });
 
-it('adds a labeled API key', async () => {
+it('adds an API key with no name first', async () => {
   renderList([account('1')]);
   fireEvent.click(screen.getByRole('button', { name: 'Add another Claude account' }));
-  expect(screen.getByLabelText('Account name')).toHaveValue('Claude 2');
+  expect(screen.queryByLabelText('Account name')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Paste an API key' }));
   fireEvent.change(screen.getByLabelText('Claude API key'), { target: { value: 'fake-key' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add account' }));
-  await waitFor(() => expect(add).toHaveBeenCalledWith('ws1', 'claude', 'anthropic_key', 'fake-key', 'Claude 2'));
+  await waitFor(() => expect(add).toHaveBeenCalledWith('ws1', 'claude', 'anthropic_key', 'fake-key'));
 });
 
 it('starts Claude sign-in after one click and shows the code step', async () => {
   renderList([account('1')]);
   fireEvent.click(screen.getByRole('button', { name: 'Add another Claude account' }));
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
-  await waitFor(() => expect(startClaudeSignIn).toHaveBeenCalledWith('ws1', { label: 'Claude 2' }));
+  await waitFor(() => expect(startClaudeSignIn).toHaveBeenCalledWith('ws1', { newAccount: true }));
   await waitFor(() => expect(openExternal).toHaveBeenCalledWith('https://example.com/sign-in'));
   expect(await screen.findByLabelText('Code from Anthropic')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Sign in with Claude' })).not.toBeInTheDocument();
@@ -239,8 +239,79 @@ it('starts Codex sign-in after one click', async () => {
   await waitFor(() => expect(codexSignIn).toHaveBeenCalledTimes(1));
   await waitFor(() => expect(saveConfig).toHaveBeenCalledWith('selfhosted', 'ws1', {
     codexAccessToken: 'access', codexRefreshToken: 'refresh',
-  }, { codexLabel: 'Codex 1' }));
+  }, { codexNewAccount: true }));
   expect(screen.queryByRole('button', { name: 'Sign in with ChatGPT' })).not.toBeInTheDocument();
+});
+
+// Holds the account list, as the settings panel does, so a connect can add a row.
+function Harness({ agent, initial, added }: { agent: 'claude' | 'codex'; initial: FleetAccountView[]; added: FleetAccountView }) {
+  const [accounts, setAccounts] = React.useState(initial);
+  return <FleetAccountsList agent={agent} workspaceId="ws1" accounts={accounts} activeId={null} switchAtPercent={95}
+    onChanged={async () => { await onChanged(); setAccounts([...initial, added]); }} />;
+}
+
+const connects: Record<string, () => Promise<void>> = {
+  'a Claude sign-in': async () => {
+    completeClaudeSignIn.mockResolvedValue({ connected: true, accountId: 'new' });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    fireEvent.change(await screen.findByLabelText('Code from Anthropic'), { target: { value: 'abc#def' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Finish sign-in' }));
+  },
+  'an API key': async () => {
+    add.mockResolvedValue(account('new', { label: 'Claude 2' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Paste an API key' }));
+    fireEvent.change(screen.getByLabelText('Claude API key'), { target: { value: 'fake-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add account' }));
+  },
+};
+
+it.each(Object.keys(connects))('opens the name field on the new row after %s, and saves a new name', async (method) => {
+  render(<Harness agent="claude" initial={[account('1', { label: 'Claude' })]} added={account('new', { label: 'Claude 2' })} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Add another Claude account' }));
+  await connects[method]();
+  const field = await screen.findByLabelText('Name for Claude 2');
+  expect(field).toHaveValue('Claude 2');
+  expect(field).toHaveFocus();
+  expect(screen.getByText('Connected. Give this account a name, or keep this one.')).toBeInTheDocument();
+  fireEvent.change(field, { target: { value: 'Work' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(rename).toHaveBeenCalledWith('new', 'Work'));
+  await waitFor(() => expect(screen.queryByLabelText('Name for Claude 2')).not.toBeInTheDocument());
+});
+
+it('opens the name field after a Codex sign-in', async () => {
+  saveConfig.mockResolvedValue({ connected: true, accountId: 'new' });
+  render(<Harness agent="codex" initial={[]} added={account('new', { agent: 'codex', kind: 'codex_oauth', label: 'Codex' })} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Codex' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+  expect(await screen.findByLabelText('Name for Codex')).toHaveValue('Codex');
+});
+
+it.each([
+  ['Skip', () => fireEvent.click(screen.getByRole('button', { name: 'Skip' }))],
+  ['Escape', (field: HTMLElement) => fireEvent.keyDown(field, { key: 'Escape' })],
+  ['Enter on the default name', (field: HTMLElement) => fireEvent.keyDown(field, { key: 'Enter' })],
+])('keeps the default name on %s', async (_name, act) => {
+  add.mockResolvedValue(account('new', { label: 'Claude' }));
+  render(<Harness agent="claude" initial={[]} added={account('new', { label: 'Claude' })} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Claude' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Paste an API key' }));
+  fireEvent.change(screen.getByLabelText('Claude API key'), { target: { value: 'fake-key' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add account' }));
+  act(await screen.findByLabelText('Name for Claude'));
+  await waitFor(() => expect(screen.queryByLabelText('Name for Claude')).not.toBeInTheDocument());
+  expect(rename).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Claude' })).toBeInTheDocument();
+});
+
+it('opens no name field when an older backend answers without an id', async () => {
+  render(<Harness agent="claude" initial={[]} added={account('new', { label: 'Claude' })} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Claude' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+  fireEvent.change(await screen.findByLabelText('Code from Anthropic'), { target: { value: 'abc#def' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Finish sign-in' }));
+  await screen.findByRole('button', { name: 'Claude' });
+  expect(screen.queryByLabelText('Name for Claude')).not.toBeInTheDocument();
 });
 
 it('keeps Claude sign-in errors visible and permits another attempt', async () => {

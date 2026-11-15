@@ -7,7 +7,7 @@ import type { Database } from '../../db/client.js';
 import { workspaces } from '../../db/schema.js';
 import { cloudProviderRoutes } from '../../routes/cloudProviders.js';
 import { addFleetAccount, getFleetAccountWithCredential, listFleetAccounts, setFleetAccountUsage } from '../../services/selfHosted/accounts.js';
-import { readSelfHostedConfig } from '../../services/selfHosted/credentials.js';
+import { patchSelfHostedConfig, readSelfHostedConfig } from '../../services/selfHosted/credentials.js';
 import { FleetClient } from '../../services/selfHosted/client.js';
 import { registerCloudProvider } from '../../services/cloudProviders/registry.js';
 import { selfHostedProvider } from '../../services/cloudProviders/selfhosted/provider.js';
@@ -162,6 +162,105 @@ describe('fleet accounts API', () => {
     expect(decryptString((stored!.credential as { accessTokenEnc: ReturnType<typeof encryptString> }).accessTokenEnc)).toBe('fresh-fake-token');
   });
 
+  function stubClaudeToken() {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      access_token: 'fresh-fake-token', refresh_token: 'fresh-fake-refresh', expires_in: 3600,
+      scope: 'user:inference',
+    }), { status: 200 })));
+  }
+
+  it.each([
+    ['the first account', 0, 'Claude'],
+    ['a second account', 1, 'Claude 2'],
+    ['a third account', 2, 'Claude 3'],
+  ])('adds %s with no name and names it on the server', async (_name, existing, expected) => {
+    for (let i = 0; i < existing; i++) await add('claude_oauth');
+    const started = await api('/selfhosted/claude/authorize', 'POST', { workspaceId: WS, newAccount: true });
+    expect(started.status).toBe(200);
+    const pending = (await readSelfHostedConfig(WS))?.claudePendingAuth as Record<string, unknown>;
+    expect(pending).toMatchObject({ newAccount: true });
+    expect(pending).not.toHaveProperty('label');
+    stubClaudeToken();
+    const completed = await api('/selfhosted/claude/complete', 'POST', { workspaceId: WS, code: 'fake-code', newAccount: true });
+    expect(completed.status).toBe(200);
+    const all = await listFleetAccounts(WS, 'claude');
+    expect(all).toHaveLength(existing + 1);
+    const added = all[all.length - 1];
+    expect(added).toMatchObject({ kind: 'claude_oauth', label: expected });
+    expect(await completed.json()).toEqual({ success: true, data: { connected: true, accountId: added.id } });
+    expect((await readSelfHostedConfig(WS))?.claudePendingAuth).toBeUndefined();
+  });
+
+  it('completes a new account without echoing newAccount, as an older client does', async () => {
+    await api('/selfhosted/claude/authorize', 'POST', { workspaceId: WS, newAccount: true });
+    stubClaudeToken();
+    const completed = await api('/selfhosted/claude/complete', 'POST', { workspaceId: WS, code: 'fake-code' });
+    expect(completed.status).toBe(200);
+    expect((await listFleetAccounts(WS, 'claude')).map((account) => account.label)).toEqual(['Claude']);
+  });
+
+  it('still adds an account from a pending row that has only a label', async () => {
+    await add('claude_oauth');
+    await patchSelfHostedConfig(WS, {
+      claudePendingAuth: {
+        state: 'old-state', codeVerifierEnc: encryptString('verifier'),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(), label: 'Old client',
+      },
+    });
+    stubClaudeToken();
+    const completed = await api('/selfhosted/claude/complete', 'POST', { workspaceId: WS, code: 'fake-code', label: 'Old client' });
+    expect(completed.status).toBe(200);
+    const added = (await listFleetAccounts(WS, 'claude')).find((account) => account.label === 'Old client');
+    expect(added).toBeDefined();
+    expect(((await completed.json()) as { data: { accountId?: string } }).data.accountId).toBe(added!.id);
+  });
+
+  it('returns the reconnected account id', async () => {
+    const first = await add('claude_oauth');
+    await api('/selfhosted/claude/authorize', 'POST', { workspaceId: WS, accountId: first.id });
+    stubClaudeToken();
+    const completed = await api('/selfhosted/claude/complete', 'POST', { workspaceId: WS, code: 'fake-code', accountId: first.id });
+    expect(((await completed.json()) as { data: { accountId?: string } }).data.accountId).toBe(first.id);
+  });
+
+  it.each([
+    ['newAccount that is not a boolean', { newAccount: 'yes' }, 400],
+    ['newAccount with an account id', { newAccount: true, accountId: 'own' }, 400],
+    ['a blank label', { label: '   ' }, 400],
+    ['a blank label with newAccount', { label: ' ', newAccount: true }, 400],
+  ])('refuses a Claude sign-in with %s', async (_name, option, status) => {
+    const first = await add('claude_oauth');
+    const body = { workspaceId: WS, ...option, ...('accountId' in option ? { accountId: first.id } : {}) };
+    const res = await api('/selfhosted/claude/authorize', 'POST', body);
+    expect(res.status).toBe(status);
+    expect((await readSelfHostedConfig(WS))?.claudePendingAuth).toBeUndefined();
+  });
+
+  it('refuses to finish a reconnect as a new account', async () => {
+    const first = await add('claude_oauth');
+    await api('/selfhosted/claude/authorize', 'POST', { workspaceId: WS, accountId: first.id });
+    const res = await api('/selfhosted/claude/complete', 'POST', { workspaceId: WS, code: 'fake-code', newAccount: true });
+    expect(res.status).toBe(400);
+    expect(await listFleetAccounts(WS, 'claude')).toHaveLength(1);
+  });
+
+  it('gates a second unnamed Claude account behind the multi-account flag', async () => {
+    vi.stubEnv('FLEET_MULTI_ACCOUNT_ENABLED', 'false');
+    expect((await api('/selfhosted/claude/authorize', 'POST', { workspaceId: WS, newAccount: true })).status).toBe(200);
+    await add('claude_oauth');
+    const second = await api('/selfhosted/claude/authorize', 'POST', { workspaceId: WS, newAccount: true });
+    expect(second.status).toBe(403);
+    expect((await second.json()) as object).toMatchObject({ code: 'multi_account_disabled' });
+  });
+
+  it('names an unnamed API key account on the server', async () => {
+    const body = { workspaceId: WS, agent: 'claude', kind: 'anthropic_key', key: 'sk-ant-api-fake' };
+    const first = await api('/selfhosted/accounts', 'POST', body);
+    const second = await api('/selfhosted/accounts', 'POST', body);
+    expect(((await first.json()) as { data: { label: string } }).data.label).toBe('Claude');
+    expect(((await second.json()) as { data: { label: string } }).data.label).toBe('Claude 2');
+  });
+
   it('limits forced usage refresh to one request per 30 seconds', async () => {
     const account = await add('anthropic_key');
     const path = `/selfhosted/accounts/${account.id}/usage/refresh`;
@@ -211,6 +310,53 @@ describe('fleet accounts API', () => {
     expect(decryptString(credential.accessTokenEnc)).toBe(jwt('second'));
     // The ChatGPT account id is a different field from the fleet account target.
     expect(credential.accountId).toBe('chatgpt-1');
+  });
+
+  describe('unnamed Codex accounts', () => {
+    const jwt = (value: string) => `header.${Buffer.from(JSON.stringify({
+      'https://api.openai.com/auth': { chatgpt_account_id: 'chatgpt-1' }, value,
+    })).toString('base64url')}.signature`;
+
+    beforeEach(() => {
+      vi.stubEnv('FLEET_PINNED_ENDPOINT', 'https://fleet.example');
+      vi.stubEnv('FLEET_GATEWAY_TOKEN', 'fake-gateway-key');
+      vi.spyOn(FleetClient.prototype, 'listGatewaySandboxes').mockResolvedValue([]);
+    });
+
+    it('adds and names each new account, and returns its id', async () => {
+      const labels: string[] = [];
+      for (const value of ['first', 'second']) {
+        const res = await api('/selfhosted/config', 'PUT', {
+          workspaceId: WS, codexAccessToken: jwt(value), codexRefreshToken: 'fake-refresh', codexNewAccount: true,
+        });
+        expect(res.status).toBe(200);
+        const { data } = (await res.json()) as { data: { connected: boolean; accountId?: string } };
+        const all = await listFleetAccounts(WS, 'codex');
+        expect(data).toEqual({ connected: true, accountId: all[all.length - 1].id });
+        labels.push(all[all.length - 1].label);
+      }
+      expect(labels).toEqual(['Codex', 'Codex 2']);
+    });
+
+    it.each([
+      ['newAccount that is not a boolean', { codexNewAccount: 'yes' }],
+      ['newAccount with an account id', { codexNewAccount: true, codexFleetAccountId: 'some-id' }],
+    ])('refuses %s', async (_name, option) => {
+      const res = await api('/selfhosted/config', 'PUT', {
+        workspaceId: WS, codexAccessToken: jwt('first'), codexRefreshToken: 'fake-refresh', ...option,
+      });
+      expect(res.status).toBe(400);
+      expect(await listFleetAccounts(WS, 'codex')).toHaveLength(0);
+    });
+
+    it('gates a second unnamed account behind the multi-account flag', async () => {
+      vi.stubEnv('FLEET_MULTI_ACCOUNT_ENABLED', 'false');
+      const body = { workspaceId: WS, codexAccessToken: jwt('first'), codexRefreshToken: 'fake-refresh', codexNewAccount: true };
+      expect((await api('/selfhosted/config', 'PUT', body)).status).toBe(200);
+      const second = await api('/selfhosted/config', 'PUT', { ...body, codexAccessToken: jwt('second') });
+      expect(second.status).toBe(403);
+      expect(await listFleetAccounts(WS, 'codex')).toHaveLength(1);
+    });
   });
 
   it.each([

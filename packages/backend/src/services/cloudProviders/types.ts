@@ -21,7 +21,7 @@ export interface CloudTaskProvider {
   validateCredentials(
     workspaceId: string,
     input: unknown,
-  ): Promise<{ ok: boolean; error?: string }>;
+  ): Promise<{ ok: boolean; error?: string; accountId?: string }>;
   /** True if this workspace has usable credentials stored. */
   hasCredentials(workspaceId: string): Promise<boolean>;
   /** Live check that the stored credentials still authenticate. */

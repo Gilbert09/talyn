@@ -669,12 +669,27 @@ export interface CloudProviderInfo {
   reauthAgents?: string[];
 }
 
+/**
+ * Which account a Claude sign-in writes: an existing one to reconnect, a new
+ * one (`newAccount`, named by the server, or `label` from older clients), or
+ * with none of them the older single sign-in.
+ */
+export interface ClaudeSignInTarget {
+  accountId?: string;
+  newAccount?: boolean;
+  label?: string;
+}
+
 export const cloudProviders = {
   list: (workspaceId: string) =>
     request<CloudProviderInfo[]>('GET', `/cloud-providers?workspaceId=${workspaceId}`),
   /** Validate + store credentials for a provider, then auto-provision its env. */
-  saveConfig: (type: string, workspaceId: string, config: Record<string, string>, options?: { codexFleetAccountId?: string; codexLabel?: string }) =>
-    request<{ connected: boolean }>('PUT', `/cloud-providers/${type}/config`, {
+  /**
+   * `codexNewAccount` adds a Codex account that the server names. The answer
+   * carries the id of the account a Codex sign-in added or reconnected.
+   */
+  saveConfig: (type: string, workspaceId: string, config: Record<string, string>, options?: { codexFleetAccountId?: string; codexLabel?: string; codexNewAccount?: boolean }) =>
+    request<{ connected: boolean; accountId?: string }>('PUT', `/cloud-providers/${type}/config`, {
       workspaceId,
       ...config,
       ...options,
@@ -688,15 +703,18 @@ export const cloudProviders = {
    * Works on BOTH front ends, unlike the Codex flow: Anthropic redirects to a
    * page it hosts rather than to a loopback, so nothing has to listen on a port.
    */
-  startClaudeSignIn: (workspaceId: string, options?: { accountId?: string; label?: string }) =>
+  startClaudeSignIn: (workspaceId: string, options?: ClaudeSignInTarget) =>
     request<{ url: string }>('POST', '/cloud-providers/selfhosted/claude/authorize', {
       workspaceId,
       ...options,
     }),
 
-  /** Finish it with the code copied off Anthropic's page (`code#state`). */
-  completeClaudeSignIn: (workspaceId: string, code: string, options?: { accountId?: string; label?: string }) =>
-    request<{ connected: boolean }>('POST', '/cloud-providers/selfhosted/claude/complete', {
+  /**
+   * Finish it with the code copied off Anthropic's page (`code#state`). The
+   * answer carries the id of the account it added or reconnected.
+   */
+  completeClaudeSignIn: (workspaceId: string, code: string, options?: ClaudeSignInTarget) =>
+    request<{ connected: boolean; accountId?: string }>('POST', '/cloud-providers/selfhosted/claude/complete', {
       workspaceId,
       code,
       ...options,

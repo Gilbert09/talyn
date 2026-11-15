@@ -1,8 +1,7 @@
 import type { FleetAccountsResponse, FleetAccountView, WorkbenchReadiness } from '@talyn/shared';
 
 import { defaultOptions, defaultPatch, defaultValue } from '../features/agents/model';
-import { accountActions, accountErrorMessage, agentState, apiKeyError, apiKeyLabel, connectTarget, looksLikeClaudeCode, movedOrder,
-  nextAccountLabel } from '../features/agents/connect/model';
+import { accountActions, accountErrorMessage, agentState, apiKeyError, connectTarget, looksLikeClaudeCode, movedOrder } from '../features/agents/connect/model';
 import { CONNECT_ACTION, connectNotice } from '../features/create/model';
 
 const account = (patch: Partial<FleetAccountView> = {}): FleetAccountView => ({
@@ -51,23 +50,15 @@ describe('connect target', () => {
     ['an older backend', null, 'claude', {}, undefined],
     ['a list still loading', undefined, 'claude', {}, undefined],
     ['an older backend with a named account', null, 'claude', { accountId: 'x' }, { accountId: 'x' }],
-    ['no accounts', response([]), 'claude', {}, { label: 'Claude 1' }],
-    ['a healthy account', response([account()]), 'claude', {}, { label: 'Claude 2' }],
+    ['no accounts', response([]), 'claude', {}, { newAccount: true }],
+    ['a healthy account', response([account()]), 'claude', {}, { newAccount: true }],
     ['a subscription to reconnect', response([account(), stale]), 'claude', {}, { accountId: 'stale' }],
-    ['a reconnect skipped by add', response([stale]), 'claude', { add: true }, { label: 'Claude 2' }],
+    ['a reconnect skipped by add', response([stale]), 'claude', { add: true }, { newAccount: true }],
     ['a named account', response([stale]), 'claude', { accountId: 'a1' }, { accountId: 'a1' }],
-    ['a stale API key, not a sign-in', response([staleKey]), 'claude', {}, { label: 'Claude 2' }],
-    ['another agent’s stale account', response([codex]), 'claude', {}, { label: 'Claude 1' }],
+    ['a stale API key, not a sign-in', response([staleKey]), 'claude', {}, { newAccount: true }],
+    ['another agent’s stale account', response([codex]), 'claude', {}, { newAccount: true }],
     ['a stale Codex sign-in', response([codex]), 'codex', {}, { accountId: 'cx' }],
   ])('%s', (_name, value, agent, options, expected) => expect(connectTarget(value, agent, options)).toEqual(expected));
-
-  it.each<[FleetAccountsResponse | null, 'claude' | 'codex', string | undefined]>([
-    [null, 'claude', undefined],
-    [response([]), 'codex', 'Codex 1'],
-    [response([account(), account({ id: 'a2' }), codex]), 'claude', 'Claude 3'],
-  ])('API key label %#', (value, agent, expected) => expect(apiKeyLabel(value, agent)).toBe(expected));
-
-  it('names the next account by its agent', () => expect(nextAccountLabel([account(), codex], 'codex')).toBe('Codex 2'));
 });
 
 describe('agent state', () => {

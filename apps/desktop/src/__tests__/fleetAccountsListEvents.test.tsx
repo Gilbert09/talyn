@@ -52,7 +52,7 @@ it('tracks the Codex one-click sign-in start, failure and success', async () => 
   });
 
   codexSignIn.mockResolvedValueOnce({ accessToken: 'a', refreshToken: 'r' });
-  saveConfig.mockResolvedValueOnce(undefined);
+  saveConfig.mockResolvedValueOnce({ connected: true });
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
   await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('cloud_provider_connected', { provider: 'selfhosted', agent: 'codex' }));
 });
@@ -81,7 +81,7 @@ it('tracks the Claude sign-in start and a failed start', async () => {
 
 it('reports a failed Claude finish and a connected account once', async () => {
   startClaudeSignIn.mockResolvedValue({ url: 'https://claude.ai/x' });
-  completeClaudeSignIn.mockRejectedValueOnce(new Error('bad code')).mockResolvedValueOnce(undefined);
+  completeClaudeSignIn.mockRejectedValueOnce(new Error('bad code')).mockResolvedValueOnce({ connected: true });
   renderList('claude');
   fireEvent.click(screen.getByRole('button', { name: 'Connect Claude' }));
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));

@@ -39,6 +39,8 @@ interface SelfHostedCredInput {
   /** Fleet account to reconnect. The old ChatGPT account-id field still works. */
   codexFleetAccountId?: string;
   codexLabel?: string;
+  /** Add a new Codex account that the server names. */
+  codexNewAccount?: boolean;
   codexExpiresIn?: number;
   /** An OpenAI PLATFORM key (`sk-…`), for metered billing instead of a subscription. */
   openaiKey?: string;
@@ -179,14 +181,17 @@ export const selfHostedProvider: CloudTaskProvider = {
     // Connecting Codex as a subscription clears any platform key beside it and
     // vice versa: a leftover credential the user believes they replaced is one
     // the dispatch path could silently fall back to.
-    const targetedCodex = Boolean(codex && (body.codexFleetAccountId || body.codexLabel));
+    const targetedCodex = Boolean(codex && (body.codexFleetAccountId || body.codexLabel || body.codexNewAccount === true));
+    let accountId: string | undefined;
     if (targetedCodex && codex) {
       if (body.codexFleetAccountId) {
         await updateFleetAccountCredential(body.codexFleetAccountId, codex);
+        accountId = body.codexFleetAccountId;
       } else {
-        await addFleetAccount(workspaceId, {
+        const added = await addFleetAccount(workspaceId, {
           kind: 'codex_oauth', credential: codex, label: body.codexLabel,
         });
+        accountId = added.id;
       }
     }
     if (!targetedCodex || claudeToken || openaiKey || clearClaude || clearCodex) {
@@ -201,7 +206,7 @@ export const selfHostedProvider: CloudTaskProvider = {
             : {}),
       });
     }
-    return { ok: true };
+    return { ok: true, ...(accountId ? { accountId } : {}) };
   },
 
   async hasCredentials(workspaceId) {

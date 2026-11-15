@@ -298,9 +298,11 @@ export function cloudProviderRoutes(): Router {
       // `codexAccountId` is the ChatGPT account id inside the credential; the
       // fleet account to reconnect is `codexFleetAccountId`. The provider writes
       // straight to that row, so it is checked against the workspace here, always.
-      const body = req.body as { claudeToken?: string; codexAccessToken?: string; openaiKey?: string; codexFleetAccountId?: unknown; codexLabel?: string };
+      const body = req.body as { claudeToken?: string; codexAccessToken?: string; openaiKey?: string; codexFleetAccountId?: unknown; codexLabel?: string; codexNewAccount?: unknown };
       if ((body.codexFleetAccountId !== undefined && typeof body.codexFleetAccountId !== 'string') ||
-          (body.codexLabel !== undefined && (typeof body.codexLabel !== 'string' || !body.codexLabel.trim()))) {
+          (body.codexLabel !== undefined && (typeof body.codexLabel !== 'string' || !body.codexLabel.trim())) ||
+          (body.codexNewAccount !== undefined && typeof body.codexNewAccount !== 'boolean') ||
+          (body.codexNewAccount === true && body.codexFleetAccountId !== undefined)) {
         return res.status(400).json({ success: false, error: 'Invalid Codex account target' });
       }
       if (typeof body.codexFleetAccountId === 'string') {
@@ -310,7 +312,7 @@ export function cloudProviderRoutes(): Router {
         }
         providerBody = { ...body, codexFleetAccountId: target.id };
       }
-      if (body.codexAccessToken && body.codexLabel && !(providerBody as { codexFleetAccountId?: string }).codexFleetAccountId &&
+      if (body.codexAccessToken && (body.codexLabel || body.codexNewAccount === true) && !(providerBody as { codexFleetAccountId?: string }).codexFleetAccountId &&
           !(await mayAddAccount(workspaceId, 'codex'))) {
         return res.status(403).json({ success: false, code: 'multi_account_disabled', error: 'Multiple accounts are disabled' });
       }
@@ -361,7 +363,7 @@ export function cloudProviderRoutes(): Router {
         notifyProviderConnected({ workspaceId, type: provider.type, agent, detail });
       }
     }
-    res.json({ success: true, data: { connected: true } });
+    res.json({ success: true, data: { connected: true, ...(result.accountId ? { accountId: result.accountId } : {}) } });
   });
 
   /**
@@ -377,7 +379,7 @@ export function cloudProviderRoutes(): Router {
    * nothing here that a browser cannot do.
    */
   router.post('/selfhosted/claude/authorize', async (req, res) => {
-    const { workspaceId, accountId, label } = req.body as { workspaceId?: string; accountId?: string; label?: string };
+    const { workspaceId, accountId, label, newAccount } = req.body as { workspaceId?: string; accountId?: string; label?: string; newAccount?: boolean };
     if (!workspaceId) {
       return res.status(400).json({ success: false, error: 'workspaceId is required' });
     }
@@ -389,18 +391,22 @@ export function cloudProviderRoutes(): Router {
     if (!(await workspaceMayUseFleet(workspaceId))) {
       return res.status(403).json({ success: false, error: fleetRefusalReason() });
     }
-    if ((accountId !== undefined && typeof accountId !== 'string') || (label !== undefined && typeof label !== 'string')) {
+    if ((accountId !== undefined && typeof accountId !== 'string') || (label !== undefined && typeof label !== 'string') ||
+        (newAccount !== undefined && typeof newAccount !== 'boolean')) {
       return res.status(400).json({ success: false, error: 'Invalid account target' });
     }
-    if (accountId && label) return res.status(400).json({ success: false, error: 'Choose an account or a new label' });
+    // A label (older clients) or `newAccount` adds an account. Without a label
+    // the server names it, and the user can rename it after the sign-in.
+    const adding = label !== undefined || newAccount === true;
+    if (accountId && adding) return res.status(400).json({ success: false, error: 'Choose an account or a new label' });
     if (accountId) {
       const target = await getFleetAccount(accountId);
       if (!target || target.workspaceId !== workspaceId || target.kind !== 'claude_oauth') {
         return res.status(404).json({ success: false, error: 'Account not found' });
       }
     }
-    if (label !== undefined) {
-      if (typeof label !== 'string' || !label.trim()) return res.status(400).json({ success: false, error: 'label is required' });
+    if (adding) {
+      if (label !== undefined && !label.trim()) return res.status(400).json({ success: false, error: 'label is required' });
       if (!(await mayAddAccount(workspaceId, 'claude'))) {
         return res.status(403).json({ success: false, code: 'multi_account_disabled', error: 'Multiple accounts are disabled' });
       }
@@ -416,6 +422,7 @@ export function cloudProviderRoutes(): Router {
         codeVerifierEnc: encryptString(verifier),
         expiresAt: new Date(Date.now() + PENDING_AUTH_TTL_MS).toISOString(),
         ...(accountId ? { accountId } : {}),
+        ...(adding ? { newAccount: true } : {}),
         ...(label ? { label: label.trim() } : {}),
       },
     } as Parameters<typeof patchSelfHostedConfig>[1]);
@@ -428,7 +435,7 @@ export function cloudProviderRoutes(): Router {
 
   /** Finish it: exchange the pasted code, store the pair, clear the pending row. */
   router.post('/selfhosted/claude/complete', async (req, res) => {
-    const { workspaceId, code, accountId, label } = req.body as { workspaceId?: string; code?: string; accountId?: string; label?: string };
+    const { workspaceId, code, accountId, label, newAccount } = req.body as { workspaceId?: string; code?: string; accountId?: string; label?: string; newAccount?: boolean };
     if (!workspaceId || !code?.trim()) {
       return res.status(400).json({ success: false, error: 'workspaceId and code are required' });
     }
@@ -439,7 +446,7 @@ export function cloudProviderRoutes(): Router {
     }
 
     const pending = (await readSelfHostedConfig(workspaceId))?.claudePendingAuth as
-      | ({ state: string; codeVerifierEnc: Parameters<typeof decryptString>[0]; expiresAt: string; accountId?: string; label?: string })
+      | ({ state: string; codeVerifierEnc: Parameters<typeof decryptString>[0]; expiresAt: string; accountId?: string; label?: string; newAccount?: boolean })
       | undefined;
     if (!pending) {
       return res.status(400).json({
@@ -447,9 +454,12 @@ export function cloudProviderRoutes(): Router {
         error: 'Start the Claude sign-in again — this one was not found.',
       });
     }
-    if ((accountId !== undefined && typeof accountId !== 'string') || (label !== undefined && typeof label !== 'string')) {
+    if ((accountId !== undefined && typeof accountId !== 'string') || (label !== undefined && typeof label !== 'string') ||
+        (newAccount !== undefined && typeof newAccount !== 'boolean')) {
       return res.status(400).json({ success: false, error: 'Invalid account target' });
     }
+    // A row written before `newAccount` existed says "add" with its label alone.
+    const pendingAdds = Boolean(pending.newAccount || pending.label);
     if (Date.parse(pending.expiresAt) <= Date.now()) {
       await patchSelfHostedConfig(workspaceId, { claudePendingAuth: undefined });
       return res.status(400).json({
@@ -457,7 +467,7 @@ export function cloudProviderRoutes(): Router {
         error: 'That sign-in expired. Start it again.',
       });
     }
-    if ((accountId && accountId !== pending.accountId) || (label && label !== pending.label)) {
+    if ((accountId && accountId !== pending.accountId) || (label && label !== pending.label) || (newAccount && !pendingAdds)) {
       return res.status(400).json({ success: false, error: 'This sign-in targets a different account' });
     }
     if (pending.accountId) {
@@ -466,7 +476,7 @@ export function cloudProviderRoutes(): Router {
         return res.status(404).json({ success: false, error: 'Account not found' });
       }
     }
-    if (pending.label && !(await mayAddAccount(workspaceId, 'claude'))) {
+    if (pendingAdds && !(await mayAddAccount(workspaceId, 'claude'))) {
       return res.status(403).json({ success: false, code: 'multi_account_disabled', error: 'Multiple accounts are disabled' });
     }
 
@@ -486,13 +496,16 @@ export function cloudProviderRoutes(): Router {
         codeVerifier: decryptString(pending.codeVerifierEnc),
         ...(state ? { state } : {}),
       });
+      let connectedAccountId: string | undefined;
       if (pending.accountId) {
         await updateFleetAccountCredential(pending.accountId, credential);
         await clearExhaustedAccount(pending.accountId);
         await patchSelfHostedConfig(workspaceId, { claudePendingAuth: undefined });
-      } else if (pending.label) {
-        await addFleetAccount(workspaceId, { kind: 'claude_oauth', credential, label: pending.label });
+        connectedAccountId = pending.accountId;
+      } else if (pendingAdds) {
+        const added = await addFleetAccount(workspaceId, { kind: 'claude_oauth', credential, label: pending.label });
         await patchSelfHostedConfig(workspaceId, { claudePendingAuth: undefined });
+        connectedAccountId = added.id;
       } else {
         await patchSelfHostedConfig(workspaceId, { claudeOAuth: credential, claudePendingAuth: undefined });
         await clearExhaustedAgent(workspaceId, 'claude');
@@ -508,7 +521,7 @@ export function cloudProviderRoutes(): Router {
         agent: 'claude',
         detail: 'Claude signed in with a Claude Pro/Max subscription.',
       });
-      res.json({ success: true, data: { connected: true } });
+      res.json({ success: true, data: { connected: true, ...(connectedAccountId ? { accountId: connectedAccountId } : {}) } });
     } catch (err) {
       // The pending sign-in is KEPT, and the reasoning that cleared it was a
       // confusion between two different things. The code is single-use; the
