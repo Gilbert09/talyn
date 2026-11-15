@@ -13,7 +13,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
      - the provider module: `services/cloudProviders/posthog/`, `services/posthogCode/` and `routes/posthog.ts`, with their tests;
      - the code review spill onto PostHog Code in `services/codeReview/executor.ts`, and its poller;
      - the PostHog Code hop in `services/cloudProviders/quotaFailover.ts`;
-     - the `posthog_code` option in the loop editor and the loop validator, and the `posthog_code` default in `emptyLoopInput` (the MCP `create_loop` tool still uses it for a task loop with no provider);
+     - the `posthog_code` option in the loop editor and the loop validator, and the `posthog_code` default in `emptyLoopInput` (the MCP `create_loop` tool now picks the fleet while the flag is on);
      - the PostHog Code settings card, onboarding option and retirement notice in web, desktop and mobile;
      - the `posthogCodeRetired` flag, `POSTHOG_CODE_RETIRED`, and the helpers in `services/posthogCodeRetirement.ts` and `packages/shared/src/posthogCodeRetirement.ts`;
      - the `POSTHOG_OAUTH_*` setup in `docs/SETUP.md` § 6b and the CIMD route in `apps/marketing/app/oauth-client/`.

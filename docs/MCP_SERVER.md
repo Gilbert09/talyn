@@ -296,7 +296,7 @@ Include the skill instructions in `prompt`; the reference records which skill th
 Scheduled automation creation uses the desktop defaults. The timezone defaults to `UTC`.
 These defaults include target `task`, PostHog Code, its default model, daily runs at 09:00, and concurrency `skip`.
 PostHog Code is retired. In a workspace with no PostHog Code connection, pass `provider: selfhosted` for a task loop that can run. Step 2 of the retirement changes this default.
-With target `session` and no provider, the provider is Talyn Fleet (`selfhosted`) with its default model.
+With target `session` and no provider, the provider is Talyn Fleet (`selfhosted`) with its default model. A task loop with no provider also gets Talyn Fleet while PostHog Code is retired (`posthog-code-retired`).
 Internet access defaults to off. `mcpServerIds: null` uses the workspace's connected servers.
 Pass scheduled automation fields directly or in a `loop` object. Set the model when you change the provider.
 

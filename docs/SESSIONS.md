@@ -16,7 +16,7 @@ Chronological notes from development sessions. Most recent first. See [`CLAUDE.m
 
 **Docs.** The public site no longer mentions the PostHog Code connection. The privacy and terms pages still name it, because existing connections still send data to it. Internal docs say it is retired.
 
-**Known gap.** `emptyLoopInput` still defaults a new loop to PostHog Code. The web and desktop editors switch it to the fleet when a fleet agent is connected. The MCP `create_loop` tool does not. A task loop made there without a provider gets PostHog Code.
+**Loop default.** `emptyLoopInput` still defaults a new loop to PostHog Code. The web and desktop editors switch it to the fleet when a fleet agent is connected. The MCP `create_loop` tool now sets a task loop with no provider to the fleet while the flag is on.
 
 **Step 2.** Delete the provider: the provider module, the code review spill, the quota failover hop, the loop provider option, the settings screens on all three apps and the flag. The list is in `ROADMAP.md`.
 

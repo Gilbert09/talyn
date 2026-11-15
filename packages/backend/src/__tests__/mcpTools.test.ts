@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { callApi, McpApiError } from '../mcp/api.js';
 import { buildMcpServer, listToolsFor } from '../mcp/server.js';
-import { emptyLoopInput, type Features } from '@talyn/shared';
+import { defaultModelForLoopProvider, emptyLoopInput, type Features } from '@talyn/shared';
 import { TOOLS, type McpToolDefinition } from '../mcp/tools/index.js';
 
 const OWNER = 'user-test';
@@ -542,7 +542,8 @@ const writeCases: {
     },
     method: 'POST',
     path: '/loops',
-    body: { ...loopBody, workspaceId: 'ws1' },
+    // PostHog Code is retired by default, so a task loop with no provider runs on the fleet.
+    body: { ...loopBody, provider: 'selfhosted', model: defaultModelForLoopProvider('selfhosted'), workspaceId: 'ws1' },
     response: loop,
   },
   {
