@@ -617,6 +617,8 @@ export interface PostHogCodeStatus {
   /** Whether the backend is configured to offer the OAuth flow at all. False on
    *  a deployment without POSTHOG_OAUTH_* set — self-hosted, or local dev. */
   oauthAvailable?: boolean;
+  /** The stored host is no longer allowed. The row still exists. */
+  hostNotAllowed?: boolean;
 }
 
 export const posthog = {

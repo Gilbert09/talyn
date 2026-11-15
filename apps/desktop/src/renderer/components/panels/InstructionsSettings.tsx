@@ -31,6 +31,7 @@ import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { SettingRow, SettingsSection } from '../ui/settings';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
+import { usePostHogCodeOffered } from '../widgets/PostHogCodeRetirement';
 
 const SELECT_CLASS =
   'h-8 rounded-md border border-input bg-background px-2 text-xs focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50';
@@ -485,7 +486,9 @@ function PromptTemplateEditor({
 
 function TemplatePreview({ kind, template }: { kind: PromptKind; template: string }) {
   const rows = usePullRequestStore((s) => s.rows);
-  const [provider, setProvider] = useState<CloudProviderType>('posthog_code');
+  const posthogOffered = usePostHogCodeOffered();
+  const previewProviders = PREVIEW_PROVIDERS.filter((p) => p.value !== 'posthog_code' || posthogOffered);
+  const [provider, setProvider] = useState<CloudProviderType>(posthogOffered ? 'posthog_code' : 'selfhosted');
   const [prId, setPrId] = useState<string>('');
   const row: PRRow | undefined = rows.find((r) => r.id === prId) ?? rows[0];
 
@@ -536,7 +539,7 @@ function TemplatePreview({ kind, template }: { kind: PromptKind; template: strin
           onChange={(e) => setProvider(e.target.value as CloudProviderType)}
           className={cn(SELECT_CLASS, 'w-40')}
         >
-          {PREVIEW_PROVIDERS.map((p) => (
+          {previewProviders.map((p) => (
             <option key={p.value} value={p.value}>
               {p.label}
             </option>

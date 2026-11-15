@@ -12,7 +12,9 @@ import { PickerSheet } from '../../components/PickerSheet';
 import { AppText, Banner, BottomBar, Button, Card, EmptyState, Group, Pill, Row, Segmented } from '../../components/UI';
 import { StateNotice } from '../../components/Workflow';
 import { errorMessage } from '../../lib/errors';
+import { useFeatures } from '../../lib/features';
 import { useResource } from '../../workflow/hooks';
+import { postHogListed } from '../integrations/posthogRetirement';
 import { Intro, Page } from '../more/Page';
 import { TextArea } from '../settings/editors/TextArea';
 import { useUnsavedGuard } from '../settings/editors/useUnsavedGuard';
@@ -129,7 +131,11 @@ function PromptEditor({ kind, workspace, offline }: { kind: PromptKind; workspac
 function Preview({ kind, template }: { kind: PromptKind; template: string }) {
   const attention = useResource<PRRow[]>('attention');
   const rows = attention.data ?? [];
-  const [provider, setProvider] = useState<CloudProviderType>('posthog_code');
+  const features = useFeatures();
+  const providers = useResource<{ type: string }[]>('providers');
+  const posthogListed = postHogListed(features, providers.data ?? []);
+  const previewProviders = PREVIEW_PROVIDERS.filter((p) => p.value !== 'posthog_code' || posthogListed);
+  const [provider, setProvider] = useState<CloudProviderType>(posthogListed ? 'posthog_code' : 'selfhosted');
   const [prId, setPrId] = useState('');
   const [picking, setPicking] = useState(false);
   const row = rows.find((item) => item.id === prId) ?? rows[0];
@@ -140,7 +146,7 @@ function Preview({ kind, template }: { kind: PromptKind; template: string }) {
         accessibilityLabel={`Preview PR: ${previewRowLabel(row)}`}
         subtitle={previewRowLabel(row)} divider={false} />
     </Group>
-    <Segmented<CloudProviderType> accessibilityLabel="Preview provider" options={PREVIEW_PROVIDERS} value={provider} onChange={setProvider} />
+    <Segmented<CloudProviderType> accessibilityLabel="Preview provider" options={previewProviders} value={provider} onChange={setProvider} />
     <Card><AppText selectable variant="mono">{rendered}</AppText></Card>
     <Intro>{previewNote(kind)}</Intro>
     <PickerSheet visible={picking} title="Preview PR" onClose={() => setPicking(false)} sections={[{ key: 'prs', items: rows.map((item) => ({

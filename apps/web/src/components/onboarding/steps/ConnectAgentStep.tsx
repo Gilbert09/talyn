@@ -12,6 +12,7 @@ import {
   PostHogCodeCard,
 } from '../../panels/SettingsPanel';
 import { Card } from '../../ui/card';
+import { usePostHogCodeOffered } from '../../widgets/PostHogCodeRetirement';
 
 type AgentChoice = 'claude' | 'codex' | 'posthog';
 
@@ -25,6 +26,7 @@ export function ConnectAgentStep() {
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const posthogConnected = useWorkspaceStore((s) => s.posthogStatus?.connected === true);
   const [choice, setChoice] = useState<AgentChoice | null>(null);
+  const posthogOffered = usePostHogCodeOffered();
 
   // Until the provider list arrives the fleet is unknown, so draw nothing
   // rather than flash PostHog Code at a workspace that turns out to have the fleet.
@@ -86,7 +88,7 @@ export function ConnectAgentStep() {
     // PostHog Code is offered here only when the fleet is not. A session runs on
     // the fleet, so a fleet workspace that picked PostHog Code here could never
     // continue. It stays in Settings for everyone.
-    ...(fleetOffered
+    ...(fleetOffered || !posthogOffered
       ? []
       : [
           {

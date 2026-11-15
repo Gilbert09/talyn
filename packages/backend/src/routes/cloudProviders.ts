@@ -49,6 +49,10 @@ import { addFleetAccount, getFleetAccount, listFleetAccounts, removeFleetAccount
 import { refreshFleetAccountUsage } from '../services/selfHosted/accountUsage.js';
 import { isOverThreshold } from '../services/selfHosted/usage.js';
 import { workspaceHasFeature } from '../services/featureFlags.js';
+import {
+  refusesNewPostHogCodeConnection,
+  sendPostHogCodeRetired,
+} from '../services/posthogCodeRetirement.js';
 import { fleetApiKeyError } from '../services/cloudProviders/selfhosted/provider.js';
 
 async function mayAddAccount(workspaceId: string, agent: FleetAgent): Promise<boolean> {
@@ -239,6 +243,8 @@ export function cloudProviderRoutes(): Router {
     // dispatch and at credential-write below, because a filtered list is not a
     // permission check: the CLI, the MCP server and curl never render it.
     const mayUseFleet = await workspaceMayUseFleet(workspaceId);
+    // Retired PostHog Code is listed only for a workspace that still has it.
+    const hidePostHogCode = await refusesNewPostHogCodeConnection(assertUser(req), workspaceId);
     // Sorted by Talyn's own preference, NOT by the order the providers happened
     // to register at boot. This list is what the Settings cards, the "Default
     // for new tasks" menu and the per-task agent picker all render from, so
@@ -247,6 +253,7 @@ export function cloudProviderRoutes(): Router {
     const providers: CloudProviderInfo[] = await Promise.all(
       listCloudProviders()
         .filter((p) => p.type !== 'selfhosted' || mayUseFleet)
+        .filter((p) => p.type !== 'posthog_code' || !hidePostHogCode)
         .sort((a, b) => cloudProviderRank(a.type) - cloudProviderRank(b.type))
         .map(async (p) => {
           const posthogCredentials = p.type === 'posthog_code'
@@ -291,6 +298,12 @@ export function cloudProviderRoutes(): Router {
     // anyone would try after being told "not allowed" is to configure it again.
     if (provider.type === 'selfhosted' && !(await workspaceMayUseFleet(workspaceId))) {
       return res.status(403).json({ success: false, error: fleetRefusalReason() });
+    }
+    if (
+      provider.type === 'posthog_code' &&
+      (await refusesNewPostHogCodeConnection(assertUser(req), workspaceId))
+    ) {
+      return sendPostHogCodeRetired(res);
     }
 
     let providerBody = req.body;

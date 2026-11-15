@@ -107,6 +107,22 @@ describe('agent step gating', () => {
   });
 });
 
+describe('with PostHog Code retired', () => {
+  it.each([
+    ['not connected, hidden', false, false],
+    ['connected, still shown', true, true],
+  ])('no fleet, PostHog Code %s', async (_name, posthogConnected, shown) => {
+    await setup({ providers: [{ type: 'posthog_code', connected: posthogConnected }], posthogConnected });
+    const { useWorkspaceStore } = await import('../stores/workspace');
+    useWorkspaceStore.setState({ features: { posthogCodeRetired: true } as never });
+    await walkToAgentStep();
+
+    await waitFor(() => expect(screen.queryByText('Checking your agents...')).toBeNull());
+    if (shown) await screen.findByRole('button', { name: /PostHog Code/ });
+    else await waitFor(() => expect(screen.queryByRole('button', { name: /PostHog Code/ })).toBeNull());
+  });
+});
+
 function skipButton() {
   return screen.queryByRole('button', { name: 'Skip for now' });
 }

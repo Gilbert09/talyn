@@ -93,6 +93,7 @@ const { countLiveUnits, getReview, getRun } = await import('../services/codeRevi
 const { heldBackAgents } = await import('../services/selfHosted/exhaustedQuota.js');
 const { cycleFailureMessage } = await import('../services/codeReview/failureMessage.js');
 const { FleetCapacityError } = await import('../services/selfHosted/client.js');
+const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 type RunRow = import('../services/codeReview/store.js').RunRow;
 
 const reconcile = (run: RunRow) =>
@@ -506,6 +507,39 @@ describe('moving a unit to the other fleet agent', () => {
     sandboxEnded('failed', INCIDENT);
     await reconcile(run);
     expect((await getRun(run.id))!.status).toBe('failed');
+  });
+});
+
+describe('spilling a fresh unit to PostHog Code when the fleet is full', () => {
+  const unitRow = async () =>
+    (await db.select().from(prCodeReviewRuns).where(eq(prCodeReviewRuns.lens, 'correctness')))[0]!;
+
+  beforeEach(() => {
+    createSandbox.mockRejectedValue(new FleetCapacityError('all hosts busy'));
+    startCodeRun.mockResolvedValue({ ok: true, model: 'claude-sonnet-5', remoteTaskId: 'pt1', remoteRunId: 'pr1' });
+  });
+  afterEach(() => {
+    delete process.env.POSTHOG_CODE_RETIRED;
+    resetFeatureFlagsForTests();
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['off', 'false'],
+  ])('spills as today with the flag %s', async (_label, value) => {
+    if (value !== undefined) process.env.POSTHOG_CODE_RETIRED = value;
+    resetFeatureFlagsForTests();
+    await dispatchUnit((await getReview('rev1'))!, LENS);
+    expect(startCodeRun).toHaveBeenCalledTimes(1);
+    expect(await unitRow()).toMatchObject({ status: 'running', provider: 'posthog_code' });
+  });
+
+  it('waits for the fleet instead with the flag on', async () => {
+    process.env.POSTHOG_CODE_RETIRED = 'true';
+    resetFeatureFlagsForTests();
+    await dispatchUnit((await getReview('rev1'))!, LENS);
+    expect(startCodeRun).not.toHaveBeenCalled();
+    expect(await unitRow()).toMatchObject({ status: 'claimed', failureCode: 'capacity_deferred' });
   });
 });
 

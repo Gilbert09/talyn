@@ -306,6 +306,24 @@ export const FEATURE_FLAGS = {
   },
 
   /**
+   * Retire PostHog Code, step one: hide it from workspaces that have not
+   * connected it, and stop new work falling back to it. A workspace that is
+   * already connected keeps its connection and is told to move.
+   *
+   * Asked for the caller at the connect routes and for the workspace OWNER in
+   * the resolver, the code review spill and quota failover. Fallback OFF: an
+   * outage or a flag nobody created yet keeps today's behaviour.
+   */
+  posthogCodeRetired: {
+    posthogKey: 'posthog-code-retired',
+    envOverride: 'POSTHOG_CODE_RETIRED',
+    fallback: false,
+    description: 'PostHog Code retired: no new connections and no fall-back onto it',
+    availability: 'general',
+    releaseScopes: [],
+  },
+
+  /**
    * Team plan — one buyer pays for seats, and each seat gives a GitHub account
    * Unlimited on its own account. Consolidated billing only; nothing is shared.
    *
@@ -642,6 +660,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'reviewRankingCandidate',
   'reviewRankingExport',
   'teams',
+  'posthogCodeRetired',
   'spaces',
   'workbenches',
   'trunkMergeEta',

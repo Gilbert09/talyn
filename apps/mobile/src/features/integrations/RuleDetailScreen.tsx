@@ -1,5 +1,5 @@
 import {
-  LOOP_TARGET_LABELS, describeSchedule, describeWorkflowActions, describeWorkflowTrigger,
+  LOOP_TARGET_LABELS, POSTHOG_CODE_RETIRED_NOTICE, describeSchedule, describeWorkflowActions, describeWorkflowTrigger, posthogCodeRetired,
   type LoopRun, type LoopWithStats, type WorkflowIntegration, type WorkflowRun, type WorkflowWithStats,
 } from '@talyn/shared';
 import { Stack } from 'expo-router';
@@ -8,6 +8,7 @@ import { View } from 'react-native';
 import { useNetwork } from '../../auth/AuthProvider';
 import { AppText, EmptyState, Group, Pill, PrNumber, Row, ui } from '../../components/UI';
 import { openExternal, StateNotice } from '../../components/Workflow';
+import { useFeatures } from '../../lib/features';
 import { modelLabel } from '../../lib/models';
 import { longTime, shortTime, useNow } from '../../lib/time';
 import { sessionRoute } from '../../navigation/routes';
@@ -62,12 +63,15 @@ function LoopFacts({ loop }: { loop: LoopWithStats }) {
   const now = useNow();
   const off = loopDisabledText(loop);
   const problems = problemsText(loop.stats.failures7d);
+  const features = useFeatures();
+  const retiring = loop.provider === 'posthog_code' && posthogCodeRetired(features);
   return <Group title="Automation" footer={off ?? undefined}>
     <Fact label="Status" value={loop.enabled ? nextRunText(loop, now) : 'Off'} />
     <Fact label="Schedule" value={describeSchedule(loop.cron, loop.timezone)} />
     <Fact label="Repository" value={loop.repoFullName} />
     <Fact label="Starts" value={LOOP_TARGET_LABELS[loop.target] ?? loop.target} />
     <Fact label="Model" value={modelLabel(loop.model)} />
+    {retiring ? <Fact label="Agent" value={POSTHOG_CODE_RETIRED_NOTICE} tone="warning" /> : null}
     <Fact label="Internet access" value={loop.internetAccess ? 'Allowed' : 'Repository only'} />
     <Fact label="Runs" value={`${loop.stats.runs7d} this week · ${loop.stats.runsTotal} in all`} divider={Boolean(problems)} />
     {problems ? <Fact label="Problems" value={problems} tone="warning" divider={false} /> : null}

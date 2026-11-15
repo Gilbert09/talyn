@@ -18,6 +18,7 @@ import { Card } from '../components/ui/card';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { GithubConnectionCard } from '../components/settings/sections/IntegrationsSettings';
 import { PostHogCodeCard } from '../components/settings/providerCards';
+import { usePostHogCodeOffered } from '../components/widgets/PostHogCodeRetirement';
 import { SlackSettings } from '../components/panels/SlackSettings';
 import { LinearSettings } from '../components/panels/LinearSettings';
 import { TrunkSettingsCard } from '../components/panels/TrunkSettingsCard';
@@ -115,7 +116,10 @@ function IntegrationsCatalog() {
   const navigate = useNavigationStore((s) => s.navigate);
   const states = useConnectionStates();
   const githubConnected = useGithubConnected();
-  const kinds = integrationsOffered(features).filter((kind) => kind !== 'github_issues' || githubConnected);
+  const posthogOffered = usePostHogCodeOffered();
+  const kinds = integrationsOffered(features).filter(
+    (kind) => (kind !== 'github_issues' || githubConnected) && (kind !== 'posthog' || posthogOffered)
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -202,7 +206,8 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
   const features = useWorkspaceStore((s) => s.features);
   const navigate = useNavigationStore((s) => s.navigate);
   const info = INTEGRATION_CATALOG[kind];
-  const offered = integrationOffered(features, kind);
+  const posthogOffered = usePostHogCodeOffered();
+  const offered = integrationOffered(features, kind) && (kind !== 'posthog' || posthogOffered);
   const hasRules = automationsShown(features, kind);
   const hasConnection = !info.builtIn;
   const [chosen, setChosen] = useState<Section | null>(null);

@@ -54,6 +54,40 @@ beforeEach(() => {
   mockDisconnect.mockResolvedValue(undefined);
 });
 
+describe('PostHog Code retired', () => {
+  const NOTICE = 'PostHog Code is going away. Move your work to Claude or Codex.';
+
+  it('offers no way to connect with the flag on and nothing connected', async () => {
+    mockFeatures = { posthogCodeRetired: true };
+    mockStatus.mockResolvedValue({ connected: false, oauthAvailable: true });
+    await render(<IntegrationsScreen kind="posthog" />);
+    expect(await screen.findByText(/no longer available for new connections/)).toBeVisible();
+    expect(screen.queryByLabelText('Connect with PostHog')).toBeNull();
+    expect(screen.queryByLabelText('Personal API key')).toBeNull();
+    expect(screen.queryByText(NOTICE)).toBeNull();
+  });
+
+  it('keeps a connection and its Disconnect with the flag on, and shows the notice', async () => {
+    mockFeatures = { posthogCodeRetired: true };
+    mockStatus.mockResolvedValue({ connected: true, oauthAvailable: true, authMethod: 'oauth', projectId: '9', host: 'https://eu.posthog.com' });
+    await render(<IntegrationsScreen kind="posthog" />);
+    expect(await screen.findByText(NOTICE)).toBeVisible();
+    expect(screen.getByLabelText('Disconnect PostHog Code')).toBeVisible();
+    expect(screen.getByLabelText('Reconnect')).toBeVisible();
+  });
+
+  it.each([
+    ['off', { posthogCodeRetired: false }],
+    ['unknown', null],
+  ])('connects as today with the flag %s', async (_label, features) => {
+    mockFeatures = features;
+    mockStatus.mockResolvedValue({ connected: false, oauthAvailable: true });
+    await render(<IntegrationsScreen kind="posthog" />);
+    expect(await screen.findByLabelText('Connect with PostHog')).toBeVisible();
+    expect(screen.queryByText(NOTICE)).toBeNull();
+  });
+});
+
 describe('PostHog Code', () => {
   it('saves a personal API key, clears it, and shows the connection', async () => {
     const saved = { connected: true, projectId: '2', host: 'https://us.posthog.com', authMethod: 'personal_api_key' };

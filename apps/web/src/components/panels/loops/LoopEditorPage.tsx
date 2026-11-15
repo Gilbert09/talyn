@@ -17,6 +17,7 @@ import {
   loopToInput,
   MAX_LOOP_NAME_LENGTH,
   nextLoopRuns,
+  posthogCodeRetired,
   presetForCron,
   WEEKDAY_LABELS,
   type LoopSchedulePresetKind,
@@ -29,6 +30,7 @@ import { cn } from '../../../lib/utils';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { Section, TextField } from '../workflows/workflowFields';
 import { LoopToolServers } from './LoopToolServers';
+import { PostHogCodeRetiredNotice } from '../../widgets/PostHogCodeRetirement';
 
 /**
  * The loop editor.
@@ -140,6 +142,7 @@ export function LoopEditorPage({
     [input.cron, input.timezone]
   );
 
+  const posthogRetired = useWorkspaceStore((s) => posthogCodeRetired(s.features));
   const agentKey = (a: CloudAgentChoice) => `${a.type}:${a.agent ?? ''}`;
   const availableAgents = useMemo(
     () => (input.target === 'session' ? agents.filter((agent) => agent.type === 'selfhosted') : agents),
@@ -477,6 +480,7 @@ export function LoopEditorPage({
                 </label>
               </div>
             )}
+            {input.provider === 'posthog_code' && posthogRetired && <PostHogCodeRetiredNotice />}
           </Section>
 
           <Section

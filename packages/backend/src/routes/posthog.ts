@@ -20,6 +20,10 @@ import {
   notifyProviderConnected,
 } from '../services/cloudProviders/environment.js';
 import { captureCloudProviderConnected } from '../services/analytics.js';
+import {
+  refusesNewPostHogCodeConnection,
+  sendPostHogCodeRetired,
+} from '../services/posthogCodeRetirement.js';
 import { renderCallbackPage } from '../services/callbackPage.js';
 import { getWebAppUrl, webAppUrl } from '../services/webApp.js';
 import {
@@ -255,6 +259,9 @@ export function posthogRoutes(): Router {
     } catch (err) {
       return handleAccessError(err, res);
     }
+    if (await refusesNewPostHogCodeConnection(assertUser(req), workspaceId)) {
+      return sendPostHogCodeRetired(res);
+    }
 
     let resolvedHost: string;
     try {
@@ -292,6 +299,9 @@ export function posthogRoutes(): Router {
       await requireWorkspaceAccess(req, workspaceId);
     } catch (err) {
       return handleAccessError(err, res);
+    }
+    if (await refusesNewPostHogCodeConnection(assertUser(req), workspaceId)) {
+      return sendPostHogCodeRetired(res);
     }
 
     // Validate before persisting so a bad key never gets stored.

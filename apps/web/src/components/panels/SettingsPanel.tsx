@@ -52,7 +52,7 @@ import { TeamSettings } from './TeamBilling';
 import { TeamsSettings } from '../settings/sections/TeamsSettings';
 import { BillingSettings } from '../settings/sections/BillingSettings';
 import { BuildInfo } from './BuildInfo';
-import { highlightsForSurface } from '@talyn/shared';
+import { highlightsForSurface, posthogCodeRetired } from '@talyn/shared';
 import { ApiError, api, GitHubRepo, getMcpEndpoint, loadAllRepos, mergeRepos } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
@@ -78,6 +78,11 @@ import {
   POSTHOG_KEY_SCOPE_NOTE,
 } from '../widgets/GetKeyLink';
 import { GithubInstallStatus } from '../widgets/GithubInstallStatus';
+import {
+  PostHogCodeRetiredNotice,
+  usePostHogCodeOffered,
+  usePostHogCodeRetiringNotice,
+} from '../widgets/PostHogCodeRetirement';
 import { useGithubInstallations } from '../../hooks/useGithubInstallations';
 import { useIsDevBuild } from '../../hooks/useIsDevBuild';
 import { isOwnerCovered, parseRepoInput } from '../../lib/githubInstall';
@@ -1934,6 +1939,8 @@ export function CloudProviderDefaultSelector() {
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const connected = (cloudProviders ?? []).filter((p) => p.connected);
   const [saving, setSaving] = useState(false);
+  const retired = useWorkspaceStore((s) => posthogCodeRetired(s.features));
+  const autoCopy = retired ? 'Auto prefers Talyn Fleet.' : 'Auto prefers Talyn Fleet, then PostHog Code.';
 
   const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
   const settings = workspace?.settings;
@@ -2010,7 +2017,7 @@ export function CloudProviderDefaultSelector() {
         <div className="flex-1 min-w-0">
           <h4 className="font-medium">Default for new tasks</h4>
           <p className="text-sm text-muted-foreground mt-1">
-            Which agent new tasks run on. Auto prefers Talyn Fleet, then PostHog Code.
+            Which agent new tasks run on. {autoCopy}
             “Ask every time” shows a picker on the Task button when more than one is connected.
           </p>
         </div>
@@ -2086,6 +2093,8 @@ export function PostHogCodeCard() {
   const [host, setHost] = useState('https://us.posthog.com');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const offered = usePostHogCodeOffered();
+  const retiring = usePostHogCodeRetiringNotice();
 
   // Seed the edit-form fields from the preloaded status. Deps are the scalar
   // values, so this won't clobber in-progress edits (status is stable while
@@ -2196,6 +2205,8 @@ export function PostHogCodeCard() {
       : 'Add a personal API key + project id to run tasks on PostHog Code’s cloud sandbox.';
   };
 
+  if (!offered) return null;
+
   return (
     <Card className="p-4">
       <div className="flex items-start gap-4">
@@ -2222,6 +2233,7 @@ export function PostHogCodeCard() {
             )}
           </div>
           <p className="text-sm text-muted-foreground mt-1">{description()}</p>
+          {retiring && <PostHogCodeRetiredNotice className="mt-2" />}
 
           {/* Not connected, OAuth on the table: it is the ONLY path offered.
               The key form used to sit one click away here. It is gone wherever

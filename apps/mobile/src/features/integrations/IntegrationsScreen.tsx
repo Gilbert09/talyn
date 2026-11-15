@@ -1,5 +1,5 @@
 import { posthog, trunk, workspaces as workspaceApi, type PostHogCodeStatus } from '@talyn/client/native';
-import { POSTHOG_CODE_MODELS, type IntegrationKind, type TrunkIntegrationStatus, type Workspace } from '@talyn/shared';
+import { POSTHOG_CODE_MODELS, POSTHOG_CODE_RETIRED_ERROR, POSTHOG_CODE_RETIRED_NOTICE, type IntegrationKind, type TrunkIntegrationStatus, type Workspace } from '@talyn/shared';
 import { useEffect, useState } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
 
@@ -13,6 +13,7 @@ import { appReturnBase, openReturnFlow } from '../../lib/returnTo';
 import { useResource } from '../../workflow/hooks';
 import { Page } from '../more/Page';
 import { useRemote, type Remote } from '../more/useRemote';
+import { postHogRetirement } from './posthogRetirement';
 import {
   type Badge, DEFAULT_POSTHOG_HOST, isHttpsUrl, keyFormOpen, POSTHOG_API_KEYS_URL, POSTHOG_KEY_SCOPE_NOTE, POSTHOG_MODEL_DESCRIPTION, postHogKeyConfig,
   postHogModelLabel, postHogModelOf, postHogOAuthOptions, postHogView, trunkFormOpen, trunkToken, trunkView, withAppReturn,
@@ -72,6 +73,7 @@ export function PostHogCodeCard({ workspaceId, status, offline }: { workspaceId:
   const [savingModel, setSavingModel] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const data = status.data;
+  const retirement = postHogRetirement(useFeatures(), data);
   const view = postHogView(data);
   const formOpen = keyFormOpen(view, editing);
   const disabled = busy || offline;
@@ -160,9 +162,10 @@ export function PostHogCodeCard({ workspaceId, status, offline }: { workspaceId:
       <CardHeader title="PostHog Code" badge={data ? view.badge : null} />
       {data === undefined
         ? <StateNotice resource={status} offline={offline} refresh={() => { void status.refresh(); }} />
-        : <AppText variant="meta" tone="muted">{view.description}</AppText>}
+        : <AppText variant="meta" tone="muted">{retirement.offered ? view.description : POSTHOG_CODE_RETIRED_ERROR}</AppText>}
+      {retirement.notice ? <AppText variant="meta" tone="warning">{POSTHOG_CODE_RETIRED_NOTICE}</AppText> : null}
 
-      {data && !view.connected && view.oauthAvailable && !formOpen ? <>
+      {data && retirement.offered && !view.connected && view.oauthAvailable && !formOpen ? <>
         <Field label="PostHog host">
           <Input accessibilityLabel="PostHog host" value={host} onChangeText={setHost} placeholder={DEFAULT_POSTHOG_HOST}
             editable={!busy} keyboardType="url" {...PLAIN} />
@@ -171,7 +174,7 @@ export function PostHogCodeCard({ workspaceId, status, offline }: { workspaceId:
         <Button title="Connect with PostHog" onPress={() => { void connectOAuth(); }} disabled={disabled} loading={busy} />
       </> : null}
 
-      {data && formOpen ? <>
+      {data && retirement.offered && formOpen ? <>
         <Field label="Personal API key">
           <Input accessibilityLabel="Personal API key" value={apiKey} onChangeText={setApiKey} placeholder="phx_..." editable={!busy} {...SECRET} />
         </Field>

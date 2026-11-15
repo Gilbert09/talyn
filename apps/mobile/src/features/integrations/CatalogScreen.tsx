@@ -8,6 +8,7 @@ import { useResource } from '../../workflow/hooks';
 import { Intro, Loading, Page } from '../more/Page';
 import { useRemote } from '../more/useRemote';
 import { githubIssuesAvailable } from './model';
+import { postHogCatalogOffered } from './posthogRetirement';
 
 type ConnectionState = 'connected' | 'not_connected' | 'built_in' | 'unknown';
 
@@ -43,7 +44,8 @@ export function CatalogScreen() {
   };
   return <Page>
     <Intro>Connect the places work comes from. Each integration holds its connection and automations.</Intro>
-    {integrationsOffered(features).filter((kind) => kind !== 'github_issues' || githubIssuesAvailable(states.github === 'connected')).map((kind) => {
+    {integrationsOffered(features).filter((kind) => (kind !== 'github_issues' || githubIssuesAvailable(states.github === 'connected'))
+      && (kind !== 'posthog' || postHogCatalogOffered(features, posthogStatus.data))).map((kind) => {
       const info = INTEGRATION_CATALOG[kind];
       const state = states[kind];
       return <Group key={kind}>

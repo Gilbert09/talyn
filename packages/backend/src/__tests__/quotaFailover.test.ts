@@ -352,6 +352,48 @@ describe('quota failover', () => {
     expect(t.metadata.quotaFailover).toMatchObject({ movedTo: 'PostHog Code' });
   });
 
+  describe('with PostHog Code retired', () => {
+    afterEach(() => {
+      delete process.env.POSTHOG_CODE_RETIRED;
+      resetFeatureFlagsForTests();
+    });
+
+    function retire(value: 'true' | 'false') {
+      process.env.POSTHOG_CODE_RETIRED = value;
+      resetFeatureFlagsForTests();
+    }
+
+    it('still moves to the other fleet agent', async () => {
+      retire('true');
+      await connectAgents(db, ['claude', 'codex']);
+      expect(await run()).toBe(true);
+      expect((await task()).assignedEnvironmentId).toBe('fleet1');
+    });
+
+    it.each(['selfhosted', 'posthog_code', 'ask'])(
+      'stops at the fleet with no hop to PostHog Code (default %s)',
+      async (pinned) => {
+        retire('true');
+        await db
+          .update(workspacesTable)
+          .set({ settings: { defaultCloudProvider: pinned } })
+          .where(eq(workspacesTable.id, 'ws1'));
+        await connectAgents(db, ['claude']);
+        expect(await run()).toBe(false);
+        const t = await task();
+        expect(t.status).toBe('failed');
+        expect(t.assignedEnvironmentId).toBe('fleet1');
+      },
+    );
+
+    it('falls through to PostHog Code as today when the flag is off', async () => {
+      retire('false');
+      await connectAgents(db, ['claude']);
+      expect(await run()).toBe(true);
+      expect((await task()).assignedEnvironmentId).toBe('ph1');
+    });
+  });
+
   it('skips a fleet agent that needs reconnecting rather than dying on it twice', async () => {
     await connectAgents(db, ['claude', 'codex'], { reauth: ['codex'] });
     expect(await run()).toBe(true);

@@ -20,6 +20,7 @@ import { getDbClient } from '../../db/client.js';
 import { pullRequests as pullRequestsTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
 import { resolveCloudEnvChain } from '../prCloudFix.js';
+import { posthogCodeRetiredForWorkspace } from '../posthogCodeRetirement.js';
 import { dispatchSandboxRun } from '../selfHosted/sandboxRun.js';
 import { meterBoxOpened } from '../billing/usageHooks.js';
 import { reviewSystemPrompt } from '../selfHosted/systemPrompts.js';
@@ -485,8 +486,10 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
 
   await patchRun(claim.id, { status: 'dispatching' });
 
+  let sawFleet = false;
   for (const link of chain) {
     if (link.provider === 'selfhosted') {
+      sawFleet = true;
       const result = await dispatchSandboxRun({
         // The fleet's create is idempotent on this id. A second dispatch with
         // the first one's id would be handed back the sandbox that just died,
@@ -600,6 +603,9 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
       // not about a limited subscription.
       if (moved) break;
       if (spilled >= MAX_SPILLED_UNITS_PER_CYCLE) break;
+      // A spill comes after a busy fleet. With PostHog Code retired the unit
+      // waits for the fleet instead, as it does once the spill is spent.
+      if (sawFleet && (await posthogCodeRetiredForWorkspace(review.workspaceId))) break;
       const result = await startCodeRun({
         workspaceId: review.workspaceId,
         repositoryId: review.repositoryId,

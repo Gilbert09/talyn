@@ -25,6 +25,7 @@ import {
   unconfirmedRefusalSummary,
 } from '../selfHosted/exhaustedQuota.js';
 import { resolveCloudEnvChain } from '../prCloudFix.js';
+import { posthogCodeRetiredForWorkspace } from '../posthogCodeRetirement.js';
 import { taskQueueService } from '../taskQueue.js';
 import { getCloudProvider } from './registry.js';
 import { TRANSCRIPT_FINAL_KEY } from './transcriptStore.js';
@@ -396,6 +397,9 @@ export async function nextHop(
   for (const link of chain) {
     if (link.provider === 'selfhosted') continue;
     if (tried.has(link.provider)) continue;
+    // Retired: the hop stops at the other fleet agent, even for a workspace
+    // that chose PostHog Code as its default.
+    if (link.provider === 'posthog_code' && (await posthogCodeRetiredForWorkspace(workspaceId))) continue;
     return { kind: 'provider', providerType: link.provider, envId: link.envId };
   }
   return null;
