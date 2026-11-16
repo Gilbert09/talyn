@@ -115,10 +115,10 @@ function optionsFor(config: AnalyticsConfig, environment: AppEnvironment, startO
     // Replay is off against a development client, like web's dev builds.
     enableSessionReplay: !development,
     sessionReplayConfig: {
-      // Transcripts, diffs and code are on screen: mask text, inputs and images.
-      maskAllTextInputs: true,
-      maskAllImages: true,
-      maskAllSandboxedViews: true,
+      // Replays are unmasked so that they show what the person saw.
+      maskAllTextInputs: false,
+      maskAllImages: false,
+      maskAllSandboxedViews: false,
       // Console lines and request URLs can carry content, so neither goes in a recording.
       captureLog: false,
       captureNetworkTelemetry: false,

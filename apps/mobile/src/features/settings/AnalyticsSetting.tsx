@@ -14,7 +14,7 @@ export function AnalyticsSetting({ divider = false }: { divider?: boolean }) {
   const title = 'Share usage data and session replays';
   return <Row title={title} divider={divider}
     subtitle={<AppText variant="meta" tone="muted">
-      {configured ? 'Helps us improve Talyn by collecting usage events, errors, and session replays of the app. Text and images are masked in replays.'
+      {configured ? 'Helps us improve Talyn by collecting usage events, errors, and session replays of the app. Replays show the app screen as you see it.'
         : 'Analytics is not enabled in this build. Nothing is collected either way.'}
     </AppText>}
     trailing={<Toggle value={configured && share} disabled={!configured} onValueChange={change}

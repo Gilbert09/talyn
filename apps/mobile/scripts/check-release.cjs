@@ -163,7 +163,7 @@ function check() {
   const inventory = JSON.parse(read('release/privacy-inventory.json'));
   assert.equal(inventory.lockfileSha256, privacyDigest(), 'Dependency graph changed. Review privacy disclosures and update the inventory.');
   assert.deepEqual(inventory.mobileDependencies, JSON.parse(read('package.json')).dependencies, 'Review each mobile dependency for privacy changes.');
-  // PostHog analytics and masked replay are allowed by Tom's call (2026-11-10). Advertising and cross-app tracking stay prohibited.
+  // PostHog analytics and session replay are allowed by Tom's call (2026-11-10; unmasked since 2026-11-16). Advertising and cross-app tracking stay prohibited.
   assert.deepEqual(inventory.prohibited, ['advertising', 'tracking']);
   assert.equal(inventory.applePreparation.tracking, false, 'PostHog here is first-party analytics. Apple tracking stays false.');
   assert(inventory.processors.some((name) => name.startsWith('PostHog')), 'List PostHog as a processor.');

@@ -361,7 +361,7 @@ Tom asked for a marketing pass that moves the site towards Conductor's positioni
 Tom's call: the mobile app now has PostHog product analytics, session replay, and error tracking, like web. This reverses the MVP rule of no analytics or replay SDK.
 - Official SDK only: `posthog-react-native` and `posthog-react-native-session-replay`, plus the Expo peers `expo-application`, `expo-file-system` and `expo-localization`. A new native build is required.
 - `src/lib/analytics.ts` ports web's guarded helpers. No `EXPO_PUBLIC_TALYN_POSTHOG_KEY` means nothing is sent. The root waits up to 1.5 s for init, so the saved opt-out (AsyncStorage) is read before the first event and touch autocapture wraps the tree without a remount.
-- Replay masks all text, inputs, images, and sandboxed views, records no console logs or network requests, and is off in development. Exceptions go through the shared drop and tag rules, like web `before_send`. `RowBoundary` reports what it catches.
+- Replay is not masked (text, inputs, images, and sandboxed views show), records no console logs or network requests, and is off in development. Exceptions go through the shared drop and tag rules, like web `before_send`. `RowBoundary` reports what it catches.
 - Screens are `$screen` events named by route pattern (`/pulls/[id]`). Touch autocapture reads component names and test IDs only, because text children and accessibility labels can hold titles.
 - Events reuse the web names and keys. The PR detail and code review screens were being edited in parallel, so `code_review_started` and the PR events there are a follow-up.
 - Apple tracking stays false. Store privacy answers must declare analytics, diagnostics, and the user ID before submission.

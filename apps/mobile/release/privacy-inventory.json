@@ -201,7 +201,7 @@
         "usage events with IDs and settings, never titles, prompts, transcripts, code, or repository names",
         "screen names as route patterns with no IDs",
         "touch autocapture by component name and test ID",
-        "masked session replay: text, inputs, images, and sandboxed views are masked; no console logs or network requests",
+        "unmasked session replay: text, inputs, images, and sandboxed views are recorded; no console logs or network requests",
         "exceptions with stack traces, the online state, and a connectivity flag",
         "native crash reports (iOS, Android JVM, and Android NDK) with native stack traces, sent on the next launch for an NDK crash",
         "device and app info: platform, OS, model, locale, timezone, app version and build, OTA update ID and channel, release environment",

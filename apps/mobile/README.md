@@ -518,7 +518,7 @@ The official SDK is `posthog-react-native`, with `@posthog/react-native-plugin` 
 - The SDK sends some events during its setup, before the super properties are registered, such as `Application Installed`. `before_send` adds the build properties to these events.
 - Each route change records a `$screen` named by its route pattern, such as `/pulls/[id]`. No IDs go in the name.
 - Touches are autocaptured by component name and test ID only. Text children and accessibility labels are not captured.
-- Session replay masks all text, inputs, images, and sandboxed views. It records no console logs or network requests. It is off in development builds.
+- Session replay is not masked. It shows text, inputs, images, and sandboxed views. It records no console logs or network requests. It is off in development builds.
 - Exception autocapture runs in preview and production builds. Each exception goes through the shared `exceptionDropReason` and `isConnectivityMessage` rules, like web.
 - Native crash capture (iOS, Android JVM, and Android NDK on API 31 and later) runs in preview and production builds. Native crashes skip `before_send`. The opt-out still stops them.
 - Readable stack traces need uploaded symbols. With the `POSTHOG_CLI_API_KEY` secret, each OTA update uploads its Hermes source maps. Each EAS build uploads its source maps, dSYMs, R8 mapping and NDK symbols. Without the key, uploads skip with a notice. See [PostHog error tracking symbols](../../docs/MOBILE_RELEASE.md#posthog-error-tracking-symbols) for the secret and where to create it.
