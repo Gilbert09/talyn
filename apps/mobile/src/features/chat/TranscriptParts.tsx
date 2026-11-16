@@ -11,7 +11,7 @@ import { shortTime } from '../../lib/time';
 import { pullRequestRoute, sessionRoute } from '../../navigation/routes';
 import { mono, radius, sans, type, useTheme, withAlpha } from '../../theme/tokens';
 import { MessageImages } from './AttachmentViews';
-import { isImage, isVideo, type MessageImage } from './attachments';
+import type { MessageImage } from './attachments';
 import { Markdown } from './Markdown';
 import { TypingDots } from './Pulse';
 import type { TranscriptRow } from './transcript';
@@ -56,7 +56,7 @@ export const UserBubble = memo(function UserBubble({ text, timestamp, attachment
   return <View style={styles.userWrap}>
     <Spoken label={`You said: ${text}${time ? `, ${time}` : ''}`} text={text} style={{ ...styles.bubble, backgroundColor: c.surface }}>
       <Markdown text={text} />
-      {files.some((file) => isImage(file) || isVideo(file)) ? <MessageImages workbenchId={workbenchId} attachments={files} />
+      {files.length ? <MessageImages workbenchId={workbenchId} attachments={files} />
         : attachments ? <AppText variant="caption" tone="muted">{attachments === 1 ? '1 attachment' : `${attachments} attachments`}</AppText> : null}
     </Spoken>
     {time ? <AppText variant="caption" tone="muted" importantForAccessibility="no">{time}</AppText> : null}
