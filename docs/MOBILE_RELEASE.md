@@ -348,6 +348,9 @@ Tom's call (2026-11-16): native changes on `main` go to TestFlight with no manua
 The workflow shares the `mobile-release` concurrency group with the protected release workflow.
 Thus only one run at a time reserves a build number.
 It uses the `mobile-updates` environment and its `EXPO_TOKEN`. The robot needs permission to write EAS environment variables.
+Before any EAS call, the script reads the EAS `production` environment and gives its public values to the EAS CLI.
+It also sets `MOBILE_RELEASE_PROFILE=internal-beta`. EAS evaluates `app.config.ts` locally before it reads the EAS environment.
+Without these values, the production config fails, or the fingerprint uses the wrong channel.
 Set the repository variable `MOBILE_TESTFLIGHT_AUTO=0` to stop it.
 **Actions → Mobile TestFlight → Run workflow** checks `main` again. Select **force** to build when the fingerprint is not new.
 Automatic TestFlight group setup stays off. An internal tester group with automatic distribution gets each build.
