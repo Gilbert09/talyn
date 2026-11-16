@@ -1,9 +1,9 @@
-import type { PostHogInboxStatus, WorkflowConditions, WorkflowWithStats } from '@talyn/shared';
-import { render, screen } from '@testing-library/react-native';
+import { POSTHOG_INBOX_BACKLOG_STATE_LABELS, type PostHogInboxBacklogPage, type PostHogInboxBacklogRow, type PostHogInboxStatus, type WorkflowConditions, type WorkflowWithStats } from '@talyn/shared';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 
 import { PostHogInboxScreen } from '../features/integrations/PostHogInboxScreen';
 import { RuleDetailScreen } from '../features/integrations/RuleDetailScreen';
-import { dailyCapText, postHogInboxCardView, postHogInboxConditionFacts, postHogInboxPushText, ruleIntegration } from '../features/integrations/model';
+import { backlogRowText, backlogStateLabel, dailyCapText, manualRunText, postHogInboxCardView, postHogInboxConditionFacts, postHogInboxPushText, ruleIntegration } from '../features/integrations/model';
 
 const mockRule = {
   id: 'r1', workspaceId: 'ws-1', integration: 'posthog_inbox', name: 'Fix urgent reports', enabled: true, events: ['report_ready'],
@@ -15,10 +15,12 @@ const mockRule = {
 const mockLifecycle = jest.requireActual<typeof import('./workflowFixtures')>('./workflowFixtures').fixture().lifecycle;
 const mockInboxStatus = jest.fn();
 const mockOpenExternal = jest.fn();
+const mockBacklog = jest.fn();
+const mockRuns = jest.fn(() => [] as unknown[]);
 
 jest.mock('@talyn/client/native', () => {
   const actual = jest.requireActual('@talyn/client/native');
-  return { ...actual, workflows: { ...actual.workflows, posthogInboxStatus: (...a: unknown[]) => mockInboxStatus(...a) } };
+  return { ...actual, workflows: { ...actual.workflows, posthogInboxStatus: (...a: unknown[]) => mockInboxStatus(...a), posthogInboxBacklog: (...a: unknown[]) => mockBacklog(...a) } };
 });
 jest.mock('../auth/AuthProvider', () => ({
   useNetwork: () => 'online',
@@ -28,7 +30,11 @@ jest.mock('../auth/AuthProvider', () => ({
 jest.mock('../features/automations/data', () => ({
   useWorkflowList: () => ({ status: 'ready', data: [mockRule], refresh: jest.fn(), refreshing: false }),
   useLoopList: () => ({ status: 'ready', data: undefined, refresh: jest.fn(), refreshing: false }),
-  useRuns: () => ({ status: 'ready', data: [], refresh: jest.fn(), refreshing: false }),
+  useRuns: () => ({ status: 'ready', data: mockRuns(), refresh: jest.fn(), refreshing: false }),
+}));
+jest.mock('../components/Workflow', () => ({
+  ...jest.requireActual('../components/Workflow'),
+  openExternal: (...a: unknown[]) => mockOpenExternal(...a),
 }));
 jest.mock('expo-router', () => ({ Stack: { Screen: () => null }, Link: ({ children }: { children: React.ReactNode }) => children }));
 
@@ -163,5 +169,98 @@ describe('PostHog Inbox connection screen', () => {
     expect(await screen.findByText('Manage on the web')).toBeVisible();
     expect(screen.queryByText('Connected')).toBeNull();
     expect(screen.queryByText('Not connected')).toBeNull();
+  });
+});
+
+const STATES = Object.keys(POSTHOG_INBOX_BACKLOG_STATE_LABELS) as PostHogInboxBacklogRow['state'][];
+const backlogRow = (id: string, extra: Partial<PostHogInboxBacklogRow> = {}): PostHogInboxBacklogRow => ({
+  id, title: `Report ${id}`, url: `https://us.posthog.com/inbox/${id}`, priority: 'P1', actionability: 'immediately_actionable', repository: 'acme/app',
+  sourceProducts: [], signalCount: 2, createdAt: '2026-11-15T10:00:00Z', updatedAt: '2026-11-15T10:00:00Z', state: 'not_run', selectable: true,
+  runId: null, workbenchId: null, pullRequestId: null, prUrl: null, ...extra,
+});
+const backlogPage = (rows: PostHogInboxBacklogRow[], nextOffset: number | null = null): PostHogInboxBacklogPage => ({
+  rows, scanned: rows.length, nextOffset, total: null, days: 7, workflowId: 'r1', runnable: true, notRunnableReason: null, dailyCap: 10, runsToday: 0,
+});
+
+describe('PostHog Inbox backlog model', () => {
+  it.each(STATES)('labels the state %s', (state) => {
+    expect(backlogStateLabel({ state })).toBe(POSTHOG_INBOX_BACKLOG_STATE_LABELS[state]);
+    expect(backlogRowText({ title: 'T', priority: 'P0', repository: 'a/b', state }).detail).toBe(`P0 · a/b · ${POSTHOG_INBOX_BACKLOG_STATE_LABELS[state]}`);
+  });
+
+  it.each([
+    [{ title: ' Crash ', priority: 'P0', repository: 'a/b' }, 'Crash', 'P0 · a/b · Not run'],
+    [{ title: '', priority: 'P2', repository: null }, 'Untitled report', 'P2 · Not run'],
+    [{ title: 'X', priority: null, repository: ' ' }, 'X', 'Not run'],
+  ])('words the row %j', (input, title, detail) => {
+    expect(backlogRowText({ ...input, state: 'not_run' } as never)).toEqual({ title, detail });
+  });
+
+  it.each([
+    [{ trigger: 'manual', triggeredBy: 'octo' }, 'Started by octo'],
+    [{ trigger: 'manual', triggeredBy: ' a@b.c ' }, 'Started by a@b.c'],
+    [{ trigger: 'manual', triggeredBy: null }, 'Started by hand'],
+    [{ trigger: 'event', triggeredBy: 'octo' }, null],
+    [{ triggeredBy: 'octo' }, null],
+    [{}, null],
+  ])('words the manual run %j', (run, text) => {
+    expect(manualRunText(run as never)).toBe(text);
+  });
+});
+
+describe('PostHog Inbox backlog on the rule screen', () => {
+  beforeEach(() => {
+    mockBacklog.mockReset();
+    mockOpenExternal.mockReset();
+    mockRuns.mockReturnValue([]);
+  });
+
+  it('lists the rows with their state, opens a report, and has no run button', async () => {
+    mockBacklog.mockResolvedValue(backlogPage(STATES.map((state, i) => backlogRow(`r${i}`, { state }))));
+    await render(<RuleDetailScreen kind="workflow" id="r1" integration="posthog_inbox" />);
+    expect(await screen.findByText('Report r0')).toBeVisible();
+    for (const state of STATES) expect(screen.getAllByText(new RegExp(POSTHOG_INBOX_BACKLOG_STATE_LABELS[state])).length).toBeGreaterThan(0);
+    expect(screen.getByText(/use the web or desktop app/)).toBeVisible();
+    expect(mockBacklog).toHaveBeenCalledWith('ws-1', { workflowId: 'r1' });
+    expect(screen.queryByText(/run selected/i)).toBeNull();
+    expect(screen.queryByText(/^run$/i)).toBeNull();
+    expect(screen.queryByText('Load more')).toBeNull();
+    fireEvent.press(screen.getByText('Report r1'));
+    expect(mockOpenExternal).toHaveBeenCalledWith('https://us.posthog.com/inbox/r1');
+  });
+
+  it('loads more rows while there is a next offset', async () => {
+    mockBacklog.mockResolvedValueOnce(backlogPage([backlogRow('a')], 25)).mockResolvedValueOnce(backlogPage([backlogRow('b')], null));
+    await render(<RuleDetailScreen kind="workflow" id="r1" integration="posthog_inbox" />);
+    const button = await screen.findByText('Load more');
+    await act(async () => { fireEvent.press(button); });
+    expect(await screen.findByText('Report b')).toBeVisible();
+    expect(screen.getByText('Report a')).toBeVisible();
+    expect(mockBacklog).toHaveBeenLastCalledWith('ws-1', { workflowId: 'r1', offset: 25 });
+    expect(screen.queryByText('Load more')).toBeNull();
+  });
+
+  it('says so when no report matches', async () => {
+    mockBacklog.mockResolvedValue(backlogPage([]));
+    await render(<RuleDetailScreen kind="workflow" id="r1" integration="posthog_inbox" />);
+    expect(await screen.findByText('No matching reports')).toBeVisible();
+  });
+
+  it('shows an error notice when the backlog fails to load', async () => {
+    mockBacklog.mockRejectedValue(new Error('boom'));
+    await render(<RuleDetailScreen kind="workflow" id="r1" integration="posthog_inbox" />);
+    expect(await screen.findByText('This view could not load.')).toBeVisible();
+    expect(screen.queryByText('Load more')).toBeNull();
+  });
+
+  it('shows who started a manual run', async () => {
+    mockBacklog.mockResolvedValue(backlogPage([]));
+    mockRuns.mockReturnValue([
+      { id: 'u1', integration: 'posthog_inbox', status: 'succeeded', subjectLabel: 'Manual report', actions: [], event: 'report_ready', createdAt: '2026-11-16T10:00:00Z', trigger: 'manual', triggeredBy: 'octo' },
+      { id: 'u2', integration: 'posthog_inbox', status: 'succeeded', subjectLabel: 'Event report', actions: [], event: 'report_ready', createdAt: '2026-11-16T10:00:00Z', trigger: 'event', triggeredBy: null },
+    ]);
+    await render(<RuleDetailScreen kind="workflow" id="r1" integration="posthog_inbox" />);
+    expect(await screen.findByText('Started by octo')).toBeVisible();
+    expect(screen.getAllByText(/Started by/)).toHaveLength(1);
   });
 });

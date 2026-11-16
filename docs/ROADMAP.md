@@ -400,6 +400,7 @@ Follow-ups now that Loops has shipped:
 - [x] PostHog Inbox: give the Inbox its own PostHog connection (the `posthog_inbox` row, its own OAuth on the shared callback, or a personal API key), so a new workspace can connect PostHog while PostHog Code is retired. A PostHog Code grant with the Inbox scopes still serves as a fallback (2026-11-16).
 - [x] PostHog Inbox step 2: claim the report in PostHog before the session starts, attach the pull request URL to the claim, and release the claim when the work ends without a pull request or the pull request closes without a merge. Needs `inbox:write` and `task:write`. Claim state shows in the run history (2026-11-16).
 - [x] PostHog Inbox step 3: receive PostHog's `$signals_report_ready` push (a PostHog webhook destination) and call `ingestPostHogReport` with only the report id. The poller becomes a 30-minute reconcile while pushes arrive (2026-11-16).
+- [x] PostHog Inbox backlog: browse older matching reports (7, 30 or 90 days) and start work on up to 20 of them ("Run selected"). Manual runs show who started them. MCP tools list and run the backlog. Mobile shows the backlog read-only (2026-11-16).
 - [ ] PostHog Inbox push on mobile: make and rotate the webhook URL natively (mobile shows the last push read-only today).
 - [ ] PostHog Inbox on mobile: an editor (mobile shows the rules read-only today).
 - [ ] Add a generic inbound webhook source.

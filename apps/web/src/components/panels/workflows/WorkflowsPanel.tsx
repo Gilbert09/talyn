@@ -21,6 +21,7 @@ import { WorkflowEditorPage } from './WorkflowEditorPage';
 import { WorkflowRunsList } from './WorkflowRunsList';
 import { WebhookDeliveriesList } from './WebhookDeliveriesList';
 import { WebhookRevealDialog, WebhookUrlSection } from './webhookFields';
+import { PostHogInboxBacklog } from './posthogInboxBacklog';
 
 const PANEL_COPY: Record<WorkflowIntegration, { title: string; description: string; empty: string }> = {
   github: {
@@ -75,6 +76,33 @@ function WebhookRuleDetail({ workflow, liveRuns }: {
       {tab === 'runs'
         ? <WorkflowRunsList workflowId={workflow.id} liveRuns={liveRuns[workflow.id]} />
         : <WebhookDeliveriesList ruleId={workflow.id} />}
+    </div>
+  );
+}
+
+/** A PostHog Inbox rule's expanded row: its runs, or its backlog of older reports. */
+function PostHogInboxRuleDetail({ workflow, liveRuns }: {
+  workflow: WorkflowWithStats;
+  liveRuns: ReturnType<typeof useWorkflows>['liveRuns'];
+}) {
+  const [tab, setTab] = useState<'runs' | 'backlog'>('runs');
+  return (
+    <div>
+      <div className="px-4 pt-3">
+        <Tabs value={tab} onValueChange={(next) => setTab(next as 'runs' | 'backlog')}>
+          <TabsList aria-label="PostHog Inbox automation">
+            <TabsTrigger value="runs" data-attr="posthog-inbox-tab-runs">Runs</TabsTrigger>
+            <TabsTrigger value="backlog" data-attr="posthog-inbox-tab-backlog">Backlog</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+      {tab === 'runs'
+        ? <WorkflowRunsList workflowId={workflow.id} liveRuns={liveRuns[workflow.id]} />
+        : (
+          <div className="p-4">
+            <PostHogInboxBacklog workflow={workflow} autoLoad showHeader={false} />
+          </div>
+        )}
     </div>
   );
 }
@@ -194,7 +222,9 @@ function WorkflowRow({
         <div className="border-t">
           {workflow.integration === 'webhook'
             ? <WebhookRuleDetail workflow={workflow} liveRuns={liveRuns} />
-            : <WorkflowRunsList workflowId={workflow.id} liveRuns={liveRuns[workflow.id]} />}
+            : workflow.integration === 'posthog_inbox'
+              ? <PostHogInboxRuleDetail workflow={workflow} liveRuns={liveRuns} />
+              : <WorkflowRunsList workflowId={workflow.id} liveRuns={liveRuns[workflow.id]} />}
         </div>
       )}
     </div>

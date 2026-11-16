@@ -25,7 +25,7 @@ import { isCodeReviewPreset, type CodeReviewPreset } from './codeReview.js';
 // is not.
 
 import type { SkillKey } from './skills.js';
-import type { PostHogClaimSummary } from './posthogInbox.js';
+import type { PostHogClaimSummary, WorkflowRunTrigger } from './posthogInbox.js';
 
 // ============================================================================
 // Integrations
@@ -1178,6 +1178,10 @@ export interface WorkflowRun {
    * other runs, on runs that made no claim, and on older servers.
    */
   posthogClaim?: PostHogClaimSummary | null;
+  /** How the run started. Absent on older servers, and absent means `event`. */
+  trigger?: WorkflowRunTrigger;
+  /** A `manual` run: the name or email of the person who started it. */
+  triggeredBy?: string | null;
 }
 
 /**
@@ -1955,6 +1959,25 @@ export function posthogInboxConditionsMatch(c: WorkflowConditions, facts: PostHo
     return false;
   }
   return true;
+}
+
+/**
+ * PURE: whether a PostHog Inbox rule's own conditions match a report, setting
+ * aside the tests every rule shares (blocked, not ready, already addressed,
+ * repository not connected). The backlog lists these reports and shows those
+ * tests as the row's state instead of hiding the row.
+ */
+export function posthogInboxContentMatches(c: WorkflowConditions, facts: PostHogInboxFacts): boolean {
+  return posthogInboxConditionsMatch(c, {
+    ...facts,
+    status: 'ready',
+    suppressionSource: null,
+    alreadyAddressed: false,
+    // A report with no repository fails a repository condition and passes
+    // without one; the state then says it has no connected repository.
+    repository: facts.repository ?? '\u0000none',
+    workspaceRepositoryId: facts.workspaceRepositoryId ?? 'unconnected',
+  });
 }
 
 // ============================================================================

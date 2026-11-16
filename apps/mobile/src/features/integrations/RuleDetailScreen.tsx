@@ -1,6 +1,6 @@
 import {
   LOOP_TARGET_LABELS, POSTHOG_CODE_RETIRED_NOTICE, describeSchedule, describeWorkflowActions, describeWorkflowTrigger, posthogCodeRetired,
-  type LoopRun, type LoopWithStats, type WorkflowIntegration, type WorkflowRun, type WorkflowWithStats,
+  type LoopRun, type LoopWithStats, type PostHogInboxBacklogRow, type WorkflowIntegration, type WorkflowRun, type WorkflowWithStats,
 } from '@talyn/shared';
 import { Stack } from 'expo-router';
 import { View } from 'react-native';
@@ -12,7 +12,10 @@ import { useFeatures } from '../../lib/features';
 import { modelLabel } from '../../lib/models';
 import { longTime, shortTime, useNow } from '../../lib/time';
 import { sessionRoute } from '../../navigation/routes';
-import { dailyCapText, postHogInboxConditionFacts } from './model';
+import { useBacklog } from './backlog';
+import {
+  POSTHOG_INBOX_BACKLOG_NOTE, backlogRowText, dailyCapText, manualRunText, postHogInboxConditionFacts,
+} from './model';
 import { Fact, Loading, Page, WebRow } from '../more/Page';
 import { useLoopList, useRuns, useWorkflowList } from '../automations/data';
 import {
@@ -41,6 +44,7 @@ export function RuleDetailScreen({ kind, id, integration = 'github' }: { kind: A
               ? <WorkflowRunRow key={run.id} run={run as WorkflowRun} divider={index < runs.data!.length - 1} />
               : <LoopRunRow key={run.id} run={run as LoopRun} divider={index < runs.data!.length - 1} />)}
       </Group>
+      {kind === 'workflow' && integration === 'posthog_inbox' ? <BacklogGroup id={id} offline={offline} /> : null}
       <Group>
         <WebRow title="Edit on the web" path={`/integrations/${kind === 'loop' ? 'schedule' : integration}`} />
       </Group>
@@ -91,12 +95,14 @@ function WorkflowRunRow({ run, divider }: { run: WorkflowRun; divider: boolean }
   const text = workflowRunText(run);
   // A run that started a session opens it; otherwise the pull request it acted on.
   const href = run.workbenchId ? sessionRoute(run.workbenchId) : undefined;
+  const manual = manualRunText(run);
   return <Row title={text.title} subtitle={text.detail} divider={divider} titleLines={1} href={href}
     onPress={!href && run.prUrl ? () => openExternal(run.prUrl) : undefined}
     accessibilityRole={!href && run.prUrl ? 'link' : undefined}
     accessibilityLabel={`${text.title}. ${badge.label}. ${longTime(run.createdAt)}`}
     trailing={<AppText variant="meta" tone="muted">{shortTime(run.createdAt, now)}</AppText>}>
     <RunPills badge={badge} number={run.prNumber} />
+    {manual ? <AppText variant="meta" tone="muted">{manual}</AppText> : null}
   </Row>;
 }
 
@@ -120,4 +126,28 @@ function RunPills({ badge, number }: { badge: Badge; number: number | null }) {
     <Pill label={badge.label} tone={badge.tone} accessibilityLabel={`Status: ${badge.label}`} />
     {number ? <PrNumber number={number} /> : null}
   </View>;
+}
+
+/** Older reports that match the rule, read-only. Starting work on them happens on the web or desktop app. */
+function BacklogGroup({ id, offline }: { id: string; offline: boolean }) {
+  const backlog = useBacklog(id, true);
+  const { rows, remote } = backlog;
+  const footer = `${POSTHOG_INBOX_BACKLOG_NOTE}${backlog.days ? ` Reports from the last ${backlog.days} days.` : ''}`;
+  return <Group title="Backlog" footer={footer}>
+    {rows === undefined ? remote.status === 'loading' || remote.status === 'idle' ? <Loading />
+      : <StateNotice resource={remote} offline={offline} refresh={() => { void backlog.refresh(); }} />
+      : rows.length === 0 ? <Row title="No matching reports" subtitle="No report from the last 7 days matches this rule." divider={false} />
+        : <>
+          {rows.map((row, index) => <BacklogRow key={row.id} row={row} divider={index < rows.length - 1 || backlog.nextOffset !== null} />)}
+          {backlog.nextOffset !== null ? <Row title={backlog.loadingMore ? 'Loading' : 'Load more'} onPress={() => { void backlog.loadMore(); }}
+            disabled={backlog.loadingMore} accessibilityRole="button" divider={false} /> : null}
+        </>}
+  </Group>;
+}
+
+function BacklogRow({ row, divider }: { row: PostHogInboxBacklogRow; divider: boolean }) {
+  const text = backlogRowText(row);
+  return <Row title={text.title} subtitle={text.detail} divider={divider} titleLines={2}
+    onPress={row.url ? () => openExternal(row.url) : undefined} accessibilityRole={row.url ? 'link' : undefined}
+    accessibilityLabel={`${text.title}. ${text.detail}`} />;
 }

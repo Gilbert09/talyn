@@ -7922,3 +7922,16 @@ Before, a session started from a pull request (`fromPullRequestId`) linked the P
 Now `workbenches.pull_request_link_explicit` (migration 0135) marks a link that a person or a caller chose. `createWorkbench` sets it for `fromPullRequestId`, and a manual link (`trackAndLink` strict) sets it too. `ownsLinkedPr()` (`prEligibility.ts`) accepts an explicit link or an eligible one. The backfill, merge auto-archive and the thread merge notice use it. So a session started from a PR also archives when that PR merges.
 The `stamp_workbench_pr_link` trigger clears the flag on an unlink, and on any PR change that does not set the flag. Branch-name links still need the evidence test.
 Sessions that lost their link before this fix stay unlinked. Use "Link PR" to link them again.
+
+### 2026-11-16 — PostHog Inbox backlog and "Run selected"
+
+Before, a PostHog Inbox rule acted only on reports that changed after the poller's first poll. Older reports that match a rule stayed untouched. Now a person can browse them and start work on the ones they pick.
+Backlog view: `POST /workflows/posthog-inbox/backlog` (`services/posthogInbox/backlog.ts`) lists reports that PostHog created in the last 7, 30 or 90 days, newest first. PostHog filters the list with the rule's conditions. Talyn's matcher (`posthogInboxContentMatches`) then checks each row. Each row has a state (`posthogInboxBacklogState`): not run, running, already run, claimed elsewhere, already addressed, repository not connected or held back.
+Run selected: `POST /workflows/:id/posthog-inbox/run` takes up to 20 report ids. For each id it reads the report, checks the state and the conditions, and checks the daily cap. Then `runWorkflowManually` uses the poller's path: same link, same PostHog claim, same session start. The rule must be saved and enabled.
+Migration 0141 adds `workflow_runs.trigger_source` (`event` or `manual`), `triggered_by_user_id` and `triggered_by_label`. The run history shows "manual by <who>". MCP has `talyn_list_posthog_inbox_backlog` (also for session tokens) and `talyn_run_posthog_inbox_reports` (not for session tokens). Mobile shows the backlog read-only on the rule screen, with "Started by <who>" on manual runs. It has no run button.
+Decisions:
+- A manual run that hits a cap records no skipped run. A skipped row would use up the dedupe key, and the report could not run later.
+- List rows now carry `repo_slug`, as PostHog's OpenAPI says. Before, only the single-report read had it. When a row has no `repo_slug` key, Talyn reads the report by id.
+- The list asks for status `ready,suppressed`, so reports that the safety judge held back show as "Held back for safety". Other suppressed rows are dropped.
+- The `search` parameter is a superset filter. PostHog may return rows that do not contain the words, so Talyn's matcher decides.
+Left: an editor for these rules on mobile, mobile "Run selected", and an exact count of matching reports. PostHog's `count` is before Talyn's matcher, so the page shows only how many reports Talyn read.

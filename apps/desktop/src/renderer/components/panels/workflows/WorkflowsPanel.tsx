@@ -21,6 +21,7 @@ import { WorkflowEditorPage } from './WorkflowEditorPage';
 import { WorkflowRunsList } from './WorkflowRunsList';
 import { WebhookDeliveriesList } from './WebhookDeliveriesList';
 import { WebhookSecretDialog, WebhookUrlSection } from './webhookFields';
+import { PostHogInboxBacklog } from './posthogInboxBacklog';
 
 /**
  * Workflows — user-defined PR automation.
@@ -137,9 +138,41 @@ function WorkflowRow({
         <div className="border-t">
           {workflow.integration === 'webhook' ? (
             <WebhookRuleDetails workflow={workflow} liveRuns={liveRuns} />
+          ) : workflow.integration === 'posthog_inbox' ? (
+            <PostHogInboxRuleDetails workflow={workflow} liveRuns={liveRuns} />
           ) : (
             <WorkflowRunsList workflowId={workflow.id} liveRuns={liveRuns[workflow.id]} />
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A PostHog Inbox rule's runs, or its backlog of older reports. */
+function PostHogInboxRuleDetails({
+  workflow,
+  liveRuns,
+}: {
+  workflow: WorkflowWithStats;
+  liveRuns: ReturnType<typeof useWorkflows>['liveRuns'];
+}) {
+  const [tab, setTab] = useState<'runs' | 'backlog'>('runs');
+  return (
+    <div>
+      <div className="px-4 pt-2">
+        <Tabs value={tab} onValueChange={(next) => setTab(next as 'runs' | 'backlog')}>
+          <TabsList aria-label="PostHog Inbox automation">
+            <TabsTrigger value="runs" data-attr="posthog-inbox-tab-runs">Runs</TabsTrigger>
+            <TabsTrigger value="backlog" data-attr="posthog-inbox-tab-backlog">Backlog</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+      {tab === 'runs' ? (
+        <WorkflowRunsList workflowId={workflow.id} liveRuns={liveRuns[workflow.id]} />
+      ) : (
+        <div className="p-3">
+          <PostHogInboxBacklog workflow={workflow} autoLoad showHeader={false} />
         </div>
       )}
     </div>

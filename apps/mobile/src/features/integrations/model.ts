@@ -1,8 +1,8 @@
 import type { PostHogCodeStatus } from '@talyn/client/native';
 import {
   DEFAULT_POSTHOG_CODE_MODEL_ID, DEFAULT_POSTHOG_INBOX_ACTIONABILITY, INVALID_RETURN_TO_CODE, isWorkflowIntegration, POSTHOG_CODE_MODELS,
-  POSTHOG_INBOX_ACTIONABILITY_LABELS, POSTHOG_INBOX_CONDITION_SPECS, posthogInboxPushActive,
-  type LinearConnection, type PostHogInboxStatus, type WorkflowConditions, type TrunkIntegrationStatus, type WorkflowIntegration, type WorkspaceSettings,
+  POSTHOG_INBOX_ACTIONABILITY_LABELS, POSTHOG_INBOX_BACKLOG_STATE_LABELS, POSTHOG_INBOX_CONDITION_SPECS, posthogInboxPushActive,
+  type LinearConnection, type PostHogInboxBacklogRow, type PostHogInboxStatus, type WorkflowRun, type WorkflowConditions, type TrunkIntegrationStatus, type WorkflowIntegration, type WorkspaceSettings,
 } from '@talyn/shared';
 
 import type { Tone } from '../../components/UI';
@@ -298,4 +298,30 @@ export function postHogInboxPushText(
     return `${managed}Last push from PostHog: ${when}. Talyn also checks the Inbox every 30 minutes.`;
   }
   return `${managed}Last push from PostHog: ${when}. No push in the last 24 hours, so Talyn checks the Inbox every 3 minutes.`;
+}
+
+// ---------------------------------------------------------------------------
+// PostHog Inbox backlog (read-only on mobile)
+// ---------------------------------------------------------------------------
+
+export const POSTHOG_INBOX_BACKLOG_NOTE = 'To start work on these reports, use the web or desktop app.';
+
+/** The state label of a backlog row, as web shows it. */
+export function backlogStateLabel(row: Pick<PostHogInboxBacklogRow, 'state'>): string {
+  return POSTHOG_INBOX_BACKLOG_STATE_LABELS[row.state] ?? row.state;
+}
+
+/** The title and the detail line of a backlog row. */
+export function backlogRowText(row: Pick<PostHogInboxBacklogRow, 'title' | 'priority' | 'repository' | 'state'>): { title: string; detail: string } {
+  return {
+    title: row.title.trim() || 'Untitled report',
+    detail: [row.priority, row.repository, backlogStateLabel(row)].filter((part) => Boolean(part && String(part).trim())).join(' · '),
+  };
+}
+
+/** "Started by <who>" for a run that a person started by hand. Null for an event run. */
+export function manualRunText(run: Pick<WorkflowRun, 'trigger' | 'triggeredBy'>): string | null {
+  if (run.trigger !== 'manual') return null;
+  const who = run.triggeredBy?.trim();
+  return who ? `Started by ${who}` : 'Started by hand';
 }

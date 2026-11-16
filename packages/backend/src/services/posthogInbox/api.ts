@@ -17,7 +17,11 @@ import { PostHogCodeClient } from '../posthogCode/client.js';
  * `.../hog_functions/:id/` (update, and the soft delete).
  */
 
-/** One report as PostHog serves it. Only the fields Talyn reads. */
+/**
+ * One report as PostHog serves it. Only the fields Talyn reads. The list rows
+ * (`SignalReportList`) carry the same fields, `repo_slug` included (PostHog's
+ * OpenAPI schema, checked 2026-11-16); an older PostHog leaves it out of the list.
+ */
 export interface PostHogInboxReport {
   id: string;
   title?: string | null;
@@ -33,6 +37,11 @@ export interface PostHogInboxReport {
   /** `owner/repo` from the latest repository selection. On the single-report read only. */
   repo_slug?: string | null;
   work_state?: string | null;
+  /** Who holds the report: a user, an internal task or an agent. Null when unclaimed. */
+  assignee?: { claim_id?: string | null; kind?: string | null } | null;
+  /** The pull request on the claim, and its state (`unknown`, `draft`, `open`, `closed`, `merged`). */
+  implementation_pr_url?: string | null;
+  implementation_pr_state?: string | null;
   created_at?: string;
   updated_at: string;
   /** False when PostHog could not read `source_products` and `scout_name` in time. */
@@ -64,6 +73,14 @@ export interface PostHogInboxListQuery {
   limit?: number;
   offset?: number;
   include_source_metadata?: boolean;
+  /** Comma-separated source products; a report with a signal from ANY of them is kept. */
+  source_product?: string;
+  /** Comma-separated scout skill names; a report with a signal from ANY of them is kept. */
+  scout?: string;
+  /** Case-insensitive substring of the title OR the summary. */
+  search?: string;
+  /** ISO 8601: keeps reports created at or after this time. */
+  created_after?: string;
 }
 
 function queryString(query: PostHogInboxListQuery): string {

@@ -1,4 +1,4 @@
-import type { WorkflowDefinition, WorkflowFacts } from '@talyn/shared';
+import type { WorkflowActionOutcome, WorkflowDefinition, WorkflowFacts, WorkflowRun, WorkflowRunStatus } from '@talyn/shared';
 import {
   effectiveWorkflowActions,
   isIssueFacts,
@@ -162,8 +162,8 @@ async function evaluateForWorkspace<
   for (const facts of prepared.facts) {
     for (const workflow of workflows) {
       if (!workflowMatches(workflow, facts, prepared.viewerLogin)) continue;
-      const acted = await runOne(source, input, target, workflow, facts, ownerId);
-      if (acted) ran += 1;
+      const outcome = await runOne(source, input, target, workflow, facts, ownerId);
+      if (outcome.kind === 'acted') ran += 1;
     }
   }
   return ran;
@@ -184,15 +184,37 @@ function subjectProps(facts: WorkflowFacts): Record<string, unknown> {
   return { repo: facts.repoFullName, pr_number: facts.number };
 }
 
-/** One matched workflow against one subject. Returns whether it acted. */
+/** What one matched workflow did with one subject. */
+export type RunOneOutcome =
+  | {
+      kind: 'acted';
+      run: WorkflowRun | null;
+      status: WorkflowRunStatus;
+      outcomes: WorkflowActionOutcome[];
+      workbenchId: string | null;
+    }
+  /** The rule's daily cap is spent. */
+  | { kind: 'daily_capped' }
+  /** The rule's per-subject hourly cap is spent. */
+  | { kind: 'rate_capped' }
+  /** This delivery already has a run: the dedupe. */
+  | { kind: 'duplicate' };
+
+interface RunOneOptions {
+  /** A person started the run by hand ("Run selected"). */
+  manual?: { userId: string; label: string | null };
+}
+
+/** One matched workflow against one subject. */
 async function runOne<Input, Target extends WorkflowSourceTarget, Facts extends WorkflowFacts>(
   source: WorkflowSourceAdapter<Input, Target, Facts>,
   input: Input,
   target: Target,
   workflow: WorkflowDefinition,
   facts: Facts,
-  ownerId: string
-): Promise<boolean> {
+  ownerId: string,
+  opts: RunOneOptions = {}
+): Promise<RunOneOutcome> {
   const subject = workflowSubjectOf(facts);
   const claimInput = {
     workflowId: workflow.id,
@@ -200,7 +222,12 @@ async function runOne<Input, Target extends WorkflowSourceTarget, Facts extends 
     repositoryId: target.repositoryId,
     facts,
     deliveryId: source.deliveryId(input),
+    ...(opts.manual ? { manual: opts.manual } : {}),
   };
+  // A manual run that a cap refuses records nothing: a skipped row would take
+  // the delivery id, and the event path could then never run this version.
+  // The person sees the refusal in the answer instead.
+  const recordRefusals = !opts.manual;
   const capNoun = isIssueFacts(facts)
     ? 'issue'
     : isWebhookFacts(facts)
@@ -216,7 +243,7 @@ async function runOne<Input, Target extends WorkflowSourceTarget, Facts extends 
   if (workflow.maxRunsPerDay) {
     const daily = await checkDailyCap({ workflowId: workflow.id, cap: workflow.maxRunsPerDay });
     if (!daily.allowed) {
-      if (daily.announce) {
+      if (daily.announce && recordRefusals) {
         const run = await recordSkippedRun(claimInput, {
           type: workflow.actions[0]?.type ?? 'comment',
           ok: false,
@@ -234,7 +261,7 @@ async function runOne<Input, Target extends WorkflowSourceTarget, Facts extends 
         ok: false,
         workspaceId: target.workspaceId,
       });
-      return false;
+      return { kind: 'daily_capped' };
     }
   }
 
@@ -245,7 +272,7 @@ async function runOne<Input, Target extends WorkflowSourceTarget, Facts extends 
     cap: workflow.maxRunsPerPrPerHour,
   });
   if (!verdict.allowed) {
-    if (verdict.announce) {
+    if (verdict.announce && recordRefusals) {
       const run = await recordSkippedRun(claimInput, {
         type: workflow.actions[0]?.type ?? 'comment',
         ok: false,
@@ -263,13 +290,13 @@ async function runOne<Input, Target extends WorkflowSourceTarget, Facts extends 
       ok: false,
       workspaceId: target.workspaceId,
     });
-    return false;
+    return { kind: 'rate_capped' };
   }
 
   // The insert IS the idempotency claim — see runs.ts. A duplicate means this
   // delivery has already been handled, here or on another replica.
   const claim = await claimRun(claimInput);
-  if (!claim.claimed) return false;
+  if (!claim.claimed) return { kind: 'duplicate' };
 
   // The rule's actions, plus the "Talyn started" comment an issue rule adds.
   const results = await runWorkflowActions(
@@ -326,6 +353,7 @@ async function runOne<Input, Target extends WorkflowSourceTarget, Facts extends 
     action_types: workflow.actions.map((a) => a.type),
     started_task: results.taskId !== null,
     started_session: results.workbenchId !== null,
+    trigger: opts.manual ? 'manual' : 'event',
     ...subjectProps(facts),
     // The codes on the run itself, so "which workflows are failing and why" is
     // answerable without unpacking the per-action array.
@@ -355,5 +383,50 @@ async function runOne<Input, Target extends WorkflowSourceTarget, Facts extends 
     });
   }
 
-  return true;
+  return { kind: 'acted', run: settled, status, outcomes: results.outcomes, workbenchId: results.workbenchId };
+}
+
+/** What a manual run of one rule did with one event. */
+export type ManualRunOutcome =
+  | RunOneOutcome
+  /** The workspace may not use workflows or this integration now. */
+  | { kind: 'unavailable' }
+  /** The event is not for the rule's workspace, or the workspace has no owner. */
+  | { kind: 'no_target' }
+  /** The rule does not match the subject (or the adapter dropped it). */
+  | { kind: 'not_matching' };
+
+/**
+ * Run ONE rule on one event, because a person asked ("Run selected" in the
+ * PostHog Inbox backlog). The same gates, matcher, caps, claim, actions and
+ * settle as {@link evaluateWorkflows}, for that rule only. The run records
+ * `manual` and who started it. The rule must be enabled.
+ *
+ * Never throws for a refusal: the answer says what happened.
+ */
+export async function runWorkflowManually<
+  Input,
+  Target extends WorkflowSourceTarget,
+  Facts extends WorkflowFacts,
+>(
+  source: WorkflowSourceAdapter<Input, Target, Facts>,
+  input: Input,
+  workflow: WorkflowDefinition,
+  manual: { userId: string; label: string | null }
+): Promise<ManualRunOutcome> {
+  if (workflowsKillSwitchPulled()) return { kind: 'unavailable' };
+  if (!workflow.enabled || workflowIntegrationOf(workflow) !== source.integration) return { kind: 'unavailable' };
+  const factsList = source.facts(input);
+  if (factsList.length === 0) return { kind: 'not_matching' };
+  const target = (await source.targets(input, factsList)).find((t) => t.workspaceId === workflow.workspaceId);
+  if (!target) return { kind: 'no_target' };
+  if (!(await workspaceMayUseWorkflows(target.workspaceId))) return { kind: 'unavailable' };
+  if (source.workspaceAllowed && !(await source.workspaceAllowed(target.workspaceId))) return { kind: 'unavailable' };
+  const ownerId = await ownerOfWorkspace(target.workspaceId);
+  if (!ownerId) return { kind: 'no_target' };
+
+  const prepared = await source.prepare(target, factsList, [workflow]);
+  const facts = prepared.facts.find((f) => workflowMatches(workflow, f, prepared.viewerLogin));
+  if (!facts) return { kind: 'not_matching' };
+  return runOne(source, input, target, workflow, facts, ownerId, { manual });
 }

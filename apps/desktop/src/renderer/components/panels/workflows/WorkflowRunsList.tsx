@@ -140,6 +140,11 @@ export function WorkflowRunsList({
                     : isIssueWorkflowIntegration(run.integration) ? 'Issue' : run.integration === 'posthog_inbox' ? 'PostHog report' : `${run.repoFullName}#${run.prNumber}`)}
               </span>
             )}
+            {run.trigger === 'manual' && (
+              <span className="text-xs text-muted-foreground" data-testid="workflow-run-trigger">
+                {run.triggeredBy ? `Started by ${run.triggeredBy}` : 'Started by hand'}
+              </span>
+            )}
             <span className="ml-auto text-xs text-muted-foreground">
               {relative(run.createdAt)}
             </span>

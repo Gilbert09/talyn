@@ -43,6 +43,7 @@ import {
   PostHogInboxPreview,
   usePostHogInboxStatus,
 } from './posthogInboxFields';
+import { PostHogInboxBacklog } from './posthogInboxBacklog';
 
 /**
  * The workflow editor, as a page.
@@ -173,6 +174,9 @@ export function WorkflowEditorPage({
   const fixedTrigger = kind === 'webhook' || kind === 'posthog_inbox';
   const hasStartAction = input.actions.some((a) => a.type === 'start_session' || a.type === 'start_task');
   const problem = useMemo(() => workflowInputProblem(input), [input]);
+  // "Run selected" in the backlog uses the saved rule, so the backlog says when the editor differs.
+  const savedInput = useMemo(() => (editing ? JSON.stringify(workflowToInput(editing)) : null), [editing]);
+  const unsavedChanges = savedInput !== null && savedInput !== JSON.stringify(input);
   // The preview reads only the conditions, so it runs before the rule has a
   // name or a prompt. The dry-run route validates the same stand-in rule.
   const previewProblem = useMemo(
@@ -513,6 +517,9 @@ export function WorkflowEditorPage({
           </Section>
 
           {kind === 'posthog_inbox' && <PostHogInboxPreview input={input} problem={previewProblem} />}
+          {kind === 'posthog_inbox' && (
+            <PostHogInboxBacklog workflow={editing} conditions={conditions} unsavedChanges={unsavedChanges} />
+          )}
 
           {/* ---- Advanced ---- */}
           <div>

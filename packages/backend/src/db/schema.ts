@@ -1656,6 +1656,11 @@ export const workflowRuns = pgTable(
      * Null on rows written before retries existed.
      */
     facts: jsonb('facts'),
+    /** `WorkflowRunTrigger`: 'event' or 'manual' ("Run selected", migration 0141). */
+    triggerSource: text('trigger_source').notNull().default('event'),
+    /** A manual run: the user who started it, and their name or email then. */
+    triggeredByUserId: text('triggered_by_user_id'),
+    triggeredByLabel: text('triggered_by_label'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
