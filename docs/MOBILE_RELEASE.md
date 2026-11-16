@@ -365,6 +365,8 @@ The app uses PostHog's own tools for this, and nothing else:
 - `apps/mobile/plugins/withPostHogSymbolUploads.cjs` applies the official `posthog-react-native/expo` config plugin
   with `uploadNativeSymbols: true`. Gradle and Xcode then upload the Hermes source maps, iOS dSYMs,
   Android R8 mappings and Android NDK `.so` symbols during a release build.
+  It also sets `skipOnConflict: true`. Two builds of the same native code give the same dSYM UUID with different bytes.
+  PostHog refuses the second dSYM. Without the flag, that stops the Xcode build. With it, PostHog keeps the first dSYM.
 - `apps/mobile/scripts/posthog-symbols.cjs` runs `posthog-cli hermes upload` on the `dist/` folder after each `eas update`.
   `publish-update.cjs` (automatic) and `release.cjs` (manual `update`) call it after the publish.
 - `posthog-cli` is pinned in `apps/mobile/release/toolchain.json` (`posthogCli`). The two workflows must use the same version. `check-release.cjs` checks this.
