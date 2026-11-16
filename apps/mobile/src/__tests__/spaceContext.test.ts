@@ -286,14 +286,16 @@ describe('new work in a space', () => {
     expect(spacePullRequestRows([prRow({})], [])).toEqual([]);
   });
 
-  it.each<[string, NewWorkForm, string | null, string | null]>([
-    ['no home workspace', form(), null, 'You need a workspace of your own to start a session in a space.'],
-    ['no home workspace, thread', form({ mode: 'thread' }), null, 'You need a workspace of your own to start a thread in a space.'],
-    ['no repository', form({ repository: null }), 'w1', 'Choose a repository.'],
-    ['no prompt', form({ prompt: '' }), 'w1', 'Describe a task.'],
-    ['ready', form(), 'w1', null],
-  ])('blocked: %s', (_name, value, home, expected) => {
-    expect(spaceBlockedReason(value, { homeWorkspaceId: home }, sandbox, false)).toBe(expected);
+  it.each<[string, NewWorkForm, string | null, string | null, number]>([
+    ['no home workspace', form(), null, 'You need a workspace of your own to start a session in a space.', 0],
+    ['no home workspace, thread', form({ mode: 'thread' }), null, 'You need a workspace of your own to start a thread in a space.', 0],
+    ['no repository', form({ repository: null }), 'w1', 'Choose a repository.', 0],
+    ['no prompt', form({ prompt: '' }), 'w1', 'Describe a task.', 0],
+    ['no prompt with an image', form({ prompt: '' }), 'w1', null, 1],
+    ['no home workspace with an image', form({ prompt: '' }), null, 'You need a workspace of your own to start a session in a space.', 1],
+    ['ready', form(), 'w1', null, 0],
+  ])('blocked: %s', (_name, value, home, expected, images) => {
+    expect(spaceBlockedReason(value, { homeWorkspaceId: home }, sandbox, false, images)).toBe(expected);
   });
 
   const home = { name: 'Home', repos: [{ id: 'x', name: 'Acme/App', url: '', defaultBranch: 'main' }] };

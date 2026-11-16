@@ -41,17 +41,21 @@ describe('agent readiness', () => {
 });
 
 describe('start validation', () => {
-  it.each<[string, Partial<NewWorkForm>, WorkbenchReadiness['sandbox'] | null, boolean, string | null]>([
-    ['a ready session', {}, ready, false, null],
-    ['a ready thread without a repository', { mode: 'thread', repository: null }, ready, false, null],
-    ['a session without a repository', { repository: null }, ready, false, 'Choose a repository.'],
-    ['an unavailable sandbox', {}, down, false, 'Sessions are paused.'],
-    ['readiness still loading', {}, null, false, 'Checking cloud availability'],
-    ['an agent that is not connected', { agent: 'codex' }, codexOff, false, 'Connect Codex in Settings.'],
-    ['no connection', {}, ready, true, 'You are offline.'],
-    ['an empty session prompt', { prompt: '   ' }, ready, false, 'Describe a task.'],
-    ['an empty thread prompt', { mode: 'thread', prompt: '' }, ready, false, 'Describe what you want to get done.'],
-  ])('%s', (_name, patch, sandbox, offline, expected) => expect(blockedReason(form(patch), sandbox, offline)).toBe(expected));
+  it.each<[string, Partial<NewWorkForm>, WorkbenchReadiness['sandbox'] | null, boolean, string | null, number]>([
+    ['a ready session', {}, ready, false, null, 0],
+    ['a ready thread without a repository', { mode: 'thread', repository: null }, ready, false, null, 0],
+    ['a session without a repository', { repository: null }, ready, false, 'Choose a repository.', 0],
+    ['an unavailable sandbox', {}, down, false, 'Sessions are paused.', 0],
+    ['readiness still loading', {}, null, false, 'Checking cloud availability', 0],
+    ['an agent that is not connected', { agent: 'codex' }, codexOff, false, 'Connect Codex in Settings.', 0],
+    ['no connection', {}, ready, true, 'You are offline.', 0],
+    ['an empty session prompt', { prompt: '   ' }, ready, false, 'Describe a task.', 0],
+    ['an empty thread prompt', { mode: 'thread', prompt: '' }, ready, false, 'Describe what you want to get done.', 0],
+    ['an empty session prompt with an image', { prompt: '   ' }, ready, false, null, 1],
+    ['an empty thread prompt with two images', { mode: 'thread', prompt: '' }, ready, false, null, 2],
+    ['images without a repository', { prompt: '', repository: null }, ready, false, 'Choose a repository.', 1],
+    ['images while offline', { prompt: '' }, ready, true, 'You are offline.', 1],
+  ])('%s', (_name, patch, sandbox, offline, expected, images) => expect(blockedReason(form(patch), sandbox, offline, images)).toBe(expected));
   it.each<[string, Partial<NewWorkForm>, object]>([
     ['a session', { baseBranch: ' develop ' }, { workspaceId: 'one', repositoryId: 'repo-one', runtime: 'sandbox', agent: 'claude',
       model: 'claude-sonnet-5-5', baseBranch: 'develop', prompt: 'Fix the bug', internetAccess: true, autoCreatePr: true }],

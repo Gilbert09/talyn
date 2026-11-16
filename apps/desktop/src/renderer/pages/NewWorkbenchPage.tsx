@@ -360,7 +360,7 @@ export function NewWorkbenchPage() {
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      if (prompt.trim()) void submit(prompt);
+      if (prompt.trim() || images.attachments.length > 0) void submit(prompt);
     }
   };
 
@@ -467,7 +467,7 @@ export function NewWorkbenchPage() {
                   <button
                     type="button"
                     onClick={() => void submit(prompt)}
-                    disabled={!canCreate || !prompt.trim()}
+                    disabled={!canCreate || (!prompt.trim() && images.attachments.length === 0)}
                     aria-label="Create and start"
                     title={blockedReason ?? `Create and start (${formatKeys('enter')})`}
                     data-attr="new-workbench-send"

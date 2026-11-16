@@ -64,7 +64,7 @@ export function useCreateWorkbench(): CreateWorkbenchState {
       // one: the prompt's own event comes only when the sandbox starts the turn.
       // A prompt without images went with the create request, so it is already sent.
       const firstChat = wb.chats?.[0];
-      const pending = firstChat && spec.prompt.trim()
+      const pending = firstChat && (spec.prompt.trim() || spec.attachments?.length)
         ? { chatId: firstChat.id, id: store.addOutgoingMessage(firstChat.id, { text: spec.prompt.trim(), attachments: spec.attachments, settled: !spec.attachments?.length }) }
         : null;
       useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
