@@ -10,6 +10,7 @@ import { uploadAttachment } from './attachmentUpload';
  * Callers refresh the store afterwards.
  */
 export const chatActions = {
+  cancelResume: (chatId: string) => workbenches.cancelResume(chatId),
   stop: (chatId: string) => workbenches.cancel(chatId),
   /** A message with images. The store's own send carries text only. */
   send: (chatId: string, input: SendWorkbenchMessageInput) => workbenches.sendMessage(chatId, input),

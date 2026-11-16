@@ -94,6 +94,8 @@ An agent can wait for the checks on its pull request instead of polling them. It
 
 Sometimes the Claude or Codex API fails on its side, for example with a server error or an overload. Talyn then suspends the sandbox and tries again later. It waits 2, 5, 10, 20 and then 30 minutes between tries, and it tries at most 8 times. The chat shows **The model API is failing** and the time of the next try. Select **Resume now** to try at once, or **Cancel** to stop waiting.
 
+With automatic resume enabled, a waiting session continues by itself when usage returns or you reconnect an account.
+
 To turn this off, open **Settings > Sessions** and turn off **Continue when an agent hits its limit**. That setting also covers usage limits. See [The model API is failing](/docs/troubleshooting#the-model-api-is-failing).
 
 ## Undo with checkpoints

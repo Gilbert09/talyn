@@ -2,6 +2,13 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Resume sessions after a credential refusal (2026-11-16)
+
+Credential refusals now use the existing limit resume sweep and retry count, with at most eight retries.
+Known usage resets set the wait time. Missing reset times use the existing retry delay.
+Fresh credentials make matching reconnect waits due in the payer's workspace.
+Web, desktop, and mobile show the wait and a cancel action.
+
 ## Show Fleet accounts that need sign-in (2026-11-16)
 
 Fleet status now reports any account that needs sign-in, with its name and ID. Healthy accounts remain available.

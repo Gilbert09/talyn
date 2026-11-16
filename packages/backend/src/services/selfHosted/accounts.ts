@@ -4,6 +4,7 @@ import { and, asc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { FleetAgent } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { fleetAccounts, integrations as integrationsTable } from '../../db/schema.js';
+import { wakeCredentialResumes } from '../workbenches/limitResumeState.js';
 import type { EncryptedEnvelope } from '../tokenCrypto.js';
 import type { ClaudeOAuthCredential } from './claudeOauth.js';
 import type { CodexOAuthCredential, ExhaustedQuotaRecord } from './credentials.js';
@@ -525,6 +526,7 @@ export async function addFleetAccount(
     })
     .returning(FLEET_ACCOUNT_STATUS_COLUMNS);
   await mirrorLegacyKeys(workspaceId, agent);
+  await wakeCredentialResumes(workspaceId, agent);
   return toAccount(rows[0]!);
 }
 
@@ -555,6 +557,7 @@ export async function upsertPrimaryFleetAccount(
       .where(eq(fleetAccounts.id, sameKind.id))
       .returning(FLEET_ACCOUNT_STATUS_COLUMNS);
     await mirrorLegacyKeys(workspaceId, agent);
+    await wakeCredentialResumes(workspaceId, agent);
     return toAccount(rows[0]!);
   }
   if (kind === 'anthropic_key' || kind === 'openai_key' || own.length === 0) {
@@ -582,6 +585,7 @@ export async function upsertPrimaryFleetAccount(
     })
     .returning(FLEET_ACCOUNT_STATUS_COLUMNS);
   await mirrorLegacyKeys(workspaceId, agent);
+  await wakeCredentialResumes(workspaceId, agent);
   return toAccount(rows[0]!);
 }
 
@@ -599,6 +603,7 @@ export async function updateFleetAccountCredential(
     .where(eq(fleetAccounts.id, accountId))
     .returning(TOUCHED_COLUMNS);
   await mirrorTouched(rows);
+  for (const row of rows) await wakeCredentialResumes(row.workspaceId, row.agent as FleetAgent);
 }
 
 /** Rename an account. False when the workspace has no such account. */

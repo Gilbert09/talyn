@@ -501,7 +501,7 @@ async function runTurnLoopBody(
       if (wb?.status === 'ready') await startQueuedIfIdle(chatId);
     }
     if (fin && !fin.started && !outcome.cancelled && outcome.status === 'error' &&
-        outcome.statusMessage && (chatLimitAgent(fin.chat, outcome.statusMessage) || chatOutageAgent(fin.chat, outcome.statusMessage))) {
+        outcome.statusMessage && (outcome.credentialsUnavailable || chatLimitAgent(fin.chat, outcome.statusMessage) || chatOutageAgent(fin.chat, outcome.statusMessage))) {
       await handleChatLimit(fin.chat, outcome.statusMessage).catch((err) => {
         console.warn(`[workbench] resuming chat ${chatId} failed:`, err);
       });
@@ -581,6 +581,7 @@ interface TurnOutcome {
   cancelled: boolean;
   /** The turn failed because the box's disk is full. */
   diskFull?: boolean;
+  credentialsUnavailable?: boolean;
   /**
    * The agent failed and its own output says the disk is full. That text is
    * not proof (an agent can talk about disks), so the box's free space is
@@ -1077,7 +1078,9 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     });
     await events.flush();
     const diskFull = isDiskFullError(err);
-    return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false, ...(diskFull ? { diskFull } : {}) };
+    return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false,
+      credentialsUnavailable: err instanceof WorkbenchError && err.code === 'credentials_unavailable',
+      ...(diskFull ? { diskFull } : {}) };
   } finally {
     await recapWrite;
     liveTurns.delete(chatId);
