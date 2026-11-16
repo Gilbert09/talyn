@@ -14,6 +14,8 @@ import {
   workspaceMayUseWorkflows,
 } from '../workflowsAccess.js';
 import type { PostHogInboxListQuery, PostHogInboxReport } from './api.js';
+import { POSTHOG_AUTH_BACKOFF_MS, POSTHOG_INBOX_POLL_INTERVAL_MS, posthogBackoffMs } from './backoff.js';
+import { claimGate, type ClaimGate } from './claims.js';
 import { getPostHogInboxConnection, type PostHogInboxConnection } from './connection.js';
 import { timestampMicros } from './facts.js';
 import { ingestPostHogReport } from './ingest.js';
@@ -56,16 +58,11 @@ import { ingestPostHogReport } from './ingest.js';
  */
 
 const TICK_MS = 60_000;
-/** How often one connection is polled. */
-export const POSTHOG_INBOX_POLL_INTERVAL_MS = 3 * 60_000;
+export { POSTHOG_INBOX_POLL_INTERVAL_MS } from './backoff.js';
 /** How often a connection that PostHog pushes to is polled: a reconcile for dropped pushes. */
 export const POSTHOG_INBOX_RECONCILE_INTERVAL_MS = 30 * 60_000;
 /** A poll that died keeps the connection for this long. */
 const LEASE_MS = 15 * 60_000;
-/** After a 401 or 403: the connection needs the user, not a retry. */
-const AUTH_BACKOFF_MS = 30 * 60_000;
-/** After any other failure. */
-const ERROR_BACKOFF_MS = 10 * 60_000;
 /** When a poll stopped at its ingest cap: come back soon for the rest. */
 const CONTINUE_MS = 30_000;
 
@@ -218,6 +215,11 @@ export async function pollConnection(
     }
     const batch = reports.slice(0, MAX_INGEST_PER_POLL);
     for (const report of batch) {
+      // PostHog refused a claim on this connection: every later report would
+      // be refused too. Stop, keep the cursor, and back off like a failed read.
+      // The run that hit it is parked, so the retry sweep owns that report.
+      const gate = claimGate(connection.id, now.getTime());
+      if (gate) return claimGateResult(gate, ingested, ran, current);
       try {
         const outcome = await ingestPostHogReport(connection, report.id);
         if (outcome.kind === 'evaluated') ran += outcome.ran;
@@ -228,6 +230,8 @@ export async function pollConnection(
       ingested += 1;
       current = advanceCursor(current, report);
     }
+    const gate = claimGate(connection.id, now.getTime());
+    if (gate) return claimGateResult(gate, ingested, ran, current);
     return { status: 'polled', ingested, ran, cursor: current, more: reports.length > batch.length };
   } catch (err) {
     return {
@@ -243,22 +247,33 @@ export async function pollConnection(
   }
 }
 
+/** A poll that stopped because PostHog refused a claim, as an error the backoff reads. */
+function claimGateResult(gate: ClaimGate, ingested: number, ran: number, cursor: PollerCursor): PollResult {
+  return {
+    status: 'error',
+    ingested,
+    ran,
+    cursor,
+    more: false,
+    error: `PostHog refused a claim: ${gate.failure.message}`,
+    errorStatus: gate.failure.status,
+    retryAfterMs: gate.failure.retryAfterMs,
+  };
+}
+
 /**
  * PURE: when to poll a connection next, from how its poll ended. `pushActive`
  * (a push in the last 24 hours) turns the normal interval into the reconcile
- * interval. Backoffs and a backlog are the same either way.
+ * interval. Backoffs (`posthogBackoffMs`, shared with the claim writes) and a
+ * backlog are the same either way.
  */
 export function nextPollDelayMs(
   result: Pick<PollResult, 'status' | 'more' | 'errorStatus' | 'retryAfterMs'>,
   opts: { pushActive?: boolean } = {}
 ): number {
   const interval = opts.pushActive ? POSTHOG_INBOX_RECONCILE_INTERVAL_MS : POSTHOG_INBOX_POLL_INTERVAL_MS;
-  if (result.status === 'error') {
-    if (result.errorStatus === 401 || result.errorStatus === 403) return AUTH_BACKOFF_MS;
-    if (result.errorStatus === 429) return Math.max(POSTHOG_INBOX_POLL_INTERVAL_MS, result.retryAfterMs ?? 0);
-    return ERROR_BACKOFF_MS;
-  }
-  if (result.status === 'no_connection') return AUTH_BACKOFF_MS;
+  if (result.status === 'error') return posthogBackoffMs(result.errorStatus, result.retryAfterMs);
+  if (result.status === 'no_connection') return POSTHOG_AUTH_BACKOFF_MS;
   if (result.more) return CONTINUE_MS;
   return interval;
 }

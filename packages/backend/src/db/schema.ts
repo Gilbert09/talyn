@@ -3560,11 +3560,31 @@ export const externalIssueLinks = pgTable(
     /** 'active' | 'done' | 'failed'. */
     status: text('status').notNull().default('active'),
     statusReason: text('status_reason'),
+    /**
+     * PostHog Inbox only (migration 0139): Talyn's claim on the report in
+     * PostHog. `posthogClaimState` is a `PostHogClaimState`, NULL on a link
+     * that made no PostHog claim. `posthogClaimNextCheckAt` is when the claim
+     * sweep looks again; NULL means nothing is owed.
+     */
+    posthogClaimId: text('posthog_claim_id'),
+    posthogClaimState: text('posthog_claim_state'),
+    posthogClaimPrUrl: text('posthog_claim_pr_url'),
+    posthogClaimReason: text('posthog_claim_reason'),
+    posthogClaimNextCheckAt: timestamp('posthog_claim_next_check_at', { withTimezone: true }),
+    posthogClaimAttempts: integer('posthog_claim_attempts').notNull().default(0),
+    posthogClaimError: text('posthog_claim_error'),
+    posthogClaimUpdatedAt: timestamp('posthog_claim_updated_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     settledAt: timestamp('settled_at', { withTimezone: true }),
   },
   (t) => ({
+    posthogClaimDueIdx: index('idx_external_issue_links_posthog_claim_due')
+      .on(t.posthogClaimNextCheckAt)
+      .where(sql`${t.posthogClaimNextCheckAt} IS NOT NULL`),
+    posthogRunIdx: index('idx_external_issue_links_posthog_run')
+      .on(t.runId)
+      .where(sql`${t.integration} = 'posthog_inbox'`),
     activeUq: uniqueIndex('uq_external_issue_links_active')
       .on(t.workspaceId, t.integration, t.externalId)
       .where(sql`${t.status} = 'active'`),

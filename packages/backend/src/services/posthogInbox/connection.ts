@@ -1,5 +1,5 @@
 import type { PostHogInboxAccess, PostHogInboxConnectionSource } from '@talyn/shared';
-import { POSTHOG_INBOX_REQUIRED_SCOPES, POSTHOG_INBOX_SCOPES } from '@talyn/shared';
+import { POSTHOG_INBOX_CLAIM_SCOPES, POSTHOG_INBOX_REQUIRED_SCOPES, POSTHOG_INBOX_SCOPES } from '@talyn/shared';
 import { isEncryptedEnvelope } from '../tokenCrypto.js';
 import { getPostHogCodeCredentials, readApiKey } from '../posthogCode/credentials.js';
 import { PostHogHostNotAllowedError } from '../posthogCode/hostPolicy.js';
@@ -42,6 +42,21 @@ function grantedScopes(scope: string | null | undefined): Set<string> {
 export function scopeGrantsInbox(scope: string | null | undefined): boolean {
   return grantedScopes(scope).has(POSTHOG_INBOX_SCOPES[0]);
 }
+
+/**
+ * Whether a stored OAuth scope string lets Talyn claim a report and attach its
+ * pull request: `inbox:write` and `task:write`. Without both, the rules start
+ * no session, because a session must not start without a claim.
+ */
+export function scopeGrantsInboxClaims(scope: string | null | undefined): boolean {
+  const granted = grantedScopes(scope);
+  return POSTHOG_INBOX_CLAIM_SCOPES.every((s) => granted.has(s));
+}
+
+/** The editor's notice for a grant that can read the Inbox but not claim. */
+export const CLAIM_SCOPES_MISSING_REASON =
+  'The PostHog connection cannot claim Inbox reports, so the automations start no sessions. ' +
+  'Connect PostHog again to grant the inbox:write and task:write permissions.';
 
 /** The required Inbox scopes a stored OAuth scope string does not hold. */
 export function missingInboxScopes(scope: string | null | undefined): string[] {
@@ -87,6 +102,8 @@ export interface StoredInboxAccess {
   connection: PostHogInboxConnectionSource | null;
   /** OAuth only: the required Inbox scopes the grant lacks. */
   missingScopes: string[];
+  /** The connection can read the Inbox, even when it cannot claim (`access` is then `reconnect`). */
+  canRead?: boolean;
 }
 
 const NOT_CONNECTED_REASON = 'Connect PostHog on the PostHog Inbox page first.';
@@ -155,7 +172,10 @@ export async function storedInboxAccess(workspaceId: string): Promise<StoredInbo
         reason: 'The PostHog connection cannot read the Inbox. Connect PostHog again to grant the Inbox permissions.',
       };
     }
-    return { ...base, missingScopes, access: 'ok', reason: null };
+    if (!scopeGrantsInboxClaims(oauth.scope)) {
+      return { ...base, missingScopes, access: 'reconnect', reason: CLAIM_SCOPES_MISSING_REASON, canRead: true };
+    }
+    return { ...base, missingScopes, access: 'ok', reason: null, canRead: true };
   }
   if (readApiKey(row.config) === null) {
     return { ...base, access: 'not_connected', reason: NOT_CONNECTED_REASON };
@@ -164,13 +184,23 @@ export async function storedInboxAccess(workspaceId: string): Promise<StoredInbo
 }
 
 /**
- * The connection to read the Inbox with, or null when the workspace has no
- * usable one (none, disabled, a grant without `inbox:read`, or one PostHog
- * revoked). A personal API key is tried: PostHog's 403 says whether it can.
+ * The connection to use, or null when the workspace has no usable one (none,
+ * disabled, a grant without `inbox:read`, or one PostHog revoked).
+ *
+ * `claim` (the default, for the poller, the webhook and the session start)
+ * also needs a grant that can claim reports (`inbox:write` and `task:write`):
+ * the rules never start a session without a claim. `read` (the dry run) does
+ * not. A personal API key is tried either way: PostHog's 403 says whether it
+ * can.
  */
-export async function getPostHogInboxConnection(workspaceId: string): Promise<PostHogInboxConnection | null> {
+export async function getPostHogInboxConnection(
+  workspaceId: string,
+  purpose: 'claim' | 'read' = 'claim'
+): Promise<PostHogInboxConnection | null> {
   const stored = await storedInboxAccess(workspaceId);
-  if (stored.access !== 'ok' && stored.access !== 'unknown') return null;
+  const usable =
+    stored.access === 'ok' || stored.access === 'unknown' || (purpose === 'read' && stored.canRead === true);
+  if (!usable) return null;
   if (!stored.integrationId) return null;
   const creds =
     stored.connection === 'posthog_inbox'

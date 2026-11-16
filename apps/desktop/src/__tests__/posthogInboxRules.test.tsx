@@ -3,9 +3,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import React from 'react';
 import {
   validateWorkflow,
+  type PostHogClaimSummary,
   type PostHogInboxDryRun,
   type PostHogInboxStatus,
   type WorkflowInput,
+  type WorkflowRun,
 } from '@talyn/shared';
 import { api } from '../renderer/lib/api';
 import { useBillingStore } from '../renderer/stores/billing';
@@ -14,6 +16,7 @@ import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useIntegrationSectionFocus } from '../renderer/lib/automationFocus';
 import { IntegrationsView } from '../renderer/pages/IntegrationsView';
 import { WorkflowsPanel } from '../renderer/components/panels/workflows/WorkflowsPanel';
+import { WorkflowRunsList } from '../renderer/components/panels/workflows/WorkflowRunsList';
 import { PostHogInboxConnectionSection } from '../renderer/components/panels/workflows/posthogInboxFields';
 
 const STATS = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null };
@@ -306,7 +309,7 @@ describe('PostHog Inbox rule editor', () => {
   });
 
   it.each([
-    ['reconnect', { access: 'reconnect', reason: 'The grant has no inbox:read.' }, /Reconnect PostHog to let Talyn read your Inbox/, 'Reconnect PostHog'],
+    ['reconnect', { access: 'reconnect', reason: 'The grant has no inbox:read.' }, /Reconnect PostHog to let Talyn read and claim your Inbox reports/, 'Reconnect PostHog'],
     ['not_connected', { access: 'not_connected', projectId: null, authMethod: null }, /Connect PostHog first/, 'Connect PostHog'],
   ] as const)('shows the %s notice with a link to the Inbox connection', async (_access, over, text, button) => {
     jest.mocked(api.workflows.posthogInboxStatus).mockResolvedValue(inboxStatus(over));
@@ -388,6 +391,63 @@ describe('PostHog Inbox rule editor', () => {
     expect(await screen.findByText('Checkout crashes on submit')).toBeTruthy();
     addCondition('Priority');
     await waitFor(() => expect(screen.queryByText('Checkout crashes on submit')).toBeNull());
+  });
+});
+
+describe('PostHog Inbox run history', () => {
+  const run = (over: Partial<WorkflowRun> = {}) =>
+    ({
+      id: 'run-1', workflowId: 'wf1', workspaceId: 'ws1', integration: 'posthog_inbox', subjectLabel: 'Checkout crashes',
+      repositoryId: 'repo1', repoFullName: '', prNumber: 0, prTitle: '', prUrl: '', prAuthor: '', pullRequestId: null,
+      taskId: null, workbenchId: null, event: 'report_ready', status: 'succeeded',
+      actions: [{ type: 'start_session', ok: true, detail: 'started a session' }],
+      error: null, retryAfter: null, attempts: 1, createdAt: new Date().toISOString(), ...over,
+    }) as WorkflowRun;
+  const claim = (over: Partial<PostHogClaimSummary>): PostHogClaimSummary => ({
+    state: 'claimed', prUrl: null, reason: null, pending: false, error: null, updatedAt: null, ...over,
+  });
+
+  it.each([
+    ['claimed', claim({}), 'Claimed the report in PostHog.', null],
+    ['PR attached', claim({ state: 'pr_attached', prUrl: 'https://github.com/acme/app/pull/7' }), 'Attached the pull request to the claim in PostHog.', 'acme/app/pull/7'],
+    ['merged', claim({ state: 'merged', prUrl: 'https://github.com/acme/app/pull/7' }), 'The pull request merged. PostHog resolves the report.', 'acme/app/pull/7'],
+    ['released', claim({ state: 'released', reason: 'the session was archived without a pull request' }), 'Released the claim in PostHog: the session was archived without a pull request.', null],
+    ['lost', claim({ state: 'lost', reason: 'somebody else took the report over' }), 'PostHog ended the claim: somebody else took the report over.', null],
+    ['an update owed', claim({ pending: true, error: '503: down' }), 'Claimed the report in PostHog. PostHog did not take the last update (503: down). Talyn tries again.', null],
+  ])('shows the claim when it is %s', async (_name, posthogClaim, text, link) => {
+    jest.spyOn(api.workflows, 'runs').mockResolvedValue([run({ posthogClaim })]);
+    render(<WorkflowRunsList workflowId="wf1" liveRuns={undefined} />);
+    expect(await screen.findByText('Checkout crashes')).toBeTruthy();
+    const line = document.querySelector('[data-testid="posthog-claim"]') as HTMLElement;
+    expect(line.textContent).toContain(text);
+    const anchor = line.querySelector('a');
+    expect(anchor?.textContent ?? null).toBe(link);
+    if (anchor) expect(anchor.getAttribute('href')).toBe(posthogClaim.prUrl);
+  });
+
+  it('shows no claim line on a run without a claim, and says why a lost race was skipped', async () => {
+    jest.spyOn(api.workflows, 'runs').mockResolvedValue([
+      run({
+        status: 'skipped',
+        actions: [{ type: 'start_session', ok: false, code: 'report_claimed_elsewhere', error: 'Another person or agent claimed this report in PostHog first, so Talyn started no session.' }],
+      }),
+    ]);
+    render(<WorkflowRunsList workflowId="wf1" liveRuns={undefined} />);
+    expect(await screen.findByText(/claimed this report in PostHog first/)).toBeTruthy();
+    expect(document.querySelector('[data-testid="posthog-claim"]')).toBeNull();
+  });
+
+  it('says a parked claim waits for PostHog, not GitHub', async () => {
+    jest.spyOn(api.workflows, 'runs').mockResolvedValue([
+      run({
+        status: 'pending_retry',
+        retryAfter: new Date(Date.now() + 10 * 60_000).toISOString(),
+        actions: [{ type: 'start_session', ok: false, code: 'posthog_unavailable', error: 'PostHog did not take the claim (503). Talyn tries again later.' }],
+      }),
+    ]);
+    render(<WorkflowRunsList workflowId="wf1" liveRuns={undefined} />);
+    expect(await screen.findByText(/PostHog did not take the claim on the report\./)).toBeTruthy();
+    expect(screen.queryByText(/GitHub is rate-limiting/)).toBeNull();
   });
 });
 

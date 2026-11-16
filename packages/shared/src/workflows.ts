@@ -25,6 +25,7 @@ import { isCodeReviewPreset, type CodeReviewPreset } from './codeReview.js';
 // is not.
 
 import type { SkillKey } from './skills.js';
+import type { PostHogClaimSummary } from './posthogInbox.js';
 
 // ============================================================================
 // Integrations
@@ -1088,6 +1089,27 @@ export type WorkflowActionFailureCode =
   | 'issue_error'
   /** The tracker connection is gone or needs a new sign-in, so Talyn cannot write back. */
   | 'issue_unavailable'
+  /**
+   * Another person or agent claimed the PostHog report first, so no session
+   * starts. The run is recorded as skipped.
+   */
+  | 'report_claimed_elsewhere'
+  /**
+   * Parked: PostHog did not answer the claim (a 5xx or a network failure).
+   * Retried with the poller's backoff.
+   */
+  | 'posthog_unavailable'
+  /**
+   * Parked: PostHog refused the claim (401 or 403). The connection probably
+   * needs the `inbox:write` and `task:write` permissions. Retried after a
+   * long backoff.
+   */
+  | 'posthog_unauthorized'
+  /**
+   * The PostHog connection cannot claim reports (gone, or a grant without
+   * `inbox:write` and `task:write`), so no session starts. Not retried.
+   */
+  | 'posthog_claim_unavailable'
   | 'error';
 
 /** One action's outcome inside one run. */
@@ -1143,6 +1165,11 @@ export interface WorkflowRun {
   /** How many times the actions have been attempted. Starts at 1. */
   attempts: number;
   createdAt: string;
+  /**
+   * A PostHog Inbox run: Talyn's claim on the report in PostHog. Absent on
+   * other runs, on runs that made no claim, and on older servers.
+   */
+  posthogClaim?: PostHogClaimSummary | null;
 }
 
 /**

@@ -511,7 +511,9 @@ describe('PostHog Inbox connection', () => {
 
     it.each([
       ['the full grant', INBOX_SCOPE, 'ok', []],
-      ['a grant without task:write', 'openid inbox:read inbox:write', 'ok', ['task:write']],
+      // It can read, but it cannot attach a pull request to a claim, so the
+      // rules start no session: reconnect, with the missing scope named.
+      ['a grant without task:write', 'openid inbox:read inbox:write', 'reconnect', ['task:write']],
       ['a grant without inbox:read', 'openid inbox:write task:write', 'reconnect', ['inbox:read']],
       ['no scope returned', '', 'reconnect', ['inbox:read', 'inbox:write', 'task:write']],
     ])('stores %s and checks it', async (_label, scope, access, missing) => {
@@ -522,6 +524,8 @@ describe('PostHog Inbox connection', () => {
       const status = await posthogInboxStatus(WS);
       expect(status).toMatchObject({ access, missingScopes: missing, connection: 'posthog_inbox', authMethod: 'oauth', projectId: '42', host: HOST });
       expect(Boolean(await getPostHogInboxConnection(WS))).toBe(access === 'ok');
+      // The dry run reads with any grant that has inbox:read.
+      expect(Boolean(await getPostHogInboxConnection(WS, 'read'))).toBe(scope.split(' ').includes('inbox:read'));
     });
   });
 

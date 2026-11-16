@@ -47,6 +47,15 @@ import {
 import { inboundRulePrompt, repositoryName } from './inboundActions.js';
 import { claimIssueForStart, finishIssueStart, issueRepository, issueRulePrompt, noRepository } from './issueActions.js';
 import { posthogInboxRulePrompt } from './posthogInboxActions.js';
+import { posthogBackoffMs } from '../posthogInbox/backoff.js';
+import {
+  claimBlockedUntil,
+  claimGate,
+  claimReportForStart,
+  syncPostHogClaim,
+  type ClaimFailure,
+} from '../posthogInbox/claims.js';
+import { getPostHogInboxConnection } from '../posthogInbox/connection.js';
 
 /**
  * The `start_session` action: a rule starts a session, as the workspace owner.
@@ -259,9 +268,13 @@ async function startIssueSession(action: StartSessionAction, ctx: IssueActionCon
 
 /**
  * From a PostHog Inbox report. Always on the report's own repository, which
- * the adapter matched to a repository connected to the workspace. The report
- * is claimed BEFORE the create (`external_issue_links`), so a later change to
- * the same report cannot start a second session while this one works on it.
+ * the adapter matched to a repository connected to the workspace.
+ *
+ * Two claims come BEFORE the create. Talyn's own (`external_issue_links`) stops
+ * a later change to the same report from starting a second session here. The
+ * claim in PostHog (`claims.ts`) tells every other agent the report is taken;
+ * a 409 means somebody else holds it, and the run is skipped. No claim, no
+ * session.
  */
 async function startPostHogInboxSession(
   action: StartSessionAction,
@@ -278,8 +291,32 @@ async function startPostHogInboxSession(
       ),
     };
   }
+  // A session never starts without a claim in PostHog, so the connection
+  // must be able to make one (`inbox:write` and `task:write`).
+  const connection = await getPostHogInboxConnection(ctx.workspaceId);
+  if (!connection || connection.id !== ctx.facts.connectionId) {
+    return {
+      outcome: no(
+        'start_session',
+        'posthog_claim_unavailable',
+        'Talyn cannot claim reports with this PostHog connection, so it started no session. ' +
+          'Connect PostHog again with the inbox:write and task:write permissions.'
+      ),
+    };
+  }
+  // PostHog refused a recent claim on this connection: wait, as the poller does.
+  const gate = claimGate(connection.id);
+  if (gate) return claimFailureResult(gate.failure, gate.until);
+
   const claim = await claimIssueForStart('start_session', ctx);
   if (!claim.ok) return claim.result;
+  const posthogClaim = await claimReportForStart(connection, claim.link, ctx.facts.reportId);
+  if (!posthogClaim.ok) {
+    const result = claimFailureResult(posthogClaim.failure, claimBlockedUntil(connection.id));
+    await finishIssueStart(claim.link, result);
+    return result;
+  }
+
   const created = await createRuleSession(action, ctx, {
     repositoryId,
     prompt: posthogInboxRulePrompt(action.prompt, ctx, repoName),
@@ -288,7 +325,55 @@ async function startPostHogInboxSession(
   });
   const result = created.ok ? started(created.workbenchId) : created.result;
   await finishIssueStart(claim.link, result);
+  // The session did not start and will not be retried: release the claim now.
+  // The claim sweep does the same if this fails.
+  if (!result.outcome.ok && !result.retryAt) await syncPostHogClaim(claim.link.id);
   return result;
+}
+
+/** A claim PostHog did not take, as the start's outcome. Parked unless it never clears. */
+export function claimFailureResult(failure: ClaimFailure, gateUntil: number, now = Date.now()): OneResult {
+  const retryAt = new Date(Math.max(gateUntil, now + posthogBackoffMs(failure.status, failure.retryAfterMs)));
+  switch (failure.kind) {
+    case 'conflict':
+      return {
+        outcome: no(
+          'start_session',
+          'report_claimed_elsewhere',
+          'Another person or agent claimed this report in PostHog first, so Talyn started no session.'
+        ),
+      };
+    case 'unauthorized':
+      return {
+        outcome: no(
+          'start_session',
+          'posthog_unauthorized',
+          `PostHog refused the claim${failure.status ? ` (${failure.status})` : ''}. ` +
+            'Connect PostHog again with the inbox:write and task:write permissions. Talyn tries again later.'
+        ),
+        retryAt,
+      };
+    case 'rate_limited':
+      return {
+        outcome: no(
+          'start_session',
+          'rate_gated',
+          `PostHog is rate-limiting claims for another ${Math.max(1, Math.round((retryAt.getTime() - now) / 1000))}s.`
+        ),
+        retryAt,
+      };
+    case 'unavailable':
+      return {
+        outcome: no(
+          'start_session',
+          'posthog_unavailable',
+          `PostHog did not take the claim (${failure.status ?? 'no answer'}). Talyn tries again later.`
+        ),
+        retryAt,
+      };
+    case 'invalid':
+      return { outcome: no('start_session', 'error', `PostHog refused the claim: ${failure.message}`) };
+  }
 }
 
 // ---- Slack ----------------------------------------------------------------

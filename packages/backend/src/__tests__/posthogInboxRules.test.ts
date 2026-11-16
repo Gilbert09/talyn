@@ -13,6 +13,7 @@ import {
   workspaces,
 } from '../db/schema.js';
 import type { CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
+import { FakePostHog } from './helpers/fakePostHogInbox.js';
 
 /**
  * PostHog Inbox rules against a database: the ingest (one report id in, read
@@ -60,81 +61,11 @@ const { ingestPostHogReport } = await import('../services/posthogInbox/ingest.js
 const { getPostHogInboxConnection } = await import('../services/posthogInbox/connection.js');
 const { posthogInboxPoller, claimPoller } = await import('../services/posthogInbox/poller.js');
 const { posthogInboxStatus, posthogInboxDryRun } = await import('../services/posthogInbox/preview.js');
+const { _resetClaimGatesForTests } = await import('../services/posthogInbox/claims.js');
 
 const MODEL = 'claude-sonnet-4-5';
 const HOST = 'https://us.posthog.com';
 const realFetch = globalThis.fetch;
-
-interface FakeReport {
-  id: string;
-  title: string;
-  summary: string;
-  status: string;
-  priority: string | null;
-  actionability: string | null;
-  already_addressed: boolean | null;
-  suppression_source: string | null;
-  signal_count: number;
-  source_products: string[];
-  scout_name: string | null;
-  repo_slug: string | null;
-  updated_at: string;
-}
-
-/** A fake of PostHog's signals reports API. Records every request path. */
-class FakePostHog {
-  reports = new Map<string, FakeReport>();
-  reviewers = new Map<string, string[]>();
-  requests: string[] = [];
-  status = 200;
-
-  put(id: string, overrides: Partial<FakeReport> = {}): FakeReport {
-    const report: FakeReport = {
-      id,
-      title: `Report ${id}`,
-      summary: `Something breaks in ${id}.`,
-      status: 'ready',
-      priority: 'P1',
-      actionability: 'immediately_actionable',
-      already_addressed: false,
-      suppression_source: null,
-      signal_count: 3,
-      source_products: ['error_tracking'],
-      scout_name: null,
-      repo_slug: 'acme/web-app',
-      updated_at: '2026-11-14T00:00:00.000001Z',
-      ...overrides,
-    };
-    this.reports.set(id, report);
-    return report;
-  }
-
-  handle(url: URL): Response {
-    this.requests.push(`${url.pathname}${url.search}`);
-    if (this.status !== 200) return new Response('{}', { status: this.status });
-    const m = /^\/api\/projects\/2\/signals\/reports\/(?:([^/]+)\/(artefacts\/)?)?$/.exec(url.pathname);
-    if (!m) return new Response('{}', { status: 404 });
-    const [, id, artefacts] = m;
-    if (id && artefacts) {
-      const logins = this.reviewers.get(id);
-      return Response.json({
-        results: logins ? [{ id: 'a1', type: 'suggested_reviewers', content: logins.map((github_login) => ({ github_login })) }] : [],
-      });
-    }
-    if (id) {
-      const report = this.reports.get(id);
-      return report ? Response.json(report) : new Response('{}', { status: 404 });
-    }
-    // The list: newest change first, without `repo_slug`, like PostHog's.
-    const offset = Number(url.searchParams.get('offset') ?? 0);
-    const limit = Number(url.searchParams.get('limit') ?? 100);
-    const rows = [...this.reports.values()]
-      .filter((r) => r.status === 'ready')
-      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-      .map(({ repo_slug: _repo, ...rest }) => rest);
-    return Response.json({ count: rows.length, results: rows.slice(offset, offset + limit) });
-  }
-}
 
 describe('PostHog Inbox rules', () => {
   let testDb: Awaited<ReturnType<typeof createTestDb>>;
@@ -147,12 +78,13 @@ describe('PostHog Inbox rules', () => {
     resetFeatureFlagsForTests();
     resetWebAppUrlCacheForTests();
     _resetWorkflowStore();
+    _resetClaimGatesForTests();
     created.length = 0;
 
     posthog = new FakePostHog();
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input instanceof Request ? input.url : input));
-      if (url.origin === HOST) return posthog.handle(url);
+      if (url.origin === HOST) return posthog.handle(url, init);
       return realFetch(input, init);
     });
 
@@ -459,6 +391,9 @@ describe('PostHog Inbox rules', () => {
       ['a PostHog Code grant from before Inbox rules', 'not_connected', 'openid task:read task:write', false],
       ['a PostHog Code grant with the Inbox scope', 'ok', 'openid task:read task:write inbox:read inbox:write', false],
       ['a PostHog Code grant PostHog revoked', 'not_connected', 'openid task:read task:write inbox:read inbox:write', true],
+      // One that can read but not claim starts no sessions, and asks for a reconnect.
+      ['a PostHog Code grant that can read but not claim (no task:write)', 'reconnect', 'openid task:read inbox:read inbox:write', false],
+      ['a PostHog Code grant that can read but not claim (no inbox:write)', 'reconnect', 'openid task:read task:write inbox:read', false],
     ])('says %s is %s', async (_name, access, scope, reauth) => {
       await connectWithOAuth(scope, reauth);
       expect((await posthogInboxStatus('ws1')).access).toBe(access);

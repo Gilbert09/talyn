@@ -17,6 +17,7 @@ import {
   workspaces,
 } from '../db/schema.js';
 import type { CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
+import { FakePostHog as SharedFakePostHog, type FakeReport } from './helpers/fakePostHogInbox.js';
 
 /**
  * The PostHog Inbox push end to end: PostHog's webhook destination posts
@@ -69,6 +70,7 @@ const { posthogInboxPoller, recordPostHogInboxPush, POSTHOG_INBOX_POLL_INTERVAL_
   await import('../services/posthogInbox/poller.js');
 const { posthogInboxStatus } = await import('../services/posthogInbox/preview.js');
 const { debugBus } = await import('../services/debugBus.js');
+const { _resetClaimGatesForTests } = await import('../services/posthogInbox/claims.js');
 
 const MODEL = 'claude-sonnet-4-5';
 const HOST = 'https://us.posthog.com';
@@ -78,71 +80,21 @@ const R1 = '0194f0c2-7d1e-7c55-9e41-000000000001';
 const R2 = '0194f0c2-7d1e-7c55-9e41-000000000002';
 const UNKNOWN = '0194f0c2-7d1e-7c55-9e41-00000000dead';
 
-interface FakeReport {
-  id: string;
-  title: string;
-  summary: string;
-  status: string;
-  priority: string | null;
-  actionability: string | null;
-  already_addressed: boolean;
-  suppression_source: string | null;
-  signal_count: number;
-  source_products: string[];
-  scout_name: string | null;
-  repo_slug: string | null;
-  updated_at: string;
-}
-
-/** PostHog's signals reports API for project 2. Records every request path. */
-class FakePostHog {
-  reports = new Map<string, FakeReport>();
-  requests: string[] = [];
-  status = 200;
-
-  put(id: string, overrides: Partial<FakeReport> = {}): FakeReport {
-    const report: FakeReport = {
-      id,
-      title: `Report ${id}`,
-      summary: `Something breaks in ${id}.`,
-      status: 'ready',
-      priority: 'P1',
-      actionability: 'immediately_actionable',
-      already_addressed: false,
-      suppression_source: null,
-      signal_count: 3,
-      source_products: ['error_tracking'],
-      scout_name: null,
-      repo_slug: 'acme/web-app',
+/**
+ * PostHog's signals reports API for project 2, with the claim route
+ * (`helpers/fakePostHogInbox.ts`). Pushes carry a newer `updated_at` by
+ * default, and `reads` counts single-report reads.
+ */
+class FakePostHog extends SharedFakePostHog {
+  override put(id: string, overrides: Partial<FakeReport> = {}): FakeReport {
+    return super.put(id, {
       updated_at: new Date(Date.now() + 60_000).toISOString().replace('Z', '123+00:00'),
       ...overrides,
-    };
-    this.reports.set(id, report);
-    return report;
+    });
   }
 
   reads(id: string): number {
     return this.requests.filter((r) => r === `/api/projects/2/signals/reports/${id}/`).length;
-  }
-
-  handle(url: URL): Response {
-    this.requests.push(`${url.pathname}${url.search}`);
-    if (this.status !== 200) return new Response('{}', { status: this.status });
-    const m = /^\/api\/projects\/2\/signals\/reports\/(?:([^/]+)\/(artefacts\/)?)?$/.exec(url.pathname);
-    if (!m) return new Response('{}', { status: 404 });
-    const [, id, artefacts] = m;
-    if (id && artefacts) return Response.json({ results: [] });
-    if (id) {
-      const report = this.reports.get(id);
-      return report ? Response.json(report) : new Response('{"detail":"Not found."}', { status: 404 });
-    }
-    const offset = Number(url.searchParams.get('offset') ?? 0);
-    const limit = Number(url.searchParams.get('limit') ?? 100);
-    const rows = [...this.reports.values()]
-      .filter((r) => r.status === 'ready')
-      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-      .map(({ repo_slug: _repo, ...rest }) => rest);
-    return Response.json({ count: rows.length, results: rows.slice(offset, offset + limit) });
   }
 }
 
@@ -185,12 +137,13 @@ describe('PostHog Inbox push', () => {
     resetFeatureFlagsForTests();
     resetWebAppUrlCacheForTests();
     _resetWorkflowStore();
+    _resetClaimGatesForTests();
     created.length = 0;
 
     posthog = new FakePostHog();
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input instanceof Request ? input.url : input));
-      if (url.origin === HOST) return posthog.handle(url);
+      if (url.origin === HOST) return posthog.handle(url, init);
       return realFetch(input, init);
     });
 
@@ -558,7 +511,10 @@ describe('PostHog Inbox push', () => {
 
       await testDb.db.update(posthogInboxPollers).set({ nextPollAt: t0 });
       await tick(new Date(t0.getTime() + 60_000));
-      expect(posthog.reads(R1)).toBe(2);
+      // The push's run claimed R1 in PostHog, and the poll lists only
+      // unclaimed reports, so the poll does not even read it again.
+      expect(posthog.activeClaim(R1)?.holder).toBe('talyn');
+      expect(posthog.reads(R1)).toBe(1);
       expect(await runs()).toHaveLength(1);
       expect(created).toHaveLength(1);
     });

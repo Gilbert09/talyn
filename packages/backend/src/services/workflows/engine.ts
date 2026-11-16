@@ -62,6 +62,7 @@ const REFUSAL_CODES: ReadonlySet<string> = new Set([
   'not_open',
   'repository_unresolved',
   'issue_already_running',
+  'report_claimed_elsewhere',
 ]);
 
 /**
