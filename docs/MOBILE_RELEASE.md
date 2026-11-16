@@ -279,8 +279,14 @@ The wrapper verifies hosted platform, profile, identity, commit, version, build,
 Android submission creates a draft on the internal track. A store owner must review and release that draft.
 iOS submission uploads to App Store Connect. It does not release the app to the public.
 iOS submission adds the build to the TestFlight groups "Talyn internal" and "Talyn external" (`groups` in the
-`eas.json` submit profiles; Tom's call, 2026-11-16). A build in the external group goes to Beta App Review.
-Testers in that group get the build after Apple approves it. Manage the people in each group in App Store Connect.
+`eas.json` submit profiles; Tom's call, 2026-11-16). Adding a build to an external group does not ask for
+Beta App Review, so App Store Connect shows it as "Ready to Submit". `.github/workflows/mobile-testflight-review.yml`
+runs every 30 minutes. It sends the newest build to Beta App Review when that build is ready and in an external group
+(`apps/mobile/scripts/testflight-review.cjs`). It never submits an older build, because a newer build replaces it.
+When the build has no "What to Test" text, the script adds a default text first. The workflow uses the
+App Store Connect API key in the `mobile-updates` environment secrets `MOBILE_ASC_KEY_ID`, `MOBILE_ASC_ISSUER_ID`
+and `MOBILE_ASC_PRIVATE_KEY` (1Password: "Talyn App Store Connect API key"). `MOBILE_TESTFLIGHT_AUTO=0` stops it.
+Testers in the external group get the build after Apple approves it. Manage the people in each group in App Store Connect.
 The app declares `ITSAppUsesNonExemptEncryption: false`, so App Store Connect does not ask the export compliance question.
 Confirm processing, tester access, and TestFlight expiry dates.
 Google personal accounts can require a closed test before production access. Confirm the current Console requirements.

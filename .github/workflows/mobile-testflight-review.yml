@@ -1,0 +1,42 @@
+name: Mobile TestFlight review
+
+# EAS adds each TestFlight build to the groups in the eas.json submit profile, but App Store Connect does not send a
+# build in an external group to Beta App Review by itself: it waits as "Ready to Submit". This workflow asks for the
+# review of the newest build. The build workflow does not wait for EAS, so this runs on a schedule. Set the repository
+# variable MOBILE_TESTFLIGHT_AUTO to 0 to stop it with the build workflow.
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-testflight-review
+  cancel-in-progress: false
+
+jobs:
+  review:
+    name: Send the newest build to Beta App Review
+    # An unset variable is null, so the kill switch defaults to '1' before the comparison (see mobile-testflight.yml).
+    if: github.repository == 'Gilbert09/talyn' && (vars.MOBILE_TESTFLIGHT_AUTO || '1') != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: mobile-updates
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: apps/mobile/scripts
+      - name: Submit when the newest build is ready
+        env:
+          ASC_KEY_ID: ${{ secrets.MOBILE_ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.MOBILE_ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.MOBILE_ASC_PRIVATE_KEY }}
+          ASC_APP_ID: '6834161436'
+        run: |
+          if [ -z "$ASC_PRIVATE_KEY" ]; then
+            echo "::notice::MOBILE_ASC_PRIVATE_KEY is not set, so no build was sent to review."
+            exit 0
+          fi
+          node apps/mobile/scripts/testflight-review.cjs --execute
