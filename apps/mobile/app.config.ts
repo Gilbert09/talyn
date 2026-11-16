@@ -161,7 +161,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     userInterfaceStyle: 'automatic',
     ios: {
       bundleIdentifier: identity.iosBundleIdentifier,
-      supportsTablet: true,
+      supportsTablet: false,
       buildNumber: release.build,
       privacyManifests: {
         NSPrivacyTracking: false,

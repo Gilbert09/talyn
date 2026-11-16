@@ -1,37 +1,51 @@
 {
-  "status": "template; store-owner approval required",
+  "status": "Listing text drafted 2026-11-16 for Tom's approval. Assets pending.",
   "locale": "en-US",
   "apple": {
     "name": "Talyn",
-    "subtitle": null,
-    "description": null,
-    "keywords": null,
-    "category": null,
-    "supportUrl": null,
-    "privacyUrl": null,
-    "deletionUrl": null,
-    "copyright": null,
-    "reviewAccess": null,
-    "releaseNotes": null,
-    "countries": null,
+    "subtitle": "Your coding agents, anywhere",
+    "description": "Talyn keeps your coding agents working while you are away from your desk. Agents run Claude Code and Codex in cloud sandboxes on your own Claude or ChatGPT plan. Talyn on your phone lets you follow them, answer them and keep their pull requests moving.\n\nFOLLOW YOUR SESSIONS\nSee every session and thread at a glance: which agents are working, which finished, and which need an answer from you. Open a session to read its transcript and the changes it made.\n\nANSWER AND STEER\nReply to an agent, give it a new instruction, or stop a turn. Start a new session on one of your repositories.\n\nKEEP PULL REQUESTS MOVING\nSee the pull requests that need you: failing checks, review requests and merge conflicts. Read the diff, approve or request changes, ask an agent to fix a failing check, and add a pull request to the merge queue.\n\nNOTIFICATIONS WHEN YOU ARE AWAY\nTalyn sends an alert when an agent finishes, needs an answer or opens a pull request. When you are at your computer with Talyn open, your phone stays quiet.\n\nTalyn works with GitHub. Sign in with your GitHub account. To run agents, connect your own Claude or ChatGPT subscription in Talyn.",
+    "keywords": "pull request,code review,coding agent,ai agent,developer,merge queue,sandbox,git,devops,ci",
+    "category": {
+      "primary": "Developer Tools",
+      "secondary": "Productivity"
+    },
+    "supportUrl": "https://www.talyn.dev/docs",
+    "privacyUrl": "https://www.talyn.dev/privacy",
+    "deletionUrl": "https://www.talyn.dev/delete-account",
+    "copyright": "2026 Thomas Owers",
+    "reviewAccess": {
+      "account": "GitHub user talynreviewer (password in 1Password: \"Github review account for talyn\"; entered by the store owner)",
+      "notes": "Sign in with the GitHub account below. Talyn uses GitHub sign-in only, because Talyn is a client for GitHub repositories and pull requests (App Review Guideline 4.8, exception for a client of a specific third-party service).\nRunning a new agent needs a Claude or ChatGPT subscription that the person connects. The reviewer can read sessions, threads, transcripts and pull requests without one.\nThe app sells nothing. Plans and usage are shown only; there is no purchase, upgrade or external payment link in the app.\nAccount deletion: Settings > Delete account."
+    },
+    "releaseNotes": "The first release of Talyn for iPhone.",
+    "countries": "all available",
     "ageRating": null,
-    "privacyAnswers": null,
-    "assets": null
+    "privacyAnswers": "published 2026-11-13, see privacy-inventory.json",
+    "assets": null,
+    "release": "automatic after approval (Tom, 2026-11-16)",
+    "devices": "iPhone only (supportsTablet false, Tom, 2026-11-16)",
+    "purchases": "none (EXPO_PUBLIC_PURCHASE_MODE=none, Tom, 2026-11-16)"
   },
   "google": {
     "name": "Talyn",
-    "shortDescription": null,
-    "description": null,
-    "category": null,
-    "supportUrl": null,
-    "privacyUrl": null,
-    "deletionUrl": null,
-    "copyright": null,
-    "reviewAccess": null,
-    "releaseNotes": null,
-    "countries": null,
+    "shortDescription": "Follow and steer your cloud coding agents, and keep pull requests moving.",
+    "description": "Talyn keeps your coding agents working while you are away from your desk. Agents run Claude Code and Codex in cloud sandboxes on your own Claude or ChatGPT plan. Talyn on your phone lets you follow them, answer them and keep their pull requests moving.\n\nFOLLOW YOUR SESSIONS\nSee every session and thread at a glance: which agents are working, which finished, and which need an answer from you. Open a session to read its transcript and the changes it made.\n\nANSWER AND STEER\nReply to an agent, give it a new instruction, or stop a turn. Start a new session on one of your repositories.\n\nKEEP PULL REQUESTS MOVING\nSee the pull requests that need you: failing checks, review requests and merge conflicts. Read the diff, approve or request changes, ask an agent to fix a failing check, and add a pull request to the merge queue.\n\nNOTIFICATIONS WHEN YOU ARE AWAY\nTalyn sends an alert when an agent finishes, needs an answer or opens a pull request. When you are at your computer with Talyn open, your phone stays quiet.\n\nTalyn works with GitHub. Sign in with your GitHub account. To run agents, connect your own Claude or ChatGPT subscription in Talyn.",
+    "category": "Productivity",
+    "supportUrl": "https://www.talyn.dev/docs",
+    "privacyUrl": "https://www.talyn.dev/privacy",
+    "deletionUrl": "https://www.talyn.dev/delete-account",
+    "copyright": "2026 Thomas Owers",
+    "reviewAccess": {
+      "account": "GitHub user talynreviewer (entered in Play Console by the store owner)",
+      "notes": "Sign in with the GitHub account below. Talyn uses GitHub sign-in only, because Talyn is a client for GitHub repositories and pull requests (App Review Guideline 4.8, exception for a client of a specific third-party service).\nRunning a new agent needs a Claude or ChatGPT subscription that the person connects. The reviewer can read sessions, threads, transcripts and pull requests without one.\nThe app sells nothing. Plans and usage are shown only; there is no purchase, upgrade or external payment link in the app.\nAccount deletion: Settings > Delete account."
+    },
+    "releaseNotes": "The first release of Talyn for Android.",
+    "countries": "all available",
     "ageRating": null,
-    "privacyAnswers": null,
-    "assets": null
+    "privacyAnswers": "Data safety published 2026-11-13, see privacy-inventory.json",
+    "assets": null,
+    "release": "automatic after approval (Tom, 2026-11-16)",
+    "purchases": "none (EXPO_PUBLIC_PURCHASE_MODE=none, Tom, 2026-11-16)"
   }
 }
