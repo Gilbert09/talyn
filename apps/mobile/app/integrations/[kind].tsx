@@ -7,6 +7,7 @@ import { View } from 'react-native';
 import { Segmented } from '../../src/components/UI';
 import { LinearScreen } from '../../src/features/integrations/LinearScreen';
 import { githubIssuesAvailable, ruleIntegration } from '../../src/features/integrations/model';
+import { PostHogInboxScreen } from '../../src/features/integrations/PostHogInboxScreen';
 import { RulesScreen } from '../../src/features/integrations/RulesScreen';
 import { IntegrationsScreen } from '../../src/features/integrations/IntegrationsScreen';
 import { GitHubSettingsScreen } from '../../src/features/settings/GitHubSettingsScreen';
@@ -58,7 +59,7 @@ function Detail({ kind, features }: { kind: IntegrationKind; features: NonNullab
       {section === 'connection' && kind === 'slack' ? <SlackScreen /> : null}
       {section === 'connection' && kind === 'tailscale' ? <PrivateRoutesScreen /> : null}
       {section === 'connection' && (kind === 'posthog' || kind === 'trunk') ? <IntegrationsScreen kind={kind} /> : null}
-      {section === 'connection' && kind === 'posthog_inbox' ? <IntegrationsScreen kind="posthog" inbox /> : null}
+      {section === 'connection' && kind === 'posthog_inbox' ? <PostHogInboxScreen /> : null}
     </View>
   </DetailRoute>;
 }

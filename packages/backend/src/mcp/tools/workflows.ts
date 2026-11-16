@@ -236,7 +236,7 @@ export const WORKFLOWS = [
           'repositories (optional): owner/repo names. A report always runs on its own repository, and only when that repository is connected to the workspace.',
           'start_session must have repositoryId: null. The prompt quotes the report as untrusted text and tells the agent to check the diagnosis first.',
           `maxRunsPerDay: most runs in 24 hours (default ${DEFAULT_POSTHOG_INBOX_RUNS_PER_DAY}). Talyn never acts on a report the PostHog safety judge suppressed.`,
-          'The PostHog connection is the one on the PostHog Code page. It needs the inbox:read permission.',
+          "The PostHog connection is the PostHog Inbox page's own connection (inbox:read, inbox:write, task:write). Without one, Talyn uses a PostHog Code connection that has inbox:read.",
         ].join('\n');
       }
       if (integration === 'slack') {

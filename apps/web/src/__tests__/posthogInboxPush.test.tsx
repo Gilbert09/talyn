@@ -24,6 +24,9 @@ function inboxStatus(over: Partial<PostHogInboxStatus> = {}): PostHogInboxStatus
     authMethod: 'oauth',
     projectId: '42',
     host: 'https://us.posthog.com',
+    connection: 'posthog_inbox',
+    missingScopes: [],
+    oauthAvailable: true,
     lastPolledAt: null,
     lastError: null,
     lastPushAt: null,
@@ -168,7 +171,8 @@ describe('the Connection tab', () => {
       inboxStatus({ access: 'not_connected', projectId: null, authMethod: null })
     );
     render(<PostHogInboxConnectionSection />);
-    expect(await screen.findByText('Connect PostHog first.')).toBeTruthy();
+    // The Inbox's own connection card says it is not connected.
+    expect(await screen.findByText('Not connected')).toBeTruthy();
     expect(document.querySelector('[data-attr="posthog-inbox-push-section"]')).toBeNull();
     expect(api.workflows.posthogInboxWebhook).not.toHaveBeenCalled();
   });

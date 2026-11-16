@@ -10,7 +10,12 @@ import { useWorkspaceStore } from '../stores/workspace';
 import { useNavigationStore } from '../stores/navigation';
 import { api } from '../lib/api';
 import { INTEGRATION_LOGOS } from '../assets/integrations/IntegrationLogos';
-import { automationsShown, useAutomationFocus } from '../lib/automationFocus';
+import {
+  automationsShown,
+  useAutomationFocus,
+  useIntegrationSectionFocus,
+  type IntegrationSection,
+} from '../lib/automationFocus';
 import { PageHeader } from '../components/ui/page-header';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Badge } from '../components/ui/badge';
@@ -43,6 +48,7 @@ function useConnectionStates(): Record<IntegrationKind, ConnectionState> {
   const [trunk, setTrunk] = useState<ConnectionState>('unknown');
   const [tailscale, setTailscale] = useState<ConnectionState>('unknown');
   const [linear, setLinear] = useState<ConnectionState>('unknown');
+  const [posthogInbox, setPostHogInbox] = useState<ConnectionState>('unknown');
 
   useEffect(() => {
     let cancelled = false;
@@ -66,6 +72,13 @@ function useConnectionStates(): Record<IntegrationKind, ConnectionState> {
         .getStatus(workspaceId)
         .then((st) => set(setLinear, st.connections.length > 0 ? 'connected' : 'not_connected'))
         .catch(() => set(setLinear, 'unknown'));
+    }
+    if (workspaceId && integrationOffered(features, 'posthog_inbox')) {
+      // A reconnect counts as not connected: the rules do not run until it is fixed.
+      api.workflows
+        .posthogInboxStatus(workspaceId)
+        .then((st) => set(setPostHogInbox, st.access === 'ok' || st.access === 'unknown' ? 'connected' : 'not_connected'))
+        .catch(() => set(setPostHogInbox, 'unknown'));
     }
     if (workspaceId && integrationOffered(features, 'tailscale')) {
       api.workspaces.privateConnector
@@ -91,8 +104,7 @@ function useConnectionStates(): Record<IntegrationKind, ConnectionState> {
     schedule: 'built_in',
     tailscale,
     posthog,
-    // It uses the PostHog connection of the PostHog Code page.
-    posthog_inbox: posthog,
+    posthog_inbox: posthogInbox,
     trunk,
   };
 }
@@ -189,7 +201,7 @@ function ConnectionSection({ kind }: { kind: IntegrationKind }) {
   );
 }
 
-type Section = 'connection' | 'rules';
+type Section = IntegrationSection;
 
 function GithubIssuesConnectionNote() {
   const navigate = useNavigationStore((s) => s.navigate);
@@ -224,6 +236,13 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
   useEffect(() => {
     if (focusKind === kind) setChosen('rules');
   }, [focusKind, kind]);
+  // A link asked for one section of this page, for example its Connection tab.
+  const sectionFocus = useIntegrationSectionFocus((s) => s.target);
+  useEffect(() => {
+    if (!sectionFocus || sectionFocus.kind !== kind) return;
+    setChosen(sectionFocus.section);
+    useIntegrationSectionFocus.getState().clear();
+  }, [sectionFocus, kind]);
   const section: Section = chosen && (chosen === 'rules' ? hasRules : hasConnection) ? chosen : hasRules ? 'rules' : 'connection';
 
   useEffect(() => {

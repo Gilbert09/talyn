@@ -1,5 +1,5 @@
-import { linear, posthog, slack, trunk, workspaces } from '@talyn/client/native';
-import { INTEGRATION_CATALOG, integrationsOffered, type IntegrationKind, type Workspace } from '@talyn/shared';
+import { linear, posthog, slack, trunk, workflows, workspaces } from '@talyn/client/native';
+import { INTEGRATION_CATALOG, integrationOffered, integrationsOffered, type IntegrationKind, type Workspace } from '@talyn/shared';
 
 import { useWorkspace } from '../../auth/AuthProvider';
 import { EmptyState, Group, Pill, Row } from '../../components/UI';
@@ -7,7 +7,7 @@ import { useFeatures } from '../../lib/features';
 import { useResource } from '../../workflow/hooks';
 import { Intro, Loading, Page } from '../more/Page';
 import { useRemote } from '../more/useRemote';
-import { githubIssuesAvailable } from './model';
+import { githubIssuesAvailable, postHogInboxCardView } from './model';
 import { postHogCatalogOffered } from './posthogRetirement';
 
 type ConnectionState = 'connected' | 'not_connected' | 'built_in' | 'unknown';
@@ -18,6 +18,8 @@ export function CatalogScreen() {
   const workspace = useResource<Workspace>('workspace', '', Boolean(workspaceId));
   const slackStatus = useRemote(features?.workbenches ? 'integration-slack' : null, () => slack.getStatus());
   const posthogStatus = useRemote(workspaceId ? `integration-posthog:${workspaceId}` : null, () => posthog.getStatus(workspaceId as string));
+  const inboxStatus = useRemote(features && workspaceId && integrationOffered(features, 'posthog_inbox') ? `integration-posthog-inbox:${workspaceId}` : null,
+    () => workflows.posthogInboxStatus(workspaceId as string));
   const trunkStatus = useRemote(features?.trunkMergeEta && workspaceId ? `integration-trunk:${workspaceId}` : null,
     () => trunk.getStatus(workspaceId as string));
   const linearStatus = useRemote(features?.issueRules && workspaceId ? `integration-linear:${workspaceId}` : null,
@@ -41,7 +43,7 @@ export function CatalogScreen() {
     schedule: 'built_in',
     tailscale: tailscaleStatus.data === undefined ? 'unknown' : tailscaleStatus.data ? 'connected' : 'not_connected',
     posthog: posthogState,
-    posthog_inbox: posthogState,
+    posthog_inbox: inboxStatus.data ? (postHogInboxCardView(inboxStatus.data).connected ? 'connected' : 'not_connected') : 'unknown',
     trunk: trunkStatus.data ? (trunkStatus.data.connected ? 'connected' : 'not_connected') : 'unknown',
   };
   return <Page>

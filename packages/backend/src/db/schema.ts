@@ -624,6 +624,10 @@ export const posthogOauthStates = pgTable(
     client: text('client').notNull().default('desktop'),
     /** The mobile app's allowlisted URL base, or null (migration 0127). */
     mobileReturn: text('mobile_return'),
+    /** 'posthog_code' | 'posthog_inbox' — which connection the flow writes.
+     *  Both flows share the callback URL; each refuses the other's state
+     *  (migration 0138). */
+    kind: text('kind').notNull().default('posthog_code'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   },

@@ -5,6 +5,7 @@ import { environmentRoutes } from './environments.js';
 import { taskRoutes } from './tasks.js';
 import { githubRoutes, githubPublicRoutes } from './github.js';
 import { posthogRoutes, posthogPublicRoutes } from './posthog.js';
+import { posthogInboxRoutes } from './posthogInbox.js';
 import { cloudProviderRoutes } from './cloudProviders.js';
 import { repositoryRoutes } from './repositories.js';
 import { skillRoutes } from './skills.js';
@@ -296,6 +297,8 @@ export function setupRoutes(app: Express): void {
   // desktop Settings card.
   app.use(`${api}/cloud-providers`, mount(cloudProviderRoutes()));
   app.use(`${api}/posthog`, mount(posthogRoutes()));
+  // The PostHog Inbox's own PostHog connection. Not a cloud provider.
+  app.use(`${api}/posthog-inbox`, mount(posthogInboxRoutes()));
   app.use(`${api}/repositories`, mount(repositoryRoutes()));
   // Trunk merge ETAs. The PR route shares the prefix and is mounted first.
   app.use(`${api}/pull-requests`, mount(trunkPullRequestRoutes()));

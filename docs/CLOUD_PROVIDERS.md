@@ -486,7 +486,7 @@ the same scope and per-project enforcement as a personal API key
 (`posthog/permissions.py` treats the two identically). What that buys:
 
 - **No credential passes through Talyn's UI.** The user authorizes on PostHog.
-- **The grant is narrow**: `openid task:read task:write inbox:read inbox:write`, on ONE project. `inbox:*` is for PostHog Inbox rules; a grant made before it keeps working for PostHog Code.
+- **The grant is narrow**: `openid task:read task:write inbox:read inbox:write`, on ONE project. `inbox:*` lets this grant serve PostHog Inbox rules in a workspace whose Inbox has no connection of its own. PostHog Inbox now has its own connection (the `posthog_inbox` row, SETUP.md §6g). It is not a cloud provider and never appears in `GET /cloud-providers`, the resolver, failover or code review spill. A grant made before `inbox:*` keeps working for PostHog Code.
 - **The project id stops being a form field.** `required_access_level=project`
   makes PostHog's consent screen render its single-project picker, and
   self-introspection (RFC 7662, allowed with no `introspection` scope when a

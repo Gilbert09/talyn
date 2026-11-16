@@ -11,8 +11,10 @@ import { api } from '../lib/api';
 import { useBillingStore } from '../stores/billing';
 import { useNavigationStore } from '../stores/navigation';
 import { useWorkspaceStore } from '../stores/workspace';
+import { useIntegrationSectionFocus } from '../lib/automationFocus';
 import { IntegrationsView } from '../pages/IntegrationsView';
 import { WorkflowsPanel } from '../components/panels/workflows/WorkflowsPanel';
+import { PostHogInboxConnectionSection } from '../components/panels/workflows/posthogInboxFields';
 
 const STATS = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null };
 
@@ -23,6 +25,9 @@ function inboxStatus(over: Partial<PostHogInboxStatus> = {}): PostHogInboxStatus
     authMethod: 'oauth',
     projectId: '42',
     host: 'https://us.posthog.com',
+    connection: 'posthog_inbox',
+    missingScopes: [],
+    oauthAvailable: true,
     lastPolledAt: null,
     lastError: null,
     lastPushAt: null,
@@ -63,6 +68,8 @@ const DRY_RUN: PostHogInboxDryRun = {
 };
 
 const navigate = vi.fn();
+const assign = vi.fn();
+
 
 beforeAll(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as never;
@@ -71,6 +78,12 @@ beforeAll(() => {
 
 beforeEach(() => {
   navigate.mockReset();
+  assign.mockReset();
+  Object.defineProperty(window, 'location', {
+    configurable: true,
+    value: { ...window.location, assign, search: '', pathname: '/integrations/posthog_inbox' },
+  });
+  useIntegrationSectionFocus.setState({ target: null });
   useNavigationStore.setState({ navigate } as never);
   useWorkspaceStore.setState({
     currentWorkspaceId: 'ws1',
@@ -120,29 +133,89 @@ describe('PostHog Inbox in the catalog', () => {
     ['flag on', { workflows: true, posthogInboxRules: true }, true],
     ['flag off', { workflows: true, posthogInboxRules: false }, false],
     ['workflows off', { workflows: false, posthogInboxRules: true }, false],
-  ])('%s', (_label, features, visible) => {
+  ])('%s', async (_label, features, visible) => {
     useWorkspaceStore.setState({ features } as never);
     render(<IntegrationsView kind={null} />);
     const card = document.querySelector('[data-attr="integration-card-posthog_inbox"]');
     expect(Boolean(card)).toBe(visible);
-    if (card) expect(within(card as HTMLElement).getByText('Connected')).toBeTruthy();
+    if (card) expect(await within(card as HTMLElement).findByText('Connected')).toBeTruthy();
+    else expect(api.workflows.posthogInboxStatus).not.toHaveBeenCalled();
   });
 
-  it('opens PostHog Inbox automations with the PostHog connection note', async () => {
+  it.each([
+    ['ok', { access: 'ok' }, 'Connected'],
+    ['unknown', { access: 'unknown', authMethod: 'personal_api_key' }, 'Connected'],
+    ['reconnect', { access: 'reconnect' }, 'Not connected'],
+    ['not_connected', { access: 'not_connected', connection: null, projectId: null }, 'Not connected'],
+    ['PostHog Code fallback', { access: 'ok', connection: 'posthog_code' }, 'Connected'],
+  ] as const)('reads its own state, not the PostHog Code state: %s', async (_label, over, badge) => {
+    // PostHog Code says the opposite, so a mirror of it would fail.
+    useWorkspaceStore.setState({
+      cloudProviders: [{ type: 'posthog_code', connected: badge !== 'Connected' }],
+    } as never);
+    vi.mocked(api.workflows.posthogInboxStatus).mockResolvedValue(inboxStatus(over as Partial<PostHogInboxStatus>));
+    render(<IntegrationsView kind={null} />);
+    const card = document.querySelector('[data-attr="integration-card-posthog_inbox"]') as HTMLElement;
+    expect(await within(card).findByText(badge)).toBeTruthy();
+    expect(api.workflows.posthogInboxStatus).toHaveBeenCalledWith('ws1');
+  });
+
+  it('shows no badge while the status cannot be read', async () => {
+    vi.mocked(api.workflows.posthogInboxStatus).mockRejectedValue(new Error('down'));
+    render(<IntegrationsView kind={null} />);
+    await waitFor(() => expect(api.workflows.posthogInboxStatus).toHaveBeenCalled());
+    const card = document.querySelector('[data-attr="integration-card-posthog_inbox"]') as HTMLElement;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(within(card).queryByText('Connected')).toBeNull();
+    expect(within(card).queryByText('Not connected')).toBeNull();
+  });
+
+  it('opens PostHog Inbox automations with a link to its own connection', async () => {
     render(<IntegrationsView kind="posthog_inbox" />);
     expect(await screen.findByText('PostHog Inbox automations')).toBeTruthy();
     await waitFor(() => expect(api.workflows.list).toHaveBeenCalledWith('ws1', 'posthog_inbox'));
-    expect(screen.getByText(/Uses your PostHog connection/)).toBeTruthy();
-    fireEvent.click(screen.getByText('Open PostHog Code'));
-    expect(navigate).toHaveBeenCalledWith({ view: 'integrations', kind: 'posthog' });
+    expect(screen.getByText(/read the Inbox through your PostHog connection/)).toBeTruthy();
+    expect(screen.queryByText('Open PostHog Code')).toBeNull();
+    fireEvent.click(screen.getByText('Manage the connection'));
+    expect(navigate).toHaveBeenCalledWith({ view: 'integrations', kind: 'posthog_inbox' });
+    expect(navigate).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'posthog' }));
+    expect(await screen.findByText('Talyn reads your Inbox with your PostHog account.')).toBeTruthy();
+    expect(document.querySelector('[data-attr="posthog-inbox-connection-section"]')).toBeTruthy();
   });
 
-  it('sends the Connection tab to the PostHog Code page', async () => {
+  it('shows its own connection card on the Connection tab', async () => {
     render(<IntegrationsView kind="posthog_inbox" />);
     fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Connection' }));
     fireEvent.click(screen.getByRole('tab', { name: 'Connection' }));
-    expect(await screen.findByText(/use your PostHog connection/)).toBeTruthy();
+    expect(await screen.findByText('Talyn reads your Inbox with your PostHog account.')).toBeTruthy();
+    expect(screen.queryByText(/PostHog Code page/)).toBeNull();
+    expect(screen.queryByText('Open PostHog Code')).toBeNull();
   });
+
+  it('opens the Connection tab from the editor notice', async () => {
+    vi.mocked(api.workflows.posthogInboxStatus).mockResolvedValue(
+      inboxStatus({ access: 'not_connected', connection: null, projectId: null, authMethod: null })
+    );
+    render(<IntegrationsView kind="posthog_inbox" />);
+    await waitFor(() => expect(api.workflows.list).toHaveBeenCalledWith('ws1', 'posthog_inbox'));
+    fireEvent.click(screen.getByText('New automation'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect PostHog' }));
+    expect(navigate).toHaveBeenCalledWith({ view: 'integrations', kind: 'posthog_inbox' });
+    expect(await screen.findByRole('button', { name: 'Connect with PostHog' })).toBeTruthy();
+    expect(useIntegrationSectionFocus.getState().target).toBeNull();
+  });
+
+  it('opens the Connection tab when it comes back from the PostHog sign-in', async () => {
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...window.location, assign, search: '?posthog_inbox=connected', pathname: '/integrations/posthog_inbox' },
+    });
+    vi.spyOn(window.history, 'replaceState').mockImplementation(() => {});
+    render(<IntegrationsView kind="posthog_inbox" />);
+    expect(await screen.findByText('Talyn reads your Inbox with your PostHog account.')).toBeTruthy();
+    expect(api.workflows.list).not.toHaveBeenCalled();
+  });
+
 });
 
 describe('PostHog Inbox rule editor', () => {
@@ -250,13 +323,37 @@ describe('PostHog Inbox rule editor', () => {
   it.each([
     ['reconnect', { access: 'reconnect', reason: 'The grant has no inbox:read.' }, /Reconnect PostHog to let Talyn read your Inbox/, 'Reconnect PostHog'],
     ['not_connected', { access: 'not_connected', projectId: null, authMethod: null }, /Connect PostHog first/, 'Connect PostHog'],
-  ] as const)('shows the %s notice with a link to PostHog Code', async (_access, over, text, button) => {
+  ] as const)('shows the %s notice with a link to the Inbox connection', async (_access, over, text, button) => {
     vi.mocked(api.workflows.posthogInboxStatus).mockResolvedValue(inboxStatus(over));
     await openEditor();
     expect(await screen.findByText(text)).toBeTruthy();
     if (over.access === 'reconnect') expect(screen.getByText('The grant has no inbox:read.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: button }));
-    expect(navigate).toHaveBeenCalledWith({ view: 'integrations', kind: 'posthog' });
+    expect(navigate).toHaveBeenCalledWith({ view: 'integrations', kind: 'posthog_inbox' });
+    expect(navigate).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'posthog' }));
+    expect(useIntegrationSectionFocus.getState().target).toEqual({ kind: 'posthog_inbox', section: 'connection' });
+  });
+
+  it.each([
+    ['some scopes', ['inbox:write', 'task:write'], 'Missing permissions: inbox:write, task:write.'],
+    ['one scope', ['task:write'], 'Missing permissions: task:write.'],
+    ['no scopes', [], null],
+  ])('lists the missing scopes in the reconnect notice: %s', async (_label, missingScopes, text) => {
+    vi.mocked(api.workflows.posthogInboxStatus).mockResolvedValue(
+      inboxStatus({ access: 'reconnect', reason: 'Old grant.', missingScopes })
+    );
+    await openEditor();
+    expect(await screen.findByText('Old grant.')).toBeTruthy();
+    if (text) expect(screen.getByText(text)).toBeTruthy();
+    else expect(document.querySelector('[data-attr="posthog-inbox-missing-scopes"]')).toBeNull();
+  });
+
+  it('tells the editor when the rules use the PostHog Code connection', async () => {
+    vi.mocked(api.workflows.posthogInboxStatus).mockResolvedValue(inboxStatus({ connection: 'posthog_code' }));
+    await openEditor();
+    expect(await screen.findByText(/It uses the older PostHog Code connection/)).toBeTruthy();
+    fireEvent.click(screen.getByText('Connect PostHog for the Inbox'));
+    expect(navigate).toHaveBeenCalledWith({ view: 'integrations', kind: 'posthog_inbox' });
   });
 
   it('shows the last poll error when the connection works', async () => {
@@ -306,5 +403,353 @@ describe('PostHog Inbox rule editor', () => {
     expect(await screen.findByText('Checkout crashes on submit')).toBeTruthy();
     addCondition('Priority');
     await waitFor(() => expect(screen.queryByText('Checkout crashes on submit')).toBeNull());
+  });
+});
+
+describe('PostHog Inbox connection card', () => {
+  const NOT_CONNECTED: Partial<PostHogInboxStatus> = {
+    access: 'not_connected',
+    connection: null,
+    authMethod: null,
+    projectId: null,
+    host: null,
+  };
+
+  async function renderCard(over: Partial<PostHogInboxStatus> = {}) {
+    vi.mocked(api.workflows.posthogInboxStatus).mockResolvedValue(inboxStatus(over));
+    render(<PostHogInboxConnectionSection />);
+    await waitFor(() => expect(screen.queryByText('Checking the PostHog connection...')).toBeNull());
+    return document.querySelector('[data-attr="posthog-inbox-connection-section"]') as HTMLElement;
+  }
+
+  function button(name: string | RegExp) {
+    return screen.getByRole('button', { name });
+  }
+
+  it.each([
+    [
+      'not connected, OAuth available',
+      NOT_CONNECTED,
+      'Not connected',
+      ['Connect with PostHog', 'Use a personal API key instead'],
+      ['Disconnect', 'Save and verify', 'Connect PostHog for the Inbox', 'Reconnect'],
+    ],
+    [
+      'not connected, no OAuth',
+      { ...NOT_CONNECTED, oauthAvailable: false },
+      'Not connected',
+      ['Save and verify'],
+      ['Connect with PostHog', 'Connect with PostHog instead', 'Cancel', 'Disconnect'],
+    ],
+    [
+      'connected with Inbox OAuth',
+      {},
+      'Connected',
+      ['Reconnect', 'Disconnect'],
+      ['Connect with PostHog', 'Connect PostHog for the Inbox', 'Save and verify'],
+    ],
+    [
+      'connected with an Inbox key, OAuth available',
+      { authMethod: 'personal_api_key' },
+      'Connected',
+      ['Switch to PostHog sign-in', 'Disconnect'],
+      ['Reconnect', 'Edit'],
+    ],
+    [
+      'connected with an Inbox key, no OAuth',
+      { authMethod: 'personal_api_key', oauthAvailable: false },
+      'Connected',
+      ['Edit', 'Disconnect'],
+      ['Reconnect', 'Switch to PostHog sign-in'],
+    ],
+    [
+      'unknown Inbox key',
+      { access: 'unknown', authMethod: 'personal_api_key' },
+      'Connected',
+      ['Disconnect'],
+      ['Reconnect'],
+    ],
+    [
+      'connected through PostHog Code',
+      { connection: 'posthog_code' },
+      'Connected',
+      ['Connect PostHog for the Inbox'],
+      ['Disconnect', 'Reconnect'],
+    ],
+    [
+      'reconnect on the Inbox connection',
+      { access: 'reconnect', reason: 'PostHog revoked the grant.' },
+      'Reconnect needed',
+      ['Reconnect', 'Disconnect'],
+      ['Connect PostHog for the Inbox'],
+    ],
+    [
+      'reconnect on the PostHog Code connection',
+      { access: 'reconnect', connection: 'posthog_code', reason: 'The grant has no inbox:read.' },
+      'Reconnect needed',
+      ['Reconnect', 'Connect PostHog for the Inbox'],
+      ['Disconnect'],
+    ],
+  ] as const)('%s', async (_label, over, badge, shown, hidden) => {
+    const card = await renderCard(over as Partial<PostHogInboxStatus>);
+    expect(within(card).getByText(badge)).toBeTruthy();
+    for (const name of shown) expect(within(card).getByRole('button', { name })).toBeTruthy();
+    for (const name of hidden) expect(within(card).queryByRole('button', { name })).toBeNull();
+    expect(screen.queryByText('Open PostHog Code')).toBeNull();
+  });
+
+  it.each([
+    ['Inbox OAuth', {}, 'Talyn reads your Inbox with your PostHog account.'],
+    ['Inbox key', { authMethod: 'personal_api_key' }, 'Talyn reads your Inbox with a personal API key.'],
+    ['PostHog Code', { connection: 'posthog_code' }, /use your older PostHog Code connection/],
+    ['unknown key', { access: 'unknown', authMethod: 'personal_api_key' }, 'Talyn has not used this API key on your Inbox yet.'],
+  ] as const)('shows the project and host when connected: %s', async (_label, over, text) => {
+    const card = await renderCard({ projectId: '77', host: 'https://eu.posthog.com', ...over } as Partial<PostHogInboxStatus>);
+    const details = within(card).getByText('Project').closest('dl') as HTMLElement;
+    expect(within(details).getByText('77')).toBeTruthy();
+    expect(within(details).getByText('https://eu.posthog.com')).toBeTruthy();
+    expect(within(details).getByText('Not checked yet')).toBeTruthy();
+    expect(within(card).getByText(text)).toBeTruthy();
+  });
+
+  it('shows the last check time and error', async () => {
+    const card = await renderCard({ lastPolledAt: '2026-11-14T10:00:00Z', lastError: 'PostHog answered 500' });
+    expect(within(card).queryByText('Not checked yet')).toBeNull();
+    expect(within(card).getByText(/The last check failed\. PostHog answered 500/)).toBeTruthy();
+  });
+
+  it.each([
+    ['two scopes', ['inbox:write', 'task:write'], 'Missing permissions: inbox:write, task:write.'],
+    ['all scopes', ['inbox:read', 'inbox:write', 'task:write'], 'Missing permissions: inbox:read, inbox:write, task:write.'],
+    ['no scopes', [], null],
+  ])('lists the missing scopes: %s', async (_label, missingScopes, text) => {
+    const card = await renderCard({ access: 'reconnect', reason: 'Old grant.', missingScopes });
+    expect(within(card).getByText('Old grant.')).toBeTruthy();
+    if (text) expect(within(card).getByText(text)).toBeTruthy();
+    else expect(card.querySelector('[data-attr="posthog-inbox-missing-scopes"]')).toBeNull();
+  });
+
+  it('shows a default reason when the reconnect has none', async () => {
+    const card = await renderCard({ access: 'reconnect', reason: null });
+    expect(within(card).getByText('The PostHog connection does not have the Inbox permissions.')).toBeTruthy();
+  });
+
+  it.each([
+    ['a host', ' https://eu.posthog.com ', 'https://eu.posthog.com'],
+    ['the default host', null, 'https://us.posthog.com'],
+    ['a blank host', '   ', undefined],
+  ])('starts the Inbox OAuth from Connect with %s', async (_label, typed, host) => {
+    const start = vi.spyOn(api.posthogInbox, 'startOAuth').mockResolvedValue({ authorizeUrl: 'https://us.posthog.com/oauth/authorize?x=1' });
+    await renderCard(NOT_CONNECTED);
+    if (typed !== null) fireEvent.change(screen.getByLabelText('PostHog host'), { target: { value: typed } });
+    fireEvent.click(button('Connect with PostHog'));
+    await waitFor(() => expect(start).toHaveBeenCalledWith('ws1', { host, projectId: undefined }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://us.posthog.com/oauth/authorize?x=1'));
+  });
+
+  it.each([
+    ['the reconnect notice', { access: 'reconnect', missingScopes: ['task:write'] }, 'Reconnect'],
+    ['a working Inbox grant', {}, 'Reconnect'],
+    ['an Inbox key', { authMethod: 'personal_api_key' }, 'Switch to PostHog sign-in'],
+    ['the PostHog Code fallback', { connection: 'posthog_code' }, 'Connect PostHog for the Inbox'],
+    ['a PostHog Code reconnect', { access: 'reconnect', connection: 'posthog_code' }, 'Reconnect'],
+  ] as const)('starts the Inbox OAuth with the project from %s', async (_label, over, name) => {
+    const start = vi.spyOn(api.posthogInbox, 'startOAuth').mockResolvedValue({ authorizeUrl: 'https://us.posthog.com/oauth/again' });
+    await renderCard(over as Partial<PostHogInboxStatus>);
+    fireEvent.click(button(name));
+    await waitFor(() => expect(start).toHaveBeenCalledWith('ws1', { host: 'https://us.posthog.com', projectId: '42' }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://us.posthog.com/oauth/again'));
+  });
+
+  it.each([
+    ['a reconnect', { access: 'reconnect', authMethod: 'personal_api_key', oauthAvailable: false }, 'Reconnect'],
+    ['the PostHog Code fallback', { connection: 'posthog_code', oauthAvailable: false }, 'Connect PostHog for the Inbox'],
+    ['an edit', { authMethod: 'personal_api_key', oauthAvailable: false }, 'Edit'],
+  ] as const)('opens the key form for %s when OAuth is not available', async (_label, over, name) => {
+    const start = vi.spyOn(api.posthogInbox, 'startOAuth');
+    await renderCard(over as Partial<PostHogInboxStatus>);
+    fireEvent.click(button(name));
+    expect(await screen.findByRole('button', { name: 'Save and verify' })).toBeTruthy();
+    expect((screen.getByLabelText('Project id') as HTMLInputElement).value).toBe('42');
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a generic failure', new Error('PostHog is down'), 'PostHog is down', false],
+    ['no message', {}, 'Could not start the PostHog sign-in.', false],
+    [
+      'OAuth not set up',
+      Object.assign(new Error('nope'), { code: 'posthog_inbox_oauth_unavailable' }),
+      'PostHog sign-in is not set up here. Use a personal API key.',
+      true,
+    ],
+  ])('shows an OAuth start error: %s', async (_label, err, text, keyForm) => {
+    vi.spyOn(api.posthogInbox, 'startOAuth').mockRejectedValue(err);
+    await renderCard(NOT_CONNECTED);
+    fireEvent.click(button('Connect with PostHog'));
+    expect(await screen.findByText(text)).toBeTruthy();
+    expect(Boolean(screen.queryByRole('button', { name: 'Save and verify' }))).toBe(keyForm);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('saves a personal API key with trimmed values and shows the new status', async () => {
+    const save = vi.spyOn(api.posthogInbox, 'saveConfig').mockResolvedValue(
+      inboxStatus({ access: 'unknown', authMethod: 'personal_api_key', projectId: '7', host: 'https://eu.posthog.com', oauthAvailable: false })
+    );
+    await renderCard({ ...NOT_CONNECTED, oauthAvailable: false });
+    fireEvent.change(screen.getByLabelText('Personal API key'), { target: { value: '  phx_secret  ' } });
+    fireEvent.change(screen.getByLabelText('Project id'), { target: { value: ' 7 ' } });
+    fireEvent.change(screen.getByLabelText('Host'), { target: { value: ' https://eu.posthog.com ' } });
+    fireEvent.click(button('Save and verify'));
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith('ws1', { apiKey: 'phx_secret', projectId: '7', host: 'https://eu.posthog.com' })
+    );
+    expect(await screen.findByText('Connected')).toBeTruthy();
+    expect(screen.getByText('Talyn has not used this API key on your Inbox yet.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Save and verify' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeTruthy();
+  });
+
+  it('sends no host when the host is blank', async () => {
+    const save = vi.spyOn(api.posthogInbox, 'saveConfig').mockResolvedValue(inboxStatus({ authMethod: 'personal_api_key' }));
+    await renderCard({ ...NOT_CONNECTED, oauthAvailable: false });
+    fireEvent.change(screen.getByLabelText('Personal API key'), { target: { value: 'phx_k' } });
+    fireEvent.change(screen.getByLabelText('Project id'), { target: { value: '9' } });
+    fireEvent.change(screen.getByLabelText('Host'), { target: { value: '  ' } });
+    fireEvent.click(button('Save and verify'));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('ws1', { apiKey: 'phx_k', projectId: '9', host: undefined }));
+  });
+
+  it.each([
+    ['no key', '', '7', true],
+    ['a blank key', '   ', '7', true],
+    ['no project', 'phx_k', '', true],
+    ['a blank project', 'phx_k', '  ', true],
+    ['both', 'phx_k', '7', false],
+  ])('enables Save and verify only with a key and a project: %s', async (_label, key, project, disabled) => {
+    await renderCard({ ...NOT_CONNECTED, oauthAvailable: false });
+    fireEvent.change(screen.getByLabelText('Personal API key'), { target: { value: key } });
+    fireEvent.change(screen.getByLabelText('Project id'), { target: { value: project } });
+    expect((button('Save and verify') as HTMLButtonElement).disabled).toBe(disabled);
+  });
+
+  it('shows a save error and keeps the form', async () => {
+    vi.spyOn(api.posthogInbox, 'saveConfig').mockRejectedValue(new Error('PostHog rejected the key'));
+    await renderCard({ ...NOT_CONNECTED, oauthAvailable: false });
+    fireEvent.change(screen.getByLabelText('Personal API key'), { target: { value: 'phx_bad' } });
+    fireEvent.change(screen.getByLabelText('Project id'), { target: { value: '7' } });
+    fireEvent.click(button('Save and verify'));
+    expect(await screen.findByText('PostHog rejected the key')).toBeTruthy();
+    expect(button('Save and verify')).toBeTruthy();
+    expect(screen.getByText('Not connected')).toBeTruthy();
+  });
+
+  it('opens the key form from the OAuth view and closes it again', async () => {
+    const start = vi.spyOn(api.posthogInbox, 'startOAuth').mockResolvedValue({ authorizeUrl: 'https://us.posthog.com/oauth' });
+    await renderCard(NOT_CONNECTED);
+    fireEvent.click(button('Use a personal API key instead'));
+    expect(button('Save and verify')).toBeTruthy();
+    expect(button('Connect with PostHog instead')).toBeTruthy();
+    fireEvent.click(button('Cancel'));
+    expect(screen.queryByRole('button', { name: 'Save and verify' })).toBeNull();
+    fireEvent.click(button('Use a personal API key instead'));
+    fireEvent.click(button('Connect with PostHog instead'));
+    await waitFor(() => expect(start).toHaveBeenCalledWith('ws1', { host: 'https://us.posthog.com', projectId: undefined }));
+  });
+
+  it.each([
+    ['an OAuth grant', {}],
+    ['a personal API key', { authMethod: 'personal_api_key' }],
+    ['a reconnect', { access: 'reconnect' }],
+  ] as const)('disconnects the Inbox connection: %s', async (_label, over) => {
+    const disconnect = vi.spyOn(api.posthogInbox, 'disconnect').mockResolvedValue(inboxStatus(NOT_CONNECTED));
+    await renderCard(over as Partial<PostHogInboxStatus>);
+    fireEvent.click(button('Disconnect'));
+    await waitFor(() => expect(disconnect).toHaveBeenCalledWith('ws1'));
+    expect(await screen.findByText('Not connected')).toBeTruthy();
+    expect(button('Connect with PostHog')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull();
+  });
+
+  it('shows the PostHog Code fallback after a disconnect', async () => {
+    vi.spyOn(api.posthogInbox, 'disconnect').mockResolvedValue(inboxStatus({ connection: 'posthog_code' }));
+    await renderCard();
+    fireEvent.click(button('Disconnect'));
+    expect(await screen.findByRole('button', { name: 'Connect PostHog for the Inbox' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull();
+  });
+
+  it('shows a disconnect error', async () => {
+    vi.spyOn(api.posthogInbox, 'disconnect').mockRejectedValue(new Error('Database is down'));
+    await renderCard();
+    fireEvent.click(button('Disconnect'));
+    expect(await screen.findByText('Database is down')).toBeTruthy();
+    expect(screen.getByText('Connected')).toBeTruthy();
+  });
+
+  it('never offers a disconnect of the PostHog Code connection', async () => {
+    const disconnect = vi.spyOn(api.posthogInbox, 'disconnect');
+    const card = await renderCard({ connection: 'posthog_code' });
+    expect(within(card).queryByRole('button', { name: /Disconnect/ })).toBeNull();
+    expect(disconnect).not.toHaveBeenCalled();
+  });
+
+  it('shows a status read error', async () => {
+    vi.mocked(api.workflows.posthogInboxStatus).mockRejectedValue(new Error('Backend is down'));
+    render(<PostHogInboxConnectionSection />);
+    expect(await screen.findByText(/Could not check the PostHog connection\. Backend is down/)).toBeTruthy();
+  });
+
+  it('reads the status again when the window gets focus', async () => {
+    await renderCard(NOT_CONNECTED);
+    expect(api.workflows.posthogInboxStatus).toHaveBeenCalledTimes(1);
+    vi.mocked(api.workflows.posthogInboxStatus).mockResolvedValue(inboxStatus());
+    fireEvent.focus(window);
+    expect(await screen.findByText('Connected')).toBeTruthy();
+    expect(api.workflows.posthogInboxStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('never sends the user to the PostHog Code page', async () => {
+    vi.spyOn(api.posthogInbox, 'startOAuth').mockResolvedValue({ authorizeUrl: 'https://us.posthog.com/oauth' });
+    await renderCard({ connection: 'posthog_code', access: 'reconnect' });
+    for (const b of screen.getAllByRole('button')) fireEvent.click(b);
+    await waitFor(() => expect(api.posthogInbox.startOAuth).toHaveBeenCalled());
+    expect(navigate).not.toHaveBeenCalled();
+    expect(screen.queryByText(/PostHog Code page/)).toBeNull();
+  });
+
+  it.each([
+    ['an error with a message', '?posthog_inbox=error&message=Access%20denied', 'Access denied'],
+    ['an error with no message', '?posthog_inbox=error', 'PostHog could not be connected.'],
+    ['an error with other params', '?tab=1&posthog_inbox=error&message=Nope', 'Nope'],
+  ])('shows the result of the PostHog sign-in once: %s', async (_label, search, text) => {
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...window.location, assign, search, pathname: '/integrations/posthog_inbox' },
+    });
+    const replace = vi.spyOn(window.history, 'replaceState').mockImplementation(() => {});
+    await renderCard(NOT_CONNECTED);
+    expect(await screen.findByText(text)).toBeTruthy();
+    expect(replace).toHaveBeenCalledTimes(1);
+    const url = replace.mock.calls[0]![2] as string;
+    expect(url).not.toContain('posthog_inbox=');
+    expect(url).not.toContain('message=');
+    expect(url.startsWith('/integrations/posthog_inbox')).toBe(true);
+    if (search.includes('tab=1')) expect(url).toBe('/integrations/posthog_inbox?tab=1');
+  });
+
+  it.each([
+    ['a successful sign-in', '?posthog_inbox=connected', 1],
+    ['no sign-in', '', 0],
+    ['an other integration', '?linear=error&message=x', 0],
+  ])('strips only its own params: %s', async (_label, search, calls) => {
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...window.location, assign, search, pathname: '/integrations/posthog_inbox' },
+    });
+    const replace = vi.spyOn(window.history, 'replaceState').mockImplementation(() => {});
+    await renderCard();
+    expect(replace).toHaveBeenCalledTimes(calls);
+    expect(document.querySelector('[data-attr="posthog-inbox-connect-error"]')).toBeNull();
   });
 });

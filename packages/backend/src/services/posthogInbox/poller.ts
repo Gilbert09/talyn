@@ -5,7 +5,7 @@ import { getPoolDbClient, runWithoutScope } from '../../db/client.js';
 import { integrations, posthogInboxPollers, workflows as workflowsTable } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
 import { PostHogCodeApiError } from '../posthogCode/client.js';
-import { POSTHOG_INTEGRATION_TYPE } from '../posthogCode/integrationRow.js';
+import { POSTHOG_INBOX_INTEGRATION_TYPE, POSTHOG_INTEGRATION_TYPE } from '../posthogCode/integrationRow.js';
 import { TickGuard } from '../tickGuard.js';
 import { enabledWorkflowsFor } from '../workflows/store.js';
 import {
@@ -267,18 +267,33 @@ const db = () => getPoolDbClient();
 
 /** The PostHog connections that have at least one enabled PostHog Inbox rule. */
 async function connectionsWithRules(): Promise<Array<{ integrationId: string; workspaceId: string }>> {
-  return db()
-    .selectDistinct({ integrationId: integrations.id, workspaceId: integrations.workspaceId })
+  const rows = await db()
+    .selectDistinct({ integrationId: integrations.id, workspaceId: integrations.workspaceId, type: integrations.type })
     .from(workflowsTable)
     .innerJoin(
       integrations,
       and(
         eq(integrations.workspaceId, workflowsTable.workspaceId),
-        eq(integrations.type, POSTHOG_INTEGRATION_TYPE),
+        inArray(integrations.type, [POSTHOG_INBOX_INTEGRATION_TYPE, POSTHOG_INTEGRATION_TYPE]),
         eq(integrations.enabled, true)
       )
     )
     .where(and(eq(workflowsTable.integration, 'posthog_inbox'), eq(workflowsTable.enabled, true)));
+  return preferInboxRows(rows);
+}
+
+/**
+ * PURE: one candidate per workspace. The Inbox's own row wins over a PostHog
+ * Code row, as in `getPostHogInboxConnection`, so the PostHog Code row of a
+ * workspace that has both is not polled.
+ */
+export function preferInboxRows<T extends { integrationId: string; workspaceId: string; type: string }>(
+  rows: T[]
+): Array<{ integrationId: string; workspaceId: string }> {
+  const withOwn = new Set(rows.filter((r) => r.type === POSTHOG_INBOX_INTEGRATION_TYPE).map((r) => r.workspaceId));
+  return rows
+    .filter((r) => r.type === POSTHOG_INBOX_INTEGRATION_TYPE || !withOwn.has(r.workspaceId))
+    .map((r) => ({ integrationId: r.integrationId, workspaceId: r.workspaceId }));
 }
 
 /**
@@ -483,6 +498,18 @@ export async function pollerState(integrationId: string): Promise<{
   return rows[0] ?? null;
 }
 
+
+/**
+ * After the user connects the Inbox again: forget the workspace's last poll
+ * error and its backoff, so the status stops asking for a reconnect and the
+ * next tick polls. The cursor stays.
+ */
+export async function clearInboxPollerBackoff(workspaceId: string, now: Date = new Date()): Promise<void> {
+  await db()
+    .update(posthogInboxPollers)
+    .set({ lastError: null, lastErrorStatus: null, nextPollAt: now, updatedAt: now })
+    .where(eq(posthogInboxPollers.workspaceId, workspaceId));
+}
 
 /**
  * Note a push whose report Talyn read from the connection's project. Creates
