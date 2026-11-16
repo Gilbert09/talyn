@@ -7830,3 +7830,10 @@ Now `GET /workspaces/attention` also sends `sessions`: the counted session ids, 
 In both apps, the rail keeps its last answer in `useContextAttentionStore` (`lib/contextRail.ts`), so the sidebar can read it. `withServerAttention` (`lib/sessionState.ts`) gives a counted row the state of its reason. Live work and a failure that the client sees win, because the server's answer can be up to 30 seconds old. The sidebar rows, the thread rows, the space model and the ⌘1–9 order all use it, so a counted row is in the active group.
 A "Needs you" section (`SidebarNeedsYou.tsx`) at the top of the Personal and space sidebars lists the counted sessions of that context. Opening one marks it as seen, so it leaves the section. With one context the rail is hidden and does not ask, so the section does not show.
 Mobile has no context rail, so it has no change.
+
+### 2026-11-16 — A session started from a PR keeps its PR link
+
+Before, a session started from a pull request (`fromPullRequestId`) linked the PR at create time. The merge backfill (`backfillMergeArchives`, every 10 minutes) then removed the link. The PR was older than the session, and the session pushed none of its commits, so `eligiblePr()` refused it. A manual "Link PR" to an older PR had the same problem.
+Now `workbenches.pull_request_link_explicit` (migration 0135) marks a link that a person or a caller chose. `createWorkbench` sets it for `fromPullRequestId`, and a manual link (`trackAndLink` strict) sets it too. `ownsLinkedPr()` (`prEligibility.ts`) accepts an explicit link or an eligible one. The backfill, merge auto-archive and the thread merge notice use it. So a session started from a PR also archives when that PR merges.
+The `stamp_workbench_pr_link` trigger clears the flag on an unlink, and on any PR change that does not set the flag. Branch-name links still need the evidence test.
+Sessions that lost their link before this fix stay unlinked. Use "Link PR" to link them again.

@@ -4,7 +4,7 @@ import { pullRequests, workbenches, workspaces } from '../../db/schema.js';
 import { autoArchiveForMergedPr } from './autoArchive.js';
 import { emitWorkbenchUpdated } from './emit.js';
 import { withMaintenanceClaim } from './maintenanceClaim.js';
-import { eligiblePr, linkedBeforeMerge } from './prEligibility.js';
+import { linkedBeforeMerge, ownsLinkedPr } from './prEligibility.js';
 import { publicWorkbench } from './prLink.js';
 import { getWorkbench } from './store.js';
 
@@ -15,12 +15,12 @@ export async function backfillMergeArchives(): Promise<boolean> {
     const db = getPoolDbClient();
     // Repeatable cleanup also repairs stale links written by an older backend.
     const wrong = await db.select({ id: workbenches.id, prId: workbenches.pullRequestId }).from(workbenches)
-      .innerJoin(pullRequests, eq(pullRequests.id, workbenches.pullRequestId)).where(sql`NOT ${eligiblePr()}`);
+      .innerJoin(pullRequests, eq(pullRequests.id, workbenches.pullRequestId)).where(sql`NOT ${ownsLinkedPr()}`);
     for (const row of wrong) {
       await renew();
       await db.update(workbenches).set({ pullRequestId: null, updatedAt: new Date() }).where(and(
         eq(workbenches.id, row.id), eq(workbenches.pullRequestId, row.prId!),
-        sql`EXISTS (SELECT 1 FROM ${pullRequests} WHERE ${pullRequests.id} = ${workbenches.pullRequestId} AND NOT ${eligiblePr()})`,
+        sql`EXISTS (SELECT 1 FROM ${pullRequests} WHERE ${pullRequests.id} = ${workbenches.pullRequestId} AND NOT ${ownsLinkedPr()})`,
       ));
       const updated = await getWorkbench(row.id);
       if (updated) await emitWorkbenchUpdated(await publicWorkbench(updated));
@@ -28,7 +28,7 @@ export async function backfillMergeArchives(): Promise<boolean> {
     const merged = await db.select({ owner: pullRequests.owner, repo: pullRequests.repo, number: pullRequests.number,
       workspaceId: workbenches.workspaceId }).from(workbenches)
       .innerJoin(pullRequests, eq(pullRequests.id, workbenches.pullRequestId))
-      .where(and(isNull(workbenches.archivedAt), eq(pullRequests.state, 'merged'), eligiblePr(), linkedBeforeMerge(),
+      .where(and(isNull(workbenches.archivedAt), eq(pullRequests.state, 'merged'), ownsLinkedPr(), linkedBeforeMerge(),
         sql`EXISTS (SELECT 1 FROM ${workspaces} ws WHERE ws.id = ${workbenches.workspaceId}
           AND (ws.settings ->> 'autoArchiveOnMerge') IS DISTINCT FROM 'false')`,
         sql`NOT (COALESCE(${workbenches.settings} -> 'autoArchivedForPr', '[]'::jsonb)

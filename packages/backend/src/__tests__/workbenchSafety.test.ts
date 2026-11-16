@@ -111,6 +111,42 @@ describe('session identity and cleanup', () => {
     expect(await getWorkbench('wb')).toMatchObject({ pullRequestId: null, pullRequestLinkedAt: null, settings: {}, archivedAt: null });
   });
 
+  it.each([
+    ['open PR', 'open', null],
+    ['PR merged after the session started', 'merged', 10],
+  ] as const)('keeps an explicit link to an older %s', async (_name, state, mergedIn) => {
+    await pr({ state, mergedAt: mergedIn === null ? null : at(mergedIn) });
+    await session('wb', { pullRequestId: 'pr', pullRequestLinkExplicit: true });
+    await backfillMergeArchives();
+    expect(await getWorkbench('wb')).toMatchObject({ pullRequestId: 'pr', pullRequestLinkExplicit: true });
+  });
+
+  it('archives a session started from an older PR when that PR merges', async () => {
+    await pr();
+    await session('wb', { pullRequestId: 'pr', pullRequestLinkExplicit: true });
+    await testDb.db.update(pullRequests).set({ state: 'merged', mergedAt: at(1) }).where(eq(pullRequests.id, 'pr'));
+    await autoArchiveForMergedPr({ repoFullName: 'o/r', number: 1 });
+    await settleArchivesForTests();
+    expect((await getWorkbench('wb'))?.archivedAt).not.toBeNull();
+  });
+
+  it.each([
+    ['an unlink', { pullRequestId: null }, null],
+    ['a heuristic relink', { pullRequestId: 'pr-2' }, 'pr-2'],
+  ] as const)('clears the explicit flag on %s', async (_name, patch, expected) => {
+    await pr();
+    await pr({ id: 'pr-2', number: 2 });
+    await session('wb', { pullRequestId: 'pr', pullRequestLinkExplicit: true });
+    expect(await updateWorkbench('wb', patch)).toMatchObject({ pullRequestId: expected, pullRequestLinkExplicit: false });
+  });
+
+  it('keeps the explicit flag when a write leaves the PR as it is', async () => {
+    await pr();
+    await session('wb', { pullRequestId: 'pr', pullRequestLinkExplicit: true });
+    expect(await updateWorkbench('wb', { pullRequestId: 'pr', title: 'Renamed' }))
+      .toMatchObject({ pullRequestId: 'pr', pullRequestLinkExplicit: true });
+  });
+
   it.each([false, true])('reaps orphan classes and protects active work; dry run=%s', async (dryRun) => {
     vi.stubEnv('WORKBENCH_REAPER_DRY_RUN', dryRun ? '1' : '0');
     await session('live', { sandboxId: 'talyn-wb-live-r2', runtime: 'sandbox' });

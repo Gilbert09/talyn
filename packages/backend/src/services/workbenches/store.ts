@@ -86,6 +86,7 @@ export const WORKBENCH_COLUMNS = {
   startProgress: workbenchesTable.startProgress,
   pullRequestId: workbenchesTable.pullRequestId,
   pullRequestLinkedAt: workbenchesTable.pullRequestLinkedAt,
+  pullRequestLinkExplicit: workbenchesTable.pullRequestLinkExplicit,
   pushedHeadShas: workbenchesTable.pushedHeadShas,
   allocatedBranch: workbenchesTable.allocatedBranch,
   settings: workbenchesTable.settings,
