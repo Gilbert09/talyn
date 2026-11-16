@@ -42,25 +42,25 @@ export function ComposerImages({ drafts, errors, onRemove, onRetry, onDismissErr
   </View>;
 }
 
-/** A video has no thumbnail without a native module, so it shows a glyph and its name. */
-function VideoGlyph({ name, faded }: { name: string; faded?: boolean }) {
+/** A video has no thumbnail without a native module, so it shows a glyph and its name. A text file does the same. */
+function VideoGlyph({ name, faded, text }: { name: string; faded?: boolean; text?: boolean }) {
   const c = useTheme();
   return <View style={[styles.videoGlyph, faded && { opacity: 0.45 }]}>
-    <SymbolView name={{ ios: 'video.fill', android: 'videocam' }} size={20} tintColor={c.muted} />
+    <SymbolView name={text ? { ios: 'doc.text', android: 'description' } : { ios: 'video.fill', android: 'videocam' }} size={20} tintColor={c.muted} />
     <AppText variant="caption" tone="muted" numberOfLines={1} style={styles.videoName}>{name}</AppText>
   </View>;
 }
 
-/** Image and video attachments on a sent message. Tap an image to see it full screen. */
+/** The attachments on a sent message: images, videos and other files. Tap an image to see it full screen. */
 export function MessageImages({ workbenchId, attachments }: { workbenchId: string; attachments: MessageImage[] }) {
-  const items = attachments.filter((item) => isImage(item) || isVideo(item));
   const [viewing, setViewing] = useState<MessageImage | null>(null);
-  if (!items.length) return null;
+  if (!attachments.length) return null;
   return <View style={styles.thumbs}>
-    {items.map((item, index) => {
+    {attachments.map((item, index) => {
       const key = `${item.path ?? item.name}:${index}`;
-      return isVideo(item) ? <MessageVideo key={key} video={item} />
-        : <MessageThumb key={key} workbenchId={workbenchId} image={item} onOpen={() => setViewing(item)} />;
+      if (isVideo(item)) return <MessageVideo key={key} video={item} />;
+      if (!isImage(item)) return <MessageFile key={key} file={item} />;
+      return <MessageThumb key={key} workbenchId={workbenchId} image={item} onOpen={() => setViewing(item)} />;
     })}
     {viewing ? <ImageViewer workbenchId={workbenchId} image={viewing} onClose={() => setViewing(null)} /> : null}
   </View>;
@@ -70,6 +70,13 @@ function MessageVideo({ video }: { video: MessageImage }) {
   const c = useTheme();
   return <View accessible accessibilityRole="text" accessibilityLabel={`Video: ${video.name}`}
     style={[styles.thumb, { borderColor: c.border, backgroundColor: c.surface }]}><VideoGlyph name={video.name} /></View>;
+}
+
+/** A text file (or any other file) shows a glyph and its name. The app does not open it. */
+function MessageFile({ file }: { file: MessageImage }) {
+  const c = useTheme();
+  return <View accessible accessibilityRole="text" accessibilityLabel={`File: ${file.name}`}
+    style={[styles.thumb, { borderColor: c.border, backgroundColor: c.surface }]}><VideoGlyph name={file.name} text /></View>;
 }
 
 /** The image request carries the sign-in token, so the source is built once the token is known. */

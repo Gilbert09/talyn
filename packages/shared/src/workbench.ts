@@ -341,13 +341,85 @@ export function workbenchAttachmentFileName(name: string, mimeType: string): str
   return `${dot > 0 ? name.slice(0, dot) : name}.${wanted}`;
 }
 
+/**
+ * The one type a text file goes up as. Clients upload every text file with it
+ * and keep the file's own name, so `notes.md` stays `notes.md`.
+ */
+export const WORKBENCH_TEXT_TYPE = 'text/plain';
+/** Small enough that a text file also fits inline in the new-session request. */
+export const WORKBENCH_MAX_TEXT_BYTES = 1024 * 1024;
+
+/** File extensions that the clients attach as text. */
+export const WORKBENCH_TEXT_EXTENSIONS: readonly string[] = [
+  'txt', 'text', 'md', 'markdown', 'mdx', 'rst', 'adoc', 'log', 'out', 'csv', 'tsv',
+  'json', 'jsonl', 'ndjson', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env', 'properties',
+  'xml', 'html', 'htm', 'css', 'scss', 'less', 'diff', 'patch', 'sql', 'graphql', 'gql', 'proto',
+  'js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'vue', 'svelte',
+  'py', 'rb', 'go', 'rs', 'java', 'kt', 'kts', 'swift', 'c', 'h', 'cc', 'cpp', 'hpp', 'cs', 'php',
+  'sh', 'bash', 'zsh', 'fish', 'ps1', 'lua', 'pl', 'r', 'scala', 'ex', 'exs', 'erl', 'hs', 'clj', 'dart',
+  'tf', 'hcl', 'gradle', 'dockerfile', 'makefile', 'gitignore', 'editorconfig', 'lock',
+];
+
+/** Declared types that are text, besides `text/*`. */
+const TEXT_APPLICATION_TYPES = [
+  'application/json', 'application/x-ndjson', 'application/xml', 'application/yaml', 'application/x-yaml',
+  'application/toml', 'application/sql', 'application/javascript', 'application/x-sh', 'application/x-httpd-php',
+];
+
+/**
+ * True when a picked file is a text file the session takes. The extension
+ * decides first, because systems label some code files with other types
+ * (`.ts` comes as `video/mp2t`).
+ */
+export function isWorkbenchTextFile(file: { name: string; type?: string | null }): boolean {
+  const name = file.name.toLowerCase();
+  const dot = name.lastIndexOf('.');
+  const extension = dot >= 0 ? name.slice(dot + 1) : name;
+  if (WORKBENCH_TEXT_EXTENSIONS.includes(extension)) return true;
+  const type = (file.type ?? '').split(';', 1)[0].trim().toLowerCase();
+  return type.startsWith('text/') || TEXT_APPLICATION_TYPES.includes(type);
+}
+
+/**
+ * True when the bytes are UTF-8 text: valid UTF-8 and no NUL byte. Written
+ * out by hand so that it runs the same in Node, browsers and React Native.
+ */
+export function isWorkbenchTextContent(bytes: Uint8Array): boolean {
+  let i = 0;
+  while (i < bytes.length) {
+    const byte = bytes[i];
+    if (byte === 0) return false;
+    if (byte < 0x80) {
+      i += 1;
+      continue;
+    }
+    let length: number;
+    let min: number;
+    if (byte >= 0xc2 && byte <= 0xdf) { length = 2; min = 0x80; }
+    else if (byte >= 0xe0 && byte <= 0xef) { length = 3; min = 0x800; }
+    else if (byte >= 0xf0 && byte <= 0xf4) { length = 4; min = 0x10000; }
+    else return false;
+    if (i + length > bytes.length) return false;
+    let code = byte & (0xff >> (length + 1));
+    for (let k = 1; k < length; k += 1) {
+      const next = bytes[i + k];
+      if ((next & 0xc0) !== 0x80) return false;
+      code = (code << 6) | (next & 0x3f);
+    }
+    if (code < min || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return false;
+    i += length;
+  }
+  return true;
+}
+
 export function isWorkbenchVideoType(mimeType: string): boolean {
   return (WORKBENCH_VIDEO_TYPES as readonly string[]).includes(mimeType.toLowerCase());
 }
 
 /** The upload limit for one attachment of this type. */
 export function workbenchAttachmentMaxBytes(mimeType: string): number {
-  return isWorkbenchVideoType(mimeType) ? WORKBENCH_MAX_VIDEO_BYTES : WORKBENCH_MAX_IMAGE_BYTES;
+  if (isWorkbenchVideoType(mimeType)) return WORKBENCH_MAX_VIDEO_BYTES;
+  return mimeType.toLowerCase() === WORKBENCH_TEXT_TYPE ? WORKBENCH_MAX_TEXT_BYTES : WORKBENCH_MAX_IMAGE_BYTES;
 }
 
 /** Added to the prompt when a video is attached: no agent can watch one directly. */

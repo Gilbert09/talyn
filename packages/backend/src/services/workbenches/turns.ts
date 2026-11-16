@@ -28,7 +28,10 @@ import {
   DEFAULT_WORKBENCH_EFFORT,
   WORKBENCH_EFFORTS,
   WORKBENCH_MESSAGE_INTENTS,
+  WORKBENCH_MAX_TEXT_BYTES,
+  WORKBENCH_TEXT_TYPE,
   WORKBENCH_VIDEO_PROMPT_NOTE,
+  isWorkbenchTextContent,
   isWorkbenchVideoType,
   type AgentEventDraft,
   type AgentStreamParser,
@@ -283,9 +286,19 @@ function normaliseAttachment(a: WorkbenchAttachment): WorkbenchAttachment {
   if (!name || hasData === hasPath) {
     throw new WorkbenchError('An attachment needs a name and exactly one of dataBase64 or path.', 400, 'bad_attachment');
   }
+  const mimeType = typeof a.mimeType === 'string' ? a.mimeType : 'application/octet-stream';
+  if (hasData && mimeType.toLowerCase() === WORKBENCH_TEXT_TYPE) {
+    const bytes = Buffer.from(a.dataBase64 as string, 'base64');
+    if (bytes.length > WORKBENCH_MAX_TEXT_BYTES) {
+      throw new WorkbenchError(`${name} is larger than 1 MB.`, 413, 'attachment_too_large');
+    }
+    if (!isWorkbenchTextContent(bytes)) {
+      throw new WorkbenchError(`${name} is not a UTF-8 text file.`, 415, 'bad_attachment');
+    }
+  }
   return {
     name,
-    mimeType: typeof a.mimeType === 'string' ? a.mimeType : 'application/octet-stream',
+    mimeType,
     ...(hasData ? { dataBase64: a.dataBase64 } : { path: a.path }),
   };
 }

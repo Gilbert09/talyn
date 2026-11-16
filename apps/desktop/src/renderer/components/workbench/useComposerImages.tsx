@@ -1,11 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Film, ImageIcon, ImagePlus, Loader2, X } from 'lucide-react';
+import { FileText, Film, ImageIcon, Loader2, Paperclip, X } from 'lucide-react';
 import {
+  isWorkbenchTextContent,
+  isWorkbenchTextFile,
   isWorkbenchVideoType,
   workbenchQueuesMessages,
   WORKBENCH_ATTACHMENT_EXTENSIONS,
   WORKBENCH_IMAGE_TYPES,
+  WORKBENCH_MAX_TEXT_BYTES,
   WORKBENCH_MAX_VIDEO_BYTES,
+  WORKBENCH_TEXT_EXTENSIONS,
+  WORKBENCH_TEXT_TYPE,
   WORKBENCH_VIDEO_TYPES,
   type WorkbenchAttachment,
   type WorkbenchStatus,
@@ -16,11 +21,14 @@ import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 
 const LARGE_PNG_BYTES = 1.5 * 1024 * 1024;
-const IMAGE_TYPES = WORKBENCH_IMAGE_TYPES.join(',');
-const MEDIA_TYPES = [...WORKBENCH_IMAGE_TYPES, ...WORKBENCH_VIDEO_TYPES, '.mov', '.m4v'].join(',');
+const TEXT_TYPES = ['text/*', ...WORKBENCH_TEXT_EXTENSIONS.map((extension) => `.${extension}`)];
+const IMAGE_AND_TEXT_TYPES = [...WORKBENCH_IMAGE_TYPES, ...TEXT_TYPES].join(',');
+const ALL_TYPES = [...WORKBENCH_IMAGE_TYPES, ...WORKBENCH_VIDEO_TYPES, '.mov', '.m4v', ...TEXT_TYPES].join(',');
+const UNSUPPORTED_FILE = 'Only images, videos and text files can be attached.';
 
-/** A file the composer takes: an image (any type the browser decodes) or a video. */
-const isMedia = (type: string) => type.startsWith('image/') || type.startsWith('video/');
+/** A file the composer takes: a text file, an image (any type the browser decodes) or a video. */
+const isAttachable = (file: Pick<File, 'name' | 'type'>) =>
+  isWorkbenchTextFile(file) || file.type.startsWith('image/') || file.type.startsWith('video/') || videoUploadType(file) !== null;
 
 /**
  * The upload type of a video file, or null when the session cannot take it.
@@ -38,6 +46,25 @@ export function videoUploadType(file: Pick<File, 'name' | 'type'>): string | nul
 const isVideoFile = (file: File) =>
   file.type.startsWith('video/') || (!file.type.startsWith('image/') && videoUploadType(file) !== null);
 
+function blobBytes(blob: Blob): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.onerror = () => reject(new Error('Could not read the file.'));
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
+/** The file as base64, after checks that it is UTF-8 text within the limit. */
+export async function readTextAttachment(file: Blob): Promise<string> {
+  if (file.size > WORKBENCH_MAX_TEXT_BYTES) throw new Error('The file is larger than 1 MB.');
+  const bytes = new Uint8Array(await blobBytes(file));
+  if (!isWorkbenchTextContent(bytes)) throw new Error('The file is not UTF-8 text.');
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
 export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchOps, status?: WorkbenchStatus) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [attachments, setAttachments] = useState<WorkbenchAttachment[]>([]);
@@ -54,6 +81,21 @@ export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchO
     setImageNotReady(false);
     setPendingUploads((count) => count + files.length);
     for (const file of files) {
+      if (isWorkbenchTextFile(file)) {
+        try {
+          await attachText(file);
+        } catch (err) {
+          toast.error('Could not attach the file', err instanceof Error ? err.message : undefined);
+        } finally {
+          setPendingUploads((count) => count - 1);
+        }
+        continue;
+      }
+      if (!isAttachable(file)) {
+        toast.error('Could not attach the file', UNSUPPORTED_FILE);
+        setPendingUploads((count) => count - 1);
+        continue;
+      }
       if (isVideoFile(file)) {
         try {
           await attachVideo(file);
@@ -99,11 +141,22 @@ export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchO
     setAttachments((current) => [...current, attachment]);
   };
 
+  // A text file goes up as `text/plain` under its own name. The session gets
+  // the path, and the agent reads the file.
+  const attachText = async (file: File) => {
+    const dataBase64 = await readTextAttachment(file);
+    const name = file.name || 'pasted.txt';
+    const attachment = ops
+      ? await ops.attach({ name, mimeType: WORKBENCH_TEXT_TYPE, blob: file })
+      : { name, mimeType: WORKBENCH_TEXT_TYPE, dataBase64 };
+    setAttachments((current) => [...current, attachment]);
+  };
+
   const onPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const files = [...event.clipboardData.items]
-      .filter((item) => item.kind === 'file' && isMedia(item.type))
+      .filter((item) => item.kind === 'file')
       .map((item) => item.getAsFile())
-      .filter((file): file is File => file !== null);
+      .filter((file): file is File => file !== null && isAttachable(file));
     if (files.length === 0) return;
     event.preventDefault();
     void attachFiles(files);
@@ -170,9 +223,9 @@ export function useImageDropZone(onFiles: (files: File[]) => void) {
       depth.current = 0;
       setDragging(false);
       const files = [...event.dataTransfer.files];
-      const media = files.filter((file) => isMedia(file.type) || videoUploadType(file) !== null);
-      if (media.length > 0) onFiles(media);
-      else if (files.length > 0) toast.error('Could not attach the file', 'Only images and videos can be attached.');
+      const attachable = files.filter(isAttachable);
+      if (attachable.length > 0) onFiles(attachable);
+      else if (files.length > 0) toast.error('Could not attach the file', UNSUPPORTED_FILE);
     },
   };
 
@@ -187,7 +240,7 @@ export function ImageDropOverlay({ dragging, className }: { dragging: boolean; c
       className={`pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-2 border-dashed border-primary/60 bg-background/80 ${className ?? ''}`}
     >
       <span className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
-        <ImagePlus className="h-4 w-4" /> Drop images or videos to attach
+        <Paperclip className="h-4 w-4" /> Drop images, videos or text files to attach
       </span>
     </div>
   );
@@ -226,6 +279,13 @@ function composerPreview(attachment: WorkbenchAttachment): string | null {
 
 function AttachmentThumbnail({ attachment }: { attachment: WorkbenchAttachment }) {
   const [failed, setFailed] = useState(false);
+  if (attachment.mimeType === WORKBENCH_TEXT_TYPE) {
+    return (
+      <span className="flex h-8 w-8 items-center justify-center rounded-sm bg-background" aria-label="Text file">
+        <FileText className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
   if (isWorkbenchVideoType(attachment.mimeType)) {
     return (
       <span className="flex h-8 w-8 items-center justify-center rounded-sm bg-background" aria-label="Video">
@@ -246,15 +306,15 @@ function AttachmentThumbnail({ attachment }: { attachment: WorkbenchAttachment }
 
 /** `videos`: also offer videos. Only a started session can take one, so the new-session page leaves it off. */
 export function ImageAttachButton({ inputRef, onFiles, videos = false }: { inputRef: React.RefObject<HTMLInputElement | null>; onFiles: (files: File[]) => void; videos?: boolean }) {
-  const label = videos ? 'Attach images or videos' : 'Attach images';
+  const label = videos ? 'Attach images, videos or text files' : 'Attach images or text files';
   return (
     <>
-      <input ref={inputRef} type="file" accept={videos ? MEDIA_TYPES : IMAGE_TYPES} multiple className="hidden" aria-label={videos ? 'Choose images or videos' : 'Choose images'} onChange={(event) => {
+      <input ref={inputRef} type="file" accept={videos ? ALL_TYPES : IMAGE_AND_TEXT_TYPES} multiple className="hidden" aria-label={videos ? 'Choose images, videos or text files' : 'Choose images or text files'} onChange={(event) => {
         onFiles([...(event.target.files ?? [])]);
         event.target.value = '';
       }} />
       <button type="button" onClick={() => inputRef.current?.click()} className="rounded p-1 hover:bg-accent" aria-label={label} title={label}>
-        <ImageIcon className="h-4 w-4" />
+        <Paperclip className="h-4 w-4" />
       </button>
     </>
   );

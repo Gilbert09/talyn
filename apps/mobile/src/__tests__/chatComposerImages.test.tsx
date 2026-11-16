@@ -152,6 +152,27 @@ describe('message images', () => {
     expect(screen.queryByRole('button', { name: 'Open clip.mp4' })).toBeNull();
   });
 
+  it('shows a text file next to an image, by name', async () => {
+    const events: WorkbenchEvent[] = [{ chatId: 'chat-one', seq: 1, turn: 1, createdAt: '2026-11-08T11:00:00Z', event: { seq: 1, type: 'user', talyn_user_message: true,
+      message: { content: [{ type: 'text', text: 'See these' }] }, talyn: { attachments: [
+        { name: 'cat.jpg', mimeType: 'image/jpeg', path: '.context/attachments/cat.jpg' },
+        { name: 'notes.md', mimeType: 'text/plain', path: '.context/attachments/notes.md' },
+      ] } } as AgentEvent }];
+    mockActive.api.workbenches.events.mockResolvedValue({ events, cursor: 1, oldestSeq: 1, hasOlder: false });
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(await screen.findByLabelText('File: notes.md')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Open cat.jpg' })).toBeVisible();
+  });
+
+  it('shows a text file alone, by name', async () => {
+    const events: WorkbenchEvent[] = [{ chatId: 'chat-one', seq: 1, turn: 1, createdAt: '2026-11-08T11:00:00Z', event: { seq: 1, type: 'user', talyn_user_message: true,
+      message: { content: [{ type: 'text', text: 'Read this' }] }, talyn: { attachments: [{ name: 'build.log', mimeType: 'text/plain', path: '.context/attachments/build.log' }] } } as AgentEvent }];
+    mockActive.api.workbenches.events.mockResolvedValue({ events, cursor: 1, oldestSeq: 1, hasOlder: false });
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(await screen.findByLabelText('File: build.log')).toBeVisible();
+    expect(screen.queryByText('1 attachment')).toBeNull();
+  });
+
   it('shows an attached image in the user bubble and opens it full screen', async () => {
     const events: WorkbenchEvent[] = [{ chatId: 'chat-one', seq: 1, turn: 1, createdAt: '2026-11-08T11:00:00Z', event: { seq: 1, type: 'user', talyn_user_message: true,
       message: { content: [{ type: 'text', text: 'See this' }] }, talyn: { attachments: [{ name: 'cat.jpg', mimeType: 'image/jpeg', path: '.context/attachments/cat.jpg' }] } } as AgentEvent }];

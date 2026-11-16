@@ -130,6 +130,29 @@ describe('workbench attachment uploads', () => {
     expect(writeSandboxFiles.mock.calls[0][1][0].base64).toBe(body.toString('base64'));
   });
 
+  it.each([
+    ['a Markdown file', 'notes.md', '# Notes\n- one\n', /-notes\.md$/],
+    ['a log with UTF-8 text', 'build output.log', 'naïve café ✓\n', /-build-output\.log$/],
+    ['a file with no extension', 'Dockerfile', 'FROM node:22\n', /-Dockerfile$/],
+    ['a TypeScript file', 'index.ts', 'export const a = 1;\n', /-index\.ts$/],
+  ])('stores %s with its own name', async (_label, name, text, path) => {
+    const body = Buffer.from(text);
+    const response = await upload(body, 'text/plain', 'owner-a', name);
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual({ name, mimeType: 'text/plain', path: expect.stringMatching(path) });
+    expect(writeSandboxFiles.mock.calls[0][1][0].base64).toBe(body.toString('base64'));
+  });
+
+  it('accepts a text type with a charset', async () => {
+    expect((await upload(Buffer.from('hello'), 'text/plain; charset=utf-8', 'owner-a', 'a.txt')).status).toBe(200);
+  });
+
+  it('refuses a text file larger than 1 MB', async () => {
+    const response = await upload(Buffer.alloc(1024 * 1024 + 1, 'a'), 'text/plain', 'owner-a', 'big.log');
+    expect(response.status).toBe(413);
+    expect(writeSandboxFiles).not.toHaveBeenCalled();
+  });
+
   it('accepts a video larger than the image limit', async () => {
     const large = Buffer.concat([mp4, Buffer.alloc(20 * 1024 * 1024)]);
     expect((await upload(large, 'video/mp4', 'owner-a', 'long.mp4')).status).toBe(200);
@@ -147,7 +170,11 @@ describe('workbench attachment uploads', () => {
     ['wrong video bytes', png, 'video/mp4', 415],
     ['WebM bytes as QuickTime', webm, 'video/quicktime', 415],
     ['an unsupported video type', mp4, 'video/x-msvideo', 415],
-    ['wrong type', png, 'text/plain', 415],
+    ['PNG bytes as text', png, 'text/plain', 415],
+    ['text with a NUL byte', Buffer.from('a\u0000b'), 'text/plain', 415],
+    ['text that is not UTF-8', Buffer.from([0x61, 0xff, 0x62]), 'text/plain', 415],
+    ['an unsupported text type', Buffer.from('<p>hi</p>'), 'text/html', 415],
+    ['empty text', Buffer.alloc(0), 'text/plain', 400],
     ['empty body', Buffer.alloc(0), 'image/png', 400],
     ['empty video', Buffer.alloc(0), 'video/mp4', 400],
   ])('rejects %s', async (_label, body, type, status) => {
