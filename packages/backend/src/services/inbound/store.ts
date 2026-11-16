@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import { and, count, desc, eq, lt, max, ne, sql } from 'drizzle-orm';
+import { and, count, desc, eq, isNotNull, lt, max, ne, sql } from 'drizzle-orm';
 import type {
   InboundDelivery,
   InboundDeliveryOutcome,
@@ -217,6 +217,11 @@ export interface PostHogInboxPushConnectionRow {
   createdAt: Date;
   rotatedAt: Date | null;
   lastDeliveryAt: Date | null;
+  /** The PostHog destination Talyn created for this URL, or null. */
+  destinationId: string | null;
+  destinationSyncedAt: Date | null;
+  /** Set when the destination is out of date (a rotate PostHog did not take). */
+  destinationError: string | null;
 }
 
 /** The query behind {@link posthogInboxPushConnection}. Exported for the egress test. */
@@ -230,6 +235,9 @@ export function posthogInboxPushConnectionQuery(workspaceId: string, projectId: 
       secretRequired: sql<boolean>`${inboundConnections.secretEnc} IS NOT NULL`,
       createdAt: inboundConnections.createdAt,
       rotatedAt: inboundConnections.rotatedAt,
+      destinationId: inboundConnections.posthogDestinationId,
+      destinationSyncedAt: inboundConnections.posthogDestinationSyncedAt,
+      destinationError: inboundConnections.posthogDestinationError,
     })
     .from(inboundConnections)
     .where(
@@ -262,6 +270,9 @@ export async function posthogInboxPushConnection(
     createdAt: row.createdAt,
     rotatedAt: row.rotatedAt,
     lastDeliveryAt: at ? new Date(at) : null,
+    destinationId: row.destinationId ?? null,
+    destinationSyncedAt: row.destinationSyncedAt ?? null,
+    destinationError: row.destinationError ?? null,
   };
 }
 
@@ -274,15 +285,28 @@ export async function posthogInboxPushConnection(
  * A workspace reads one PostHog project at a time, so a URL for any other
  * project is deleted: its pushes could only name reports the connection
  * cannot read.
+ *
+ * The PostHog destination fields stay as they are unless `destination` sets
+ * them. "Set up push in PostHog" mints the secrets first (`minted`, with the
+ * row id it will use as `connectionId`), saves the destination in PostHog,
+ * and only then calls this, so a PostHog failure changes nothing here.
  */
 export async function rotatePostHogInboxPushConnection(
   workspaceId: string,
   projectId: string,
-  opts: { requireSecret: boolean; createdBy: string }
+  opts: {
+    requireSecret: boolean;
+    createdBy: string;
+    minted?: WebhookSecrets;
+    /** The id for a new row. Ignored when the row exists. */
+    connectionId?: string;
+    destination?: PostHogInboxDestinationState;
+  }
 ): Promise<{ connectionId: string; token: string; secret: string | null; created: boolean }> {
-  const minted = mintWebhookSecrets();
+  const minted = opts.minted ?? mintWebhookSecrets();
   const secret = opts.requireSecret ? minted.signingSecret : null;
   const now = new Date();
+  const destination = opts.destination ? destinationColumns(opts.destination) : {};
   return db().transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     await txDb
@@ -301,6 +325,7 @@ export async function rotatePostHogInboxPushConnection(
         secretEnc: secret ? encryptString(secret) : null,
         rotatedAt: now,
         updatedAt: now,
+        ...destination,
       })
       .where(
         and(
@@ -311,7 +336,7 @@ export async function rotatePostHogInboxPushConnection(
       )
       .returning({ id: inboundConnections.id });
     if (updated[0]) return { connectionId: updated[0].id, token: minted.token, secret, created: false };
-    const connectionId = uuid();
+    const connectionId = opts.connectionId ?? uuid();
     await txDb.insert(inboundConnections).values({
       id: connectionId,
       workspaceId,
@@ -320,9 +345,56 @@ export async function rotatePostHogInboxPushConnection(
       tokenHash: minted.tokenHash,
       secretEnc: secret ? encryptString(secret) : null,
       createdBy: opts.createdBy,
+      ...destination,
     });
     return { connectionId, token: minted.token, secret, created: true };
   });
+}
+
+/** What Talyn knows about its PostHog destination for one URL. */
+export interface PostHogInboxDestinationState {
+  id: string | null;
+  syncedAt: Date | null;
+  error: string | null;
+}
+
+function destinationColumns(state: PostHogInboxDestinationState) {
+  return {
+    posthogDestinationId: state.id,
+    posthogDestinationSyncedAt: state.syncedAt,
+    posthogDestinationError: state.error,
+  };
+}
+
+/** Record what happened to the PostHog destination of one URL row. */
+export async function setPostHogInboxDestination(connectionId: string, state: PostHogInboxDestinationState): Promise<void> {
+  await db()
+    .update(inboundConnections)
+    .set({ ...destinationColumns(state), updatedAt: new Date() })
+    .where(and(eq(inboundConnections.id, connectionId), eq(inboundConnections.kind, 'posthog_inbox')));
+}
+
+/** The workspace's PostHog Inbox URL rows that have a Talyn destination. */
+export async function posthogInboxDestinations(
+  workspaceId: string
+): Promise<Array<{ connectionId: string; projectId: string | null; destinationId: string }>> {
+  const rows = await db()
+    .select({
+      connectionId: inboundConnections.id,
+      projectId: inboundConnections.externalAccountId,
+      destinationId: inboundConnections.posthogDestinationId,
+    })
+    .from(inboundConnections)
+    .where(
+      and(
+        eq(inboundConnections.workspaceId, workspaceId),
+        eq(inboundConnections.kind, 'posthog_inbox'),
+        isNotNull(inboundConnections.posthogDestinationId)
+      )
+    );
+  return rows.flatMap((r) =>
+    r.destinationId ? [{ connectionId: r.connectionId, projectId: r.projectId, destinationId: r.destinationId }] : []
+  );
 }
 
 /** Delete the workspace's PostHog Inbox webhook URLs and, by cascade, their deliveries. */

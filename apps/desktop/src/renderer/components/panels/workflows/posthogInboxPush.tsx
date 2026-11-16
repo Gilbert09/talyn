@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, Copy, RotateCw, Trash2 } from 'lucide-react';
-import type { PostHogInboxPushReveal, PostHogInboxPushState } from '@talyn/shared';
-import { posthogInboxPushActive } from '@talyn/shared';
+import { AlertTriangle, CheckCircle2, Copy, ExternalLink, RefreshCw, RotateCw, Send, Trash2 } from 'lucide-react';
+import type {
+  PostHogInboxDestinationOutcome,
+  PostHogInboxDestinationSummary,
+  PostHogInboxPushReveal,
+  PostHogInboxPushState,
+  PostHogInboxStatus,
+} from '@talyn/shared';
+import {
+  POSTHOG_INBOX_PUSH_RECONNECT_MESSAGE,
+  POSTHOG_INBOX_PUSH_SCOPES_MISSING_CODE,
+  posthogInboxPushActive,
+} from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { captureAnalyticsException } from '../../../lib/analytics';
 import { toast } from '../../../stores/toast';
@@ -13,8 +23,9 @@ import { posthogInboxDeliverySource, WebhookDeliveriesList } from './WebhookDeli
 
 /**
  * The PostHog Inbox push: the webhook URL that a PostHog webhook destination
- * posts "report ready" to, the steps to add that destination, the last push
- * and the requests PostHog sent.
+ * posts "report ready" to, "Set up push in PostHog" (Talyn creates and keeps
+ * the destination itself), the manual steps, the last push and the requests
+ * PostHog sent.
  *
  * The same file is in apps/web/src/components/panels/workflows/. Keep the two in step.
  */
@@ -91,6 +102,11 @@ export function PostHogInboxPushRevealDialog({ reveal, onClose }: { reveal: Post
             <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
             Copy these now. Talyn shows them only once.
           </p>
+          {reveal.destination?.state === 'failed' && (
+            <p className="text-xs text-red-500" data-testid="posthog-inbox-push-reveal-destination-error">
+              {reveal.destination.error}
+            </p>
+          )}
           <CopyValue label="URL" value={reveal.url} testId="posthog-inbox-push-url" />
           {reveal.secret && (
             <>
@@ -144,52 +160,156 @@ export function postHogInboxPushLine(lastPushAt: string | null, configured: bool
   return `Last push from PostHog: ${formatWhen(lastPushAt)}. No push in the last 24 hours, so Talyn checks the Inbox every 3 minutes.`;
 }
 
+/** Whether a rotate or remove left Talyn's PostHog destination as it should be. Null: no destination. */
+export function destinationOutcomeText(outcome: PostHogInboxDestinationOutcome | null | undefined, action: 'rotate' | 'remove'): string | null {
+  if (!outcome) return null;
+  switch (outcome.state) {
+    case 'updated':
+      return 'PostHog has the new URL and secret.';
+    case 'deleted':
+      return 'Talyn deleted its destination in PostHog.';
+    case 'not_found':
+      return action === 'rotate'
+        ? 'The destination Talyn made is gone from PostHog. Set up push again to make a new one.'
+        : 'The destination was already gone from PostHog.';
+    case 'failed':
+      return outcome.error ?? 'PostHog did not take the change.';
+  }
+}
+
+function errorCode(err: unknown): string | undefined {
+  return (err as { code?: string } | null)?.code;
+}
+
+/** The Talyn-managed destination: its PostHog link, the last update, or that it is out of date. */
+function ManagedDestination({ destination }: { destination: PostHogInboxDestinationSummary }) {
+  return (
+    <div className="space-y-1 text-xs" data-attr="posthog-inbox-push-managed">
+      {destination.error ? (
+        <p
+          className="flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-amber-700 dark:text-amber-300"
+          data-testid="posthog-inbox-push-out-of-date"
+        >
+          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+          <span>The destination in PostHog is out of date. {destination.error}</span>
+        </p>
+      ) : (
+        <p className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+          Talyn set up the destination in PostHog
+          {destination.syncedAt ? ` and last updated it ${formatWhen(destination.syncedAt)}` : ''}.
+        </p>
+      )}
+      {destination.url && (
+        <a
+          href={destination.url}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
+          data-attr="posthog-inbox-push-destination-link"
+        >
+          <ExternalLink className="h-3 w-3" />
+          Open the destination in PostHog
+        </a>
+      )}
+    </div>
+  );
+}
+
 /**
- * The push part of the PostHog Inbox Connection tab: make, rotate or remove
- * the URL, the steps for PostHog, the last push and the requests.
+ * The push part of the PostHog Inbox Connection tab: set up the push in
+ * PostHog, or make, rotate or remove the URL by hand; the steps for PostHog,
+ * the last push and the requests.
+ *
+ * `status` gives the scopes "Set up push in PostHog" needs. `onReconnect`
+ * starts the PostHog sign-in again.
  */
-export function PostHogInboxPushSection() {
+export function PostHogInboxPushSection({
+  status,
+  onReconnect,
+  reconnectBusy = false,
+}: {
+  status?: Pick<PostHogInboxStatus, 'authMethod' | 'pushSetupMissingScopes'> | null;
+  onReconnect?: () => void;
+  reconnectBusy?: boolean;
+} = {}) {
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const { state, error, reload } = usePostHogInboxPush(workspaceId);
   const [requireSecret, setRequireSecret] = useState(true);
-  const [confirming, setConfirming] = useState<'rotate' | 'remove' | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState<'rotate' | 'remove' | 'setup' | null>(null);
+  const [running, setRunning] = useState<'setup' | 'rotate' | 'remove' | null>(null);
+  const busy = running !== null;
   const [reveal, setReveal] = useState<PostHogInboxPushReveal | null>(null);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [scopesRefused, setScopesRefused] = useState(false);
   // A rotate keeps the current choice unless the person changes it.
   const currentSecret = state ? state.secretRequired : null;
   useEffect(() => {
     if (currentSecret !== null) setRequireSecret(currentSecret);
   }, [currentSecret]);
 
+  const missingScopes = status?.pushSetupMissingScopes ?? [];
+  const needsReconnect = missingScopes.length > 0 || scopesRefused;
+  const managed = state?.destination ?? null;
+
+  const setUp = async () => {
+    if (!workspaceId) return;
+    setRunning('setup');
+    setSetupError(null);
+    try {
+      const result = await api.workflows.setUpPostHogInboxPush(workspaceId);
+      setConfirming(null);
+      setScopesRefused(false);
+      toast.success(result.created ? 'Push is set up in PostHog' : 'PostHog has the new URL and secret');
+      reload();
+    } catch (err) {
+      setConfirming(null);
+      if (errorCode(err) === POSTHOG_INBOX_PUSH_SCOPES_MISSING_CODE) setScopesRefused(true);
+      else captureAnalyticsException(err, { flow: 'posthog_inbox_push_setup' });
+      setSetupError(err instanceof Error ? err.message : 'Could not set up the push in PostHog.');
+      reload();
+    } finally {
+      setRunning(null);
+    }
+  };
+
   const rotate = async () => {
     if (!workspaceId) return;
-    setBusy(true);
+    setRunning('rotate');
     try {
       const next = await api.workflows.rotatePostHogInboxWebhook(workspaceId, requireSecret);
       setConfirming(null);
-      setReveal(next);
+      if (next.destination?.state === 'updated') {
+        // PostHog has them already: nobody needs to copy the URL or the secret.
+        toast.success('URL rotated', destinationOutcomeText(next.destination, 'rotate') ?? undefined);
+      } else {
+        if (next.destination) toast.error('The destination in PostHog is out of date', destinationOutcomeText(next.destination, 'rotate') ?? undefined);
+        setReveal(next);
+      }
       reload();
     } catch (err) {
       captureAnalyticsException(err, { flow: 'posthog_inbox_push_rotate' });
       toast.error('Could not make the URL', err instanceof Error ? err.message : undefined);
     } finally {
-      setBusy(false);
+      setRunning(null);
     }
   };
 
   const remove = async () => {
     if (!workspaceId) return;
-    setBusy(true);
+    setRunning('remove');
     try {
-      await api.workflows.removePostHogInboxWebhook(workspaceId);
+      const result = await api.workflows.removePostHogInboxWebhook(workspaceId);
       setConfirming(null);
-      toast.success('Webhook URL removed');
+      const text = destinationOutcomeText(result.destination, 'remove');
+      if (result.destination?.state === 'failed') toast.error('Webhook URL removed, but not the destination in PostHog', text ?? undefined);
+      else toast.success('Webhook URL removed', text ?? undefined);
       reload();
     } catch (err) {
       captureAnalyticsException(err, { flow: 'posthog_inbox_push_remove' });
       toast.error('Could not remove the URL', err instanceof Error ? err.message : undefined);
     } finally {
-      setBusy(false);
+      setRunning(null);
     }
   };
 
@@ -203,6 +323,49 @@ export function PostHogInboxPushSection() {
       />
       Require a secret header ({SECRET_HEADER_LABEL})
     </label>
+  );
+
+  const setupButton = (
+    <Button
+      size="sm"
+      variant={state === null ? 'default' : 'outline'}
+      // Over an existing URL it is a rotate, so ask first.
+      onClick={() => (state ? setConfirming('setup') : void setUp())}
+      disabled={busy || needsReconnect}
+      data-attr="posthog-inbox-push-setup"
+    >
+      <Send className="mr-1 h-3.5 w-3.5" />
+      {running === 'setup' ? 'Setting up...' : managed?.error ? 'Update the destination in PostHog' : 'Set up push in PostHog'}
+    </Button>
+  );
+
+  const reconnectNotice = needsReconnect && (
+    <div
+      className="flex items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2"
+      data-attr="posthog-inbox-push-reconnect"
+    >
+      <div className="flex-1 text-xs">
+        <p className="font-medium text-amber-600 dark:text-amber-400">{POSTHOG_INBOX_PUSH_RECONNECT_MESSAGE}</p>
+        <p className="mt-0.5 text-muted-foreground">
+          {missingScopes.length > 0
+            ? `The PostHog connection lacks ${missingScopes.join(' and ')}. Your automations keep working without them.`
+            : 'The PostHog connection cannot create destinations. Your automations keep working without it.'}{' '}
+          You can also add the destination by hand.
+        </p>
+      </div>
+      {onReconnect && (
+        <Button size="sm" onClick={onReconnect} disabled={reconnectBusy} data-attr="posthog-inbox-push-reconnect-button">
+          <RefreshCw className="mr-1 h-3.5 w-3.5" />
+          Reconnect
+        </Button>
+      )}
+    </div>
+  );
+
+  const setupErrorLine = setupError && !scopesRefused && (
+    <p className="text-xs text-red-500" data-testid="posthog-inbox-push-setup-error">
+      {setupError}
+    </p>
   );
 
   return (
@@ -222,10 +385,20 @@ export function PostHogInboxPushSection() {
         <p className="text-xs text-muted-foreground">Loading...</p>
       ) : state === null ? (
         <div className="space-y-2">
-          {secretToggle}
-          <Button size="sm" onClick={() => void rotate()} disabled={busy} data-attr="posthog-inbox-push-create">
-            {busy ? 'Making the URL...' : 'Make a webhook URL'}
-          </Button>
+          {reconnectNotice}
+          <p className="text-xs text-muted-foreground">
+            Talyn can add the webhook destination in your PostHog project for you, with a new URL and secret that
+            nobody needs to copy.
+          </p>
+          {setupButton}
+          {setupErrorLine}
+          <div className="space-y-2 border-t pt-2" data-attr="posthog-inbox-push-manual">
+            <p className="text-xs text-muted-foreground">Or make a URL and add the destination in PostHog yourself.</p>
+            {secretToggle}
+            <Button size="sm" variant="outline" onClick={() => void rotate()} disabled={busy} data-attr="posthog-inbox-push-create">
+              {running === 'rotate' ? 'Making the URL...' : 'Make a webhook URL'}
+            </Button>
+          </div>
         </div>
       ) : (
         <div className="space-y-2">
@@ -237,10 +410,14 @@ export function PostHogInboxPushSection() {
             Made {formatWhen(state.createdAt)}. Rotated {formatWhen(state.rotatedAt)}. Last request{' '}
             {formatWhen(state.lastDeliveryAt)}.
           </p>
+          {managed && <ManagedDestination destination={managed} />}
           <p className="text-xs" data-testid="posthog-inbox-push-last">
             {postHogInboxPushLine(state.lastPushAt, true)}
           </p>
-          {secretToggle}
+          {reconnectNotice}
+          {(!managed || managed.error) && setupButton}
+          {setupErrorLine}
+          {!managed && secretToggle}
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => setConfirming('rotate')} data-attr="posthog-inbox-push-rotate">
               <RotateCw className="mr-1 h-3.5 w-3.5" />
@@ -255,7 +432,7 @@ export function PostHogInboxPushSection() {
         </div>
       )}
 
-      <PostHogInboxPushSteps secretRequired={state ? state.secretRequired : requireSecret} />
+      {!managed && <PostHogInboxPushSteps secretRequired={state ? state.secretRequired : requireSecret} />}
 
       {state && workspaceId && (
         <div className="rounded-md border" data-attr="posthog-inbox-push-deliveries">
@@ -265,12 +442,27 @@ export function PostHogInboxPushSection() {
       )}
 
       <ConfirmDialog
+        open={confirming === 'setup'}
+        title="Set up push in PostHog?"
+        description={
+          managed
+            ? 'Talyn rotates the URL and secret and gives them to its destination in PostHog.'
+            : 'Talyn rotates the URL and secret and adds a destination in PostHog that sends to them. A destination you added by hand stops working: delete it in PostHog.'
+        }
+        confirmLabel="Set up push"
+        busy={busy}
+        onConfirm={() => void setUp()}
+        onCancel={() => setConfirming(null)}
+      />
+      <ConfirmDialog
         open={confirming === 'rotate'}
         title="Rotate the URL?"
         description={
-          requireSecret
-            ? 'The old URL and secret stop working at once. Update the destination in PostHog with the new URL and secret.'
-            : 'The old URL stops working at once, and the new URL needs no secret. Update the destination in PostHog with the new URL.'
+          managed
+            ? 'The old URL and secret stop working at once. Talyn gives the new ones to its destination in PostHog.'
+            : requireSecret
+              ? 'The old URL and secret stop working at once. Update the destination in PostHog with the new URL and secret.'
+              : 'The old URL stops working at once, and the new URL needs no secret. Update the destination in PostHog with the new URL.'
         }
         confirmLabel="Rotate URL"
         busy={busy}
@@ -280,7 +472,11 @@ export function PostHogInboxPushSection() {
       <ConfirmDialog
         open={confirming === 'remove'}
         title="Remove the URL?"
-        description="PostHog's requests stop working at once. Talyn goes back to checking the Inbox every 3 minutes."
+        description={
+          managed
+            ? "PostHog's requests stop working at once, and Talyn deletes its destination in PostHog. Talyn goes back to checking the Inbox every 3 minutes."
+            : "PostHog's requests stop working at once. Talyn goes back to checking the Inbox every 3 minutes."
+        }
         confirmLabel="Remove URL"
         busy={busy}
         onConfirm={() => void remove()}

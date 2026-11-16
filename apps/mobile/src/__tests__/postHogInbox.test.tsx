@@ -52,8 +52,13 @@ describe('PostHog Inbox rule model', () => {
     expect(facts).toHaveLength(expected.length);
   });
 
-  it.each<[string, { lastPushAt: string | null; pushConfigured: boolean } | null, RegExp | null]>([
+  it.each<[string, { lastPushAt: string | null; pushConfigured: boolean; pushManaged?: boolean } | null, RegExp | null]>([
     ['no status yet', null, null],
+    ['a managed URL without a push', { lastPushAt: null, pushConfigured: true, pushManaged: true }, /^Talyn set up the destination in PostHog\. Talyn has a webhook URL, but no push/],
+    ['a managed URL with a recent push', { lastPushAt: new Date(Date.now() - 60_000).toISOString(), pushConfigured: true, pushManaged: true }, /^Talyn set up the destination in PostHog\. Last push from PostHog: .*every 30 minutes/],
+    ['a managed URL with an old push', { lastPushAt: new Date(Date.now() - 25 * 3_600_000).toISOString(), pushConfigured: true, pushManaged: true }, /^Talyn set up the destination in PostHog\. .*No push in the last 24 hours/],
+    ['no URL, whatever pushManaged says', { lastPushAt: null, pushConfigured: false, pushManaged: true }, /^PostHog does not push to Talyn yet/],
+    ['a URL made by hand', { lastPushAt: null, pushConfigured: true, pushManaged: false }, /^Talyn has a webhook URL/],
     ['no URL', { lastPushAt: null, pushConfigured: false }, /does not push to Talyn yet\. Talyn checks the Inbox every 3 minutes/],
     ['a URL without a push', { lastPushAt: null, pushConfigured: true }, /no push from PostHog has arrived yet/],
     ['a push a minute ago', { lastPushAt: new Date(Date.now() - 60_000).toISOString(), pushConfigured: true }, /also checks the Inbox every 30 minutes/],
@@ -84,7 +89,7 @@ describe('PostHog Inbox rule detail', () => {
 const NOW = Date.parse('2026-11-16T12:00:00Z');
 const status = (extra: Partial<PostHogInboxStatus> = {}): PostHogInboxStatus => ({
   access: 'ok', reason: null, authMethod: 'oauth', projectId: '42', host: 'https://us.posthog.com', connection: 'posthog_inbox',
-  missingScopes: [], oauthAvailable: true, lastPolledAt: '2026-11-16T11:55:00Z', lastError: null, lastPushAt: null, pushConfigured: false, ...extra,
+  missingScopes: [], oauthAvailable: true, lastPolledAt: '2026-11-16T11:55:00Z', lastError: null, lastPushAt: null, pushConfigured: false, pushManaged: false, pushSetupMissingScopes: [], ...extra,
 });
 
 describe('PostHog Inbox connection card view', () => {
