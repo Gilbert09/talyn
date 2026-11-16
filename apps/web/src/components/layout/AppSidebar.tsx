@@ -308,8 +308,15 @@ function SidebarItem({
 
 /** The vendor apps this workspace can connect, as small marks. Schedule is built in, so it has none. */
 function IntegrationLogoStrip({ features }: { features: Parameters<typeof integrationsOffered>[0] }) {
-  const kinds = integrationsOffered(features).filter((kind) => !INTEGRATION_CATALOG[kind].builtIn);
-  if (kinds.length === 0) return null;
+  // Some apps share a mark (PostHog Code and PostHog Inbox), so show each mark one time.
+  const icons = [
+    ...new Set(
+      integrationsOffered(features)
+        .filter((kind) => !INTEGRATION_CATALOG[kind].builtIn)
+        .map((kind) => INTEGRATION_CATALOG[kind].icon)
+    ),
+  ];
+  if (icons.length === 0) return null;
   return (
     // One fixed-height row: in a narrow sidebar the marks that do not fit wrap out of sight, whole.
     <span
@@ -317,9 +324,9 @@ function IntegrationLogoStrip({ features }: { features: Parameters<typeof integr
       data-attr="nav-integrations-logos"
       aria-hidden
     >
-      {kinds.map((kind) => {
-        const Logo = INTEGRATION_LOGOS[INTEGRATION_CATALOG[kind].icon];
-        return <Logo key={kind} className="h-3 w-3 shrink-0" />;
+      {icons.map((icon) => {
+        const Logo = INTEGRATION_LOGOS[icon];
+        return <Logo key={icon} className="h-3 w-3 shrink-0" />;
       })}
     </span>
   );
