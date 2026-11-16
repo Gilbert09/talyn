@@ -81,10 +81,15 @@ function useReduceMotion(): boolean {
   return reduced;
 }
 
-/** A determinate fill, or a sweep while there is no basis for a number. */
-function StartBar({ fraction, label, width = BAR_WIDTH }: { fraction: number | null; label: string; width?: number }) {
+/**
+ * A determinate fill, or a sweep while there is no basis for a number.
+ * With `stretch`, the bar takes the full width of its parent.
+ */
+function StartBar({ fraction, label, stretch = false }: { fraction: number | null; label: string; stretch?: boolean }) {
   const c = useTheme();
   const reduced = useReduceMotion();
+  const [measured, setMeasured] = useState(BAR_WIDTH);
+  const width = stretch ? measured : BAR_WIDTH;
   const sweep = useRef(new Animated.Value(0)).current;
   const indeterminate = fraction === null;
   useEffect(() => {
@@ -97,7 +102,8 @@ function StartBar({ fraction, label, width = BAR_WIDTH }: { fraction: number | n
   const segment = width * 0.35;
   return <View accessible accessibilityRole="progressbar" accessibilityLabel={label}
     accessibilityValue={fraction === null ? undefined : { min: 0, max: 100, now: Math.round(fraction * 100) }}
-    style={[local.track, { width, maxWidth: '100%', backgroundColor: c.surface }]}>
+    onLayout={stretch ? (event) => setMeasured(event.nativeEvent.layout.width) : undefined}
+    style={[local.track, stretch ? local.trackStretch : { width, maxWidth: '100%' }, { backgroundColor: c.surface }]}>
     {indeterminate
       ? <Animated.View testID="start-progress-sweep" style={[local.fill, { width: segment, backgroundColor: c.primaryAction,
         transform: [{ translateX: sweep.interpolate({ inputRange: [0, 1], outputRange: [-segment, width] }) }] }]} />
@@ -163,7 +169,7 @@ export function StartingLine({ workbench }: { workbench: Workbench }) {
       <ActivityIndicator size="small" color={c.muted} />
       <Text style={[type.caption, { color: c.muted, flexShrink: 1 }]}>{text}</Text>
     </View>
-    <StartBar fraction={fraction} label={text} width={160} />
+    <StartBar fraction={fraction} label={text} stretch />
   </View>;
 }
 
@@ -171,12 +177,13 @@ const local = StyleSheet.create({
   hint: { alignItems: 'center', gap: 10, paddingHorizontal: 24, paddingVertical: 32, alignSelf: 'center', maxWidth: 360, width: '100%' },
   badge: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
   track: { height: 4, borderRadius: 2, overflow: 'hidden', marginVertical: 4 },
+  trackStretch: { alignSelf: 'stretch' },
   fill: { height: 4, borderRadius: 2 },
   steps: { alignSelf: 'stretch', gap: 8, paddingHorizontal: 24, paddingVertical: 4 },
   step: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   stepIcon: { width: 18, height: 18, alignItems: 'center', justifyContent: 'center' },
   stepSpinner: { transform: [{ scale: 0.75 }] },
   stepDot: { width: 10, height: 10, borderRadius: 5, borderWidth: 1.5 },
-  line: { gap: 6, paddingVertical: 6 },
+  line: { alignSelf: 'stretch', gap: 6, paddingVertical: 6 },
   lineText: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 });

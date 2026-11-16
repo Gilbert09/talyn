@@ -1,8 +1,9 @@
 import type { Workbench, WorkbenchStartProgress } from '@talyn/shared';
-import { act, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 
 import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
-import { isStarting, START_PROGRESS_TICK_MS, StartingHint, startQueueText } from '../features/sessions/Starting';
+import { isStarting, START_PROGRESS_TICK_MS, StartingHint, StartingLine, startQueueText } from '../features/sessions/Starting';
 import { chat, fixture, session } from './workflowFixtures';
 
 jest.setTimeout(15000);
@@ -47,6 +48,18 @@ describe('startQueueText', () => {
     [5, '5 messages are queued. They are sent in order when the sandbox is ready.'],
   ])('%i queued', (queued, text) => {
     expect(startQueueText(queued)).toBe(text);
+  });
+});
+
+describe('StartingLine', () => {
+  it('stretches its bar to the full width and sweeps across the measured width', async () => {
+    await render(<StartingLine workbench={wb()} />);
+    const bar = screen.getByRole('progressbar');
+    const style = StyleSheet.flatten(bar.props.style);
+    expect(style.alignSelf).toBe('stretch');
+    expect(style.width).toBeUndefined();
+    await act(async () => { fireEvent(bar, 'layout', { nativeEvent: { layout: { width: 400, height: 4, x: 0, y: 0 } } }); });
+    expect(StyleSheet.flatten(screen.getByTestId('start-progress-sweep').props.style).width).toBe(140);
   });
 });
 
