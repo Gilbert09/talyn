@@ -11,6 +11,7 @@ const NAME_PLACEHOLDERS: Record<WorkflowIntegration, string> = {
   webhook: 'Start work from a webhook',
   linear: 'Fix issues labelled agent',
   github_issues: 'Fix issues labelled agent',
+  posthog_inbox: 'Fix urgent PostHog reports',
 };
 
 export function WorkflowNameField({ value, integration, onChange }: {
@@ -40,7 +41,9 @@ export function WorkflowRunCapField({ value, integration, onChange }: {
           ? 'Runs per hour'
           : integration === 'linear' || integration === 'github_issues'
             ? 'Runs per issue per hour'
-            : 'Stop after this many runs on one PR per hour'}
+            : integration === 'posthog_inbox'
+              ? 'Runs per report per hour'
+              : 'Stop after this many runs on one PR per hour'}
     </label>
     <Input type="number" min={1} className="mt-1 max-w-32" value={value}
       onChange={(event) => onChange(Number(event.target.value))} />
@@ -51,7 +54,9 @@ export function WorkflowRunCapField({ value, integration, onChange }: {
           ? 'This limit stops a sender from starting too many runs.'
           : integration === 'linear' || integration === 'github_issues'
             ? 'This limit prevents a busy issue from starting too many runs.'
-            : 'A loop breaker. Talyn already ignores its own actions; this bounds an echo from somebody else reacting to them.'}
+            : integration === 'posthog_inbox'
+              ? 'This limit prevents one report from starting too many runs.'
+              : 'A loop breaker. Talyn already ignores its own actions; this bounds an echo from somebody else reacting to them.'}
     </p>
   </div>;
 }

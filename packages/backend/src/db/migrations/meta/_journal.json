@@ -946,6 +946,13 @@
       "when": 1790900000100,
       "tag": "0133_usage_interval_peak_memory",
       "breakpoints": true
+    },
+    {
+      "idx": 136,
+      "version": "7",
+      "when": 1790900000110,
+      "tag": "0134_posthog_inbox_rules",
+      "breakpoints": true
     }
   ]
 }

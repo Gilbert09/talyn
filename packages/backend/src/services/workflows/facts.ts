@@ -1,4 +1,11 @@
-import type { GithubWorkflowEvent, IssueEventFacts, SlackEventFacts, WebhookEventFacts, WorkflowFacts } from '@talyn/shared';
+import type {
+  GithubWorkflowEvent,
+  IssueEventFacts,
+  PostHogInboxFacts,
+  SlackEventFacts,
+  WebhookEventFacts,
+  WorkflowFacts,
+} from '@talyn/shared';
 import { loginLooksLikeBot } from '@talyn/shared';
 
 /**
@@ -42,6 +49,11 @@ export function workflowFactsFromRun(run: {
       const webhook = stored as Partial<WebhookEventFacts>;
       if (typeof webhook.ruleId === 'string' && typeof webhook.deliveryRowId === 'string') {
         return stored as WebhookEventFacts;
+      }
+    } else if (stored.integration === 'posthog_inbox') {
+      const report = stored as Partial<PostHogInboxFacts>;
+      if (typeof report.reportId === 'string' && report.reportId && typeof report.connectionId === 'string') {
+        return stored as PostHogInboxFacts;
       }
     } else if (stored.integration === 'slack') {
       const slack = stored as Partial<SlackEventFacts>;

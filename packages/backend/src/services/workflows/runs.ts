@@ -320,6 +320,33 @@ export async function checkRateCap(opts: {
  * The rate cap's WHERE clause. Exported so a test can assert it keys on
  * `subject_key`, which is what `idx_workflow_runs_subject_at` covers.
  */
+/**
+ * The per-rule DAILY cap: how many runs one rule made in the last 24 hours,
+ * over every subject. `skipped` rows are not counted, as for the hourly cap.
+ *
+ * A budget, not a loop breaker: a PostHog Inbox rule can match a new report
+ * every few minutes, and each run starts a session that bills box-hours.
+ * Announced once per window, like the hourly cap: when the newest run of the
+ * rule in the window is already a refusal, the user has been told.
+ */
+export async function checkDailyCap(opts: { workflowId: string; cap: number; now?: Date }): Promise<RateVerdict> {
+  const db = getDbClient();
+  const since = new Date((opts.now ?? new Date()).getTime() - 24 * 60 * 60 * 1000);
+  const scope = and(eq(runsTable.workflowId, opts.workflowId), gt(runsTable.createdAt, since));
+  const counted = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(runsTable)
+    .where(and(scope, ne(runsTable.status, 'skipped')));
+  if (Number(counted[0]?.n ?? 0) < opts.cap) return { allowed: true };
+  const latest = await db
+    .select({ status: runsTable.status })
+    .from(runsTable)
+    .where(scope)
+    .orderBy(desc(runsTable.createdAt))
+    .limit(1);
+  return { allowed: false, announce: latest[0]?.status !== 'skipped' };
+}
+
 export function rateCapScope(opts: { workflowId: string; subjectKey: string; windowMs?: number }) {
   const windowMs = opts.windowMs ?? 60 * 60 * 1000;
   const since = new Date(Date.now() - windowMs);

@@ -120,7 +120,9 @@ export async function handlePullRequestSettled(
     );
     if (!won) continue;
     handled += 1;
-    if (!writeBack) continue;
+    // A PostHog report resolves itself in PostHog when a linked pull request
+    // merges. Talyn writes nothing back to it yet.
+    if (!writeBack || link.integration === 'posthog_inbox') continue;
     try {
       await writeBackMerge(link, pullRequestId, prUrl);
     } catch (err) {

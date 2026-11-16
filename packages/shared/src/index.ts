@@ -65,6 +65,8 @@ export * from './reviewRankingLocalLog.js';
 export * from './workflows.js';
 // Inbound integrations: the webhook URL, delivery and signature shapes.
 export * from './inbound.js';
+// PostHog Inbox rules: the connection status and the dry run.
+export * from './posthogInbox.js';
 export * from './exceptionFilter.js';
 
 // Release notes — the "What's new" feed: version ordering, the commit filter

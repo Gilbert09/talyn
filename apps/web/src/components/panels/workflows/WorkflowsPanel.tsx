@@ -48,6 +48,11 @@ const PANEL_COPY: Record<WorkflowIntegration, { title: string; description: stri
     description: 'Start a session or a task when an issue in a watched repository matches. Talyn comments on the issue and closes it when the fix merges.',
     empty: 'An automation watches GitHub issues and can start a session or a task, comment, or change the status.',
   },
+  posthog_inbox: {
+    title: 'PostHog Inbox automations',
+    description: 'Start a session when a PostHog self-driving report is ready for work. The session works on the report\'s repository and opens a pull request.',
+    empty: 'An automation watches your PostHog Inbox and starts a session for each report that matches.',
+  },
 };
 
 /** A webhook rule's expanded row: its URL, then its runs or the requests it received. */

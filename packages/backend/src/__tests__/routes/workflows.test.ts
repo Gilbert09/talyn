@@ -246,6 +246,7 @@ describe('workflow routes', () => {
         slackChannelRules: false,
         webhookRules: false,
         issueRules: false,
+        posthogInboxRules: false,
       });
     });
 
@@ -280,6 +281,7 @@ describe('workflow routes', () => {
         slackChannelRules: false,
         webhookRules: false,
         issueRules: false,
+        posthogInboxRules: false,
       });
     });
   });

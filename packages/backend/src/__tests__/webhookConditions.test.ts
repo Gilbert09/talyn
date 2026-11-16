@@ -245,7 +245,7 @@ describe('validateWorkflow for webhook rules', () => {
             actions: [{ type, repositoryId: 'r1', prompt: 'x' }],
           }
         : { integration, name: 'x', events: ['pr_opened'], actions: [{ type, repositoryId: 'r1', prompt: 'x' }] };
-    expect(() => validateWorkflow(rule)).toThrow(/is for webhook automations/);
+    expect(() => validateWorkflow(rule)).toThrow(/is for webhook and issue automations/);
   });
 
   it('refuses a webhook condition on a GitHub rule', () => {

@@ -1,3 +1,4 @@
+import { POSTHOG_INBOX_SCOPES } from '@talyn/shared';
 import { createHash, randomBytes } from 'node:crypto';
 import { eq, lt } from 'drizzle-orm';
 import { getDbClient, getPoolDbClient, isRealPostgres } from '../../db/client.js';
@@ -45,10 +46,15 @@ import {
 
 /** Scopes Talyn asks for. `task:*` is everything the cloud-task API needs
  *  (products/tasks/backend — every action is gated on task:read or task:write);
- *  `openid` makes it a proper OIDC grant. Deliberately nothing else: the consent
- *  screen lists these verbatim, and a broad ask is both a security smell and a
- *  reason for a user to bail. */
-const SCOPES = ['openid', 'task:read', 'task:write'] as const;
+ *  `inbox:*` is the self-driving Inbox (signals reports) that PostHog Inbox
+ *  automations read, and later claim; `openid` makes it a proper OIDC grant.
+ *  Deliberately nothing else: the consent screen lists these verbatim, and a
+ *  broad ask is both a security smell and a reason for a user to bail.
+ *
+ *  A grant made before `inbox:*` was asked for keeps working for PostHog Code.
+ *  The PostHog Inbox editor reads the stored `scope` and asks the user to
+ *  connect again (`services/posthogInbox/connection.ts`). */
+const SCOPES = ['openid', 'task:read', 'task:write', ...POSTHOG_INBOX_SCOPES] as const;
 
 /** How long a started flow stays redeemable. PostHog expires the authorization
  *  code itself after 5 minutes, so there is nothing to gain from outliving it —

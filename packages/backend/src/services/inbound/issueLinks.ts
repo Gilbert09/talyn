@@ -1,6 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
-import type { IssueEventFacts, IssueWorkflowIntegration } from '@talyn/shared';
+import type { IssueEventFacts, IssueWorkflowIntegration, PostHogInboxFacts } from '@talyn/shared';
 import { TERMINAL_TASK_STATUSES } from '@talyn/shared';
 import { getPoolDbClient, type Database } from '../../db/client.js';
 import {
@@ -41,10 +41,51 @@ const db = (): Database => getPoolDbClient();
  */
 export const UNATTACHED_CLAIM_GRACE_MS = 10 * 60_000;
 
+/**
+ * The integrations whose rules claim one external item per piece of work:
+ * the issue trackers, and PostHog Inbox (one report).
+ */
+export type LinkedWorkIntegration = IssueWorkflowIntegration | 'posthog_inbox';
+
+/** The facts of an item a start action can claim. */
+export type LinkableFacts = IssueEventFacts | PostHogInboxFacts;
+
 /** The facts a link keeps: no long text, which the merge write-back never reads. */
-export function linkFacts(facts: IssueEventFacts): IssueEventFacts {
+export function linkFacts(facts: IssueEventFacts): IssueEventFacts;
+export function linkFacts(facts: PostHogInboxFacts): PostHogInboxFacts;
+export function linkFacts(facts: LinkableFacts): LinkableFacts;
+export function linkFacts(facts: LinkableFacts): LinkableFacts {
+  if (facts.integration === 'posthog_inbox') return { ...facts, summary: '' };
   const { comment: _comment, ...rest } = facts;
   return { ...rest, body: '' };
+}
+
+/** The columns a claim writes for one item. */
+function linkSubject(facts: LinkableFacts): {
+  integration: LinkedWorkIntegration;
+  connectionId: string | null;
+  externalId: string;
+  externalKey: string;
+  externalUrl: string;
+} {
+  if (facts.integration === 'posthog_inbox') {
+    // `connection_id` references inbound_connections. A PostHog connection is
+    // an `integrations` row, so it stays null; the facts keep it.
+    return {
+      integration: 'posthog_inbox',
+      connectionId: null,
+      externalId: facts.reportId,
+      externalKey: facts.title.slice(0, 200) || facts.reportId,
+      externalUrl: facts.url,
+    };
+  }
+  return {
+    integration: facts.integration,
+    connectionId: facts.connectionId,
+    externalId: facts.externalId,
+    externalKey: facts.identifier,
+    externalUrl: facts.url,
+  };
 }
 
 export const LINK_COLUMNS = {
@@ -74,7 +115,7 @@ export type IssueClaim =
 /** The active link of one issue, or null. */
 export async function activeLink(
   workspaceId: string,
-  integration: IssueWorkflowIntegration,
+  integration: LinkedWorkIntegration,
   externalId: string
 ): Promise<IssueLinkRow | null> {
   const rows = await db()
@@ -103,10 +144,11 @@ export async function claimIssue(input: {
   workspaceId: string;
   workflowId: string;
   runId: string;
-  facts: IssueEventFacts;
+  facts: LinkableFacts;
   now?: Date;
 }): Promise<IssueClaim> {
   const { facts } = input;
+  const subject = linkSubject(facts);
   // Two tries: the second follows the release of a stale claim.
   for (let attempt = 0; attempt < 2; attempt++) {
     const inserted = await db()
@@ -114,13 +156,13 @@ export async function claimIssue(input: {
       .values({
         id: uuid(),
         workspaceId: input.workspaceId,
-        integration: facts.integration,
-        connectionId: facts.connectionId,
+        integration: subject.integration,
+        connectionId: subject.connectionId,
         workflowId: input.workflowId,
         runId: input.runId,
-        externalId: facts.externalId,
-        externalKey: facts.identifier,
-        externalUrl: facts.url,
+        externalId: subject.externalId,
+        externalKey: subject.externalKey,
+        externalUrl: subject.externalUrl,
         facts: linkFacts(facts),
       })
       .onConflictDoNothing({
@@ -130,14 +172,14 @@ export async function claimIssue(input: {
       .returning(LINK_COLUMNS);
     if (inserted[0]) return { claimed: true, link: inserted[0] };
 
-    const existing = await activeLink(input.workspaceId, facts.integration, facts.externalId);
+    const existing = await activeLink(input.workspaceId, subject.integration, subject.externalId);
     if (!existing) continue; // Settled between the insert and the read.
     if (existing.runId === input.runId) return { claimed: true, link: existing };
     const live = await linkIsLive(existing, input.now ?? new Date());
     if (live.live) return { claimed: false, link: existing };
     await settleLink(existing.id, live.status, live.reason);
   }
-  return { claimed: false, link: await activeLink(input.workspaceId, facts.integration, facts.externalId) };
+  return { claimed: false, link: await activeLink(input.workspaceId, subject.integration, subject.externalId) };
 }
 
 /** Attach the started work to a claim. Best effort: a link with no work is released later. */

@@ -184,6 +184,8 @@ const PANEL_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
     'Start a session or a task when an issue in Linear matches. Talyn comments on the issue and moves it to done when the fix merges.',
   github_issues:
     'Start a session or a task when an issue in a watched repository matches. Talyn comments on the issue and closes it when the fix merges.',
+  posthog_inbox:
+    'Start a session when a PostHog self-driving report is ready for work. The session works on the report\'s repository and opens a pull request.',
 };
 
 const EMPTY_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
@@ -194,6 +196,7 @@ const EMPTY_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
     'An automation gets a URL. Another system sends a request to it, and Talyn starts a session or a task.',
   linear: 'An automation watches Linear issues and can start a session or a task, comment, or change the status.',
   github_issues: 'An automation watches GitHub issues and can start a session or a task, comment, or change the status.',
+  posthog_inbox: 'An automation watches your PostHog Inbox and starts a session for each report that matches.',
 };
 
 export function WorkflowsPanel({ integration = 'github' }: { integration?: WorkflowIntegration }) {

@@ -1,6 +1,6 @@
 import { loopsOffered } from './loops.js';
 import { privateRoutesOffered } from './privateRoutes.js';
-import { issueRulesOffered, webhookRulesOffered, workflowsOffered } from './workflows.js';
+import { issueRulesOffered, posthogInboxRulesOffered, webhookRulesOffered, workflowsOffered } from './workflows.js';
 
 /**
  * The Integrations area: one page per integration, each holding its
@@ -15,6 +15,7 @@ export type IntegrationKind =
   | 'schedule'
   | 'tailscale'
   | 'posthog'
+  | 'posthog_inbox'
   | 'trunk';
 
 export const INTEGRATION_KINDS: readonly IntegrationKind[] = [
@@ -26,6 +27,7 @@ export const INTEGRATION_KINDS: readonly IntegrationKind[] = [
   'schedule',
   'tailscale',
   'posthog',
+  'posthog_inbox',
   'trunk',
 ];
 
@@ -37,6 +39,7 @@ export type IntegrationGate =
   | 'trunkMergeEta'
   | 'webhookRules'
   | 'issueRules'
+  | 'posthogInboxRules'
   | null;
 
 export interface IntegrationInfo {
@@ -127,6 +130,17 @@ export const INTEGRATION_CATALOG: Record<IntegrationKind, IntegrationInfo> = {
     builtIn: false,
     gate: null,
   },
+  posthog_inbox: {
+    kind: 'posthog_inbox',
+    name: 'PostHog Inbox',
+    description:
+      'An automation watches PostHog self-driving reports. A report that is ready for work starts a session that opens a pull request.',
+    icon: 'posthog',
+    hasRules: true,
+    // It uses the PostHog connection from the PostHog Code page.
+    builtIn: false,
+    gate: 'posthogInboxRules',
+  },
   trunk: {
     kind: 'trunk',
     name: 'Trunk',
@@ -151,6 +165,7 @@ type OfferedFeatures =
       workflows?: boolean;
       webhookRules?: boolean;
       issueRules?: boolean;
+      posthogInboxRules?: boolean;
     }
   | null
   | undefined;
@@ -171,6 +186,8 @@ export function integrationOffered(features: OfferedFeatures, kind: IntegrationK
     case 'linear':
     case 'github_issues':
       return issueRulesOffered(features);
+    case 'posthog_inbox':
+      return posthogInboxRulesOffered(features);
     default:
       return true;
   }
@@ -187,5 +204,6 @@ export function integrationRulesOffered(features: OfferedFeatures, kind: Integra
   if (kind === 'github') return workflowsOffered(features);
   if (kind === 'webhook') return webhookRulesOffered(features);
   if (kind === 'linear' || kind === 'github_issues') return issueRulesOffered(features);
+  if (kind === 'posthog_inbox') return posthogInboxRulesOffered(features);
   return true;
 }

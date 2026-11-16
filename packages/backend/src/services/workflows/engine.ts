@@ -2,6 +2,7 @@ import type { WorkflowDefinition, WorkflowFacts } from '@talyn/shared';
 import {
   effectiveWorkflowActions,
   isIssueFacts,
+  isPostHogInboxFacts,
   isSlackFacts,
   isWebhookFacts,
   workflowIntegrationOf,
@@ -16,7 +17,7 @@ import type { WebhookDelivery } from '../webhookPayload.js';
 import { workflowsKillSwitchPulled, workspaceMayUseWorkflows } from '../workflowsAccess.js';
 import { ownerOfWorkspace } from './owner.js';
 import { runWorkflowActions } from './actions.js';
-import { checkRateCap, claimRun, recordSkippedRun, settleRun, settlementFor } from './runs.js';
+import { checkDailyCap, checkRateCap, claimRun, recordSkippedRun, settleRun, settlementFor } from './runs.js';
 import type { WorkflowSourceAdapter, WorkflowSourceTarget } from './source.js';
 import { githubWorkflowSource } from './sources/github.js';
 import { enabledWorkflowsFor } from './store.js';
@@ -175,6 +176,7 @@ async function evaluateForWorkspace<
 function subjectProps(facts: WorkflowFacts): Record<string, unknown> {
   if (isIssueFacts(facts)) return { issue_integration: facts.integration, issue_id: facts.externalId };
   if (isWebhookFacts(facts)) return { webhook_connection_id: facts.connectionId };
+  if (isPostHogInboxFacts(facts)) return { posthog_report_id: facts.reportId, posthog_project_id: facts.projectId };
   if (isSlackFacts(facts)) {
     return { slack_team_id: facts.teamId, slack_channel_id: facts.channelId };
   }
@@ -198,7 +200,42 @@ async function runOne<Input, Target extends WorkflowSourceTarget, Facts extends 
     facts,
     deliveryId: source.deliveryId(input),
   };
-  const capNoun = isIssueFacts(facts) ? 'issue' : isWebhookFacts(facts) ? 'webhook' : isSlackFacts(facts) ? 'channel' : 'PR';
+  const capNoun = isIssueFacts(facts)
+    ? 'issue'
+    : isWebhookFacts(facts)
+      ? 'webhook'
+      : isPostHogInboxFacts(facts)
+        ? 'report'
+        : isSlackFacts(facts)
+          ? 'channel'
+          : 'PR';
+
+  // The daily cap first: it is a budget over every subject, so a rule that
+  // spent it stands down whatever the subject.
+  if (workflow.maxRunsPerDay) {
+    const daily = await checkDailyCap({ workflowId: workflow.id, cap: workflow.maxRunsPerDay });
+    if (!daily.allowed) {
+      if (daily.announce) {
+        const run = await recordSkippedRun(claimInput, {
+          type: workflow.actions[0]?.type ?? 'comment',
+          ok: false,
+          code: 'rate_capped',
+          error:
+            `"${workflow.name}" has already run ${workflow.maxRunsPerDay} times in the last 24 hours, ` +
+            'so it stood down. Raise its daily limit to let it run more.',
+        });
+        if (run) emitWorkflowRun(target.workspaceId, run);
+      }
+      debugBus.recordEvent({
+        service: 'workflows',
+        action: 'daily-capped',
+        summary: `"${workflow.name}" hit its daily cap on ${subject.label}`,
+        ok: false,
+        workspaceId: target.workspaceId,
+      });
+      return false;
+    }
+  }
 
   // The rate cap first, so a loop costs one COUNT rather than a round of actions.
   const verdict = await checkRateCap({

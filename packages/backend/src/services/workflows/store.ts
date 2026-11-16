@@ -46,6 +46,8 @@ function rowToWorkflow(row: WorkflowRow): WorkflowDefinition {
     conditions: (row.conditions ?? {}) as WorkflowDefinition['conditions'],
     actions: (row.actions ?? []) as WorkflowDefinition['actions'],
     maxRunsPerPrPerHour: row.maxRunsPerPrPerHour,
+    // Only when set, so a rule without a daily cap reads as it always has.
+    ...(row.maxRunsPerDay !== null && row.maxRunsPerDay !== undefined ? { maxRunsPerDay: row.maxRunsPerDay } : {}),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -202,6 +204,7 @@ export async function createWorkflow(
     conditions: input.conditions,
     actions: input.actions,
     maxRunsPerPrPerHour: input.maxRunsPerPrPerHour,
+    maxRunsPerDay: input.maxRunsPerDay ?? null,
     createdAt: now,
     updatedAt: now,
   };
@@ -226,6 +229,7 @@ export async function updateWorkflow(
       conditions: input.conditions,
       actions: input.actions,
       maxRunsPerPrPerHour: input.maxRunsPerPrPerHour,
+      maxRunsPerDay: input.maxRunsPerDay ?? null,
       updatedAt: new Date(),
     })
     .where(eq(workflowsTable.id, id));

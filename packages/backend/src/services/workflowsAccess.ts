@@ -132,3 +132,18 @@ export async function workspaceMayUseIssueRules(workspaceId: string): Promise<bo
 export async function userMayUseIssueRules(subject: FlagSubject): Promise<boolean> {
   return (await evaluateFlag('issueRules', subject)).enabled;
 }
+
+/**
+ * Whether this workspace's owner may use PostHog Inbox rules.
+ *
+ * Asked IN ADDITION to {@link workspaceMayUseWorkflows} by the engine, and on
+ * its own by the poller. Keyed on the owner: a report has no Talyn caller.
+ */
+export async function workspaceMayUsePostHogInboxRules(workspaceId: string): Promise<boolean> {
+  return (await workspaceHasFeature('posthogInboxRules', workspaceId)).enabled;
+}
+
+/** Whether this signed-in user may use PostHog Inbox rules. The owner routes ask this. */
+export async function userMayUsePostHogInboxRules(subject: FlagSubject): Promise<boolean> {
+  return (await evaluateFlag('posthogInboxRules', subject)).enabled;
+}

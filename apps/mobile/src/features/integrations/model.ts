@@ -1,7 +1,8 @@
 import type { PostHogCodeStatus } from '@talyn/client/native';
 import {
-  DEFAULT_POSTHOG_CODE_MODEL_ID, INVALID_RETURN_TO_CODE, isWorkflowIntegration, POSTHOG_CODE_MODELS,
-  type LinearConnection, type TrunkIntegrationStatus, type WorkflowIntegration, type WorkspaceSettings,
+  DEFAULT_POSTHOG_CODE_MODEL_ID, DEFAULT_POSTHOG_INBOX_ACTIONABILITY, INVALID_RETURN_TO_CODE, isWorkflowIntegration, POSTHOG_CODE_MODELS,
+  POSTHOG_INBOX_ACTIONABILITY_LABELS, POSTHOG_INBOX_CONDITION_SPECS,
+  type LinearConnection, type WorkflowConditions, type TrunkIntegrationStatus, type WorkflowIntegration, type WorkspaceSettings,
 } from '@talyn/shared';
 
 import type { Tone } from '../../components/UI';
@@ -192,4 +193,42 @@ export function linearReturnError(url: string): string | null {
     const params = new URL(url).searchParams;
     return params.get('linear') === 'error' ? (params.get('message') ?? 'Linear sign-in did not finish.') : null;
   } catch { return null; }
+}
+
+/** What a PostHog Inbox rule filters on, one line per condition it sets. Actionability always shows, with PostHog's default when unset. */
+export function postHogInboxConditionFacts(conditions: WorkflowConditions | null | undefined): Array<{ label: string; value: string }> {
+  const c = conditions ?? {};
+  const actionabilityLabel = (value: string) => (POSTHOG_INBOX_ACTIONABILITY_LABELS as Record<string, string>)[value] ?? value;
+  const facts: Array<{ label: string; value: string }> = [];
+  for (const spec of POSTHOG_INBOX_CONDITION_SPECS) {
+    let value = '';
+    switch (spec.key) {
+      case 'repositories': case 'priorities': case 'sourceProducts': case 'suggestedReviewers':
+        value = (c[spec.key] ?? []).join(', ');
+        break;
+      case 'actionability':
+        value = (c.actionability ?? [...DEFAULT_POSTHOG_INBOX_ACTIONABILITY]).map(actionabilityLabel).join(', ');
+        break;
+      case 'scouts': {
+        const parts = [];
+        if (c.scouts?.include?.length) parts.push(`only ${c.scouts.include.join(', ')}`);
+        if (c.scouts?.exclude?.length) parts.push(`not ${c.scouts.exclude.join(', ')}`);
+        value = parts.join('; ');
+        break;
+      }
+      case 'titleContains': case 'summaryContains':
+        value = c[spec.key]?.trim() ? `“${c[spec.key]!.trim()}”` : '';
+        break;
+      case 'minSignalCount':
+        value = typeof c.minSignalCount === 'number' && c.minSignalCount > 0 ? String(c.minSignalCount) : '';
+        break;
+    }
+    if (value) facts.push({ label: spec.label, value });
+  }
+  return facts;
+}
+
+/** The daily cap line of a rule, or null when it has none. */
+export function dailyCapText(maxRunsPerDay: number | null | undefined): string | null {
+  return typeof maxRunsPerDay === 'number' && maxRunsPerDay > 0 ? `${maxRunsPerDay} ${maxRunsPerDay === 1 ? 'run' : 'runs'} a day` : null;
 }
