@@ -336,6 +336,16 @@ export function buildAppShortcuts(): Shortcut[] {
       when: () => inWorkbench() && composerForTab() !== null,
       run: () => window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_EVENT)),
     },
+    {
+      id: 'composer.focus.slash',
+      keys: '/',
+      label: 'Focus chat input',
+      group: 'Session',
+      hidden: true,
+      // On Home, '/' is 'repository.open'. In a field, '/' types a slash.
+      when: () => inWorkbench() && composerForTab() !== null,
+      run: () => window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_EVENT)),
+    },
     ...buildGoToShortcuts(),
   ];
 }

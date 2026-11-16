@@ -475,6 +475,72 @@ describe('Tab focuses the chat input', () => {
   });
 });
 
+describe('/ focuses the chat input', () => {
+  const opts = { menuOwnsChords: false, mac: true };
+  let composer: HTMLTextAreaElement;
+  const onFocus = vi.fn();
+
+  beforeEach(() => {
+    useNavigationStore.setState({ paletteOpen: false });
+    composer = document.createElement('textarea');
+    composer.setAttribute('data-session-composer', '');
+    document.body.appendChild(composer);
+    onFocus.mockReset();
+    window.addEventListener(FOCUS_COMPOSER_EVENT, onFocus);
+  });
+
+  afterEach(() => {
+    window.removeEventListener(FOCUS_COMPOSER_EVENT, onFocus);
+    composer.remove();
+  });
+
+  function slash(target?: HTMLElement): KeyboardEvent {
+    const e = new KeyboardEvent('keydown', { key: '/', code: 'Slash', bubbles: true, cancelable: true });
+    target?.dispatchEvent(e);
+    return e;
+  }
+
+  it('in a session, asks the composer for focus and does not type the slash', () => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' }));
+    const e = slash();
+    expect(dispatchKeydown(e, opts)).toBe(true);
+    expect(e.defaultPrevented).toBe(true);
+    expect(onFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it('outside a session, / does not focus the composer', () => {
+    const e = slash();
+    expect(dispatchKeydown(e, opts)).toBe(false);
+    expect(onFocus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the composer', () => composer],
+    ['another field', () => document.body.appendChild(document.createElement('input'))],
+  ])('typing in %s keeps the slash', (_name, target) => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' }));
+    const el = target();
+    el.focus();
+    const e = slash(el);
+    expect(dispatchKeydown(e, opts)).toBe(false);
+    expect(e.defaultPrevented).toBe(false);
+    expect(onFocus).not.toHaveBeenCalled();
+    if (el !== composer) el.remove();
+  });
+
+  it('an open dialog keeps the slash', () => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' }));
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('data-state', 'open');
+    document.body.appendChild(dialog);
+    const e = slash();
+    expect(dispatchKeydown(e, opts)).toBe(false);
+    expect(onFocus).not.toHaveBeenCalled();
+    dialog.remove();
+  });
+});
+
 describe('session arrows', () => {
   const opts = { menuOwnsChords: false, mac: true };
   let composer: HTMLTextAreaElement;
