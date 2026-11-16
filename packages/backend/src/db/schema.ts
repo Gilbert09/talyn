@@ -2388,6 +2388,8 @@ export const workbenches = pgTable(
       onDelete: 'set null',
     }),
     pullRequestLinkedAt: timestamp('pull_request_linked_at', { withTimezone: true }),
+    /** The link was chosen (a session started from the PR, or a manual link), not found by branch (migration 0135). */
+    pullRequestLinkExplicit: boolean('pull_request_link_explicit').notNull().default(false),
     pushedHeadShas: text('pushed_head_shas').array().notNull().default([]),
     allocatedBranch: boolean('allocated_branch').notNull().default(false),
     /** When the one post-first-turn branch rename was decided (renamed or kept). Null: not yet. */

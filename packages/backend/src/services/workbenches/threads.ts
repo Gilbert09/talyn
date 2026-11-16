@@ -11,7 +11,7 @@ import { pullRequests as prTable, workbenches } from '../../db/schema.js';
 import { createWorkbench } from './create.js';
 import { emitWorkbenchEvents } from './emit.js';
 import { WorkbenchError } from './errors.js';
-import { eligiblePr, linkedBeforeMerge } from './prEligibility.js';
+import { linkedBeforeMerge, ownsLinkedPr } from './prEligibility.js';
 import type { ReadinessUser } from './readiness.js';
 import { appendEvents, getWorkbench, isThread, listChats, threadAutoWakeState, threadSessions, type ChatRow, type WorkbenchRow } from './store.js';
 import { sendMessage } from './turns.js';
@@ -162,7 +162,7 @@ export async function notifyThreadsOfMergedPr(pullRequestId: string): Promise<vo
       .innerJoin(prTable, eq(prTable.id, workbenches.pullRequestId))
       .where(and(
         eq(workbenches.pullRequestId, pullRequestId), isNotNull(workbenches.threadId),
-        eq(prTable.state, 'merged'), eligiblePr(), linkedBeforeMerge(),
+        eq(prTable.state, 'merged'), ownsLinkedPr(), linkedBeforeMerge(),
         sql`NOT (COALESCE(${workbenches.settings} -> 'threadToldOfMerge', '[]'::jsonb) ? ${pullRequestId})`,
       ));
     for (const { id } of children) {

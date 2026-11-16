@@ -13,6 +13,14 @@ export function eligiblePr(createdAt: SQL = sql`${workbenches.createdAt}`, pushe
   ), false)`;
 }
 
+/**
+ * The session owns its linked PR: a person or a caller chose it (started from
+ * the PR, or linked it by hand), or the evidence test passes.
+ */
+export function ownsLinkedPr(): SQL {
+  return sql`(${workbenches.pullRequestLinkExplicit} OR ${eligiblePr()})`;
+}
+
 export function linkedBeforeMerge(mergedAt: SQL = sql`${pullRequests.mergedAt}`): SQL {
   return sql`${workbenches.pullRequestLinkedAt} < ${mergedAt} AND ${workbenches.createdAt} <= ${mergedAt}`;
 }

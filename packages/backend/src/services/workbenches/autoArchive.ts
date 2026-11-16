@@ -1,4 +1,4 @@
-import { eligiblePr, linkedBeforeMerge } from './prEligibility.js';
+import { linkedBeforeMerge, ownsLinkedPr } from './prEligibility.js';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { getPoolDbClient } from '../../db/client.js';
 import { pullRequests, workbenches, workspaces } from '../../db/schema.js';
@@ -21,7 +21,7 @@ export async function autoArchiveForMergedPr(input: MergeArchiveInput): Promise<
       mergeArchiveEnabled,
       sql`${workbenches.settings} ->> 'archiveOnIdle' IS NOT NULL`,
       sql`EXISTS (SELECT 1 FROM ${pullRequests} WHERE ${pullRequests.id} = ${workbenches.pullRequestId}
-        AND ${eligiblePr()} AND ${linkedBeforeMerge()})`,
+        AND ${ownsLinkedPr()} AND ${linkedBeforeMerge()})`,
     ));
     ids = rows.map((row) => row.id);
   } else {
@@ -37,7 +37,7 @@ export async function autoArchiveForMergedPr(input: MergeArchiveInput): Promise<
         sql`lower(${pullRequests.repo}) = ${repo}`,
         eq(pullRequests.number, input.number), isNull(workbenches.archivedAt),
         mergeArchiveEnabled,
-        eligiblePr(), linkedBeforeMerge(mergeTime),
+        ownsLinkedPr(), linkedBeforeMerge(mergeTime),
         input.workspaceIds ? inArray(workbenches.workspaceId, input.workspaceIds) : undefined,
         sql`NOT (COALESCE(${workbenches.settings} -> 'autoArchivedForPr', '[]'::jsonb) ? ${key})`,
       ));
@@ -51,7 +51,7 @@ export async function autoArchiveForMergedPr(input: MergeArchiveInput): Promise<
         mergeArchiveEnabled,
         sql`NOT (COALESCE(${workbenches.settings} -> 'autoArchivedForPr', '[]'::jsonb) ? ${key})`,
         sql`EXISTS (SELECT 1 FROM ${pullRequests} WHERE ${pullRequests.id} = ${workbenches.pullRequestId}
-          AND ${eligiblePr()} AND ${linkedBeforeMerge(mergeTime)})`,
+          AND ${ownsLinkedPr()} AND ${linkedBeforeMerge(mergeTime)})`,
       )).returning({ id: workbenches.id });
       ids.push(...marked.map((row) => row.id));
     }
