@@ -101,7 +101,7 @@ describe('withPostHogSymbolUploads', () => {
   });
 
   it('skips a dSYM that PostHog already holds, so a rebuild of the same native code does not fail', () => {
-    const official = jest.fn((config: object) => config);
+    const official = jest.fn((config: object, _props?: object) => config);
     jest.isolateModules(() => {
       jest.doMock('posthog-react-native/expo', () => official);
       const isolated = require('../../plugins/withPostHogSymbolUploads.cjs');
