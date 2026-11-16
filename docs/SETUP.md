@@ -498,7 +498,7 @@ dispatchable** — a real state, not a broken one.
 #### 3. The backend
 
 ```
-TS_AUTHKEY=tskey-auth-...              # absent = Tailscale never starts
+TS_AUTHKEY=tskey-client-...            # OAuth client secret; absent = Tailscale never starts
 TS_HOSTNAME=talyn-backend
 FLEET_HTTP_PROXY=http://localhost:1055 # what the fleet client dials through
 FLEET_REPORT_TOKEN=<shared with every fleet host>
@@ -648,7 +648,17 @@ With no `TS_AUTHKEY` the daemon never starts and the image behaves exactly as it
 did before; a deployment with no self-hosted fleet should not be running a
 networking daemon it has no use for.
 
-**The backend's key must be EPHEMERAL** (tick "Ephemeral" when generating it).
+**Use an OAuth client secret, not an auth key.** An auth key expires after at
+most 90 days. The running container does not notice, because it joined long
+ago, but the next deploy cannot join, and the fleet becomes unreachable. That
+happened to the fleet's control plane on 2026-11-16. An OAuth client secret does
+not expire. Generate it in Tailscale under Settings → OAuth clients, with the
+**Auth Keys: write** scope and the tag `tag:talyn-backend`, and set it as
+`TS_AUTHKEY`. The entrypoint adds `--advertise-tags` (`TS_TAGS` changes the tag)
+and asks for an ephemeral, pre-approved node. An auth key still works.
+
+**The backend's node must be EPHEMERAL** (the entrypoint asks for this with an
+OAuth client; with an auth key, tick "Ephemeral" when generating it).
 The container has no persistent volume, so every deploy starts with empty
 tailscaled state and registers as a new node. With a normal key the old one
 lingers and you accumulate `talyn-backend-1`, `-2`, `-3`… one per deploy — all
