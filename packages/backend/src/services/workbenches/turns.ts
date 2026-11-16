@@ -889,7 +889,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     });
     if (refreshed.note) events.add(accountSwitchEvent(refreshed.note));
     if (live.cancelRequested) return cancelledOutcome(events);
-    startTitleGeneration(wb, message.text);
+    startTitleGeneration(wb, message.text, { agent });
 
     const planMode = message.planMode ?? chat.planMode;
     const model = turnModel;
