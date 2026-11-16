@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from '../lib/api';
-import { isActiveSessionState, sessionPr, sessionState, spaceSessionState, type SessionStateKind } from '../lib/sessionState';
+import { isActiveSessionState, sessionPr, sessionState, spaceSessionState, withServerAttention, type SessionState, type SessionStateKind } from '../lib/sessionState';
 
 type Wb = Pick<Workbench, 'status' | 'sandboxState' | 'diffStat' | 'committedStats' | 'archivedAt'>;
 const WB: Wb = { status: 'ready', sandboxState: 'running', diffStat: null, archivedAt: null } as Wb;
@@ -139,5 +139,30 @@ describe('spaceSessionState', () => {
     ['a closed pull request', { pullRequest: { number: 7, state: 'closed', url: 'https://github.com/a/b/pull/7' } }, 'closed'],
   ] as [string, Partial<typeof SPACE_SESSION>, SessionStateKind][])('%s', (_name, patch, kind) => {
     expect(spaceSessionState({ ...SPACE_SESSION, ...patch }).kind).toBe(kind);
+  });
+});
+
+describe('withServerAttention', () => {
+  const state = (kind: SessionStateKind, label: string = kind): SessionState => ({ kind, label });
+
+  it.each<[string, SessionState, Parameters<typeof withServerAttention>[1], number | null, SessionState]>([
+    ['no reason keeps the state', state('idle'), undefined, null, state('idle')],
+    ['a question on an idle row', state('idle'), 'reply', null, { kind: 'needs_reply', label: 'Waiting for your answer' }],
+    ['a question on an unread row', state('needs_reply', 'New reply'), 'reply', null, { kind: 'needs_reply', label: 'Waiting for your answer' }],
+    ['a question on an open PR row', state('pr_waiting'), 'reply', 5, { kind: 'needs_reply', label: 'Waiting for your answer' }],
+    ['a failure on an idle row', state('idle'), 'failed', null, { kind: 'failed', label: 'Failed: open it to see why' }],
+    ['a failure on a merged row', state('merged'), 'failed', 5, { kind: 'failed', label: 'Failed: open it to see why' }],
+    ['conflicts on an open PR row', state('pr_waiting'), 'conflict', 12, { kind: 'pr_attention', label: '#12 has conflicts' }],
+    ['conflicts with no PR number', state('pr_waiting'), 'conflict', null, { kind: 'pr_attention', label: 'The pull request has conflicts' }],
+    ['conflicts the row already shows', state('pr_attention', '#12 has conflicts'), 'conflict', 12, state('pr_attention', '#12 has conflicts')],
+    ['a failure the row already shows', state('failed', 'A chat failed'), 'reply', null, state('failed', 'A chat failed')],
+    ['live work wins over an old question', state('working'), 'reply', null, state('working')],
+    ['a starting box wins over old conflicts', state('starting'), 'conflict', 3, state('starting')],
+  ])('%s', (_label, given, reason, prNumber, expected) => {
+    expect(withServerAttention(given, reason, prNumber)).toEqual(expected);
+  });
+
+  it('puts a flagged idle row in the active group', () => {
+    expect(isActiveSessionState(withServerAttention(state('idle'), 'reply'))).toBe(true);
   });
 });

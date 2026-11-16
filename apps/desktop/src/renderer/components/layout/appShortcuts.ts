@@ -25,6 +25,7 @@ import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { groupSidebarWorkbenches, isArchived, sidebarSessionStates, visibleGroupItems } from '../workbench/workbenchSelectors';
 import { currentSpaceSidebarModel, spaceSidebarSessionIds } from './spaceSidebarModel';
 import { buildGoToShortcuts } from './goToShortcuts';
+import { useContextAttentionStore } from '../../lib/contextRail';
 
 // Keep the same context shortcut as the web app.
 export const CONTEXT_JUMP_KEYS = (n: number) => `mod+shift+${n}`;
@@ -46,6 +47,7 @@ export function orderedLiveWorkbenches(): Workbench[] {
     unread,
     unseen,
     backgrounds: useSessionBackgroundStore.getState().byWorkbench,
+    attention: useContextAttentionStore.getState().counts?.sessions,
   });
   const { sidebarOrder, collapsedSessionGroups } = useWorkspaceStore.getState();
   const openId = currentWorkbench()?.id ?? null;

@@ -11,6 +11,7 @@ import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { groupSidebarWorkbenches, isArchived, sidebarSessionStates, visibleGroupItems } from '../workbench/workbenchSelectors';
 import { currentSpaceSidebarModel, spaceSidebarSessionIds } from './spaceSidebarModel';
 import { buildGoToShortcuts } from './goToShortcuts';
+import { useContextAttentionStore } from '../../lib/contextRail';
 import { activeSpace, contextEntries, inPersonalList, isWorkbenchOwner, openSpaceSession, spacesOffered, switchContext } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
 import { useSessionBackgroundStore } from '../../stores/sessionBackground';
@@ -35,6 +36,7 @@ export function orderedLiveWorkbenches(): Workbench[] {
     unread,
     unseen,
     backgrounds: useSessionBackgroundStore.getState().byWorkbench,
+    attention: useContextAttentionStore.getState().counts?.sessions,
   });
   const { sidebarOrder, collapsedSessionGroups } = useWorkspaceStore.getState();
   const openId = currentWorkbench()?.id ?? null;
