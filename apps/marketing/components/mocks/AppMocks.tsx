@@ -543,7 +543,7 @@ export function MockReviews({ filters = true }: MockProps) {
 /* ---------- task running (mirrors QueuePanel + TaskTerminal) ---------- */
 
 const transcript = [
-  { k: "sys", t: "Cloud run started · PostHog Code · sandbox sundial-3f2a" },
+  { k: "sys", t: "Cloud run started · Talyn Fleet · Claude · box sundial-3f2a" },
   { k: "tool", t: "read  .github/workflows/ci.yml" },
   { k: "tool", t: "run   npm test -- packages/api" },
   { k: "err", t: "× 2 failing: checkout webhook retry timing" },
@@ -577,7 +577,7 @@ export function MockTaskRunning(_props: MockProps) {
         </p>
         <div className="rounded-lg border border-line p-2">
           <p className="truncate text-[11px] text-ink-600">Reply review #418</p>
-          <p className="font-mono text-[9px] text-ink-400">PostHog Code</p>
+          <p className="font-mono text-[9px] text-ink-400">Talyn Fleet · Codex</p>
         </div>
       </div>
       {/* detail */}
@@ -593,7 +593,7 @@ export function MockTaskRunning(_props: MockProps) {
                 Working
               </span>
               <span className="flex items-center gap-1 rounded border border-line px-1.5 py-0.5 text-[9px] text-ink-500">
-                <Sparkles className="h-2.5 w-2.5" /> PostHog Code
+                <Sparkles className="h-2.5 w-2.5" /> Talyn Fleet · Claude
               </span>
               <span className="flex items-center gap-1 rounded border border-line px-1.5 py-0.5 font-mono text-[9px] text-ink-500">
                 <GitBranch className="h-2.5 w-2.5" /> fix/webhook-retry
@@ -602,7 +602,7 @@ export function MockTaskRunning(_props: MockProps) {
           </div>
         </div>
         <div className="flex items-center gap-2 border-b border-line bg-paper-100 px-3 py-1.5 text-[10px] text-ink-500">
-          <Sparkles className="h-3 w-3 text-clay" /> Cloud run on PostHog Code
+          <Sparkles className="h-3 w-3 text-clay" /> Cloud run on Talyn Fleet
           <span className="ml-auto flex items-center gap-1 text-ink-400">
             <ExternalLink className="h-3 w-3" /> View run
           </span>

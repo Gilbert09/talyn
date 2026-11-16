@@ -30,6 +30,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   setAgents(null, null);
+  useWorkspaceStore.setState({ features: null });
 });
 
 describe('ConnectAgentBanner', () => {
@@ -57,6 +58,18 @@ describe('ConnectAgentBanner', () => {
     expect(screen.getByText('Connect an agent to start sessions.')).toBeTruthy();
     expect(screen.getByText(copy)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /dismiss/i })).toBeNull();
+  });
+
+  it.each([
+    ['no fleet and PostHog Code not connected', [{ type: 'posthog_code', connected: false }]],
+    ['no providers at all', []],
+    ['fleet with no agent', [fleet([])]],
+  ])('names only Claude or Codex with PostHog Code retired, %s', (_name, providers) => {
+    setAgents(providers, false);
+    useWorkspaceStore.setState({ features: { posthogCodeRetired: true } as never });
+    render(<ConnectAgentBanner />);
+    expect(screen.getByText(FLEET_COPY)).toBeTruthy();
+    expect(screen.queryByText(POSTHOG_COPY)).toBeNull();
   });
 
   it('tracks one view per mount', () => {

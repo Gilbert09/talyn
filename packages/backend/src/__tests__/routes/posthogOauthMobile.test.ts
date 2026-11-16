@@ -9,6 +9,7 @@ import { wrapAsyncRoutes } from '../../middleware/asyncHandler.js';
 import { completeAuthorization } from '../../services/posthogCode/oauth.js';
 import { resetPostHogOAuthConfigForTests } from '../../services/posthogCode/oauthConfig.js';
 import { resetWebAppUrlCacheForTests } from '../../services/webApp.js';
+import { resetFeatureFlagsForTests } from '../../services/featureFlags.js';
 import { posthogOauthStates, workspaces } from '../../db/schema.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 
@@ -35,6 +36,7 @@ const ENV_KEYS = [
   'TALYN_TOKEN_KEY',
   'POSTHOG_OAUTH_CLIENT_ID',
   'POSTHOG_OAUTH_REDIRECT_URI',
+  'POSTHOG_CODE_RETIRED',
 ] as const;
 const saved: Record<string, string | undefined> = {};
 
@@ -52,6 +54,9 @@ describe('PostHog OAuth — mobile return', () => {
     process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
     process.env.POSTHOG_OAUTH_CLIENT_ID = 'https://www.talyn.dev/oauth-client';
     process.env.POSTHOG_OAUTH_REDIRECT_URI = 'https://prod.talyn.dev/api/v1/posthog/oauth/callback';
+    // PostHog Code is retired by default. The return flow still runs where the flag is off.
+    process.env.POSTHOG_CODE_RETIRED = 'false';
+    resetFeatureFlagsForTests();
     resetPostHogOAuthConfigForTests();
     resetWebAppUrlCacheForTests();
     vi.mocked(completeAuthorization).mockReset();
@@ -91,6 +96,7 @@ describe('PostHog OAuth — mobile return', () => {
     }
     resetPostHogOAuthConfigForTests();
     resetWebAppUrlCacheForTests();
+    resetFeatureFlagsForTests();
   });
 
   function startFlow(body: Record<string, unknown>, origin?: string) {

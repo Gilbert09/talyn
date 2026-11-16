@@ -72,6 +72,16 @@ To stop the agent, select **Stop the agent**.
 
 Type `@` to mention a file, and `/` for the agent's slash commands. The agent is the real Claude Code or Codex tool, so its commands, skills and plan mode work as they do on your own computer.
 
+## Wait for CI
+
+An agent can wait for the checks on its pull request instead of polling them. It sets a wake-up that fires when the checks on the commit finish, when the pull request head moves, or when the pull request merges or closes. The wake-up also has a latest time, which is 3 hours unless the agent sets another. The session shows that it waits for CI, and the agent starts a new turn when the wake-up fires.
+
+## When the model API fails
+
+Sometimes the Claude or Codex API fails on its side, for example with a server error or an overload. Talyn then suspends the sandbox and tries again later. It waits 2, 5, 10, 20 and then 30 minutes between tries, and it tries at most 8 times. The chat shows **The model API is failing** and the time of the next try. Select **Resume now** to try at once, or **Cancel** to stop waiting.
+
+To turn this off, open **Settings > Sessions** and turn off **Continue when an agent hits its limit**. That setting also covers usage limits. See [The model API is failing](/docs/troubleshooting#the-model-api-is-failing).
+
 ## Undo with checkpoints
 
 Each message you send is a checkpoint. To put the files back to how they were before a message, hover over the message and select **Revert to here**, then confirm.
@@ -88,7 +98,7 @@ One button in the session header moves the work on. Its label changes as the pul
 
 **Address review comments** asks the agent to read and handle the unresolved review comments.
 
-To have the agent open the pull request by itself when it finishes, turn on **Open a PR when the agent is done** in **Settings > Agents**.
+In the desktop app, you can have the agent open the pull request by itself when it finishes. Turn on **Open a PR when the agent is done** in **Settings > Agents**.
 
 Sometimes Talyn cannot push the branch or commit the changes for a reason that the agent can fix. For example, the branch on GitHub has commits that the session does not have. Then Talyn gives the error back to the agent in a new turn. The agent merges the remote commits or fixes the commit, and Talyn tries again. The chat shows this turn as one line, **Talyn could not open the pull request**, and **Show error** shows the error. Talyn tries at most two times. It does not try again when GitHub refuses access, because only you can fix that. It also does not try again when you already sent the next message.
 
@@ -107,6 +117,17 @@ The thread keeps track of its sessions. When a session finishes a turn, opens a 
 Every session a thread starts is an ordinary session. You can open it, read its diff and send it messages yourself.
 
 To turn a session into a thread, open **More actions** in the session header and select **Continue as thread**. The new thread starts with a recap of the session, and the session joins it.
+
+## Split view
+
+Split view shows up to four sessions side by side, each with its own chat and composer. It is in the desktop app and the web app. It is not in the mobile app.
+
+- Open **Split view** from the command palette, or right-click a session in the sidebar and select **Open in split view**. You can also hold ⌘ (Ctrl on Windows and Linux) and click a session.
+- Drag a session or thread from the sidebar onto a pane. Drop it in the middle of a pane to replace that session. Drop it near an edge to add it beside the pane.
+- Drag a pane header onto another pane to swap the two. The arrows in a header move a pane left or right, and the close button removes it.
+- Only the pane you click has the keyboard focus. Select the open icon in a pane header to open that session on its own.
+
+Talyn keeps your panes on the device. A pane closes when its session is archived.
 
 ## Archive a session
 

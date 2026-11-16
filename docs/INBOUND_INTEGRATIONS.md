@@ -16,7 +16,7 @@ Plan of 2026-11-12. Each phase ships on its own, behind its own PostHog flag.
 - The engine is adapter-shaped: `services/workflows/source.ts` (`WorkflowSourceAdapter<Input, Target, Facts>`) and `engine.ts` `evaluateWorkflows(source, input)`. A new vendor is a new adapter and a facts member.
 - Slack is the inbound pattern: `services/slack/events.ts` verifies the HMAC on the raw body, inserts into `slack_events` (event id is the idempotency), answers 200, processes after the response with a claim (`claimed_at` CAS, 5 attempts), a 60 s sweep and 7-day retention. Mirror Slack, not GitHub's Redis stream.
 - `run_prompt` / `run_skill` are PR-only. `start_session` (`sessionAction.ts`) is the shared action. `buildSlackPrompt` (`services/slack/context.ts`) is the untrusted-content fencing to reuse.
-- The `posthog` integration kind is PostHog Code credentials, not an error-tracking project. Error tracking gets a new kind.
+- The `posthog` integration kind is PostHog Code credentials, not an error-tracking project. PostHog Code is retired, and only existing connections keep this row. Error tracking gets a new kind.
 - Mobile: `apps/mobile/app/integrations/[kind].tsx` and `RulesScreen.tsx` list rules with an enable toggle and "Edit on the web".
 
 ## Shared inbound layer (`packages/backend/src/services/inbound/`)

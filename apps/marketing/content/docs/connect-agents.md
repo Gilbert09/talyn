@@ -43,6 +43,8 @@ You need a ChatGPT subscription.
 
 You can connect more than one account for each agent, for example a personal and a work Claude account. Talyn uses them in the order of the list. Use **Move up** and **Move down** to change the order.
 
+Talyn gives a new account a name such as **Claude 2**. After the account connects, you can type a different name or keep that one. To change the name later, select it.
+
 Each account row shows its usage. When one account reaches its limit, Talyn uses the next one. See [Usage limits and failover](/docs/troubleshooting#usage-limits-and-failover).
 
 ## Pick the agent and model

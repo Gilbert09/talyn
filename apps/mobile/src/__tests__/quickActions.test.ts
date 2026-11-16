@@ -32,11 +32,11 @@ describe('primaryActions', () => {
     ['a running turn leaves Stop to the composer', session({ chats: [chat({ status: 'running' })] }), row(conflicts), ['resolve_conflicts', 'queue_add']],
     ['a failed start offers Retry', noPr({ status: 'error', error: 'Boom.' }), null, ['retry']],
     ['a failed sandbox offers Retry before the PR action', session({ sandboxState: 'error' }), row(mergeable), ['retry', 'merge']],
-    ['a sleeping sandbox offers Wake last', noPr({ sandboxState: 'suspended' }), null, ['wake']],
-    ['Wake falls off when two actions come first', session({ sandboxState: 'suspended' }), row(mergeable), ['merge', 'queue_add']],
+    ['a sleeping sandbox leaves Wake to the menu', noPr({ sandboxState: 'suspended' }), null, []],
+    ['a sleeping sandbox still offers its PR actions', session({ sandboxState: 'suspended' }), row(mergeable), ['merge', 'queue_add']],
     ['a thread never gets PR actions', thread(), null, []],
     ['a running thread has no quick actions', { ...thread(), chats: [chat({ id: 'thread-chat', status: 'running' })] }, null, []],
-    ['a sleeping thread can wake', { ...thread(), sandboxState: 'suspended' }, null, ['wake']],
+    ['a sleeping thread has no quick actions', { ...thread(), sandboxState: 'suspended' }, null, []],
     ['a linked PR still loading waits instead of offering Create PR', session({ diffStat: changes.diffStat }), null, []],
     ['the workbench summary drives the cycle before the row loads', session({ pr: { number: 42, url: '', state: 'open', mergeable: 'conflicting', ciStatus: 'success' } }), null, ['resolve_conflicts']],
   ])('%s', (_name, item, pull, expected) => {
@@ -44,9 +44,9 @@ describe('primaryActions', () => {
   });
 
   it('keeps at most the limit', () => {
-    const item = session({ sandboxState: 'suspended' });
-    expect(kinds(item, row(conflicts), { limit: 3 })).toEqual(['resolve_conflicts', 'queue_add', 'wake']);
-    expect(kinds(item, row(conflicts), { limit: 1 })).toEqual(['resolve_conflicts']);
+    const item = session({ status: 'error' });
+    expect(kinds(item, row(conflicts), { limit: 3 })).toEqual(['retry', 'resolve_conflicts', 'queue_add']);
+    expect(kinds(item, row(conflicts), { limit: 1 })).toEqual(['retry']);
   });
 
   it.each([
@@ -73,7 +73,7 @@ describe('primaryActions', () => {
   it('disables every action offline but the queue state, which only navigates', () => {
     const actions = primaryActions(session({ sandboxState: 'suspended' }), row(mergeable, { mergeQueued: true }), { offline: true, limit: 5 });
     expect(actions.map((action) => [action.kind, action.disabledReason])).toEqual([
-      ['merge', 'You are offline.'], ['queue_status', null], ['wake', 'You are offline.'],
+      ['merge', 'You are offline.'], ['queue_status', null],
     ]);
   });
 

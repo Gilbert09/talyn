@@ -396,7 +396,7 @@ export const faq = [
   },
   {
     q: "Which agents does it use?",
-    a: "Claude Code on your Claude Pro or Max plan, and Codex on your ChatGPT Plus or Pro plan. You sign in with the account; there is no API key. Connect both and pick per session. PR fixes and scheduled automations can also run on PostHog Code.",
+    a: "Claude Code on your Claude Pro or Max plan, and Codex on your ChatGPT Plus or Pro plan. You sign in with the account; there is no API key. Connect both and pick per session.",
   },
   {
     q: "Where does my code run?",

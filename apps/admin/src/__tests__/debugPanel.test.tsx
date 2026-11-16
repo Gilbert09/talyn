@@ -20,6 +20,7 @@ const getAccess = vi.fn();
 const getEvents = vi.fn();
 const getSnapshot = vi.fn();
 const setDebugFilter = vi.fn();
+const stopDebugStream = vi.fn();
 const on = vi.fn((_type: string, _handler: unknown) => () => {});
 
 vi.mock('../lib/api', () => ({
@@ -32,6 +33,7 @@ vi.mock('../lib/api', () => ({
     },
     ws: {
       setDebugFilter: (owner?: string) => setDebugFilter(owner),
+      stopDebugStream: () => stopDebugStream(),
       on: (type: string, handler: unknown) => on(type, handler),
     },
   },
@@ -116,14 +118,17 @@ describe('DebugPanel in its new home', () => {
     expect(getSnapshot).not.toHaveBeenCalled();
   });
 
-  it('CLEARS the server-side debug filter on unmount', async () => {
-    // The leak. A filter left set outlives this page and silently narrows the
-    // stream for whatever opens the socket next.
+  it('STOPS the server-side debug stream on unmount', async () => {
+    // The leak. A stream left on outlives this page: the socket keeps
+    // receiving every debug event, and a filter left set silently narrows the
+    // stream for whatever opens the panel next.
     const view = render(<DebugPanel />);
-    await waitFor(() => expect(getEvents).toHaveBeenCalled());
+    await waitFor(() => expect(setDebugFilter).toHaveBeenCalledWith(undefined));
+    stopDebugStream.mockClear();
     setDebugFilter.mockClear();
     view.unmount();
-    await waitFor(() => expect(setDebugFilter).toHaveBeenCalledWith(undefined));
+    await waitFor(() => expect(stopDebugStream).toHaveBeenCalledTimes(1));
+    expect(setDebugFilter).not.toHaveBeenCalled();
   });
 
   it('subscribes to the live event stream', async () => {

@@ -40,6 +40,6 @@ describe('FleetAccountsList on web', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save sign-in' }));
     await waitFor(() => expect(saveConfig).toHaveBeenCalledWith('selfhosted', 'ws1', {
       codexAccessToken: 'access', codexRefreshToken: 'refresh', codexAccountId: 'account',
-    }, { codexLabel: 'Codex 1' }));
+    }, { codexNewAccount: true }));
   });
 });

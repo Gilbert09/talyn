@@ -48,17 +48,12 @@ export function apiKeyError(agent: FleetAgent, key: string): string | null {
   return null;
 }
 
-/** Which account a sign-in writes: an existing one to reconnect, a new one by name, or the older single sign-in. */
-export type ConnectTarget = { accountId: string } | { label: string } | undefined;
+/** Which account a sign-in writes: an existing one to reconnect, a new one the server names, or the older single sign-in. */
+export type ConnectTarget = { accountId: string } | { newAccount: true } | undefined;
 
 /** Accounts of one agent, in their failover order. */
 export function agentAccounts(accounts: readonly FleetAccountView[], agent: FleetAgent): FleetAccountView[] {
   return accounts.filter((account) => account.agent === agent).sort((a, b) => a.priority - b.priority);
-}
-
-/** "Claude 2" for a second Claude account, like web's default name. */
-export function nextAccountLabel(accounts: readonly FleetAccountView[], agent: FleetAgent): string {
-  return `${AGENT_SHORT[agent]} ${agentAccounts(accounts, agent).length + 1}`;
 }
 
 const OAUTH_KIND: Record<FleetAgent, FleetAccountView['kind']> = { claude: 'claude_oauth', codex: 'codex_oauth' };
@@ -76,12 +71,7 @@ export function connectTarget(response: FleetAccountsResponse | null | undefined
     const stale = agentAccounts(response.accounts, agent).find((account) => account.needsReauth && account.kind === OAUTH_KIND[agent]);
     if (stale) return { accountId: stale.id };
   }
-  return { label: nextAccountLabel(response.accounts, agent) };
-}
-
-/** The label for the API key path, which always adds an account. */
-export function apiKeyLabel(response: FleetAccountsResponse | null | undefined, agent: FleetAgent): string | undefined {
-  return response ? nextAccountLabel(response.accounts, agent) : undefined;
+  return { newAccount: true };
 }
 
 export interface AgentState { label: string; tone: Tone; connected: boolean; reauth: boolean }

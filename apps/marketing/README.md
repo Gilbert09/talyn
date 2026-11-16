@@ -35,9 +35,9 @@ All headlines, feature blurbs, FAQ, nav, and footer text. Edit here to retune vo
 ### Download button — live
 
 `components/ui/DownloadButton.tsx` fetches the newest release from the public
-GitHub API (`Gilbert09/talyn`) on click and downloads the Apple-silicon `.dmg`,
-falling back to the releases page. It uses `/releases?per_page=1` (not
-`/releases/latest`) because all current builds are pre-releases. Change `REPO`
+GitHub API (`Gilbert09/talyn`) on click and downloads the installer for the visitor's platform (Apple-silicon `.dmg`, Windows `.exe` or Linux `.AppImage`),
+falling back to the releases page. It uses `/releases/latest` (the newest
+stable release; nothing publishes pre-releases any more). Change `REPO`
 there if the repo moves. A `download_click` event is sent to PostHog.
 
 ### Analytics — PostHog

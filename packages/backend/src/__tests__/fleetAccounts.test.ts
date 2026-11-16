@@ -89,14 +89,45 @@ describe('fleet accounts', () => {
 
   describe('the store', () => {
     it.each([
-      ['claude_oauth', 'claude', 'Claude subscription'],
-      ['anthropic_key', 'claude', 'Anthropic API key'],
-      ['codex_oauth', 'codex', 'ChatGPT subscription'],
-      ['openai_key', 'codex', 'OpenAI API key'],
+      ['claude_oauth', 'claude', 'Claude'],
+      ['anthropic_key', 'claude', 'Claude'],
+      ['codex_oauth', 'codex', 'Codex'],
+      ['openai_key', 'codex', 'Codex'],
     ] as const)('adds a %s account to the %s agent with a default label', async (kind, agent, label) => {
       const account = await add(kind, 'v');
       expect(account).toMatchObject({ agent, kind, label, priority: 1, reauthRequiredAt: null });
       expect(account).not.toHaveProperty('credential');
+    });
+
+    it.each([
+      ['claude', [], 'Claude'],
+      ['claude', ['Work'], 'Claude 2'],
+      ['claude', ['Claude', 'Claude 2'], 'Claude 3'],
+      ['claude', ['Claude subscription'], 'Claude 2'],
+      ['claude', ['Work', 'claude 2'], 'Claude 3'],
+      ['claude', ['Claude 2', 'Claude 3'], 'Claude 4'],
+      ['codex', [], 'Codex'],
+      ['codex', ['Codex'], 'Codex 2'],
+      ['codex', ['Personal', 'Codex 3'], 'Codex 4'],
+    ] as const)('names a new %s account after %j as %s', (agent, existing, expected) => {
+      expect(accounts.nextAccountLabel(agent, existing)).toBe(expected);
+    });
+
+    it('names unnamed accounts by how many the agent already has', async () => {
+      await add('claude_oauth', 'a');
+      await add('claude_oauth', 'b', 'Work');
+      await add('claude_oauth', 'c');
+      await add('codex_oauth', 'd');
+      await add('claude_oauth', 'e', '   ');
+      const list = await accounts.listFleetAccounts(WS);
+      expect(list.map((a) => a.label)).toEqual(['Claude', 'Work', 'Claude 3', 'Claude 4', 'Codex']);
+    });
+
+    it('keeps the old default names on the single-credential path', async () => {
+      expect((await accounts.upsertPrimaryFleetAccount(WS, 'claude_oauth', credentialFor('claude_oauth', 'a'))).label)
+        .toBe('Claude subscription');
+      expect((await accounts.upsertPrimaryFleetAccount(WS, 'openai_key', credentialFor('openai_key', 'b'))).label)
+        .toBe('OpenAI API key');
     });
 
     it('appends each new account at the end of its own agent', async () => {
@@ -106,10 +137,10 @@ describe('fleet accounts', () => {
       await add('claude_oauth', 'd');
       const list = await accounts.listFleetAccounts(WS);
       expect(list.map((a) => [a.agent, a.priority, a.label])).toEqual([
-        ['claude', 1, 'Claude subscription'],
+        ['claude', 1, 'Claude'],
         ['claude', 2, 'Team key'],
-        ['claude', 3, 'Claude subscription'],
-        ['codex', 1, 'OpenAI API key'],
+        ['claude', 3, 'Claude 3'],
+        ['codex', 1, 'Codex'],
       ]);
       expect((await accounts.listFleetAccounts(WS, 'codex')).map((a) => a.kind)).toEqual(['openai_key']);
     });

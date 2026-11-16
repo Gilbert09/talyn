@@ -12,7 +12,6 @@ and [#129](https://github.com/Gilbert09/talyn/pull/129).
 Use [the release runbook](../../docs/MOBILE_RELEASE.md) for exact configuration, secrets, signing, updates, and submission steps.
 Use [the release checklist](../../docs/MOBILE_RELEASE_CHECKLIST.md), [store asset inventory](../../docs/MOBILE_STORE_ASSETS.md),
 and [Maestro device flows](e2e/README.md) before beta and each store candidate.
-Merge #128, then #129, then this release change. Do not queue this stacked change before its parents.
 
 Development and preview remain useful without production secrets.
 Internal beta and production require explicit identities, public URLs, project configuration, and a reserved build number.
@@ -206,7 +205,7 @@ No transcript, repository data, token, or verifier is cached in AsyncStorage or 
 AppState and NetInfo provide active/suspended and online/offline/unknown states.
 Unknown reachability permits a request. It does not prove internet access.
 Supabase refresh stops while suspended or offline. The shared client owns concurrent 401 recovery.
-No workflow socket is opened in this phase. Later workflows can use the configured native client.
+The workflow store opens the shared client socket (`src/native/socket.ts`) and patches rows from live events.
 
 Transient network errors, timeouts, rate limits, unknown auth failures, and 5xx responses retain the account.
 Only explicit refresh-token rejection permits automatic sign-out.
@@ -317,7 +316,7 @@ Use the native preview to inspect sign-in, workspace selection, and Settings aft
 
 ## Implemented workflow
 
-The native tabs remain Sessions, Threads, Attention, and Settings.
+Navigation is a left drawer that mirrors the web sidebar (`app/(drawer)/`). Sessions, Threads and Attention are drawer screens.
 Lists show the selected workspace. Pull-to-refresh uses authoritative REST snapshots.
 Session and thread lists show scope, status, latest activity, and supplied text response gates.
 The contract supplies no shared unread marker. The app does not invent one.
@@ -436,7 +435,7 @@ They establish a rendering bound in the test host. They do not measure device fr
 ## Physical-device and performance checks
 
 No physical-device or live-backend workflow result is claimed.
-Use the native preview with configured test services to inspect all four tabs and detail views.
+Use the native preview with configured test services to inspect the drawer screens and detail views.
 Complete these checks on signed iOS and Android development builds before beta.
 Use the minimum supported OS versions, a small phone, and a tablet or large Android window.
 Use authorized test accounts supplied through the normal sign-in flow. Do not add credentials to fixtures.
@@ -473,9 +472,7 @@ Semantic tokens live in `src/theme/tokens.ts`.
 Muted ink and action clay are darker in light mode to keep small text readable on paper.
 Shared controls live in `src/components/UI.tsx`.
 
-Native tabs keep their platform behavior.
-`ScreenContainer` handles safe areas, including the tab bar, through React Native Screens.
-Automatic tab content insets are disabled to prevent duplicate padding.
+`ScreenContainer` handles safe areas from the JS safe-area provider, not the native `SafeAreaView`.
 System fonts can scale without a limit.
 Rows and badges wrap, and content has a maximum width on tablets.
 

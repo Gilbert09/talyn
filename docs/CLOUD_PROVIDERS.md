@@ -1,13 +1,13 @@
 # Cloud Task Providers — Pluggable Delegation
 
-> ## Current state (September 2026)
+> ## Current state (November 2026)
 >
 > | Provider | Wire value | Status |
 > |---|---|---|
 > | **Talyn Fleet** | `selfhosted` | **Live, and the DEFAULT.** Firecracker microVMs on hardware we own, dispatched through the sandbox gateway. Runs on the workspace's OWN Claude or Codex subscription. |
-> | PostHog Code | `posthog_code` | Live. The fall-back: what a workspace not on the fleet allow-list runs on, and where a full fleet fails over to. |
+> | PostHog Code | `posthog_code` | **Retired** (step 1, 2026-11-15). The `posthogCodeRetired` flag (`posthog-code-retired`, break glass `POSTHOG_CODE_RETIRED`) hides it for everyone, and its fallback is ON, so a PostHog outage or an absent flag keeps it hidden. A `false` answer in PostHog, or `POSTHOG_CODE_RETIRED=false`, brings it back. With the flag on: the connect routes answer 410 `posthog_code_retired` for a workspace with no PostHog Code row, and `GET /cloud-providers` lists it only for a workspace that has a row. The resolver keeps it only as the chosen default or the only connected provider. Neither the code review spill nor quota failover moves work onto it, so it is no longer a fall-back. An existing connection keeps working, and every client shows it a move-to-Claude-or-Codex notice. Helpers: `services/posthogCodeRetirement.ts`, `packages/shared/src/posthogCodeRetirement.ts`. The code stays for now. Step 2 deletes the provider (see `ROADMAP.md`). |
 > | Codex Cloud | `codex_cloud` | Deferred — OpenAI exposes no server-to-server cloud-task API. Note this is a different thing from running **Codex on the fleet**, which works today. |
-> | ~~Claude Code~~ | ~~`claude_code`~~ | **Removed** (migration `0050`). Anthropic Managed Agents billed metered API credits with no subscription option — the opposite of what the fleet offers — and the fleet runs Claude on the user's own subscription instead. |
+> | ~~Claude Code~~ | ~~`claude_code`~~ | **Removed** (migration `0050`, commit `9c5689f37c`, 2026-09-05; `services/claudeCode/` is gone). Anthropic Managed Agents billed metered API credits with no subscription option — the opposite of what the fleet offers — and the fleet runs Claude on the user's own subscription instead. |
 >
 > ### The fleet's two agents
 >
@@ -18,8 +18,10 @@
 > task is therefore picking a model — there is no second field, because a second
 > field is a second source of truth that can disagree with the first.
 >
-> - **Claude** — `claude setup-token` yields a long-lived `sk-ant-oat…`, or a
->   Console key for metered billing. Pasted.
+> - **Claude** — a subscription sign-in at `claude.com/cai/oauth/authorize`
+>   (`services/selfHosted/claudeOauth.ts` owns the exchange and the refresh, and
+>   it runs on desktop and web alike), or a Console key for metered billing,
+>   pasted. The old `claude setup-token` paste is what the sign-in replaced.
 > - **Codex** — a ChatGPT-subscription token pair. The authorize leg **cannot**
 >   run on the backend: OpenAI publishes no third-party OAuth for
 >   subscription inference, and the only client the Codex backend accepts
@@ -56,10 +58,16 @@
 > `runCredentials.ts` serves it back to a host that asks. A row with no `llm`
 > predates the field and is an Anthropic run.
 
-> Status: **Phases 1–2 shipped** (June 2026, the cloud-only refactor). Goal: turn the
-> one-off PostHog Code integration into a pluggable "cloud task provider" abstraction,
-> then add **OpenAI Codex Cloud** and **Claude Code Routines** as two more delegators
-> behind the same machinery.
+> Status: **the sections below are the June 2026 plan, kept as history.** Where they
+> disagree with the table above or with `CLAUDE.md`, those win. File names in the plan
+> (`cloudProviders/streamer.ts`, `cloudProviders/claude/`, `routes/cloudProviders.ts`
+> with `/api/cloud-providers`) are not the shipped ones: the transcript core is
+> `cloudProviders/transcriptStore.ts`, the routes are `routes/cloudProviders.ts` under
+> `/api/v1`, and the providers live in `cloudProviders/{posthog,selfhosted}/`.
+>
+> Original goal: turn the one-off PostHog Code integration into a pluggable "cloud task
+> provider" abstraction, then add **OpenAI Codex Cloud** and **Claude Code Routines** as
+> two more delegators behind the same machinery.
 >
 > **What's done:** the `CloudTaskProvider` interface + registry
 > (`services/cloudProviders/{types,registry,poller,environment}.ts`), PostHog Code
@@ -75,11 +83,11 @@
 > `TranscriptSource`/`TranscriptConverter` was **deferred** — with one provider, the
 > PostHog poller/streamer are wrapped as-is; generalise them when Codex/Claude land.
 > (3) The Settings/composer UI stays PostHog-specific until a 2nd provider exists.
-> Phase 4 (Claude Code, Managed Agents) **shipped** (June 2026) — `services/claudeCode/*`
-> + `cloudProviders/claude/provider.ts`, registered in `index.ts`, with a generic
-> `CloudProviderCard` Settings form. Phase 3 (Codex Cloud) is **deferred** — no
-> server-to-server API (see the Phase 0 findings). Remaining: per-task provider
-> picker in the composer; `TranscriptSource`/`TranscriptConverter` generalisation.
+> Phase 4 (Claude Code, Managed Agents) shipped in June 2026 and was **removed** in
+> September 2026 (see the table above). Phase 3 (Codex Cloud) is **deferred** — no
+> server-to-server API (see the Phase 0 findings). The per-task provider picker shipped
+> as the agent menu on each PR row. `TranscriptSource`/`TranscriptConverter`
+> generalisation is still deferred.
 
 ## Background
 
@@ -442,39 +450,12 @@ neutral shapes.
 
 ---
 
-## Phase 4 — Claude Code provider — SHIPPED (June 2026)
+## Phase 4: Claude Code provider (removed, September 2026)
 
-> Implemented via Anthropic's **Managed Agents API** (not Routines — that path is
-> subscription-billed but fire-and-forget / low-parity; see the Phase 0 findings
-> and the billing analysis). Provider type `claude_code`, displayName
-> "Claude Code". Contract confirmed by the spike (see above).
-
-`services/claudeCode/` + `services/cloudProviders/claude/provider.ts`:
-- **`client.ts`** — Managed Agents wrapper: create agent / environment / vault
-  (+ GitHub credential) / session, post the prompt event, poll the event list,
-  get session, interrupt + delete. `debugBus` service tag `claude_managed_agents`.
-- **`credentials.ts`** — `type: 'claude_code'` integration; encrypted Anthropic
-  key + GitHub PAT; caches the reusable agent/environment/vault ids per workspace
-  (cleared on credential rotation).
-- **`converter.ts`** — `managedAgentEventToAgentEvents` (poll-based, complete
-  events → `AgentEvent[]`; no chunk coalescing) + `findPullRequestUrl` /
-  `isTerminalEvent`.
-- **`executor.ts`** — `dispatch`: ensure resources → create session w/ repo
-  resource + vault → post the prompt (starts the run) → stamp `cloudTask` →
-  `in_progress`.
-- **`poller.ts`** — `reconcile`: poll events → transcript (persist + emit only
-  what's new), detect+link the PR from `create_pull_request`, finalize on
-  `session.status_idle`/`end_turn`; `stopStreaming` clears the in-memory cursor.
-- **`provider.ts`** — `CloudTaskProvider`; `cancel` = interrupt + delete session.
-- Registered in `index.ts`; DebugPanel `SERVICE_INFO`; generic `CloudProviderCard`
-  Settings form (Anthropic key + GitHub PAT).
-- **Tests:** `claudeCodeConverter.test.ts` (event mapping, PR detection, terminal),
-  `claudeCodeProvider.test.ts` (conformance + registry).
-- **Known follow-ups:** per-task provider picker (PR-fix tasks currently prefer
-  PostHog, else Claude); `checkout` object shape for `pr_response`/`pr_review`
-  head-branch mounting; executor/poller DB-mocked reconcile tests; reusing the
-  workspace GitHub connection instead of a separate PAT (OAuth-token↔MCP compat
-  unverified).
+Built in June 2026 on Anthropic's Managed Agents API, then removed in commit
+`9c5689f37c` (migration `0050`): it billed metered API credits with no
+subscription option. Talyn Fleet runs Claude on the user's own subscription
+instead. The Phase 0 spike notes above are kept as a record of the contract.
 
 ---
 
@@ -490,6 +471,8 @@ neutral shapes.
 ---
 
 ## PostHog Code auth — OAuth alongside the personal API key (August 2026)
+
+> PostHog Code is retired (see the table at the top). New users cannot connect it. This section describes code that still runs for existing connections, until step 2 deletes it.
 
 PostHog Code originally authenticated with a **personal API key** the user pasted
 into Settings, plus a project id they had to go and find. Both are still
@@ -609,6 +592,8 @@ and a project picker is the fix — not silently filing tasks into the wrong pro
 ---
 
 ## Two integration models (scope clarification)
+
+> Historical: the local daemon this section compares against was removed in the June 2026 cloud-only refactor.
 
 This plan covers **cloud delegation** (vendor hosts the sandbox + agent loop; Owl
 kicks off + reconciles). The alternative is **local execution via Owl's daemon**

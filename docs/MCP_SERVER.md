@@ -93,7 +93,7 @@ owner-scoped RLS as the desktop app — no separate permission surface.
 
 ## Tools
 
-The hosted server has 102 tools. Account feature flags control 52 of them (see
+The hosted server has 105 tools. Account feature flags control 54 of them (see
 [Feature-gated tools](#feature-gated-tools)). A session token sees fewer tools (see
 [Inside a session sandbox](#inside-a-session-sandbox)).
 Every tool declares annotations for reads and actions.
@@ -295,7 +295,8 @@ Include the skill instructions in `prompt`; the reference records which skill th
 
 Scheduled automation creation uses the desktop defaults. The timezone defaults to `UTC`.
 These defaults include target `task`, PostHog Code, its default model, daily runs at 09:00, and concurrency `skip`.
-With target `session` and no provider, the provider is Talyn Fleet (`selfhosted`) with its default model.
+PostHog Code is retired. In a workspace with no PostHog Code connection, pass `provider: selfhosted` for a task loop that can run. Step 2 of the retirement changes this default.
+With target `session` and no provider, the provider is Talyn Fleet (`selfhosted`) with its default model. A task loop with no provider also gets Talyn Fleet while PostHog Code is retired (`posthog-code-retired`).
 Internet access defaults to off. `mcpServerIds: null` uses the workspace's connected servers.
 Pass scheduled automation fields directly or in a `loop` object. Set the model when you change the provider.
 
@@ -306,7 +307,8 @@ API-key servers must be added in the Talyn app, so the key never passes through 
 ### Feature-gated tools
 
 Tool listing checks `/features` once per request.
-The flags `workflows`, `loops`, `mcpServers`, `workbenches`, and `spaces` control their tool groups.
+The flags `workflows`, `loops`, `mcpServers`, `workbenches`, `spaces`, and `slackChannelRules` control their tool groups.
+The `slackChannelRules` flag controls `talyn_list_slack_channels`. `talyn_slack_reply` has no flag.
 The `workbenches` flag controls the session, workspace memory and Setup list tools.
 The background job and wake-up tools have no flag. The code review tools are always listed.
 A false flag hides the group. If the feature request fails, all tools remain listed.

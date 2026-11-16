@@ -59,6 +59,8 @@ To see the details, open **Settings > Plan and usage** in the desktop app, or **
 
 Talyn warns you when you have used 50%, 80% and 100% of your box-hours.
 
+When your included box-hours run out and you use credits, the gauge shows a credit bar. It starts at 100% of your credits and counts down. A top-up or a usage reset starts a new bar.
+
 ### The monthly period
 
 On the free plan, box-hours reset at the start of each calendar month, in UTC. On Pro, they reset each month on the day your subscription renews. An annual Pro plan also resets monthly. Box-hours you do not use do not roll over.
@@ -105,6 +107,16 @@ Turn on **Buy credits automatically when the balance is low** to buy a pack when
 - **At most per month ($)**: a cap on auto top-ups. The default is $100.
 
 If an automatic charge fails, the page says so and offers **Buy credits**.
+
+## Reset your usage
+
+On a paid plan, you can pay once to set this period's used box-hours back to zero. The price is your plan's monthly price.
+
+1. Open the plan page.
+2. Select **Reset usage**.
+3. Pay on the checkout page.
+
+You get all of your plan's box-hours back at once. Your period still ends on the same day, and unused hours do not carry over. If you refund the payment, Talyn does not take the hours back on its own. You see the button only when your plan offers a reset.
 
 ## Upgrade to Pro or Max
 

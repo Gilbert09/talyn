@@ -115,6 +115,12 @@ interface SelfHostedIntegrationConfig {
     state: string;
     codeVerifierEnc: EncryptedEnvelope;
     expiresAt: string;
+    /** The account a reconnect writes to. */
+    accountId?: string;
+    /** Set when the sign-in adds a new account. */
+    newAccount?: boolean;
+    /** The name an older client chose before the sign-in. */
+    label?: string;
   };
   /** The workspace's own Claude credential — an OAuth token from a Claude
    *  subscription (`sk-ant-oat…`), or a Console API key (`sk-ant-api…`),

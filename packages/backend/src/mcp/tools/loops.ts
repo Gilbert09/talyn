@@ -9,6 +9,7 @@ import {
   type LoopWithStats,
 } from '@talyn/shared';
 import { callApi, type WatchedRepo } from '../api.js';
+import { posthogCodeRetiredForWorkspace } from '../../services/posthogCodeRetirement.js';
 import {
   bool,
   booleanSchema,
@@ -149,7 +150,10 @@ export const LOOPS = [
       requireId(values, 'repositoryId');
       await repoName(ownerId, workspaceId, values);
       const defaults = emptyLoopInput('UTC');
-      if (values.target === 'session' && values.provider === undefined) {
+      // Sessions need the fleet. A task loop also defaults to it once PostHog
+      // Code is retired, because the blank loop still names PostHog Code.
+      if (values.provider === undefined &&
+          (values.target === 'session' || (await posthogCodeRetiredForWorkspace(workspaceId)))) {
         values.provider = 'selfhosted';
       }
       if (values.provider === 'selfhosted' || values.provider === 'posthog_code')

@@ -5,6 +5,7 @@ import {
   isStoredFleetModelId,
   fleetAgentForModel,
   parseAutoKeepMergeableLabels,
+  posthogCodeRetired,
   type FleetAgent,
   type Workspace,
 } from '@talyn/shared';
@@ -268,6 +269,8 @@ export function CloudProviderDefaultSelector() {
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const connected = (cloudProviders ?? []).filter((p) => p.connected);
   const [saving, setSaving] = useState(false);
+  const retired = useWorkspaceStore((s) => posthogCodeRetired(s.features));
+  const autoCopy = retired ? 'Auto prefers Talyn Fleet.' : 'Auto prefers Talyn Fleet, then PostHog Code.';
 
   const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
   const settings = workspace?.settings;
@@ -341,7 +344,7 @@ export function CloudProviderDefaultSelector() {
       label="Default for new tasks"
       description={
         <>
-          Which agent new tasks run on. Auto prefers Talyn Fleet, then PostHog Code.
+          Which agent new tasks run on. {autoCopy}
           “Ask every time” shows a picker on the Task button when more than one is connected.
         </>
       }

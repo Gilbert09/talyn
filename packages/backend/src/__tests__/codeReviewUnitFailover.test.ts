@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { randomBytes } from 'crypto';
 import { eq } from 'drizzle-orm';
 import { CODE_REVIEW_FINDINGS_SENTINEL, type FleetAgent } from '@talyn/shared';
@@ -93,6 +93,7 @@ const { countLiveUnits, getReview, getRun } = await import('../services/codeRevi
 const { heldBackAgents } = await import('../services/selfHosted/exhaustedQuota.js');
 const { cycleFailureMessage } = await import('../services/codeReview/failureMessage.js');
 const { FleetCapacityError } = await import('../services/selfHosted/client.js');
+const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 type RunRow = import('../services/codeReview/store.js').RunRow;
 
 const reconcile = (run: RunRow) =>
@@ -509,6 +510,39 @@ describe('moving a unit to the other fleet agent', () => {
   });
 });
 
+describe('spilling a fresh unit to PostHog Code when the fleet is full', () => {
+  const unitRow = async () =>
+    (await db.select().from(prCodeReviewRuns).where(eq(prCodeReviewRuns.lens, 'correctness')))[0]!;
+
+  beforeEach(() => {
+    createSandbox.mockRejectedValue(new FleetCapacityError('all hosts busy'));
+    startCodeRun.mockResolvedValue({ ok: true, model: 'claude-sonnet-5', remoteTaskId: 'pt1', remoteRunId: 'pr1' });
+  });
+  afterEach(() => {
+    delete process.env.POSTHOG_CODE_RETIRED;
+    resetFeatureFlagsForTests();
+  });
+
+  it('spills with the flag off', async () => {
+    process.env.POSTHOG_CODE_RETIRED = 'false';
+    resetFeatureFlagsForTests();
+    await dispatchUnit((await getReview('rev1'))!, LENS);
+    expect(startCodeRun).toHaveBeenCalledTimes(1);
+    expect(await unitRow()).toMatchObject({ status: 'running', provider: 'posthog_code' });
+  });
+
+  it.each([
+    ['on', 'true'],
+    ['unset', undefined],
+  ])('waits for the fleet instead with the flag %s', async (_label, value) => {
+    if (value !== undefined) process.env.POSTHOG_CODE_RETIRED = value;
+    resetFeatureFlagsForTests();
+    await dispatchUnit((await getReview('rev1'))!, LENS);
+    expect(startCodeRun).not.toHaveBeenCalled();
+    expect(await unitRow()).toMatchObject({ status: 'claimed', failureCode: 'capacity_deferred' });
+  });
+});
+
 describe('not learning a limit once per unit', () => {
   const SECURITY = { kind: 'lens' as const, lens: 'security', chunkIndex: 0 };
 
@@ -595,7 +629,14 @@ describe('not learning a limit once per unit', () => {
   });
 
   it('still spills a first dispatch to the fall-back provider when the fleet is full', async () => {
-    // The bounded spill is a rule about capacity, and it is unchanged.
+    // The bounded spill is a rule about capacity, and it is unchanged where
+    // PostHog Code is not retired.
+    process.env.POSTHOG_CODE_RETIRED = 'false';
+    resetFeatureFlagsForTests();
+    onTestFinished(() => {
+      delete process.env.POSTHOG_CODE_RETIRED;
+      resetFeatureFlagsForTests();
+    });
     createSandbox.mockRejectedValue(new FleetCapacityError('all hosts busy'));
     startCodeRun.mockResolvedValue({ ok: true, model: 'm', remoteTaskId: 't', remoteRunId: 'r' });
     await dispatchUnit((await getReview('rev1'))!, SECURITY);

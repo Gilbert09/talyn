@@ -109,6 +109,33 @@ describe('agent step gating', () => {
   });
 });
 
+describe('with PostHog Code retired', () => {
+  it.each([
+    ['not connected, hidden', false, false],
+    ['connected, still shown', true, true],
+  ])('no fleet, PostHog Code %s', async (_name, posthogConnected, shown) => {
+    await setup({ providers: [{ type: 'posthog_code', connected: posthogConnected }], posthogConnected });
+    const { useWorkspaceStore } = await import('../renderer/stores/workspace');
+    useWorkspaceStore.setState({ features: { posthogCodeRetired: true } as never });
+    await walkToAgentStep();
+
+    await waitFor(() => expect(screen.queryByText('Checking your agents...')).toBeNull());
+    if (shown) await screen.findByRole('button', { name: /PostHog Code/ });
+    else await waitFor(() => expect(screen.queryByRole('button', { name: /PostHog Code/ })).toBeNull());
+  });
+
+  it('names only Claude or Codex when nothing can be connected', async () => {
+    await setup({ providers: [], posthogConnected: false });
+    const { useWorkspaceStore } = await import('../renderer/stores/workspace');
+    useWorkspaceStore.setState({ features: { posthogCodeRetired: true } as never });
+    await walkToAgentStep();
+
+    await screen.findByText(/Sessions run on Claude or Codex\./);
+    expect(screen.getByText('Connect Claude or ChatGPT to start sessions, or skip for now.')).toBeTruthy();
+    expect(screen.queryByText(/Connect PostHog Code/)).toBeNull();
+  });
+});
+
 function skipButton() {
   return screen.queryByRole('button', { name: 'Skip for now' });
 }

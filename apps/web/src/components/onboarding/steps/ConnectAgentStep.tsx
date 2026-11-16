@@ -12,10 +12,11 @@ import {
   PostHogCodeCard,
 } from '../../panels/SettingsPanel';
 import { Card } from '../../ui/card';
+import { usePostHogCodeOffered } from '../../widgets/PostHogCodeRetirement';
 
 type AgentChoice = 'claude' | 'codex' | 'posthog';
 
-/** Connect a subscription or PostHog Code before starting a session. */
+/** Connect a subscription (or PostHog Code, where it is still offered) before starting a session. */
 export function ConnectAgentStep() {
   // The cards read the store, and nothing else fills it during onboarding:
   // `useSystemStatus` mounts in `MainLayout`, which renders only once the
@@ -25,6 +26,7 @@ export function ConnectAgentStep() {
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const posthogConnected = useWorkspaceStore((s) => s.posthogStatus?.connected === true);
   const [choice, setChoice] = useState<AgentChoice | null>(null);
+  const posthogOffered = usePostHogCodeOffered();
 
   // Until the provider list arrives the fleet is unknown, so draw nothing
   // rather than flash PostHog Code at a workspace that turns out to have the fleet.
@@ -86,7 +88,7 @@ export function ConnectAgentStep() {
     // PostHog Code is offered here only when the fleet is not. A session runs on
     // the fleet, so a fleet workspace that picked PostHog Code here could never
     // continue. It stays in Settings for everyone.
-    ...(fleetOffered
+    ...(fleetOffered || !posthogOffered
       ? []
       : [
           {
@@ -102,7 +104,11 @@ export function ConnectAgentStep() {
   return (
     <div className="space-y-4">
       <p className="text-[13px] text-muted-foreground">
-        {fleetOffered ? 'Use your Claude or ChatGPT subscription' : 'Connect PostHog Code to run your sessions.'}
+        {fleetOffered
+          ? 'Use your Claude or ChatGPT subscription'
+          : posthogOffered
+            ? 'Connect PostHog Code to run your sessions.'
+            : 'Sessions run on Claude or Codex. Neither is available for this workspace yet, so skip this step for now.'}
       </p>
       <div className="space-y-2">
         {options.map((option) => (

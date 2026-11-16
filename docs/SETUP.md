@@ -69,8 +69,8 @@ never at Railway/prod values (those live only in Railway service variables).
 
 **Nothing in the backend or either front end reads `ANTHROPIC_API_KEY`.** Talyn
 never calls Anthropic on a first-party key: the fleet runs on the *workspace's
-own* subscription credential (`sk-ant-oat…`, §6c) and PostHog Code runs on
-PostHog's token. That is the whole point of the fleet — see
+own* subscription credential (`sk-ant-oat…`, see "Connecting the backend to a self-hosted fleet", step 3), and the retired PostHog Code
+provider runs on PostHog's token for the connections that still exist. That is the whole point of the fleet — see
 [`docs/CLOUD_PROVIDERS.md`](./CLOUD_PROVIDERS.md).
 
 This section used to say the key powered
@@ -82,31 +82,8 @@ longer exists.
 The only things that read it today are optional and developer-facing:
 
 - `scripts/check-model-catalog.mjs` — one read-only `GET /v1/models` to report
-  catalogue drift (see §6d). Skips cleanly when the key is absent.
+  catalogue drift (see "Connecting the backend to a self-hosted fleet", step 3). Skips cleanly when the key is absent.
 - `scripts/spikes/spike-claude.ts` — a hand-run spike, never shipped.
-
-### 2. `claude` CLI on every environment
-
-Talyn spawns `claude` (interactive mode) via node-pty on the chosen environment. The binary must be in the PATH of whichever shell gets spawned.
-
-- **Local**: `npm install -g @anthropic-ai/claude-cli` (or whatever the current install command is), log in via `claude login`
-- **VMs**: same, on the remote user's shell
-
-Verify by running `claude --version` as the shell user Talyn will use.
-
-**One-time MCP trust approval** (only if you run autonomous tasks in **strict** mode on this environment — i.e., the env's "Allow unattended Claude runs to bypass permission prompts" toggle is OFF):
-
-Talyn's repo root ships a `.mcp.json` registering the Supabase MCP server. On first encounter, Claude Code prompts you to trust it. Autonomous runs can't answer that prompt, so do it once interactively:
-
-```bash
-cd ~/path/to/fastowl    # or wherever the clone lives on this env
-claude                  # opens the TUI
-# → prompted: "New MCP server found in .mcp.json: supabase — use this?"
-# → pick "Use this and all future MCP servers in this project"
-# → Ctrl-D to exit
-```
-
-The approval lands in your user-level Claude config and sticks. You don't need to do this on daemon envs that have "bypass permissions" enabled — they skip all prompts by design.
 
 ### 3. GitHub OAuth app (already scaffolded in backend)
 
@@ -128,13 +105,12 @@ Used by the GitHub integration (connect GitHub → PR monitoring, PR actions, re
 1. https://github.com/settings/developers → **OAuth Apps** tab → **New OAuth App** (do *not* use the "GitHub Apps" tab)
 2. Application name: `Talyn (Dev)` (make a separate prod one later)
 3. Homepage URL: `http://localhost:4747`
-4. Authorization callback URL: `http://localhost:4747/api/v1/github/callback` (must match `GITHUB_REDIRECT_URI` exactly)
+4. Authorization callback URL: `http://localhost:4747/api/v1/github/callback`
 5. Create, then **Generate a new client secret**
 6. Export before running the backend:
    ```bash
    export GITHUB_CLIENT_ID=Ov23xxxxx        # classic OAuth App id (NOT Iv1./Iv23 — that's a GitHub App)
    export GITHUB_CLIENT_SECRET=xxxxx
-   export GITHUB_REDIRECT_URI=http://localhost:4747/api/v1/github/callback
    ```
 
 No scopes are configured on the app itself — the backend requests
@@ -258,7 +234,7 @@ at the call site.
 | `workflows` | Workflows — user-defined PR automation | `WORKFLOWS_ENABLED=false` | **ON** | general |
 | `loops` | Loops — recurring prompts on a cron schedule | `LOOPS_ENABLED=false` | **OFF** | general |
 | `talyn-fleet` | Talyn Fleet — the Firecracker microVMs | `FLEET_ALLOWED=false` | **OFF** | general |
-| `public-api` | The public API (`/v1`) and personal access tokens | `PUBLIC_API_ENABLED=false` | **OFF** | gated |
+| `public-api` | The public API (`/v1`) and personal access tokens | `PUBLIC_API_ENABLED=false` | **OFF** | general |
 | `split-view` | Split view — several sessions side by side, each with its transcript and composer | `SPLIT_VIEW_ENABLED=false` | **ON** | general |
 | `session-ci-wait` | Session CI wait — a session wake-up that fires when the checks on its pull request settle | `SESSION_CI_WAIT_ENABLED=false` | **ON** | general |
 
@@ -279,8 +255,9 @@ everybody has it — the PostHog audience still decides that. It means the notes
 may talk about it, so a flag can be `general` while its rollout is still a
 percentage. Flipping it replays the withheld backlog to everyone who missed it.
 
-Every flag is `general` as of 2026-09-16, so nothing is withheld today. Note
-what that means for `talyn-fleet`: its `availability` and `fallback` now
+`talyn-fleet` has been `general` since 2026-09-16. Other flags are still
+`gated`: see `packages/shared/src/featureFlags.ts`. Note what that means for
+`talyn-fleet`: its `availability` and `fallback` now
 disagree on purpose. The fleet is announced to everybody, and a PostHog outage
 still refuses it, because an announcement does not change the fact that the
 fleet is finite hardware running on a workspace's own agent subscription.
@@ -289,7 +266,7 @@ fleet is finite hardware running on a workspace's own agent subscription.
 is the answer when PostHog is not configured, is unreachable, or has never heard
 of the key — so it is chosen by asking "if the flag service is down, what is the
 safe answer?" Workflows is released, so a PostHog outage must not hide a page
-that exists. The fleet is one box running on somebody's own subscription, so an
+that exists. The fleet is finite hardware running on somebody's own subscription, so an
 outage must not open it to everybody. Loops reads like workflows but answers
 like the fleet, and the difference is worth stating: a workflow acts when a
 webhook arrives, so there is a person at the other end of every firing, while a
@@ -367,6 +344,25 @@ wins whether it says yes or no, so `WORKFLOWS_ENABLED=true` in a deployment's
 env means PostHog is never consulted for that flag. Leave them unset unless you
 are breaking glass.
 
+The same rule holds for every other flag that has an override. Each variable
+reads as OFF only for `false`/`0`/`off`/`no`:
+
+| Variable | Flag (PostHog key) | Gates | Fallback | Availability |
+| --- | --- | --- | --- | --- |
+| `CI_PARK_ENABLED` | `ci-park` | Suspend fleet fix runs while CI runs, then resume them | OFF | gated |
+| `FLEET_MULTI_ACCOUNT_ENABLED` | `fleet-multi-account` | More than one Claude or Codex account per workspace | ON | general |
+| `POSTHOG_CODE_RETIRED` | `posthog-code-retired` | PostHog Code retired: hidden for workspaces that have not connected it, no new connections, no fall-back onto it. Set `false` to bring it back | ON | general |
+| `REVIEW_PRIORITY_ENABLED` | `review-priority` | Ranked ordering of the Reviews tab | ON | general |
+| `REVIEW_RANKING_CANDIDATE_ENABLED` | `review-ranking-candidate-v1` | Fixed shared ranking candidate for the production experiment | OFF | gated |
+| `REVIEW_RANKING_EXPORT_ENABLED` | `review-ranking-export` | Export ranking data stored on this device | OFF | gated |
+| `SLACK_CHANNEL_RULES_ENABLED` | `slack-channel-rules` | A message in a watched Slack channel starts a session | OFF | gated |
+| `SPACES_ENABLED` | `spaces` | Teams and Spaces: shared sessions and tasks for a team | OFF | gated |
+| `TAILSCALE_PRIVATE_ROUTES_ENABLED` | `tailscale-private-routes` | Exact TCP destinations through a workspace Tailscale connector | OFF | gated |
+| `TEAMS_ENABLED` | `teams` | Team plan: seats paid for by one buyer | OFF | gated |
+| `TRUNK_MERGE_ETA_ENABLED` | `trunk-merge-eta` | When a PR in the Trunk merge queue will merge | OFF | gated |
+
+`mcp-servers` has no override on purpose.
+
 #### Retired variables
 
 `FLEET_ALLOWED_EMAILS` and `WORKFLOWS_ALLOWED_EMAILS` are **gone**. Nothing
@@ -402,8 +398,7 @@ CLI, the MCP server and plain `curl` all walk straight past.
 
 The `selfhosted` provider — **"Talyn Fleet" everywhere in the UI**; the wire and
 DB value stays `selfhosted` because it is persisted in `environments.type` and
-`integrations.type` — runs tasks on hardware we own — one box, with a memory
-budget that fits a couple of concurrent runs. Two separate things gate it, and
+`integrations.type` — runs tasks on hardware we own. Two separate things gate it, and
 both are needed:
 
 ```
@@ -431,9 +426,12 @@ queued.
 heads `CLOUD_PROVIDER_ORDER` (`services/prCloudFix.ts`), but
 `resolveCloudEnvChain` drops that link entirely for a workspace that may not use
 the fleet — so a workspace outside the audience gets exactly the behaviour it
-had before: the chain heads at PostHog Code, no fleet card is offered, and a
-credential write is 403'd. The fleet is one box; widen the audience as capacity
-allows rather than removing the gate.
+had before: no fleet card is offered and a credential write is 403'd. Its
+chain heads at PostHog Code only if it still has a PostHog Code connection,
+because PostHog Code is retired (see the `POSTHOG_CODE_RETIRED` row above). The fleet was released to every workspace on
+2026-09-16, so the `talyn-fleet` flag is now a kill switch and a way to take the
+hardware away from one account. It is no longer an allow-list. Keep the gate: it
+is what drops the fleet from a chain when the flag is off.
 
 ### Connecting the backend to a self-hosted fleet (Tailscale)
 
@@ -477,7 +475,7 @@ runs untrusted code.
 
 #### 2. Each fleet host
 
-From the `talyn-fleet` repo:
+From the YetAnotherSandbox (YAS) repo (`~/dev/Gilbert09/yas`):
 
 ```
 sudo provision/tailscale.sh --authkey tskey-auth-... --hostname fleet-hetzner-64
@@ -856,9 +854,9 @@ Single source of truth for analytics + error tracking + logs (Phase 18.8).
 
 1. Create project at https://posthog.com (or self-host)
 2. From Project settings grab:
-   - `POSTHOG_PROJECT_API_KEY` (write key, used in server + desktop)
-   - `POSTHOG_PERSONAL_API_KEY` (read key, used by CI / MCP server / dashboards)
-   - `POSTHOG_HOST` (`https://us.i.posthog.com` or `https://eu.i.posthog.com` or self-hosted URL)
+   - `TALYN_POSTHOG_KEY` (project write key, used by the backend and the desktop build)
+   - `TALYN_POSTHOG_PERSONAL_API_KEY` (backend only: lets feature flags evaluate in-process. Needs the feature flag read scope)
+   - `TALYN_POSTHOG_HOST` (`https://us.i.posthog.com` by default, or the EU or self-hosted URL)
 3. In the project, enable **Error tracking** and **Session replay** features
 4. Create a feature flag called `fastowl_debug` (off by default) that we can flip for verbose logging per user
 
@@ -868,6 +866,10 @@ Single source of truth for analytics + error tracking + logs (Phase 18.8).
 - **Backend** (Railway env) — `TALYN_POSTHOG_KEY` / `TALYN_POSTHOG_HOST` enable server-side task-lifecycle events (`task_dispatched` / `task_completed` / `task_failed`), attributed to the workspace owner. Unset ⇒ server analytics is a no-op (see `packages/backend/src/services/analytics.ts`). **The same key also powers feature flags** — unset there means every flag answers its built-in fallback. See **Feature flags (PostHog)** above, and add `TALYN_POSTHOG_PERSONAL_API_KEY` so flags evaluate locally.
 
 ### 6b. "Connect with PostHog" — the PostHog Code OAuth app
+
+> PostHog Code is retired, so new users cannot connect it. Keep these variables
+> only while existing connections may need to reconnect. A new deployment does
+> not need them. Step 2 of the retirement deletes this flow.
 
 Nothing to register anywhere. PostHog supports **CIMD** (OAuth Client ID Metadata
 Document), so Talyn's `client_id` IS a URL we host, and PostHog fetches it during
@@ -1092,15 +1094,15 @@ Wiring these up lets Claude Code answer questions about GitHub state, DB schema,
 claude mcp add github -- npx -y @modelcontextprotocol/server-github
 ```
 
-Needs a `GITHUB_PERSONAL_ACCESS_TOKEN` env var. Create one at https://github.com/settings/tokens with `repo` + `read:org` scopes.
+The repo's `.mcp.json` does not register this server. It is an optional personal setup. It needs a `GITHUB_PERSONAL_ACCESS_TOKEN` env var. Create one at https://github.com/settings/tokens with `repo` + `read:org` scopes.
 
-### Supabase MCP (once #4 is set up)
+### Supabase MCP (in the repo's `.mcp.json`)
 
-Follow https://github.com/supabase-community/supabase-mcp for the install command. Needs `SUPABASE_ACCESS_TOKEN` (Supabase account level) and the project ref.
+`.mcp.json` registers the hosted Supabase MCP server for one project, as a plain HTTP URL with `read_only=true` and a `project_ref`. It holds no token and needs no `SUPABASE_ACCESS_TOKEN`. Claude Code asks you to approve the server the first time you open the repo. Run `/mcp` to see its status and to sign in if it asks.
 
 ### PostHog MCP (once #6 is set up)
 
-Not yet officially released but community versions exist — search `posthog mcp` on GitHub. Will use `POSTHOG_PERSONAL_API_KEY` + `POSTHOG_HOST`.
+See PostHog's own MCP documentation for the install command. It uses a personal API key from your PostHog account. The key is not a Talyn env var.
 
 ### Railway MCP (once #5 is set up)
 
@@ -1135,16 +1137,36 @@ After adding any MCP server, restart Claude Code. Verify with `/mcp` in the prom
 
 Once the accounts above exist, add these to **Repo Settings → Secrets and variables → Actions** so CI can use them:
 
-| Secret                          | Purpose                                   |
-| ------------------------------- | ----------------------------------------- |
-| `ANTHROPIC_API_KEY`             | OPTIONAL — the daily model-catalogue check only (`GET /v1/models`). Absent = the check skips. Nothing else reads it. |
-| `GITHUB_TOKEN`                  | Already provided by Actions               |
-| `RAILWAY_TOKEN`                 | Deploy the backend on merges to main      |
-| `DATABASE_URL`                  | drizzle-kit migrate step                  |
-| `SUPABASE_SERVICE_ROLE_KEY`     | Server-side admin operations in migrations|
-| `POSTHOG_PROJECT_API_KEY`       | Ship error events + build metrics         |
-| `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_ID_PASS` | macOS notarization (already in `publish.yml`) |
-| `CSC_LINK` / `CSC_KEY_PASSWORD` | Code signing (same)                       |
+| Secret | Purpose |
+| --- | --- |
+| `ANTHROPIC_API_KEY` | OPTIONAL: the daily model-catalogue check only (`GET /v1/models`, `model-catalog.yml`). Absent = the check skips. Nothing else reads it. |
+| `GITHUB_TOKEN` | Already provided by Actions |
+| `RAILWAY_TOKEN` | `deploy-backend.yml`: deploy the backend on merges to main |
+| `VERCEL_TOKEN` | Vercel CLI token for the marketing, app and admin deploys |
+| `VERCEL_ORG_ID` | Vercel team id for the same three deploys |
+| `VERCEL_PROJECT_ID_WEB` | Vercel project for the marketing site (`deploy-marketing.yml`) |
+| `VERCEL_PROJECT_ID` | Old name of `VERCEL_PROJECT_ID_WEB`. Only a fallback until the new one is set |
+| `VERCEL_PROJECT_ID_APP` | Vercel project for app.talyn.dev (`deploy-app.yml`) |
+| `VERCEL_PROJECT_ID_ADMIN` | Vercel project for admin.talyn.dev (`deploy-admin.yml`) |
+| `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_SPECIFIC_PASSWORD` | macOS notarization (`publish.yml`, `publish-workbenches.yml`) |
+| `CSC_LINK` / `CSC_KEY_PASSWORD` | macOS code signing (same workflows). Windows ships unsigned until these cover it |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `publish.yml`: the release-notes generator runs the Claude Code CLI on a subscription token from `claude setup-token` |
+| `TALYN_RELEASE_INGEST_SECRET` | `publish.yml`: authorises the POST of release highlights to the backend. Same value as the backend variable |
+| `POSTHOG_CLI_API_KEY` | Source map upload to PostHog (`publish.yml`, `mobile-release.yml`, `mobile-update.yml`). The step skips when it is unset |
+| `EXPO_TOKEN` | EAS access for `mobile-release.yml` and `mobile-update.yml` |
+| `MOBILE_RELEASE_EVIDENCE_JSON` / `MOBILE_STORE_METADATA_JSON` | `mobile-release.yml`: protected release files, written outside the repository at run time |
+
+Repository **variables** (same page, Variables tab):
+
+| Variable | Purpose |
+| --- | --- |
+| `TALYN_SUPABASE_URL` / `TALYN_SUPABASE_ANON_KEY` / `TALYN_POSTHOG_KEY` | Public build values baked into the desktop, web and admin builds (`publish.yml`, `publish-workbenches.yml`, `test.yml`) |
+| `POSTHOG_CLI_PROJECT_ID` | PostHog project that receives the desktop source maps |
+| `WORKBENCHES_BUILDS_PUBLIC` | `publish-workbenches.yml`: builds stay drafts until this is `true` |
+| `MOBILE_UPDATES_AUTO` | `mobile-update.yml`: set to `0` to stop automatic OTA updates |
+| `MOBILE_UPDATES_INTERNAL_BETA` | `mobile-update.yml`: set to `1` to also publish to internal beta |
+| `MOBILE_RELEASE_APPROVED` | `mobile-release.yml`: must be `true` before a store release runs |
+| `MOBILE_APPLE_TEAM_ID`, `MOBILE_ASC_APP_ID`, `TALYN_MOBILE_*`, `EXPO_PUBLIC_*` | Mobile build and store identity. The list and rules are in [`MOBILE_RELEASE.md`](./MOBILE_RELEASE.md) and `apps/mobile/release/policy.cjs`. Do not repeat them here |
 
 ---
 
@@ -1158,7 +1180,6 @@ Backend reads env vars on startup. To avoid exporting them every terminal, creat
 # Workspace-level GitHub integration (for PR monitoring)
 GITHUB_CLIENT_ID=Iv1.xxx
 GITHUB_CLIENT_SECRET=xxx
-GITHUB_REDIRECT_URI=http://localhost:4747/api/v1/github/callback
 
 # Database + auth (Phase 18)
 DATABASE_URL=postgres://...supabase.co:6543/postgres?pgbouncer=true
@@ -1182,8 +1203,9 @@ SUPABASE_SERVICE_ROLE_KEY=eyJ...    # service role, bypasses RLS
 # GITHUB_APP_PRIVATE_KEY=<base64 of the downloaded .pem>
 # GITHUB_WEBHOOK_SECRET=<the secret you set on the App's webhook>
 
-POSTHOG_PROJECT_API_KEY=phc_xxx     # optional, for when 18.8 lands
-POSTHOG_HOST=https://us.i.posthog.com
+# TALYN_POSTHOG_KEY=phc_xxx                  # optional: server analytics and feature flags
+# TALYN_POSTHOG_PERSONAL_API_KEY=phx_xxx     # optional: local flag evaluation
+# TALYN_POSTHOG_HOST=https://us.i.posthog.com
 
 # Polar billing (usage pricing: Free / Pro / Legacy Pro, credits, auto
 # top-up). Optional as a group: when ALL core vars are unset, limits are not
@@ -1288,6 +1310,38 @@ POSTHOG_HOST=https://us.i.posthog.com
 # 0 the same day anything moves to cookie auth, or it becomes a live
 # cross-site WebSocket hijack.
 # TALYN_ALLOW_NULL_ORIGIN_WS=0
+#
+# --- Operational switches (all optional) -----------------------------------
+#
+# GITHUB_STACK_FIELDS: set to exactly "0" to drop the GitHub `stack` fields
+# from the PR query and use the derived (branch-shaped) stacks. Anything else
+# keeps them. Use it if GitHub withdraws the fields from its public preview.
+# GITHUB_STACK_FIELDS=0
+#
+# GITHUB_STATUS_POLL_ENABLED: set to false/0/off/no to stop the one-minute
+# githubstatus.com reads. The outage detector then uses only Talyn's own
+# GitHub traffic. Default on.
+# GITHUB_STATUS_POLL_ENABLED=false
+#
+# POSTHOG_CODE_IDLE_TIMEOUT_MS: how long a PostHog Code run may sit idle
+# before the poller finishes it. Default 600000 (10 minutes).
+# POSTHOG_CODE_IDLE_TIMEOUT_MS=600000
+#
+# RAILWAY_DEPLOYMENT_DRAINING_SECONDS: the drain window the backend assumes on
+# deploy for session followers. Read as seconds, clamped to 2-52, default 10.
+# RAILWAY_DEPLOYMENT_DRAINING_SECONDS=10
+#
+# WEBHOOK_TRACE: set to 1 or true to log every step of each GitHub webhook
+# delivery (`[wh-trace]`). Off by default: with org-wide installs it is a
+# firehose. Turn it on briefly, to debug.
+# WEBHOOK_TRACE=1
+#
+# WORKBENCH_REAPER_DRY_RUN: set to exactly "1" to make the orphan-box reaper
+# log what it would delete and delete nothing.
+# WORKBENCH_REAPER_DRY_RUN=1
+#
+# Mobile push: TALYN_MOBILE_PUSH_ENABLED, TALYN_MOBILE_PUSH_APP_IDENTITIES and
+# EXPO_ACCESS_TOKEN are documented in docs/MOBILE_PUSH_NOTIFICATIONS.md.
 ```
 
 ### Supabase redirect URLs for the browser app
@@ -1316,6 +1370,20 @@ TALYN_SUPABASE_ANON_KEY=eyJ...    # anon key, safe to bundle
 TALYN_API_URL=http://localhost:4747   # default if unset
 ```
 
+Web and admin build env (`apps/web`, `apps/admin`). Vite reads these at build time, and they are `VITE_`-prefixed so they reach `import.meta.env`. Locally copy `.env.example` in each app. In production they are Vercel project variables.
+
+| Variable | Meaning |
+| --- | --- |
+| `VITE_TALYN_API_URL` | Backend origin. The app falls back to `http://localhost:4747` when unset. Required for a production build |
+| `VITE_TALYN_SUPABASE_URL` | Supabase project URL. Required for a production build |
+| `VITE_TALYN_SUPABASE_ANON_KEY` | Supabase anon key, safe to bundle. Required for a production build |
+| `VITE_TALYN_POSTHOG_KEY` | Optional. PostHog project key. Unset means no client analytics |
+| `VITE_TALYN_POSTHOG_HOST` | Optional. PostHog host. The web app defaults to `https://us.i.posthog.com` |
+| `VITE_TALYN_BUILD_SHA` | Optional. Short build id. It becomes the `web/<sha>` client version. The build falls back to `VERCEL_GIT_COMMIT_SHA`, then `GITHUB_SHA`, then `dev` |
+| `VITE_TALYN_BUILD_COMMIT` | Not set by hand. `vite.config.ts` derives the full commit SHA from the same sources and bakes it in. Settings → Developer links it to GitHub. Only the web app uses it |
+
+Mobile uses `EXPO_PUBLIC_*` variables instead. See [`MOBILE_RELEASE.md`](./MOBILE_RELEASE.md) and `apps/mobile/release/policy.cjs`.
+
 CLI uses `~/.fastowl/token` (populated via `fastowl token set` — copy the current token from desktop → Settings → Account → Copy CLI token). MCP server expects `TALYN_AUTH_TOKEN` in its spawn env.
 
 And ensure `.gitignore` has `packages/backend/.env`. (If the backend doesn't yet load `.env` automatically, we'll add a `dotenv` import in Phase 18 cleanup — not critical yet.)
@@ -1329,7 +1397,6 @@ Everything in this doc that requires an account, a browser approval, or a creden
 - Approve OAuth apps
 - Generate API keys
 - Add GitHub repo secrets
-- Install `claude` CLI binaries on remote VMs (we *can* automate this via the Phase 18.3 remote install flow once that ships, but not yet)
 
 Everything else — schema, migrations, deploy configs, Dockerfiles, CI YAML — Claude Code can scaffold. Just share the credentials above when each phase starts.
 

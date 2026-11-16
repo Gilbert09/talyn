@@ -2,6 +2,24 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Retire PostHog Code, step 1 (2026-11-15)
+
+**Why.** PostHog Code confused users. It sat next to Claude and Codex as a third agent, but it cannot run sessions.
+
+**What step 1 did.** The `posthogCodeRetired` flag (`posthog-code-retired`, break glass `POSTHOG_CODE_RETIRED`) gates the retirement. With it on:
+- A workspace with no PostHog Code row never sees it on web, desktop or mobile. Its connect routes answer 410 `posthog_code_retired`.
+- New work never falls back to it. The resolver keeps it only as the chosen default or the only connected provider. Code review units wait for the fleet. Quota failover stops at the other fleet agent.
+- An existing connection keeps working and shows "PostHog Code is going away. Move your work to Claude or Codex."
+- The connect banner and onboarding name only Claude or Codex.
+
+**Fallback ON.** Nobody could create the flag in PostHog, so its fallback is ON. An outage or an absent flag keeps PostHog Code hidden for everyone. A `false` answer in PostHog brings it back for one account. `POSTHOG_CODE_RETIRED=false` brings it back for the deployment. Clients still read "features not loaded" as off, so they never hide a connection on a guess. The connect routes refuse on their own.
+
+**Docs.** The public site no longer mentions the PostHog Code connection. The privacy and terms pages still name it, because existing connections still send data to it. Internal docs say it is retired.
+
+**Loop default.** `emptyLoopInput` still defaults a new loop to PostHog Code. The web and desktop editors switch it to the fleet when a fleet agent is connected. The MCP `create_loop` tool now sets a task loop with no provider to the fleet while the flag is on.
+
+**Step 2.** Delete the provider: the provider module, the code review spill, the quota failover hop, the loop provider option, the settings screens on all three apps and the flag. The list is in `ROADMAP.md`.
+
 ## Code review on ReviewBench (2026-11-13)
 
 `benchmarks/review-bench/` runs the review pipeline as a [ReviewBench](https://github.com/review-bench/ReviewBench) reviewer image. It reuses the prompt builders, parser, dedupe key and judge matching. Only the order of the units is new. The pure helpers moved from `executor.ts` to `unitPure.ts`, so the bundle has no database code.

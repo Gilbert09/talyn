@@ -234,6 +234,7 @@ describe('workflow routes', () => {
         reviewRankingCandidate: false,
         reviewRankingExport: false,
         teams: false,
+        posthogCodeRetired: true,
         spaces: false,
         workbenches: false,
         trunkMergeEta: false,
@@ -245,7 +246,6 @@ describe('workflow routes', () => {
         slackChannelRules: false,
         webhookRules: false,
         issueRules: false,
-      posthogInboxRules: false,
         posthogInboxRules: false,
       });
     });
@@ -269,6 +269,7 @@ describe('workflow routes', () => {
         reviewRankingCandidate: false,
         reviewRankingExport: false,
         teams: false,
+        posthogCodeRetired: true,
         spaces: false,
         workbenches: false,
         trunkMergeEta: false,
@@ -280,7 +281,6 @@ describe('workflow routes', () => {
         slackChannelRules: false,
         webhookRules: false,
         issueRules: false,
-      posthogInboxRules: false,
         posthogInboxRules: false,
       });
     });

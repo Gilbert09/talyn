@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { randomBytes } from 'crypto';
 import { SANDBOX_SIZES, type SandboxSize } from '@talyn/shared';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
@@ -58,6 +58,7 @@ const { codeReviewPoller } = await import('../services/codeReview/poller.js');
 const { getReview, getRun } = await import('../services/codeReview/store.js');
 const { FleetCapacityError, FleetRunNotFoundError, FleetThrottleError } = await import('../services/selfHosted/client.js');
 const { resetUsageHookCacheForTests } = await import('../services/billing/usageHooks.js');
+const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 type RunRow = import('../services/codeReview/store.js').RunRow;
 
 const reconcile = (run: RunRow) =>
@@ -174,6 +175,13 @@ describe('the meter on the code-review path', () => {
   });
 
   it('opens nothing for a unit that spills to PostHog Code', async () => {
+    // The spill runs only where PostHog Code is not retired.
+    process.env.POSTHOG_CODE_RETIRED = 'false';
+    resetFeatureFlagsForTests();
+    onTestFinished(() => {
+      delete process.env.POSTHOG_CODE_RETIRED;
+      resetFeatureFlagsForTests();
+    });
     createSandbox.mockRejectedValue(new FleetCapacityError('all hosts busy'));
     startCodeRun.mockResolvedValue({ ok: true, model: 'm', remoteTaskId: 't', remoteRunId: 'r' });
     await dispatchUnit((await getReview('rev1'))!, LENS);

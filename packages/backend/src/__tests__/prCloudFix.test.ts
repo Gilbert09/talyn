@@ -5,6 +5,7 @@ import {
   ACTIVE_STATUSES,
   resolvePostHogEnvId,
   resolveCloudEnvId,
+  resolveCloudEnvChain,
   linkedTaskStatus,
   startPrMergeableRun,
 } from '../services/prCloudFix.js';
@@ -209,6 +210,39 @@ describe('prCloudFix helpers', () => {
 
     it('returns null when no provider is connected', async () => {
       expect(await resolveCloudEnvId('ws1')).toBeNull();
+    });
+
+    describe('with PostHog Code retired', () => {
+      afterEach(() => {
+        delete process.env.POSTHOG_CODE_RETIRED;
+        process.env.FLEET_ALLOWED = 'true';
+        resetFeatureFlagsForTests();
+      });
+
+      const chainOf = async () => (await resolveCloudEnvChain('ws1')).map((l) => l.provider);
+
+      it.each<[string, 'on' | 'off' | 'unset', { phc: boolean; fleet: boolean; fleetAllowed?: boolean; pinned?: string }, string[]]>([
+        ['flag off keeps PostHog Code as the fall-back', 'off', { phc: true, fleet: true }, ['selfhosted', 'posthog_code']],
+        ['flag unset drops it behind the fleet', 'unset', { phc: true, fleet: true }, ['selfhosted']],
+        ['flag unset keeps it as the only provider', 'unset', { phc: true, fleet: false }, ['posthog_code']],
+        ['flag off keeps it behind a pinned fleet', 'off', { phc: true, fleet: true, pinned: 'selfhosted' }, ['selfhosted', 'posthog_code']],
+        ['flag on drops it behind the fleet', 'on', { phc: true, fleet: true }, ['selfhosted']],
+        ['flag on drops it for ask', 'on', { phc: true, fleet: true, pinned: 'ask' }, ['selfhosted']],
+        ['flag on drops it behind a pinned fleet', 'on', { phc: true, fleet: true, pinned: 'selfhosted' }, ['selfhosted']],
+        ['flag on keeps it as the chosen default', 'on', { phc: true, fleet: true, pinned: 'posthog_code' }, ['posthog_code', 'selfhosted']],
+        ['flag on keeps it as the only provider', 'on', { phc: true, fleet: false }, ['posthog_code']],
+        ['flag on keeps it when the fleet is not allowed', 'on', { phc: true, fleet: true, fleetAllowed: false }, ['posthog_code']],
+        ['flag on leaves a fleet-only chain alone', 'on', { phc: false, fleet: true }, ['selfhosted']],
+      ])('%s', async (_label, flag, setup, expected) => {
+        if (setup.phc) await connectPostHog();
+        if (setup.fleet) await connectFleet();
+        if (setup.pinned) await setDefault(setup.pinned);
+        if (setup.fleetAllowed === false) process.env.FLEET_ALLOWED = 'false';
+        if (flag === 'on') process.env.POSTHOG_CODE_RETIRED = 'true';
+        if (flag === 'off') process.env.POSTHOG_CODE_RETIRED = 'false';
+        resetFeatureFlagsForTests();
+        expect(await chainOf()).toEqual(expected);
+      });
     });
   });
 

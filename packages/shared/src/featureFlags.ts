@@ -306,6 +306,29 @@ export const FEATURE_FLAGS = {
   },
 
   /**
+   * PostHog Code is retired for everyone. With this flag on, a workspace that
+   * has not connected it never sees it, and new work never falls back to it.
+   * A workspace that is already connected keeps its connection and is told to
+   * move to Claude or Codex.
+   *
+   * Asked for the caller at the connect routes and for the workspace OWNER in
+   * the resolver, the code review spill and quota failover.
+   *
+   * Fallback ON, so a PostHog outage or an absent flag keeps PostHog Code
+   * hidden. To bring it back for one account, create the flag in PostHog and
+   * answer `false` for that account. `POSTHOG_CODE_RETIRED=false` brings it
+   * back for the whole deployment.
+   */
+  posthogCodeRetired: {
+    posthogKey: 'posthog-code-retired',
+    envOverride: 'POSTHOG_CODE_RETIRED',
+    fallback: true,
+    description: 'PostHog Code retired: no new connections and no fall-back onto it',
+    availability: 'general',
+    releaseScopes: [],
+  },
+
+  /**
    * Team plan — one buyer pays for seats, and each seat gives a GitHub account
    * Unlimited on its own account. Consolidated billing only; nothing is shared.
    *
@@ -662,6 +685,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'reviewRankingCandidate',
   'reviewRankingExport',
   'teams',
+  'posthogCodeRetired',
   'spaces',
   'workbenches',
   'trunkMergeEta',

@@ -63,8 +63,7 @@ These are real, and several of them we have no answer to.
 - **Six harnesses to our two.** Claude Code, Codex, Cursor, Grok Build,
   OpenCode and Antigravity, with model switching mid-thread and a shift-click
   that fans one prompt out to several models at once, each in its own worktree.
-  Talyn runs Claude Code and Codex, and PR fixes and scheduled automations can also run on
-  PostHog Code.
+  Talyn runs Claude Code and Codex.
 - **Six git hosts to our one.** GitHub, GitLab, Forgejo, Gitea, Bitbucket and
   Azure DevOps. Talyn is GitHub only. If you are not on GitHub, this comparison
   is already over.

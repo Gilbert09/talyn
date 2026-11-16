@@ -15,7 +15,7 @@ Talyn runs automations on its servers, so the app can stay closed.
 4. Under **When this happens**, select **Add trigger** and pick an event.
 5. Optionally, under **Only if**, select **Add condition**.
 6. Under **Do this**, select **Add action**. Actions run in order, top to bottom.
-7. Select **Create an automation**.
+7. Select **Create**.
 
 Any one of the triggers starts the automation. Every condition must hold.
 
@@ -69,9 +69,9 @@ The editor offers only the conditions that make sense for the triggers you picke
 
 ## Run history
 
-Open **GitHub > Runs** to see automation runs. Each run shows the pull request, event, and action results.
+On **Integrations > GitHub > Automations**, select **Show history** on an automation to see its runs. Each run shows the pull request, event, and action results.
 A run is **Running**, **Waiting to retry**, **Done**, **Partly done**, **Failed**, or **Stood down**.
-When a run starts a session, click **Open the session it started** to go to that session. On mobile, tap the run.
+When a run starts a session, select **Open the session it started** to go to that session. On mobile, open the automation and tap the run.
 
 **Waiting to retry** means GitHub rate-limited an action. Talyn tries it again later, and does not repeat the actions that already worked.
 

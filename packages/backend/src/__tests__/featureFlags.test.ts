@@ -478,6 +478,7 @@ describe('featuresForUser', () => {
       'issueRules',
       'loops',
       'mcpServers',
+      'posthogCodeRetired',
       'posthogInboxRules',
       'privateRoutes',
       'publicApi',
@@ -508,6 +509,7 @@ describe('featuresForUser', () => {
       reviewRankingCandidate: false,
       reviewRankingExport: false,
       teams: false,
+      posthogCodeRetired: true,
       spaces: false,
       workbenches: false,
       trunkMergeEta: false,
@@ -526,7 +528,8 @@ describe('featuresForUser', () => {
     // because it creates paid cloud tasks on a timer with nobody watching, and
     // MCP servers stay OFF because that page stores third-party credentials —
     // collapsing these to one default would silently flip two of them.
-    // Teams stays OFF because it offers a checkout.
+    // Teams stays OFF because it offers a checkout. posthogCodeRetired stays
+    // ON, so an outage never offers a retired provider again.
     expect(await featuresForUser(SUBJECT)).toEqual({
       workflows: true,
       loops: false,
@@ -537,6 +540,7 @@ describe('featuresForUser', () => {
       reviewRankingCandidate: false,
       reviewRankingExport: false,
       teams: false,
+      posthogCodeRetired: true,
       spaces: false,
       workbenches: false,
       trunkMergeEta: false,

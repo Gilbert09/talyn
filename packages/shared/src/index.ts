@@ -92,6 +92,8 @@ export * from './loops.js';
 
 // The Integrations area: catalog + which integrations an account is offered.
 export * from './integrations.js';
+// PostHog Code retirement: what the clients draw while the flag is on.
+export * from './posthogCodeRetirement.js';
 
 // MCP servers — the servers a workspace connects and the fleet wires into
 // every run. The validator MIRRORS the fleet's own refusals, so somebody hears
@@ -1455,6 +1457,7 @@ export type WSClientMessage =
   | { type: 'subscribe'; workspaceId: string; capabilities?: string[] }
   | { type: 'unsubscribe'; workspaceId: string }
   | { type: 'debug:filter'; owner: string | null }
+  | { type: 'debug:unsubscribe' }
   | { type: 'ping' };
 
 export type WSEventType =

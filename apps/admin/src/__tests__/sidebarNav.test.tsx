@@ -22,7 +22,7 @@ import { DEFAULT_ROUTE, ROUTES, routeTo } from '../lib/routes';
 const pending = () => new Promise(() => {});
 vi.mock('../lib/api', () => ({
   api: {
-    ws: { connect: vi.fn(), disconnect: vi.fn(), setDebugFilter: vi.fn(), on: vi.fn(() => () => {}) },
+    ws: { connect: vi.fn(), disconnect: vi.fn(), setDebugFilter: vi.fn(), stopDebugStream: vi.fn(), on: vi.fn(() => () => {}) },
     // The moved DebugPanel talks to api.debug, not api.admin.
     debug: { getAccess: pending, getEvents: pending, getSnapshot: pending, clearEvents: pending },
     admin: {

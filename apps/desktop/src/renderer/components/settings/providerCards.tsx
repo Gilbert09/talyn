@@ -19,6 +19,11 @@ import {
 } from '../widgets/GetKeyLink';
 import { WorkspaceModelSelector } from './WorkspaceModelSelector';
 import { FleetAccountsList } from './FleetAccountsList';
+import {
+  PostHogCodeRetiredNotice,
+  usePostHogCodeOffered,
+  usePostHogCodeRetiringNotice,
+} from '../widgets/PostHogCodeRetirement';
 import { ipcErrorMessage } from '../../lib/ipcError';
 
 /**
@@ -556,6 +561,8 @@ export function PostHogCodeCard() {
   const [host, setHost] = useState('https://us.posthog.com');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const offered = usePostHogCodeOffered();
+  const retiring = usePostHogCodeRetiringNotice();
 
   // Seed the edit-form fields from the preloaded status. Deps are the scalar
   // values, so this won't clobber in-progress edits (status is stable while
@@ -647,6 +654,8 @@ export function PostHogCodeCard() {
       : 'Add a personal API key + project id to run tasks on PostHog Code’s cloud sandbox.';
   };
 
+  if (!offered) return null;
+
   return (
     <Card className="p-3">
       <div className="flex items-start gap-3">
@@ -673,6 +682,7 @@ export function PostHogCodeCard() {
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">{description()}</p>
+          {retiring && <PostHogCodeRetiredNotice className="mt-2" />}
 
           {/* Not connected, OAuth on the table: it is the ONLY path offered.
               The key form used to sit one click away here. It is gone wherever

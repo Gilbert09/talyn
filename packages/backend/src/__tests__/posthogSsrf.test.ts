@@ -16,6 +16,7 @@ import { getPostHogCodeCredentials, storePostHogCodeCredentials } from '../servi
 import { ensureFreshAccessToken, resetOAuthInflightForTests } from '../services/posthogCode/oauth.js';
 import { resetPostHogOAuthConfigForTests } from '../services/posthogCode/oauthConfig.js';
 import { encryptString } from '../services/tokenCrypto.js';
+import { resetFeatureFlagsForTests } from '../services/featureFlags.js';
 
 const HOST = 'https://us.posthog.com';
 const WS = 'posthog-security';
@@ -53,6 +54,10 @@ beforeEach(async () => {
   vi.stubEnv('POSTHOG_ALLOWED_ORIGINS', '');
   vi.stubEnv('POSTHOG_OAUTH_CLIENT_ID', 'test-client');
   vi.stubEnv('POSTHOG_OAUTH_REDIRECT_URI', 'https://talyn.example/callback');
+  // PostHog Code is retired by default. These tests cover the connect routes,
+  // which still run where the flag is off.
+  vi.stubEnv('POSTHOG_CODE_RETIRED', 'false');
+  resetFeatureFlagsForTests();
   resetPostHogOAuthConfigForTests();
   resetOAuthInflightForTests();
   await db.delete(integrations);
@@ -65,6 +70,7 @@ beforeEach(async () => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  resetFeatureFlagsForTests();
   resetPostHogOAuthConfigForTests();
   resetOAuthInflightForTests();
 });
