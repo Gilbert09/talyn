@@ -174,6 +174,13 @@ interface LiveTurn {
 const liveTurns = new Map<string, LiveTurn>();
 
 /**
+ * chatId → the turn a person stopped here, with the queue to start after it.
+ * The follower reads it when that turn ends. Archive, close and an agent
+ * switch also stop turns, but they never start the queue.
+ */
+const queueAfterCancel = new Map<string, number>();
+
+/**
  * chatId → turn loops alive in this process. Wider than `liveTurns`, which is
  * empty between a claim and the first await of a turn: the sweep must never
  * adopt a lease that this process still works on.
@@ -444,6 +451,8 @@ async function runTurnLoopBody(
       await releaseLease(chatId, heldTurn, 'the turn follower failed', error);
       return;
     } finally { clearInterval(heartbeat); }
+    const startQueue = queueAfterCancel.get(chatId) === heldTurn;
+    if (startQueue) queueAfterCancel.delete(chatId);
     // Before the lease checks: nothing ran, and a requeue that this instance still owns keeps the message safe across a deploy.
     if (outcome.capacityWait) {
       await requeueForSandbox(chatId, next.message, heldTurn, outcome.capacityWait);
@@ -474,7 +483,7 @@ async function runTurnLoopBody(
     const fin = await finishTurn(chatId, {
       finalStatus: outcome.status,
       statusMessage: outcome.statusMessage,
-      drain: !outcome.cancelled,
+      drain: !outcome.cancelled || startQueue,
       owner: TURN_OWNER,
       turn: heldTurn,
     });
@@ -1468,8 +1477,11 @@ export async function restoreCheckpoint(chatId: string, turn: number): Promise<v
  * whether or not this process is the one following the turn. When nothing
  * here is following it, the chat is settled here as well — otherwise the
  * follower's own ending settles it.
+ *
+ * `startQueue`: a person pressed Stop, so the messages they queued behind
+ * the turn start after it. Without it the queue waits for the next message.
  */
-export async function cancelTurn(chatId: string): Promise<void> {
+export async function cancelTurn(chatId: string, opts: { startQueue?: boolean } = {}): Promise<void> {
   await cancelLimitResume(chatId);
   const chat = await getChat(chatId);
   if (!chat) throw new WorkbenchError('Chat not found', 404, 'not_found');
@@ -1477,10 +1489,14 @@ export async function cancelTurn(chatId: string): Promise<void> {
   if (!wb) throw new WorkbenchError('Session not found', 404, 'not_found');
   if (wb.runtime === 'local') throw localRuntimeError();
   const live = liveTurns.get(chatId);
-  if (live) live.cancelRequested = true;
+  if (live) {
+    live.cancelRequested = true;
+    if (opts.startQueue) queueAfterCancel.set(chatId, live.turn);
+  }
   if (chat.status !== 'running' && !live) {
     // Between two tries of a wait for a free sandbox nothing runs: the wait itself stops.
-    await endCapacityWait(chatId);
+    const ended = await endCapacityWait(chatId);
+    if (ended && opts.startQueue && ended.queuedMessages.length > 0 && !ended.closedAt) await startQueuedIfIdle(chatId);
     return;
   }
   const lease = await getTurnLease(chatId);
@@ -1491,10 +1507,16 @@ export async function cancelTurn(chatId: string): Promise<void> {
     await killMarker(wb, marker);
   }
   if (!live) {
-    const fin = await finishTurn(chatId, { finalStatus: 'idle', statusMessage: 'Cancelled', drain: false, turn: chat.turnCount });
+    const fin = await finishTurn(chatId, {
+      finalStatus: 'idle', statusMessage: 'Cancelled', drain: opts.startQueue ?? false, turn: chat.turnCount,
+    });
     if (fin) {
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
       sendWebhookSignal({ kind: 'turn_completed', workspaceId: fin.chat.workspaceId, chatId, turn: chat.turnCount, finalStatus: 'idle' });
+      if (fin.started) {
+        sendWebhookSignal({ kind: 'turn_started', workspaceId: fin.chat.workspaceId, chatId, turn: fin.started.turn });
+        launchTurnLoop(chatId, fin.started);
+      }
       await archiveIdleSession(fin.chat.workbenchId);
       await suspendIfOutOfBudget(fin.chat.workbenchId);
       if (wb.sandboxId) await removeTurnLogs(wb, chatId, chat.turnCount);

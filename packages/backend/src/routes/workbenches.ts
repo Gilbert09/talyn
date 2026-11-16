@@ -451,7 +451,7 @@ export function workbenchRoutes(): Router {
       if (!mine) return bad(res, 403, 'You can stop only a turn you started.', 'not_your_turn');
     }
     try {
-      await cancelTurn(found.chat.id);
+      await cancelTurn(found.chat.id, { startQueue: true });
       ok(res, null);
     } catch (err) {
       fail(res, err);
