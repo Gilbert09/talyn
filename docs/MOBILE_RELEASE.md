@@ -278,9 +278,11 @@ Submit the inspected beta build ID through the protected workflow.
 The wrapper verifies hosted platform, profile, identity, commit, version, build, runtime, and channel before submission.
 Android submission creates a draft on the internal track. A store owner must review and release that draft.
 iOS submission uploads to App Store Connect. It does not release the app to the public.
-Automatic TestFlight group setup is disabled. Assign approved internal testers in App Store Connect.
-Confirm processing, export compliance, tester access, and TestFlight expiry dates.
-External TestFlight testers can require beta review. Record the review result before distribution.
+iOS submission adds the build to the TestFlight groups "Talyn internal" and "Talyn external" (`groups` in the
+`eas.json` submit profiles; Tom's call, 2026-11-16). A build in the external group goes to Beta App Review.
+Testers in that group get the build after Apple approves it. Manage the people in each group in App Store Connect.
+The app declares `ITSAppUsesNonExemptEncryption: false`, so App Store Connect does not ask the export compliance question.
+Confirm processing, tester access, and TestFlight expiry dates.
 Google personal accounts can require a closed test before production access. Confirm the current Console requirements.
 Play internal testing alone does not satisfy every production-access requirement.
 
@@ -353,8 +355,8 @@ It also sets `MOBILE_RELEASE_PROFILE=internal-beta`. EAS evaluates `app.config.t
 Without these values, the production config fails, or the fingerprint uses the wrong channel.
 Set the repository variable `MOBILE_TESTFLIGHT_AUTO=0` to stop it.
 **Actions → Mobile TestFlight → Run workflow** checks `main` again. Select **force** to build when the fingerprint is not new.
-Automatic TestFlight group setup stays off. An internal tester group with automatic distribution gets each build.
-App Store Connect asks for export compliance on each build until the app declares `ITSAppUsesNonExemptEncryption`.
+EAS adds each build to both TestFlight groups, and the app answers export compliance in its `Info.plist`.
+See **TestFlight and Play preparation**.
 
 ## PostHog error tracking symbols
 
