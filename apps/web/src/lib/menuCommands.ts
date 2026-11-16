@@ -17,6 +17,7 @@
  * - Focus composer is ⌘⇧L.
  * - Back and forward use the arrow keys when the page receives them.
  * - Chords a page can catch (⌘K, ⌘B, ⌘J, ⌘,, ⌘⇧D, ⌘⌥B, ⌘↑/↓) stay as on desktop.
+ * - ⌘F finds in the open session's transcript. Outside a session the browser's find keeps it.
  * On Windows and Linux `mod` is Ctrl; `shortcuts.ts` ignores Ctrl+Alt when
  * it is really AltGr.
  */
@@ -53,6 +54,7 @@ export const MENU_COMMANDS: MenuCommand[] = [
   { id: 'nav.back', label: 'Back', keys: 'mod+left', section: 'view', separatorBefore: true },
   { id: 'nav.forward', label: 'Forward', keys: 'mod+right', section: 'view' },
   { id: 'composer.focus', label: 'Focus Composer', keys: 'mod+shift+l', section: 'workbench' },
+  { id: 'transcript.find', label: 'Find in Transcript', keys: 'mod+f', section: 'workbench' },
   { id: 'workbench.createPr', label: 'Create Pull Request', keys: 'mod+alt+p', section: 'workbench' },
   { id: 'workbench.fixChecks', label: 'Fix Checks', keys: 'mod+alt+x', section: 'workbench' },
   { id: 'workbench.merge', label: 'Merge Pull Request', keys: 'mod+alt+m', section: 'workbench' },

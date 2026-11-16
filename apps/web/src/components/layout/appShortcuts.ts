@@ -15,6 +15,8 @@ import { useContextAttentionStore } from '../../lib/contextRail';
 import { activeSpace, contextEntries, inPersonalList, isWorkbenchOwner, openSpaceSession, spacesOffered, switchContext } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
 import { useSessionBackgroundStore } from '../../stores/sessionBackground';
+import { useSplitViewStore } from '../../stores/splitView';
+import { requestTranscriptFind } from '../../lib/transcriptFind';
 
 /** ⌘1–9 belongs to the browser, and ⌘⌥1–9 opens a session. */
 export const CONTEXT_JUMP_KEYS = (n: number) => `mod+shift+${n}`;
@@ -95,6 +97,22 @@ const ownsCurrent = () => {
   return isWorkbenchOwner(wb, ws.workspaces, ws.currentWorkspaceId);
 };
 const inOwnWorkbench = () => inWorkbench() && ownsCurrent();
+
+/** The session whose transcript ⌘F searches: the open one, or the focused split view pane. */
+export function findTargetWorkbenchId(): string | null {
+  if (!offered()) return null;
+  const { route } = useNavigationStore.getState();
+  if (route.view === 'workbench') return route.id;
+  if (route.view === 'split') return useSplitViewStore.getState().focusedId;
+  return null;
+}
+
+/** Code views and the terminal keep ⌘F for their own find. */
+const FIND_KEEPS_MEANING = '.xterm, .monaco-editor, .cm-editor, diffs-container';
+const findAllowedIn = (target: EventTarget | null) => {
+  const el = target as Element | null;
+  return !el || typeof el.closest !== 'function' || el.closest(FIND_KEEPS_MEANING) === null;
+};
 
 type Def = Omit<Shortcut, 'keys' | 'label' | 'menu'> & { keys?: string; label?: string };
 
@@ -297,6 +315,16 @@ export function buildAppShortcuts(): Shortcut[] {
       allowInInput: true,
       when: inWorkbench,
       run: () => window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_EVENT)),
+    }),
+    fromMenu({
+      id: 'transcript.find',
+      group: 'Session',
+      allowInInput: findAllowedIn,
+      when: () => findTargetWorkbenchId() !== null && findAllowedIn(document.activeElement),
+      run: () => {
+        const id = findTargetWorkbenchId();
+        if (id) requestTranscriptFind(id);
+      },
     }),
     {
       id: 'composer.focus.tab',

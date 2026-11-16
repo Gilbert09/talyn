@@ -6,23 +6,27 @@ import { AppText } from '../../components/UI';
 import { openExternal, safeExternalUrl } from '../../components/Workflow';
 import { inlineText, parseMarkdown, type MdBlock, type MdInline } from '../../lib/markdown';
 import { mono, radius, sans, type, useTheme, type Theme } from '../../theme/tokens';
+import { useHighlighter } from './findHighlight';
 
 /** Characters per code `Text`. Very long single texts are slow to lay out on Android. */
 const CODE_CHUNK = 4000;
 
-function renderInline(nodes: MdInline[], c: Theme, key = ''): ReactNode[] {
+type Mark = (text: string, key?: string) => ReactNode;
+const plain: Mark = (text) => text;
+
+function renderInline(nodes: MdInline[], c: Theme, key = '', mark: Mark = plain): ReactNode[] {
   return nodes.map((node, index) => {
     const k = `${key}${index}`;
     switch (node.type) {
-      case 'text': return node.text;
+      case 'text': return mark(node.text, k);
       case 'br': return '\n';
-      case 'strong': return <Text key={k} style={sans(600)}>{renderInline(node.children, c, `${k}.`)}</Text>;
-      case 'em': return <Text key={k} style={styles.em}>{renderInline(node.children, c, `${k}.`)}</Text>;
-      case 'del': return <Text key={k} style={styles.del}>{renderInline(node.children, c, `${k}.`)}</Text>;
-      case 'code': return <Text key={k} style={[styles.inlineCode, { backgroundColor: c.surface, color: c.text }]}>{node.text}</Text>;
+      case 'strong': return <Text key={k} style={sans(600)}>{renderInline(node.children, c, `${k}.`, mark)}</Text>;
+      case 'em': return <Text key={k} style={styles.em}>{renderInline(node.children, c, `${k}.`, mark)}</Text>;
+      case 'del': return <Text key={k} style={styles.del}>{renderInline(node.children, c, `${k}.`, mark)}</Text>;
+      case 'code': return <Text key={k} style={[styles.inlineCode, { backgroundColor: c.surface, color: c.text }]}>{mark(node.text, k)}</Text>;
       case 'link': {
         const url = safeExternalUrl(node.href);
-        const children = renderInline(node.children, c, `${k}.`);
+        const children = renderInline(node.children, c, `${k}.`, mark);
         if (!url) return <Text key={k}>{children}</Text>;
         return <Text key={k} accessibilityRole="link" accessibilityLabel={`Open website: ${inlineText(node.children)}`}
           suppressHighlighting={false} onPress={() => openExternal(url)} style={{ color: c.information }}>{children}</Text>;
@@ -33,16 +37,18 @@ function renderInline(nodes: MdInline[], c: Theme, key = ''): ReactNode[] {
 
 function Paragraph({ children, style }: { children: MdInline[]; style?: TextStyle }) {
   const c = useTheme();
-  return <Text selectable style={[type.body, { color: c.text }, style]}>{renderInline(children, c)}</Text>;
+  const mark = useHighlighter();
+  return <Text selectable style={[type.body, { color: c.text }, style]}>{renderInline(children, c, '', mark)}</Text>;
 }
 
 function CodeBlock({ lang, text }: { lang: string; text: string }) {
   const c = useTheme();
+  const mark = useHighlighter();
   const chunks = Array.from({ length: Math.max(1, Math.ceil(text.length / CODE_CHUNK)) }, (_, index) => text.slice(index * CODE_CHUNK, (index + 1) * CODE_CHUNK));
   return <View accessibilityLabel={lang ? `${lang} code` : 'Code'} style={[styles.code, { backgroundColor: c.surface }]}>
     {lang ? <AppText variant="caption" tone="muted" style={styles.codeLang}>{lang}</AppText> : null}
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.codeScroll}>
-      <View>{chunks.map((chunk, index) => <Text key={index} selectable style={[styles.codeText, { color: c.text }]}>{chunk}</Text>)}</View>
+      <View>{chunks.map((chunk, index) => <Text key={index} selectable style={[styles.codeText, { color: c.text }]}>{mark(chunk, String(index))}</Text>)}</View>
     </ScrollView>
   </View>;
 }
@@ -81,11 +87,12 @@ function Table({ block }: { block: Extract<MdBlock, { type: 'table' }> }) {
 
 function Blocks({ blocks, depth = 0 }: { blocks: MdBlock[]; depth?: number }) {
   const c = useTheme();
+  const mark = useHighlighter();
   return <View style={styles.blocks}>{blocks.map((block, index) => {
     switch (block.type) {
       case 'paragraph': return <Paragraph key={index}>{block.children}</Paragraph>;
       case 'heading': return <Text key={index} accessibilityRole="header" selectable
-        style={[block.depth <= 1 ? styles.h1 : block.depth === 2 ? styles.h2 : styles.h3, index > 0 && styles.headingAfter, { color: c.text }]}>{renderInline(block.children, c)}</Text>;
+        style={[block.depth <= 1 ? styles.h1 : block.depth === 2 ? styles.h2 : styles.h3, index > 0 && styles.headingAfter, { color: c.text }]}>{renderInline(block.children, c, '', mark)}</Text>;
       case 'code': return <CodeBlock key={index} lang={block.lang} text={block.text} />;
       case 'list': return <List key={index} block={block} depth={depth} />;
       case 'blockquote': return <View key={index} style={[styles.quote, { borderColor: c.border }]}><Blocks blocks={block.children} depth={depth + 1} /></View>;

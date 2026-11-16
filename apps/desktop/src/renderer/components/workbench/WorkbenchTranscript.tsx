@@ -9,6 +9,7 @@ import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { PlanCard, type PlanCardState } from './PlanCard';
 import { MessageAttachments } from './MessageAttachments';
+import { TranscriptFindBar } from './TranscriptFindBar';
 import { RelativeTime } from '../RelativeTime';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
@@ -91,7 +92,8 @@ export function WorkbenchTranscript({
   const plans = useMemo(() => turns.map((turn) => findTurnPlan(turn.events)), [turns]);
 
   return (
-    <div className="flex h-full min-w-0 flex-col bg-background">
+    <div className="relative flex h-full min-w-0 flex-col bg-background">
+      <TranscriptFindBar workbenchId={chat.workbenchId} scrollRef={scrollRef} partial={older.hasOlder} />
       <div
         ref={scrollRef}
         onScroll={onScroll}

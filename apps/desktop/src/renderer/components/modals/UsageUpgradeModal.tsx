@@ -16,7 +16,7 @@ import {
 } from '@talyn/shared';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
-import { PlanCards, PlanOption, planCardTiers } from '../billing/PlanCards';
+import { BillingPeriodToggle, PlanCards, PlanOption, planCardTiers, type Period } from '../billing/PlanCards';
 import { UsageResetAction } from '../billing/UsageResetAction';
 import { api } from '../../lib/api';
 import { openExternal } from '../../lib/openExternal';
@@ -34,7 +34,6 @@ import {
 import { useBillingStore, type UpgradeReason } from '../../stores/billing';
 import { useWorkspaceStore } from '../../stores/workspace';
 
-type Period = 'monthly' | 'annual';
 /** `annualMicros` is null for Max, which is sold monthly only. */
 type Prices = { monthlyMicros: number; annualMicros: number | null };
 
@@ -281,23 +280,7 @@ export function UsageUpgradeModal({
   // No picker for a plan sold monthly only (Max).
   const periodPicker = (prices: Prices) =>
     prices.annualMicros != null && (
-      <div className="grid grid-cols-2 gap-2">
-        <PlanOption
-          label="Annual"
-          price={`${formatUsd(prices.annualMicros, 0)}/yr`}
-          hint="2 months free"
-          selected={period === 'annual'}
-          onSelect={() => setPeriod('annual')}
-          disabled={busy !== null || waiting}
-        />
-        <PlanOption
-          label="Monthly"
-          price={`${formatUsd(prices.monthlyMicros, 0)}/mo`}
-          selected={period === 'monthly'}
-          onSelect={() => setPeriod('monthly')}
-          disabled={busy !== null || waiting}
-        />
-      </div>
+      <BillingPeriodToggle period={period} onChange={setPeriod} disabled={busy !== null || waiting} />
     );
 
   const maxPortalNote = (

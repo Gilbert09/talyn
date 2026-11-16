@@ -64,6 +64,19 @@ The panel on the right has four tabs:
 
 The terminal dock below has a **Run** tab for your run scripts and a **Terminal** tab with a shell in the sandbox. Press ⌘J on a Mac to show or hide it.
 
+## Find in the transcript
+
+Press ⌘F (Ctrl+F on Windows and Linux) to search the session's chat. The find bar shows the number of matches and highlights them.
+
+- Press Enter to go to the next match. Press Shift+Enter to go to the previous match.
+- Press Esc to close the find bar.
+- In split view, ⌘F searches the pane that has focus.
+- The search includes only the messages that are loaded. To search earlier messages, scroll up to load them. When earlier messages are not loaded, the find bar tells you.
+- The search does not include the contents of collapsed tool calls.
+- In the code viewer and in the terminal, ⌘F keeps its usual function.
+
+In the mobile app, tap the search button in the session header. The row of the current match has a tinted background.
+
 ## Talk to the agent while it works
 
 You can send a message while the agent is in the middle of a turn. The message waits in a queue and goes in when the turn ends. Queued messages show above the composer, and you can remove one before it is sent.
