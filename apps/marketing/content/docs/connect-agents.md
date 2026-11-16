@@ -62,3 +62,5 @@ Select the unlink icon on the row. Runs that need that agent stop being possible
 ## When a sign-in stops working
 
 If Anthropic or OpenAI rejects the saved sign-in, the row shows **Reconnect needed**. See [Reconnect an agent](/docs/troubleshooting#reconnect-needed).
+
+Talyn shows a notice when an account needs to be signed in again. Failed turns that need sign-in show Reconnect beside Retry, which opens the agent settings.

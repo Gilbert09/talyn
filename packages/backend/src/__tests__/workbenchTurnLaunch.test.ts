@@ -1,3 +1,4 @@
+import { WorkbenchError } from '../services/workbenches/errors.js';
 import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -289,6 +290,18 @@ describe('workbench turn launch', () => {
     await sendMessage('chat', { text: 'go' });
     await settled('idle');
     expect(fleet.scripts[0]).toContain('git commit-tree');
+  });
+
+  it('stores the reconnect reason and account ids on the failed turn', async () => {
+    vi.spyOn(runtime, 'refreshSandboxCredentials').mockRejectedValue(new WorkbenchError(
+      'Personal needs to be signed in again.', 409, 'credentials_unavailable', { reason: 'reauth', accountIds: ['personal'] },
+    ));
+    await sendMessage('chat', { text: 'go' });
+    await settled('error');
+    expect(await events()).toContainEqual(expect.objectContaining({
+      type: 'result', code: 'credentials_unavailable', reason: 'reauth', accountIds: ['personal'],
+    }));
+    expect(agentRuns).toBe(0);
   });
 
   it('waits for pending writes before it settles a failed turn', async () => {

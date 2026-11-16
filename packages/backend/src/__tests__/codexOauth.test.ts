@@ -221,7 +221,7 @@ describe('Codex OAuth refresh', () => {
     // Still reported as connected, so the card can offer "Reconnect" rather
     // than telling the user they never set it up.
     const { fleetAgentStatus } = await import('../services/selfHosted/credentials.js');
-    expect(await fleetAgentStatus('ws1')).toEqual({
+    expect(await fleetAgentStatus('ws1')).toMatchObject({
       connectedAgents: ['codex'],
       reauthAgents: ['codex'],
     });

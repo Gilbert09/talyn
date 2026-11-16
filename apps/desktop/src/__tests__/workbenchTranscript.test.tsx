@@ -1,3 +1,4 @@
+import { useWorkspaceStore } from '../renderer/stores/workspace';
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import React from 'react';
@@ -626,4 +627,17 @@ describe('WorkbenchTranscript find', () => {
     expect(screen.getByText('1 of 3')).toBeInTheDocument();
     expect(screen.getByText('· loaded only')).toBeInTheDocument();
   });
+});
+
+it.each(['reauth', 'limited'])('offers Reconnect only for a reauth turn: %s', (reason) => {
+  const events: WorkbenchEvent[] = [userEvent(1, 1), {
+    chatId: 'c1', seq: 2, turn: 1,
+    event: { seq: 2, type: 'result', is_error: true, reason, result: 'Personal needs to be signed in again.' } as AgentEvent,
+  }];
+  setup(events, older({ hasOlder: false }));
+  expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+  if (reason === 'reauth') {
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+    expect(useWorkspaceStore.getState().settingsSection).toBe('integrations');
+  } else expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
 });

@@ -10,6 +10,8 @@ import { useNow } from '../../lib/time';
 import { radius, type, useTheme, withAlpha } from '../../theme/tokens';
 import { useLocal, useResource } from '../../workflow/hooks';
 import type { Transcript } from '../../workflow/model';
+import { FleetReconnectNotice } from '../agents/FleetReconnectNotice';
+import { TurnFailureActions } from './TurnFailureActions';
 import { isStarting, StartingHint, StartingLine } from '../sessions/Starting';
 import { chatActions } from './actions';
 import { Composer } from './Composer';
@@ -151,6 +153,7 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
 
   return <View style={{ flex: 1 }}>
     {header}
+    <FleetReconnectNotice />
     {findOpen ? <FindBar query={query} onChangeQuery={changeQuery} count={matches.length} label={matchCountLabel(current, matches.length, query)}
       partial={Boolean(data?.hasOlder)} focusKey={find} onPrevious={() => step(-1)} onNext={() => step(1)} onClose={closeFind} /> : null}
     <View style={{ flex: 1 }}>
@@ -196,6 +199,9 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
         </View>}
         renderItem={({ item: row }) => <View style={row.key === currentKey ? [local_.current, currentStyle] : undefined}>
           <TranscriptRow row={row} now={now} workbench={item} plan={plan} highlight={highlight && matchKeys.has(row.key) ? highlight : undefined} />
+          {row.kind === 'failed' && rows[0]?.key === row.key && chat && (chat.status === 'idle' || chat.status === 'error')
+            && !chat.queuedMessages?.length ? <TurnFailureActions chatId={chat.id} workbenchId={item.id} text={row.text}
+              reconnect={row.reason === 'reauth'} disabled={offline || !ready} /> : null}
         </View>} />
       </TranscriptContext.Provider></RowBoundary>
       {startHint ? <View pointerEvents="box-none" style={local_.startHint}>

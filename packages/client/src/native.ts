@@ -671,6 +671,8 @@ export interface CloudProviderInfo {
   connectedAgents?: string[];
   /** Connected agents whose sign-in was rejected and needs redoing. */
   reauthAgents?: string[];
+  /** Accounts that need sign-in, without credentials. */
+  reauthAccounts?: { id: string; label: string; agent: string }[];
 }
 
 /**

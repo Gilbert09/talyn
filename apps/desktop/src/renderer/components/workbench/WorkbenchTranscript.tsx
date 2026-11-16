@@ -12,6 +12,7 @@ import { MessageAttachments } from './MessageAttachments';
 import { TranscriptFindBar } from './TranscriptFindBar';
 import { RelativeTime } from '../RelativeTime';
 import { api } from '../../lib/api';
+import { useWorkspaceStore } from '../../stores/workspace';
 import { toast } from '../../stores/toast';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { useWorkbenchStore, type OutgoingWorkbenchMessage } from '../../stores/workbenches';
@@ -130,7 +131,7 @@ export function WorkbenchTranscript({
                 live={last && running}
                 ops={ops}
                 retryResult={canRetry && !loading && !error && (chat.status === 'idle' || chat.status === 'error') && !chat.queuedMessages?.length && result?.kind === 'result' && result.isError && !turn.events.some((event) => event.type === 'result' && event.subtype === 'cancelled')
-                  ? { key: result.key, reason: result.summary.trim() || 'The agent stopped unexpectedly.' }
+                  ? { key: result.key, reason: result.summary.trim() || 'The agent stopped unexpectedly.', reconnect: result.reason === 'reauth' }
                   : undefined}
                 canRevert={!running && !ops.unavailable && turn.userText !== null}
                 plan={
@@ -328,7 +329,7 @@ const TurnView = React.memo(function TurnView({
   /** The turn is still running, so its last event time keeps moving. */
   live: boolean;
   ops: WorkbenchOps;
-  retryResult?: { key: string; reason: string };
+  retryResult?: { key: string; reason: string; reconnect: boolean };
   canRevert: boolean;
   /** The turn's plan card, drawn after its blocks. */
   plan: React.ReactNode;
@@ -343,7 +344,7 @@ const TurnView = React.memo(function TurnView({
           events={turn.events}
           scopeId={`${chatId}:${turn.turn}`}
           hideCompletedResults
-          retryResult={retryResult ? { key: retryResult.key, action: <RetryTurn chat={chat} ops={ops} reason={retryResult.reason} /> } : undefined}
+          retryResult={retryResult ? { key: retryResult.key, action: <RetryTurn chat={chat} ops={ops} reason={retryResult.reason} reconnect={retryResult.reconnect} /> } : undefined}
         />
       )}
       {plan}
@@ -357,7 +358,8 @@ const TurnView = React.memo(function TurnView({
 /** The 30-minute wait for a sandbox ended. A plain retry would start another 30-minute wait. */
 export const SANDBOX_WAIT_BOUND_ERROR = /No sandbox became free in 30 minutes|The sandbox did not wake in 30 minutes/i;
 
-function RetryTurn({ chat, ops, reason }: { chat: WorkbenchChat; ops: WorkbenchOps; reason: string }) {
+function RetryTurn({ chat, ops, reason, reconnect }: { chat: WorkbenchChat; ops: WorkbenchOps; reason: string; reconnect: boolean }) {
+  const openSettings = useWorkspaceStore((s) => s.openSettings);
   const [sending, setSending] = useState(false);
   const send = async () => {
     if (sending) return;
@@ -380,10 +382,13 @@ function RetryTurn({ chat, ops, reason }: { chat: WorkbenchChat; ops: WorkbenchO
   );
   if (SANDBOX_WAIT_BOUND_ERROR.test(reason)) return null;
   return (
-    <button type="button" data-attr="turn-retry" disabled={sending} onClick={() => void send()}
-      className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50">
-      {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />} Retry
-    </button>
+    <>
+      <button type="button" data-attr="turn-retry" disabled={sending} onClick={() => void send()}
+        className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50">
+        {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />} Retry
+      </button>
+      {reconnect && <button type="button" className="ml-2 text-xs underline" onClick={() => openSettings('integrations')}>Reconnect</button>}
+    </>
   );
 }
 

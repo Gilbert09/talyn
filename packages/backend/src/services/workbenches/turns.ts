@@ -1071,7 +1071,10 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     // as plain words and not as the fleet's raw refusal.
     const why = userFacingError(err);
     console.warn(`[workbench] turn ${turn} of chat ${chatId} failed:`, err);
-    events.add(errorResultEvent('error_during_execution', `Talyn could not run this turn: ${why}`));
+    events.add({
+      ...errorResultEvent('error_during_execution', `Talyn could not run this turn: ${why}`),
+      ...(err instanceof WorkbenchError && err.details ? { code: err.code, ...err.details } : {}),
+    });
     await events.flush();
     const diskFull = isDiskFullError(err);
     return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false, ...(diskFull ? { diskFull } : {}) };

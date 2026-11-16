@@ -2,6 +2,11 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Show Fleet accounts that need sign-in (2026-11-16)
+
+Fleet status now reports any account that needs sign-in, with its name and ID. Healthy accounts remain available.
+Turn errors name affected accounts and report known usage resets. Web, desktop, and mobile show reconnect notices and actions.
+
 ## Retire PostHog Code, step 1 (2026-11-15)
 
 **Why.** PostHog Code confused users. It sat next to Claude and Codex as a third agent, but it cannot run sessions.

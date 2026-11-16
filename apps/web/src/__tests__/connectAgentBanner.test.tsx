@@ -103,3 +103,15 @@ describe('ConnectAgentBanner', () => {
     expect(container.innerHTML).toBe('');
   });
 });
+
+it('names a revoked account while another account can run, then opens Fleet settings', () => {
+  setAgents([{ ...fleet(['claude']), reauthAgents: [],
+    reauthAccounts: [{ id: 'one', label: 'Personal Claude', agent: 'claude' }] }], false);
+  const { rerender } = render(<ConnectAgentBanner />);
+  expect(screen.getByText(/Personal Claude needs to be signed in again/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+  expect(useWorkspaceStore.getState().settingsSection).toBe('integrations');
+  setAgents([fleet(['claude'])], false);
+  rerender(<ConnectAgentBanner />);
+  expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
+});
