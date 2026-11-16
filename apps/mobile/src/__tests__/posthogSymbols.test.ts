@@ -100,6 +100,21 @@ describe('withPostHogSymbolUploads', () => {
     expect(JSON.stringify(publicConfig)).not.toContain(KEY);
   });
 
+  it('skips a dSYM that PostHog already holds, so a rebuild of the same native code does not fail', () => {
+    const official = jest.fn((config: object) => config);
+    jest.isolateModules(() => {
+      jest.doMock('posthog-react-native/expo', () => official);
+      const isolated = require('../../plugins/withPostHogSymbolUploads.cjs');
+      isolated.withPostHogSymbolUploads(base(), { profile: 'production', env: { POSTHOG_CLI_API_KEY: KEY } });
+    });
+    jest.dontMock('posthog-react-native/expo');
+    expect(official).toHaveBeenCalledTimes(1);
+    const props = official.mock.calls[0][1];
+    expect(props).toEqual({ uploadNativeSymbols: true, skipOnConflict: true, dotenvFile: DOTENV_FILE, patchMainActivityNewIntent: false });
+    // posthog-cli refuses --skip-on-conflict together with --force.
+    expect(props).not.toHaveProperty('force');
+  });
+
   it('refuses a key that is not a personal API key', () => {
     expect(() => withPostHogSymbolUploads(base(), { profile: 'production', env: { POSTHOG_CLI_API_KEY: 'phc_project' } })).toThrow('phx_');
   });
