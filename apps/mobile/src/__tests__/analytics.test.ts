@@ -159,7 +159,7 @@ describe('initialisation', () => {
     configure(environment);
     const { options } = await started();
     expect(options).toMatchObject({ host: CONFIG.host, personProfiles: 'identified_only', captureAppLifecycleEvents: true, enableSessionReplay: replay });
-    expect(options.sessionReplayConfig).toMatchObject({ maskAllTextInputs: true, maskAllImages: true, maskAllSandboxedViews: true, captureLog: false });
+    expect(options.sessionReplayConfig).toMatchObject({ maskAllTextInputs: false, maskAllImages: false, maskAllSandboxedViews: false, captureLog: false });
     expect(options.errorTracking).toEqual(exceptions
       ? { autocapture: { uncaughtExceptions: true, unhandledRejections: true, console: ['error'], nativeCrashes: true, androidNdkCrashes: true } }
       : { autocapture: false });

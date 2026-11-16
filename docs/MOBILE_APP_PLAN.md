@@ -772,7 +772,7 @@ Certificate pinning is an open risk decision. MASVS does not mean every app must
 Choose one native crash reporter after reviewing SDK data, processors, retention, and regional requirements.
 **Revised 2026-11-10 (Tom's call):** the app now uses PostHog for product analytics, session replay, and error tracking, like web.
 This replaces the MVP rule that disabled session replay and automatic view content capture.
-Replay masks all text, inputs, images, and sandboxed views, and records no console logs or network requests.
+Replay is not masked: it shows text, inputs, images, and sandboxed views. It records no console logs or network requests.
 Touch autocapture reads component names and test IDs only. Explicit events reuse the web names and reviewed fields.
 Settings > Account has an opt-out. Apple tracking stays false, so there is no ATT prompt.
 Exclude prompts, transcript text, code, auth URLs, tokens, push tokens, and raw request query strings.
