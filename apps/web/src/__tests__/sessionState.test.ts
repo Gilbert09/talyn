@@ -24,6 +24,7 @@ describe('sessionState', () => {
     ['moving to a fresh sandbox, with the turn that asked for it', { status: 'moving' }, [chat('running')], {}, pr('open'), 'working'],
     ['working', {}, [chat('running')], {}, pr('open'), 'working'],
     ['a message waits for the sandbox', {}, [{ ...chat('idle'), queuedMessages: [{ id: 'q1', text: 'go', queuedAt: '2026-11-04T00:00:00Z' }] } as ReturnType<typeof chat>], {}, pr('open'), 'working'],
+    ['an archived session with a queued message is not working', { archivedAt: '2026-11-15T00:00:00Z' }, [{ ...chat('idle'), queuedMessages: [{ id: 'q1', text: 'go', queuedAt: '2026-11-04T00:00:00Z' }] } as ReturnType<typeof chat>], {}, pr('merged'), 'merged'],
     ['an empty queue is not work', {}, [{ ...chat('idle'), queuedMessages: [] } as ReturnType<typeof chat>], {}, null, 'idle'],
     ['waiting for an answer', {}, [chat('awaiting_input')], {}, pr('open'), 'needs_reply'],
     ['an unread reply', {}, [chat('idle')], { c1: true }, pr('open'), 'needs_reply'],

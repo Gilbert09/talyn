@@ -78,8 +78,10 @@ import type {
   WorkflowCounts,
   PostHogInboxBacklogPage,
   PostHogInboxDryRun,
+  PostHogInboxPushRemoval,
   PostHogInboxRunResponse,
   PostHogInboxPushReveal,
+  PostHogInboxPushSetupResult,
   PostHogInboxPushState,
   PostHogInboxStatus,
   WorkflowInput,
@@ -2526,9 +2528,21 @@ export const workflows = {
   rotatePostHogInboxWebhook: (workspaceId: string, requireSecret: boolean) =>
     request<PostHogInboxPushReveal>('POST', '/workflows/posthog-inbox/webhook/rotate', { workspaceId, requireSecret }),
 
-  /** Remove the PostHog Inbox webhook URL. The poller goes back to every 3 minutes. */
+  /**
+   * "Set up push in PostHog": make or rotate the webhook URL and create or
+   * update Talyn's PostHog destination. Never returns the URL token or the
+   * secret. A grant without the hog function scopes answers
+   * `posthog_inbox_push_scopes_missing` and changes nothing.
+   */
+  setUpPostHogInboxPush: (workspaceId: string) =>
+    request<PostHogInboxPushSetupResult>('POST', '/workflows/posthog-inbox/webhook/setup', { workspaceId }),
+
+  /**
+   * Remove the PostHog Inbox webhook URL. The poller goes back to every 3
+   * minutes. Talyn's PostHog destination is deleted too, best effort.
+   */
   removePostHogInboxWebhook: (workspaceId: string) =>
-    request<{ removed: number }>('DELETE', `/workflows/posthog-inbox/webhook?workspaceId=${encodeURIComponent(workspaceId)}`),
+    request<PostHogInboxPushRemoval>('DELETE', `/workflows/posthog-inbox/webhook?workspaceId=${encodeURIComponent(workspaceId)}`),
 
   /** The requests PostHog sent to the webhook URL, newest first, without their bodies. */
   posthogInboxDeliveries: (workspaceId: string, opts: { limit?: number; cursor?: string | null } = {}) => {

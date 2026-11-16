@@ -49,7 +49,10 @@ export function sessionState(workbench: StateWorkbench, chats: StateChat[], pr: 
   if (chats.some((chat) => chat.status === 'error')) return { kind: 'failed', label: 'A chat failed' };
   if (workbench.status === 'provisioning' || workbench.sandboxState === 'creating') return { kind: 'starting', label: 'Starting' };
   if (chats.some((chat) => chat.status === 'running')) return { kind: 'working', label: 'Working' };
-  if (chats.some((chat) => (chat.queuedMessages?.length ?? 0) > 0)) return { kind: 'working', label: 'A message waits for the sandbox' };
+  // An archived session has no box: its queued message waits for a restore.
+  if (!workbench.archivedAt && chats.some((chat) => (chat.queuedMessages?.length ?? 0) > 0)) {
+    return { kind: 'working', label: 'A message waits for the sandbox' };
+  }
   if (chats.some((chat) => chat.status === 'awaiting_input')) return { kind: 'needs_reply', label: 'Waiting for your answer' };
   if (pr && !workbench.archivedAt && workbench.kind !== 'thread') {
     if (pr.state === 'merged') return { kind: 'merged', label: `Done: #${pr.number} merged` };

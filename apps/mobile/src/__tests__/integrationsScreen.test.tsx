@@ -221,7 +221,7 @@ describe('Trunk', () => {
 describe('PostHog Inbox push line', () => {
   const status = (over: Record<string, unknown> = {}) => ({
     access: 'ok', reason: null, authMethod: 'oauth', projectId: '42', host: 'https://us.posthog.com',
-    lastPolledAt: null, lastError: null, lastPushAt: null, pushConfigured: false, ...over,
+    lastPolledAt: null, lastError: null, lastPushAt: null, pushConfigured: false, pushManaged: false, pushSetupMissingScopes: [], ...over,
   });
 
   it.each([

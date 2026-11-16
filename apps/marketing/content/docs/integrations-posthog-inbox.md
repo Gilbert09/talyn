@@ -12,7 +12,8 @@ PostHog self-driving writes reports about problems in your product. Each report 
 PostHog Inbox has its own PostHog connection. Open **Integrations > PostHog Inbox > Connection**, then select **Connect with PostHog**.
 
 - On the PostHog screen, pick the one project whose Inbox Talyn reads.
-- Talyn asks for `inbox:read` (read reports), `inbox:write` (claim reports) and `task:write` (attach the pull request to a claim).
+- Talyn asks for `inbox:read` (read reports), `inbox:write` (claim reports), `task:write` (attach the pull request to a claim), and `hog_function:read` and `hog_function:write` (set up the push destination in PostHog for you).
+- A connection made before Talyn asked for `hog_function:*` keeps working for rules and claims. Only **Set up push in PostHog** needs these permissions. Reconnect to grant them.
 - The card shows the project and the host. **Reconnect** starts the PostHog screen again. **Disconnect** removes only the PostHog Inbox connection.
 - When the connection is missing a permission, the card names it and asks you to reconnect.
 
@@ -52,7 +53,23 @@ When a write to PostHog fails, Talyn tries again with the same waits. The run hi
 
 A push tells Talyn that a report is ready. Talyn uses only the report id from the push. It then reads the report from your PostHog project with your connection, as for a check. A push that names a report your project does not have is dropped.
 
-To set up the push:
+### Let Talyn set it up
+
+1. Open **Integrations > PostHog Inbox > Connection**.
+2. Click **Set up push in PostHog**.
+
+Talyn makes a webhook URL and a secret. Then it adds a destination named **Talyn – PostHog Inbox push** in your PostHog project. The destination sends `POST` requests with the default JSON body when an Inbox report is ready. The secret is in an encrypted secret header, `X-Talyn-Secret`, and debug logging is off. Nobody needs to copy the URL or the secret, so Talyn does not show them.
+
+The Connection tab then shows **Open the destination in PostHog**, which opens the destination in PostHog.
+
+- This needs the `hog_function:read`, `hog_function:write` and `inbox:read` permissions. Your PostHog user also needs access to the Inbox. If the connection does not have the permissions, the card asks you to reconnect. Talyn then changes nothing.
+- If PostHog refuses or does not answer, Talyn changes nothing, and the old URL keeps working.
+- Run it again at any time. Talyn updates its own destination and does not make a second one. If somebody deleted the destination in PostHog, Talyn makes a new one.
+- If you set up the push by hand before, the old URL stops working. Delete your own destination in PostHog.
+
+### Set it up by hand
+
+Use this with a personal API key that does not have the `hog_function` scopes, or if you prefer to add the destination yourself.
 
 1. Open **Integrations > PostHog Inbox > Connection**.
 2. Click **Make a webhook URL**. By default, the URL also needs a secret header. Clear **Require a secret header** if you do not want one.
@@ -66,7 +83,12 @@ The Connection tab shows the time of the last push and the requests that PostHog
 
 While pushes arrive, Talyn checks the Inbox only every 30 minutes, to catch a push that was lost. When no push arrives for 24 hours, Talyn goes back to checking every 3 minutes. A push and a check of the same report version never both start work.
 
-**Rotate URL** makes a new URL and secret. The old ones stop at once, so update the destination in PostHog. **Remove URL** stops the push.
+**Rotate URL** makes a new URL and secret. The old ones stop at once.
+
+- If Talyn set up the destination, Talyn gives it the new URL and secret. If PostHog does not take the change, the rotate still happens. The card then says that the destination is out of date and still sends to the old URL. Click **Update the destination in PostHog** to fix it.
+- If you added the destination by hand, update it in PostHog.
+
+**Remove URL** stops the push. If Talyn set up the destination, Talyn deletes it in PostHog too. If PostHog does not delete it, Talyn tells you, and you can delete it in PostHog. **Disconnect** also deletes the destination when it can. A PostHog failure never stops the disconnect.
 
 PostHog sends this event only to organizations where PostHog turned it on. If no request arrives, the 3-minute check still works.
 

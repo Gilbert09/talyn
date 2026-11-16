@@ -172,10 +172,10 @@ describe('PostHog Inbox push routes', () => {
     const made = data(await call('POST', '/posthog-inbox/webhook/rotate', { workspaceId: 'ws-mine' }));
     await insertDelivery({ connectionId: String(made.connectionId), deliveryId: 'evt-1', eventType: 'x', payload: {}, headers: {}, payloadBytes: 2 });
     const removed = await call('DELETE', '/posthog-inbox/webhook?workspaceId=ws-mine');
-    expect(data(removed)).toEqual({ removed: 1 });
+    expect(data(removed)).toEqual({ removed: 1, destination: null });
     expect(await db.select().from(inboundConnections)).toHaveLength(0);
     expect(await db.select().from(inboundDeliveries)).toHaveLength(0);
-    expect(data(await call('DELETE', '/posthog-inbox/webhook?workspaceId=ws-mine'))).toEqual({ removed: 0 });
+    expect(data(await call('DELETE', '/posthog-inbox/webhook?workspaceId=ws-mine'))).toEqual({ removed: 0, destination: null });
   });
 
   it('lists the requests without bodies, shows one with its body, and replays it', async () => {
@@ -232,6 +232,7 @@ describe('PostHog Inbox push routes', () => {
     ['GET', '/posthog-inbox/deliveries?workspaceId=ws-theirs', undefined],
     ['GET', '/posthog-inbox/deliveries/d1?workspaceId=ws-theirs', undefined],
     ['POST', '/posthog-inbox/deliveries/d1/replay', { workspaceId: 'ws-theirs' }],
+    ['POST', '/posthog-inbox/webhook/setup', { workspaceId: 'ws-theirs' }],
   ])("refuses %s %s for another workspace", async (method, path, body) => {
     await seedUser(db, { id: 'user-other', email: 'other@example.test' });
     await db.insert(workspacesTable).values({ id: 'ws-theirs', ownerId: 'user-other', name: 'theirs', settings: {} });
@@ -248,6 +249,7 @@ describe('PostHog Inbox push routes', () => {
     ['GET', '/posthog-inbox/deliveries?workspaceId=ws-mine', undefined],
     ['GET', '/posthog-inbox/deliveries/d1?workspaceId=ws-mine', undefined],
     ['POST', '/posthog-inbox/deliveries/d1/replay', { workspaceId: 'ws-mine' }],
+    ['POST', '/posthog-inbox/webhook/setup', { workspaceId: 'ws-mine' }],
   ])('hides %s %s behind the flag', async (method, path, body) => {
     await connect();
     process.env.POSTHOG_INBOX_RULES_ENABLED = 'false';
@@ -262,6 +264,7 @@ describe('PostHog Inbox push routes', () => {
     ['GET', '/posthog-inbox/webhook?workspaceId=ws-mine', undefined],
     ['POST', '/posthog-inbox/webhook/rotate', { workspaceId: 'ws-mine' }],
     ['GET', '/posthog-inbox/deliveries?workspaceId=ws-mine', undefined],
+    ['POST', '/posthog-inbox/webhook/setup', { workspaceId: 'ws-mine' }],
   ])('asks to connect PostHog first: %s %s', async (method, path, body) => {
     const res = await call(method, path, body);
     expect(res.status).toBe(409);
@@ -271,6 +274,7 @@ describe('PostHog Inbox push routes', () => {
   it.each<[string, string, unknown]>([
     ['GET', '/posthog-inbox/webhook?workspaceId=ws-mine', undefined],
     ['POST', '/posthog-inbox/webhook/rotate', { workspaceId: 'ws-mine' }],
+    ['POST', '/posthog-inbox/webhook/setup', { workspaceId: 'ws-mine' }],
   ])('refuses %s %s while the connection cannot read the Inbox', async (method, path, body) => {
     // An OAuth grant from before Inbox rules: no inbox:read.
     await db.insert(integrations).values({
@@ -301,6 +305,7 @@ describe('PostHog Inbox push routes', () => {
     ['GET', '/posthog-inbox/webhook', undefined],
     ['POST', '/posthog-inbox/webhook/rotate', {}],
     ['DELETE', '/posthog-inbox/webhook', undefined],
+    ['POST', '/posthog-inbox/webhook/setup', {}],
   ])('needs a workspace: %s %s', async (method, path, body) => {
     expect((await call(method, path, body)).status).toBe(400);
   });

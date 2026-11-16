@@ -111,7 +111,7 @@ beforeEach(() => {
   jest.spyOn(api.workflows, 'posthogInboxStatus').mockResolvedValue({
     access: 'ok', reason: null, authMethod: 'oauth', projectId: '42', host: 'https://us.posthog.com',
     connection: 'posthog_inbox', missingScopes: [], oauthAvailable: true, lastPolledAt: null, lastError: null,
-    lastPushAt: null, pushConfigured: false,
+    lastPushAt: null, pushConfigured: false, pushManaged: false, pushSetupMissingScopes: [],
   });
   jest.spyOn(api.ws, 'on').mockReturnValue(() => {});
 });

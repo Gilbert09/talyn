@@ -13,6 +13,7 @@ import { PostHogInboxClient } from '../services/posthogInbox/api.js';
 import { removeInboxConnection, storeInboxApiKey } from '../services/posthogInbox/credentials.js';
 import { startInboxAuthorization } from '../services/posthogInbox/oauth.js';
 import { clearInboxPollerBackoff } from '../services/posthogInbox/poller.js';
+import { deleteDestinationsOnDisconnect } from '../services/posthogInbox/pushSetup.js';
 import { posthogInboxStatus } from '../services/posthogInbox/preview.js';
 import { captureWorkspaceEvent } from '../services/analytics.js';
 import { originClient } from './posthog.js';
@@ -125,10 +126,15 @@ export function posthogInboxRoutes(): Router {
     res.json({ success: true, data } as ApiResponse<PostHogInboxStatus>);
   });
 
-  /** Remove the Inbox's own connection. A PostHog Code connection stays. */
+  /**
+   * Remove the Inbox's own connection. A PostHog Code connection stays.
+   * Talyn's PostHog push destination is deleted first with this connection,
+   * best effort: it never blocks the disconnect.
+   */
   router.delete('/config', async (req, res) => {
     const workspaceId = req.query.workspaceId as string | undefined;
     if (!(await gate(req, res, workspaceId))) return;
+    await deleteDestinationsOnDisconnect(workspaceId as string);
     await removeInboxConnection(workspaceId as string);
     const data = await posthogInboxStatus(workspaceId as string);
     res.json({ success: true, data } as ApiResponse<PostHogInboxStatus>);

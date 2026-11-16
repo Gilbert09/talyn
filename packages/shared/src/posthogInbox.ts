@@ -6,12 +6,27 @@
 export const POSTHOG_INBOX_SCOPES = ['inbox:read', 'inbox:write'] as const;
 
 /**
- * The scopes the PostHog Inbox's own OAuth connection asks for: read the
- * reports (`inbox:read`), claim them (`inbox:write`) and attach a pull request
- * to the claim (`task:write`). `openid` makes it an OIDC grant. Checked
- * against PostHog's OpenAPI schema.
+ * The scopes Talyn needs to set up the push in PostHog itself: create, read,
+ * update and delete the webhook destination (PostHog's hog functions API,
+ * `hog_function:read` and `hog_function:write`). A grant without them still
+ * runs the rules and the claims; only "Set up push in PostHog" needs them.
  */
-export const POSTHOG_INBOX_OAUTH_SCOPES = ['openid', 'inbox:read', 'inbox:write', 'task:write'] as const;
+export const POSTHOG_INBOX_PUSH_SETUP_SCOPES = ['hog_function:read', 'hog_function:write'] as const;
+
+/**
+ * The scopes the PostHog Inbox's own OAuth connection asks for: read the
+ * reports (`inbox:read`), claim them (`inbox:write`), attach a pull request
+ * to the claim (`task:write`) and set up the push destination
+ * (`hog_function:read`, `hog_function:write`). `openid` makes it an OIDC
+ * grant. Checked against PostHog's OpenAPI schema.
+ */
+export const POSTHOG_INBOX_OAUTH_SCOPES = [
+  'openid',
+  'inbox:read',
+  'inbox:write',
+  'task:write',
+  ...POSTHOG_INBOX_PUSH_SETUP_SCOPES,
+] as const;
 
 /** The scopes an Inbox grant must hold. The card asks for a reconnect when one is missing. */
 export const POSTHOG_INBOX_REQUIRED_SCOPES = ['inbox:read', 'inbox:write', 'task:write'] as const;
@@ -71,6 +86,15 @@ export interface PostHogInboxStatus {
   lastPushAt: string | null;
   /** Whether the workspace has a webhook URL for its PostHog project. */
   pushConfigured: boolean;
+  /** Whether Talyn created the PostHog destination for that URL ("Set up push in PostHog"). */
+  pushManaged: boolean;
+  /**
+   * OAuth only: the scopes ({@link POSTHOG_INBOX_PUSH_SETUP_SCOPES}) the grant
+   * lacks for "Set up push in PostHog". Separate from `missingScopes`: the
+   * rules work without them. Empty for a personal API key, whose scopes Talyn
+   * cannot read.
+   */
+  pushSetupMissingScopes: string[];
 }
 
 /** One report the dry run found. */
@@ -229,6 +253,23 @@ export interface PostHogInboxPushSummary {
   lastDeliveryAt: string | null;
   /** The newest push whose report Talyn read from the project, or null. */
   lastPushAt: string | null;
+  /** The PostHog destination Talyn created for this URL, or null when the person added it by hand. */
+  destination: PostHogInboxDestinationSummary | null;
+}
+
+/** The PostHog webhook destination that Talyn created and keeps in step with the URL. */
+export interface PostHogInboxDestinationSummary {
+  /** PostHog's hog function id. */
+  id: string;
+  /** The destination in the PostHog app, or null when Talyn does not know the host. */
+  url: string | null;
+  /** When PostHog last took the URL and the secret, or null. */
+  syncedAt: string | null;
+  /**
+   * Set when Talyn changed the URL but PostHog did not take the change: the
+   * destination still sends to the old URL. "Set up push in PostHog" fixes it.
+   */
+  error: string | null;
 }
 
 /** `GET /workflows/posthog-inbox/webhook`: null when the workspace has no URL for its project. */
@@ -243,6 +284,76 @@ export interface PostHogInboxPushReveal {
   secret: string | null;
   /** The header name to add in PostHog. */
   secretHeader: string;
+  /**
+   * Set when Talyn created the PostHog destination for this URL: whether
+   * PostHog took the new URL and secret too. Null when the person added the
+   * destination by hand.
+   */
+  destination?: PostHogInboxDestinationOutcome | null;
+}
+
+/** The name of the destination Talyn creates in PostHog. */
+export const POSTHOG_INBOX_DESTINATION_NAME = 'Talyn – PostHog Inbox push';
+
+/** The answer code when the OAuth grant lacks {@link POSTHOG_INBOX_PUSH_SETUP_SCOPES}. Talyn changed nothing. */
+export const POSTHOG_INBOX_PUSH_SCOPES_MISSING_CODE = 'posthog_inbox_push_scopes_missing';
+
+/** The answer code when PostHog refused the destination (403: a missing scope or no Inbox access). */
+export const POSTHOG_INBOX_PUSH_FORBIDDEN_CODE = 'posthog_inbox_push_forbidden';
+
+/** The answer code when PostHog did not take the destination for another reason. */
+export const POSTHOG_INBOX_PUSH_FAILED_CODE = 'posthog_inbox_push_failed';
+
+/** The message for {@link POSTHOG_INBOX_PUSH_SCOPES_MISSING_CODE}. */
+export const POSTHOG_INBOX_PUSH_RECONNECT_MESSAGE = 'Reconnect PostHog to let Talyn set up push.';
+
+/**
+ * `POST /workflows/posthog-inbox/webhook/setup`: Talyn made or rotated the
+ * URL and created or updated the PostHog destination. Never holds the URL
+ * token or the secret: PostHog has them, and nobody needs to copy them.
+ */
+export interface PostHogInboxPushSetupResult {
+  connectionId: string;
+  destination: PostHogInboxDestinationSummary;
+  /** True when Talyn created a new destination, false when it updated its own. */
+  created: boolean;
+}
+
+/**
+ * What happened to Talyn's PostHog destination when the URL changed or went away.
+ *
+ * - `updated`: PostHog took the new URL and secret.
+ * - `deleted`: PostHog deleted the destination.
+ * - `not_found`: PostHog no longer had it.
+ * - `failed`: PostHog did not take the change. `error` says why. After a
+ *   rotate, the destination still sends to the old URL.
+ */
+export interface PostHogInboxDestinationOutcome {
+  state: 'updated' | 'deleted' | 'not_found' | 'failed';
+  error: string | null;
+  /** The destination in the PostHog app, or null. */
+  url: string | null;
+}
+
+/** `DELETE /workflows/posthog-inbox/webhook`. */
+export interface PostHogInboxPushRemoval {
+  removed: number;
+  /** Talyn's PostHog destination, or null when Talyn did not create one. */
+  destination: PostHogInboxDestinationOutcome | null;
+}
+
+/**
+ * PURE: the destination's page in the PostHog app
+ * (`/project/:projectId/functions/:id`, PostHog's `urls.hogFunction`). Null
+ * when a part is missing.
+ */
+export function posthogDestinationUrl(
+  host: string | null | undefined,
+  projectId: string | null | undefined,
+  destinationId: string | null | undefined
+): string | null {
+  if (!host || !projectId || !destinationId) return null;
+  return `${host.replace(/\/+$/, '')}/project/${encodeURIComponent(projectId)}/functions/${encodeURIComponent(destinationId)}`;
 }
 
 /** PURE: whether a push in the window makes the poller only reconcile. */
