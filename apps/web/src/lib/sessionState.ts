@@ -133,7 +133,10 @@ export function sessionState(
   }
   if (chats.some((c) => c.status === 'running')) return { kind: 'working', label: 'Working' };
   // A message that waits for the box is work in progress, not an idle session.
-  if (chats.some((c) => (c.queuedMessages?.length ?? 0) > 0)) return { kind: 'working', label: 'A message waits for the sandbox' };
+  // An archived session has no box: its queued message waits for a restore.
+  if (!workbench.archivedAt && chats.some((c) => (c.queuedMessages?.length ?? 0) > 0)) {
+    return { kind: 'working', label: 'A message waits for the sandbox' };
+  }
   if (chats.some((c) => c.status === 'awaiting_input')) {
     return { kind: 'needs_reply', label: 'Waiting for your answer' };
   }
