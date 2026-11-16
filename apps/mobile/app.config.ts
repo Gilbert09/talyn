@@ -165,7 +165,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         NSPrivacyTrackingDomains: [],
       },
       infoPlist: { NSAppTransportSecurity: { NSAllowsArbitraryLoads: false, NSAllowsLocalNetworking: identity.environment === 'development' } },
-      ...(httpsCallback ? { associatedDomains: [`applinks:${httpsCallback.hostname}`] } : {}),
+      // iOS 17.4+ sign-in hands the HTTPS callback to ASWebAuthenticationSession, which needs `webcredentials`, not only `applinks`.
+      ...(httpsCallback ? { associatedDomains: [`applinks:${httpsCallback.hostname}`, `webcredentials:${httpsCallback.hostname}`] } : {}),
     },
     android: {
       package: identity.androidPackage,

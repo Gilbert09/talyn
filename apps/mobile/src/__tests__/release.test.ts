@@ -41,6 +41,7 @@ describe('release configuration boundaries', () => {
       icon: './assets/notification-icon.png', color: '#a94d2e',
     }]);
     expect(result.android?.intentFilters?.[0].data).toContainEqual({ scheme: 'https', host: 'mobile.fixture.dev', pathPrefix: '/sessions/' });
+    expect(result.ios?.associatedDomains).toEqual(['applinks:mobile.fixture.dev', 'webcredentials:mobile.fixture.dev']);
   });
   it.each(['MOBILE_BUILD_NUMBER', 'TALYN_MOBILE_SUPPORT_URL', 'TALYN_MOBILE_PRIVACY_URL', 'TALYN_MOBILE_DELETION_URL'])('blocks a store build without %s', (key) => {
     expect(() => readReleaseSettings({ ...fixture, [key]: undefined }, 'production', fixture.EXPO_PUBLIC_EAS_PROJECT_ID)).toThrow();
@@ -311,5 +312,15 @@ describe('automatic update publication', () => {
   it('keeps signed URLs and long tokens out of logs', () => {
     const text = redact(`GET https://storage.fixture.dev/a.js?X-Amz-Signature=abc failed with ${'t'.repeat(48)}`);
     expect(text).toBe('GET [signed URL removed] failed with [long value removed]');
+  });
+});
+
+describe('apple app site association', () => {
+  const file = path.join(__dirname, '../../../web/public/.well-known/apple-app-site-association');
+  const association = JSON.parse(fs.readFileSync(file, 'utf8'));
+  it('lets every universal link app use the HTTPS sign-in callback', () => {
+    const linked = association.applinks.details.flatMap((detail: { appIDs: string[] }) => detail.appIDs);
+    expect(linked.length).toBeGreaterThan(0);
+    expect(association.webcredentials.apps).toEqual(linked);
   });
 });
