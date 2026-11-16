@@ -1,6 +1,6 @@
 {
   "cli": {
-    "version": "27.5.0",
+    "version": ">= 27.5.0",
     "appVersionSource": "local",
     "requireCommit": true
   },

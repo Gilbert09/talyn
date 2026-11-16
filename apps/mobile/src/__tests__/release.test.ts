@@ -100,6 +100,18 @@ describe('release configuration boundaries', () => {
     }
     expect(Object.keys(profiles).filter((name) => profiles[name].autoUpdate)).toEqual(['preview', 'internal-beta']);
   });
+  // EAS build workers run their own newer eas-cli for the embedded bundle upload. An exact pin in eas.json stops it.
+  it.each([
+    ['the pinned CLI', '27.5.0', true],
+    ['a newer CLI on the EAS build worker', '27.10.0', true],
+    ['the next major CLI', '28.0.0', true],
+    ['an older CLI', '27.4.9', false],
+  ])('lets eas.json accept %s (%s)', (_name, version, allowed) => {
+    const eas = require('../../eas.json');
+    const { easCli } = require('../../release/toolchain.json');
+    expect(eas.cli.version).toBe(`>= ${easCli}`);
+    expect(require('semver').satisfies(version, eas.cli.version)).toBe(allowed);
+  });
   it('keeps store templates incomplete until owner approval', () => {
     expect(() => checkMetadata(metadata)).not.toThrow(); expect(() => checkMetadata(metadata, true)).toThrow();
   });

@@ -53,7 +53,7 @@ Both store profiles require this value. Non-store builds default to 1.
 EAS uses `appVersionSource: local`; every profile disables `autoIncrement`.
 Do not reuse a store number or allow concurrent version reservations. CI serializes release jobs.
 
-EAS CLI is pinned to 27.5.0 in `release/toolchain.json`, `eas.json`, and the release workflow.
+EAS CLI is pinned to 27.5.0 in `release/toolchain.json` and the mobile workflows. `eas.json` sets `>= 27.5.0`, not an exact version. EAS build workers run their own newer eas-cli for the embedded bundle upload, and that CLI stops when `eas.json` does not allow its version.
 CI installs it outside the app. Doctor rejects a local EAS CLI dependency.
 Expo owns the supported native dependency versions.
 Recheck store SDK and builder requirements at each release freeze.
