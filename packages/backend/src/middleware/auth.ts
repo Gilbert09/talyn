@@ -110,6 +110,19 @@ interface VerifiedIdentity {
   email: string;
   githubUsername?: string;
   expiresAt: number;
+  /** Supabase's `app_metadata.providers`: set by Supabase's server, never by the user. */
+  providers?: unknown;
+}
+
+/**
+ * Talyn accounts come from GitHub sign-in. Supabase email sign-in is on only so the store review account
+ * (a GitHub user given a password) can sign in on a device where GitHub asks for an emailed code. Anybody
+ * can create an email account through the public Supabase key, so an account whose providers do not
+ * include GitHub is refused: it would skip the limit that GitHub sign-in puts on free accounts.
+ * A token with no provider list (not one Supabase issues) is left to the other checks.
+ */
+export function hasGithubIdentity(providers: unknown): boolean {
+  return !Array.isArray(providers) || providers.includes('github');
 }
 
 /** Local path: verify signature + claims against the cached JWKS and read the
@@ -124,8 +137,10 @@ async function verifyJwtLocally(token: string): Promise<VerifiedIdentity | null>
     });
     if (!payload.sub) return null;
     const meta = (payload.user_metadata ?? {}) as Record<string, unknown>;
+    const appMeta = (payload.app_metadata ?? {}) as Record<string, unknown>;
     return {
       id: payload.sub,
+      providers: appMeta.providers,
       expiresAt: payload.exp! * 1000,
       email: (payload.email as string | undefined) ?? '',
       githubUsername:
@@ -168,6 +183,7 @@ async function verifyViaSupabase(token: string): Promise<VerifiedIdentity | null
     if (typeof exp !== 'number' || !Number.isFinite(exp) || exp * 1000 <= Date.now()) return null;
     return {
       id: data.user.id,
+      providers: (data.user.app_metadata as Record<string, unknown> | undefined)?.providers,
       expiresAt: exp * 1000,
       email: data.user.email ?? '',
       githubUsername:
@@ -203,6 +219,7 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
       ? await verifyViaSupabase(token)
       : await verifyJwtLocally(token);
   if (!identity) return null;
+  if (!hasGithubIdentity(identity.providers)) return null;
 
   const { email, githubUsername } = identity;
 

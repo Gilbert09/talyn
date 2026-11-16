@@ -255,12 +255,14 @@ describe('requireAuth (Supabase JWT verification)', () => {
       audience?: string;
       sub?: string;
       expired?: boolean;
+      providers?: string[];
     } = {}
   ) {
     const nowSec = Math.floor(Date.now() / 1000);
     return new SignJWT({
       email: 'jwt@test',
       user_metadata: { user_name: 'jwt-gh-user' },
+      ...(overrides.providers ? { app_metadata: { provider: overrides.providers[0], providers: overrides.providers } } : {}),
     })
       .setProtectedHeader({ alg: 'ES256', kid: 'test-key' })
       .setIssuer(overrides.issuer ?? `${TEST_SUPABASE_URL}/auth/v1`)
@@ -324,6 +326,24 @@ describe('requireAuth (Supabase JWT verification)', () => {
     const res = await probe(await signEs256(privateKey));
     expect(res.status).toBe(200);
     expect((await res.json()).userId).toBe(JWT_USER_ID);
+  });
+
+  it.each([
+    ['a GitHub account', ['github'], 200],
+    ['a GitHub account that also has a password (the store review account)', ['github', 'email'], 200],
+    ['an email-only account', ['email'], 401],
+    ['an account with no providers', [], 401],
+  ])('accepts or refuses %s by its Supabase providers', async (_name, providers, status) => {
+    const res = await probe(await signEs256(privateKey, { providers }));
+    expect(res.status).toBe(status);
+  });
+
+  it('refuses an email-only account on the legacy HS256 path too', async () => {
+    stubSupabaseGetUser(async () => ({
+      data: { user: { id: JWT_USER_ID, email: 'legacy@test', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: {} } },
+      error: null,
+    }));
+    expect(await verifyTokenAndGetUser(await signHs256())).toBeNull();
   });
 
   it('retains the verified ES256 expiry', async () => {
