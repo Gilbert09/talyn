@@ -168,39 +168,57 @@ export function UsageResetAction({
   );
 }
 
-function PeriodOption({
-  label,
-  price,
-  hint,
-  selected,
-  onSelect,
+/**
+ * Monthly or annual billing, as a segmented toggle. It must not look like the
+ * plan cards, or a reader counts the two periods as two more plans.
+ */
+export function BillingPeriodToggle({
+  period,
+  onChange,
   disabled,
+  className,
 }: {
-  label: string;
-  price: string;
-  hint?: string;
-  selected: boolean;
-  onSelect: () => void;
+  period: Period;
+  onChange: (period: Period) => void;
   disabled?: boolean;
+  className?: string;
 }) {
   return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      onClick={onSelect}
-      disabled={disabled}
-      className={cn(
-        'rounded-md border p-3 text-left transition-colors',
-        selected ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/40',
-        disabled && 'opacity-60'
-      )}
+    <div
+      role="group"
+      aria-label="Billing period"
+      data-testid="billing-period-toggle"
+      className={cn('inline-flex rounded-md border bg-muted/50 p-0.5', disabled && 'opacity-60', className)}
     >
-      <div className="text-sm font-medium">{label}</div>
-      <div className="text-lg font-semibold">{price}</div>
-      {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
-    </button>
+      {PERIOD_OPTIONS.map((option) => {
+        const selected = period === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onChange(option.value)}
+            disabled={disabled}
+            className={cn(
+              'flex items-center gap-1.5 rounded px-3 py-1 text-sm transition-colors',
+              selected ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {option.label}
+            {option.hint && (
+              <span className="rounded-full bg-primary/10 px-1.5 py-px text-xs font-medium text-primary">{option.hint}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
   );
 }
+
+const PERIOD_OPTIONS: { value: Period; label: string; hint?: string }[] = [
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'annual', label: 'Annual', hint: '2 months free' },
+];
 
 /**
  * Pick monthly or annual Pro, or monthly Max, then buy it (Free) or move to it
@@ -287,23 +305,7 @@ export function PlanForm({
   return (
     <div className="space-y-3">
       {prices.annual != null && (
-        <div className="grid grid-cols-2 gap-2">
-          <PeriodOption
-            label="Monthly"
-            price={`${prices.monthly}/mo`}
-            selected={period === 'monthly'}
-            onSelect={() => setPeriod('monthly')}
-            disabled={busy}
-          />
-          <PeriodOption
-            label="Annual"
-            price={`${prices.annual}/yr`}
-            hint="2 months free"
-            selected={period === 'annual'}
-            onSelect={() => setPeriod('annual')}
-            disabled={busy}
-          />
-        </div>
+        <BillingPeriodToggle period={period} onChange={setPeriod} disabled={busy} />
       )}
       <Button onClick={() => void submit()} disabled={busy} className="w-full gap-2" data-attr={`${plan}-${mode}`}>
         {busy && <Loader2 className="h-4 w-4 animate-spin" />}
