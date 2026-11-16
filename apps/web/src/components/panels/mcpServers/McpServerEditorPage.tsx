@@ -778,6 +778,7 @@ function RepositoryPicker({
   onChange: (next: string[] | null) => void;
 }) {
   const selected = new Set(allowed ?? []);
+  const selectedCount = repositories.filter((repository) => selected.has(repository.id)).length;
   return (
     <div className="space-y-3">
       <label className="flex items-start gap-2 text-sm">
@@ -811,6 +812,31 @@ function RepositoryPicker({
           </p>
         ) : (
           <div className="divide-y divide-border rounded-lg border border-border">
+            <div className="flex items-center justify-between gap-3 px-3 py-2 text-xs text-muted-foreground">
+              <span>{selectedCount} of {repositories.length} selected</span>
+              <div className="flex gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={selectedCount === repositories.length}
+                  onClick={() => onChange(repositories.map((repository) => repository.id))}
+                  data-attr="mcp-repositories-select-all"
+                >
+                  Select all
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={allowed.length === 0}
+                  onClick={() => onChange([])}
+                  data-attr="mcp-repositories-deselect-all"
+                >
+                  Deselect all
+                </Button>
+              </div>
+            </div>
             {repositories.map((repository) => (
               <label key={repository.id} className="flex items-center gap-3 px-3 py-2.5 text-sm">
                 <input

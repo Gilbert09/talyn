@@ -108,6 +108,43 @@ describe('MCP authentication setup', () => {
     ));
   });
 
+  it('selects and deselects every repository at once', async () => {
+    mocks.discoverAuth.mockResolvedValue({ methods: ['bearer'], source: 'server' });
+    setup({
+      ...server,
+      hasSecret: true,
+      lastProbe: { ok: true, at: '', toolNames: ['read_documents'] },
+    });
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Only selected repositories' }));
+    const selectAll = screen.getByRole('button', { name: 'Select all' }) as HTMLButtonElement;
+    const deselectAll = screen.getByRole('button', { name: 'Deselect all' }) as HTMLButtonElement;
+    const api = screen.getByRole('checkbox', { name: 'acme/api' }) as HTMLInputElement;
+    const web = screen.getByRole('checkbox', { name: 'acme/web' }) as HTMLInputElement;
+    expect(screen.getByText('2 of 2 selected')).toBeTruthy();
+    expect(selectAll.disabled).toBe(true);
+
+    fireEvent.click(deselectAll);
+    await waitFor(() => expect(api.checked).toBe(false));
+    expect(web.checked).toBe(false);
+    expect(screen.getByText('0 of 2 selected')).toBeTruthy();
+    expect(deselectAll.disabled).toBe(true);
+    expect(screen.getByText('No repository can access this server.')).toBeTruthy();
+
+    fireEvent.click(selectAll);
+    await waitFor(() => expect(api.checked).toBe(true));
+    expect(web.checked).toBe(true);
+    expect(selectAll.disabled).toBe(true);
+
+    fireEvent.click(deselectAll);
+    const save = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ repositoryIds: [] })
+    ));
+  });
+
   it('allows a private hostname after the exact route loads', async () => {
     mocks.privateConnector.mockResolvedValue({ routes: [{ host: 'mcp.local', port: 443 }] });
     mocks.discoverAuth.mockResolvedValue({ methods: ['none'], source: 'server' });
