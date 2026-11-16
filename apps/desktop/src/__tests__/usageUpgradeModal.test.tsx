@@ -66,8 +66,11 @@ describe('UpgradeModal with usage billing', () => {
     checkout.mockResolvedValue({ url: 'https://polar.test/checkout' });
     open(usageStatus('free'));
     expect(screen.getByText('Upgrade to Pro')).toBeInTheDocument();
-    expect(screen.getByText('$400/yr')).toBeInTheDocument();
-    expect(screen.getByText('$40/mo')).toBeInTheDocument();
+    // The period is a toggle, not two more cards that read as plans.
+    const periods = screen.getByRole('group', { name: 'Billing period' });
+    expect(within(periods).getByRole('button', { name: 'Monthly' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(periods).getByRole('button', { name: /Annual.*2 months free/ })).toHaveAttribute('aria-pressed', 'false');
+    expect(within(periods).queryByText(/\$/)).toBeNull();
     expect(screen.getByText(/^\s*200 box-hours a month\s*$/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Pro: $40/mo' }));
     await waitFor(() => expect(checkout).toHaveBeenCalledWith({ period: 'monthly', plan: 'pro' }));
