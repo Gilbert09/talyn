@@ -34,7 +34,9 @@ export function assertSandboxAgent(row: WorkbenchRow, agent: FleetAgent): void {
   const original = allowed.includes('codex') ? 'Codex' : 'Claude';
   const requested = agent === 'codex' ? 'Codex' : 'Claude';
   throw new WorkbenchError(
-    `This session's sandbox was started for ${original}. Start a new session to use ${requested}, or switch this chat back to ${original}.`,
+    row.kind === 'thread'
+      ? `This thread's sandbox runs only ${original}. Start a new thread to use ${requested}, or switch back to ${original}.`
+      : `This sandbox runs only ${original}. Select "Restart sandbox" in the chat to add ${requested}. Your branch and uncommitted changes will transfer.`,
     409,
     'sandbox_wrong_agent',
   );

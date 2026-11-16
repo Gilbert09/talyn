@@ -23,11 +23,11 @@ import {
   buildSandboxCreateBody,
   createSandboxRetryingUncertain,
   resolveRepository,
-  resolveSandboxCredentials,
   withGithubReadAllRepos,
 } from '../selfHosted/sandboxRun.js';
 import { refreshDiffStat } from './changes.js';
 import { recordSandboxAgents } from './credentialPolicy.js';
+import { resolveBoxCredentials } from './boxCredentials.js';
 import { captureChanges } from './changesCapture.js';
 import { deleteChangesSnapshot } from './changesSnapshot.js';
 import { emitWorkbenchDeleted, emitWorkbenchUpdated } from './emit.js';
@@ -64,7 +64,6 @@ import {
   nextSandboxId,
   providerForAgent,
   recordWorkbenchEvent,
-  workbenchAgentCredentials,
   runCapture,
   sandboxIdFor,
   SANDBOX_WORK_ROOT,
@@ -535,15 +534,18 @@ export type CreatedWorkbenchSandbox =
   }
   | { ok: false; error: string };
 
-/** Create a session box with every usable vendor key and record its allowed agents. */
+/** Create a box with all valid vendor keys, including accounts with temporary quota holds. */
 export async function createWorkbenchSandbox(
   row: WorkbenchRow,
   sandboxId: string,
   opts: { strictSize?: boolean; queueWhenFull?: boolean; diskMib?: number; warm?: boolean } = {},
 ): Promise<CreatedWorkbenchSandbox> {
-  const resolved = await resolveSandboxCredentials(row.workspaceId);
+  const resolved = await resolveBoxCredentials(row.workspaceId);
   if (!resolved.ok) return { ok: false, error: resolved.error };
-  const credentials = await workbenchAgentCredentials(row);
+  const credentials = {
+    claude: resolved.creds.claudeToken ? { token: resolved.creds.claudeToken } : null,
+    codex: resolved.creds.openaiKey ? { token: resolved.creds.openaiKey } : null,
+  };
   const agents = (['claude', 'codex'] as const).filter((agent) => credentials[agent]?.token);
   const provider = providerForAgent(credentials[row.agent === 'codex' ? 'codex' : 'claude']?.token ? row.agent : agents[0]);
   // Best effort: without it the box boots the base image and the clone script

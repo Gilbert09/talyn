@@ -302,6 +302,7 @@ describe('workbench turn launch', () => {
       type: 'result', code: 'credentials_unavailable', reason: 'reauth', accountIds: ['personal'],
     }));
     expect(agentRuns).toBe(0);
+    await vi.waitFor(async () => expect((await store.getChat('chat'))?.resumeAt).toBeInstanceOf(Date));
   });
 
   it('waits for pending writes before it settles a failed turn', async () => {

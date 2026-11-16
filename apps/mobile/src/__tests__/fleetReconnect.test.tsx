@@ -6,11 +6,12 @@ import { TurnFailureActions } from '../features/chat/TurnFailureActions';
 const mockPush = jest.fn();
 const mockRefresh = jest.fn();
 const mockSend = jest.fn(async (..._args: unknown[]) => undefined);
+const mockCancelResume = jest.fn(async (..._args: unknown[]) => undefined);
 let mockProviders: unknown[] | undefined;
 jest.mock('expo-router', () => ({ useRouter: () => ({ push: mockPush }) }));
 jest.mock('../workflow/hooks', () => ({ useResource: () => ({ data: mockProviders }) }));
 jest.mock('../auth/AuthProvider', () => ({ useMobileRuntime: () => ({ workflow: { refresh: mockRefresh } }) }));
-jest.mock('../features/chat/actions', () => ({ chatActions: { send: (...args: unknown[]) => mockSend(...args) } }));
+jest.mock('../features/chat/actions', () => ({ chatActions: { cancelResume: (...args: unknown[]) => mockCancelResume(...args), send: (...args: unknown[]) => mockSend(...args) } }));
 
 beforeEach(() => { mockProviders = undefined; jest.clearAllMocks(); });
 
@@ -47,4 +48,15 @@ it('does not offer Reconnect for other errors', async () => {
   await render(<TurnFailureActions chatId="chat" workbenchId="wb" text="No capacity." reconnect={false} />);
   expect(screen.queryByText('Reconnect')).toBeNull();
   expect(screen.getByText('Retry')).toBeVisible();
+});
+
+
+it.each([true, false])('shows a waiting line with cancel, reconnect=%s', async (reconnect) => {
+  await render(<TurnFailureActions chatId="chat" workbenchId="wb" text="Sign in again" reconnect={reconnect}
+    resumeAt="2026-11-16T17:00:00Z" />);
+  expect(screen.getByText(reconnect ? /Waiting for the account to be signed in again. Checks again at/ : /Waiting for usage. Resumes at/)).toBeVisible();
+  expect(screen.queryByText('Retry')).toBeNull();
+  await fireEvent.press(screen.getByText('Cancel'));
+  await waitFor(() => expect(mockCancelResume).toHaveBeenCalledWith('chat'));
+  expect(mockRefresh).toHaveBeenCalledWith('workbench', 'wb');
 });

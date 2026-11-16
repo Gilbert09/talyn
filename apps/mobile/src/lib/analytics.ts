@@ -71,12 +71,26 @@ export function buildSuperProperties(environment: AppEnvironment): AnalyticsProp
 }
 
 /**
- * Drop or tag a captured exception, exactly like web `before_send`. Events
- * that can never be acted on in code are dropped; the rest carry `online`
- * and `connectivity_error` so a backend outage reads apart from a bug.
+ * Add the build super properties that an event does not carry. The SDK sends
+ * some events before `register` runs, such as `Application Installed` during
+ * its own setup, and those must also carry `client: 'mobile'`.
  */
-export function beforeSend(event: CaptureEvent | null): CaptureEvent | null {
-  if (!event || event.event !== '$exception') return event;
+function withBuildProperties(event: CaptureEvent): CaptureEvent {
+  const properties = event.properties ?? {};
+  if (Object.keys(buildProperties).every((key) => key in properties)) return event;
+  return { ...event, properties: { ...buildProperties, ...properties } };
+}
+
+/**
+ * Add missing build properties to every event, then drop or tag a captured
+ * exception, exactly like web `before_send`. Exceptions that can never be
+ * acted on in code are dropped; the rest carry `online` and
+ * `connectivity_error` so a backend outage reads apart from a bug.
+ */
+export function beforeSend(captured: CaptureEvent | null): CaptureEvent | null {
+  if (!captured) return captured;
+  const event = withBuildProperties(captured);
+  if (event.event !== '$exception') return event;
   const list = event.properties?.$exception_list as Array<{
     value?: string;
     stacktrace?: { frames?: Array<{ source?: string; filename?: string; abs_path?: string }> };
@@ -159,13 +173,14 @@ export function initAnalytics(): Promise<PostHog | null> {
   const environment = appEnvironmentOf(configExtra());
   initPromise = (async () => {
     const startOptedOut = await loadAnalyticsOptOut();
+    // Set before the client exists, so `before_send` adds them to the events the SDK sends during its setup.
+    buildProperties = buildSuperProperties(environment);
     const ph = new PostHog(config.key, optionsFor(config, environment, startOptedOut));
     client = ph;
     try { await ph.ready(); } catch { /* The client still queues events. */ }
     // The SDK also persists its own opt-out. Make it agree with the saved choice.
     if (optedOut && !ph.optedOut) await ph.optOut();
     else if (!optedOut && ph.optedOut) await ph.optIn();
-    buildProperties = buildSuperProperties(environment);
     await ph.register(buildProperties);
     trackEvent('app_opened');
     return ph;

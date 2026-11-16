@@ -28,7 +28,7 @@ function labels(accounts: FleetAccount[]): string {
 }
 
 /** The latest known blocking reset for an account. */
-function accountReset(account: FleetAccount, threshold: number, model: string | undefined, now: Date): number | null {
+export function accountReset(account: FleetAccount, threshold: number, model: string | undefined, now: Date): number | null {
   const resets: (string | null | undefined)[] = [];
   if (account.quotaExhausted && isHeldBack(account.quotaExhausted, now)) resets.push(account.quotaExhausted.resetsAt);
   if (account.usage && 'windows' in account.usage) {

@@ -15,6 +15,7 @@ import { ComposerImages } from './AttachmentViews';
 import { useImageDrafts } from './attachmentDrafts';
 import { buildMessageInput, checkAttachment, imageErrorMessage, sendBlock, type ImageDraft, type PickedImage } from './attachments';
 import { showImagePicker } from './imagePicker';
+import { SandboxAgentNotice } from './SandboxAgentNotice';
 
 /** About six lines of body text, then the field scrolls. */
 const MAX_INPUT_HEIGHT = 6 * 22 + 18;
@@ -125,6 +126,7 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
     : isStarting(item) ? 'The sandbox is starting. A message now is queued.'
     : chat?.status === 'awaiting_input' ? 'Reply to the agent' : workbenchKind(item) === 'thread' ? 'Ask the thread' : 'Ask the agent';
   return <View style={[styles.wrap, { backgroundColor: c.background, borderColor: c.border }]}>
+    <SandboxAgentNotice key={item.sandboxId} item={item} />
     {status || delivery.status !== 'idle' ? <View style={styles.status}>
       {delivery.status !== 'idle' ? <Text accessibilityLiveRegion="polite" accessibilityRole="text"
         style={[type.caption, { color: delivery.status === 'failed' ? c.destructive : c.muted }]}>{deliveryLabel(delivery.status)}</Text> : null}

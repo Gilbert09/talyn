@@ -5,7 +5,8 @@ import { guardCrossReplica } from '../advisoryLock.js';
 import { debugBus } from '../debugBus.js';
 import { isWorkbenchDraining } from './ownership.js';
 import { exhaustedAgentFrom, rateLimitedAgentFrom } from '../selfHosted/exhaustedQuota.js';
-import { chatLimitAgent, handleChatLimit } from './limitResume.js';
+import { chatLimitAgent, handleChatLimit, MAX_CREDENTIAL_RETRIES } from './limitResume.js';
+import { credentialResumeReason } from './limitResumeState.js';
 import { emitWorkbenchChat } from './emit.js';
 import { CHAT_COLUMNS, rowToChat } from './store.js';
 
@@ -18,7 +19,9 @@ export async function backfillChatLimits(now = new Date()): Promise<number> {
   const db = getDbClient();
   const rows = await db.select(CHAT_COLUMNS).from(chats)
     .innerJoin(workbenches, eq(chats.workbenchId, workbenches.id))
-    .innerJoin(workspaces, eq(chats.workspaceId, workspaces.id))
+    .innerJoin(workspaces, sql`${workspaces.id} = CASE
+      WHEN ${chats.payerUserId} IS NOT NULL AND ${chats.payerWorkspaceId} IS NOT NULL
+      THEN ${chats.payerWorkspaceId} ELSE ${chats.workspaceId} END`)
     .where(and(eq(chats.status, 'error'), isNull(chats.resumeAt), isNull(chats.closedAt),
       isNull(workbenches.archivedAt), eq(workbenches.runtime, 'sandbox'),
       gte(chats.updatedAt, new Date(now.getTime() - 48 * 60 * 60_000)),
@@ -27,8 +30,14 @@ export async function backfillChatLimits(now = new Date()): Promise<number> {
   let count = 0;
   for (const chat of rows) {
     const reason = chat.resumeReason ?? chat.statusMessage;
-    if (!reason || !(exhaustedAgentFrom(reason) || rateLimitedAgentFrom(reason))) continue;
-    if (chat.limitCount === 0 && !chatLimitAgent(chat, reason)) continue;
+    if (!reason) continue;
+    const credentialReason = await credentialResumeReason(chat);
+    if (credentialReason) {
+      if (!['limited', 'reauth'].includes(credentialReason) || chat.limitCount >= MAX_CREDENTIAL_RETRIES) continue;
+    } else {
+      if (!(exhaustedAgentFrom(reason) || rateLimitedAgentFrom(reason))) continue;
+      if (chat.limitCount === 0 && !chatLimitAgent(chat, reason)) continue;
+    }
     const claimed = await db.update(chats).set({ resumeAt: now, resumeReason: reason })
       .where(and(eq(chats.id, chat.id), eq(chats.status, 'error'), isNull(chats.resumeAt),
         eq(chats.resumeVersion, chat.resumeVersion), eq(chats.turnCount, chat.turnCount)))
