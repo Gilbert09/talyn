@@ -17,6 +17,7 @@ describe('session state', () => {
     ['a creating sandbox', session({ sandboxState: 'creating' }), 'starting'],
     ['a running chat', session({ chats: [chat({ status: 'running' })] }), 'working'],
     ['a queued message', session({ chats: [chat({ queuedMessages: [{ id: 'q', text: 'x', queuedAt: '2026-11-08T10:00:00Z' }] as never })] }), 'working'],
+    ['an archived session with a queued message', session({ archivedAt: '2026-11-15T00:00:00Z', chats: [chat({ queuedMessages: [{ id: 'q', text: 'x', queuedAt: '2026-11-08T10:00:00Z' }] as never })] }), 'idle'],
     ['a question for the user', session({ chats: [chat({ status: 'awaiting_input' })] }), 'needs_reply'],
     ['a merged PR', session({ pr: linked({ state: 'merged' }) }), 'merged'],
     ['a closed PR', session({ pr: linked({ state: 'closed' }) }), 'closed'],
