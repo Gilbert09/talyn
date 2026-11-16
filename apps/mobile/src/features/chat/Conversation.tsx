@@ -7,16 +7,18 @@ import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { AppText } from '../../components/UI';
 import { StateNotice, workflowStyles as styles } from '../../components/Workflow';
 import { useNow } from '../../lib/time';
-import { type, useTheme } from '../../theme/tokens';
+import { radius, type, useTheme, withAlpha } from '../../theme/tokens';
 import { useLocal, useResource } from '../../workflow/hooks';
 import type { Transcript } from '../../workflow/model';
 import { isStarting, StartingHint, StartingLine } from '../sessions/Starting';
 import { chatActions } from './actions';
 import { Composer } from './Composer';
+import { FindBar } from './FindBar';
 import { fullToolFrom, TranscriptContext, toolSeq, type TranscriptActions } from './fullTool';
 import { TypingDots } from './Pulse';
 import { RowBoundary } from './RowBoundary';
 import { TranscriptRowCache, type TranscriptRow as Row } from './transcript';
+import { findMatches, matchCountLabel, normalizeQuery, selectedIndex, stepIndex, type FindMatch, type FindSelection } from './transcriptFind';
 import { TranscriptRow, type PlanControls } from './TranscriptRow';
 
 /** How close to the newest message still counts as following new output. */
@@ -29,8 +31,10 @@ const OLDER_DISTANCE = 0.6;
  * the newest message, so it opens at the newest message with no scroll after
  * layout. Older history loads by itself when the reader reaches the top.
  */
-export function Conversation({ item, ready, header, top }: {
+export function Conversation({ item, ready, header, top, find = 0, onCloseFind }: {
   item: Workbench; ready: boolean; header?: ReactNode;
+  /** 0 hides the find bar. Each new value opens it and focuses its field. */
+  find?: number; onCloseFind?(): void;
   /** Content above the oldest message. Receives a callback that stops following new output while the reader expands it. */
   top?: (pauseFollowing: () => void) => ReactNode;
 }) {
@@ -107,6 +111,39 @@ export function Conversation({ item, ready, header, top }: {
       inputRef.current?.focus();
     },
   }), [planBusy, running, offline, ready, chat, workflow, item.id]);
+
+  // Find in the loaded conversation. Matches are oldest first, and a new query selects the newest.
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<FindSelection | null>(null);
+  const [jump, setJump] = useState(0);
+  const jumped = useRef(0);
+  const scrollRetries = useRef(0);
+  const findOpen = find > 0;
+  const oldestFirst = useMemo(() => findOpen ? rows.slice().reverse() : [], [findOpen, rows]);
+  const matches = useMemo(() => findMatches(oldestFirst, query), [oldestFirst, query]);
+  const current = selectedIndex(matches, selected);
+  const currentKey = current >= 0 ? matches[current].rowKey : null;
+  const highlight = findOpen ? normalizeQuery(query) : '';
+  const matchKeys = useMemo(() => new Set(matches.map((match) => match.rowKey)), [matches]);
+  const select = (match: FindMatch | undefined) => {
+    setSelected(match ? { rowKey: match.rowKey, occurrence: match.occurrence } : null);
+    setJump((value) => value + 1);
+  };
+  const changeQuery = (text: string) => { setQuery(text); select(findMatches(oldestFirst, text).at(-1)); };
+  const step = (direction: 1 | -1) => { if (matches.length) select(matches[stepIndex(current, matches.length, direction)]); };
+  const closeFind = () => { setQuery(''); setSelected(null); onCloseFind?.(); };
+  useEffect(() => {
+    if (jump === jumped.current) return;
+    jumped.current = jump;
+    if (!currentKey) return;
+    const index = rows.findIndex((row) => row.key === currentKey);
+    if (index < 0) return;
+    scrollRetries.current = 0;
+    ref.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
+  }, [jump, currentKey, rows]);
+  const extraData = useMemo(() => ({ highlight, matchKeys, currentKey }), [highlight, matchKeys, currentKey]);
+  const currentStyle = { backgroundColor: withAlpha(c.primary, c.mode === 'dark' ? 0.14 : 0.08) };
+
   const empty = state.status === 'ready' && rows.length === 0;
   const starting = isStarting(item);
   // A new sandbox: show what it does in place of the empty conversation, also while the first load runs.
@@ -114,6 +151,8 @@ export function Conversation({ item, ready, header, top }: {
 
   return <View style={{ flex: 1 }}>
     {header}
+    {findOpen ? <FindBar query={query} onChangeQuery={changeQuery} count={matches.length} label={matchCountLabel(current, matches.length, query)}
+      partial={Boolean(data?.hasOlder)} focusKey={find} onPrevious={() => step(-1)} onNext={() => step(1)} onClose={closeFind} /> : null}
     <View style={{ flex: 1 }}>
       <RowBoundary label="The conversation" resetKey={chat?.id} retry><TranscriptContext.Provider value={actions}>
       <FlatList ref={ref} key={chat?.id ?? item.id} inverted data={rows} keyExtractor={(row) => row.key} accessibilityRole="list" accessibilityLabel="Conversation transcript"
@@ -130,7 +169,12 @@ export function Conversation({ item, ready, header, top }: {
           // Back at the newest message: older events past the release bound load again on the next scroll up.
           if (next && !following && chat) workflow.release(chat.id);
         }}
-        onEndReached={loadOlder} onEndReachedThreshold={OLDER_DISTANCE}
+        onEndReached={loadOlder} onEndReachedThreshold={OLDER_DISTANCE} extraData={extraData}
+        onScrollToIndexFailed={(info) => {
+          // The row is not measured yet. Go near it by the average row height, then try again.
+          ref.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
+          if (scrollRetries.current++ < 3) setTimeout(() => ref.current?.scrollToIndex({ index: info.index, animated: true, viewPosition: 0.5 }), 120);
+        }}
         keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive"
         ListHeaderComponent={starting && !running && rows.length ? <StartingLine workbench={item} /> : running ? <View accessibilityLiveRegion="polite" style={local_.working}>
           <TypingDots />
@@ -150,7 +194,9 @@ export function Conversation({ item, ready, header, top }: {
           {state.data?.gap ? <AppText variant="caption" tone="muted" style={local_.note}>Some events are missing. Talyn is loading them again.</AppText> : null}
           {empty && !startHint ? <AppText variant="meta" tone="muted" style={local_.empty}>No messages yet.</AppText> : null}
         </View>}
-        renderItem={({ item: row }) => <TranscriptRow row={row} now={now} workbench={item} plan={plan} />} />
+        renderItem={({ item: row }) => <View style={row.key === currentKey ? [local_.current, currentStyle] : undefined}>
+          <TranscriptRow row={row} now={now} workbench={item} plan={plan} highlight={highlight && matchKeys.has(row.key) ? highlight : undefined} />
+        </View>} />
       </TranscriptContext.Provider></RowBoundary>
       {startHint ? <View pointerEvents="box-none" style={local_.startHint}>
         <StartingHint workbench={item} queued={chat?.queuedMessages.length ?? 0} canWrite={Boolean(chat)} />
@@ -167,6 +213,7 @@ export function Conversation({ item, ready, header, top }: {
 
 const local_ = StyleSheet.create({
   content: { paddingTop: 8, paddingBottom: 12 },
+  current: { borderRadius: radius.md, marginHorizontal: -6, paddingHorizontal: 6 },
   working: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
   top: { gap: 8, paddingBottom: 8 },
   older: { height: 28, alignItems: 'center', justifyContent: 'center' },
