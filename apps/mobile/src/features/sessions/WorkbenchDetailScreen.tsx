@@ -73,6 +73,7 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
   const placeholder = item ?? ({ id, chats: [] } as unknown as Workbench);
   const quick = useQuickActions({ item: placeholder, row, runSession: menu.run, toast: menu.toast });
   const [retrying, setRetrying] = useState(false);
+  const [find, setFind] = useState(0);
 
   let content = null;
   if (item) {
@@ -87,6 +88,7 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
       {keyboard.open ? null : <QuickActionRow actions={actions} busy={quick.busy} run={quick.run} />}
     </View> : null;
     content = <Conversation key={item.id} item={item} ready={state.status === 'ready' || state.status === 'error'} header={header}
+      find={find} onCloseFind={() => setFind(0)}
       top={kind === 'thread' ? (pause) => <View style={{ gap: 4 }}>
         <StateNotice resource={children} offline={offline} refresh={children.refresh} refreshLabel="Refresh child sessions" />
         {childItems.length ? <Disclosure title={`Related sessions (${childItems.length})`} onToggle={pause}>
@@ -126,6 +128,7 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
       headerTitle: () => <HeaderTitle item={item} row={row} onPress={() => setView('details')} />,
       headerRight: () => <View style={local.headerRight}>
         <HeaderTrailing item={item} row={row} onChanges={() => setView('changes')} />
+        <IconButton label="Find in transcript" symbol={{ ios: 'magnifyingglass', android: 'search' }} onPress={() => setFind((value) => value + 1)} />
         <IconButton label={kind === 'session' ? 'Session actions' : 'Thread actions'}
           symbol={{ ios: 'ellipsis.circle', android: 'more_vert' }} onPress={() => openMenu(item)} />
       </View>,

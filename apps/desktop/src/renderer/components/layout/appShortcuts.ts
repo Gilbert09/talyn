@@ -16,6 +16,8 @@ import {
   runShortcut,
   type Shortcut,
 } from '../../lib/shortcuts';
+import { useSplitViewStore } from '../../stores/splitView';
+import { requestTranscriptFind } from '../../lib/transcriptFind';
 import { requestWorkbenchAction, type WorkbenchAction } from '../../lib/workbenchActions';
 import { useNavigationStore } from '../../stores/navigation';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -112,6 +114,22 @@ const ZOOM_SHORTCUTS: Array<[string, ZoomStep]> = [
   ['view.zoomOut', 'out'],
   ['view.zoomReset', 'reset'],
 ];
+
+/** The session whose transcript ⌘F searches: the open one, or the focused split view pane. */
+export function findTargetWorkbenchId(): string | null {
+  if (!offered()) return null;
+  const { route } = useNavigationStore.getState();
+  if (route.view === 'workbench') return route.id;
+  if (route.view === 'split') return useSplitViewStore.getState().focusedId;
+  return null;
+}
+
+/** Code views and the terminal keep ⌘F for their own find. */
+const FIND_KEEPS_MEANING = '.xterm, .monaco-editor, .cm-editor, diffs-container';
+const findAllowedIn = (target: EventTarget | null) => {
+  const el = target as Element | null;
+  return !el || typeof el.closest !== 'function' || el.closest(FIND_KEEPS_MEANING) === null;
+};
 
 type Def = Omit<Shortcut, 'keys' | 'label' | 'menu'> & { keys?: string; label?: string };
 
@@ -332,6 +350,16 @@ export function buildAppShortcuts(): Shortcut[] {
       allowInInput: true,
       when: inWorkbench,
       run: () => window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_EVENT)),
+    }),
+    fromMenu({
+      id: 'transcript.find',
+      group: 'Session',
+      allowInInput: findAllowedIn,
+      when: () => findTargetWorkbenchId() !== null && findAllowedIn(document.activeElement),
+      run: () => {
+        const id = findTargetWorkbenchId();
+        if (id) requestTranscriptFind(id);
+      },
     }),
     {
       id: 'composer.focus.tab',
