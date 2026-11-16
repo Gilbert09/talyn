@@ -9,7 +9,8 @@ import {
   PostHogInboxConnectionNotice,
   PostHogInboxConnectionSection,
 } from '../components/panels/workflows/posthogInboxFields';
-import { postHogInboxPushLine } from '../components/panels/workflows/posthogInboxPush';
+import { destinationOutcomeText, postHogInboxPushLine } from '../components/panels/workflows/posthogInboxPush';
+import { toast } from '../stores/toast';
 
 /**
  * The PostHog Inbox push on web: the Connection tab makes, rotates and
@@ -31,6 +32,8 @@ function inboxStatus(over: Partial<PostHogInboxStatus> = {}): PostHogInboxStatus
     lastError: null,
     lastPushAt: null,
     pushConfigured: false,
+    pushManaged: false,
+    pushSetupMissingScopes: [],
     ...over,
   };
 }
@@ -44,6 +47,14 @@ const SUMMARY: PostHogInboxPushSummary = {
   rotatedAt: null,
   lastDeliveryAt: '2026-11-16T11:00:00Z',
   lastPushAt: new Date(Date.now() - 60_000).toISOString(),
+  destination: null,
+};
+
+const DESTINATION_URL = 'https://us.posthog.com/project/42/functions/hog-1';
+
+const MANAGED: PostHogInboxPushSummary = {
+  ...SUMMARY,
+  destination: { id: 'hog-1', url: DESTINATION_URL, syncedAt: '2026-11-16T12:00:00Z', error: null },
 };
 
 const DELIVERY: InboundDeliverySummary = {
@@ -82,7 +93,15 @@ beforeEach(() => {
     secret: 'whsec_shown_once',
     secretHeader: 'x-talyn-secret',
   });
-  vi.spyOn(api.workflows, 'removePostHogInboxWebhook').mockResolvedValue({ removed: 1 });
+  vi.spyOn(api.workflows, 'removePostHogInboxWebhook').mockResolvedValue({ removed: 1, destination: null });
+  vi.spyOn(api.workflows, 'setUpPostHogInboxPush').mockResolvedValue({
+    connectionId: 'c1',
+    created: true,
+    destination: { id: 'hog-1', url: DESTINATION_URL, syncedAt: '2026-11-16T12:00:00Z', error: null },
+  });
+  vi.spyOn(api.posthogInbox, 'startOAuth').mockResolvedValue({ authorizeUrl: 'https://us.posthog.com/oauth/authorize' });
+  vi.spyOn(toast, 'success');
+  vi.spyOn(toast, 'error');
 });
 
 afterEach(() => {
@@ -181,6 +200,178 @@ describe('the Connection tab', () => {
     vi.mocked(api.workflows.posthogInboxWebhook).mockRejectedValue(new Error('boom'));
     render(<PostHogInboxConnectionSection />);
     expect(await screen.findByText('boom')).toBeTruthy();
+  });
+});
+
+function codedError(message: string, code: string): Error {
+  return Object.assign(new Error(message), { code });
+}
+
+describe('Set up push in PostHog', () => {
+  it('is the first choice without a URL: one click, no URL or secret shown', async () => {
+    render(<PostHogInboxConnectionSection />);
+    const setUp = await screen.findByRole('button', { name: /Set up push in PostHog/ });
+    // The manual path stays, below.
+    expect(screen.getByRole('button', { name: 'Make a webhook URL' })).toBeTruthy();
+    fireEvent.click(setUp);
+    await waitFor(() => expect(api.workflows.setUpPostHogInboxPush).toHaveBeenCalledWith('ws1'));
+    expect(api.workflows.rotatePostHogInboxWebhook).not.toHaveBeenCalled();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Push is set up in PostHog'));
+    expect(screen.queryByRole('dialog', { name: 'Copy the PostHog webhook URL' })).toBeNull();
+    expect(api.workflows.posthogInboxWebhook).toHaveBeenCalledTimes(2);
+  });
+
+  it.each<[string, string[]]>([
+    ['both scopes', ['hog_function:read', 'hog_function:write']],
+    ['the write scope', ['hog_function:write']],
+  ])('asks for a reconnect when the grant lacks %s, and keeps the manual path', async (_label, missing) => {
+    vi.mocked(api.workflows.posthogInboxStatus).mockResolvedValue(inboxStatus({ pushSetupMissingScopes: missing }));
+    render(<PostHogInboxConnectionSection />);
+    const notice = (await screen.findByText('Reconnect PostHog to let Talyn set up push.')).closest(
+      '[data-attr="posthog-inbox-push-reconnect"]'
+    ) as HTMLElement;
+    expect(notice.textContent).toContain(missing.join(' and '));
+    expect(notice.textContent).toContain('Your automations keep working');
+    // The connection card itself does not say the connection is broken.
+    expect(document.querySelector('[data-attr="posthog-inbox-reconnect-notice"]')).toBeNull();
+    expect((screen.getByRole('button', { name: /Set up push in PostHog/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Make a webhook URL' }) as HTMLButtonElement).disabled).toBe(false);
+
+    const original = window.location;
+    const assign = vi.fn();
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...original, assign } });
+    try {
+      fireEvent.click(within(notice).getByRole('button', { name: /Reconnect/ }));
+      await waitFor(() => expect(api.posthogInbox.startOAuth).toHaveBeenCalledWith('ws1', expect.objectContaining({ projectId: '42' })));
+      await waitFor(() => expect(assign).toHaveBeenCalledWith('https://us.posthog.com/oauth/authorize'));
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: original });
+    }
+  });
+
+  it('asks for a reconnect when the backend refuses for missing scopes', async () => {
+    vi.mocked(api.workflows.setUpPostHogInboxPush).mockRejectedValue(
+      codedError('Reconnect PostHog to let Talyn set up push. The connection lacks hog_function:write.', 'posthog_inbox_push_scopes_missing')
+    );
+    render(<PostHogInboxConnectionSection />);
+    fireEvent.click(await screen.findByRole('button', { name: /Set up push in PostHog/ }));
+    expect(await screen.findByText('Reconnect PostHog to let Talyn set up push.')).toBeTruthy();
+    expect(screen.queryByTestId('posthog-inbox-push-setup-error')).toBeNull();
+  });
+
+  it.each([
+    ['posthog_inbox_push_forbidden', 'PostHog refused to save the destination (403). Talyn did not change the webhook URL.'],
+    ['posthog_inbox_push_failed', 'PostHog did not answer as expected (503). Try again later. Talyn did not change the webhook URL.'],
+  ])('shows PostHog\'s refusal (%s) and leaves the URL alone', async (code, message) => {
+    vi.mocked(api.workflows.setUpPostHogInboxPush).mockRejectedValue(codedError(message, code));
+    render(<PostHogInboxConnectionSection />);
+    fireEvent.click(await screen.findByRole('button', { name: /Set up push in PostHog/ }));
+    expect((await screen.findByTestId('posthog-inbox-push-setup-error')).textContent).toBe(message);
+    expect(screen.queryByText('Reconnect PostHog to let Talyn set up push.')).toBeNull();
+  });
+
+  it('over a URL made by hand, asks first and warns that the hand-made destination stops working', async () => {
+    vi.mocked(api.workflows.posthogInboxWebhook).mockResolvedValue(SUMMARY);
+    render(<PostHogInboxConnectionSection />);
+    fireEvent.click(await screen.findByRole('button', { name: /Set up push in PostHog/ }));
+    expect(api.workflows.setUpPostHogInboxPush).not.toHaveBeenCalled();
+    expect(screen.getByText(/A destination you added by hand stops working/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Set up push' }));
+    await waitFor(() => expect(api.workflows.setUpPostHogInboxPush).toHaveBeenCalledWith('ws1'));
+  });
+
+  it('shows a destination Talyn manages, with its PostHog link, and hides the manual steps', async () => {
+    vi.mocked(api.workflows.posthogInboxWebhook).mockResolvedValue(MANAGED);
+    render(<PostHogInboxConnectionSection />);
+    const managed = (await screen.findByText(/Talyn set up the destination in PostHog/)).closest(
+      '[data-attr="posthog-inbox-push-managed"]'
+    ) as HTMLElement;
+    const link = within(managed).getByRole('link', { name: /Open the destination in PostHog/ }) as HTMLAnchorElement;
+    expect(link.href).toBe(DESTINATION_URL);
+    expect(link.target).toBe('_blank');
+    expect(document.querySelector('[data-attr="posthog-inbox-push-steps"]')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Set up push in PostHog/ })).toBeNull();
+    expect(screen.queryByText(/Require a secret header/)).toBeNull();
+    expect(screen.getByTestId('posthog-inbox-push-last').textContent).toMatch(/Last push from PostHog/);
+  });
+
+  it('says when the destination is out of date, and offers to update it', async () => {
+    const error = 'Talyn changed the webhook URL, but PostHog did not take the change. The destination still sends to the old URL.';
+    vi.mocked(api.workflows.posthogInboxWebhook).mockResolvedValue({ ...MANAGED, destination: { ...MANAGED.destination!, error } });
+    render(<PostHogInboxConnectionSection />);
+    expect((await screen.findByTestId('posthog-inbox-push-out-of-date')).textContent).toContain(error);
+    fireEvent.click(screen.getByRole('button', { name: /Update the destination in PostHog/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Set up push' }));
+    await waitFor(() => expect(api.workflows.setUpPostHogInboxPush).toHaveBeenCalledWith('ws1'));
+  });
+
+  it('a rotate PostHog took shows no URL or secret', async () => {
+    vi.mocked(api.workflows.posthogInboxWebhook).mockResolvedValue(MANAGED);
+    vi.mocked(api.workflows.rotatePostHogInboxWebhook).mockResolvedValue({
+      connectionId: 'c1',
+      url: 'https://api.talyn.test/api/v1/webhooks/in/c1/tok_secret_part',
+      secret: 'whsec_shown_once',
+      secretHeader: 'x-talyn-secret',
+      destination: { state: 'updated', error: null, url: DESTINATION_URL },
+    });
+    render(<PostHogInboxConnectionSection />);
+    fireEvent.click(await screen.findByRole('button', { name: /Rotate URL/ }));
+    expect(screen.getByText(/Talyn gives the new ones to its destination in PostHog/)).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Rotate URL' }).at(-1)!);
+    await waitFor(() => expect(api.workflows.rotatePostHogInboxWebhook).toHaveBeenCalledWith('ws1', true));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('URL rotated', 'PostHog has the new URL and secret.'));
+    expect(screen.queryByRole('dialog', { name: 'Copy the PostHog webhook URL' })).toBeNull();
+    expect(document.body.textContent).not.toContain('whsec_shown_once');
+  });
+
+  it('a rotate PostHog did not take says so, and shows the URL and secret once to fix it by hand', async () => {
+    const error = 'Talyn changed the webhook URL, but PostHog did not take the change. PostHog refused to save the destination (403).';
+    vi.mocked(api.workflows.posthogInboxWebhook).mockResolvedValue(MANAGED);
+    vi.mocked(api.workflows.rotatePostHogInboxWebhook).mockResolvedValue({
+      connectionId: 'c1',
+      url: 'https://api.talyn.test/api/v1/webhooks/in/c1/tok',
+      secret: 'whsec_x',
+      secretHeader: 'x-talyn-secret',
+      destination: { state: 'failed', error, url: DESTINATION_URL },
+    });
+    render(<PostHogInboxConnectionSection />);
+    fireEvent.click(await screen.findByRole('button', { name: /Rotate URL/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Rotate URL' }).at(-1)!);
+    const dialog = await screen.findByRole('dialog', { name: 'Copy the PostHog webhook URL' });
+    expect(within(dialog).getByTestId('posthog-inbox-push-reveal-destination-error').textContent).toBe(error);
+    expect(toast.error).toHaveBeenCalledWith('The destination in PostHog is out of date', error);
+  });
+
+  it.each<[string, { state: 'deleted' | 'not_found' | 'failed'; error: string | null } | null, 'success' | 'error', RegExp]>([
+    ['deleted', { state: 'deleted', error: null }, 'success', /deleted its destination/],
+    ['already gone', { state: 'not_found', error: null }, 'success', /already gone/],
+    ['not deleted', { state: 'failed', error: 'PostHog refused. Delete the destination in PostHog.' }, 'error', /Delete the destination in PostHog/],
+  ])('removing a managed URL: destination %s', async (_label, outcome, kind, text) => {
+    vi.mocked(api.workflows.posthogInboxWebhook).mockResolvedValue(MANAGED);
+    vi.mocked(api.workflows.removePostHogInboxWebhook).mockResolvedValue({
+      removed: 1,
+      destination: outcome ? { ...outcome, url: DESTINATION_URL } : null,
+    });
+    render(<PostHogInboxConnectionSection />);
+    fireEvent.click(await screen.findByRole('button', { name: /Remove URL/ }));
+    expect(screen.getByText(/Talyn deletes its destination in PostHog/)).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove URL' }).at(-1)!);
+    await waitFor(() => expect(toast[kind]).toHaveBeenCalledWith(expect.any(String), expect.stringMatching(text)));
+  });
+});
+
+describe('destinationOutcomeText', () => {
+  it.each<[Parameters<typeof destinationOutcomeText>[0], 'rotate' | 'remove', string | null]>([
+    [null, 'rotate', null],
+    [undefined, 'remove', null],
+    [{ state: 'updated', error: null, url: null }, 'rotate', 'PostHog has the new URL and secret.'],
+    [{ state: 'deleted', error: null, url: null }, 'remove', 'Talyn deleted its destination in PostHog.'],
+    [{ state: 'not_found', error: null, url: null }, 'rotate', 'The destination Talyn made is gone from PostHog. Set up push again to make a new one.'],
+    [{ state: 'not_found', error: null, url: null }, 'remove', 'The destination was already gone from PostHog.'],
+    [{ state: 'failed', error: 'boom', url: null }, 'rotate', 'boom'],
+    [{ state: 'failed', error: null, url: null }, 'remove', 'PostHog did not take the change.'],
+  ])('%j on %s', (outcome, action, expected) => {
+    expect(destinationOutcomeText(outcome, action)).toBe(expected);
   });
 });
 

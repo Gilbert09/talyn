@@ -269,8 +269,15 @@ describe('PostHog Inbox connection', () => {
       expect(states).toEqual([{ kind: 'posthog_inbox', mobileReturn: null }]);
     });
 
-    it('asks for exactly the Inbox scopes, and nothing from PostHog Code', () => {
-      expect([...POSTHOG_INBOX_OAUTH_SCOPES]).toEqual(['openid', 'inbox:read', 'inbox:write', 'task:write']);
+    it('asks for exactly the Inbox and push setup scopes, and nothing from PostHog Code', () => {
+      expect([...POSTHOG_INBOX_OAUTH_SCOPES]).toEqual([
+        'openid',
+        'inbox:read',
+        'inbox:write',
+        'task:write',
+        'hog_function:read',
+        'hog_function:write',
+      ]);
       expect(POSTHOG_INBOX_OAUTH_SCOPES).not.toContain('task:read');
     });
 

@@ -3489,6 +3489,12 @@ export const inboundConnections = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     rotatedAt: timestamp('rotated_at', { withTimezone: true }),
+    /** kind 'posthog_inbox' only: the PostHog webhook destination Talyn created (migration 0140), or null. */
+    posthogDestinationId: text('posthog_destination_id'),
+    /** When PostHog last took the URL and the secret. */
+    posthogDestinationSyncedAt: timestamp('posthog_destination_synced_at', { withTimezone: true }),
+    /** Set when Talyn changed the URL but could not update the destination: it is out of date. */
+    posthogDestinationError: text('posthog_destination_error'),
   },
   (t) => ({
     accountUq: uniqueIndex('uq_inbound_connections_account').on(t.workspaceId, t.kind, t.externalAccountId),

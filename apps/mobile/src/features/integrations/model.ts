@@ -284,16 +284,18 @@ export function postHogInboxCardView(status: PostHogInboxStatus, now = Date.now(
  * `postHogInboxPushLine` (posthogInboxPush.tsx). Null until the status loads.
  */
 export function postHogInboxPushText(
-  status: Pick<PostHogInboxStatus, 'lastPushAt' | 'pushConfigured'> | null | undefined,
+  status: (Pick<PostHogInboxStatus, 'lastPushAt' | 'pushConfigured'> & Partial<Pick<PostHogInboxStatus, 'pushManaged'>>) | null | undefined,
   now: number = Date.now()
 ): string | null {
   if (!status) return null;
   if (!status.pushConfigured) return 'PostHog does not push to Talyn yet. Talyn checks the Inbox every 3 minutes.';
-  if (!status.lastPushAt) return 'Talyn has a webhook URL, but no push from PostHog has arrived yet. Talyn checks the Inbox every 3 minutes.';
+  // "Set up push in PostHog" on the web: Talyn made the destination and keeps it up to date.
+  const managed = status.pushManaged ? 'Talyn set up the destination in PostHog. ' : '';
+  if (!status.lastPushAt) return `${managed}Talyn has a webhook URL, but no push from PostHog has arrived yet. Talyn checks the Inbox every 3 minutes.`;
   const at = new Date(status.lastPushAt);
   const when = Number.isNaN(at.getTime()) ? 'never' : at.toLocaleString();
   if (posthogInboxPushActive(status.lastPushAt, now)) {
-    return `Last push from PostHog: ${when}. Talyn also checks the Inbox every 30 minutes.`;
+    return `${managed}Last push from PostHog: ${when}. Talyn also checks the Inbox every 30 minutes.`;
   }
-  return `Last push from PostHog: ${when}. No push in the last 24 hours, so Talyn checks the Inbox every 3 minutes.`;
+  return `${managed}Last push from PostHog: ${when}. No push in the last 24 hours, so Talyn checks the Inbox every 3 minutes.`;
 }

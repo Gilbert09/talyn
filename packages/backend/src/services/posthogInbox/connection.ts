@@ -1,5 +1,10 @@
 import type { PostHogInboxAccess, PostHogInboxConnectionSource } from '@talyn/shared';
-import { POSTHOG_INBOX_CLAIM_SCOPES, POSTHOG_INBOX_REQUIRED_SCOPES, POSTHOG_INBOX_SCOPES } from '@talyn/shared';
+import {
+  POSTHOG_INBOX_CLAIM_SCOPES,
+  POSTHOG_INBOX_PUSH_SETUP_SCOPES,
+  POSTHOG_INBOX_REQUIRED_SCOPES,
+  POSTHOG_INBOX_SCOPES,
+} from '@talyn/shared';
 import { isEncryptedEnvelope } from '../tokenCrypto.js';
 import { getPostHogCodeCredentials, readApiKey } from '../posthogCode/credentials.js';
 import { PostHogHostNotAllowedError } from '../posthogCode/hostPolicy.js';
@@ -32,6 +37,13 @@ import type { PostHogInboxConnectionRef } from './facts.js';
 export interface PostHogInboxConnection extends PostHogInboxConnectionRef {
   authMethod: 'oauth' | 'personal_api_key';
   client: PostHogInboxClient;
+  /** Which row the connection is: the Inbox's own, or the PostHog Code fallback. */
+  source?: PostHogInboxConnectionSource;
+  /**
+   * OAuth only: the push setup scopes the grant lacks. Empty for a personal
+   * API key, whose scopes show only when PostHog answers.
+   */
+  pushSetupMissingScopes?: string[];
 }
 
 function grantedScopes(scope: string | null | undefined): Set<string> {
@@ -62,6 +74,16 @@ export const CLAIM_SCOPES_MISSING_REASON =
 export function missingInboxScopes(scope: string | null | undefined): string[] {
   const granted = grantedScopes(scope);
   return POSTHOG_INBOX_REQUIRED_SCOPES.filter((s) => !granted.has(s));
+}
+
+/**
+ * The push setup scopes ({@link POSTHOG_INBOX_PUSH_SETUP_SCOPES}) a stored
+ * OAuth scope string does not hold. Only "Set up push in PostHog" needs them,
+ * so they never make the connection `reconnect`.
+ */
+export function missingPushSetupScopes(scope: string | null | undefined): string[] {
+  const granted = grantedScopes(scope);
+  return POSTHOG_INBOX_PUSH_SETUP_SCOPES.filter((s) => !granted.has(s));
 }
 
 /**
@@ -102,6 +124,8 @@ export interface StoredInboxAccess {
   connection: PostHogInboxConnectionSource | null;
   /** OAuth only: the required Inbox scopes the grant lacks. */
   missingScopes: string[];
+  /** OAuth only: the scopes "Set up push in PostHog" needs that the grant lacks. Never makes `access` `reconnect`. */
+  pushSetupMissingScopes: string[];
   /** The connection can read the Inbox, even when it cannot claim (`access` is then `reconnect`). */
   canRead?: boolean;
 }
@@ -124,6 +148,7 @@ export async function storedInboxAccess(workspaceId: string): Promise<StoredInbo
     integrationId: null,
     connection: null,
     missingScopes: [],
+    pushSetupMissingScopes: [],
   };
   if (!resolved) return none;
   const { source, row } = resolved;
@@ -154,6 +179,7 @@ export async function storedInboxAccess(workspaceId: string): Promise<StoredInbo
     integrationId: row.id,
     connection: source,
     missingScopes: [] as string[],
+    pushSetupMissingScopes: [] as string[],
   };
   if (authMethod === 'oauth') {
     const oauth = row.config.oauth;
@@ -161,21 +187,23 @@ export async function storedInboxAccess(workspaceId: string): Promise<StoredInbo
       return { ...base, access: 'not_connected', reason: NOT_CONNECTED_REASON };
     }
     const missingScopes = missingInboxScopes(oauth.scope);
+    const pushSetupMissingScopes = missingPushSetupScopes(oauth.scope);
     if (oauth.reauthRequiredAt) {
-      return { ...base, missingScopes, access: 'reconnect', reason: 'PostHog ended the connection. Connect PostHog again.' };
+      return { ...base, missingScopes, pushSetupMissingScopes, access: 'reconnect', reason: 'PostHog ended the connection. Connect PostHog again.' };
     }
     if (!scopeGrantsInbox(oauth.scope)) {
       return {
         ...base,
         missingScopes,
+        pushSetupMissingScopes,
         access: 'reconnect',
         reason: 'The PostHog connection cannot read the Inbox. Connect PostHog again to grant the Inbox permissions.',
       };
     }
     if (!scopeGrantsInboxClaims(oauth.scope)) {
-      return { ...base, missingScopes, access: 'reconnect', reason: CLAIM_SCOPES_MISSING_REASON, canRead: true };
+      return { ...base, missingScopes, pushSetupMissingScopes, access: 'reconnect', reason: CLAIM_SCOPES_MISSING_REASON, canRead: true };
     }
-    return { ...base, missingScopes, access: 'ok', reason: null, canRead: true };
+    return { ...base, missingScopes, pushSetupMissingScopes, access: 'ok', reason: null, canRead: true };
   }
   if (readApiKey(row.config) === null) {
     return { ...base, access: 'not_connected', reason: NOT_CONNECTED_REASON };
@@ -214,5 +242,7 @@ export async function getPostHogInboxConnection(
     host: creds.host,
     authMethod: creds.authMethod,
     client: new PostHogInboxClient(creds.getToken, creds.projectId, creds.host),
+    source: stored.connection ?? undefined,
+    pushSetupMissingScopes: stored.pushSetupMissingScopes,
   };
 }

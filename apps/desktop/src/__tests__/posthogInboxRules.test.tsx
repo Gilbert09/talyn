@@ -35,6 +35,8 @@ function inboxStatus(over: Partial<PostHogInboxStatus> = {}): PostHogInboxStatus
     lastError: null,
     lastPushAt: null,
     pushConfigured: false,
+    pushManaged: false,
+    pushSetupMissingScopes: [],
     ...over,
   };
 }

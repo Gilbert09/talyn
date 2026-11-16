@@ -41,6 +41,7 @@ export async function posthogInboxStatus(workspaceId: string): Promise<PostHogIn
       access = 'ok';
     }
   }
+  const push = stored.projectId ? (await posthogInboxPushConnectionQuery(workspaceId, stored.projectId))[0] : undefined;
   return {
     access,
     reason,
@@ -53,7 +54,9 @@ export async function posthogInboxStatus(workspaceId: string): Promise<PostHogIn
     lastPolledAt: state?.lastPolledAt ? state.lastPolledAt.toISOString() : null,
     lastError: state?.lastError ?? null,
     lastPushAt: state?.lastPushAt ? state.lastPushAt.toISOString() : null,
-    pushConfigured: stored.projectId ? (await posthogInboxPushConnectionQuery(workspaceId, stored.projectId)).length > 0 : false,
+    pushConfigured: push !== undefined,
+    pushManaged: Boolean(push?.destinationId),
+    pushSetupMissingScopes: stored.pushSetupMissingScopes ?? [],
   };
 }
 

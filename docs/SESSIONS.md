@@ -2,6 +2,22 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## PostHog Inbox: Talyn sets up the push in PostHog (2026-11-16)
+
+**What.** "Set up push in PostHog" on the PostHog Inbox Connection tab. Talyn makes or rotates the webhook URL and creates the PostHog webhook destination itself, so the person does not copy a URL and a secret into PostHog. The manual path (#257) stays, for personal API keys without the scopes and for people who prefer it.
+
+**PostHog API, read from PostHog's OpenAPI and source.** `POST/PATCH /api/projects/:id/hog_functions/[:id/]` (`hog_function:write`). On `$signals_report_ready` PostHog also needs `inbox:read` and Inbox viewer access (`INTERNAL_EVENT_READ_SCOPES`), and refuses a truthy `debug` input. The sub-template is `internal_destination` + `template-webhook`. A create copies `hog` and `inputs_schema` from the template, but not the input values, so Talyn sends them all. `secret_headers` is the template's encrypted dictionary input; PostHog answers `{"secret": true}` for it. `DELETE` answers 405; `PATCH {deleted: true}` is the delete, and a deleted function answers 404. Agent sources make PostHog stage a draft, but only for `destination` edits, so an `internal_destination` edit is live at once. The app path is `/project/:id/functions/:id`.
+
+**Design.**
+- Scopes: the Inbox OAuth grant now asks for `hog_function:read hog_function:write`. Old grants keep working; `pushSetupMissingScopes` lists the gap apart from `missingScopes`, so the connection does not read as broken.
+- Setup order: mint, save in PostHog, then store. A 403, 5xx or missing scope leaves the old URL working. A failed store after PostHog accepted leaves an out-of-date error on the row.
+- Rotate stays a rotate: it always rotates (it may be a leak), then updates the destination. A failure is stored in `posthog_destination_error` and shown, until setup runs again. A destination deleted in PostHog is forgotten, not re-created.
+- Remove and disconnect delete the destination best effort, before the URL or the grant goes. Disconnect is bounded to 10 seconds. A destination PostHog did not delete keeps its id, so a later setup updates it.
+- Setup, rotate sync and delete run one at a time per workspace on a replica, so a double click does not make two destinations.
+- Migration `0140_posthog_inbox_destination` (idx 142; main skips idx 138).
+
+**Not tested against a real PostHog project.** The request body comes from PostHog's source.
+
 ## PostHog Inbox rules, step 2: claims (2026-11-16)
 
 **What.** A PostHog Inbox rule now claims the report in PostHog before its session starts. It attaches the session's pull request to the claim and releases the claim when the work ends without one. PostHog resolves the report itself when a linked pull request merges, so Talyn sends nothing on a merge.

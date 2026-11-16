@@ -981,6 +981,13 @@
       "when": 1790900000160,
       "tag": "0139_posthog_inbox_claims",
       "breakpoints": true
+    },
+    {
+      "idx": 142,
+      "version": "7",
+      "when": 1790900000170,
+      "tag": "0140_posthog_inbox_destination",
+      "breakpoints": true
     }
   ]
 }

@@ -522,7 +522,7 @@ export function PostHogInboxConnectionSection() {
         </div>
       </Card>
       {/* The push needs a project to read from, so it shows once a connection resolves one. */}
-      {status.projectId && <PostHogInboxPushSection />}
+      {status.projectId && <PostHogInboxPushSection status={status} onReconnect={reconnect} reconnectBusy={busy} />}
     </div>
   );
 }

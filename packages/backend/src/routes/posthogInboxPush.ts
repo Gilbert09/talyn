@@ -3,26 +3,37 @@ import type {
   ApiResponse,
   InboundDelivery,
   InboundDeliverySummary,
+  PostHogInboxPushRemoval,
   PostHogInboxPushReveal,
+  PostHogInboxPushSetupResult,
   PostHogInboxPushState,
 } from '@talyn/shared';
-import { POSTHOG_INBOX_SECRET_HEADER } from '@talyn/shared';
+import {
+  POSTHOG_INBOX_PUSH_FAILED_CODE,
+  POSTHOG_INBOX_PUSH_FORBIDDEN_CODE,
+  POSTHOG_INBOX_PUSH_SCOPES_MISSING_CODE,
+  POSTHOG_INBOX_SECRET_HEADER,
+} from '@talyn/shared';
 import { assertUser } from '../middleware/auth.js';
 import { captureWorkspaceEvent } from '../services/analytics.js';
 import { scheduleProcessing } from '../services/inbound/receiver.js';
 import {
-  deletePostHogInboxPushConnections,
   deliverySummary,
   getDelivery,
   listDeliveries,
   posthogInboxPushConnection,
   replayDelivery,
-  rotatePostHogInboxPushConnection,
   type PostHogInboxPushConnectionRow,
 } from '../services/inbound/store.js';
 import { webhookUrl, webhookUrlPrefix } from '../services/inbound/url.js';
-import { getPostHogInboxConnection } from '../services/posthogInbox/connection.js';
+import { getPostHogInboxConnection, type PostHogInboxConnection } from '../services/posthogInbox/connection.js';
 import { pollerState } from '../services/posthogInbox/poller.js';
+import {
+  destinationSummary,
+  removePostHogInboxPush,
+  rotatePostHogInboxPush,
+  setUpPostHogInboxPush,
+} from '../services/posthogInbox/pushSetup.js';
 
 /**
  * The PostHog Inbox push: the webhook URL that a PostHog webhook destination
@@ -38,7 +49,11 @@ import { pollerState } from '../services/posthogInbox/poller.js';
  *
  * - `GET    /posthog-inbox/webhook?workspaceId=` — the URL without its token, or null.
  * - `POST   /posthog-inbox/webhook/rotate` — make or replace it; the URL and secret are shown once.
+ *   When Talyn created the PostHog destination, PostHog gets the new URL and secret too.
+ * - `POST   /posthog-inbox/webhook/setup` — "Set up push in PostHog": make or rotate the URL and
+ *   create or update the PostHog destination. Never shows the URL token or the secret.
  * - `DELETE /posthog-inbox/webhook?workspaceId=` — stop the push; the poller goes back to every 3 minutes.
+ *   Talyn's PostHog destination is deleted too, best effort.
  * - `GET    /posthog-inbox/deliveries?workspaceId=` — the stored requests, newest first, no bodies.
  * - `GET    /posthog-inbox/deliveries/:deliveryId?workspaceId=` — one request with its body.
  * - `POST   /posthog-inbox/deliveries/:deliveryId/replay` — read the report again.
@@ -56,7 +71,7 @@ export function registerPostHogInboxPushRoutes(router: Router, gates: { gate: Ga
     req: Request,
     res: Response,
     workspaceId: string
-  ): Promise<{ projectId: string; integrationId: string | null } | null> {
+  ): Promise<{ projectId: string; integrationId: string | null; connection: PostHogInboxConnection } | null> {
     if (!(await gates.gate(req, res, workspaceId))) return null;
     if (!(await gates.posthogInboxGate(req, res))) return null;
     const connection = await getPostHogInboxConnection(workspaceId);
@@ -68,7 +83,7 @@ export function registerPostHogInboxPushRoutes(router: Router, gates: { gate: Ga
       });
       return null;
     }
-    return { projectId: connection.projectId, integrationId: connection.id };
+    return { projectId: connection.projectId, integrationId: connection.id, connection };
   }
 
   /** The current project's URL row, or null. */
@@ -76,10 +91,14 @@ export function registerPostHogInboxPushRoutes(router: Router, gates: { gate: Ga
     req: Request,
     res: Response,
     workspaceId: string
-  ): Promise<{ row: PostHogInboxPushConnectionRow | null; integrationId: string | null } | null> {
+  ): Promise<{ row: PostHogInboxPushConnectionRow | null; integrationId: string | null; host: string } | null> {
     const found = await project(req, res, workspaceId);
     if (!found) return null;
-    return { row: await posthogInboxPushConnection(workspaceId, found.projectId), integrationId: found.integrationId };
+    return {
+      row: await posthogInboxPushConnection(workspaceId, found.projectId),
+      integrationId: found.integrationId,
+      host: found.connection.host,
+    };
   }
 
   const workspaceOf = (req: Request): string =>
@@ -101,6 +120,7 @@ export function registerPostHogInboxPushRoutes(router: Router, gates: { gate: Ga
         rotatedAt: found.row.rotatedAt ? found.row.rotatedAt.toISOString() : null,
         lastDeliveryAt: found.row.lastDeliveryAt ? found.row.lastDeliveryAt.toISOString() : null,
         lastPushAt: state?.lastPushAt ? state.lastPushAt.toISOString() : null,
+        destination: destinationSummary(found.row, found.host),
       };
     }
     res.json({ success: true, data } as ApiResponse<PostHogInboxPushState>);
@@ -115,29 +135,85 @@ export function registerPostHogInboxPushRoutes(router: Router, gates: { gate: Ga
     const found = await project(req, res, workspaceId);
     if (!found) return;
     const requireSecret = body.requireSecret !== false;
-    const rotated = await rotatePostHogInboxPushConnection(workspaceId, found.projectId, {
+    // A URL Talyn set up in PostHog: the destination gets the new URL and secret, or is marked out of date.
+    const rotated = await rotatePostHogInboxPush({
+      workspaceId,
+      connection: found.connection,
       requireSecret,
       createdBy: assertUser(req).id,
+      urlFor: (connectionId, token) => webhookUrl(req, connectionId, token),
     });
     captureWorkspaceEvent(workspaceId, rotated.created ? 'posthog_inbox_webhook_created' : 'posthog_inbox_webhook_rotated', {
       require_secret: requireSecret,
+      managed_destination: rotated.managed,
+      ...(rotated.destination ? { destination: rotated.destination.state } : {}),
     });
     const data: PostHogInboxPushReveal = {
       connectionId: rotated.connectionId,
-      url: webhookUrl(req, rotated.connectionId, rotated.token),
+      url: rotated.url,
       secret: rotated.secret,
       secretHeader: POSTHOG_INBOX_SECRET_HEADER,
+      destination: rotated.destination,
     };
     res.json({ success: true, data } as ApiResponse<PostHogInboxPushReveal>);
+  });
+
+  router.post('/posthog-inbox/webhook/setup', async (req, res) => {
+    const workspaceId = (req.body as { workspaceId?: string } | undefined)?.workspaceId ?? '';
+    const found = await project(req, res, workspaceId);
+    if (!found) return;
+    const result = await setUpPostHogInboxPush({
+      workspaceId,
+      connection: found.connection,
+      createdBy: assertUser(req).id,
+      urlFor: (connectionId, token) => webhookUrl(req, connectionId, token),
+    });
+    if (!result.ok) {
+      captureWorkspaceEvent(workspaceId, 'posthog_inbox_push_setup_failed', {
+        reason: result.reason,
+        ...(result.reason === 'posthog' ? { kind: result.failure.kind, status: result.failure.status } : {}),
+      });
+      if (result.reason === 'scopes_missing') {
+        return res.status(409).json({
+          success: false,
+          error: result.message,
+          code: POSTHOG_INBOX_PUSH_SCOPES_MISSING_CODE,
+          missingScopes: result.missingScopes,
+        });
+      }
+      if (result.reason === 'posthog') {
+        const forbidden = result.failure.kind === 'forbidden' || result.failure.kind === 'unauthorized';
+        return res.status(forbidden ? 409 : 502).json({
+          success: false,
+          error: result.message,
+          code: forbidden ? POSTHOG_INBOX_PUSH_FORBIDDEN_CODE : POSTHOG_INBOX_PUSH_FAILED_CODE,
+        });
+      }
+      return res.status(500).json({ success: false, error: result.message, code: POSTHOG_INBOX_PUSH_FAILED_CODE });
+    }
+    captureWorkspaceEvent(workspaceId, 'posthog_inbox_push_set_up', { created: result.created });
+    const data: PostHogInboxPushSetupResult = {
+      connectionId: result.connectionId,
+      destination: result.destination,
+      created: result.created,
+    };
+    res.json({ success: true, data } as ApiResponse<PostHogInboxPushSetupResult>);
   });
 
   router.delete('/posthog-inbox/webhook', async (req, res) => {
     const workspaceId = workspaceOf(req);
     if (!(await gates.gate(req, res, workspaceId))) return;
     if (!(await gates.posthogInboxGate(req, res))) return;
-    const removed = await deletePostHogInboxPushConnections(workspaceId);
-    if (removed > 0) captureWorkspaceEvent(workspaceId, 'posthog_inbox_webhook_removed', {});
-    res.json({ success: true, data: { removed } } as ApiResponse<{ removed: number }>);
+    // Talyn's PostHog destination goes first, while the connection can still reach it. Never blocks the removal.
+    const { removed, destination } = await removePostHogInboxPush(
+      workspaceId,
+      await getPostHogInboxConnection(workspaceId, 'read').catch(() => null)
+    );
+    if (removed > 0) {
+      captureWorkspaceEvent(workspaceId, 'posthog_inbox_webhook_removed', { destination: destination?.state ?? 'none' });
+    }
+    const data: PostHogInboxPushRemoval = { removed, destination };
+    res.json({ success: true, data } as ApiResponse<PostHogInboxPushRemoval>);
   });
 
   router.get('/posthog-inbox/deliveries', async (req, res) => {
