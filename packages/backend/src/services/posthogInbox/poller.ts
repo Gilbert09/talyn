@@ -1,6 +1,6 @@
-import { and, eq, inArray, isNull, lte, lt, or } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lte, lt, or, sql } from 'drizzle-orm';
 import type { WorkflowDefinition } from '@talyn/shared';
-import { DEFAULT_POSTHOG_INBOX_ACTIONABILITY, workflowIntegrationOf } from '@talyn/shared';
+import { DEFAULT_POSTHOG_INBOX_ACTIONABILITY, posthogInboxPushActive, workflowIntegrationOf } from '@talyn/shared';
 import { getPoolDbClient, runWithoutScope } from '../../db/client.js';
 import { integrations, posthogInboxPollers, workflows as workflowsTable } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
@@ -44,11 +44,22 @@ import { ingestPostHogReport } from './ingest.js';
  * and the cursor when it is done. A replica that dies mid-poll leaves a lease
  * that expires; the next poll starts from the last cursor it saved, and the
  * run claim (`UNIQUE (workflow_id, delivery_id)`) makes any repeat a no-op.
+ *
+ * # Push, then reconcile
+ *
+ * PostHog can also push "report ready" to Talyn through a webhook destination
+ * (`inbound/adapters/posthogInbox.ts`). A push that Talyn could read sets
+ * `last_push_at`. While that is less than 24 hours old, the poller only
+ * reconciles: every 30 minutes, for a push PostHog dropped. When pushes stop,
+ * the next poll is back on the 3-minute interval. A push and a poll of the
+ * same report version claim the same run, so they never both fire.
  */
 
 const TICK_MS = 60_000;
 /** How often one connection is polled. */
 export const POSTHOG_INBOX_POLL_INTERVAL_MS = 3 * 60_000;
+/** How often a connection that PostHog pushes to is polled: a reconcile for dropped pushes. */
+export const POSTHOG_INBOX_RECONCILE_INTERVAL_MS = 30 * 60_000;
 /** A poll that died keeps the connection for this long. */
 const LEASE_MS = 15 * 60_000;
 /** After a 401 or 403: the connection needs the user, not a retry. */
@@ -232,8 +243,16 @@ export async function pollConnection(
   }
 }
 
-/** PURE: when to poll a connection next, from how its poll ended. */
-export function nextPollDelayMs(result: Pick<PollResult, 'status' | 'more' | 'errorStatus' | 'retryAfterMs'>): number {
+/**
+ * PURE: when to poll a connection next, from how its poll ended. `pushActive`
+ * (a push in the last 24 hours) turns the normal interval into the reconcile
+ * interval. Backoffs and a backlog are the same either way.
+ */
+export function nextPollDelayMs(
+  result: Pick<PollResult, 'status' | 'more' | 'errorStatus' | 'retryAfterMs'>,
+  opts: { pushActive?: boolean } = {}
+): number {
+  const interval = opts.pushActive ? POSTHOG_INBOX_RECONCILE_INTERVAL_MS : POSTHOG_INBOX_POLL_INTERVAL_MS;
   if (result.status === 'error') {
     if (result.errorStatus === 401 || result.errorStatus === 403) return AUTH_BACKOFF_MS;
     if (result.errorStatus === 429) return Math.max(POSTHOG_INBOX_POLL_INTERVAL_MS, result.retryAfterMs ?? 0);
@@ -241,7 +260,7 @@ export function nextPollDelayMs(result: Pick<PollResult, 'status' | 'more' | 'er
   }
   if (result.status === 'no_connection') return AUTH_BACKOFF_MS;
   if (result.more) return CONTINUE_MS;
-  return POSTHOG_INBOX_POLL_INTERVAL_MS;
+  return interval;
 }
 
 const db = () => getPoolDbClient();
@@ -266,7 +285,10 @@ async function connectionsWithRules(): Promise<Array<{ integrationId: string; wo
  * Take a connection's row for one poll: due, and no live lease. The
  * conditional UPDATE is the claim, so two replicas cannot both win it.
  */
-export async function claimPoller(integrationId: string, now: Date): Promise<PollerCursor | null> {
+export async function claimPoller(
+  integrationId: string,
+  now: Date
+): Promise<(PollerCursor & { lastPushAt: Date | null }) | null> {
   const rows = await db()
     .update(posthogInboxPollers)
     .set({ leaseUntil: new Date(now.getTime() + LEASE_MS), updatedAt: now })
@@ -277,10 +299,18 @@ export async function claimPoller(integrationId: string, now: Date): Promise<Pol
         or(isNull(posthogInboxPollers.leaseUntil), lt(posthogInboxPollers.leaseUntil, now))
       )
     )
-    .returning({ cursorUpdatedAt: posthogInboxPollers.cursorUpdatedAt, cursorReportIds: posthogInboxPollers.cursorReportIds });
+    .returning({
+      cursorUpdatedAt: posthogInboxPollers.cursorUpdatedAt,
+      cursorReportIds: posthogInboxPollers.cursorReportIds,
+      lastPushAt: posthogInboxPollers.lastPushAt,
+    });
   const row = rows[0];
   if (!row) return null;
-  return { updatedAt: row.cursorUpdatedAt, reportIds: Array.isArray(row.cursorReportIds) ? row.cursorReportIds : [] };
+  return {
+    updatedAt: row.cursorUpdatedAt,
+    reportIds: Array.isArray(row.cursorReportIds) ? row.cursorReportIds : [],
+    lastPushAt: row.lastPushAt ?? null,
+  };
 }
 
 /** Save the poll's outcome and release the lease. */
@@ -316,7 +346,7 @@ class PostHogInboxPoller {
     debugBus.registerPoller(
       'posthog_inbox_poller',
       TICK_MS,
-      'PostHog Inbox rules: every 3 minutes per PostHog connection with an enabled rule, reads the reports that changed and runs the rules on them.'
+      'PostHog Inbox rules: every 3 minutes per PostHog connection with an enabled rule (every 30 minutes while PostHog pushes to it), reads the reports that changed and runs the rules on them.'
     );
     this.timer = setInterval(() => void this.tick(), TICK_MS);
     this.timer.unref?.();
@@ -366,15 +396,22 @@ class PostHogInboxPoller {
 
     let polled = 0;
     for (const row of due) {
-      const cursor = await claimPoller(row.integrationId, now);
-      if (!cursor) continue; // Another replica took it.
+      const claimed = await claimPoller(row.integrationId, now);
+      if (!claimed) continue; // Another replica took it.
       polled += 1;
-      await this.pollOne(row.integrationId, row.workspaceId, cursor, now);
+      const { lastPushAt, ...cursor } = claimed;
+      await this.pollOne(row.integrationId, row.workspaceId, cursor, now, posthogInboxPushActive(lastPushAt, now.getTime()));
     }
     return polled;
   }
 
-  private async pollOne(integrationId: string, workspaceId: string, cursor: PollerCursor, now: Date): Promise<void> {
+  private async pollOne(
+    integrationId: string,
+    workspaceId: string,
+    cursor: PollerCursor,
+    now: Date,
+    pushActive: boolean
+  ): Promise<void> {
     let result: PollResult;
     try {
       const allowed =
@@ -408,11 +445,11 @@ class PostHogInboxPoller {
         retryAfterMs: err instanceof PostHogCodeApiError ? err.retryAfterMs : null,
       };
     }
-    await settlePoller(integrationId, result, now, nextPollDelayMs(result));
+    await settlePoller(integrationId, result, now, nextPollDelayMs(result, { pushActive }));
     debugBus.recordEvent({
       service: 'workflows',
       action: `posthog_inbox_poll:${result.status}`,
-      summary: `connection ${integrationId}: ${result.ingested} report(s) read, ${result.ran} run(s)${result.error ? ` — ${result.error}` : ''}`,
+      summary: `connection ${integrationId}: ${result.ingested} report(s) read, ${result.ran} run(s)${pushActive ? ' (reconcile)' : ''}${result.error ? ` — ${result.error}` : ''}`,
       ok: result.status !== 'error' && result.status !== 'no_connection',
       workspaceId,
     });
@@ -431,12 +468,14 @@ export async function pollerState(integrationId: string): Promise<{
   lastPolledAt: Date | null;
   lastError: string | null;
   lastErrorStatus: number | null;
+  lastPushAt: Date | null;
 } | null> {
   const rows = await db()
     .select({
       lastPolledAt: posthogInboxPollers.lastPolledAt,
       lastError: posthogInboxPollers.lastError,
       lastErrorStatus: posthogInboxPollers.lastErrorStatus,
+      lastPushAt: posthogInboxPollers.lastPushAt,
     })
     .from(posthogInboxPollers)
     .where(eq(posthogInboxPollers.integrationId, integrationId))
@@ -444,3 +483,22 @@ export async function pollerState(integrationId: string): Promise<{
   return rows[0] ?? null;
 }
 
+
+/**
+ * Note a push whose report Talyn read from the connection's project. Creates
+ * the poller row when the connection has none yet (no enabled rule): the
+ * poller only starts on it once a rule exists, and then starts in reconcile.
+ * Never moves `last_push_at` back.
+ */
+export async function recordPostHogInboxPush(integrationId: string, workspaceId: string, at: Date): Promise<void> {
+  await db()
+    .insert(posthogInboxPollers)
+    .values({ integrationId, workspaceId, nextPollAt: at, lastPushAt: at })
+    .onConflictDoUpdate({
+      target: posthogInboxPollers.integrationId,
+      set: {
+        lastPushAt: sql`GREATEST(${posthogInboxPollers.lastPushAt}, ${at.toISOString()}::timestamptz)`,
+        updatedAt: at,
+      },
+    });
+}

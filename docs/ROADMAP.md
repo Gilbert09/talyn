@@ -398,7 +398,8 @@ Follow-ups now that Loops has shipped:
 - [ ] Add Sentry as a rule source.
 - [x] Add PostHog Inbox (self-driving reports) as a rule source: poller, ingest by report id, filters, daily cap, dry run. The `posthogInboxRules` flag controls rollout (2026-11-14).
 - [ ] PostHog Inbox step 2: claim the report in PostHog when the session starts, attach the pull request URL to the claim, and release the claim when the work ends without a merge (needs `inbox:write`).
-- [ ] PostHog Inbox step 3: receive PostHog's `$signals_report_ready` push (a PostHog webhook destination) and call `ingestPostHogReport` with only the report id.
+- [x] PostHog Inbox step 3: receive PostHog's `$signals_report_ready` push (a PostHog webhook destination) and call `ingestPostHogReport` with only the report id. The poller becomes a 30-minute reconcile while pushes arrive (2026-11-16).
+- [ ] PostHog Inbox push on mobile: make and rotate the webhook URL natively (mobile shows the last push read-only today).
 - [ ] PostHog Inbox on mobile: an editor (mobile shows the rules read-only today).
 - [ ] Add a generic inbound webhook source.
 

@@ -3,6 +3,7 @@ import { getPoolDbClient, runWithoutScope } from '../../db/client.js';
 import { inboundDeliveries } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
 import { evaluateWorkflows } from '../workflows/engine.js';
+import { isNudgeAdapter } from './adapter.js';
 import { inboundAdapterFor } from './adapters/index.js';
 import { connectionRef } from './store.js';
 
@@ -85,15 +86,26 @@ async function processUnscoped(id: string): Promise<InboundProcessResult> {
       headers: row.headers ?? {},
       receivedAt: row.receivedAt,
     };
-    const facts = adapter.toFacts(delivery, connection);
-    const ran = facts.length > 0 ? await evaluateWorkflows(adapter.workflowSource, { connection, delivery, facts }) : 0;
-    const outcome = ran > 0 ? 'handled' : 'ignored';
-    await settle(outcome);
+    let ran: number;
+    let outcome: 'handled' | 'ignored' | 'failed';
+    let note: string | null = null;
+    if (isNudgeAdapter(adapter)) {
+      // The request only names a subject: the adapter reads it from the vendor.
+      const nudged = await adapter.nudge(delivery, connection);
+      ran = nudged.ran;
+      outcome = nudged.outcome;
+      note = nudged.note ? nudged.note.slice(0, 1000) : null;
+    } else {
+      const facts = adapter.toFacts(delivery, connection);
+      ran = facts.length > 0 ? await evaluateWorkflows(adapter.workflowSource, { connection, delivery, facts }) : 0;
+      outcome = ran > 0 ? 'handled' : 'ignored';
+    }
+    await settle(outcome, note);
     debugBus.recordEvent({
       service: 'inbound',
       action: 'processed',
       summary: `${connection.kind} ${row.deliveryId}: ${outcome} (${ran} rule run${ran === 1 ? '' : 's'})`,
-      ok: true,
+      ok: outcome !== 'failed',
       workspaceId: connection.workspaceId,
     });
     return outcome;
