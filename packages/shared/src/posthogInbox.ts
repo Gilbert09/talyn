@@ -32,6 +32,10 @@ export interface PostHogInboxStatus {
   lastPolledAt: string | null;
   /** The last poll's error, or null when it worked. */
   lastError: string | null;
+  /** The newest push from PostHog that Talyn could read, or null. */
+  lastPushAt: string | null;
+  /** Whether the workspace has a webhook URL for its PostHog project. */
+  pushConfigured: boolean;
 }
 
 /** One report the dry run found. */
@@ -156,4 +160,60 @@ export function posthogClaimText(claim: PostHogClaimSummary): string {
     text += claim.error ? ` PostHog did not take the last update (${claim.error}). Talyn tries again.` : ' Talyn has an update to send to PostHog.';
   }
   return text.replace(/\.\./g, '.');
+}
+
+// ---- Push (PostHog webhook destination) -------------------------------------
+
+/** The internal event PostHog emits when an Inbox report becomes ready. */
+export const POSTHOG_INBOX_READY_EVENT = '$signals_report_ready';
+
+/**
+ * The header that carries the optional shared secret. Add it in PostHog as a
+ * secret header of the webhook destination, so PostHog stores it encrypted.
+ */
+export const POSTHOG_INBOX_SECRET_HEADER = 'x-talyn-secret';
+
+/** A push in this window slows the poller to a reconcile. */
+export const POSTHOG_INBOX_PUSH_WINDOW_MS = 24 * 60 * 60_000;
+
+/**
+ * The webhook URL of the workspace's PostHog Inbox, for the Connection tab.
+ * Never holds a secret: Talyn keeps only a hash of the URL token.
+ */
+export interface PostHogInboxPushSummary {
+  connectionId: string;
+  /** The URL up to the token, for display. */
+  urlPrefix: string;
+  /** The PostHog project the URL is for. */
+  projectId: string;
+  /** Whether a request must carry `X-Talyn-Secret`. */
+  secretRequired: boolean;
+  createdAt: string;
+  rotatedAt: string | null;
+  /** The newest request to the URL, valid or not, or null. */
+  lastDeliveryAt: string | null;
+  /** The newest push whose report Talyn read from the project, or null. */
+  lastPushAt: string | null;
+}
+
+/** `GET /workflows/posthog-inbox/webhook`: null when the workspace has no URL for its project. */
+export type PostHogInboxPushState = PostHogInboxPushSummary | null;
+
+/** The URL and the secret, shown ONCE: when they are made or rotated. */
+export interface PostHogInboxPushReveal {
+  connectionId: string;
+  /** The full URL, token included. */
+  url: string;
+  /** The value for `X-Talyn-Secret`, or null when the URL needs no secret. */
+  secret: string | null;
+  /** The header name to add in PostHog. */
+  secretHeader: string;
+}
+
+/** PURE: whether a push in the window makes the poller only reconcile. */
+export function posthogInboxPushActive(lastPushAt: string | Date | null | undefined, now: number = Date.now()): boolean {
+  if (!lastPushAt) return false;
+  const at = lastPushAt instanceof Date ? lastPushAt.getTime() : new Date(lastPushAt).getTime();
+  if (Number.isNaN(at)) return false;
+  return now - at < POSTHOG_INBOX_PUSH_WINDOW_MS;
 }

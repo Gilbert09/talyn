@@ -498,7 +498,7 @@ dispatchable** — a real state, not a broken one.
 #### 3. The backend
 
 ```
-TS_AUTHKEY=tskey-auth-...              # absent = Tailscale never starts
+TS_AUTHKEY=tskey-client-...            # OAuth client secret; absent = Tailscale never starts
 TS_HOSTNAME=talyn-backend
 FLEET_HTTP_PROXY=http://localhost:1055 # what the fleet client dials through
 FLEET_REPORT_TOKEN=<shared with every fleet host>
@@ -648,7 +648,17 @@ With no `TS_AUTHKEY` the daemon never starts and the image behaves exactly as it
 did before; a deployment with no self-hosted fleet should not be running a
 networking daemon it has no use for.
 
-**The backend's key must be EPHEMERAL** (tick "Ephemeral" when generating it).
+**Use an OAuth client secret, not an auth key.** An auth key expires after at
+most 90 days. The running container does not notice, because it joined long
+ago, but the next deploy cannot join, and the fleet becomes unreachable. That
+happened to the fleet's control plane on 2026-11-16. An OAuth client secret does
+not expire. Generate it in Tailscale under Settings → OAuth clients, with the
+**Auth Keys: write** scope and the tag `tag:talyn-backend`, and set it as
+`TS_AUTHKEY`. The entrypoint adds `--advertise-tags` (`TS_TAGS` changes the tag)
+and asks for an ephemeral, pre-approved node. An auth key still works.
+
+**The backend's node must be EPHEMERAL** (the entrypoint asks for this with an
+OAuth client; with an auth key, tick "Ephemeral" when generating it).
 The container has no persistent volume, so every deploy starts with empty
 tailscaled state and registers as a new node. With a normal key the old one
 lingers and you accumulate `talyn-backend-1`, `-2`, `-3`… one per deploy — all
@@ -1079,9 +1089,11 @@ How it works:
 
 - `services/posthogInbox/poller.ts` runs every minute when the workflows engine is armed. It polls each PostHog connection that has an enabled rule about every 3 minutes. Its state is in `posthog_inbox_pollers` (migration 0134). A replica takes a connection with a conditional UPDATE and a 15-minute lease.
 - It lists `GET /api/projects/:id/signals/reports/` with `status=ready`, `already_addressed=false`, `unclaimed=true`, the rules' actionability (default `immediately_actionable`) and `ordering=-updated_at`, and pages down to its cursor. PostHog has no "updated after" filter.
-- Every report goes through `ingestPostHogReport(connection, reportId)`, which reads the report by id and runs the rules. A later PostHog webhook calls the same function with only the id.
+- Every report goes through `ingestPostHogReport(connection, reportId)`, which reads the report by id and runs the rules. The PostHog webhook push calls the same function with only the id.
+- **Push (step 3).** PostHog emits the CDP internal event `$signals_report_ready` when a report becomes ready (PostHog/posthog#135880, behind PostHog's per-organization flag `signals-report-ready-event`). A user adds a webhook destination on it ("HTTP Webhook when an Inbox report is ready"). The URL is an `inbound_connections` row of kind `posthog_inbox`, one per workspace and PostHog project (`external_account_id` = project id), made on the PostHog Inbox Connection tab (`POST /workflows/posthog-inbox/webhook/rotate`). The receiver is the generic one (`POST /api/v1/webhooks/in/:connectionId/:token`, same rate limits and 1 MB cap). The URL token is checked against its sha256; an optional `X-Talyn-Secret` header (a PostHog secret header) is required when the URL was made with a secret. The adapter (`services/inbound/adapters/posthogInbox.ts`) reads only `event.properties.report_id` (and `updated_at` and `event.uuid` for the delivery id). A report the project does not have is dropped (200, logged).
+- A push that Talyn could read sets `posthog_inbox_pollers.last_push_at` (migration 0137). While it is less than 24 hours old, the poller polls that connection every 30 minutes (a reconcile). Otherwise it polls about every 3 minutes.
 - The run's dedupe key is `posthog_inbox:<reportId>:<updated_at>`. The report is claimed in `external_issue_links`, so a second session never starts beside live work on it.
-- Before the session starts, Talyn claims the report in PostHog (`POST .../signals/reports/:id/claim/`, `services/posthogInbox/claims.ts`) and stores `assignee.claim_id` on the link (`posthog_claim_id`, migration 0136). A 409 skips the run (`report_claimed_elsewhere`). A 401/403/429/5xx parks it (`posthog_unauthorized`, `rate_gated`, `posthog_unavailable`) with the poller's backoff (`posthogInbox/backoff.ts`) and gates the connection's claims in memory, so the poller stops too.
+- Before the session starts, Talyn claims the report in PostHog (`POST .../signals/reports/:id/claim/`, `services/posthogInbox/claims.ts`) and stores `assignee.claim_id` on the link (`posthog_claim_id`, migration 0138). A 409 skips the run (`report_claimed_elsewhere`). A 401/403/429/5xx parks it (`posthog_unauthorized`, `rate_gated`, `posthog_unavailable`) with the poller's backoff (`posthogInbox/backoff.ts`) and gates the connection's claims in memory, so the poller stops too.
 - The claim sweep (`posthog_claim_sweep`, every minute, one replica at a time) reads links whose `posthog_claim_next_check_at` is due. It attaches the session's pull request (`claim_id` + `pull_requests`), releases the claim (`release: true`) when the work ended without one, and marks it `merged` after a merge. `pr:session` and the merge listener sync a link at once. A failed write backs off and stops after 8 attempts.
 - The session prompt asks the agent to end on `TALYN_REPORT_NOT_FIXED: <reason>` when it stops without a fix. The sweep reads it from the session's last turn and releases the claim.
 - A report that PostHog's safety judge suppressed (`suppression_source = safety_judge`) never starts work.

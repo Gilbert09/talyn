@@ -7,8 +7,11 @@ import type { WorkflowWithStats } from './workflows.js';
  * Only the generic webhook exists today.
  */
 
-/** The vendors an inbound connection can belong to. Only `webhook` has an adapter today. */
-export const INBOUND_KINDS = ['webhook', 'linear', 'jira', 'sentry', 'posthog_errors'] as const;
+/**
+ * The vendors an inbound connection can belong to. `webhook`, `linear` and
+ * `posthog_inbox` have adapters today.
+ */
+export const INBOUND_KINDS = ['webhook', 'linear', 'jira', 'sentry', 'posthog_errors', 'posthog_inbox'] as const;
 
 export type InboundKind = (typeof INBOUND_KINDS)[number];
 

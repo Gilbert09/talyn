@@ -16,6 +16,25 @@ Chronological notes from development sessions. Most recent first. See [`CLAUDE.m
 
 **Not done.** The Inbox still uses the retired PostHog Code connection. `claims.ts` only asks `getPostHogInboxConnection`, so a separate Inbox connection can replace it later.
 
+## PostHog Inbox step 3: push from PostHog (2026-11-16)
+
+**What.** PostHog's webhook destination on `$signals_report_ready` now nudges Talyn, so rules act within seconds. The poller stays as a reconcile.
+
+**What PostHog sends.** I read PostHog's webhook template and the sub-template from PostHog/posthog#135880. The default is `POST`, `Content-Type: application/json`, body `{"event": {...}, "person": null}`. `event.uuid` is the internal event uuid, and PostHog's retries repeat it. `event.properties` has only `report_id`, `report_url`, `priority`, `actionability`, `source_products`, `source_products_text` and `updated_at`. Users can add plain headers and encrypted "secret headers". PostHog retries 408, 429 and 5xx up to 3 times, with a 3-second timeout.
+
+**Design.**
+- A new inbound kind `posthog_inbox`, with one URL per workspace and PostHog project. It uses the same receiver, rate limits and size cap as the generic webhook.
+- The adapter is a "nudge" adapter (`InboundNudgeAdapter`). It makes no facts from the body. `nudge` reads the report by id through `ingestPostHogReport`.
+- The URL token is the credential. An optional `X-Talyn-Secret` secret header is required when the URL was made with a secret (the default). A stored secret that no longer decrypts refuses every request.
+- The delivery id is the event uuid, else `posthog_inbox:<id>:<updated_at>`. The run key stays `posthog_inbox:<id>:<updated_at>` from the report Talyn read, so a push and a poll never both fire.
+- A 404 or 400 from PostHog drops the request (200 to PostHog, `ignored` with a note). A 401 or 403 fails the request without a retry. Other errors retry through the inbound sweep.
+- `last_push_at` is set only by a push whose report Talyn read, and never by a replay. It switches the poller to 30 minutes for 24 hours.
+- The URL belongs to the workspace and the PostHog project (`external_account_id`), never to the PostHog Code `integrations` row. Every read of the connection goes through `getPostHogInboxConnection`, so a separate Inbox connection can replace the row later. `last_push_at` is migration 0137 (#240 holds 0136); expect to renumber at merge.
+
+**UI.** The web and desktop PostHog Inbox Connection tab can make, rotate and remove the URL. It shows the URL and secret once, the PostHog steps, the last push and the requests (`WebhookDeliveriesList` now takes a source). The rule editor shows the push line. Mobile shows the push line read-only.
+
+**Not tested against a real PostHog project.** The body shape comes from the PostHog source, not from a captured request.
+
 ## Keep box agents through quota holds (2026-11-16)
 
 New session boxes and warm boxes include every agent with an account that does not need sign-in.

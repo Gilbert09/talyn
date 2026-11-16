@@ -380,7 +380,7 @@ export async function activeLinksForPullRequest(workspaceId: string, pullRequest
   return activeLinksForPullRequestQuery(workspaceId, pullRequestId);
 }
 
-// ---- PostHog claims (migration 0136) ---------------------------------------
+// ---- PostHog claims (migration 0138) ---------------------------------------
 
 const CLAIM_STATES: ReadonlySet<string> = new Set<PostHogClaimState>(['claimed', 'pr_attached', 'merged', 'released', 'lost']);
 

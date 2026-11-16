@@ -11,6 +11,7 @@ import type { PostHogInboxConnection } from './connection.js';
 import { storedInboxAccess } from './connection.js';
 import { reportToFacts } from './facts.js';
 import { pollerState, pollQuery } from './poller.js';
+import { posthogInboxPushConnectionQuery } from '../inbound/store.js';
 
 /** How many of the newest ready reports the dry run reads. Each costs one PostHog read. */
 export const DRY_RUN_REPORTS = 25;
@@ -47,6 +48,8 @@ export async function posthogInboxStatus(workspaceId: string): Promise<PostHogIn
     host: stored.host,
     lastPolledAt: state?.lastPolledAt ? state.lastPolledAt.toISOString() : null,
     lastError: state?.lastError ?? null,
+    lastPushAt: state?.lastPushAt ? state.lastPushAt.toISOString() : null,
+    pushConfigured: stored.projectId ? (await posthogInboxPushConnectionQuery(workspaceId, stored.projectId)).length > 0 : false,
   };
 }
 

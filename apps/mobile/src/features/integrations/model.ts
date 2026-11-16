@@ -1,8 +1,8 @@
 import type { PostHogCodeStatus } from '@talyn/client/native';
 import {
   DEFAULT_POSTHOG_CODE_MODEL_ID, DEFAULT_POSTHOG_INBOX_ACTIONABILITY, INVALID_RETURN_TO_CODE, isWorkflowIntegration, POSTHOG_CODE_MODELS,
-  POSTHOG_INBOX_ACTIONABILITY_LABELS, POSTHOG_INBOX_CONDITION_SPECS,
-  type LinearConnection, type WorkflowConditions, type TrunkIntegrationStatus, type WorkflowIntegration, type WorkspaceSettings,
+  POSTHOG_INBOX_ACTIONABILITY_LABELS, POSTHOG_INBOX_CONDITION_SPECS, posthogInboxPushActive,
+  type LinearConnection, type PostHogInboxStatus, type WorkflowConditions, type TrunkIntegrationStatus, type WorkflowIntegration, type WorkspaceSettings,
 } from '@talyn/shared';
 
 import type { Tone } from '../../components/UI';
@@ -231,4 +231,23 @@ export function postHogInboxConditionFacts(conditions: WorkflowConditions | null
 /** The daily cap line of a rule, or null when it has none. */
 export function dailyCapText(maxRunsPerDay: number | null | undefined): string | null {
   return typeof maxRunsPerDay === 'number' && maxRunsPerDay > 0 ? `${maxRunsPerDay} ${maxRunsPerDay === 1 ? 'run' : 'runs'} a day` : null;
+}
+
+/**
+ * The read-only line about the PostHog Inbox push. Mirrors web
+ * `postHogInboxPushLine` (posthogInboxPush.tsx). Null until the status loads.
+ */
+export function postHogInboxPushText(
+  status: Pick<PostHogInboxStatus, 'lastPushAt' | 'pushConfigured'> | null | undefined,
+  now: number = Date.now()
+): string | null {
+  if (!status) return null;
+  if (!status.pushConfigured) return 'PostHog does not push to Talyn yet. Talyn checks the Inbox every 3 minutes.';
+  if (!status.lastPushAt) return 'Talyn has a webhook URL, but no push from PostHog has arrived yet. Talyn checks the Inbox every 3 minutes.';
+  const at = new Date(status.lastPushAt);
+  const when = Number.isNaN(at.getTime()) ? 'never' : at.toLocaleString();
+  if (posthogInboxPushActive(status.lastPushAt, now)) {
+    return `Last push from PostHog: ${when}. Talyn also checks the Inbox every 30 minutes.`;
+  }
+  return `Last push from PostHog: ${when}. No push in the last 24 hours, so Talyn checks the Inbox every 3 minutes.`;
 }

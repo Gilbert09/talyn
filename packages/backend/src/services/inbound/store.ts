@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import { and, count, desc, eq, lt, max } from 'drizzle-orm';
+import { and, count, desc, eq, lt, max, ne, sql } from 'drizzle-orm';
 import type {
   InboundDelivery,
   InboundDeliveryOutcome,
@@ -185,6 +185,7 @@ export async function connectionSecrets(connectionId: string): Promise<InboundCo
     ruleId: row.ruleId,
     tokenHash: row.tokenHash,
     signingSecret,
+    hasSecret: row.secretEnc !== null && row.secretEnc !== undefined,
   };
 }
 
@@ -196,12 +197,141 @@ export async function connectionRef(connectionId: string): Promise<InboundConnec
       workspaceId: inboundConnections.workspaceId,
       kind: inboundConnections.kind,
       ruleId: inboundConnections.ruleId,
+      externalAccountId: inboundConnections.externalAccountId,
     })
     .from(inboundConnections)
     .where(eq(inboundConnections.id, connectionId))
     .limit(1);
   const row = rows[0];
   return row ? { ...row, kind: row.kind as InboundKind } : null;
+}
+
+// ---- PostHog Inbox push ------------------------------------------------------
+
+/** The workspace's PostHog Inbox webhook URL for one PostHog project, without its secrets. */
+export interface PostHogInboxPushConnectionRow {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  secretRequired: boolean;
+  createdAt: Date;
+  rotatedAt: Date | null;
+  lastDeliveryAt: Date | null;
+}
+
+/** The query behind {@link posthogInboxPushConnection}. Exported for the egress test. */
+export function posthogInboxPushConnectionQuery(workspaceId: string, projectId: string) {
+  return db()
+    .select({
+      id: inboundConnections.id,
+      workspaceId: inboundConnections.workspaceId,
+      projectId: inboundConnections.externalAccountId,
+      // Only whether a secret exists: the encrypted envelope never leaves the database here.
+      secretRequired: sql<boolean>`${inboundConnections.secretEnc} IS NOT NULL`,
+      createdAt: inboundConnections.createdAt,
+      rotatedAt: inboundConnections.rotatedAt,
+    })
+    .from(inboundConnections)
+    .where(
+      and(
+        eq(inboundConnections.workspaceId, workspaceId),
+        eq(inboundConnections.kind, 'posthog_inbox'),
+        eq(inboundConnections.externalAccountId, projectId)
+      )
+    )
+    .limit(1);
+}
+
+export async function posthogInboxPushConnection(
+  workspaceId: string,
+  projectId: string
+): Promise<PostHogInboxPushConnectionRow | null> {
+  const rows = await posthogInboxPushConnectionQuery(workspaceId, projectId);
+  const row = rows[0];
+  if (!row?.projectId) return null;
+  const last = await db()
+    .select({ at: max(inboundDeliveries.receivedAt) })
+    .from(inboundDeliveries)
+    .where(eq(inboundDeliveries.connectionId, row.id));
+  const at = last[0]?.at;
+  return {
+    id: row.id,
+    workspaceId: row.workspaceId,
+    projectId: row.projectId,
+    secretRequired: Boolean(row.secretRequired),
+    createdAt: row.createdAt,
+    rotatedAt: row.rotatedAt,
+    lastDeliveryAt: at ? new Date(at) : null,
+  };
+}
+
+/**
+ * Make or replace the workspace's PostHog Inbox webhook URL for one PostHog
+ * project. The old URL stops working at once. With `requireSecret`, every
+ * request must carry the new secret in `X-Talyn-Secret`; without it, the URL
+ * token alone is the credential.
+ *
+ * A workspace reads one PostHog project at a time, so a URL for any other
+ * project is deleted: its pushes could only name reports the connection
+ * cannot read.
+ */
+export async function rotatePostHogInboxPushConnection(
+  workspaceId: string,
+  projectId: string,
+  opts: { requireSecret: boolean; createdBy: string }
+): Promise<{ connectionId: string; token: string; secret: string | null; created: boolean }> {
+  const minted = mintWebhookSecrets();
+  const secret = opts.requireSecret ? minted.signingSecret : null;
+  const now = new Date();
+  return db().transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    await txDb
+      .delete(inboundConnections)
+      .where(
+        and(
+          eq(inboundConnections.workspaceId, workspaceId),
+          eq(inboundConnections.kind, 'posthog_inbox'),
+          ne(inboundConnections.externalAccountId, projectId)
+        )
+      );
+    const updated = await txDb
+      .update(inboundConnections)
+      .set({
+        tokenHash: minted.tokenHash,
+        secretEnc: secret ? encryptString(secret) : null,
+        rotatedAt: now,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(inboundConnections.workspaceId, workspaceId),
+          eq(inboundConnections.kind, 'posthog_inbox'),
+          eq(inboundConnections.externalAccountId, projectId)
+        )
+      )
+      .returning({ id: inboundConnections.id });
+    if (updated[0]) return { connectionId: updated[0].id, token: minted.token, secret, created: false };
+    const connectionId = uuid();
+    await txDb.insert(inboundConnections).values({
+      id: connectionId,
+      workspaceId,
+      kind: 'posthog_inbox',
+      externalAccountId: projectId,
+      tokenHash: minted.tokenHash,
+      secretEnc: secret ? encryptString(secret) : null,
+      createdBy: opts.createdBy,
+    });
+    return { connectionId, token: minted.token, secret, created: true };
+  });
+}
+
+/** Delete the workspace's PostHog Inbox webhook URLs and, by cascade, their deliveries. */
+export async function deletePostHogInboxPushConnections(workspaceId: string): Promise<number> {
+  const rows = await db()
+    .delete(inboundConnections)
+    .where(and(eq(inboundConnections.workspaceId, workspaceId), eq(inboundConnections.kind, 'posthog_inbox')))
+    .returning({ id: inboundConnections.id });
+  return rows.length;
 }
 
 // ---- Deliveries --------------------------------------------------------------

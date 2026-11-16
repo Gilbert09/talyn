@@ -962,10 +962,17 @@
       "breakpoints": true
     },
     {
-      "idx": 138,
+      "idx": 139,
       "version": "7",
-      "when": 1790900000130,
-      "tag": "0136_posthog_inbox_claims",
+      "when": 1790900000140,
+      "tag": "0137_posthog_inbox_push",
+      "breakpoints": true
+    },
+    {
+      "idx": 140,
+      "version": "7",
+      "when": 1790900000150,
+      "tag": "0138_posthog_inbox_claims",
       "breakpoints": true
     }
   ]

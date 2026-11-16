@@ -28,6 +28,8 @@ function inboxStatus(over: Partial<PostHogInboxStatus> = {}): PostHogInboxStatus
     host: 'https://us.posthog.com',
     lastPolledAt: null,
     lastError: null,
+    lastPushAt: null,
+    pushConfigured: false,
     ...over,
   };
 }
@@ -88,6 +90,7 @@ beforeEach(() => {
   vi.spyOn(api.workflows, 'runs').mockResolvedValue([]);
   vi.spyOn(api.workflows, 'posthogInboxStatus').mockResolvedValue(inboxStatus());
   vi.spyOn(api.workflows, 'posthogInboxDryRun').mockResolvedValue(DRY_RUN);
+  vi.spyOn(api.workflows, 'posthogInboxWebhook').mockResolvedValue(null);
   vi.spyOn(api.ws, 'on').mockReturnValue(() => {});
   vi.spyOn(api.mcpServers, 'list').mockResolvedValue([]);
   vi.spyOn(api.slack, 'getStatus').mockResolvedValue({ installations: [], links: [] });

@@ -3473,7 +3473,7 @@ export const inboundConnections = pgTable(
     workspaceId: text('workspace_id')
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
-    /** `InboundKind`: 'webhook' today; 'linear' | 'jira' | 'sentry' | 'posthog_errors' later. */
+    /** `InboundKind`: 'webhook', 'linear' or 'posthog_inbox' today; 'jira' | 'sentry' | 'posthog_errors' later. */
     kind: text('kind').notNull(),
     externalAccountId: text('external_account_id'),
     tokenHash: text('token_hash'),
@@ -3557,7 +3557,7 @@ export const externalIssueLinks = pgTable(
     status: text('status').notNull().default('active'),
     statusReason: text('status_reason'),
     /**
-     * PostHog Inbox only (migration 0136): Talyn's claim on the report in
+     * PostHog Inbox only (migration 0138): Talyn's claim on the report in
      * PostHog. `posthogClaimState` is a `PostHogClaimState`, NULL on a link
      * that made no PostHog claim. `posthogClaimNextCheckAt` is when the claim
      * sweep looks again; NULL means nothing is owed.
@@ -3616,6 +3616,8 @@ export const posthogInboxPollers = pgTable(
     lastPolledAt: timestamp('last_polled_at', { withTimezone: true }),
     lastError: text('last_error'),
     lastErrorStatus: integer('last_error_status'),
+    /** The newest push whose report Talyn read (migration 0137). Slows the poll to a reconcile for 24 h. */
+    lastPushAt: timestamp('last_push_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

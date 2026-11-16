@@ -15,6 +15,7 @@ const mockTrunkSave = jest.fn();
 const mockTrunkRemove = jest.fn();
 const mockUpdate = jest.fn();
 const mockOpenReturn = jest.fn();
+const mockInboxStatus = jest.fn();
 let mockFeatures: Record<string, boolean> | null = { trunkMergeEta: true };
 
 jest.mock('@talyn/client/native', () => ({
@@ -28,6 +29,7 @@ jest.mock('@talyn/client/native', () => ({
     removeToken: (...a: unknown[]) => mockTrunkRemove(...a),
   },
   workspaces: { update: (...a: unknown[]) => mockUpdate(...a) },
+  workflows: { posthogInboxStatus: (...a: unknown[]) => mockInboxStatus(...a) },
 }));
 jest.mock('../auth/AuthProvider', () => ({
   useMobileRuntime: () => ({ lifecycle: mockLifecycle, workflow: { load: mockLoad } }),
@@ -213,5 +215,32 @@ describe('Trunk', () => {
     expect(screen.queryByText('Trunk merge queue')).toBeNull();
     expect(screen.queryByText('PostHog Code')).toBeNull();
     expect(mockTrunkStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('PostHog Inbox push line', () => {
+  const status = (over: Record<string, unknown> = {}) => ({
+    access: 'ok', reason: null, authMethod: 'oauth', projectId: '42', host: 'https://us.posthog.com',
+    lastPolledAt: null, lastError: null, lastPushAt: null, pushConfigured: false, ...over,
+  });
+
+  it.each([
+    ['no URL', status(), /does not push to Talyn yet/],
+    ['a URL without a push', status({ pushConfigured: true }), /no push from PostHog has arrived yet/],
+    ['a recent push', status({ pushConfigured: true, lastPushAt: new Date().toISOString() }), /Last push from PostHog: .*every 30 minutes/],
+  ])('shows %s read-only on the PostHog Inbox page', async (_name, value, text) => {
+    mockInboxStatus.mockResolvedValue(value);
+    await render(<IntegrationsScreen kind="posthog" inbox />);
+    expect((await screen.findByTestId('posthog-inbox-push-line')).props.children).toMatch(text);
+    expect(mockInboxStatus).toHaveBeenCalledWith('ws-1');
+    expect(screen.getByText(/Make or rotate the webhook URL on the web/)).toBeVisible();
+  });
+
+  it('is not drawn on the PostHog Code page', async () => {
+    mockInboxStatus.mockClear();
+    await render(<IntegrationsScreen kind="posthog" />);
+    await waitFor(() => expect(mockStatus).toHaveBeenCalled());
+    expect(screen.queryByTestId('posthog-inbox-push-line')).toBeNull();
+    expect(mockInboxStatus).not.toHaveBeenCalled();
   });
 });
