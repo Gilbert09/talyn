@@ -367,6 +367,18 @@ describe('automatic TestFlight build', () => {
       MOBILE_UPDATES_ENABLED: '0', MOBILE_BUILD_NUMBER: '7' });
     expect(env).toEqual({ PATH: '/bin', EXPO_NO_DOTENV: '1' });
   });
+  it('gives EAS the pulled public values and the internal-beta profile, because EAS evaluates the config locally first', () => {
+    const pulled = { TALYN_MOBILE_IOS_BUNDLE_ID: 'dev.talyn.mobile', EXPO_PUBLIC_API_ORIGIN: 'https://api.talyn.dev', MOBILE_BUILD_NUMBER: '7',
+      EXPO_PUBLIC_TALYN_POSTHOG_KEY: 'phc_fixture', SOME_TOKEN: 'secret' };
+    const env = testflight.easEnvironment({ PATH: '/bin', APP_ENV: 'development', MOBILE_RELEASE_PROFILE: 'preview', EAS_BUILD_PROFILE: 'preview',
+      MOBILE_BUILD_NUMBER: '3' }, pulled);
+    expect(env).toEqual({ PATH: '/bin', EXPO_NO_DOTENV: '1', TALYN_MOBILE_IOS_BUNDLE_ID: 'dev.talyn.mobile', EXPO_PUBLIC_API_ORIGIN: 'https://api.talyn.dev',
+      EXPO_PUBLIC_TALYN_POSTHOG_KEY: 'phc_fixture', APP_ENV: 'production', MOBILE_RELEASE_PROFILE: 'internal-beta', MOBILE_UPDATES_ENABLED: '1',
+      MOBILE_BUILD_NUMBER: '1' });
+  });
+  it('refuses an EAS environment that sets the update switch', () => {
+    expect(() => testflight.easEnvironment({ PATH: '/bin' }, { MOBILE_UPDATES_ENABLED: '0' })).toThrow('eas.json owns the switch');
+  });
   it('builds only the iOS internal-beta profile and lets EAS submit it', () => {
     const args = testflight.buildArgs('fix: fixture (eeeeeee)');
     expect(args).toEqual(['build', '--profile', 'internal-beta', '--platform', 'ios', '--auto-submit-with-profile', 'internal-beta',

@@ -6,7 +6,7 @@
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { profiles, required } = require('../release/policy.cjs');
-const { easOrThrow, pullEnvironment, redact, summarize } = require('./publish-update.cjs');
+const { easOrThrow, publishEnvironment, pullEnvironment, redact, summarize } = require('./publish-update.cjs');
 
 const root = path.resolve(__dirname, '..');
 const PROFILE = 'internal-beta';
@@ -34,6 +34,15 @@ function neutralEnvironment(env) {
   const neutral = { ...env, EXPO_NO_DOTENV: '1' };
   for (const name of SELECTORS) delete neutral[name];
   return neutral;
+}
+
+/**
+ * The environment for every EAS call. EAS evaluates app.config.ts locally before it reads the EAS environment, and it
+ * never sets EAS_BUILD_PROFILE locally. Without the pulled identifiers the production config fails, and without the
+ * profile the config resolves the production channel, so the fingerprint would not match the internal-beta binary.
+ */
+function easEnvironment(base, pulled) {
+  return publishEnvironment(neutralEnvironment(base), pulled, PROFILE);
 }
 
 function fingerprintArgs() {
@@ -93,7 +102,8 @@ function run() {
   console.log(JSON.stringify({ action: 'build-and-submit', profile: PROFILE, platform: PLATFORM, force, execute: mode === '--execute' }));
   if (mode !== '--execute') return;
   assertTestflightExecution(process.env);
-  const env = neutralEnvironment(process.env);
+  const pulled = pullEnvironment(neutralEnvironment(process.env), policy.environment);
+  const env = easEnvironment(process.env, pulled);
 
   const { hash } = json(env, fingerprintArgs(), `Generating the ${PROFILE} ${PLATFORM} fingerprint`);
   if (!/^[a-f0-9]{40,64}$/.test(hash ?? '')) throw new Error('EAS returned no fingerprint hash.');
@@ -103,8 +113,7 @@ function run() {
     return;
   }
 
-  const current = pullEnvironment(env, policy.environment).MOBILE_BUILD_NUMBER;
-  const buildNumber = nextBuildNumber(current, json(env, recentBuildArgs(), 'Listing recent builds'));
+  const buildNumber = nextBuildNumber(pulled.MOBILE_BUILD_NUMBER, json(env, recentBuildArgs(), 'Listing recent builds'));
   easOrThrow(env, ['env:set', '--name', 'MOBILE_BUILD_NUMBER', '--value', buildNumber, '--environment', policy.environment,
     '--visibility', 'plaintext', '--type', 'string', '--non-interactive'], `Reserving build number ${buildNumber}`);
 
@@ -120,8 +129,11 @@ function run() {
 
 if (require.main === module) {
   Promise.resolve().then(run).catch((error) => {
-    console.error(`TestFlight build blocked: ${redact(error instanceof Error ? error.message : String(error))}`);
+    // The first line is also an annotation, so the reason shows on the check without the log.
+    const [first, ...rest] = redact(error instanceof Error ? error.message : String(error)).split('\n');
+    console.log(`::error::TestFlight build blocked: ${first}`);
+    if (rest.length) console.error(rest.join('\n'));
     process.exitCode = 1;
   });
 }
-module.exports = { assertTestflightExecution, neutralEnvironment, fingerprintArgs, existingBuildArgs, recentBuildArgs, buildArgs, coveringBuild, nextBuildNumber, assertQueuedBuild };
+module.exports = { assertTestflightExecution, neutralEnvironment, easEnvironment, fingerprintArgs, existingBuildArgs, recentBuildArgs, buildArgs, coveringBuild, nextBuildNumber, assertQueuedBuild };
