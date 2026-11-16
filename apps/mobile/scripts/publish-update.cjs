@@ -165,4 +165,4 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
-module.exports = { autoUpdatePlan, assertAutoExecution, parseDotenv, publishEnvironment, assertUpdateConfig, redact };
+module.exports = { autoUpdatePlan, assertAutoExecution, parseDotenv, publishEnvironment, assertUpdateConfig, redact, easOrThrow, pullEnvironment, summarize };

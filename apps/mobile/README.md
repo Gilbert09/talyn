@@ -267,6 +267,9 @@ and **Check for updates**. Update errors show only there. The development client
 
 An update can change JavaScript and assets only. A new native module, config plugin, or native field in `app.config.ts`
 changes the native fingerprint, so its update reaches no installed app. Ship that change in a new binary.
+For iOS internal-beta, `.github/workflows/mobile-testflight.yml` does this on each push to `main`: when the fingerprint is new,
+it builds a binary and EAS submits it to TestFlight. Set `MOBILE_TESTFLIGHT_AUTO=0` to stop it.
+See [the release runbook](../../docs/MOBILE_RELEASE.md#automatic-testflight-builds-for-internal-beta).
 Updates are unsigned by decision (2026-11-09), because EAS code signing needs a paid EAS plan. EAS HTTPS delivery and
 access to `EXPO_TOKEN` and the Expo project protect them. Signing later needs that plan, a certificate in the config, and a new binary.
 See [the release runbook](../../docs/MOBILE_RELEASE.md#automatic-updates-for-preview-and-internal-beta) for secrets, checks, and rollback.

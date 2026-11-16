@@ -56,6 +56,25 @@ function checkUpdateWorkflow(text, yaml) {
   assert.deepEqual(published, Object.keys(profiles).filter((name) => profiles[name].autoUpdate), 'Publish to every automatic channel, preview first.');
 }
 
+/** The automatic TestFlight path builds only iOS internal-beta, from main, through testflight-build.cjs. */
+function checkTestflightWorkflow(text, yaml) {
+  const workflow = yaml.load(text);
+  assert.deepEqual(Object.keys(workflow.on).sort(), ['push', 'workflow_dispatch']);
+  assert.deepEqual(workflow.on.push.branches, ['main']);
+  assert.equal(workflow.permissions.contents, 'read');
+  assert.equal(workflow.concurrency.group, 'mobile-release', 'Share the release concurrency group so build numbers are reserved one at a time.');
+  assert.equal(workflow.concurrency['cancel-in-progress'], false, 'TestFlight builds must queue in order.');
+  const job = workflow.jobs.build;
+  for (const guard of ["github.repository == 'Gilbert09/talyn'", "github.ref == 'refs/heads/main'", "(vars.MOBILE_TESTFLIGHT_AUTO || '1') != '0'"]) {
+    assert(job.if.includes(guard), `The TestFlight workflow needs the guard ${guard}.`);
+  }
+  assert(!/actions\/(?:upload-artifact|cache)|cache:\s*npm|set\s+-x|pull_request|eas\s+(?:build|submit|update|env)/.test(text),
+    'The TestFlight workflow builds only through testflight-build.cjs, with no cache, artifact, or PR trigger.');
+  assert(!/(?<!\|\| '1'\) )vars\.MOBILE_TESTFLIGHT_AUTO != '0'/.test(text), 'Default MOBILE_TESTFLIGHT_AUTO before comparing it.');
+  assert(text.includes(`eas-cli@${JSON.parse(read('eas.json')).cli.version}`), 'Keep the external EAS CLI pin aligned.');
+  assert.equal([...text.matchAll(/testflight-build\.cjs\s+--execute/g)].length, 1, 'Run testflight-build.cjs once.');
+}
+
 /**
  * Updates are unsigned by decision (2026-11-09): EAS code signing needs a paid EAS plan. A certificate in a binary
  * would make it reject every unsigned update, so nothing may configure or supply one.
@@ -103,7 +122,9 @@ function check() {
   assert(releaseText.includes("MOBILE_UPDATES_ENABLED: ${{ inputs.profile == 'development' && '0' || '1' }}"), 'The release workflow must enable updates as eas.json does.');
   const updateText = fs.readFileSync(path.join(root, '.github/workflows/mobile-update.yml'), 'utf8');
   checkUpdateWorkflow(updateText, yaml);
-  checkUnsignedUpdates([releaseText, updateText]);
+  const testflightText = fs.readFileSync(path.join(root, '.github/workflows/mobile-testflight.yml'), 'utf8');
+  checkTestflightWorkflow(testflightText, yaml);
+  checkUnsignedUpdates([releaseText, updateText, testflightText]);
   for (const name of ['auth', 'workflows', 'deep-links', 'notifications', 'notification-tap', 'logout', 'deletion']) {
     const flow = yaml.loadAll(read(`e2e/${name}.yaml`));
     assert.equal(flow.length, 2, `Invalid Maestro flow: ${name}.`);
@@ -152,4 +173,4 @@ if (require.main === module) {
   if (process.argv[2] === '--privacy-digest') console.log(privacyDigest());
   else check();
 }
-module.exports = { checkMetadata, checkUnsignedUpdates, checkUpdateWorkflow, privacyDigest, scanFiles };
+module.exports = { checkMetadata, checkUnsignedUpdates, checkUpdateWorkflow, checkTestflightWorkflow, privacyDigest, scanFiles };
