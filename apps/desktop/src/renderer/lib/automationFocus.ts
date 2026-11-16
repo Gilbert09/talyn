@@ -52,3 +52,26 @@ export function takeAutomationTarget<T extends { id: string }>(
   useAutomationFocus.getState().clear();
   return rows.find((row) => row.id === target.id);
 }
+
+/** A section of an integration page. */
+export type IntegrationSection = 'connection' | 'rules';
+
+interface IntegrationSectionFocusState {
+  target: { kind: IntegrationKind; section: IntegrationSection } | null;
+  clear: () => void;
+}
+
+/**
+ * Hands a section to an integration page. The route has no section, so the
+ * page reads the target, shows that section and clears the target.
+ */
+export const useIntegrationSectionFocus = create<IntegrationSectionFocusState>((set) => ({
+  target: null,
+  clear: () => set({ target: null }),
+}));
+
+/** Open one section of an integration page, for example its Connection tab. */
+export function openIntegrationSection(kind: IntegrationKind, section: IntegrationSection): void {
+  useIntegrationSectionFocus.setState({ target: { kind, section } });
+  useNavigationStore.getState().navigate({ view: 'integrations', kind });
+}

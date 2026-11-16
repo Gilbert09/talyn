@@ -9,6 +9,7 @@ import { posthogInboxMismatchReason } from '@talyn/shared';
 import { preparePostHogInboxFacts } from '../workflows/sources/posthogInbox.js';
 import type { PostHogInboxConnection } from './connection.js';
 import { storedInboxAccess } from './connection.js';
+import { isPostHogOAuthEnabled } from '../posthogCode/oauthConfig.js';
 import { reportToFacts } from './facts.js';
 import { pollerState, pollQuery } from './poller.js';
 import { posthogInboxPushConnectionQuery } from '../inbound/store.js';
@@ -46,6 +47,9 @@ export async function posthogInboxStatus(workspaceId: string): Promise<PostHogIn
     authMethod: stored.authMethod,
     projectId: stored.projectId,
     host: stored.host,
+    connection: stored.connection,
+    missingScopes: stored.missingScopes,
+    oauthAvailable: isPostHogOAuthEnabled(),
     lastPolledAt: state?.lastPolledAt ? state.lastPolledAt.toISOString() : null,
     lastError: state?.lastError ?? null,
     lastPushAt: state?.lastPushAt ? state.lastPushAt.toISOString() : null,

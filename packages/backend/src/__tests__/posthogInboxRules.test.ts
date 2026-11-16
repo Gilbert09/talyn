@@ -330,6 +330,26 @@ describe('PostHog Inbox rules', () => {
       });
     });
 
+    it.each([
+      ['only the PostHog Code row', false, ['int-1']],
+      ['the Inbox row beside it', true, ['int-inbox']],
+    ])('polls %s', async (_label, withInbox, polled) => {
+      await rule();
+      if (withInbox) {
+        await testDb.db.insert(integrations).values({
+          id: 'int-inbox',
+          workspaceId: 'ws1',
+          type: 'posthog_inbox',
+          enabled: true,
+          config: { apiKeyEnc: encryptString('phx_inbox'), projectId: '2', host: HOST, authMethod: 'personal_api_key' },
+        });
+      }
+      expect(await posthogInboxPoller.tick(new Date('2026-11-14T00:00:00Z'))).toBe(1);
+      const rows = await testDb.db.select({ id: posthogInboxPollers.integrationId, error: posthogInboxPollers.lastError }).from(posthogInboxPollers);
+      expect(rows).toEqual(polled.map((id) => ({ id, error: null })));
+      expect((await posthogInboxStatus('ws1')).connection).toBe(withInbox ? 'posthog_inbox' : 'posthog_code');
+    });
+
     it('lets one replica at a time take a connection', async () => {
       await rule();
       const now = new Date('2026-11-14T00:00:00Z');
@@ -366,11 +386,14 @@ describe('PostHog Inbox rules', () => {
 
   describe('the editor', () => {
     it.each([
-      ['an OAuth grant from before Inbox rules', 'reconnect', 'openid task:read task:write', false],
-      ['an OAuth grant with the Inbox scope', 'ok', 'openid task:read task:write inbox:read inbox:write', false],
-      ['an OAuth grant that can read but not claim (no task:write)', 'reconnect', 'openid task:read inbox:read inbox:write', false],
-      ['an OAuth grant that can read but not claim (no inbox:write)', 'reconnect', 'openid task:read task:write inbox:read', false],
-      ['an OAuth grant PostHog revoked', 'reconnect', 'openid task:read task:write inbox:read inbox:write', true],
+      // A PostHog Code grant serves the Inbox only with the Inbox scope and
+      // while PostHog keeps it. Otherwise the Inbox asks for its own connection.
+      ['a PostHog Code grant from before Inbox rules', 'not_connected', 'openid task:read task:write', false],
+      ['a PostHog Code grant with the Inbox scope', 'ok', 'openid task:read task:write inbox:read inbox:write', false],
+      ['a PostHog Code grant PostHog revoked', 'not_connected', 'openid task:read task:write inbox:read inbox:write', true],
+      // One that can read but not claim starts no sessions, and asks for a reconnect.
+      ['a PostHog Code grant that can read but not claim (no task:write)', 'reconnect', 'openid task:read inbox:read inbox:write', false],
+      ['a PostHog Code grant that can read but not claim (no inbox:write)', 'reconnect', 'openid task:read task:write inbox:read', false],
     ])('says %s is %s', async (_name, access, scope, reauth) => {
       await connectWithOAuth(scope, reauth);
       expect((await posthogInboxStatus('ws1')).access).toBe(access);

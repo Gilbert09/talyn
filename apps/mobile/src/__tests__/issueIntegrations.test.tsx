@@ -13,6 +13,7 @@ const mockLinearConnect = jest.fn();
 const mockLinearDisconnect = jest.fn();
 const mockList = jest.fn();
 const mockUpdate = jest.fn();
+const mockInboxStatus = jest.fn();
 const mockOpenReturn = jest.fn();
 let mockFeatures: Record<string, boolean> | null = {};
 let mockGithub = true;
@@ -28,7 +29,8 @@ jest.mock('@talyn/client/native', () => {
       getStatus: (...a: unknown[]) => mockLinearStatus(...a), connect: (...a: unknown[]) => mockLinearConnect(...a),
       disconnect: (...a: unknown[]) => mockLinearDisconnect(...a),
     },
-    workflows: { ...actual.workflows, list: (...a: unknown[]) => mockList(...a), update: (...a: unknown[]) => mockUpdate(...a) },
+    workflows: { ...actual.workflows, list: (...a: unknown[]) => mockList(...a), update: (...a: unknown[]) => mockUpdate(...a),
+      posthogInboxStatus: (...a: unknown[]) => mockInboxStatus(...a) },
   };
 });
 jest.mock('../auth/AuthProvider', () => ({
@@ -62,6 +64,7 @@ beforeEach(() => {
   mockLinearConnect.mockResolvedValue({ authorizeUrl: 'https://linear.app/oauth/authorize?x=1' });
   mockLinearDisconnect.mockResolvedValue(undefined);
   mockOpenReturn.mockResolvedValue('returned');
+  mockInboxStatus.mockReset();
   mockList.mockResolvedValue([rule]);
   mockUpdate.mockImplementation(async (_id: string, input: { enabled?: boolean }) => ({ ...rule, enabled: input.enabled ?? rule.enabled }));
 });
@@ -79,6 +82,45 @@ describe('issue integration cards', () => {
     expect(await screen.findByText('GitHub')).toBeVisible();
     await waitFor(() => expect(screen.queryByText('GitHub Issues') !== null).toBe(issues));
     expect(screen.queryByText('Linear') !== null).toBe(linearCard);
+  });
+});
+
+describe('PostHog Inbox catalog state', () => {
+  const base = { workflows: true, posthogInboxRules: true };
+  it.each([
+    ['ok', { access: 'ok', missingScopes: [] }, 'Connected'],
+    ['unknown key', { access: 'unknown', missingScopes: [] }, 'Connected'],
+    ['reconnect', { access: 'reconnect', missingScopes: [] }, 'Not connected'],
+    ['not connected', { access: 'not_connected', missingScopes: [] }, 'Not connected'],
+  ])('shows %s as %s', async (_name, inbox, label) => {
+    mockFeatures = { ...base };
+    mockInboxStatus.mockResolvedValue(inbox);
+    await render(<CatalogScreen />);
+    expect(await screen.findByLabelText(`PostHog Inbox. ${label}.`)).toBeVisible();
+    expect(mockInboxStatus).toHaveBeenCalledWith('ws-1');
+  });
+
+  it('shows no state when the status fails to load', async () => {
+    mockFeatures = { ...base };
+    mockInboxStatus.mockRejectedValue(new Error('boom'));
+    await render(<CatalogScreen />);
+    expect(await screen.findByLabelText('PostHog Inbox. Status unknown.')).toBeVisible();
+  });
+
+  it.each([[{ workflows: true, posthogInboxRules: false }], [{ workflows: false, posthogInboxRules: true }], [{}]])(
+    'does not read the Inbox status or list the card for %j', async (features) => {
+      mockFeatures = { ...features };
+      await render(<CatalogScreen />);
+      expect(await screen.findByText('GitHub')).toBeVisible();
+      expect(screen.queryByText('PostHog Inbox')).toBeNull();
+      expect(mockInboxStatus).not.toHaveBeenCalled();
+    });
+
+  it('ignores the PostHog Code connection for the Inbox card', async () => {
+    mockFeatures = { ...base };
+    mockInboxStatus.mockResolvedValue({ access: 'not_connected', missingScopes: [] });
+    await render(<CatalogScreen />);
+    expect(await screen.findByLabelText('PostHog Inbox. Not connected.')).toBeVisible();
   });
 });
 

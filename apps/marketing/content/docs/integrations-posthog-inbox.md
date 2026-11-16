@@ -9,13 +9,20 @@ PostHog self-driving writes reports about problems in your product. Each report 
 
 ## Connection
 
-PostHog Inbox uses the PostHog connection on the **PostHog Code** page. You connect nothing new.
+PostHog Inbox has its own PostHog connection. Open **Integrations > PostHog Inbox > Connection**, then select **Connect with PostHog**.
 
-The connection needs permission to read the Inbox and to claim reports: `inbox:read`, `inbox:write` and `task:write`. A PostHog connection made before PostHog Inbox rules does not have them. PostHog Code keeps working, but the rule editor asks you to **Reconnect PostHog**. Connect again from the PostHog Code page, and approve the Inbox permissions.
+- On the PostHog screen, pick the one project whose Inbox Talyn reads.
+- Talyn asks for `inbox:read` (read reports), `inbox:write` (claim reports) and `task:write` (attach the pull request to a claim).
+- The card shows the project and the host. **Reconnect** starts the PostHog screen again. **Disconnect** removes only the PostHog Inbox connection.
+- When the connection is missing a permission, the card names it and asks you to reconnect.
 
-Without these permissions, the rules start no sessions. **Preview matches** still works with `inbox:read` only.
+A deployment without PostHog sign-in shows a form for a personal API key instead. The key needs the `inbox:read`, `inbox:write` and `task:write` scopes. Talyn checks that the key can read the Inbox before it saves it. The card shows whether PostHog accepted the key after the first check.
 
-A personal API key needs the `inbox:read`, `inbox:write` and `task:write` scopes. The editor shows whether PostHog accepted the key after the first check.
+A workspace that set up PostHog Inbox rules on a PostHog Code connection keeps working. Talyn uses that connection when it has the Inbox permissions and the Inbox has no connection of its own. The card then asks you to connect PostHog for the Inbox. When you connect, the Inbox uses its own connection only. Disconnecting one connection never changes the other.
+
+On the mobile app, the card shows the connection state. To connect or reconnect, open the page on the web.
+
+Without `inbox:write` and `task:write`, the rules start no sessions, because Talyn starts a session only after it claims the report. **Preview matches** still works with `inbox:read` only.
 
 ## How Talyn finds reports
 
