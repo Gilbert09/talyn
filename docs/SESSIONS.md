@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Keep box agents through quota holds (2026-11-16)
+
+New session boxes and warm boxes include every agent with an account that does not need sign-in.
+Temporary quota holds do not remove an agent from the box. Turn selection still avoids held accounts.
+The fleet fixes its routes and credential policy at creation. A credential push cannot add a suppressed vendor.
+Web, desktop, and mobile now offer a restart beside the chat input for boxes with one agent.
+The existing restart transfers branches and uncommitted changes before it deletes the old box.
+It waits for running turns. Running processes stop, and large ignored files can be excluded from the transfer.
+Limit resume keeps checking the current box's recorded agents, including after a restart.
+
 ## Resume sessions after a credential refusal (2026-11-16)
 
 Credential refusals now use the existing limit resume sweep and retry count, with at most eight retries.

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createElement } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { cloudProviderStatus } from '@talyn/shared';
+import { cloudProviderStatus , addableBoxAgent } from '@talyn/shared';
 import { CloudProviderStatus } from '../components/layout/CloudProviderStatus';
 import type { CloudProviderInfo } from '@talyn/client';
 
@@ -91,5 +91,17 @@ describe('sidebar provider dots', () => {
     const button = screen.getByRole('button', { name: /Reconnect needed/ });
     expect(button.querySelector('span.rounded-full')?.className).toContain('bg-warning');
     view.unmount();
+  });
+});
+
+describe('addableBoxAgent', () => {
+  it.each([
+    ['both agents already in the box', ['claude', 'codex'], { connectedAgents: ['claude', 'codex'] }, null],
+    ['the missing agent is connected', ['claude'], { connectedAgents: ['claude', 'codex'] }, 'codex'],
+    ['the missing agent is not connected', ['claude'], { connectedAgents: ['claude'] }, null],
+    ['the missing agent needs sign-in', ['codex'], { connectedAgents: ['claude', 'codex'], reauthAgents: ['claude'] }, null],
+    ['no provider loaded', ['codex'], undefined, null],
+  ] as const)('%s', (_name, box, provider, expected) => {
+    expect(addableBoxAgent(box, provider)).toBe(expected);
   });
 });
