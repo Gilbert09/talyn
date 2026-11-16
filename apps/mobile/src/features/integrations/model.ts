@@ -2,10 +2,11 @@ import type { PostHogCodeStatus } from '@talyn/client/native';
 import {
   DEFAULT_POSTHOG_CODE_MODEL_ID, DEFAULT_POSTHOG_INBOX_ACTIONABILITY, INVALID_RETURN_TO_CODE, isWorkflowIntegration, POSTHOG_CODE_MODELS,
   POSTHOG_INBOX_ACTIONABILITY_LABELS, POSTHOG_INBOX_CONDITION_SPECS,
-  type LinearConnection, type WorkflowConditions, type TrunkIntegrationStatus, type WorkflowIntegration, type WorkspaceSettings,
+  type LinearConnection, type PostHogInboxStatus, type WorkflowConditions, type TrunkIntegrationStatus, type WorkflowIntegration, type WorkspaceSettings,
 } from '@talyn/shared';
 
 import type { Tone } from '../../components/UI';
+import { relativeTimeLabel } from '../../lib/time';
 
 /** Where PostHog hands out personal API keys. Same link as web `GetKeyLink`. */
 export const POSTHOG_API_KEYS_URL = 'https://app.posthog.com/settings/user-api-keys';
@@ -231,4 +232,49 @@ export function postHogInboxConditionFacts(conditions: WorkflowConditions | null
 /** The daily cap line of a rule, or null when it has none. */
 export function dailyCapText(maxRunsPerDay: number | null | undefined): string | null {
   return typeof maxRunsPerDay === 'number' && maxRunsPerDay > 0 ? `${maxRunsPerDay} ${maxRunsPerDay === 1 ? 'run' : 'runs'} a day` : null;
+}
+
+export interface PostHogInboxCardView {
+  badge: string;
+  tone: Tone;
+  /** Whether the catalog counts this state as connected. */
+  connected: boolean;
+  /** Plain sentences under the badge. */
+  notes: string[];
+  facts: { label: string; value: string }[];
+  webLabel: string;
+}
+
+/** What the PostHog Inbox connection card shows for a status. Read-only: the web page owns connect and reconnect. */
+export function postHogInboxCardView(status: PostHogInboxStatus, now = Date.now()): PostHogInboxCardView {
+  const { access } = status;
+  const connected = access === 'ok' || access === 'unknown';
+  const notes: string[] = [];
+  if (access === 'reconnect') {
+    notes.push(status.reason?.trim() || 'The PostHog connection does not have the Inbox permissions.');
+    if (status.missingScopes.length > 0) notes.push(`Missing permissions: ${status.missingScopes.join(', ')}.`);
+  } else if (access === 'not_connected') {
+    notes.push('Talyn reads the Inbox through a PostHog connection. Until you connect PostHog, these automations never run.');
+  } else if (access === 'unknown') {
+    notes.push('Talyn has not read your Inbox with this PostHog API key yet.');
+  }
+  if (connected && status.connection === 'posthog_code') {
+    notes.push('These automations use your older PostHog Code connection. Connect PostHog for the Inbox on the web to give the Inbox its own connection.');
+  }
+  if (connected) {
+    const polled = relativeTimeLabel(status.lastPolledAt, now);
+    notes.push(polled ? `Last checked ${polled}.` : 'Not checked yet.');
+  }
+  if (status.lastError) notes.push(`The last check failed. ${status.lastError}`);
+  const facts: { label: string; value: string }[] = [];
+  if (status.projectId) facts.push({ label: 'Project', value: status.projectId });
+  if (status.host) facts.push({ label: 'Host', value: status.host });
+  if (status.authMethod) facts.push({ label: 'Sign-in', value: status.authMethod === 'oauth' ? 'PostHog account' : 'Personal API key' });
+  const own = status.connection === 'posthog_inbox';
+  return {
+    badge: access === 'ok' ? 'Connected' : access === 'unknown' ? 'Connected — not checked yet' : access === 'reconnect' ? 'Reconnect needed' : 'Not connected',
+    tone: access === 'ok' ? 'success' : access === 'reconnect' ? 'warning' : 'muted',
+    connected, notes, facts,
+    webLabel: access === 'reconnect' ? 'Reconnect on the web' : (access === 'not_connected' || !own) ? 'Connect on the web' : 'Manage on the web',
+  };
 }

@@ -649,6 +649,23 @@ export const posthog = {
     request<void>('DELETE', `/posthog/config?workspaceId=${workspaceId}`),
 };
 
+// PostHog Inbox — its own PostHog connection, separate from PostHog Code. The
+// status is `workflows.posthogInboxStatus`. Not a cloud provider.
+export const posthogInbox = {
+  /**
+   * Start the OAuth flow for the Inbox. Returns the PostHog authorize URL to
+   * open. The callback sends the web app to `/integrations/posthog_inbox`.
+   */
+  startOAuth: (workspaceId: string, opts?: { host?: string; projectId?: string }) =>
+    request<{ authorizeUrl: string }>('POST', '/posthog-inbox/oauth/start', { workspaceId, ...opts }),
+  /** Save a personal API key for the Inbox. PostHog checks it first. */
+  saveConfig: (workspaceId: string, config: { apiKey: string; projectId: string; host?: string }) =>
+    request<PostHogInboxStatus>('PUT', '/posthog-inbox/config', { workspaceId, ...config }),
+  /** Remove the Inbox's own connection. A PostHog Code connection stays. */
+  disconnect: (workspaceId: string) =>
+    request<PostHogInboxStatus>('DELETE', `/posthog-inbox/config?workspaceId=${encodeURIComponent(workspaceId)}`),
+};
+
 // Cloud task providers — the registered providers + their per-workspace
 // connection status. Generic surface so a new provider shows up without a
 // desktop change.
@@ -2967,6 +2984,7 @@ export const api = {
   tasks,
   github,
   posthog,
+  posthogInbox,
   cloudProviders,
   repositories,
   pullRequests,

@@ -1,61 +1,164 @@
-import type { PostHogInboxAccess } from '@talyn/shared';
-import { POSTHOG_INBOX_SCOPES } from '@talyn/shared';
+import type { PostHogInboxAccess, PostHogInboxConnectionSource } from '@talyn/shared';
+import { POSTHOG_INBOX_REQUIRED_SCOPES, POSTHOG_INBOX_SCOPES } from '@talyn/shared';
 import { isEncryptedEnvelope } from '../tokenCrypto.js';
-import { getPostHogCodeCredentials } from '../posthogCode/credentials.js';
-import { normalizeHost, readAuthMethod, readPostHogIntegration } from '../posthogCode/integrationRow.js';
+import { getPostHogCodeCredentials, readApiKey } from '../posthogCode/credentials.js';
+import { PostHogHostNotAllowedError } from '../posthogCode/hostPolicy.js';
+import {
+  normalizeHost,
+  readAuthMethod,
+  readPostHogIntegration,
+  type PostHogIntegrationRow,
+} from '../posthogCode/integrationRow.js';
 import { PostHogInboxClient } from './api.js';
+import { inboxRowCredentials, readInboxRow } from './credentials.js';
 import type { PostHogInboxConnectionRef } from './facts.js';
 
 /**
  * The workspace's PostHog connection, as PostHog Inbox rules use it.
  *
- * It is the same `integrations` row (type `posthog`) that PostHog Code uses,
- * with either auth method. An OAuth grant made before Inbox rules has only
- * `task:*`: it keeps working for PostHog Code, and the Inbox reads say
- * `reconnect` until the user connects again (the new grant asks for
- * `inbox:read inbox:write` too).
+ * The Inbox has its own connection: an `integrations` row of type
+ * `posthog_inbox`, with an OAuth grant or a personal API key. When it exists,
+ * it is the only one used, in any state.
+ *
+ * When it does not, an older PostHog Code row (type `posthog`) is used if it
+ * can serve the Inbox: an OAuth grant with `inbox:read` that PostHog has not
+ * revoked, or a personal API key (its scopes show only when PostHog answers).
+ * That keeps workspaces that set up Inbox rules on PostHog Code working with
+ * no reconnect. A PostHog Code grant without the Inbox scopes is not used.
+ *
+ * `getPostHogInboxConnection` is the single entry point for the poller, the
+ * dry run, the claims and the webhook.
  */
 export interface PostHogInboxConnection extends PostHogInboxConnectionRef {
   authMethod: 'oauth' | 'personal_api_key';
   client: PostHogInboxClient;
 }
 
+function grantedScopes(scope: string | null | undefined): Set<string> {
+  return new Set((scope ?? '').split(/\s+/).filter(Boolean));
+}
+
 /** Whether a stored OAuth scope string grants the Inbox read. */
 export function scopeGrantsInbox(scope: string | null | undefined): boolean {
-  const granted = new Set((scope ?? '').split(/\s+/).filter(Boolean));
-  return granted.has(POSTHOG_INBOX_SCOPES[0]);
+  return grantedScopes(scope).has(POSTHOG_INBOX_SCOPES[0]);
 }
+
+/** The required Inbox scopes a stored OAuth scope string does not hold. */
+export function missingInboxScopes(scope: string | null | undefined): string[] {
+  const granted = grantedScopes(scope);
+  return POSTHOG_INBOX_REQUIRED_SCOPES.filter((s) => !granted.has(s));
+}
+
+/**
+ * Whether a PostHog Code row may serve the Inbox, when the Inbox has no row
+ * of its own. A revoked grant does not: the user cannot reconnect PostHog Code
+ * from the Inbox page, so the Inbox asks for its own connection instead.
+ */
+export function postHogCodeRowServesInbox(row: PostHogIntegrationRow | null): boolean {
+  if (!row || !row.enabled || !row.config.projectId) return false;
+  if (readAuthMethod(row.config) === 'oauth') {
+    const oauth = row.config.oauth;
+    return Boolean(
+      oauth && isEncryptedEnvelope(oauth.accessTokenEnc) && !oauth.reauthRequiredAt && scopeGrantsInbox(oauth.scope)
+    );
+  }
+  return readApiKey(row.config) !== null;
+}
+
+/** The row the Inbox uses: its own, else a PostHog Code row that can serve it. */
+async function resolveInboxRow(
+  workspaceId: string
+): Promise<{ source: PostHogInboxConnectionSource; row: PostHogIntegrationRow } | null> {
+  const own = await readInboxRow(workspaceId);
+  if (own) return { source: 'posthog_inbox', row: own };
+  const code = await readPostHogIntegration(workspaceId);
+  if (postHogCodeRowServesInbox(code)) return { source: 'posthog_code', row: code as PostHogIntegrationRow };
+  return null;
+}
+
+export interface StoredInboxAccess {
+  access: PostHogInboxAccess;
+  reason: string | null;
+  authMethod: 'oauth' | 'personal_api_key' | null;
+  projectId: string | null;
+  host: string | null;
+  integrationId: string | null;
+  /** Which row the Inbox uses, or null. */
+  connection: PostHogInboxConnectionSource | null;
+  /** OAuth only: the required Inbox scopes the grant lacks. */
+  missingScopes: string[];
+}
+
+const NOT_CONNECTED_REASON = 'Connect PostHog on the PostHog Inbox page first.';
 
 /**
  * What the stored connection says about Inbox access, before any request.
  * A personal API key cannot be read for its scopes, so it is `unknown` until
  * the poller has used it.
  */
-export async function storedInboxAccess(
-  workspaceId: string
-): Promise<{ access: PostHogInboxAccess; reason: string | null; authMethod: 'oauth' | 'personal_api_key' | null; projectId: string | null; host: string | null; integrationId: string | null }> {
-  const row = await readPostHogIntegration(workspaceId);
-  if (!row || !row.enabled || !row.config.projectId) {
-    return { access: 'not_connected', reason: 'Connect PostHog on the PostHog Code page first.', authMethod: null, projectId: null, host: null, integrationId: row?.id ?? null };
+export async function storedInboxAccess(workspaceId: string): Promise<StoredInboxAccess> {
+  const resolved = await resolveInboxRow(workspaceId);
+  const none: StoredInboxAccess = {
+    access: 'not_connected',
+    reason: NOT_CONNECTED_REASON,
+    authMethod: null,
+    projectId: null,
+    host: null,
+    integrationId: null,
+    connection: null,
+    missingScopes: [],
+  };
+  if (!resolved) return none;
+  const { source, row } = resolved;
+  if (!row.enabled || !row.config.projectId) {
+    return { ...none, integrationId: row.id, connection: source };
   }
   const authMethod = readAuthMethod(row.config);
-  const base = { authMethod, projectId: row.config.projectId, host: normalizeHost(row.config.host), integrationId: row.id };
+  let host: string;
+  try {
+    host = normalizeHost(row.config.host);
+  } catch (err) {
+    if (!(err instanceof PostHogHostNotAllowedError)) throw err;
+    return {
+      ...none,
+      access: 'reconnect',
+      reason: `Talyn no longer allows the PostHog host ${err.host}. Connect PostHog again.`,
+      authMethod,
+      projectId: row.config.projectId,
+      host: err.host,
+      integrationId: row.id,
+      connection: source,
+    };
+  }
+  const base = {
+    authMethod,
+    projectId: row.config.projectId,
+    host,
+    integrationId: row.id,
+    connection: source,
+    missingScopes: [] as string[],
+  };
   if (authMethod === 'oauth') {
     const oauth = row.config.oauth;
     if (!oauth || !isEncryptedEnvelope(oauth.accessTokenEnc)) {
-      return { ...base, access: 'not_connected', reason: 'Connect PostHog on the PostHog Code page first.' };
+      return { ...base, access: 'not_connected', reason: NOT_CONNECTED_REASON };
     }
+    const missingScopes = missingInboxScopes(oauth.scope);
     if (oauth.reauthRequiredAt) {
-      return { ...base, access: 'reconnect', reason: 'PostHog ended the connection. Connect PostHog again.' };
+      return { ...base, missingScopes, access: 'reconnect', reason: 'PostHog ended the connection. Connect PostHog again.' };
     }
     if (!scopeGrantsInbox(oauth.scope)) {
       return {
         ...base,
+        missingScopes,
         access: 'reconnect',
-        reason: 'The PostHog connection was made before Inbox automations and cannot read the Inbox. Connect PostHog again to grant it.',
+        reason: 'The PostHog connection cannot read the Inbox. Connect PostHog again to grant the Inbox permissions.',
       };
     }
-    return { ...base, access: 'ok', reason: null };
+    return { ...base, missingScopes, access: 'ok', reason: null };
+  }
+  if (readApiKey(row.config) === null) {
+    return { ...base, access: 'not_connected', reason: NOT_CONNECTED_REASON };
   }
   return { ...base, access: 'unknown', reason: null };
 }
@@ -69,7 +172,10 @@ export async function getPostHogInboxConnection(workspaceId: string): Promise<Po
   const stored = await storedInboxAccess(workspaceId);
   if (stored.access !== 'ok' && stored.access !== 'unknown') return null;
   if (!stored.integrationId) return null;
-  const creds = await getPostHogCodeCredentials(workspaceId);
+  const creds =
+    stored.connection === 'posthog_inbox'
+      ? inboxRowCredentials(workspaceId, await readInboxRow(workspaceId))
+      : await getPostHogCodeCredentials(workspaceId);
   if (!creds || creds.reauthRequired) return null;
   return {
     id: stored.integrationId,

@@ -2,6 +2,20 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## PostHog Inbox gets its own PostHog connection (2026-11-16)
+
+**Why.** PostHog Inbox rules read reports through the PostHog Code connection. PostHog Code is retired, so its connect routes answer 410 for a new workspace. A new workspace could not connect PostHog for the Inbox.
+
+**What changed.**
+- The Inbox has its own `integrations` row (type `posthog_inbox`): an OAuth grant (`openid inbox:read inbox:write task:write`, one project) or a personal API key. It is not a cloud provider.
+- The OAuth code moved to `services/posthogOAuth/core.ts`. PostHog Code and the Inbox share the client, the callback URL and `posthog_oauth_states`. The state row has a `kind` (migration 0138), and each completion refuses the other kind. So the client metadata document and `POSTHOG_OAUTH_REDIRECT_URI` did not change.
+- Refresh stays single-flighted per row: the promise map is keyed by row type, and the Inbox has its own advisory lock name. The PostHog Code lock name did not change, so old and new replicas still exclude each other during a deploy.
+- `getPostHogInboxConnection` keeps its shape. It takes the Inbox row first, in any state. Else it uses a PostHog Code row with `inbox:read` that PostHog has not revoked, or a PostHog Code key. The poller polls one row per workspace, the same one.
+- A new connection clears the workspace's poller error and backoff, so the status does not ask for a reconnect for 30 more minutes.
+- Web and desktop: the Inbox card connects, reconnects and disconnects on its own. Mobile shows the same state, read-only, with a link to the web.
+
+**Not done.** The PostHog Code grant still asks for `inbox:*`. It can stop when PostHog Code is deleted (retirement step 2).
+
 ## Show Fleet accounts that need sign-in (2026-11-16)
 
 Fleet status now reports any account that needs sign-in, with its name and ID. Healthy accounts remain available.

@@ -8,6 +8,7 @@ import {
   upsertPostHogIntegration,
   type PostHogAuthMethod,
   type PostHogIntegrationConfig,
+  type PostHogIntegrationRow,
 } from './integrationRow.js';
 import { ensureFreshAccessToken, PostHogReauthRequiredError } from './oauth.js';
 
@@ -38,7 +39,7 @@ export interface PostHogCodeCredentials {
   getToken: PostHogTokenSource;
 }
 
-function readApiKey(config: PostHogIntegrationConfig): string | null {
+export function readApiKey(config: PostHogIntegrationConfig): string | null {
   if (config.apiKeyEnc && isEncryptedEnvelope(config.apiKeyEnc)) {
     try {
       return decryptString(config.apiKeyEnc);
@@ -57,6 +58,21 @@ export async function getPostHogCodeCredentials(
   workspaceId: string
 ): Promise<PostHogCodeCredentials | null> {
   const row = await readPostHogIntegration(workspaceId);
+  return credentialsFromRow(row, (opts) =>
+    ensureFreshAccessToken(workspaceId, { force: opts?.forceRefresh })
+  );
+}
+
+/**
+ * Credentials from one PostHog row's config, for either auth method. Shared
+ * with the PostHog Inbox's own row (`services/posthogInbox/credentials.ts`),
+ * which passes its own OAuth token source. Null when the row is missing,
+ * disabled or incomplete.
+ */
+export function credentialsFromRow(
+  row: PostHogIntegrationRow | null,
+  oauthToken: PostHogTokenSource
+): PostHogCodeCredentials | null {
   if (!row || !row.enabled) return null;
 
   const config = row.config;
@@ -72,7 +88,7 @@ export async function getPostHogCodeCredentials(
       host,
       authMethod,
       reauthRequired: Boolean(oauth.reauthRequiredAt),
-      getToken: (opts) => ensureFreshAccessToken(workspaceId, { force: opts?.forceRefresh }),
+      getToken: oauthToken,
     };
   }
 

@@ -5,6 +5,31 @@
 /** The OAuth scopes PostHog Inbox rules need. */
 export const POSTHOG_INBOX_SCOPES = ['inbox:read', 'inbox:write'] as const;
 
+/**
+ * The scopes the PostHog Inbox's own OAuth connection asks for: read the
+ * reports (`inbox:read`), claim them (`inbox:write`) and attach a pull request
+ * to the claim (`task:write`). `openid` makes it an OIDC grant. Checked
+ * against PostHog's OpenAPI schema.
+ */
+export const POSTHOG_INBOX_OAUTH_SCOPES = ['openid', 'inbox:read', 'inbox:write', 'task:write'] as const;
+
+/** The scopes an Inbox grant must hold. The card asks for a reconnect when one is missing. */
+export const POSTHOG_INBOX_REQUIRED_SCOPES = ['inbox:read', 'inbox:write', 'task:write'] as const;
+
+/**
+ * Which PostHog connection the Inbox rules use.
+ *
+ * - `posthog_inbox`: the Inbox's own connection (an `integrations` row of
+ *   type `posthog_inbox`). It wins when it exists.
+ * - `posthog_code`: an older PostHog Code connection whose grant has the Inbox
+ *   scopes (or a personal API key). Used only when the Inbox has no connection
+ *   of its own, so existing workspaces keep working without a reconnect.
+ */
+export type PostHogInboxConnectionSource = 'posthog_inbox' | 'posthog_code';
+
+/** The answer code of the Inbox connect routes when PostHog OAuth is not set up on this deployment. */
+export const POSTHOG_INBOX_OAUTH_UNAVAILABLE_CODE = 'posthog_inbox_oauth_unavailable';
+
 /** The answer code when the `posthogInboxRules` flag is off for the caller. */
 export const POSTHOG_INBOX_RULES_UNAVAILABLE_CODE = 'posthog_inbox_rules_unavailable';
 
@@ -28,6 +53,16 @@ export interface PostHogInboxStatus {
   authMethod: 'oauth' | 'personal_api_key' | null;
   projectId: string | null;
   host: string | null;
+  /** Which connection the rules use, or null when none. */
+  connection: PostHogInboxConnectionSource | null;
+  /**
+   * OAuth only: the required scopes ({@link POSTHOG_INBOX_REQUIRED_SCOPES})
+   * the stored grant does not hold. Empty for a personal API key or no
+   * connection.
+   */
+  missingScopes: string[];
+  /** Whether this deployment can offer "Connect with PostHog" at all. */
+  oauthAvailable: boolean;
   /** When the poller last read the Inbox, or null. */
   lastPolledAt: string | null;
   /** The last poll's error, or null when it worked. */

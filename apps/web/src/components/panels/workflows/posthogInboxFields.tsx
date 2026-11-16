@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, Check, Loader2, Pencil, RefreshCw, Unlink } from 'lucide-react';
 import type {
   PostHogInboxConditionSpec,
   PostHogInboxDryRun,
@@ -15,14 +16,18 @@ import {
   POSTHOG_INBOX_ACTIONABILITY,
   POSTHOG_INBOX_ACTIONABILITY_LABELS,
   POSTHOG_INBOX_CONDITION_SPECS,
+  POSTHOG_INBOX_OAUTH_UNAVAILABLE_CODE,
   POSTHOG_INBOX_PRIORITIES,
 } from '@talyn/shared';
 import { api } from '../../../lib/api';
-import { captureAnalyticsException } from '../../../lib/analytics';
-import { useNavigationStore } from '../../../stores/navigation';
+import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
+import { openIntegrationSection } from '../../../lib/automationFocus';
 import { useWorkspaceStore } from '../../../stores/workspace';
+import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
+import { Card } from '../../ui/card';
 import { Input } from '../../ui/input';
+import { GetKeyLink, POSTHOG_API_KEYS_URL } from '../../widgets/GetKeyLink';
 import { ChoiceSet, DropdownButton, EditorRow, TextField, TokenField } from './workflowFields';
 
 /**
@@ -40,52 +45,86 @@ export interface PostHogInboxStatusState {
   error: string | null;
 }
 
-/** Whether Talyn can read the workspace's PostHog Inbox. */
-export function usePostHogInboxStatus(enabled: boolean): PostHogInboxStatusState {
-  const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
-  const [status, setStatus] = useState<PostHogInboxStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
+export interface PostHogInboxStatusHook extends PostHogInboxStatusState {
+  /** Read the status again, for example after a connect in the browser. */
+  reload: () => void;
+  /** Show a status that a save or a disconnect sent back. */
+  setStatus: (next: PostHogInboxStatus) => void;
+}
 
-  useEffect(() => {
+/**
+ * Whether Talyn can read the workspace's PostHog Inbox. The status is read
+ * again when the window gets focus, because a connect finishes in the browser.
+ */
+export function usePostHogInboxStatus(enabled: boolean): PostHogInboxStatusHook {
+  const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const [status, setStatusState] = useState<PostHogInboxStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Only the newest read may land: an older answer must not replace a newer one.
+  const request = useRef(0);
+
+  const reload = useCallback(() => {
     if (!enabled || !workspaceId) return;
-    let active = true;
+    const id = ++request.current;
     api.workflows
       .posthogInboxStatus(workspaceId)
       .then((next) => {
-        if (!active) return;
-        setStatus(next);
+        if (request.current !== id) return;
+        setStatusState(next);
         setError(null);
       })
       .catch((err: unknown) => {
         captureAnalyticsException(err, { flow: 'posthog_inbox_status' });
-        if (active) setError(err instanceof Error ? err.message : 'Could not check the PostHog connection.');
+        if (request.current === id) setError(err instanceof Error ? err.message : 'Could not check the PostHog connection.');
       });
-    return () => {
-      active = false;
-    };
   }, [enabled, workspaceId]);
 
-  return { status, error };
+  useEffect(() => {
+    if (!enabled || !workspaceId) return;
+    reload();
+    window.addEventListener('focus', reload);
+    return () => {
+      window.removeEventListener('focus', reload);
+      request.current += 1;
+    };
+  }, [enabled, workspaceId, reload]);
+
+  const setStatus = useCallback((next: PostHogInboxStatus) => {
+    request.current += 1;
+    setStatusState(next);
+    setError(null);
+  }, []);
+
+  return { status, error, reload, setStatus };
 }
 
-function OpenPostHogCodeButton({ children }: { children: React.ReactNode }) {
-  const navigate = useNavigationStore((s) => s.navigate);
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      data-attr="posthog-inbox-open-posthog"
-      onClick={() => navigate({ view: 'integrations', kind: 'posthog' })}
-    >
-      {children}
-    </Button>
-  );
+/** Opens the Connection tab of the PostHog Inbox page. */
+function openInboxConnection() {
+  openIntegrationSection('posthog_inbox', 'connection');
 }
 
 function formatTime(iso: string | null): string | null {
   if (!iso) return null;
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? null : date.toLocaleString();
+}
+
+function errorCode(err: unknown): string | undefined {
+  return (err as { code?: string } | null)?.code;
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
+}
+
+/** The scopes an OAuth grant does not have, as one line. */
+function MissingScopes({ scopes }: { scopes: string[] }) {
+  if (scopes.length === 0) return null;
+  return (
+    <p className="mt-0.5 text-xs text-muted-foreground" data-attr="posthog-inbox-missing-scopes">
+      Missing permissions: {scopes.join(', ')}.
+    </p>
+  );
 }
 
 /** What the editor says about the PostHog connection. */
@@ -113,10 +152,13 @@ export function PostHogInboxConnectionNotice({ status, error }: PostHogInboxStat
           <p className="mt-0.5 text-xs text-muted-foreground">
             {reconnect
               ? status.reason ?? 'The PostHog connection does not have the Inbox permissions.'
-              : 'Talyn reads the Inbox through your PostHog connection. Until you connect PostHog, this automation never runs.'}
+              : 'Talyn reads the Inbox through a PostHog connection. Until you connect PostHog, this automation never runs.'}
           </p>
+          {reconnect && <MissingScopes scopes={status.missingScopes ?? []} />}
         </div>
-        <OpenPostHogCodeButton>{reconnect ? 'Reconnect PostHog' : 'Connect PostHog'}</OpenPostHogCodeButton>
+        <Button variant="outline" size="sm" data-attr="posthog-inbox-open-connection" onClick={openInboxConnection}>
+          {reconnect ? 'Reconnect PostHog' : 'Connect PostHog'}
+        </Button>
       </div>
     );
   }
@@ -130,39 +172,363 @@ export function PostHogInboxConnectionNotice({ status, error }: PostHogInboxStat
           : `Talyn reads the Inbox of PostHog project ${status.projectId ?? 'unknown'}.`}{' '}
         {polled ? `Last checked ${polled}.` : 'Not checked yet.'}
       </p>
+      {status.connection === 'posthog_code' && (
+        <p>
+          It uses the older PostHog Code connection.{' '}
+          <button type="button" className="underline hover:text-foreground" onClick={openInboxConnection}>
+            Connect PostHog for the Inbox
+          </button>
+        </p>
+      )}
       {status.lastError && <p className="text-red-500">The last check failed. {status.lastError}</p>}
     </div>
   );
 }
 
-/** A one-line note for the rules list: these rules use the PostHog Code connection. */
+/** A one-line note for the rules list: where the PostHog connection of these rules is. */
 export function PostHogInboxConnectionNote() {
-  const navigate = useNavigationStore((s) => s.navigate);
   return (
     <p className="border-b px-6 py-2 text-xs text-muted-foreground" data-attr="posthog-inbox-connection">
-      Uses your PostHog connection.{' '}
-      <button
-        type="button"
-        className="underline hover:text-foreground"
-        onClick={() => navigate({ view: 'integrations', kind: 'posthog' })}
-      >
-        Open PostHog Code
+      These automations read the Inbox through your PostHog connection.{' '}
+      <button type="button" className="underline hover:text-foreground" onClick={openInboxConnection}>
+        Manage the connection
       </button>
     </p>
   );
 }
 
-/** The Connection tab of the PostHog Inbox page. The connection itself is on the PostHog Code page. */
+const DEFAULT_POSTHOG_HOST = 'https://us.posthog.com';
+const POSTHOG_INBOX_KEY_SCOPE_NOTE = 'the key needs the inbox:read, inbox:write and task:write scopes.';
+
+function ConnectionBadge({ status }: { status: PostHogInboxStatus }) {
+  if (status.access === 'reconnect') return <Badge variant="destructive">Reconnect needed</Badge>;
+  if (status.access === 'ok' || status.access === 'unknown') {
+    return (
+      <Badge variant="default" className="bg-green-600">
+        <Check className="mr-1 h-3 w-3" />
+        Connected
+      </Badge>
+    );
+  }
+  return <Badge variant="secondary">Not connected</Badge>;
+}
+
+/**
+ * The Connection tab of the PostHog Inbox page. The Inbox has its own PostHog
+ * connection. An older PostHog Code connection with the Inbox scopes still
+ * works until the Inbox gets its own. A disconnect here never touches
+ * PostHog Code.
+ */
 export function PostHogInboxConnectionSection() {
-  const state = usePostHogInboxStatus(true);
-  return (
-    <div className="space-y-3 rounded-lg border p-4" data-attr="posthog-inbox-connection-section">
-      <p className="text-sm">
-        PostHog Inbox automations use your PostHog connection. Connect or reconnect PostHog on the PostHog Code page.
-      </p>
-      <PostHogInboxConnectionNotice {...state} />
-      <OpenPostHogCodeButton>Open PostHog Code</OpenPostHogCodeButton>
+  const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const { status, error: loadError, setStatus } = usePostHogInboxStatus(true);
+  const [host, setHost] = useState(DEFAULT_POSTHOG_HOST);
+  const [apiKey, setApiKey] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [keyForm, setKeyForm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Seed the form from the status. The deps are scalars, so a typed value stays.
+  useEffect(() => {
+    if (status?.host) setHost(status.host);
+  }, [status?.host]);
+  useEffect(() => {
+    if (status?.projectId) setProjectId(status.projectId);
+  }, [status?.projectId]);
+
+  // The OAuth callback sends the web app back to
+  // /integrations/posthog_inbox?posthog_inbox=connected|error&message=…
+  // Read it once, then strip it so a refresh does not show an old failure.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get('posthog_inbox');
+    if (!result) return;
+    if (result === 'connected') trackEvent('posthog_inbox_connected', { authMethod: 'oauth' });
+    else setError(params.get('message') || 'PostHog could not be connected.');
+    params.delete('posthog_inbox');
+    params.delete('message');
+    const qs = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
+  }, []);
+
+  if (!status) {
+    return (
+      <Card className="p-4" data-attr="posthog-inbox-connection-section">
+        <h4 className="font-medium">PostHog Inbox</h4>
+        {loadError ? (
+          <p className="mt-1 text-sm text-red-500">Could not check the PostHog connection. {loadError}</p>
+        ) : (
+          <p className="mt-1 text-sm text-muted-foreground">Checking the PostHog connection...</p>
+        )}
+      </Card>
+    );
+  }
+
+  const oauthAvailable = status.oauthAvailable === true;
+  const own = status.connection === 'posthog_inbox';
+  const legacy = status.connection === 'posthog_code';
+  const notConnected = status.access === 'not_connected' || status.connection === null;
+  // Without OAuth, the key form is the only way to connect.
+  const showKeyForm = keyForm || (notConnected && !oauthAvailable);
+
+  const connectOAuth = async () => {
+    if (!workspaceId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { authorizeUrl } = await api.posthogInbox.startOAuth(workspaceId, {
+        host: host.trim() || undefined,
+        // Only a pre-selection on PostHog's consent screen. It helps on a reconnect.
+        projectId: status.projectId ?? undefined,
+      });
+      trackEvent('posthog_inbox_oauth_started');
+      // Navigate this tab. The await above spends the user activation, so a
+      // popup from window.open would be blocked. The callback sends the user back here.
+      window.location.assign(authorizeUrl);
+    } catch (err) {
+      captureAnalyticsException(err, { flow: 'posthog_inbox_oauth_start' });
+      if (errorCode(err) === POSTHOG_INBOX_OAUTH_UNAVAILABLE_CODE) {
+        setKeyForm(true);
+        setError('PostHog sign-in is not set up here. Use a personal API key.');
+      } else {
+        setError(errorMessage(err, 'Could not start the PostHog sign-in.'));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Without OAuth, a reconnect means a new personal API key.
+  const reconnect = () => {
+    if (oauthAvailable) void connectOAuth();
+    else setKeyForm(true);
+  };
+
+  const saveKey = async () => {
+    if (!workspaceId || !apiKey.trim() || !projectId.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.posthogInbox.saveConfig(workspaceId, {
+        apiKey: apiKey.trim(),
+        projectId: projectId.trim(),
+        host: host.trim() || undefined,
+      });
+      trackEvent('posthog_inbox_connected', { authMethod: 'personal_api_key' });
+      setStatus(next);
+      setApiKey('');
+      setKeyForm(false);
+    } catch (err) {
+      captureAnalyticsException(err, { flow: 'posthog_inbox_save_key' });
+      setError(errorMessage(err, 'Could not save the API key.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disconnect = async () => {
+    if (!workspaceId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.posthogInbox.disconnect(workspaceId);
+      trackEvent('posthog_inbox_disconnected');
+      setStatus(next);
+      setKeyForm(false);
+    } catch (err) {
+      captureAnalyticsException(err, { flow: 'posthog_inbox_disconnect' });
+      setError(errorMessage(err, 'Could not disconnect PostHog.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const description = () => {
+    if (notConnected) {
+      return oauthAvailable
+        ? 'Connect PostHog to let Talyn read and claim reports in your Inbox. Talyn asks only for Inbox and task access to one project.'
+        : 'Add a personal API key and a project id to let Talyn read your Inbox.';
+    }
+    if (legacy) return 'These automations use your older PostHog Code connection. Connect PostHog for the Inbox to give it its own connection.';
+    return status.authMethod === 'oauth'
+      ? 'Talyn reads your Inbox with your PostHog account.'
+      : 'Talyn reads your Inbox with a personal API key.';
+  };
+
+  const polled = formatTime(status.lastPolledAt);
+  const errorLine = error && (
+    <div className="flex items-start gap-2 text-sm text-destructive" data-attr="posthog-inbox-connect-error">
+      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+      <span>{error}</span>
     </div>
+  );
+
+  return (
+    <Card className="p-4" data-attr="posthog-inbox-connection-section">
+      <div className="flex items-start gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h4 className="font-medium">PostHog Inbox</h4>
+            <ConnectionBadge status={status} />
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground">{description()}</p>
+
+          {!notConnected && (
+            <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm" data-attr="posthog-inbox-connection-details">
+              <dt className="text-muted-foreground">Project</dt>
+              <dd>{status.projectId ?? 'Unknown'}</dd>
+              <dt className="text-muted-foreground">Host</dt>
+              <dd>{status.host ?? 'Unknown'}</dd>
+              <dt className="text-muted-foreground">Last checked</dt>
+              <dd>{polled ?? 'Not checked yet'}</dd>
+            </dl>
+          )}
+          {!notConnected && status.access === 'unknown' && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Talyn has not used this API key on your Inbox yet.
+            </p>
+          )}
+          {status.lastError && !notConnected && (
+            <p className="mt-2 text-xs text-red-500">The last check failed. {status.lastError}</p>
+          )}
+
+          {status.access === 'reconnect' && (
+            <div
+              className="mt-3 flex items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2"
+              data-attr="posthog-inbox-reconnect-notice"
+            >
+              <div className="flex-1 text-sm">
+                <p className="font-medium text-amber-600 dark:text-amber-400">Reconnect PostHog to let Talyn read your Inbox.</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {status.reason ?? 'The PostHog connection does not have the Inbox permissions.'}
+                </p>
+                <MissingScopes scopes={status.missingScopes ?? []} />
+              </div>
+              <Button size="sm" onClick={reconnect} disabled={busy} data-attr="posthog-inbox-reconnect">
+                <RefreshCw className="mr-1 h-4 w-4" />
+                Reconnect
+              </Button>
+            </div>
+          )}
+
+          {notConnected && oauthAvailable && !showKeyForm && (
+            <div className="mt-3 space-y-3">
+              <Input
+                label="PostHog host"
+                aria-label="PostHog host"
+                placeholder={DEFAULT_POSTHOG_HOST}
+                value={host}
+                onChange={(e) => setHost(e.target.value)}
+                disabled={busy}
+              />
+              {errorLine}
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={() => void connectOAuth()} disabled={busy || !workspaceId} data-attr="posthog-inbox-connect">
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connect with PostHog'}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setKeyForm(true)} disabled={busy}>
+                  Use a personal API key instead
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {showKeyForm && (
+            <div className="mt-3 space-y-3" data-attr="posthog-inbox-key-form">
+              <Input
+                label="Personal API key"
+                aria-label="Personal API key"
+                type="password"
+                placeholder="phx_..."
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                disabled={busy}
+              />
+              <GetKeyLink url={POSTHOG_API_KEYS_URL} note={POSTHOG_INBOX_KEY_SCOPE_NOTE} />
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  label="Project id"
+                  aria-label="Project id"
+                  placeholder="e.g. 2"
+                  value={projectId}
+                  onChange={(e) => setProjectId(e.target.value)}
+                  disabled={busy}
+                />
+                <Input
+                  label="Host"
+                  aria-label="Host"
+                  placeholder={DEFAULT_POSTHOG_HOST}
+                  value={host}
+                  onChange={(e) => setHost(e.target.value)}
+                  disabled={busy}
+                />
+              </div>
+              {errorLine}
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => void saveKey()}
+                  disabled={busy || !apiKey.trim() || !projectId.trim() || !workspaceId}
+                  data-attr="posthog-inbox-save-key"
+                >
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save and verify'}
+                </Button>
+                {oauthAvailable && (
+                  <Button size="sm" variant="ghost" onClick={() => void connectOAuth()} disabled={busy}>
+                    Connect with PostHog instead
+                  </Button>
+                )}
+                {(oauthAvailable || !notConnected) && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setKeyForm(false);
+                      setApiKey('');
+                      setError(null);
+                    }}
+                    disabled={busy}
+                  >
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {!notConnected && !showKeyForm && errorLine && <div className="mt-3">{errorLine}</div>}
+        </div>
+
+        {!notConnected && !showKeyForm && (
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            {legacy && (
+              <Button size="sm" onClick={reconnect} disabled={busy} data-attr="posthog-inbox-connect-own">
+                Connect PostHog for the Inbox
+              </Button>
+            )}
+            {own && status.access !== 'reconnect' && (
+              <Button variant="outline" size="sm" onClick={reconnect} disabled={busy}>
+                {oauthAvailable ? <RefreshCw className="mr-1 h-4 w-4" /> : <Pencil className="mr-1 h-4 w-4" />}
+                {oauthAvailable ? (status.authMethod === 'oauth' ? 'Reconnect' : 'Switch to PostHog sign-in') : 'Edit'}
+              </Button>
+            )}
+            {own && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void disconnect()}
+                disabled={busy}
+                data-attr="posthog-inbox-disconnect"
+              >
+                {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Unlink className="mr-1 h-4 w-4" />}
+                Disconnect
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 

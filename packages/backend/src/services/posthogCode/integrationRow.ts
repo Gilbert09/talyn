@@ -15,6 +15,16 @@ import type { EncryptedEnvelope } from '../tokenCrypto.js';
  */
 
 export const POSTHOG_INTEGRATION_TYPE = 'posthog';
+
+/**
+ * The PostHog Inbox's own connection (`services/posthogInbox/`). Same config
+ * shape as the PostHog Code row, a separate row, so one never touches the
+ * other. It is not a cloud provider.
+ */
+export const POSTHOG_INBOX_INTEGRATION_TYPE = 'posthog_inbox';
+
+/** The two `integrations` rows that hold a PostHog connection. */
+export type PostHogRowType = typeof POSTHOG_INTEGRATION_TYPE | typeof POSTHOG_INBOX_INTEGRATION_TYPE;
 export { DEFAULT_POSTHOG_HOST, normalizeHost } from './hostPolicy.js';
 
 /** How a workspace authenticates to PostHog. */
@@ -77,6 +87,33 @@ export function readAuthMethod(config: PostHogIntegrationConfig): PostHogAuthMet
 export async function readPostHogIntegration(
   workspaceId: string
 ): Promise<PostHogIntegrationRow | null> {
+  return readPostHogRow(POSTHOG_INTEGRATION_TYPE, workspaceId);
+}
+
+/**
+ * Read-modify-write the PostHog Code integration config.
+ *
+ * `mutate` receives the current config (`{}` when there is no row yet) and
+ * returns the whole next config — the row is replaced, not merged, so a caller
+ * switching auth methods can drop the other method's fields deliberately rather
+ * than leaving a half-populated row behind.
+ */
+export async function upsertPostHogIntegration(
+  workspaceId: string,
+  mutate: (current: PostHogIntegrationConfig) => PostHogIntegrationConfig
+): Promise<void> {
+  return upsertPostHogRow(POSTHOG_INTEGRATION_TYPE, workspaceId, mutate);
+}
+
+export async function deletePostHogIntegration(workspaceId: string): Promise<void> {
+  return deletePostHogRow(POSTHOG_INTEGRATION_TYPE, workspaceId);
+}
+
+/** Read one of the workspace's PostHog rows, by type. */
+export async function readPostHogRow(
+  type: PostHogRowType,
+  workspaceId: string
+): Promise<PostHogIntegrationRow | null> {
   const db = getDbClient();
   const rows = await db
     .select({
@@ -88,7 +125,7 @@ export async function readPostHogIntegration(
     .where(
       and(
         eq(integrationsTable.workspaceId, workspaceId),
-        eq(integrationsTable.type, POSTHOG_INTEGRATION_TYPE)
+        eq(integrationsTable.type, type)
       )
     )
     .limit(1);
@@ -101,20 +138,14 @@ export async function readPostHogIntegration(
   };
 }
 
-/**
- * Read-modify-write the integration config.
- *
- * `mutate` receives the current config (`{}` when there is no row yet) and
- * returns the whole next config — the row is replaced, not merged, so a caller
- * switching auth methods can drop the other method's fields deliberately rather
- * than leaving a half-populated row behind.
- */
-export async function upsertPostHogIntegration(
+/** Read-modify-write one of the workspace's PostHog rows. See `upsertPostHogIntegration`. */
+export async function upsertPostHogRow(
+  type: PostHogRowType,
   workspaceId: string,
   mutate: (current: PostHogIntegrationConfig) => PostHogIntegrationConfig
 ): Promise<void> {
   const db = getDbClient();
-  const existing = await readPostHogIntegration(workspaceId);
+  const existing = await readPostHogRow(type, workspaceId);
   const config = mutate(existing?.config ?? {});
   const now = new Date();
 
@@ -128,7 +159,7 @@ export async function upsertPostHogIntegration(
   await db.insert(integrationsTable).values({
     id: uuid(),
     workspaceId,
-    type: POSTHOG_INTEGRATION_TYPE,
+    type,
     enabled: true,
     config,
     createdAt: now,
@@ -136,14 +167,15 @@ export async function upsertPostHogIntegration(
   });
 }
 
-export async function deletePostHogIntegration(workspaceId: string): Promise<void> {
+/** Delete one of the workspace's PostHog rows. The other row stays. */
+export async function deletePostHogRow(type: PostHogRowType, workspaceId: string): Promise<void> {
   const db = getDbClient();
   await db
     .delete(integrationsTable)
     .where(
       and(
         eq(integrationsTable.workspaceId, workspaceId),
-        eq(integrationsTable.type, POSTHOG_INTEGRATION_TYPE)
+        eq(integrationsTable.type, type)
       )
     );
 }

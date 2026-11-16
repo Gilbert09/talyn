@@ -1069,7 +1069,13 @@ The GitHub App must deliver the `issues` and `issue_comment` events, and have th
 
 ### 6g. PostHog Inbox rules
 
-A PostHog Inbox rule starts a session when a PostHog self-driving report is ready for work. It uses the workspace's PostHog Code connection (6b): an OAuth grant with `inbox:read`, or a personal API key with that scope.
+A PostHog Inbox rule starts a session when a PostHog self-driving report is ready for work. It has its own PostHog connection: an `integrations` row of type `posthog_inbox`, separate from the PostHog Code row (`posthog`). It is not a cloud provider.
+
+- **OAuth.** It uses the same client as PostHog Code (6b): `POSTHOG_OAUTH_CLIENT_ID`, `POSTHOG_OAUTH_REDIRECT_URI` and the callback `/api/v1/posthog/oauth/callback`. Nothing new to register. The state row records the flow in `posthog_oauth_states.kind` (`posthog_code` or `posthog_inbox`, migration 0138), and each flow refuses a state of the other kind. The Inbox asks for `openid inbox:read inbox:write task:write` on one project. A web flow ends on `/integrations/posthog_inbox?posthog_inbox=connected|error`.
+- **Personal API key.** On a deployment without the OAuth pair, the card saves a key with `inbox:read`, `inbox:write` and `task:write`. Talyn lists one report with it before it stores it.
+- **Routes.** `POST /posthog-inbox/oauth/start`, `PUT /posthog-inbox/config` and `DELETE /posthog-inbox/config` (`routes/posthogInbox.ts`). They need the `posthog-inbox-rules` flag and do not check `posthog-code-retired`. The status is `GET /workflows/posthog-inbox/status`.
+- **Refresh.** `services/posthogOAuth/core.ts` holds the PKCE, state, token and refresh code for both connections. A refresh is single-flighted per row: an in-process promise map, and the advisory lock `posthog-inbox-oauth-refresh:<workspace>` (PostHog Code keeps `posthog-oauth-refresh:<workspace>`).
+- **Which connection the rules use.** `getPostHogInboxConnection` takes the Inbox row first, in any state. Without one, it uses a PostHog Code row whose OAuth grant has `inbox:read` and is not revoked, or a PostHog Code personal API key. Disconnecting one row never touches the other.
 
 | Flag | Name | Override | Default | Availability |
 | --- | --- | --- | --- | --- |

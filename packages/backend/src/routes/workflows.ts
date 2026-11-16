@@ -344,7 +344,7 @@ export function workflowRoutes(): Router {
     if (!connection) {
       return res.status(409).json({
         success: false,
-        error: 'Talyn cannot read this workspace\'s PostHog Inbox. Connect PostHog on the PostHog Code page, with the Inbox permission.',
+        error: 'Talyn cannot read this workspace\'s PostHog Inbox. Connect PostHog on the PostHog Inbox page.',
         code: 'posthog_inbox_unavailable',
       });
     }
