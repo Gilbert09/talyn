@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { FileIcon, Film } from 'lucide-react';
-import { isWorkbenchVideoType } from '@talyn/shared';
+import { FileIcon, FileText, Film } from 'lucide-react';
+import { isWorkbenchVideoType, WORKBENCH_TEXT_TYPE } from '@talyn/shared';
 import { attachmentPreview, rememberAttachmentBlob } from '../../lib/attachmentPreviews';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { Dialog, DialogContent, DialogTitle } from '../ui/dialog';
@@ -99,9 +99,10 @@ function ImageAttachment({ attachment, ops }: { attachment: Attachment; ops: Wor
   }, [open]);
 
   if (!image || failed || !attachment.path) {
+    const Icon = attachment.mimeType === WORKBENCH_TEXT_TYPE ? FileText : FileIcon;
     return (
       <span className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-muted-foreground">
-        <FileIcon className="h-3.5 w-3.5" /> {attachment.name}{image && (failed || !attachment.path) && ' · Image unavailable'}
+        <Icon className="h-3.5 w-3.5" /> {attachment.name}{image && (failed || !attachment.path) && ' · Image unavailable'}
       </span>
     );
   }

@@ -1,13 +1,18 @@
 import type { Workbench } from '@talyn/shared';
 import { memo } from 'react';
 
+import { FindHighlightContext } from './findHighlight';
 import { RowBoundary } from './RowBoundary';
 import type { TranscriptRow as Row } from './transcript';
 import { ToolGroupRow, ToolRow } from './ToolRow';
 import { AgentText, EventLine, FailedLine, PermissionRow, PlanCard, QueuedBubble, SystemRow, ThinkingRow, UserBubble } from './TranscriptParts';
 
 export interface PlanControls { busy: boolean; disabled: boolean; approve(): void; keepPlanning(): void }
-interface Props { row: Row; now: number; workbench: Workbench; plan: PlanControls }
+interface Props {
+  row: Row; now: number; workbench: Workbench; plan: PlanControls;
+  /** The find query, given only to rows that match it. */
+  highlight?: string;
+}
 
 function RowView({ row, now, workbench, plan }: Props) {
   switch (row.kind) {
@@ -32,7 +37,7 @@ function RowView({ row, now, workbench, plan }: Props) {
  * clock and each workbench or chat update do not draw every row again.
  */
 export function sameRowProps(prev: Props, next: Props): boolean {
-  if (prev.row !== next.row) return false;
+  if (prev.row !== next.row || (prev.highlight ?? '') !== (next.highlight ?? '')) return false;
   const row = next.row;
   if (row.kind === 'user') return prev.now === next.now && prev.workbench.id === next.workbench.id;
   if (row.kind === 'system') return prev.workbench.id === next.workbench.id && prev.workbench.pullRequestId === next.workbench.pullRequestId &&
@@ -43,5 +48,8 @@ export function sameRowProps(prev: Props, next: Props): boolean {
 
 /** One conversation row. No author badges and no full timestamps: the shape says who wrote it. A row that fails to draw shows a notice. */
 export const TranscriptRow = memo(function TranscriptRow(props: Props) {
-  return <RowBoundary label="This message" resetKey={props.row}><RowView {...props} /></RowBoundary>;
+  // Always the same tree, so a row that starts or stops matching keeps its open sections.
+  return <FindHighlightContext.Provider value={props.highlight ?? ''}>
+    <RowBoundary label="This message" resetKey={props.row}><RowView {...props} /></RowBoundary>
+  </FindHighlightContext.Provider>;
 }, sameRowProps);

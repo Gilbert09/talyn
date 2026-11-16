@@ -191,7 +191,7 @@ function fail(res: Response, err: unknown): void {
       res.status(refusal.status).json({ success: false, error: refusal.message, code: refusal.code, wake: true });
       return;
     }
-    bad(res, refusal.status, refusal.message, refusal.code);
+    res.status(refusal.status).json({ success: false, error: refusal.message, code: refusal.code, ...refusal.details });
     return;
   }
   throw err;

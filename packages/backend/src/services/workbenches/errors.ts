@@ -46,6 +46,7 @@ export class WorkbenchError extends Error {
     message: string,
     readonly status: number,
     readonly code: string,
+    readonly details?: { reason: 'reauth' | 'limited' | 'missing' | 'unavailable'; accountIds: string[] },
   ) {
     super(message);
     this.name = 'WorkbenchError';

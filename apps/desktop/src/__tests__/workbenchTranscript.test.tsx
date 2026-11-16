@@ -1,3 +1,4 @@
+import { useWorkspaceStore } from '../renderer/stores/workspace';
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import React from 'react';
@@ -5,6 +6,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { AgentEvent, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 import { WorkbenchTranscript, type OlderHistory } from '../renderer/components/workbench/WorkbenchTranscript';
 import { PENDING_MESSAGE_GRACE_MS } from '../renderer/lib/workbenchFormat';
+import { requestTranscriptFind } from '../renderer/lib/transcriptFind';
 import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
 import { toast } from '../renderer/stores/toast';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
@@ -614,4 +616,28 @@ describe('message times', () => {
     );
     expect(container.querySelector('time')).toBeNull();
   });
+});
+
+describe('WorkbenchTranscript find', () => {
+  it('opens the find bar for its session and searches the messages', () => {
+    render(<WorkbenchTranscript chat={chat} events={turns(1, 3)} loading={false} error={null} ops={ops} older={older({ hasOlder: true })} />);
+    expect(screen.queryByRole('search')).toBeNull();
+    act(() => requestTranscriptFind('wb1'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Find in transcript' }), { target: { value: 'MESSAGE' } });
+    expect(screen.getByText('1 of 3')).toBeInTheDocument();
+    expect(screen.getByText('· loaded only')).toBeInTheDocument();
+  });
+});
+
+it.each(['reauth', 'limited'])('offers Reconnect only for a reauth turn: %s', (reason) => {
+  const events: WorkbenchEvent[] = [userEvent(1, 1), {
+    chatId: 'c1', seq: 2, turn: 1,
+    event: { seq: 2, type: 'result', is_error: true, reason, result: 'Personal needs to be signed in again.' } as AgentEvent,
+  }];
+  setup(events, older({ hasOlder: false }));
+  expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+  if (reason === 'reauth') {
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+    expect(useWorkspaceStore.getState().settingsSection).toBe('integrations');
+  } else expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
 });

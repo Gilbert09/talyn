@@ -16,6 +16,11 @@ Chronological notes from development sessions. Most recent first. See [`CLAUDE.m
 
 **Not done.** The Inbox still uses the retired PostHog Code connection. `claims.ts` only asks `getPostHogInboxConnection`, so a separate Inbox connection can replace it later.
 
+## Show Fleet accounts that need sign-in (2026-11-16)
+
+Fleet status now reports any account that needs sign-in, with its name and ID. Healthy accounts remain available.
+Turn errors name affected accounts and report known usage resets. Web, desktop, and mobile show reconnect notices and actions.
+
 ## Retire PostHog Code, step 1 (2026-11-15)
 
 **Why.** PostHog Code confused users. It sat next to Claude and Codex as a third agent, but it cannot run sessions.
@@ -7829,3 +7834,25 @@ The run key is `posthog_inbox:<reportId>:<updated_at>`. The report is claimed in
 Conditions: priorities, actionability (default `immediately_actionable`), source products, scouts (include/exclude), repositories, suggested reviewers (GitHub logins, read from the `suggested_reviewers` artefact only when a rule asks), title, summary and minimum signal count. Every rule refuses a report whose `suppression_source` is `safety_judge`, a report that is not `ready` or already addressed, and a report whose `repo_slug` is not a repository of the workspace. Only the single-report read has `repo_slug`; the list does not.
 New: `workflows.max_runs_per_day`, a per-rule daily cap beside the hourly one (default 10 for PostHog Inbox, null for the other sources). The PostHog OAuth grant now asks for `inbox:read inbox:write`; an older grant keeps working for PostHog Code and the editor says "Reconnect PostHog". `GET /workflows/posthog-inbox/status` and `POST /workflows/posthog-inbox/dry-run` back the editor's notice and its preview.
 Web and desktop have the editor (`posthogInboxFields.tsx`). Mobile shows the rules read-only. Steps 2 and 3: claim the report in PostHog and attach the pull request, and the PostHog webhook receiver.
+
+### 2026-11-16 — Find in the session transcript (⌘F)
+
+User request (Jovan): "let me do a `cmd` + `f` in the session transcript". Electron has no built-in find, so ⌘F did nothing in the desktop app.
+Web and desktop: `transcript.find` (`mod+f`) opens `TranscriptFindBar` over `WorkbenchTranscript` through `OPEN_TRANSCRIPT_FIND_EVENT` with the target `workbenchId` (the open session, or the focused split view pane; `findTargetWorkbenchId`). `lib/transcriptFind.ts` walks the transcript's text nodes and paints matches with the CSS Custom Highlight API (`::highlight(transcript-find)` in `app.css`/`App.css`), so React-owned nodes are not changed. A `MutationObserver` counts again while the agent streams. The transcript is not virtualized, so the search covers every loaded message; collapsed tool output is not in the DOM and is not searched.
+Desktop: the menu item is `rendererOnly`, so the Monaco code viewer keeps ⌘F. On both clients ⌘F is left alone in `.xterm`, `.monaco-editor`, `.cm-editor` and `diffs-container`, and on web outside a session (the browser's find).
+Mobile: a search button in the session header opens `FindBar` above the conversation. `features/chat/transcriptFind.ts` matches the text each row shows; the current row is tinted and matched words are marked, markdown included.
+
+### 2026-11-16 — The sidebar shows which session the rail badge counts
+
+Before, a context rail tile could say "1 item needs you" while no sidebar row looked different. The server counts a failure, a question, or a pull request with conflicts. The sidebar works out each row's state on the client, and the client can miss these: a space row has no chats and no mergeable state, and a session whose chats are not loaded shows as idle. So the counted row could be a grey dot, far down the list.
+Now `GET /workspaces/attention` also sends `sessions`: the counted session ids, each with a reason (`failed`, `reply` or `conflict`, from `attentionReason` in `packages/shared/src/contextAttention.ts`). An older server leaves it out, and the clients then show nothing new.
+In both apps, the rail keeps its last answer in `useContextAttentionStore` (`lib/contextRail.ts`), so the sidebar can read it. `withServerAttention` (`lib/sessionState.ts`) gives a counted row the state of its reason. Live work and a failure that the client sees win, because the server's answer can be up to 30 seconds old. The sidebar rows, the thread rows, the space model and the ⌘1–9 order all use it, so a counted row is in the active group.
+A "Needs you" section (`SidebarNeedsYou.tsx`) at the top of the Personal and space sidebars lists the counted sessions of that context. Opening one marks it as seen, so it leaves the section. With one context the rail is hidden and does not ask, so the section does not show.
+Mobile has no context rail, so it has no change.
+
+### 2026-11-16 — A session started from a PR keeps its PR link
+
+Before, a session started from a pull request (`fromPullRequestId`) linked the PR at create time. The merge backfill (`backfillMergeArchives`, every 10 minutes) then removed the link. The PR was older than the session, and the session pushed none of its commits, so `eligiblePr()` refused it. A manual "Link PR" to an older PR had the same problem.
+Now `workbenches.pull_request_link_explicit` (migration 0135) marks a link that a person or a caller chose. `createWorkbench` sets it for `fromPullRequestId`, and a manual link (`trackAndLink` strict) sets it too. `ownsLinkedPr()` (`prEligibility.ts`) accepts an explicit link or an eligible one. The backfill, merge auto-archive and the thread merge notice use it. So a session started from a PR also archives when that PR merges.
+The `stamp_workbench_pr_link` trigger clears the flag on an unlink, and on any PR change that does not set the flag. Branch-name links still need the evidence test.
+Sessions that lost their link before this fix stay unlinked. Use "Link PR" to link them again.

@@ -21,6 +21,9 @@ import { spaceGroupKeyPrefix } from '../workbench/workbenchSelectors';
 import { SessionsHeader, SidebarSessionGroups, WorkbenchRow } from './SidebarWorkbenchList';
 import { SidebarThreadSection } from './SidebarThreadList';
 import { useSpaceSidebarModel } from './spaceSidebarModel';
+import { SidebarNeedsYou, useNeedsYouItems } from './SidebarNeedsYou';
+
+const isLiveRow = (row: SpaceSessionRow) => !row.archivedAt && row.status !== 'archived';
 
 /**
  * The sidebar body in a space, laid out like Personal: my threads, then every
@@ -36,6 +39,29 @@ export function SpaceSidebar({ active }: { active: SpaceRef }) {
   const mine = useMemo(() => [...model.owned.values()], [model.owned]);
   const hidden = sessions.hiddenCount + tasks.hiddenCount;
   const open = (id: string) => void openSpaceSession(id);
+  const needsYou = useNeedsYouItems(sessions.items, isLiveRow);
+  const renderRow = (row: SpaceSessionRow, shortcut: number | null) => {
+    const workbench = model.owned.get(row.id);
+    return workbench ? (
+      <WorkbenchRow
+        key={row.id}
+        workbench={workbench}
+        shortcut={shortcut}
+        selected={row.id === openId}
+        onSelect={() => open(row.id)}
+        trailing={<SpaceRowPeople row={row} spaceId={spaceId} />}
+      />
+    ) : (
+      <SpaceSessionItem
+        key={row.id}
+        row={row}
+        selected={row.id === openId}
+        spaceId={spaceId}
+        shortcut={shortcut}
+        state={model.states.get(row.id)}
+      />
+    );
+  };
 
   return (
     <div className="space-y-2" data-attr="space-sidebar">
@@ -47,6 +73,7 @@ export function SpaceSidebar({ active }: { active: SpaceRef }) {
         <p className="px-3 py-2 text-xs text-destructive">{sessions.error}</p>
       ) : (
         <>
+          <SidebarNeedsYou items={needsYou} renderItem={(row) => renderRow(row, null)} />
           <SidebarThreadSection entries={model.threads} onOpen={open} spaceId={spaceId} />
           {model.groups.length === 0 ? (
             <div className="space-y-2 px-3 py-2 text-xs text-muted-foreground" data-attr="space-sidebar-empty">
@@ -63,28 +90,7 @@ export function SpaceSidebar({ active }: { active: SpaceRef }) {
                 states={model.states}
                 openId={openId}
                 keyPrefix={spaceGroupKeyPrefix(spaceId)}
-                renderItem={(row, shortcut) => {
-                  const workbench = model.owned.get(row.id);
-                  return workbench ? (
-                    <WorkbenchRow
-                      key={row.id}
-                      workbench={workbench}
-                      shortcut={shortcut}
-                      selected={row.id === openId}
-                      onSelect={() => open(row.id)}
-                      trailing={<SpaceRowPeople row={row} spaceId={spaceId} />}
-                    />
-                  ) : (
-                    <SpaceSessionItem
-                      key={row.id}
-                      row={row}
-                      selected={row.id === openId}
-                      spaceId={spaceId}
-                      shortcut={shortcut}
-                      state={model.states.get(row.id)}
-                    />
-                  );
-                }}
+                renderItem={renderRow}
               />
             </div>
           )}

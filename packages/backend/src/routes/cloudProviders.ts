@@ -114,6 +114,7 @@ interface CloudProviderInfo {
    * "you never set this up".
    */
   reauthAgents?: FleetAgent[];
+  reauthAccounts?: { id: string; label: string; agent: FleetAgent }[];
 }
 
 /**

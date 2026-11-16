@@ -11,5 +11,8 @@
         ]
       }
     ]
+  },
+  "webcredentials": {
+    "apps": ["5KQY9SJDWG.dev.talyn.mobile"]
   }
 }

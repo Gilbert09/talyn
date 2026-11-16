@@ -80,7 +80,7 @@ export function useCreateWorkbench(): CreateWorkbenchState {
       const firstChat = wb.chats?.[0];
       // A sandbox prompt without images went with the create request, so it is already sent.
       const alreadySent = spec.runtime !== 'local' && !spec.attachments?.length;
-      const pending: PendingFirstMessage | null = firstChat && spec.prompt.trim()
+      const pending: PendingFirstMessage | null = firstChat && (spec.prompt.trim() || spec.attachments?.length)
         ? { chatId: firstChat.id, id: store.addOutgoingMessage(firstChat.id, { text: spec.prompt.trim(), attachments: spec.attachments, settled: alreadySent }) }
         : null;
       useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
@@ -240,7 +240,7 @@ async function startLocalChat(wb: Workbench, spec: NewWorkbenchSpec, pending: Pe
     store.upsertChat(chat);
     store.setChatEventsState(chat.id, { loaded: true });
     store.selectChat(wb.id, chat.id);
-    if (prompt) {
+    if (prompt || spec.attachments?.length) {
       const ops = opsFor(wb);
       const attachments = spec.attachments?.length
         ? await Promise.all(spec.attachments.map(async (attachment) => attachment.dataBase64

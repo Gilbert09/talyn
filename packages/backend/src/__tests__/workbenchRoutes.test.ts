@@ -71,6 +71,7 @@ const { resetChangesGithubForTests } = await import('../services/workbenches/cha
 const { GitHubRateLimitError } = await import('../services/githubRateGate.js');
 const { getChat, getWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
 const { startStaleGoldenMove } = await import('../services/workbenches/move.js');
+const { backfillMergeArchives } = await import('../services/workbenches/mergeBackfill.js');
 const recovery = await import('../services/workbenches/recovery.js');
 const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../services/workbenches/turns.js');
 const { resolveRunCredentials } = await import('../services/selfHosted/runCredentials.js');
@@ -468,6 +469,16 @@ describe('workbench routes', () => {
       expect(wb).toMatchObject({ branch: 'feat/thing', baseBranch: 'develop', pullRequestId: 'pr-a' });
       const got = await call('GET', `/workbenches/${wb.id}`);
       expect(got.body.data.pr).toMatchObject({ number: 42, state: 'open', ciStatus: 'failure' });
+    });
+
+    it('keeps the link to an older pull request through the merge backfill', async () => {
+      await testDb.db.insert(pullRequests).values({
+        id: 'pr-a', workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'acme', repo: 'app', number: 42, state: 'open',
+        lastSummary: { headBranch: 'feat/thing', baseBranch: 'develop', headSha: 'abc', createdAt: '2026-01-01T00:00:00Z' },
+      });
+      const wb = await createSandboxWorkbench({ fromPullRequestId: 'pr-a' });
+      await backfillMergeArchives();
+      expect(await getWorkbench(wb.id)).toMatchObject({ pullRequestId: 'pr-a', pullRequestLinkExplicit: true });
     });
 
     it.each([

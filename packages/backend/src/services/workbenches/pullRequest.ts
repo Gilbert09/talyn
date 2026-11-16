@@ -322,7 +322,11 @@ async function trackAndLink(row: WorkbenchRow, number: number, strict = false): 
           .where(sql`${pullRequests.id} = ${watched.rowId} AND ${eligiblePr()}`);
         if (!eligible) return row;
       }
-      const linked = (await updateWorkbench(row.id, { pullRequestId: watched.rowId })) ?? row;
+      const linked = (await updateWorkbench(row.id, {
+        pullRequestId: watched.rowId,
+        // A manual link is chosen. A Create PR link leaves the flag to the trigger (migration 0135).
+        ...(strict ? { pullRequestLinkExplicit: true } : {}),
+      })) ?? row;
       if (linked.threadId && row.pullRequestId !== watched.rowId) await notifyThreadOfLinkedPr(linked);
       return linked;
     }

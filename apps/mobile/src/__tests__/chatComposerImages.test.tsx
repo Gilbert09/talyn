@@ -66,13 +66,15 @@ describe('composer images', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove cat.jpg' })).toBeNull());
   });
 
-  it('does not send images without text', async () => {
+  it('sends an image without text', async () => {
     pickLibrary();
     await render(<WorkbenchDetailScreen kind="session" />);
     await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Remove cat.jpg' })).toBeVisible());
-    expect(screen.getByText('Add a message to send with the attachments.')).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Send message' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
+    await fireEvent.press(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(mockActions.send).toHaveBeenCalledWith('chat-one', { text: '', attachments: [{ name: 'cat.jpg', mimeType: 'image/jpeg', path: '.context/attachments/cat.jpg' }] }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove cat.jpg' })).toBeNull());
   });
 
   it('explains a camera permission denial and points to settings', async () => {
@@ -121,12 +123,12 @@ describe('composer videos', () => {
     await fireEvent.press(screen.getByRole('button', { name: /^Send/ }));
     await waitFor(() => expect(mockActions.send).toHaveBeenCalledWith('chat-one', { text: 'Why does it stutter?', attachments: [{ name: 'clip.mov', mimeType: 'video/quicktime', path: '.context/attachments/clip.mov' }] }));
   });
-  it('names an unnamed video and blocks send without text', async () => {
+  it('names an unnamed video and allows send without text', async () => {
     pickVideo({ uri: 'file:///x', mimeType: 'video/mp4' });
     await render(<WorkbenchDetailScreen kind="session" />);
     await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Remove video-1.mp4' })).toBeVisible());
-    expect(screen.getByText('Add a message to send with the attachments.')).toBeVisible();
+    expect(screen.getByRole('button', { name: /^Send/ })).toBeEnabled();
   });
   it.each([
     [{ uri: 'file:///big.mp4', fileName: 'big.mp4', mimeType: 'video/mp4', fileSize: 50 * 1024 * 1024 + 1 }, 'big.mp4: The video is larger than 50 MB.'],
@@ -148,6 +150,27 @@ describe('message images', () => {
     await render(<WorkbenchDetailScreen kind="session" />);
     expect(await screen.findByLabelText('Video: clip.mp4')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Open clip.mp4' })).toBeNull();
+  });
+
+  it('shows a text file next to an image, by name', async () => {
+    const events: WorkbenchEvent[] = [{ chatId: 'chat-one', seq: 1, turn: 1, createdAt: '2026-11-08T11:00:00Z', event: { seq: 1, type: 'user', talyn_user_message: true,
+      message: { content: [{ type: 'text', text: 'See these' }] }, talyn: { attachments: [
+        { name: 'cat.jpg', mimeType: 'image/jpeg', path: '.context/attachments/cat.jpg' },
+        { name: 'notes.md', mimeType: 'text/plain', path: '.context/attachments/notes.md' },
+      ] } } as AgentEvent }];
+    mockActive.api.workbenches.events.mockResolvedValue({ events, cursor: 1, oldestSeq: 1, hasOlder: false });
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(await screen.findByLabelText('File: notes.md')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Open cat.jpg' })).toBeVisible();
+  });
+
+  it('shows a text file alone, by name', async () => {
+    const events: WorkbenchEvent[] = [{ chatId: 'chat-one', seq: 1, turn: 1, createdAt: '2026-11-08T11:00:00Z', event: { seq: 1, type: 'user', talyn_user_message: true,
+      message: { content: [{ type: 'text', text: 'Read this' }] }, talyn: { attachments: [{ name: 'build.log', mimeType: 'text/plain', path: '.context/attachments/build.log' }] } } as AgentEvent }];
+    mockActive.api.workbenches.events.mockResolvedValue({ events, cursor: 1, oldestSeq: 1, hasOlder: false });
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(await screen.findByLabelText('File: build.log')).toBeVisible();
+    expect(screen.queryByText('1 attachment')).toBeNull();
   });
 
   it('shows an attached image in the user bubble and opens it full screen', async () => {

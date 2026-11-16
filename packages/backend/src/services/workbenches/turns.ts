@@ -28,7 +28,10 @@ import {
   DEFAULT_WORKBENCH_EFFORT,
   WORKBENCH_EFFORTS,
   WORKBENCH_MESSAGE_INTENTS,
+  WORKBENCH_MAX_TEXT_BYTES,
+  WORKBENCH_TEXT_TYPE,
   WORKBENCH_VIDEO_PROMPT_NOTE,
+  isWorkbenchTextContent,
   isWorkbenchVideoType,
   type AgentEventDraft,
   type AgentStreamParser,
@@ -254,14 +257,16 @@ export function isTurnLiveHere(chatId: string): boolean {
 
 export function normaliseMessage(input: SendWorkbenchMessageInput): WorkbenchQueuedMessage {
   const text = typeof input?.text === 'string' ? input.text : '';
-  if (!text.trim()) throw new WorkbenchError('A message needs some text.', 400, 'empty_message');
+  const attachments = Array.isArray(input?.attachments) ? input.attachments.map(normaliseAttachment) : undefined;
+  if (!text.trim() && !attachments?.length) {
+    throw new WorkbenchError('A message needs some text or an attachment.', 400, 'empty_message');
+  }
   if (input.effort !== undefined && !WORKBENCH_EFFORTS.includes(input.effort)) {
     throw new WorkbenchError(`Unknown effort "${String(input.effort)}".`, 400, 'bad_effort');
   }
   if (input.intent !== undefined && !WORKBENCH_MESSAGE_INTENTS.includes(input.intent)) {
     throw new WorkbenchError(`Unknown intent "${String(input.intent)}".`, 400, 'bad_intent');
   }
-  const attachments = Array.isArray(input.attachments) ? input.attachments.map(normaliseAttachment) : undefined;
   return {
     id: uuid(),
     text,
@@ -281,9 +286,19 @@ function normaliseAttachment(a: WorkbenchAttachment): WorkbenchAttachment {
   if (!name || hasData === hasPath) {
     throw new WorkbenchError('An attachment needs a name and exactly one of dataBase64 or path.', 400, 'bad_attachment');
   }
+  const mimeType = typeof a.mimeType === 'string' ? a.mimeType : 'application/octet-stream';
+  if (hasData && mimeType.toLowerCase() === WORKBENCH_TEXT_TYPE) {
+    const bytes = Buffer.from(a.dataBase64 as string, 'base64');
+    if (bytes.length > WORKBENCH_MAX_TEXT_BYTES) {
+      throw new WorkbenchError(`${name} is larger than 1 MB.`, 413, 'attachment_too_large');
+    }
+    if (!isWorkbenchTextContent(bytes)) {
+      throw new WorkbenchError(`${name} is not a UTF-8 text file.`, 415, 'bad_attachment');
+    }
+  }
   return {
     name,
-    mimeType: typeof a.mimeType === 'string' ? a.mimeType : 'application/octet-stream',
+    mimeType,
     ...(hasData ? { dataBase64: a.dataBase64 } : { path: a.path }),
   };
 }
@@ -874,13 +889,14 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     });
     if (refreshed.note) events.add(accountSwitchEvent(refreshed.note));
     if (live.cancelRequested) return cancelledOutcome(events);
-    startTitleGeneration(wb, message.text);
+    startTitleGeneration(wb, message.text, { agent });
 
     const planMode = message.planMode ?? chat.planMode;
     const model = turnModel;
     const effort = message.effort ?? (chat.effort as WorkbenchQueuedMessage['effort']) ?? DEFAULT_WORKBENCH_EFFORT;
     let resumeSessionId = chat.agentSessionId ?? undefined;
-    const text = promptWith(message.text, agent === 'codex' ? attached.other : attached.all);
+    // Codex gets images with -i. An image-only message still names them, so the prompt is not empty.
+    const text = promptWith(message.text, agent === 'codex' && message.text.trim() ? attached.other : attached.all);
     // The transcript keeps `message.text`; the hidden instructions reach the agent only.
     let recap = await recoveryRecap(chatId, turn);
     const buildArgv = () => {
@@ -1055,7 +1071,10 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     // as plain words and not as the fleet's raw refusal.
     const why = userFacingError(err);
     console.warn(`[workbench] turn ${turn} of chat ${chatId} failed:`, err);
-    events.add(errorResultEvent('error_during_execution', `Talyn could not run this turn: ${why}`));
+    events.add({
+      ...errorResultEvent('error_during_execution', `Talyn could not run this turn: ${why}`),
+      ...(err instanceof WorkbenchError && err.details ? { code: err.code, ...err.details } : {}),
+    });
     await events.flush();
     const diskFull = isDiskFullError(err);
     return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false, ...(diskFull ? { diskFull } : {}) };
@@ -1256,7 +1275,8 @@ function promptWith(text: string, files: Array<{ path: string; mimeType: string 
   if (files.length === 0) return text;
   const list = files.map((f) => `- ${f.path} (${f.mimeType})`).join('\n');
   const note = files.some((f) => isWorkbenchVideoType(f.mimeType)) ? `\n\n${WORKBENCH_VIDEO_PROMPT_NOTE}` : '';
-  return `${text}\n\nAttached files:\n${list}${note}`;
+  const attached = `Attached files:\n${list}${note}`;
+  return text.trim() ? `${text}\n\n${attached}` : attached;
 }
 
 /**

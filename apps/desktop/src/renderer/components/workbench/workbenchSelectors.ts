@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
+import type { ContextAttentionReason, Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
 import { api, type PRRow } from '../../lib/api';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { isPrOnlyUnseen, useWorkbenchStore, type UnseenUpdates } from '../../stores/workbenches';
-import { isActiveSessionState, sessionPr, sessionState, type SessionState } from '../../lib/sessionState';
+import { isActiveSessionState, sessionPr, sessionState, withServerAttention, type SessionState } from '../../lib/sessionState';
 import { opsFor, sandboxUnavailableReason, type WorkbenchOps } from '../../lib/workbenchOps';
 import { isThread, liveThreads, threadChildren } from '../../lib/threads';
 import { newestSessions } from '../../lib/sessionOrder';
@@ -80,6 +80,8 @@ export interface SidebarStateSources {
   unread: Record<string, true>;
   unseen: Record<string, UnseenUpdates | undefined>;
   backgrounds: Record<string, WorkbenchBackground | undefined>;
+  /** The sessions that the context rail counts (`useAttentionSessions`). */
+  attention?: Readonly<Record<string, ContextAttentionReason>>;
 }
 
 /**
@@ -97,13 +99,17 @@ export function sidebarSessionStates(
   for (const workbench of workbenches) {
     const pr = workbench.pullRequestId ? rowById.get(workbench.pullRequestId) : undefined;
     const resolvedPr = sessionPr(workbench, pr);
-    const state = sessionState(
-      workbench,
-      sources.chats[workbench.id] ?? workbench.chats ?? [],
-      sources.unread,
-      resolvedPr,
-      isPrOnlyUnseen(sources.unseen[workbench.id]),
-      sources.backgrounds[workbench.id],
+    const state = withServerAttention(
+      sessionState(
+        workbench,
+        sources.chats[workbench.id] ?? workbench.chats ?? [],
+        sources.unread,
+        resolvedPr,
+        isPrOnlyUnseen(sources.unseen[workbench.id]),
+        sources.backgrounds[workbench.id],
+      ),
+      sources.attention?.[workbench.id],
+      resolvedPr?.number,
     );
     states.set(workbench.id, state);
     if (isActiveSessionState(state) || (!resolvedPr && Boolean(workbench.pullRequestId))) activeIds.add(workbench.id);

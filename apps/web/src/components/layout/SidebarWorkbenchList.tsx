@@ -22,7 +22,8 @@ import { WorkbenchHoverCard } from '../workbench/SessionHoverCard';
 import { ThreadTag } from '../threads/ThreadChip';
 import { SlackSessionMark } from '../workbench/SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
-import { sessionPr, sessionState, type SessionState } from '../../lib/sessionState';
+import { sessionPr, sessionState, withServerAttention, type SessionState } from '../../lib/sessionState';
+import { useAttentionReason, useAttentionSessions } from '../../lib/contextRail';
 import {
   groupSidebarWorkbenches,
   isArchived,
@@ -56,10 +57,11 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
   const unread = useWorkbenchStore((s) => s.unread);
   const unseen = useWorkbenchStore((s) => s.unseen);
   const backgrounds = useSessionBackgroundStore((s) => s.byWorkbench);
+  const attention = useAttentionSessions();
   const live = useMemo(() => workbenches.filter((workbench) => !isArchived(workbench)), [workbenches]);
   const { activeIds, states } = useMemo(
-    () => sidebarSessionStates(live, { prRows: rows, chats, unread, unseen, backgrounds }),
-    [live, rows, chats, unread, unseen, backgrounds],
+    () => sidebarSessionStates(live, { prRows: rows, chats, unread, unseen, backgrounds, attention }),
+    [live, rows, chats, unread, unseen, backgrounds, attention],
   );
   const groups = useMemo(
     () => groupSidebarWorkbenches(live, activeIds, sidebarOrder === 'active_first'),
@@ -207,7 +209,12 @@ export function WorkbenchRow({
   );
   const pullRequest = sessionPr(workbench, pr);
   const background = useBackground(workbench.id);
-  const state = sessionState(workbench, chats ?? [], unread, pullRequest, prOnlyUnseen, background);
+  const attention = useAttentionReason(workbench.id);
+  const state = withServerAttention(
+    sessionState(workbench, chats ?? [], unread, pullRequest, prOnlyUnseen, background),
+    attention,
+    pullRequest?.number,
+  );
   const isUnread = state.kind === 'needs_reply' || state.kind === 'pr_opened';
   const done = pullRequest?.state === 'merged' || pullRequest?.state === 'closed';
   const stats = workbench.uncommittedStats === undefined ? workbench.diffStat : workbench.uncommittedStats;

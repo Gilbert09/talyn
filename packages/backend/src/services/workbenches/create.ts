@@ -224,6 +224,7 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
         status: body.runtime === 'sandbox' ? 'provisioning' : 'ready',
         statusMessage: body.runtime === 'sandbox' ? 'Creating the sandbox' : null,
         pullRequestId,
+        pullRequestLinkExplicit: pullRequestId !== null,
         settings: {
           ...(body.internetAccess === undefined ? {} : { internetAccess: body.internetAccess }),
           ...(body.autoCreatePr === undefined ? {} : { autoCreatePr: body.autoCreatePr }),

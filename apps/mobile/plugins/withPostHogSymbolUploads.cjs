@@ -17,6 +17,17 @@ const { posthogUploadCredentials } = require('../release/policy.cjs');
 const DOTENV_FILE = '.expo/posthog-cli.env';
 const PLATFORMS = ['ios', 'android'];
 
+// `skipOnConflict`: two builds with the same native code make the same dSYM UUID, but not byte for byte the same
+// dSYM. PostHog refuses the second upload, and without this flag the CLI fails the Xcode build. The first upload
+// already symbolicates that binary, so the build keeps it.
+// `patchMainActivityNewIntent` stays off so a build with the key runs the same MainActivity as one without.
+const POSTHOG_PLUGIN_PROPS = Object.freeze({
+  uploadNativeSymbols: true,
+  skipOnConflict: true,
+  dotenvFile: DOTENV_FILE,
+  patchMainActivityNewIntent: false,
+});
+
 /** The upload credentials for a profile, or null when it uploads nothing. The development client loads from Metro. */
 function symbolUploadCredentials(env, profile) {
   if (!profile || profile === 'development') return null;
@@ -42,8 +53,7 @@ function withPostHogSymbolUploads(config, { profile, env = process.env }) {
       return modConfig;
     }]);
   }
-  // `patchMainActivityNewIntent` stays off so a build with the key runs the same MainActivity as one without.
-  return withPostHog(config, { uploadNativeSymbols: true, dotenvFile: DOTENV_FILE, patchMainActivityNewIntent: false });
+  return withPostHog(config, { ...POSTHOG_PLUGIN_PROPS });
 }
 
-module.exports = { DOTENV_FILE, symbolUploadCredentials, writeCredentials, withPostHogSymbolUploads };
+module.exports = { DOTENV_FILE, POSTHOG_PLUGIN_PROPS, symbolUploadCredentials, writeCredentials, withPostHogSymbolUploads };

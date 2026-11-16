@@ -253,7 +253,7 @@ export function workspaceRoutes(): Router {
   // The context rail's badges. Before `/:id`, which would read "attention" as an id.
   router.get('/attention', async (req, res) => {
     const user = assertUser(req);
-    const empty: ContextAttentionCounts = { workspaces: {}, spaces: {} };
+    const empty: ContextAttentionCounts = { workspaces: {}, spaces: {}, sessions: {} };
     if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
       return res.json({ success: true, data: empty } as ApiResponse<ContextAttentionCounts>);
     }

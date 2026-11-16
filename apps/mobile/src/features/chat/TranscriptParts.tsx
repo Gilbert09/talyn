@@ -11,10 +11,12 @@ import { shortTime } from '../../lib/time';
 import { pullRequestRoute, sessionRoute } from '../../navigation/routes';
 import { mono, radius, sans, type, useTheme, withAlpha } from '../../theme/tokens';
 import { MessageImages } from './AttachmentViews';
-import { isImage, isVideo, type MessageImage } from './attachments';
+import type { MessageImage } from './attachments';
 import { Markdown } from './Markdown';
 import { TypingDots } from './Pulse';
 import type { TranscriptRow } from './transcript';
+import { useHighlighter } from './findHighlight';
+import { BOX_REFUSALS, permissionTitle, systemRowText } from './transcriptFind';
 
 /** Links in a message, offered to screen readers as actions on the message. */
 function markdownLinks(text: string): Array<{ url: string; label: string }> {
@@ -54,7 +56,7 @@ export const UserBubble = memo(function UserBubble({ text, timestamp, attachment
   return <View style={styles.userWrap}>
     <Spoken label={`You said: ${text}${time ? `, ${time}` : ''}`} text={text} style={{ ...styles.bubble, backgroundColor: c.surface }}>
       <Markdown text={text} />
-      {files.some((file) => isImage(file) || isVideo(file)) ? <MessageImages workbenchId={workbenchId} attachments={files} />
+      {files.length ? <MessageImages workbenchId={workbenchId} attachments={files} />
         : attachments ? <AppText variant="caption" tone="muted">{attachments === 1 ? '1 attachment' : `${attachments} attachments`}</AppText> : null}
     </Spoken>
     {time ? <AppText variant="caption" tone="muted" importantForAccessibility="no">{time}</AppText> : null}
@@ -70,13 +72,14 @@ export const AgentText = memo(function AgentText({ text, streaming }: { text: st
 
 export function ThinkingRow({ text, compact = false }: { text: string; compact?: boolean }) {
   const c = useTheme();
+  const mark = useHighlighter();
   const [open, setOpen] = useState(false);
   const first = compact ? 'Thought' : text.split('\n').find((line) => line.trim())?.trim() ?? 'Thinking';
   return <View style={styles.thinking}>
     <Pressable accessibilityRole="button" accessibilityLabel={compact ? 'Thought' : 'Thinking'} accessibilityState={{ expanded: open }}
       onPress={() => setOpen(!open)} style={styles.thinkingLine} hitSlop={4}>
       <Text style={[type.meta, { color: c.muted }]}>✻</Text>
-      <Text numberOfLines={open ? undefined : 1} style={[type.meta, styles.italic, { color: c.muted, flex: 1 }]}>{open && !compact ? 'Thinking' : first}</Text>
+      <Text numberOfLines={open ? undefined : 1} style={[type.meta, styles.italic, { color: c.muted, flex: 1 }]}>{open && !compact ? 'Thinking' : mark(first)}</Text>
     </Pressable>
     {open ? <Text selectable style={[type.meta, styles.italic, styles.thinkingBody, { color: c.muted }]}>{text}</Text> : null}
   </View>;
@@ -87,11 +90,12 @@ function EventLine({ icon, text, tone = 'muted', href, url, label }: {
   icon: Symbol; text: string; tone?: 'muted' | 'destructive' | 'warning'; href?: Href; url?: string; label?: string;
 }) {
   const c = useTheme();
+  const mark = useHighlighter();
   const color = tone === 'destructive' ? c.destructive : tone === 'warning' ? c.warning : c.muted;
   const linked = Boolean(href || url);
   const content = <View style={styles.eventInner}>
     <SymbolView name={icon} size={13} tintColor={color} />
-    <Text style={[type.caption, sans(linked ? 600 : 500), { color: linked ? c.text : color, flexShrink: 1, textAlign: 'center' }]}>{text}</Text>
+    <Text style={[type.caption, sans(linked ? 600 : 500), { color: linked ? c.text : color, flexShrink: 1, textAlign: 'center' }]}>{mark(text)}</Text>
     {linked ? <SymbolView name={{ ios: 'chevron.right', android: 'chevron_right' }} size={11} tintColor={c.muted} /> : null}
   </View>;
   // One plain style object: `Link asChild` drops style arrays and functions.
@@ -102,10 +106,6 @@ function EventLine({ icon, text, tone = 'muted', href, url, label }: {
 }
 
 const PR_ICON: Symbol = { ios: 'arrow.triangle.pull', android: 'fork_right' };
-const BOX_REFUSALS: Record<string, string> = {
-  usage_exhausted: 'Out of hours', box_limit_reached: 'All your boxes are busy', size_requires_pro: 'This size needs Pro',
-};
-
 function SystemRow({ row, workbench }: { row: Extract<TranscriptRow, { kind: 'system' }>; workbench: Workbench }) {
   const url = row.url ? safeExternalUrl(row.url) ?? undefined : undefined;
   if (row.subtype === 'talyn_pr' && row.pullRequest) {
@@ -122,11 +122,11 @@ function SystemRow({ row, workbench }: { row: Extract<TranscriptRow, { kind: 'sy
     return <EventLine icon={failed ? { ios: 'exclamationmark.circle', android: 'error' } : { ios: 'bubble.left.and.bubble.right', android: 'forum' }}
       text={row.text} tone={failed ? 'destructive' : 'muted'} href={sessionRoute(row.thread.sessionId)} label={`${row.text}. Open session`} />;
   }
-  if (row.subtype === 'talyn_interruption') return <EventLine icon={{ ios: 'pause.circle', android: 'pause_circle' }} text="Interrupted" />;
+  if (row.subtype === 'talyn_interruption') return <EventLine icon={{ ios: 'pause.circle', android: 'pause_circle' }} text={systemRowText(row)} />;
   if (row.subtype && BOX_REFUSALS[row.subtype]) {
-    return <EventLine icon={{ ios: 'pause.circle', android: 'pause_circle' }} tone="warning" text={`${BOX_REFUSALS[row.subtype]}. ${row.text}`} />;
+    return <EventLine icon={{ ios: 'pause.circle', android: 'pause_circle' }} tone="warning" text={systemRowText(row)} />;
   }
-  if (row.subtype === 'talyn_message') return <EventLine icon={{ ios: 'sparkles', android: 'auto_awesome' }} text={row.text.length > 280 ? `${row.text.slice(0, 280)}…` : row.text} />;
+  if (row.subtype === 'talyn_message') return <EventLine icon={{ ios: 'sparkles', android: 'auto_awesome' }} text={systemRowText(row)} />;
   return <EventLine icon={{ ios: 'info.circle', android: 'info' }} text={row.text} tone={row.isError ? 'destructive' : 'muted'} url={url} />;
 }
 
@@ -136,18 +136,17 @@ function SystemRow({ row, workbench }: { row: Extract<TranscriptRow, { kind: 'sy
  */
 function PermissionRow({ row }: { row: Extract<TranscriptRow, { kind: 'permission' }> }) {
   const c = useTheme();
+  const mark = useHighlighter();
   const detail = describeTool(row.toolName, row.toolInput).detail;
   const tone = row.status === 'pending' ? c.warning : row.status === 'denied' ? c.destructive : c.success;
-  const title = row.status === 'pending' ? `${row.toolName} is waiting for approval`
-    : row.status === 'denied' ? `Denied ${row.toolName}` : row.status === 'auto_allowed' ? `Allowed ${row.toolName} automatically`
-      : `Allowed ${row.toolName}${row.persist ? ' for this session' : ''}`;
+  const title = permissionTitle(row);
   return <View accessible accessibilityLabel={`${title}${detail ? `. ${detail}` : ''}`}
     style={[styles.permission, { borderColor: withAlpha(tone, 0.35), backgroundColor: withAlpha(tone, c.mode === 'dark' ? 0.1 : 0.06) }]}>
     <View style={styles.eventInner}>
       <SymbolView name={{ ios: 'checkmark.shield', android: 'shield' }} size={14} tintColor={tone} />
-      <Text style={[type.meta, sans(600), { color: c.text, flex: 1 }]}>{title}</Text>
+      <Text style={[type.meta, sans(600), { color: c.text, flex: 1 }]}>{mark(title)}</Text>
     </View>
-    {detail ? <Text numberOfLines={4} selectable style={[styles.mono, { color: c.muted }]}>{detail}</Text> : null}
+    {detail ? <Text numberOfLines={4} selectable style={[styles.mono, { color: c.muted }]}>{mark(detail)}</Text> : null}
   </View>;
 }
 
@@ -173,17 +172,19 @@ export function PlanCard({ plan, state, busy, disabled, onApprove, onKeepPlannin
 
 export function FailedLine({ text }: { text: string }) {
   const c = useTheme();
+  const mark = useHighlighter();
   return <View accessible accessibilityRole="alert" accessibilityLabel={`Turn failed. ${text}`} style={styles.failed}>
     <SymbolView name={{ ios: 'exclamationmark.circle', android: 'error' }} size={14} tintColor={c.destructive} />
-    <Text selectable style={[type.meta, { color: c.destructive, flex: 1 }]}><Text style={sans(600)}>Turn failed. </Text>{text}</Text>
+    <Text selectable style={[type.meta, { color: c.destructive, flex: 1 }]}><Text style={sans(600)}>{mark('Turn failed. ')}</Text>{mark(text)}</Text>
   </View>;
 }
 
 export function QueuedBubble({ text, fromTalyn }: { text: string; fromTalyn: boolean }) {
   const c = useTheme();
+  const mark = useHighlighter();
   return <View style={styles.userWrap}>
     <View accessible accessibilityLabel={`${fromTalyn ? 'From Talyn' : 'Queued'}: ${text}`} style={[styles.bubble, styles.queued, { borderColor: c.border }]}>
-      <Text numberOfLines={6} style={[type.body, { color: c.muted }]}>{text}</Text>
+      <Text numberOfLines={6} style={[type.body, { color: c.muted }]}>{mark(text)}</Text>
     </View>
     <AppText variant="caption" tone="muted" importantForAccessibility="no">{fromTalyn ? 'From Talyn' : 'Queued'}</AppText>
   </View>;

@@ -116,7 +116,7 @@ describe('SpaceHomePage composer, like the personal one', () => {
   });
 
   it.each<[string, string]>([
-    ['the image button', 'Attach images'],
+    ['the attach button', 'Attach images or text files'],
     ['the repository picker', 'Repository'],
     ['the base branch', 'Base branch'],
     ['Create from', 'Create from'],

@@ -5,7 +5,9 @@ import {
   WORKBENCH_ATTACHMENT_EXTENSIONS,
   WORKBENCH_IMAGE_TYPES,
   WORKBENCH_MAX_VIDEO_BYTES,
+  WORKBENCH_TEXT_TYPE,
   WORKBENCH_VIDEO_TYPES,
+  isWorkbenchTextContent,
   workbenchAttachmentFileName,
   workbenchAttachmentMaxBytes,
   type ApiResponse,
@@ -18,7 +20,7 @@ import { recordWorkbenchEvent, repoDirFor, runCapture } from '../services/workbe
 import { writeSandboxFiles } from '../services/workbenches/sandboxFiles.js';
 import { getWorkbench, isThread } from '../services/workbenches/store.js';
 
-const ATTACHMENT_TYPES: readonly string[] = [...WORKBENCH_IMAGE_TYPES, ...WORKBENCH_VIDEO_TYPES];
+const ATTACHMENT_TYPES: readonly string[] = [...WORKBENCH_IMAGE_TYPES, ...WORKBENCH_VIDEO_TYPES, WORKBENCH_TEXT_TYPE];
 const ATTACHMENT_PATH = /^\.context\/attachments\/[A-Za-z0-9._-]+$/;
 const READ_CHUNK_BYTES = 2 * 1024 * 1024;
 const megabytes = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
@@ -34,6 +36,7 @@ export function matchesAttachmentType(type: string, data: Buffer): boolean {
   if (type === 'image/jpeg') return data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
   if (type === 'image/gif') return data.subarray(0, 6).toString('ascii') === 'GIF87a' || data.subarray(0, 6).toString('ascii') === 'GIF89a';
   if (type === 'image/webp') return data.subarray(0, 4).toString('ascii') === 'RIFF' && data.subarray(8, 12).toString('ascii') === 'WEBP';
+  if (type === WORKBENCH_TEXT_TYPE) return isWorkbenchTextContent(data);
   return false;
 }
 
@@ -130,6 +133,7 @@ export function workbenchAttachmentRoutes(): Router {
         .join('')
         .slice(0, 200) || 'attachment';
       // The raw route reads the type back from the extension, so the stored name must carry the right one.
+      // A text file keeps its own extension: the raw route does not serve text.
       const safe = workbenchAttachmentFileName(
         name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '').slice(0, 75) || 'attachment',
         mimeType,

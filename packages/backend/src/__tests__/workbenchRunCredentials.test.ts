@@ -20,7 +20,10 @@ import { FakeFleet, isWorkSaveScript } from './helpers/fakeFleet.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 
 vi.mock('../services/github.js', () => ({ githubService: { getVerifiedAccessToken: vi.fn(async () => 'github-token') } }));
-vi.mock('../services/selfHosted/accountSelection.js', () => ({ resolveRunCredential: vi.fn(async () => ({ token: 'agent-token' })) }));
+vi.mock('../services/selfHosted/accountSelection.js', async (original) => ({
+  ...(await original<typeof import('../services/selfHosted/accountSelection.js')>()),
+  resolveRunCredential: vi.fn(async () => ({ token: 'agent-token' })),
+}));
 vi.mock('../services/mcpServers/dispatch.js', () => ({ mcpIntegrationSecrets: vi.fn(async () => ({ linear: 'tool-token' })) }));
 vi.mock('../services/websocket.js', async (original) => ({
   ...(await original<typeof import('../services/websocket.js')>()), broadcastToWorkspace: () => undefined,

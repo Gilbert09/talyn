@@ -25,8 +25,9 @@ Other options in the composer:
 - To start a session from a pull request, you can also use **Open in session** on the pull request. On mobile, it is in the pull request's menu.
 - **Plan** turns on plan mode. The agent reads the code and writes a plan, and changes nothing until you approve it. Press Shift+Tab to switch plan mode.
 - **Internet on** / **Internet off** controls whether the sandbox can reach the internet. See [Internet access](/docs/sandboxes#internet-access).
-- The attach button adds images and videos. You can also paste or drop them into the chat. Images can be PNG, JPEG, WebP or GIF, up to 10 MB. Videos can be MP4, MOV or WebM, up to 50 MB. On the phone, pick a video from your library.
-- You can attach a video only after the session starts. When you start a new session, attach images only.
+- The attach button adds images, videos and text files. You can also paste or drop them into the chat. Images can be PNG, JPEG, WebP or GIF, up to 10 MB. Videos can be MP4, MOV or WebM, up to 50 MB. On the phone, pick a video from your library.
+- A text file must be UTF-8 text, up to 1 MB. Examples are logs, Markdown, CSV, JSON, YAML and source code. The file keeps its name. The agent reads it from the sandbox. The phone shows text files that you attach on the web or desktop, but cannot attach them yet.
+- You can attach a video only after the session starts. When you start a new session, attach images and text files only.
 - The agent gets a video as a file in the sandbox. It cannot watch the video. It can take still frames from the video with a tool such as ffmpeg, if the sandbox has one.
 
 Your defaults for new sessions are in **Settings > Sessions**: the agent, the model, the reasoning effort, plan mode, internet access and a branch prefix such as `yourname/`.
@@ -63,6 +64,19 @@ The panel on the right has four tabs:
 - **Sandbox**: what the sandbox is doing, its CPU and memory use over the last hour, and whether your work is saved.
 
 The terminal dock below has a **Run** tab for your run scripts and a **Terminal** tab with a shell in the sandbox. Press ⌘J on a Mac to show or hide it.
+
+## Find in the transcript
+
+Press ⌘F (Ctrl+F on Windows and Linux) to search the session's chat. The find bar shows the number of matches and highlights them.
+
+- Press Enter to go to the next match. Press Shift+Enter to go to the previous match.
+- Press Esc to close the find bar.
+- In split view, ⌘F searches the pane that has focus.
+- The search includes only the messages that are loaded. To search earlier messages, scroll up to load them. When earlier messages are not loaded, the find bar tells you.
+- The search does not include the contents of collapsed tool calls.
+- In the code viewer and in the terminal, ⌘F keeps its usual function.
+
+In the mobile app, tap the search button in the session header. The row of the current match has a tinted background.
 
 ## Talk to the agent while it works
 

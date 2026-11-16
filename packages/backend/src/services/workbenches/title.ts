@@ -49,12 +49,12 @@ export function startTitleGeneration(row: WorkbenchRow, message: string, opts: C
 export async function startTitleFromQueue(row: WorkbenchRow, opts: CheapAgentOptions = {}): Promise<void> {
   if (row.title || row.runtime !== 'sandbox') return;
   const chats = await listChats(row.id);
-  const text = chats
+  const first = chats
     .filter((chat) => !chat.closedAt)
-    .flatMap((chat) => chat.queuedMessages ?? [])
-    .map((message) => message.text.trim())
-    .find(Boolean);
-  if (text) await startTitleGeneration(row, text, opts);
+    .flatMap((chat) => (chat.queuedMessages ?? []).map((message) => ({ text: message.text.trim(), agent: chat.agent })))
+    .find((message) => message.text);
+  if (!first) return;
+  await startTitleGeneration(row, first.text, { agent: first.agent === 'codex' ? 'codex' : 'claude', ...opts });
 }
 
 /** Test hook: forget the failure counts. */

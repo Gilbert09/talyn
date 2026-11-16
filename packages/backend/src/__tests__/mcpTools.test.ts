@@ -1200,6 +1200,7 @@ describe('MCP reads and edge cases', () => {
           connected: true,
           connectedAgents: ['codex'],
           reauthAgents: ['claude'],
+          reauthAccounts: [{ id: 'account-1', label: 'Personal Claude', agent: 'claude' }],
           secret: 'NEVER_SHOW',
         },
       ],
@@ -1210,6 +1211,7 @@ describe('MCP reads and edge cases', () => {
     });
     const out = await tool('talyn_list_cloud_providers').handler(OWNER, { workspace_id: 'ws1' });
     expect(out).toContain('agents: codex  reauth needed: claude');
+    expect(out).toContain('Personal Claude (account-1)');
     expect(out).toContain('default provider: selfhosted');
     expect(out).not.toContain('NEVER_SHOW');
   });

@@ -140,8 +140,8 @@ describe('attaching a video in a session', () => {
 
   it('offers videos in the file picker', () => {
     renderComposer();
-    expect(screen.getByLabelText('Choose images or videos')).toHaveAttribute('accept', expect.stringContaining('video/mp4'));
-    expect(screen.getByRole('button', { name: 'Attach images or videos' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Choose images, videos or text files')).toHaveAttribute('accept', expect.stringContaining('video/mp4'));
+    expect(screen.getByRole('button', { name: 'Attach images, videos or text files' })).toBeInTheDocument();
   });
 });
 

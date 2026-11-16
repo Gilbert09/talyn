@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { SpacePresenceMember, SpaceSessionRow, Workbench, Workspace } from '@talyn/shared';
-import { isActiveSessionState, spaceSessionState, type SessionState } from '../../lib/sessionState';
+import { isActiveSessionState, spaceSessionState, withServerAttention, type SessionState } from '../../lib/sessionState';
+import { useAttentionSessions, useContextAttentionStore } from '../../lib/contextRail';
 import { isWorkbenchOwner } from '../../lib/spaces';
 import { isThread } from '../../lib/threads';
 import { newestSessions } from '../../lib/sessionOrder';
@@ -81,7 +82,7 @@ export function spaceSidebarModel(input: SpaceSidebarInput): SpaceSidebarModel {
   const states = new Map<string, SessionState>();
   const activeIds = new Set<string>();
   for (const row of live) {
-    let state = own.states.get(row.id) ?? spaceSessionState(row);
+    let state = own.states.get(row.id) ?? withServerAttention(spaceSessionState(row), input.attention?.[row.id], row.pullRequest?.number);
     if (row.running && !isActiveSessionState(state)) state = WORKING;
     states.set(row.id, state);
     if (isActiveSessionState(state) || viewed.has(row.id) || own.activeIds.has(row.id)) activeIds.add(row.id);
@@ -129,6 +130,7 @@ export function currentSpaceSidebarModel(spaceId: string): SpaceSidebarModel {
     unread: wbs.unread,
     unseen: wbs.unseen,
     backgrounds: useSessionBackgroundStore.getState().byWorkbench,
+    attention: useContextAttentionStore.getState().counts?.sessions,
   });
 }
 
@@ -145,6 +147,7 @@ export function useSpaceSidebarModel(spaceId: string): SpaceSidebarModel {
   const sidebarOrder = useWorkspaceStore((s) => s.sidebarOrder);
   const prRows = usePullRequestStore((s) => s.rows);
   const backgrounds = useSessionBackgroundStore((s) => s.byWorkbench);
+  const attention = useAttentionSessions();
   return useMemo(
     () =>
       spaceSidebarModel({
@@ -160,7 +163,8 @@ export function useSpaceSidebarModel(spaceId: string): SpaceSidebarModel {
         unread,
         unseen,
         backgrounds,
+        attention,
       }),
-    [rows, presence, selfUserId, workbenches, workspaces, currentWorkspaceId, sidebarOrder, prRows, chats, unread, unseen, backgrounds],
+    [rows, presence, selfUserId, workbenches, workspaces, currentWorkspaceId, sidebarOrder, prRows, chats, unread, unseen, backgrounds, attention],
   );
 }
