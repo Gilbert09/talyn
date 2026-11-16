@@ -27,7 +27,6 @@ export const QUICK_ACTION_ICON: Record<QuickActionKind | 'queue_remove', Symbol>
   merge: { ios: 'arrow.triangle.merge', android: 'merge' },
   archive: { ios: 'archivebox', android: 'archive' },
   retry: { ios: 'arrow.clockwise', android: 'refresh' },
-  wake: { ios: 'sun.max', android: 'wb_sunny' },
   restore: { ios: 'arrow.uturn.backward', android: 'unarchive' },
   queue_add: { ios: 'text.badge.plus', android: 'playlist_add' },
   queue_remove: { ios: 'text.badge.minus', android: 'playlist_remove' },
@@ -78,7 +77,7 @@ export function useQuickActions({ item, row, runSession, toast }: {
   const run = (kind: RunnableKind) => {
     if (busy) return;
     switch (kind) {
-      case 'retry': case 'wake': case 'restore': void track(kind, () => runSession(kind, item)); return;
+      case 'retry': case 'restore': void track(kind, () => runSession(kind, item)); return;
       case 'archive': void runSession('archive', item); return;
       case 'create_pr': void attempt(kind, 'Could not create the pull request', () => sendCreatePullRequest(workflow, item)); return;
       case 'resolve_conflicts': case 'fix_checks':
@@ -117,12 +116,19 @@ export function quickMenuActions(item: Workbench, row: PRRow | null, options: { 
   return out;
 }
 
+/**
+ * Only the next step in the PR cycle (and Retry or Restore) is filled. The
+ * merge queue is an option, not the next step, so it never takes the accent
+ * even when it is the only chip.
+ */
+const PRIMARY_KINDS = new Set<QuickActionKind>(['create_pr', 'resolve_conflicts', 'fix_checks', 'merge', 'retry', 'restore']);
+
 /** The one slim row of quick actions. Nothing renders without an action. */
 export function QuickActionRow({ actions, busy, run }: { actions: QuickAction[]; busy: RunnableKind | null; run(kind: QuickActionKind): void }) {
   if (!actions.length) return null;
   return <View accessibilityRole="toolbar" accessibilityLabel="Quick actions" style={styles.actions}>
     {actions.map((action, index) => <ChipButton key={action.kind} label={action.label} icon={QUICK_ACTION_ICON[action.kind]}
-      variant={index === 0 && action.kind !== 'archive' && action.kind !== 'queue_status' ? 'primary' : 'secondary'}
+      variant={index === 0 && PRIMARY_KINDS.has(action.kind) ? 'primary' : 'secondary'}
       loading={busy === action.kind} disabled={Boolean(action.disabledReason) || (busy !== null && busy !== action.kind)}
       hint={action.disabledReason ?? action.hint} onPress={() => run(action.kind)} />)}
   </View>;

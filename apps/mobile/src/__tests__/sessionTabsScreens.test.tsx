@@ -5,6 +5,7 @@ import { Alert } from 'react-native';
 
 import { HistoryScreen } from '../features/history/HistoryScreen';
 import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
+import { palettes } from '../theme/tokens';
 import { chat, fixture, pr, session, thread } from './workflowFixtures';
 
 jest.setTimeout(15000);
@@ -134,6 +135,25 @@ describe('quick actions', () => {
     await fireEvent.press(await screen.findByRole('button', { name: 'Add to merge queue' }));
     await waitFor(() => expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledWith('pr-one', true));
     expect(await screen.findByText('Added #42 to the merge queue.')).toBeVisible();
+  });
+  const accent = { backgroundColor: palettes.light.primaryAction };
+  it('keeps the queue chip quiet when it is the only chip', async () => {
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(await screen.findByRole('button', { name: 'Add to merge queue' })).not.toHaveStyle(accent);
+  });
+  it('fills the next step and keeps the queue quiet beside it', async () => {
+    withRow(summary({ mergeable: 'MERGEABLE', ciStatus: 'passing', blockingReason: 'mergeable' }));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(await screen.findByRole('button', { name: 'Merge' })).toHaveStyle(accent);
+    expect(screen.getByRole('button', { name: 'Add to merge queue' })).not.toHaveStyle(accent);
+  });
+  it('leaves Wake to the menu', async () => {
+    mockActive.api.workbenches.get.mockResolvedValue(session({ sandboxState: 'suspended' }));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await screen.findByRole('button', { name: 'Add to merge queue' });
+    expect(screen.queryByRole('button', { name: 'Wake' })).toBeNull();
+    await fireEvent.press(screen.getByRole('button', { name: 'Session actions' }));
+    expect(screen.getByRole('button', { name: 'Wake sandbox' })).toBeVisible();
   });
   it('shows the queue state once queued and opens the PR from it', async () => {
     withRow({ mergeQueued: true, mergeQueue: { position: 2, status: 'queued' } as never });
