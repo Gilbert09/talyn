@@ -40,21 +40,59 @@ function relative(iso: string): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-/** One webhook rule's stored requests, newest first, paged by `receivedAt`. */
-export function useWebhookDeliveries(ruleId: string) {
+/**
+ * Where a deliveries list reads from: a webhook rule's URL, or the PostHog
+ * Inbox webhook of a workspace. `key` changes when the list must reload.
+ */
+export interface DeliverySource {
+  key: string;
+  list(opts: { limit: number; cursor: string | null }): Promise<InboundDeliverySummary[]>;
+  get(deliveryId: string): Promise<InboundDelivery>;
+  replay(deliveryId: string): Promise<unknown>;
+  /** What the list says before the first request. */
+  empty?: string;
+}
+
+/** The requests of one webhook rule. */
+export function ruleDeliverySource(ruleId: string): DeliverySource {
+  return {
+    key: `rule:${ruleId}`,
+    list: (opts) => api.workflows.deliveries(ruleId, opts),
+    get: (deliveryId) => api.workflows.delivery(ruleId, deliveryId),
+    replay: (deliveryId) => api.workflows.replayDelivery(ruleId, deliveryId),
+  };
+}
+
+/** The requests PostHog sent to the workspace's PostHog Inbox webhook URL. */
+export function posthogInboxDeliverySource(workspaceId: string): DeliverySource {
+  return {
+    key: `posthog_inbox:${workspaceId}`,
+    list: (opts) => api.workflows.posthogInboxDeliveries(workspaceId, opts),
+    get: (deliveryId) => api.workflows.posthogInboxDelivery(workspaceId, deliveryId),
+    replay: (deliveryId) => api.workflows.replayPostHogInboxDelivery(workspaceId, deliveryId),
+    empty: 'No requests yet. PostHog sends one when an Inbox report becomes ready.',
+  };
+}
+
+/** One source's stored requests, newest first, paged by `receivedAt`. */
+export function useWebhookDeliveries(ruleIdOrSource: string | DeliverySource) {
+  const source = typeof ruleIdOrSource === 'string' ? ruleDeliverySource(ruleIdOrSource) : ruleIdOrSource;
+  const sourceKey = source.key;
   const [rows, setRows] = useState<InboundDeliverySummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
-  const ruleRef = useRef(ruleId);
-  ruleRef.current = ruleId;
+  const ruleRef = useRef(sourceKey);
+  ruleRef.current = sourceKey;
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
 
   const fetchPage = useCallback((cursor: string | null) => {
     setLoading(true);
-    api.workflows
-      .deliveries(ruleId, { limit: PAGE, cursor })
+    sourceRef.current
+      .list({ limit: PAGE, cursor })
       .then((page) => {
-        if (ruleRef.current !== ruleId) return;
+        if (ruleRef.current !== sourceKey) return;
         setRows((prev) => {
           if (!cursor) return page;
           const seen = new Set(prev.map((r) => r.id));
@@ -64,11 +102,11 @@ export function useWebhookDeliveries(ruleId: string) {
         setError(null);
       })
       .catch((err: unknown) => {
-        if (ruleRef.current !== ruleId) return;
+        if (ruleRef.current !== sourceKey) return;
         setError(err instanceof Error ? err.message : 'Could not load the deliveries');
       })
       .finally(() => setLoading(false));
-  }, [ruleId]);
+  }, [sourceKey]);
 
   useEffect(() => {
     setRows([]);
@@ -86,21 +124,22 @@ export function useWebhookDeliveries(ruleId: string) {
   return { rows, loading, error, hasMore, loadMore, reload };
 }
 
-function DeliveryDetail({ ruleId, deliveryId }: { ruleId: string; deliveryId: string }) {
+function DeliveryDetail({ source, deliveryId }: { source: DeliverySource; deliveryId: string }) {
   const [delivery, setDelivery] = useState<InboundDelivery | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     setDelivery(null);
-    api.workflows
-      .delivery(ruleId, deliveryId)
+    source
+      .get(deliveryId)
       .then((d) => { if (active) setDelivery(d); })
       .catch((err: unknown) => {
         if (active) setError(err instanceof Error ? err.message : 'Could not load this delivery');
       });
     return () => { active = false; };
-  }, [ruleId, deliveryId]);
+    // The source object is new on each render; its key names it.
+  }, [source.key, deliveryId]);
 
   if (error) return <p className="text-xs text-red-500">{error}</p>;
   if (!delivery) return <p className="text-xs text-muted-foreground">Loading...</p>;
@@ -128,8 +167,8 @@ function DeliveryDetail({ ruleId, deliveryId }: { ruleId: string; deliveryId: st
   </div>;
 }
 
-function DeliveryRow({ ruleId, row, onReplayed }: {
-  ruleId: string;
+function DeliveryRow({ source, row, onReplayed }: {
+  source: DeliverySource;
   row: InboundDeliverySummary;
   onReplayed: () => void;
 }) {
@@ -139,7 +178,7 @@ function DeliveryRow({ ruleId, row, onReplayed }: {
   const replay = async () => {
     setReplaying(true);
     try {
-      await api.workflows.replayDelivery(ruleId, row.id);
+      await source.replay(row.id);
       toast.success('Replay started');
       onReplayed();
     } catch (err) {
@@ -182,13 +221,14 @@ function DeliveryRow({ ruleId, row, onReplayed }: {
       </Button>
     </div>
     {row.error && <p className="text-xs text-red-500">{row.error}</p>}
-    {open && <DeliveryDetail ruleId={ruleId} deliveryId={row.id} />}
+    {open && <DeliveryDetail source={source} deliveryId={row.id} />}
   </div>;
 }
 
 /** The requests a webhook rule received. Talyn keeps each one for 7 days. */
-export function WebhookDeliveriesList({ ruleId }: { ruleId: string }) {
-  const { rows, loading, error, hasMore, loadMore, reload } = useWebhookDeliveries(ruleId);
+export function WebhookDeliveriesList(props: { ruleId: string } | { source: DeliverySource }) {
+  const source = 'source' in props ? props.source : ruleDeliverySource(props.ruleId);
+  const { rows, loading, error, hasMore, loadMore, reload } = useWebhookDeliveries(source);
 
   if (error && rows.length === 0) return <p className="px-3 py-2 text-[13px] text-red-500">{error}</p>;
   if (loading && rows.length === 0) {
@@ -196,12 +236,12 @@ export function WebhookDeliveriesList({ ruleId }: { ruleId: string }) {
   }
   if (rows.length === 0) {
     return <p className="px-3 py-2 text-[13px] text-muted-foreground">
-      No requests yet. Send a request to the URL to see it here.
+      {source.empty ?? 'No requests yet. Send a request to the URL to see it here.'}
     </p>;
   }
 
   return <div className="divide-y">
-    {rows.map((row) => <DeliveryRow key={row.id} ruleId={ruleId} row={row} onReplayed={reload} />)}
+    {rows.map((row) => <DeliveryRow key={row.id} source={source} row={row} onReplayed={reload} />)}
     {error && <p className="px-3 py-2 text-xs text-red-500">{error}</p>}
     {hasMore && (
       <div className="p-3">

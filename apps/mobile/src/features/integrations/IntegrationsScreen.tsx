@@ -1,5 +1,5 @@
-import { posthog, trunk, workspaces as workspaceApi, type PostHogCodeStatus } from '@talyn/client/native';
-import { POSTHOG_CODE_MODELS, POSTHOG_CODE_RETIRED_ERROR, POSTHOG_CODE_RETIRED_NOTICE, type IntegrationKind, type TrunkIntegrationStatus, type Workspace } from '@talyn/shared';
+import { posthog, trunk, workflows, workspaces as workspaceApi, type PostHogCodeStatus } from '@talyn/client/native';
+import { POSTHOG_CODE_MODELS, POSTHOG_CODE_RETIRED_ERROR, POSTHOG_CODE_RETIRED_NOTICE, type IntegrationKind, type PostHogInboxStatus, type TrunkIntegrationStatus, type Workspace } from '@talyn/shared';
 import { useEffect, useState } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
 
@@ -16,15 +16,18 @@ import { useRemote, type Remote } from '../more/useRemote';
 import { postHogRetirement } from './posthogRetirement';
 import {
   type Badge, DEFAULT_POSTHOG_HOST, isHttpsUrl, keyFormOpen, POSTHOG_API_KEYS_URL, POSTHOG_KEY_SCOPE_NOTE, POSTHOG_MODEL_DESCRIPTION, postHogKeyConfig,
-  postHogModelLabel, postHogModelOf, postHogOAuthOptions, postHogView, trunkFormOpen, trunkToken, trunkView, withAppReturn,
+  postHogInboxPushText, postHogModelLabel, postHogModelOf, postHogOAuthOptions, postHogView, trunkFormOpen, trunkToken, trunkView, withAppReturn,
 } from './model';
 
 /** The secret fields: hidden, never corrected, never kept by the keyboard. */
 const SECRET = { secureTextEntry: true, autoCapitalize: 'none', autoCorrect: false, spellCheck: false, autoComplete: 'off', textContentType: 'none' } as const;
 const PLAIN = { autoCapitalize: 'none', autoCorrect: false, spellCheck: false } as const;
 
-/** The existing connection cards on their integration pages. */
-export function IntegrationsScreen({ kind }: { kind: Extract<IntegrationKind, 'posthog' | 'trunk'> }) {
+/**
+ * The existing connection cards on their integration pages. `inbox` is the
+ * PostHog Inbox page: it adds the read-only push line under the PostHog card.
+ */
+export function IntegrationsScreen({ kind, inbox = false }: { kind: Extract<IntegrationKind, 'posthog' | 'trunk'>; inbox?: boolean }) {
   const workspaceId = useWorkspace().selected;
   const offline = useNetwork() === 'offline';
   const features = useFeatures();
@@ -33,16 +36,35 @@ export function IntegrationsScreen({ kind }: { kind: Extract<IntegrationKind, 'p
     () => posthog.getStatus(workspaceId as string));
   const trunkStatus = useRemote<TrunkIntegrationStatus>(workspaceId && trunkOn ? `trunk-status:${workspaceId}` : null,
     () => trunk.getStatus(workspaceId as string));
+  const inboxStatus = useRemote<PostHogInboxStatus>(inbox && kind === 'posthog' && workspaceId ? `posthog-inbox-status:${workspaceId}` : null,
+    () => workflows.posthogInboxStatus(workspaceId as string));
 
   if (!workspaceId) {
     return <Page><EmptyState title="No Workspace Selected" detail="Create or select a workspace to configure settings" /></Page>;
   }
-  const refresh = () => { if (kind === 'posthog') void posthogStatus.refresh(); else void trunkStatus.refresh(); };
+  const refresh = () => {
+    if (kind === 'posthog') {
+      void posthogStatus.refresh();
+      if (inbox) void inboxStatus.refresh();
+    } else void trunkStatus.refresh();
+  };
   const remote = kind === 'posthog' ? posthogStatus : trunkStatus;
   return <Page refreshing={remote.refreshing && remote.data !== undefined} onRefresh={refresh}>
     {kind === 'posthog' ? <PostHogCodeCard workspaceId={workspaceId} status={posthogStatus} offline={offline} /> : null}
+    {inbox && kind === 'posthog' ? <PostHogInboxPushCard status={inboxStatus} /> : null}
     {trunkOn ? <TrunkCard workspaceId={workspaceId} status={trunkStatus} offline={offline} /> : null}
   </Page>;
+}
+
+/** The PostHog Inbox push, read-only. The URL is made and rotated on the web. */
+function PostHogInboxPushCard({ status }: { status: Remote<PostHogInboxStatus> }) {
+  const text = postHogInboxPushText(status.data);
+  if (!text) return null;
+  return <Card>
+    <CardHeader title="Push from PostHog" badge={null} />
+    <AppText variant="meta" tone="muted" testID="posthog-inbox-push-line">{text}</AppText>
+    <AppText variant="meta" tone="muted">Make or rotate the webhook URL on the web, on the PostHog Inbox Connection tab.</AppText>
+  </Card>;
 }
 
 function CardHeader({ title, badge }: { title: string; badge: Badge | null }) {

@@ -19,9 +19,33 @@ A personal API key needs the `inbox:read` scope. The editor shows whether PostHo
 
 Talyn checks your PostHog project about every 3 minutes. It reads the reports that are **ready**, not claimed, and not already being handled, and that changed since the last check. Talyn always reads each report again from PostHog before it acts.
 
+PostHog can also push to Talyn when a report becomes ready. Then rules act within seconds. See [Push from PostHog](#push-from-posthog).
+
 A new rule acts on reports that become ready or change after it is enabled. To see what a rule matches now, use **Preview matches** in the editor. The preview starts nothing.
 
 When a report changes, a rule can act on it again. While a session from that report is still working, Talyn does not start a second one. The run history shows `issue_already_running`.
+
+## Push from PostHog
+
+A push tells Talyn that a report is ready. Talyn uses only the report id from the push. It then reads the report from your PostHog project with your connection, as for a check. A push that names a report your project does not have is dropped.
+
+To set up the push:
+
+1. Open **Integrations > PostHog Inbox > Connection**.
+2. Click **Make a webhook URL**. By default, the URL also needs a secret header. Clear **Require a secret header** if you do not want one.
+3. Copy the URL and the secret. Talyn shows them only once.
+4. In your PostHog project, open **Data pipelines** and add a new destination. Choose **HTTP Webhook when an Inbox report is ready**.
+5. Paste the URL. Keep the `POST` method and the default JSON body.
+6. If you use the secret, add it under the secret headers as `X-Talyn-Secret`. PostHog keeps secret headers encrypted.
+7. Save and turn on the destination.
+
+The Connection tab shows the time of the last push and the requests that PostHog sent. Each request shows whether a rule ran, and why Talyn dropped it if it did. **Replay** reads the report again. A report version that a rule already acted on does not start a second session.
+
+While pushes arrive, Talyn checks the Inbox only every 30 minutes, to catch a push that was lost. When no push arrives for 24 hours, Talyn goes back to checking every 3 minutes. A push and a check of the same report version never both start work.
+
+**Rotate URL** makes a new URL and secret. The old ones stop at once, so update the destination in PostHog. **Remove URL** stops the push.
+
+PostHog sends this event only to organizations where PostHog turned it on. If no request arrives, the 3-minute check still works.
 
 ## Create a rule
 

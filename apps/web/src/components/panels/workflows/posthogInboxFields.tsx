@@ -23,6 +23,7 @@ import { useNavigationStore } from '../../../stores/navigation';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
+import { PostHogInboxPushSection, postHogInboxPushLine } from './posthogInboxPush';
 import { ChoiceSet, DropdownButton, EditorRow, TextField, TokenField } from './workflowFields';
 
 /**
@@ -131,6 +132,10 @@ export function PostHogInboxConnectionNotice({ status, error }: PostHogInboxStat
         {polled ? `Last checked ${polled}.` : 'Not checked yet.'}
       </p>
       {status.lastError && <p className="text-red-500">The last check failed. {status.lastError}</p>}
+      <p data-attr="posthog-inbox-push-status">
+        {postHogInboxPushLine(status.lastPushAt ?? null, status.pushConfigured ?? false)}
+        {!status.pushConfigured && ' To start automations within seconds, set up the push on the Connection tab.'}
+      </p>
     </div>
   );
 }
@@ -162,6 +167,7 @@ export function PostHogInboxConnectionSection() {
       </p>
       <PostHogInboxConnectionNotice {...state} />
       <OpenPostHogCodeButton>Open PostHog Code</OpenPostHogCodeButton>
+      {state.status?.projectId && <PostHogInboxPushSection />}
     </div>
   );
 }

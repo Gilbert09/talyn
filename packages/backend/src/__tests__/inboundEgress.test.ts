@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { WebhookEventFacts } from '@talyn/shared';
 import { createTestDb } from './helpers/testDb.js';
-import { listDeliveriesQuery, webhookConnectionQuery } from '../services/inbound/store.js';
+import { listDeliveriesQuery, posthogInboxPushConnectionQuery, webhookConnectionQuery } from '../services/inbound/store.js';
 import { storedFacts } from '../services/workflows/runs.js';
 
 /**
@@ -35,6 +35,15 @@ describe('inbound egress', () => {
     expect(sql).not.toContain('token_hash');
     expect(sql).not.toContain('secret_enc');
     expect(sql).not.toContain('credential_enc');
+  });
+
+  it('the PostHog Inbox URL summary reads only whether a secret exists', () => {
+    const sql = posthogInboxPushConnectionQuery('ws1', '2').toSQL().sql;
+    expect(sql).not.toContain('token_hash');
+    expect(sql).not.toContain('credential_enc');
+    expect(sql).toMatch(/"secret_enc" IS NOT NULL/);
+    // The envelope itself is never a selected column.
+    expect(sql.replace(/"secret_enc" IS NOT NULL/g, '')).not.toContain('secret_enc');
   });
 
   it('a run stores a webhook without its body or headers', () => {
