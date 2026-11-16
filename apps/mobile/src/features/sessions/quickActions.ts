@@ -4,12 +4,12 @@ import { nextWorkbenchAction, prSummaryToNextActionPr, type Workbench, type Work
 import { sessionPr, type SessionPr } from '../../lib/status';
 import { workbenchKind } from '../../workflow/model';
 import { queueStateLabel } from '../prs/actions';
-import { canRetry, canWake, isArchived } from './actions';
+import { canRetry, isArchived } from './actions';
 import { hasChanges, sessionUnavailable } from './model';
 
 /** The header cycle of web `workbenchActions.ts`: Create PR, Resolve conflicts, Fix checks, Merge, Archive. */
 export type CycleAction = Exclude<WorkbenchNextAction, null>;
-export type QuickActionKind = CycleAction | 'retry' | 'wake' | 'restore' | 'queue_add' | 'queue_status';
+export type QuickActionKind = CycleAction | 'retry' | 'restore' | 'queue_add' | 'queue_status';
 
 export interface QuickAction {
   kind: QuickActionKind;
@@ -37,7 +37,6 @@ export const QUICK_ACTION_HINT: Record<QuickActionKind, string> = {
   merge: 'Merges the pull request on GitHub.',
   archive: 'Archives this session.',
   retry: 'Starts the sandbox again.',
-  wake: 'Wakes the sandbox so the next message starts sooner.',
   restore: 'Restores this session.',
   queue_add: 'Adds the pull request to the merge queue.',
   queue_status: 'Opens the pull request.',
@@ -102,9 +101,10 @@ export const canQueue = (item: Workbench, row: PRRow | null): row is PRRow =>
 
 /**
  * The quick actions above the transcript, most urgent first, at most `limit`.
- * Order: Retry a failed start, web's primary cycle action, the merge queue,
- * then Wake. Archived work only restores. A thread has no PR actions. Stop is
- * in the composer and the menu, not here.
+ * Order: Retry a failed start, web's primary cycle action, then the merge
+ * queue. Archived work only restores. A thread has no PR actions. Stop is in
+ * the composer and the menu, and Wake is in the menu: a sleeping sandbox wakes
+ * on the next message anyway, so it does not earn a place in the row.
  */
 export function primaryActions(item: Workbench, row: PRRow | null,
   options: { offline?: boolean; limit?: number } = {}): QuickAction[] {
@@ -119,7 +119,6 @@ export function primaryActions(item: Workbench, row: PRRow | null,
   if (canQueue(item, row)) {
     out.push(row.mergeQueued ? { ...make('queue_status', queueStateLabel(row)), disabledReason: null } : make('queue_add', 'Add to merge queue'));
   }
-  if (canWake(item)) out.push(make('wake', 'Wake'));
   return out.slice(0, options.limit ?? 2);
 }
 
