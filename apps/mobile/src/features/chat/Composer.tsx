@@ -53,7 +53,7 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
   const hasText = Boolean(local.draft.trim());
   const hasImages = images.length > 0;
   const hasDraft = hasText || hasImages;
-  const imageBlock = sendBlock({ text: local.draft, drafts: images });
+  const imageBlock = sendBlock(images);
   const blocked = delivery.status === 'failed' || delivery.status === 'unknown';
   const retry = () => Alert.alert('Send this message again?', delivery.status === 'unknown'
     ? 'Delivery is still unknown. The server can receive the same message twice. Check the conversation and queue first.'

@@ -28,7 +28,7 @@ const { durablePaths } = await import('../services/workbenches/durableExec.js');
 const { TURN_OWNER, resetWorkbenchDrainForTests } = await import('../services/workbenches/ownership.js');
 const { settleAgentBackupsForTests } = await import('../services/workbenches/agentBackups.js');
 const {
-  LAUNCH_FAILED_MESSAGE, MAX_TURN_ATTEMPTS, ORPHAN_MESSAGE, launchTurnLoopForTests, sendMessage,
+  LAUNCH_FAILED_MESSAGE, MAX_TURN_ATTEMPTS, ORPHAN_MESSAGE, launchTurnLoopForTests, normaliseMessage, sendMessage,
   setTurnRetryDelaysForTests, sweepOrphanedTurns, turnLogKey,
 } = await import('../services/workbenches/turns.js');
 
@@ -193,6 +193,45 @@ describe('workbench turn launch', () => {
     const script = fleet.scripts.find((candidate) => isAgentTurn(candidate)) ?? '';
     expect(script).toContain(`/work/app/${path} (${mimeType})`);
     expect(script.includes('extract frames from it')).toBe(noted);
+  });
+
+  it.each(['claude', 'codex'] as const)('sends an image with no text to %s with the file named in the prompt', async (agent) => {
+    if (agent === 'codex') {
+      await addFleetAccount('ws', {
+        kind: 'openai_key', label: 'Codex', credential: { keyEnc: encryptString('codex-token') },
+      });
+      await testDb.db.update(workbenches).set({
+        settings: { autoCreatePr: false, sandboxAgents: { 'talyn-wb-test': ['claude', 'codex'] } },
+      }).where(eq(workbenches.id, 'wb'));
+      await testDb.db.update(workbenchChats).set({ agent }).where(eq(workbenchChats.id, 'chat'));
+      fleet.handler = (script) => isAgentTurn(script, 'codex')
+        ? { stdout: [
+          JSON.stringify({ type: 'thread.started', thread_id: 'sess' }),
+          JSON.stringify({ type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'done' } }),
+          JSON.stringify({ type: 'turn.completed', usage: {} }),
+        ], exitCode: 0 }
+        : { stdout: '', exitCode: 0 };
+    }
+    const path = '.context/attachments/abc-shot.png';
+    await sendMessage('chat', { text: '  ', attachments: [{ name: 'shot.png', mimeType: 'image/png', path }] });
+    await settled('idle');
+    const script = fleet.scripts.find((candidate) => isAgentTurn(candidate, agent)) ?? '';
+    expect(script).toContain(`Attached files:\n- /work/app/${path} (image/png)`);
+    if (agent === 'codex') expect(script).toContain(`-i /work/app/${path}`);
+    const user = (await events()).find((event) => (event.talyn as { kind?: string } | undefined)?.kind === 'user_message');
+    expect(user?.talyn).toMatchObject({ attachments: [{ name: 'shot.png', mimeType: 'image/png', path }] });
+  });
+
+  it.each([
+    ['no text and no attachments', { text: '' }, false],
+    ['blank text and no attachments', { text: '   ', attachments: [] }, false],
+    ['no text field and one attachment', { attachments: [{ name: 'a.png', mimeType: 'image/png', dataBase64: 'YQ==' }] }, true],
+    ['blank text and one attachment', { text: ' ', attachments: [{ name: 'a.png', mimeType: 'image/png', path: 'a.png' }] }, true],
+    ['text and no attachments', { text: 'hi' }, true],
+  ])('normalises a message with %s', async (_label, input, ok) => {
+    const call = () => normaliseMessage(input as never);
+    if (ok) expect(call()).toMatchObject({ text: (input as { text?: string }).text ?? '' });
+    else expect(call).toThrow(expect.objectContaining({ code: 'empty_message', status: 400 }));
   });
 
   it.each(['credentials', 'attachments', 'instructions', 'skills'] as const)('propagates a fatal %s failure after other steps finish', async (step) => {

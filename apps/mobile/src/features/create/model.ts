@@ -137,16 +137,16 @@ export interface NewWorkForm {
 /**
  * Why Start is off, or null when it can start. Same order as web: the
  * repository, then the sandbox, then the agent. The prompt and the connection
- * come last because they are the person's to fix.
+ * come last because they are the person's to fix. Images alone are a prompt.
  */
-export function blockedReason(form: NewWorkForm, sandbox: Sandbox | null | undefined, offline: boolean): string | null {
+export function blockedReason(form: NewWorkForm, sandbox: Sandbox | null | undefined, offline: boolean, images = 0): string | null {
   if (form.mode === 'session' && !form.repository) return 'Choose a repository.';
   const sandboxOk = sandboxChoice(sandbox);
   if (!sandboxOk.available) return sandboxOk.reason ?? 'Cloud sessions are unavailable';
   const agentOk = agentChoice(sandbox, form.agent);
   if (!agentOk.available) return agentOk.reason ?? `${AGENT_NAMES[form.agent]} is not connected`;
   if (offline) return 'You are offline.';
-  if (!form.prompt.trim()) return form.mode === 'thread' ? 'Describe what you want to get done.' : 'Describe a task.';
+  if (!form.prompt.trim() && images === 0) return form.mode === 'thread' ? 'Describe what you want to get done.' : 'Describe a task.';
   return null;
 }
 

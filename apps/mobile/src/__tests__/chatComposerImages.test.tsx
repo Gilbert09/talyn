@@ -66,13 +66,15 @@ describe('composer images', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove cat.jpg' })).toBeNull());
   });
 
-  it('does not send images without text', async () => {
+  it('sends an image without text', async () => {
     pickLibrary();
     await render(<WorkbenchDetailScreen kind="session" />);
     await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Remove cat.jpg' })).toBeVisible());
-    expect(screen.getByText('Add a message to send with the attachments.')).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Send message' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
+    await fireEvent.press(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(mockActions.send).toHaveBeenCalledWith('chat-one', { text: '', attachments: [{ name: 'cat.jpg', mimeType: 'image/jpeg', path: '.context/attachments/cat.jpg' }] }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove cat.jpg' })).toBeNull());
   });
 
   it('explains a camera permission denial and points to settings', async () => {
@@ -121,12 +123,12 @@ describe('composer videos', () => {
     await fireEvent.press(screen.getByRole('button', { name: /^Send/ }));
     await waitFor(() => expect(mockActions.send).toHaveBeenCalledWith('chat-one', { text: 'Why does it stutter?', attachments: [{ name: 'clip.mov', mimeType: 'video/quicktime', path: '.context/attachments/clip.mov' }] }));
   });
-  it('names an unnamed video and blocks send without text', async () => {
+  it('names an unnamed video and allows send without text', async () => {
     pickVideo({ uri: 'file:///x', mimeType: 'video/mp4' });
     await render(<WorkbenchDetailScreen kind="session" />);
     await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Remove video-1.mp4' })).toBeVisible());
-    expect(screen.getByText('Add a message to send with the attachments.')).toBeVisible();
+    expect(screen.getByRole('button', { name: /^Send/ })).toBeEnabled();
   });
   it.each([
     [{ uri: 'file:///big.mp4', fileName: 'big.mp4', mimeType: 'video/mp4', fileSize: 50 * 1024 * 1024 + 1 }, 'big.mp4: The video is larger than 50 MB.'],
