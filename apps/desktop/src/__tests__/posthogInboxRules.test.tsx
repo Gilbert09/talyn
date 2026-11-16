@@ -30,6 +30,8 @@ function inboxStatus(over: Partial<PostHogInboxStatus> = {}): PostHogInboxStatus
     oauthAvailable: true,
     lastPolledAt: null,
     lastError: null,
+    lastPushAt: null,
+    pushConfigured: false,
     ...over,
   };
 }
@@ -94,6 +96,7 @@ beforeEach(() => {
   jest.spyOn(api.workflows, 'runs').mockResolvedValue([]);
   jest.spyOn(api.workflows, 'posthogInboxStatus').mockResolvedValue(inboxStatus());
   jest.spyOn(api.workflows, 'posthogInboxDryRun').mockResolvedValue(DRY_RUN);
+  jest.spyOn(api.workflows, 'posthogInboxWebhook').mockResolvedValue(null);
   jest.spyOn(api.ws, 'on').mockReturnValue(() => {});
   jest.spyOn(api.mcpServers, 'list').mockResolvedValue([]);
   jest.spyOn(api.slack, 'getStatus').mockResolvedValue({ installations: [], links: [] });

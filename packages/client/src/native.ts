@@ -77,6 +77,8 @@ import type {
   FleetAgent,
   WorkflowCounts,
   PostHogInboxDryRun,
+  PostHogInboxPushReveal,
+  PostHogInboxPushState,
   PostHogInboxStatus,
   WorkflowInput,
   WorkflowIntegration,
@@ -2491,6 +2493,44 @@ export const workflows = {
    */
   posthogInboxDryRun: (workspaceId: string, input: WorkflowInput) =>
     request<PostHogInboxDryRun>('POST', '/workflows/posthog-inbox/dry-run', { workspaceId, workflow: input }),
+
+  /** The PostHog Inbox webhook URL of the workspace's PostHog project, without its token, or null. */
+  posthogInboxWebhook: (workspaceId: string) =>
+    request<PostHogInboxPushState>('GET', `/workflows/posthog-inbox/webhook?workspaceId=${encodeURIComponent(workspaceId)}`),
+
+  /**
+   * Make or replace the PostHog Inbox webhook URL. The old URL stops working
+   * at once. The URL and the secret are shown this once.
+   */
+  rotatePostHogInboxWebhook: (workspaceId: string, requireSecret: boolean) =>
+    request<PostHogInboxPushReveal>('POST', '/workflows/posthog-inbox/webhook/rotate', { workspaceId, requireSecret }),
+
+  /** Remove the PostHog Inbox webhook URL. The poller goes back to every 3 minutes. */
+  removePostHogInboxWebhook: (workspaceId: string) =>
+    request<{ removed: number }>('DELETE', `/workflows/posthog-inbox/webhook?workspaceId=${encodeURIComponent(workspaceId)}`),
+
+  /** The requests PostHog sent to the webhook URL, newest first, without their bodies. */
+  posthogInboxDeliveries: (workspaceId: string, opts: { limit?: number; cursor?: string | null } = {}) => {
+    const qs = new URLSearchParams({ workspaceId });
+    if (opts.limit) qs.set('limit', String(opts.limit));
+    if (opts.cursor) qs.set('cursor', opts.cursor);
+    return request<InboundDeliverySummary[]>('GET', `/workflows/posthog-inbox/deliveries?${qs.toString()}`);
+  },
+
+  /** One request PostHog sent, with its body and the headers Talyn kept. */
+  posthogInboxDelivery: (workspaceId: string, deliveryId: string) =>
+    request<InboundDelivery>(
+      'GET',
+      `/workflows/posthog-inbox/deliveries/${encodeURIComponent(deliveryId)}?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+
+  /** Read a pushed report again, as a new delivery. A report version already acted on does not run again. */
+  replayPostHogInboxDelivery: (workspaceId: string, deliveryId: string) =>
+    request<InboundDeliverySummary>(
+      'POST',
+      `/workflows/posthog-inbox/deliveries/${encodeURIComponent(deliveryId)}/replay`,
+      { workspaceId }
+    ),
 };
 
 // ============================================================================

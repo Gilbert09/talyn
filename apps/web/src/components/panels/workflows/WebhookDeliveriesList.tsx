@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
 import type { InboundDelivery, InboundDeliveryOutcome, InboundDeliverySummary } from '@talyn/shared';
 import { api } from '../../../lib/api';
@@ -40,8 +40,46 @@ function relative(iso: string): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-/** A webhook rule's stored requests, paged by `receivedAt`, newest first. */
-export function useWebhookDeliveries(ruleId: string) {
+/**
+ * Where a deliveries list reads from: a webhook rule's URL, or the PostHog
+ * Inbox webhook of a workspace. `key` changes when the list must reload.
+ */
+export interface DeliverySource {
+  key: string;
+  list(opts: { limit: number; cursor: string | null }): Promise<InboundDeliverySummary[]>;
+  get(deliveryId: string): Promise<InboundDelivery>;
+  replay(deliveryId: string): Promise<unknown>;
+  /** What the list says before the first request. */
+  empty?: string;
+}
+
+/** The requests of one webhook rule. */
+export function ruleDeliverySource(ruleId: string): DeliverySource {
+  return {
+    key: `rule:${ruleId}`,
+    list: (opts) => api.workflows.deliveries(ruleId, opts),
+    get: (deliveryId) => api.workflows.delivery(ruleId, deliveryId),
+    replay: (deliveryId) => api.workflows.replayDelivery(ruleId, deliveryId),
+  };
+}
+
+/** The requests PostHog sent to the workspace's PostHog Inbox webhook URL. */
+export function posthogInboxDeliverySource(workspaceId: string): DeliverySource {
+  return {
+    key: `posthog_inbox:${workspaceId}`,
+    list: (opts) => api.workflows.posthogInboxDeliveries(workspaceId, opts),
+    get: (deliveryId) => api.workflows.posthogInboxDelivery(workspaceId, deliveryId),
+    replay: (deliveryId) => api.workflows.replayPostHogInboxDelivery(workspaceId, deliveryId),
+    empty: 'No requests yet. PostHog sends one when an Inbox report becomes ready.',
+  };
+}
+
+/** One source's stored requests, paged by `receivedAt`, newest first. */
+export function useWebhookDeliveries(ruleIdOrSource: string | DeliverySource) {
+  const source = typeof ruleIdOrSource === 'string' ? ruleDeliverySource(ruleIdOrSource) : ruleIdOrSource;
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
+  const sourceKey = source.key;
   const [deliveries, setDeliveries] = useState<InboundDeliverySummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,8 +88,8 @@ export function useWebhookDeliveries(ruleId: string) {
   const fetchPage = useCallback(
     (cursor: string | null) => {
       setLoading(true);
-      api.workflows
-        .deliveries(ruleId, { limit: PAGE, cursor })
+      sourceRef.current
+        .list({ limit: PAGE, cursor })
         .then((rows) => {
           setDeliveries((prev) => (cursor ? [...prev, ...rows] : rows));
           setHasMore(rows.length === PAGE);
@@ -60,7 +98,7 @@ export function useWebhookDeliveries(ruleId: string) {
         .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not load the requests'))
         .finally(() => setLoading(false));
     },
-    [ruleId]
+    [sourceKey]
   );
 
   useEffect(() => {
@@ -79,18 +117,19 @@ export function useWebhookDeliveries(ruleId: string) {
   return { deliveries, loading, error, hasMore, loadMore, reload };
 }
 
-function DeliveryDetail({ ruleId, deliveryId }: { ruleId: string; deliveryId: string }) {
+function DeliveryDetail({ source, deliveryId }: { source: DeliverySource; deliveryId: string }) {
   const [detail, setDetail] = useState<InboundDelivery | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    api.workflows
-      .delivery(ruleId, deliveryId)
+    source
+      .get(deliveryId)
       .then((next) => { if (active) setDetail(next); })
       .catch((err: unknown) => { if (active) setError(err instanceof Error ? err.message : 'Could not load this request'); });
     return () => { active = false; };
-  }, [ruleId, deliveryId]);
+    // The source object is new on each render; its key names it.
+  }, [source.key, deliveryId]);
 
   if (error) return <p className="text-xs text-red-500">{error}</p>;
   if (!detail) return <p className="text-xs text-muted-foreground">Loading...</p>;
@@ -128,15 +167,16 @@ function DeliveryDetail({ ruleId, deliveryId }: { ruleId: string; deliveryId: st
  * The requests a webhook rule received. Each row opens to show the body and
  * the headers Talyn kept. Replay sends a stored request through the rule again.
  */
-export function WebhookDeliveriesList({ ruleId }: { ruleId: string }) {
-  const { deliveries, loading, error, hasMore, loadMore, reload } = useWebhookDeliveries(ruleId);
+export function WebhookDeliveriesList(props: { ruleId: string } | { source: DeliverySource }) {
+  const source = 'source' in props ? props.source : ruleDeliverySource(props.ruleId);
+  const { deliveries, loading, error, hasMore, loadMore, reload } = useWebhookDeliveries(source);
   const [openId, setOpenId] = useState<string | null>(null);
   const [replaying, setReplaying] = useState<string | null>(null);
 
   const replay = async (delivery: InboundDeliverySummary) => {
     setReplaying(delivery.id);
     try {
-      await api.workflows.replayDelivery(ruleId, delivery.id);
+      await source.replay(delivery.id);
       toast.success('Request sent again');
       reload();
     } catch (err) {
@@ -154,7 +194,7 @@ export function WebhookDeliveriesList({ ruleId }: { ruleId: string }) {
   if (deliveries.length === 0) {
     return (
       <p className="p-4 text-sm text-muted-foreground">
-        No requests yet. Send a POST request to the webhook URL to start this automation.
+        {source.empty ?? 'No requests yet. Send a POST request to the webhook URL to start this automation.'}
       </p>
     );
   }
@@ -198,7 +238,7 @@ export function WebhookDeliveriesList({ ruleId }: { ruleId: string }) {
             {delivery.error && <p className="mt-1 text-xs text-red-500">{delivery.error}</p>}
             {open && (
               <div className="mt-2">
-                <DeliveryDetail ruleId={ruleId} deliveryId={delivery.id} />
+                <DeliveryDetail source={source} deliveryId={delivery.id} />
               </div>
             )}
           </div>

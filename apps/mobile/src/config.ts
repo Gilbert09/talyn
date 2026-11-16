@@ -20,6 +20,11 @@ export interface MobileConfig {
   supabaseUrl: string;
   supabaseKey: string;
   callbackUrl: string;
+  /**
+   * Where the sign-in browser session returns: always the app scheme. Absent in binaries built before it existed;
+   * those use `callbackUrl`.
+   */
+  signInCallbackUrl?: string;
   purchaseMode?: PurchaseMode;
 }
 

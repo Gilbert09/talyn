@@ -27,8 +27,12 @@ class MockPostHog {
   stopSessionRecording = jest.fn(async () => { mockCalls.push('stopSessionRecording'); });
   // Like the SDK: an opted-out client sends nothing.
   capture = jest.fn((event: string, properties?: unknown) => { if (!this.optedOut) this.captured.push({ event, properties }); });
+  // What `before_send` makes of an event the SDK sends during its own setup, before `register`.
+  installed: unknown;
   constructor(public key: string, public options: Options) {
     mockCalls.push('construct');
+    const beforeSendOption = options.before_send as ((event: unknown) => unknown) | undefined;
+    this.installed = beforeSendOption?.({ uuid: 'u', event: 'Application Installed', properties: { version: '1.2.3' } });
     this.optedOut = options.defaultOptIn === false;
     mockClients.push(this);
   }
@@ -267,6 +271,35 @@ describe('beforeSend', () => {
     const result = beforeSend(exception(message) as never);
     if (tags === null) expect(result).toBeNull();
     else expect(result?.properties).toMatchObject(tags);
+  });
+
+  it('adds the build properties to an event the SDK sends before register', async () => {
+    const client = await started();
+    expect(client.installed).toEqual({ uuid: 'u', event: 'Application Installed', properties: {
+      version: '1.2.3', client: 'mobile', platform: 'ios', app_version: '1.2.3', app_build: '7', update_id: '01234567',
+      update_channel: 'preview', environment: 'production',
+    } });
+  });
+
+  it('keeps the values an event already carries', async () => {
+    await started();
+    const result = beforeSend({ uuid: 'u', event: 'session_created', properties: { kind: 'session', environment: 'other' } } as never);
+    expect(result?.properties).toMatchObject({ kind: 'session', environment: 'other', client: 'mobile', platform: 'ios' });
+  });
+
+  it('returns an event that already has every build property unchanged', async () => {
+    const client = await started();
+    const properties = { ...(client.register.mock.calls[0] as unknown[])[0] as object, kind: 'session' };
+    const event = { uuid: 'u', event: 'session_created', properties };
+    expect(beforeSend(event as never)).toBe(event);
+  });
+
+  it('adds the build properties to an exception it keeps', async () => {
+    await started();
+    setAnalyticsReachability('online');
+    expect(beforeSend(exception('TypeError: x is not a function') as never)?.properties).toMatchObject({
+      client: 'mobile', environment: 'production', online: true, connectivity_error: false,
+    });
   });
 
   it('drops an exception from a hot update frame', () => {

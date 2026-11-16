@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react-native';
 
 import { PostHogInboxScreen } from '../features/integrations/PostHogInboxScreen';
 import { RuleDetailScreen } from '../features/integrations/RuleDetailScreen';
-import { dailyCapText, postHogInboxCardView, postHogInboxConditionFacts, ruleIntegration } from '../features/integrations/model';
+import { dailyCapText, postHogInboxCardView, postHogInboxConditionFacts, postHogInboxPushText, ruleIntegration } from '../features/integrations/model';
 
 const mockRule = {
   id: 'r1', workspaceId: 'ws-1', integration: 'posthog_inbox', name: 'Fix urgent reports', enabled: true, events: ['report_ready'],
@@ -52,6 +52,19 @@ describe('PostHog Inbox rule model', () => {
     expect(facts).toHaveLength(expected.length);
   });
 
+  it.each<[string, { lastPushAt: string | null; pushConfigured: boolean } | null, RegExp | null]>([
+    ['no status yet', null, null],
+    ['no URL', { lastPushAt: null, pushConfigured: false }, /does not push to Talyn yet\. Talyn checks the Inbox every 3 minutes/],
+    ['a URL without a push', { lastPushAt: null, pushConfigured: true }, /no push from PostHog has arrived yet/],
+    ['a push a minute ago', { lastPushAt: new Date(Date.now() - 60_000).toISOString(), pushConfigured: true }, /also checks the Inbox every 30 minutes/],
+    ['a push 25 hours ago', { lastPushAt: new Date(Date.now() - 25 * 3_600_000).toISOString(), pushConfigured: true }, /No push in the last 24 hours/],
+    ['a push time that is not a time', { lastPushAt: 'soon', pushConfigured: true }, /Last push from PostHog: never/],
+  ])('words the push: %s', (_name, status, text) => {
+    const line = postHogInboxPushText(status);
+    if (text === null) expect(line).toBeNull();
+    else expect(line).toMatch(text);
+  });
+
   it.each([[10, '10 runs a day'], [1, '1 run a day'], [0, null], [null, null], [undefined, null]])('words the daily cap %s', (cap, text) => {
     expect(dailyCapText(cap)).toBe(text);
   });
@@ -71,7 +84,7 @@ describe('PostHog Inbox rule detail', () => {
 const NOW = Date.parse('2026-11-16T12:00:00Z');
 const status = (extra: Partial<PostHogInboxStatus> = {}): PostHogInboxStatus => ({
   access: 'ok', reason: null, authMethod: 'oauth', projectId: '42', host: 'https://us.posthog.com', connection: 'posthog_inbox',
-  missingScopes: [], oauthAvailable: true, lastPolledAt: '2026-11-16T11:55:00Z', lastError: null, ...extra,
+  missingScopes: [], oauthAvailable: true, lastPolledAt: '2026-11-16T11:55:00Z', lastError: null, lastPushAt: null, pushConfigured: false, ...extra,
 });
 
 describe('PostHog Inbox connection card view', () => {

@@ -67,9 +67,39 @@ if [ -n "${TS_AUTHKEY:-}" ]; then
   #
   # --accept-routes=false: we want to reach fleet hosts, not inherit anybody's
   # subnet routes.
+  #
+  # TS_AUTHKEY may be an auth key (tskey-auth-...) or an OAuth client secret
+  # (tskey-client-...). Use the OAuth client. An auth key expires after at most
+  # 90 days, and the running container does not notice, because it joined long
+  # ago. The next deploy is a new node, its login fails, and the fleet becomes
+  # unreachable. That happened to the fleet's control plane on 2026-11-16. An
+  # OAuth client secret does not expire. `tailscale up` makes a node key from it,
+  # but only for a tagged node, and the node options go on the secret as a query.
+  TS_TAGS="${TS_TAGS:-tag:talyn-backend}"
+  TAG_ARG=""
+  TS_JOIN_KEY="${TS_AUTHKEY}"
+  case "${TS_AUTHKEY}" in
+    tskey-client-*)
+      case "${TS_AUTHKEY}" in
+        *\?*) ;;
+        *) TS_JOIN_KEY="${TS_AUTHKEY}?ephemeral=true&preauthorized=true" ;;
+      esac
+      TAG_ARG="--advertise-tags=${TS_TAGS}"
+      echo "[entrypoint] joining the tailnet with an OAuth client, as ${TS_TAGS}"
+      ;;
+    *)
+      echo "[entrypoint] joining the tailnet with an auth key. It expires; use an OAuth client secret with the auth_keys scope and ${TS_TAGS} instead." >&2
+      ;;
+  esac
+  #
+  # --timeout: with a key the coordination server refuses, `tailscale up` does
+  # not fail. It waits for an interactive login that never comes, and the
+  # backend never starts.
   if /usr/local/bin/tailscale --socket=/var/run/tailscale/tailscaled.sock up \
-       --authkey="${TS_AUTHKEY}" \
+       --authkey="${TS_JOIN_KEY}" \
        --hostname="${TS_HOSTNAME:-talyn-backend}" \
+       ${TAG_ARG:+"$TAG_ARG"} \
+       --timeout="${TS_UP_TIMEOUT:-45s}" \
        --accept-routes=false \
        --accept-dns=false; then
     echo "[entrypoint] tailnet up as ${TS_HOSTNAME:-talyn-backend}"

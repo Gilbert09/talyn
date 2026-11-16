@@ -38,6 +38,7 @@ import { workflowSuggestions } from '../services/workflows/suggestions.js';
 import { ownerReachesSlackTeam } from '../services/workflows/sources/slack.js';
 import { getPostHogInboxConnection } from '../services/posthogInbox/connection.js';
 import { posthogInboxDryRun, posthogInboxStatus } from '../services/posthogInbox/preview.js';
+import { registerPostHogInboxPushRoutes } from './posthogInboxPush.js';
 import { PostHogCodeApiError } from '../services/posthogCode/client.js';
 
 /**
@@ -363,6 +364,9 @@ export function workflowRoutes(): Router {
       });
     }
   });
+
+  // The PostHog Inbox push: its webhook URL and requests. Above `/:id`.
+  registerPostHogInboxPushRoutes(router, { gate, posthogInboxGate });
 
   router.post('/', async (req, res) => {
     const workspaceId = (req.body as { workspaceId?: string } | undefined)?.workspaceId ?? '';

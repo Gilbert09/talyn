@@ -1,0 +1,12 @@
+-- PostHog Inbox push (step 3): PostHog sends a webhook when a report becomes
+-- ready, and the poller becomes a slow reconcile.
+--
+-- `last_push_at` is the newest push whose report Talyn read from the
+-- connection's PostHog project. While it is less than 24 hours old, the poller
+-- polls the connection every 30 minutes instead of every 3. A push that names
+-- a report the project does not have never sets it.
+--
+-- The webhook URL itself is an `inbound_connections` row of kind
+-- 'posthog_inbox' (migration 0131), one per workspace and PostHog project
+-- (`external_account_id` = the project id). It needs no schema change.
+ALTER TABLE "posthog_inbox_pollers" ADD COLUMN IF NOT EXISTS "last_push_at" timestamp with time zone;

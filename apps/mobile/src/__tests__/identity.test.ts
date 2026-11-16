@@ -60,6 +60,17 @@ describe('public mobile configuration', () => {
     expect(readMobileConfig(publicValues, 'production', 'talyn-mobile')?.callbackUrl).toBe(publicValues.EXPO_PUBLIC_AUTH_CALLBACK_URL);
   });
   it.each([
+    ['production', 'talyn-mobile', 'https://mobile.example.com/callback', 'talyn-mobile://auth/callback'],
+    ['production', 'talyn-custom', 'https://mobile.example.com/callback', 'talyn-custom://auth/callback'],
+    ['preview', 'talyn-mobile-preview', 'https://mobile.example.com/callback', 'talyn-mobile-preview://auth/callback'],
+    ['preview', 'talyn-mobile-preview', 'talyn-mobile-preview://auth/callback', 'talyn-mobile-preview://auth/callback'],
+    ['development', 'talyn-mobile-development', 'talyn-mobile-development://auth/callback', 'talyn-mobile-development://auth/callback'],
+  ] as const)('returns %s sign-in through the %s scheme for callback %s', (environment, scheme, callback, expected) => {
+    const config = readMobileConfig({ ...publicValues, EXPO_PUBLIC_AUTH_CALLBACK_URL: callback }, environment, scheme);
+    expect(config?.callbackUrl).toBe(callback);
+    expect(config?.signInCallbackUrl).toBe(expected);
+  });
+  it.each([
     'talyn-mobile://auth/callback', 'http://mobile.example.com/callback',
     'https://mobile.example.com/other', 'https://user@mobile.example.com/callback',
     'https://mobile.example.com/callback?code=bad', 'https://mobile.example.com/callback#bad',

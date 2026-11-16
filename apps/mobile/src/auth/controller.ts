@@ -14,7 +14,7 @@ export interface AuthGateway {
   stopAutoRefresh(): void | Promise<void>;
 }
 export interface AuthBrowser {
-  open(url: string, callback: string): Promise<{ type: string; url?: string }>;
+  open(url: string, callback: string): Promise<{ type: string; url?: string; error?: string | null }>;
   dismiss(): void;
 }
 export type AuthStatus = 'restoring' | 'signedOut' | 'signingIn' | 'signedIn' | 'locked';
@@ -23,6 +23,8 @@ export interface AuthSnapshot {
   /** `githubLogin` is the GitHub username, when the session carries it. */
   user: (Pick<User, 'id' | 'email'> & { githubLogin?: string }) | null;
   issue: SignInError['kind'] | 'outage' | null;
+  /** What the browser or OS reported when sign-in failed, for analytics. */
+  detail?: string;
   notice?: 'deleted';
 }
 type Attempt = { callback: string; startedAt: number; phase: 'awaiting' | 'exchanging' };
@@ -145,7 +147,7 @@ export class AuthController {
       if (!this.valid(epoch)) return;
       if (response.type === 'success' && response.url) await this.handleCallback(response.url);
       else if (this.exchange) await this.exchange;
-      else if (!this.session) throw new SignInError('cancelled');
+      else if (!this.session) throw new SignInError('cancelled', response.error ? `${response.type}: ${response.error}` : response.type);
     } catch (error) {
       // A warm link can finish before the browser reports dismissal.
       if (this.exchange) await this.exchange;
@@ -194,7 +196,8 @@ export class AuthController {
   private async fail(error: unknown) {
     try {
       await this.clearAttempt();
-      this.publish({ status: 'signedOut', user: null, issue: error instanceof SignInError ? error.kind : 'failed' });
+      const detail = (error instanceof SignInError ? error.detail : error instanceof Error ? error.message : undefined)?.slice(0, 200);
+      this.publish({ status: 'signedOut', user: null, issue: error instanceof SignInError ? error.kind : 'failed', ...(detail ? { detail } : {}) });
     } catch { this.publish({ status: 'locked', user: null, issue: 'storage' }); }
   }
 

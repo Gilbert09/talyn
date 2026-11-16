@@ -29,6 +29,7 @@ import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
 import { Input } from '../../ui/input';
 import { GetKeyLink, POSTHOG_API_KEYS_URL } from '../../widgets/GetKeyLink';
+import { PostHogInboxPushSection, postHogInboxPushLine } from './posthogInboxPush';
 import { ChoiceSet, DropdownButton, EditorRow, TextField, TokenField } from './workflowFields';
 
 /**
@@ -182,6 +183,10 @@ export function PostHogInboxConnectionNotice({ status, error }: PostHogInboxStat
         </p>
       )}
       {status.lastError && <p className="text-red-500">The last check failed. {status.lastError}</p>}
+      <p data-attr="posthog-inbox-push-status">
+        {postHogInboxPushLine(status.lastPushAt ?? null, status.pushConfigured ?? false)}
+        {!status.pushConfigured && ' To start automations within seconds, set up the push on the Connection tab.'}
+      </p>
     </div>
   );
 }
@@ -351,170 +356,174 @@ export function PostHogInboxConnectionSection() {
   );
 
   return (
-    <Card className="p-4" data-attr="posthog-inbox-connection-section">
-      <div className="flex items-start gap-4">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <h4 className="font-medium">PostHog Inbox</h4>
-            <ConnectionBadge status={status} />
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">{description()}</p>
-
-          {!notConnected && (
-            <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm" data-attr="posthog-inbox-connection-details">
-              <dt className="text-muted-foreground">Project</dt>
-              <dd>{status.projectId ?? 'Unknown'}</dd>
-              <dt className="text-muted-foreground">Host</dt>
-              <dd>{status.host ?? 'Unknown'}</dd>
-              <dt className="text-muted-foreground">Last checked</dt>
-              <dd>{polled ?? 'Not checked yet'}</dd>
-            </dl>
-          )}
-          {!notConnected && status.access === 'unknown' && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              Talyn has not used this API key on your Inbox yet.
-            </p>
-          )}
-          {status.lastError && !notConnected && (
-            <p className="mt-2 text-xs text-red-500">The last check failed. {status.lastError}</p>
-          )}
-
-          {status.access === 'reconnect' && (
-            <div
-              className="mt-3 flex items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2"
-              data-attr="posthog-inbox-reconnect-notice"
-            >
-              <div className="flex-1 text-sm">
-                <p className="font-medium text-amber-600 dark:text-amber-400">Reconnect PostHog to let Talyn read your Inbox.</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {status.reason ?? 'The PostHog connection does not have the Inbox permissions.'}
-                </p>
-                <MissingScopes scopes={status.missingScopes ?? []} />
-              </div>
-              <Button size="sm" onClick={reconnect} disabled={busy} data-attr="posthog-inbox-reconnect">
-                <RefreshCw className="mr-1 h-4 w-4" />
-                Reconnect
-              </Button>
+    <div className="space-y-3">
+      <Card className="p-4" data-attr="posthog-inbox-connection-section">
+        <div className="flex items-start gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <h4 className="font-medium">PostHog Inbox</h4>
+              <ConnectionBadge status={status} />
             </div>
-          )}
+            <p className="mt-1 text-sm text-muted-foreground">{description()}</p>
 
-          {notConnected && oauthAvailable && !showKeyForm && (
-            <div className="mt-3 space-y-3">
-              <Input
-                label="PostHog host"
-                aria-label="PostHog host"
-                placeholder={DEFAULT_POSTHOG_HOST}
-                value={host}
-                onChange={(e) => setHost(e.target.value)}
-                disabled={busy}
-              />
-              {errorLine}
-              <div className="flex items-center gap-2">
-                <Button size="sm" onClick={() => void connectOAuth()} disabled={busy || !workspaceId} data-attr="posthog-inbox-connect">
-                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connect with PostHog'}
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setKeyForm(true)} disabled={busy}>
-                  Use a personal API key instead
+            {!notConnected && (
+              <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm" data-attr="posthog-inbox-connection-details">
+                <dt className="text-muted-foreground">Project</dt>
+                <dd>{status.projectId ?? 'Unknown'}</dd>
+                <dt className="text-muted-foreground">Host</dt>
+                <dd>{status.host ?? 'Unknown'}</dd>
+                <dt className="text-muted-foreground">Last checked</dt>
+                <dd>{polled ?? 'Not checked yet'}</dd>
+              </dl>
+            )}
+            {!notConnected && status.access === 'unknown' && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Talyn has not used this API key on your Inbox yet.
+              </p>
+            )}
+            {status.lastError && !notConnected && (
+              <p className="mt-2 text-xs text-red-500">The last check failed. {status.lastError}</p>
+            )}
+
+            {status.access === 'reconnect' && (
+              <div
+                className="mt-3 flex items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2"
+                data-attr="posthog-inbox-reconnect-notice"
+              >
+                <div className="flex-1 text-sm">
+                  <p className="font-medium text-amber-600 dark:text-amber-400">Reconnect PostHog to let Talyn read your Inbox.</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {status.reason ?? 'The PostHog connection does not have the Inbox permissions.'}
+                  </p>
+                  <MissingScopes scopes={status.missingScopes ?? []} />
+                </div>
+                <Button size="sm" onClick={reconnect} disabled={busy} data-attr="posthog-inbox-reconnect">
+                  <RefreshCw className="mr-1 h-4 w-4" />
+                  Reconnect
                 </Button>
               </div>
-            </div>
-          )}
+            )}
 
-          {showKeyForm && (
-            <div className="mt-3 space-y-3" data-attr="posthog-inbox-key-form">
-              <Input
-                label="Personal API key"
-                aria-label="Personal API key"
-                type="password"
-                placeholder="phx_..."
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                disabled={busy}
-              />
-              <GetKeyLink url={POSTHOG_API_KEYS_URL} note={POSTHOG_INBOX_KEY_SCOPE_NOTE} />
-              <div className="grid grid-cols-2 gap-3">
+            {notConnected && oauthAvailable && !showKeyForm && (
+              <div className="mt-3 space-y-3">
                 <Input
-                  label="Project id"
-                  aria-label="Project id"
-                  placeholder="e.g. 2"
-                  value={projectId}
-                  onChange={(e) => setProjectId(e.target.value)}
-                  disabled={busy}
-                />
-                <Input
-                  label="Host"
-                  aria-label="Host"
+                  label="PostHog host"
+                  aria-label="PostHog host"
                   placeholder={DEFAULT_POSTHOG_HOST}
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
                   disabled={busy}
                 />
-              </div>
-              {errorLine}
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  onClick={() => void saveKey()}
-                  disabled={busy || !apiKey.trim() || !projectId.trim() || !workspaceId}
-                  data-attr="posthog-inbox-save-key"
-                >
-                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save and verify'}
-                </Button>
-                {oauthAvailable && (
-                  <Button size="sm" variant="ghost" onClick={() => void connectOAuth()} disabled={busy}>
-                    Connect with PostHog instead
+                {errorLine}
+                <div className="flex items-center gap-2">
+                  <Button size="sm" onClick={() => void connectOAuth()} disabled={busy || !workspaceId} data-attr="posthog-inbox-connect">
+                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connect with PostHog'}
                   </Button>
-                )}
-                {(oauthAvailable || !notConnected) && (
+                  <Button size="sm" variant="ghost" onClick={() => setKeyForm(true)} disabled={busy}>
+                    Use a personal API key instead
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {showKeyForm && (
+              <div className="mt-3 space-y-3" data-attr="posthog-inbox-key-form">
+                <Input
+                  label="Personal API key"
+                  aria-label="Personal API key"
+                  type="password"
+                  placeholder="phx_..."
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  disabled={busy}
+                />
+                <GetKeyLink url={POSTHOG_API_KEYS_URL} note={POSTHOG_INBOX_KEY_SCOPE_NOTE} />
+                <div className="grid grid-cols-2 gap-3">
+                  <Input
+                    label="Project id"
+                    aria-label="Project id"
+                    placeholder="e.g. 2"
+                    value={projectId}
+                    onChange={(e) => setProjectId(e.target.value)}
+                    disabled={busy}
+                  />
+                  <Input
+                    label="Host"
+                    aria-label="Host"
+                    placeholder={DEFAULT_POSTHOG_HOST}
+                    value={host}
+                    onChange={(e) => setHost(e.target.value)}
+                    disabled={busy}
+                  />
+                </div>
+                {errorLine}
+                <div className="flex gap-2">
                   <Button
                     size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setKeyForm(false);
-                      setApiKey('');
-                      setError(null);
-                    }}
-                    disabled={busy}
+                    onClick={() => void saveKey()}
+                    disabled={busy || !apiKey.trim() || !projectId.trim() || !workspaceId}
+                    data-attr="posthog-inbox-save-key"
                   >
-                    Cancel
+                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save and verify'}
                   </Button>
-                )}
+                  {oauthAvailable && (
+                    <Button size="sm" variant="ghost" onClick={() => void connectOAuth()} disabled={busy}>
+                      Connect with PostHog instead
+                    </Button>
+                  )}
+                  {(oauthAvailable || !notConnected) && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setKeyForm(false);
+                        setApiKey('');
+                        setError(null);
+                      }}
+                      disabled={busy}
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                </div>
               </div>
+            )}
+
+            {!notConnected && !showKeyForm && errorLine && <div className="mt-3">{errorLine}</div>}
+          </div>
+
+          {!notConnected && !showKeyForm && (
+            <div className="flex shrink-0 flex-col items-end gap-2">
+              {legacy && (
+                <Button size="sm" onClick={reconnect} disabled={busy} data-attr="posthog-inbox-connect-own">
+                  Connect PostHog for the Inbox
+                </Button>
+              )}
+              {own && status.access !== 'reconnect' && (
+                <Button variant="outline" size="sm" onClick={reconnect} disabled={busy}>
+                  {oauthAvailable ? <RefreshCw className="mr-1 h-4 w-4" /> : <Pencil className="mr-1 h-4 w-4" />}
+                  {oauthAvailable ? (status.authMethod === 'oauth' ? 'Reconnect' : 'Switch to PostHog sign-in') : 'Edit'}
+                </Button>
+              )}
+              {own && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void disconnect()}
+                  disabled={busy}
+                  data-attr="posthog-inbox-disconnect"
+                >
+                  {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Unlink className="mr-1 h-4 w-4" />}
+                  Disconnect
+                </Button>
+              )}
             </div>
           )}
-
-          {!notConnected && !showKeyForm && errorLine && <div className="mt-3">{errorLine}</div>}
         </div>
-
-        {!notConnected && !showKeyForm && (
-          <div className="flex shrink-0 flex-col items-end gap-2">
-            {legacy && (
-              <Button size="sm" onClick={reconnect} disabled={busy} data-attr="posthog-inbox-connect-own">
-                Connect PostHog for the Inbox
-              </Button>
-            )}
-            {own && status.access !== 'reconnect' && (
-              <Button variant="outline" size="sm" onClick={reconnect} disabled={busy}>
-                {oauthAvailable ? <RefreshCw className="mr-1 h-4 w-4" /> : <Pencil className="mr-1 h-4 w-4" />}
-                {oauthAvailable ? (status.authMethod === 'oauth' ? 'Reconnect' : 'Switch to PostHog sign-in') : 'Edit'}
-              </Button>
-            )}
-            {own && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void disconnect()}
-                disabled={busy}
-                data-attr="posthog-inbox-disconnect"
-              >
-                {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Unlink className="mr-1 h-4 w-4" />}
-                Disconnect
-              </Button>
-            )}
-          </div>
-        )}
-      </div>
-    </Card>
+      </Card>
+      {/* The push needs a project to read from, so it shows once a connection resolves one. */}
+      {status.projectId && <PostHogInboxPushSection />}
+    </div>
   );
 }
 

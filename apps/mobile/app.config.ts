@@ -40,6 +40,9 @@ export function readMobileConfig(env: PublicEnvironment, environment: AppEnviron
   return {
     environment, apiOrigin: origin(api, environment === 'development'),
     supabaseUrl: origin(supabase, environment === 'development'), supabaseKey: publicSupabaseKey(key), callbackUrl: callback,
+    // An HTTPS return works only after iOS (webcredentials) or Android (App Links) verifies the domain, and production
+    // sign-in never got past that. The OS hands a scheme return only to the auth session, and PKCE guards the code.
+    signInCallbackUrl: url.protocol === 'https:' ? `${scheme}://auth/callback` : callback,
     purchaseMode: readPurchaseMode(env),
   };
 }

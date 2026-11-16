@@ -104,9 +104,9 @@ function AnalyticsBinding() {
     const before = previousStatus.current;
     previousStatus.current = auth.status;
     if (before === 'signingIn' && auth.status === 'signedOut' && auth.issue) {
-      trackEvent('signin_failed', { stage: auth.issue === 'timeout' ? 'callback_timeout' : auth.issue });
+      trackEvent('signin_failed', { stage: auth.issue === 'timeout' ? 'callback_timeout' : auth.issue, ...(auth.detail ? { detail: auth.detail } : {}) });
     }
-  }, [auth.status, auth.issue]);
+  }, [auth.status, auth.issue, auth.detail]);
 
   useEffect(() => {
     const before = previousUser.current;
