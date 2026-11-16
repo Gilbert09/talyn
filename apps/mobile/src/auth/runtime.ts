@@ -92,7 +92,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     startAutoRefresh: async () => { await initialized; await supabase.auth.startAutoRefresh(); },
     stopAutoRefresh: async () => { await initialized; await supabase.auth.stopAutoRefresh(); },
   }, storage, {
-    open: (url, callback) => WebBrowser.openAuthSessionAsync(url, callback, { preferEphemeralSession: true, preferUniversalLinks: callback.startsWith('https:') }),
+    open: (url, callback) => WebBrowser.openAuthSessionAsync(url, callback, { preferUniversalLinks: callback.startsWith('https:') }),
     dismiss: () => { try { WebBrowser.dismissAuthSession(); } catch { /* No active browser session. */ } },
   }, config.signInCallbackUrl ?? config.callbackUrl, (priorUser) => {
     workflow.setScope(null);
