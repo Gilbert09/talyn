@@ -1,4 +1,4 @@
-import type { SpaceSessionRow, Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
+import type { ContextAttentionReason, SpaceSessionRow, Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from './api';
 import type { WorkbenchPrLike } from './workbenchFormat';
 import { primaryWorkbenchAction } from './workbenchActions';
@@ -88,6 +88,27 @@ export function spaceSessionState(
     {},
     pullRequest,
   );
+}
+
+/**
+ * Make a row agree with the context rail's badge. The server counts a session
+ * that failed, asks a question, or has a pull request with conflicts. The
+ * client can miss that: a session whose chats are not loaded, or a space row,
+ * which has no chats and no mergeable state. Then the row shows the server's
+ * reason. Live work and a failure the client sees win, because the server's
+ * answer can be up to 30 seconds old.
+ */
+export function withServerAttention(
+  state: SessionState,
+  reason: ContextAttentionReason | undefined,
+  prNumber?: number | null,
+): SessionState {
+  if (!reason) return state;
+  if (state.kind === 'failed' || state.kind === 'working' || state.kind === 'starting') return state;
+  if (reason === 'failed') return { kind: 'failed', label: 'Failed: open it to see why' };
+  if (reason === 'reply') return { kind: 'needs_reply', label: 'Waiting for your answer' };
+  if (state.kind === 'pr_attention') return state;
+  return { kind: 'pr_attention', label: prNumber ? `#${prNumber} has conflicts` : 'The pull request has conflicts' };
 }
 
 /** True when a session belongs in the sidebar's active group. */

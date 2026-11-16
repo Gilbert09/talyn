@@ -12,7 +12,16 @@ import type { WorkbenchChatStatus, WorkbenchKind, WorkbenchSandboxState, Workben
 export interface ContextAttentionCounts {
   workspaces: Record<string, number>;
   spaces: Record<string, number>;
+  /**
+   * The sessions that the counts count, by id, with what each waits on me
+   * for. The sidebar marks these rows, so a badge always points at a row.
+   * An older server leaves it out.
+   */
+  sessions?: Record<string, ContextAttentionReason>;
 }
+
+/** What a counted session waits on me for. */
+export type ContextAttentionReason = 'failed' | 'reply' | 'conflict';
 
 export interface AttentionSessionInput {
   kind: WorkbenchKind | string;
@@ -69,6 +78,15 @@ export function sessionAttentionKey(session: AttentionSessionInput): string | nu
   return null;
 }
 
+/** The reason in a {@link sessionAttentionKey}, or null for no key. */
+export function attentionReason(key: string | null): ContextAttentionReason | null {
+  if (key === null) return null;
+  const head = key.split(':', 1)[0];
+  if (head === 'reply') return 'reply';
+  if (head === 'conflict') return 'conflict';
+  return 'failed';
+}
+
 function chatKey(reason: string, chats: AttentionSessionInput['chats']): string {
   return `${reason}:${chats
     .map((c) => `${c.id ?? ''}@${c.turnCount ?? 0}`)
@@ -81,14 +99,15 @@ function bump(map: Record<string, number>, key: string): void {
   map[key] = (map[key] ?? 0) + 1;
 }
 
-/** The counts for a list of sessions that need me, by workspace and by space. */
+/** The counts for a list of sessions that need me, by workspace and by space, and each session's reason. */
 export function countContextAttention(
-  sessions: { workspaceId: string; spaceId: string | null }[],
-): ContextAttentionCounts {
-  const out: ContextAttentionCounts = { workspaces: {}, spaces: {} };
+  sessions: { id: string; workspaceId: string; spaceId: string | null; reason: ContextAttentionReason }[],
+): Required<ContextAttentionCounts> {
+  const out: Required<ContextAttentionCounts> = { workspaces: {}, spaces: {}, sessions: {} };
   for (const s of sessions) {
     bump(out.workspaces, s.workspaceId);
     if (s.spaceId) bump(out.spaces, s.spaceId);
+    out.sessions[s.id] = s.reason;
   }
   return out;
 }

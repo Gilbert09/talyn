@@ -33,6 +33,7 @@ import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { SidebarWorkbenchList } from './SidebarWorkbenchList';
 import { SidebarThreadList } from './SidebarThreadList';
 import { SidebarSlackPending } from './SidebarSlackPending';
+import { PersonalNeedsYou } from './SidebarNeedsYou';
 import { UpdateNotice } from './UpdateNotice';
 import { SidebarAccountStatus } from './UsageGauge';
 import { UserChip } from './UserChip';
@@ -139,6 +140,7 @@ export function AppSidebar() {
 
         <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5" aria-label="Sessions">
           {offered && !collapsed && space && <SpaceSidebar active={space} />}
+          {offered && !collapsed && !space && <PersonalNeedsYou workbenches={workbenches} />}
           {offered && !collapsed && !space && <SidebarSlackPending />}
           {offered && !collapsed && !space && <SidebarThreadList workbenches={workbenches} />}
           {offered && !collapsed && !space && <SidebarWorkbenchList workbenches={workbenches} />}

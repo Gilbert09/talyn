@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { countContextAttention, sessionAttentionKey, type ContextAttentionCounts } from '@talyn/shared';
+import { attentionReason, countContextAttention, sessionAttentionKey, type ContextAttentionCounts } from '@talyn/shared';
 import type { Database } from '../../db/client.js';
 import {
   pullRequests as prTable,
@@ -87,10 +87,14 @@ async function attentionKeys(
   }));
 }
 
-export async function contextAttention(db: Database, ownerId: string): Promise<ContextAttentionCounts> {
+export async function contextAttention(db: Database, ownerId: string): Promise<Required<ContextAttentionCounts>> {
   const keyed = await attentionKeys(db, await attentionSessionsQuery(db, ownerId));
   return countContextAttention(
-    keyed.filter(({ session, key }) => key !== null && key !== session.attentionAck).map(({ session }) => session),
+    keyed.flatMap(({ session, key }) => {
+      const reason = attentionReason(key);
+      if (reason === null || key === session.attentionAck) return [];
+      return [{ id: session.id, workspaceId: session.workspaceId, spaceId: session.spaceId, reason }];
+    }),
   );
 }
 
