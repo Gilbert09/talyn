@@ -41,6 +41,8 @@ export interface ClaimInput {
   facts: WorkflowFacts;
   deliveryId: string;
   pullRequestId?: string | null;
+  /** A manual run ("Run selected"): who started it. Absent means an event started it. */
+  manual?: { userId: string; label: string | null };
 }
 
 /**
@@ -94,6 +96,9 @@ export async function claimRun(input: ClaimInput): Promise<ClaimResult> {
     // Kept so a retry is faithful — see the column's note. The webhook payload
     // is gone by the time a rate-limit gate clears.
     facts: storedFacts(facts),
+    triggerSource: input.manual ? 'manual' : 'event',
+    triggeredByUserId: input.manual?.userId ?? null,
+    triggeredByLabel: input.manual?.label ?? null,
     createdAt: new Date(),
   };
 

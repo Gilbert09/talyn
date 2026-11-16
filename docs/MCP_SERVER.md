@@ -191,6 +191,8 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_set_workflow_enabled` | Enable or disable an automation while keeping its definition. |
 | `talyn_delete_workflow` | Delete an automation and its history. |
 | `talyn_list_workflow_runs` | Read automation runs with `limit` and `cursor`. |
+| `talyn_list_posthog_inbox_backlog` | Read the backlog of a PostHog Inbox rule: older reports that match it. Pass `workflow_id`, and optional `days` (7, 30 or 90) and `offset`. It only reads. Session tokens can use it. |
+| `talyn_run_posthog_inbox_reports` | Start work on reports from the backlog. Pass `workflow_id` and `report_ids` (20 at most). Each report starts a session. The daily cap applies. A manual run needs an enabled rule. Session tokens cannot use it. |
 | `talyn_list_slack_channels` | Pass `{teamId}` to list channels the bot joined. Invite it with `/invite @Talyn` first. |
 | `talyn_slack_reply` | Reply as the Talyn bot in the Slack thread that started a session. Pass `text`. A user token must also pass `session_id`. |
 

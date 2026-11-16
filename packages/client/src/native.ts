@@ -76,7 +76,9 @@ import type {
   FleetAccountsResponse,
   FleetAgent,
   WorkflowCounts,
+  PostHogInboxBacklogPage,
   PostHogInboxDryRun,
+  PostHogInboxRunResponse,
   PostHogInboxPushReveal,
   PostHogInboxPushState,
   PostHogInboxStatus,
@@ -2493,6 +2495,25 @@ export const workflows = {
    */
   posthogInboxDryRun: (workspaceId: string, input: WorkflowInput) =>
     request<PostHogInboxDryRun>('POST', '/workflows/posthog-inbox/dry-run', { workspaceId, workflow: input }),
+  /**
+   * One page of a PostHog Inbox rule's backlog: older reports that match it.
+   * Pass `workflowId` for a saved rule, `conditions` for the editor's unsaved
+   * ones, or both. Reads only.
+   */
+  posthogInboxBacklog: (
+    workspaceId: string,
+    opts: { workflowId?: string | null; conditions?: WorkflowInput['conditions']; days?: number; offset?: number }
+  ) =>
+    request<PostHogInboxBacklogPage>('POST', '/workflows/posthog-inbox/backlog', {
+      workspaceId,
+      ...(opts.workflowId ? { workflowId: opts.workflowId } : {}),
+      ...(opts.conditions !== undefined ? { workflow: { conditions: opts.conditions } } : {}),
+      ...(opts.days !== undefined ? { days: opts.days } : {}),
+      ...(opts.offset !== undefined ? { offset: opts.offset } : {}),
+    }),
+  /** "Run selected": start a saved, enabled PostHog Inbox rule on these reports (at most 20). */
+  runPostHogInboxReports: (workflowId: string, reportIds: string[]) =>
+    request<PostHogInboxRunResponse>('POST', `/workflows/${encodeURIComponent(workflowId)}/posthog-inbox/run`, { reportIds }),
 
   /** The PostHog Inbox webhook URL of the workspace's PostHog project, without its token, or null. */
   posthogInboxWebhook: (workspaceId: string) =>

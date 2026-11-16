@@ -119,6 +119,7 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_get_workflow',
   'talyn_get_workflow_vocabulary',
   'talyn_list_workflow_runs',
+  'talyn_list_posthog_inbox_backlog',
   'talyn_list_loops',
   'talyn_get_loop',
   'talyn_list_loop_runs',

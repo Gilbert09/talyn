@@ -80,6 +80,8 @@ export function rowToWorkflowRun(row: RunRow): WorkflowRun {
     retryAfter: row.retryAfter ? row.retryAfter.toISOString() : null,
     attempts: row.attempts,
     createdAt: row.createdAt.toISOString(),
+    trigger: row.triggerSource === 'manual' ? 'manual' : 'event',
+    triggeredBy: row.triggeredByLabel ?? null,
   };
 }
 

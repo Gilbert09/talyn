@@ -106,6 +106,33 @@ Each rule has a **runs per day** limit. The default is 10. When a rule reaches i
 
 Each session uses box-hours, like any other. See [Plans, usage and billing](/docs/billing).
 
+## Backlog
+
+A rule acts only on reports that change after you enable it. The **Backlog** tab shows older reports that match the rule. Use it to start work on a report that came before the rule.
+
+The Backlog lists reports that PostHog created in the last 7, 30 or 90 days. The newest report is first. Talyn asks PostHog for the reports that match the rule's conditions. Then Talyn checks each report with its own matcher. A row shows the title, the priority, the repository and a state.
+
+| State | Meaning |
+| --- | --- |
+| **Not run** | No session started from this report. You can select it. |
+| **Running / PR open** | A session works on this report now, or its pull request is open. |
+| **Already run** | A rule already acted on this version of the report. |
+| **Claimed elsewhere** | Somebody else claimed the report in PostHog. Talyn never takes a claim over. |
+| **Already addressed** | PostHog marks the report as done. |
+| **Repository not connected** | The report's repository is not in your Talyn workspace. |
+| **Held back for safety** | PostHog's safety judge held the report back. Talyn never acts on it. |
+
+You can select only **Not run** rows. Select up to 20 rows, then click **Run selected**. A dialog asks you to confirm. Each report starts one session that opens a pull request.
+
+- A manual run counts toward the rule's runs per day. When the limit is reached, Talyn refuses the rest. The message says, for example: "3 of 5 started; the daily cap of 10 is reached."
+- A refused report records no skipped run. You can run it again later.
+- A manual run uses the same claim in PostHog and the same duplicate check as an automatic run. A report cannot start two sessions.
+- The rule must be saved and enabled. Save your changes first. The Backlog shows the rule as saved, not as you edited it.
+
+**Runs** shows manual runs too. Each one says who started it.
+
+The mobile app shows the Backlog read-only. You cannot select reports or start work there. Use the web or desktop app.
+
 ## Runs
 
 Open **Runs** to see each result. For each run that started a session, the history also shows the claim: claimed, pull request attached, merged, released (with the reason), or ended by PostHog. The mobile app shows the same line.

@@ -1,9 +1,11 @@
 import { Router, type Request, type Response } from 'express';
-import type { ApiResponse, CreatedWorkflow, WorkflowIntegration } from '@talyn/shared';
+import type { ApiResponse, CreatedWorkflow, WorkflowConditions, WorkflowDefinition, WorkflowIntegration } from '@talyn/shared';
 import {
   ISSUE_RULES_UNAVAILABLE_CODE,
   POSTHOG_INBOX_RULES_UNAVAILABLE_CODE,
   isIssueWorkflowIntegration,
+  MAX_POSTHOG_INBOX_RUN_REPORTS,
+  posthogInboxBacklogDays,
   posthogInboxPreviewInput,
   isWorkflowIntegration,
   validateWorkflow,
@@ -38,6 +40,12 @@ import { workflowSuggestions } from '../services/workflows/suggestions.js';
 import { ownerReachesSlackTeam } from '../services/workflows/sources/slack.js';
 import { getPostHogInboxConnection } from '../services/posthogInbox/connection.js';
 import { posthogInboxDryRun, posthogInboxStatus } from '../services/posthogInbox/preview.js';
+import {
+  manualRunRefusal,
+  parseRunReportIds,
+  posthogInboxBacklog,
+  runPostHogInboxReports,
+} from '../services/posthogInbox/backlog.js';
 import { registerPostHogInboxPushRoutes } from './posthogInboxPush.js';
 import { PostHogCodeApiError } from '../services/posthogCode/client.js';
 
@@ -96,6 +104,31 @@ function workflowShape(
     action_types: workflow.actions.map((a) => a.type),
     action_count: workflow.actions.length,
   };
+}
+
+/** PURE: JSON with sorted object keys, so two equal condition sets compare equal. */
+export function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** A PostHog error as the Inbox routes answer it. */
+function posthogInboxReadFailure(res: Response, err: unknown): void {
+  const status = err instanceof PostHogCodeApiError ? err.status : null;
+  res.status(502).json({
+    success: false,
+    error:
+      status === 401 || status === 403
+        ? 'PostHog refused to show the Inbox. Connect PostHog again to grant the Inbox permission.'
+        : 'Talyn could not read the PostHog Inbox. Try again in a minute.',
+    code: status === 401 || status === 403 ? 'posthog_inbox_forbidden' : 'posthog_inbox_unreachable',
+  });
 }
 
 export function workflowRoutes(): Router {
@@ -353,15 +386,76 @@ export function workflowRoutes(): Router {
       const data = await posthogInboxDryRun(connection, normalized);
       res.json({ success: true, data } as ApiResponse<typeof data>);
     } catch (err) {
-      const status = err instanceof PostHogCodeApiError ? err.status : null;
-      res.status(502).json({
+      posthogInboxReadFailure(res, err);
+    }
+  });
+
+  /**
+   * One page of a PostHog Inbox rule's backlog: older reports that match it,
+   * newest first, with Talyn's state for each. `workflowId` is the saved rule
+   * (its dedupe state, daily cap and whether rows can be run);
+   * `workflow.conditions` are the editor's unsaved conditions. One of the two
+   * is needed. Reads only.
+   */
+  router.post('/posthog-inbox/backlog', async (req, res) => {
+    const body = (req.body ?? {}) as {
+      workspaceId?: string;
+      workflowId?: string;
+      workflow?: { conditions?: unknown };
+      days?: unknown;
+      offset?: unknown;
+    };
+    const workspaceId = body.workspaceId ?? '';
+    if (!(await gate(req, res, workspaceId))) return;
+    if (!(await posthogInboxGate(req, res))) return;
+    let saved: WorkflowDefinition | null = null;
+    if (body.workflowId) {
+      saved = await getWorkflow(body.workflowId);
+      if (!saved || saved.workspaceId !== workspaceId) {
+        return res.status(404).json({ success: false, error: 'Automation not found' });
+      }
+      if (workflowIntegrationOf(saved) !== 'posthog_inbox') {
+        return res.status(400).json({ success: false, error: 'Only a PostHog Inbox automation has a backlog.' });
+      }
+    }
+    const asked = body.workflow?.conditions;
+    if (asked === undefined && !saved) {
+      return res.status(400).json({ success: false, error: 'workflowId or workflow.conditions is required' });
+    }
+    let conditions: WorkflowConditions;
+    let savedConditions: WorkflowConditions | null = null;
+    try {
+      if (saved) savedConditions = validateWorkflow(posthogInboxPreviewInput(saved.conditions)).conditions;
+      conditions =
+        asked === undefined
+          ? (savedConditions as WorkflowConditions)
+          : validateWorkflow(posthogInboxPreviewInput(asked as WorkflowConditions)).conditions;
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err instanceof Error ? err.message : 'invalid automation' });
+    }
+    const offset = Number(body.offset ?? 0);
+    if (!Number.isInteger(offset) || offset < 0) {
+      return res.status(400).json({ success: false, error: 'offset must be a whole number of 0 or more' });
+    }
+    const connection = await getPostHogInboxConnection(workspaceId, 'read');
+    if (!connection) {
+      return res.status(409).json({
         success: false,
-        error:
-          status === 401 || status === 403
-            ? 'PostHog refused to show the Inbox. Connect PostHog again to grant the Inbox permission.'
-            : 'Talyn could not read the PostHog Inbox. Try again in a minute.',
-        code: status === 401 || status === 403 ? 'posthog_inbox_forbidden' : 'posthog_inbox_unreachable',
+        error: "Talyn cannot read this workspace's PostHog Inbox. Connect PostHog on the PostHog Inbox page.",
+        code: 'posthog_inbox_unavailable',
       });
+    }
+    try {
+      const data = await posthogInboxBacklog(connection, {
+        conditions,
+        workflow: saved,
+        unsavedChanges: savedConditions !== null && stableJson(savedConditions) !== stableJson(conditions),
+        days: posthogInboxBacklogDays(body.days),
+        offset,
+      });
+      res.json({ success: true, data } as ApiResponse<typeof data>);
+    } catch (err) {
+      posthogInboxReadFailure(res, err);
     }
   });
 
@@ -484,6 +578,61 @@ export function workflowRoutes(): Router {
       age_hours: Math.round((Date.now() - new Date(existing.createdAt).getTime()) / 3_600_000),
     });
     res.json({ success: true, data: null } as ApiResponse<null>);
+  });
+
+  /**
+   * "Run selected": start a saved, enabled PostHog Inbox rule on these
+   * reports (at most {@link MAX_POSTHOG_INBOX_RUN_REPORTS}). Each one is read
+   * again and checked again, then goes through the same claim and session
+   * path as a poll. The runs count toward the daily cap and record who
+   * started them. The answer says what happened to each report.
+   */
+  router.post('/:id/posthog-inbox/run', async (req, res) => {
+    const existing = await getWorkflow(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Automation not found' });
+    }
+    if (!(await gate(req, res, existing.workspaceId))) return;
+    if (workflowIntegrationOf(existing) !== 'posthog_inbox') {
+      return res.status(400).json({ success: false, error: 'Only a PostHog Inbox automation can run reports.' });
+    }
+    if (!(await posthogInboxGate(req, res))) return;
+    const reportIds = parseRunReportIds((req.body as { reportIds?: unknown } | undefined)?.reportIds);
+    if (!reportIds || reportIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'reportIds must be a list of report ids.' });
+    }
+    if (reportIds.length > MAX_POSTHOG_INBOX_RUN_REPORTS) {
+      return res.status(400).json({
+        success: false,
+        error: `Select at most ${MAX_POSTHOG_INBOX_RUN_REPORTS} reports at a time.`,
+        code: 'too_many_reports',
+      });
+    }
+    const refusal = manualRunRefusal(existing);
+    if (refusal) {
+      return res.status(409).json({ success: false, error: refusal, code: 'workflow_not_runnable' });
+    }
+    const connection = await getPostHogInboxConnection(existing.workspaceId);
+    if (!connection) {
+      return res.status(409).json({
+        success: false,
+        error:
+          'Talyn cannot claim reports with this PostHog connection. Connect PostHog again with the inbox:write and task:write permissions.',
+        code: 'posthog_inbox_unavailable',
+      });
+    }
+    const user = assertUser(req);
+    const data = await runPostHogInboxReports(connection, existing, reportIds, {
+      userId: user.id,
+      label: user.githubUsername || user.email || null,
+    });
+    captureWorkspaceEvent(existing.workspaceId, 'workflow_manual_run', {
+      ...workflowShape(existing.id, existing),
+      requested: data.requested,
+      started: data.started,
+      outcomes: [...new Set(data.results.map((r) => r.outcome))].sort(),
+    });
+    res.json({ success: true, data } as ApiResponse<typeof data>);
   });
 
   /** One workflow's run history, newest first. `cursor` is the last row's createdAt. */

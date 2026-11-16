@@ -2,6 +2,9 @@ import {
   ALL_WORKFLOW_ACTION_TYPES,
   ALL_WORKFLOW_TRIGGER_EVENTS,
   DEFAULT_POSTHOG_INBOX_RUNS_PER_DAY,
+  MAX_POSTHOG_INBOX_RUN_REPORTS,
+  POSTHOG_INBOX_BACKLOG_DAYS,
+  POSTHOG_INBOX_BACKLOG_STATE_LABELS,
   POSTHOG_INBOX_ACTIONABILITY,
   POSTHOG_INBOX_PRIORITIES,
   WORKFLOW_ACTOR_KINDS,
@@ -14,6 +17,8 @@ import {
   type WorkflowSuggestions,
   type WorkflowWithStats,
   type CreatedWorkflow,
+  type PostHogInboxBacklogPage,
+  type PostHogInboxRunResponse,
 } from '@talyn/shared';
 import { callApi } from '../api.js';
 import {
@@ -132,6 +137,31 @@ const actionFields: Record<(typeof ALL_WORKFLOW_ACTION_TYPES)[number], string> =
   slack_reply: 'text: string (may use {{session.url}} and {{message.permalink}})',
   slack_react: 'emoji: string (a name without colons, for example eyes)',
 };
+
+/** A saved PostHog Inbox automation of this workspace, or an error the agent can read. */
+async function inboxRule(ownerId: string, args: Record<string, unknown>): Promise<WorkflowWithStats> {
+  const workflow = await current(ownerId, args);
+  if ((workflow.integration ?? 'github') !== 'posthog_inbox') {
+    throw new Error(`Workflow ${workflow.id} is not a PostHog Inbox automation.`);
+  }
+  return workflow;
+}
+
+function backlogText(page: PostHogInboxBacklogPage): string {
+  const head = [
+    `Reports created in the last ${page.days} days that match, newest first. Talyn read ${page.scanned} report(s) from PostHog${page.total !== null ? ` of ${page.total}` : ''}.`,
+    page.runnable
+      ? `Run reports with talyn_run_posthog_inbox_reports. Only rows marked [selectable] can run.${page.dailyCap !== null ? ` Daily cap: ${page.runsToday} of ${page.dailyCap} runs used in the last 24 hours.` : ''}`
+      : `Reports cannot run now: ${page.notRunnableReason ?? 'the automation is not runnable'}`,
+  ];
+  const rows = linesOrNone(
+    page.rows,
+    (row) =>
+      `${row.id}  [${POSTHOG_INBOX_BACKLOG_STATE_LABELS[row.state]}]${row.selectable ? ' [selectable]' : ''}  ${row.priority ?? 'no priority'}  ${row.repository ?? 'no repository'}  ${row.title || '(no title)'}  created ${row.createdAt ?? 'unknown'}  ${row.url}${row.workbenchId ? `  session: ${row.workbenchId}` : ''}${row.prUrl ? `  pr: ${row.prUrl}` : ''}`
+  );
+  const more = page.nextOffset !== null ? `\nMore reports: call again with offset ${page.nextOffset}.` : '';
+  return `${head.join('\n')}\n${rows}${more}`;
+}
 
 export const WORKFLOWS = [
   defineTool(
@@ -296,6 +326,47 @@ export const WORKFLOWS = [
     'workflows'
   ),
   defineTool(
+    'list_posthog_inbox_backlog',
+    'List older PostHog Inbox reports that a saved PostHog Inbox automation matches, newest first, with where each one stands for Talyn (not run, running or PR open, already run, claimed elsewhere, already addressed, repository not connected, held back for safety). Starts nothing.',
+    {
+      ...idSchema,
+      days: { type: 'integer', enum: [...POSTHOG_INBOX_BACKLOG_DAYS], description: 'How far back reports were created. Default 7.' },
+      offset: { type: 'integer', description: 'The offset a previous call returned, for more reports.' },
+    },
+    ['workflow_id'],
+    { readOnlyHint: true, openWorldHint: true },
+    async (ownerId, args) => {
+      const workflow = await inboxRule(ownerId, args);
+      const page = await callApi<PostHogInboxBacklogPage>(ownerId, 'POST', '/workflows/posthog-inbox/backlog', {
+        workspaceId: workflow.workspaceId,
+        workflowId: workflow.id,
+        ...(args.days !== undefined ? { days: args.days } : {}),
+        ...(args.offset !== undefined ? { offset: args.offset } : {}),
+      });
+      return backlogText(page);
+    },
+    'workflows'
+  ),
+  defineTool(
+    'run_posthog_inbox_reports',
+    `Start a saved, enabled PostHog Inbox automation on older reports, by id (at most ${MAX_POSTHOG_INBOX_RUN_REPORTS}). Each report starts a session that opens a pull request. Talyn reads each report again, checks the automation's conditions, claims it in PostHog and never runs the same report version twice. The runs count toward the automation's daily cap. Get ids from talyn_list_posthog_inbox_backlog, and confirm with the user first.`,
+    {
+      ...idSchema,
+      report_ids: { type: 'array', items: { type: 'string' }, maxItems: MAX_POSTHOG_INBOX_RUN_REPORTS },
+    },
+    ['workflow_id', 'report_ids'],
+    { openWorldHint: true },
+    async (ownerId, args) => {
+      const workflow = await inboxRule(ownerId, args);
+      if (!Array.isArray(args.report_ids)) throw new Error('report_ids must be a list of report ids.');
+      const data = await callApi<PostHogInboxRunResponse>(ownerId, 'POST', `/workflows/${workflow.id}/posthog-inbox/run`, {
+        reportIds: args.report_ids.map(String),
+      });
+      return [data.summary, linesOrNone(data.results, (r) => `${r.reportId}  [${r.outcome}]  ${r.message}${r.workbenchId ? `  session: ${r.workbenchId}` : ''}`)].join('\n');
+    },
+    'workflows'
+  ),
+  defineTool(
     'list_workflow_runs',
     'List automation runs. Use the returned cursor to fetch older runs.',
     { workflow_id: textSchema, ...pageSchema },
@@ -311,7 +382,7 @@ export const WORKFLOWS = [
         rows,
         args,
         (run) =>
-          `${run.id}  [${run.status}]  ${run.createdAt}  ${run.subjectLabel ?? `${run.repoFullName}#${run.prNumber}`}  ${run.event}${run.taskId ? `  task: ${run.taskId}` : ''}${str(run.error) ? `  ${run.error}` : ''}`
+          `${run.id}  [${run.status}]  ${run.createdAt}  ${run.subjectLabel ?? `${run.repoFullName}#${run.prNumber}`}  ${run.event}${run.trigger === 'manual' ? `  manual${run.triggeredBy ? ` by ${run.triggeredBy}` : ''}` : ''}${run.taskId ? `  task: ${run.taskId}` : ''}${str(run.error) ? `  ${run.error}` : ''}`
       );
     },
     'workflows'

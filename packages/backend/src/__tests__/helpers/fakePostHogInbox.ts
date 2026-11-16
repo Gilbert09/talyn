@@ -3,6 +3,11 @@
  * list, the single read, the artefacts and the claim
  * (`POST .../signals/reports/:id/claim/`). It records every request and
  * every claim body, and can refuse reads or claims with a status.
+ *
+ * A read shows the active claim as `assignee`, like PostHog. The list keeps
+ * the `status` it is asked for (`ready` by default). With `filterList`, it
+ * also applies the backlog's filters (actionability, priority, source
+ * product, scout, search, `created_after`).
  */
 
 export interface FakeReport {
@@ -19,6 +24,11 @@ export interface FakeReport {
   scout_name: string | null;
   repo_slug: string | null;
   updated_at: string;
+  created_at?: string;
+  /** Set to override the assignee the active claim gives. */
+  assignee?: { claim_id?: string | null; kind?: string | null } | null;
+  implementation_pr_url?: string | null;
+  implementation_pr_state?: string | null;
 }
 
 /** One claim on a report, as PostHog keeps it. */
@@ -50,6 +60,14 @@ export class FakePostHog {
   claimRetryAfter: number | null = null;
   /** Answer a claim with no `assignee.claim_id`. */
   omitClaimId = false;
+  /** Show the active claim as `assignee` on reads and list rows. */
+  exposeClaims = true;
+  /** Apply the backlog's list filters, not only `status`. */
+  filterList = false;
+  /** Keep `repo_slug` on list rows (a newer PostHog). */
+  listRepoSlug = false;
+  /** Refuse single reads of these report ids with a status. */
+  readFailures = new Map<string, number>();
   private nextClaim = 1;
 
   put(id: string, overrides: Partial<FakeReport> = {}): FakeReport {
@@ -102,19 +120,66 @@ export class FakePostHog {
       });
     }
     if (id) {
+      const failure = this.readFailures.get(id);
+      if (failure) return new Response('{}', { status: failure });
       const report = this.reports.get(id);
-      return report ? Response.json(report) : new Response('{}', { status: 404 });
+      return report ? Response.json(this.served(report)) : new Response('{}', { status: 404 });
     }
-    // The list: newest change first, without `repo_slug`, like PostHog's.
-    const offset = Number(url.searchParams.get('offset') ?? 0);
-    const limit = Number(url.searchParams.get('limit') ?? 100);
-    const unclaimed = url.searchParams.get('unclaimed') === 'true';
+    // The list: newest change first (or newest created with `-created_at`),
+    // without `repo_slug` unless `listRepoSlug`.
+    const q = url.searchParams;
+    const offset = Number(q.get('offset') ?? 0);
+    const limit = Number(q.get('limit') ?? 100);
+    const unclaimed = q.get('unclaimed') === 'true';
+    const statuses = (q.get('status') ?? 'ready').split(',');
+    const anyOf = (param: string): string[] | null => {
+      const raw = q.get(param);
+      return raw ? raw.split(',').map((v) => v.toLowerCase()) : null;
+    };
+    const keep = (r: FakeReport): boolean => {
+      if (!this.filterList) return true;
+      const actionability = anyOf('actionability');
+      if (actionability && !actionability.includes((r.actionability ?? '').toLowerCase())) return false;
+      const priority = anyOf('priority');
+      if (priority && !priority.includes((r.priority ?? '').toLowerCase())) return false;
+      const products = anyOf('source_product');
+      if (products && !r.source_products.some((p) => products.includes(p.toLowerCase()))) return false;
+      const scouts = anyOf('scout');
+      if (scouts && !scouts.includes((r.scout_name ?? '').toLowerCase())) return false;
+      const search = (q.get('search') ?? '').toLowerCase();
+      if (search && !`${r.title}\n${r.summary}`.toLowerCase().includes(search)) return false;
+      const after = q.get('created_after');
+      if (after && r.created_at && Date.parse(r.created_at) < Date.parse(after)) return false;
+      return true;
+    };
+    const byCreated = q.get('ordering') === '-created_at';
     const rows = [...this.reports.values()]
-      .filter((r) => r.status === 'ready')
+      .filter((r) => statuses.includes(r.status))
       .filter((r) => !unclaimed || !this.activeClaim(r.id))
-      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-      .map(({ repo_slug: _repo, ...rest }) => rest);
-    return Response.json({ count: rows.length, results: rows.slice(offset, offset + limit) });
+      .filter(keep)
+      .sort((a, b) =>
+        byCreated ? (b.created_at ?? '').localeCompare(a.created_at ?? '') : b.updated_at.localeCompare(a.updated_at)
+      )
+      .map((r) => this.served(r))
+      .map((r) => {
+        if (this.listRepoSlug) return r;
+        const { repo_slug: _repo, ...rest } = r;
+        return rest;
+      });
+    const page = rows.slice(offset, offset + limit);
+    const next = offset + limit < rows.length ? `${url.origin}${url.pathname}?offset=${offset + limit}` : null;
+    return Response.json({ count: rows.length, next, results: page });
+  }
+
+  /** The report as PostHog serves it: the active claim as its assignee. */
+  private served(report: FakeReport): FakeReport {
+    if (!this.exposeClaims || report.assignee !== undefined) return report;
+    const claim = this.activeClaim(report.id);
+    return {
+      ...report,
+      assignee: claim ? { claim_id: claim.claimId, kind: claim.holder === 'talyn' ? 'agent' : 'user' } : null,
+      implementation_pr_url: report.implementation_pr_url ?? claim?.pullRequests[0] ?? null,
+    };
   }
 
   /** PostHog's claim semantics, as its OpenAPI describes them. */

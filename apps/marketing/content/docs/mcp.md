@@ -146,6 +146,8 @@ Set it to `github`, `slack`, `webhook`, `linear`, `github_issues` or `posthog_in
 Creating a webhook automation answers with its URL and signing secret once. Talyn cannot show them again. A webhook automation can use the `start_task` action.
 A Linear rule needs `conditions.connectionId`. Issue automations (`linear` and `github_issues`) need the `issue-rules` feature. PostHog Inbox automations need the `posthog-inbox-rules` feature, and their `start_session` action has `repositoryId: null`.
 Use `talyn_get_workflow_vocabulary` with optional `integration` to read its fields. It defaults to `github`.
+Use `talyn_list_posthog_inbox_backlog` with `workflow_id` to list older reports that match a PostHog Inbox rule. Optional `days` is 7, 30 or 90. Optional `offset` reads the next page. The tool only reads.
+Use `talyn_run_posthog_inbox_reports` with `workflow_id` and `report_ids` to start work on up to 20 reports from that backlog. The rule must be enabled. The daily cap applies.
 Use `talyn_list_slack_channels` with `{teamId}` to list channels the bot joined.
 Use `talyn_slack_reply` with `text` to reply as the Talyn bot in the Slack thread that started a session. A user token must also pass `session_id`.
 The `talyn_*loop*` tools manage scheduled automations. Their tool names stay the same.

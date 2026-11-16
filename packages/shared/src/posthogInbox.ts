@@ -252,3 +252,188 @@ export function posthogInboxPushActive(lastPushAt: string | Date | null | undefi
   if (Number.isNaN(at)) return false;
   return now - at < POSTHOG_INBOX_PUSH_WINDOW_MS;
 }
+
+// ---- Backlog (older reports) and manual runs --------------------------------
+
+/** The time ranges the backlog offers, in days. The default is the first. */
+export const POSTHOG_INBOX_BACKLOG_DAYS = [7, 30, 90] as const;
+export type PostHogInboxBacklogDays = (typeof POSTHOG_INBOX_BACKLOG_DAYS)[number];
+export const DEFAULT_POSTHOG_INBOX_BACKLOG_DAYS: PostHogInboxBacklogDays = 7;
+
+/** The most reports one "Run selected" request may name. */
+export const MAX_POSTHOG_INBOX_RUN_REPORTS = 20;
+
+/** PURE: a backlog range from user input. Anything unknown is the default. */
+export function posthogInboxBacklogDays(raw: unknown): PostHogInboxBacklogDays {
+  const n = typeof raw === 'string' ? Number(raw) : raw;
+  return (POSTHOG_INBOX_BACKLOG_DAYS as readonly unknown[]).includes(n)
+    ? (n as PostHogInboxBacklogDays)
+    : DEFAULT_POSTHOG_INBOX_BACKLOG_DAYS;
+}
+
+/**
+ * Where one report stands for Talyn, in the backlog.
+ *
+ * - `not_run`: the rule would act on it. The only state that can be selected.
+ * - `running`: Talyn works on it now: a session, and maybe a pull request.
+ * - `already_run`: the rule already ran on this version of the report.
+ * - `claimed_elsewhere`: another person or agent holds it in PostHog.
+ * - `already_addressed`: PostHog says somebody already handles it.
+ * - `repository_not_connected`: its repository is not in this workspace.
+ * - `held_back`: PostHog's safety judge suppressed it. Talyn never acts on it.
+ */
+export type PostHogInboxBacklogState =
+  | 'not_run'
+  | 'running'
+  | 'already_run'
+  | 'claimed_elsewhere'
+  | 'already_addressed'
+  | 'repository_not_connected'
+  | 'held_back';
+
+export const POSTHOG_INBOX_BACKLOG_STATE_LABELS: Record<PostHogInboxBacklogState, string> = {
+  not_run: 'Not run',
+  running: 'Running / PR open',
+  already_run: 'Already run',
+  claimed_elsewhere: 'Claimed elsewhere',
+  already_addressed: 'Already addressed',
+  repository_not_connected: 'Repository not connected',
+  held_back: 'Held back for safety',
+};
+
+/** What a backlog state needs to know about one report. */
+export interface PostHogInboxBacklogStateInput {
+  suppressionSource: string | null;
+  alreadyAddressed: boolean | null;
+  /** The Talyn repository of the report's repository, or null when it is not connected. */
+  workspaceRepositoryId: string | null | undefined;
+  /** Whether somebody holds the report in PostHog (an assignee, or a pull request in flight). */
+  claimedInPostHog: boolean;
+  /** Whether that claim is Talyn's own. */
+  claimIsTalyns: boolean;
+  /** Whether Talyn has live work on the report (an active link). */
+  talynActive: boolean;
+  /** Whether this rule already has a run for this version of the report. */
+  ranThisVersion: boolean;
+}
+
+/**
+ * PURE: the backlog state of one report. The order matters: a report Talyn
+ * works on reads `running` even after PostHog marks it addressed because of
+ * Talyn's own pull request.
+ */
+export function posthogInboxBacklogState(input: PostHogInboxBacklogStateInput): PostHogInboxBacklogState {
+  if ((input.suppressionSource ?? '').trim().toLowerCase() === 'safety_judge') return 'held_back';
+  if (input.talynActive) return 'running';
+  if (input.claimedInPostHog && !input.claimIsTalyns) return 'claimed_elsewhere';
+  if (input.ranThisVersion) return 'already_run';
+  if (input.alreadyAddressed === true) return 'already_addressed';
+  if (!input.workspaceRepositoryId) return 'repository_not_connected';
+  // Talyn's own claim without a live link: a release PostHog has not taken yet.
+  if (input.claimedInPostHog) return 'already_run';
+  return 'not_run';
+}
+
+/** One report in the backlog. */
+export interface PostHogInboxBacklogRow {
+  id: string;
+  title: string;
+  /** The report in the PostHog app. */
+  url: string;
+  priority: string | null;
+  actionability: string | null;
+  /** `owner/repo`, or null when PostHog did not pick one. */
+  repository: string | null;
+  sourceProducts: string[];
+  signalCount: number;
+  createdAt: string | null;
+  updatedAt: string;
+  state: PostHogInboxBacklogState;
+  /** True only for `not_run` rows of a saved, enabled rule. */
+  selectable: boolean;
+  /** Talyn's work on the report, when it has some. */
+  runId: string | null;
+  workbenchId: string | null;
+  pullRequestId: string | null;
+  prUrl: string | null;
+}
+
+/** `POST /workflows/posthog-inbox/backlog`: one page of older reports that match a rule. */
+export interface PostHogInboxBacklogPage {
+  rows: PostHogInboxBacklogRow[];
+  /** How many reports Talyn read from PostHog for this page. */
+  scanned: number;
+  /** The offset of the next page, or null when PostHog has no more. */
+  nextOffset: number | null;
+  /** How many reports PostHog's own filters keep, before Talyn's matcher. Null when unknown. */
+  total: number | null;
+  days: PostHogInboxBacklogDays;
+  /** The rule the page was read for, or null for an unsaved rule. */
+  workflowId: string | null;
+  /** Whether "Run selected" works: the rule is saved and enabled. */
+  runnable: boolean;
+  /** Why it does not, or null. */
+  notRunnableReason: string | null;
+  /** The rule's daily cap, or null when it has none. */
+  dailyCap: number | null;
+  /** Runs in the last 24 hours that count toward the cap. */
+  runsToday: number;
+}
+
+/**
+ * What happened to one report in "Run selected".
+ *
+ * - `started`: a session started.
+ * - `parked`: PostHog or a limit refused for now; Talyn retries later.
+ * - `failed`: the run failed. The message says why.
+ * - `claimed_elsewhere`: PostHog answered 409; somebody else holds it.
+ * - `already_run`: this version already ran. Dedupe, so nothing new.
+ * - `not_eligible`: the report no longer matches, or its state does not allow a run.
+ * - `daily_cap`: the rule's daily cap is reached; Talyn did not try.
+ * - `not_found`: PostHog does not have the report.
+ * - `unreadable`: Talyn could not read the report from PostHog.
+ */
+export type PostHogInboxRunOutcome =
+  | 'started'
+  | 'parked'
+  | 'failed'
+  | 'claimed_elsewhere'
+  | 'already_run'
+  | 'not_eligible'
+  | 'daily_cap'
+  | 'not_found'
+  | 'unreadable';
+
+export interface PostHogInboxRunResult {
+  reportId: string;
+  outcome: PostHogInboxRunOutcome;
+  /** One short sentence for the person. */
+  message: string;
+  runId: string | null;
+  workbenchId: string | null;
+}
+
+/** `POST /workflows/:id/posthog-inbox/run`. */
+export interface PostHogInboxRunResponse {
+  results: PostHogInboxRunResult[];
+  requested: number;
+  started: number;
+  dailyCap: number | null;
+  /** The whole answer in one sentence, for example "3 of 5 started; the daily cap of 10 is reached." */
+  summary: string;
+}
+
+/** PURE: the one-sentence summary of a manual run. */
+export function posthogInboxRunSummary(results: PostHogInboxRunResult[], dailyCap: number | null): string {
+  const requested = results.length;
+  const started = results.filter((r) => r.outcome === 'started').length;
+  const parked = results.filter((r) => r.outcome === 'parked').length;
+  const capped = results.some((r) => r.outcome === 'daily_cap');
+  let text = `${started} of ${requested} started`;
+  if (capped && dailyCap !== null) text += `; the daily cap of ${dailyCap} is reached`;
+  if (parked > 0) text += `; ${parked} wait${parked === 1 ? 's' : ''} for a retry`;
+  return `${text}.`;
+}
+
+/** How a run was started. `event` is the poller or a push; `manual` is "Run selected". */
+export type WorkflowRunTrigger = 'event' | 'manual';

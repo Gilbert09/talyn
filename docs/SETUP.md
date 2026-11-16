@@ -1087,6 +1087,8 @@ A PostHog Inbox rule starts a session when a PostHog self-driving report is read
 - **Refresh.** `services/posthogOAuth/core.ts` holds the PKCE, state, token and refresh code for both connections. A refresh is single-flighted per row: an in-process promise map, and the advisory lock `posthog-inbox-oauth-refresh:<workspace>` (PostHog Code keeps `posthog-oauth-refresh:<workspace>`).
 - **Which connection the rules use.** `getPostHogInboxConnection` takes the Inbox row first, in any state. Without one, it uses a PostHog Code row whose OAuth grant has `inbox:read` and is not revoked, or a PostHog Code personal API key. Disconnecting one row never touches the other.
 
+**Backlog.** A rule acts only on reports that change after the first poll. The backlog lets a person start work on older reports. `POST /workflows/posthog-inbox/backlog` lists them (`services/posthogInbox/backlog.ts`). `POST /workflows/:id/posthog-inbox/run` starts up to 20 of them. Both routes need the `posthog-inbox-rules` flag. A manual run uses the poller's claim, dedupe key and daily cap. It adds no new environment variable. Migration 0140 adds `workflow_runs.trigger_source` for manual runs.
+
 Without `inbox:write` and `task:write` the rules claim nothing and start nothing (`getPostHogInboxConnection` answers null for its default `claim` purpose), and the editor asks for a reconnect. The dry run uses the `read` purpose, so it still reads with `inbox:read`.
 
 | Flag | Name | Override | Default | Availability |
