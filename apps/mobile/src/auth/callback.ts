@@ -2,7 +2,7 @@ export const ATTEMPT_TTL_MS = 5 * 60 * 1000;
 
 export class SignInError extends Error {
   /** `detail` is what the OS or browser reported, for diagnostics. It never holds a code or token. */
-  constructor(public readonly kind: 'invalid' | 'expired' | 'failed' | 'cancelled' | 'timeout' | 'storage', public readonly detail?: string) {
+  constructor(public readonly kind: 'invalid' | 'expired' | 'failed' | 'cancelled' | 'timeout' | 'storage' | 'credentials', public readonly detail?: string) {
     super('Sign-in could not finish. Please try again.');
   }
 }

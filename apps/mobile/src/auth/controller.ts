@@ -9,6 +9,7 @@ export interface AuthGateway {
   refreshSession(): Promise<AuthResult>;
   signInWithOAuth(options: { provider: 'github'; options: { redirectTo: string; skipBrowserRedirect: true } }): Promise<{ data: { url: string | null }; error: unknown }>;
   exchangeCodeForSession(code: string): Promise<AuthResult>;
+  signInWithPassword(credentials: { email: string; password: string }): Promise<AuthResult>;
   signOut(options: { scope: 'local' }): Promise<{ error: unknown }>;
   startAutoRefresh(): void | Promise<void>;
   stopAutoRefresh(): void | Promise<void>;
@@ -158,6 +159,30 @@ export class AuthController {
       if (timer) clearTimeout(timer);
       this.cancelBrowser = null;
       this.browser.dismiss();
+    }
+  }
+
+  /** Store review only: the backend refuses any account without a GitHub identity. */
+  signInWithPassword = (email: string, password: string): Promise<void> => {
+    if (this.login) return this.login;
+    if (this.exchange) return this.exchange;
+    if (this.cleanup || this.disposed || this.session) return Promise.resolve();
+    this.blocked = false;
+    const epoch = ++this.epoch;
+    this.publish({ status: 'signingIn', user: null, issue: null });
+    this.login = this.runPasswordSignIn(email, password, epoch).finally(() => { this.login = null; });
+    return this.login;
+  };
+  private async runPasswordSignIn(email: string, password: string, epoch: number) {
+    try {
+      await this.clearAttempt();
+      if (!this.valid(epoch)) return;
+      const result = await this.auth.signInWithPassword({ email, password });
+      if (!this.valid(epoch)) return;
+      if (result.error || !result.data.session) throw new SignInError('credentials');
+      await this.accept(result.data.session, epoch);
+    } catch (error) {
+      if (this.valid(epoch) && !this.session) await this.fail(error);
     }
   }
 

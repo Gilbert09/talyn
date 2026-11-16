@@ -30,6 +30,7 @@ import WorkspacesScreen from '../../app/workspaces';
 let mockAuth: AuthSnapshot = { status: 'signedIn', user: { id: 'alice', email: 'alice@example.com' }, issue: null };
 let mockNetwork = 'online';
 const mockSignIn = jest.fn();
+const mockPasswordSignIn = jest.fn();
 const mockSignOut = jest.fn();
 const mockDelete = jest.fn(async () => 'blocked');
 const mockWorkspace: { status: string; choices: { id: string; name: string }[]; selected: string | null } = {
@@ -45,7 +46,7 @@ jest.mock('../auth/AuthProvider', () => ({
   useWorkspace: () => mockWorkspace,
   useMobileRuntime: () => ({
     workflow: mockWorkflow.store, lifecycle: mockWorkflow.lifecycle,
-    auth: { signIn: mockSignIn, signOut: mockSignOut, cancelSignIn: jest.fn(), restore: jest.fn() },
+    auth: { signIn: mockSignIn, signInWithPassword: mockPasswordSignIn, signOut: mockSignOut, cancelSignIn: jest.fn(), restore: jest.fn() },
     account: { deleteAccount: mockDelete }, workspace: { getSnapshot: () => mockWorkspace, load: jest.fn(), select: mockSelectWorkspace },
     context: mockContext,
   }),
@@ -280,6 +281,27 @@ describe('auth route gates and accessible states', () => {
     expect(screen.queryByText('alice@example.com')).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Sign in with GitHub' }));
     expect(mockSignIn).toHaveBeenCalledTimes(1);
+  });
+  it('opens the review sign-in only on a long press of the owl', async () => {
+    mockAuth = { status: 'signedOut', user: null, issue: null };
+    await renderRouter(routes, { initialUrl: '/sign-in' });
+    expect(screen.queryByText('Review sign-in')).toBeNull();
+    await fireEvent.press(screen.getByLabelText('Talyn logo'));
+    expect(screen.queryByText('Review sign-in')).toBeNull();
+    await fireEvent(screen.getByLabelText('Talyn logo'), 'longPress');
+    expect(screen.getByText('Review sign-in')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeDisabled();
+    await fireEvent.changeText(screen.getByLabelText('Email'), '  reviewer@example.com ');
+    await fireEvent.changeText(screen.getByLabelText('Password'), ' pass word ');
+    await fireEvent.press(screen.getByRole('button', { name: 'Sign in' }));
+    expect(mockPasswordSignIn).toHaveBeenCalledWith('reviewer@example.com', ' pass word ');
+  });
+  it('closes the review sign-in on Cancel', async () => {
+    mockAuth = { status: 'signedOut', user: null, issue: null };
+    await renderRouter(routes, { initialUrl: '/sign-in' });
+    await fireEvent(screen.getByLabelText('Talyn logo'), 'longPress');
+    await fireEvent.press(screen.getAllByRole('button', { name: 'Cancel' })[0]!);
+    expect(screen.queryByText('Review sign-in')).toBeNull();
   });
   it('gates the shell until restoration finishes', async () => {
     mockAuth = { status: 'restoring', user: null, issue: null };

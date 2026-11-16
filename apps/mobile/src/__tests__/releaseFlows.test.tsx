@@ -50,6 +50,7 @@ async function releaseFixture(workspaceId = 'one') {
     getSession: jest.fn(async () => ({ data: { session: null }, error: null })),
     refreshSession: jest.fn(async () => ({ data: { session }, error: null })),
     signInWithOAuth: jest.fn<ReturnType<AuthGateway['signInWithOAuth']>, Parameters<AuthGateway['signInWithOAuth']>>(async () => { await storage.setItem('session-code-verifier', 'fixture-verifier'); return { data: { url: 'https://auth.example.test/authorize' }, error: null }; }),
+    signInWithPassword: jest.fn<ReturnType<AuthGateway['signInWithPassword']>, Parameters<AuthGateway['signInWithPassword']>>(async () => ({ data: { session }, error: null })),
     exchangeCodeForSession: jest.fn<ReturnType<AuthGateway['exchangeCodeForSession']>, Parameters<AuthGateway['exchangeCodeForSession']>>(async () => ({ data: { session }, error: null })), signOut: jest.fn<ReturnType<AuthGateway['signOut']>, Parameters<AuthGateway['signOut']>>(async () => ({ error: null })), startAutoRefresh: jest.fn(), stopAutoRefresh: jest.fn(),
   };
   const callback = 'talyn-mobile-development://auth/callback';

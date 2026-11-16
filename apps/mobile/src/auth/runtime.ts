@@ -88,6 +88,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     refreshSession: () => supabase.auth.refreshSession(),
     signInWithOAuth: (options) => supabase.auth.signInWithOAuth(options),
     exchangeCodeForSession: (code) => supabase.auth.exchangeCodeForSession(code),
+    signInWithPassword: (credentials) => supabase.auth.signInWithPassword(credentials),
     signOut: (options) => supabase.auth.signOut(options),
     startAutoRefresh: async () => { await initialized; await supabase.auth.startAutoRefresh(); },
     stopAutoRefresh: async () => { await initialized; await supabase.auth.stopAutoRefresh(); },

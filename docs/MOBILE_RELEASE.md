@@ -273,6 +273,7 @@ Use the inventory in [MOBILE_STORE_ASSETS.md](MOBILE_STORE_ASSETS.md).
 Supply support and deletion pages. Confirm provider deletion, retention, backups, and paying-admin escalation.
 Provide disposable review access through App Store Connect or Play Console's restricted review fields.
 Keep passwords and OAuth codes out of metadata files and automated flows.
+Store review sign-in: press and hold the Talyn owl on the sign-in screen for 2 seconds to open an email and password form. Only the review account has a password. The backend refuses accounts without a GitHub identity.
 
 Submit the inspected beta build ID through the protected workflow.
 The wrapper verifies hosted platform, profile, identity, commit, version, build, runtime, and channel before submission.
