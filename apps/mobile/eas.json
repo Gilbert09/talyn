@@ -1,6 +1,6 @@
 {
   "cli": {
-    "version": "27.5.0",
+    "version": ">= 27.5.0",
     "appVersionSource": "local",
     "requireCommit": true
   },
@@ -64,7 +64,11 @@
       },
       "ios": {
         "ascAppId": "6834161436",
-        "appleTeamId": "5KQY9SJDWG"
+        "appleTeamId": "5KQY9SJDWG",
+        "groups": [
+          "Talyn internal",
+          "Talyn external"
+        ]
       }
     },
     "production": {
@@ -75,7 +79,11 @@
       },
       "ios": {
         "ascAppId": "6834161436",
-        "appleTeamId": "5KQY9SJDWG"
+        "appleTeamId": "5KQY9SJDWG",
+        "groups": [
+          "Talyn internal",
+          "Talyn external"
+        ]
       }
     }
   }

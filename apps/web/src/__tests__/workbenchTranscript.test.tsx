@@ -642,3 +642,15 @@ it.each(['reauth', 'limited'])('offers Reconnect only for a reauth turn: %s', (r
     expect(useWorkspaceStore.getState().settingsSection).toBe('integrations');
   } else expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
 });
+
+
+it('shows the reconnect wait and cancel control', () => {
+  const waiting = { ...chat, status: 'error', resumeAt: '2026-11-16T17:00:00Z',
+    resumeReason: 'Personal needs to be signed in again.' } as WorkbenchChat;
+  const result = errorResult(2, 1, waiting.resumeReason!);
+  result.event = { ...result.event, reason: 'reauth' } as AgentEvent;
+  render(<WorkbenchTranscript chat={waiting} events={[userEvent(1, 1), result]} loading={false} error={null} ops={ops} />);
+  expect(screen.getByText(/Waiting for the account to be signed in again. Checks again at/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  expect(screen.queryByText(/Waiting for usage/)).not.toBeInTheDocument();
+});

@@ -164,7 +164,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         NSPrivacyTracking: false,
         NSPrivacyTrackingDomains: [],
       },
-      infoPlist: { NSAppTransportSecurity: { NSAllowsArbitraryLoads: false, NSAllowsLocalNetworking: identity.environment === 'development' } },
+      // Talyn uses only HTTPS and the OS's own encryption, which is exempt. This answers TestFlight's export
+      // compliance question for every build, so nobody has to answer it by hand.
+      infoPlist: { ITSAppUsesNonExemptEncryption: false, NSAppTransportSecurity: { NSAllowsArbitraryLoads: false, NSAllowsLocalNetworking: identity.environment === 'development' } },
       // iOS 17.4+ sign-in hands the HTTPS callback to ASWebAuthenticationSession, which needs `webcredentials`, not only `applinks`.
       ...(httpsCallback ? { associatedDomains: [`applinks:${httpsCallback.hostname}`, `webcredentials:${httpsCallback.hostname}`] } : {}),
     },

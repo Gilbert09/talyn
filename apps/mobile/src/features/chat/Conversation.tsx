@@ -201,7 +201,7 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
           <TranscriptRow row={row} now={now} workbench={item} plan={plan} highlight={highlight && matchKeys.has(row.key) ? highlight : undefined} />
           {row.kind === 'failed' && rows[0]?.key === row.key && chat && (chat.status === 'idle' || chat.status === 'error')
             && !chat.queuedMessages?.length ? <TurnFailureActions chatId={chat.id} workbenchId={item.id} text={row.text}
-              reconnect={row.reason === 'reauth'} disabled={offline || !ready} /> : null}
+              reconnect={row.reason === 'reauth'} resumeAt={chat.resumeAt} resumeReason={chat.resumeReason} disabled={offline || !ready} /> : null}
         </View>} />
       </TranscriptContext.Provider></RowBoundary>
       {startHint ? <View pointerEvents="box-none" style={local_.startHint}>

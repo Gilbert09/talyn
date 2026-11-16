@@ -164,3 +164,17 @@ export function fleetReconnectMessage(provider: {
   const names = labels.length < 2 ? labels[0] : `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`;
   return `${names} ${labels.length === 1 ? 'needs' : 'need'} to be signed in again.`;
 }
+
+/**
+ * The agent a single-agent session box lacks, when the workspace can run it now.
+ * Null when the box has both, or the missing agent is not connected or needs
+ * sign-in: a restart would not add it, so offering one would mislead.
+ */
+export function addableBoxAgent(
+  boxAgents: readonly string[],
+  provider: { connectedAgents?: readonly string[]; reauthAgents?: readonly string[] } | undefined,
+): FleetAgent | null {
+  const missing = (['claude', 'codex'] as const).find((agent) => !boxAgents.includes(agent));
+  if (!missing) return null;
+  return provider?.connectedAgents?.includes(missing) && !provider.reauthAgents?.includes(missing) ? missing : null;
+}

@@ -280,6 +280,13 @@ export function McpServerEditor({ workspaceId, servers, server, initial, offline
     .map((tool) => ({ key: tool.name, label: tool.label, detail: tool.detail, selected: selectedTools(allowedTools, offeredTools).includes(tool.name),
       accessibilityLabel: `Enable ${tool.name}`, onPress: () => edit({ tools: toggleTool(allowedTools, offeredTools, tool.name) }) }));
   const openPicker = (kind: 'repositories' | 'tools') => { setPickerQuery(''); setPicker(kind); };
+  const selectedRepositoryCount = repositories.filter((repo) => (allowedRepositories ?? []).includes(repo.id)).length;
+  const repositoryBulkActions = <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 4, paddingHorizontal: 8 }}>
+    <Button variant="quiet" size="sm" title="Select all" disabled={offline || selectedRepositoryCount === repositories.length}
+      onPress={() => edit({ repositoryIds: onlySelectedRepositories(repositories) })} />
+    <Button variant="quiet" size="sm" title="Deselect all" disabled={offline || (allowedRepositories ?? []).length === 0}
+      onPress={() => edit({ repositoryIds: [] })} />
+  </View>;
 
   return <View style={{ flex: 1 }}>
     <Page>
@@ -440,7 +447,7 @@ export function McpServerEditor({ workspaceId, servers, server, initial, offline
       </View>
     </Page>
     <PickerSheet visible={picker !== null} closeOnSelect={false} onClose={() => setPicker(null)}
-      title={picker === 'tools' ? 'Tools' : 'Repositories'}
+      title={picker === 'tools' ? 'Tools' : 'Repositories'} header={picker === 'repositories' ? repositoryBulkActions : undefined}
       search={{ value: pickerQuery, onChange: setPickerQuery, placeholder: picker === 'tools' ? 'Search tools' : 'Search repositories' }}
       sections={[{ key: picker ?? 'none', items: picker === 'tools' ? toolItems : repositoryItems }]}
       empty={<AppText variant="meta" tone="muted" style={{ padding: 16 }}>Nothing matches your search.</AppText>} />

@@ -94,6 +94,8 @@ An agent can wait for the checks on its pull request instead of polling them. It
 
 Sometimes the Claude or Codex API fails on its side, for example with a server error or an overload. Talyn then suspends the sandbox and tries again later. It waits 2, 5, 10, 20 and then 30 minutes between tries, and it tries at most 8 times. The chat shows **The model API is failing** and the time of the next try. Select **Resume now** to try at once, or **Cancel** to stop waiting.
 
+With automatic resume enabled, a waiting session continues by itself when usage returns or you reconnect an account.
+
 To turn this off, open **Settings > Sessions** and turn off **Continue when an agent hits its limit**. That setting also covers usage limits. See [The model API is failing](/docs/troubleshooting#the-model-api-is-failing).
 
 ## Undo with checkpoints
@@ -170,3 +172,13 @@ In the desktop app, a session can also run in a git worktree on your own compute
 ## Limits
 
 Each running sandbox counts against your plan. See [Plans, usage and billing](/docs/billing).
+
+### Add an agent to an older sandbox
+
+A new sandbox includes connected Claude and Codex accounts, even when a temporary usage limit applies.
+Accounts that need sign-in are excluded. Each turn still selects its account again.
+
+An older sandbox can run only one agent. When you have connected the other agent, select **Restart sandbox** beside the chat input to add it.
+The restart keeps your branch and uncommitted changes. It starts after all running turns end.
+Running processes stop. Large ignored files may not transfer.
+If the transfer fails, the session keeps its old sandbox.

@@ -120,7 +120,7 @@ describe('session credentials during lifecycle operations', () => {
     await insertChat({ id: 'chat-test', workbenchId: ID, workspaceId: 'ws', title: 'Codex', agent: 'codex' });
     expect(await workbenchRequest('/chats/:chatId/messages', 'post', { text: 'hello' })).toMatchObject({
       status: 409,
-      body: { error: "This session's sandbox was started for Claude. Start a new session to use Codex, or switch this chat back to Claude." },
+      body: { error: 'This sandbox runs only Claude. Select "Restart sandbox" in the chat to add Codex. Your branch and uncommitted changes will transfer.' },
     });
     expect(fleet.scripts).toEqual([]);
   });
@@ -145,7 +145,7 @@ describe('session credentials during lifecycle operations', () => {
   it('refuses a Codex turn in an old Claude box before pushing credentials', async () => {
     await expect(refreshSandboxCredentials(await row(), { agent: 'codex' })).rejects.toMatchObject({
       status: 409,
-      message: "This session's sandbox was started for Claude. Start a new session to use Codex, or switch this chat back to Claude.",
+      message: 'This sandbox runs only Claude. Select "Restart sandbox" in the chat to add Codex. Your branch and uncommitted changes will transfer.',
     });
     expect(fleet.credentialPushes).toEqual([]);
   });
