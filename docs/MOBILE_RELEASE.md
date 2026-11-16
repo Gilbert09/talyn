@@ -326,6 +326,33 @@ A change that needs a new native build must not ship as an update. That includes
 and the native fields in `app.config.ts`. The change gives a new fingerprint, so its update reaches no current binary.
 Build and distribute a new binary for it.
 
+## Automatic TestFlight builds for internal-beta
+
+`.github/workflows/mobile-testflight.yml` runs after each push to `main` that changes the same paths as the update workflow.
+It builds only the iOS `internal-beta` profile. Android and `production` builds stay on the protected release workflow.
+Tom's call (2026-11-16): native changes on `main` go to TestFlight with no manual dispatch or approval record.
+
+`apps/mobile/scripts/testflight-build.cjs` does each run:
+
+1. It runs only in CI, on `main`, from a clean checkout of the pushed commit.
+2. It generates the iOS native fingerprint of the `internal-beta` profile with `eas fingerprint:generate`.
+3. It looks for an `internal-beta` iOS build with that runtime that is new, queued, in progress, or finished.
+   If one exists, it stops. The update workflow sends the change to that binary, so a new build is not necessary.
+4. It reserves the next build number. The number is one more than the highest of `MOBILE_BUILD_NUMBER` in the
+   EAS `production` environment and the last 50 store builds on both platforms. It writes that number to
+   `MOBILE_BUILD_NUMBER` in the EAS `production` environment, because the EAS builder reads the number from there.
+5. It queues `eas build --profile internal-beta --platform ios --auto-submit-with-profile internal-beta --no-wait`.
+   EAS submits the finished binary to App Store Connect. The runner does not wait for the build queue.
+6. It checks that EAS queued one iOS `internal-beta` build for the pushed commit with the reserved number.
+
+The workflow shares the `mobile-release` concurrency group with the protected release workflow.
+Thus only one run at a time reserves a build number.
+It uses the `mobile-updates` environment and its `EXPO_TOKEN`. The robot needs permission to write EAS environment variables.
+Set the repository variable `MOBILE_TESTFLIGHT_AUTO=0` to stop it.
+**Actions → Mobile TestFlight → Run workflow** checks `main` again. Select **force** to build when the fingerprint is not new.
+Automatic TestFlight group setup stays off. An internal tester group with automatic distribution gets each build.
+App Store Connect asks for export compliance on each build until the app declares `ITSAppUsesNonExemptEncryption`.
+
 ## PostHog error tracking symbols
 
 PostHog shows a readable stack trace only when it has the symbols for the exact code that crashed.
