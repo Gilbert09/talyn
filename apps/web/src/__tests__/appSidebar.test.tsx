@@ -320,6 +320,19 @@ describe('AppSidebar', () => {
     expect(document.querySelector('[data-attr="nav-integrations-logos"]')).toBeNull();
   });
 
+  it('Integrations shows the PostHog mark one time when PostHog Code and PostHog Inbox are both offered', () => {
+    const markCount = (features: Partial<Features>) => {
+      setFeatures(features);
+      const { unmount } = render(<AppSidebar />);
+      const count = document.querySelectorAll('[data-attr="nav-integrations-logos"] > svg').length;
+      unmount();
+      return count;
+    };
+    const withoutInbox = markCount({ workbenches: true, workflows: true });
+    expect(withoutInbox).toBeGreaterThan(0);
+    expect(markCount({ workbenches: true, workflows: true, posthogInboxRules: true })).toBe(withoutInbox);
+  });
+
   it.each([null, { workbenches: false }])('hides sessions when features are %p', (features) => {
     setFeatures(features);
     render(<AppSidebar />);
