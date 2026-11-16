@@ -152,3 +152,29 @@ export function cloudProviderStatus(provider: {
     detail: agents.length > 0 ? `${agentList(agents)} connected` : 'Connected',
   };
 }
+
+/** A notice for any Fleet account that needs sign-in, including a partially available agent. */
+export function fleetReconnectMessage(provider: {
+  reauthAccounts?: readonly { label: string }[];
+  reauthAgents?: readonly string[];
+} | undefined): string | null {
+  const labels = provider?.reauthAccounts?.map((account) => account.label)
+    ?? provider?.reauthAgents?.map((agent) => fleetAgentLabel(agent as FleetAgent)) ?? [];
+  if (!labels.length) return null;
+  const names = labels.length < 2 ? labels[0] : `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`;
+  return `${names} ${labels.length === 1 ? 'needs' : 'need'} to be signed in again.`;
+}
+
+/**
+ * The agent a single-agent session box lacks, when the workspace can run it now.
+ * Null when the box has both, or the missing agent is not connected or needs
+ * sign-in: a restart would not add it, so offering one would mislead.
+ */
+export function addableBoxAgent(
+  boxAgents: readonly string[],
+  provider: { connectedAgents?: readonly string[]; reauthAgents?: readonly string[] } | undefined,
+): FleetAgent | null {
+  const missing = (['claude', 'codex'] as const).find((agent) => !boxAgents.includes(agent));
+  if (!missing) return null;
+  return provider?.connectedAgents?.includes(missing) && !provider.reauthAgents?.includes(missing) ? missing : null;
+}

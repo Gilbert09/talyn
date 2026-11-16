@@ -101,7 +101,7 @@ describe('withPostHogSymbolUploads', () => {
   });
 
   it('skips a dSYM that PostHog already holds, so a rebuild of the same native code does not fail', () => {
-    const official = jest.fn((config: object) => config);
+    const official = jest.fn((config: object, _props?: object) => config);
     jest.isolateModules(() => {
       jest.doMock('posthog-react-native/expo', () => official);
       const isolated = require('../../plugins/withPostHogSymbolUploads.cjs');
@@ -109,7 +109,7 @@ describe('withPostHogSymbolUploads', () => {
     });
     jest.dontMock('posthog-react-native/expo');
     expect(official).toHaveBeenCalledTimes(1);
-    const props = official.mock.calls[0][1];
+    const props = (official.mock.calls[0] as unknown[])[1];
     expect(props).toEqual({ uploadNativeSymbols: true, skipOnConflict: true, dotenvFile: DOTENV_FILE, patchMainActivityNewIntent: false });
     // posthog-cli refuses --skip-on-conflict together with --force.
     expect(props).not.toHaveProperty('force');

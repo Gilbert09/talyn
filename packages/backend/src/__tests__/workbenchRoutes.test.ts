@@ -686,7 +686,7 @@ describe('workbench routes', () => {
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'go' });
       await idle(chatId);
       expect((await getChat(chatId))?.status).toBe('error');
-      expect((await getChat(chatId))?.statusMessage).toMatch(/Claude subscription/);
+      expect((await getChat(chatId))?.statusMessage).toMatch(/no Claude account/);
       expect(fleet.scripts.some((s) => isAgentTurn(s))).toBe(false);
       // Never a push with the key left out, which the gateway would fill from its own custody.
       expect(fleet.credentialPushes).toEqual([]);

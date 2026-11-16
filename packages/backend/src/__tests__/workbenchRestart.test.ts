@@ -1,6 +1,4 @@
-import express from 'express';
-import { createServer, type Server } from 'http';
-import type { AddressInfo } from 'net';
+import type { Request, RequestHandler, Response } from 'express';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SANDBOX_SIZES } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
@@ -57,10 +55,10 @@ const store = await import('../services/workbenches/store.js');
 const move = await import('../services/workbenches/move.js');
 const turns = await import('../services/workbenches/turns.js');
 const restart = await import('../services/workbenches/restart.js');
+const { assertSandboxAgent, sandboxAgents } = await import('../services/workbenches/credentialPolicy.js');
+const { switchChatAgent } = await import('../services/workbenches/sessionOps.js');
 const { settleArchivesForTests } = await import('../services/workbenches/lifecycle.js');
 const { workbenchRoutes } = await import('../routes/workbenches.js');
-const { apiErrorHandler } = await import('../routes/index.js');
-const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 
 const WB = '11111111-2222-4333-8444-555555555555';
@@ -220,6 +218,32 @@ describe('restarting a session', () => {
     ((fleet.created[i] as { mcpServers?: Array<{ name: string }> }).mcpServers ?? []).map((s) => s.name);
 
   describe('the request', () => {
+    it('replaces a single-agent box and transfers its work before allowing the other agent', async () => {
+      const before = await row();
+      expect(sandboxAgents(before)).toEqual(['claude']);
+      expect(() => assertSandboxAgent(before, 'codex')).toThrow('Select "Restart sandbox"');
+      await expect(switchChatAgent((await store.getChat('chat-a'))!, before, 'codex', null))
+        .rejects.toMatchObject({ code: 'sandbox_wrong_agent' });
+      await store.updateChat('chat-a', { agent: 'codex' });
+      await expect(turns.sendMessage('chat-a', { text: 'continue' }))
+        .rejects.toMatchObject({ code: 'sandbox_wrong_agent' });
+      expect(fleet.created).toHaveLength(0);
+      await store.updateChat('chat-a', { agent: 'claude' });
+
+      await restart.requestSessionRestart(before, { reason: 'add connected agents' });
+      await moved();
+      const after = await row();
+      expect(after.branch).toBe(before.branch);
+      expect(sandboxAgents(after)).toEqual(['claude', 'codex']);
+      expect(fleet.created[0]).toMatchObject({ anthropicKey: 'sk-ant-oat-claude', openaiKey: 'oa-codex' });
+      expect(fleet.first('export', OLD_BOX)).toBeLessThan(fleet.first('create'));
+      expect(fleet.scripts.some((script) => script.includes('staged.patch.gz') && script.includes('git apply'))).toBe(true);
+      expect(fleet.scripts.some((script) => script.includes('unstaged.patch.gz') && script.includes('git apply'))).toBe(true);
+      expect(fleet.deleted).toContain(OLD_BOX);
+      await expect(switchChatAgent((await store.getChat('chat-a'))!, after, 'codex', null, { resumeVersion: 0 }))
+        .resolves.toMatchObject({ agent: 'codex' });
+    });
+
     it('waits while a turn runs, and records the time and the reason', async () => {
       await store.updateChat('chat-a', { status: 'running' });
       const result = await restart.requestSessionRestart(await row(), { reason: '  load   the Polar server. ' });
@@ -344,36 +368,18 @@ describe('restarting a session', () => {
   });
 
   describe('the route', () => {
-    let server: Server;
-    let base: string;
-
-    beforeEach(async () => {
-      const app = express();
-      app.use(express.json());
-      app.use((req, _res, next) => {
-        const id = req.headers['x-user'] as string;
-        req.user = { id, email: `${id}@example.test`, isAdmin: false };
-        next();
-      });
-      app.use('/workbenches', wrapAsyncRoutes(workbenchRoutes()));
-      app.use(apiErrorHandler);
-      server = createServer(app);
-      await new Promise<void>((r) => server.listen(0, r));
-      base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    });
-
-    afterEach(async () => {
-      await new Promise<void>((r) => server.close(() => r()));
-    });
-
     const post = async (body: unknown, user = 'owner-a') => {
-      const resp = await fetch(`${base}/workbenches/${WB}/restart`, {
-        method: 'POST',
-        headers: { 'x-user': user, 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return { status: resp.status, body: (await resp.json()) as any };
+      const route = workbenchRoutes().stack.find((layer) => layer.route?.path === '/:id/restart')!.route;
+      let status = 200;
+      let response: { data?: { outcome?: string; continued?: boolean } } = {};
+      const res = {
+        status(code: number) { status = code; return this; },
+        json(value: typeof response) { response = value; return this; },
+      };
+      await (route.stack[0].handle as RequestHandler)({
+        body, params: { id: WB }, user: { id: user, email: `${user}@example.test`, isAdmin: false },
+      } as unknown as Request, res as Response, vi.fn());
+      return { status, body: response };
     };
 
     it('queues continueWith as a Talyn message while the turn runs', async () => {
@@ -391,7 +397,7 @@ describe('restarting a session', () => {
     it('starts the continueWith turn at once on an idle session, and the restart comes first', async () => {
       servers.push(POLAR);
       const res = await post({ continueWith: 'Use Polar now.' });
-      expect(res.body.data.continued).toBe(true);
+      expect(res.body.data?.continued).toBe(true);
       await vi.waitFor(() => expect(fleet.first('agent')).toBeGreaterThanOrEqual(0), { timeout: 5000 });
       expect(fleet.first('agent', OLD_BOX)).toBe(-1);
       expect(createdServers(0)).toContain('polar');

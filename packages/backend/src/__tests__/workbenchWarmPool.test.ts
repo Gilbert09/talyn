@@ -3,9 +3,10 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeFleet } from './helpers/fakeFleet.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
-import { fleetHosts, repositories, usageIntervals, workbenchChats, workbenchWarmBoxes, workbenches, workspaces } from '../db/schema.js';
+import { fleetAccounts, fleetHosts, repositories, usageIntervals, workbenchChats, workbenchWarmBoxes, workbenches, workspaces } from '../db/schema.js';
 import { UsageExhaustedError } from '../services/billing/entitlements.js';
 import { githubService } from '../services/github.js';
+import { encryptString } from '../services/tokenCrypto.js';
 import * as accountSelection from '../services/selfHosted/accountSelection.js';
 import { FleetCapacityError } from '../services/selfHosted/client.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
@@ -53,6 +54,7 @@ describe('the warm pool', () => {
 
   beforeEach(async () => {
     Object.assign(PROVISION_CAPACITY_WAIT, { maxMs: 2_000, firstDelayMs: 5, maxDelayMs: 20, checkMs: 5, queuePollMs: 5 });
+    await testDb.db.delete(fleetAccounts);
     await testDb.db.delete(workbenches);
     await testDb.db.delete(workbenchWarmBoxes);
     await testDb.db.delete(usageIntervals);
@@ -96,6 +98,7 @@ describe('the warm pool', () => {
     runtime.setWorkbenchFleetClientForTests(null);
     resetWorkbenchDrainForTests();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   const boxRows = () => testDb.db.select().from(workbenchWarmBoxes).orderBy(workbenchWarmBoxes.createdAt);
@@ -168,14 +171,66 @@ describe('the warm pool', () => {
   });
 
   describe('filling', () => {
+    it.each(['held', 'usage', 'reauth', 'mixed'] as const)('records box agents from %s accounts on both create paths', async (state) => {
+      vi.stubEnv('TALYN_TOKEN_KEY', 'box-agent-test-key');
+      vi.mocked(sandboxRun.resolveSandboxCredentials).mockRestore();
+      const now = new Date();
+      const held = { at: now.toISOString(), resetsAt: new Date(Date.now() + 5 * 60 * 60_000).toISOString(), detail: 'quota' };
+      await testDb.db.insert(fleetAccounts).values([
+        { id: 'claude', workspaceId: 'ws', agent: 'claude', kind: 'anthropic_key', label: 'Claude', priority: 1,
+          credential: { keyEnc: encryptString('claude-held-key') },
+          quotaExhausted: state === 'held' || state === 'mixed' ? held : null,
+          reauthRequiredAt: state === 'reauth' ? now : null,
+          usage: { fetchedAt: now.toISOString(), windows: [{ key: 'five_hour', label: '5-hour', usedPercent: 100, resetsAt: held.resetsAt }] } },
+        { id: 'codex', workspaceId: 'ws', agent: 'codex', kind: 'openai_key', label: 'Codex', priority: 1,
+          credential: { keyEnc: encryptString('codex-key') } },
+        ...(state === 'mixed' ? [{ id: 'revoked', workspaceId: 'ws', agent: 'claude' as const,
+          kind: 'anthropic_key' as const, label: 'Revoked', priority: -1, reauthRequiredAt: now,
+          credential: { keyEnc: encryptString('must-not-send') } }] : []),
+      ]);
+      const agents = state === 'reauth' ? ['codex'] : ['claude', 'codex'];
+      vi.mocked(accountSelection.resolveRunCredential).mockRestore();
+      const row = await insertSession('wb-held');
+      if (state !== 'usage') {
+        expect((await runtime.workbenchAgentCredentials(row)).claude).toBeNull();
+      }
+      const made = await createWorkbenchSandbox(row, row.sandboxId!);
+      expect(made).toMatchObject({ ok: true, record: { credentialAgents: agents } });
+      expect((await getWorkbench(row.id))?.settings).toMatchObject({ sandboxAgents: { [row.sandboxId!]: agents } });
+      await sweepWarmPool();
+      const [warm] = await readyBoxes();
+      expect(warm.record).toMatchObject({ credentialAgents: agents });
+      for (const body of [fleet.created[0], poolCreates()[0]]) {
+        expect(body.anthropicKey).toBe(state === 'reauth' ? undefined : 'claude-held-key');
+        expect(body.openaiKey).toBe('codex-key');
+        expect(body.policy?.credentials?.anthropic).toBe(state === 'reauth' ? 'none' : undefined);
+      }
+      const claimed = await insertSession('wb-claim-held', { agent: state === 'reauth' ? 'claude' : 'codex' });
+      expect(await claimWarmBox(claimed)).not.toBeNull();
+      expect((await getWorkbench(claimed.id))?.settings).toMatchObject({ sandboxAgents: { [warm.sandboxId]: agents } });
+    });
+
+    it.each(['missing', 'reauth'] as const)('creates no box when both agents are %s', async (state) => {
+      vi.stubEnv('TALYN_TOKEN_KEY', 'box-agent-test-key');
+      vi.mocked(sandboxRun.resolveSandboxCredentials).mockRestore();
+      if (state === 'reauth') {
+        await testDb.db.insert(fleetAccounts).values(['claude', 'codex'].map((agent) => ({
+          id: agent, workspaceId: 'ws', agent, kind: agent === 'claude' ? 'anthropic_key' : 'openai_key',
+          label: agent, priority: 1, reauthRequiredAt: new Date(), credential: { keyEnc: encryptString('must-not-send') },
+        })));
+      }
+      const row = await insertSession('wb-no-keys');
+      expect(await createWorkbenchSandbox(row, row.sandboxId!)).toMatchObject({ ok: false });
+      expect(fleet.created).toEqual([]);
+    });
+
     it.each([
       ['both', 'claude-key', 'codex-key', {}, ['claude', 'codex']],
       ['Claude', 'claude-key', undefined, { openai: 'none' }, ['claude']],
       ['Codex', undefined, 'codex-key', { anthropic: 'none' }, ['codex']],
     ] as const)('creates and replaces a session box with %s credentials', async (_name, anthropicKey, openaiKey, policy, agents) => {
-      vi.mocked(accountSelection.resolveRunCredential).mockImplementation(async (_workspace, agent) => {
-        const token = agent === 'claude' ? anthropicKey : openaiKey;
-        return token ? { token } : null;
+      vi.mocked(sandboxRun.resolveSandboxCredentials).mockResolvedValue({
+        ok: true, creds: { claudeToken: anthropicKey, openaiKey }, githubToken: 'gh-token',
       });
       const row = await insertSession('wb-keys');
       for (const sandboxId of [row.sandboxId!, `${row.sandboxId}-r1`]) {

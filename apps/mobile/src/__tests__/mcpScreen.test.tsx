@@ -241,6 +241,21 @@ describe('editing a server', () => {
     expect(mockApi.update).toHaveBeenCalledWith('srv-1', expect.objectContaining({ repositoryIds: [...expected] }));
   });
 
+  it('selects and deselects every repository at once', async () => {
+    await openConnected();
+    await fireEvent.press(screen.getByLabelText('Only selected repositories'));
+    await fireEvent.press(screen.getByLabelText('Repositories. 2 of 2.'));
+    expect(screen.getByLabelText('Select all').props.accessibilityState.disabled).toBe(true);
+    await fireEvent.press(screen.getByLabelText('Deselect all'));
+    expect(screen.getByText('No repository can access this server.')).toBeTruthy();
+    expect(screen.getByLabelText('Deselect all').props.accessibilityState.disabled).toBe(true);
+    await fireEvent.press(screen.getByLabelText('Select all'));
+    expect(screen.queryByText('No repository can access this server.')).toBeNull();
+    await fireEvent.press(screen.getByLabelText('Deselect all'));
+    await save();
+    expect(mockApi.update).toHaveBeenCalledWith('srv-1', expect.objectContaining({ repositoryIds: [] }));
+  });
+
   it('goes back to all repositories as null', async () => {
     await openConnected({ repositoryIds: [] });
     await fireEvent.press(screen.getByLabelText('All repositories'));

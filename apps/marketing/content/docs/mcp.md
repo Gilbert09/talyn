@@ -137,7 +137,7 @@ Every tool name starts with `talyn_`. Most tools take a `workspace_id`. If you h
 | Schedule | List, create, change, turn on or off, run a scheduled automation now, and read runs |
 | MCP servers | List the servers your workspace connects, and connect one that uses OAuth or no auth |
 | Spaces | List your teams and their spaces, start a session in a space. Spaces are not yet available to all accounts. |
-| Account | Your plan and usage, your connected agents, and what is new |
+| Account | Your plan and usage, connected agents, accounts that need sign-in, and what is new |
 
 Your client lists every tool with its description and parameters when it connects.
 

@@ -1,3 +1,4 @@
+import type { Request, RequestHandler, Response } from 'express';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
@@ -21,6 +22,9 @@ import {
 
 const fetchWithTimeout = vi.hoisted(() => vi.fn());
 vi.mock('../services/httpTimeout.js', () => ({ fetchWithTimeout }));
+vi.mock('../services/cloudProviders/fleetAccess.js', async (original) => ({
+  ...(await original<typeof import('../services/cloudProviders/fleetAccess.js')>()), workspaceMayUseFleet: async () => true,
+}));
 
 const accounts = await import('../services/selfHosted/accounts.js');
 const { getSelfHostedCredentials, fleetAgentStatus, removeSelfHostedCredentials } = await import(
@@ -418,6 +422,33 @@ describe('fleet accounts', () => {
   });
 
   describe('agent status', () => {
+    it('includes affected account names and ids in GET /cloud-providers', async () => {
+      const { cloudProviderRoutes } = await import('../routes/cloudProviders.js');
+      const { registerCloudProvider } = await import('../services/cloudProviders/registry.js');
+      const { selfHostedProvider } = await import('../services/cloudProviders/selfhosted/provider.js');
+      registerCloudProvider(selfHostedProvider);
+      const stale = await add('claude_oauth', 'first', 'Personal');
+      const second = await add('claude_oauth', 'second', 'Work');
+      await add('anthropic_key', 'working', 'Backup');
+      await accounts.setFleetAccountReauth(stale.id);
+      await accounts.setFleetAccountReauth(second.id);
+      const route = cloudProviderRoutes().stack.find((layer) => layer.route?.path === '/' && layer.route.methods.get)!.route;
+      const json = vi.fn();
+      const res = { json, status: vi.fn().mockReturnThis() };
+      await (route.stack[0].handle as RequestHandler)({ query: { workspaceId: WS }, user: { id: TEST_USER_ID } } as unknown as Request,
+        res as unknown as Response, vi.fn());
+      expect(res.status).not.toHaveBeenCalled();
+      const response = json.mock.calls[0][0];
+      expect(response.data.find((p: { type: string }) => p.type === 'selfhosted')).toMatchObject({
+        connected: true, connectedAgents: ['claude'], reauthAgents: [],
+        reauthAccounts: [
+          { id: stale.id, label: 'Personal', agent: 'claude' },
+          { id: second.id, label: 'Work', agent: 'claude' },
+        ],
+      });
+      expect(JSON.stringify(response)).not.toContain('keyEnc');
+    });
+
     it.each([
       ['no accounts', [], { connectedAgents: [], reauthAgents: [] }],
       ['one live account', [['claude_oauth', false]], { connectedAgents: ['claude'], reauthAgents: [] }],
@@ -437,7 +468,11 @@ describe('fleet accounts', () => {
         const a = await add(kind, 'v');
         if (dead) await accounts.setFleetAccountReauth(a.id);
       }
-      expect(await fleetAgentStatus(WS)).toEqual(expected);
+      const status = await fleetAgentStatus(WS);
+      expect(status).toMatchObject(expected);
+      const stored = await accounts.listFleetAccounts(WS);
+      const reconnect = stored.filter((a) => a.reauthRequiredAt).map(({ id, label, agent }) => ({ id, label, agent }));
+      expect(status.reauthAccounts ?? []).toEqual(reconnect);
     });
   });
 

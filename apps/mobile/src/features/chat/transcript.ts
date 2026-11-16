@@ -23,7 +23,7 @@ export type TranscriptRow = Base & (
   | { kind: 'permission'; toolName: string; toolInput: unknown; status: 'pending' | 'allowed' | 'denied' | 'auto_allowed'; persist: boolean }
   | { kind: 'system'; text: string; subtype?: string; url?: string; isError: boolean;
     pullRequest?: SystemBlock['pullRequest']; thread?: ThreadSessionEvent }
-  | { kind: 'failed'; text: string }
+  | { kind: 'failed'; text: string; reason?: 'reauth' | 'limited' | 'missing' | 'unavailable' }
   | { kind: 'stopped' }
   | { kind: 'plan'; plan: string; state: PlanState }
   | { kind: 'queued'; text: string; fromTalyn: boolean }
@@ -116,7 +116,7 @@ function turnRows(chatId: string, turn: Turn, partial: ReadonlySet<string>): Tra
         pullRequest: block.pullRequest, thread: block.thread }); break;
       case 'result':
         if (cancelled) rows.push({ key, timestamp, kind: 'stopped' });
-        else if (block.isError) rows.push({ key, timestamp, kind: 'failed', text: clip(block.summary.trim() || 'The agent stopped unexpectedly.') });
+        else if (block.isError) rows.push({ key, timestamp, kind: 'failed', ...(block.reason ? { reason: block.reason } : {}), text: clip(block.summary.trim() || 'The agent stopped unexpectedly.') });
         break;
     }
   }

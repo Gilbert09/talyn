@@ -14,6 +14,7 @@ import { display, radius, sans, useTheme } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
 import { NewWorkScreen } from '../create/NewWorkScreen';
 import { nothingConnected } from '../onboarding/readiness';
+import { FleetReconnectNotice } from '../agents/FleetReconnectNotice';
 import { ConnectAgentSheet } from '../agents/connect/ConnectAgentSheet';
 import { ConnectAgentModal, ReadinessChecklist } from '../onboarding/ReadinessChecklist';
 import { PullRequestsScreen } from '../prs/PullRequestsScreen';
@@ -42,6 +43,7 @@ export function HomeScreen() {
   const notice = agentNoticeVisible(readiness.status, readiness.data);
   const welcome = homeView({ repositories: repositories.data, readiness: readiness.data, inSpace }) === 'welcome';
   return <View style={styles.fill}>
+    <FleetReconnectNotice />
     {notice ? <ConnectAgentNotice /> : null}
     {welcome
       ? <HomeWelcome hasRepositories={(repositories.data?.length ?? 0) > 0} readiness={readiness.data} noticeShown={notice} />

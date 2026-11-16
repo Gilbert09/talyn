@@ -1,3 +1,4 @@
+import { fleetReconnectMessage } from '@talyn/shared';
 import { useEffect, useRef } from 'react';
 import { Bot } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -20,6 +21,8 @@ export function ConnectAgentBanner() {
   const canStartSessions = useWorkspaceStore((s) =>
     sessionAgentConnected(s.cloudProviders, s.posthogStatus?.connected === true)
   );
+  const reconnect = useWorkspaceStore((s) => fleetReconnectMessage(s.cloudProviders?.find((p) => p.type === 'selfhosted')));
+  const openSettings = useWorkspaceStore((s) => s.openSettings);
   const openConnectAgent = useWorkspaceStore((s) => s.openConnectAgent);
   const posthogOffered = usePostHogCodeOffered();
   const viewed = useRef(false);
@@ -33,6 +36,12 @@ export function ConnectAgentBanner() {
     trackEvent('connect_agent_banner_viewed', { fleet_offered: fleetOffered });
   }, [show, fleetOffered]);
 
+  if (reconnect) return (
+    <div role="region" aria-label="Reconnect needed" className="flex shrink-0 items-center gap-3 border-b border-border bg-muted px-4 py-2 text-sm">
+      <span className="min-w-0 flex-1">{reconnect} Reconnect in Settings → Talyn Fleet.</span>
+      <Button size="sm" onClick={() => openSettings('integrations')}>Reconnect</Button>
+    </div>
+  );
   if (!show) return null;
 
   // With PostHog Code retired, the copy names only Claude or Codex.

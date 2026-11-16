@@ -1,11 +1,13 @@
 import {
   app,
+  clipboard,
   Menu,
   shell,
   BrowserWindow,
   MenuItemConstructorOptions,
 } from 'electron';
 import { checkForUpdatesInteractively } from './updater';
+import { buildEditContextMenuTemplate } from './editContextMenu';
 import {
   MENU_COMMANDS,
   MENU_COMMAND_CHANNEL,
@@ -40,12 +42,7 @@ export default class MenuBuilder {
   }
 
   buildMenu(): Menu {
-    if (
-      process.env.NODE_ENV === 'development' ||
-      process.env.DEBUG_PROD === 'true'
-    ) {
-      this.setupDevelopmentEnvironment();
-    }
+    this.setupContextMenu();
 
     const template =
       process.platform === 'darwin'
@@ -58,18 +55,20 @@ export default class MenuBuilder {
     return menu;
   }
 
-  setupDevelopmentEnvironment(): void {
-    this.mainWindow.webContents.on('context-menu', (_, props) => {
-      const { x, y } = props;
-
-      Menu.buildFromTemplate([
-        {
-          label: 'Inspect element',
-          click: () => {
-            this.mainWindow.webContents.inspectElement(x, y);
-          },
-        },
-      ]).popup({ window: this.mainWindow });
+  setupContextMenu(): void {
+    const { webContents } = this.mainWindow;
+    webContents.on('context-menu', (_, params) => {
+      const template = buildEditContextMenuTemplate(params, {
+        replaceMisspelling: (word) => webContents.replaceMisspelling(word),
+        addToDictionary: (word) =>
+          webContents.session.addWordToSpellCheckerDictionary(word),
+        copyLink: (url) => clipboard.writeText(url),
+        inspect: isDevMenu()
+          ? () => webContents.inspectElement(params.x, params.y)
+          : undefined,
+      });
+      if (template.length === 0) return;
+      Menu.buildFromTemplate(template).popup({ window: this.mainWindow });
     });
   }
 

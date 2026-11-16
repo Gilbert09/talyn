@@ -48,7 +48,7 @@ function checkUpdateWorkflow(text, yaml) {
   }
   assert(!/actions\/(?:upload-artifact|cache)|cache:\s*npm|set\s+-x|pull_request|--channel\s+production|eas\s+update/.test(text),
     'The update workflow publishes only through publish-update.cjs, with no cache, artifact, or PR trigger.');
-  assert(text.includes(`eas-cli@${JSON.parse(read('eas.json')).cli.version}`), 'Keep the external EAS CLI pin aligned.');
+  assert(text.includes(`eas-cli@${JSON.parse(read('release/toolchain.json')).easCli}`), 'Keep the external EAS CLI pin aligned.');
   assert(text.includes(`@posthog/cli@${JSON.parse(read('release/toolchain.json')).posthogCli}`), 'Keep the PostHog CLI pin aligned with release/toolchain.json.');
   // An unset variable is null, and null != '0' is false in Actions expressions, so the guard must default it first.
   assert(!/(?<!\|\| '1'\) )vars\.MOBILE_UPDATES_AUTO != '0'/.test(text), 'Default MOBILE_UPDATES_AUTO before comparing it.');
@@ -71,7 +71,7 @@ function checkTestflightWorkflow(text, yaml) {
   assert(!/actions\/(?:upload-artifact|cache)|cache:\s*npm|set\s+-x|pull_request|eas\s+(?:build|submit|update|env)/.test(text),
     'The TestFlight workflow builds only through testflight-build.cjs, with no cache, artifact, or PR trigger.');
   assert(!/(?<!\|\| '1'\) )vars\.MOBILE_TESTFLIGHT_AUTO != '0'/.test(text), 'Default MOBILE_TESTFLIGHT_AUTO before comparing it.');
-  assert(text.includes(`eas-cli@${JSON.parse(read('eas.json')).cli.version}`), 'Keep the external EAS CLI pin aligned.');
+  assert(text.includes(`eas-cli@${JSON.parse(read('release/toolchain.json')).easCli}`), 'Keep the external EAS CLI pin aligned.');
   assert.equal([...text.matchAll(/testflight-build\.cjs\s+--execute/g)].length, 1, 'Run testflight-build.cjs once.');
 }
 
@@ -134,8 +134,11 @@ function check() {
   const eas = JSON.parse(read('eas.json'));
   assert.equal(eas.cli.appVersionSource, 'local');
   assert.equal(eas.cli.requireCommit, true);
-  assert.equal(eas.cli.version, JSON.parse(read('release/toolchain.json')).easCli);
-  assert(fs.readFileSync(path.join(root, '.github/workflows/mobile-release.yml'), 'utf8').includes(`eas-cli@${eas.cli.version}`), 'Keep the external EAS CLI pin aligned.');
+  const { easCli } = JSON.parse(read('release/toolchain.json'));
+  // EAS build workers run their own newer eas-cli for steps such as the embedded bundle upload, and that CLI refuses
+  // to run when eas.json does not allow its version. So eas.json sets a floor; the workflows pin the exact version.
+  assert.equal(eas.cli.version, `>= ${easCli}`, 'eas.json must allow the pinned EAS CLI and newer versions.');
+  assert(fs.readFileSync(path.join(root, '.github/workflows/mobile-release.yml'), 'utf8').includes(`eas-cli@${easCli}`), 'Keep the external EAS CLI pin aligned.');
   assert(releaseText.includes(`@posthog/cli@${JSON.parse(read('release/toolchain.json')).posthogCli}`), 'Keep the PostHog CLI pin aligned with release/toolchain.json.');
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'))).packages['apps/mobile'].version, JSON.parse(read('package.json')).version, 'Mobile version differs from the root lockfile.');
   assert.deepEqual(Object.keys(eas.build).sort(), Object.keys(profiles).sort());

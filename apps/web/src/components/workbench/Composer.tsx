@@ -45,6 +45,7 @@ import { AgentPicker, ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoC
 import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './useComposerImages';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { SessionUsageNotice } from './SessionUsageNotice';
+import { SandboxAgentNotice } from './SandboxAgentNotice';
 import { promptRefusal, useIsWorkbenchOwner } from '../../lib/spaces';
 import { BackgroundChips } from './BackgroundChips';
 import { WakeLaterPopover } from './WakeLaterPopover';
@@ -359,6 +360,7 @@ export function Composer({
 
   return (
     <div className="border-t bg-background px-3 pb-3 pt-2">
+      <SandboxAgentNotice key={workbench.sandboxId} workbench={workbench} owner={owner} />
       <BackgroundChips workbenchId={workbench.id} chatId={chat?.id ?? null} canOpen={owner} />
       {(queue.length > 0 || queuing.length > 0) && (
         <ul className="mb-2 space-y-1">

@@ -14,6 +14,7 @@ import { switchChatAgent } from '../services/workbenches/sessionOps.js';
 import { sendMessage } from '../services/workbenches/turns.js';
 import { existingBoxRefusal } from '../services/workbenches/boxGate.js';
 import { UsageExhaustedError } from '../services/billing/entitlements.js';
+import { recordSandboxAgents } from '../services/workbenches/credentialPolicy.js';
 
 vi.mock('../services/workbenches/turns.js', () => ({
   sendMessage: vi.fn(async (id, input, options) => {
@@ -85,6 +86,19 @@ it('uses the vendor reset instant', async () => {
   const at = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
   await handleChatLimit(await chat(), `${reason} resetsAt: "${at}"`);
   expect((await chat()).resumeAt?.toISOString()).toBe(at);
+});
+it('uses the replacement box agents after a restart', async () => {
+  await account('codex');
+  await testDb.db.update(workbenches).set({ settings: { sandboxAgents: { box: ['claude'] } } }).where(eq(workbenches.id, 'wb'));
+  await handleChatLimit(await chat(), reason);
+  expect(sendMessage).not.toHaveBeenCalled();
+  const wb = (await getWorkbench('wb'))!;
+  await recordSandboxAgents(wb, 'replacement', ['claude', 'codex']);
+  await testDb.db.update(workbenches).set({ sandboxId: 'replacement' }).where(eq(workbenches.id, 'wb'));
+  await updateChat('chat', { resumeAt: null });
+  await handleChatLimit(await chat(), reason, true);
+  expect(await chat()).toMatchObject({ agent: 'codex', status: 'running' });
+  expect(sendMessage).toHaveBeenCalledOnce();
 });
 it.each([[1, 5], [2, 15], [3, 30], [4, 60], [9, 60]])('backs off after limit %i', (count, minutes) => {
   expect(limitRetryDelay(count)).toBe(minutes * 60_000);

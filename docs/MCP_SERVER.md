@@ -286,7 +286,7 @@ The table `memory_review_runs` (migration `0123`) keeps one row for each review.
 | Tool | What it does |
 | --- | --- |
 | `talyn_get_billing_status` | Read the plan and usage against task, queue, integration automation, and scheduled automation limits. |
-| `talyn_list_cloud_providers` | Read connected providers, connected agents, required sign-ins, and the default provider. |
+| `talyn_list_cloud_providers` | Read connected providers, connected agents, required sign-ins with account names and IDs, and the default provider. |
 | `talyn_whats_new` | Read the latest release. Pass a version in `since` to read newer releases. |
 
 A task's `skill` reference contains `key`, `name`, and `source`.

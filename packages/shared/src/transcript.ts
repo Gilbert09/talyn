@@ -101,6 +101,7 @@ export type Block =
       kind: 'result';
       key: string;
       summary: string;
+      reason?: 'reauth' | 'limited' | 'missing' | 'unavailable';
       costUsd?: number;
       inputTokens?: number;
       outputTokens?: number;
@@ -313,6 +314,8 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
         kind: 'result',
         key: seqKey,
         summary: String(event.result ?? ''),
+        ...(['reauth', 'limited', 'missing', 'unavailable'].includes(String(event.reason))
+          ? { reason: event.reason as 'reauth' | 'limited' | 'missing' | 'unavailable' } : {}),
         costUsd: event.total_cost_usd,
         inputTokens: usage.input_tokens,
         outputTokens: usage.output_tokens,

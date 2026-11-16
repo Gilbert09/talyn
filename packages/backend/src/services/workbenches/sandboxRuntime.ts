@@ -66,6 +66,7 @@ import {
   isDiskFullText,
   isGuestUnreachableBeforeStart,
 } from './execFailures.js';
+import { missingSessionCredential } from './credentialFailure.js';
 import { WorkbenchError } from './errors.js';
 import { assertSandboxAgent } from './credentialPolicy.js';
 import { recoverLostSandbox, withLostRecovery } from './recovery.js';
@@ -1236,7 +1237,7 @@ export async function refreshSandboxCredentials(
   assertSandboxAgent(row, agent);
   const { creds, credentials, model, payer } = await sandboxCredentialSet(row, { ...opts, payer: opts.payer ?? null });
   const credential = credentials[agent];
-  if (!credential?.token) throw missingSessionCredential(agent, payer);
+  if (!credential?.token) throw await missingSessionCredential(payer?.workspaceId ?? row.workspaceId, agent, { payer: Boolean(payer), model });
   const recorded = workbenchFleetAccountId(row, agent, payer?.userId);
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   await withLostRecovery(row, () => client.setSandboxCredentials(sandboxId, creds));
@@ -1277,19 +1278,13 @@ export async function workbenchAgentCredentials(
     avoidAccountIds: [...unavailable, ...(agent === selectedAgent ? opts.avoidAccountIds ?? [] : [])],
   });
   const [claude, codex] = await Promise.all([resolve('claude'), resolve('codex')]);
-  if (!claude?.token && !codex?.token) throw missingSessionCredential(undefined, payer);
+  if (!claude?.token && !codex?.token) {
+    throw await missingSessionCredential(workspaceId, selectedAgent, {
+      payer: Boolean(payer),
+      model: opts.model ?? (selectedAgent === row.agent ? row.model ?? undefined : undefined),
+    });
+  }
   return { claude, codex };
-}
-
-function missingSessionCredential(agent?: FleetAgent, payer?: TurnPayerRef | null): WorkbenchError {
-  const label = agent === 'codex' ? 'Codex (ChatGPT)' : agent === 'claude' ? 'Claude' : 'Claude or Codex';
-  return new WorkbenchError(
-    payer
-      ? `Your workspace has no usable ${label} subscription. Connect it in Settings → Talyn Fleet to prompt this session.`
-      : `This workspace has no usable ${label} subscription. Connect it in Settings → Talyn Fleet.`,
-    409,
-    'credentials_unavailable',
-  );
 }
 
 /**
