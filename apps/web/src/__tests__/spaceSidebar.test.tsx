@@ -305,7 +305,7 @@ describe('SpaceSidebar', () => {
     setRows([mine('a')]);
     render(<SpaceSidebar active={ACTIVE} />);
     fireEvent.contextMenu(screen.getByText('a'));
-    for (const name of ['Open', 'Rename', 'Copy branch name', 'Copy session ID', 'Open pull request', 'Move to space…', 'Move to Personal', 'Archive…']) {
+    for (const name of ['Open', 'Rename…', 'Copy branch name', 'Copy session ID', 'Open pull request', 'Move to space…', 'Move to Personal', 'Archive…']) {
       expect(await screen.findByRole('menuitem', { name })).toBeInTheDocument();
     }
   });

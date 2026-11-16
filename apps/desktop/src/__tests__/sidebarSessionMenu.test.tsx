@@ -3,7 +3,7 @@
  */
 import '@testing-library/jest-dom';
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { Workbench } from '@talyn/shared';
 import { SidebarWorkbenchList } from '../renderer/components/layout/SidebarWorkbenchList';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
@@ -86,11 +86,16 @@ afterEach(() => cleanup());
 describe('sidebar session context menu', () => {
   async function editTitle(value: string, key = 'Enter') {
     rightClick(/lisbon/);
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
-    const input = await screen.findByRole('textbox', { name: 'Session title' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Rename session' });
+    const input = within(dialog).getByRole('textbox', { name: 'Session title' });
     expect(input).toHaveAttribute('maxLength', '100');
+    await waitFor(() => expect(input).toHaveFocus());
     fireEvent.change(input, { target: { value } });
-    fireEvent.keyDown(input, { key });
+    // Enter in the input submits the form; jsdom does not do that on its own.
+    if (key === 'Enter') fireEvent.submit(input.closest('form')!);
+    else fireEvent.keyDown(input, { key });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   }
 
   it('saves a trimmed title from Rename', async () => {
@@ -110,6 +115,29 @@ describe('sidebar session context menu', () => {
     await editTitle('lisbon');
     expect(update).not.toHaveBeenCalled();
     expect(useWorkbenchStore.getState().workbenches.lisbon.title).toBeUndefined();
+  });
+
+  it('opens with the current title, closes on Cancel and saves from the Rename button', async () => {
+    update.mockResolvedValue({ ...lisbon, title: 'From button' });
+    render(<SidebarWorkbenchList workbenches={[lisbon, oslo]} />);
+    rightClick(/lisbon/);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename…' }));
+    let dialog = await screen.findByRole('dialog', { name: 'Rename session' });
+    expect(within(dialog).getByRole('textbox', { name: 'Session title' })).toHaveValue('lisbon');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    rightClick(/lisbon/);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename…' }));
+    dialog = await screen.findByRole('dialog', { name: 'Rename session' });
+    const input = within(dialog).getByRole('textbox', { name: 'Session title' });
+    fireEvent.change(input, { target: { value: '  ' } });
+    expect(within(dialog).getByRole('button', { name: 'Rename' })).toBeDisabled();
+    fireEvent.change(input, { target: { value: 'From button' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Rename' }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith('lisbon', { title: 'From button' }));
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('restores the old title and shows an error after a failed save', async () => {

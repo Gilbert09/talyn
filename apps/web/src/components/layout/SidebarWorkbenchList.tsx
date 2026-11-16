@@ -12,6 +12,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '../ui/context-menu';
+import { anyDialogOpen } from '../ui/dialog';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from '../workbench/archiveWorkbench';
 import { formatKeys } from '../../lib/shortcuts';
 import { usePullRequestStore } from '../../stores/pullRequests';
@@ -252,14 +253,12 @@ export function WorkbenchRow({
           workbench={workbench}
           state={state}
           shortcut={shortcut ? formatKeys(`mod+alt+${shortcut}`) : null}
-          disabled={rename.editing}
         >
         <ContextMenuTrigger asChild>
           <div
             role="button"
             tabIndex={0}
             onClick={(event) => {
-              if (rename.editing) return;
               // ⌘- or Ctrl-click opens the session beside the others in split view.
               if (splitOn && (event.metaKey || event.ctrlKey)) {
                 event.preventDefault();
@@ -276,7 +275,7 @@ export function WorkbenchRow({
             }}
             data-attr="sidebar-workbench-row"
             aria-current={selected ? 'page' : undefined}
-            {...sessionDragProps(workbench.id, splitOn && !rename.editing)}
+            {...sessionDragProps(workbench.id, splitOn)}
             className={cn(
               'flex w-full items-center gap-2 rounded-md px-3 py-1 text-left text-[13px] transition-colors',
               selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60'
@@ -285,17 +284,15 @@ export function WorkbenchRow({
             <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
               <SessionStateIcon state={state} />
             </span>
-            {rename.editing ? rename.input : (
-              <span
-                className={cn(
-                  'min-w-[5rem] flex-1 truncate',
-                  isUnread ? 'font-semibold' : 'font-normal',
-                  done && !selected && 'opacity-60'
-                )}
-              >
-                {workbenchDisplayName(workbench)}
-              </span>
-            )}
+            <span
+              className={cn(
+                'min-w-[5rem] flex-1 truncate',
+                isUnread ? 'font-semibold' : 'font-normal',
+                done && !selected && 'opacity-60'
+              )}
+            >
+              {workbenchDisplayName(workbench)}
+            </span>
             {diff && !done && (
               // All or nothing: when the counts do not fit, they wrap to a hidden second line.
               <span className="flex h-4 min-w-0 shrink flex-wrap justify-end overflow-hidden font-mono text-[11px] leading-4 tabular-nums">
@@ -313,7 +310,11 @@ export function WorkbenchRow({
           </div>
         </ContextMenuTrigger>
         </WorkbenchHoverCard>
-        <ContextMenuContent className="min-w-[10rem]">
+        <ContextMenuContent
+          className="min-w-[10rem]"
+          // A dialog opened from the menu keeps focus: the menu must not give it back to the row.
+          onCloseAutoFocus={(event) => { if (anyDialogOpen()) event.preventDefault(); }}
+        >
           <ContextMenuItem onSelect={onSelect}>Open</ContextMenuItem>
           {splitOn && (
             <ContextMenuItem data-attr="sidebar-open-in-split-view" onSelect={() => openInSplitView(workbench.id, 'sidebar_menu')}>
@@ -321,7 +322,7 @@ export function WorkbenchRow({
               Open in split view
             </ContextMenuItem>
           )}
-          <ContextMenuItem onSelect={() => setTimeout(rename.start, 0)}>Rename</ContextMenuItem>
+          <ContextMenuItem onSelect={rename.openDialog}>Rename…</ContextMenuItem>
           {workbench.branch && (
             <ContextMenuItem onSelect={copyBranch}>
               <Copy className="h-3.5 w-3.5" />
@@ -365,6 +366,7 @@ export function WorkbenchRow({
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
+      {rename.dialog}
       <ArchiveWorkbenchDialog
         workbench={workbench}
         open={confirming}
