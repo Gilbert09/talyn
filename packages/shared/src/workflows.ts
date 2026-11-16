@@ -656,6 +656,7 @@ export const WORKFLOW_ACTION_TYPES = [
   'request_reviewers',
   'assign',
   'comment',
+  'approve_pr',
   'run_skill',
   'run_prompt',
   'watch_pr',
@@ -734,6 +735,12 @@ export type WorkflowAction =
   | { type: 'request_reviewers'; users?: string[]; teams?: string[] }
   | { type: 'assign'; users: string[] }
   | { type: 'comment'; body: string }
+  /**
+   * Approve the pull request as the workspace's GitHub account. `body` is an
+   * optional review comment, with the same `{{...}}` fields as `comment`.
+   * GitHub refuses an approval on your own pull request.
+   */
+  | { type: 'approve_pr'; body?: string }
   | { type: 'run_skill'; skillKey: SkillKey; model?: string }
   | { type: 'run_prompt'; prompt: string; model?: string }
   | { type: 'watch_pr' }
@@ -867,6 +874,7 @@ export const WORKFLOW_ACTION_LABELS: Record<WorkflowActionType, string> = {
   request_reviewers: 'Request reviewers',
   assign: 'Assign people',
   comment: 'Post a comment',
+  approve_pr: 'Approve the PR',
   run_skill: 'Run a skill',
   run_prompt: 'Run a prompt',
   watch_pr: 'Add to My PRs',
@@ -2780,6 +2788,13 @@ function validateAction(
       }
       return { type: 'comment', body: a.body.trim() };
     }
+    case 'approve_pr': {
+      if (a.body !== undefined && typeof a.body !== 'string') {
+        fail(`${at}.body must be a string`);
+      }
+      const body = typeof a.body === 'string' ? a.body.trim() : '';
+      return { type: 'approve_pr', ...(body ? { body } : {}) };
+    }
     case 'run_skill': {
       if (typeof a.skillKey !== 'string' || !a.skillKey.trim()) {
         fail(`${at}.skillKey must be a non-empty string`);
@@ -3097,6 +3112,8 @@ export function emptyWorkflowAction(type: WorkflowActionType): WorkflowAction {
       return { type: 'assign', users: [] };
     case 'comment':
       return { type: 'comment', body: '' };
+    case 'approve_pr':
+      return { type: 'approve_pr' };
     case 'run_skill':
       return { type: 'run_skill', skillKey: '' };
     case 'run_prompt':
@@ -3845,6 +3862,8 @@ export function describeWorkflowAction(action: WorkflowAction): string {
       return `Assign ${action.users.join(', ')}`;
     case 'comment':
       return 'Post a comment';
+    case 'approve_pr':
+      return 'Approve the PR';
     case 'run_skill':
       return `Run skill ${action.skillKey.replace(/^(repo:[^:]+:|platform:)/, '')}`;
     case 'run_prompt':

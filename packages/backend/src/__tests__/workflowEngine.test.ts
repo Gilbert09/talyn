@@ -620,6 +620,92 @@ describe('workflow engine', () => {
     });
   });
 
+  describe('approve_pr', () => {
+    const outcome = async () => {
+      const [run] = await db.select().from(runsTable);
+      return (run?.actions as Array<{ type: string; ok: boolean; detail?: string; error?: string }>)[0];
+    };
+
+    it('approves with the rendered review body', async () => {
+      vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('tom');
+      vi.spyOn(githubService, 'getPRReviews').mockResolvedValue([]);
+      const review = vi.spyOn(githubService, 'createPRReview').mockResolvedValue({} as never);
+      await addWorkflow({ actions: [{ type: 'approve_pr', body: 'LGTM {{pr.author}}' }] });
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      expect(review).toHaveBeenCalledWith(WORKSPACE, 'acme', 'widget', 42, {
+        event: 'APPROVE',
+        body: 'LGTM alice',
+      });
+      expect(await outcome()).toMatchObject({ type: 'approve_pr', ok: true, detail: 'approved' });
+    });
+
+    it('sends no body when the rule has none', async () => {
+      vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('tom');
+      vi.spyOn(githubService, 'getPRReviews').mockResolvedValue([]);
+      const review = vi.spyOn(githubService, 'createPRReview').mockResolvedValue({} as never);
+      await addWorkflow({ actions: [{ type: 'approve_pr' }] });
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      expect(review).toHaveBeenCalledWith(WORKSPACE, 'acme', 'widget', 42, { event: 'APPROVE' });
+    });
+
+    it('refuses to approve the connected user’s own PR', async () => {
+      vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('Alice');
+      const review = vi.spyOn(githubService, 'createPRReview').mockResolvedValue({} as never);
+      await addWorkflow({ actions: [{ type: 'approve_pr' }] });
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      expect(review).not.toHaveBeenCalled();
+      expect(await outcome()).toMatchObject({ type: 'approve_pr', ok: false });
+    });
+
+    it.each([
+      { name: 'an approval still stands', states: ['APPROVED', 'COMMENTED'], approves: false },
+      { name: 'the approval was dismissed', states: ['APPROVED', 'DISMISSED'], approves: true },
+      { name: 'the last verdict asked for changes', states: ['APPROVED', 'CHANGES_REQUESTED'], approves: true },
+      { name: 'only someone else approved', states: [], approves: true },
+    ])('approves again only when needed: $name', async ({ states, approves }) => {
+      vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('tom');
+      vi.spyOn(githubService, 'getPRReviews').mockResolvedValue([
+        { id: 1, user: { login: 'carol', avatar_url: '' }, body: '', state: 'APPROVED', submitted_at: '', html_url: '' },
+        ...states.map((state, i) => ({
+          id: i + 2,
+          user: { login: 'Tom', avatar_url: '' },
+          body: '',
+          state: state as 'APPROVED',
+          submitted_at: '',
+          html_url: '',
+        })),
+      ]);
+      const review = vi.spyOn(githubService, 'createPRReview').mockResolvedValue({} as never);
+      await addWorkflow({ actions: [{ type: 'approve_pr' }] });
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      expect(review).toHaveBeenCalledTimes(approves ? 1 : 0);
+      expect(await outcome()).toMatchObject({
+        type: 'approve_pr',
+        ok: true,
+        detail: approves ? 'approved' : 'already approved',
+      });
+    });
+
+    it('records a GitHub refusal as a failure', async () => {
+      vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('tom');
+      vi.spyOn(githubService, 'getPRReviews').mockResolvedValue([]);
+      vi.spyOn(githubService, 'createPRReview').mockRejectedValue(new Error('GitHub API error 422'));
+      await addWorkflow({ actions: [{ type: 'approve_pr' }] });
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      expect(await outcome()).toMatchObject({ type: 'approve_pr', ok: false, error: 'GitHub API error 422' });
+    });
+  });
+
   describe('enrichment', () => {
     it('fills a base branch an issue_comment payload cannot carry', async () => {
       await db.insert(pullRequestsTable).values({

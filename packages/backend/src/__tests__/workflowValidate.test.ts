@@ -3,7 +3,9 @@ import {
   DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR,
   MAX_WORKFLOW_NAME_LENGTH,
   validateWorkflow,
+  workflowActionsFor,
   type WorkflowInput,
+  type WorkflowIntegration,
 } from '@talyn/shared';
 
 /**
@@ -116,6 +118,32 @@ describe('validateWorkflow — refusals', () => {
     ],
   ])('refuses an action that would do nothing: %s', (_name, action, message) => {
     expect(() => validateWorkflow(input({ actions: [action as never] }))).toThrow(message);
+  });
+
+  it.each<[string, unknown, unknown]>([
+    ['with no body', { type: 'approve_pr' }, { type: 'approve_pr' }],
+    ['with a blank body', { type: 'approve_pr', body: '   ' }, { type: 'approve_pr' }],
+    ['with a body', { type: 'approve_pr', body: ' LGTM ' }, { type: 'approve_pr', body: 'LGTM' }],
+  ])('accepts approve_pr %s', (_name, action, expected) => {
+    const out = validateWorkflow(input({ actions: [action as never] }));
+    expect(out.actions[0]).toEqual(expected);
+  });
+
+  it('refuses approve_pr with a body that is not a string', () => {
+    expect(() =>
+      validateWorkflow(input({ actions: [{ type: 'approve_pr', body: 42 } as never] }))
+    ).toThrow(/body must be a string/);
+  });
+
+  it.each<[WorkflowIntegration, boolean]>([
+    ['github', true],
+    ['slack', false],
+    ['webhook', false],
+    ['linear', false],
+    ['github_issues', false],
+    ['posthog_inbox', false],
+  ])('offers approve_pr on a %s rule: %s', (integration, offered) => {
+    expect(workflowActionsFor(integration).includes('approve_pr')).toBe(offered);
   });
 
   it('refuses a local skill, and says why', () => {

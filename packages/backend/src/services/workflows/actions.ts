@@ -305,6 +305,8 @@ async function runPrAction(
       return { outcome: await assign(action.users, ctx) };
     case 'comment':
       return { outcome: await comment(action.body, ctx, extras) };
+    case 'approve_pr':
+      return { outcome: await approve(action.body, ctx, extras) };
     case 'watch_pr':
       return watchPr(ctx);
     case 'enqueue_merge_queue':
@@ -561,6 +563,48 @@ async function comment(
     return ok('comment', `commented (${rendered.length} chars)`);
   } catch (err) {
     return githubFailure('comment', err);
+  }
+}
+
+/**
+ * Approve the pull request as the workspace's GitHub account.
+ *
+ * GitHub 422s an approval on your own pull request, so that case is refused
+ * here with a clear reason. An approval that still stands is not repeated: a
+ * rule on a frequent event (checks passing) would otherwise stack a new
+ * approval on the PR every time it matched.
+ */
+async function approve(
+  body: string | undefined,
+  ctx: GithubActionContext,
+  extras: WorkflowTemplateExtras
+): Promise<WorkflowActionOutcome> {
+  try {
+    const viewer = (await githubService.getViewerLogin(ctx.workspaceId))?.toLowerCase() ?? null;
+    if (viewer && ctx.facts.author.login.toLowerCase() === viewer) {
+      return no('approve_pr', 'github_error', 'GitHub does not let you approve your own pull request');
+    }
+    if (viewer) {
+      const reviews = await githubService.getPRReviews(ctx.workspaceId, ctx.owner, ctx.repo, ctx.facts.number);
+      // Only these states change the viewer's verdict; a later COMMENTED
+      // review leaves an approval in place.
+      const latest = reviews
+        .filter(
+          (r) =>
+            r.user?.login?.toLowerCase() === viewer &&
+            (r.state === 'APPROVED' || r.state === 'CHANGES_REQUESTED' || r.state === 'DISMISSED')
+        )
+        .at(-1);
+      if (latest?.state === 'APPROVED') return ok('approve_pr', 'already approved');
+    }
+    const rendered = body ? renderWorkflowComment(body, ctx.facts, extras) : undefined;
+    await githubService.createPRReview(ctx.workspaceId, ctx.owner, ctx.repo, ctx.facts.number, {
+      event: 'APPROVE',
+      ...(rendered ? { body: rendered } : {}),
+    });
+    return ok('approve_pr', 'approved');
+  } catch (err) {
+    return githubFailure('approve_pr', err);
   }
 }
 
