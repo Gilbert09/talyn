@@ -109,7 +109,7 @@ describe('withPostHogSymbolUploads', () => {
     });
     jest.dontMock('posthog-react-native/expo');
     expect(official).toHaveBeenCalledTimes(1);
-    const props = official.mock.calls[0][1];
+    const props = (official.mock.calls[0] as unknown[])[1];
     expect(props).toEqual({ uploadNativeSymbols: true, skipOnConflict: true, dotenvFile: DOTENV_FILE, patchMainActivityNewIntent: false });
     // posthog-cli refuses --skip-on-conflict together with --force.
     expect(props).not.toHaveProperty('force');
