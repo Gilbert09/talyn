@@ -9,7 +9,7 @@ import { api } from '../renderer/lib/api';
 import { CommandPalette } from '../renderer/components/CommandPalette';
 import { buildAppShortcuts, orderedLiveWorkbenches, orderedSidebarSessionIds } from '../renderer/components/layout/appShortcuts';
 import { ShortcutsSettings, shortcutRows } from '../renderer/components/settings/sections/ShortcutsSettings';
-import { FOCUS_COMPOSER_EVENT, clearShortcuts, dispatchKeydown, formatKeys, registerShortcuts } from '../renderer/lib/shortcuts';
+import { FOCUS_COMPOSER_EVENT, clearShortcuts, dispatchKeydown, formatKeys, isSequence, registerShortcuts } from '../renderer/lib/shortcuts';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { useNavigationStore } from '../renderer/stores/navigation';
@@ -449,6 +449,72 @@ describe('Tab focuses the chat input', () => {
   });
 });
 
+describe('/ focuses the chat input', () => {
+  const opts = { menuOwnsChords: false, mac: true };
+  let composer: HTMLTextAreaElement;
+  const onFocus = jest.fn();
+
+  beforeEach(() => {
+    useNavigationStore.setState({ paletteOpen: false });
+    composer = document.createElement('textarea');
+    composer.setAttribute('data-session-composer', '');
+    document.body.appendChild(composer);
+    onFocus.mockReset();
+    window.addEventListener(FOCUS_COMPOSER_EVENT, onFocus);
+  });
+
+  afterEach(() => {
+    window.removeEventListener(FOCUS_COMPOSER_EVENT, onFocus);
+    composer.remove();
+  });
+
+  function slash(target?: HTMLElement): KeyboardEvent {
+    const e = new KeyboardEvent('keydown', { key: '/', code: 'Slash', bubbles: true, cancelable: true });
+    target?.dispatchEvent(e);
+    return e;
+  }
+
+  it('in a session, asks the composer for focus and does not type the slash', () => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' }));
+    const e = slash();
+    expect(dispatchKeydown(e, opts)).toBe(true);
+    expect(e.defaultPrevented).toBe(true);
+    expect(onFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it('outside a session, / does not focus the composer', () => {
+    const e = slash();
+    expect(dispatchKeydown(e, opts)).toBe(false);
+    expect(onFocus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the composer', () => composer],
+    ['another field', () => document.body.appendChild(document.createElement('input'))],
+  ])('typing in %s keeps the slash', (_name, target) => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' }));
+    const el = target();
+    el.focus();
+    const e = slash(el);
+    expect(dispatchKeydown(e, opts)).toBe(false);
+    expect(e.defaultPrevented).toBe(false);
+    expect(onFocus).not.toHaveBeenCalled();
+    if (el !== composer) el.remove();
+  });
+
+  it('an open dialog keeps the slash', () => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' }));
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('data-state', 'open');
+    document.body.appendChild(dialog);
+    const e = slash();
+    expect(dispatchKeydown(e, opts)).toBe(false);
+    expect(onFocus).not.toHaveBeenCalled();
+    dialog.remove();
+  });
+});
+
 describe('Settings → Shortcuts', () => {
   it('lists the go-to sequences in their own group and Tab under Session', () => {
     const groups = shortcutRows(buildAppShortcuts());
@@ -467,12 +533,13 @@ describe('Settings → Shortcuts', () => {
     ]);
     const session = groups.find((g) => g.group === 'Session');
     expect(session?.rows).toContainEqual({ id: 'composer.focus.tab', label: 'Focus chat input', keys: 'Tab' });
+    expect(session?.rows).toContainEqual({ id: 'composer.focus.slash', label: 'Focus chat input', keys: '/' });
     const general = groups.find((g) => g.group === 'General');
     expect(general?.rows.map((r) => r.label)).toContain('Show keyboard shortcuts');
   });
 
   it('every go-to sequence has its own keys', () => {
-    const keys = buildAppShortcuts().map((s) => s.keys);
+    const keys = buildAppShortcuts().filter((s) => isSequence(s.keys)).map((s) => s.keys);
     expect(new Set(keys).size).toBe(keys.length);
   });
 
@@ -483,7 +550,7 @@ describe('Settings → Shortcuts', () => {
     expect(within(row).getByText('G')).toBeInTheDocument();
     expect(within(row).getByText('then')).toBeInTheDocument();
     expect(within(row).getByText('R')).toBeInTheDocument();
-    expect(screen.getByText('Focus chat input')).toBeInTheDocument();
+    expect(screen.getAllByText('Focus chat input')).toHaveLength(2);
   });
 });
 
