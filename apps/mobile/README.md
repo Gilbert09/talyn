@@ -164,6 +164,7 @@ talyn-mobile-development://auth/callback
 talyn-mobile-preview://auth/callback
 ```
 
+Production also needs `talyn-mobile://auth/callback` (the production scheme), because sign-in returns through the scheme.
 Add the approved production HTTPS callback verbatim after its host is confirmed.
 Do not add wildcards. Retain the existing web and desktop entries.
 GitHub's provider callback remains the Supabase project callback, rather than a mobile scheme.
@@ -274,8 +275,11 @@ Updates are unsigned by decision (2026-11-09), because EAS code signing needs a 
 access to `EXPO_TOKEN` and the Expo project protect them. Signing later needs that plan, a certificate in the config, and a new binary.
 See [the release runbook](../../docs/MOBILE_RELEASE.md#automatic-updates-for-preview-and-internal-beta) for secrets, checks, and rollback.
 
-An explicit HTTPS callback configures iOS Associated Domains and an exact Android intent filter.
-Expo's `preferUniversalLinks` enables the HTTPS authentication callback on iOS 17.4 and later.
+An explicit HTTPS callback configures iOS Associated Domains and an exact Android intent filter for links.
+The sign-in session does not return through the HTTPS callback. It returns through `<scheme>://auth/callback`.
+An HTTPS return works only after iOS (`webcredentials`) or Android (App Links) verifies the domain.
+Production sign-in never got past that check: the auth session ended at once with no browser.
+iOS gives a scheme return only to the auth session that started it, and PKCE protects the code.
 No AASA or `assetlinks.json` file is added because production identifiers are unverified.
 A configured domain or a mock callback does not prove universal-link verification.
 Confirm the production iOS minimum version and test the exact signed binary before release.
