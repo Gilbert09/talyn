@@ -60,8 +60,9 @@ export function QueueSwipeRow({ row, queued = row.mergeQueued, busy, onQueue, ch
   const rowStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
   const armedStyle = useAnimatedStyle(() => ({ opacity: armed.value }));
   const label = queued ? 'Dequeue' : 'Queue';
-  const fill = queued ? c.muted : c.primaryAction;
-  const ink = queued ? c.background : c.primaryText;
+  // Green adds to the queue, red removes from it. Same pairs as the success and destructive buttons.
+  const fill = queued ? c.destructiveFill : c.success;
+  const ink = queued ? c.destructiveFillText : c.primaryText;
   // Both sides carry the label. The opaque row covers the side it has not left.
   const sides = (tint: string) => <View style={local.sides}>
     {[0, 1].map((side) => <View key={side} style={local.side}>
