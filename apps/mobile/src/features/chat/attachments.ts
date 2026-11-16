@@ -61,12 +61,10 @@ export function buildMessageInput(text: string, drafts: ImageDraft[]): SendWorkb
   return attachments.length ? { text, attachments } : { text };
 }
 
-export interface SendGate { text: string; drafts: ImageDraft[] }
-/** The server rejects a message with no text, so attachments alone cannot be sent. */
-export function sendBlock({ text, drafts }: SendGate): string | null {
+/** Why the attachments cannot be sent yet. A message with attachments needs no text. */
+export function sendBlock(drafts: ImageDraft[]): string | null {
   if (drafts.some((draft) => draft.status === 'uploading')) return 'Waiting for the attachments to upload.';
   if (drafts.some((draft) => draft.status === 'error')) return 'Remove the attachments that failed, or try them again.';
-  if (drafts.length > 0 && !text.trim()) return 'Add a message to send with the attachments.';
   return null;
 }
 

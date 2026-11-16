@@ -7,6 +7,7 @@ import { mono, type, useTheme, withAlpha } from '../../theme/tokens';
 import { ROW_TEXT_LIMIT } from '../../workflow/model';
 import { useTranscriptActions } from './fullTool';
 import { StatusDot } from './Pulse';
+import { useHighlighter } from './findHighlight';
 import { ThinkingRow } from './TranscriptParts';
 import { diffTone, preview, readableOutput, toolLine, type DiffTone } from './toolFormat';
 
@@ -82,6 +83,7 @@ type FullState = { status: 'idle' | 'loading' | 'failed' } | { status: 'ready'; 
  */
 export const ToolRow = memo(function ToolRow({ tool: held, nested = false, partial = false }: { tool: ToolBlock; nested?: boolean; partial?: boolean }) {
   const c = useTheme();
+  const mark = useHighlighter();
   const actions = useTranscriptActions();
   const [open, setOpen] = useState(false);
   const [full, setFull] = useState(false);
@@ -110,8 +112,8 @@ export const ToolRow = memo(function ToolRow({ tool: held, nested = false, parti
     <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ expanded: open }}
       onPress={() => setOpen(!open)} style={styles.line} hitSlop={4}>
       <StatusDot state={state} />
-      <Text numberOfLines={1} style={[styles.label, { color: tool.isError ? c.destructive : c.text }]}>{line.label}</Text>
-      {line.detail ? <Text numberOfLines={1} style={[styles.detail, { color: c.muted }]}>{line.detail}</Text> : <View style={{ flex: 1 }} />}
+      <Text numberOfLines={1} style={[styles.label, { color: tool.isError ? c.destructive : c.text }]}>{mark(line.label)}</Text>
+      {line.detail ? <Text numberOfLines={1} style={[styles.detail, { color: c.muted }]}>{mark(line.detail)}</Text> : <View style={{ flex: 1 }} />}
       {editDiff && !isPreview ? <Text style={styles.counts}><Text style={{ color: c.success }}>+{editDiff.added}</Text> <Text style={{ color: c.destructive }}>−{editDiff.removed}</Text></Text> : null}
       {tool.stopped ? <Text style={[styles.counts, { color: c.muted }]}>stopped</Text> : null}
       <Chevron open={open} />
@@ -135,6 +137,7 @@ export const ToolRow = memo(function ToolRow({ tool: held, nested = false, parti
 /** A run of tool calls folded into one line, like web: "Ran 3 commands, read a file". */
 export const ToolGroupRow = memo(function ToolGroupRow({ group, partial = [] }: { group: ToolGroupBlock; partial?: readonly string[] }) {
   const c = useTheme();
+  const mark = useHighlighter();
   const [open, setOpen] = useState(group.lastFailed && !group.running);
   const state = group.running ? 'running' : group.isError ? 'error' : 'done';
   return <View style={styles.tool}>
@@ -142,7 +145,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({ group, partial = [] }: 
       accessibilityState={{ expanded: open }} onPress={() => setOpen(!open)} style={styles.line} hitSlop={4}>
       <StatusDot state={state} />
       <Text numberOfLines={1} style={[styles.detail, { color: c.muted }]}>
-        {group.summary}{group.failedCount > 0 ? <Text style={{ color: c.destructive }}> · {group.failedCount} failed</Text> : null}
+        {mark(group.summary)}{group.failedCount > 0 ? <Text style={{ color: c.destructive }}> · {group.failedCount} failed</Text> : null}
       </Text>
       <Chevron open={open} />
     </Pressable>

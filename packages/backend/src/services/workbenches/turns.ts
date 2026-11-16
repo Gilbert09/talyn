@@ -254,14 +254,16 @@ export function isTurnLiveHere(chatId: string): boolean {
 
 export function normaliseMessage(input: SendWorkbenchMessageInput): WorkbenchQueuedMessage {
   const text = typeof input?.text === 'string' ? input.text : '';
-  if (!text.trim()) throw new WorkbenchError('A message needs some text.', 400, 'empty_message');
+  const attachments = Array.isArray(input?.attachments) ? input.attachments.map(normaliseAttachment) : undefined;
+  if (!text.trim() && !attachments?.length) {
+    throw new WorkbenchError('A message needs some text or an attachment.', 400, 'empty_message');
+  }
   if (input.effort !== undefined && !WORKBENCH_EFFORTS.includes(input.effort)) {
     throw new WorkbenchError(`Unknown effort "${String(input.effort)}".`, 400, 'bad_effort');
   }
   if (input.intent !== undefined && !WORKBENCH_MESSAGE_INTENTS.includes(input.intent)) {
     throw new WorkbenchError(`Unknown intent "${String(input.intent)}".`, 400, 'bad_intent');
   }
-  const attachments = Array.isArray(input.attachments) ? input.attachments.map(normaliseAttachment) : undefined;
   return {
     id: uuid(),
     text,
@@ -880,7 +882,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     const model = turnModel;
     const effort = message.effort ?? (chat.effort as WorkbenchQueuedMessage['effort']) ?? DEFAULT_WORKBENCH_EFFORT;
     let resumeSessionId = chat.agentSessionId ?? undefined;
-    const text = promptWith(message.text, agent === 'codex' ? attached.other : attached.all);
+    // Codex gets images with -i. An image-only message still names them, so the prompt is not empty.
+    const text = promptWith(message.text, agent === 'codex' && message.text.trim() ? attached.other : attached.all);
     // The transcript keeps `message.text`; the hidden instructions reach the agent only.
     let recap = await recoveryRecap(chatId, turn);
     const buildArgv = () => {
@@ -1256,7 +1259,8 @@ function promptWith(text: string, files: Array<{ path: string; mimeType: string 
   if (files.length === 0) return text;
   const list = files.map((f) => `- ${f.path} (${f.mimeType})`).join('\n');
   const note = files.some((f) => isWorkbenchVideoType(f.mimeType)) ? `\n\n${WORKBENCH_VIDEO_PROMPT_NOTE}` : '';
-  return `${text}\n\nAttached files:\n${list}${note}`;
+  const attached = `Attached files:\n${list}${note}`;
+  return text.trim() ? `${text}\n\n${attached}` : attached;
 }
 
 /**

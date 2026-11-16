@@ -352,7 +352,7 @@ export class LocalTurnController {
     if (input.trigger) userEvent.talyn = { kind: 'user_message', origin: 'talyn', trigger: input.trigger };
     this.record(chat.id, turn, userEvent);
     void this.report(chat.id, { status: 'running' });
-    if (turn === 1) void this.generateTitle(workbench, chat.agent, input.text);
+    if (turn === 1 && input.text.trim()) void this.generateTitle(workbench, chat.agent, input.text);
 
     const text = withAttachmentNote(input.text, input.attachments);
     // The transcript keeps `input.text`; the hidden instructions reach the agent only.
@@ -742,7 +742,8 @@ function findChat(chatId: string): WorkbenchChat | undefined {
 function withAttachmentNote(text: string, attachments: SendWorkbenchMessageInput['attachments']): string {
   const paths = (attachments ?? []).map((a) => a.path).filter((p): p is string => Boolean(p));
   if (paths.length === 0) return text;
-  return `${text}\n\nAttached files (in the working tree): ${paths.map((p) => `\`${p}\``).join(', ')}`;
+  const note = `Attached files (in the working tree): ${paths.map((p) => `\`${p}\``).join(', ')}`;
+  return text.trim() ? `${text}\n\n${note}` : note;
 }
 
 let controller: LocalTurnController | null = null;

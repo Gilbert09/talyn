@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   attentionBadgeLabel,
+  attentionReason,
   countContextAttention,
   sessionAttentionKey,
   sessionNeedsAttention,
@@ -102,19 +103,53 @@ describe('sessionAttentionKey', () => {
 });
 
 describe('countContextAttention', () => {
-  it('adds space sessions to their workspace and space counts', () => {
+  it('adds space sessions to their workspace and space counts, and names each session', () => {
     expect(
       countContextAttention([
-        { workspaceId: 'ws1', spaceId: null },
-        { workspaceId: 'ws1', spaceId: 'sp1' },
-        { workspaceId: 'ws2', spaceId: 'sp1' },
-        { workspaceId: 'ws2', spaceId: 'sp2' },
+        { id: 'a', workspaceId: 'ws1', spaceId: null, reason: 'reply' },
+        { id: 'b', workspaceId: 'ws1', spaceId: 'sp1', reason: 'failed' },
+        { id: 'c', workspaceId: 'ws2', spaceId: 'sp1', reason: 'conflict' },
+        { id: 'd', workspaceId: 'ws2', spaceId: 'sp2', reason: 'reply' },
       ]),
-    ).toEqual({ workspaces: { ws1: 2, ws2: 2 }, spaces: { sp1: 2, sp2: 1 } });
+    ).toEqual({
+      workspaces: { ws1: 2, ws2: 2 },
+      spaces: { sp1: 2, sp2: 1 },
+      sessions: { a: 'reply', b: 'failed', c: 'conflict', d: 'reply' },
+    });
   });
 
   it('answers empty maps for no sessions', () => {
-    expect(countContextAttention([])).toEqual({ workspaces: {}, spaces: {} });
+    expect(countContextAttention([])).toEqual({ workspaces: {}, spaces: {}, sessions: {} });
+  });
+});
+
+describe('attentionReason', () => {
+  it.each<[string | null, string | null]>([
+    [null, null],
+    ['error', 'failed'],
+    ['chat_error:c1@3', 'failed'],
+    ['chat_error:c1@4,c2@1', 'failed'],
+    ['reply:c1@2', 'reply'],
+    ['reply:@0', 'reply'],
+    ['conflict:pr1:abc', 'conflict'],
+    ['conflict:pr1:', 'conflict'],
+  ])('%s -> %s', (key, reason) => {
+    expect(attentionReason(key)).toBe(reason);
+  });
+
+  it('names a reason for every key that sessionAttentionKey gives', () => {
+    const inputs: Partial<AttentionSessionInput>[] = [
+      { status: 'error' },
+      { chats: [{ id: 'c1', status: 'error', queued: 0, turnCount: 1 }] },
+      { chats: [{ id: 'c1', status: 'awaiting_input', queued: 0, turnCount: 1 }] },
+      { pr: { id: 'pr1', state: 'open', mergeable: 'CONFLICTING', headSha: 'a' } },
+    ];
+    expect(inputs.map((patch) => attentionReason(sessionAttentionKey({ ...BASE, ...patch })))).toEqual([
+      'failed',
+      'failed',
+      'reply',
+      'conflict',
+    ]);
   });
 });
 
@@ -230,17 +265,18 @@ describe('contextAttention (pglite)', () => {
     expect(await contextAttention(db, OWNER)).toEqual({
       workspaces: { ws1: 4, ws2: 1 },
       spaces: { sp1: 1 },
+      sessions: { question: 'reply', failed: 'failed', conflict: 'conflict', 'in-space': 'reply', 'ws2-thread': 'failed' },
     });
   });
 
   it('never counts another owner’s sessions', async () => {
     await session('theirs', { workspaceId: 'ws-other', spaceId: 'sp1', chats: [{ status: 'error' }] });
-    expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {} });
-    expect(await contextAttention(db, OTHER)).toEqual({ workspaces: { 'ws-other': 1 }, spaces: { sp1: 1 } });
+    expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {}, sessions: {} });
+    expect(await contextAttention(db, OTHER)).toEqual({ workspaces: { 'ws-other': 1 }, spaces: { sp1: 1 }, sessions: { theirs: 'failed' } });
   });
 
   it('answers empty maps for an owner with no sessions', async () => {
-    expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {} });
+    expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {}, sessions: {} });
   });
 
   describe('acknowledgeAttention', () => {
@@ -270,12 +306,12 @@ describe('contextAttention (pglite)', () => {
     it('counts the session again when a new question comes in a later turn', async () => {
       await session('s1', { chats: [{ status: 'awaiting_input', turnCount: 1 }] });
       await acknowledgeAttention(db, OWNER, 's1');
-      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {} });
+      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {}, sessions: {} });
 
       await setChat('s1-chat-0', { status: 'running', turnCount: 2 });
-      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {} });
+      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {}, sessions: {} });
       await setChat('s1-chat-0', { status: 'awaiting_input' });
-      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: { ws1: 1 }, spaces: {} });
+      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: { ws1: 1 }, spaces: {}, sessions: { s1: 'reply' } });
     });
 
     it('counts the session again when its conflicts come back on a new head', async () => {
@@ -283,10 +319,10 @@ describe('contextAttention (pglite)', () => {
       await session('s1', { pullRequestId: 'pr-conflict' });
       await acknowledgeAttention(db, OWNER, 's1');
       expect(await ackOf('s1')).toBe('conflict:pr-conflict:a');
-      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {} });
+      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {}, sessions: {} });
 
       await db.update(prTable).set({ lastSummary: { mergeable: 'CONFLICTING', headSha: 'b' } as never }).where(eq(prTable.id, 'pr-conflict'));
-      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: { ws1: 1 }, spaces: {} });
+      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: { ws1: 1 }, spaces: {}, sessions: { s1: 'conflict' } });
     });
 
     it('clears the stored key when the session is opened with no alert', async () => {
@@ -303,7 +339,7 @@ describe('contextAttention (pglite)', () => {
       await session('theirs', { workspaceId: 'ws-other', spaceId: 'sp1', chats: [{ status: 'awaiting_input' }] });
       expect(await acknowledgeAttention(db, OWNER, 'theirs')).toBe(false);
       expect(await ackOf('theirs')).toBeNull();
-      expect(await contextAttention(db, OTHER)).toEqual({ workspaces: { 'ws-other': 1 }, spaces: { sp1: 1 } });
+      expect(await contextAttention(db, OTHER)).toEqual({ workspaces: { 'ws-other': 1 }, spaces: { sp1: 1 }, sessions: { theirs: 'reply' } });
     });
 
     it.each([

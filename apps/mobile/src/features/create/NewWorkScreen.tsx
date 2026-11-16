@@ -171,7 +171,7 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   const model = pickedModel && modelsFor(agent).some((item) => item.id === pickedModel) ? pickedModel : modelFor(settingsSource?.settings, agent);
   const startFrom = prsOn ? activePullRequest(pullRequest, repository) : null;
   const form: NewWorkForm = { mode, prompt, repository, agent, model, baseBranch, internetAccess, pullRequest: startFrom };
-  const blocked = (inSpace ? spaceBlockedReason(form, inSpace.team, sandbox, offline) : blockedReason(form, sandbox, offline)) ?? images.block;
+  const blocked = (inSpace ? spaceBlockedReason(form, inSpace.team, sandbox, offline, attached.length) : blockedReason(form, sandbox, offline, attached.length)) ?? images.block;
   const send = sendState(blocked, busy, workspaceId);
   const sandboxOk = sandboxChoice(sandbox);
   const connect = connectNotice(sandbox, agent);

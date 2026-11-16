@@ -11,7 +11,10 @@ import {
   railEntryAttention,
   railInitials,
   useAttentionSeen,
+  useAttentionSessions,
+  useContextAttentionStore,
 } from '../renderer/lib/contextRail';
+import { SidebarNeedsYou, useNeedsYouItems } from '../renderer/components/layout/SidebarNeedsYou';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useSpacesStore } from '../renderer/stores/spaces';
 import { useNavigationStore } from '../renderer/stores/navigation';
@@ -59,6 +62,7 @@ function setup(opts: { workspaces: Workspace[]; spaces?: boolean; teams?: Spaces
 
 beforeEach(() => {
   localStorage.clear();
+  useContextAttentionStore.setState({ counts: null });
   attention = jest.spyOn(api.workspaces, 'attention');
 });
 
@@ -205,6 +209,58 @@ describe('ContextRail', () => {
       await Promise.resolve();
     });
     expect(screen.getByRole('button', { name: 'Side, 4 items need you' })).toBeInTheDocument();
+  });
+});
+
+describe('the sessions the rail counts', () => {
+  const counts = { workspaces: { ws1: 2 }, spaces: { s1: 1 }, sessions: { a: 'reply', b: 'conflict' } } as const;
+
+  it('shares the counted sessions with the sidebar', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')], counts });
+    const sessions = renderHook(() => useAttentionSessions());
+    expect(sessions.result.current).toEqual({});
+    render(<ContextRail />);
+    await waitFor(() => expect(sessions.result.current).toEqual({ a: 'reply', b: 'conflict' }));
+  });
+
+  it('answers no sessions from an older server that does not send them', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')], counts: { workspaces: { ws1: 1 }, spaces: {} } });
+    render(<ContextRail />);
+    expect(await screen.findByRole('button', { name: 'Mine, 1 item needs you' })).toBeInTheDocument();
+    const sessions = renderHook(() => useAttentionSessions());
+    expect(sessions.result.current).toEqual({});
+  });
+
+  it('forgets the counted sessions when the rail hides', async () => {
+    useContextAttentionStore.setState({ counts });
+    setup({ workspaces: [ws('ws1', 'Mine')] });
+    render(<ContextRail />);
+    const sessions = renderHook(() => useAttentionSessions());
+    await waitFor(() => expect(sessions.result.current).toEqual({}));
+  });
+
+  it('picks the counted live items, in the list order', () => {
+    useContextAttentionStore.setState({ counts });
+    const list = [{ id: 'c' }, { id: 'b' }, { id: 'a' }, { id: 'gone' }];
+    const live = (item: { id: string }) => item.id !== 'gone';
+    const { result } = renderHook(() => useNeedsYouItems(list, live));
+    expect(result.current.map((item) => item.id)).toEqual(['b', 'a']);
+  });
+
+  it('leaves out a counted item that is not live', () => {
+    useContextAttentionStore.setState({ counts: { ...counts, sessions: { a: 'failed' } } });
+    const { result } = renderHook(() => useNeedsYouItems([{ id: 'a' }], () => false));
+    expect(result.current).toEqual([]);
+  });
+
+  it('shows a "Needs you" section with a count, and nothing when no item waits', () => {
+    const { rerender } = render(
+      <SidebarNeedsYou items={[{ id: 'a' }, { id: 'b' }]} renderItem={(item) => <div key={item.id}>row {item.id}</div>} />,
+    );
+    const group = screen.getByRole('group', { name: 'Needs you' });
+    expect(group).toHaveTextContent('Needs you2row arow b');
+    rerender(<SidebarNeedsYou items={[]} renderItem={() => null} />);
+    expect(screen.queryByRole('group', { name: 'Needs you' })).not.toBeInTheDocument();
   });
 });
 

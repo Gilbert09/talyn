@@ -225,10 +225,9 @@ export class AgentProcesses {
       if (attachment.mimeType.startsWith('image/')) images.push(file);
     }
     const hasVideo = (input.attachments ?? []).some((attachment) => isWorkbenchVideoType(attachment.mimeType));
+    const attached = `Attached files:\n${files.join('\n')}${hasVideo ? `\n\n${WORKBENCH_VIDEO_PROMPT_NOTE}` : ''}`;
     return {
-      prompt: files.length
-        ? `${input.prompt}\n\nAttached files:\n${files.join('\n')}${hasVideo ? `\n\n${WORKBENCH_VIDEO_PROMPT_NOTE}` : ''}`
-        : input.prompt,
+      prompt: !files.length ? input.prompt : input.prompt.trim() ? `${input.prompt}\n\n${attached}` : attached,
       images,
     };
   }

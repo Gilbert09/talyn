@@ -22,7 +22,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { AnnualSwitch } from '../settings/sections/AnnualSwitch';
 import { Button } from '../ui/button';
 
-type Period = 'monthly' | 'annual';
+export type Period = 'monthly' | 'annual';
 export type PlanCardTier = PlanTier | 'team';
 
 /** Free, Pro, Max and Team, with Legacy Pro for the people who hold it. Max only when it is offered or held. */
@@ -76,6 +76,58 @@ export function PlanOption({
     </button>
   );
 }
+
+/**
+ * Monthly or annual billing, as a segmented toggle. It must not look like the
+ * plan cards, or a reader counts the two periods as two more plans.
+ */
+export function BillingPeriodToggle({
+  period,
+  onChange,
+  disabled,
+  className,
+}: {
+  period: Period;
+  onChange: (period: Period) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Billing period"
+      data-testid="billing-period-toggle"
+      className={cn('inline-flex rounded-md border bg-muted/50 p-0.5', disabled && 'opacity-60', className)}
+    >
+      {PERIOD_OPTIONS.map((option) => {
+        const selected = period === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onChange(option.value)}
+            disabled={disabled}
+            className={cn(
+              'flex items-center gap-1.5 rounded px-3 py-1 text-[13px] transition-colors',
+              selected ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {option.label}
+            {option.hint && (
+              <span className="rounded-full bg-primary/10 px-1.5 py-px text-[11px] font-medium text-primary">{option.hint}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const PERIOD_OPTIONS: { value: Period; label: string; hint?: string }[] = [
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'annual', label: 'Annual', hint: '2 months free' },
+];
 
 /**
  * Every plan side by side: its price, what it includes, and the move to it
@@ -169,23 +221,7 @@ export function PlanCards({
   return (
     <div className="space-y-3">
       {showPeriodPicker && (
-        <div className="grid max-w-sm grid-cols-2 gap-2">
-          <PlanOption
-            label="Annual"
-            price={`${formatUsd(pricing.proAnnualMicros, 0)}/yr`}
-            hint="2 months free"
-            selected={period === 'annual'}
-            onSelect={() => setPeriod('annual')}
-            disabled={blocked}
-          />
-          <PlanOption
-            label="Monthly"
-            price={`${formatUsd(pricing.proMonthlyMicros, 0)}/mo`}
-            selected={period === 'monthly'}
-            onSelect={() => setPeriod('monthly')}
-            disabled={blocked}
-          />
-        </div>
+        <BillingPeriodToggle period={period} onChange={setPeriod} disabled={blocked} />
       )}
       <div className={cn('grid gap-3 sm:grid-cols-2', className)} data-testid="plan-cards">
         {plans.map((card) => {

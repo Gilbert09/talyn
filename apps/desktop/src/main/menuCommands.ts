@@ -49,6 +49,8 @@ export const MENU_COMMANDS: MenuCommand[] = [
   { id: 'nav.back', label: 'Back', keys: 'mod+left', section: 'view', separatorBefore: true, rendererOnly: true },
   { id: 'nav.forward', label: 'Forward', keys: 'mod+right', section: 'view', rendererOnly: true },
   { id: 'composer.focus', label: 'Focus Composer', keys: 'mod+l', section: 'workbench' },
+  // Renderer-only: a menu accelerator would take ⌘F from the code viewer's own find.
+  { id: 'transcript.find', label: 'Find in Transcript', keys: 'mod+f', section: 'workbench', rendererOnly: true },
   { id: 'workbench.createPr', label: 'Create Pull Request', keys: 'mod+shift+p', section: 'workbench' },
   { id: 'workbench.fixChecks', label: 'Fix Checks', keys: 'mod+shift+x', section: 'workbench' },
   { id: 'workbench.merge', label: 'Merge Pull Request', keys: 'mod+shift+m', section: 'workbench' },

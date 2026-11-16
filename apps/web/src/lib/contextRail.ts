@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
+import { create } from 'zustand';
 import {
   sessionAttentionKey,
   type ContextAttentionCounts,
+  type ContextAttentionReason,
   type SpacesTeam,
   type Workbench,
   type WorkbenchChat,
@@ -83,22 +85,43 @@ export function refreshContextAttention(): void {
 }
 
 /**
+ * The rail's last answer. The rail fills it; the sidebar reads the
+ * `sessions` part, so the rows that the badge counts show it.
+ */
+export const useContextAttentionStore = create<{ counts: ContextAttentionCounts | null }>(() => ({ counts: null }));
+
+const NO_SESSIONS: Readonly<Record<string, ContextAttentionReason>> = Object.freeze({});
+
+/** The sessions that the rail's badges count, with their reasons. Empty while the rail is hidden. */
+export function useAttentionSessions(): Readonly<Record<string, ContextAttentionReason>> {
+  return useContextAttentionStore((s) => s.counts?.sessions ?? NO_SESSIONS);
+}
+
+/** Why the rail counts one session, if it does. A row subscribes to its own reason only. */
+export function useAttentionReason(id: string): ContextAttentionReason | undefined {
+  return useContextAttentionStore((s) => s.counts?.sessions?.[id]);
+}
+
+/**
  * The rail's badge counts. Asks on mount, every 30 seconds while the window
  * shows, when the window comes back, when `refreshKey` changes (a context
  * switch, so the context I just left shows its count at once), and on
  * {@link refreshContextAttention}.
  */
 export function useContextAttention(enabled: boolean, refreshKey: string): ContextAttentionCounts | null {
-  const [counts, setCounts] = useState<ContextAttentionCounts | null>(null);
+  const counts = useContextAttentionStore((s) => s.counts);
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      useContextAttentionStore.setState({ counts: null });
+      return;
+    }
     let cancelled = false;
     const load = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       Promise.resolve()
         .then(() => api.workspaces.attention())
         .then((next) => {
-          if (!cancelled) setCounts(next);
+          if (!cancelled) useContextAttentionStore.setState({ counts: next });
         })
         .catch(() => {
           // A failed ask keeps the last badges. The next tick tries again.

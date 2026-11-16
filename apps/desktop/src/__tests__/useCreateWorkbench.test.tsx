@@ -242,6 +242,18 @@ describe('useCreateWorkbench: the first prompt in the new chat', () => {
     expect(held()).toEqual([]);
   });
 
+  it.each([
+    ['empty', ''],
+    ['whitespace', '  \n '],
+  ])('sends images with an %s prompt and shows them in the new chat', async (_label, prompt) => {
+    mockApi.create.mockResolvedValue(workbench());
+    mockApi.sendMessage.mockResolvedValue({ queued: true });
+    await run(spec({ prompt, attachments: [image] }));
+    expect(mockApi.create.mock.calls[0][0]).toMatchObject({ prompt: undefined, namingText: undefined });
+    expect(mockApi.sendMessage).toHaveBeenCalledWith('c1', expect.objectContaining({ text: '', attachments: [image] }));
+    expect(held()).toEqual([expect.objectContaining({ text: '', attachments: [image], settledAt: expect.any(Number) })]);
+  });
+
   it('adds nothing when the row came back without a chat', async () => {
     mockApi.create.mockResolvedValue(workbench({ chats: [] }));
     await run(spec());

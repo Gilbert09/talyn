@@ -76,15 +76,14 @@ describe('buildMessageInput', () => {
 
 describe('sendBlock', () => {
   it.each([
-    ['hi', [], null],
-    ['', [], null],
-    ['hi', [draft()], null],
-    ['  ', [draft()], 'Add a message to send with the attachments.'],
-    ['hi', [draft({ status: 'uploading' })], 'Waiting for the attachments to upload.'],
-    ['hi', [draft({ status: 'error' })], 'Remove the attachments that failed, or try them again.'],
-    ['  ', [draft({ mimeType: 'video/mp4' })], 'Add a message to send with the attachments.'],
-    ['hi', [draft({ mimeType: 'video/mp4', status: 'uploading' })], 'Waiting for the attachments to upload.'],
-  ] as const)('text %j with %#', (text, drafts, expected) => { expect(sendBlock({ text, drafts: [...drafts] })).toBe(expected); });
+    [[], null],
+    [[draft()], null],
+    [[draft({ mimeType: 'video/mp4' })], null],
+    [[draft({ status: 'uploading' })], 'Waiting for the attachments to upload.'],
+    [[draft({ status: 'error' })], 'Remove the attachments that failed, or try them again.'],
+    [[draft(), draft({ status: 'error' })], 'Remove the attachments that failed, or try them again.'],
+    [[draft({ mimeType: 'video/mp4', status: 'uploading' })], 'Waiting for the attachments to upload.'],
+  ] as const)('drafts %#', (drafts, expected) => { expect(sendBlock([...drafts])).toBe(expected); });
 });
 
 describe('attachment urls and events', () => {

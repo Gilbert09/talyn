@@ -34,9 +34,9 @@ export function spacePullRequestRows<T extends Pick<PRRow, 'owner' | 'repo' | 'r
 
 /** Why Start is off in a space: no home workspace first, then the personal rules. Mirrors web `SpaceComposer`. */
 export function spaceBlockedReason(form: NewWorkForm, team: Pick<SpacesTeam, 'homeWorkspaceId'>,
-  sandbox: WorkbenchReadiness['sandbox'] | null | undefined, offline: boolean): string | null {
+  sandbox: WorkbenchReadiness['sandbox'] | null | undefined, offline: boolean, images = 0): string | null {
   if (!team.homeWorkspaceId) return `You need a workspace of your own to start a ${form.mode} in a space.`;
-  return blockedReason(form, sandbox, offline);
+  return blockedReason(form, sandbox, offline, images);
 }
 
 /**

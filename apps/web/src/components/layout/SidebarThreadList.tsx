@@ -2,7 +2,8 @@ import { cloneElement, useMemo, useState, type ReactElement } from 'react';
 import { Archive, ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import { splitViewOffered, workbenchDisplayName, type SpaceSessionRow, type Workbench, type WorkbenchChat } from '@talyn/shared';
 import { cn } from '../../lib/utils';
-import { sessionPr, sessionState, spaceSessionState, type SessionState } from '../../lib/sessionState';
+import { sessionPr, sessionState, spaceSessionState, withServerAttention, type SessionState } from '../../lib/sessionState';
+import { useAttentionReason } from '../../lib/contextRail';
 import { useBackground } from '../../stores/sessionBackground';
 import { liveThreads, runningSessionCount, threadChildren, threadSummary } from '../../lib/threads';
 import { newestSessions } from '../../lib/sessionOrder';
@@ -169,11 +170,15 @@ function ThreadRow({
   const spacesOn = useWorkspaceStore((s) => spacesOffered(s.features));
   const splitOn = useWorkspaceStore((s) => splitViewOffered(s.features));
   const spaceId = thread ? thread.spaceId ?? null : item.row?.spaceId ?? null;
-  const own = thread
-    ? sessionState(thread, chats ?? [], unread, null, false, background)
-    : item.row
-      ? spaceSessionState(item.row)
-      : { kind: 'idle' as const, label: 'Idle' };
+  const attention = useAttentionReason(item.id);
+  const own = withServerAttention(
+    thread
+      ? sessionState(thread, chats ?? [], unread, null, false, background)
+      : item.row
+        ? spaceSessionState(item.row)
+        : { kind: 'idle' as const, label: 'Idle' },
+    attention,
+  );
   // A resting thread whose sessions work is working too. Its own reply, question or failure still wins.
   const state = sessionsRunning > 0 && (own.kind === 'idle' || own.kind === 'wakeup')
     ? { kind: 'working' as const, label: sessionsRunning === 1 ? '1 session working' : `${sessionsRunning} sessions working` }
@@ -288,7 +293,8 @@ function ThreadChildRow({
   );
   const pr = sessionPr(session, row);
   const background = useBackground(session.id);
-  const state = sessionState(session, chats ?? [], unread, pr, false, background);
+  const attention = useAttentionReason(session.id);
+  const state = withServerAttention(sessionState(session, chats ?? [], unread, pr, false, background), attention, pr?.number);
   const repo = session.repoFullName.split('/').pop() || session.repoFullName;
   const splitOn = useWorkspaceStore((s) => splitViewOffered(s.features));
   return (
@@ -331,7 +337,8 @@ function SpaceThreadChildRow({
   spaceId?: string;
   onSelect: () => void;
 }) {
-  const state = spaceSessionState(row);
+  const attention = useAttentionReason(row.id);
+  const state = withServerAttention(spaceSessionState(row), attention, row.pullRequest?.number);
   const repo = row.repoFullName.split('/').pop() || row.repoFullName;
   const name = row.title || row.name;
   const prState = row.pullRequest?.state === 'merged' || row.pullRequest?.state === 'closed' ? row.pullRequest.state : 'open';

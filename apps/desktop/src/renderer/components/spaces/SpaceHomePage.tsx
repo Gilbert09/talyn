@@ -265,7 +265,7 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
 
   const submit = async () => {
     const text = prompt.trim();
-    if (!canCreate || !text || !team.homeWorkspaceId) return;
+    if (!canCreate || (!text && images.attachments.length === 0) || !team.homeWorkspaceId) return;
     const session = mode === 'session';
     const wb = await create({
       workspaceId: team.homeWorkspaceId,
@@ -427,7 +427,7 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
             <button
               type="button"
               onClick={() => void submit()}
-              disabled={!canCreate || !prompt.trim()}
+              disabled={!canCreate || (!prompt.trim() && images.attachments.length === 0)}
               aria-label="Create and start"
               title={blockedReason ?? `Create and start (${formatKeys('enter')})`}
               data-attr="space-new-session-send"
