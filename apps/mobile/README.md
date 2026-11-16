@@ -511,6 +511,7 @@ The official SDK is `posthog-react-native`, with `@posthog/react-native-plugin` 
 
 - The distinct ID is the Supabase user ID, as on web. Email and GitHub username are person properties. Sign-out resets the identity.
 - Every event carries `client: 'mobile'`, `platform`, `app_version`, `app_build`, `update_id`, `update_channel`, `environment`, and `workspace_id`.
+- The SDK sends some events during its setup, before the super properties are registered, such as `Application Installed`. `before_send` adds the build properties to these events.
 - Each route change records a `$screen` named by its route pattern, such as `/pulls/[id]`. No IDs go in the name.
 - Touches are autocaptured by component name and test ID only. Text children and accessibility labels are not captured.
 - Session replay masks all text, inputs, images, and sandboxed views. It records no console logs or network requests. It is off in development builds.
