@@ -26,11 +26,16 @@ export async function posthogInboxStatus(workspaceId: string): Promise<PostHogIn
   let access = stored.access;
   let reason = stored.reason;
   // A personal API key says nothing about its scopes until PostHog answers.
-  if (access === 'unknown' && state) {
+  // A 401 or 403 from a read or a claim (the poller records both) means the
+  // connection needs the user, whichever way it was made.
+  if ((access === 'unknown' || access === 'ok') && state) {
     if (state.lastErrorStatus === 401 || state.lastErrorStatus === 403) {
       access = 'reconnect';
-      reason = 'PostHog refused the API key for the Inbox. Use a key with the inbox:read scope, or connect with PostHog.';
-    } else if (state.lastPolledAt && !state.lastError) {
+      reason =
+        stored.authMethod === 'personal_api_key'
+          ? 'PostHog refused the API key for the Inbox. Use a key with the inbox:read, inbox:write and task:write scopes, or connect with PostHog.'
+          : 'PostHog refused the connection for the Inbox. Connect PostHog again to grant the inbox:read, inbox:write and task:write permissions.';
+    } else if (access === 'unknown' && state.lastPolledAt && !state.lastError) {
       access = 'ok';
     }
   }

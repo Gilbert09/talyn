@@ -340,7 +340,7 @@ export function workflowRoutes(): Router {
     } catch (err) {
       return res.status(400).json({ success: false, error: err instanceof Error ? err.message : 'invalid automation' });
     }
-    const connection = await getPostHogInboxConnection(workspaceId);
+    const connection = await getPostHogInboxConnection(workspaceId, 'read');
     if (!connection) {
       return res.status(409).json({
         success: false,

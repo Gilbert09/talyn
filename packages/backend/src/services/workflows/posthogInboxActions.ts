@@ -1,4 +1,5 @@
 import type { PostHogInboxFacts } from '@talyn/shared';
+import { TALYN_REPORT_NOT_FIXED_SENTINEL } from '@talyn/shared';
 import { buildInboundPrompt } from '../inbound/prompt.js';
 import type { PostHogInboxActionContext } from './actions.js';
 
@@ -16,8 +17,9 @@ export const POSTHOG_INBOX_VERIFY_INSTRUCTION =
   "PostHog's report is a diagnosis, not a verified fact. Before you change any code, check the diagnosis " +
   'against the code in this repository. If the diagnosis is wrong, the problem is already fixed, or the fix ' +
   'is not in this repository, stop: do not change any files and do not open a pull request. Say in one short ' +
-  'message what you found. If the diagnosis is right, fix the problem and open a pull request that links the ' +
-  'report.';
+  `message what you found, and make the last line of that message \`${TALYN_REPORT_NOT_FIXED_SENTINEL} <one-line reason>\`, ` +
+  'so Talyn can hand the report back in PostHog. If the diagnosis is right, fix the problem and open a pull ' +
+  'request that links the report.';
 
 /** The report as the prompt quotes it. */
 export function reportText(facts: PostHogInboxFacts): string {

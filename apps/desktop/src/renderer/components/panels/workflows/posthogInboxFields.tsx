@@ -108,11 +108,11 @@ export function PostHogInboxConnectionNotice({ status, error }: PostHogInboxStat
       >
         <div className="flex-1 text-sm">
           <p className="font-medium text-amber-600 dark:text-amber-400">
-            {reconnect ? 'Reconnect PostHog to let Talyn read your Inbox.' : 'Connect PostHog first.'}
+            {reconnect ? 'Reconnect PostHog to let Talyn read and claim your Inbox reports.' : 'Connect PostHog first.'}
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {reconnect
-              ? status.reason ?? 'The PostHog connection does not have the Inbox permissions.'
+              ? status.reason ?? 'The PostHog connection does not have the Inbox permissions (inbox:read, inbox:write and task:write).'
               : 'Talyn reads the Inbox through your PostHog connection. Until you connect PostHog, this automation never runs.'}
           </p>
         </div>

@@ -14,6 +14,7 @@ import { ownerOfWorkspace } from '../workflows/owner.js';
 import { claimRun, settleRun, settlementFor } from '../workflows/runs.js';
 import { getWorkflow } from '../workflows/store.js';
 import { workflowsKillSwitchPulled, workspaceMayUseIssueRules } from '../workflowsAccess.js';
+import { syncPostHogClaim } from '../posthogInbox/claims.js';
 import { activeLinksForPullRequest, settleLink, type IssueLinkRow } from './issueLinks.js';
 
 /**
@@ -121,8 +122,13 @@ export async function handlePullRequestSettled(
     if (!won) continue;
     handled += 1;
     // A PostHog report resolves itself in PostHog when a linked pull request
-    // merges. Talyn writes nothing back to it yet.
-    if (!writeBack || link.integration === 'posthog_inbox') continue;
+    // merges, so Talyn only makes sure the pull request is on its claim. A
+    // pull request that closed without a merge releases the claim.
+    if (link.integration === 'posthog_inbox') {
+      if (link.posthogClaimId) await syncPostHogClaim(link.id);
+      continue;
+    }
+    if (!writeBack) continue;
     try {
       await writeBackMerge(link, pullRequestId, prUrl);
     } catch (err) {

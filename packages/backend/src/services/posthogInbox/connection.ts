@@ -1,5 +1,5 @@
 import type { PostHogInboxAccess } from '@talyn/shared';
-import { POSTHOG_INBOX_SCOPES } from '@talyn/shared';
+import { POSTHOG_INBOX_CLAIM_SCOPES, POSTHOG_INBOX_SCOPES } from '@talyn/shared';
 import { isEncryptedEnvelope } from '../tokenCrypto.js';
 import { getPostHogCodeCredentials } from '../posthogCode/credentials.js';
 import { normalizeHost, readAuthMethod, readPostHogIntegration } from '../posthogCode/integrationRow.js';
@@ -20,11 +20,29 @@ export interface PostHogInboxConnection extends PostHogInboxConnectionRef {
   client: PostHogInboxClient;
 }
 
+function grantedScopes(scope: string | null | undefined): Set<string> {
+  return new Set((scope ?? '').split(/\s+/).filter(Boolean));
+}
+
 /** Whether a stored OAuth scope string grants the Inbox read. */
 export function scopeGrantsInbox(scope: string | null | undefined): boolean {
-  const granted = new Set((scope ?? '').split(/\s+/).filter(Boolean));
-  return granted.has(POSTHOG_INBOX_SCOPES[0]);
+  return grantedScopes(scope).has(POSTHOG_INBOX_SCOPES[0]);
 }
+
+/**
+ * Whether a stored OAuth scope string lets Talyn claim a report and attach its
+ * pull request: `inbox:write` and `task:write`. Without both, the rules start
+ * no session, because a session must not start without a claim.
+ */
+export function scopeGrantsInboxClaims(scope: string | null | undefined): boolean {
+  const granted = grantedScopes(scope);
+  return POSTHOG_INBOX_CLAIM_SCOPES.every((s) => granted.has(s));
+}
+
+/** The editor's notice for a grant that can read the Inbox but not claim. */
+export const CLAIM_SCOPES_MISSING_REASON =
+  'The PostHog connection cannot claim Inbox reports, so the automations start no sessions. ' +
+  'Connect PostHog again to grant the inbox:write and task:write permissions.';
 
 /**
  * What the stored connection says about Inbox access, before any request.
@@ -33,7 +51,16 @@ export function scopeGrantsInbox(scope: string | null | undefined): boolean {
  */
 export async function storedInboxAccess(
   workspaceId: string
-): Promise<{ access: PostHogInboxAccess; reason: string | null; authMethod: 'oauth' | 'personal_api_key' | null; projectId: string | null; host: string | null; integrationId: string | null }> {
+): Promise<{
+  access: PostHogInboxAccess;
+  reason: string | null;
+  authMethod: 'oauth' | 'personal_api_key' | null;
+  projectId: string | null;
+  host: string | null;
+  integrationId: string | null;
+  /** The connection can read the Inbox, even when it cannot claim (`access` is then `reconnect`). */
+  canRead?: boolean;
+}> {
   const row = await readPostHogIntegration(workspaceId);
   if (!row || !row.enabled || !row.config.projectId) {
     return { access: 'not_connected', reason: 'Connect PostHog on the PostHog Code page first.', authMethod: null, projectId: null, host: null, integrationId: row?.id ?? null };
@@ -55,19 +82,31 @@ export async function storedInboxAccess(
         reason: 'The PostHog connection was made before Inbox automations and cannot read the Inbox. Connect PostHog again to grant it.',
       };
     }
-    return { ...base, access: 'ok', reason: null };
+    if (!scopeGrantsInboxClaims(oauth.scope)) {
+      return { ...base, access: 'reconnect', reason: CLAIM_SCOPES_MISSING_REASON, canRead: true };
+    }
+    return { ...base, access: 'ok', reason: null, canRead: true };
   }
   return { ...base, access: 'unknown', reason: null };
 }
 
 /**
- * The connection to read the Inbox with, or null when the workspace has no
- * usable one (none, disabled, a grant without `inbox:read`, or one PostHog
- * revoked). A personal API key is tried: PostHog's 403 says whether it can.
+ * The connection to use, or null when the workspace has no usable one (none,
+ * disabled, a grant without `inbox:read`, or one PostHog revoked).
+ *
+ * `claim` (the default, for the poller and the session start) also needs a
+ * grant that can claim reports (`inbox:write` and `task:write`): the rules
+ * never start a session without a claim. `read` (the dry run) does not.
+ * A personal API key is tried either way: PostHog's 403 says whether it can.
  */
-export async function getPostHogInboxConnection(workspaceId: string): Promise<PostHogInboxConnection | null> {
+export async function getPostHogInboxConnection(
+  workspaceId: string,
+  purpose: 'claim' | 'read' = 'claim'
+): Promise<PostHogInboxConnection | null> {
   const stored = await storedInboxAccess(workspaceId);
-  if (stored.access !== 'ok' && stored.access !== 'unknown') return null;
+  const usable =
+    stored.access === 'ok' || stored.access === 'unknown' || (purpose === 'read' && stored.canRead === true);
+  if (!usable) return null;
   if (!stored.integrationId) return null;
   const creds = await getPostHogCodeCredentials(workspaceId);
   if (!creds || creds.reauthRequired) return null;

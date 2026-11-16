@@ -60,3 +60,100 @@ export interface PostHogInboxDryRun {
   /** True when PostHog had more reports than the dry run reads. */
   truncated: boolean;
 }
+
+// ---- Claims (step 2) --------------------------------------------------------
+
+/**
+ * The scopes Talyn needs to claim a report and attach its pull request.
+ * PostHog's claim endpoint needs `inbox:write`; adding a pull request to the
+ * claim also needs `task:write` (PostHog's OpenAPI, `signals_reports_claim`).
+ */
+export const POSTHOG_INBOX_CLAIM_SCOPES = ['inbox:write', 'task:write'] as const;
+
+/**
+ * Where Talyn's claim on a PostHog report stands.
+ *
+ * - `claimed`: Talyn holds the report in PostHog. The session works on it.
+ * - `pr_attached`: the session's pull request is on the claim. PostHog
+ *   resolves the report when the pull request merges.
+ * - `merged`: the pull request merged. Nothing more is owed.
+ * - `released`: the work ended without a pull request, or the pull request
+ *   closed without a merge. Talyn released the claim.
+ * - `lost`: PostHog ended Talyn's claim, for example because somebody took
+ *   the report over.
+ */
+export type PostHogClaimState = 'claimed' | 'pr_attached' | 'merged' | 'released' | 'lost';
+
+/** Talyn's claim on one run's report, as the run history shows it. */
+export interface PostHogClaimSummary {
+  state: PostHogClaimState;
+  /** The pull request on the claim, or null. */
+  prUrl: string | null;
+  /** Why the claim was released or lost, or null. */
+  reason: string | null;
+  /** True while Talyn still owes PostHog a write (an attach or a release that failed). */
+  pending: boolean;
+  /** The last failed write to PostHog, or null. */
+  error: string | null;
+  updatedAt: string | null;
+}
+
+/**
+ * The prefix a PostHog Inbox session puts on the last line of its final
+ * message when it stops without a fix, for example because the diagnosis was
+ * wrong. Talyn then releases the claim on the report.
+ */
+export const TALYN_REPORT_NOT_FIXED_SENTINEL = 'TALYN_REPORT_NOT_FIXED:';
+
+const REPORT_NOT_FIXED_REASON_MAX = 300;
+
+/**
+ * Read {@link TALYN_REPORT_NOT_FIXED_SENTINEL} from the last non-empty line of
+ * an agent's final message. Null when the message does not end on it: an
+ * agent that only discusses the sentinel does not trip it. A sentinel with no
+ * reason still counts.
+ */
+export function parseReportNotFixedSentinel(text: string | null | undefined): { reason: string } | null {
+  if (typeof text !== 'string' || text.length === 0) return null;
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]!.trim().replace(/^`+|`+$/g, '').trim();
+    if (line.length === 0) continue;
+    if (!line.startsWith(TALYN_REPORT_NOT_FIXED_SENTINEL)) return null;
+    const reason = line.slice(TALYN_REPORT_NOT_FIXED_SENTINEL.length).trim();
+    if (!reason) return { reason: 'The agent stopped without a fix.' };
+    return {
+      reason:
+        reason.length > REPORT_NOT_FIXED_REASON_MAX
+          ? `${reason.slice(0, REPORT_NOT_FIXED_REASON_MAX - 1).trimEnd()}…`
+          : reason,
+    };
+  }
+  return null;
+}
+
+/** One line for the run history: what Talyn's claim on the report is now. */
+export function posthogClaimText(claim: PostHogClaimSummary): string {
+  let text: string;
+  switch (claim.state) {
+    case 'claimed':
+      text = 'Claimed the report in PostHog.';
+      break;
+    case 'pr_attached':
+      text = 'Attached the pull request to the claim in PostHog.';
+      break;
+    case 'merged':
+      text = 'The pull request merged. PostHog resolves the report.';
+      break;
+    case 'released':
+      text = claim.reason ? `Released the claim in PostHog: ${claim.reason}.` : 'Released the claim in PostHog.';
+      break;
+    case 'lost':
+      text = claim.reason ? `PostHog ended the claim: ${claim.reason}.` : 'PostHog ended the claim.';
+      break;
+  }
+  if (claim.pending) {
+    text += claim.error ? ` PostHog did not take the last update (${claim.error}). Talyn tries again.` : ' Talyn has an update to send to PostHog.';
+  }
+  return text.replace(/\.\./g, '.');
+}

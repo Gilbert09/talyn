@@ -1069,7 +1069,7 @@ The GitHub App must deliver the `issues` and `issue_comment` events, and have th
 
 ### 6g. PostHog Inbox rules
 
-A PostHog Inbox rule starts a session when a PostHog self-driving report is ready for work. It uses the workspace's PostHog Code connection (6b): an OAuth grant with `inbox:read`, or a personal API key with that scope.
+A PostHog Inbox rule starts a session when a PostHog self-driving report is ready for work. It uses the workspace's PostHog Code connection (6b): an OAuth grant with `inbox:read`, `inbox:write` and `task:write`, or a personal API key with those scopes. Without `inbox:write` and `task:write` the rules claim nothing and start nothing; the dry run still reads with `inbox:read`.
 
 | Flag | Name | Override | Default | Availability |
 | --- | --- | --- | --- | --- |
@@ -1081,6 +1081,9 @@ How it works:
 - It lists `GET /api/projects/:id/signals/reports/` with `status=ready`, `already_addressed=false`, `unclaimed=true`, the rules' actionability (default `immediately_actionable`) and `ordering=-updated_at`, and pages down to its cursor. PostHog has no "updated after" filter.
 - Every report goes through `ingestPostHogReport(connection, reportId)`, which reads the report by id and runs the rules. A later PostHog webhook calls the same function with only the id.
 - The run's dedupe key is `posthog_inbox:<reportId>:<updated_at>`. The report is claimed in `external_issue_links`, so a second session never starts beside live work on it.
+- Before the session starts, Talyn claims the report in PostHog (`POST .../signals/reports/:id/claim/`, `services/posthogInbox/claims.ts`) and stores `assignee.claim_id` on the link (`posthog_claim_id`, migration 0135). A 409 skips the run (`report_claimed_elsewhere`). A 401/403/429/5xx parks it (`posthog_unauthorized`, `rate_gated`, `posthog_unavailable`) with the poller's backoff (`posthogInbox/backoff.ts`) and gates the connection's claims in memory, so the poller stops too.
+- The claim sweep (`posthog_claim_sweep`, every minute, one replica at a time) reads links whose `posthog_claim_next_check_at` is due. It attaches the session's pull request (`claim_id` + `pull_requests`), releases the claim (`release: true`) when the work ended without one, and marks it `merged` after a merge. `pr:session` and the merge listener sync a link at once. A failed write backs off and stops after 8 attempts.
+- The session prompt asks the agent to end on `TALYN_REPORT_NOT_FIXED: <reason>` when it stops without a fix. The sweep reads it from the session's last turn and releases the claim.
 - A report that PostHog's safety judge suppressed (`suppression_source = safety_judge`) never starts work.
 - Each rule has a daily cap (`workflows.max_runs_per_day`, default 10).
 

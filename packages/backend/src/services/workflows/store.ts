@@ -15,6 +15,7 @@ import type {
 import { workflowIntegrationOf } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { workflowRuns as runsTable, workflows as workflowsTable } from '../../db/schema.js';
+import { posthogClaimsForRuns } from '../inbound/issueLinks.js';
 
 /**
  * Reads and writes for the two workflow tables.
@@ -334,5 +335,24 @@ export async function listWorkflowRuns(
     )
     .orderBy(desc(runsTable.createdAt))
     .limit(opts.limit);
-  return rows.map(rowToWorkflowRun);
+  return withPostHogClaims(rows.map(rowToWorkflowRun));
+}
+
+/**
+ * Add Talyn's PostHog claim to the PostHog Inbox runs among these. One read
+ * for the page, and none when no run is a PostHog Inbox run.
+ */
+export async function withPostHogClaims(runs: WorkflowRun[]): Promise<WorkflowRun[]> {
+  const ids = runs.filter((r) => r.integration === 'posthog_inbox').map((r) => r.id);
+  if (ids.length === 0) return runs;
+  const claims = await posthogClaimsForRuns(ids);
+  return runs.map((r) => (claims.has(r.id) ? { ...r, posthogClaim: claims.get(r.id)! } : r));
+}
+
+/** One run, with its PostHog claim when it has one. */
+export async function getWorkflowRunWithClaim(runId: string): Promise<WorkflowRun | null> {
+  const rows = await getDbClient().select().from(runsTable).where(eq(runsTable.id, runId)).limit(1);
+  if (!rows[0]) return null;
+  const [run] = await withPostHogClaims([rowToWorkflowRun(rows[0])]);
+  return run ?? null;
 }

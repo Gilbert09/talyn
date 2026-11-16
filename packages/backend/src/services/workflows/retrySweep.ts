@@ -18,6 +18,7 @@ import { githubService } from '../github.js';
 import { TickGuard } from '../tickGuard.js';
 import { sessionLaunchUrl, taskLaunchUrl } from '../webApp.js';
 import { linearBlockedUntil } from '../linear/api.js';
+import { claimBlockedUntil } from '../posthogInbox/claims.js';
 import { workflowsKillSwitchPulled } from '../workflowsAccess.js';
 import { runWorkflowActions, type BaseActionContext, type WorkflowActionContext } from './actions.js';
 import { workflowFactsFromRun } from './facts.js';
@@ -180,6 +181,7 @@ class WorkflowRetrySweep {
         return githubRateGate.blockedUntil(githubService.accountKeyFor(run.workspaceId), 'rest');
       }
       if (isIssueFacts(runFacts) && runFacts.connectionId) return linearBlockedUntil(runFacts.connectionId);
+      if (isPostHogInboxFacts(runFacts)) return claimBlockedUntil(runFacts.connectionId);
       return 0;
     };
     const blockedUntilMs = gateUntil();

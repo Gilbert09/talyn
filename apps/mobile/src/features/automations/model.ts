@@ -1,6 +1,6 @@
 import {
   LOOP_DISABLED_REASON_LABELS, LOOP_RUN_FAILURE_LABELS, LOOP_RUN_STATUS_LABELS, WORKFLOW_ACTION_LABELS, WORKFLOW_EVENT_LABELS,
-  WORKFLOW_RUN_STATUS_LABELS, describeSchedule, describeWorkflowActions, describeWorkflowTrigger, loopToInput,
+  WORKFLOW_RUN_STATUS_LABELS, describeSchedule, posthogClaimText, describeWorkflowActions, describeWorkflowTrigger, loopToInput,
   type LoopInput, type LoopRun, type LoopRunStatus, type LoopWithStats, type WorkflowInput, type WorkflowRun,
   type WorkflowRunStatus, type WorkflowWithStats,
 } from '@talyn/shared';
@@ -84,16 +84,19 @@ export function withEnabled<T extends { id: string; enabled: boolean }>(items: r
 }
 
 /** Title and detail of a workflow run row. */
-export function workflowRunText(run: Pick<WorkflowRun, 'integration' | 'subjectLabel' | 'prNumber' | 'prTitle' | 'repoFullName' | 'event' | 'actions' | 'error'>): { title: string; detail: string } {
+export function workflowRunText(run: Pick<WorkflowRun, 'integration' | 'subjectLabel' | 'prNumber' | 'prTitle' | 'repoFullName' | 'event' | 'actions' | 'error' | 'posthogClaim'>): { title: string; detail: string } {
   const failed = run.actions.find((action) => !action.ok);
   const problem = String(failed?.code) === 'slack_scope_missing'
     ? 'Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.'
     : failed ? `${WORKFLOW_ACTION_LABELS[failed.type] ?? failed.type}: ${failed.error ?? 'did not run'}` : run.error;
   const slack = run.integration === 'slack' || run.event === 'slack_message';
   const webhook = run.integration === 'webhook' || run.event === 'webhook_received';
+  const posthog = run.integration === 'posthog_inbox';
+  // A PostHog Inbox run: where Talyn's claim on the report stands, as web shows it.
+  const claim = posthog && run.posthogClaim ? posthogClaimText(run.posthogClaim) : null;
   return {
-    title: webhook ? run.subjectLabel || 'Webhook request' : slack ? run.subjectLabel || 'Slack message' : run.prTitle || `Pull request #${run.prNumber}`,
-    detail: problem ?? [slack || webhook ? null : run.repoFullName, WORKFLOW_EVENT_LABELS[run.event] ?? run.event].filter(Boolean).join(' · '),
+    title: webhook ? run.subjectLabel || 'Webhook request' : slack ? run.subjectLabel || 'Slack message' : posthog ? run.subjectLabel || 'PostHog report' : run.prTitle || `Pull request #${run.prNumber}`,
+    detail: problem ?? claim ?? [slack || webhook || posthog ? null : run.repoFullName, WORKFLOW_EVENT_LABELS[run.event] ?? run.event].filter(Boolean).join(' · '),
   };
 }
 

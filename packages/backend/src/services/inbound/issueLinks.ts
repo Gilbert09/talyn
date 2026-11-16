@@ -1,6 +1,12 @@
 import { v4 as uuid } from 'uuid';
 import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
-import type { IssueEventFacts, IssueWorkflowIntegration, PostHogInboxFacts } from '@talyn/shared';
+import type {
+  IssueEventFacts,
+  IssueWorkflowIntegration,
+  PostHogClaimState,
+  PostHogClaimSummary,
+  PostHogInboxFacts,
+} from '@talyn/shared';
 import { TERMINAL_TASK_STATUSES } from '@talyn/shared';
 import { getPoolDbClient, type Database } from '../../db/client.js';
 import {
@@ -104,6 +110,8 @@ export const LINK_COLUMNS = {
   pullRequestId: externalIssueLinks.pullRequestId,
   status: externalIssueLinks.status,
   createdAt: externalIssueLinks.createdAt,
+  posthogClaimId: externalIssueLinks.posthogClaimId,
+  posthogClaimState: externalIssueLinks.posthogClaimState,
 } as const;
 
 export type IssueLinkRow = Pick<typeof externalIssueLinks.$inferSelect, keyof typeof LINK_COLUMNS>;
@@ -370,4 +378,57 @@ export function activeLinksForPullRequestQuery(workspaceId: string, pullRequestI
 
 export async function activeLinksForPullRequest(workspaceId: string, pullRequestId: string): Promise<IssueLinkRow[]> {
   return activeLinksForPullRequestQuery(workspaceId, pullRequestId);
+}
+
+// ---- PostHog claims (migration 0135) ---------------------------------------
+
+const CLAIM_STATES: ReadonlySet<string> = new Set<PostHogClaimState>(['claimed', 'pr_attached', 'merged', 'released', 'lost']);
+
+/** The query behind {@link posthogClaimsForRuns}. Exported for the egress test. */
+export function posthogClaimsForRunsQuery(runIds: string[]) {
+  return db()
+    .select({
+      runId: externalIssueLinks.runId,
+      state: externalIssueLinks.posthogClaimState,
+      prUrl: externalIssueLinks.posthogClaimPrUrl,
+      reason: externalIssueLinks.posthogClaimReason,
+      nextCheckAt: externalIssueLinks.posthogClaimNextCheckAt,
+      error: externalIssueLinks.posthogClaimError,
+      updatedAt: externalIssueLinks.posthogClaimUpdatedAt,
+      createdAt: externalIssueLinks.createdAt,
+    })
+    .from(externalIssueLinks)
+    .where(
+      and(
+        eq(externalIssueLinks.integration, 'posthog_inbox'),
+        inArray(externalIssueLinks.runId, runIds),
+        sql`${externalIssueLinks.posthogClaimState} IS NOT NULL`
+      )
+    );
+}
+
+/**
+ * Talyn's PostHog claim for each of these runs, by run id. A run without a
+ * claim (it never got that far, or another rule) is absent.
+ */
+export async function posthogClaimsForRuns(runIds: string[]): Promise<Map<string, PostHogClaimSummary>> {
+  const out = new Map<string, PostHogClaimSummary>();
+  if (runIds.length === 0) return out;
+  const rows = await posthogClaimsForRunsQuery(runIds);
+  rows.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  for (const r of rows) {
+    if (!r.runId || !r.state || !CLAIM_STATES.has(r.state)) continue;
+    const state = r.state as PostHogClaimState;
+    out.set(r.runId, {
+      state,
+      prUrl: r.prUrl ?? null,
+      reason: r.reason ?? null,
+      // Owed: a write is scheduled after a failure. A live claim that is only
+      // being watched also has a next check, but no error.
+      pending: Boolean(r.error) && r.nextCheckAt !== null,
+      error: r.error ?? null,
+      updatedAt: r.updatedAt ? r.updatedAt.toISOString() : null,
+    });
+  }
+  return out;
 }

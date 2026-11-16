@@ -344,6 +344,18 @@ describe('automations', () => {
     ['Slack scope missing', { integration: 'slack', subjectLabel: '#general', prNumber: 0, prTitle: '', repoFullName: '',
       event: 'slack_message', actions: [{ type: 'slack_reply', ok: false, code: 'slack_scope_missing', error: 'raw' }], error: null },
       { title: '#general', detail: 'Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.' }],
+    ['PostHog report, claimed', { integration: 'posthog_inbox', subjectLabel: 'Checkout crashes', prNumber: 0, prTitle: '', repoFullName: '', event: 'report_ready', actions: [{ type: 'start_session', ok: true }], error: null,
+      posthogClaim: { state: 'claimed', prUrl: null, reason: null, pending: false, error: null, updatedAt: null } },
+      { title: 'Checkout crashes', detail: 'Claimed the report in PostHog.' }],
+    ['PostHog report, PR attached', { integration: 'posthog_inbox', subjectLabel: 'Checkout crashes', prNumber: 0, prTitle: '', repoFullName: '', event: 'report_ready', actions: [{ type: 'start_session', ok: true }], error: null,
+      posthogClaim: { state: 'pr_attached', prUrl: 'https://github.com/acme/app/pull/3', reason: null, pending: false, error: null, updatedAt: null } },
+      { title: 'Checkout crashes', detail: 'Attached the pull request to the claim in PostHog.' }],
+    ['PostHog report, released', { integration: 'posthog_inbox', subjectLabel: 'Checkout crashes', prNumber: 0, prTitle: '', repoFullName: '', event: 'report_ready', actions: [{ type: 'start_session', ok: true }], error: null,
+      posthogClaim: { state: 'released', prUrl: null, reason: 'the agent stopped without a fix: wrong diagnosis', pending: false, error: null, updatedAt: null } },
+      { title: 'Checkout crashes', detail: 'Released the claim in PostHog: the agent stopped without a fix: wrong diagnosis.' }],
+    ['PostHog report, lost the race', { integration: 'posthog_inbox', subjectLabel: '', prNumber: 0, prTitle: '', repoFullName: '', event: 'report_ready',
+      actions: [{ type: 'start_session', ok: false, code: 'report_claimed_elsewhere', error: 'Another person or agent claimed this report in PostHog first, so Talyn started no session.' }], error: null },
+      { title: 'PostHog report', detail: 'Start a session: Another person or agent claimed this report in PostHog first, so Talyn started no session.' }],
   ])('workflow run text: %s', (_name, run, expected) => {
     const text = workflowRunText(run as never);
     expect(text.title).toBe(expected.title);

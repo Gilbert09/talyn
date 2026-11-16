@@ -11,9 +11,11 @@ PostHog self-driving writes reports about problems in your product. Each report 
 
 PostHog Inbox uses the PostHog connection on the **PostHog Code** page. You connect nothing new.
 
-The connection needs permission to read the Inbox. A PostHog connection made before PostHog Inbox rules does not have it. PostHog Code keeps working, but the rule editor asks you to **Reconnect PostHog**. Connect again from the PostHog Code page, and approve the Inbox permissions.
+The connection needs permission to read the Inbox and to claim reports: `inbox:read`, `inbox:write` and `task:write`. A PostHog connection made before PostHog Inbox rules does not have them. PostHog Code keeps working, but the rule editor asks you to **Reconnect PostHog**. Connect again from the PostHog Code page, and approve the Inbox permissions.
 
-A personal API key needs the `inbox:read` scope. The editor shows whether PostHog accepted the key after the first check.
+Without these permissions, the rules start no sessions. **Preview matches** still works with `inbox:read` only.
+
+A personal API key needs the `inbox:read`, `inbox:write` and `task:write` scopes. The editor shows whether PostHog accepted the key after the first check.
 
 ## How Talyn finds reports
 
@@ -22,6 +24,20 @@ Talyn checks your PostHog project about every 3 minutes. It reads the reports th
 A new rule acts on reports that become ready or change after it is enabled. To see what a rule matches now, use **Preview matches** in the editor. The preview starts nothing.
 
 When a report changes, a rule can act on it again. While a session from that report is still working, Talyn does not start a second one. The run history shows `issue_already_running`.
+
+## Claims in PostHog
+
+Talyn claims each report in PostHog before it starts a session. The claim tells people and other agents that Talyn is working on the report. Talyn never starts a session without a claim.
+
+- **Somebody else claimed the report first.** Talyn starts no session. The run shows as **Skipped**, with the reason. Talyn never takes a claim over.
+- **PostHog refuses the claim or does not answer.** Talyn starts no session yet. The run waits and tries again: 30 minutes after a 401 or 403, PostHog's `Retry-After` after a 429, and 10 minutes after any other failure. Talyn also stops reading new reports for that time.
+- **The session opens a pull request.** Talyn adds the pull request to the claim. When the pull request merges, PostHog resolves the report.
+- **The work ends without a pull request.** Talyn releases the claim, so the report is free again. This happens when the session is archived or deleted, when it fails, or when the agent decides that the diagnosis is wrong.
+- **The pull request closes without a merge.** Talyn releases the claim. The pull request stays on the report.
+
+PostHog's release has no field for a reason, so the reason shows only in Talyn's run history.
+
+When a write to PostHog fails, Talyn tries again with the same waits. The run history shows that an update is still owed.
 
 ## Create a rule
 
@@ -47,7 +63,7 @@ Two checks apply to every rule:
 
 The session works on the report's own repository and opens a pull request.
 
-Your prompt comes first. Talyn then tells the agent to check the report's diagnosis against the code before it changes anything. When the diagnosis is wrong, the agent stops and opens no pull request.
+Your prompt comes first. Talyn then tells the agent to check the report's diagnosis against the code before it changes anything. When the diagnosis is wrong, the agent stops and opens no pull request. The last line of its message then starts with `TALYN_REPORT_NOT_FIXED:` and gives the reason. Talyn reads that line and releases the claim.
 
 Below the prompt, Talyn adds the report's title, priority, link and summary. It quotes them and marks them as untrusted, because PostHog wrote them from product data that anybody can influence.
 
@@ -61,4 +77,4 @@ Each session uses box-hours, like any other. See [Plans, usage and billing](/doc
 
 ## Runs
 
-Open **Runs** to see each result.
+Open **Runs** to see each result. For each run that started a session, the history also shows the claim: claimed, pull request attached, merged, released (with the reason), or ended by PostHog. The mobile app shows the same line.

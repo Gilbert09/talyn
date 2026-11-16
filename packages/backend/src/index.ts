@@ -46,6 +46,7 @@ import { workflowsKillSwitchPulled } from './services/workflowsAccess.js';
 import { loopsKillSwitchPulled } from './services/loopsAccess.js';
 import { initWorkflowRetrySweep } from './services/workflows/retrySweep.js';
 import { initPostHogInboxPoller } from './services/posthogInbox/poller.js';
+import { initPostHogClaimSweep } from './services/posthogInbox/claims.js';
 import { initChecksGreenTrigger } from './services/workflows/checksGreen.js';
 import { initLoopScheduler, loopScheduler } from './services/loops/scheduler.js';
 import { initCodeReviewTriggers } from './services/codeReview/triggers.js';
@@ -186,6 +187,9 @@ async function main() {
     // rule. One indexed read a minute when no workspace has one; the flag is
     // asked per connection, per poll.
     initPostHogInboxPoller();
+    // PostHog Inbox claims: attaches a session's pull request to its claim and
+    // releases a claim whose work ended without one. One indexed read a minute.
+    initPostHogClaimSweep();
     // Raises `pr_checks_passed` off the recomputed check counts — the only
     // place "every check is green" is known. Gated with the engine for the same
     // reason the sweep is: no listener for runs that cannot be created.

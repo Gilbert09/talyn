@@ -1,14 +1,17 @@
 import { PostHogCodeClient } from '../posthogCode/client.js';
 
 /**
- * The PostHog Inbox (self-driving signals) REST API, read-only.
+ * The PostHog Inbox (self-driving signals) REST API: the report reads, and
+ * the one write Talyn makes, the claim.
  *
  * The same transport as PostHog Code (`PostHogCodeClient`): one bearer token
  * per request, a forced refresh and one retry on a 401, and a
  * `PostHogCodeApiError` with the status for anything else. Paths are under
  * `/api/projects/:project_id/signals/reports/` (confirmed against PostHog's
  * OpenAPI schema, `signals_reports_list` / `_retrieve` /
- * `signals_report_artefacts_list`, which need `inbox:read`).
+ * `signals_report_artefacts_list`, which need `inbox:read`). The claim is
+ * `POST .../signals/reports/:id/claim/` (`signals_reports_claim`, `inbox:write`;
+ * adding pull requests also needs `task:write`).
  */
 
 /** One report as PostHog serves it. Only the fields Talyn reads. */
@@ -90,4 +93,34 @@ export class PostHogInboxClient extends PostHogCodeClient {
     if (Array.isArray(page)) return page;
     return Array.isArray(page?.results) ? page.results : [];
   }
+
+  /** Start, resume, add pull requests to or release Talyn's claim on a report. */
+  claimReport(reportId: string, body: PostHogInboxClaimRequest): Promise<PostHogInboxClaimResponse> {
+    return this.request<PostHogInboxClaimResponse>('POST', `/signals/reports/${encodeURIComponent(reportId)}/claim/`, body);
+  }
+}
+
+/**
+ * The body of `POST .../signals/reports/:id/claim/` (PostHog's
+ * `SignalReportClaim`). Only the fields Talyn sends.
+ *
+ * - No `claim_id`: start a claim. A report somebody else holds answers 409.
+ * - `claim_id`: resume Talyn's own claim. A stale claim answers 409.
+ * - `pull_requests`: add GitHub PR URLs. Additive and deduplicated, so a
+ *   repeat is harmless.
+ * - `release`: end the claim. Attached pull requests stay on the report.
+ *   PostHog has no release reason.
+ */
+export interface PostHogInboxClaimRequest {
+  claim_id?: string;
+  pull_requests?: string[];
+  release?: boolean;
+}
+
+/** The report PostHog answers a claim with. Only the fields Talyn reads. */
+export interface PostHogInboxClaimResponse {
+  id?: string;
+  assignee?: { claim_id?: string | null; kind?: string | null } | null;
+  implementation_pr_url?: string | null;
+  work_state?: string | null;
 }

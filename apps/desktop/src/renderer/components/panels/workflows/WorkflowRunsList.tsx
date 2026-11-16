@@ -2,6 +2,7 @@ import { ExternalLink } from 'lucide-react';
 import type { WorkflowActionOutcome, WorkflowRun, WorkflowRunStatus } from '@talyn/shared';
 import {
   isIssueWorkflowIntegration,
+  posthogClaimText,
   WORKFLOW_ACTION_LABELS,
   WORKFLOW_EVENT_LABELS,
   WORKFLOW_RUN_STATUS_LABELS,
@@ -161,9 +162,30 @@ export function WorkflowRunsList({
               "Failed — rate limited" and never changes is the bug this replaced. */}
           {run.status === 'pending_retry' && (
             <p className="text-xs text-muted-foreground">
-              GitHub is rate-limiting this account. Talyn will try again
+              {run.integration === 'posthog_inbox'
+                ? 'PostHog did not take the claim on the report.'
+                : 'GitHub is rate-limiting this account.'}{' '}
+              Talyn will try again
               {run.retryAfter ? ` ${until(run.retryAfter)}` : ' shortly'}
               {run.attempts > 1 ? ` (attempt ${run.attempts + 1})` : ''}.
+            </p>
+          )}
+
+          {/* A PostHog Inbox run: where Talyn's claim on the report stands in PostHog. */}
+          {run.posthogClaim && (
+            <p
+              className={`text-xs ${run.posthogClaim.pending || run.posthogClaim.state === 'lost' ? 'text-amber-500' : 'text-muted-foreground'}`}
+              data-testid="posthog-claim"
+            >
+              {posthogClaimText(run.posthogClaim)}
+              {run.posthogClaim.prUrl && (
+                <>
+                  {' '}
+                  <a href={run.posthogClaim.prUrl} target="_blank" rel="noreferrer" className="hover:underline">
+                    {run.posthogClaim.prUrl.replace(/^https:\/\/github\.com\//, '')}
+                  </a>
+                </>
+              )}
             </p>
           )}
 

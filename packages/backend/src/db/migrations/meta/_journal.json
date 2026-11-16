@@ -953,6 +953,13 @@
       "when": 1790900000110,
       "tag": "0134_posthog_inbox_rules",
       "breakpoints": true
+    },
+    {
+      "idx": 137,
+      "version": "7",
+      "when": 1790900000120,
+      "tag": "0135_posthog_inbox_claims",
+      "breakpoints": true
     }
   ]
 }

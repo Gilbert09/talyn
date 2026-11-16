@@ -2,6 +2,20 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## PostHog Inbox rules, step 2: claims (2026-11-16)
+
+**What.** A PostHog Inbox rule now claims the report in PostHog before its session starts. It attaches the session's pull request to the claim and releases the claim when the work ends without one. PostHog resolves the report itself when a linked pull request merges, so Talyn sends nothing on a merge.
+
+**API, checked against PostHog's OpenAPI and MCP.** One endpoint does it all: `POST /api/projects/:id/signals/reports/:id/claim/` (`signals_reports_claim`). No `claim_id` starts a claim. `claim_id` resumes it, `pull_requests` adds PR URLs (additive, deduplicated), and `release: true` ends it. The answer is the report, with the claim id in `assignee.claim_id`. A 409 means another actor holds the report, the claim id is stale, or the status does not allow a claim. The claim needs `inbox:write`; adding pull requests also needs `task:write`. The release has no reason field. The state endpoint has `dismissal_reason: analysis_wrong`, but it suppresses the report and closes its pull request, so Talyn does not use it for an agent's judgement.
+
+**Order.** Talyn's own link first (cheap, local, the guard against a second session), then the PostHog claim, then the session. No claim, no session.
+
+**Releases.** `linkIsLive` already decides when the work ended (an archived or deleted session, a closed pull request). Two signals are new and PostHog-only: the agent's `TALYN_REPORT_NOT_FIXED:` last line, and a session in `error` for an hour. A deleted session clears the link's session id, so its claim is released after the 10-minute unattached grace.
+
+**Why a sweep.** A session links its pull request on several paths (Create PR, the turn-end branch match, adoption). The sweep reads the link's work by structured ids, so it covers all of them. `pr:session` and the merge listener are the fast paths.
+
+**Not done.** The Inbox still uses the retired PostHog Code connection. `claims.ts` only asks `getPostHogInboxConnection`, so a separate Inbox connection can replace it later.
+
 ## Retire PostHog Code, step 1 (2026-11-15)
 
 **Why.** PostHog Code confused users. It sat next to Claude and Codex as a third agent, but it cannot run sessions.

@@ -9,7 +9,7 @@ import type {
 import { factsIntegration, isGithubFacts, isWebhookFacts, workflowSubjectOf } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { workflowRuns as runsTable } from '../../db/schema.js';
-import { rowToWorkflowRun } from './store.js';
+import { rowToWorkflowRun, withPostHogClaims } from './store.js';
 
 /**
  * The run row's lifecycle, and the rate cap that reads it.
@@ -183,7 +183,9 @@ export async function settleRun(runId: string, input: SettleInput): Promise<Work
   }
 
   const rows = await db.select().from(runsTable).where(eq(runsTable.id, runId)).limit(1);
-  return rows[0] ? rowToWorkflowRun(rows[0]) : null;
+  if (!rows[0]) return null;
+  const run = rowToWorkflowRun(rows[0]);
+  return run.integration === 'posthog_inbox' ? ((await withPostHogClaims([run]))[0] ?? run) : run;
 }
 
 /**
@@ -197,9 +199,17 @@ export async function settleRun(runId: string, input: SettleInput): Promise<Work
  */
 export const MAX_RETRY_ATTEMPTS = 5;
 
+/**
+ * Failure codes that mean the run deliberately did nothing, so it records as
+ * `skipped` like a rate-cap refusal and does not count toward the caps.
+ * `report_claimed_elsewhere`: somebody else claimed the PostHog report first.
+ */
+const SKIP_CODES: ReadonlySet<string> = new Set(['report_claimed_elsewhere']);
+
 /** Derive the run status from the actions that ran. */
 export function statusFromOutcomes(outcomes: WorkflowActionOutcome[]): WorkflowRunStatus {
   if (outcomes.length === 0) return 'skipped';
+  if (outcomes.every((o) => !o.ok && SKIP_CODES.has(o.code ?? ''))) return 'skipped';
   const failed = outcomes.filter((o) => !o.ok).length;
   if (failed === 0) return 'succeeded';
   return failed === outcomes.length ? 'failed' : 'partial';
@@ -225,7 +235,15 @@ export function statusFromOutcomes(outcomes: WorkflowActionOutcome[]): WorkflowR
  *  - `task_already_running` resolves, but by the time it does the PR event that
  *    triggered the workflow is old news.
  */
-const RETRYABLE_CODES: ReadonlySet<string> = new Set(['rate_gated', 'usage_exhausted', 'box_limit_reached']);
+const RETRYABLE_CODES: ReadonlySet<string> = new Set([
+  'rate_gated',
+  'usage_exhausted',
+  'box_limit_reached',
+  // A PostHog claim that PostHog did not take: a 5xx or no answer, or a 401
+  // or 403. Each carries its retry time from the poller's backoff.
+  'posthog_unavailable',
+  'posthog_unauthorized',
+]);
 
 /** Whether an outcome is one the sweep should have another go at. */
 export function isRetryable(outcome: WorkflowActionOutcome): boolean {

@@ -5,6 +5,7 @@ import { getDbClient } from '../../../db/client.js';
 import { repositories as repositoriesTable } from '../../../db/schema.js';
 import { debugBus } from '../../debugBus.js';
 import type { PostHogInboxConnection } from '../../posthogInbox/connection.js';
+import { claimBlockedUntil } from '../../posthogInbox/claims.js';
 import { suggestedReviewersFromArtefacts } from '../../posthogInbox/facts.js';
 import { workspaceMayUsePostHogInboxRules } from '../../workflowsAccess.js';
 import type { WorkflowSourceAdapter, WorkflowSourceTarget } from '../source.js';
@@ -144,7 +145,9 @@ export const posthogInboxWorkflowSource: WorkflowSourceAdapter<
     facts,
   }),
 
-  blockedUntilMs: () => 0,
+  // PostHog refused a recent claim on this connection: a parked start waits
+  // for the same backoff the poller uses.
+  blockedUntilMs: (target) => claimBlockedUntil(target.connectionId),
 
   describe: (input) => `posthog_inbox ${input.connection.id} report ${input.facts.reportId} (${input.facts.updatedAt})`,
 };
