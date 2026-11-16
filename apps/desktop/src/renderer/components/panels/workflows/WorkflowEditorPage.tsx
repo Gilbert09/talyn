@@ -85,6 +85,7 @@ const ACTION_HINTS: Record<WorkflowActionType, string> = {
   request_reviewers: 'The PR author is dropped automatically; asking them would fail the whole call.',
   assign: 'Assignees must be collaborators on the repository.',
   comment: 'Posted as Talyn on the PR conversation.',
+  approve_pr: 'Approves as your GitHub account. GitHub does not let you approve your own PR.',
   run_skill: 'Starts a cloud task. Counts against your plan, and never runs twice on one PR.',
   run_prompt: 'Starts a cloud task. Counts against your plan, and never runs twice on one PR.',
   watch_pr: 'Adds the PR to My PRs, exactly as pasting its URL does.',

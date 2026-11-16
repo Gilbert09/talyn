@@ -320,6 +320,21 @@ export function GithubActionInput({
           </p>
         </div>
       );
+    case 'approve_pr':
+      return (
+        <div className="space-y-1">
+          <Textarea
+            rows={2}
+            value={action.body ?? ''}
+            placeholder="Optional review comment"
+            onChange={(e) => onChange({ ...action, body: e.target.value || undefined })}
+          />
+          <p className="text-xs text-muted-foreground">
+            Optional. Uses the same {'{{...}}'} fields as a comment. If you already approved, the
+            approval is not repeated.
+          </p>
+        </div>
+      );
     case 'run_skill':
       return (
         <div className="space-y-1">

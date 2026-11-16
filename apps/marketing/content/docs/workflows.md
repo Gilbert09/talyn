@@ -59,6 +59,7 @@ The editor offers only the conditions that make sense for the triggers you picke
 | **Request reviewers** | Requests reviews. The author is left out. |
 | **Assign people** | Assigns people. They must be collaborators on the repository. |
 | **Post a comment** | Posts a comment on the pull request as Talyn. You can use templates such as `{{pr.author}}` and `{{pr.baseBranch}}`. |
+| **Approve the PR** | Approves the pull request as your GitHub account, with an optional review comment. GitHub does not let you approve your own pull request. If your approval still stands, Talyn does not approve again. |
 | **Run a skill** | Runs a [skill](/docs/skills) on the pull request with an agent. |
 | **Run a prompt** | Runs your prompt on the pull request with an agent. |
 | **Add to My PRs** | Tracks the pull request on your **Pull requests** page. |

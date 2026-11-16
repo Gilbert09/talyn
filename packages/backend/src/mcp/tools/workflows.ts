@@ -117,6 +117,7 @@ const actionFields: Record<(typeof ALL_WORKFLOW_ACTION_TYPES)[number], string> =
   request_reviewers: 'users?: string[], teams?: string[]',
   assign: 'users: string[]',
   comment: 'body: string',
+  approve_pr: 'body?: string (an optional review comment; same {{pr.*}} fields as comment)',
   run_skill: 'skillKey: string, model?: string',
   run_prompt: 'prompt: string, model?: string',
   watch_pr: 'no extra fields',
