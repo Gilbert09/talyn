@@ -397,6 +397,12 @@ interface ResolvedAuth {
   accessToken: string;
 }
 
+/** One read of a workspace's GitHub integration row, with its config resolved. */
+interface AuthConfigRead {
+  row: { id: string; enabled: boolean; config: unknown; configHash: string; version: string } | undefined;
+  config: GitHubIntegrationConfig | undefined;
+}
+
 export class GitHubApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -551,6 +557,12 @@ class GitHubService extends EventEmitter {
   // its jsonb text. `resolveAuth` still reads the row on every call; this only
   // lets that read skip shipping a config the caller already holds.
   private authConfigCache: Map<string, { hash: string; config: GitHubIntegrationConfig }> = new Map();
+  // The integration-row read in flight per DB handle and workspace, shared by
+  // every `resolveAuth` that starts while it runs. See `readAuthConfig`.
+  private authReads = new WeakMap<Database, Map<string, { epoch: number; read: Promise<AuthConfigRead> }>>();
+  // Moves when a workspace's credential is written, so a read that started
+  // before the write is never shared with a caller that starts after it.
+  private authEpochs: Map<string, number> = new Map();
 
   // Refresh an expiring user token once it's within this window of expiry.
   private static readonly USER_TOKEN_REFRESH_SKEW_MS = 5 * 60_000;
@@ -845,6 +857,7 @@ class GitHubService extends EventEmitter {
    * the stored credential changes, so a reconnect takes effect at once.
    */
   private forgetResolvedAuth(workspaceId: string): void {
+    this.bumpAuthEpoch(workspaceId);
     this.deadCredentials.delete(workspaceId);
     this.authConfigCache.delete(workspaceId);
     this.ownerCoverageCache.delete(workspaceId);
@@ -1199,6 +1212,52 @@ class GitHubService extends EventEmitter {
       .then((rows) => rows[0]);
   }
 
+  private bumpAuthEpoch(workspaceId: string): void {
+    this.authEpochs.set(workspaceId, (this.authEpochs.get(workspaceId) ?? 0) + 1);
+  }
+
+  /**
+   * The integration row and its config. A caller that starts while a read for
+   * the same workspace is in flight on the same DB handle gets that read.
+   *
+   * A discovery or a poll fires many GitHub calls at once, and each one asked
+   * for the same row: N identical queries, each holding a pool connection. A
+   * shared read answers no older than a read the caller started itself, so
+   * this is not a TTL cache. The DB handle is part of the key, so an owner
+   * scope never answers from a read that RLS did not filter for it, and the
+   * epoch keeps a read that started before a credential write from answering
+   * a caller that started after it.
+   */
+  private readAuthConfig(workspaceId: string, mayJoin: boolean): Promise<AuthConfigRead> {
+    const db = this.db;
+    const reads = this.authReads.get(db) ?? new Map<string, { epoch: number; read: Promise<AuthConfigRead> }>();
+    this.authReads.set(db, reads);
+    const epoch = this.authEpochs.get(workspaceId) ?? 0;
+    const pending = reads.get(workspaceId);
+    if (mayJoin && pending && pending.epoch === epoch) return pending.read;
+    const read = this.loadAuthConfig(db, workspaceId);
+    reads.set(workspaceId, { epoch, read });
+    const settle = (): void => {
+      if (reads.get(workspaceId)?.read === read) reads.delete(workspaceId);
+    };
+    read.then(settle, settle);
+    return read;
+  }
+
+  private async loadAuthConfig(db: Database, workspaceId: string): Promise<AuthConfigRead> {
+    const cached = this.authConfigCache.get(workspaceId);
+    const row = await GitHubService.readAuthRow(db, workspaceId, cached?.hash ?? null);
+    if (!row) this.authConfigCache.delete(workspaceId);
+    let config: GitHubIntegrationConfig | undefined;
+    if (row && row.config === null && cached?.hash === row.configHash) {
+      config = cached.config;
+    } else if (row && row.config) {
+      config = row.config as GitHubIntegrationConfig;
+      this.authConfigCache.set(workspaceId, { hash: row.configHash, config });
+    }
+    return { row, config };
+  }
+
   /**
    * Use the workspace user's permissions for every REST and GraphQL operation.
    * Installation credentials have wider access and cannot authorize a workspace.
@@ -1212,16 +1271,9 @@ class GitHubService extends EventEmitter {
     // once — a TTL cache here would hold a deleted integration open.
     // Reload after a successful refresh or a lost conditional write. Bound concurrent replacement retries.
     for (let attempt = 0; attempt < 3; attempt++) {
-      const cached = this.authConfigCache.get(workspaceId);
-      const row = await GitHubService.readAuthRow(this.db, workspaceId, cached?.hash ?? null);
-      if (!row) this.authConfigCache.delete(workspaceId);
-      let config: GitHubIntegrationConfig | undefined;
-      if (row && row.config === null && cached?.hash === row.configHash) {
-        config = cached.config;
-      } else if (row && row.config) {
-        config = row.config as GitHubIntegrationConfig;
-        this.authConfigCache.set(workspaceId, { hash: row.configHash, config });
-      }
+      // A reload never joins a read: one that started before the refresh would
+      // hand back the token that was just replaced.
+      const { row, config } = await this.readAuthConfig(workspaceId, attempt === 0);
       const accessToken = row?.enabled && config ? readAccessToken(config) : null;
       if (this.tokens.get(workspaceId)?.accessToken !== accessToken) {
         this.viewerLoginCache.delete(workspaceId);
@@ -1262,7 +1314,10 @@ class GitHubService extends EventEmitter {
       let refresh = this.userTokenRefreshes.get(workspaceId);
       if (!refresh) {
         refresh = this.rotateUserToken(workspaceId, stored, { id: row.id, config, version: row.version })
-          .finally(() => this.userTokenRefreshes.delete(workspaceId));
+          .finally(() => {
+            this.userTokenRefreshes.delete(workspaceId);
+            this.bumpAuthEpoch(workspaceId);
+          });
         this.userTokenRefreshes.set(workspaceId, refresh);
       }
       // The refresh error type covers both a dead token and a 429/5xx. Only the

@@ -5,7 +5,7 @@ import { githubService } from '../services/github.js';
 import * as githubApp from '../services/githubApp.js';
 import { encryptString, decryptString, type EncryptedEnvelope } from '../services/tokenCrypto.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
-import type { Database } from '../db/client.js';
+import { runInScopedDb, type Database } from '../db/client.js';
 import { workspaces as workspacesTable, integrations as integrationsTable } from '../db/schema.js';
 
 /**
@@ -192,5 +192,85 @@ describe('github resolveAuth config cache', () => {
     expect(await githubService.getVerifiedAccessToken('ws1')).toBe('ghu_replacement');
     const [row] = await db.select({ config: integrationsTable.config }).from(integrationsTable).where(where);
     expect(decryptString((row.config as { accessTokenEnc: EncryptedEnvelope }).accessTokenEnc)).toBe('ghu_replacement');
+  });
+
+  // A burst of GitHub calls used to run one integrations select each.
+  describe('concurrent reads', () => {
+    beforeEach(async () => {
+      await githubService.storeToken('ws1', 'ghu_a', 'bearer', 'repo');
+    });
+
+    /** Hold each read's answer until `release`, after the row has been read. */
+    function gateReads() {
+      const original = GitHubServiceClass.readAuthRow.bind(GitHubServiceClass);
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      const handles: Database[] = [];
+      const spy = spyReads().mockImplementation(async (handle, workspaceId, knownHash) => {
+        handles.push(handle);
+        // The fake scope handles cannot run SQL, so every read uses the test DB.
+        const row = await original(db, workspaceId, knownHash);
+        await gate;
+        return row;
+      });
+      return { spy, handles, release };
+    }
+
+    it.each([1, 2, 5, 10])('%i concurrent calls on one handle share one read', async (calls) => {
+      const { spy, release } = gateReads();
+      const tokens = Array.from({ length: calls }, () => githubService.getVerifiedAccessToken('ws1'));
+      release();
+      expect(await Promise.all(tokens)).toEqual(Array(calls).fill('ghu_a'));
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads again once the shared read has settled', async () => {
+      const spy = spyReads();
+      expect(await githubService.getVerifiedAccessToken('ws1')).toBe('ghu_a');
+      expect(await githubService.getVerifiedAccessToken('ws1')).toBe('ghu_a');
+      expect(spy).toHaveBeenCalledTimes(2);
+    });
+
+    it('never shares a read between two DB handles', async () => {
+      const { spy, handles, release } = gateReads();
+      const scopeA = {} as Database;
+      const scopeB = {} as Database;
+      const tokens = [
+        githubService.getVerifiedAccessToken('ws1'),
+        runInScopedDb(scopeA, () => githubService.getVerifiedAccessToken('ws1')),
+        runInScopedDb(scopeA, () => githubService.getVerifiedAccessToken('ws1')),
+        runInScopedDb(scopeB, () => githubService.getVerifiedAccessToken('ws1')),
+      ];
+      release();
+      expect(await Promise.all(tokens)).toEqual(['ghu_a', 'ghu_a', 'ghu_a', 'ghu_a']);
+      expect(spy).toHaveBeenCalledTimes(3);
+      expect(new Set(handles)).toEqual(new Set([db, scopeA, scopeB]));
+    });
+
+    it.each([
+      ['a reconnect', () => githubService.storeToken('ws1', 'ghu_b', 'bearer', 'repo'), 'ghu_b'],
+      ['a disconnect', () => githubService.removeToken('ws1'), null],
+    ] as const)('a call after %s does not join a read that started before it', async (_label, write, expected) => {
+      const { spy, release } = gateReads();
+      const before = githubService.getVerifiedAccessToken('ws1');
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+      await write();
+      const after = githubService.getVerifiedAccessToken('ws1');
+      release();
+      expect(await before).toBe('ghu_a');
+      expect(await after).toBe(expected);
+      expect(spy).toHaveBeenCalledTimes(2);
+    });
+
+    it('gives every joined caller the failure, then reads again', async () => {
+      const spy = spyReads().mockRejectedValueOnce(new Error('connection lost'));
+      const results = await Promise.allSettled([
+        githubService.getVerifiedAccessToken('ws1'),
+        githubService.getVerifiedAccessToken('ws1'),
+      ]);
+      expect(results.map((r) => r.status)).toEqual(['rejected', 'rejected']);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(await githubService.getVerifiedAccessToken('ws1')).toBe('ghu_a');
+    });
   });
 });
