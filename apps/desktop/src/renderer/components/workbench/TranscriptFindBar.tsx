@@ -9,6 +9,7 @@ import {
   paintMatches,
   scrollToMatch,
   stepMatch,
+  takePendingTranscriptFind,
   type OpenTranscriptFindDetail,
 } from '../../lib/transcriptFind';
 import type { OlderHistory } from './WorkbenchTranscript';
@@ -70,10 +71,19 @@ export function TranscriptFindBar({
         setOpen(false);
         return;
       }
+      takePendingTranscriptFind(workbenchId);
+      if (detail.query) setQuery(detail.query);
       setOpen(true);
       setFocusRequest((n) => n + 1);
     };
     window.addEventListener(OPEN_TRANSCRIPT_FIND_EVENT, onOpen);
+    // A request sent before this transcript was on screen.
+    const pendingQuery = takePendingTranscriptFind(workbenchId);
+    if (pendingQuery) {
+      setQuery(pendingQuery);
+      setOpen(true);
+      setFocusRequest((n) => n + 1);
+    }
     return () => window.removeEventListener(OPEN_TRANSCRIPT_FIND_EVENT, onOpen);
   }, [workbenchId]);
 

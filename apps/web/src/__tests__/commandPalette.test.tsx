@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vite
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { Features, SpaceSessionRow, SpacesTeam, Workbench, WorkbenchChat } from '@talyn/shared';
+import type { Features, SpaceSessionRow, SpacesTeam, Workbench, WorkbenchChat, WorkbenchTranscriptMatch } from '@talyn/shared';
 import { api } from '../lib/api';
 import { CommandPalette } from '../components/CommandPalette';
 import { buildAppShortcuts, orderedLiveWorkbenches, orderedSidebarSessionIds } from '../components/layout/appShortcuts';
@@ -11,11 +11,12 @@ import { useWorkspaceStore } from '../stores/workspace';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useNavigationStore } from '../stores/navigation';
 import { useSpacesStore } from '../stores/spaces';
+import { OPEN_TRANSCRIPT_FIND_EVENT, takePendingTranscriptFind, type OpenTranscriptFindDetail } from '../lib/transcriptFind';
 
 vi.mock('../lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 vi.mock('../lib/api', () => ({
   api: {
-    workbenches: { list: vi.fn(), restore: vi.fn(), get: vi.fn() },
+    workbenches: { list: vi.fn(), restore: vi.fn(), get: vi.fn(), searchTranscripts: vi.fn() },
     workflows: { list: vi.fn(() => Promise.resolve([])) },
     loops: { list: vi.fn(() => Promise.resolve([])) },
     pullRequests: {},
@@ -74,6 +75,7 @@ let unregister: () => void = () => {};
 
 beforeEach(() => {
   vi.mocked(api.workbenches.list).mockReset().mockResolvedValue([]);
+  vi.mocked(api.workbenches.searchTranscripts).mockReset().mockResolvedValue([]);
   vi.mocked(api.workbenches.restore).mockReset();
   useWorkspaceStore.setState({
     currentWorkspaceId: 'ws1',
@@ -292,6 +294,88 @@ it('shows arrow navigation and keeps bracket aliases hidden', () => {
   ]);
 });
 
+describe('CommandPalette transcript search', () => {
+  const match = (workbench: Workbench, snippet: string): WorkbenchTranscriptMatch => ({
+    workbench, chatId: `chat-${workbench.id}`, seq: 4, role: 'user', snippet,
+  });
+
+  afterEach(() => {
+    takePendingTranscriptFind('deps');
+  });
+
+  it.each(['', 'py', '  py  '])('does not search transcripts for %j', async (term) => {
+    render(<CommandPalette />);
+    search(term);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(vi.mocked(api.workbenches.searchTranscripts)).not.toHaveBeenCalled();
+  });
+
+  it('searches once after typing stops and lists the matches with their snippet', async () => {
+    vi.mocked(api.workbenches.searchTranscripts).mockResolvedValue([
+      match(wb('deps', { name: 'Upgrade dependencies' }), 'Please upgrade pyarrow to 17'),
+    ]);
+    render(<CommandPalette />);
+    search('pya');
+    search('pyar');
+    search('pyarrow');
+    expect(screen.getByText('Searching transcripts…')).toBeInTheDocument();
+    await waitFor(() => expect(rowsOfKind('Transcript')).toHaveLength(1));
+    expect(vi.mocked(api.workbenches.searchTranscripts).mock.calls).toEqual([['ws1', 'pyarrow']]);
+    const row = rowsOfKind('Transcript')[0];
+    expect(within(row).getByText('Upgrade dependencies')).toBeInTheDocument();
+    expect(within(row).getByText('Please upgrade pyarrow to 17')).toBeInTheDocument();
+  });
+
+  it('opens a match, keeps an archived one archived, and finds the search in its transcript', async () => {
+    const archived = wb('deps', { name: 'Upgrade dependencies', status: 'archived', archivedAt: '2026-10-13T01:00:00Z' });
+    vi.mocked(api.workbenches.searchTranscripts).mockResolvedValue([match(archived, 'upgrade pyarrow to 17')]);
+    const requests: OpenTranscriptFindDetail[] = [];
+    const listener = (e: Event) => requests.push((e as CustomEvent<OpenTranscriptFindDetail>).detail);
+    window.addEventListener(OPEN_TRANSCRIPT_FIND_EVENT, listener);
+    try {
+      render(<CommandPalette />);
+      search('pyarrow upgrade');
+      await waitFor(() => expect(rowsOfKind('Transcript')).toHaveLength(1));
+      fireEvent.click(rowsOfKind('Transcript')[0]);
+    } finally {
+      window.removeEventListener(OPEN_TRANSCRIPT_FIND_EVENT, listener);
+    }
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'deps' });
+    expect(useNavigationStore.getState().paletteOpen).toBe(false);
+    expect(useWorkbenchStore.getState().workbenches.deps).toBeDefined();
+    expect(vi.mocked(api.workbenches.restore)).not.toHaveBeenCalled();
+    expect(requests).toEqual([{ workbenchId: 'deps', query: 'pyarrow' }]);
+    expect(takePendingTranscriptFind('deps')).toBe('pyarrow');
+  });
+
+  it('lists a session once when its name matches too', async () => {
+    vi.mocked(api.workbenches.searchTranscripts).mockResolvedValue([
+      match(wb('oslo'), 'oslo again'),
+      match(wb('deps', { name: 'Upgrade dependencies' }), 'oslo is mentioned'),
+    ]);
+    render(<CommandPalette />);
+    search('oslo');
+    await waitFor(() => expect(rowsOfKind('Transcript')).toHaveLength(1));
+    expect(rowIds()).toEqual(['session:oslo', 'transcript:deps']);
+  });
+
+  it('shows no transcript rows when the search fails', async () => {
+    vi.mocked(api.workbenches.searchTranscripts).mockRejectedValue(new Error('offline'));
+    render(<CommandPalette />);
+    search('pyarrow');
+    await waitFor(() => expect(screen.getByText('Nothing matches.')).toBeInTheDocument());
+    expect(rowsOfKind('Transcript')).toHaveLength(0);
+  });
+
+  it('does not search when sessions are not offered', async () => {
+    useWorkspaceStore.setState({ features: { workbenches: false } as Features });
+    render(<CommandPalette />);
+    search('pyarrow');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(vi.mocked(api.workbenches.searchTranscripts)).not.toHaveBeenCalled();
+  });
+});
+
 describe('CommandPalette search ranking', () => {
   it('puts the best match first, whatever its type', () => {
     useWorkbenchStore.getState().setWorkbenches('ws1', [wb('chart', { branch: 'feat/insights-chart' })]);
@@ -350,9 +434,17 @@ describe('CommandPalette search ranking', () => {
     expect(rowsOfKind('Session')).toHaveLength(0);
   });
 
-  it('says so when nothing matches', () => {
+  it('says so when nothing matches, after the transcript search', async () => {
     render(<CommandPalette />);
     search('zzzzqqq');
+    expect(rowIds()).toEqual([]);
+    expect(screen.getByText('Searching transcripts…')).toBeInTheDocument();
+    expect(await screen.findByText('Nothing matches.')).toBeInTheDocument();
+  });
+
+  it('says so at once for a search too short for transcripts', () => {
+    render(<CommandPalette />);
+    search('zq');
     expect(rowIds()).toEqual([]);
     expect(screen.getByText('Nothing matches.')).toBeInTheDocument();
   });

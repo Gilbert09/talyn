@@ -1,4 +1,4 @@
-import type { Workbench } from '@talyn/shared';
+import type { Workbench, WorkbenchTranscriptMatch } from '@talyn/shared';
 import type { LegacyPanGesture } from 'react-native-gesture-handler';
 
 import { workbenchState, type SessionStateKind } from '../../lib/status';
@@ -27,13 +27,15 @@ export function matchesQuery(item: Workbench, query: string): boolean {
 /** The label of a group of sessions with no repository. */
 export const NO_REPOSITORY = 'No repository';
 
-export type DrawerSection = 'needs' | 'threads' | 'sessions';
+export type DrawerSection = 'needs' | 'threads' | 'sessions' | 'transcripts';
 export type DrawerEntry =
   | { type: 'heading'; key: string; section: DrawerSection; title: string }
   | { type: 'group'; key: string; repo: string; expanded: boolean; hidden: number; attention: boolean }
   | { type: 'thread'; key: string; item: Workbench; expanded: boolean; childCount: number; running: number }
   | { type: 'row'; key: string; item: Workbench; indent: boolean }
   | { type: 'notice'; key: string; text: string }
+  /** A session or thread whose transcript holds the search, with the text around the match. */
+  | { type: 'transcript'; key: string; match: WorkbenchTranscriptMatch }
   /** What a session is, and jobs to start one with. Shown when there are no sessions at all. */
   | { type: 'starters'; key: string }
   | { type: 'loading'; key: string };
@@ -99,6 +101,31 @@ export function drawerEntries({ sessions, threads, query: raw, collapsedGroups, 
 
   if (searching && !entries.length) entries.push({ type: 'notice', key: 'notice:search', text: 'No sessions or threads match.' });
   return entries;
+}
+
+/** How long the transcript search waits after the last key before it asks the server. Same as web. */
+export const TRANSCRIPT_SEARCH_DEBOUNCE_MS = 250;
+
+/**
+ * The drawer's entries with the transcript matches below the name matches, like
+ * web's palette. A match the name search already shows is left out. While the
+ * server searches and nothing else matches, a quiet line says so.
+ */
+export function withTranscriptMatches(entries: DrawerEntry[], matches: readonly WorkbenchTranscriptMatch[], loading: boolean): DrawerEntry[] {
+  const shown = new Set(entries.flatMap((entry) => entry.type === 'row' || entry.type === 'thread' ? [entry.item.id] : []));
+  const named = shown.size > 0;
+  const extra: WorkbenchTranscriptMatch[] = [];
+  for (const match of matches) {
+    if (shown.has(match.workbench.id)) continue;
+    shown.add(match.workbench.id);
+    extra.push(match);
+  }
+  const rest = entries.filter((entry) => entry.key !== 'notice:search');
+  if (extra.length) {
+    return [...rest, { type: 'heading', key: 'heading:transcripts', section: 'transcripts', title: 'In transcripts' },
+      ...extra.map((match): DrawerEntry => ({ type: 'transcript', key: `transcript:${match.workbench.id}`, match }))];
+  }
+  return loading && !named ? [...rest, { type: 'notice', key: 'notice:transcripts', text: 'Searching transcripts…' }] : entries;
 }
 
 /** How many sessions and threads wait on the person. Drives the menu button's dot. */

@@ -17,7 +17,7 @@ import { openExternal } from '../lib/openExternal';
 vi.mock('../lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 vi.mock('../lib/api', () => ({
   api: {
-    workbenches: { list: vi.fn(), restore: vi.fn() },
+    workbenches: { list: vi.fn(), restore: vi.fn(), searchTranscripts: vi.fn(() => Promise.resolve([])) },
     workflows: { list: vi.fn(() => Promise.resolve([])) },
     loops: { list: vi.fn(() => Promise.resolve([])) },
     pullRequests: {},

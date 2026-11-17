@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { paletteMatchScore, rankPaletteSections, type PaletteEntry, type PaletteSection } from '../lib/paletteSearch';
+import { PALETTE_FOUND_ELSEWHERE, paletteMatchScore, rankPaletteSections, type PaletteEntry, type PaletteSection } from '../lib/paletteSearch';
 
 function entry(id: string, label: string, keywords: PaletteEntry['keywords'] = []): PaletteEntry {
   return { id, label, keywords, content: null, onSelect: () => {} };
@@ -92,6 +92,40 @@ describe('rankPaletteSections', () => {
       section('archived', [entry('x1', 'xoslo'), entry('x2', 'oslo'), entry('x3', 'oslo two')], { limit: 2 }),
     ];
     expect(ids('oslo', sections)).toEqual(['x2', 'x3']);
+  });
+
+  it('matches every row of a section with a match score, below keyword matches', () => {
+    const sections = [
+      section('Session', [entry('s1', 'Lisbon', ['pyarrow-branch']), entry('s2', 'Oslo')]),
+      section('Transcript', [entry('t1', 'Upgrade deps'), entry('t2', 'Pyarrow notes')], { matchScore: PALETTE_FOUND_ELSEWHERE }),
+    ];
+    expect(ids('pyarrow', sections)).toEqual(['t2', 's1', 't1']);
+  });
+
+  it('keeps a match score row above a fuzzy match', () => {
+    const sections = [
+      section('Session', [entry('s1', 'p-y-a-r-r-o-w')]),
+      section('Transcript', [entry('t1', 'Upgrade deps')], { matchScore: PALETTE_FOUND_ELSEWHERE }),
+    ];
+    expect(ids('pyarrow', sections)).toEqual(['t1', 's1']);
+  });
+
+  it.each([
+    ['the name match when the name matches', 'oslo', ['s1']],
+    ['the transcript match when only the transcript matches', 'pyarrow', ['t1']],
+  ])('shows one row of a group: %s', (_name, search, expected) => {
+    const sections = [
+      section('Session', [{ ...entry('s1', 'Oslo'), group: 'wb:1' }]),
+      section('Transcript', [{ ...entry('t1', 'Oslo'), group: 'wb:1' }], { matchScore: PALETTE_FOUND_ELSEWHERE }),
+    ];
+    expect(ids(search, sections)).toEqual(expected);
+  });
+
+  it('keeps rows without a group and rows of other groups', () => {
+    const sections = [
+      section('Session', [{ ...entry('s1', 'Oslo one'), group: 'wb:1' }, entry('s2', 'Oslo two'), { ...entry('s3', 'Oslo three'), group: 'wb:3' }]),
+    ];
+    expect(ids('oslo', sections)).toEqual(['s1', 's2', 's3']);
   });
 
   it('returns every row in order for an empty search', () => {

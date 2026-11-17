@@ -32,6 +32,7 @@ import {
   type WorkbenchEvent,
   type WorkbenchKind,
   type WorkbenchSettings,
+  type WorkbenchTranscriptMatch,
   type WorkbenchTurnPayer,
   type Workbench,
   boxRefusalReason,
@@ -50,6 +51,7 @@ import { chooseReadSource } from '../services/workbenches/sandboxReadSource.js';
 import { BOX_START_SETTINGS_KEYS } from '../services/workbenches/boxStart.js';
 import { requestArchiveAfterTurn } from '../services/workbenches/autoArchive.js';
 import { createWorkbench, type CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
+import { searchTranscripts } from '../services/workbenches/transcriptSearch.js';
 import {
   archiveWorkbench,
   deleteWorkbench,
@@ -719,6 +721,19 @@ export function workbenchRoutes(): Router {
     if (!(await gate(req, res, workspaceId))) return;
     const rows = await listWorkbenches(workspaceId, req.query.includeArchived === 'true', kinds);
     ok(res, await publicWorkbenches(rows));
+  });
+
+  /** Sessions and threads whose transcripts match `q` (⌘K), archived ones too. */
+  router.get('/search', async (req, res) => {
+    const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+    const query = typeof req.query.q === 'string' ? req.query.q : '';
+    if (!(await gate(req, res, workspaceId))) return;
+    const hits = await searchTranscripts(workspaceId, query);
+    const publics = await publicWorkbenches(hits.map((h) => h.row));
+    const matches: WorkbenchTranscriptMatch[] = hits.map((h, i) => ({
+      workbench: publics[i], chatId: h.chatId, seq: h.seq, role: h.role, snippet: h.snippet,
+    }));
+    ok(res, matches);
   });
 
   router.get('/:id', async (req, res) => {

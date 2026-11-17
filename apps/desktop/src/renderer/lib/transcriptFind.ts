@@ -15,10 +15,39 @@ export const OPEN_TRANSCRIPT_FIND_EVENT = 'talyn:open-transcript-find';
 
 export interface OpenTranscriptFindDetail {
   workbenchId: string;
+  /** The text to find. Absent: the bar keeps its own text. */
+  query?: string;
 }
 
-export function requestTranscriptFind(workbenchId: string): void {
-  window.dispatchEvent(new CustomEvent<OpenTranscriptFindDetail>(OPEN_TRANSCRIPT_FIND_EVENT, { detail: { workbenchId } }));
+/** A request with a query for a transcript that is not on screen yet, such as a pick in ⌘K. */
+let pending: { workbenchId: string; query: string; at: number } | null = null;
+const PENDING_MS = 10_000;
+
+/** Open the find bar of a session's transcript. With `query`, also when the transcript mounts in the next seconds. */
+export function requestTranscriptFind(workbenchId: string, query?: string): void {
+  pending = query ? { workbenchId, query, at: Date.now() } : null;
+  const detail: OpenTranscriptFindDetail = query ? { workbenchId, query } : { workbenchId };
+  window.dispatchEvent(new CustomEvent<OpenTranscriptFindDetail>(OPEN_TRANSCRIPT_FIND_EVENT, { detail }));
+}
+
+/** The query of a request for this session that no find bar took yet. A second read answers null. */
+export function takePendingTranscriptFind(workbenchId: string): string | null {
+  const request = pending;
+  if (!request || request.workbenchId !== workbenchId) return null;
+  pending = null;
+  return Date.now() - request.at <= PENDING_MS ? request.query : null;
+}
+
+/**
+ * What to find in a transcript that a search found: the whole search when
+ * the matching text holds it, else its longest word that the text holds.
+ */
+export function transcriptFindText(search: string, matchText: string): string {
+  const query = search.trim().replace(/\s+/g, ' ');
+  const text = matchText.toLowerCase();
+  if (text.includes(query.toLowerCase())) return query;
+  const words = query.split(' ').filter((word) => text.includes(word.toLowerCase()));
+  return words.sort((a, b) => b.length - a.length)[0] ?? query;
 }
 
 /** Text under these is not searched: hidden content and controls that are not transcript text. */

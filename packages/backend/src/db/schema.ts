@@ -2609,6 +2609,40 @@ export const workbenchEvents = pgTable(
   })
 );
 
+const tsvector = customType<{ data: string }>({ dataType: () => 'tsvector' });
+
+/**
+ * The searchable text of a transcript (migration 0142): one row for each user
+ * or assistant event with text blocks. A trigger on `workbench_events` writes
+ * it; `transcriptSearch.ts` backfills older chats and reads it.
+ */
+export const workbenchSearchText = pgTable(
+  'workbench_search_text',
+  {
+    chatId: text('chat_id')
+      .notNull()
+      .references(() => workbenchChats.id, { onDelete: 'cascade' }),
+    seq: bigint('seq', { mode: 'number' }).notNull(),
+    workbenchId: text('workbench_id')
+      .notNull()
+      .references(() => workbenches.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').notNull(),
+    /** `user` or `assistant`. */
+    role: text('role').notNull(),
+    body: text('body').notNull(),
+    tsv: tsvector('tsv').generatedAlwaysAs(
+      sql`to_tsvector('simple'::regconfig, "body") || to_tsvector('simple'::regconfig, regexp_replace("body", '[^[:alnum:]]+', ' ', 'g'))`
+    ),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ name: 'workbench_search_text_pkey', columns: [t.chatId, t.seq] }),
+    tsvIdx: index('idx_workbench_search_text_tsv').using('gin', t.tsv),
+    workspaceIdx: index('idx_workbench_search_text_workspace').on(t.workspaceId, t.createdAt),
+    workbenchIdx: index('idx_workbench_search_text_workbench').on(t.workbenchId),
+  })
+);
+
 /** One turn's time report (migration 0099). Written once, when the turn ends. */
 export const workbenchTurnTimings = pgTable(
   'workbench_turn_timings',

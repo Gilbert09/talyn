@@ -187,6 +187,7 @@ import type {
   ContinueWorkbenchAsThreadInput,
   CreateWorkbenchInput,
   WorkbenchKind,
+  WorkbenchTranscriptMatch,
   PutWorkbenchInstructionFileInput,
   WorkbenchInstructionFile,
   ListMemoryQuery,
@@ -2725,6 +2726,9 @@ export const workbenches = {
     if (opts.kinds?.length) qs.set('kinds', opts.kinds.join(','));
     return request<Workbench[]>('GET', `/workbenches?${qs.toString()}`);
   },
+  /** Sessions and threads whose transcripts match `q`, archived ones too. Best for a search of 3 or more characters. */
+  searchTranscripts: (workspaceId: string, q: string) =>
+    request<WorkbenchTranscriptMatch[]>('GET', `/workbenches/search?${new URLSearchParams({ workspaceId, q }).toString()}`),
   /** The sessions of a thread, newest first, archived ones too. */
   threadSessions: (threadId: string) => request<Workbench[]>('GET', `/workbenches/${enc(threadId)}/sessions`),
   /** Continue a session as a thread. Answers the new thread. */

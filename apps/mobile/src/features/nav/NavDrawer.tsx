@@ -1,4 +1,4 @@
-import type { Workbench } from '@talyn/shared';
+import type { Workbench, WorkbenchTranscriptMatch } from '@talyn/shared';
 import { useGlobalSearchParams, usePathname, useRouter, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useMemo, useState } from 'react';
@@ -6,12 +6,12 @@ import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-na
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SessionStateIcon } from '../../components/Status';
-import { AppText, IconButton, Spinner, type Symbol } from '../../components/UI';
+import { AppText, IconButton, Row, Spinner, type Symbol } from '../../components/UI';
 import { workbenchState } from '../../lib/status';
 import { useNow } from '../../lib/time';
-import { HOME, newWorkRoute, threadRoute } from '../../navigation/routes';
+import { HOME, newWorkRoute, sessionRoute, threadRoute } from '../../navigation/routes';
 import { radius, sans, type, useTheme } from '../../theme/tokens';
-import { workbenchTitle } from '../../workflow/model';
+import { workbenchKind, workbenchTitle } from '../../workflow/model';
 import { useNavItems } from '../more/MoreScreen';
 import { usePrCounts } from '../prs/counts';
 import { pullsRoute, type PullsTab } from '../prs/lists';
@@ -22,8 +22,8 @@ import { ContextSwitcher } from './ContextSwitcher';
 import { GroupHeader, Heading } from './DrawerParts';
 import { SessionStarters } from './SessionStarters';
 import { SpaceDrawerList } from './SpaceDrawer';
-import { useDrawerWork } from './data';
-import { activeTarget, badgeText, drawerEntries, toggled, type DrawerEntry, type DrawerTarget } from './model';
+import { useDrawerWork, useTranscriptMatches } from './data';
+import { activeTarget, badgeText, drawerEntries, toggled, withTranscriptMatches, type DrawerEntry, type DrawerTarget } from './model';
 
 const LIST_LINKS = new Set(['/sessions', '/threads']);
 
@@ -48,11 +48,14 @@ export function NavDrawer({ close }: { close(): void }) {
   const [query, setQuery] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(() => new Set());
   const [collapsedThreads, setCollapsedThreads] = useState<ReadonlySet<string>>(() => new Set());
-  const entries = useMemo(() => offered ? drawerEntries({ sessions: personal.sessions, threads: personal.threads, query, collapsedGroups, collapsedThreads }) : [],
-    [offered, personal, query, collapsedGroups, collapsedThreads]);
+  const place = useActiveContext();
+  const space = place.active?.space ?? null;
+  const { matches, loading } = useTranscriptMatches(query, offered && !space);
+  const entries = useMemo(() => offered
+    ? withTranscriptMatches(drawerEntries({ sessions: personal.sessions, threads: personal.threads, query, collapsedGroups, collapsedThreads }), matches, loading)
+    : [], [offered, personal, query, collapsedGroups, collapsedThreads, matches, loading]);
   const now = useNow();
   const menu = useSessionMenu();
-  const place = useActiveContext();
   const owned = useMemo(() => new Map([...(sessions.data ?? []), ...(threads.data ?? [])].map((item) => [item.id, item])),
     [sessions.data, threads.data]);
 
@@ -75,6 +78,7 @@ export function NavDrawer({ close }: { close(): void }) {
       case 'row': return <View style={item.indent ? styles.indent : undefined}>
         <WorkbenchRow item={item.item} now={now} divider={false} onLongPress={menu.open} />
       </View>;
+      case 'transcript': return <TranscriptMatchRow match={item.match} />;
       case 'notice': return <AppText variant="meta" tone="muted" style={styles.notice}>{item.text}</AppText>;
       case 'starters': return <SessionStarters />;
       case 'loading': return <View accessibilityState={{ busy: true }} style={styles.loading}><Spinner /></View>;
@@ -84,7 +88,6 @@ export function NavDrawer({ close }: { close(): void }) {
   const pages = <AppPages active={active} go={go} history={offered} />;
   // The pull request lists stay pinned. The other pages scroll after the lists, so a phone keeps room for sessions.
   // With no list to scroll (still loading, or no sessions on the account) every page stays pinned.
-  const space = place.active?.space ?? null;
   const pinnedAll = features === null || place.context.kind === 'pending' || (!offered && !space);
   const footer = pinnedAll ? undefined : <View style={styles.footerPages}><AppPages active={active} go={go} history={offered} withPullRequests={false} /></View>;
   return <View style={[styles.drawer, { backgroundColor: c.paper, paddingTop: insets.top + 8, paddingBottom: Math.max(insets.bottom, 8) }]}>
@@ -154,6 +157,21 @@ function SearchField({ value, onChange }: { value: string; onChange(value: strin
       <SymbolView name={{ ios: 'xmark.circle.fill', android: 'cancel' }} size={16} tintColor={c.muted} />
     </Pressable> : null}
   </View>;
+}
+
+/** A session or thread whose transcript holds the search: its name, its repository, and the text around the match. */
+function TranscriptMatchRow({ match }: { match: WorkbenchTranscriptMatch }) {
+  const c = useTheme();
+  const item = match.workbench;
+  const title = workbenchTitle(item);
+  const thread = workbenchKind(item) === 'thread';
+  const place = thread ? 'Thread' : item.repoFullName;
+  return <Row href={thread ? threadRoute(item.id) : sessionRoute(item.id)} title={title} titleLines={1} divider={false}
+    subtitle={place || undefined} accessibilityLabel={[`${title}.`, place ? `${place}.` : '', item.archivedAt ? 'Archived.' : '', match.snippet]
+      .filter(Boolean).join(' ')}
+    leading={<SymbolView name={{ ios: 'text.bubble', android: 'chat' }} size={14} tintColor={c.muted} />}>
+    <AppText variant="meta" tone="muted" numberOfLines={2}>{match.snippet}</AppText>
+  </Row>;
 }
 
 /** A thread with how many of its sessions run, and a toggle for its sessions. */

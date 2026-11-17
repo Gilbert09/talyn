@@ -1,8 +1,8 @@
-import type { Workbench } from '@talyn/shared';
+import type { Workbench, WorkbenchTranscriptMatch } from '@talyn/shared';
 import { Gesture } from 'react-native-gesture-handler';
 
 import { activeTarget, badgeText, configureDrawerSwipe, DRAWER_SWIPE_VERTICAL_SLOP, drawerEntries, drawerWidth, matchesQuery, needsYou,
-  needsYouCount, normalizeQuery, toggled, type DrawerEntry, type DrawerInput } from '../features/nav/model';
+  needsYouCount, normalizeQuery, toggled, withTranscriptMatches, type DrawerEntry, type DrawerInput } from '../features/nav/model';
 import { chat, session, thread } from './workflowFixtures';
 
 const none = new Set<string>();
@@ -101,6 +101,34 @@ describe('drawer entries', () => {
     const entries = drawerEntries(input({ sessions: [alpha, beta, child, waiting], threads: [thread()], query,
       collapsedGroups: new Set(['org/alpha', 'org/beta']), collapsedThreads: new Set(['thread-one']) }));
     expect(keys(entries)).toEqual(expected);
+  });
+});
+
+describe('transcript matches', () => {
+  const found = (item: Workbench): WorkbenchTranscriptMatch => ({ workbench: item, chatId: 'chat-one', seq: 1, role: 'user', snippet: `in ${item.id}` });
+  const old = session({ id: 'old', title: 'Old', archivedAt: '2026-11-09T00:00:00Z' });
+  const named = drawerEntries(input({ sessions: [alpha, beta], query: 'alpha' }));
+  const unmatched = drawerEntries(input({ sessions: [alpha, beta], query: 'zzz' }));
+
+  it.each<[string, DrawerEntry[], WorkbenchTranscriptMatch[], boolean, string[]]>([
+    ['adds matches below the name matches', named, [found(old)], false,
+      ['heading:sessions', 'group:org/alpha', 'session:alpha', 'heading:transcripts', 'transcript:old']],
+    ['leaves out a session the name search shows', named, [found(alpha), found(old)], false,
+      ['heading:sessions', 'group:org/alpha', 'session:alpha', 'heading:transcripts', 'transcript:old']],
+    ['lists a session once', unmatched, [found(old), found(old)], false, ['heading:transcripts', 'transcript:old']],
+    ['adds nothing when every match is shown', named, [found(alpha)], false, ['heading:sessions', 'group:org/alpha', 'session:alpha']],
+    ['keeps the no-match notice with no matches', unmatched, [], false, ['notice:search']],
+    ['says it searches when nothing else matches', unmatched, [], true, ['notice:transcripts']],
+    ['stays quiet while it searches below name matches', named, [], true, ['heading:sessions', 'group:org/alpha', 'session:alpha']],
+    ['shows matches in place of the no-match notice', unmatched, [found(beta)], false, ['heading:transcripts', 'transcript:beta']],
+  ])('%s', (_name, entries, matches, loading, expected) => {
+    expect(keys(withTranscriptMatches(entries, matches, loading))).toEqual(expected);
+  });
+
+  it('names the group and carries the match', () => {
+    const entries = withTranscriptMatches(unmatched, [found(old)], false);
+    expect(entries[0]).toEqual({ type: 'heading', key: 'heading:transcripts', section: 'transcripts', title: 'In transcripts' });
+    expect(entries[1]).toEqual({ type: 'transcript', key: 'transcript:old', match: found(old) });
   });
 });
 
