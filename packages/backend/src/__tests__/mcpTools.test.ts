@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { callApi, McpApiError } from '../mcp/api.js';
 import { buildMcpServer, listToolsFor } from '../mcp/server.js';
+import { SESSION_ONLY_TOOLS } from '../mcp/sessionScope.js';
 import { defaultModelForLoopProvider, emptyLoopInput, type Features } from '@talyn/shared';
 import { TOOLS, type McpToolDefinition } from '../mcp/tools/index.js';
 
@@ -123,8 +124,9 @@ describe('mcp tool registry', () => {
 
   it('covers the full surface (listing, context, actions, tasks)', () => {
     const names = TOOLS.map((t) => t.name);
-    expect(names).toHaveLength(107);
+    expect(names).toHaveLength(108);
     for (const expected of [
+      'talyn_ask_user',
       'talyn_list_workspaces',
       'talyn_get_workspace',
       'talyn_list_repositories',
@@ -684,7 +686,7 @@ describe('MCP product coverage', () => {
     (feature) => {
       const visible = listToolsFor({ ...features, [feature]: false });
       expect(visible.map((entry) => entry.name)).toEqual(
-        TOOLS.filter((entry) => entry.feature !== feature).map((entry) => entry.name)
+        TOOLS.filter((entry) => entry.feature !== feature && !SESSION_ONLY_TOOLS.has(entry.name)).map((entry) => entry.name)
       );
       expect(visible[0].annotations).toEqual(TOOLS[0].annotations);
     }

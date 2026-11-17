@@ -21,7 +21,7 @@ import { TypingDots } from './Pulse';
 import { RowBoundary } from './RowBoundary';
 import { TranscriptRowCache, type TranscriptRow as Row } from './transcript';
 import { findMatches, matchCountLabel, normalizeQuery, selectedIndex, stepIndex, type FindMatch, type FindSelection } from './transcriptFind';
-import { TranscriptRow, type PlanControls } from './TranscriptRow';
+import { TranscriptRow, type PlanControls, type QuestionControls } from './TranscriptRow';
 
 /** How close to the newest message still counts as following new output. */
 const FOLLOW_DISTANCE = 64;
@@ -54,6 +54,7 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
   const [following, setFollowing] = useState(local.following);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [planBusy, setPlanBusy] = useState(false);
+  const [questionBusy, setQuestionBusy] = useState(false);
   const cache = useRef(new TranscriptRowCache());
   /** The reader reached the oldest loaded message while another load ran. The older page is owed once it ends. */
   const olderOwed = useRef(false);
@@ -113,6 +114,17 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
       inputRef.current?.focus();
     },
   }), [planBusy, running, offline, ready, chat, workflow, item.id]);
+  const queued = Boolean(chat?.queuedMessages?.length);
+  const question: QuestionControls = useMemo(() => ({
+    busy: questionBusy, disabled: offline || !ready, waiting: running || queued,
+    answer: (text: string) => {
+      if (!chat || questionBusy) return;
+      setQuestionBusy(true);
+      chatActions.answerQuestion(chat.id, text).then(() => {
+        void workflow.load('workbench', item.id); void workflow.load('transcript', chat.id);
+      }, () => Alert.alert('Could not send the answer', 'Try again.')).finally(() => setQuestionBusy(false));
+    },
+  }), [questionBusy, running, queued, offline, ready, chat, workflow, item.id]);
 
   // Find in the loaded conversation. Matches are oldest first, and a new query selects the newest.
   const [query, setQuery] = useState('');
@@ -198,7 +210,7 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
           {empty && !startHint ? <AppText variant="meta" tone="muted" style={local_.empty}>No messages yet.</AppText> : null}
         </View>}
         renderItem={({ item: row }) => <View style={row.key === currentKey ? [local_.current, currentStyle] : undefined}>
-          <TranscriptRow row={row} now={now} workbench={item} plan={plan} highlight={highlight && matchKeys.has(row.key) ? highlight : undefined} />
+          <TranscriptRow row={row} now={now} workbench={item} plan={plan} question={question} highlight={highlight && matchKeys.has(row.key) ? highlight : undefined} />
           {row.kind === 'failed' && rows[0]?.key === row.key && chat && (chat.status === 'idle' || chat.status === 'error')
             && !chat.queuedMessages?.length ? <TurnFailureActions chatId={chat.id} workbenchId={item.id} text={row.text}
               reconnect={row.reason === 'reauth'} resumeAt={chat.resumeAt} resumeReason={chat.resumeReason} disabled={offline || !ready} /> : null}

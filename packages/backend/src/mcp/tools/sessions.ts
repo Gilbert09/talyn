@@ -4,6 +4,9 @@ import {
   extractToolText,
   formatDurationMs,
   isTalynOriginMessage,
+  messageSender,
+  parseQuestionEvent,
+  questionText,
   TURN_TIME_CATEGORIES,
   TURN_TIME_CATEGORY_LABELS,
   type AgentEvent,
@@ -376,7 +379,8 @@ function transcriptItems(events: WorkbenchEvent[]): { seq: number; text: string 
   for (const { event, seq } of events) {
     const talyn = (event as { talyn?: { kind?: string } }).talyn;
     if (event.type === 'user' && talyn?.kind === 'user_message') {
-      const label = isTalynOriginMessage(talyn) ? 'talyn' : 'user';
+      const sender = messageSender(talyn);
+      const label = isTalynOriginMessage(talyn) ? 'talyn' : sender ? `thread "${sender.name}"` : 'user';
       const content = event.message?.content;
       const text = Array.isArray(content)
         ? content
@@ -386,6 +390,8 @@ function transcriptItems(events: WorkbenchEvent[]): { seq: number; text: string 
         : '';
       if (text) items.push({ seq, text: `${label}: ${text}` });
     }
+    const asked = parseQuestionEvent(event as unknown as Record<string, unknown>);
+    if (asked) items.push({ seq, text: `[question to the person]\n${questionText(asked)}` });
   }
   for (const block of buildBlocks(events.map((e) => e.event as AgentEvent))) {
     const seq = eventSeq(block.key) ?? lastSeq;
@@ -712,6 +718,8 @@ export const SESSIONS = [
         const chatId = await resolveChat(ownerId, args);
         if (await targetsSelf(ctx, args, chatId)) throw new Error(SELF_MESSAGE);
         const body: Record<string, unknown> = { text };
+        // The route labels the message as the thread's when the caller is the session's thread.
+        if (ctx?.session) body.fromThreadId = ctx.session.workbenchId;
         if (args.plan_mode !== undefined) body.planMode = bool(args, 'plan_mode');
         if (str(args.model)) body.model = str(args.model);
         if (str(args.effort)) body.effort = str(args.effort);

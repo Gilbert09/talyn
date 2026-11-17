@@ -155,6 +155,17 @@ describe('transcript turns', () => {
     ]);
   });
 
+  it.each([
+    ['a person wrote it', undefined, null],
+    ['the thread wrote it', { sender: { kind: 'thread', threadId: 't1', name: 'Storage plan' } }, { kind: 'thread', threadId: 't1', name: 'Storage plan' }],
+    ['the sender has no thread id', { sender: { kind: 'thread', name: 'Storage plan' } }, null],
+    ['the sender is not a thread', { sender: { kind: 'person', threadId: 't1' } }, null],
+  ])('keeps who sent the user message: %s', (_n, talyn, expected) => {
+    const message = user(1, 1, 'hi');
+    const [turn] = splitTurns([{ ...message, event: { ...message.event, ...(talyn ? { talyn } : {}) } as AgentEvent }, we(2, 1, {})]);
+    expect(turn.sender).toEqual(expected);
+  });
+
   it('keeps a turn whose user message was never recorded', () => {
     const turns = splitTurns([we(1, 1, {}), we(2, 1, {})]);
     expect(turns).toHaveLength(1);

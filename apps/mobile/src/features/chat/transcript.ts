@@ -1,7 +1,7 @@
 import {
-  PLAN_APPROVED_MESSAGE, buildBlocks, findTurnPlan, groupToolRuns, isClaudeInterruptionEvent, mergeToolBlocks, messageTrigger, messageTriggerText,
-  stripAutoPrBlock, stripPlanBlocks, type AgentEvent, type GroupedBlock, type ThreadSessionEvent, type ToolBlock,
-  type ToolGroupBlock, type WorkbenchEvent,
+  PLAN_APPROVED_MESSAGE, buildBlocks, findTurnPlan, findTurnQuestion, groupToolRuns, isClaudeInterruptionEvent, mergeToolBlocks, messageSender,
+  messageTrigger, messageTriggerText, questionSummary, stripAutoPrBlock, stripPlanBlocks, type AgentEvent, type GroupedBlock, type ThreadSessionEvent,
+  type ToolBlock, type ToolGroupBlock, type WorkbenchEvent, type WorkbenchMessageSender, type WorkbenchQuestionEvent,
 } from '@talyn/shared';
 
 import { ROW_TEXT_LIMIT } from '../../workflow/model';
@@ -10,10 +10,13 @@ import { eventAttachments, type MessageImage } from './attachments';
 
 type SystemBlock = Extract<GroupedBlock, { kind: 'system' }>;
 export type PlanState = 'open' | 'approved' | 'past';
+/** `open`: the last turn asked. `answered`: a later message answered it. */
+export type QuestionState = 'open' | 'answered';
 interface Base { key: string; timestamp: string | null }
 /** One row of the conversation list. Rows are oldest first. */
 export type TranscriptRow = Base & (
-  | { kind: 'user'; text: string; attachments: number; files: MessageImage[] }
+  /** `sender`: set when the session's thread wrote the message. */
+  | { kind: 'user'; text: string; attachments: number; files: MessageImage[]; sender?: WorkbenchMessageSender }
   | { kind: 'text'; text: string; streaming: boolean }
   | { kind: 'thinking'; text: string }
   /** `partial`: the window holds only a preview of the call or its result. */
@@ -26,6 +29,8 @@ export type TranscriptRow = Base & (
   | { kind: 'failed'; text: string; reason?: 'reauth' | 'limited' | 'missing' | 'unavailable' }
   | { kind: 'stopped' }
   | { kind: 'plan'; plan: string; state: PlanState }
+  /** `answeredBy`: the thread that answered. Null when the person answered or nobody did yet. */
+  | { kind: 'question'; question: WorkbenchQuestionEvent; state: QuestionState; answeredBy: WorkbenchMessageSender | null }
   | { kind: 'queued'; text: string; fromTalyn: boolean }
   /** Events that could not be turned into rows. The rest of the conversation still shows. */
   | { kind: 'broken' }
@@ -59,7 +64,7 @@ const timeOf = (entry: WorkbenchEvent) => {
   return typeof raw === 'string' && Number.isFinite(Date.parse(raw)) ? raw : null;
 };
 
-interface Turn { turn: number; user: { text: string; seq: number; at: string | null; files: MessageImage[] } | null; events: AgentEvent[]; times: Map<number, string | null> }
+interface Turn { turn: number; user: { text: string; seq: number; at: string | null; files: MessageImage[]; sender: WorkbenchMessageSender | null } | null; events: AgentEvent[]; times: Map<number, string | null> }
 /** Split one turn's events at each new user message, like web `splitTurns`. */
 function splitTurns(turn: number, events: WorkbenchEvent[], interruption: (entry: WorkbenchEvent) => boolean): Turn[] {
   const turns: Turn[] = [];
@@ -75,7 +80,7 @@ function splitTurns(turn: number, events: WorkbenchEvent[], interruption: (entry
       turns.push(current);
     }
     if (text !== null && current.user === null && current.events.length === 0) {
-      current.user = { text, seq: entry.seq, at: timeOf(entry), files: eventFiles(entry.event) };
+      current.user = { text, seq: entry.seq, at: timeOf(entry), files: eventFiles(entry.event), sender: messageSender(entry.event.talyn) };
     } else {
       current.events.push(event);
       current.times.set(entry.seq, timeOf(entry));
@@ -90,7 +95,10 @@ const NONE: readonly string[] = Object.freeze([]);
 /** The rows of one turn without its plan, which depends on the next turn. */
 function turnRows(chatId: string, turn: Turn, partial: ReadonlySet<string>): TranscriptRow[] {
   const rows: TranscriptRow[] = [];
-  if (turn.user) rows.push({ key: `${chatId}:${turn.user.seq}.user`, kind: 'user', text: clip(turn.user.text), timestamp: turn.user.at, attachments: turn.user.files.length, files: turn.user.files });
+  if (turn.user) {
+    rows.push({ key: `${chatId}:${turn.user.seq}.user`, kind: 'user', text: clip(turn.user.text), timestamp: turn.user.at, attachments: turn.user.files.length, files: turn.user.files,
+      ...(turn.user.sender ? { sender: turn.user.sender } : {}) });
+  }
   if (!turn.events.length) return rows;
   const cancelled = turn.events.some((event) => event.type === 'result' && event.subtype === 'cancelled');
   for (const block of groupToolRuns(mergeToolBlocks(buildBlocks(turn.events)))) {
@@ -123,8 +131,11 @@ function turnRows(chatId: string, turn: Turn, partial: ReadonlySet<string>): Tra
   return rows;
 }
 
-/** One turn's share of the conversation: its rows, and what its plan needs from its neighbours. */
-interface Segment { rows: TranscriptRow[]; plan: string | null; turn: number; userSeq: number | null; userText: string | null }
+/** One turn's share of the conversation: its rows, and what its plan and its question need from its neighbours. */
+interface Segment {
+  rows: TranscriptRow[]; plan: string | null; question: WorkbenchQuestionEvent | null; turn: number; userSeq: number | null; userText: string | null;
+  sender: WorkbenchMessageSender | null;
+}
 interface Group { entries: WorkbenchEvent[]; segments: Segment[] }
 
 function sameEntries(a: WorkbenchEvent[], b: WorkbenchEvent[]) {
@@ -215,10 +226,15 @@ export class TranscriptRowCache {
     };
     segments.forEach((segment, index) => {
       segment.rows.forEach(push);
-      if (segment.plan === null) return;
       const following = segments[index + 1];
-      const state: PlanState = !following ? 'open' : following.userText === PLAN_APPROVED_MESSAGE ? 'approved' : 'past';
-      push({ key: `${chatId}:${segment.turn}.${segment.userSeq ?? index}.plan`, timestamp: null, kind: 'plan', plan: clip(segment.plan), state });
+      if (segment.plan !== null) {
+        const state: PlanState = !following ? 'open' : following.userText === PLAN_APPROVED_MESSAGE ? 'approved' : 'past';
+        push({ key: `${chatId}:${segment.turn}.${segment.userSeq ?? index}.plan`, timestamp: null, kind: 'plan', plan: clip(segment.plan), state });
+      }
+      if (segment.question !== null) {
+        push({ key: `${chatId}:${segment.turn}.${segment.userSeq ?? index}.question`, timestamp: null, kind: 'question', question: segment.question,
+          state: following ? 'answered' : 'open', answeredBy: following?.sender ?? null });
+      }
     });
     this.previous = next;
     return rows;
@@ -230,11 +246,12 @@ export class TranscriptRowCache {
       for (const entry of entries) for (const id of slimTools(entry.event)) partial.add(id);
       return splitTurns(turn, entries, this.interrupted).map((item) => ({
         rows: turnRows(chatId, item, partial), plan: item.events.length ? findTurnPlan(item.events) ?? null : null,
-        turn: item.turn, userSeq: item.user?.seq ?? null, userText: item.user?.text ?? null,
+        question: item.events.length ? findTurnQuestion(item.events) : null,
+        turn: item.turn, userSeq: item.user?.seq ?? null, userText: item.user?.text ?? null, sender: item.user?.sender ?? null,
       }));
     } catch {
       // One unreadable turn shows as a notice. The rest of the conversation still draws.
-      return [{ rows: [{ key: `${chatId}:${entries[0].seq}.broken`, timestamp: null, kind: 'broken' }], plan: null, turn, userSeq: null, userText: null }];
+      return [{ rows: [{ key: `${chatId}:${entries[0].seq}.broken`, timestamp: null, kind: 'broken' }], plan: null, question: null, turn, userSeq: null, userText: null, sender: null }];
     }
   }
 }
@@ -247,7 +264,7 @@ export function transcriptRows(chatId: string, events: WorkbenchEvent[]): Transc
 /** What a screen reader says for a row. */
 export function rowLabel(row: TranscriptRow): string {
   switch (row.kind) {
-    case 'user': return `You said: ${row.text}`;
+    case 'user': return row.sender ? `${senderLabel(row.sender)}: ${row.text}` : `You said: ${row.text}`;
     case 'text': return `Agent said: ${row.text}`;
     case 'thinking': return 'Agent thinking';
     case 'failed': return `Turn failed. ${row.text}`;
@@ -255,9 +272,20 @@ export function rowLabel(row: TranscriptRow): string {
     case 'queued': return `${row.fromTalyn ? 'From Talyn' : 'Queued'}: ${row.text}`;
     case 'system': return row.text;
     case 'plan': return 'Plan';
+    case 'question': return `${row.state === 'answered' ? 'Answered question' : 'Question'}: ${questionSummary(row.question)}`;
     case 'permission': return `Permission for ${row.toolName}`;
     case 'tool': return `Tool ${row.tool.name}`;
     case 'tool_group': return row.group.summary;
     case 'broken': return 'Part of this conversation could not be shown.';
   }
+}
+
+/** The line above a message the session's thread wrote. */
+export function senderLabel(sender: WorkbenchMessageSender): string {
+  return sender.name ? `From thread ${sender.name}` : 'From the thread';
+}
+
+/** The line in a question card's header after a later message answered it. */
+export function answeredLabel(answeredBy: WorkbenchMessageSender | null): string {
+  return answeredBy ? `Answered by thread ${answeredBy.name}`.trim() : 'Answered';
 }
