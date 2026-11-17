@@ -29,7 +29,7 @@ import { LinearSettings } from '../components/panels/LinearSettings';
 import { TrunkSettingsCard } from '../components/panels/TrunkSettingsCard';
 import { PrivateRoutesSettings } from '../components/settings/sections/PrivateRoutesSettings';
 import {
-  PostHogInboxConnectionNote,
+  PostHogInboxAutomationsGate,
   PostHogInboxConnectionSection,
 } from '../components/panels/workflows/posthogInboxFields';
 
@@ -297,12 +297,9 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
             </div>
           )}
           {section === 'rules' && kind === 'posthog_inbox' && hasRules && (
-            <div className="flex h-full flex-col">
-              <PostHogInboxConnectionNote />
-              <div className="min-h-0 flex-1">
-                <WorkflowsPanel integration="posthog_inbox" />
-              </div>
-            </div>
+            <PostHogInboxAutomationsGate>
+              <WorkflowsPanel integration="posthog_inbox" />
+            </PostHogInboxAutomationsGate>
           )}
           {section === 'rules' && kind === 'schedule' && <LoopsPanel />}
         </Suspense>
