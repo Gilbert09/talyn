@@ -4,7 +4,7 @@ import type { WorkbenchBackground, WorkbenchBackgroundJob, WorkbenchWakeup } fro
 vi.mock('../lib/api', () => ({ api: { workbenches: { background: vi.fn() } } }));
 
 import { api } from '../lib/api';
-import { formatCountdown, formatRunTime, isActiveBackground, keepAwakeLabel, wakeLaterPresets, wakeupTitle, wakeupWhen } from '../lib/sessionBackground';
+import { emptyLogText, formatCountdown, formatRunTime, isActiveBackground, keepAwakeLabel, wakeLaterPresets, wakeupTitle, wakeupWhen } from '../lib/sessionBackground';
 import { loadBackground, useSessionBackgroundStore } from '../stores/sessionBackground';
 
 const empty = (workbenchId: string): WorkbenchBackground => ({ workbenchId, jobs: [], wakeups: [] });
@@ -44,6 +44,13 @@ describe('session background store', () => {
 });
 
 describe('session background helpers', () => {
+  it.each([
+    [true, 'No output yet.'],
+    [false, 'The job printed no output.'],
+  ])('says what an empty log means when running is %s', (running, expected) => {
+    expect(emptyLogText(running)).toBe(expected);
+  });
+
   it('formats run times and wake-up countdowns', () => {
     const start = '2026-11-08T10:00:00Z';
     expect(formatRunTime(start, null, new Date('2026-11-08T10:00:42Z'))).toBe('42s');
