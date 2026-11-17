@@ -609,3 +609,31 @@ export function posthogInboxRunSummary(results: PostHogInboxRunResult[], dailyCa
 
 /** How a run was started. `event` is the poller or a push; `manual` is "Run selected". */
 export type WorkflowRunTrigger = 'event' | 'manual';
+
+/**
+ * The placeholders a PostHog Inbox rule's prompt can use. Talyn fills them in
+ * when the session starts (`posthogInboxRulePrompt` in the backend). A short
+ * value (the link, the id, the repository) goes inline. A long or free-text
+ * value (the title, the summary) is quoted below the prompt as untrusted text,
+ * and the prompt points at it.
+ */
+export const POSTHOG_INBOX_PROMPT_FIELDS = [
+  { key: 'report.title', label: 'Title', description: 'The title of the report.' },
+  { key: 'report.url', label: 'Link', description: 'The link to the report in PostHog.' },
+  { key: 'report.summary', label: 'Summary', description: "PostHog's summary of the problem." },
+  { key: 'report.id', label: 'Report ID', description: 'The id of the report in PostHog.' },
+  { key: 'repo', label: 'Repository', description: 'The repository the session works on, as owner/name.' },
+] as const;
+
+export type PostHogInboxPromptField = (typeof POSTHOG_INBOX_PROMPT_FIELDS)[number]['key'];
+
+/** The placeholder text for a field: `{{report.title}}`. */
+export function posthogInboxPromptPlaceholder(key: PostHogInboxPromptField): string {
+  return `{{${key}}}`;
+}
+
+/** The prompt a new PostHog Inbox rule starts with. The person can change it. */
+export const POSTHOG_INBOX_DEFAULT_PROMPT =
+  'Fix the problem in the PostHog report "{{report.title}}" ({{report.url}}).\n\n' +
+  "Read the report's summary: {{report.summary}}\n\n" +
+  'Add a test that fails without the fix.';

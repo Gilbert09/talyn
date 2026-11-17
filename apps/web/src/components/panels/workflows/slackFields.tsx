@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Check, Loader2, Lock, Plus, X } from 'lucide-react';
 import type { SlackChannelsResponse, SlackChannelSummary, SlackStatus, WorkflowAction, WorkflowConditions, WorkflowIntegration } from '@talyn/shared';
 import { FLEET_MODELS } from '@talyn/shared';
@@ -17,6 +17,7 @@ import { Input } from '../../ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover';
 import { Select } from '../../ui/select';
 import { Textarea } from '../../ui/textarea';
+import { PostHogInboxPromptFields } from './posthogInboxFields';
 import { TokenField } from './workflowFields';
 
 export type SlackChannelsState =
@@ -194,6 +195,7 @@ export function StartSessionInput({ action, onChange, integration }: {
 }) {
   const repositories = useWorkspaceStore((s) => s.repositories);
   useFleetModelCatalog();
+  const promptRef = useRef<HTMLTextAreaElement>(null);
   // A GitHub Issues rule can leave the repository empty: the issue's own repository.
   const setRepository = (value: string) => onChange({ ...action, repositoryId: value || null });
   const emptyRepository = integration === 'slack'
@@ -207,8 +209,9 @@ export function StartSessionInput({ action, onChange, integration }: {
       </Select>
     </label>}
     <label className="block text-xs font-medium text-muted-foreground">Prompt
-      <Textarea className="mt-1" rows={4} value={action.prompt} onChange={(e) => onChange({ ...action, prompt: e.target.value })} />
+      <Textarea ref={promptRef} className="mt-1" rows={4} value={action.prompt} onChange={(e) => onChange({ ...action, prompt: e.target.value })} />
     </label>
+    {integration === 'posthog_inbox' && <PostHogInboxPromptFields prompt={action.prompt} onChange={(prompt) => onChange({ ...action, prompt })} textareaRef={promptRef} />}
     {integration === 'webhook' && <p className="text-xs text-muted-foreground">
       Talyn adds the request body below your prompt as untrusted text. {'{{payload.<path>}}'} in the prompt is quoted the same way.
     </p>}

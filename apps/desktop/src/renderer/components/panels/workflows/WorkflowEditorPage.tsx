@@ -2,6 +2,7 @@ import { captureAnalyticsException } from '../../../lib/analytics';
 import { useCallback, useMemo, useState } from 'react';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import type {
+  WorkflowAction,
   WorkflowActionType,
   WorkflowConditions,
   WorkflowInput,
@@ -28,6 +29,7 @@ import {
   workflowIntegrationOf,
   WEBHOOK_WORKFLOW_CONDITION_SPECS,
   posthogInboxPreviewInput,
+  POSTHOG_INBOX_DEFAULT_PROMPT,
 } from '@talyn/shared';
 import { Button } from '../../ui/button';
 import { cn } from '../../../lib/utils';
@@ -130,6 +132,14 @@ const NO_ACTIONS: Record<WorkflowIntegration, string> = {
   posthog_inbox: 'Add an action. It starts a session on the report\'s repository.',
 };
 
+/** A new action row. A PostHog Inbox session starts with a prompt that points at the report. */
+function newWorkflowAction(type: WorkflowActionType, integration: WorkflowIntegration): WorkflowAction {
+  const action = emptyWorkflowAction(type);
+  return action.type === 'start_session' && integration === 'posthog_inbox'
+    ? { ...action, prompt: POSTHOG_INBOX_DEFAULT_PROMPT }
+    : action;
+}
+
 export function WorkflowEditorPage({
   integration,
   editing,
@@ -143,7 +153,7 @@ export function WorkflowEditorPage({
     const blank = emptyWorkflowInput(integration);
     // An issue or PostHog Inbox rule starts a session by default.
     return isIssueWorkflowIntegration(integration) || integration === 'posthog_inbox'
-      ? { ...blank, actions: [emptyWorkflowAction('start_session')] }
+      ? { ...blank, actions: [newWorkflowAction('start_session', integration)] }
       : blank;
   });
   const [saving, setSaving] = useState(false);
@@ -479,7 +489,7 @@ export function WorkflowEditorPage({
                 onPick={(type) =>
                   setInput((p) => ({
                     ...p,
-                    actions: [...p.actions, emptyWorkflowAction(type as WorkflowActionType)],
+                    actions: [...p.actions, newWorkflowAction(type as WorkflowActionType, kind)],
                   }))
                 }
               />
