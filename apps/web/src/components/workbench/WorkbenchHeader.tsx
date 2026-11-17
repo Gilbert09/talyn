@@ -56,6 +56,7 @@ import { PrPill } from './WorkbenchBadges';
 import { PrCopyLinkButton } from './PrCopyLinkButton';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from './archiveWorkbench';
 import { createSessionChat } from './createSessionChat';
+import { AutomationChip } from './AutomationChip';
 import { SlackThreadChip } from './SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
@@ -715,6 +716,7 @@ export function WorkbenchHeader({
             {slackSourceOf(workbench) && (
               <SlackThreadChip source={slackSourceOf(workbench)!} />
             )}
+            <AutomationChip source={workbench.source} />
             {!thread && <SessionPreviewLinks workbench={workbench} ops={ops} />}
             {workbench.settings?.internetAccess === false && (
               <span

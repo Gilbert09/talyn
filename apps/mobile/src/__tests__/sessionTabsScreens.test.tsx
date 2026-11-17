@@ -126,6 +126,25 @@ describe('compact session header', () => {
     await fireEvent.press(screen.getByRole('button', { name: 'Open parent thread' }));
     expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/threads/[id]', params: { id: 'thread-one' } });
   });
+  it.each([
+    ['a GitHub rule', { kind: 'workflow', workflowId: 'wf-one', runId: 'r' }, 'GitHub', { kind: 'github', id: 'wf-one' }],
+    ['a Linear rule', { kind: 'workflow', workflowId: 'wf-two', runId: 'r', integration: 'linear' }, 'Linear', { kind: 'linear', id: 'wf-two' }],
+    ['a PostHog Inbox rule', { kind: 'workflow', workflowId: 'wf-three', runId: 'r', integration: 'posthog_inbox' }, 'PostHog Inbox', { kind: 'posthog_inbox', id: 'wf-three' }],
+    ['a scheduled loop', { kind: 'loop', loopId: 'lp-one', runId: 'r' }, 'Schedule', { kind: 'schedule', id: 'lp-one' }],
+  ] as const)('links %s that started the session back to it', async (_name, source, label, params) => {
+    mockActive.api.workbenches.get.mockResolvedValue(session({ source }));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('header', { name: /^Current work\./ }));
+    await fireEvent.press(await screen.findByRole('button', { name: `Open the ${label} automation that started this session` }));
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/integrations/[kind]/[id]', params });
+  });
+  it('shows no automation row for a session from the composer', async () => {
+    mockActive.api.workbenches.get.mockResolvedValue(session({ source: null }));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('header', { name: /^Current work\./ }));
+    expect(await screen.findByRole('header', { name: 'Session details' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /automation that started this session$/ })).toBeNull();
+  });
 });
 
 describe('quick actions', () => {
