@@ -14,6 +14,7 @@ import {
   stepMatch,
 } from '../lib/transcriptFind';
 import { TranscriptFindBar } from '../components/workbench/TranscriptFindBar';
+import type { OlderHistory } from '../components/workbench/WorkbenchTranscript';
 import { buildAppShortcuts, findTargetWorkbenchId } from '../components/layout/appShortcuts';
 import { clearShortcuts, dispatchKeydown, registerShortcuts } from '../lib/shortcuts';
 import { MENU_COMMANDS } from '../lib/menuCommands';
@@ -147,11 +148,13 @@ describe('paintMatches', () => {
   });
 });
 
-function Harness({ workbenchId = 'wb-1', partial = false, children }: { workbenchId?: string; partial?: boolean; children: React.ReactNode }) {
+const NO_OLDER: OlderHistory = { hasOlder: false, loading: false, error: null, load: () => undefined };
+
+function Harness({ workbenchId = 'wb-1', older = NO_OLDER, children }: { workbenchId?: string; older?: OlderHistory; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   return (
     <div>
-      <TranscriptFindBar workbenchId={workbenchId} scrollRef={ref} partial={partial} />
+      <TranscriptFindBar workbenchId={workbenchId} scrollRef={ref} older={older} />
       <div ref={ref} data-testid={`scroll-${workbenchId}`}>
         {children}
       </div>
@@ -253,10 +256,60 @@ describe('TranscriptFindBar', () => {
     await waitFor(() => expect(screen.getByText('No results')).toBeInTheDocument());
   });
 
-  it('says when earlier messages are not searched', () => {
-    render(<Harness partial><p>a</p></Harness>);
+  it('focuses the input when it opens, and again on the next ⌘F', () => {
+    render(<Harness><p>a</p></Harness>);
     open();
-    expect(screen.getByTitle('Only loaded messages are searched. Scroll up to load earlier ones.')).toBeInTheDocument();
+    expect(input()).toHaveFocus();
+    act(() => input().blur());
+    expect(input()).not.toHaveFocus();
+    open();
+    expect(input()).toHaveFocus();
+  });
+
+  it('loads the earlier pages one at a time while a search is open', () => {
+    const load = vi.fn();
+    const older = (over: Partial<OlderHistory> = {}): OlderHistory => ({ hasOlder: true, loading: false, error: null, load, ...over });
+    const { rerender } = render(<Harness older={older()}><p>a</p></Harness>);
+    open();
+    expect(load).not.toHaveBeenCalled();
+    type('a');
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('searching earlier')).toBeInTheDocument();
+    rerender(<Harness older={older({ loading: true })}><p>a</p></Harness>);
+    expect(load).toHaveBeenCalledTimes(1);
+    rerender(<Harness older={older()}><p>a</p></Harness>);
+    expect(load).toHaveBeenCalledTimes(2);
+    rerender(<Harness older={older({ hasOlder: false })}><p>a</p></Harness>);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('searching earlier')).toBeNull();
+  });
+
+  it('does not load earlier pages for an empty query or a closed bar', () => {
+    const load = vi.fn();
+    render(<Harness older={{ hasOlder: true, loading: false, error: null, load }}><p>a</p></Harness>);
+    open();
+    type('  ');
+    fireEvent.keyDown(input(), { key: 'Escape' });
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it('selects the first match that an earlier page brings in', async () => {
+    const { rerender } = render(<Harness><p>beta</p></Harness>);
+    open();
+    type('alpha');
+    expect(screen.getByText('No results')).toBeInTheDocument();
+    rerender(<Harness><p>alpha</p><p>alpha</p><p>beta</p></Harness>);
+    await waitFor(() => expect(screen.getByText('1 of 2')).toBeInTheDocument());
+  });
+
+  it('stops loading on an error and offers a retry', () => {
+    const load = vi.fn();
+    render(<Harness older={{ hasOlder: true, loading: false, error: 'offline', load }}><p>a</p></Harness>);
+    open();
+    type('a');
+    expect(load).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry earlier' }));
+    expect(load).toHaveBeenCalledTimes(1);
   });
 });
 

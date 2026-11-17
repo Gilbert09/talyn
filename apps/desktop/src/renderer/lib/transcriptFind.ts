@@ -1,7 +1,8 @@
 /**
  * Find in a session transcript (⌘F). The transcript is not virtualized, so
- * the search reads the text the DOM holds now: the loaded messages, with
- * collapsed tool output left out, as the browser's own find does.
+ * the search reads the text the DOM holds now, with collapsed tool output
+ * left out, as the browser's own find does. The find bar loads the earlier
+ * pages of the transcript first, so the DOM holds the whole transcript.
  *
  * Matches are painted with the CSS Custom Highlight API, which marks text
  * ranges without changing the DOM. Wrapping matches in <mark> would change

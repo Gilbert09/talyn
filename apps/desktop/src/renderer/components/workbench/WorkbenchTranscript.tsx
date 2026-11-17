@@ -94,7 +94,7 @@ export function WorkbenchTranscript({
 
   return (
     <div className="relative flex h-full min-w-0 flex-col bg-background">
-      <TranscriptFindBar workbenchId={chat.workbenchId} scrollRef={scrollRef} partial={older.hasOlder} />
+      <TranscriptFindBar workbenchId={chat.workbenchId} scrollRef={scrollRef} older={older} />
       <div
         ref={scrollRef}
         onScroll={onScroll}
