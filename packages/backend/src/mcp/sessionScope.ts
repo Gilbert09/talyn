@@ -75,6 +75,9 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_resize_session',
   // A restart is a move to a box of the same size: the same guards as a resize.
   'talyn_restart_session',
+  // The person's own "Continue as thread". The tool limits it to the calling
+  // session at spawn depth 0, so a thread never escapes the depth limit.
+  'talyn_continue_as_thread',
   'talyn_get_session_transcript',
   'talyn_cancel_session_turn',
   'talyn_get_session_changes',

@@ -146,6 +146,8 @@ Every session a thread starts is an ordinary session. You can open it, read its 
 
 To turn a session into a thread, open **More actions** in the session header and select **Continue as thread**. The new thread starts with a recap of the session, and the session joins it.
 
+You can also ask the session's agent to do it, for example "turn this into a thread". The agent starts the thread and gives it its plan. When the agent finds that the work needs sessions on several repositories, it asks you first.
+
 ## Split view
 
 Split view shows up to four sessions side by side, each with its own chat and composer. It is in the desktop app and the web app. It is not in the mobile app.
