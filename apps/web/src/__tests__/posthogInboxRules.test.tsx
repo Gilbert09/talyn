@@ -188,6 +188,30 @@ describe('PostHog Inbox in the catalog', () => {
     expect(document.querySelector('[data-attr="posthog-inbox-connection-section"]')).toBeTruthy();
   });
 
+  it('has a Reports tab that shows the reports an automation matches', async () => {
+    vi.mocked(api.workflows.list).mockResolvedValue([
+      {
+        id: 'wf1', workspaceId: 'ws1', integration: 'posthog_inbox', name: 'Fix urgent reports', enabled: true,
+        events: ['report_ready'], conditions: {}, actions: [{ type: 'start_session', prompt: 'Fix it' }],
+        stats: { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null },
+      } as never,
+    ]);
+    const backlog = vi.spyOn(api.workflows, 'posthogInboxBacklog').mockResolvedValue({
+      rows: [], scanned: 0, nextOffset: null, total: 0, days: 7, workflowId: 'wf1',
+      runnable: true, notRunnableReason: null, dailyCap: 10, runsToday: 0,
+    });
+    vi.spyOn(api.workflows, 'posthogInboxBacklogCount').mockResolvedValue({
+      days: 7, matched: 0, scanned: 0, total: 0, complete: true,
+      byState: { not_run: 0, running: 0, already_run: 0, claimed_elsewhere: 0, already_addressed: 0, repository_not_connected: 0, held_back: 0 },
+    });
+    render(<IntegrationsView kind="posthog_inbox" />);
+    const tab = await screen.findByRole('tab', { name: 'Reports' });
+    fireEvent.mouseDown(tab);
+    fireEvent.click(tab);
+    expect(await screen.findByText('0 reports match in the last 7 days.')).toBeTruthy();
+    expect(backlog).toHaveBeenCalledWith('ws1', expect.objectContaining({ workflowId: 'wf1', offset: 0 }));
+  });
+
   it('shows its own connection card on the Connection tab', async () => {
     render(<IntegrationsView kind="posthog_inbox" />);
     fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Connection' }));

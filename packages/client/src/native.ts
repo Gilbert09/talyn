@@ -76,6 +76,8 @@ import type {
   FleetAccountsResponse,
   FleetAgent,
   WorkflowCounts,
+  PostHogInboxBacklogCount,
+  PostHogInboxBacklogDays,
   PostHogInboxBacklogPage,
   PostHogInboxDryRun,
   PostHogInboxPushRemoval,
@@ -2505,7 +2507,7 @@ export const workflows = {
    */
   posthogInboxBacklog: (
     workspaceId: string,
-    opts: { workflowId?: string | null; conditions?: WorkflowInput['conditions']; days?: number; offset?: number }
+    opts: { workflowId?: string | null; conditions?: WorkflowInput['conditions']; days?: PostHogInboxBacklogDays; offset?: number }
   ) =>
     request<PostHogInboxBacklogPage>('POST', '/workflows/posthog-inbox/backlog', {
       workspaceId,
@@ -2513,6 +2515,20 @@ export const workflows = {
       ...(opts.conditions !== undefined ? { workflow: { conditions: opts.conditions } } : {}),
       ...(opts.days !== undefined ? { days: opts.days } : {}),
       ...(opts.offset !== undefined ? { offset: opts.offset } : {}),
+    }),
+  /**
+   * How many reports in the range match a PostHog Inbox rule, by state. Same
+   * options as {@link posthogInboxBacklog}, without the offset. Reads only.
+   */
+  posthogInboxBacklogCount: (
+    workspaceId: string,
+    opts: { workflowId?: string | null; conditions?: WorkflowInput['conditions']; days?: PostHogInboxBacklogDays }
+  ) =>
+    request<PostHogInboxBacklogCount>('POST', '/workflows/posthog-inbox/backlog/count', {
+      workspaceId,
+      ...(opts.workflowId ? { workflowId: opts.workflowId } : {}),
+      ...(opts.conditions !== undefined ? { workflow: { conditions: opts.conditions } } : {}),
+      ...(opts.days !== undefined ? { days: opts.days } : {}),
     }),
   /** "Run selected": start a saved, enabled PostHog Inbox rule on these reports (at most 20). */
   runPostHogInboxReports: (workflowId: string, reportIds: string[]) =>

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type {
+  PostHogInboxBacklogCount,
+  PostHogInboxBacklogDays,
   PostHogInboxBacklogStateInput,
   PostHogInboxFacts,
   PostHogInboxRunResult,
@@ -11,7 +13,10 @@ import {
   MAX_POSTHOG_INBOX_RUN_REPORTS,
   POSTHOG_INBOX_BACKLOG_DAYS,
   POSTHOG_INBOX_BACKLOG_STATE_LABELS,
+  posthogInboxBacklogCountText,
   posthogInboxBacklogDays,
+  posthogInboxBacklogRangeLabel,
+  posthogInboxBacklogRangeText,
   posthogInboxBacklogState,
   posthogInboxContentMatches,
   posthogInboxRunSummary,
@@ -20,6 +25,8 @@ import {
   BACKLOG_PAGE_SIZE,
   backlogQuery,
   claimedInPostHog,
+  emptyBacklogStateCounts,
+  listHasMore,
   manualOutcomeResult,
   manualRunRefusal,
   parseRunReportIds,
@@ -61,6 +68,14 @@ describe('backlogQuery', () => {
     [90, '2026-08-18T12:00:00.000Z'],
   ] as const)('sends created_after %s days before now', (days, expected) => {
     expect(backlogQuery({}, days, 0, NOW).created_after).toBe(expected);
+  });
+
+  it("sends no created_after for 'all'", () => {
+    expect(backlogQuery({}, 'all', 0, NOW).created_after).toBeUndefined();
+  });
+
+  it('takes a page size', () => {
+    expect(backlogQuery({}, 7, 0, NOW, 100).limit).toBe(100);
   });
 
   it('uses the current time when no now is given', () => {
@@ -194,13 +209,16 @@ describe('posthogInboxBacklogState', () => {
 });
 
 describe('posthogInboxBacklogDays', () => {
-  it('offers 7, 30 and 90 days, 7 by default, and at most 20 reports a run', () => {
-    expect([...POSTHOG_INBOX_BACKLOG_DAYS]).toEqual([7, 30, 90]);
+  it('offers 7, 30 and 90 days and all time, 7 by default, and at most 20 reports a run', () => {
+    expect([...POSTHOG_INBOX_BACKLOG_DAYS]).toEqual([7, 30, 90, 'all']);
     expect(DEFAULT_POSTHOG_INBOX_BACKLOG_DAYS).toBe(7);
     expect(MAX_POSTHOG_INBOX_RUN_REPORTS).toBe(20);
   });
 
-  it.each<[unknown, number]>([
+  it.each<[unknown, PostHogInboxBacklogDays]>([
+    ['all', 'all'],
+    ['ALL ', 'all'],
+    ['al', 7],
     [7, 7],
     [30, 30],
     [90, 90],
@@ -445,5 +463,69 @@ describe('stableJson', () => {
     [{ b: [1, { d: 1, c: 'x' }], a: null }, '{"a":null,"b":[1,{"c":"x","d":1}]}'],
   ])('writes %j as %s', (value, expected) => {
     expect(stableJson(value)).toBe(expected);
+  });
+});
+
+describe('backlog range labels', () => {
+  it.each<[PostHogInboxBacklogDays, string, string]>([
+    [7, '7 days', 'in the last 7 days'],
+    [30, '30 days', 'in the last 30 days'],
+    [90, '90 days', 'in the last 90 days'],
+    ['all', 'All time', 'in all time'],
+  ])('labels %s', (days, label, text) => {
+    expect(posthogInboxBacklogRangeLabel(days)).toBe(label);
+    expect(posthogInboxBacklogRangeText(days)).toBe(text);
+  });
+});
+
+describe('listHasMore', () => {
+  it.each<[string, { next?: string | null }, number, number, boolean]>([
+    ['a next link', { next: 'https://x/next' }, 25, 25, true],
+    ['an empty next link', { next: '' }, 25, 25, false],
+    ['a null next link', { next: null }, 25, 25, false],
+    ['no next field, full page', {}, 25, 25, true],
+    ['no next field, short page', {}, 3, 25, false],
+    ['no next field, a larger limit', {}, 25, 100, false],
+  ])('reads %s', (_name, page, read, limit, expected) => {
+    expect(listHasMore(page, read, limit)).toBe(expected);
+  });
+});
+
+describe('posthogInboxBacklogCountText', () => {
+  const count = (overrides: Partial<PostHogInboxBacklogCount> = {}): PostHogInboxBacklogCount => ({
+    days: 30,
+    matched: 0,
+    byState: emptyBacklogStateCounts(),
+    scanned: 0,
+    total: 0,
+    complete: true,
+    ...overrides,
+  });
+
+  it('has every state at zero to start', () => {
+    expect(Object.keys(emptyBacklogStateCounts()).sort()).toEqual(Object.keys(POSTHOG_INBOX_BACKLOG_STATE_LABELS).sort());
+    expect(Object.values(emptyBacklogStateCounts()).every((n) => n === 0)).toBe(true);
+  });
+
+  it.each<[string, Partial<PostHogInboxBacklogCount>, string]>([
+    ['none', {}, '0 reports match in the last 30 days.'],
+    ['one', { matched: 1, byState: { ...emptyBacklogStateCounts(), not_run: 1 } }, '1 report matches in the last 30 days: 1 not run.'],
+    [
+      'several states, in label order',
+      { matched: 12, byState: { ...emptyBacklogStateCounts(), not_run: 8, already_run: 3, held_back: 1 } },
+      '12 reports match in the last 30 days: 8 not run, 3 already run, 1 held back for safety.',
+    ],
+    [
+      'all time, not complete',
+      { days: 'all', matched: 40, scanned: 1000, complete: false, byState: { ...emptyBacklogStateCounts(), not_run: 40 } },
+      '40+ reports match in all time: 40 not run. Talyn read the newest 1000 reports only.',
+    ],
+    [
+      'one, not complete',
+      { days: 7, matched: 1, scanned: 1000, complete: false, byState: { ...emptyBacklogStateCounts(), running: 1 } },
+      '1+ reports match in the last 7 days: 1 running / PR open. Talyn read the newest 1000 reports only.',
+    ],
+  ])('says %s', (_name, overrides, expected) => {
+    expect(posthogInboxBacklogCountText(count(overrides))).toBe(expected);
   });
 });

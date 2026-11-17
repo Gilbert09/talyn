@@ -132,7 +132,11 @@ Each session uses box-hours, like any other. See [Plans, usage and billing](/doc
 
 A rule acts only on reports that change after you enable it. The **Backlog** tab shows older reports that match the rule. Use it to start work on a report that came before the rule.
 
-The Backlog lists reports that PostHog created in the last 7, 30 or 90 days. The newest report is first. Talyn asks PostHog for the reports that match the rule's conditions. Then Talyn checks each report with its own matcher. A row shows the title, the priority, the repository and a state.
+You can also open the **Reports** tab on the PostHog Inbox page. Select an automation to see the reports that it matches. The tab shows the same list as the automation's Backlog tab.
+
+The Backlog lists reports that PostHog created in the last 7, 30 or 90 days, or in all time. The newest report is first. Talyn asks PostHog for the reports that match the rule's conditions. Then Talyn checks each report with its own matcher. A page shows up to 25 matching reports. To find them, Talyn reads up to 100 reports from PostHog. Select **Load more** to read the next reports. A row shows the title, the priority, the repository and a state.
+
+Above the list, Talyn shows how many reports in the time range match the rule, by state. For example: "12 reports match in the last 30 days: 8 not run, 4 already run." To count, Talyn reads up to 1,000 reports. If there are more, the number has a "+" and the text says that Talyn read only the newest 1,000 reports.
 
 | State | Meaning |
 | --- | --- |
@@ -153,7 +157,7 @@ You can select only **Not run** rows. Select up to 20 rows, then click **Run sel
 
 **Runs** shows manual runs too. Each one says who started it.
 
-The mobile app shows the Backlog read-only. You cannot select reports or start work there. Use the web or desktop app.
+The mobile app shows the Backlog read-only, with the time range and the count. You cannot select reports or start work there. Use the web or desktop app.
 
 ## Runs
 

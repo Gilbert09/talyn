@@ -2,11 +2,14 @@ import {
   ALL_WORKFLOW_ACTION_TYPES,
   ALL_WORKFLOW_TRIGGER_EVENTS,
   DEFAULT_POSTHOG_INBOX_RUNS_PER_DAY,
+  MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN,
   MAX_POSTHOG_INBOX_RUN_REPORTS,
   POSTHOG_INBOX_BACKLOG_DAYS,
   POSTHOG_INBOX_BACKLOG_STATE_LABELS,
   POSTHOG_INBOX_ACTIONABILITY,
   POSTHOG_INBOX_PRIORITIES,
+  posthogInboxBacklogCountText,
+  posthogInboxBacklogRangeText,
   WORKFLOW_ACTOR_KINDS,
   WORKFLOW_INTEGRATIONS,
   workflowVocabulary,
@@ -17,6 +20,7 @@ import {
   type WorkflowSuggestions,
   type WorkflowWithStats,
   type CreatedWorkflow,
+  type PostHogInboxBacklogCount,
   type PostHogInboxBacklogPage,
   type PostHogInboxRunResponse,
 } from '@talyn/shared';
@@ -146,9 +150,10 @@ async function inboxRule(ownerId: string, args: Record<string, unknown>): Promis
   return workflow;
 }
 
-function backlogText(page: PostHogInboxBacklogPage): string {
+function backlogText(page: PostHogInboxBacklogPage, count: PostHogInboxBacklogCount | null): string {
   const head = [
-    `Reports created in the last ${page.days} days that match, newest first. Talyn read ${page.scanned} report(s) from PostHog${page.total !== null ? ` of ${page.total}` : ''}.`,
+    `Reports created ${posthogInboxBacklogRangeText(page.days)} that match, newest first. Talyn read ${page.scanned} report(s) from PostHog for this page${page.total !== null ? ` (PostHog's filters keep ${page.total})` : ''}.`,
+    ...(count ? [`Exact count: ${posthogInboxBacklogCountText(count)}`] : []),
     page.runnable
       ? `Run reports with talyn_run_posthog_inbox_reports. Only rows marked [selectable] can run.${page.dailyCap !== null ? ` Daily cap: ${page.runsToday} of ${page.dailyCap} runs used in the last 24 hours.` : ''}`
       : `Reports cannot run now: ${page.notRunnableReason ?? 'the automation is not runnable'}`,
@@ -326,11 +331,18 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'list_posthog_inbox_backlog',
-    'List older PostHog Inbox reports that a saved PostHog Inbox automation matches, newest first, with where each one stands for Talyn (not run, running or PR open, already run, claimed elsewhere, already addressed, repository not connected, held back for safety). Starts nothing.',
+    'List older PostHog Inbox reports that a saved PostHog Inbox automation matches, newest first, up to all time, with where each one stands for Talyn (not run, running or PR open, already run, claimed elsewhere, already addressed, repository not connected, held back for safety). Starts nothing.',
     {
       ...idSchema,
-      days: { type: 'integer', enum: [...POSTHOG_INBOX_BACKLOG_DAYS], description: 'How far back reports were created. Default 7.' },
+      days: {
+        enum: [...POSTHOG_INBOX_BACKLOG_DAYS],
+        description: 'How far back reports were created: 7, 30 or 90 days, or "all" for all time. Default 7.',
+      },
       offset: { type: 'integer', description: 'The offset a previous call returned, for more reports.' },
+      count: {
+        type: 'boolean',
+        description: `Also count every matching report in the range, by state (reads up to ${MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN} reports, so it is slower). Default false.`,
+      },
     },
     ['workflow_id'],
     { readOnlyHint: true, openWorldHint: true },
@@ -342,7 +354,15 @@ export const WORKFLOWS = [
         ...(args.days !== undefined ? { days: args.days } : {}),
         ...(args.offset !== undefined ? { offset: args.offset } : {}),
       });
-      return backlogText(page);
+      const count =
+        args.count === true
+          ? await callApi<PostHogInboxBacklogCount>(ownerId, 'POST', '/workflows/posthog-inbox/backlog/count', {
+              workspaceId: workflow.workspaceId,
+              workflowId: workflow.id,
+              ...(args.days !== undefined ? { days: args.days } : {}),
+            })
+          : null;
+      return backlogText(page, count);
     },
     'workflows'
   ),

@@ -195,6 +195,7 @@ describe('PostHog Inbox backlog routes', () => {
     return { status: res.status, json: (await res.json()) as Json };
   }
   const backlog = (body: unknown) => call('POST', '/posthog-inbox/backlog', body);
+  const backlogCount = (body: unknown) => call('POST', '/posthog-inbox/backlog/count', body);
   const runReports = (id: string, body: unknown) => call('POST', `/${id}/posthog-inbox/run`, body);
   const listQuery = () =>
     new URL(`http://x${posthog.requests.find((r) => r.startsWith('/api/projects/2/signals/reports/?'))}`).searchParams;
@@ -241,6 +242,17 @@ describe('PostHog Inbox backlog routes', () => {
       expect(res.json.data?.days).toBe(expected);
       const after = Date.parse(listQuery().get('created_after')!);
       expect(Math.abs(Date.now() - expected * 24 * 60 * 60_000 - after)).toBeLessThan(60_000);
+    });
+
+    it.each(['all', 'ALL'])("reads days %j as all time, with no created_after", async (days) => {
+      await connect();
+      const wf = await rule();
+      report('rep-old', { created_at: new Date(Date.now() - 400 * 24 * 60 * 60_000).toISOString() });
+      const res = await backlog({ workspaceId: 'ws-mine', workflowId: wf.id, days });
+      expect(res.status).toBe(200);
+      expect(res.json.data?.days).toBe('all');
+      expect(res.json.data?.rows.map((r: { id: string }) => r.id)).toEqual(['rep-old']);
+      expect(listQuery().has('created_after')).toBe(false);
     });
 
     it.each<[unknown, string]>([
@@ -406,6 +418,84 @@ describe('PostHog Inbox backlog routes', () => {
     });
   });
 
+  // ---- The backlog count -------------------------------------------------------------
+
+  describe('POST /posthog-inbox/backlog/count', () => {
+    it('counts the matching reports of a saved rule, by state', async () => {
+      await connect();
+      const wf = await rule();
+      report('rep-1', { created_at: new Date(Date.now() - 60_000).toISOString() });
+      report('rep-2', { created_at: new Date(Date.now() - 120_000).toISOString() });
+      report('rep-3', { status: 'suppressed', suppression_source: 'safety_judge', created_at: new Date(Date.now() - 180_000).toISOString() });
+      const res = await backlogCount({ workspaceId: 'ws-mine', workflowId: wf.id, days: 30 });
+      expect(res.status).toBe(200);
+      expect(res.json.data).toEqual({
+        days: 30,
+        matched: 3,
+        byState: {
+          not_run: 2,
+          running: 0,
+          already_run: 0,
+          claimed_elsewhere: 0,
+          already_addressed: 0,
+          repository_not_connected: 0,
+          held_back: 1,
+        },
+        scanned: 3,
+        total: 3,
+        complete: true,
+      });
+      expect(listQuery().get('limit')).toBe('100');
+    });
+
+    it('counts all time', async () => {
+      await connect();
+      const wf = await rule();
+      report('rep-old', { created_at: new Date(Date.now() - 400 * 24 * 60 * 60_000).toISOString() });
+      const res = await backlogCount({ workspaceId: 'ws-mine', workflowId: wf.id, days: 'all' });
+      expect(res.json.data).toMatchObject({ days: 'all', matched: 1 });
+      expect(listQuery().has('created_after')).toBe(false);
+    });
+
+    it("counts an unsaved rule's conditions", async () => {
+      await connect();
+      report('rep-1', { priority: 'P0' });
+      report('rep-2', { priority: 'P2' });
+      const res = await backlogCount({ workspaceId: 'ws-mine', workflow: { conditions: { priorities: ['P0'] } } });
+      expect(res.status).toBe(200);
+      expect(res.json.data).toMatchObject({ matched: 1, days: 7 });
+    });
+
+    it.each<[string, () => Promise<unknown>, number]>([
+      ['no workspace', async () => ({ workflow: { conditions: {} } }), 400],
+      ['no rule or conditions', async () => { await connect(); return { workspaceId: 'ws-mine' }; }, 400],
+      ['an unknown rule', async () => { await connect(); return { workspaceId: 'ws-mine', workflowId: 'nope' }; }, 404],
+      ['a GitHub rule', async () => { await connect(); return { workspaceId: 'ws-mine', workflowId: (await githubRule()).id }; }, 400],
+      ['no PostHog connection', async () => ({ workspaceId: 'ws-mine', workflow: { conditions: {} } }), 409],
+    ])('refuses %s', async (_name, body, status) => {
+      const res = await backlogCount(await body());
+      expect(res.status).toBe(status);
+      expect(posthog.requests).toEqual([]);
+    });
+
+    it("refuses another workspace's count", async () => {
+      await theirs();
+      const wf = await rule('ws-theirs');
+      const res = await backlogCount({ workspaceId: 'ws-theirs', workflowId: wf.id });
+      expect([403, 404]).toContain(res.status);
+      expect(posthog.requests).toEqual([]);
+    });
+
+    it('answers 502 when PostHog refuses', async () => {
+      await connect();
+      const wf = await rule();
+      posthog.status = 403;
+      const res = await backlogCount({ workspaceId: 'ws-mine', workflowId: wf.id });
+      expect(res.status).toBe(502);
+      expect(res.json.code).toBe('posthog_inbox_forbidden');
+    });
+  });
+
   // ---- Run selected ---------------------------------------------------------------
 
   describe('POST /:id/posthog-inbox/run', () => {
@@ -540,7 +630,7 @@ describe('PostHog Inbox backlog routes', () => {
   // ---- Both routes ----------------------------------------------------------------
 
   describe('the flag', () => {
-    it.each(['backlog', 'run'])('hides %s behind the flag', async (which) => {
+    it.each(['backlog', 'count', 'run'])('hides %s behind the flag', async (which) => {
       await connect();
       const wf = await rule();
       report('rep-1');
@@ -549,7 +639,9 @@ describe('PostHog Inbox backlog routes', () => {
       const res =
         which === 'backlog'
           ? await backlog({ workspaceId: 'ws-mine', workflowId: wf.id })
-          : await runReports(wf.id, { reportIds: ['rep-1'] });
+          : which === 'count'
+            ? await backlogCount({ workspaceId: 'ws-mine', workflowId: wf.id })
+            : await runReports(wf.id, { reportIds: ['rep-1'] });
       expect(res.status).toBe(404);
       expect(res.json.code).toBe('posthog_inbox_rules_unavailable');
       expect(posthog.requests).toEqual([]);

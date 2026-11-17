@@ -1,18 +1,20 @@
 import {
-  LOOP_TARGET_LABELS, POSTHOG_CODE_RETIRED_NOTICE, describeSchedule, describeWorkflowActions, describeWorkflowTrigger, posthogCodeRetired,
-  type LoopRun, type LoopWithStats, type PostHogInboxBacklogRow, type WorkflowIntegration, type WorkflowRun, type WorkflowWithStats,
+  DEFAULT_POSTHOG_INBOX_BACKLOG_DAYS, LOOP_TARGET_LABELS, POSTHOG_CODE_RETIRED_NOTICE, POSTHOG_INBOX_BACKLOG_DAYS, describeSchedule, describeWorkflowActions, describeWorkflowTrigger, posthogCodeRetired,
+  posthogInboxBacklogCountText, posthogInboxBacklogDays, posthogInboxBacklogRangeLabel, posthogInboxBacklogRangeText,
+  type LoopRun, type LoopWithStats, type PostHogInboxBacklogDays, type PostHogInboxBacklogRow, type WorkflowIntegration, type WorkflowRun, type WorkflowWithStats,
 } from '@talyn/shared';
 import { Stack } from 'expo-router';
+import { useState } from 'react';
 import { View } from 'react-native';
 
 import { useNetwork } from '../../auth/AuthProvider';
-import { AppText, EmptyState, Group, Pill, PrNumber, Row, ui } from '../../components/UI';
+import { AppText, EmptyState, Group, Pill, PrNumber, Row, Segmented, ui } from '../../components/UI';
 import { openExternal, StateNotice } from '../../components/Workflow';
 import { useFeatures } from '../../lib/features';
 import { modelLabel } from '../../lib/models';
 import { longTime, shortTime, useNow } from '../../lib/time';
 import { sessionRoute } from '../../navigation/routes';
-import { useBacklog } from './backlog';
+import { useBacklog, useBacklogCount } from './backlog';
 import {
   POSTHOG_INBOX_BACKLOG_NOTE, backlogRowText, dailyCapText, manualRunText, postHogInboxConditionFacts, ruleSpaceText,
 } from './model';
@@ -133,15 +135,24 @@ function RunPills({ badge, number }: { badge: Badge; number: number | null }) {
   </View>;
 }
 
-/** Older reports that match the rule, read-only. Starting work on them happens on the web or desktop app. */
+const BACKLOG_RANGES = POSTHOG_INBOX_BACKLOG_DAYS.map((days) => ({ value: String(days), label: posthogInboxBacklogRangeLabel(days) }));
+
+/** Older reports that match the rule, up to all time, with an exact count. Read-only: starting work happens on the web or desktop app. */
 function BacklogGroup({ id, offline }: { id: string; offline: boolean }) {
-  const backlog = useBacklog(id, true);
+  const [days, setDays] = useState<PostHogInboxBacklogDays>(DEFAULT_POSTHOG_INBOX_BACKLOG_DAYS);
+  const backlog = useBacklog(id, true, days);
+  const count = useBacklogCount(id, true, days);
   const { rows, remote } = backlog;
-  const footer = `${POSTHOG_INBOX_BACKLOG_NOTE}${backlog.days ? ` Reports from the last ${backlog.days} days.` : ''}`;
-  return <Group title="Backlog" footer={footer}>
+  const countText = count.data ? posthogInboxBacklogCountText(count.data)
+    : count.status === 'loading' || count.status === 'idle' ? 'Counting the matching reports...' : 'Talyn could not count the matching reports.';
+  return <Group title="Backlog" footer={POSTHOG_INBOX_BACKLOG_NOTE}>
+    <View style={{ gap: 8, paddingHorizontal: 16, paddingVertical: 12 }}>
+      <Segmented options={BACKLOG_RANGES} value={String(days)} onChange={(value) => setDays(posthogInboxBacklogDays(value))} accessibilityLabel="Time range" />
+      <AppText variant="meta" tone="muted">{countText}</AppText>
+    </View>
     {rows === undefined ? remote.status === 'loading' || remote.status === 'idle' ? <Loading />
       : <StateNotice resource={remote} offline={offline} refresh={() => { void backlog.refresh(); }} />
-      : rows.length === 0 ? <Row title="No matching reports" subtitle="No report from the last 7 days matches this rule." divider={false} />
+      : rows.length === 0 ? <Row title="No matching reports" subtitle={`No report ${posthogInboxBacklogRangeText(days)} matches this rule.`} divider={false} />
         : <>
           {rows.map((row, index) => <BacklogRow key={row.id} row={row} divider={index < rows.length - 1 || backlog.nextOffset !== null} />)}
           {backlog.nextOffset !== null ? <Row title={backlog.loadingMore ? 'Loading' : 'Load more'} onPress={() => { void backlog.loadMore(); }}

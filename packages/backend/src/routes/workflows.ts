@@ -45,6 +45,7 @@ import {
   manualRunRefusal,
   parseRunReportIds,
   posthogInboxBacklog,
+  posthogInboxBacklogCount,
   runPostHogInboxReports,
 } from '../services/posthogInbox/backlog.js';
 import { registerPostHogInboxPushRoutes } from './posthogInboxPush.js';
@@ -418,36 +419,37 @@ export function workflowRoutes(): Router {
   });
 
   /**
-   * One page of a PostHog Inbox rule's backlog: older reports that match it,
-   * newest first, with Talyn's state for each. `workflowId` is the saved rule
-   * (its dedupe state, daily cap and whether rows can be run);
-   * `workflow.conditions` are the editor's unsaved conditions. One of the two
-   * is needed. Reads only.
+   * The rule, conditions and connection of a backlog request, or null after
+   * an error answer. `workflowId` is the saved rule (its dedupe state, daily
+   * cap and whether rows can be run); `workflow.conditions` are the editor's
+   * unsaved conditions. One of the two is needed.
    */
-  router.post('/posthog-inbox/backlog', async (req, res) => {
+  async function backlogRequest(req: Request, res: Response) {
     const body = (req.body ?? {}) as {
       workspaceId?: string;
       workflowId?: string;
       workflow?: { conditions?: unknown };
       days?: unknown;
-      offset?: unknown;
     };
     const workspaceId = body.workspaceId ?? '';
-    if (!(await gate(req, res, workspaceId))) return;
-    if (!(await posthogInboxGate(req, res))) return;
+    if (!(await gate(req, res, workspaceId))) return null;
+    if (!(await posthogInboxGate(req, res))) return null;
     let saved: WorkflowDefinition | null = null;
     if (body.workflowId) {
       saved = await getWorkflow(body.workflowId);
       if (!saved || saved.workspaceId !== workspaceId) {
-        return res.status(404).json({ success: false, error: 'Automation not found' });
+        res.status(404).json({ success: false, error: 'Automation not found' });
+        return null;
       }
       if (workflowIntegrationOf(saved) !== 'posthog_inbox') {
-        return res.status(400).json({ success: false, error: 'Only a PostHog Inbox automation has a backlog.' });
+        res.status(400).json({ success: false, error: 'Only a PostHog Inbox automation has a backlog.' });
+        return null;
       }
     }
     const asked = body.workflow?.conditions;
     if (asked === undefined && !saved) {
-      return res.status(400).json({ success: false, error: 'workflowId or workflow.conditions is required' });
+      res.status(400).json({ success: false, error: 'workflowId or workflow.conditions is required' });
+      return null;
     }
     let conditions: WorkflowConditions;
     let savedConditions: WorkflowConditions | null = null;
@@ -458,27 +460,64 @@ export function workflowRoutes(): Router {
           ? (savedConditions as WorkflowConditions)
           : validateWorkflow(posthogInboxPreviewInput(asked as WorkflowConditions)).conditions;
     } catch (err) {
-      return res.status(400).json({ success: false, error: err instanceof Error ? err.message : 'invalid automation' });
-    }
-    const offset = Number(body.offset ?? 0);
-    if (!Number.isInteger(offset) || offset < 0) {
-      return res.status(400).json({ success: false, error: 'offset must be a whole number of 0 or more' });
+      res.status(400).json({ success: false, error: err instanceof Error ? err.message : 'invalid automation' });
+      return null;
     }
     const connection = await getPostHogInboxConnection(workspaceId, 'read');
     if (!connection) {
-      return res.status(409).json({
+      res.status(409).json({
         success: false,
         error: "Talyn cannot read this workspace's PostHog Inbox. Connect PostHog on the PostHog Inbox page.",
         code: 'posthog_inbox_unavailable',
       });
+      return null;
+    }
+    return {
+      connection,
+      conditions,
+      saved,
+      unsavedChanges: savedConditions !== null && stableJson(savedConditions) !== stableJson(conditions),
+      days: posthogInboxBacklogDays(body.days),
+    };
+  }
+
+  /**
+   * One page of a PostHog Inbox rule's backlog: older reports that match it,
+   * newest first, with Talyn's state for each. Reads only.
+   */
+  router.post('/posthog-inbox/backlog', async (req, res) => {
+    const request = await backlogRequest(req, res);
+    if (!request) return;
+    const offset = Number((req.body as { offset?: unknown } | undefined)?.offset ?? 0);
+    if (!Number.isInteger(offset) || offset < 0) {
+      return res.status(400).json({ success: false, error: 'offset must be a whole number of 0 or more' });
     }
     try {
-      const data = await posthogInboxBacklog(connection, {
-        conditions,
-        workflow: saved,
-        unsavedChanges: savedConditions !== null && stableJson(savedConditions) !== stableJson(conditions),
-        days: posthogInboxBacklogDays(body.days),
+      const data = await posthogInboxBacklog(request.connection, {
+        conditions: request.conditions,
+        workflow: request.saved,
+        unsavedChanges: request.unsavedChanges,
+        days: request.days,
         offset,
+      });
+      res.json({ success: true, data } as ApiResponse<typeof data>);
+    } catch (err) {
+      posthogInboxReadFailure(res, err);
+    }
+  });
+
+  /**
+   * How many reports in the range match a PostHog Inbox rule, by state, after
+   * Talyn's matcher. Same body as the backlog, without `offset`. Reads only.
+   */
+  router.post('/posthog-inbox/backlog/count', async (req, res) => {
+    const request = await backlogRequest(req, res);
+    if (!request) return;
+    try {
+      const data = await posthogInboxBacklogCount(request.connection, {
+        conditions: request.conditions,
+        workflow: request.saved,
+        days: request.days,
       });
       res.json({ success: true, data } as ApiResponse<typeof data>);
     } catch (err) {

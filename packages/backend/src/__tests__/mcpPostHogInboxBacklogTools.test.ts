@@ -170,7 +170,8 @@ describe('talyn_list_posthog_inbox_backlog', () => {
         }),
     });
     const text = await tool('talyn_list_posthog_inbox_backlog').handler(OWNER, { workspace_id: 'ws1', workflow_id: 'w1' });
-    expect(text).toContain('Reports created in the last 7 days that match, newest first. Talyn read 25 report(s) from PostHog of 60.');
+    expect(text).toContain("Reports created in the last 7 days that match, newest first. Talyn read 25 report(s) from PostHog for this page (PostHog's filters keep 60).");
+    expect(text).not.toContain('Exact count');
     expect(text).toContain('Only rows marked [selectable] can run. Daily cap: 4 of 10 runs used in the last 24 hours.');
     expect(text).toContain(
       'rep-1  [Not run] [selectable]  P1  acme/web-app  Checkout crashes  created 2026-11-15T00:00:00Z  https://us.posthog.com/project/2/inbox/rep-1'
@@ -199,7 +200,7 @@ describe('talyn_list_posthog_inbox_backlog', () => {
         }),
     });
     const text = await tool('talyn_list_posthog_inbox_backlog').handler(OWNER, { workspace_id: 'ws1', workflow_id: 'w1' });
-    expect(text).toContain('Talyn read 25 report(s) from PostHog.');
+    expect(text).toContain('Talyn read 25 report(s) from PostHog for this page.');
     expect(text).toContain('Reports cannot run now: Turn the automation on first. Then you can run reports.');
     expect(text).toContain('None.');
     expect(text).not.toContain('More reports');
@@ -257,11 +258,37 @@ describe('talyn_list_posthog_inbox_backlog', () => {
     ).rejects.toThrow(message);
   });
 
-  it('is read-only and offers 7, 30 and 90 days', () => {
+  it('asks for the exact count too when count is true, for the same range', async () => {
+    const { calls } = mockApi({
+      'GET /api/v1/workflows': rules,
+      'POST /api/v1/workflows/posthog-inbox/backlog': () => backlogPage({ days: 'all' }),
+      'POST /api/v1/workflows/posthog-inbox/backlog/count': () => ({
+        days: 'all',
+        matched: 3,
+        byState: { not_run: 2, running: 0, already_run: 1, claimed_elsewhere: 0, already_addressed: 0, repository_not_connected: 0, held_back: 0 },
+        scanned: 60,
+        total: 60,
+        complete: true,
+      }),
+    });
+    const text = await tool('talyn_list_posthog_inbox_backlog').handler(OWNER, {
+      workspace_id: 'ws1',
+      workflow_id: 'w1',
+      days: 'all',
+      count: true,
+    });
+    expect(calls[2].url.pathname).toBe('/api/v1/workflows/posthog-inbox/backlog/count');
+    expect(calls[2].body).toEqual({ workspaceId: 'ws1', workflowId: 'w1', days: 'all' });
+    expect(text).toContain('Reports created in all time that match');
+    expect(text).toContain('Exact count: 3 reports match in all time: 2 not run, 1 already run.');
+  });
+
+  it('is read-only and offers 7, 30 and 90 days and all time', () => {
     const t = tool('talyn_list_posthog_inbox_backlog');
     expect(t.annotations.readOnlyHint).toBe(true);
-    const schema = t.inputSchema as { properties: Record<string, { enum?: number[] }>; required: string[] };
-    expect(schema.properties.days.enum).toEqual([7, 30, 90]);
+    const schema = t.inputSchema as { properties: Record<string, { enum?: unknown[]; type?: string }>; required: string[] };
+    expect(schema.properties.days.enum).toEqual([7, 30, 90, 'all']);
+    expect(schema.properties.count.type).toBe('boolean');
     expect(schema.required).toEqual(['workflow_id']);
   });
 });
