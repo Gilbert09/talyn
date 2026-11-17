@@ -171,10 +171,12 @@ function started(workbenchId: string, pullRequestId: string | null = null): OneR
  * Never beside a run or a live session on the same PR: both would push to the
  * one branch.
  */
-async function startGithubSession(
+export async function startGithubSession(
   action: StartSessionAction,
   ctx: GithubActionContext,
-  prRow: PrRowSource
+  prRow: PrRowSource,
+  /** A prompt Talyn built, such as a skill's. It already names the PR. */
+  builtPrompt?: string
 ): Promise<OneResult> {
   const resolved = await prRow.get();
   const open = resolved && resolved.summary.state === 'open' ? resolved : null;
@@ -201,7 +203,7 @@ async function startGithubSession(
   const ref = `${ctx.owner}/${ctx.repo}#${ctx.facts.number}`;
   const created = await createRuleSession(action, ctx, {
     repositoryId: ctx.repositoryId,
-    prompt: `You are working on pull request ${ref} (${ctx.facts.url}).\n\n${action.prompt}`,
+    prompt: builtPrompt ?? `You are working on pull request ${ref} (${ctx.facts.url}).\n\n${action.prompt}`,
     namingText: action.prompt,
     source: { kind: 'workflow', workflowId: ctx.workflowId, runId: ctx.runId, integration: 'github' },
     ...(open ? { fromPullRequestId: open.id } : {}),

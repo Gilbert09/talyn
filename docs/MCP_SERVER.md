@@ -136,7 +136,6 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_set_auto_keep_mergeable` | Enable or disable automatic cloud fixes. |
 | `talyn_merge_pull_request` | Merge a PR now with `merge`, `squash` or `rebase`. When the repository uses a GitHub merge queue, Talyn submits the PR to that queue. |
 | `talyn_close_pull_request` | Close a PR as you, with an optional comment first. Pass `pull_request_id`, or `repository` and `number`. Talyn closes only your own PRs (the GitHub author is the connected user) or PRs a Talyn session opened. A merged PR is refused. An already closed PR is a no-op, and Talyn does not post the comment. Talyn posts the comment only when the close is allowed. If the close then fails, the error says that the comment is on the PR. From a session token, the PR must be in the session's repository, and the session's own PR is refused. |
-| `talyn_fix_pull_request` | Start the standard cloud task to make a PR ready to merge. |
 
 ### Merge queue
 
@@ -155,14 +154,14 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_start_code_review` | Start a `quick`, `standard`, or `deep` review. Optionally reset the prior cycle. |
 | `talyn_cancel_code_review` | Cancel a running review. |
 | `talyn_get_code_review_finding` | Read the full body, suggestion, anchor, and verdict reason. |
-| `talyn_fix_code_review_findings` | Start a cloud task for selected finding ids. |
 | `talyn_dismiss_code_review_finding` | Dismiss a finding with a fixed reason. Use `undo` to restore it. |
 
 ### Tasks
 
+MCP calls cannot create tasks. To work on a PR, use `talyn_create_session` with `pull_request_id`. The routes `POST /tasks`, `POST /pull-requests/:id/fix` and `POST /pull-requests/:id/code-review/fix` answer 403 `tasks_app_only` to MCP calls. Tools for existing tasks stay.
+
 | Tool | What it does |
 | --- | --- |
-| `talyn_create_task` | Create cloud work. Optionally link a PR and supply a structured `skill` reference. |
 | `talyn_list_tasks` | List tasks with comma-separated statuses. Use `limit` and the returned `before` cursor. |
 | `talyn_get_task` | Read results, human requests, quota failover, and an optional transcript. |
 | `talyn_stop_task` | Cancel a running task. |
@@ -185,7 +184,7 @@ Use `talyn_list_workspaces` to find workspace ids.
 | --- | --- |
 | `talyn_list_workflows` | List automations and run statistics. Pass `integration` as `github`, `slack`, `webhook`, `linear`, `github_issues` or `posthog_inbox` to filter the list. Each row includes its integration. |
 | `talyn_get_workflow` | Read the editable automation as JSON, including `integration`. |
-| `talyn_get_workflow_vocabulary` | Pass optional `integration` as `github`, `slack`, `webhook`, `linear`, `github_issues` or `posthog_inbox`. The default is `github`. Read events, conditions, and actions. The `webhook` vocabulary includes the `start_task` action and payload tests. The `posthog_inbox` vocabulary lists the priorities, actionability values and the daily cap. |
+| `talyn_get_workflow_vocabulary` | Pass optional `integration` as `github`, `slack`, `webhook`, `linear`, `github_issues` or `posthog_inbox`. The default is `github`. Read events, conditions, and actions. The `webhook` vocabulary includes the `start_session` action and payload tests. The `posthog_inbox` vocabulary lists the priorities, actionability values and the daily cap. |
 | `talyn_create_workflow` | Create an automation from `workflow`. Set `workflow.integration` to `github`, `slack`, `webhook`, `linear`, `github_issues` or `posthog_inbox`. A Linear rule needs `conditions.connectionId`. Issue automations need the `issue-rules` feature. PostHog Inbox automations need the `posthog-inbox-rules` feature. `workflow.maxRunsPerDay` sets a daily cap (PostHog Inbox defaults to 10). The result includes the integration. Creating a webhook automation also answers with its URL and signing secret. Talyn shows them once. |
 | `talyn_update_workflow` | Merge supplied fields over the current automation. The result includes its integration. An automation cannot change integration. |
 | `talyn_set_workflow_enabled` | Enable or disable an automation while keeping its definition. |
@@ -202,7 +201,7 @@ Use `talyn_list_workspaces` to find workspace ids.
 | --- | --- |
 | `talyn_list_loops` | List scheduled automations and their next run times. |
 | `talyn_get_loop` | Read a scheduled automation and its next run time as JSON. |
-| `talyn_create_loop` | Create a scheduled automation. Set `target` to `session` or `task`. Get the repository name from `repository_id`. |
+| `talyn_create_loop` | Create a scheduled automation. Every run starts a session. `target: task` and `mcpServerIds` are refused. Get the repository name from `repository_id`. |
 | `talyn_update_loop` | Merge supplied fields over the current scheduled automation. |
 | `talyn_set_loop_enabled` | Enable or disable a scheduled automation while keeping its definition. |
 | `talyn_delete_loop` | Delete a scheduled automation and its history. |
@@ -291,15 +290,10 @@ The table `memory_review_runs` (migration `0123`) keeps one row for each review.
 | `talyn_list_cloud_providers` | Read connected providers, connected agents, required sign-ins with account names and IDs, and the default provider. |
 | `talyn_whats_new` | Read the latest release. Pass a version in `since` to read newer releases. |
 
-A task's `skill` reference contains `key`, `name`, and `source`.
-It can also contain `repositoryId` or `platformSkillId`.
-Include the skill instructions in `prompt`; the reference records which skill the task uses.
-
 Scheduled automation creation uses the desktop defaults. The timezone defaults to `UTC`.
-These defaults include target `task`, PostHog Code, its default model, daily runs at 09:00, and concurrency `skip`.
-PostHog Code is retired. In a workspace with no PostHog Code connection, pass `provider: selfhosted` for a task loop that can run. Step 2 of the retirement changes this default.
-With target `session` and no provider, the provider is Talyn Fleet (`selfhosted`) with its default model. A task loop with no provider also gets Talyn Fleet while PostHog Code is retired (`posthog-code-retired`).
-Internet access defaults to off. `mcpServerIds: null` uses the workspace's connected servers.
+These defaults include target `session`, Talyn Fleet (`selfhosted`) with its default model, daily runs at 09:00, and concurrency `skip`.
+Every run starts a session. Only Talyn Fleet is valid. Migration `0143_automations_start_sessions` turned off PostHog Code schedules.
+Internet access defaults to off. A scheduled automation cannot choose MCP servers. `mcpServerIds` must be `null`, and the session uses the workspace's MCP servers.
 Pass scheduled automation fields directly or in a `loop` object. Set the model when you change the provider.
 
 For MCP connections, `authKind` accepts `oauth` or `none`.
@@ -328,7 +322,7 @@ The `spaces` flag controls one tool. Spaces are not yet available to all account
 Every cloud session's sandbox gets this server as the MCP server named
 `talyn`, authenticated as the session's owner. A session agent can archive its
 own session, start another session, add a pull request to the merge queue, and
-so on. Cloud tasks do not get it.
+so on. Cloud tasks do not get it. Automations and MCP calls never create tasks.
 
 **The credential.** Each session has one `talyn_mcs_` token in
 `session_mcp_tokens` (migration `0093`, backend-pool only). The hash is what

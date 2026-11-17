@@ -346,24 +346,13 @@ export function GithubActionInput({
           <p className="text-xs text-muted-foreground">
             A repo skill (<code>repo:owner/repo:name</code>) or one saved to the workspace (
             <code>platform:id</code>). A skill on your own machine cannot be used, because
-            automations run on the server.
+            automations run on the server. The skill runs in a session on the pull request.
           </p>
         </div>
       );
     case 'run_prompt':
-      return (
-        <div className="space-y-1">
-          <Textarea
-            rows={4}
-            value={action.prompt}
-            placeholder="Review this PR for missing tests and leave your findings as review comments."
-            onChange={(e) => onChange({ ...action, prompt: e.target.value })}
-          />
-          <p className="text-xs text-muted-foreground">
-            The PR is named for the agent already. Write only the instruction.
-          </p>
-        </div>
-      );
+    case 'start_task':
+      return null;
     case 'enqueue_merge_queue':
       return (
         <div className="space-y-1">

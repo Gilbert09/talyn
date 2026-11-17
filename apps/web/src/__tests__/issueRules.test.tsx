@@ -267,7 +267,7 @@ describe('Issue rule editor', () => {
   it('allows one start action only', async () => {
     await openEditor('linear');
     fireEvent.click(screen.getByText('Add action'));
-    for (const label of ['Start a session', 'Start a task']) {
+    for (const label of ['Start a session']) {
       const option = screen.getAllByRole('button', { name: new RegExp(label) }).find((b) => b.closest('.absolute'));
       expect((option as HTMLButtonElement).disabled).toBe(true);
     }
@@ -321,7 +321,7 @@ describe('Issue rule editor', () => {
     expect(within(group).getByText('Nobody')).toBeTruthy();
   });
 
-  it('saves a GitHub Issues task on the issue\'s own repository', async () => {
+  it('saves a GitHub Issues session on the issue\'s own repository', async () => {
     const create = vi.spyOn(api.workflows, 'create').mockImplementation(async (_ws, input) => ({
       id: 'wf2', workspaceId: 'ws1', createdAt: '', updatedAt: '', stats: STATS, ...input,
     } as never));
@@ -329,7 +329,7 @@ describe('Issue rule editor', () => {
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Fix bugs' } });
     fireEvent.click(screen.getByLabelText('Remove Start a session'));
     fireEvent.click(screen.getByText('Add action'));
-    fireEvent.click(screen.getByRole('button', { name: /Start a task/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Start a session/ }));
     const repo = screen.getByLabelText('Repository') as HTMLSelectElement;
     expect(repo.value).toBe('');
     expect(within(repo).getByText('The issue\'s repository')).toBeTruthy();
@@ -340,7 +340,7 @@ describe('Issue rule editor', () => {
     await waitFor(() => expect(create).toHaveBeenCalled());
     const normalized = validateWorkflow(savedInput(create));
     expect(normalized.integration).toBe('github_issues');
-    expect(normalized.actions).toEqual([{ type: 'start_task', repositoryId: null, prompt: 'Fix the bug' }]);
+    expect(normalized.actions).toEqual([{ type: 'start_session', repositoryId: null, prompt: 'Fix the bug' }]);
   });
 
   it('offers done, closed and open for a GitHub status action', async () => {

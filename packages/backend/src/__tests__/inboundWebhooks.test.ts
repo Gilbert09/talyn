@@ -31,8 +31,12 @@ vi.mock('../services/websocket.js', async (importOriginal) => ({
 }));
 
 const created: Array<{ input: CreateWorkbenchServiceInput; actor: { id: string } }> = [];
+/** Refusals the next session creates throw, in order. */
+const sessionRefusals: Error[] = [];
 vi.mock('../services/workbenches/create.js', () => ({
   createWorkbench: async (input: CreateWorkbenchServiceInput, actor: { id: string }) => {
+    const refusal = sessionRefusals.shift();
+    if (refusal) throw refusal;
     created.push({ input, actor });
     const { insertWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
     const id = `wb-${created.length}`;
@@ -66,7 +70,6 @@ const { _resetWorkflowStore } = await import('../services/workflows/store.js');
 const { workflowRetrySweep } = await import('../services/workflows/retrySweep.js');
 const { UsageExhaustedError, ConcurrentBoxLimitError } = await import('../services/billing/entitlements.js');
 const taskCreate = await import('../services/taskCreate.js');
-const prCloudFix = await import('../services/prCloudFix.js');
 const analytics = await import('../services/analytics.js');
 
 const MODEL = 'claude-sonnet-4-5';
@@ -461,39 +464,33 @@ describe('inbound webhooks', () => {
 
   // ---- start_task ----------------------------------------------------------
 
-  describe('start_task', () => {
+  describe('an old start_task rule', () => {
     beforeEach(() => {
-      vi.spyOn(prCloudFix, 'resolveCloudEnv').mockResolvedValue({ envId: 'env-1', provider: 'selfhosted' });
+      sessionRefusals.length = 0;
     });
 
     const taskAction = { type: 'start_task', repositoryId: 'r-web', prompt: 'Fix {{repo}}', model: MODEL, internetAccess: true };
 
-    it('creates a code_writing task attributed to the rule', async () => {
-      const create = vi
-        .spyOn(taskCreate, 'createCloudTask')
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .mockResolvedValue({ id: 'task-1' } as any);
+    it('starts a session attributed to the rule, never a task', async () => {
+      const createTask = vi.spyOn(taskCreate, 'createCloudTask');
       const rule = await addRule({ actions: [taskAction] });
+      expect(rule.workflow.actions[0].type).toBe('start_session');
       const res = await send(`${rule.connectionId}/${rule.secrets.token}`, '{"a":1}');
       await settled(String(res.json.id));
-      expect(create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workspaceId: 'ws1',
-          type: 'code_writing',
-          source: 'workflow',
-          title: 'Issue hook',
-          repositoryId: 'r-web',
-          assignedEnvironmentId: 'env-1',
-          model: MODEL,
-          internetAccess: true,
-          workflow: expect.objectContaining({ workflowId: rule.workflow.id, event: 'webhook_received' }),
-        })
-      );
-      const prompt = create.mock.calls[0][0].prompt as string;
+      expect(createTask).not.toHaveBeenCalled();
+      expect(created).toHaveLength(1);
+      expect(created[0].input).toMatchObject({
+        workspaceId: 'ws1',
+        repositoryId: 'r-web',
+        model: MODEL,
+        internetAccess: true,
+        source: { kind: 'workflow', workflowId: rule.workflow.id, integration: 'webhook' },
+      });
+      const prompt = created[0].input.prompt as string;
       expect(prompt.startsWith('Fix acme/web-app')).toBe(true);
       expect(prompt).toContain('~~~~ request-body\n{\n  "a": 1\n}\n~~~~');
       const [run] = await runs();
-      expect(run).toMatchObject({ status: 'succeeded', taskId: null });
+      expect(run).toMatchObject({ status: 'succeeded', taskId: null, workbenchId: 'wb-1' });
     });
 
     it.each([
@@ -501,7 +498,7 @@ describe('inbound webhooks', () => {
       ['at the box cap', () => new ConcurrentBoxLimitError(2, 2), 'box_limit_reached'],
     ])('parks a box refusal (%s) as a deferral, never a 402, and the retry reads the body again', async (_label, refusal, code) => {
       const capture = vi.spyOn(analytics, 'captureWorkspaceEvent').mockReturnValue(undefined);
-      const create = vi.spyOn(taskCreate, 'createCloudTask').mockRejectedValueOnce(refusal());
+      sessionRefusals.push(refusal());
       const rule = await addRule({ actions: [taskAction] });
       const res = await send(`${rule.connectionId}/${rule.secrets.token}`, '{"secret_sauce":42}');
       expect(res.status).toBe(200);
@@ -516,17 +513,15 @@ describe('inbound webhooks', () => {
         expect.objectContaining({ source: 'workflow', gate: code, workflow_id: rule.workflow.id })
       );
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      create.mockResolvedValue({ id: 'task-2' } as any);
       await testDb.db.update(workflowRuns).set({ retryAfter: new Date(Date.now() - 1000) }).where(eq(workflowRuns.id, run.id));
       expect(await workflowRetrySweep.tick()).toBe(1);
       [run] = await runs();
       expect(run).toMatchObject({ status: 'succeeded', attempts: 2 });
-      expect(create.mock.calls.at(-1)![0].prompt).toContain('"secret_sauce": 42');
+      expect(created.at(-1)!.input.prompt).toContain('"secret_sauce": 42');
     });
 
     it('gives a parked run up when its delivery is gone', async () => {
-      vi.spyOn(taskCreate, 'createCloudTask').mockRejectedValue(new ConcurrentBoxLimitError(2, 2));
+      sessionRefusals.push(new ConcurrentBoxLimitError(2, 2));
       const rule = await addRule({ actions: [taskAction] });
       const res = await send(`${rule.connectionId}/${rule.secrets.token}`, '{"a":1}');
       await settled(String(res.json.id));

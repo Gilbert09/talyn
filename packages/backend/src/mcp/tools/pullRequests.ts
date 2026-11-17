@@ -1,4 +1,4 @@
-import type { Task, Workbench } from '@talyn/shared';
+import type { Workbench } from '@talyn/shared';
 import type { ClosePullRequestResult } from '../../services/prClose.js';
 import { McpApiError, callApi, type PrSummary, type PublicPr } from '../api.js';
 import {
@@ -343,31 +343,6 @@ export const PULLREQUESTS: McpToolDefinition[] = [
         return `${ref} is already closed. Nothing changed${comment ? ', and Talyn did not post the comment' : ''}.  ${result.url}`;
       }
       return `Closed ${ref}${result.commentPosted ? ' after posting the comment' : ''}.  ${result.url}`;
-    },
-  },
-  {
-    name: 'talyn_fix_pull_request',
-    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-    description:
-      "Start the standard Talyn \"get this PR mergeable\" cloud run — the exact action behind the app's fix button. Using Talyn's standard prompt and the workspace's configured provider, the agent resolves reviewer comments, gets CI green, and cleanly merges the base branch, then opens/updates the PR. Takes only the PR id — no instructions needed (use talyn_create_task for freeform work).",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        pull_request_id: { type: 'string' },
-        model: { type: 'string', description: 'Optional model id override (provider-specific).' },
-      },
-      required: ['pull_request_id'],
-    },
-    handler: async (ownerId, args) => {
-      const id = requireId(args, 'pull_request_id');
-      const model = str(args.model);
-      const task = await callApi<Task>(
-        ownerId,
-        'POST',
-        `/pull-requests/${id}/fix`,
-        model ? { model } : {}
-      );
-      return `Started "${task.title}" — task ${task.id} (${task.status}).`;
     },
   },
 ];

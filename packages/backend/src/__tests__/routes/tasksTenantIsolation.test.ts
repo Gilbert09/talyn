@@ -132,6 +132,18 @@ describe('task tenant isolation', () => {
     expect(await db.select().from(pullRequests)).toEqual(prsBefore);
   });
 
+  it('refuses to create a task for the MCP server, before any insert', async () => {
+    const before = await db.select().from(tasks);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...internalProxyHeaders(TEST_USER_ID, { mcp: true }), 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceId: 'ws1', type: 'code_writing', title: 'x', description: '', repositoryId: 'repo1', prompt: 'x' }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('tasks_app_only');
+    expect(await db.select().from(tasks)).toEqual(before);
+  });
+
   it('validates before reusing a previously malformed task', async () => {
     await db.update(tasks).set({ pullRequestId: 'pr2' }).where(eq(tasks.id, 'task1'));
     await expect(createCloudTask({

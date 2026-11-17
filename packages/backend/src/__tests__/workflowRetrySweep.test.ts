@@ -18,6 +18,32 @@ import * as prCache from '../services/prCache.js';
 import * as prCloudFix from '../services/prCloudFix.js';
 import { ConcurrentBoxLimitError, UsageExhaustedError } from '../services/billing/entitlements.js';
 import { isRetryable } from '../services/workflows/runs.js';
+import type { CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
+
+// The session create is stubbed. It inserts a real row, because
+// `workflow_runs.workbench_id` links to it behind a foreign key.
+let sessionError: Error | null = null;
+vi.mock('../services/workbenches/create.js', () => ({
+  createWorkbench: async (input: CreateWorkbenchServiceInput) => {
+    if (sessionError) throw sessionError;
+    const { insertWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
+    const row = await insertWorkbench({
+      id: 'wb-retry',
+      workspaceId: input.workspaceId,
+      repositoryId: input.repositoryId,
+      repoFullName: 'acme/widget',
+      name: 'wb-retry',
+      branch: 'wb-retry',
+      baseBranch: 'main',
+      runtime: 'sandbox',
+      agent: input.agent,
+      model: input.model ?? null,
+      status: 'provisioning',
+      source: input.source ?? null,
+    });
+    return rowToWorkbench(row);
+  },
+}));
 
 /**
  * The retry sweep.
@@ -266,32 +292,33 @@ describe('workflow retry sweep', () => {
     ['github_error', false],
   ])('%s is retryable: %s', (code, retryable) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(isRetryable({ type: 'run_prompt', ok: false, code: code as any })).toBe(retryable);
+    expect(isRetryable({ type: 'start_session', ok: false, code: code as any })).toBe(retryable);
   });
 
   describe('a run parked on a box refusal', () => {
     async function promptWorkflowRun(code: 'usage_exhausted' | 'box_limit_reached') {
-      const wf = await addWorkflow([{ type: 'run_prompt', prompt: 'Review this' }]);
-      const runId = await parkedRun(wf.id, { actions: [{ type: 'run_prompt', ok: false, code }] });
+      const wf = await addWorkflow([{ type: 'start_session', repositoryId: null, prompt: 'Review this', model: 'claude-sonnet-5-5' }]);
+      const runId = await parkedRun(wf.id, { actions: [{ type: 'start_session', ok: false, code }] });
       vi.spyOn(prCache, 'getOrFetchPRSummary').mockResolvedValue({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         summary: { title: 'Add a widget', url: FACTS.url, headBranch: 'alice/widget', baseBranch: 'main', state: 'open' } as any,
         row: { id: 'pr-row', state: 'open' },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any);
-      vi.spyOn(prCloudFix, 'resolveCloudEnv').mockResolvedValue({ envId: 'env-1', provider: 'selfhosted' });
       vi.spyOn(prCloudFix, 'activePrTaskId').mockResolvedValue(null);
+      sessionError = null;
       return runId;
     }
 
-    it('runs again once due, and starts the task when the plan allows it now', async () => {
+    it('runs again once due, and starts the session when the plan allows it now', async () => {
       const runId = await promptWorkflowRun('usage_exhausted');
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      vi.spyOn(taskCreate, 'createCloudTask').mockResolvedValue({ id: 'task-1' } as any);
+      const createTask = vi.spyOn(taskCreate, 'createCloudTask');
       await workflowRetrySweep.tick();
       const [run] = await db.select().from(runsTable).where(eq(runsTable.id, runId));
       expect(run?.status).toBe('succeeded');
       expect(run?.attempts).toBe(2);
+      expect(run?.workbenchId).toBe('wb-retry');
+      expect(createTask).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -299,7 +326,7 @@ describe('workflow retry sweep', () => {
       ['still at the box cap', () => new ConcurrentBoxLimitError(2, 2), 30_000],
     ])('parks again at the refusal recheck time when %s', async (_label, make, retryInMs) => {
       const runId = await promptWorkflowRun('usage_exhausted');
-      vi.spyOn(taskCreate, 'createCloudTask').mockRejectedValue(make());
+      sessionError = make();
       const before = Date.now();
       await workflowRetrySweep.tick();
       const [run] = await db.select().from(runsTable).where(eq(runsTable.id, runId));

@@ -4,7 +4,7 @@ navLabel: MCP server
 description: Connect Claude Code, Codex, Claude Desktop, Cursor or another MCP client to your Talyn account, and manage pull requests, sessions and reviews from your editor.
 ---
 
-Talyn runs a hosted MCP server. Connect an MCP client to it and your agent can list your pull requests, start a fix or a code review, queue a merge, or start a session, without you opening Talyn.
+Talyn runs a hosted MCP server. Connect an MCP client to it and your agent can list your pull requests, start a code review, queue a merge, or start a session, without you opening Talyn.
 
 This page is about using Talyn from your own MCP client. To give Talyn's agents tools from Linear, Sentry and others, see [MCP servers](/docs/mcp-servers).
 
@@ -123,18 +123,18 @@ Every tool name starts with `talyn_`. Most tools take a `workspace_id`. If you h
 
 | Area | Examples |
 | --- | --- |
-| Pull requests | List your pull requests or the ones that need attention, read a diff or reviews, fix a pull request with an agent, turn on keep mergeable, merge, track or close a pull request |
+| Pull requests | List your pull requests or the ones that need attention, read a diff or reviews, turn on keep mergeable, merge, track or close a pull request |
 | Merge queue | Add or remove a pull request, queue a stack, read the queue history |
-| Code review | Start a review at a depth, read findings, fix or dismiss findings |
-| Tasks | Start a cloud task, read its result, stop it, retry it or delete it |
-| Sessions | Start a session, send a message, read the transcript, read the diff, open the pull request, archive, list the sessions of a thread |
+| Code review | Start a review at a depth, read findings, dismiss findings |
+| Tasks | Read the result of an existing task, stop it, retry it or delete it. MCP cannot create tasks. Start a session instead. |
+| Sessions | Start a session (also to work on a pull request), send a message, read the transcript, read the diff, open the pull request, archive, list the sessions of a thread |
 | Session accounts and sandboxes | List your Claude and Codex accounts, choose the account for a session, move a session to a sandbox of another size, restart a session on a fresh sandbox, read the sandbox status, see where a session spent its time |
 | Background jobs and wake-ups | Run a long command in a session's sandbox after the turn ends, read its output, stop it, schedule a new turn for later |
 | Memory | Save, search, read, list and forget short notes that later sessions can read |
 | Repositories | List, add and remove repositories, read setup steps, record or dismiss a setup step |
 | Skills | List, read, create and change skills |
 | GitHub, Slack, webhook, Linear and GitHub Issues automations | List, create, change, turn on or off, and read runs |
-| Schedule | List, create, change, turn on or off, run a scheduled automation now, and read runs |
+| Schedule | List, create, change, turn on or off, run a scheduled automation now, and read runs. Each run starts a session. |
 | MCP servers | List the servers your workspace connects, and connect one that uses OAuth or no auth |
 | Spaces | List your teams and their spaces, start a session in a space. Spaces are not yet available to all accounts. |
 | Account | Your plan and usage, connected agents, accounts that need sign-in, and what is new |
@@ -143,7 +143,7 @@ Your client lists every tool with its description and parameters when it connect
 
 The `talyn_list_workflows`, `talyn_create_workflow`, and `talyn_update_workflow` tools use `integration`.
 Set it to `github`, `slack`, `webhook`, `linear`, `github_issues` or `posthog_inbox` in an automation definition. Listed and saved automations include the integration.
-Creating a webhook automation answers with its URL and signing secret once. Talyn cannot show them again. A webhook automation can use the `start_task` action.
+Creating a webhook automation answers with its URL and signing secret once. Talyn cannot show them again. A webhook automation uses the `start_session` action.
 A Linear rule needs `conditions.connectionId`. Issue automations (`linear` and `github_issues`) need the `issue-rules` feature. PostHog Inbox automations need the `posthog-inbox-rules` feature, and their `start_session` action has `repositoryId: null`.
 Use `talyn_get_workflow_vocabulary` with optional `integration` to read its fields. It defaults to `github`.
 Use `talyn_list_posthog_inbox_backlog` with `workflow_id` to list older reports that match a PostHog Inbox rule. Optional `days` is 7, 30 or 90. Optional `offset` reads the next page. The tool only reads.

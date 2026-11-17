@@ -25,7 +25,7 @@ const RULE: WorkflowWithStats = {
   enabled: true,
   events: ['webhook_received'],
   conditions: {},
-  actions: [{ type: 'start_task', repositoryId: 'repo1', prompt: 'Fix it' }],
+  actions: [{ type: 'start_session', repositoryId: 'repo1', prompt: 'Fix it' }],
   maxRunsPerPrPerHour: 5,
   createdAt: '2026-11-12T00:00:00Z',
   updatedAt: '2026-11-12T00:00:00Z',
@@ -149,7 +149,7 @@ describe('Webhook rule editor', () => {
     expect(screen.getByText('No tests. Every request to the URL starts this automation.')).toBeTruthy();
   });
 
-  it.each(['Start a task', 'Start a session'])('requires a repository for "%s"', async (label) => {
+  it.each(['Start a session'])('requires a repository for "%s"', async (label) => {
     await openEditor();
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Rule' } });
     fireEvent.click(screen.getByText('Add action'));
@@ -174,7 +174,7 @@ describe('Webhook rule editor', () => {
     fireEvent.change(screen.getByLabelText('Path 1'), { target: { value: 'action' } });
     fireEvent.change(screen.getByLabelText('Value 1'), { target: { value: 'opened' } });
     fireEvent.click(screen.getByText('Add action'));
-    fireEvent.click(screen.getByRole('button', { name: /Start a task/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Start a session/ }));
     fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'repo1' } });
     fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Fix the bug' } });
     fireEvent.click(document.querySelector('[data-attr="workflow-save"]')!);
@@ -185,7 +185,7 @@ describe('Webhook rule editor', () => {
     const normalized = validateWorkflow(input as WorkflowInput);
     expect(normalized.integration).toBe('webhook');
     expect(normalized.conditions).toEqual({ payloadMatches: [{ path: 'action', op: 'equals', value: 'opened' }] });
-    expect(normalized.actions).toEqual([{ type: 'start_task', repositoryId: 'repo1', prompt: 'Fix the bug' }]);
+    expect(normalized.actions).toEqual([{ type: 'start_session', repositoryId: 'repo1', prompt: 'Fix the bug' }]);
 
     const dialog = await screen.findByRole('dialog', { name: 'Copy the webhook URL' });
     expect(within(dialog).getByTestId('webhook-url').textContent).toBe(REVEAL.url);

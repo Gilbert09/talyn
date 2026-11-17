@@ -239,7 +239,7 @@ describe('PostHog Inbox rule validation', () => {
     ['a Linear condition', { conditions: { teams: ['ENG'] } }, /Linear condition/],
     ['a GitHub condition', { conditions: { draft: true } }, /GitHub condition/],
     ['a Slack action', { actions: [{ type: 'slack_reply', text: 'hi' }] }, /cannot use it/],
-    ['a start task action', { actions: [{ type: 'start_task', repositoryId: 'r1', prompt: 'x' }] }, /cannot use it/],
+    ['a start task action', { actions: [{ type: 'start_task', repositoryId: 'r1', prompt: 'x' }] }, /starts a session, not a cloud task/],
     ['a repository on the session', { actions: [{ type: 'start_session', repositoryId: 'r1', prompt: 'x' }] }, /report's own repository/],
     ['an issue event', { events: ['issue_created'] }, /Linear event|GitHub Issues event/],
     ['a daily cap of 0', { maxRunsPerDay: 0 }, /maxRunsPerDay/],

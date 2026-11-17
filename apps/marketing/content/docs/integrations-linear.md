@@ -1,6 +1,6 @@
 ---
 title: Linear integration
-description: Connect Linear and start a session or a task when an issue changes. Talyn writes back to the issue.
+description: Connect Linear and start a session when an issue changes. Talyn writes back to the issue.
 ---
 
 Linear rules are in early access. The cards show only for accounts that have the `issue-rules` flag. Open **Integrations > Linear** to connect Linear and create rules.
@@ -48,12 +48,12 @@ To use **Assigned to Talyn**, assign the issue to Talyn in Linear, or delegate i
 
 ## Actions
 
-A rule starts a session by default (**Start a session**). It can start a cloud task instead (**Start a task**).
+A rule starts a session (**Start a session**).
 A rule has one start action. The start action must name a repository.
 
 | Action | What it does |
 | --- | --- |
-| **Start a session** or **Start a task** | Starts the work on the repository you choose. Set the prompt, model and internet access. |
+| **Start a session** | Starts the work on the repository you choose. Set the prompt, model and internet access. |
 | **Comment on the issue** | Posts a comment. Use `{{issue.identifier}}`, `{{issue.url}}`, `{{issue.title}}`, `{{session.url}}` and `{{task.url}}`. |
 | **Change the issue status** | Moves the issue to `done`, or to a Linear status name you give. |
 
@@ -61,7 +61,7 @@ A rule has one start action. The start action must name a repository.
 
 Write-back is on by default.
 
-- When work starts, Talyn comments on the issue: "Talyn started working on this", with a link to the session or task.
+- When work starts, Talyn comments on the issue: "Talyn started working on this", with a link to the session.
 - When the pull request that the work opened merges, Talyn comments: "Talyn merged a fix for this", with a link to the pull request. Talyn then moves the issue to done. This is the first status of type "completed" in the team. It is usually Done.
 
 The start action has two switches. One turns off the start comment. The other turns off the move to done. The merge comment stays.
@@ -71,7 +71,7 @@ If Linear rate-limits Talyn, the write-back waits and tries again.
 
 ## One piece of work per issue
 
-While a session or task from an earlier event is still running on an issue, a new event on the same issue does not start more work. The run history shows `issue_already_running`.
+While a session from an earlier event is still running on an issue, a new event on the same issue does not start more work. The run history shows `issue_already_running`.
 
 The issue is free again when the work ends without a merge. This happens when:
 
@@ -84,7 +84,7 @@ The issue is free again when the work ends without a merge. This happens when:
 Talyn ignores its own comments and changes, so a rule cannot trigger itself.
 The rule's **runs per hour** setting applies to each issue.
 
-Each session or task uses box-hours, like any other. See [Plans, usage and billing](/docs/billing).
+Each session uses box-hours, like any other. See [Plans, usage and billing](/docs/billing).
 
 ## The prompt
 

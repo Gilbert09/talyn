@@ -29,6 +29,12 @@ export interface AuthUser {
   isAdmin: boolean;
   /** Verified token expiry in milliseconds. Internal callers have no JWT. */
   expiresAt?: number;
+  /**
+   * True for a call from Talyn's MCP server acting for the user, not the app.
+   * Set only behind the internal secret. Routes that only the app may use
+   * read this.
+   */
+  viaMcp?: boolean;
 }
 
 declare global {
@@ -361,10 +367,12 @@ const INTERNAL_SECRET = randomBytes(48).toString('hex');
 
 /** Backend-internal consumer — WS proxy handler — calls this to get the
  *  two headers it needs to dispatch an authenticated localhost request. */
-export function internalProxyHeaders(userId: string): Record<string, string> {
+export function internalProxyHeaders(userId: string, opts: { mcp?: boolean } = {}): Record<string, string> {
   return {
     'x-fastowl-internal-user': userId,
     'x-fastowl-internal-token': INTERNAL_SECRET,
+    // Read only after the secret matches, so no outside caller can set it.
+    ...(opts.mcp ? { 'x-fastowl-internal-via': 'mcp' } : {}),
   };
 }
 
@@ -411,7 +419,22 @@ async function checkInternalAuth(req: Request): Promise<AuthUser | null> {
     // The daemon proxy impersonates a user for data access but never gets the
     // operator-only debug surface.
     isAdmin: false,
+    ...(req.headers['x-fastowl-internal-via'] === 'mcp' ? { viaMcp: true } : {}),
   };
+}
+
+/**
+ * Only the app creates cloud tasks. A call from outside it (the MCP server)
+ * gets a 403 and is told to start a session; answers true when it refused.
+ */
+export function refuseTaskFromOutsideApp(req: Request, res: Response): boolean {
+  if (!req.user?.viaMcp) return false;
+  res.status(403).json({
+    success: false,
+    error: 'Only the Talyn app can start a cloud task. Start a session instead (talyn_create_session).',
+    code: 'tasks_app_only',
+  });
+  return true;
 }
 
 /**

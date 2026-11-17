@@ -13,7 +13,7 @@ import type {
   PostHogInboxFacts,
   CodeReviewPreset,
 } from '@talyn/shared';
-import { buildSkillPrompt, renderWorkflowComment, SKILL_MAX_BYTES } from '@talyn/shared';
+import { buildSkillPrompt, renderWorkflowComment, SKILL_MAX_BYTES, workflowActionAsSession } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { startReviewCycle } from '../codeReview/cycle.js';
 import { isBoxGateError } from '../billing/entitlements.js';
@@ -22,17 +22,13 @@ import { githubService } from '../github.js';
 import { GitHubRateLimitError } from '../githubRateGate.js';
 import { prMonitorService } from '../prMonitor.js';
 import { getOrFetchPRSummary } from '../prCache.js';
-import { activePrTaskId, resolveCloudEnv } from '../prCloudFix.js';
-import { createCloudTask } from '../taskCreate.js';
-import { liveWorkbenchForPr, sessionHoldReason } from '../workbenches/prSessions.js';
 import { setQueueMembership } from '../mergeQueue/membership.js';
 import { getRepoSkillContent } from '../skills.js';
 import { workspacePromptTemplate } from '../promptTemplates.js';
 import type { PRSummary } from '../githubGraphql.js';
 import { boxRefused, no, ok, type OneResult } from './actionResult.js';
-import { startSession } from './sessionAction.js';
-import { startInboundTask } from './inboundActions.js';
-import { issueComment, issueSetStatus, startIssueTask } from './issueActions.js';
+import { startGithubSession, startSession } from './sessionAction.js';
+import { issueComment, issueSetStatus } from './issueActions.js';
 import { taskLaunchUrl } from '../webApp.js';
 import { slackReact, slackReply } from './slackActions.js';
 
@@ -247,14 +243,15 @@ async function runOne(
   extras: WorkflowTemplateExtras,
   previous: WorkflowActionOutcome | undefined
 ): Promise<OneResult> {
+  // An automation never starts a cloud task. The store already reads an old
+  // task action as a session; this holds for any other caller.
+  if (action.type === 'run_prompt' || action.type === 'start_task') {
+    const session = workflowActionAsSession(action);
+    if (session.type === 'start_session') return startSession(session, ctx, prRow);
+  }
   if (action.type === 'start_session') return startSession(action, ctx, prRow);
   if (action.type === 'start_task') {
-    if (isIssueContext(ctx)) return startIssueTask(action, ctx);
-    if (ctx.integration !== 'webhook') {
-      // The validator allows this action on inbound rules only.
-      return { outcome: no(action.type, 'error', 'This action is for webhook and issue automations') };
-    }
-    return startInboundTask(action, ctx);
+    return { outcome: no(action.type, 'error', 'An automation starts a session, not a cloud task') };
   }
   if (action.type === 'issue_comment' || action.type === 'issue_set_status') {
     if (!isIssueContext(ctx)) {
@@ -312,8 +309,10 @@ async function runPrAction(
     case 'enqueue_merge_queue':
       return enqueue(action.method, ctx, prRow);
     case 'run_skill':
+      return startSkillSession(action, ctx, prRow);
     case 'run_prompt':
-      return startTask(action, ctx, prRow);
+      // Read as `start_session` in `runOne`; never reaches here.
+      return { outcome: no(action.type, 'error', 'An automation starts a session, not a cloud task') };
     case 'run_code_review':
       return runCodeReview(action.preset, ctx, prRow);
   }
@@ -735,10 +734,15 @@ async function enqueue(
   }
 }
 
-// ---- run_skill / run_prompt ----------------------------------------------
+// ---- run_skill ------------------------------------------------------------
 
-async function startTask(
-  action: Extract<WorkflowAction, { type: 'run_skill' | 'run_prompt' }>,
+/**
+ * Run a skill on the pull request, in a session. An automation never starts a
+ * cloud task. The session guards (a run or a live session already on the PR)
+ * are the ones `start_session` uses.
+ */
+async function startSkillSession(
+  action: Extract<WorkflowAction, { type: 'run_skill' }>,
   ctx: GithubActionContext,
   prRow: PrRowCache
 ): Promise<OneResult> {
@@ -752,103 +756,38 @@ async function startTask(
       ),
     };
   }
-
-  // Never two runs at one PR. This is the Session 111 bug: three concurrent
-  // runs at one PR filled the plan's task cap and starved a real fix run.
-  const inFlight = await activePrTaskId(ctx.workspaceId, resolved.id);
-  if (inFlight) {
-    return {
-      outcome: no(
-        action.type,
-        'task_already_running',
-        'a run is already working this PR'
-      ),
-      pullRequestId: resolved.id,
-    };
-  }
-  // Nor a run beside a live session: both would push to the one branch.
-  const session = await liveWorkbenchForPr(ctx.workspaceId, resolved.id);
-  if (session) {
-    return {
-      outcome: no(action.type, 'session_active', sessionHoldReason(session.name)),
-      pullRequestId: resolved.id,
-    };
-  }
-
-  const env = await resolveCloudEnv(ctx.workspaceId);
-  if (!env) {
-    return {
-      outcome: no(
-        action.type,
-        'no_cloud_provider',
-        'this workspace has no connected cloud provider to run the task on'
-      ),
-      pullRequestId: resolved.id,
-    };
-  }
+  const loaded = await loadSkill(action.skillKey, ctx);
+  if (!loaded.ok) return { outcome: loaded.outcome, pullRequestId: resolved.id };
 
   const summary = resolved.summary;
-  const ref = `${ctx.owner}/${ctx.repo}#${ctx.facts.number}`;
-  let prompt: string;
-  let title: string;
-  let skill: { key: string; name: string; source: 'repo' | 'platform'; repositoryId?: string; platformSkillId?: string } | undefined;
-
-  if (action.type === 'run_skill') {
-    const loaded = await loadSkill(action.skillKey, ctx);
-    if (!loaded.ok) return { outcome: loaded.outcome, pullRequestId: resolved.id };
-    prompt = buildSkillPrompt({
-      owner: ctx.owner,
-      repo: ctx.repo,
-      number: ctx.facts.number,
-      pr: {
-        url: summary.url,
-        title: summary.title,
-        headBranch: summary.headBranch,
-        baseBranch: summary.baseBranch,
-      },
-      skill: loaded.skill,
-      provider: env.provider,
-      template: await workspacePromptTemplate(ctx.workspaceId, 'skill'),
-    });
-    title = `Run skill "${loaded.skill.name}" on ${ref}`;
-    skill = loaded.info;
-  } else {
-    // A freeform prompt is handed over verbatim, with the PR named up front so
-    // the agent does not have to guess which one it is on.
-    prompt = `You are working on pull request ${ref} (${summary.url}).\n\n${action.prompt}`;
-    title = `Automation run on ${ref}`;
-  }
-
-  try {
-    const task = await createCloudTask({
-      workspaceId: ctx.workspaceId,
-      type: 'pr_response',
-      source: 'workflow',
-      title,
-      description: `Started by the "${ctx.workflowId}" automation on ${ref}.`,
-      prompt,
-      repositoryId: ctx.repositoryId,
-      assignedEnvironmentId: env.envId,
-      pullRequestId: resolved.id,
-      model: action.model,
-      ...(skill ? { skill } : {}),
-      workflow: { workflowId: ctx.workflowId, runId: ctx.runId, event: ctx.facts.event },
-    });
-    return {
-      outcome: ok(action.type, `started task ${task.id}`),
-      taskId: task.id,
-      pullRequestId: resolved.id,
-    };
-  } catch (err) {
-    if (isBoxGateError(err)) {
-      // Same treatment the merge-queue and auto-keep watchers give it: there is
-      // no request to answer, so nothing can 402 and no modal can open. The
-      // action parks (`pending_retry`) until the refusal's recheck time, and
-      // the deferral is captured server-side (Session 116).
-      return boxRefused(action.type, err, resolved.id, ctx);
-    }
-    return { outcome: githubFailure(action.type, err), pullRequestId: resolved.id };
-  }
+  const prompt = buildSkillPrompt({
+    owner: ctx.owner,
+    repo: ctx.repo,
+    number: ctx.facts.number,
+    pr: {
+      url: summary.url,
+      title: summary.title,
+      headBranch: summary.headBranch,
+      baseBranch: summary.baseBranch,
+    },
+    skill: loaded.skill,
+    // Sessions run on Talyn Fleet.
+    provider: 'selfhosted',
+    template: await workspacePromptTemplate(ctx.workspaceId, 'skill'),
+  });
+  const result = await startGithubSession(
+    {
+      type: 'start_session',
+      repositoryId: null,
+      prompt: `Run the skill "${loaded.skill.name}"`,
+      ...(action.model ? { model: action.model } : {}),
+    },
+    ctx,
+    prRow,
+    prompt
+  );
+  // The outcome belongs to this action, so the run history names the skill.
+  return { ...result, outcome: { ...result.outcome, type: action.type } };
 }
 
 type LoadedSkill =

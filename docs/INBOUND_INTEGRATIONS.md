@@ -4,7 +4,7 @@ Plan of 2026-11-12. Each phase ships on its own, behind its own PostHog flag.
 
 ## Decisions (Tom, 2026-11-12)
 
-1. A rule that an issue, an error or a generic webhook matches starts a **session** by default (`start_session`). A rule can choose `start_task` instead.
+1. A rule that an issue, an error or a generic webhook matches starts a **session** by default (`start_session`). `start_task` is not offered. Migration `0143` converted stored `start_task` rules to `start_session`.
 2. **Write-back is on by default.** A new rule comments on the issue or error when it starts work ("Talyn started: <link>"). A rule can turn it off.
 3. **On PR merge, comment and transition.** Talyn comments with the PR link and moves the issue to done (Linear "Done", Jira done transition, GitHub issue closed, Sentry or PostHog issue resolved). A rule can turn the transition off.
 4. **GitHub Issues has its own catalog card**, beside Linear and Jira. It uses the existing GitHub App connection: no new auth.
@@ -15,7 +15,7 @@ Plan of 2026-11-12. Each phase ships on its own, behind its own PostHog flag.
 - `IntegrationKind` (`packages/shared/src/integrations.ts`, page catalog and gates) and `WorkflowIntegration` (`packages/shared/src/workflows.ts`, `WORKFLOW_INTEGRATIONS`, the facts union, `workflowMatches`) are separate unions. A new vendor touches both.
 - The engine is adapter-shaped: `services/workflows/source.ts` (`WorkflowSourceAdapter<Input, Target, Facts>`) and `engine.ts` `evaluateWorkflows(source, input)`. A new vendor is a new adapter and a facts member.
 - Slack is the inbound pattern: `services/slack/events.ts` verifies the HMAC on the raw body, inserts into `slack_events` (event id is the idempotency), answers 200, processes after the response with a claim (`claimed_at` CAS, 5 attempts), a 60 s sweep and 7-day retention. Mirror Slack, not GitHub's Redis stream.
-- `run_prompt` / `run_skill` are PR-only. `start_session` (`sessionAction.ts`) is the shared action. `buildSlackPrompt` (`services/slack/context.ts`) is the untrusted-content fencing to reuse.
+- `run_skill` is PR-only. It starts a session on the pull request. `run_prompt` is gone. It is now `start_session` with `repositoryId: null`. `start_session` (`sessionAction.ts`) is the shared action. `buildSlackPrompt` (`services/slack/context.ts`) is the untrusted-content fencing to reuse.
 - The `posthog` integration kind is PostHog Code credentials, not an error-tracking project. PostHog Code is retired, and only existing connections keep this row. Error tracking gets a new kind.
 - Mobile: `apps/mobile/app/integrations/[kind].tsx` and `RulesScreen.tsx` list rules with an enable toggle and "Edit on the web".
 
@@ -47,7 +47,7 @@ interface WebhookEventFacts { integration: 'webhook'; event: 'webhook_received';
 
 **Conditions.** Each rule carries `connectionId`. Issue: `labelsAny/All/None`, `assignee` (`any | me | logins`), `teams`, `projects`, `statuses`, `titleContains`, `bodyContains`. Error: `projects`, `environments`, `levels`, `minEvents`, `minUsers`, `titleContains`. Webhook: a short list of `jsonPath` + `equals | contains`.
 
-**Actions.** `start_session` (exists; the default for every inbound integration) and a new `start_task` `{ repositoryId, prompt, model?, internetAccess? }` through `createCloudTask({ type: 'code_writing', source: 'workflow' })`. The repository is explicit per rule. Write-back actions: `issue_comment`, `issue_set_status`, `error_comment` (Sentry), `error_set_status`. Write-back runs in the backend with the connection credential; the agent never holds it. A vendor 429 parks the action as `rate_gated` through `retrySweep.ts`.
+**Actions.** `start_session` (exists; the default for every inbound integration) `start_session` takes `{ repositoryId, prompt, model?, internetAccess? }`. The repository is explicit per rule. A `start_task` action was planned here. It is now converted to `start_session`, because automations never create tasks. Write-back actions: `issue_comment`, `issue_set_status`, `error_comment` (Sentry), `error_set_status`. Write-back runs in the backend with the connection credential; the agent never holds it. A vendor 429 parks the action as `rate_gated` through `retrySweep.ts`.
 
 **Prompt.** `inbound/prompt.ts` `buildInboundPrompt` mirrors `buildSlackPrompt`: the rule's prompt first, then one fenced UNTRUSTED block per source (issue body, comments, stack trace, payload capped at 16 KB), then the source URL. Identifier placeholders (`{{issue.identifier}}`, `{{issue.url}}`, `{{error.url}}`, `{{repo}}`) render inline, single line, length-capped. Text placeholders (`{{issue.body}}`, `{{error.stack}}`, `{{payload.<path>}}`) render only inside the fence. `internetAccess` stays off by default.
 

@@ -25,6 +25,7 @@ import {
   requireRepositoryAccess,
   assertUser,
   internalProxyHeaders,
+  refuseTaskFromOutsideApp,
   setJwtKeySourceForTesting,
   verifyTokenAndGetUser,
 } from '../middleware/auth.js';
@@ -133,6 +134,10 @@ async function makeProbeServer(): Promise<{ url: string; close: () => Promise<vo
   app.get('/probe', requireAuth, (req, res) => {
     res.json({ userId: req.user?.id });
   });
+  app.post('/task-probe', requireAuth, (req, res) => {
+    if (refuseTaskFromOutsideApp(req, res)) return;
+    res.json({ created: true });
+  });
   const server: Server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   const addr = server.address() as AddressInfo;
@@ -226,6 +231,62 @@ describe('requireAuth (JWT + internal-proxy)', () => {
       headers: internalProxyHeaders('no-such-user'),
     });
     expect(res.status).toBe(401);
+  });
+
+  it('refuses a task from the MCP server, and points at a session', async () => {
+    const res = await fetch(`${serverUrl}/task-probe`, {
+      method: 'POST',
+      headers: internalProxyHeaders(TEST_USER_ID, { mcp: true }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('tasks_app_only');
+    expect(body.error).toMatch(/Start a session instead/);
+  });
+
+  it('lets other internal callers create a task', async () => {
+    const res = await fetch(`${serverUrl}/task-probe`, {
+      method: 'POST',
+      headers: internalProxyHeaders(TEST_USER_ID),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('ignores the MCP mark without the internal secret', async () => {
+    const res = await fetch(`${serverUrl}/task-probe`, {
+      method: 'POST',
+      headers: { 'x-fastowl-internal-via': 'mcp' },
+    });
+    // No secret means no internal auth at all, so the bearer path refuses it.
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('refuseTaskFromOutsideApp', () => {
+  function fakeRes() {
+    const res = { statusCode: 0, body: undefined as unknown };
+    return Object.assign(res, {
+      status(code: number) {
+        res.statusCode = code;
+        return this;
+      },
+      json(body: unknown) {
+        res.body = body;
+        return this;
+      },
+    });
+  }
+
+  it.each([
+    ['an app user', { id: 'u1', email: 'a@b.c', isAdmin: false }, false],
+    ['an app admin', { id: 'u1', email: 'a@b.c', isAdmin: true }, false],
+    ['no user', undefined, false],
+    ['the MCP server', { id: 'u1', email: 'a@b.c', isAdmin: false, viaMcp: true }, true],
+  ])('answers for %s', (_name, user, refused) => {
+    const res = fakeRes();
+    const out = refuseTaskFromOutsideApp({ user } as never, res as never);
+    expect(out).toBe(refused);
+    expect(res.statusCode).toBe(refused ? 403 : 0);
   });
 });
 

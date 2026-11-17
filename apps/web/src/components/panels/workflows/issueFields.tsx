@@ -417,7 +417,7 @@ export function IssueWriteBackFields({
   integration,
   onChange,
 }: {
-  action: Extract<WorkflowAction, { type: 'start_session' | 'start_task' }>;
+  action: Extract<WorkflowAction, { type: 'start_session' }>;
   integration: IssueWorkflowIntegration;
   onChange: (next: WorkflowAction) => void;
 }) {

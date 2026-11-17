@@ -719,18 +719,19 @@ describe('issue rules', () => {
       expect((run.actions as Array<{ code?: string }>)[0].code).toBe('rate_gated');
     });
 
-    it('starts a task on a chosen repository and links it with {{task.url}}', async () => {
+    it('starts a session, not a task, for an old start_task rule', async () => {
       const comment = vi.spyOn(githubService, 'createIssueComment').mockResolvedValue({ id: 2 });
       vi.spyOn(githubService, 'listRecentIssueComments').mockResolvedValue([]);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const create = vi.spyOn(taskCreate, 'createCloudTask').mockResolvedValue({ id: 'task-1' } as any);
+      const create = vi.spyOn(taskCreate, 'createCloudTask');
       await addGithubRule({ actions: [{ type: 'start_task', repositoryId: 'r-web', prompt: 'Fix it' }] });
       await evaluateWorkflows(githubIssuesWorkflowSource, {
         delivery: delivery('issues', 'labeled', { label: { name: 'bug' } }),
         targets: [target],
       });
-      expect(create).toHaveBeenCalledWith(expect.objectContaining({ type: 'code_writing', source: 'workflow', repositoryId: 'r-web', title: 'acme/web-app#5: Broken footer' }));
-      expect(comment).toHaveBeenCalledWith('ws1', 'acme', 'web-app', 5, 'Talyn started working on this: https://app.talyn.test/open/task/task-1');
+      expect(create).not.toHaveBeenCalled();
+      expect(created).toHaveLength(1);
+      expect(created[0].input.repositoryId).toBe('r-web');
+      expect(comment).toHaveBeenCalledWith('ws1', 'acme', 'web-app', 5, 'Talyn started working on this: https://app.talyn.test/open/session/wb-1');
     });
 
     it('does nothing with the flag off', async () => {

@@ -125,7 +125,9 @@ export async function claimFiring(
       repoFullName: loop.repoFullName,
       provider: loop.provider,
       model: loop.model,
-      target: loop.target,
+      // Every new firing starts a session, whatever an old loop row says.
+      // A run marked `task` would settle through the task path and fail.
+      target: 'session',
       status: 'queued',
       createdAt: new Date(),
     })
@@ -306,31 +308,6 @@ function captureLoopRan(
     // the thing worth alerting on and cannot be seen from the count alone.
     late_ms: row.createdAt.getTime() - row.scheduledFor.getTime(),
   });
-}
-
-/**
- * Record that this run got its task.
- *
- * Moves the run to `queued` as well as attaching the id, and that is not
- * cosmetic: a run parked on the plan limit is `waiting_slot` with a
- * `retry_after`, and a retry that only attached the task would leave it parked
- * — retried forever, with a task already running behind it.
- *
- * `dispatched_at` is written because `task_id` cannot be trusted to remember:
- * its FK is ON DELETE SET NULL.
- */
-export async function markDispatched(runId: string, taskId: string): Promise<void> {
-  await getDbClient()
-    .update(runsTable)
-    .set({
-      taskId,
-      dispatchedAt: new Date(),
-      status: 'queued',
-      failureCode: null,
-      error: null,
-      retryAfter: null,
-    })
-    .where(eq(runsTable.id, runId));
 }
 
 /** Attach the sandbox session and its first chat to a firing. */
@@ -614,9 +591,4 @@ export function concurrencyOf(loop: DueLoop): LoopConcurrency {
 /** The provider a run dispatches at, narrowed from the stored text column. */
 export function providerOf(loop: DueLoop): LoopProvider {
   return loop.provider === 'selfhosted' ? 'selfhosted' : 'posthog_code';
-}
-
-/** The destination copied onto a due loop. Older rows read as tasks. */
-export function targetOf(loop: DueLoop): LoopTarget {
-  return loop.target === 'session' ? 'session' : 'task';
 }

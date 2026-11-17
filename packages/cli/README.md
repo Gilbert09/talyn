@@ -32,10 +32,9 @@ talyn token show                        # print the stored token (scripting only
 talyn token clear                       # remove the stored token
 
 talyn task list                         # list tasks in the current workspace
-talyn task create --prompt "Add foo"    # create a code_writing task
-talyn task create --type manual \
-    --title "Merge PR #42"              # non-agent task
 ```
+
+The CLI cannot create a task. Only the Talyn app creates tasks.
 
 Add `--json` to the task commands to get machine-readable output.
 `--status` and `--type` filter `task list`.

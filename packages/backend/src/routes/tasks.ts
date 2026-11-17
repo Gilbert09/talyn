@@ -26,6 +26,7 @@ import { postHogCodeStreamer } from '../services/posthogCode/streamer.js';
 import {
   assertUser,
   handleAccessError,
+  refuseTaskFromOutsideApp,
   requireEnvironmentAccess,
   requireTaskAccess,
   requireWorkspaceAccess,
@@ -236,6 +237,7 @@ export function taskRoutes(): Router {
 
   // Create task — queued immediately for the cloud scheduler to dispatch.
   router.post('/', async (req, res) => {
+    if (refuseTaskFromOutsideApp(req, res)) return;
     const body = req.body as CreateTaskRequest;
     try {
       await requireWorkspaceAccess(req, body.workspaceId);

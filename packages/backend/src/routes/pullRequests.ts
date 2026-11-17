@@ -35,7 +35,7 @@ import {
   setActiveView,
   type ActiveView,
 } from '../services/prFocus.js';
-import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { assertUser, handleAccessError, refuseTaskFromOutsideApp, requireWorkspaceAccess } from '../middleware/auth.js';
 import { isFeatureEnabled } from '../services/featureFlags.js';
 import { scoreReviewRows } from '../services/reviewPriority/score.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
@@ -867,6 +867,7 @@ export function pullRequestRoutes(): Router {
   // FastOwl's canonical buildMergeablePrompt and the workspace's configured
   // provider. Body is optional `{ model? }`. Returns the created task.
   router.post('/:id/fix', async (req, res) => {
+    if (refuseTaskFromOutsideApp(req, res)) return;
     const db = getDbClient();
     const rows = await db
       .select(DETAIL_COLUMNS)
@@ -1382,6 +1383,7 @@ export function pullRequestRoutes(): Router {
 
   /** Fix the ticked findings: one run, one push, one optional comment. */
   router.post('/:id/code-review/fix', async (req, res) => {
+    if (refuseTaskFromOutsideApp(req, res)) return;
     const workspaceId = await reviewGate(req, res);
     if (!workspaceId) return;
     const review = await getReviewForPr(req.params.id);

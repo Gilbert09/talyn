@@ -1711,8 +1711,8 @@ export const loops = pgTable(
     /** `LoopProvider` — the pinned provider. Never failed over; see dispatch.ts. */
     provider: text('provider').notNull(),
     model: text('model').notNull(),
-    /** `LoopTarget`: existing rows start cloud tasks; new rows may start sessions. */
-    target: text('target').notNull().default('task'),
+    /** `LoopTarget`: always `session`. Loops stopped starting cloud tasks (migration `0143`). */
+    target: text('target').notNull().default('session'),
     /** `LoopConcurrency` — what a firing does when the last run is still going. */
     concurrency: text('concurrency').notNull().default('skip'),
     /**
@@ -1856,8 +1856,8 @@ export const loopRuns = pgTable(
     /** Copied at fire time, so editing the loop cannot rewrite its history. */
     provider: text('provider').notNull(),
     model: text('model').notNull(),
-    /** `LoopTarget`, copied at fire time. */
-    target: text('target').notNull().default('task'),
+    /** `LoopTarget`, copied at fire time. Old runs can say `task`. */
+    target: text('target').notNull().default('session'),
     taskId: text('task_id').references(() => tasks.id, { onDelete: 'set null' }),
     /** The reviewable session this firing started, when `target = 'session'`. */
     workbenchId: text('workbench_id').references(() => workbenches.id, { onDelete: 'set null' }),
