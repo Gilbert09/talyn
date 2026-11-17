@@ -3,6 +3,7 @@ import { View } from 'react-native';
 
 import { PrPill, SessionStateIcon } from '../../components/Status';
 import { AppText, Row } from '../../components/UI';
+import { usePlanState } from '../nav/data';
 import { workbenchState } from '../../lib/status';
 import { relativeTimeLabel, shortTime } from '../../lib/time';
 import { sessionRoute, threadRoute } from '../../navigation/routes';
@@ -10,7 +11,7 @@ import { workbenchKind, workbenchTitle } from '../../workflow/model';
 
 /** One session or thread: state mark, title, PR number, and when it last changed. */
 export function WorkbenchRow({ item, now, divider = true, onLongPress }: { item: Workbench; now: number; divider?: boolean; onLongPress?(item: Workbench): void }) {
-  const state = workbenchState(item);
+  const state = usePlanState(item.id, workbenchState(item));
   const title = workbenchTitle(item);
   const updated = relativeTimeLabel(item.updatedAt, now);
   return <Row href={workbenchKind(item) === 'thread' ? threadRoute(item.id) : sessionRoute(item.id)} title={title} divider={divider}

@@ -6,9 +6,11 @@ import { featureOffered, useFeatures } from '../../lib/features';
 import { useResource } from '../../workflow/hooks';
 import { useTeams } from '../spaces/data';
 import { personalItems, spacesOffered } from '../spaces/model';
-import { needsYouCount, TRANSCRIPT_SEARCH_DEBOUNCE_MS } from './model';
+import { withPlanAttention, type SessionState } from '../../lib/status';
+import { needsYouCount, type AttentionReasons, TRANSCRIPT_SEARCH_DEBOUNCE_MS } from './model';
 
 const NO_TEAMS: SpacesTeam[] = [];
+const NO_REASONS: AttentionReasons = {};
 const NO_MATCHES: WorkbenchTranscriptMatch[] = [];
 
 /**
@@ -21,19 +23,26 @@ export function useDrawerWork() {
   const offered = featureOffered(features, 'workbenches');
   const sessions = useResource<Workbench[]>('sessions', '', offered);
   const threads = useResource<Workbench[]>('threads', '', offered);
+  const attention = useResource<AttentionReasons>('contextAttention', '', offered);
   const teams = useTeams();
   const spaces = spacesOffered(features);
   // A failed teams read counts as no teams, like web, so nothing is lost from Personal.
   const known = teams.data ?? (teams.status === 'loading' ? null : NO_TEAMS);
   const personal = useMemo(() => ({ sessions: personalItems(sessions.data, known, spaces), threads: personalItems(threads.data, known, spaces) }),
     [sessions.data, threads.data, known, spaces]);
-  return { features, offered, sessions, threads, personal };
+  return { features, offered, sessions, threads, personal, reasons: attention.data ?? NO_REASONS };
 }
 
 /** How many sessions and threads in Personal wait on the person. */
 export function useNeedsYouCount(): number {
-  const { offered, personal } = useDrawerWork();
-  return offered ? needsYouCount(personal.sessions, personal.threads) : 0;
+  const { offered, personal, reasons } = useDrawerWork();
+  return offered ? needsYouCount(personal.sessions, personal.threads, reasons) : 0;
+}
+
+/** A row's state with the plan the server reports. Reads what the drawer already loaded. */
+export function usePlanState(id: string, state: SessionState): SessionState {
+  const reasons = useResource<AttentionReasons>('contextAttention', '', false).data;
+  return withPlanAttention(state, reasons?.[id]);
 }
 
 /**

@@ -1,15 +1,18 @@
-import type { Workbench, WorkbenchTranscriptMatch } from '@talyn/shared';
+import type { ContextAttentionReason, Workbench, WorkbenchTranscriptMatch } from '@talyn/shared';
 import type { LegacyPanGesture } from 'react-native-gesture-handler';
 
-import { workbenchState, type SessionStateKind } from '../../lib/status';
+import { withPlanAttention, workbenchState, type SessionStateKind } from '../../lib/status';
 import type { PullsTab } from '../prs/lists';
 import { compareWorkbenches, groupByRepository, workbenchTitle } from '../../workflow/model';
 
 /** States that wait on the person: an answer, a permission or plan prompt, or a failure. */
 export const NEEDS_YOU: ReadonlySet<SessionStateKind> = new Set(['needs_reply', 'failed']);
 
-export function needsYou(item: Workbench): boolean {
-  return !item.archivedAt && NEEDS_YOU.has(workbenchState(item).kind);
+export type AttentionReasons = Readonly<Record<string, ContextAttentionReason>>;
+const NO_REASONS: AttentionReasons = {};
+
+export function needsYou(item: Workbench, reasons: AttentionReasons = NO_REASONS): boolean {
+  return !item.archivedAt && NEEDS_YOU.has(withPlanAttention(workbenchState(item), reasons[item.id]).kind);
 }
 
 /** Lower case and trimmed, so a search ignores case and stray spaces. */
@@ -46,6 +49,8 @@ export interface DrawerInput {
   query: string;
   collapsedGroups: ReadonlySet<string>;
   collapsedThreads: ReadonlySet<string>;
+  /** The server's reasons per session. Only `plan` is used. */
+  reasons?: AttentionReasons;
 }
 
 const running = (item: Workbench) => (item.chats ?? []).some((chat) => chat.status === 'running' || (chat.queuedMessages?.length ?? 0) > 0);
@@ -55,7 +60,7 @@ const running = (item: Workbench) => (item.chats ?? []).some((chat) => chat.stat
  * sidebar: Needs you, Threads with their sessions, then Sessions by repository.
  * A search keeps only the matches and opens every group and thread.
  */
-export function drawerEntries({ sessions, threads, query: raw, collapsedGroups, collapsedThreads }: DrawerInput): DrawerEntry[] {
+export function drawerEntries({ sessions, threads, query: raw, collapsedGroups, collapsedThreads, reasons = NO_REASONS }: DrawerInput): DrawerEntry[] {
   const query = normalizeQuery(raw);
   const searching = query.length > 0;
   if (sessions === undefined && threads === undefined) return [{ type: 'loading', key: 'loading' }];
@@ -63,7 +68,7 @@ export function drawerEntries({ sessions, threads, query: raw, collapsedGroups, 
   const allThreads = (threads ?? []).filter((item) => !item.archivedAt);
   const entries: DrawerEntry[] = [];
 
-  const waiting = [...allThreads, ...allSessions].filter((item) => needsYou(item) && matchesQuery(item, query)).sort(compareWorkbenches);
+  const waiting = [...allThreads, ...allSessions].filter((item) => needsYou(item, reasons) && matchesQuery(item, query)).sort(compareWorkbenches);
   if (waiting.length) {
     entries.push({ type: 'heading', key: 'heading:needs', section: 'needs', title: 'Needs you' });
     for (const item of waiting) entries.push({ type: 'row', key: `needs:${item.id}`, item, indent: false });
@@ -95,7 +100,7 @@ export function drawerEntries({ sessions, threads, query: raw, collapsedGroups, 
     const repo = group.repo || NO_REPOSITORY;
     const expanded = searching || !collapsedGroups.has(repo);
     entries.push({ type: 'group', key: `group:${repo}`, repo, expanded,
-      hidden: expanded ? 0 : group.items.length, attention: !expanded && group.items.some(needsYou) });
+      hidden: expanded ? 0 : group.items.length, attention: !expanded && group.items.some((item) => needsYou(item, reasons)) });
     if (expanded) for (const item of group.items) entries.push({ type: 'row', key: `session:${item.id}`, item, indent: false });
   }
 
@@ -129,8 +134,8 @@ export function withTranscriptMatches(entries: DrawerEntry[], matches: readonly 
 }
 
 /** How many sessions and threads wait on the person. Drives the menu button's dot. */
-export function needsYouCount(sessions: Workbench[] | undefined, threads: Workbench[] | undefined): number {
-  return [...(threads ?? []), ...(sessions ?? [])].filter(needsYou).length;
+export function needsYouCount(sessions: Workbench[] | undefined, threads: Workbench[] | undefined, reasons: AttentionReasons = NO_REASONS): number {
+  return [...(threads ?? []), ...(sessions ?? [])].filter((item) => needsYou(item, reasons)).length;
 }
 
 /** A count for a badge: nothing for zero or unknown, and "99+" above 99. */

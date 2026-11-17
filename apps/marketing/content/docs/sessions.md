@@ -51,6 +51,8 @@ Hover over a session in the sidebar to see its details immediately. The card sho
 - Running background jobs, a scheduled wake-up, where the session started (for example a Slack channel), and an error if there is one.
 - When the session was last active and when it started.
 
+The **Needs you** section at the top of the sidebar lists the sessions that wait on you: a session that failed, asks a question, has a plan to approve, or has a pull request with merge conflicts. A session leaves the list when you open it.
+
 A session in a space also shows who started it. In the mobile app, press and hold a session. The menu shows its state, branch, changes, agent, sandbox and times above the actions.
 
 ## The session screen

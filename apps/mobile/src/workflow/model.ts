@@ -14,8 +14,11 @@ export const PAGE_SIZE = 500;
 export const PAGE_CEILING = 2_000;
 export const ROW_TEXT_LIMIT = 16000;
 export interface Scope { environment: string; user: string; workspace: string }
-/** `attention` holds every open PR of the workspace, as web's one PR store; the three PR pages filter it. */
-export type Entity = 'sessions' | 'threads' | 'attention' | 'workbench' | 'children' | 'readiness' | 'pr' | 'timeline' | 'transcript'
+/**
+ * `attention` holds every open PR of the workspace, as web's one PR store; the three PR pages filter it.
+ * `contextAttention` holds the server's reason for each session that waits on the person, as `{ [id]: reason }`.
+ */
+export type Entity = 'sessions' | 'threads' | 'attention' | 'contextAttention' | 'workbench' | 'children' | 'readiness' | 'pr' | 'timeline' | 'transcript'
   | 'features' | 'repositories' | 'providers' | 'workspace' | 'environments' | 'codeReview' | 'prDescription' | 'prFiles' | 'prReviews';
 export const cacheKey = (scope: Scope, entity: Entity, id = '') =>
   JSON.stringify(['mobile', SCHEMA_VERSION, scope.environment, scope.user, scope.workspace, entity, id]);

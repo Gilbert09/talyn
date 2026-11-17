@@ -27,6 +27,22 @@ describe('needs you', () => {
     expect(needsYou(session(patch))).toBe(expected);
   });
 
+  it.each<[string, Partial<Workbench>, Record<string, 'plan' | 'reply' | 'failed' | 'conflict'>, boolean]>([
+    ['a plan on an idle session', {}, { 'session-one': 'plan' }, true],
+    ['a plan on another session', {}, { other: 'plan' }, false],
+    ['a reply reason, which mobile derives itself', {}, { 'session-one': 'reply' }, false],
+    ['a plan on a running session', { chats: [chat({ status: 'running' })] }, { 'session-one': 'plan' }, false],
+    ['a plan on an archived session', { archivedAt: '2026-11-09T00:00:00Z' }, { 'session-one': 'plan' }, false],
+    ['no reasons', {}, {}, false],
+  ])('with %s is %s', (_name, patch, reasons, expected) => {
+    expect(needsYou(session(patch), reasons)).toBe(expected);
+  });
+
+  it('counts a plan session and a plan thread', () => {
+    expect(needsYouCount([alpha, waiting], [thread()], { alpha: 'plan', 'thread-one': 'plan' })).toBe(3);
+    expect(needsYouCount([alpha], undefined, { alpha: 'plan' })).toBe(1);
+  });
+
   it('counts sessions and threads, and nothing unknown', () => {
     expect(needsYouCount(undefined, undefined)).toBe(0);
     expect(needsYouCount([waiting, alpha], [thread()])).toBe(1);
@@ -50,6 +66,19 @@ describe('drawer entries', () => {
 
   it('says there are no sessions yet and keeps the Threads heading', () => {
     expect(keys(drawerEntries(input({})))).toEqual(['heading:threads', 'heading:sessions', 'starters:sessions']);
+  });
+
+  it('lists a plan session under Needs you and marks its collapsed group', () => {
+    const entries = drawerEntries(input({ sessions: [alpha, beta], reasons: { alpha: 'plan' }, collapsedGroups: new Set(['org/alpha']) }));
+    expect(keys(entries).slice(0, 2)).toEqual(['heading:needs', 'needs:alpha']);
+    expect(entries.find((entry) => entry.key === 'group:org/alpha')).toMatchObject({ attention: true });
+    expect(entries.find((entry) => entry.key === 'group:org/beta')).toMatchObject({ attention: false });
+  });
+
+  it('does not list a plan session that is archived or filtered out by the search', () => {
+    expect(keys(drawerEntries(input({ sessions: [{ ...alpha, archivedAt: '2026-11-09T00:00:00Z' }], reasons: { alpha: 'plan' } }))))
+      .not.toContain('heading:needs');
+    expect(keys(drawerEntries(input({ sessions: [alpha], reasons: { alpha: 'plan' }, query: 'zzz' })))).not.toContain('needs:alpha');
   });
 
   it('orders Needs you, Threads with sessions, then repositories newest first', () => {

@@ -276,6 +276,8 @@ describe('clientAttentionKey', () => {
     ['a conflicting PR', [wb, [], { state: 'open', summary: { mergeable: 'CONFLICTING' } }], 'conflict::'],
     ['a mergeable PR', [wb, [], { state: 'open', summary: { mergeable: 'MERGEABLE' } }], null],
     ['a thread with no kind set', [{ ...wb, kind: undefined }, [chat('c1', 'awaiting_input')], null], 'reply:c1@0'],
+    ['a running turn, so the key changes when it ends', [wb, [chat('c1', 'running')], null], 'busy'],
+    ['a failure next to a running turn', [wb, [chat('c1', 'error'), chat('c2', 'running')], null], 'chat_error:c1@0'],
   ])('%s', (_label, args, expected) => {
     expect(clientAttentionKey(...args)).toBe(expected);
   });
