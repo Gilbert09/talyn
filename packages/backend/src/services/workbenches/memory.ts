@@ -1,9 +1,9 @@
 import { v4 as uuid } from 'uuid';
-import { and, asc, desc, eq, ilike, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import {
   MAX_LIVE_MEMORIES_PER_WORKSPACE,
-  memoryLimitMessage,
   MAX_MEMORY_INDEX_BYTES,
+  MEMORY_EVICTION_GRACE_DAYS,
   renderMemoryIndex,
   validateMemoryInput,
   validateMemoryUpdate,
@@ -49,6 +49,9 @@ export const SUMMARY_COLUMNS = {
   createdAt: table.createdAt,
   updatedAt: table.updatedAt,
   forgottenAt: table.forgottenAt,
+  forgottenReason: table.forgottenReason,
+  useCount: table.useCount,
+  lastUsedAt: table.lastUsedAt,
 } as const;
 
 /** What the index shows, and the id so a caller can act on an entry. */
@@ -86,6 +89,9 @@ function toSummary(row: SummaryRow): MemoryEntrySummary {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     forgottenAt: row.forgottenAt ? row.forgottenAt.toISOString() : null,
+    forgottenReason: row.forgottenReason ?? null,
+    useCount: row.useCount,
+    lastUsedAt: row.lastUsedAt ? row.lastUsedAt.toISOString() : null,
   };
 }
 
@@ -212,10 +218,28 @@ export async function listMemoriesUsedBy(
 }
 
 /**
- * Note that a session or thread saved or read an entry. Best effort: a failure
- * only drops the entry from the thread's work panel.
+ * Note that a caller saved or read an entry. A read adds one to the entry's
+ * `use_count`, from any caller; the cap evicts the entries with the fewest
+ * reads first. With a session or thread, also note that it used the entry.
+ * Best effort: a failure only makes the count low, or drops the entry from the
+ * thread's work panel.
  */
-export async function recordMemoryUse(memoryId: string, workbenchId: string, kind: 'wrote' | 'read'): Promise<void> {
+export async function recordMemoryUse(
+  memoryId: string,
+  workbenchId: string | null,
+  kind: 'wrote' | 'read',
+): Promise<void> {
+  if (kind === 'read') {
+    try {
+      await db()
+        .update(table)
+        .set({ useCount: sql`${table.useCount} + 1`, lastUsedAt: new Date() })
+        .where(eq(table.id, memoryId));
+    } catch (err) {
+      console.warn('[memory] could not count a memory read:', err);
+    }
+  }
+  if (!workbenchId) return;
   try {
     await db()
       .insert(uses)
@@ -299,44 +323,49 @@ function refuse(result: { error: string; code: string; status: number }): never 
   throw new WorkbenchError(result.error, result.status, result.code);
 }
 
-/** The live entry with this scope target and name (case-insensitive), if any. */
-function sameKey(
-  workspaceId: string,
-  scope: MemoryScope,
-  repositoryId: string | null,
-  threadId: string | null,
-  name: string,
-): SQL {
-  return and(
-    eq(table.workspaceId, workspaceId),
-    eq(table.scope, scope),
-    sql`coalesce(${table.repositoryId}, '') = ${repositoryId ?? ''}`,
-    sql`coalesce(${table.threadId}, '') = ${threadId ?? ''}`,
-    sql`lower(${table.name}) = lower(${name})`,
-    isNull(table.forgottenAt),
-  )!;
-}
+/**
+ * The order in which the cap forgets live entries: an entry saved, changed or
+ * restored in the grace period last; then the fewest reads; then the oldest
+ * last read or change.
+ */
+const EVICTION_ORDER = [
+  asc(sql`${table.updatedAt} > now() - ${sql.raw(`interval '${MEMORY_EVICTION_GRACE_DAYS} days'`)}`),
+  asc(table.useCount),
+  asc(sql`greatest(${table.lastUsedAt}, ${table.updatedAt})`),
+  asc(table.createdAt),
+  asc(table.id),
+];
 
-/** Refuse a new live entry when the workspace is at the cap. */
-async function requireRoomFor(workspaceId: string, exclude?: SQL): Promise<void> {
-  const [row] = await db()
-    .select({
-      live: sql<number>`count(*)::int`,
-      existing: exclude ? sql<boolean>`coalesce(bool_or(${exclude}), false)` : sql<boolean>`false`,
-    })
+/**
+ * Bring the workspace back to the live entry cap after a write added a row:
+ * forget the entries that come first in `EVICTION_ORDER`, never `keepId`,
+ * and return them. A person can restore them. Two racing writes can each see
+ * one row too many and forget two entries; the cap is about clutter, not
+ * safety.
+ */
+async function trimToCap(workspaceId: string, keepId: string): Promise<MemoryEntrySummary[]> {
+  const live = and(eq(table.workspaceId, workspaceId), isNull(table.forgottenAt))!;
+  const [row] = await db().select({ live: sql<number>`count(*)::int` }).from(table).where(live);
+  const over = (row?.live ?? 0) - MAX_LIVE_MEMORIES_PER_WORKSPACE;
+  if (over <= 0) return [];
+  const victims = db()
+    .select({ id: table.id })
     .from(table)
-    .where(and(eq(table.workspaceId, workspaceId), isNull(table.forgottenAt)));
-  // An update of a live entry adds no row.
-  if (row?.existing) return;
-  if ((row?.live ?? 0) >= MAX_LIVE_MEMORIES_PER_WORKSPACE) {
-    throw new WorkbenchError(memoryLimitMessage(), 409, 'memory_limit_reached');
-  }
+    .where(and(live, ne(table.id, keepId)))
+    .orderBy(...EVICTION_ORDER)
+    .limit(over);
+  const now = new Date();
+  const rows = await db()
+    .update(table)
+    .set({ forgottenAt: now, forgottenReason: 'evicted', updatedAt: now })
+    .where(and(inArray(table.id, victims), isNull(table.forgottenAt)))
+    .returning(SUMMARY_COLUMNS);
+  return rows.map(toSummary);
 }
 
 /**
  * Create an entry, or update the live entry with the same scope target and
- * name. The cap check runs first, so two racing creates can pass it together
- * and go one row over; the cap is about clutter, not safety.
+ * name. When a create goes over the cap, Talyn forgets the least-used entry.
  */
 export async function putMemory(ownerId: string, input: unknown): Promise<PutMemoryResult> {
   const workspaceId = (input as { workspaceId?: unknown } | null)?.workspaceId;
@@ -348,11 +377,6 @@ export async function putMemory(ownerId: string, input: unknown): Promise<PutMem
   const value = checked.value;
   await requireTargetInWorkspace(workspaceId, value.repositoryId, value.threadId);
   const source = await validateSource(workspaceId, (input as { source?: unknown }).source);
-  await requireRoomFor(
-    workspaceId,
-    sameKey(workspaceId, value.scope, value.repositoryId, value.threadId, value.name),
-  );
-
   const result = await db().execute(sql`
     INSERT INTO workspace_memories
       (id, workspace_id, owner_id, scope, repository_id, thread_id, type, name, description, body, bytes, source)
@@ -365,9 +389,10 @@ export async function putMemory(ownerId: string, input: unknown): Promise<PutMem
     RETURNING id, (xmax = 0) AS inserted
   `);
   const [row] = rowsOf<{ id: string; inserted: boolean }>(result);
+  const evicted = row.inserted ? await trimToCap(workspaceId, row.id) : [];
   const entry = await getMemory(row.id);
   if (!entry) throw new Error(`memory ${row.id} vanished after its upsert`);
-  return { entry, outcome: row.inserted ? 'created' : 'updated' };
+  return { entry, outcome: row.inserted ? 'created' : 'updated', evicted };
 }
 
 function isUniqueViolation(err: unknown): boolean {
@@ -411,16 +436,18 @@ export async function forgetMemory(id: string): Promise<MemoryEntrySummary | nul
   return row ? toSummary(row) : null;
 }
 
-/** Bring a forgotten entry back. Refused when a live entry took its name, or at the cap. */
+/**
+ * Bring a forgotten entry back. Refused when a live entry took its name. At
+ * the cap, the least-used live entry is forgotten to make room.
+ */
 export async function restoreMemory(id: string): Promise<MemoryEntry> {
   const current = await getMemory(id);
   if (!current) throw new WorkbenchError('Memory entry not found', 404, 'memory_not_found');
   if (!current.forgottenAt) return current;
-  await requireRoomFor(current.workspaceId);
   try {
     await db()
       .update(table)
-      .set({ forgottenAt: null, updatedAt: new Date() })
+      .set({ forgottenAt: null, forgottenReason: null, updatedAt: new Date() })
       .where(eq(table.id, id));
   } catch (err) {
     if (isUniqueViolation(err)) {
@@ -432,6 +459,7 @@ export async function restoreMemory(id: string): Promise<MemoryEntry> {
     }
     throw err;
   }
+  await trimToCap(current.workspaceId, id);
   return (await getMemory(id))!;
 }
 

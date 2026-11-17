@@ -44,7 +44,7 @@ const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
 
 const summary = (overrides: Partial<MemoryEntrySummary> = {}): MemoryEntrySummary => ({ id: 'm1', workspaceId: 'w1', scope: 'workspace',
   repositoryId: null, threadId: null, type: 'project', name: 'Build command', description: 'How to build', bytes: 13, source: { kind: 'user' },
-  createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-08T00:00:00Z', forgottenAt: null, ...overrides });
+  createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-08T00:00:00Z', forgottenAt: null, forgottenReason: null, useCount: 0, lastUsedAt: null, ...overrides });
 const entry = (overrides: Partial<MemoryEntry> = {}): MemoryEntry => ({ ...summary(overrides), body: 'npm run build', ...overrides });
 
 beforeEach(() => {

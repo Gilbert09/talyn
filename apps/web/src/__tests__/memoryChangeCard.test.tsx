@@ -61,7 +61,7 @@ const live: MemoryEntry = {
   source: { kind: 'session', workbenchId: 'wb1' },
   createdAt: '2026-10-30T00:00:00.000Z',
   updatedAt: '2026-10-30T00:00:00.000Z',
-  forgottenAt: null,
+  forgottenAt: null, forgottenReason: null, useCount: 0, lastUsedAt: null,
 };
 
 afterEach(() => {

@@ -1,6 +1,6 @@
 import {
-  MAX_LIVE_MEMORIES_PER_WORKSPACE, MAX_MEMORY_BODY_BYTES, MAX_MEMORY_DESCRIPTION_CHARS, MAX_MEMORY_NAME_CHARS, validateMemoryInput,
-  validateMemoryUpdate,
+  MAX_LIVE_MEMORIES_PER_WORKSPACE, MAX_MEMORY_BODY_BYTES, MAX_MEMORY_DESCRIPTION_CHARS, MAX_MEMORY_NAME_CHARS, memoryUseLabel,
+  validateMemoryInput, validateMemoryUpdate,
   type ListMemoryQuery, type MemoryEntry, type MemoryEntrySummary, type MemoryReviewRun, type MemoryScope, type MemorySource,
   type MemoryType, type PutMemoryInput, type UpdateMemoryInput,
 } from '@talyn/shared';
@@ -181,6 +181,19 @@ export function memoryDirty(original: MemoryEntry | null, draft: MemoryDraft): b
 
 export function sameNameMessage(name: string): string {
   return `Updated the entry "${name}", which had the same name`;
+}
+
+/** What to tell the person when Talyn forgot entries to make room for a new one. Null when it forgot none. */
+export function evictedMessage(evicted: readonly Pick<MemoryEntrySummary, 'name'>[]): string | null {
+  if (evicted.length === 0) return null;
+  return `Memory is full, so Talyn forgot the least-read ${evicted.length === 1 ? `entry "${evicted[0].name}"` : `${evicted.length} entries`}`;
+}
+
+/** The line under an entry: who saved it, when it changed, how often sessions read it. */
+export function memoryEntryMeta(entry: MemoryEntrySummary, now = Date.now()): string {
+  const parts = [memorySourceLabel(entry.source).text, `Updated ${ago(entry.updatedAt, now)}`, memoryUseLabel(entry.useCount)];
+  if (entry.forgottenAt && entry.forgottenReason === 'evicted') parts.push('Forgotten to make room');
+  return parts.join(' · ');
 }
 
 /** Replace one entry of a list in place, or add it at the end. */

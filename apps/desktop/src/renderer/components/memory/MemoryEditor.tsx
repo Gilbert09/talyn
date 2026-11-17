@@ -116,7 +116,8 @@ export function MemoryEditor({
   entry?: MemoryEntrySummary | MemoryEntry;
   repositories: readonly RepoRef[];
   onClose: () => void;
-  onSaved: (entry: MemoryEntry, outcome: 'created' | 'updated') => void;
+  /** `evicted`: the entries Talyn forgot to make room at the limit. */
+  onSaved: (entry: MemoryEntry, outcome: 'created' | 'updated', evicted: MemoryEntrySummary[]) => void;
 }) {
   const editing = Boolean(entry);
   const initialBody = entry && 'body' in entry ? entry.body : undefined;
@@ -180,7 +181,7 @@ export function MemoryEditor({
       setSaving(true);
       try {
         const saved = await api.workbenches.memory.update(entry.id, patch);
-        onSaved(saved, 'updated');
+        onSaved(saved, 'updated', []);
         onClose();
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Could not save this memory');
@@ -207,7 +208,7 @@ export function MemoryEditor({
     try {
       const result = await api.workbenches.memory.put(input);
       if (result.outcome === 'updated') toast.info(`Updated the entry "${result.entry.name}", which had the same name`);
-      onSaved(result.entry, result.outcome);
+      onSaved(result.entry, result.outcome, result.evicted ?? []);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save this memory');

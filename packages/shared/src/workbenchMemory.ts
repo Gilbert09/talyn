@@ -25,6 +25,9 @@ export type MemorySource =
   | { kind: 'session'; workbenchId: string; chatId?: string; turn?: number }
   | { kind: 'auto' };
 
+/** Why an entry was forgotten. `evicted`: Talyn forgot it to make room at the live entry cap. */
+export type MemoryForgottenReason = 'evicted';
+
 /** An entry without its body, as a list returns it. */
 export interface MemoryEntrySummary {
   id: string;
@@ -40,6 +43,12 @@ export interface MemoryEntrySummary {
   createdAt: string;
   updatedAt: string;
   forgottenAt: string | null;
+  /** Null when a person or a session forgot the entry. */
+  forgottenReason: MemoryForgottenReason | null;
+  /** How many times a session read the entry with `talyn_memory_read`. */
+  useCount: number;
+  /** The last read. Null when nobody read the entry. */
+  lastUsedAt: string | null;
   /** Set only on a `usedBy` list: how that session or thread used the entry. */
   use?: MemoryUse;
 }
@@ -81,6 +90,8 @@ export interface UpdateMemoryInput {
 export interface PutMemoryResult {
   entry: MemoryEntry;
   outcome: 'created' | 'updated';
+  /** The entries Talyn forgot to make room for a new entry at the cap. Usually empty. */
+  evicted: MemoryEntrySummary[];
 }
 
 /** `GET /workbenches/memory` filters. With no `scope`, a repository or thread id means "visible from there". */
@@ -110,6 +121,9 @@ export const MAX_MEMORY_BODY_BYTES = 8 * 1024;
 // The index cap holds about 200 typical entries. 500 leaves room for repository and thread
 // entries that one session does not see, and still bounds the rows of one workspace.
 export const MAX_LIVE_MEMORIES_PER_WORKSPACE = 500;
+// At the cap, an entry saved in the last 7 days is forgotten only when no older entry is left.
+// A new entry has no reads yet, so without this time it would be the first to go.
+export const MEMORY_EVICTION_GRACE_DAYS = 7;
 // Same cap as the recovery recap (agentRecap.ts): about 6,000 tokens, which leaves room for the prompt and tools.
 export const MAX_MEMORY_INDEX_BYTES = 24 * 1024;
 
@@ -126,7 +140,16 @@ export function memoryBodyTooLargeMessage(bytes: number): string {
 }
 
 export function memoryLimitMessage(): string {
-  return `This workspace has ${MAX_LIVE_MEMORIES_PER_WORKSPACE} memory entries, which is the limit. Forget some entries first.`;
+  return (
+    `This workspace has ${MAX_LIVE_MEMORIES_PER_WORKSPACE} memory entries, which is the limit. ` +
+    'When you add an entry, Talyn forgets the entry that sessions read the least.'
+  );
+}
+
+/** "Read 3 times", "Read once", "Never read". */
+export function memoryUseLabel(useCount: number): string {
+  if (useCount <= 0) return 'Never read';
+  return useCount === 1 ? 'Read once' : `Read ${useCount} times`;
 }
 
 function bad(error: string): { ok: false; error: string; code: string; status: number } {

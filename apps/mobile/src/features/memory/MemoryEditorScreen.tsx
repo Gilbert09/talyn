@@ -17,7 +17,7 @@ import { useRemote } from '../more/useRemote';
 import { TextArea } from '../settings/editors/TextArea';
 import { useUnsavedGuard } from '../settings/editors/useUnsavedGuard';
 import {
-  MEMORY_TYPE_LABEL, WORKSPACE_TARGET, WORKSPACE_TARGET_LABEL, ago, memoryDirty, memoryDraftOf, memoryFieldCounts, memorySaveRequest,
+  MEMORY_TYPE_LABEL, WORKSPACE_TARGET, WORKSPACE_TARGET_LABEL, ago, evictedMessage, memoryDirty, memoryDraftOf, memoryFieldCounts, memorySaveRequest,
   memoryScopeLabel, memorySourceLabel, sameNameMessage, targetLabel, type MemoryDraft,
 } from './model';
 
@@ -71,6 +71,8 @@ function Editor({ original: initial, repositories, offline }: {
       } else if (request.kind === 'create') {
         const result = await workbenches.memory.put(request.input);
         if (result.outcome === 'updated') Alert.alert('Memory updated', sameNameMessage(result.entry.name));
+        const evicted = evictedMessage(result.evicted ?? []);
+        if (evicted) Alert.alert('Memory is full', evicted);
       }
       leave(() => router.back());
     } catch (failure) {
