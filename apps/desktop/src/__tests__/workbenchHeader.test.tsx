@@ -12,6 +12,7 @@ import { usePullRequestStore } from '../renderer/stores/pullRequests';
 import { captureAnalyticsException, trackEvent } from '../renderer/lib/analytics';
 
 const merge = jest.fn();
+const closePr = jest.fn();
 const setMergeQueue = jest.fn();
 const archive = jest.fn();
 const restore = jest.fn();
@@ -24,6 +25,7 @@ jest.mock('../renderer/lib/api', () => ({
   api: {
     pullRequests: {
       merge: (...a: unknown[]) => merge(...a),
+      close: (...a: unknown[]) => closePr(...a),
       setMergeQueue: (...a: unknown[]) => setMergeQueue(...a),
     },
     workbenches: {
@@ -462,6 +464,62 @@ describe('WorkbenchHeader action cycle', () => {
   });
 });
 
+
+describe('WorkbenchHeader close PR', () => {
+  const openMenu = () =>
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
+  const mine = (patch: Partial<PRRow> = {}, state: PRRow['state'] = 'open') =>
+    ({ ...prRow({}, state), authored: true, ...patch }) as PRRow;
+
+  it.each<[string, Workbench, PRRow, boolean]>([
+    ['an open PR the person opened', WB, mine(), true],
+    ['an open PR this session opened', WB, { ...prRow({ createdAt: '2026-10-13T02:00:00Z' }), authored: false } as PRRow, true],
+    ['a PR somebody else opened before the session', WB, { ...prRow({ createdAt: '2026-10-01T00:00:00Z' }), authored: false } as PRRow, false],
+    ['a PR with no author or open date', WB, prRow({}), false],
+    ['a merged PR', WB, mine({}, 'merged'), false],
+    ['a closed PR', WB, mine({}, 'closed'), false],
+  ])('offers Close pull request for %s: %p', (_name, workbench, pr, shown) => {
+    render(<WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={ops()} />);
+    openMenu();
+    const item = screen.queryByRole('menuitem', { name: 'Close pull request' });
+    if (shown) expect(item).toBeInTheDocument();
+    else expect(item).toBeNull();
+  });
+
+  it('confirms in a dialog, then closes through the PR close API', async () => {
+    closePr.mockResolvedValue({ alreadyClosed: false });
+    render(<WorkbenchHeader workbench={WB} pr={mine()} chat={chat} ops={ops()} />);
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Close pull request' }));
+    expect(closePr).not.toHaveBeenCalled();
+    expect(screen.getByText('Close #42?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close pull request' }));
+    await waitFor(() => expect(closePr).toHaveBeenCalledWith('pr1'));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Closed #42'));
+    expect(trackEvent).toHaveBeenCalledWith('pull_request_closed', { workbench_id: 'wb1', already_closed: false });
+  });
+
+  it('cancel closes nothing', () => {
+    render(<WorkbenchHeader workbench={WB} pr={mine()} chat={chat} ops={ops()} />);
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Close pull request' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(closePr).not.toHaveBeenCalled();
+    expect(screen.queryByText('Close #42?')).toBeNull();
+  });
+
+  it('shows the refusal when the close fails', async () => {
+    closePr.mockRejectedValue(new Error('#42 is merged. A merged pull request cannot be closed.'));
+    render(<WorkbenchHeader workbench={WB} pr={mine()} chat={chat} ops={ops()} />);
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Close pull request' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close pull request' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not close #42', '#42 is merged. A merged pull request cannot be closed.'),
+    );
+    expect(screen.getByText('Close #42?')).toBeInTheDocument();
+  });
+});
 
 describe('WorkbenchHeader merge queue', () => {
   it.each([

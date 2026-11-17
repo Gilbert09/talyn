@@ -1502,6 +1502,26 @@ export function nextWorkbenchAction(input: WorkbenchNextActionInput): WorkbenchN
   return null;
 }
 
+/** A session's PR link can lag the PR by a poll. Same slack as the backend's `prClose.ts`. */
+const SESSION_OPENED_PR_SLACK_MS = 2 * 60_000;
+
+/**
+ * Whether a session header offers "Close pull request". Mirrors the backend's
+ * rule in `services/prClose.ts`: the PR is open, and the person opened it or
+ * this session opened it (the session started before the PR). A PR somebody
+ * else opened is never offered, because the backend refuses it.
+ */
+export function canCloseSessionPullRequest(
+  workbench: { createdAt: string },
+  pr: { state: string; authored?: boolean; summary?: { createdAt?: string } } | null | undefined
+): boolean {
+  if (!pr || pr.state !== 'open') return false;
+  if (pr.authored) return true;
+  const prCreated = Date.parse(pr.summary?.createdAt ?? '');
+  const started = Date.parse(workbench.createdAt);
+  return Number.isFinite(prCreated) && Number.isFinite(started) && started <= prCreated + SESSION_OPENED_PR_SLACK_MS;
+}
+
 // ============================================================================
 // Action prompts
 // ============================================================================

@@ -597,6 +597,12 @@ export class WorkflowStore {
     this.refresh('pr', id); this.refresh('attention');
     return result;
   }
+  /** Close the PR on GitHub without merging. The backend refuses a PR the person did not open. */
+  async closePr(id: string) {
+    const result = await this.api.pullRequests.close(id);
+    this.refresh('pr', id); this.refresh('attention');
+    return result;
+  }
   /** Approve or request changes as the person. The answer carries the refreshed row. */
   async submitPrReview(id: string, event: PRReviewEvent, body?: string) {
     const result = await this.api.pullRequests.submitReview(id, { event, ...(body ? { body } : {}) });
