@@ -1,6 +1,7 @@
-import type { WorkbenchPullRequestSummary } from '@talyn/shared';
+import type { ContextAttentionReason, WorkbenchPullRequestSummary } from '@talyn/shared';
 
-import { prNumberTone, prReview, prRowStatus, prStatus, sessionPr, sessionState, workbenchState } from '../lib/status';
+import { PLAN_LABEL, prNumberTone, prReview, prRowStatus, prStatus, sessionPr, sessionState, withPlanAttention, workbenchState,
+  type SessionState, type SessionStateKind } from '../lib/status';
 import { chat, pr, session } from './workflowFixtures';
 
 const checks = (patch: Partial<{ total: number; passed: number; failed: number; inProgress: number; skipped: number }> = {}) =>
@@ -79,4 +80,20 @@ describe('PR review pill and number', () => {
   ] as const)('maps %s on an %s PR', (decision, state, label) => expect(prReview(decision, state)?.label ?? null).toBe(label));
   it.each([['merged', false, 'merged'], ['closed', false, 'destructive'], ['open', true, 'muted'], ['open', false, 'success']] as const)(
     'tints a %s PR (draft %s) %s', (state, draft, tone) => expect(prNumberTone(state, draft)).toBe(tone));
+});
+
+describe('plan attention', () => {
+  const state = (kind: SessionStateKind, label = kind): SessionState => ({ kind, label });
+  it.each<[string, SessionState, ContextAttentionReason | null | undefined, SessionStateKind, string]>([
+    ['idle with a plan', state('idle'), 'plan', 'needs_reply', PLAN_LABEL],
+    ['an open PR with a plan', state('pr_waiting'), 'plan', 'needs_reply', PLAN_LABEL],
+    ['working with a plan', state('working'), 'plan', 'working', 'working'],
+    ['starting with a plan', state('starting'), 'plan', 'starting', 'starting'],
+    ['failed with a plan', state('failed'), 'plan', 'failed', 'failed'],
+    ['idle with no reason', state('idle'), undefined, 'idle', 'idle'],
+    ['idle with a null reason', state('idle'), null, 'idle', 'idle'],
+    ['idle with another reason', state('idle'), 'reply', 'idle', 'idle'],
+  ])('%s', (_name, input, reason, kind, label) => {
+    expect(withPlanAttention(input, reason)).toEqual({ kind, label });
+  });
 });

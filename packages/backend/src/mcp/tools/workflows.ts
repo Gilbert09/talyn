@@ -129,7 +129,7 @@ const actionFields: Record<(typeof ALL_WORKFLOW_ACTION_TYPES)[number], string> =
   enqueue_merge_queue: 'method?: squash | merge | rebase',
   run_code_review: 'preset?: quick | standard | deep',
   start_session:
-    'repositoryId: string | null (null lets Talyn choose on Slack, and means the issue repository on github_issues; webhook and linear need one), prompt: string, model?: string, internetAccess?: boolean, issueStartComment?: boolean (issue rules, default true), issueDoneOnMerge?: boolean (issue rules, default true)',
+    'repositoryId: string | null (null lets Talyn choose on Slack, and means the issue repository on github_issues; webhook and linear need one), prompt: string, model?: string, internetAccess?: boolean, spaceId?: string (a team space the session starts in; absent means Personal), issueStartComment?: boolean (issue rules, default true), issueDoneOnMerge?: boolean (issue rules, default true)',
   start_task: 'not offered: an automation starts a session, not a cloud task. Saved as start_session',
   issue_comment: 'body: string (may use {{issue.identifier}}, {{issue.url}}, {{session.url}}, {{task.url}})',
   issue_set_status: 'status: string (done, a Linear state name, or open / closed on GitHub Issues)',

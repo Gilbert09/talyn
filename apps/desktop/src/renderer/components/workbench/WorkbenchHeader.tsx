@@ -60,6 +60,7 @@ import { ArchiveWorkbenchDialog, archiveWorkbench, restoreWorkbench, type Archiv
 import { createSessionChat } from './createSessionChat';
 import { SandboxStatusChip } from './SandboxStatusPanel';
 import { SessionPreviewChips } from './SessionPreviewChips';
+import { AutomationChip } from './AutomationChip';
 import { SlackThreadChip } from './SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
@@ -703,6 +704,7 @@ export function WorkbenchHeader({
             {slackSourceOf(workbench) && (
               <SlackThreadChip source={slackSourceOf(workbench)!} />
             )}
+            <AutomationChip source={workbench.source} />
             {!thread && workbench.threadId && (
               <ThreadChip threadId={workbench.threadId} />
             )}

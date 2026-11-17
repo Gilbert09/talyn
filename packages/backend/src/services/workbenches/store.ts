@@ -1375,7 +1375,7 @@ export async function finishTurn(
       FROM pre
     )
     UPDATE workbench_chats c SET
-      limit_count = CASE WHEN ${opts.finalStatus === 'idle' && !opts.statusMessage} THEN 0 ELSE c.limit_count END,
+      limit_count = CASE WHEN ${(opts.finalStatus === 'idle' || opts.finalStatus === 'awaiting_input') && !opts.statusMessage} THEN 0 ELSE c.limit_count END,
       resume_at = NULL,
       resume_reason = NULL,
       agent_backup_pending = true,
@@ -2175,6 +2175,14 @@ export async function payerBlockedSiblings(workbenchId: string, exceptChatId: st
     eq(chatsTable.drainPending, true), ne(chatsTable.status, 'running'), isNull(chatsTable.closedAt),
     sql`jsonb_array_length(${chatsTable.queuedMessages}) > 0`,
   ));
+}
+
+/** The newest `type` event of one turn, or null. */
+export async function latestTurnEvent(chatId: string, turn: number, type: string): Promise<Record<string, unknown> | null> {
+  const [row] = await db().select({ event: eventsTable.event }).from(eventsTable)
+    .where(and(eq(eventsTable.chatId, chatId), eq(eventsTable.turn, turn), sql`${eventsTable.event}->>'type' = ${type}`))
+    .orderBy(desc(eventsTable.seq)).limit(1);
+  return row ? (row.event as Record<string, unknown>) : null;
 }
 
 export async function hasTurnEvent(chatId: string, turn: number, type: string, onlyErrors = false): Promise<boolean> {

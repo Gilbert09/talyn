@@ -454,7 +454,7 @@ export function taskRoutes(): Router {
       .update(tasksTable)
       .set({ status: 'queued', result: null, completedAt: null, updatedAt: new Date() })
       .where(eq(tasksTable.id, req.params.id));
-    void taskQueueService.processQueue();
+    taskQueueService.runProcessQueue();
 
     const rows = await db
       .select(taskColumnsNoTranscript)

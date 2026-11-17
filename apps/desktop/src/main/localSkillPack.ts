@@ -125,6 +125,7 @@ Give the person a short summary: what the session did, what is left, and what it
 - To stop a turn that goes the wrong way: \`talyn_cancel_session_turn\`. Then send the correction.
 - When the session needs more memory or CPU: \`talyn_resize_session\`.
 - When the session needs an MCP server that was connected later: \`talyn_restart_session\`.
+- When the person wants the session's work to go on as a thread: \`talyn_continue_as_thread\`.
 - When the session failed or is stuck while it starts: \`talyn_retry_session\`.
 
 Ask the person before you cancel a turn, retry a session or change its account.
@@ -198,16 +199,16 @@ Give the person a short list: the pull request, what blocks it, and the next ste
 
 ## Fix it in the cloud
 
-- For failing checks, merge conflicts and review comments: \`talyn_fix_pull_request\`.
-  Talyn starts a cloud task that makes the pull request ready to merge.
-- For a larger change: start a session on the pull request with the talyn-remote-session skill.
+- For failing checks, merge conflicts, review comments or a larger change: start a session
+  on the pull request with the talyn-remote-session skill. MCP cannot start a cloud task.
 - To keep a pull request mergeable automatically: \`talyn_set_auto_keep_mergeable\`.
 
 ## Review it
 
 - \`talyn_start_code_review\` with \`quick\`, \`standard\` or \`deep\`.
 - \`talyn_get_code_review\` reads the status and the findings.
-- \`talyn_fix_code_review_findings\` starts a cloud task for the findings that the person chooses.
+- To fix findings, start a session on the pull request with the talyn-remote-session skill.
+  Name the findings in the prompt.
 - \`talyn_dismiss_code_review_finding\` dismisses a finding that is wrong.
 
 ## Land it

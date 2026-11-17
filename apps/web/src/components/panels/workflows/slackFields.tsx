@@ -7,6 +7,8 @@ import { cn } from '../../../lib/utils';
 import { captureAnalyticsException } from '../../../lib/analytics';
 import { useFleetModelCatalog } from '../../../lib/fleetModelCatalog';
 import { startSlackInstall } from '../../../lib/slackInstall';
+import { spacesOffered } from '../../../lib/spaces';
+import { useSpacesStore } from '../../../stores/spaces';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { toast } from '../../../stores/toast';
 import { Button } from '../../ui/button';
@@ -223,8 +225,35 @@ export function StartSessionInput({ action, onChange, integration }: {
         {FLEET_MODELS.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
       </Select>
     </label>
+    {action.type === 'start_session' && <RuleSpaceSelect action={action} onChange={onChange} />}
     <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={action.internetAccess === true} onChange={(e) => onChange({ ...action, internetAccess: e.target.checked })} />Internet access</label>
   </div>;
+}
+
+/**
+ * The space a rule's session starts in. Shown only when Spaces is offered and
+ * the person is in a space, or the rule already names one. The session still
+ * runs in this workspace; the space makes it visible to the space's team.
+ */
+function RuleSpaceSelect({ action, onChange }: {
+  action: Extract<WorkflowAction, { type: 'start_session' }>;
+  onChange: (next: WorkflowAction) => void;
+}) {
+  const offered = useWorkspaceStore((s) => spacesOffered(s.features));
+  const teams = useSpacesStore((s) => s.teams);
+  const withSpaces = (teams ?? []).filter((team) => team.spaces.length > 0);
+  if (!offered || (withSpaces.length === 0 && !action.spaceId)) return null;
+  const known = withSpaces.some((team) => team.spaces.some((space) => space.id === action.spaceId));
+  return <label className="block text-xs font-medium text-muted-foreground">Space
+    <Select className="mt-1 block" value={action.spaceId ?? ''} onChange={(e) => onChange({ ...action, spaceId: e.target.value || undefined })}>
+      <option value="">Personal</option>
+      {action.spaceId && !known && <option value={action.spaceId}>A space you cannot use</option>}
+      {withSpaces.map((team) => <optgroup key={team.id} label={team.name}>
+        {team.spaces.map((space) => <option key={space.id} value={space.id}>{space.name}</option>)}
+      </optgroup>)}
+    </Select>
+    <span className="mt-1 block font-normal">The session runs in this workspace. People in the space's team can see it.</span>
+  </label>;
 }
 
 export function SlackActionInput({ action, onChange }: {

@@ -1,4 +1,5 @@
 import { getFleetModelCatalog } from './index.js';
+import { INTEGRATION_CATALOG, type IntegrationKind } from './integrations.js';
 import type { Workbench, WorkbenchChat, WorkbenchDiffStat, WorkbenchSource } from './workbench.js';
 import type { WorkbenchBackground } from './workbenchBackground.js';
 
@@ -78,6 +79,7 @@ const RULE_INTEGRATION: Record<string, string> = {
   webhook: 'webhook',
   linear: 'Linear',
   github_issues: 'GitHub Issues',
+  posthog_inbox: 'PostHog Inbox',
 };
 
 /** What started the session when the app's composer did not. Null for the composer. */
@@ -97,6 +99,28 @@ export function sourceGlance(source: WorkbenchSource | null | undefined): string
     default:
       return null;
   }
+}
+
+/** The automation that started a session: a rule on an integration page, or a scheduled loop. */
+export interface SessionAutomation {
+  type: 'workflow' | 'loop';
+  id: string;
+  /** The integration page the automation lives on. */
+  kind: IntegrationKind;
+  /** The integration's name, for example "GitHub" or "Schedule". */
+  label: string;
+}
+
+/** The automation a session links back to. Null when no automation started it. */
+export function sessionAutomation(source: WorkbenchSource | null | undefined): SessionAutomation | null {
+  if (source?.kind === 'workflow' && source.workflowId) {
+    const kind: IntegrationKind = source.integration ?? 'github';
+    return { type: 'workflow', id: source.workflowId, kind, label: INTEGRATION_CATALOG[kind]?.name ?? 'GitHub' };
+  }
+  if (source?.kind === 'loop' && source.loopId) {
+    return { type: 'loop', id: source.loopId, kind: 'schedule', label: INTEGRATION_CATALOG.schedule.name };
+  }
+  return null;
 }
 
 const MAX_REASON = 80;

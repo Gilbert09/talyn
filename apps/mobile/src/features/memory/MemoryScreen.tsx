@@ -18,8 +18,8 @@ import { useRefreshOnFocus } from '../instructions/useRefreshOnFocus';
 import { Intro, Loading, Page } from '../more/Page';
 import { useRemote } from '../more/useRemote';
 import {
-  MEMORY_INTRO, MEMORY_REVIEW_DETAIL, MEMORY_TITLE_DESCRIPTION, MEMORY_TYPE_LABEL, SEARCH_DELAY_MS, SESSION_MEMORY_DETAIL, ago,
-  emptyMemoryMessage, groupMemories, liveCountOf, memoryCount, memoryListQuery, memorySourceLabel, reviewLine, upsertSummary,
+  MEMORY_INTRO, MEMORY_REVIEW_DETAIL, MEMORY_TITLE_DESCRIPTION, MEMORY_TYPE_LABEL, SEARCH_DELAY_MS, SESSION_MEMORY_DETAIL,
+  emptyMemoryMessage, groupMemories, liveCountOf, memoryCount, memoryEntryMeta, memoryListQuery, reviewLine, upsertSummary,
 } from './model';
 
 /** Settings → Memory. Mirrors web `MemorySection`. */
@@ -114,6 +114,8 @@ function MemoryList() {
       list.mutate((items) => upsertSummary(items, restored));
       setJustForgotten((set) => { const next = new Set(set); next.delete(entry.id); return next; });
       setLiveCount((n) => n === null ? n : n + 1);
+      // At the limit, the restore made Talyn forget another entry.
+      if (memoryCount(liveCount)?.full) void list.refresh();
     } catch (error) {
       Alert.alert('Could not restore this memory', errorMessage(error, 'Please try again.'));
     } finally {
@@ -157,9 +159,9 @@ function MemoryList() {
         autoCapitalize="none" autoCorrect={false} clearButtonMode="while-editing" returnKeyType="search" />
       <Group footer={count?.full ? memoryLimitMessage() : undefined}>
         <Row title="Show forgotten" trailing={<Toggle accessibilityLabel="Show forgotten" value={showForgotten} onValueChange={setShowForgotten} />} />
-        <Row title="Add memory" divider={false} disabled={list.data === undefined || Boolean(count?.full) || offline}
+        <Row title="Add memory" divider={false} disabled={list.data === undefined || offline}
           onPress={() => router.push({ pathname: '/settings/memory/[id]', params: { id: 'new' } })}
-          trailing={count ? <AppText variant="meta" tone={count.full ? 'destructive' : 'muted'} testID="memory-count">{count.label}</AppText> : undefined} />
+          trailing={count ? <AppText variant="meta" tone="muted" testID="memory-count">{count.label}</AppText> : undefined} />
       </Group>
 
       {list.data === undefined ? <StateNotice resource={list} offline={offline} refresh={() => { void list.refresh(); }} />
@@ -175,7 +177,7 @@ function MemoryList() {
                   trailing={forgotten ? <Pill label="Forgotten" tone="warning" />
                     : <Pill label={MEMORY_TYPE_LABEL[entry.type]} />}
                   subtitle={entry.description ? <AppText variant="meta" tone="muted" numberOfLines={2}>{entry.description}</AppText> : undefined}>
-                  <AppText variant="meta" tone="muted">{`${memorySourceLabel(entry.source).text} · Updated ${ago(entry.updatedAt)}`}</AppText>
+                  <AppText variant="meta" tone="muted">{memoryEntryMeta(entry)}</AppText>
                 </Row>;
               })}
             </Group>

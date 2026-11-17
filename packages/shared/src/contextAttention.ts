@@ -21,7 +21,7 @@ export interface ContextAttentionCounts {
 }
 
 /** What a counted session waits on me for. */
-export type ContextAttentionReason = 'failed' | 'reply' | 'conflict';
+export type ContextAttentionReason = 'failed' | 'reply' | 'plan' | 'conflict';
 
 export interface AttentionSessionInput {
   kind: WorkbenchKind | string;
@@ -31,8 +31,11 @@ export interface AttentionSessionInput {
   /**
    * The open chats only. A closed tab is not shown, so it cannot need you.
    * `id` and `turnCount` name the alert in {@link sessionAttentionKey}.
+   * `planPending` is true when the agent's latest reply holds a plan that
+   * waits for "Approve and build" (a ```talyn-plan block after the last
+   * message from a person).
    */
-  chats: { id?: string; status: WorkbenchChatStatus | string; queued: number; turnCount?: number }[];
+  chats: { id?: string; status: WorkbenchChatStatus | string; queued: number; turnCount?: number; planPending?: boolean }[];
   /**
    * The linked pull request. `mergeable` is GitHub's word ('CONFLICTING', 'MERGEABLE', 'UNKNOWN').
    * `id` and `headSha` name the alert in {@link sessionAttentionKey}.
@@ -42,8 +45,8 @@ export interface AttentionSessionInput {
 
 /**
  * True when a session waits on me. It is the server's half of the sidebar's
- * `sessionState`: a failure, a question for me, or a pull request with
- * conflicts. The sidebar also counts an unread reply, but read state is kept
+ * `sessionState`: a failure, a question for me, a plan that waits for my
+ * approval, or a pull request with conflicts. The sidebar also counts an unread reply, but read state is kept
  * only in the open app, so the server cannot know it.
  *
  * Live work wins over a question, as in the sidebar: a session with a running
@@ -71,6 +74,8 @@ export function sessionAttentionKey(session: AttentionSessionInput): string | nu
   if (session.chats.some((c) => c.status === 'running' || c.queued > 0)) return null;
   const asking = session.chats.filter((c) => c.status === 'awaiting_input');
   if (asking.length > 0) return chatKey('reply', asking);
+  const planning = session.chats.filter((c) => c.planPending && c.status === 'idle');
+  if (planning.length > 0) return chatKey('plan', planning);
   if (session.kind === 'thread') return null;
   if (session.pr?.state === 'open' && session.pr.mergeable === 'CONFLICTING') {
     return `conflict:${session.pr.id ?? ''}:${session.pr.headSha ?? ''}`;
@@ -83,6 +88,7 @@ export function attentionReason(key: string | null): ContextAttentionReason | nu
   if (key === null) return null;
   const head = key.split(':', 1)[0];
   if (head === 'reply') return 'reply';
+  if (head === 'plan') return 'plan';
   if (head === 'conflict') return 'conflict';
   return 'failed';
 }

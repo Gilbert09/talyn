@@ -118,12 +118,13 @@ interface CloudProviderInfo {
 }
 
 /**
- * Generic, provider-agnostic surface for cloud task providers. Lists the
- * registered providers + their per-workspace connection status, and proxies
- * credential CRUD to each provider's own methods. Adding a provider needs
- * no change here — it registers in index.ts and shows up automatically.
+ * The fleet account list, which waits on the Anthropic and OpenAI usage APIs.
+ * Mounted BEFORE ownerScope: Settings polls it every 60 s while the fleet card
+ * shows, and the usage goes stale after 60 s, so almost every poll waits on a
+ * vendor. `requireWorkspaceAccess` checks the owner itself, and every row read
+ * below is keyed by the workspace it proved.
  */
-export function cloudProviderRoutes(): Router {
+export function cloudProviderReadRoutes(): Router {
   const router = Router();
 
   router.get('/selfhosted/accounts', async (req, res) => {
@@ -149,6 +150,18 @@ export function cloudProviderRoutes(): Router {
     }
     res.json({ success: true, data: { accounts: views, switchAtPercent: threshold, active } satisfies FleetAccountsResponse });
   });
+
+  return router;
+}
+
+/**
+ * Generic, provider-agnostic surface for cloud task providers. Lists the
+ * registered providers + their per-workspace connection status, and proxies
+ * credential CRUD to each provider's own methods. Adding a provider needs
+ * no change here — it registers in index.ts and shows up automatically.
+ */
+export function cloudProviderRoutes(): Router {
+  const router = Router();
 
   router.post('/selfhosted/accounts', async (req, res) => {
     const { workspaceId, agent, kind, key, label } = req.body as {

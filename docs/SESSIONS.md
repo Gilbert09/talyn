@@ -2,6 +2,29 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## DB pool: transaction queries the stall breaker could not see (2026-11-17)
+
+**Incident.** At 13:25:44 UTC six owner-scope request transactions opened (GET /skills ×4, /cloud-providers, /github/status, one app boot). Their first `select "integrations"` and `select "pull_requests"` queries never settled. They stayed open for 24 minutes and the stall breaker never tripped, although it closed 38 stalled pool connections in the same 14 hours. With 12 lock transactions also open, the 20-connection pool filled from 13:45. Pool demand reached 305, and `dbWatchdog` restarted the process at 13:49:49. The in-flight registry also held owner-scope queries open for up to 10.5 hours, older than any transaction.
+
+**Root cause, shown against real postgres-js 3.4.9** (`__tests__/dbTransactionStall.test.ts`, with a wire-protocol test server in `__tests__/helpers/fakePgServer.ts`):
+- postgres-js gives each transaction a private queue (`index.js` `begin` → `scope` → `handler`). After any query with parameters (`describeFirst` with `prepare: false`, which is every drizzle query through Supavisor), the connection goes to the `full` queue. The next queries of the transaction wait in the private queue until a ReadyForQuery reaches `connection.reserved()`. A query there is never `active`, so the breaker, which starts its timer on `Query.active`, never times it.
+- Nothing rejects that private queue. When the connection closes, `onclose` rejects only the `begin`. The queued queries wait forever, also after a breaker trip.
+- On a ReadyForQuery that says "idle" while the transaction is open, postgres-js sets `connection.reserved = null` and gives the connection to the pool (`connection.js` `ReadyForQuery`). The queued query then waits forever. The next query runs outside the transaction, without RLS. This is the only client-side path we found that strands the first route query of an owner transaction with no trip and no close. That matches the incident exactly. We cannot confirm from our side that the pooler sent that ReadyForQuery.
+- COMMIT, ROLLBACK and SAVEPOINT are tagged-template queries on the scope `sql`, not `sql.unsafe`. So they had no timer either: a COMMIT with no reply held its transaction (and the lock transactions' ROLLBACK after `maxHoldMs`) forever. `prReconcileSweep:tick` was open for 558 s, past its 300 s deadline.
+- The 10.5-hour orphans are late queries: a request ended (GET /skills answers 500 when one `Promise.all` leg rejects) and its `fetchRepoSkills` kept calling `resolveAuth` on the ended scope. When the old connection is in `full`, postgres-js parks the query in the dead transaction's queue for good. These queries hold no connection, only a registry entry and a hung caller. When the connection is idle, the query runs on the bare connection, outside the transaction and RLS.
+
+**Fixes (`db/stallBreaker.ts`, `db/client.ts`, `db/scope.ts`).**
+- A query on a transaction or savepoint whose body has settled is rejected at once with `DbTransactionEndedError` (`DB_TRANSACTION_ENDED`) and never reaches postgres-js. The call site is still logged once.
+- A transaction watchdog in the breaker covers what the query timer cannot. "stuck": queries of the transaction wait, none is active, and nothing moved for `DB_STALL_MS`. "commit": the body settled and COMMIT or ROLLBACK did not end the transaction in `DB_STALL_MS`. Both use the existing 135 s, which is the statement timeout plus the margin. The watchdog closes the connection if the transaction still holds it, rejects every waiting query, and rejects the `begin`, so the in-flight entries end. `withStallLimit(null)` (the boot migrator) turns it off.
+- When a transaction has lost its connection without a close (`connection.reserved` is no longer its own), its next query is rejected with `DbTransactionLostError` (`how: 'released'`) before postgres-js sends it outside the transaction.
+- When a `begin` settles, any query of the transaction that still waits is rejected. Before, a stall trip left them hanging.
+- Owner-scope request transactions have an idle limit, `OWNER_SCOPE_IDLE_MS` = `DB_STALL_MS`. The longest single wait on another service below `ownerScope` is the 45 s fleet create, GitHub calls stop at 30 s, and no SSE route runs below it. The 10-minute sandbox resume, Polar and Slack routes are mounted before `ownerScope`. An idle owner transaction is closed, its writes roll back and the request fails. This is the client-side form of the 30 s `idle_in_transaction_session_timeout` that Supavisor drops. Lock transactions get no idle limit: they are idle for the whole tick by design, and `maxHoldMs` bounds them. They now label the breaker's log line with the lock name.
+- A transaction's policy (label, idle limit) passes through `withTransactionPolicy` and applies only to that `begin`. A transaction opened from inside an owner request does not inherit it.
+
+**Supavisor and the pool size (no change made).** The pooler is set to 30 server connections per user and database (400 client connections, `max_connections` 90). One backend uses at most 20 (`DB_POOL_MAX`). During a deploy overlap two backends can ask for 40, and any idle-in-transaction connection (each lock transaction for its whole tick, each owner request waiting on GitHub) pins a server connection. So in an overlap the pooler can run out first, and queries then wait in its checkout queue. This incident was not that case: our own 20 were full. Recommendation: raise the pooler pool size to at least 2 × `DB_POOL_MAX` (40), which `max_connections` 90 allows, or lower `DB_POOL_MAX` to 15. The larger cost is the 12 lock transactions that each hold a connection for a whole tick. That is a design follow-up.
+
+**Not done here.** The route fixes (GET /skills and the other routes that hold the owner transaction across GitHub calls, and `resolveAuth` on an ended scope) are a separate change. The pool acquire deadline and `continueWithoutOwnerScope` in the 2026-11-10 note below were reverted the same day (a9fe293804, 4779ca080b), so a `begin` that waits in the postgres-js queue still has no deadline.
+
 ## PostHog Inbox: Talyn sets up the push in PostHog (2026-11-16)
 
 **What.** "Set up push in PostHog" on the PostHog Inbox Connection tab. Talyn makes or rotates the webhook URL and creates the PostHog webhook destination itself, so the person does not copy a URL and a secret into PostHog. The manual path (#257) stays, for personal API keys without the scopes and for people who prefer it.
@@ -7935,3 +7958,21 @@ Decisions:
 - The list asks for status `ready,suppressed`, so reports that the safety judge held back show as "Held back for safety". Other suppressed rows are dropped.
 - The `search` parameter is a superset filter. PostHog may return rows that do not contain the words, so Talyn's matcher decides.
 Left: an editor for these rules on mobile, mobile "Run selected", and an exact count of matching reports. PostHog's `count` is before Talyn's matcher, so the page shows only how many reports Talyn read.
+
+### 2026-11-17 — A session can turn itself into a thread
+
+Before, only a person could continue a session as a thread, with **Continue as thread** in the session menu. The `talyn` MCP server had no tool for it. A person asked a session to "turn this into a thread", and the agent could only tell them to press the menu item. Nothing happened until they did.
+Now `talyn_continue_as_thread` calls the same route, `POST /workbenches/:id/thread`, with an optional `prompt`. The thread's first message recaps the session's chat and then gives the prompt, so the agent hands its plan to the thread. The tool tells the agent to end its turn.
+Decisions:
+- A session token may call it on itself only. It refuses a thread, and a session that is in a thread already: that thread starts the other sessions.
+- It refuses a session at spawn depth 1 or more. A thread starts again at depth 0, so a child session could escape `MAX_SESSION_SPAWN_DEPTH`.
+- The briefing tells the agent to call the tool when the person asks for a thread. When the work needs several repositories and the person did not ask, the agent asks first.
+
+### 2026-11-17 — An automation can start its session in a team space
+
+Before, a session from an integration rule (GitHub, Slack, webhook, Linear, GitHub Issues, PostHog Inbox) always started in Personal. To share it, the owner had to move it by hand.
+Now the `start_session` action has an optional `spaceId`. The rule editor on web and desktop shows a **Space** picker when Spaces is offered and the person is in a space. Mobile shows the space on the rule's facts. Rules are read-only on mobile.
+Decisions:
+- The session runs in the rule's own workspace, not in the owner's home workspace for the team. This is the same as a move: a space is a container. So Talyn adds no repository and makes no change to the space's repository list.
+- The checks are the move checks, for the rule's owner: the `spaces` flag, team membership and a live space (`services/workflows/ruleSpace.ts`). The route checks only a space that is NEW to the rule. Thus a rule whose space went away can still be renamed or switched off.
+- When the rule fires and the space is no longer usable, the session starts in Personal. The run's action detail says why. Personal is visible only to the owner, so this fails closed and the work still happens.

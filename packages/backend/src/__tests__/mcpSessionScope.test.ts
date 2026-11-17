@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Features } from '@talyn/shared';
 import { buildMcpServer, listToolsFor } from '../mcp/server.js';
-import { SESSION_TOKEN_TOOLS } from '../mcp/sessionScope.js';
+import { SESSION_ONLY_TOOLS, SESSION_TOKEN_TOOLS } from '../mcp/sessionScope.js';
 import { TOOLS, type McpCallContext, type McpToolDefinition } from '../mcp/tools/index.js';
 import {
   chatWorkbenchId,
@@ -134,14 +134,24 @@ describe('session token tool scope', () => {
     'talyn_list_tasks', 'talyn_list_loops', 'talyn_get_workflow', 'talyn_get_skill', 'talyn_list_repositories',
     'talyn_memory_write', 'talyn_memory_search', 'talyn_memory_read', 'talyn_memory_forget', 'talyn_memory_list',
     'talyn_list_setup_steps', 'talyn_close_pull_request', 'talyn_track_pull_request', 'talyn_list_slack_channels',
-    'talyn_slack_reply', 'talyn_list_posthog_inbox_backlog',
+    'talyn_slack_reply', 'talyn_list_posthog_inbox_backlog', 'talyn_ask_user',
   ])('allows %s', (name) => {
     expect(SESSION_TOKEN_TOOLS.has(name)).toBe(true);
   });
 
-  it('lists only allowed tools for a session token, and every tool for a user token', () => {
+  it('lists only allowed tools for a session token, and every other tool for a user token', () => {
     expect(listToolsFor(features, SELF).map((t) => t.name).sort()).toEqual([...SESSION_TOKEN_TOOLS].sort());
-    expect(listToolsFor(features).map((t) => t.name)).toEqual(TOOLS.map((t) => t.name));
+    expect(listToolsFor(features).map((t) => t.name)).toEqual(TOOLS.map((t) => t.name).filter((n) => !SESSION_ONLY_TOOLS.has(n)));
+  });
+
+  it('keeps session-only tools in the session allow-list', () => {
+    for (const name of SESSION_ONLY_TOOLS) expect(SESSION_TOKEN_TOOLS.has(name)).toBe(true);
+  });
+
+  it('refuses talyn_ask_user for a user token: it has no session to ask from', async () => {
+    const result = await callTool({}, 'talyn_ask_user', { questions: [{ question: 'Which one?' }] });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe('talyn_ask_user works only for an agent in a Talyn session.');
   });
 
   it('ListTools on a session server hides excluded tools', async () => {

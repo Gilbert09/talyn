@@ -1,5 +1,6 @@
 import { fetchWithTimeout } from './httpTimeout.js';
 import { debugBus } from './debugBus.js';
+import { runWithoutScope } from '../db/client.js';
 
 /**
  * Cross-product inbox (todiex).
@@ -145,10 +146,12 @@ export type TodiexEventSource = TodiexEvent | (() => Promise<TodiexEvent | null>
 export function notifyTodiex(source: TodiexEventSource): void {
   if (!isTodiexConfigured()) return;
   const label = typeof source === 'function' ? 'deferred' : source.kind;
-  void (async () => {
+  // Off the request scope: a deferred source reads the DB after the
+  // response, when the request transaction has ended.
+  void runWithoutScope(async () => {
     const event = typeof source === 'function' ? await source() : source;
     if (event) await postTodiexEvent(event);
-  })().catch((err) => {
+  }).catch((err) => {
     const msg = err instanceof Error ? err.message : 'unknown error';
     console.warn(`[todiex] post "${label}" failed:`, msg);
   });

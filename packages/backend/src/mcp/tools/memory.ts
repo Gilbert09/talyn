@@ -1,4 +1,5 @@
 import {
+  memoryUseLabel,
   MEMORY_TYPES,
   type MemoryEntry,
   type MemoryEntrySummary,
@@ -109,7 +110,7 @@ function scopeLabel(entry: MemoryEntrySummary): string {
 }
 
 const entryLine = (entry: MemoryEntrySummary) =>
-  `${entry.id}  ${entry.name}  (${entry.type}, ${scopeLabel(entry)})${entry.forgottenAt ? '  [forgotten]' : ''}  ${entry.description}`;
+  `${entry.id}  ${entry.name}  (${entry.type}, ${scopeLabel(entry)}, ${memoryUseLabel(entry.useCount).toLowerCase()})${entry.forgottenAt ? '  [forgotten]' : ''}  ${entry.description}`;
 
 /** The list route's query for what this caller can see. */
 function listQuery(context: MemoryContext, extra: Record<string, string>): string {
@@ -268,17 +269,24 @@ export const MEMORY = [
         ...(context.workbenchId ? { source: { kind: 'session', workbenchId: context.workbenchId } } : {}),
       });
       const { entry, outcome } = result;
+      const evicted = result.evicted ?? [];
       if (context.workbenchId) {
         await recordMemoryUse(entry.id, context.workbenchId, 'wrote');
-        await announceMemoryChange(context.workbenchId, {
-          action: outcome,
-          memoryId: entry.id,
-          name: entry.name,
-          memoryType: entry.type,
-          scope: entry.scope,
-        });
+        for (const change of [{ action: outcome, entry }, ...evicted.map((e) => ({ action: 'forgotten' as const, entry: e }))]) {
+          await announceMemoryChange(context.workbenchId, {
+            action: change.action,
+            memoryId: change.entry.id,
+            name: change.entry.name,
+            memoryType: change.entry.type,
+            scope: change.entry.scope,
+          });
+        }
       }
-      return `${outcome === 'created' ? 'Saved' : 'Updated'} memory entry:\n${entryLine(entry)}`;
+      const lines = [`${outcome === 'created' ? 'Saved' : 'Updated'} memory entry:\n${entryLine(entry)}`];
+      if (evicted.length > 0) {
+        lines.push(`The workspace was at its memory limit, so Talyn forgot the least-read ${evicted.length === 1 ? 'entry' : 'entries'}:\n${matchLines(evicted)}`);
+      }
+      return lines.join('\n');
     },
     FEATURE,
   ),
@@ -312,7 +320,8 @@ export const MEMORY = [
       const { entry: found, others } = await resolveEntry(ownerId, context, ref, { unique: false });
       const entry = 'body' in found ? (found as MemoryEntry) : await entryById(ownerId, found.id);
       if (!entry || !visibleTo(context, entry)) throw new Error(NOT_VISIBLE);
-      if (context.workbenchId) await recordMemoryUse(entry.id, context.workbenchId, 'read');
+      // A review reads every entry, so its reads are not counted as uses.
+      if (!context.reviewer) await recordMemoryUse(entry.id, context.workbenchId ?? null, 'read');
       const lines = [entryLine(entry), `updated: ${entry.updatedAt}`];
       if (others.length > 0) lines.push(`Other entries with this name, in wider scopes:\n${matchLines(others)}`);
       return [...lines, '', entry.body].join('\n');

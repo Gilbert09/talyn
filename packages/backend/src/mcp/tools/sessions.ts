@@ -4,6 +4,9 @@ import {
   extractToolText,
   formatDurationMs,
   isTalynOriginMessage,
+  messageSender,
+  parseQuestionEvent,
+  questionText,
   TURN_TIME_CATEGORIES,
   TURN_TIME_CATEGORY_LABELS,
   type AgentEvent,
@@ -218,6 +221,20 @@ function restartText(sessionId: string, result: SessionRestartResult, self: bool
   return lines.join(' ');
 }
 
+function continueAsThreadText(sessionId: string, thread: Workbench, self: boolean): string {
+  const lines = [
+    `Started thread ${thread.id} ("${thread.title || thread.name}"). Session ${sessionId} is now part of it.`,
+    "The thread's first turn reads a recap of the session's conversation and the prompt, then does the work.",
+  ];
+  if (self) {
+    lines.push(
+      'End your turn now. Do not start sessions on other repositories from here: the thread does that.',
+      'Tell the person that the thread continues the work, and give its name.'
+    );
+  }
+  return lines.join(' ');
+}
+
 function accountUsageText(account: FleetAccountView): string {
   const parts: string[] = [];
   if (account.needsReauth) parts.push('needs to be signed in again');
@@ -376,7 +393,8 @@ function transcriptItems(events: WorkbenchEvent[]): { seq: number; text: string 
   for (const { event, seq } of events) {
     const talyn = (event as { talyn?: { kind?: string } }).talyn;
     if (event.type === 'user' && talyn?.kind === 'user_message') {
-      const label = isTalynOriginMessage(talyn) ? 'talyn' : 'user';
+      const sender = messageSender(talyn);
+      const label = isTalynOriginMessage(talyn) ? 'talyn' : sender ? `thread "${sender.name}"` : 'user';
       const content = event.message?.content;
       const text = Array.isArray(content)
         ? content
@@ -386,6 +404,8 @@ function transcriptItems(events: WorkbenchEvent[]): { seq: number; text: string 
         : '';
       if (text) items.push({ seq, text: `${label}: ${text}` });
     }
+    const asked = parseQuestionEvent(event as unknown as Record<string, unknown>);
+    if (asked) items.push({ seq, text: `[question to the person]\n${questionText(asked)}` });
   }
   for (const block of buildBlocks(events.map((e) => e.event as AgentEvent))) {
     const seq = eventSeq(block.key) ?? lastSeq;
@@ -712,6 +732,8 @@ export const SESSIONS = [
         const chatId = await resolveChat(ownerId, args);
         if (await targetsSelf(ctx, args, chatId)) throw new Error(SELF_MESSAGE);
         const body: Record<string, unknown> = { text };
+        // The route labels the message as the thread's when the caller is the session's thread.
+        if (ctx?.session) body.fromThreadId = ctx.session.workbenchId;
         if (args.plan_mode !== undefined) body.planMode = bool(args, 'plan_mode');
         if (str(args.model)) body.model = str(args.model);
         if (str(args.effort)) body.effort = str(args.effort);
@@ -862,6 +884,48 @@ export const SESSIONS = [
           body
         );
         return restartText(sessionId, result, sessionId === self);
+      }),
+    FEATURE
+  ),
+  defineTool(
+    'continue_as_thread',
+    "Turn a session into a thread, for work that needs sessions on more than one repository. Talyn starts a new thread. Its first message recaps the session's conversation, then gives `prompt`. The session joins the thread and keeps its branch, changes and pull request. The thread starts sessions on the other repositories with talyn_create_session. " +
+      'Use it when the person asks for a thread. When the work needs several repositories and the person did not ask, ask them first. ' +
+      'From a session token: only the calling session, and only when it is not in a thread already and no other session started it.',
+    {
+      session_id: { type: 'string', description: 'The session. Default: the calling session.' },
+      prompt: {
+        type: 'string',
+        description:
+          'What the thread must do: the plan, the repositories, their order, and the decisions the person made. The thread reads it after the recap, so do not repeat the conversation.',
+      },
+    },
+    [],
+    { openWorldHint: true },
+    async (ownerId, args, ctx) =>
+      sandboxOnly(async () => {
+        const binding = ctx?.session;
+        const sessionId = str(args.session_id) ?? binding?.workbenchId;
+        if (!sessionId) throw new Error('session_id is required');
+        if (binding && sessionId !== binding.workbenchId) throw new Error('A session can turn only itself into a thread.');
+        // A thread starts sessions at depth 0 again, so a session that another
+        // session started would escape the spawn-depth limit.
+        if (binding && binding.depth > 0) {
+          throw new Error(
+            'Another session started this session, so it cannot become a thread. Report in your reply; the session that started you reads it.'
+          );
+        }
+        const wb = await loadSession(ownerId, sessionId);
+        if (wb.kind === 'thread') throw new Error('This is already a thread. Start sessions with talyn_create_session.');
+        if (wb.threadId) {
+          throw new Error(
+            `Session ${sessionId} is already in thread ${wb.threadId}. Report in your reply; the thread reads it and starts the other sessions.`
+          );
+        }
+        const body: Record<string, unknown> = {};
+        if (str(args.prompt)) body.prompt = str(args.prompt);
+        const thread = await callApi<Workbench>(ownerId, 'POST', `/workbenches/${encodeURIComponent(sessionId)}/thread`, body);
+        return continueAsThreadText(sessionId, thread, sessionId === binding?.workbenchId);
       }),
     FEATURE
   ),

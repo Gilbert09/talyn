@@ -28,7 +28,7 @@ import {
   type SkillSummary,
   type SkillUsageEntry,
 } from '@talyn/shared';
-import { getDbClient } from '../db/client.js';
+import { getDbClient, runWithoutScope } from '../db/client.js';
 import { repositories as repositoriesTable, skillUsage as skillUsageTable } from '../db/schema.js';
 import { githubService, type GitHubContentsEntry } from './github.js';
 import { parseRepoUrl } from './repoIdentity.js';
@@ -104,6 +104,7 @@ const blobContentCache = new Map<string, Map<string, BlobContent>>();
 export function clearRepoSkillCache(): void {
   repoSkillCache.clear();
   blobContentCache.clear();
+  discoveries.clear();
 }
 
 // One pool for the whole process, not one per discovery: the desktop
@@ -140,17 +141,50 @@ function releaseSlot(): void {
  * full pool waits for a slot its own holder will never release.
  */
 async function mapBounded<T, R>(items: T[], fn: (item: T) => Promise<R>): Promise<R[]> {
-  return Promise.all(
-    items.map(async (item) => {
-      await acquireSlot();
-      try {
-        return await fn(item);
-      } finally {
-        releaseSlot();
-      }
-    })
-  );
+  return Promise.all(items.map((item) => runInSlot(() => fn(item))));
 }
+
+/**
+ * How long one slot may be held before it is taken back.
+ *
+ * A slot holds one GitHub read: `resolveAuth` (one pool query, which the stall
+ * breaker ends at 135 s) and the request itself (30 s each; the 401 check, its
+ * retry and a token refresh make at most four). That is about 255 s, so five
+ * minutes fires only for work that will never settle. Without it, such work
+ * keeps its slot for the life of the process. With ten of them, every later
+ * discovery waits forever, and so does the request that asked for it. On
+ * 2026-11-17 reads on an ended owner scope did exactly that.
+ */
+const SLOT_DEADLINE_MS = 5 * 60_000;
+let slotDeadlineMs = SLOT_DEADLINE_MS;
+
+/** Test hook. Pass nothing to restore the default. */
+export function setSlotDeadlineMsForTests(ms?: number): void {
+  slotDeadlineMs = ms ?? SLOT_DEADLINE_MS;
+}
+
+async function runInSlot<R>(fn: () => Promise<R>): Promise<R> {
+  await acquireSlot();
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`A skill read did not finish in ${Math.round(slotDeadlineMs / 1000)}s`)),
+      slotDeadlineMs
+    );
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([fn(), deadline]);
+  } finally {
+    clearTimeout(timer);
+    releaseSlot();
+  }
+}
+
+// One discovery per workspace and repository at a time. The apps load skills
+// for every watched repository when a workspace opens, and several clients
+// can open at once, so the same discovery is often asked for twice.
+const discoveries = new Map<string, Promise<RepoSkillsResult>>();
 
 async function loadRepoIdentity(
   repositoryId: string,
@@ -347,10 +381,28 @@ export async function listRepoSkills(
   if (!opts.refresh && cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
     return cached.result;
   }
+  const key = `${workspaceId}:${repositoryId}`;
+  let discovery = opts.refresh ? undefined : discoveries.get(key);
+  if (!discovery) {
+    // The GitHub reads run on the pool, never in the caller's owner scope. The
+    // repository row above proves that the workspace may use the repository.
+    // In a scope, the token lookup of each read is a query on the request
+    // transaction. That keeps the transaction open for the whole discovery,
+    // and a lookup sent after the transaction ends never settles.
+    const started = runWithoutScope(async () => {
+      const result = await fetchRepoSkills(workspaceId, repositoryId, repo);
+      repoSkillCache.set(repositoryId, { fetchedAt: Date.now(), result });
+      return result;
+    });
+    discovery = started;
+    discoveries.set(key, started);
+    const settle = (): void => {
+      if (discoveries.get(key) === started) discoveries.delete(key);
+    };
+    started.then(settle, settle);
+  }
   try {
-    const result = await fetchRepoSkills(workspaceId, repositoryId, repo);
-    repoSkillCache.set(repositoryId, { fetchedAt: Date.now(), result });
-    return result;
+    return await discovery;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[skills] repo skill discovery failed for ${repositoryId}: ${message}`);

@@ -15,6 +15,7 @@ import {
   spaces as spacesTable,
   teams as teamsTable,
   workbenchChats as chatsTable,
+  workbenchEvents as eventsTable,
   workbenches as workbenchesTable,
   workspaces as workspacesTable,
 } from '../db/schema.js';
@@ -55,6 +56,13 @@ describe('sessionNeedsAttention', () => {
     ['a conflicting PR while a turn runs', { pr: { state: 'open', mergeable: 'CONFLICTING' }, chats: [{ status: 'running', queued: 0 }] }, false],
     ['a thread with a conflicting PR', { kind: 'thread', pr: { state: 'open', mergeable: 'CONFLICTING' } }, false],
     ['a thread with a question', { kind: 'thread', chats: [{ status: 'awaiting_input', queued: 0 }] }, true],
+    ['a plan that waits for approval', { chats: [{ status: 'idle', queued: 0, planPending: true }] }, true],
+    ['a plan while another chat works', { chats: [{ status: 'idle', queued: 0, planPending: true }, { status: 'running', queued: 0 }] }, false],
+    ['a plan with a queued message', { chats: [{ status: 'idle', queued: 1, planPending: true }] }, false],
+    ['a plan flag on a running chat', { chats: [{ status: 'running', queued: 0, planPending: true }] }, false],
+    ['a plan while the box starts', { status: 'provisioning', chats: [{ status: 'idle', queued: 0, planPending: true }] }, false],
+    ['a thread with a plan', { kind: 'thread', chats: [{ status: 'idle', queued: 0, planPending: true }] }, true],
+    ['an archived session with a plan', { archivedAt: new Date(), chats: [{ status: 'idle', queued: 0, planPending: true }] }, false],
     ['an archived session that failed', { archivedAt: new Date(), status: 'error' }, false],
     ['a session with archived status', { status: 'archived', chats: [{ status: 'awaiting_input', queued: 0 }] }, false],
     ['a session with no chats', { chats: [] }, false],
@@ -65,6 +73,7 @@ describe('sessionNeedsAttention', () => {
 
 describe('sessionAttentionKey', () => {
   const chat = (id: string, status: string, turnCount = 1, queued = 0) => ({ id, status, queued, turnCount });
+  const plan = (id: string, turnCount = 1) => ({ ...chat(id, 'idle', turnCount), planPending: true });
 
   it.each<[string, Partial<AttentionSessionInput>, string | null]>([
     ['an idle session', { chats: [chat('c1', 'idle')] }, null],
@@ -74,6 +83,11 @@ describe('sessionAttentionKey', () => {
     ['two failed chats, in a stable order', { chats: [chat('c2', 'error', 1), chat('c1', 'error', 4)] }, 'chat_error:c1@4,c2@1'],
     ['a question for me', { chats: [chat('c1', 'awaiting_input', 2)] }, 'reply:c1@2'],
     ['a question while another chat works', { chats: [chat('c1', 'awaiting_input'), chat('c2', 'running')] }, null],
+    ['a plan for me', { chats: [plan('c1', 2)] }, 'plan:c1@2'],
+    ['two plans, in a stable order', { chats: [plan('c2', 1), plan('c1', 3)] }, 'plan:c1@3,c2@1'],
+    ['a question wins over a plan', { chats: [plan('c1'), chat('c2', 'awaiting_input', 2)] }, 'reply:c2@2'],
+    ['a failure wins over a plan', { chats: [plan('c1'), chat('c2', 'error', 2)] }, 'chat_error:c2@2'],
+    ['a plan wins over a conflicting PR', { chats: [plan('c1')], pr: { id: 'pr1', state: 'open', mergeable: 'CONFLICTING', headSha: 'abc' } }, 'plan:c1@1'],
     ['a conflicting PR', { pr: { id: 'pr1', state: 'open', mergeable: 'CONFLICTING', headSha: 'abc' } }, 'conflict:pr1:abc'],
     ['a conflicting PR with no head yet', { pr: { id: 'pr1', state: 'open', mergeable: 'CONFLICTING' } }, 'conflict:pr1:'],
     ['a mergeable PR', { pr: { id: 'pr1', state: 'open', mergeable: 'MERGEABLE', headSha: 'abc' } }, null],
@@ -93,6 +107,8 @@ describe('sessionAttentionKey', () => {
       { pr: { id: 'pr1', state: 'open', mergeable: 'CONFLICTING', headSha: 'b' } },
     ],
     ['a question after a failure', { chats: [chat('c1', 'error')] }, { chats: [chat('c1', 'awaiting_input')] }],
+    ['a plan in a later turn', { chats: [plan('c1', 1)] }, { chats: [plan('c1', 2)] }],
+    ['a question after a plan', { chats: [plan('c1', 1)] }, { chats: [chat('c1', 'awaiting_input', 1)] }],
   ])('names a new alert differently: %s', (_label, before, after) => {
     const a = sessionAttentionKey({ ...BASE, ...before });
     const b = sessionAttentionKey({ ...BASE, ...after });
@@ -131,6 +147,7 @@ describe('attentionReason', () => {
     ['chat_error:c1@4,c2@1', 'failed'],
     ['reply:c1@2', 'reply'],
     ['reply:@0', 'reply'],
+    ['plan:c1@2', 'plan'],
     ['conflict:pr1:abc', 'conflict'],
     ['conflict:pr1:', 'conflict'],
   ])('%s -> %s', (key, reason) => {
@@ -142,12 +159,14 @@ describe('attentionReason', () => {
       { status: 'error' },
       { chats: [{ id: 'c1', status: 'error', queued: 0, turnCount: 1 }] },
       { chats: [{ id: 'c1', status: 'awaiting_input', queued: 0, turnCount: 1 }] },
+      { chats: [{ id: 'c1', status: 'idle', queued: 0, turnCount: 1, planPending: true }] },
       { pr: { id: 'pr1', state: 'open', mergeable: 'CONFLICTING', headSha: 'a' } },
     ];
     expect(inputs.map((patch) => attentionReason(sessionAttentionKey({ ...BASE, ...patch })))).toEqual([
       'failed',
       'failed',
       'reply',
+      'plan',
       'conflict',
     ]);
   });
@@ -266,6 +285,85 @@ describe('contextAttention (pglite)', () => {
       workspaces: { ws1: 4, ws2: 1 },
       spaces: { sp1: 1 },
       sessions: { question: 'reply', failed: 'failed', conflict: 'conflict', 'in-space': 'reply', 'ws2-thread': 'failed' },
+    });
+  });
+
+  describe('a plan that waits for approval', () => {
+    const PLAN = 'I read the code.\n\n```talyn-plan\n1. Change the list.\n2. Add tests.\n```';
+    let seq = 0;
+    /** Append transcript events the way a turn stores them; the trigger fills `workbench_search_text`. */
+    const transcript = async (chatId: string, turn: number, items: ['user' | 'assistant', string][]) => {
+      await db.insert(eventsTable).values(
+        items.map(([type, text]) => ({
+          chatId,
+          seq: ++seq,
+          turn,
+          event: { type, message: { role: type, content: [{ type: 'text', text }] } },
+        })),
+      );
+    };
+    const toolEvents = async (chatId: string, turn: number) => {
+      await db.insert(eventsTable).values([
+        { chatId, seq: ++seq, turn, event: { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }] } } },
+        { chatId, seq: ++seq, turn, event: { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'file' }] } } },
+        { chatId, seq: ++seq, turn, event: { type: 'result', subtype: 'success', result: 'done' } },
+      ]);
+    };
+    beforeEach(() => {
+      seq = 0;
+    });
+
+    it.each<[string, ['user' | 'assistant', string][], boolean]>([
+      ['a plan block at the end of the reply', [['user', 'Plan it'], ['assistant', PLAN]], true],
+      ['a plan block before more text', [['user', 'Plan it'], ['assistant', PLAN], ['assistant', 'Tell me what you think.']], true],
+      ['a tilde fence', [['user', 'Plan it'], ['assistant', '~~~talyn-plan\nThe plan\n~~~']], true],
+      ['a four-backtick fence with a code block inside', [['user', 'Plan it'], ['assistant', '````talyn-plan\nRun:\n```sh\nnpm test\n```\n````']], true],
+      ['an unclosed plan block', [['user', 'Plan it'], ['assistant', 'Here:\n```talyn-plan\n1. Do it']], true],
+      ['a plan the person approved', [['user', 'Plan it'], ['assistant', PLAN], ['user', 'Approved. Build the plan.']], false],
+      ['a plan the person answered after a later reply', [['user', 'Plan it'], ['assistant', PLAN], ['user', 'Keep planning'], ['assistant', 'Which file?']], false],
+      ['a reply with no plan', [['user', 'Fix it'], ['assistant', 'Done.']], false],
+      ['a reply that names the fence in a sentence', [['user', 'How?'], ['assistant', 'I end with a ```talyn-plan block in plan mode.']], false],
+      ['a plan block from the person', [['user', PLAN]], false],
+    ])('%s', async (_label, items, counted) => {
+      await session('s1');
+      await transcript('s1-chat-0', 1, items);
+      expect((await contextAttention(db, OWNER)).sessions).toEqual(counted ? { s1: 'plan' } : {});
+    });
+
+    it('counts a plan after tool calls and their results', async () => {
+      await session('s1');
+      await transcript('s1-chat-0', 1, [['user', 'Plan it']]);
+      await toolEvents('s1-chat-0', 1);
+      await transcript('s1-chat-0', 1, [['assistant', PLAN]]);
+      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: { ws1: 1 }, spaces: {}, sessions: { s1: 'plan' } });
+    });
+
+    it.each<[string, Parameters<typeof session>[1]]>([
+      ['a running turn', { chats: [{ status: 'running' }] }],
+      ['a queued message', { chats: [{ status: 'idle', queued: 1 }] }],
+      ['a closed tab', { chats: [{ status: 'idle', closed: true }] }],
+      ['an archived session', { archived: true }],
+    ])('does not count a plan in %s', async (_label, opts) => {
+      await session('s1', opts);
+      await transcript('s1-chat-0', 1, [['user', 'Plan it'], ['assistant', PLAN]]);
+      expect((await contextAttention(db, OWNER)).sessions).toEqual({});
+    });
+
+    it('counts a plan in a space for the space and the workspace', async () => {
+      await session('s1', { spaceId: 'sp1' });
+      await transcript('s1-chat-0', 1, [['user', 'Plan it'], ['assistant', PLAN]]);
+      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: { ws1: 1 }, spaces: { sp1: 1 }, sessions: { s1: 'plan' } });
+    });
+
+    it('stops counting when the session is opened, and counts a new plan in a later turn', async () => {
+      await session('s1', { chats: [{ status: 'idle', turnCount: 1 }] });
+      await transcript('s1-chat-0', 1, [['user', 'Plan it'], ['assistant', PLAN]]);
+      expect(await acknowledgeAttention(db, OWNER, 's1')).toBe(true);
+      expect((await contextAttention(db, OWNER)).sessions).toEqual({});
+
+      await db.update(chatsTable).set({ turnCount: 2 }).where(eq(chatsTable.id, 's1-chat-0'));
+      await transcript('s1-chat-0', 2, [['user', 'Keep planning: add docs'], ['assistant', PLAN]]);
+      expect((await contextAttention(db, OWNER)).sessions).toEqual({ s1: 'plan' });
     });
   });
 

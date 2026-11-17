@@ -24,6 +24,7 @@ export function buildPlanTurnInstructions(): string {
     '',
     '1. Read the code you need, then make the plan.',
     '2. If you must have an answer from the person before you can plan, ask the question and stop. Do not write a plan block.',
+    '   When the `talyn_ask_user` tool is available, ask with it.',
     `3. When the plan is ready, end the reply with the complete plan in one fenced block that opens with \`\`\`${PLAN_BLOCK_FENCE}.`,
     '   Write the plan in Markdown inside the block, and write nothing after it.',
     `   If the plan contains \`\`\` code blocks, open the block with \`\`\`\`${PLAN_BLOCK_FENCE} and close it with \`\`\`\`.`,
@@ -81,7 +82,8 @@ export const TALYN_SKILLS_NOTE =
 export const TALYN_THREAD_NOTE =
   'This is a Talyn thread. It has no repository: plan the work, start sessions on repositories with ' +
   '`talyn_create_session`, then end your turn. Talyn wakes you when a session finishes, opens a pull request ' +
-  'or needs an answer. Use the `talyn-thread` skill.';
+  'or needs an answer. When a session asks a question, answer it with `talyn_send_session_message` if you can, ' +
+  'or ask the person with `talyn_ask_user`. Use the `talyn-thread` skill.';
 
 /** Told to every turn of a session whose workspace has memory on and whose box has Talyn's MCP server. */
 export const TALYN_MEMORY_NOTE =

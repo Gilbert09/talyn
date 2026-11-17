@@ -8,15 +8,15 @@ import { loops, repositories, workflows, workspaces } from '../db/schema.js';
 
 const MIGRATION = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  '../db/migrations/0143_automations_start_sessions.sql'
+  '../db/migrations/0144_automations_start_sessions.sql'
 );
 
 /**
- * Migration 0143: no automation creates a cloud task. Old loops start sessions,
+ * Migration 0144: no automation creates a cloud task. Old loops start sessions,
  * and old rule actions that started a task are rewritten as `start_session`.
  * The fixture holds the old rows; the test runs the migration on them again.
  */
-describe('migration 0143: automations start sessions', () => {
+describe('migration 0144: automations start sessions', () => {
   let testDb: Awaited<ReturnType<typeof createTestDb>>;
 
   async function runMigrationAgain() {

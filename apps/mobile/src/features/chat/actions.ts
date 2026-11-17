@@ -22,4 +22,6 @@ export const chatActions = {
     return result;
   },
   setPlanMode: (chatId: string, planMode: boolean) => workbenches.updateChat(chatId, { planMode }),
+  /** The question card's answer: the chat's next message. */
+  answerQuestion: (chatId: string, text: string) => workbenches.sendMessage(chatId, { text }),
 };

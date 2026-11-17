@@ -175,6 +175,9 @@ export class WorkflowStore {
     if (changed) this.emit();
   }
   private patchChat(chat: WorkbenchChat) {
+    // A turn that starts or ends can add or remove a plan that waits for approval.
+    const before = this.findWorkbench(chat.workbenchId)?.chats?.find((value) => value.id === chat.id);
+    if (before?.status !== chat.status) this.invalidateEntry(this.entry('contextAttention', '', false));
     const patch = (rows: Workbench[]) => rows.some((row) => row.id === chat.workbenchId) ? rows.map((row) => withChat(row, chat)) : rows;
     let changed = this.updateData<Workbench>(this.entry('workbench', chat.workbenchId, false), (item) => withChat(item, chat));
     for (const entry of this.entries.values()) {
@@ -289,6 +292,7 @@ export class WorkflowStore {
       case 'attention': return reuseRows(data as PRRow[] | undefined,
         (await this.api.pullRequests.list({ workspaceId: scope.workspace, state: 'open', relationship: 'all' }))
           .filter((row) => row.workspaceId === scope.workspace));
+      case 'contextAttention': return (await this.api.workspaces.attention()).sessions ?? {};
       case 'workbench': return this.authorizedWorkbench(id, scope);
       case 'children': {
         await this.authorizedWorkbench(id, scope);
@@ -463,6 +467,7 @@ export class WorkflowStore {
         delivery: deliveryReducer(this.local(chatId).delivery, { type: 'ack', queued: ack.queued }) });
       this.invalidateEntry(this.entry('workbench', workbenchId, false), false);
       this.invalidateEntry(this.entry('transcript', chatId, false), false);
+      this.invalidateEntry(this.entry('contextAttention', '', false), false);
       this.emit();
     }).catch((error: unknown) => {
       if (!valid()) return;

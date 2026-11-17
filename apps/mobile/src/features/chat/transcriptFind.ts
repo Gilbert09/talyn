@@ -2,7 +2,7 @@ import { describeTool, type ToolBlock } from '@talyn/shared';
 
 import { inlineText, parseMarkdown, type MdBlock } from '../../lib/markdown';
 import { preview, readableOutput, toolLine } from './toolFormat';
-import type { TranscriptRow } from './transcript';
+import { answeredLabel, type TranscriptRow } from './transcript';
 
 /** One occurrence of the query. `rowIndex` is the row's place in the rows given to `findMatches`. */
 export interface FindMatch { rowKey: string; rowIndex: number; occurrence: number }
@@ -85,6 +85,9 @@ function computeText(row: TranscriptRow): string {
     case 'stopped': return 'Stopped';
     case 'queued': return `${row.text}\n${row.fromTalyn ? 'From Talyn' : 'Queued'}`;
     case 'plan': return `Plan${row.state === 'approved' ? ' Approved' : ''}\n${markdownText(row.plan)}`;
+    case 'question': return [row.state === 'answered' ? `Question ${answeredLabel(row.answeredBy)}` : 'Question',
+      ...row.question.questions.flatMap((item) => [item.header, item.question, ...item.options.flatMap((option) => [option.label, option.description])])]
+      .filter(Boolean).join('\n');
     case 'broken': return 'Part of this conversation could not be shown.';
   }
 }

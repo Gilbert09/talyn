@@ -34,6 +34,7 @@ import { userFacingError, WorkbenchError } from '../workbenches/errors.js';
 import { liveWorkbenchForPr } from '../workbenches/prSessions.js';
 import type { ReadinessUser } from '../workbenches/readiness.js';
 import { boxRefused, no, ok, type OneResult } from './actionResult.js';
+import { ruleSpaceRefusal } from './ruleSpace.js';
 import {
   isGithubContext,
   isIssueContext,
@@ -108,7 +109,7 @@ interface SessionRequest {
   pullRequestId?: string | null;
 }
 
-type Created = { ok: true; workbenchId: string } | { ok: false; result: OneResult };
+type Created = { ok: true; workbenchId: string; detail: string } | { ok: false; result: OneResult };
 
 async function createRuleSession(
   action: StartSessionAction,
@@ -123,6 +124,10 @@ async function createRuleSession(
     const { agent, model } = action.model
       ? { agent: fleetAgentForModel(action.model), model: action.model }
       : await slackSessionDefaults(ctx.workspaceId, actor);
+    // A space the owner can no longer use does not stop the work: the session
+    // starts in Personal, which only the owner sees, and the run says why.
+    const spaceRefusal = action.spaceId ? await ruleSpaceRefusal(actor, action.spaceId) : null;
+    const spaceId = action.spaceId && !spaceRefusal ? action.spaceId : null;
     const wb = await createWorkbench(
       {
         workspaceId: ctx.workspaceId,
@@ -136,10 +141,14 @@ async function createRuleSession(
         autoCreatePr: true,
         ...(req.fromPullRequestId ? { fromPullRequestId: req.fromPullRequestId } : {}),
         source: req.source,
+        spaceId,
       },
       actor
     );
-    return { ok: true, workbenchId: wb.id };
+    const detail = spaceRefusal
+      ? `started a session in Personal, not in the chosen space: ${spaceRefusal}`
+      : 'started a session';
+    return { ok: true, workbenchId: wb.id, detail };
   } catch (err) {
     if (isBoxGateError(err)) {
       return { ok: false, result: boxRefused('start_session', err, pullRequestId, ctx) };
@@ -152,11 +161,11 @@ async function createRuleSession(
   }
 }
 
-function started(workbenchId: string, pullRequestId: string | null = null): OneResult {
+function started(created: { workbenchId: string; detail: string }, pullRequestId: string | null = null): OneResult {
   return {
-    outcome: ok('start_session', 'started a session'),
-    workbenchId,
-    sessionUrl: sessionLaunchUrl(workbenchId),
+    outcome: ok('start_session', created.detail),
+    workbenchId: created.workbenchId,
+    sessionUrl: sessionLaunchUrl(created.workbenchId),
     pullRequestId,
   };
 }
@@ -210,7 +219,7 @@ export async function startGithubSession(
     pullRequestId: resolved?.id ?? null,
   });
   if (!created.ok) return created.result;
-  return started(created.workbenchId, resolved?.id ?? null);
+  return started(created, resolved?.id ?? null);
 }
 
 // ---- Webhook --------------------------------------------------------------
@@ -239,7 +248,7 @@ async function startWebhookSession(action: StartSessionAction, ctx: WebhookActio
     source: { kind: 'workflow', workflowId: ctx.workflowId, runId: ctx.runId, integration: 'webhook' },
   });
   if (!created.ok) return created.result;
-  return started(created.workbenchId);
+  return started(created);
 }
 
 // ---- Issues ---------------------------------------------------------------
@@ -261,7 +270,7 @@ async function startIssueSession(action: StartSessionAction, ctx: IssueActionCon
     namingText: [ctx.facts.identifier, ctx.facts.title, action.prompt].filter(Boolean).join(' '),
     source: { kind: 'workflow', workflowId: ctx.workflowId, runId: ctx.runId, integration: ctx.integration },
   });
-  const result = created.ok ? started(created.workbenchId) : created.result;
+  const result = created.ok ? started(created) : created.result;
   await finishIssueStart(claim.link, result);
   return result;
 }
@@ -325,7 +334,7 @@ async function startPostHogInboxSession(
     namingText: [ctx.facts.title, action.prompt].filter(Boolean).join(' '),
     source: { kind: 'workflow', workflowId: ctx.workflowId, runId: ctx.runId, integration: 'posthog_inbox' },
   });
-  const result = created.ok ? started(created.workbenchId) : created.result;
+  const result = created.ok ? started(created) : created.result;
   await finishIssueStart(claim.link, result);
   // The session did not start and will not be retried: release the claim now.
   // The claim sweep does the same if this fails.
@@ -511,5 +520,5 @@ async function startSlackSession(action: StartSessionAction, ctx: SlackActionCon
     corrected: false,
   }).catch(() => undefined);
   scheduleSlackStatus(created.workbenchId);
-  return started(created.workbenchId);
+  return started(created);
 }

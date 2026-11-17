@@ -1,3 +1,4 @@
+import { runWithoutScope } from '../../db/client.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import {
   getFleetAccountWithCredential,
@@ -21,7 +22,12 @@ export async function refreshFleetAccountUsage(
   if (account.kind !== 'claude_oauth' && account.kind !== 'codex_oauth') return account.usage;
   if (!force && !usageIsStale(account.usage, maxAgeMs)) return account.usage;
 
-  return refreshOnce(`fleet-usage:${account.id}`, async () => {
+  // `refreshOnce` shares this promise with every caller, so it must not run in
+  // the first caller's owner scope: when that request ends, the queries below
+  // would go to an ended transaction and never settle, and every later caller
+  // would wait on them. The rows are keyed by the account, which the caller
+  // read for a workspace it proved.
+  return refreshOnce(`fleet-usage:${account.id}`, () => runWithoutScope(async () => {
     const outcome = await guardCrossReplica(`fleet-usage:${account.id}`, async () => {
       const current = await getFleetAccountWithCredential(account.id);
       if (!current) return null;
@@ -57,5 +63,5 @@ export async function refreshFleetAccountUsage(
       return usage;
     }, { maxHoldMs: 15_000 });
     return outcome.acquired ? (outcome.result ?? null) : account.usage;
-  });
+  }));
 }

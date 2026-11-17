@@ -4,7 +4,7 @@ Plan of 2026-11-12. Each phase ships on its own, behind its own PostHog flag.
 
 ## Decisions (Tom, 2026-11-12)
 
-1. A rule that an issue, an error or a generic webhook matches starts a **session** by default (`start_session`). `start_task` is not offered. Migration `0143` converted stored `start_task` rules to `start_session`.
+1. A rule that an issue, an error or a generic webhook matches starts a **session** by default (`start_session`). `start_task` is not offered. Migration `0144` converted stored `start_task` rules to `start_session`.
 2. **Write-back is on by default.** A new rule comments on the issue or error when it starts work ("Talyn started: <link>"). A rule can turn it off.
 3. **On PR merge, comment and transition.** Talyn comments with the PR link and moves the issue to done (Linear "Done", Jira done transition, GitHub issue closed, Sentry or PostHog issue resolved). A rule can turn the transition off.
 4. **GitHub Issues has its own catalog card**, beside Linear and Jira. It uses the existing GitHub App connection: no new auth.

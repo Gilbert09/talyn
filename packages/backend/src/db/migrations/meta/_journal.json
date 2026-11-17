@@ -1007,7 +1007,14 @@
       "idx": 145,
       "version": "7",
       "when": 1790900000200,
-      "tag": "0143_automations_start_sessions",
+      "tag": "0143_workspace_memory_use_count",
+      "breakpoints": true
+    },
+    {
+      "idx": 146,
+      "version": "7",
+      "when": 1790900000210,
+      "tag": "0144_automations_start_sessions",
       "breakpoints": true
     }
   ]

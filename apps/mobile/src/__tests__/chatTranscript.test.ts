@@ -156,6 +156,33 @@ describe('transcript rows', () => {
     expect(rows.find((row) => row.kind === 'text')).toMatchObject({ text: 'Here.' });
   });
 
+  const question = (turn = 1) => at({ type: 'talyn_question', id: `q${turn}`, questions: [{ question: 'Which database?', options: [{ label: 'Postgres' }, { label: 'SQLite' }] }] } as unknown as AgentEvent, turn);
+  const thread = { kind: 'thread', threadId: 't1', name: 'Storage plan' };
+
+  it.each([
+    ['the last turn', null, 'open', null],
+    ['a turn the person answered', {}, 'answered', null],
+    ['a turn the thread answered', { talyn: { kind: 'user_message', sender: thread } }, 'answered', thread],
+  ])('shows the question of %s', (_name, answer, state, answeredBy) => {
+    const events = [user('Add storage'),
+      assistant([{ type: 'tool_use', id: 'ask', name: 'mcp__talyn__talyn_ask_user', input: {} }]), toolResult('ask', 'Talyn shows your question.'), question()];
+    if (answer) events.push(at({ type: 'user', message: { content: [{ type: 'text', text: 'Postgres' }] }, talyn_user_message: true, ...answer } as unknown as AgentEvent, 2));
+    const rows = transcriptRows('chat-one', events);
+    expect(kinds(rows)).toEqual(answer ? ['user', 'question', 'user'] : ['user', 'question']);
+    expect(rows[1]).toMatchObject({ kind: 'question', state, answeredBy, question: { id: 'q1', questions: [{ question: 'Which database?' }] } });
+    expect(rowLabel(rows[1])).toBe(`${state === 'answered' ? 'Answered question' : 'Question'}: Which database?`);
+  });
+
+  it('keeps the thread as the sender of a user message', () => {
+    const rows = transcriptRows('chat-one', [
+      at({ type: 'user', message: { content: [{ type: 'text', text: 'Use Postgres' }] }, talyn: { kind: 'user_message', sender: thread } } as unknown as AgentEvent),
+      user('Thanks', 2),
+    ]);
+    expect(rows[0]).toMatchObject({ kind: 'user', sender: thread });
+    expect(rowLabel(rows[0])).toBe('From thread Storage plan: Use Postgres');
+    expect(rows[1]).not.toHaveProperty('sender');
+  });
+
   it('keeps pending permission requests as rows', () => {
     const rows = transcriptRows('chat-one', [at({ type: 'talyn_permission_request', requestId: 'r1', tool_name: 'Bash', tool_input: { command: 'rm -rf x' } } as unknown as AgentEvent)]);
     expect(rows[0]).toMatchObject({ kind: 'permission', status: 'pending', toolName: 'Bash' });

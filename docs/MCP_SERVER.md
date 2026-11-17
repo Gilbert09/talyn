@@ -228,13 +228,15 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | `talyn_record_setup_step` | Add a setup step to the repository of the session. Record only a step that every session on the repository needs. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell, sends data out or pushes code. The new step is `suggested`: it runs on new boxes only when a person accepts it or when enough recent sessions need it. From a session token: the session itself, or a session in its thread. |
 | `talyn_create_session` | Start a sandbox session on a new branch, an existing branch, or a pull request. A `prompt` is the first message. With `space_id`, the session starts in a team space, and Talyn refuses `pull_request_id` and `auto_create_pr`. From a session in a space, with no `space_id`, the new session starts in the same space. Talyn uses Personal and says why when `pull_request_id` is given, `workspace_id` is not the home workspace of the team, the repository is not in the space, or the space is archived or the owner left its team. In an inherited space, `auto_create_pr: true` is accepted (it is the default there), and `auto_create_pr: false` is refused. `space_id: "personal"` starts in Personal. Spaces are not yet available to all accounts. |
 | `talyn_list_thread_sessions` | List the sessions of a thread, newest first: status, repository, branch, chat status and pull request. From a thread, `thread_id` is the thread itself by default. Read-only. |
-| `talyn_send_session_message` | Send a message to a chat. With only `session_id`, it uses the first open chat. If a turn runs, the message waits in the queue. |
+| `talyn_send_session_message` | Send a message to a chat. With only `session_id`, it uses the first open chat. If a turn runs, the message waits in the queue. From a thread's token to a session of that thread, the session shows the message as sent by the thread. |
+| `talyn_ask_user` | Ask the person 1 to 4 `questions`, each with `options` (none, or 2 to 6, each a `label` and an optional `description`), an optional `header` and `multi_select`. Talyn writes the questions in the calling turn's transcript. The turn then ends as `awaiting_input`: the person gets a notification, the apps show the questions as a card with the options, and a session in a thread wakes the thread with the questions. The next message in the chat is the answer. The agent must end its turn after the call. Only for a session token: a user token does not see this tool. |
 | `talyn_list_accounts` | List the workspace's Claude and Codex subscriptions, in the order Talyn tries them: label, usage, and if the account is usable now. It also shows the account of a session, or of each session in a thread. It never shows secrets. Read-only. |
 | `talyn_set_session_account` | Choose the Claude or Codex account that a session uses from its next turn. Use an account id from `talyn_list_accounts`, for the session's agent. A running turn does not stop. When the chosen account is rate limited at turn start, Talyn still moves to another account. From a session token: the session itself, or a session in its thread. |
 | `talyn_get_session_transcript` | Read a chat as text. Output is capped. Pass the returned `cursor` for the next page. |
 | `talyn_cancel_session_turn` | Stop the running turn of a chat. |
 | `talyn_resize_session` | Move a session to a sandbox of another `size` after its running turn. `continue_with` sends a message that starts the next turn on the new sandbox. `remember_for_repository` also sets the repository's size. From a session token: the session itself, or a session in its thread. |
 | `talyn_restart_session` | Restart a session on a fresh sandbox of the same size after its running turn. The new sandbox gets the workspace's current MCP servers, so a server connected after the session started becomes available. `continue_with` sends a message that starts the next turn on the new sandbox. From a session token: the session itself, or a session in its thread. |
+| `talyn_continue_as_thread` | Turn a session into a thread (`POST /workbenches/:id/thread`). The thread starts with a recap of the session's conversation and the optional `prompt`, and the session joins it. From a session token: only the session itself, at spawn depth 0, and not when it is a thread or in a thread already. |
 | `talyn_session_timing` | Show where a session's turns spent their time: tests, installs, builds, Docker and services, waits, git, file reads, other tool calls and model time. It also lists the slowest calls. Read-only. From a session token: the session itself, or a session in its thread. |
 | `talyn_get_session_changes` | List changed files with line counts. |
 | `talyn_get_session_diff` | Read the unified diff, or one file with `path`. Large diffs are cut. A sleeping sandbox answers from the copy that Talyn stored, or from GitHub when all the work is pushed. Pass `live` to wake the sandbox and read it now. |
@@ -254,6 +256,8 @@ From a thread, an entry applies to the thread unless `scope` is `workspace`.
 A session sees workspace entries, its repository's entries and its thread's entries.
 A write or forget from a session adds a `talyn_memory` card to its transcript.
 When `settings.sessionMemory` is `false`, every memory tool refuses.
+Each `talyn_memory_read` adds one to the entry's `use_count` (migration `0143`). The reads of a memory review thread do not count.
+A workspace holds at most 500 live entries. When a write or a restore goes over the limit, Talyn forgets the entry with the fewest reads, then the one with the oldest last read or change, and sets `forgotten_reason` to `evicted`. An entry saved, changed or restored in the last 7 days goes last, because it had no time to get reads. A session's write names the forgotten entries in its result and adds a card for each.
 
 A memory review thread (source `memory_review`) sees every entry of its workspace.
 It writes a repository entry with `repository_id` and a thread entry with `thread_id`.
@@ -292,7 +296,7 @@ The table `memory_review_runs` (migration `0123`) keeps one row for each review.
 
 Scheduled automation creation uses the desktop defaults. The timezone defaults to `UTC`.
 These defaults include target `session`, Talyn Fleet (`selfhosted`) with its default model, daily runs at 09:00, and concurrency `skip`.
-Every run starts a session. Only Talyn Fleet is valid. Migration `0143_automations_start_sessions` turned off PostHog Code schedules.
+Every run starts a session. Only Talyn Fleet is valid. Migration `0144_automations_start_sessions` turned off PostHog Code schedules.
 Internet access defaults to off. A scheduled automation cannot choose MCP servers. `mcpServerIds` must be `null`, and the session uses the workspace's MCP servers.
 Pass scheduled automation fields directly or in a `loop` object. Set the model when you change the provider.
 
@@ -362,6 +366,9 @@ is refused, because it undoes what a person chose to watch.
   `talyn_session_timing` and `talyn_session_sandbox_status` work on the session
   itself, or on a session in its thread.
 - The background job and wake-up tools work on the session itself only.
+- `talyn_continue_as_thread` works on the session itself only. It refuses a
+  session that another session started: the new thread starts at depth 0, so it
+  would escape the spawn-depth limit.
 - `talyn_close_pull_request` refuses the session's own pull request, and any
   pull request outside the session's repository. A thread has no repository,
   so it cannot close pull requests.

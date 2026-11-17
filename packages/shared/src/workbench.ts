@@ -442,6 +442,13 @@ export interface WorkbenchAttachment {
  * A sandbox `exec` has no stdin, so there is no mid-turn steering: a message
  * sent during a turn is queued and drained, in order, when the turn ends.
  */
+/** An agent that wrote a message for the person: the session's thread. */
+export interface WorkbenchMessageSender {
+  kind: 'thread';
+  threadId: string;
+  name: string;
+}
+
 export interface WorkbenchQueuedMessage {
   id: string;
   text: string;
@@ -462,6 +469,12 @@ export interface WorkbenchQueuedMessage {
    * `talyn.trigger`, so the clients show the turn as a system row.
    */
   trigger?: WorkbenchMessageTrigger;
+  /**
+   * Set when the session's thread wrote the message with
+   * `talyn_send_session_message`, for example to answer a question. The
+   * transcript's user-message event carries it as `talyn.sender`.
+   */
+  sender?: WorkbenchMessageSender;
   queuedAt: string;
   /**
    * A teammate who prompted this session from a space, and pays for its turn

@@ -244,44 +244,146 @@ describe('workspace memory', () => {
   });
 
   describe('the live entry cap', () => {
-    async function fill(count: number) {
+    const DAY = 24 * 60 * 60 * 1000;
+    const daysAgo = (days: number) => new Date(Date.now() - days * DAY);
+
+    // Old entries, out of the grace period, each read once 20 days ago.
+    async function fill(count: number, overrides: Record<number, Partial<typeof workspaceMemories.$inferInsert>> = {}) {
       await testDb.db.insert(workspaceMemories).values(
         Array.from({ length: count }, (_, i) => ({
           id: `m-${i}`, workspaceId: 'ws-a', ownerId: 'owner-a', scope: 'workspace', type: 'project',
           name: `entry ${i}`, description: 'd', body: 'b', bytes: 1,
+          createdAt: daysAgo(60), updatedAt: daysAgo(30), useCount: 1, lastUsedAt: daysAgo(20),
+          ...overrides[i],
         })),
       );
     }
 
-    it('refuses a new entry at the cap and says why', async () => {
-      await fill(MAX_LIVE_MEMORIES_PER_WORKSPACE);
+    const evictedIds = async () =>
+      (await listMemories('ws-a', { includeForgotten: true }))
+        .filter((e) => e.forgottenReason === 'evicted')
+        .map((e) => e.id);
+
+    const liveCount = async () => (await listMemories('ws-a')).length;
+
+    it.each<[string, Record<number, Partial<typeof workspaceMemories.$inferInsert>>, string]>([
+      ['the entry with the fewest reads', { 7: { useCount: 0, lastUsedAt: null }, 3: { useCount: 5 } }, 'm-7'],
+      ['the oldest read when reads are equal', {
+        9: { lastUsedAt: daysAgo(40), updatedAt: daysAgo(45) },
+        4: { lastUsedAt: daysAgo(35), updatedAt: daysAgo(45) },
+      }, 'm-9'],
+      ['the oldest change when nobody read them', {
+        2: { useCount: 0, lastUsedAt: null, updatedAt: daysAgo(10) },
+        5: { useCount: 0, lastUsedAt: null, updatedAt: daysAgo(50) },
+      }, 'm-5'],
+      ['a read entry before an unread entry saved in the grace period', {
+        8: { useCount: 0, lastUsedAt: null, createdAt: daysAgo(1), updatedAt: daysAgo(1) },
+        6: { lastUsedAt: daysAgo(25) },
+      }, 'm-6'],
+      ['an entry restored in the grace period last', {
+        1: { useCount: 0, lastUsedAt: null, updatedAt: daysAgo(2) },
+        11: { lastUsedAt: daysAgo(90), updatedAt: daysAgo(90) },
+      }, 'm-11'],
+    ])('at the cap, a new entry forgets %s', async (_label, overrides, expected) => {
+      await fill(MAX_LIVE_MEMORIES_PER_WORKSPACE, overrides);
       const res = await create({ name: 'one more' });
-      expect(res.status).toBe(409);
-      expect(res.body.code).toBe('memory_limit_reached');
-      expect(res.body.error).toBe('This workspace has 500 memory entries, which is the limit. Forget some entries first.');
+      expect(res.status).toBe(200);
+      expect(res.body.data.outcome).toBe('created');
+      expect(res.body.data.evicted.map((e: Loose) => e.id)).toEqual([expected]);
+      expect(res.body.data.evicted[0].forgottenReason).toBe('evicted');
+      expect(await evictedIds()).toEqual([expected]);
+      expect(await liveCount()).toBe(MAX_LIVE_MEMORIES_PER_WORKSPACE);
     });
 
-    it('still updates an existing entry at the cap', async () => {
+    it('forgets only what is over the cap', async () => {
+      await fill(MAX_LIVE_MEMORIES_PER_WORKSPACE + 2, { 0: { useCount: 0 }, 1: { useCount: 0 }, 2: { useCount: 0 } });
+      const res = await create({ name: 'one more' });
+      expect(res.body.data.evicted.map((e: Loose) => e.id).sort()).toEqual(['m-0', 'm-1', 'm-2']);
+      expect(await liveCount()).toBe(MAX_LIVE_MEMORIES_PER_WORKSPACE);
+    });
+
+    it('never forgets the new entry, even when it is the least used', async () => {
+      await fill(MAX_LIVE_MEMORIES_PER_WORKSPACE, Object.fromEntries(
+        Array.from({ length: MAX_LIVE_MEMORIES_PER_WORKSPACE }, (_, i) => [i, { useCount: 50, updatedAt: new Date() }]),
+      ));
+      const res = await create({ name: 'one more' });
+      const id = res.body.data.entry.id;
+      expect(res.body.data.evicted).toHaveLength(1);
+      expect(res.body.data.evicted[0].id).not.toBe(id);
+      expect((await listMemories('ws-a')).map((e) => e.id)).toContain(id);
+    });
+
+    it('below the cap, forgets nothing', async () => {
+      await fill(MAX_LIVE_MEMORIES_PER_WORKSPACE - 1);
+      const res = await create({ name: 'one more' });
+      expect(res.body.data.evicted).toEqual([]);
+      expect(await evictedIds()).toEqual([]);
+    });
+
+    it('an update at the cap forgets nothing', async () => {
       await fill(MAX_LIVE_MEMORIES_PER_WORKSPACE);
       const res = await create({ name: 'entry 7', body: 'new' });
       expect(res.status).toBe(200);
       expect(res.body.data.outcome).toBe('updated');
+      expect(res.body.data.evicted).toEqual([]);
+      expect(await evictedIds()).toEqual([]);
     });
 
     it('does not count forgotten entries or other workspaces', async () => {
       await fill(MAX_LIVE_MEMORIES_PER_WORKSPACE);
       await call('DELETE', '/workbenches/memory/m-0');
-      expect((await create({ name: 'one more' })).status).toBe(200);
-      expect((await create({ workspaceId: 'ws-b' }, 'owner-b')).status).toBe(200);
+      expect((await create({ name: 'one more' })).body.data.evicted).toEqual([]);
+      expect((await create({ workspaceId: 'ws-b' }, 'owner-b')).body.data.evicted).toEqual([]);
+      expect(await evictedIds()).toEqual([]);
     });
 
-    it('refuses a restore at the cap', async () => {
+    it('a restore at the cap forgets the least-used other entry, and clears its own reason', async () => {
+      await fill(MAX_LIVE_MEMORIES_PER_WORKSPACE, { 0: { useCount: 0 }, 4: { useCount: 0, lastUsedAt: null } });
+      await create({ name: 'one more' });
+      expect(await evictedIds()).toEqual(['m-4']);
+      const res = await call('POST', '/workbenches/memory/m-4/restore');
+      expect(res.status).toBe(200);
+      expect(res.body.data.forgottenAt).toBeNull();
+      expect(res.body.data.forgottenReason).toBeNull();
+      expect(await evictedIds()).toEqual(['m-0']);
+      expect(await liveCount()).toBe(MAX_LIVE_MEMORIES_PER_WORKSPACE);
+    });
+
+    it('a restore refused for its name forgets nothing', async () => {
       await fill(MAX_LIVE_MEMORIES_PER_WORKSPACE);
       await call('DELETE', '/workbenches/memory/m-0');
-      await create({ name: 'fills the gap' });
+      await create({ name: 'entry 0' });
       const res = await call('POST', '/workbenches/memory/m-0/restore');
       expect(res.status).toBe(409);
-      expect(res.body.code).toBe('memory_limit_reached');
+      expect(res.body.code).toBe('memory_name_taken');
+      expect(await evictedIds()).toEqual([]);
+    });
+
+    it('a person forgetting an entry gives no reason', async () => {
+      await fill(1);
+      const res = await call('DELETE', '/workbenches/memory/m-0');
+      expect(res.body.data.forgottenReason).toBeNull();
+    });
+  });
+
+  describe('read counts', () => {
+    it('a read adds one and sets the last read, with or without a session', async () => {
+      const { body } = await create();
+      const id = body.data.entry.id;
+      expect(body.data.entry).toMatchObject({ useCount: 0, lastUsedAt: null });
+      await recordMemoryUse(id, null, 'read');
+      await recordMemoryUse(id, null, 'read');
+      const [read] = await listMemories('ws-a');
+      expect(read.useCount).toBe(2);
+      expect(read.lastUsedAt).not.toBeNull();
+      expect(await testDb.db.select().from(workspaceMemoryUses)).toEqual([]);
+    });
+
+    it('a write adds no read', async () => {
+      const { body } = await create();
+      await recordMemoryUse(body.data.entry.id, null, 'wrote');
+      const [written] = await listMemories('ws-a');
+      expect(written).toMatchObject({ useCount: 0, lastUsedAt: null });
     });
   });
 

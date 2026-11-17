@@ -11,6 +11,7 @@ import {
   type WorkbenchTodo,
 } from '@talyn/shared';
 import { cn } from '../../lib/utils';
+import { FleetAgentMark } from '../../lib/providerMeta';
 import { useFleetModelCatalog } from '../../lib/fleetModelCatalog';
 import { formatTokens } from '../../lib/workbenchFormat';
 
@@ -30,10 +31,19 @@ export function defaultModelFor(agent: WorkbenchAgent): string {
 const selectClass =
   'h-6 appearance-none rounded border border-transparent bg-transparent bg-none py-0 pl-1 pr-5 text-[11px] leading-tight text-muted-foreground hover:border-input hover:text-foreground focus:border-input focus:outline-none disabled:opacity-50';
 
-function PickerSelect({ children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+function PickerSelect({
+  children,
+  leading,
+  ...props
+}: React.SelectHTMLAttributes<HTMLSelectElement> & { leading?: React.ReactNode }) {
   return (
     <span className="relative inline-flex items-center">
-      <select {...props} className={selectClass}>
+      {leading && (
+        <span className={cn('pointer-events-none absolute left-1 inline-flex', props.disabled && 'opacity-50')}>
+          {leading}
+        </span>
+      )}
+      <select {...props} className={cn(selectClass, Boolean(leading) && 'pl-5')}>
         {children}
       </select>
       <ChevronDown className="pointer-events-none absolute right-1 h-3 w-3 text-muted-foreground" />
@@ -57,6 +67,7 @@ export function AgentPicker({
       disabled={disabled}
       title="Agent"
       aria-label="Agent"
+      leading={<FleetAgentMark agent={value} className="h-3.5 w-3.5" />}
     >
       <option value="claude">Claude</option>
       <option value="codex">Codex</option>

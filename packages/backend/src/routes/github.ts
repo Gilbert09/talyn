@@ -348,31 +348,31 @@ export function parseRepoPage(value: unknown): number | undefined | null {
   return page >= 1 && page <= 20 ? page : null;
 }
 
+// Helper: pull workspaceId from body or query, verify ownership, or 4xx.
+async function gateWorkspace(
+  req: import('express').Request,
+  res: import('express').Response,
+  source: 'body' | 'query' = 'query'
+): Promise<string | null> {
+  const workspaceId =
+    source === 'body'
+      ? (req.body?.workspaceId as string | undefined)
+      : (req.query.workspaceId as string | undefined);
+  if (!workspaceId) {
+    res.status(400).json({ success: false, error: 'workspaceId is required' });
+    return null;
+  }
+  try {
+    await requireWorkspaceAccess(req, workspaceId);
+  } catch (err) {
+    handleAccessError(err, res);
+    return null;
+  }
+  return workspaceId;
+}
+
 export function githubRoutes(): Router {
   const router = Router();
-
-  // Helper: pull workspaceId from body or query, verify ownership, or 4xx.
-  async function gateWorkspace(
-    req: import('express').Request,
-    res: import('express').Response,
-    source: 'body' | 'query' = 'query'
-  ): Promise<string | null> {
-    const workspaceId =
-      source === 'body'
-        ? (req.body?.workspaceId as string | undefined)
-        : (req.query.workspaceId as string | undefined);
-    if (!workspaceId) {
-      res.status(400).json({ success: false, error: 'workspaceId is required' });
-      return null;
-    }
-    try {
-      await requireWorkspaceAccess(req, workspaceId);
-    } catch (err) {
-      handleAccessError(err, res);
-      return null;
-    }
-    return workspaceId;
-  }
 
   router.get('/status', async (req, res) => {
     const configured = githubService.isConfigured();
@@ -458,6 +458,20 @@ export function githubRoutes(): Router {
     await githubService.removeToken(workspaceId, 'user disconnected via POST /github/disconnect');
     res.json({ success: true } as ApiResponse<void>);
   });
+
+  return router;
+}
+
+/**
+ * The reads that wait on GitHub. Mounted BEFORE ownerScope, so no owner
+ * transaction is open while GitHub answers: the apps call `/user`,
+ * `/installations` and `/coverage` on boot and on every focus. Each handler
+ * proves the workspace with `gateWorkspace`, and the only rows the service then
+ * reads (the workspace's GitHub integration, its repositories) are keyed by
+ * that workspace.
+ */
+export function githubReadRoutes(): Router {
+  const router = Router();
 
   router.get('/user', async (req, res) => {
     const workspaceId = await gateWorkspace(req, res);

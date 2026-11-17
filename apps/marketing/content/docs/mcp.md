@@ -127,7 +127,7 @@ Every tool name starts with `talyn_`. Most tools take a `workspace_id`. If you h
 | Merge queue | Add or remove a pull request, queue a stack, read the queue history |
 | Code review | Start a review at a depth, read findings, dismiss findings |
 | Tasks | Read the result of an existing task, stop it, retry it or delete it. MCP cannot create tasks. Start a session instead. |
-| Sessions | Start a session (also to work on a pull request), send a message, read the transcript, read the diff, open the pull request, archive, list the sessions of a thread |
+| Sessions | Start a session (also to work on a pull request), send a message, read the transcript, read the diff, open the pull request, archive, list the sessions of a thread. Inside a session, the agent can also ask you a question |
 | Session accounts and sandboxes | List your Claude and Codex accounts, choose the account for a session, move a session to a sandbox of another size, restart a session on a fresh sandbox, read the sandbox status, see where a session spent its time |
 | Background jobs and wake-ups | Run a long command in a session's sandbox after the turn ends, read its output, stop it, schedule a new turn for later |
 | Memory | Save, search, read, list and forget short notes that later sessions can read |

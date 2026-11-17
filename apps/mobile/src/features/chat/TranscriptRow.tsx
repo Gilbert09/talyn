@@ -5,18 +5,20 @@ import { FindHighlightContext } from './findHighlight';
 import { RowBoundary } from './RowBoundary';
 import type { TranscriptRow as Row } from './transcript';
 import { ToolGroupRow, ToolRow } from './ToolRow';
-import { AgentText, EventLine, FailedLine, PermissionRow, PlanCard, QueuedBubble, SystemRow, ThinkingRow, UserBubble } from './TranscriptParts';
+import { AgentText, EventLine, FailedLine, PermissionRow, PlanCard, QuestionCard, QueuedBubble, SystemRow, ThinkingRow, UserBubble } from './TranscriptParts';
 
 export interface PlanControls { busy: boolean; disabled: boolean; approve(): void; keepPlanning(): void }
+/** `waiting`: the chat runs or has a message on its way, so the question shows read-only. */
+export interface QuestionControls { busy: boolean; disabled: boolean; waiting: boolean; answer(text: string): void }
 interface Props {
-  row: Row; now: number; workbench: Workbench; plan: PlanControls;
+  row: Row; now: number; workbench: Workbench; plan: PlanControls; question: QuestionControls;
   /** The find query, given only to rows that match it. */
   highlight?: string;
 }
 
-function RowView({ row, now, workbench, plan }: Props) {
+function RowView({ row, now, workbench, plan, question }: Props) {
   switch (row.kind) {
-    case 'user': return <UserBubble text={row.text} timestamp={row.timestamp} attachments={row.attachments} files={row.files} workbenchId={workbench.id} now={now} />;
+    case 'user': return <UserBubble text={row.text} timestamp={row.timestamp} attachments={row.attachments} files={row.files} workbenchId={workbench.id} now={now} sender={row.sender} />;
     case 'text': return <AgentText text={row.text} streaming={row.streaming} />;
     case 'thinking': return <ThinkingRow text={row.text} />;
     case 'tool': return <ToolRow tool={row.tool} partial={row.partial} />;
@@ -28,6 +30,8 @@ function RowView({ row, now, workbench, plan }: Props) {
     case 'queued': return <QueuedBubble text={row.text} fromTalyn={row.fromTalyn} />;
     case 'plan': return <PlanCard plan={row.plan} state={row.state} busy={plan.busy} disabled={plan.disabled}
       onApprove={plan.approve} onKeepPlanning={plan.keepPlanning} />;
+    case 'question': return <QuestionCard question={row.question} state={row.state} answeredBy={row.answeredBy} busy={question.busy}
+      disabled={question.disabled} waiting={question.waiting} onAnswer={question.answer} />;
     case 'broken': return <EventLine icon={{ ios: 'exclamationmark.triangle', android: 'warning' }} tone="warning" text="Part of this conversation could not be shown." />;
   }
 }
@@ -43,6 +47,7 @@ export function sameRowProps(prev: Props, next: Props): boolean {
   if (row.kind === 'system') return prev.workbench.id === next.workbench.id && prev.workbench.pullRequestId === next.workbench.pullRequestId &&
     prev.workbench.pr?.number === next.workbench.pr?.number;
   if (row.kind === 'plan') return prev.plan === next.plan;
+  if (row.kind === 'question') return prev.question === next.question;
   return true;
 }
 

@@ -7,6 +7,7 @@ import {
   errorGlance,
   prSizeGlance,
   sandboxGlance,
+  sessionAutomation,
   sessionGlanceFacts,
   sourceGlance,
   type SessionGlanceWorkbench,
@@ -75,9 +76,33 @@ describe('sourceGlance', () => {
     ['a scheduled rule', { kind: 'loop', loopId: 'l', runId: 'r' }, 'A scheduled rule'],
     ['a GitHub rule with no integration', { kind: 'workflow', workflowId: 'w', runId: 'r' }, 'A GitHub rule'],
     ['a Linear rule', { kind: 'workflow', workflowId: 'w', runId: 'r', integration: 'linear' }, 'A Linear rule'],
+    ['a PostHog Inbox rule', { kind: 'workflow', workflowId: 'w', runId: 'r', integration: 'posthog_inbox' }, 'A PostHog Inbox rule'],
     ['a memory review', { kind: 'memory_review', runId: 'r' } as WorkbenchSource, 'Memory review'],
   ])('%s', (_name, source, expected) => {
     expect(sourceGlance(source)).toBe(expected);
+  });
+});
+
+describe('sessionAutomation', () => {
+  const rule = (integration?: string) =>
+    ({ kind: 'workflow', workflowId: 'wf1', runId: 'r', ...(integration ? { integration } : {}) }) as WorkbenchSource;
+  it.each<[string, WorkbenchSource | null | undefined, ReturnType<typeof sessionAutomation>]>([
+    ['the composer', null, null],
+    ['absent', undefined, null],
+    ['a Slack mention', { kind: 'slack', teamId: 'T', teamName: null, channelId: 'C1', channelName: 'eng', messageTs: '1', threadTs: '1', permalink: null }, null],
+    ['a memory review', { kind: 'memory_review', runId: 'r' } as WorkbenchSource, null],
+    ['a rule with no workflow id', { kind: 'workflow', workflowId: '', runId: 'r' }, null],
+    ['a loop with no loop id', { kind: 'loop', loopId: '', runId: 'r' }, null],
+    ['a GitHub rule with no integration', rule(), { type: 'workflow', id: 'wf1', kind: 'github', label: 'GitHub' }],
+    ['a GitHub rule', rule('github'), { type: 'workflow', id: 'wf1', kind: 'github', label: 'GitHub' }],
+    ['a Slack rule', rule('slack'), { type: 'workflow', id: 'wf1', kind: 'slack', label: 'Slack' }],
+    ['a webhook rule', rule('webhook'), { type: 'workflow', id: 'wf1', kind: 'webhook', label: 'Webhooks' }],
+    ['a Linear rule', rule('linear'), { type: 'workflow', id: 'wf1', kind: 'linear', label: 'Linear' }],
+    ['a GitHub Issues rule', rule('github_issues'), { type: 'workflow', id: 'wf1', kind: 'github_issues', label: 'GitHub Issues' }],
+    ['a PostHog Inbox rule', rule('posthog_inbox'), { type: 'workflow', id: 'wf1', kind: 'posthog_inbox', label: 'PostHog Inbox' }],
+    ['a scheduled loop', { kind: 'loop', loopId: 'lp1', runId: 'r' }, { type: 'loop', id: 'lp1', kind: 'schedule', label: 'Schedule' }],
+  ])('%s', (_name, source, expected) => {
+    expect(sessionAutomation(source)).toEqual(expected);
   });
 });
 

@@ -21,6 +21,7 @@ import { adoptedPullRequestMessage, parseAutoPrDetails } from './workbenchPullRe
 import { memoryChangeText, parseMemoryChangeEvent, type MemoryChangeEvent } from './workbenchMemory.js';
 import { messageTrigger, type WorkbenchMessageTrigger } from './workbenchBackground.js';
 import { isTalynOriginMessage, parseThreadSessionEvent, threadSessionEventText, type ThreadSessionEvent } from './workbenchThread.js';
+import { isAskUserToolName } from './workbenchQuestion.js';
 
 const INTERRUPTED_MESSAGES = new Set([
   '[Request interrupted by user]',
@@ -138,6 +139,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
     interruptionOpen = true;
   };
   const permissionByRequestId = new Map<string, number>(); // requestId → blocks index
+  const askUserCalls = new Map<string, Block>(); // talyn_ask_user calls waiting for their result
   // Pair tool_result → tool_use by tool_use_id so the collapsed result
   // row can say "Read 40 lines from <file>" instead of dumping bytes.
   const toolUseById = new Map<string, { name: string; input: unknown }>();
@@ -244,13 +246,10 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
           const name = String(b.name ?? 'unknown');
           const inp = b.input ?? {};
           if (id) toolUseById.set(id, { name, input: inp });
-          blocks.push({
-            kind: 'tool_use',
-            key: `${seqKey}.${i}`,
-            toolId: id,
-            name,
-            input: inp,
-          });
+          const block: Block = { kind: 'tool_use', key: `${seqKey}.${i}`, toolId: id, name, input: inp };
+          // The question card shows a question. The call shows only when it fails.
+          if (id && isAskUserToolName(name)) askUserCalls.set(id, block);
+          else blocks.push(block);
         }
       }
       continue;
@@ -289,6 +288,15 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
           const toolId = String(b.tool_use_id ?? '');
           const paired = toolId ? toolUseById.get(toolId) : undefined;
           const stopped = isClaudeRejectedToolResult(b.content, b.is_error === true);
+          const askCall = askUserCalls.get(toolId);
+          if (askCall) {
+            askUserCalls.delete(toolId);
+            if (b.is_error !== true) {
+              interruptionOpen = false;
+              continue;
+            }
+            blocks.push(askCall);
+          }
           blocks.push({
             kind: 'tool_result',
             key: `${seqKey}.${i}`,

@@ -1,4 +1,4 @@
--- automations_start_sessions: schedules (loops) and rules (workflows) start
+-- automations_start_sessions (0144): schedules (loops) and rules (workflows) start
 -- sessions only. No automation creates a cloud task.
 --
 -- Loops: every loop now starts a session. A session uses the workspace MCP

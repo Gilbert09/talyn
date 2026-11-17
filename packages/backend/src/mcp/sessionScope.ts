@@ -72,6 +72,9 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_resize_session',
   // A restart is a move to a box of the same size: the same guards as a resize.
   'talyn_restart_session',
+  // The person's own "Continue as thread". The tool limits it to the calling
+  // session at spawn depth 0, so a thread never escapes the depth limit.
+  'talyn_continue_as_thread',
   'talyn_get_session_transcript',
   'talyn_cancel_session_turn',
   'talyn_get_session_changes',
@@ -124,8 +127,13 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_list_slack_channels',
   // A session may reply as the bot in its own Slack thread.
   'talyn_slack_reply',
+  // Its own question to the person, in its own transcript.
+  'talyn_ask_user',
 ]);
 
+/** Tools that act on the calling session itself: a person's own token has no session, so it does not get them. */
+export const SESSION_ONLY_TOOLS: ReadonlySet<string> = new Set(['talyn_ask_user']);
+
 export function toolAllowedForCaller(name: string, session: unknown): boolean {
-  return !session || SESSION_TOKEN_TOOLS.has(name);
+  return session ? SESSION_TOKEN_TOOLS.has(name) : !SESSION_ONLY_TOOLS.has(name);
 }
