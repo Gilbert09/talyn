@@ -7976,3 +7976,10 @@ Decisions:
 - The session runs in the rule's own workspace, not in the owner's home workspace for the team. This is the same as a move: a space is a container. So Talyn adds no repository and makes no change to the space's repository list.
 - The checks are the move checks, for the rule's owner: the `spaces` flag, team membership and a live space (`services/workflows/ruleSpace.ts`). The route checks only a space that is NEW to the rule. Thus a rule whose space went away can still be renamed or switched off.
 - When the rule fires and the space is no longer usable, the session starts in Personal. The run's action detail says why. Personal is visible only to the owner, so this fails closed and the work still happens.
+
+### 2026-11-17 — Agents use `talyn_run_background`, and an open tool call at turn end is explained
+
+A PostHog/posthog session showed "Interrupted" two times. Nobody stopped it, and no limit or sandbox loss occurred. The agent started Claude Code background tasks (Agent subagents and `run_in_background` Bash) and wrote "waiting for the agent's report". `claude -p` stayed alive for those tasks and kept making tool calls. It then emitted `result` and exited while a Bash call was still open. The next turn's `--resume` marked that call as rejected, and the transcript showed "Interrupted".
+Changes:
+- The briefing has a new **Background work** section. Each command that can take more than about 2 minutes goes to `talyn_run_background`, and the agent ends its turn. Subagents run in the foreground. The agent's own background tasks (`run_in_background`, `&`, `nohup`) are not used, and the agent never ends a turn while one runs. The `talyn-speed` skill and the tool description say the same. The old "poll a log with `nohup` and `sleep 45`" advice is gone.
+- `buildBlocks` adds a plain note before a Claude `result` that arrives while a tool call has no result: "The agent ended its turn before a tool call finished. …". Error results (a stop, a lost sandbox) and Codex runs get no note. The next turn still shows "Interrupted" for the same call.

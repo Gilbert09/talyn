@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentEvent } from '../src/index.js';
 import { claudePromptText, claudeSessionToEvents } from '../src/claudeSessionImport.js';
-import { buildBlocks, isClaudeInterruptionText, mergeToolBlocks } from '../src/transcript.js';
+import { TURN_ENDED_WITH_OPEN_TOOL_NOTE, buildBlocks, isClaudeInterruptionText, mergeToolBlocks } from '../src/transcript.js';
 
 const rejection = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.";
 
@@ -62,6 +62,41 @@ describe('Claude Code interruption markers', () => {
       expect(blocks.find((block) => block.kind === 'tool')).toMatchObject({ stopped: true, isError: false, output: '' });
     },
   );
+});
+
+describe('a turn that ends with a tool call still open', () => {
+  const init = (seq: number, agent?: string): AgentEvent =>
+    ({ seq, type: 'system', subtype: 'init', ...(agent ? { agent } : {}) }) as AgentEvent;
+  const runResult = (seq: number, isError = false): AgentEvent =>
+    ({ seq, type: 'result', subtype: isError ? 'error_during_execution' : 'success', is_error: isError, result: 'Waiting for the agent.' }) as AgentEvent;
+  const notes = (events: AgentEvent[]) =>
+    buildBlocks(events).filter((block) => block.kind === 'system' && block.text === TURN_ENDED_WITH_OPEN_TOOL_NOTE);
+
+  it.each<{ name: string; events: AgentEvent[]; expected: number }>([
+    { name: 'a Claude run with an open call', events: [init(1), tool(2), runResult(3)], expected: 1 },
+    { name: 'a run with no init event', events: [tool(1), runResult(2)], expected: 1 },
+    { name: 'a run whose call has a result', events: [init(1), tool(2), result(3, 'ok', false), runResult(4)], expected: 0 },
+    { name: 'a run with no tool calls', events: [init(1), runResult(2)], expected: 0 },
+    { name: 'an error result (a stop or a lost sandbox)', events: [init(1), tool(2), runResult(3, true)], expected: 0 },
+    { name: 'a Codex run', events: [init(1, 'codex'), tool(2), runResult(3)], expected: 0 },
+    { name: 'a Claude run after a Codex run', events: [init(1, 'codex'), runResult(2), init(3), tool(4), runResult(5)], expected: 1 },
+    { name: 'a call left open in an earlier run', events: [init(1), tool(2), init(3), runResult(4)], expected: 0 },
+    { name: 'two results for one open call', events: [init(1), tool(2), runResult(3), runResult(4)], expected: 1 },
+  ])('$name: $expected note(s)', ({ events, expected }) => {
+    expect(notes(events)).toHaveLength(expected);
+  });
+
+  it('places the note before the result, and the next turn still shows the interruption', () => {
+    const blocks = buildBlocks([
+      init(1), tool(2), runResult(3),
+      user(4, 'Continue'),
+      init(5), result(6, rejection), user(7, '[Request interrupted by user for tool use]'),
+    ]);
+    expect(blocks.map((block) => block.kind === 'system' ? block.text : block.kind)).toEqual([
+      'tool_use', TURN_ENDED_WITH_OPEN_TOOL_NOTE, 'result', 'tool_result', 'Interrupted',
+    ]);
+    expect(blocks[1]).toEqual({ kind: 'system', key: '3.open', text: TURN_ENDED_WITH_OPEN_TOOL_NOTE });
+  });
 });
 
 describe('thread transcript cards', () => {
