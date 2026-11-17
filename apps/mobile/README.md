@@ -377,14 +377,16 @@ Active resources and pending requests are protected from eviction.
 Lists use full endpoint snapshots because the current list methods expose no paging cursor.
 The app does not simulate pagination by slicing those responses.
 FlatList virtualizes sessions, PRs, child sessions, queue rows, and transcripts.
-A transcript retains at most 1200 events and approximately 2 MB of serialized UTF-16 content.
+A transcript retains at most 12000 events and approximately 24 MB of slimmed event content.
+A history page holds 500 events, extended to at most 2000 to reach the start of a turn, as on desktop and web.
+Most stored events are token deltas that draw nothing, so a smaller page shows only a few rows of a long turn.
 Each displayed text block is limited to 16000 characters. Code uses selectable chunks of at most 4000 characters.
 A partial history window has explicit labels and controls for older and latest history.
 Titles and list data still have the size of the server snapshot. Measure large accounts before release.
 
 REST establishes transcript cursors. Socket events are deduplicated by chat and sequence.
 Missing ranges are recovered with forward REST history. Older history uses the supported backward cursor.
-Each recovery reads at most four forward pages of 200 events after its initial page.
+Each recovery reads at most four forward pages of 500 events after its initial page.
 A larger backlog remains stale until another refresh. Recovery never loops without a bound.
 The shared transport retains its existing single GET transport retry and 401 recovery.
 The workflow adds no automatic read retry loop or message retry.
