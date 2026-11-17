@@ -147,13 +147,18 @@ export function useContextAttention(enabled: boolean, refreshKey: string): Conte
  * The client's view of the session's alert. It does not match the server's
  * key exactly (the client has no turn counts), but it changes when the alert
  * changes, which is all {@link useAttentionSeen} needs.
+ *
+ * A plan that waits for approval is in the transcript only, so the client
+ * cannot see it here. While a turn runs the key is `busy`, so the key also
+ * changes when a turn ends. Then an open session tells the server that I saw
+ * the plan that the turn wrote.
  */
 export function clientAttentionKey(
   workbench: Pick<Workbench, 'kind' | 'status' | 'sandboxState' | 'archivedAt'>,
   chats: Pick<WorkbenchChat, 'id' | 'status' | 'queuedMessages'>[],
   pr: { state: string; summary: { mergeable?: string | null } } | null,
 ): string | null {
-  return sessionAttentionKey({
+  const key = sessionAttentionKey({
     kind: workbench.kind ?? 'session',
     status: workbench.status,
     sandboxState: workbench.sandboxState,
@@ -161,6 +166,7 @@ export function clientAttentionKey(
     chats: chats.map((c) => ({ id: c.id, status: c.status, queued: c.queuedMessages?.length ?? 0 })),
     pr: pr ? { state: pr.state, mergeable: pr.summary.mergeable ?? null } : null,
   });
+  return key ?? (chats.some((c) => c.status === 'running') ? 'busy' : null);
 }
 
 /** Tell the server I saw the session's alert, then ask for the rail's badges again. */

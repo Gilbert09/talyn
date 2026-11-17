@@ -159,11 +159,16 @@ describe('withServerAttention', () => {
     ['a failure the row already shows', state('failed', 'A chat failed'), 'reply', null, state('failed', 'A chat failed')],
     ['live work wins over an old question', state('working'), 'reply', null, state('working')],
     ['a starting box wins over old conflicts', state('starting'), 'conflict', 3, state('starting')],
+    ['a plan on an idle row', state('idle'), 'plan', null, { kind: 'needs_reply', label: 'A plan waits for your approval' }],
+    ['a plan on an open PR row', state('pr_waiting'), 'plan', 7, { kind: 'needs_reply', label: 'A plan waits for your approval' }],
+    ['live work wins over an old plan', state('working'), 'plan', null, state('working')],
+    ['a failure the row shows wins over a plan', state('failed', 'A chat failed'), 'plan', null, state('failed', 'A chat failed')],
+    ['an unknown reason keeps the row', state('pr_waiting', '#4 open'), 'later' as never, 4, state('pr_waiting', '#4 open')],
   ])('%s', (_label, given, reason, prNumber, expected) => {
     expect(withServerAttention(given, reason, prNumber)).toEqual(expected);
   });
 
-  it('puts a flagged idle row in the active group', () => {
-    expect(isActiveSessionState(withServerAttention(state('idle'), 'reply'))).toBe(true);
+  it.each(['reply', 'plan', 'failed', 'conflict'] as const)('puts an idle row flagged for %s in the active group', (reason) => {
+    expect(isActiveSessionState(withServerAttention(state('idle'), reason))).toBe(true);
   });
 });

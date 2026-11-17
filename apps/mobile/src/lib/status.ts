@@ -2,6 +2,7 @@ import {
   externalQueueStatusFromLabels,
   nextWorkbenchAction,
   prSummaryToNextActionPr,
+  type ContextAttentionReason,
   type ExternalQueueState,
   type Workbench,
   type WorkbenchChat,
@@ -18,6 +19,7 @@ export type StatusTone = 'success' | 'warning' | 'destructive' | 'information' |
 
 export type SessionStateKind = 'failed' | 'starting' | 'working' | 'needs_reply' | 'background_job' | 'pr_opened' | 'pr_attention'
   | 'ready_to_merge' | 'pr_waiting' | 'draft' | 'merged' | 'closed' | 'unshipped' | 'wakeup' | 'idle';
+export const PLAN_LABEL = 'A plan waits for your approval';
 export interface SessionState { kind: SessionStateKind; label: string }
 
 export interface SessionPr {
@@ -71,6 +73,12 @@ export function sessionState(workbench: StateWorkbench, chats: StateChat[], pr: 
     return { kind: 'unshipped', label: 'Changes with no pull request yet' };
   }
   return { kind: 'idle', label: 'Idle' };
+}
+
+/** The server marks a session `plan` when its latest reply holds a plan that waits for approval. Work and failure win. */
+export function withPlanAttention(state: SessionState, reason: ContextAttentionReason | null | undefined): SessionState {
+  if (reason !== 'plan' || state.kind === 'working' || state.kind === 'starting' || state.kind === 'failed') return state;
+  return { kind: 'needs_reply', label: PLAN_LABEL };
 }
 
 export function workbenchState(item: Workbench, row?: PRRow | null): SessionState {

@@ -1,9 +1,16 @@
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { attentionReason, countContextAttention, sessionAttentionKey, type ContextAttentionCounts } from '@talyn/shared';
+import {
+  attentionReason,
+  countContextAttention,
+  PLAN_BLOCK_FENCE,
+  sessionAttentionKey,
+  type ContextAttentionCounts,
+} from '@talyn/shared';
 import type { Database } from '../../db/client.js';
 import {
   pullRequests as prTable,
   workbenchChats as chatsTable,
+  workbenchSearchText as searchTextTable,
   workbenches as workbenchesTable,
   workspaces as workspacesTable,
 } from '../../db/schema.js';
@@ -47,6 +54,33 @@ export function attentionSessionsQuery(db: Database, ownerId: string, workbenchI
     );
 }
 
+/**
+ * The opening fence of a plan block, as `parsePlanBlock` reads it: a line of
+ * three or more backticks or tildes, then `talyn-plan`. A Postgres regex.
+ */
+const PLAN_OPENER_SQL = `(^|\n)(\`{3,}|~{3,})[ \t]*${PLAN_BLOCK_FENCE}[ \t]*\r?(\n|$)`;
+
+/**
+ * True when an idle chat's agent wrote a plan after the last message from a
+ * person, so the plan waits for "Approve and build" or "Keep planning". Both
+ * buttons send a message, which ends the wait. It reads
+ * `workbench_search_text` (the text of user and assistant events only) on its
+ * primary key, never the event stream, and only for an idle chat with no queue.
+ */
+const planPendingSql = sql<boolean>`CASE WHEN ${chatsTable.status} = 'idle'
+    AND COALESCE(jsonb_array_length(${chatsTable.queuedMessages}), 0) = 0
+  THEN EXISTS (
+    SELECT 1 FROM ${searchTextTable} plan_text
+    WHERE plan_text.chat_id = ${chatsTable.id}
+      AND plan_text.role = 'assistant'
+      AND plan_text.seq > COALESCE((
+        SELECT max(asked.seq) FROM ${searchTextTable} asked
+        WHERE asked.chat_id = ${chatsTable.id} AND asked.role = 'user'
+      ), 0)
+      AND plan_text.body ~ ${PLAN_OPENER_SQL}
+  )
+  ELSE false END`;
+
 export function attentionChatsQuery(db: Database, workbenchIds: string[]) {
   return db
     .select({
@@ -55,6 +89,7 @@ export function attentionChatsQuery(db: Database, workbenchIds: string[]) {
       status: chatsTable.status,
       queued: sql<number>`COALESCE(jsonb_array_length(${chatsTable.queuedMessages}), 0)::int`,
       turnCount: chatsTable.turnCount,
+      planPending: planPendingSql,
     })
     .from(chatsTable)
     .where(and(inArray(chatsTable.workbenchId, workbenchIds), isNull(chatsTable.closedAt)));
@@ -68,10 +103,16 @@ async function attentionKeys(
   sessions: AttentionSessionRow[],
 ): Promise<{ session: AttentionSessionRow; key: string | null }[]> {
   if (sessions.length === 0) return [];
-  const chats = new Map<string, { id: string; status: string; queued: number; turnCount: number }[]>();
+  const chats = new Map<string, { id: string; status: string; queued: number; turnCount: number; planPending: boolean }[]>();
   for (const row of await attentionChatsQuery(db, sessions.map((s) => s.id))) {
     const list = chats.get(row.workbenchId) ?? [];
-    list.push({ id: row.id, status: row.status, queued: Number(row.queued) || 0, turnCount: row.turnCount });
+    list.push({
+      id: row.id,
+      status: row.status,
+      queued: Number(row.queued) || 0,
+      turnCount: row.turnCount,
+      planPending: row.planPending === true,
+    });
     chats.set(row.workbenchId, list);
   }
   return sessions.map((s) => ({

@@ -22,7 +22,7 @@ import { ContextSwitcher } from './ContextSwitcher';
 import { GroupHeader, Heading } from './DrawerParts';
 import { SessionStarters } from './SessionStarters';
 import { SpaceDrawerList } from './SpaceDrawer';
-import { useDrawerWork, useTranscriptMatches } from './data';
+import { useDrawerWork, usePlanState, useTranscriptMatches } from './data';
 import { activeTarget, badgeText, drawerEntries, toggled, withTranscriptMatches, type DrawerEntry, type DrawerTarget } from './model';
 
 const LIST_LINKS = new Set(['/sessions', '/threads']);
@@ -44,7 +44,7 @@ export function NavDrawer({ close }: { close(): void }) {
   const pathname = usePathname();
   const { tab } = useGlobalSearchParams<{ tab?: string }>();
   const active = activeTarget(pathname, tab);
-  const { features, offered, sessions, threads, personal } = useDrawerWork();
+  const { features, offered, sessions, threads, personal, reasons } = useDrawerWork();
   const [query, setQuery] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(() => new Set());
   const [collapsedThreads, setCollapsedThreads] = useState<ReadonlySet<string>>(() => new Set());
@@ -52,8 +52,8 @@ export function NavDrawer({ close }: { close(): void }) {
   const space = place.active?.space ?? null;
   const { matches, loading } = useTranscriptMatches(query, offered && !space);
   const entries = useMemo(() => offered
-    ? withTranscriptMatches(drawerEntries({ sessions: personal.sessions, threads: personal.threads, query, collapsedGroups, collapsedThreads }), matches, loading)
-    : [], [offered, personal, query, collapsedGroups, collapsedThreads, matches, loading]);
+    ? withTranscriptMatches(drawerEntries({ sessions: personal.sessions, threads: personal.threads, query, collapsedGroups, collapsedThreads, reasons }), matches, loading)
+    : [], [offered, personal, reasons, query, collapsedGroups, collapsedThreads, matches, loading]);
   const now = useNow();
   const menu = useSessionMenu();
   const owned = useMemo(() => new Map([...(sessions.data ?? []), ...(threads.data ?? [])].map((item) => [item.id, item])),
@@ -182,7 +182,7 @@ function ThreadRow({ item, expanded, childCount, running, onToggle, onLongPress 
   const router = useRouter();
   const [pressed, setPressed] = useState(false);
   const title = workbenchTitle(item);
-  const state = workbenchState(item);
+  const state = usePlanState(item.id, workbenchState(item));
   return <View style={[styles.threadRow, { backgroundColor: pressed ? c.surface : 'transparent' }]}>
     <Pressable accessibilityRole="link" accessibilityLabel={[`${title}.`, `${state.label}.`, running ? `${running} running.` : ''].filter(Boolean).join(' ')}
       accessibilityActions={[{ name: 'longpress', label: `Actions for ${title}` }]}

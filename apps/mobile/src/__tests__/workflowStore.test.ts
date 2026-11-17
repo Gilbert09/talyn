@@ -282,6 +282,25 @@ describe('targeted invalidation and stale-while-revalidate', () => {
     expect(api.workbenches.get).toHaveBeenCalledTimes(1); expect(api.workbenches.list).toHaveBeenCalledTimes(1);
     expect(api.workbenches.events).not.toHaveBeenCalled(); stopList(); stopItem();
   });
+  it.each([
+    ['a turn starts', 'running', 2],
+    ['the status does not change', 'idle', 1],
+  ] as const)('refetches the attention reasons when %s', async (_name, status, calls) => {
+    const { store, api, emit } = active;
+    const stopList = store.watch('sessions'); const stop = store.watch('contextAttention'); await settle();
+    api.workspaces.attention.mockResolvedValue({ sessions: { 'session-one': 'plan' } });
+    expect(store.read('contextAttention').data).toEqual({});
+    emit('workbench:chat', { chat: chat({ status }) });
+    jest.advanceTimersByTime(EVENT_REFETCH_INTERVAL * 2); await settle();
+    expect(api.workspaces.attention).toHaveBeenCalledTimes(calls);
+    expect(store.read('contextAttention').data).toEqual(calls === 2 ? { 'session-one': 'plan' } : {}); stopList(); stop();
+  });
+  it('reads no reasons when the server sends none', async () => {
+    const { store, api } = active;
+    api.workspaces.attention.mockResolvedValueOnce({});
+    const stop = store.watch('contextAttention'); await settle();
+    expect(store.read('contextAttention').data).toEqual({}); stop();
+  });
   it('removes a deleted workbench from lists without a refetch', async () => {
     const { store, api, emit } = active; const stop = store.watch('threads'); await settle();
     emit('workbench:deleted', { id: 'thread-one' });
