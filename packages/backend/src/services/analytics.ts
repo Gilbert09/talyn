@@ -5,7 +5,7 @@ import {
   type TaskResult,
   type TaskStatus,
 } from '@talyn/shared';
-import { getDbClient } from '../db/client.js';
+import { getDbClient, runWithoutScope } from '../db/client.js';
 import { workspaces as workspacesTable } from '../db/schema.js';
 import { debugBus } from './debugBus.js';
 
@@ -129,7 +129,9 @@ export function captureWorkspaceEvent(
   properties: Record<string, unknown> = {},
 ): void {
   if (!isServerAnalyticsConfigured()) return;
-  void getWorkspaceOwnerId(workspaceId)
+  // Off the request scope: this settles after the response, when the
+  // request transaction has ended.
+  void runWithoutScope(() => getWorkspaceOwnerId(workspaceId))
     .then((ownerId) => {
       if (!ownerId) return;
       return captureServerEvent(ownerId, event, {

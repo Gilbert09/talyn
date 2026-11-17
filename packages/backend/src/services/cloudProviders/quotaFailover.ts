@@ -322,7 +322,7 @@ export async function failoverExhaustedRun(opts: {
       `${rateLimited ? 'rate limited' : 'usage exhausted'} — moving to ${movedTo}`,
   );
 
-  void taskQueueService.processQueue();
+  taskQueueService.runProcessQueue();
   return true;
 }
 

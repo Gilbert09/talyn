@@ -9,7 +9,7 @@ import {
   type PostHogCodeRuntimeAdapter,
   type WorkflowTriggerEvent,
 } from '@talyn/shared';
-import { getDbClient } from '../db/client.js';
+import { getDbClient, runWithoutScope } from '../db/client.js';
 import {
   tasks as tasksTable,
   environments as environmentsTable,
@@ -348,7 +348,8 @@ async function buildTaskMetadata(
     metadata.skill = input.skill;
     // Best-effort usage bump for the picker's "frequently used" ordering —
     // never blocks or fails task creation.
-    void bumpSkillUsage(input.workspaceId, input.skill.key).catch((err) => {
+    // Off the request scope, because it can settle after the request ends.
+    void runWithoutScope(() => bumpSkillUsage(input.workspaceId, input.skill!.key)).catch((err) => {
       console.warn('[taskCreate] failed to bump skill usage:', err);
     });
   }
