@@ -1,5 +1,5 @@
 import type { PRRow } from '@talyn/client/native';
-import type { Workbench, WorkbenchReadiness } from '@talyn/shared';
+import { sessionAutomation, type Workbench, type WorkbenchReadiness } from '@talyn/shared';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
@@ -206,6 +206,7 @@ export function SessionDetailsSheet({ visible, onClose, item, row, readiness, on
     ['Agent', agent],
   ];
   const number = row?.number ?? item.pr?.number;
+  const automation = sessionAutomation(item.source);
   return <SheetModal visible={visible} onClose={onClose} title={kind === 'thread' ? 'Thread details' : 'Session details'}>
     <ScrollView contentContainerStyle={styles.details}>
       <AppText selectable accessibilityRole="header" variant="rowTitle" style={{ fontSize: 17, lineHeight: 23 }}>{workbenchTitle(item)}</AppText>
@@ -230,7 +231,9 @@ export function SessionDetailsSheet({ visible, onClose, item, row, readiness, on
         {row ? <View style={{ alignSelf: 'flex-start' }}><PrStatusPill variant={prRowStatus(row)} /></View> : null}
       </Row> : null}
       {item.threadId ? <Row divider={false} chevron title="Open parent thread" onPress={() => go(threadRoute(item.threadId!))} /> : null}
-      {item.source?.kind === 'loop' ? <Row divider={false} chevron title="Automation" onPress={() => go('/integrations/schedule')} /> : null}
+      {automation ? <Row divider={false} chevron title={`${automation.label} automation`} subtitle="Started this session"
+        accessibilityLabel={`Open the ${automation.label} automation that started this session`}
+        onPress={() => go({ pathname: '/integrations/[kind]/[id]', params: { kind: automation.kind, id: automation.id } })} /> : null}
     </ScrollView>
   </SheetModal>;
 }

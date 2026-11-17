@@ -10,7 +10,7 @@ import { DetailRoute } from '../../../src/navigation/DetailRoute';
 export default function Screen() {
   const { kind, id } = useLocalSearchParams<{ kind: string; id: string }>();
   const features = useFeatures();
-  if (kind !== 'github' && kind !== 'schedule' && kind !== 'slack' && kind !== 'webhook' && kind !== 'linear' && kind !== 'github_issues') return <Redirect href="/integrations" />;
+  if (kind !== 'github' && kind !== 'schedule' && kind !== 'slack' && kind !== 'webhook' && kind !== 'linear' && kind !== 'github_issues' && kind !== 'posthog_inbox') return <Redirect href="/integrations" />;
   if (!features) return <Page><Loading /></Page>;
   if (!integrationRulesOffered(features, kind)
     && !(kind === 'slack' && integrationOffered(features, kind) && slackRulesOffered(features))) return <Redirect href="/integrations" />;
