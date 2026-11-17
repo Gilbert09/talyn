@@ -292,8 +292,18 @@ export interface PostHogInboxPushReveal {
   destination?: PostHogInboxDestinationOutcome | null;
 }
 
-/** The name of the destination Talyn creates in PostHog. */
+/** The name of the destination Talyn creates in PostHog, without a GitHub login. */
 export const POSTHOG_INBOX_DESTINATION_NAME = 'Talyn – PostHog Inbox push';
+
+/**
+ * The destination name with the GitHub login of the person who set it up or
+ * last rotated it, so that people who share a PostHog project can tell
+ * their destinations apart.
+ */
+export function posthogInboxDestinationName(githubLogin?: string | null): string {
+  const login = githubLogin?.trim();
+  return login ? `${POSTHOG_INBOX_DESTINATION_NAME} (@${login})` : POSTHOG_INBOX_DESTINATION_NAME;
+}
 
 /** The answer code when the OAuth grant lacks {@link POSTHOG_INBOX_PUSH_SETUP_SCOPES}. Talyn changed nothing. */
 export const POSTHOG_INBOX_PUSH_SCOPES_MISSING_CODE = 'posthog_inbox_push_scopes_missing';

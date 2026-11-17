@@ -198,17 +198,56 @@ describe('PostHog Inbox in the catalog', () => {
     expect(screen.queryByText('Open PostHog Code')).toBeNull();
   });
 
-  it('opens the Connection tab from the editor notice', async () => {
+  it('asks for a PostHog connection before it shows the automations', async () => {
     vi.mocked(api.workflows.posthogInboxStatus).mockResolvedValue(
       inboxStatus({ access: 'not_connected', connection: null, projectId: null, authMethod: null })
     );
     render(<IntegrationsView kind="posthog_inbox" />);
-    await waitFor(() => expect(api.workflows.list).toHaveBeenCalledWith('ws1', 'posthog_inbox'));
-    fireEvent.click(screen.getByText('New automation'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Connect PostHog' }));
+    expect(await screen.findByText('Connect PostHog first')).toBeTruthy();
+    expect(screen.queryByText('New automation')).toBeNull();
+    expect(screen.queryByText('Manage the connection')).toBeNull();
+    expect(api.workflows.list).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect PostHog' }));
     expect(navigate).toHaveBeenCalledWith({ view: 'integrations', kind: 'posthog_inbox' });
     expect(await screen.findByRole('button', { name: 'Connect with PostHog' })).toBeTruthy();
     expect(useIntegrationSectionFocus.getState().target).toBeNull();
+  });
+
+  it('shows nothing of the automations while it checks the connection', async () => {
+    vi.mocked(api.workflows.posthogInboxStatus).mockReturnValue(new Promise(() => {}));
+    render(<IntegrationsView kind="posthog_inbox" />);
+    expect(await screen.findByText('Checking the PostHog connection...')).toBeTruthy();
+    expect(screen.queryByText('New automation')).toBeNull();
+    expect(api.workflows.list).not.toHaveBeenCalled();
+  });
+
+  it('shows the automations with a reconnect line when the connection needs a reconnect', async () => {
+    vi.mocked(api.workflows.posthogInboxStatus).mockResolvedValue(inboxStatus({ access: 'reconnect', reason: 'Old grant.' }));
+    render(<IntegrationsView kind="posthog_inbox" />);
+    await waitFor(() => expect(api.workflows.list).toHaveBeenCalledWith('ws1', 'posthog_inbox'));
+    expect(screen.getByText(/Until you do, these automations do not run/)).toBeTruthy();
+    expect(screen.queryByText('Connect PostHog first')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect PostHog' }));
+    expect(navigate).toHaveBeenCalledWith({ view: 'integrations', kind: 'posthog_inbox' });
+    expect(await screen.findByText('Talyn reads your Inbox with your PostHog account.')).toBeTruthy();
+  });
+
+  it.each([
+    ['ok', inboxStatus()],
+    ['unknown', inboxStatus({ access: 'unknown' })],
+  ])('shows the automations when the connection is %s', async (_access, status) => {
+    vi.mocked(api.workflows.posthogInboxStatus).mockResolvedValue(status);
+    render(<IntegrationsView kind="posthog_inbox" />);
+    await waitFor(() => expect(api.workflows.list).toHaveBeenCalledWith('ws1', 'posthog_inbox'));
+    expect(screen.getByText('Manage the connection')).toBeTruthy();
+    expect(screen.queryByText('Connect PostHog first')).toBeNull();
+  });
+
+  it('shows the automations when the connection status cannot be read', async () => {
+    vi.mocked(api.workflows.posthogInboxStatus).mockRejectedValue(new Error('down'));
+    render(<IntegrationsView kind="posthog_inbox" />);
+    await waitFor(() => expect(api.workflows.list).toHaveBeenCalledWith('ws1', 'posthog_inbox'));
+    expect(screen.queryByText('Connect PostHog first')).toBeNull();
   });
 
   it('opens the Connection tab when it comes back from the PostHog sign-in', async () => {
@@ -434,6 +473,20 @@ describe('PostHog Inbox rule editor', () => {
     fireEvent.click(document.querySelector('[data-attr="posthog-inbox-preview-run"]')!);
     await waitFor(() => expect(api.workflows.posthogInboxDryRun).toHaveBeenCalled());
     expect(screen.queryByText(/Fix this first/)).toBeNull();
+  });
+
+  it('adds a typed reviewer that was not entered when the field loses focus', async () => {
+    await openEditor();
+    addCondition('Suggested reviewer');
+    const reviewer = screen.getByPlaceholderText('GitHub login');
+    fireEvent.change(reviewer, { target: { value: 'Gilbert09' } });
+    fireEvent.blur(reviewer);
+    expect(screen.getByLabelText('Remove Gilbert09')).toBeTruthy();
+
+    fireEvent.click(document.querySelector('[data-attr="posthog-inbox-preview-run"]')!);
+    await waitFor(() => expect(api.workflows.posthogInboxDryRun).toHaveBeenCalled());
+    const [, input] = vi.mocked(api.workflows.posthogInboxDryRun).mock.calls[0]!;
+    expect(input.conditions?.suggestedReviewers).toEqual(['Gilbert09']);
   });
 
   it('clears the preview when a condition changes', async () => {

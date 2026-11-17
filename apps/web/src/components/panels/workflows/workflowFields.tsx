@@ -281,8 +281,13 @@ export function TokenField({
               onNeedSuggestions?.();
             }}
             // A blur that fires before a suggestion's click handler would close
-            // the list and swallow the pick, so the close is deferred.
-            onBlur={() => window.setTimeout(() => setFocused(false), 150)}
+            // the list and swallow the pick, so the close is deferred. Text that
+            // is typed but not entered is added on blur: otherwise the field
+            // shows a value that the rule does not hold.
+            onBlur={() => {
+              add(text);
+              window.setTimeout(() => setFocused(false), 150);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();

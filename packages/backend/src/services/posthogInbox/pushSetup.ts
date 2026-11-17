@@ -96,6 +96,8 @@ export async function setUpPostHogInboxPush(input: {
   workspaceId: string;
   connection: PostHogInboxConnection;
   createdBy: string;
+  /** The GitHub login of the person, for the destination's name in PostHog. */
+  githubLogin?: string | null;
   urlFor: WebhookUrlFor;
 }): Promise<SetupResult> {
   const { workspaceId, connection } = input;
@@ -117,6 +119,7 @@ export async function setUpPostHogInboxPush(input: {
       saved = await upsertDestination(connection, row?.destinationId ?? null, {
         url: input.urlFor(connectionId, minted.token),
         secret: minted.signingSecret,
+        githubLogin: input.githubLogin,
       });
     } catch (err) {
       if (!(err instanceof DestinationSyncError)) throw err;
@@ -192,6 +195,8 @@ export async function rotatePostHogInboxPush(input: {
   connection: PostHogInboxConnection;
   requireSecret: boolean;
   createdBy: string;
+  /** The GitHub login of the person, for the destination's name in PostHog. */
+  githubLogin?: string | null;
   urlFor: WebhookUrlFor;
 }): Promise<{
   connectionId: string;
@@ -217,6 +222,7 @@ export async function rotatePostHogInboxPush(input: {
           connectionId: rotated.connectionId,
           url,
           secret: rotated.secret,
+          githubLogin: input.githubLogin,
         })
       : null;
     return {
@@ -243,6 +249,7 @@ async function syncDestinationAfterRotate(input: {
   connectionId: string;
   url: string;
   secret: string | null;
+  githubLogin?: string | null;
 }): Promise<PostHogInboxDestinationOutcome> {
   const { workspaceId, connection, before } = input;
   const where = { host: connection.host, projectId: connection.projectId, id: before.destinationId };
@@ -261,7 +268,7 @@ async function syncDestinationAfterRotate(input: {
   try {
     await connection.client.updateHogFunction(
       before.destinationId,
-      destinationPayload({ url: input.url, secret: input.secret }, 'update')
+      destinationPayload({ url: input.url, secret: input.secret, githubLogin: input.githubLogin }, 'update')
     );
   } catch (err) {
     if (err instanceof PostHogCodeApiError && err.status === 404) {

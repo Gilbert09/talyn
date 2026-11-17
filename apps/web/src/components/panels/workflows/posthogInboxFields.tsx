@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { AlertCircle, Check, Loader2, Pencil, RefreshCw, Unlink } from 'lucide-react';
 import type {
   PostHogInboxConditionSpec,
@@ -194,7 +194,20 @@ export function PostHogInboxConnectionNotice({ status, error }: PostHogInboxStat
 }
 
 /** A one-line note for the rules list: where the PostHog connection of these rules is. */
-export function PostHogInboxConnectionNote() {
+export function PostHogInboxConnectionNote({ reconnect = false }: { reconnect?: boolean }) {
+  if (reconnect) {
+    return (
+      <p
+        className="border-b border-amber-500/40 bg-amber-500/10 px-6 py-2 text-xs text-amber-600 dark:text-amber-400"
+        data-attr="posthog-inbox-connection"
+      >
+        Reconnect PostHog. Until you do, these automations do not run.{' '}
+        <button type="button" className="underline hover:text-foreground" onClick={openInboxConnection}>
+          Reconnect PostHog
+        </button>
+      </p>
+    );
+  }
   return (
     <p className="border-b px-6 py-2 text-xs text-muted-foreground" data-attr="posthog-inbox-connection">
       These automations read the Inbox through your PostHog connection.{' '}
@@ -202,6 +215,46 @@ export function PostHogInboxConnectionNote() {
         Manage the connection
       </button>
     </p>
+  );
+}
+
+/**
+ * The Automations tab of the PostHog Inbox page. With no PostHog connection it
+ * asks for one first, because no automation can run without it. A failed
+ * status read shows the automations: it is not proof of a missing connection.
+ */
+export function PostHogInboxAutomationsGate({ children }: { children: ReactNode }) {
+  const { status, error } = usePostHogInboxStatus(true);
+
+  if (!status && !error) {
+    return (
+      <p className="p-6 text-sm text-muted-foreground" data-attr="posthog-inbox-checking">
+        Checking the PostHog connection...
+      </p>
+    );
+  }
+
+  if (status?.access === 'not_connected') {
+    return (
+      <div className="mx-auto max-w-lg px-6 py-12 text-center" data-attr="posthog-inbox-connect-first">
+        <Unlink className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+        <h2 className="font-medium">Connect PostHog first</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Talyn reads and claims your Inbox reports through a PostHog connection. Connect PostHog, then create
+          automations here.
+        </p>
+        <Button className="mt-4" data-attr="posthog-inbox-connect-first-button" onClick={openInboxConnection}>
+          Connect PostHog
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      <PostHogInboxConnectionNote reconnect={status?.access === 'reconnect'} />
+      <div className="min-h-0 flex-1">{children}</div>
+    </div>
   );
 }
 
