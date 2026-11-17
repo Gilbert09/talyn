@@ -7,6 +7,8 @@
  * One set of rules, so desktop, web and mobile suggest the same things.
  */
 
+import { canWorkOnPr } from './prMergeable.js';
+
 export type SessionStarterKind = 'fix_checks' | 'resolve_conflicts' | 'address_review' | 'review' | 'explain' | 'tests';
 
 /** The parts of a pull request row the starters read. Every front end's row is a superset. */
@@ -18,6 +20,7 @@ export interface SessionStarterPr {
   number: number;
   state: string;
   authored: boolean;
+  watching?: boolean;
   reviewRequested: boolean;
   summary: {
     title?: string;
@@ -63,11 +66,12 @@ const LABELS: Record<SessionStarterKind, string> = {
 export function starterKindForPr(row: SessionStarterPr): SessionStarterKind | null {
   if (row.state !== 'open') return null;
   const s = row.summary;
-  if (row.authored) {
+  // A fix job first on a PR the person opened or watches. A watched PR can also
+  // ask for their review, so a clean one falls through to the review check.
+  if (canWorkOnPr(row)) {
     if (s.blockingReason === 'checks_failed') return 'fix_checks';
     if (s.blockingReason === 'merge_conflicts' || s.mergeable === 'CONFLICTING') return 'resolve_conflicts';
     if (s.blockingReason === 'changes_requested' || (s.unresolvedReviewThreads ?? 0) > 0) return 'address_review';
-    return null;
   }
   if (row.reviewRequested && !s.draft) return 'review';
   return null;

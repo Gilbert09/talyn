@@ -233,6 +233,17 @@ export function prHasFixableIssues(s: PRMergeableSummary): boolean {
 }
 
 /**
+ * Whether the person can do the standard work on this PR: hand it to an agent,
+ * queue it, merge it, keep it mergeable. True for a PR they opened, and for a
+ * PR they chose to watch, also when somebody else opened it and they are a
+ * requested reviewer on it. The backend does not limit these actions by
+ * relationship, so this is the one client rule.
+ */
+export function canWorkOnPr(row: { authored: boolean; watching?: boolean | null }): boolean {
+  return row.authored || row.watching === true;
+}
+
+/**
  * Why this PR cannot be handed to an agent right now, or `null` when it can.
  *
  * ONE definition behind two things that must never drift: whether the fix

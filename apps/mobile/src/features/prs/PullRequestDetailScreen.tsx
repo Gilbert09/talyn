@@ -1,5 +1,5 @@
 import type { CloudProviderInfo, MergeQueueTimelineEvent, PRFile, PRReviewDetail, PRReviewEvent, pullRequests } from '@talyn/client/native';
-import { fixBlockedMessage, fixBlockedReason, resolveReportingBar, type CloudAgentChoice, type Environment, type Workspace } from '@talyn/shared';
+import { canWorkOnPr, fixBlockedMessage, fixBlockedReason, resolveReportingBar, type CloudAgentChoice, type Environment, type Workspace } from '@talyn/shared';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -117,7 +117,7 @@ export function PullRequestDetailScreen() {
   const description = useResource<{ body: string | null }>('prDescription', id, Boolean(row) && !fresh);
   const files = useResource<PRFile[]>('prFiles', id, Boolean(row) && seen.has('files'));
   const reviews = useResource<PRReviewDetail>('prReviews', id, Boolean(row) && seen.has('reviews'));
-  const writable = Boolean(row?.authored && row.state === 'open');
+  const writable = Boolean(row && canWorkOnPr(row) && row.state === 'open');
   const providers = useResource<CloudProviderInfo[]>('providers', '', writable);
   // Also read for the code review's reporting bar, so it is needed on every PR.
   const workspace = useResource<Workspace>('workspace', '', Boolean(row));
