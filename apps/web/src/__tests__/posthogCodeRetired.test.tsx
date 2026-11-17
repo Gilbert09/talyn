@@ -101,7 +101,9 @@ describe('PostHogCodeCard', () => {
   });
 });
 
-describe('LoopEditorPage on a PostHog Code loop', () => {
+// Since #284 a schedule always starts a Talyn Fleet session. The editor drops
+// PostHog Code agents, so it has no PostHog Code notice to show.
+describe('LoopEditorPage with a PostHog Code agent', () => {
   const AGENTS: CloudAgentChoice[] = [
     {
       type: 'posthog_code',
@@ -112,10 +114,10 @@ describe('LoopEditorPage on a PostHog Code loop', () => {
   ];
 
   it.each<[string, FlagState, boolean]>([
-    ['on', true, true],
+    ['on', true, false],
     ['off', false, false],
     ['unknown', null, false],
-  ])('with the flag %s', (_label, flag, shown) => {
+  ])('shows no retirement notice with the flag %s', (_label, flag, shown) => {
     useWorkspaceStore.setState({
       currentWorkspaceId: 'ws1',
       features: features(flag),
