@@ -265,11 +265,16 @@ describe('validateWorkflow — cross-integration refusals', () => {
     );
   });
 
-  it.each(WORKFLOW_ACTION_TYPES)('refuses the PR action "%s" on a Slack rule', (type) => {
+  it.each(WORKFLOW_ACTION_TYPES.filter((t) => t !== 'run_prompt'))('refuses the PR action "%s" on a Slack rule', (type) => {
     const rule = slackRule({ actions: [{ ...emptyWorkflowAction(type) }] });
     expect(() => validateWorkflow(rule)).toThrow(
       new RegExp(`"${WORKFLOW_ACTION_LABELS[type]}" acts on a pull request, so a Slack automation cannot use it`)
     );
+  });
+
+  it('refuses the old task action "run_prompt" on a Slack rule', () => {
+    const rule = slackRule({ actions: [{ type: 'run_prompt', prompt: 'x' }] });
+    expect(() => validateWorkflow(rule)).toThrow(/an automation starts a session, not a cloud task/);
   });
 
   it.each(['slack_reply', 'slack_react'] as const)('refuses the Slack action "%s" on a GitHub rule', (type) => {
@@ -306,7 +311,6 @@ describe('the vocabulary per integration', () => {
       if (['request_reviewers', 'assign'].includes(type)) Object.assign(action, { users: ['x'] });
       if (type === 'comment') Object.assign(action, { body: 'x' });
       if (type === 'run_skill') Object.assign(action, { skillKey: 'platform:x' });
-      if (type === 'run_prompt') Object.assign(action, { prompt: 'x' });
       expect(() => validateWorkflow({ ...base, actions: [action] }), type).not.toThrow();
     }
   });

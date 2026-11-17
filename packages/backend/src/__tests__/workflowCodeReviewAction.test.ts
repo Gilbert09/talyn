@@ -65,13 +65,16 @@ describe('run_code_review', () => {
 });
 
 describe('workflowActionStartsTask', () => {
-  it('does NOT count a code review as a task action', async () => {
+  it('counts no automation action as a task action', async () => {
     // Load-bearing, not a detail. A review's units are not `tasks` rows — they
     // cannot be, because activePrTaskId would refuse the second one and
     // withTaskLimitGate would spend the plan's allowance on them. Counting the
     // review here would make a workflow reserve a task slot it never uses.
     const { workflowActionStartsTask } = await import('@talyn/shared');
     expect(workflowActionStartsTask({ type: 'run_code_review' })).toBe(false);
-    expect(workflowActionStartsTask({ type: 'run_prompt', prompt: 'x' })).toBe(true);
+    // An automation starts sessions only, never a cloud task.
+    expect(workflowActionStartsTask({ type: 'run_prompt', prompt: 'x' })).toBe(false);
+    expect(workflowActionStartsTask({ type: 'run_skill', skillKey: 'platform:s1' })).toBe(false);
+    expect(workflowActionStartsTask({ type: 'start_task', repositoryId: 'r1', prompt: 'x' })).toBe(false);
   });
 });

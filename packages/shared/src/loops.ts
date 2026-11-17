@@ -63,10 +63,14 @@ export const LOOP_PROVIDER_LABELS: Record<LoopProvider, string> = {
   selfhosted: 'Talyn Fleet',
 };
 
-/** What each firing starts. Existing loops default to a cloud task. */
+/**
+ * What each firing starts. Every firing starts a session. `task` survives only
+ * on old run rows, from before automations stopped creating cloud tasks.
+ */
 export type LoopTarget = 'task' | 'session';
 
-export const LOOP_TARGETS = ['session', 'task'] as const;
+/** The targets a loop may be saved with. */
+export const LOOP_TARGETS = ['session'] as const;
 
 export const LOOP_TARGET_LABELS: Record<LoopTarget, string> = {
   session: 'Session',
@@ -208,7 +212,7 @@ export interface LoopDefinition {
   timezone: string;
   provider: LoopProvider;
   model: string;
-  /** Whether each firing starts a legacy cloud task or a reviewable session. */
+  /** Always `session`: each firing starts a reviewable session. */
   target: LoopTarget;
   concurrency: LoopConcurrency;
   /**
@@ -235,9 +239,9 @@ export interface LoopDefinition {
    * collapsing it into null would make that the one thing a loop could not ask
    * for. A list is exactly those.
    *
-   * A cloud task gets this selection at dispatch. Sessions inherit the
-   * workspace selection because their tools remain available for follow-up
-   * turns.
+   * Always null now. Every firing starts a session, and a session inherits
+   * the workspace selection because its tools stay available for follow-up
+   * turns. Only old loops that started cloud tasks used a selection.
    */
   mcpServerIds: string[] | null;
   /** Null only after the repository row was deleted; `repoFullName` survives. */
@@ -674,11 +678,17 @@ export function validateLoop(raw: unknown): NormalizedLoop {
   if (!model) fail('an automation needs a model');
   validateProviderModel(provider, model);
 
-  const target = l.target === undefined ? 'task' : (l.target as LoopTarget);
-  if (!(LOOP_TARGETS as readonly string[]).includes(target)) {
-    fail('target must be task or session');
+  // A schedule starts sessions only. A cloud task is refused, not converted,
+  // so a caller that asks for one learns that it did not get one.
+  const target: LoopTarget = 'session';
+  if (l.target !== undefined && l.target !== 'session') {
+    fail(
+      l.target === 'task'
+        ? 'a schedule starts a session. Schedules cannot start cloud tasks'
+        : 'target must be session'
+    );
   }
-  if (target === 'session' && provider !== 'selfhosted') {
+  if (provider !== 'selfhosted') {
     fail('sessions run on Talyn Fleet — choose a Talyn Fleet agent');
   }
 
@@ -763,9 +773,9 @@ export function emptyLoopInput(timezone = localTimezone()): LoopInput {
     prompt: '',
     cron: '0 9 * * *',
     timezone,
-    provider: 'posthog_code',
-    model: DEFAULT_POSTHOG_CODE_MODEL_ID,
-    target: 'task',
+    provider: 'selfhosted',
+    model: defaultFleetModelForAgent('claude'),
+    target: 'session',
     concurrency: DEFAULT_LOOP_CONCURRENCY,
     internetAccess: false,
     mcpServerIds: null,

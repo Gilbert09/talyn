@@ -124,7 +124,7 @@ describe('mcp tool registry', () => {
 
   it('covers the full surface (listing, context, actions, tasks)', () => {
     const names = TOOLS.map((t) => t.name);
-    expect(names).toHaveLength(108);
+    expect(names).toHaveLength(106);
     for (const expected of [
       'talyn_ask_user',
       'talyn_list_workspaces',
@@ -145,7 +145,6 @@ describe('mcp tool registry', () => {
       'talyn_set_auto_keep_mergeable',
       'talyn_merge_pull_request',
       'talyn_close_pull_request',
-      'talyn_fix_pull_request',
       'talyn_set_merge_queue',
       'talyn_set_merge_queue_stack',
       'talyn_get_merge_queue_timeline',
@@ -153,10 +152,8 @@ describe('mcp tool registry', () => {
       'talyn_start_code_review',
       'talyn_cancel_code_review',
       'talyn_get_code_review_finding',
-      'talyn_fix_code_review_findings',
       'talyn_dismiss_code_review_finding',
       'talyn_list_code_reviews',
-      'talyn_create_task',
       'talyn_list_tasks',
       'talyn_list_sessions',
       'talyn_list_spaces',
@@ -276,31 +273,6 @@ describe('mcp tool handlers', () => {
       include_patch: true,
     });
     expect(withPatch).toContain('PATCHTEXT');
-  });
-
-  it('fix_pull_request calls the standard /fix action (no freeform params)', async () => {
-    const { calls } = mockApi({
-      'POST /api/v1/pull-requests/pr1/fix': () => ({
-        id: 'task1',
-        type: 'pr_response',
-        title: 'Get acme/web#42 mergeable',
-        status: 'queued',
-      }),
-    });
-
-    const out = await tool('talyn_fix_pull_request').handler(OWNER, {
-      pull_request_id: 'pr1',
-      model: 'claude-opus-4-8',
-    });
-
-    // Hits the dedicated fix endpoint — the backend builds the standard prompt.
-    const post = calls.find(
-      (c) => c.method === 'POST' && c.url.pathname === '/api/v1/pull-requests/pr1/fix'
-    );
-    expect(post).toBeTruthy();
-    expect(post!.body).toEqual({ model: 'claude-opus-4-8' });
-    expect(out).toContain('task1');
-    expect(out).toContain('Get acme/web#42 mergeable');
   });
 
   it('passes internal-proxy headers identifying the owner', async () => {
@@ -470,14 +442,6 @@ const writeCases: {
     method: 'DELETE',
     path: '/pull-requests/pr1/code-review',
     response: review,
-  },
-  {
-    name: 'fix_code_review_findings',
-    args: { pull_request_id: 'pr1', finding_ids: ['f1', 'f2'] },
-    method: 'POST',
-    path: '/pull-requests/pr1/code-review/fix',
-    body: { findingIds: ['f1', 'f2'] },
-    response: { taskId: 't1', review },
   },
   {
     name: 'dismiss_code_review_finding',
@@ -1303,34 +1267,13 @@ describe('MCP reads and edge cases', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('passes the structured task skill reference', async () => {
-    const descriptor = {
-      key: 'platform:s1',
-      name: 'Check',
-      source: 'platform',
-      platformSkillId: 's1',
-    };
-    const { calls } = mockApi({
-      'POST /api/v1/tasks': () => ({
-        id: 't1',
-        title: 'Check',
-        type: 'code_writing',
-        status: 'queued',
-      }),
-    });
-    await tool('talyn_create_task').handler(OWNER, {
-      workspace_id: 'ws1',
-      repository_id: 'r1',
-      prompt: 'Read the skill instructions',
-      skill: descriptor,
-      pull_request_id: 'pr1',
-    });
-    expect(calls[0].body).toMatchObject({
-      skill: descriptor,
-      pullRequestId: 'pr1',
-      repositoryId: 'r1',
-    });
-  });
+  it.each(['talyn_create_task', 'talyn_fix_pull_request', 'talyn_fix_code_review_findings'])(
+    'offers no tool that creates a task: %s',
+    (name) => {
+      // Only the app creates cloud tasks. MCP callers start sessions.
+      expect(TOOLS.map((t) => t.name)).not.toContain(name);
+    }
+  );
 
   it('prints human intervention and quota failover details', async () => {
     mockApi({

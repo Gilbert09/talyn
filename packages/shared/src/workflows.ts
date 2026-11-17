@@ -678,8 +678,8 @@ export const SHARED_WORKFLOW_ACTION_TYPES = ['start_session'] as const;
 export const SLACK_WORKFLOW_ACTION_TYPES = ['slack_reply', 'slack_react'] as const;
 
 /**
- * Start a cloud task on a named repository. Inbound rules only (webhooks
- * today): a GitHub rule has `run_prompt`, which runs on the pull request.
+ * Old: start a cloud task on a named repository. No integration offers it now;
+ * see {@link TASK_WORKFLOW_ACTION_TYPES}.
  */
 export const INBOUND_WORKFLOW_ACTION_TYPES = ['start_task'] as const;
 
@@ -700,21 +700,58 @@ export const ALL_WORKFLOW_ACTION_TYPES = [
 
 export type WorkflowActionType = (typeof ALL_WORKFLOW_ACTION_TYPES)[number];
 
+/**
+ * Old actions that started a cloud task. An automation starts sessions only,
+ * so no integration offers these. A stored or submitted one is converted to
+ * `start_session` by {@link workflowActionAsSession}.
+ */
+export const TASK_WORKFLOW_ACTION_TYPES = ['run_prompt', 'start_task'] as const;
+
+function withoutTaskActions(types: readonly WorkflowActionType[]): WorkflowActionType[] {
+  return types.filter((t) => !(TASK_WORKFLOW_ACTION_TYPES as readonly string[]).includes(t));
+}
+
 /** The action types one integration's rules may use. */
 export function workflowActionsFor(integration: WorkflowIntegration): readonly WorkflowActionType[] {
   switch (integration) {
     case 'slack':
       return [...SHARED_WORKFLOW_ACTION_TYPES, ...SLACK_WORKFLOW_ACTION_TYPES];
     case 'webhook':
-      return [...SHARED_WORKFLOW_ACTION_TYPES, ...INBOUND_WORKFLOW_ACTION_TYPES];
+      return [...SHARED_WORKFLOW_ACTION_TYPES];
     case 'linear':
     case 'github_issues':
-      return [...SHARED_WORKFLOW_ACTION_TYPES, ...INBOUND_WORKFLOW_ACTION_TYPES, ...ISSUE_WORKFLOW_ACTION_TYPES];
+      return [...SHARED_WORKFLOW_ACTION_TYPES, ...ISSUE_WORKFLOW_ACTION_TYPES];
     case 'posthog_inbox':
       return [...SHARED_WORKFLOW_ACTION_TYPES];
     default:
-      return [...WORKFLOW_ACTION_TYPES, ...SHARED_WORKFLOW_ACTION_TYPES];
+      return [...withoutTaskActions(WORKFLOW_ACTION_TYPES), ...SHARED_WORKFLOW_ACTION_TYPES];
   }
+}
+
+/**
+ * The session form of an old task action. Automations start sessions, never
+ * cloud tasks:
+ * - `run_prompt` (a GitHub rule) becomes `start_session` on the PR's repository.
+ * - `start_task` (a webhook or issue rule) becomes `start_session` with the
+ *   same repository, prompt, model, internet access and issue write-back.
+ *
+ * Every other action comes back unchanged. The validator, the rule store and
+ * the engine all call this, so a rule saved before the change runs a session.
+ */
+export function workflowActionAsSession(action: WorkflowAction): WorkflowAction {
+  if (action.type === 'run_prompt') {
+    return {
+      type: 'start_session',
+      repositoryId: null,
+      prompt: action.prompt,
+      ...(action.model ? { model: action.model } : {}),
+    };
+  }
+  if (action.type === 'start_task') {
+    const { type: _type, ...rest } = action;
+    return { ...rest, type: 'start_session' };
+  }
+  return action;
 }
 
 export type WorkflowMergeMethod = 'squash' | 'merge' | 'rebase';
@@ -741,7 +778,9 @@ export type WorkflowAction =
    * GitHub refuses an approval on your own pull request.
    */
   | { type: 'approve_pr'; body?: string }
+  /** Start a session on the pull request that runs the skill. */
   | { type: 'run_skill'; skillKey: SkillKey; model?: string }
+  /** Old: a cloud task with a prompt. Read as `start_session` now. */
   | { type: 'run_prompt'; prompt: string; model?: string }
   | { type: 'watch_pr' }
   | { type: 'enqueue_merge_queue'; method?: WorkflowMergeMethod }
@@ -786,9 +825,8 @@ export type WorkflowAction =
   /** React to the Slack message that triggered the rule. `emoji` has no colons. */
   | { type: 'slack_react'; emoji: string }
   /**
-   * Start a cloud task (`code_writing`) on the named repository with the
-   * rule's prompt. The alternative to `start_session` for inbound rules.
-   * `null` is allowed on a GitHub Issues rule only: the issue's repository.
+   * Old: a cloud task (`code_writing`) on the named repository with the rule's
+   * prompt. Read as `start_session` now, with the same fields.
    */
   | ({
       type: 'start_task';
@@ -893,9 +931,12 @@ export const WORKFLOW_ACTION_LABELS: Record<WorkflowActionType, string> = {
   issue_set_status: 'Change the issue status',
 };
 
-/** Actions that start a cloud task, and so consume a plan task slot. */
-export function workflowActionStartsTask(action: WorkflowAction): boolean {
-  return action.type === 'run_skill' || action.type === 'run_prompt' || action.type === 'start_task';
+/**
+ * Actions that started a cloud task. Always false now: every automation action
+ * that starts work starts a session.
+ */
+export function workflowActionStartsTask(_action: WorkflowAction): boolean {
+  return false;
 }
 
 // ============================================================================
@@ -2243,10 +2284,10 @@ export function validateWorkflow(raw: unknown): NormalizedWorkflow {
             : validateConditions(w.conditions, events);
   const actions = validateActions(w.actions, integration);
   if (isIssueWorkflowIntegration(integration)) {
-    const starts = actions.filter((a) => a.type === 'start_session' || a.type === 'start_task');
+    const starts = actions.filter((a) => a.type === 'start_session');
     // One issue gets one piece of work. A second start in the same run would
     // start a second session on the same issue.
-    if (starts.length > 1) fail('An issue automation can start one session or one task, not more.');
+    if (starts.length > 1) fail('An issue automation can start one session, not more.');
   }
 
   let maxRuns = DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR;
@@ -2767,6 +2808,17 @@ function validateAction(
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail(`${at} must be an object`);
   const a = raw as Record<string, unknown>;
   const type = a.type;
+  // An old task action is accepted and saved as the session that replaces it,
+  // when the integration offered it before. The editors no longer offer it.
+  if (type === 'run_prompt' && integration === 'github') {
+    return validateAction({ ...a, type: 'start_session', repositoryId: null }, at, integration);
+  }
+  if (type === 'start_task' && (integration === 'webhook' || isIssueWorkflowIntegration(integration))) {
+    return validateAction({ ...a, type: 'start_session' }, at, integration);
+  }
+  if (typeof type === 'string' && (TASK_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)) {
+    fail(`${at}: an automation starts a session, not a cloud task. Use "${WORKFLOW_ACTION_LABELS.start_session}"`);
+  }
   if (typeof type !== 'string' || !(ALL_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)) {
     fail(
       integration === 'github'
@@ -2840,13 +2892,6 @@ function validateAction(
       }
       const model = typeof a.model === 'string' && a.model.trim() ? a.model.trim() : undefined;
       return { type: 'run_skill', skillKey, ...(model ? { model } : {}) };
-    }
-    case 'run_prompt': {
-      if (typeof a.prompt !== 'string' || !a.prompt.trim()) {
-        fail(`${at}.prompt must be a non-empty string`);
-      }
-      const model = typeof a.model === 'string' && a.model.trim() ? a.model.trim() : undefined;
-      return { type: 'run_prompt', prompt: a.prompt.trim(), ...(model ? { model } : {}) };
     }
     case 'watch_pr':
       return { type: 'watch_pr' };
@@ -2926,29 +2971,10 @@ function validateAction(
       }
       return { type: 'slack_react', emoji };
     }
-    case 'start_task': {
-      if (typeof a.prompt !== 'string' || !a.prompt.trim()) {
-        fail(`${at}.prompt must be a non-empty string`);
-      }
-      if (a.repositoryId !== undefined && a.repositoryId !== null && typeof a.repositoryId !== 'string') {
-        fail(`${at}.repositoryId must be a string or null`);
-      }
-      const repositoryId = typeof a.repositoryId === 'string' ? a.repositoryId.trim() : '';
-      // Only a GitHub Issues rule may leave it out: the issue's own repository.
-      if (!repositoryId && integration !== 'github_issues') fail(`${at}: choose the repository the task works on`);
-      if (a.internetAccess !== undefined && typeof a.internetAccess !== 'boolean') {
-        fail(`${at}.internetAccess must be a boolean`);
-      }
-      const model = typeof a.model === 'string' && a.model.trim() ? a.model.trim() : undefined;
-      return {
-        type: 'start_task',
-        repositoryId: repositoryId || null,
-        prompt: a.prompt.trim(),
-        ...(model ? { model } : {}),
-        ...(a.internetAccess === true ? { internetAccess: true } : {}),
-        ...validateIssueWriteBack(a, at, integration),
-      };
-    }
+    case 'run_prompt':
+    case 'start_task':
+      // Converted to `start_session` or refused above.
+      return fail(`${at}: an automation starts a session, not a cloud task`);
     case 'issue_comment': {
       if (typeof a.body !== 'string' || !a.body.trim()) fail(`${at}.body must be a non-empty string`);
       // `afterStart` is Talyn's own marker and is never stored.

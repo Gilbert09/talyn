@@ -1,18 +1,17 @@
 ---
 title: Webhook integration
-description: Give an automation its own URL. A request to the URL starts a session or a task.
+description: Give an automation its own URL. A request to the URL starts a session.
 ---
 
 Webhook automations are in early access. Open **Integrations > Webhooks** to create one.
 
-Each automation has its own URL. Your tool sends a request to that URL. Talyn then starts a session or a task on a repository you choose.
+Each automation has its own URL. Your tool sends a request to that URL. Talyn then starts a session on a repository you choose.
 
 ## Create an automation
 
 1. Open **Integrations > Webhooks** and select **New automation**.
 2. Choose a repository and write a prompt.
-3. Choose what to start: a session (the default) or a task.
-4. Add payload tests if you want (see below).
+3. Add payload tests if you want (see below).
 
 Talyn shows the URL and a signing secret once, when it creates the automation. Copy them then.
 Talyn stores only a hash of the token, so it cannot show the URL again.
@@ -105,7 +104,7 @@ Select **Replay** to run the automation again with that request.
 
 An automation runs at most its hourly limit. The default is 5 runs an hour. You can change it.
 
-Each session or task uses box-hours, like any other. Internet access in the sandbox is off unless you turn it on.
+Each session uses box-hours, like any other. Internet access in the sandbox is off unless you turn it on.
 
 ## Untrusted content
 

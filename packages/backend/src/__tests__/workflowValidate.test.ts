@@ -146,6 +146,28 @@ describe('validateWorkflow — refusals', () => {
     expect(workflowActionsFor(integration).includes('approve_pr')).toBe(offered);
   });
 
+  it.each<[string, unknown, unknown]>([
+    ['with a prompt', { type: 'run_prompt', prompt: ' Fix it ' }, { type: 'start_session', repositoryId: null, prompt: 'Fix it' }],
+    [
+      'with a model',
+      { type: 'run_prompt', prompt: 'Fix it', model: 'claude-sonnet-5-5' },
+      { type: 'start_session', repositoryId: null, prompt: 'Fix it', model: 'claude-sonnet-5-5' },
+    ],
+  ])('saves an old run_prompt %s as a session on the pull request', (_name, action, expected) => {
+    const out = validateWorkflow(input({ actions: [action as never] }));
+    expect(out.actions).toEqual([expected]);
+  });
+
+  it.each<[WorkflowIntegration]>([['github'], ['slack'], ['webhook'], ['linear'], ['github_issues'], ['posthog_inbox']])(
+    'offers no task action on a %s rule',
+    (integration) => {
+      const offered = workflowActionsFor(integration);
+      expect(offered).not.toContain('run_prompt');
+      expect(offered).not.toContain('start_task');
+      expect(offered).toContain('start_session');
+    }
+  );
+
   it('refuses a local skill, and says why', () => {
     expect(() =>
       validateWorkflow(input({ actions: [{ type: 'run_skill', skillKey: 'local:my-skill' }] }))

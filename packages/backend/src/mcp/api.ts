@@ -38,7 +38,7 @@ export async function callApi<T>(
     method,
     headers: {
       'content-type': 'application/json',
-      ...internalProxyHeaders(ownerId),
+      ...internalProxyHeaders(ownerId, { mcp: true }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });

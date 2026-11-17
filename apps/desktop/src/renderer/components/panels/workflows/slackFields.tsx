@@ -181,23 +181,20 @@ export function SlackConditions({ conditions, onChange, settings }: {
 }
 
 /**
- * Edits `start_session`, and `start_task` on a webhook or issue rule. A webhook
+ * Edits `start_session`. A webhook
  * or Linear rule must name its repository. A GitHub Issues rule can use the
  * issue's own repository. A PostHog Inbox rule always uses the report's
  * repository, so it shows no repository picker.
  */
 export function StartSessionInput({ action, onChange, integration }: {
-  action: Extract<WorkflowAction, { type: 'start_session' | 'start_task' }>;
+  action: Extract<WorkflowAction, { type: 'start_session' }>;
   onChange: (next: WorkflowAction) => void;
   integration: WorkflowIntegration;
 }) {
   const repositories = useWorkspaceStore((s) => s.repositories);
   useFleetModelCatalog();
-  const repositoryRequired = integration === 'webhook' || integration === 'linear'
-    || (action.type === 'start_task' && integration !== 'github_issues');
-  const setRepository = (value: string) => onChange(action.type === 'start_task' && repositoryRequired
-    ? { ...action, repositoryId: value }
-    : { ...action, repositoryId: value || null });
+  const repositoryRequired = integration === 'webhook' || integration === 'linear';
+  const setRepository = (value: string) => onChange({ ...action, repositoryId: value || null });
   const emptyRepository = repositoryRequired
     ? 'Pick a repository'
     : integration === 'github_issues' ? 'The issue\'s repository' : 'Let Talyn choose';

@@ -20,7 +20,7 @@ const webhookRule = {
   enabled: true,
   events: ['webhook_received'],
   conditions: {},
-  actions: [{ type: 'start_task', repositoryId: 'repo1', prompt: 'Fix it' }],
+  actions: [{ type: 'start_session', repositoryId: 'repo1', prompt: 'Fix it' }],
   maxRunsPerPrPerHour: 5,
   stats,
 };
@@ -180,7 +180,7 @@ describe('Webhook rule editor', () => {
     fireEvent.change(screen.getByLabelText('Path 1'), { target: { value: 'action' } });
     fireEvent.change(screen.getByLabelText('Value 1'), { target: { value: 'opened' } });
     fireEvent.click(screen.getByText('Add test'));
-    await addAction('Start a task');
+    await addAction('Start a session');
     fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'repo1' } });
     fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Fix {{payload.issue.title}}' } });
     fireEvent.click(document.querySelector('[data-attr="workflow-save"]')!);
@@ -191,7 +191,7 @@ describe('Webhook rule editor', () => {
     // The empty second test is dropped, not sent.
     expect(input.conditions?.payloadMatches).toEqual([{ path: 'action', op: 'equals', value: 'opened' }]);
     expect(validateWorkflow(input).actions).toEqual([
-      { type: 'start_task', repositoryId: 'repo1', prompt: 'Fix {{payload.issue.title}}' },
+      { type: 'start_session', repositoryId: 'repo1', prompt: 'Fix {{payload.issue.title}}' },
     ]);
 
     const dialog = await screen.findByRole('dialog', { name: 'Copy your webhook URL' });
@@ -211,7 +211,7 @@ describe('Webhook rule editor', () => {
     jest.spyOn(api.workflows, 'create').mockImplementation(async (_ws, input) => ({ ...webhookRule, ...input }) as never);
     await openWebhookEditor();
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Deploy hook' } });
-    await addAction('Start a task');
+    await addAction('Start a session');
     fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'repo1' } });
     fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Go' } });
     fireEvent.click(document.querySelector('[data-attr="workflow-save"]')!);

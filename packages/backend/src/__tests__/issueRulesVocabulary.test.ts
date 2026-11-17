@@ -5,7 +5,6 @@ import {
   integrationRulesOffered,
   ISSUE_MERGE_COMMENT,
   ISSUE_START_COMMENT_SESSION,
-  ISSUE_START_COMMENT_TASK,
   issueConditionsMatch,
   issueMergeActions,
   issueRulesOffered,
@@ -72,8 +71,9 @@ describe('validateWorkflow on issue rules', () => {
   it.each([
     ['linear needs a connection', { integration: 'linear', conditions: {} }, 'needs a Linear workspace'],
     ['linear session needs a repository', { integration: 'linear', conditions: { connectionId: 'c' }, actions: [{ ...session, repositoryId: null }] }, 'choose the repository'],
-    ['linear task needs a repository', { integration: 'linear', conditions: { connectionId: 'c' }, actions: [{ type: 'start_task', repositoryId: null, prompt: 'x' }] }, 'choose the repository'],
-    ['two starts', { integration: 'github_issues', actions: [session, { type: 'start_task', repositoryId: null, prompt: 'x' }] }, 'one session or one task'],
+    ['linear old task needs a repository', { integration: 'linear', conditions: { connectionId: 'c' }, actions: [{ type: 'start_task', repositoryId: null, prompt: 'x' }] }, 'choose the repository the session works on'],
+    ['two starts', { integration: 'github_issues', actions: [session, { ...session }] }, 'one session, not more'],
+    ['a session and an old task', { integration: 'github_issues', actions: [session, { type: 'start_task', repositoryId: null, prompt: 'x' }] }, 'one session, not more'],
     ['a Linear condition on GitHub', { integration: 'github_issues', conditions: { teams: ['ENG'] } }, 'Linear condition'],
     ['a GitHub Issues condition on Linear', { integration: 'linear', conditions: { connectionId: 'c', issueAuthors: ['x'] } }, 'GitHub Issues condition'],
     ['a PR condition on an issue rule', { integration: 'linear', conditions: { connectionId: 'c', draft: true } }, 'GitHub condition'],
@@ -137,7 +137,21 @@ describe('validateWorkflow on issue rules', () => {
     ['start_task', { type: 'start_task', repositoryId: '', prompt: 'x' }],
   ])('lets a GitHub Issues %s leave the repository to the issue', (_name, action) => {
     const rule = validateWorkflow({ integration: 'github_issues', name: 'R', events: ['issue_created'], actions: [action] });
+    expect(rule.actions[0].type).toBe('start_session');
     expect((rule.actions[0] as { repositoryId: string | null }).repositoryId).toBeNull();
+  });
+
+  it('saves an old start_task as a session with the same fields', () => {
+    const rule = validateWorkflow({
+      integration: 'linear',
+      name: 'R',
+      events: ['issue_created'],
+      conditions: { connectionId: 'c' },
+      actions: [{ type: 'start_task', repositoryId: 'r1', prompt: 'x', model: 'claude-sonnet-5-5', internetAccess: true, issueStartComment: false }],
+    });
+    expect(rule.actions).toEqual([
+      { type: 'start_session', repositoryId: 'r1', prompt: 'x', model: 'claude-sonnet-5-5', internetAccess: true, issueStartComment: false },
+    ]);
   });
 
   it('keeps a webhook start_task requiring its repository', () => {
@@ -169,7 +183,7 @@ describe('validateWorkflow on issue rules', () => {
 
   it.each(['linear', 'github_issues'] as const)('lists %s conditions and actions', (integration) => {
     const vocabulary = workflowVocabulary(integration);
-    expect(vocabulary.actions.map((a) => a.type)).toEqual(['start_session', 'start_task', 'issue_comment', 'issue_set_status']);
+    expect(vocabulary.actions.map((a) => a.type)).toEqual(['start_session', 'issue_comment', 'issue_set_status']);
     const keys = vocabulary.conditions.map((c) => c.key);
     expect(keys.includes('connectionId')).toBe(integration === 'linear');
     expect(keys.includes('repos')).toBe(integration === 'github_issues');
@@ -234,12 +248,12 @@ describe('issueConditionsMatch', () => {
 describe('the start comment and the merge actions', () => {
   it.each([
     ['session, comment on', { ...session }, [ISSUE_START_COMMENT_SESSION]],
-    ['task, comment on', { type: 'start_task', repositoryId: 'r1', prompt: 'x' }, [ISSUE_START_COMMENT_TASK]],
+    ['old task, saved as a session, comment on', { type: 'start_task', repositoryId: 'r1', prompt: 'x' }, [ISSUE_START_COMMENT_SESSION]],
     ['session, comment off', { ...session, issueStartComment: false }, []],
   ])('adds the comment after a start action: %s', (_name, action, comments) => {
     const rule = validateWorkflow({ integration: 'github_issues', name: 'R', events: ['issue_created'], actions: [action, { type: 'issue_set_status', status: 'open' }] });
     const actions = effectiveWorkflowActions(rule);
-    expect(actions[0].type).toBe(action.type);
+    expect(actions[0].type).toBe('start_session');
     const added = actions.filter((a) => a.type === 'issue_comment');
     expect(added.map((a) => (a as { body: string }).body)).toEqual(comments);
     if (comments.length) expect(actions[1]).toMatchObject({ type: 'issue_comment', afterStart: true });

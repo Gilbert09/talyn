@@ -38,7 +38,6 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   // Its own rules for a session: only the session's repository, never the
   // session's own PR, and only the owner's PRs or PRs a session opened.
   'talyn_close_pull_request',
-  'talyn_fix_pull_request',
   // Tracking only adds a PR to the watching list, and the tool refuses
   // add_repository for a session. Untracking stays out: it undoes what a
   // person chose to watch.
@@ -53,10 +52,8 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_get_code_review_finding',
   'talyn_start_code_review',
   'talyn_cancel_code_review',
-  'talyn_fix_code_review_findings',
   'talyn_dismiss_code_review_finding',
   // Tasks
-  'talyn_create_task',
   'talyn_list_tasks',
   'talyn_get_task',
   'talyn_stop_task',

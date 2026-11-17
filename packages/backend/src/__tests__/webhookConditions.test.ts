@@ -198,9 +198,10 @@ describe('validateWorkflow for webhook rules', () => {
         { path: 'issue', op: 'exists' },
       ],
     });
+    // An old start_task is saved as the session that replaces it.
     expect(out.actions).toEqual([
       { type: 'start_session', repositoryId: 'r1', prompt: 'Fix it', model: 'claude-x', internetAccess: true },
-      { type: 'start_task', repositoryId: 'r1', prompt: 'Also this' },
+      { type: 'start_session', repositoryId: 'r1', prompt: 'Also this' },
     ]);
   });
 
@@ -234,7 +235,8 @@ describe('validateWorkflow for webhook rules', () => {
   it.each([
     ['github', 'start_task'],
     ['slack', 'start_task'],
-  ])('refuses start_task on a %s rule', (integration, type) => {
+    ['slack', 'run_prompt'],
+  ])('refuses %s on a %s rule', (integration, type) => {
     const rule =
       integration === 'slack'
         ? {
@@ -245,7 +247,7 @@ describe('validateWorkflow for webhook rules', () => {
             actions: [{ type, repositoryId: 'r1', prompt: 'x' }],
           }
         : { integration, name: 'x', events: ['pr_opened'], actions: [{ type, repositoryId: 'r1', prompt: 'x' }] };
-    expect(() => validateWorkflow(rule)).toThrow(/is for webhook and issue automations/);
+    expect(() => validateWorkflow(rule)).toThrow(/an automation starts a session, not a cloud task/);
   });
 
   it('refuses a webhook condition on a GitHub rule', () => {
@@ -260,7 +262,7 @@ describe('validateWorkflow for webhook rules', () => {
   });
 
   it('describes the vocabulary and the empty input', () => {
-    expect(workflowActionsFor('webhook')).toEqual(['start_session', 'start_task']);
+    expect(workflowActionsFor('webhook')).toEqual(['start_session']);
     const vocab = workflowVocabulary('webhook');
     expect(vocab.events.map((e) => e.event)).toEqual(['webhook_received']);
     expect(vocab.conditions.map((c) => c.key)).toEqual(['payloadMatches']);
