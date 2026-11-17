@@ -35,6 +35,11 @@ export const Memory = z
       session_id: Id.nullable().openapi({ description: 'The session that wrote the entry, for `kind: "session"`.' }),
     }),
     forgotten_at: Timestamp.nullable().openapi({ description: 'Set when the entry was forgotten. Restore it to use it again.' }),
+    forgotten_reason: z.enum(['evicted']).nullable().openapi({
+      description: '`evicted`: Talyn forgot the entry to make room at the limit of 500 live entries. Null otherwise.',
+    }),
+    use_count: z.number().int().openapi({ description: 'How many times a session read the entry with `talyn_memory_read`.' }),
+    last_used_at: Timestamp.nullable().openapi({ description: 'The last read. Null when nobody read the entry.' }),
     created_at: Timestamp,
     updated_at: Timestamp,
   })

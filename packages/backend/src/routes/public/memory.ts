@@ -62,7 +62,9 @@ export const memoryRoutes: PublicRoute[] = [
     summary: 'Save a memory entry',
     description:
       'Creates an entry. When a live entry with the same scope, target and name exists (the name is not case-sensitive), ' +
-      'that entry is updated instead and the answer is 200. A workspace holds at most 500 live entries.',
+      'that entry is updated instead and the answer is 200. A workspace holds at most 500 live entries. ' +
+      'A new entry over the limit makes Talyn forget the entry that sessions read the least, ' +
+      'with `forgotten_reason: "evicted"`.',
     tag: 'Memory',
     scope: 'memory:write',
     sessions: true,
@@ -146,7 +148,9 @@ export const memoryRoutes: PublicRoute[] = [
     path: '/memories/{id}/restore',
     operationId: 'restoreMemory',
     summary: 'Restore a forgotten entry',
-    description: 'Refused with 409 `memory_name_taken` when a live entry took its name, and with 409 `memory_limit_reached` at the limit.',
+    description:
+      'Refused with 409 `memory_name_taken` when a live entry took its name. ' +
+      'At the limit, Talyn forgets the entry that sessions read the least.',
     tag: 'Memory',
     scope: 'memory:write',
     sessions: true,

@@ -27,6 +27,7 @@ import type {
   WorkbenchSettings,
   WorkbenchStartProgress,
   WorkbenchSource,
+  MemoryForgottenReason,
   MemorySource,
   SlackRepoCandidate,
   SlackSessionSource,
@@ -3178,6 +3179,12 @@ export const workspaceMemories = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     forgottenAt: timestamp('forgotten_at', { withTimezone: true }),
+    /** `MemoryForgottenReason` (migration 0143): `evicted` when Talyn forgot it at the cap. */
+    forgottenReason: text('forgotten_reason').$type<MemoryForgottenReason>(),
+    /** How many times `talyn_memory_read` returned the entry (migration 0143). */
+    useCount: integer('use_count').notNull().default(0),
+    /** The last read. Null: nobody read it. */
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
   },
   (t) => ({
     liveNameUq: uniqueIndex('uq_workspace_memories_live_name')

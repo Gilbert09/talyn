@@ -78,7 +78,7 @@ function memory(id: string, scope: MemoryEntrySummary['scope'], over: Partial<Me
     source: { kind: 'user' },
     createdAt: '2026-10-30T00:00:00Z',
     updatedAt: '2026-10-30T00:00:00Z',
-    forgottenAt: null,
+    forgottenAt: null, forgottenReason: null, useCount: 0, lastUsedAt: null,
     ...over,
   };
 }

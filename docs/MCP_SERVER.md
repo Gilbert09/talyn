@@ -255,6 +255,8 @@ From a thread, an entry applies to the thread unless `scope` is `workspace`.
 A session sees workspace entries, its repository's entries and its thread's entries.
 A write or forget from a session adds a `talyn_memory` card to its transcript.
 When `settings.sessionMemory` is `false`, every memory tool refuses.
+Each `talyn_memory_read` adds one to the entry's `use_count` (migration `0143`). The reads of a memory review thread do not count.
+A workspace holds at most 500 live entries. When a write or a restore goes over the limit, Talyn forgets the entry with the fewest reads, then the one with the oldest last read or change, and sets `forgotten_reason` to `evicted`. An entry saved, changed or restored in the last 7 days goes last, because it had no time to get reads. A session's write names the forgotten entries in its result and adds a card for each.
 
 A memory review thread (source `memory_review`) sees every entry of its workspace.
 It writes a repository entry with `repository_id` and a thread entry with `thread_id`.

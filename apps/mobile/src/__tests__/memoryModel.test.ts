@@ -1,8 +1,8 @@
 import { MAX_MEMORY_BODY_BYTES, MAX_MEMORY_NAME_CHARS, type MemoryEntry, type MemoryEntrySummary, type MemoryReviewRun } from '@talyn/shared';
 
 import {
-  MEMORY_EMPTY, WORKSPACE_TARGET, WORKSPACE_TARGET_LABEL, ago, emptyMemoryMessage, groupMemories, liveCountOf, memoryCount, memoryCreateInput,
-  memoryDirty, memoryDraftOf, memoryFieldCounts, memoryListQuery, memorySaveRequest, memoryScopeLabel, memorySourceLabel, memoryUpdatePatch,
+  MEMORY_EMPTY, WORKSPACE_TARGET, WORKSPACE_TARGET_LABEL, ago, emptyMemoryMessage, evictedMessage, groupMemories, liveCountOf, memoryCount, memoryCreateInput,
+  memoryDirty, memoryDraftOf, memoryEntryMeta, memoryFieldCounts, memoryListQuery, memorySaveRequest, memoryScopeLabel, memorySourceLabel, memoryUpdatePatch,
   reviewLine, sameNameMessage, targetLabel, upsertSummary,
 } from '../features/memory/model';
 
@@ -12,7 +12,7 @@ const repos = [{ id: 'r1', fullName: 'acme/web' }, { id: 'r2', fullName: 'acme/a
 function summary(overrides: Partial<MemoryEntrySummary> = {}): MemoryEntrySummary {
   return { id: 'm1', workspaceId: 'w1', scope: 'workspace', repositoryId: null, threadId: null, type: 'project', name: 'Build',
     description: 'How to build', bytes: 10, source: { kind: 'user' }, createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-08T12:00:00Z',
-    forgottenAt: null, ...overrides };
+    forgottenAt: null, forgottenReason: null, useCount: 0, lastUsedAt: null, ...overrides };
 }
 const entry = (overrides: Partial<MemoryEntry> = {}): MemoryEntry => ({ ...summary(overrides), body: 'npm run build', ...overrides });
 
@@ -79,6 +79,22 @@ describe('counts and queries', () => {
     [null, null], [0, { label: '0 of 500', full: false }], [499, { label: '499 of 500', full: false }],
     [500, { label: '500 of 500', full: true }], [501, { label: '501 of 500', full: true }],
   ])('memoryCount(%j)', (count, expected) => expect(memoryCount(count)).toEqual(expected));
+
+  it.each<[string, Partial<MemoryEntrySummary>, string]>([
+    ['nobody read', {}, 'Added by you · Updated 1d ago · Never read'],
+    ['read once', { useCount: 1, lastUsedAt: '2026-11-09T00:00:00Z' }, 'Added by you · Updated 1d ago · Read once'],
+    ['read often', { useCount: 7 }, 'Added by you · Updated 1d ago · Read 7 times'],
+    ['forgotten by a person', { forgottenAt: '2026-11-09T00:00:00Z' }, 'Added by you · Updated 1d ago · Never read'],
+    ['forgotten to make room', { forgottenAt: '2026-11-09T00:00:00Z', forgottenReason: 'evicted' },
+      'Added by you · Updated 1d ago · Never read · Forgotten to make room'],
+  ])('the line under an entry %s', (_label, overrides, expected) =>
+    expect(memoryEntryMeta(summary({ updatedAt: '2026-11-09T00:00:00Z', ...overrides }), Date.parse('2026-11-10T00:00:00Z'))).toBe(expected));
+
+  it.each<[string[], string | null]>([
+    [[], null],
+    [['Old note'], 'Memory is full, so Talyn forgot the least-read entry "Old note"'],
+    [['A', 'B'], 'Memory is full, so Talyn forgot the least-read 2 entries'],
+  ])('evictedMessage(%j)', (names, expected) => expect(evictedMessage(names.map((name) => ({ name })))).toBe(expected));
 
   it.each([
     ['', false, { workspaceId: 'w1' }],
