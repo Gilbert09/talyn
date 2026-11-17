@@ -1,6 +1,6 @@
 import type { Workbench } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
-import { useRef, useState, type ComponentRef, type Ref } from 'react';
+import { useEffect, useRef, useState, type ComponentRef, type Ref } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
@@ -13,7 +13,7 @@ import { isStarting } from '../sessions/Starting';
 import { chatActions } from './actions';
 import { ComposerImages } from './AttachmentViews';
 import { useImageDrafts } from './attachmentDrafts';
-import { buildMessageInput, checkAttachment, imageErrorMessage, sendBlock, type ImageDraft, type PickedImage } from './attachments';
+import { attachmentsFailed, attachmentsUploading, buildMessageInput, checkAttachment, imageErrorMessage, sendBlock, type ImageDraft, type PickedImage } from './attachments';
 import { showImagePicker } from './imagePicker';
 import { SandboxAgentNotice } from './SandboxAgentNotice';
 
@@ -46,6 +46,8 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
   const [imageErrors, setImageErrors] = useState<string[]>([]);
   const [sendingImages, setSendingImages] = useState(false);
   const [imageSendError, setImageSendError] = useState('');
+  // Send was pressed while attachments upload: the message goes when they finish.
+  const [sendHeld, setSendHeld] = useState(false);
   const picked = useRef(0);
   const chat = item.chats?.find((value) => value.id === chatId);
   const allowed = ready && network === 'online' && canCompose(item, chat) && workflow.canSend();
@@ -55,6 +57,8 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
   const hasImages = images.length > 0;
   const hasDraft = hasText || hasImages;
   const imageBlock = sendBlock(images);
+  const uploading = attachmentsUploading(images);
+  const imagesFailed = attachmentsFailed(images);
   const blocked = delivery.status === 'failed' || delivery.status === 'unknown';
   const retry = () => Alert.alert('Send this message again?', delivery.status === 'unknown'
     ? 'Delivery is still unknown. The server can receive the same message twice. Check the conversation and queue first.'
@@ -116,6 +120,21 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
       setImageSendError('The message may not have been sent. Your text and attachments are still here. Check the conversation before sending again.');
     } finally { setSendingImages(false); }
   };
+  useEffect(() => setSendHeld(false), [chatId]);
+  // A failed upload cancels the held send. The draft stays, with the failure shown.
+  useEffect(() => {
+    if (!sendHeld || uploading) return;
+    setSendHeld(false);
+    if (imagesFailed || !allowed) return;
+    if (hasImages) void sendImages();
+    else if (hasText) void sendText();
+  }, [sendHeld, uploading]);
+  const pressSend = () => {
+    if (sendHeld) setSendHeld(false);
+    else if (uploading) setSendHeld(true);
+    else if (hasImages) void sendImages();
+    else void sendText();
+  };
   const queued = chat?.queuedMessages.length ?? 0;
   const status = [
     network === 'offline' ? 'Offline. Sending needs a connection.' : network !== 'online' ? 'Checking the connection.' : '',
@@ -142,7 +161,8 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
       <Button size="sm" variant="quiet" title="Retry message" disabled={!allowed || !hasDraft} onPress={retry} />
     </View> : null}
     {imageSendError ? <Text accessibilityLiveRegion="polite" style={[type.caption, { color: c.destructive, paddingHorizontal: 4 }]}>{imageSendError}</Text> : null}
-    {hasImages && imageBlock ? <Text style={[type.caption, { color: c.muted, paddingHorizontal: 4 }]}>{imageBlock}</Text> : null}
+    {hasImages && imageBlock ? <Text style={[type.caption, { color: c.muted, paddingHorizontal: 4 }]}>
+      {sendHeld ? 'The message sends after the upload. Tap send again to cancel.' : imageBlock}</Text> : null}
     <ComposerImages drafts={images} errors={imageErrors}
       onRemove={(id) => updateImages((current) => current.filter((value) => value.id !== id))}
       onRetry={(id) => { const draft = images.find((value) => value.id === id); if (draft) void upload(draft); }}
@@ -160,10 +180,10 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
       <View style={styles.buttons}>
         {running && !hasDraft ? <RoundButton label="Stop the agent" symbol={{ ios: 'stop.fill', android: 'stop' }} tone="destructive"
           disabled={stopping} busy={stopping} onPress={() => { void stop(); }} /> : null}
-        {!running || hasDraft ? <RoundButton label={running ? 'Queue message' : 'Send message'} symbol={{ ios: 'arrow.up', android: 'arrow_upward' }} tone="primary"
-          busy={delivery.status === 'sending' || sendingImages}
-          disabled={!allowed || !hasDraft || blocked || delivery.status === 'sending' || sendingImages || (hasImages && Boolean(imageBlock))}
-          onPress={() => { if (hasImages) void sendImages(); else void sendText(); }} /> : null}
+        {!running || hasDraft ? <RoundButton label={sendHeld ? 'Cancel the waiting message' : running ? 'Queue message' : 'Send message'} symbol={{ ios: 'arrow.up', android: 'arrow_upward' }} tone="primary"
+          busy={delivery.status === 'sending' || sendingImages || sendHeld}
+          disabled={!allowed || !hasDraft || blocked || delivery.status === 'sending' || sendingImages || imagesFailed}
+          onPress={pressSend} /> : null}
       </View>
     </View>
   </View>;

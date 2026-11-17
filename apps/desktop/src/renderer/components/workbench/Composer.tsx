@@ -44,7 +44,7 @@ import { isThread, threadMentions } from '../../lib/threads';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useThreadChildren } from './workbenchSelectors';
 import { AgentPicker, ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
-import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './useComposerImages';
+import { ImageAttachButton, ImageAttachmentChips, useComposerImages, useSendAfterUploads } from './useComposerImages';
 import { BackgroundChips } from './BackgroundChips';
 import { SandboxAgentNotice } from './SandboxAgentNotice';
 import { WakeLaterPopover } from './WakeLaterPopover';
@@ -83,7 +83,7 @@ export function Composer({
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
   const images = useComposerImages(ops.runtime, ops, workbench.status);
-  const { attachments, setAttachments, pendingUploads, imageNotReady, setImageNotReady, fileInputRef, attachFiles, onPaste } = images;
+  const { attachments, setAttachments, pendingUploads, failedUploads, imageNotReady, setImageNotReady, fileInputRef, attachFiles, onPaste } = images;
   useEffect(() => {
     if (attachRef) attachRef.current = (files) => void attachFiles(files);
   });
@@ -255,7 +255,13 @@ export function Composer({
 
   const send = async () => {
     const text = draft.trim();
-    if ((!text && attachments.length === 0) || sending || pendingUploads > 0 || sendBlocked) return;
+    if (sending || sendBlocked) return;
+    // A file still uploads: hold the message and send it when the upload ends.
+    if (pendingUploads > 0) {
+      heldSend.hold();
+      return;
+    }
+    if (!text && attachments.length === 0) return;
     if (!owner && !chat) return;
     setSending(true);
     setRefusal(null);
@@ -311,6 +317,8 @@ export function Composer({
       setSending(false);
     }
   };
+
+  const heldSend = useSendAfterUploads(pendingUploads, failedUploads, () => void send(), draftKey);
 
   const stop = async () => {
     if (!chat) return;
@@ -429,7 +437,7 @@ export function Composer({
             onPickLink={pickLink}
           />
         )}
-        <ImageAttachmentChips attachments={attachments} pendingUploads={pendingUploads} imageNotReady={imageNotReady} onRemove={(index) => setAttachments((current) => current.filter((_, i) => i !== index))} />
+        <ImageAttachmentChips attachments={attachments} pendingUploads={pendingUploads} imageNotReady={imageNotReady} sendHeld={heldSend.held} onRemove={(index) => setAttachments((current) => current.filter((_, i) => i !== index))} />
         <textarea
           data-session-composer
           ref={textareaRef}
@@ -477,13 +485,13 @@ export function Composer({
           ) : null}
           <button
             type="button"
-            onClick={() => void send()}
-            disabled={sending || pendingUploads > 0 || sendBlocked || (!draft.trim() && attachments.length === 0)}
+            onClick={() => (heldSend.held ? heldSend.cancel() : void send())}
+            disabled={sending || sendBlocked || (!draft.trim() && attachments.length === 0 && pendingUploads === 0)}
             className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
-            title={running ? 'Queue (Enter)' : 'Send (Enter)'}
-            aria-label={running ? 'Queue the message' : 'Send the message'}
+            title={heldSend.held ? 'Sends after the upload. Click to cancel.' : running ? 'Queue (Enter)' : 'Send (Enter)'}
+            aria-label={heldSend.held ? 'Cancel the waiting message' : running ? 'Queue the message' : 'Send the message'}
           >
-            {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+            {sending || heldSend.held ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
           </button>
         </div>
       </div>

@@ -69,6 +69,7 @@ export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchO
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [attachments, setAttachments] = useState<WorkbenchAttachment[]>([]);
   const [pendingUploads, setPendingUploads] = useState(0);
+  const [failedUploads, setFailedUploads] = useState(0);
   const [imageNotReady, setImageNotReady] = useState(false);
 
   const attachFiles = async (files: File[]) => {
@@ -85,6 +86,7 @@ export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchO
         try {
           await attachText(file);
         } catch (err) {
+          setFailedUploads((count) => count + 1);
           toast.error('Could not attach the file', err instanceof Error ? err.message : undefined);
         } finally {
           setPendingUploads((count) => count - 1);
@@ -92,6 +94,7 @@ export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchO
         continue;
       }
       if (!isAttachable(file)) {
+        setFailedUploads((count) => count + 1);
         toast.error('Could not attach the file', UNSUPPORTED_FILE);
         setPendingUploads((count) => count - 1);
         continue;
@@ -100,6 +103,7 @@ export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchO
         try {
           await attachVideo(file);
         } catch (err) {
+          setFailedUploads((count) => count + 1);
           toast.error('Could not attach the video', err instanceof Error ? err.message : undefined);
         } finally {
           setPendingUploads((count) => count - 1);
@@ -120,6 +124,7 @@ export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchO
         if (attachment.path) rememberAttachmentPreview(attachment.path, dataUrl);
         setAttachments((current) => [...current, attachment]);
       } catch (err) {
+        setFailedUploads((count) => count + 1);
         toast.error('Could not attach the image', err instanceof Error ? err.message : undefined);
       } finally {
         setPendingUploads((count) => count - 1);
@@ -163,9 +168,36 @@ export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchO
   };
 
   return {
-    attachments, setAttachments, pendingUploads, imageNotReady, setImageNotReady,
+    attachments, setAttachments, pendingUploads, failedUploads, imageNotReady, setImageNotReady,
     fileInputRef, attachFiles, onPaste,
     clear: () => { setAttachments([]); setImageNotReady(false); },
+  };
+}
+
+/**
+ * Holds a send that the person asks for while files upload, and runs it when
+ * the last upload ends. A failed upload cancels the send, so a message never
+ * goes out without a file that the person attached.
+ */
+export function useSendAfterUploads(pendingUploads: number, failedUploads: number, send: () => void, resetKey: string) {
+  // The failure count when the send was held, or null when no send waits.
+  const [heldAt, setHeldAt] = useState<number | null>(null);
+  const sendRef = useRef(send);
+  sendRef.current = send;
+
+  useEffect(() => setHeldAt(null), [resetKey]);
+
+  useEffect(() => {
+    if (heldAt === null || pendingUploads > 0) return;
+    setHeldAt(null);
+    if (failedUploads > heldAt) toast.error('The message was not sent', 'A file did not upload. Your message is still in the composer.');
+    else sendRef.current();
+  }, [heldAt, pendingUploads, failedUploads]);
+
+  return {
+    held: heldAt !== null,
+    hold: () => setHeldAt((current) => current ?? failedUploads),
+    cancel: () => setHeldAt(null),
   };
 }
 
@@ -247,11 +279,13 @@ export function ImageDropOverlay({ dragging, className }: { dragging: boolean; c
 }
 
 export function ImageAttachmentChips({
-  attachments, pendingUploads, imageNotReady, onRemove,
+  attachments, pendingUploads, imageNotReady, onRemove, sendHeld = false,
 }: {
   attachments: WorkbenchAttachment[];
   pendingUploads: number;
   imageNotReady: boolean;
+  /** A send waits for the uploads to end. */
+  sendHeld?: boolean;
   onRemove: (index: number) => void;
 }) {
   if (attachments.length === 0 && pendingUploads === 0 && !imageNotReady) return null;
@@ -266,7 +300,7 @@ export function ImageAttachmentChips({
           </button>
         </span>
       ))}
-      {pendingUploads > 0 && <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]"><Loader2 className="h-3 w-3 animate-spin" /> Uploading…</span>}
+      {pendingUploads > 0 && <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]"><Loader2 className="h-3 w-3 animate-spin" /> {sendHeld ? 'Uploading… The message sends after the upload.' : 'Uploading…'}</span>}
       {imageNotReady && <span className="text-[11px] text-amber-700 dark:text-amber-400">Files can be attached once the sandbox is ready.</span>}
     </div>
   );

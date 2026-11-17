@@ -61,10 +61,13 @@ export function buildMessageInput(text: string, drafts: ImageDraft[]): SendWorkb
   return attachments.length ? { text, attachments } : { text };
 }
 
+export const attachmentsUploading = (drafts: ImageDraft[]) => drafts.some((draft) => draft.status === 'uploading');
+export const attachmentsFailed = (drafts: ImageDraft[]) => drafts.some((draft) => draft.status === 'error');
+
 /** Why the attachments cannot be sent yet. A message with attachments needs no text. */
 export function sendBlock(drafts: ImageDraft[]): string | null {
-  if (drafts.some((draft) => draft.status === 'uploading')) return 'Waiting for the attachments to upload.';
-  if (drafts.some((draft) => draft.status === 'error')) return 'Remove the attachments that failed, or try them again.';
+  if (attachmentsUploading(drafts)) return 'Waiting for the attachments to upload.';
+  if (attachmentsFailed(drafts)) return 'Remove the attachments that failed, or try them again.';
   return null;
 }
 

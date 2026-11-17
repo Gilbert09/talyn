@@ -77,6 +77,50 @@ describe('composer images', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove cat.jpg' })).toBeNull());
   });
 
+  describe('send while an attachment uploads', () => {
+    const slowUpload = () => {
+      let finish: (ok: boolean) => void = () => {};
+      mockActions.uploadAttachment.mockImplementationOnce((_id, file) => new Promise((resolve, reject) => {
+        finish = (ok) => ok ? resolve({ name: file.name, mimeType: file.mimeType, path: `.context/attachments/${file.name}` }) : reject(new Error('The upload failed.'));
+      }));
+      return (ok: boolean) => act(async () => finish(ok));
+    };
+    const holdSend = async () => {
+      pickLibrary();
+      await render(<WorkbenchDetailScreen kind="session" />);
+      await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
+      await waitFor(() => expect(screen.getByLabelText('cat.jpg, uploading')).toBeVisible());
+      await fireEvent.changeText(screen.getByLabelText('Message'), 'What is this?');
+      await fireEvent.press(screen.getByRole('button', { name: 'Send message' }));
+      expect(screen.getByText('The message sends after the upload. Tap send again to cancel.')).toBeVisible();
+    };
+
+    it('holds the message and sends it with the attachment when the upload ends', async () => {
+      const finish = slowUpload();
+      await holdSend();
+      expect(mockActions.send).not.toHaveBeenCalled();
+      await finish(true);
+      await waitFor(() => expect(mockActions.send).toHaveBeenCalledWith('chat-one', { text: 'What is this?', attachments: [{ name: 'cat.jpg', mimeType: 'image/jpeg', path: '.context/attachments/cat.jpg' }] }));
+    });
+
+    it('does not send when the upload fails', async () => {
+      const finish = slowUpload();
+      await holdSend();
+      await finish(false);
+      await waitFor(() => expect(screen.getByText('Remove the attachments that failed, or try them again.')).toBeVisible());
+      expect(mockActions.send).not.toHaveBeenCalled();
+    });
+
+    it('cancels the held message on a second press', async () => {
+      const finish = slowUpload();
+      await holdSend();
+      await fireEvent.press(screen.getByRole('button', { name: 'Cancel the waiting message' }));
+      await finish(true);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled());
+      expect(mockActions.send).not.toHaveBeenCalled();
+    });
+  });
+
   it('explains a camera permission denial and points to settings', async () => {
     mockPicker.requestCameraPermissionsAsync.mockResolvedValue({ granted: false });
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
