@@ -10,6 +10,7 @@ import {
   POSTHOG_INBOX_PUSH_FORBIDDEN_CODE,
   POSTHOG_INBOX_PUSH_SCOPES_MISSING_CODE,
   posthogDestinationUrl,
+  posthogInboxDestinationName,
 } from '@talyn/shared';
 import { workflowRoutes } from '../../routes/workflows.js';
 import { posthogInboxRoutes } from '../../routes/posthogInbox.js';
@@ -18,7 +19,7 @@ import { wrapAsyncRoutes } from '../../middleware/asyncHandler.js';
 import { internalProxyHeaders, requireAuth } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
-import { inboundConnections, integrations, workspaces as workspacesTable } from '../../db/schema.js';
+import { inboundConnections, integrations, users, workspaces as workspacesTable } from '../../db/schema.js';
 import { _resetWorkflowStore } from '../../services/workflows/store.js';
 import { resetFeatureFlagsForTests } from '../../services/featureFlags.js';
 import { decryptString, encryptString } from '../../services/tokenCrypto.js';
@@ -540,6 +541,29 @@ describe('PostHog Inbox push setup', () => {
     });
   });
 
+  describe('destination name', () => {
+    it('names the destination with the GitHub login of the person who sets it up', async () => {
+      await db.update(users).set({ githubUsername: 'octo-cat' }).where(eq(users.id, TEST_USER_ID));
+      await connect();
+      await setup();
+      expect(posthog.calls[0]).toMatchObject({ method: 'POST', body: { name: 'Talyn – PostHog Inbox push (@octo-cat)' } });
+      expect(posthog.live()[0].body.name).toBe('Talyn – PostHog Inbox push (@octo-cat)');
+    });
+
+    it('a rotate and a re-run give the name the GitHub login of the person who makes the change', async () => {
+      await connect();
+      await setup();
+      expect(posthog.calls[0].body!.name).toBe(POSTHOG_INBOX_DESTINATION_NAME);
+      await db.update(users).set({ githubUsername: 'octo-cat' }).where(eq(users.id, TEST_USER_ID));
+      await rotate();
+      expect(posthog.calls.at(-1)).toMatchObject({ method: 'PATCH', body: { name: 'Talyn – PostHog Inbox push (@octo-cat)' } });
+      await db.update(users).set({ githubUsername: 'hedgehog' }).where(eq(users.id, TEST_USER_ID));
+      await setup();
+      expect(posthog.calls.at(-1)).toMatchObject({ method: 'PATCH', body: { name: 'Talyn – PostHog Inbox push (@hedgehog)' } });
+      expect(posthog.functions.size).toBe(1);
+    });
+  });
+
   describe('rotate', () => {
     it('gives the managed destination the new URL and secret', async () => {
       await connect();
@@ -833,6 +857,19 @@ describe('PostHog destination pure helpers', () => {
     // Each call gets its own filters, so a caller cannot change the shared constant.
     (body.filters!.events as Array<{ id: string }>)[0].id = 'changed';
     expect(DESTINATION_FILTERS.events[0].id).toBe('$signals_report_ready');
+  });
+
+  it.each([
+    [undefined, 'Talyn – PostHog Inbox push'],
+    [null, 'Talyn – PostHog Inbox push'],
+    ['', 'Talyn – PostHog Inbox push'],
+    ['   ', 'Talyn – PostHog Inbox push'],
+    ['octo-cat', 'Talyn – PostHog Inbox push (@octo-cat)'],
+    [' octo-cat ', 'Talyn – PostHog Inbox push (@octo-cat)'],
+  ])('posthogInboxDestinationName(%j) is %j', (login, name) => {
+    expect(posthogInboxDestinationName(login)).toBe(name);
+    expect(destinationPayload({ url: 'https://api.talyn.test/x/tok', secret: null, githubLogin: login }, 'create').name).toBe(name);
+    expect(destinationPayload({ url: 'https://api.talyn.test/x/tok', secret: null, githubLogin: login }, 'update').name).toBe(name);
   });
 
   it.each([

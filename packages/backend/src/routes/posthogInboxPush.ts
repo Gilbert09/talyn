@@ -141,6 +141,7 @@ export function registerPostHogInboxPushRoutes(router: Router, gates: { gate: Ga
       connection: found.connection,
       requireSecret,
       createdBy: assertUser(req).id,
+      githubLogin: assertUser(req).githubUsername ?? null,
       urlFor: (connectionId, token) => webhookUrl(req, connectionId, token),
     });
     captureWorkspaceEvent(workspaceId, rotated.created ? 'posthog_inbox_webhook_created' : 'posthog_inbox_webhook_rotated', {
@@ -166,6 +167,7 @@ export function registerPostHogInboxPushRoutes(router: Router, gates: { gate: Ga
       workspaceId,
       connection: found.connection,
       createdBy: assertUser(req).id,
+      githubLogin: assertUser(req).githubUsername ?? null,
       urlFor: (connectionId, token) => webhookUrl(req, connectionId, token),
     });
     if (!result.ok) {
