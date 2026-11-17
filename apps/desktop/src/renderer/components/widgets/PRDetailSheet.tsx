@@ -9,6 +9,7 @@ import {
   fixBlockedMessage,
   TASK_STATUS_TERMINAL,
   humanGatesIn,
+  canWorkOnPr,
 } from '@talyn/shared';
 import {
   ExternalLink,
@@ -448,11 +449,12 @@ export function PRDetailSheet({
       view.row.summary.blockingReason === 'checks_failed_optional');
 
   // Owner vs reviewer view. The PR-modifying affordances (merge, merge queue,
-  // auto-keep-mergeable) and the CI status pill only make sense on a PR you
-  // own; on one you're only a requested reviewer, the relevant signal is
-  // whether your review is required, so we show the review-decision pill and
-  // drop every write action except your own review (`canReview` below).
-  const isOwnPr = !!view && view.row.authored;
+  // auto-keep-mergeable, fix) and the CI status pill are for a PR you opened
+  // or chose to watch. A watched PR keeps them also when you are a requested
+  // reviewer on it. On a PR you are only asked to review, the relevant signal
+  // is whether your review is required, so we show the review-decision pill
+  // and drop every write action except your own review (`canReview` below).
+  const isOwnPr = !!view && canWorkOnPr(view.row);
   // The one write a reviewer gets: their own review, on an open PR that asked
   // for it. GitHub refuses a review of your own PR, and so does the backend.
   const canReview =

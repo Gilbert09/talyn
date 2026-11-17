@@ -52,7 +52,9 @@ vi.mock('../lib/api', () => ({
 
 const submitReview = api.pullRequests.submitReview as unknown as ReturnType<typeof vi.fn>;
 
-function row(opts: { reviewRequested?: boolean; authored?: boolean; state?: string } = {}): PRRow {
+function row(
+  opts: { reviewRequested?: boolean; authored?: boolean; watching?: boolean; state?: string } = {}
+): PRRow {
   return {
     id: 'pr1',
     workspaceId: 'ws1',
@@ -64,7 +66,7 @@ function row(opts: { reviewRequested?: boolean; authored?: boolean; state?: stri
     state: (opts.state ?? 'open') as PRRow['state'],
     reviewRequested: opts.reviewRequested ?? true,
     authored: opts.authored ?? false,
-    watching: false,
+    watching: opts.watching ?? false,
     mergedAt: null,
     lastPolledAt: '',
     autoKeepMergeable: false,
@@ -123,6 +125,27 @@ describe('who sees the review buttons', () => {
     open(row(opts));
     expect(approveButton()).toBeNull();
     expect(requestButton()).toBeNull();
+  });
+});
+
+describe('who sees the fix action', () => {
+  const fixButton = () => screen.queryByRole('button', { name: /Fix with agent/ });
+
+  it.each([
+    ['your own PR', { authored: true, reviewRequested: false }, true],
+    ['a watched PR that asked for your review', { watching: true }, true],
+    ['a watched PR somebody else opened', { watching: true, reviewRequested: false }, true],
+    ['a PR that only asked for your review', {}, false],
+    ['a watched merged PR', { watching: true, state: 'merged' }, false],
+  ])('on %s: %s', (_label, opts, shown) => {
+    open(row(opts));
+    expect(Boolean(fixButton())).toBe(shown);
+  });
+
+  it('keeps the review buttons beside it on a watched PR that asked for your review', () => {
+    open(row({ watching: true }));
+    expect(approveButton()).toBeTruthy();
+    expect(requestButton()).toBeTruthy();
   });
 });
 

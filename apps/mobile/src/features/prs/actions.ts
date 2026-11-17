@@ -1,5 +1,5 @@
 import type { CloudProviderInfo, MergeQueuePublic, PRCheckContext, PRRow, PRSummaryShape } from '@talyn/client/native';
-import { buildMergeablePrompt, cloudAgentChoices, fixBlockedReason, mergeBlockerReason, promptTemplateFor, queueBlockNeedsHuman,
+import { buildMergeablePrompt, canWorkOnPr, cloudAgentChoices, fixBlockedReason, mergeBlockerReason, promptTemplateFor, queueBlockNeedsHuman,
   TASK_STATUS_TERMINAL, type CloudAgentChoice, type CloudProviderType, type Environment, type FixBlockedReason,
   type TaskStatus, type Workspace } from '@talyn/shared';
 
@@ -17,7 +17,7 @@ export function canResubmit(entry: MergeQueuePublic | null | undefined): boolean
 export const queueBlocked = (entry: MergeQueuePublic | null | undefined) => entry?.status === 'blocked' || entry?.status === 'blocked_manual';
 
 export interface PrActionSet {
-  /** Write actions are for PRs you opened, as on web. A reviewer only gets the link. */
+  /** Write actions are for PRs you opened or watch, as on web. A reviewer only gets the link. */
   owner: boolean;
   merge: boolean;
   fix: boolean;
@@ -30,7 +30,7 @@ export interface PrActionSet {
 }
 
 export function prActions(row: PRRow, options: { posthogConnected: boolean; taskRunning?: boolean }): PrActionSet {
-  const owner = row.authored;
+  const owner = canWorkOnPr(row);
   const open = row.state === 'open';
   const write = owner && open;
   const queued = row.mergeQueued || Boolean(row.mergeQueue);

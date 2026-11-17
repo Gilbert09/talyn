@@ -49,6 +49,7 @@ import {
   describePRPriorityReason,
   FREE_PLAN_ACTIVE_TASK_LIMIT,
   type PRPriorityVerdict,
+  canWorkOnPr,
 } from '@talyn/shared';
 import { SkillPickerModal } from './SkillPickerModal';
 import { ProviderIcon } from '../../../lib/providerMeta';
@@ -559,6 +560,8 @@ const PRTableRow = React.memo(function PRTableRow({
   // of the control and the reason reported to analytics are the same call.
   const fixBlocked = fixBlockedReason(summary, { state: row.state, taskRunning });
   const canFollowUp = fixBlocked === null;
+  // The Reviews page hides the owner actions, except on a PR the person watches.
+  const ownerActions = variant !== 'review' || canWorkOnPr(row);
 
   async function copyToClipboard(write: () => Promise<void>) {
     try {
@@ -1263,7 +1266,7 @@ const PRTableRow = React.memo(function PRTableRow({
           {/* Row actions reveal on hover/focus to keep the table calm.
               Merge, merge-queue, and "get mergeable" are owner actions, so
               they're hidden on the Reviews page (you're reviewing someone
-              else's PR there). */}
+              else's PR there) unless you watch the PR. */}
           {stackable &&
             (confirmStack ? (
               <button
@@ -1360,7 +1363,7 @@ const PRTableRow = React.memo(function PRTableRow({
               )}
             </button>
           )}
-          {variant !== 'review' && row.state === 'open' && (
+          {ownerActions && row.state === 'open' && (
             <button
               type="button"
               data-attr="pr-row-merge-queue-toggle"
@@ -1387,7 +1390,7 @@ const PRTableRow = React.memo(function PRTableRow({
               )}
             </button>
           )}
-          {variant !== 'review' &&
+          {ownerActions &&
             canMerge &&
             (confirmMerge ? (
               <button
@@ -1425,7 +1428,7 @@ const PRTableRow = React.memo(function PRTableRow({
           {/* One slot, two buttons: the robot starts a run; while the run is
               queued or in progress the same slot is a Stop button, and it turns
               back into the robot once the task lands in cancelled. */}
-          {variant !== 'review' && row.state === 'open' && (
+          {ownerActions && row.state === 'open' && (
             <div className="relative inline-flex">
               {taskRunning && row.taskId ? (
                 <button

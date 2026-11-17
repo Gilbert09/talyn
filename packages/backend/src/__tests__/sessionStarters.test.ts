@@ -35,6 +35,11 @@ describe('starterKindForPr', () => {
     ['review requested of me', pr({ authored: false, reviewRequested: true }), 'review'],
     ['review requested on a draft', pr({ authored: false, reviewRequested: true, summary: { draft: true } }), null],
     ['someone else failing, no review asked', pr({ authored: false, summary: { blockingReason: 'checks_failed' } }), null],
+    ['someone else failing, watched', pr({ authored: false, watching: true, summary: { blockingReason: 'checks_failed' } }), 'fix_checks'],
+    ['watched and review requested, failing', pr({ authored: false, watching: true, reviewRequested: true, summary: { blockingReason: 'checks_failed' } }), 'fix_checks'],
+    ['watched and review requested, clean', pr({ authored: false, watching: true, reviewRequested: true }), 'review'],
+    ['watched, clean, no review asked', pr({ authored: false, watching: true }), null],
+    ['review requested, not watched', pr({ authored: false, watching: false, reviewRequested: true, summary: { blockingReason: 'checks_failed' } }), 'review'],
     ['a closed PR', pr({ state: 'closed', summary: { blockingReason: 'checks_failed' } }), null],
     ['a merged PR', pr({ state: 'merged', summary: { blockingReason: 'checks_failed' } }), null],
   ])('%s', (_name, row, kind) => {
