@@ -73,11 +73,22 @@ Press ⌘F (Ctrl+F on Windows and Linux) to search the session's chat. The find 
 - Press Enter to go to the next match. Press Shift+Enter to go to the previous match.
 - Press Esc to close the find bar.
 - In split view, ⌘F searches the pane that has focus.
-- The search includes only the messages that are loaded. To search earlier messages, scroll up to load them. When earlier messages are not loaded, the find bar tells you.
+- The find bar loads the earlier messages, so the search includes the whole transcript.
 - The search does not include the contents of collapsed tool calls.
 - In the code viewer and in the terminal, ⌘F keeps its usual function.
 
 In the mobile app, tap the search button in the session header. The row of the current match has a tinted background.
+
+## Search all transcripts
+
+Press ⌘K (Ctrl+K on Windows and Linux) and type at least three characters. Below the sessions whose names match, the **Transcript** rows show the sessions and threads whose chats contain the text. Archived sessions are included.
+
+- The search finds the messages that you send and the text that the agent writes. It does not search tool output, such as command output or file contents.
+- Each word that you type must be in the same message. A word matches the start of a word in the message: "pyarr" finds "pyarrow", but "arrow" does not.
+- Each row shows the text around the match.
+- Select a row to open the session. Its find bar opens with your search, so you can step through the matches.
+
+In the mobile app, type in the search field of the menu. The matches show under **In transcripts**.
 
 ## Talk to the agent while it works
 

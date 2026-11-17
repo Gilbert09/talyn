@@ -545,6 +545,20 @@ export interface WorkbenchEvent {
   createdAt?: string;
 }
 
+/** A session or thread whose transcript matches a search (`GET /workbenches/search`). */
+export interface WorkbenchTranscriptMatch {
+  workbench: Workbench;
+  chatId: string;
+  seq: number;
+  /** `user`: a message a person sent. `assistant`: the agent's text. */
+  role: 'user' | 'assistant';
+  /** The text around the first match, on one line. */
+  snippet: string;
+}
+
+/** The shortest search that `GET /workbenches/search` runs. A shorter one answers no matches. */
+export const TRANSCRIPT_SEARCH_MIN_LENGTH = 3;
+
 /** A hidden commit under `refs/talyn/checkpoints/<chatId>/<turn>`. See `workbenchGit.ts`. */
 export interface WorkbenchCheckpoint {
   chatId: string;

@@ -1,4 +1,4 @@
-import type { Workbench, WorkbenchChat, WorkbenchEvent, WorkbenchReadiness } from '@talyn/shared';
+import type { Workbench, WorkbenchChat, WorkbenchEvent, WorkbenchReadiness, WorkbenchTranscriptMatch } from '@talyn/shared';
 import type { ClientLifecycleEvent, ClientState, CodeReviewFinding, CodeReviewPublic, PRFile, PRReviewDetail, PRRow } from '@talyn/client/native';
 
 import { WorkflowStore, type WorkflowApi, type WorkflowSocket } from '../workflow/store';
@@ -65,6 +65,7 @@ export function fixture() {
       list: jest.fn(async (_workspace?: string, _opts?: unknown) => [session(), thread()]),
       get: jest.fn(async (id: string) => id.includes('thread') ? thread() : session({ id })),
       threadSessions: jest.fn(async () => [session({ threadId: 'thread-one' })]),
+      searchTranscripts: jest.fn(async (_workspace?: string, _q?: string): Promise<WorkbenchTranscriptMatch[]> => []),
       readiness: jest.fn(async (): Promise<WorkbenchReadiness> => ({ sandbox: { ok: true, reasons: [], agents: { claude: { ok: true }, codex: { ok: true } } } })),
       events: jest.fn(async (_id?: string, _opts?: unknown) => ({ events: [event(1, { chatId: _id ?? 'chat-one' })], cursor: 1, oldestSeq: 1, hasOlder: false })),
       sendMessage: jest.fn(async (_id?: string, _input?: unknown) => ({ queued: false })),

@@ -19,7 +19,7 @@ import { openExternal } from '../renderer/lib/openExternal';
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 jest.mock('../renderer/lib/api', () => ({
   api: {
-    workbenches: { list: jest.fn(), restore: jest.fn() },
+    workbenches: { list: jest.fn(), restore: jest.fn(), searchTranscripts: jest.fn(() => Promise.resolve([])) },
     workflows: { list: jest.fn(() => Promise.resolve([])) },
     loops: { list: jest.fn(() => Promise.resolve([])) },
     pullRequests: {},

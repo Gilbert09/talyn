@@ -87,6 +87,11 @@ per-sandbox `idleTtlSec`.
   created_at, updated_at`.
 - `workbench_events` — APPEND-ONLY `(chat_id, seq)` unique, `turn int, event jsonb, created_at`.
   Never a growing jsonb column on a row (the transcript disk-IO lesson). Paged by `seq`.
+- `workbench_search_text` (migration 0142) — the searchable text of the transcripts (⌘K, `GET /workbenches/search`).
+  One row for each `user` or `assistant` event with text blocks (`workbench_search_body()`), with a generated
+  `tsv` and a GIN index. An `AFTER INSERT` trigger on `workbench_events` writes it, so every append path feeds it.
+  Chats from before 0142 come from the `transcript-search-backfill` job (night window, cursor in
+  `usage_insights_backfill`). Stream deltas, tool calls, tool output and thinking are not in it.
 - `workbench_checkpoints` — `chat_id, turn, ref, sha, created_at`.
 
 ## Your instruction files in sandboxes (migration `0077_workbench_instruction_files.sql`)

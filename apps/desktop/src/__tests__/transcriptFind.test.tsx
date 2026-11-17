@@ -12,6 +12,8 @@ import {
   paintMatches,
   requestTranscriptFind,
   stepMatch,
+  takePendingTranscriptFind,
+  transcriptFindText,
 } from '../renderer/lib/transcriptFind';
 import { TranscriptFindBar } from '../renderer/components/workbench/TranscriptFindBar';
 import type { OlderHistory } from '../renderer/components/workbench/WorkbenchTranscript';
@@ -322,6 +324,63 @@ describe('TranscriptFindBar', () => {
     expect(load).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Retry earlier' }));
     expect(load).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('transcriptFindText', () => {
+  it.each([
+    ['pyarrow', 'Upgrade pyarrow to 17', 'pyarrow'],
+    ['  upgrade   PyArrow ', 'please upgrade pyarrow now', 'upgrade PyArrow'],
+    ['pyarrow upgrade', 'please upgrade pyarrow now', 'pyarrow'],
+    ['to pyarrow', 'please upgrade pyarrow', 'pyarrow'],
+    ['pyarr lock', 'pyarrow in uv.lock', 'pyarr'],
+    ['zzz yyy', 'nothing here', 'zzz yyy'],
+  ])('%j in %j → %j', (search, text, expected) => {
+    expect(transcriptFindText(search, text)).toBe(expected);
+  });
+});
+
+describe('a find request for a transcript that is not on screen', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+    takePendingTranscriptFind('wb-1');
+  });
+
+  it('opens the bar with the query when the transcript mounts, once', () => {
+    requestTranscriptFind('wb-1', 'beta');
+    render(<Harness><p>alpha beta</p><p>beta</p></Harness>);
+    expect(input()).toHaveValue('beta');
+    expect(screen.getByText('1 of 2')).toBeInTheDocument();
+    expect(takePendingTranscriptFind('wb-1')).toBeNull();
+  });
+
+  it('is for its own session only', () => {
+    requestTranscriptFind('wb-other', 'beta');
+    render(<Harness><p>beta</p></Harness>);
+    expect(screen.queryByRole('search')).toBeNull();
+    expect(takePendingTranscriptFind('wb-other')).toBe('beta');
+  });
+
+  it('expires', () => {
+    jest.useFakeTimers({ now: 0 });
+    requestTranscriptFind('wb-1', 'beta');
+    jest.setSystemTime(10_001);
+    expect(takePendingTranscriptFind('wb-1')).toBeNull();
+  });
+
+  it('is replaced by a request without a query', () => {
+    requestTranscriptFind('wb-1', 'beta');
+    requestTranscriptFind('wb-1');
+    expect(takePendingTranscriptFind('wb-1')).toBeNull();
+  });
+
+  it('sets the query of a bar that is open already', () => {
+    render(<Harness><p>alpha beta</p></Harness>);
+    open();
+    type('alpha');
+    act(() => requestTranscriptFind('wb-1', 'beta'));
+    expect(input()).toHaveValue('beta');
+    expect(takePendingTranscriptFind('wb-1')).toBeNull();
   });
 });
 

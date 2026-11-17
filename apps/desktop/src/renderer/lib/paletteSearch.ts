@@ -10,6 +10,12 @@ export interface PaletteEntry {
   keywords?: readonly (string | null | undefined)[];
   content: ReactNode;
   onSelect: () => void;
+  /**
+   * Rows with the same group are one thing found in two ways, such as a
+   * session found by its name and by its transcript. A search shows only the
+   * best of them.
+   */
+  group?: string;
 }
 
 export interface PaletteSection {
@@ -22,6 +28,11 @@ export interface PaletteSection {
   searchOnly?: boolean;
   /** At most this many rows from the section match a search. */
   limit?: number;
+  /**
+   * The rows were found by a search somewhere else (the server), so each one
+   * matches with at least this score, also when its label does not.
+   */
+  matchScore?: number;
 }
 
 export interface RankedPaletteEntry {
@@ -43,6 +54,8 @@ const KEYWORD_SUBSTRING = 0.35;
 const ALL_WORDS = 0.3;
 const FUZZY_MIN = 0.1;
 const FUZZY_RANGE = 0.1;
+/** For `matchScore`: below a match in any keyword, above a fuzzy match. */
+export const PALETTE_FOUND_ELSEWHERE = 0.25;
 
 function normalize(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -135,7 +148,8 @@ const byRank = (a: Scored, b: Scored) => b.score - a.score || a.index - b.index;
 
 /**
  * Every row that matches the search, best match first, as one list. Rows
- * with the same score keep the order of their sections.
+ * with the same score keep the order of their sections. Of the rows in one
+ * group, only the best stays.
  */
 export function rankPaletteSections(search: string, sections: readonly PaletteSection[]): RankedPaletteEntry[] {
   const all: Scored[] = [];
@@ -143,11 +157,20 @@ export function rankPaletteSections(search: string, sections: readonly PaletteSe
   for (const section of sections) {
     const matches: Scored[] = [];
     for (const entry of section.entries) {
-      const score = paletteMatchScore(search, entry.label, entry.keywords);
+      const score = Math.max(paletteMatchScore(search, entry.label, entry.keywords), section.matchScore ?? 0);
       if (score > 0) matches.push({ entry, kind: section.kind, score, index });
       index += 1;
     }
     all.push(...(section.limit === undefined ? matches : matches.sort(byRank).slice(0, section.limit)));
   }
-  return all.sort(byRank).map(({ entry, kind }) => ({ entry, kind }));
+  const groups = new Set<string>();
+  return all
+    .sort(byRank)
+    .filter(({ entry }) => {
+      if (entry.group === undefined) return true;
+      if (groups.has(entry.group)) return false;
+      groups.add(entry.group);
+      return true;
+    })
+    .map(({ entry, kind }) => ({ entry, kind }));
 }

@@ -17,6 +17,7 @@ import { openNewThread, openNewWorkbench } from './workbench/new/openNewWorkbenc
 import { SessionStateIcon } from './workbench/WorkbenchBadges';
 import { usePaletteAppSections } from './PaletteAppCommands';
 import { usePaletteAutomationsSection } from './PaletteAutomations';
+import { usePaletteTranscriptsSection } from './PaletteTranscripts';
 import { rankPaletteSections, type PaletteEntry, type PaletteSection } from '../lib/paletteSearch';
 import { SlackSessionMark } from './workbench/SlackThreadChip';
 import { slackSourceOf } from '../lib/slackSession';
@@ -79,7 +80,8 @@ function navShortcut(key: string): Shortcut | undefined {
 
 /**
  * ⌘K. Jump to any workbench, go anywhere in the app, or run any shortcut
- * that applies now (listed with its keys). With no search the rows are
+ * that applies now (listed with its keys). A search also finds the sessions
+ * whose transcripts hold it. With no search the rows are
  * grouped by type; a search ranks every match in one list, best first.
  * Closes on Escape or on a pick.
  */
@@ -173,6 +175,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
 
   const appSections = usePaletteAppSections(pick);
   const automationsSection = usePaletteAutomationsSection(pick);
+  const transcripts = usePaletteTranscriptsSection(query, pick);
 
   const navEntries: PaletteEntry[] = [];
   if (workbenchesOffered(features)) {
@@ -227,6 +230,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         id: `session:${wb.id}`,
         label: workbenchDisplayName(wb),
         keywords: [wb.name, wb.branch, wb.repoFullName, wb.id],
+        group: `workbench:${wb.id}`,
         onSelect: () => pick(() => navigate({ view: 'workbench', id: wb.id })),
         content: <PaletteSessionContent workbench={wb} />,
       })),
@@ -241,6 +245,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         id: `archived:${wb.id}`,
         label: workbenchDisplayName(wb),
         keywords: [wb.name, wb.branch, wb.repoFullName],
+        group: `workbench:${wb.id}`,
         onSelect: () =>
           pick(() => {
             useWorkbenchStore.getState().upsertWorkbench(wb);
@@ -258,6 +263,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         ),
       })),
     },
+    ...(transcripts.section ? [transcripts.section] : []),
     ...(automationsSection ? [automationsSection] : []),
     { id: 'navigate', heading: 'Navigate', kind: 'Navigate', entries: navEntries },
     ...appSections,
@@ -284,9 +290,9 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
 
   return (
     <CommandDialog open onOpenChange={(next) => !next && onClose()} shouldFilter={false}>
-      <CommandInput placeholder="Search sessions, automations, pages, spaces, settings and actions…" value={query} onValueChange={setQuery} autoFocus />
+      <CommandInput placeholder="Search sessions, transcripts, automations, pages, spaces, settings and actions…" value={query} onValueChange={setQuery} autoFocus />
       <CommandList>
-        <CommandEmpty>Nothing matches.</CommandEmpty>
+        <CommandEmpty>{transcripts.loading ? 'Searching transcripts…' : 'Nothing matches.'}</CommandEmpty>
         {searching
           ? rankPaletteSections(query, sections).map(({ entry, kind }) => <PaletteRow key={entry.id} entry={entry} kind={kind} />)
           : sections
