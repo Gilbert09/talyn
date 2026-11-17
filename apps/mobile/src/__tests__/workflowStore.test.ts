@@ -130,7 +130,7 @@ describe('socket invalidation, resume, and transcript reconciliation', () => {
     expect(store.read<Transcript>('transcript', 'chat-one').data?.gap).toBe(true);
     api.workbenches.events.mockResolvedValueOnce({ events: [event(2), event(3)], cursor: 3, oldestSeq: 2, hasOlder: false });
     jest.advanceTimersByTime(250); await settle();
-    expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { after: 1, limit: 200 });
+    expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { after: 1, limit: PAGE_SIZE });
     const state = store.read<Transcript>('transcript', 'chat-one');
     expect(state.data?.events.map((item) => item.seq)).toEqual([1, 2, 3]); expect(state.stale).toBe(false);
   });
@@ -155,14 +155,14 @@ describe('socket invalidation, resume, and transcript reconciliation', () => {
     api.workbenches.events.mockResolvedValueOnce({ events: [event(10)], cursor: 10, oldestSeq: 10, hasOlder: true });
     await store.load('transcript', 'chat-one');
     api.workbenches.events.mockResolvedValueOnce({ events: [event(9)], cursor: 9, oldestSeq: 9, hasOlder: false });
-    await store.older('chat-one'); expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { before: 10, limit: 200, ceiling: 400 });
+    await store.older('chat-one'); expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { before: 10, limit: PAGE_SIZE, ceiling: PAGE_CEILING });
     expect(store.read<Transcript>('transcript', 'chat-one').data?.events.map((item) => item.seq)).toEqual([9, 10]);
   });
   it('caps recovery batches and retained events for large histories', async () => {
     const { store, api } = active;
     api.workbenches.events.mockImplementation(async (_id, options) => {
       const after = (options as { after?: number })?.after ?? 0;
-      return { events: Array.from({ length: 200 }, (_, index) => event(after + index + 1)), cursor: after + 200 } as Awaited<ReturnType<typeof api.workbenches.events>>;
+      return { events: Array.from({ length: PAGE_SIZE }, (_, index) => event(after + index + 1)), cursor: after + PAGE_SIZE } as Awaited<ReturnType<typeof api.workbenches.events>>;
     });
     await store.load('transcript', 'chat-one');
     expect(api.workbenches.events.mock.calls.length).toBeLessThanOrEqual(5);

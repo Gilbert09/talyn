@@ -4,9 +4,14 @@ import type { PRRow, WorkbenchEventsPage } from '@talyn/client/native';
 import { eventSize, slimEvent } from './slim';
 
 export const SCHEMA_VERSION = 1;
-export const PAGE_SIZE = 200;
-/** The most events one backward page may hold while it reaches back to the start of a turn. */
-export const PAGE_CEILING = 400;
+/**
+ * Events per page, as on desktop and web. Most stored events are `stream_event` token deltas,
+ * which draw nothing once their message lands. A long turn can hold thousands of them, so a
+ * smaller page shows only a few rows and needs many requests to reach the start of the turn.
+ */
+export const PAGE_SIZE = 500;
+/** The most events one backward page may hold while it reaches back to the start of a turn. The server maximum. */
+export const PAGE_CEILING = 2_000;
 export const ROW_TEXT_LIMIT = 16000;
 export interface Scope { environment: string; user: string; workspace: string }
 /** `attention` holds every open PR of the workspace, as web's one PR store; the three PR pages filter it. */
@@ -69,8 +74,9 @@ export const EVENT_BYTES = 24_000_000;
 /** While the reader is in older history, live events may grow the window this much past the budget before the oldest go. */
 export const READING_SLACK = 1.5;
 /** A jump to the newest message releases older events past this count, keeping `RELEASE_KEEP`. They load again on scroll. */
-export const RELEASE_AT = 2_000;
-export const RELEASE_KEEP = 1_000;
+export const RELEASE_AT = 2 * PAGE_CEILING;
+/** One full newest page, so a jump to the newest message holds what opening the session holds. */
+export const RELEASE_KEEP = PAGE_CEILING;
 
 export interface Transcript {
   /** Oldest first, each one slimmed. */
