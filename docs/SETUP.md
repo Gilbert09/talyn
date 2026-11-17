@@ -1174,8 +1174,8 @@ Once the accounts above exist, add these to **Repo Settings → Secrets and vari
 | `VERCEL_PROJECT_ID` | Old name of `VERCEL_PROJECT_ID_WEB`. Only a fallback until the new one is set |
 | `VERCEL_PROJECT_ID_APP` | Vercel project for app.talyn.dev (`deploy-app.yml`) |
 | `VERCEL_PROJECT_ID_ADMIN` | Vercel project for admin.talyn.dev (`deploy-admin.yml`) |
-| `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_SPECIFIC_PASSWORD` | macOS notarization (`publish.yml`, `publish-workbenches.yml`) |
-| `CSC_LINK` / `CSC_KEY_PASSWORD` | macOS code signing (same workflows). Windows ships unsigned until these cover it |
+| `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_SPECIFIC_PASSWORD` | macOS notarization (`publish.yml`) |
+| `CSC_LINK` / `CSC_KEY_PASSWORD` | macOS code signing (same workflow). Windows ships unsigned until these cover it |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `publish.yml`: the release-notes generator runs the Claude Code CLI on a subscription token from `claude setup-token` |
 | `TALYN_RELEASE_INGEST_SECRET` | `publish.yml`: authorises the POST of release highlights to the backend. Same value as the backend variable |
 | `POSTHOG_CLI_API_KEY` | Source map upload to PostHog (`publish.yml`, `mobile-release.yml`, `mobile-update.yml`). The step skips when it is unset |
@@ -1186,9 +1186,8 @@ Repository **variables** (same page, Variables tab):
 
 | Variable | Purpose |
 | --- | --- |
-| `TALYN_SUPABASE_URL` / `TALYN_SUPABASE_ANON_KEY` / `TALYN_POSTHOG_KEY` | Public build values baked into the desktop, web and admin builds (`publish.yml`, `publish-workbenches.yml`, `test.yml`) |
+| `TALYN_SUPABASE_URL` / `TALYN_SUPABASE_ANON_KEY` / `TALYN_POSTHOG_KEY` | Public build values baked into the desktop, web and admin builds (`publish.yml`, `test.yml`) |
 | `POSTHOG_CLI_PROJECT_ID` | PostHog project that receives the desktop source maps |
-| `WORKBENCHES_BUILDS_PUBLIC` | `publish-workbenches.yml`: builds stay drafts until this is `true` |
 | `MOBILE_UPDATES_AUTO` | `mobile-update.yml`: set to `0` to stop automatic OTA updates |
 | `MOBILE_UPDATES_INTERNAL_BETA` | `mobile-update.yml`: set to `1` to also publish to internal beta |
 | `MOBILE_RELEASE_APPROVED` | `mobile-release.yml`: must be `true` before a store release runs |
