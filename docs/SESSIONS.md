@@ -7935,3 +7935,12 @@ Decisions:
 - The list asks for status `ready,suppressed`, so reports that the safety judge held back show as "Held back for safety". Other suppressed rows are dropped.
 - The `search` parameter is a superset filter. PostHog may return rows that do not contain the words, so Talyn's matcher decides.
 Left: an editor for these rules on mobile, mobile "Run selected", and an exact count of matching reports. PostHog's `count` is before Talyn's matcher, so the page shows only how many reports Talyn read.
+
+### 2026-11-17 — A session can turn itself into a thread
+
+Before, only a person could continue a session as a thread, with **Continue as thread** in the session menu. The `talyn` MCP server had no tool for it. A person asked a session to "turn this into a thread", and the agent could only tell them to press the menu item. Nothing happened until they did.
+Now `talyn_continue_as_thread` calls the same route, `POST /workbenches/:id/thread`, with an optional `prompt`. The thread's first message recaps the session's chat and then gives the prompt, so the agent hands its plan to the thread. The tool tells the agent to end its turn.
+Decisions:
+- A session token may call it on itself only. It refuses a thread, and a session that is in a thread already: that thread starts the other sessions.
+- It refuses a session at spawn depth 1 or more. A thread starts again at depth 0, so a child session could escape `MAX_SESSION_SPAWN_DEPTH`.
+- The briefing tells the agent to call the tool when the person asks for a thread. When the work needs several repositories and the person did not ask, the agent asks first.

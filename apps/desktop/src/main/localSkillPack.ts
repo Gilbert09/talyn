@@ -125,6 +125,7 @@ Give the person a short summary: what the session did, what is left, and what it
 - To stop a turn that goes the wrong way: \`talyn_cancel_session_turn\`. Then send the correction.
 - When the session needs more memory or CPU: \`talyn_resize_session\`.
 - When the session needs an MCP server that was connected later: \`talyn_restart_session\`.
+- When the person wants the session's work to go on as a thread: \`talyn_continue_as_thread\`.
 - When the session failed or is stuck while it starts: \`talyn_retry_session\`.
 
 Ask the person before you cancel a turn, retry a session or change its account.

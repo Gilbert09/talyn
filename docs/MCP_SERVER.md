@@ -236,6 +236,7 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | `talyn_cancel_session_turn` | Stop the running turn of a chat. |
 | `talyn_resize_session` | Move a session to a sandbox of another `size` after its running turn. `continue_with` sends a message that starts the next turn on the new sandbox. `remember_for_repository` also sets the repository's size. From a session token: the session itself, or a session in its thread. |
 | `talyn_restart_session` | Restart a session on a fresh sandbox of the same size after its running turn. The new sandbox gets the workspace's current MCP servers, so a server connected after the session started becomes available. `continue_with` sends a message that starts the next turn on the new sandbox. From a session token: the session itself, or a session in its thread. |
+| `talyn_continue_as_thread` | Turn a session into a thread (`POST /workbenches/:id/thread`). The thread starts with a recap of the session's conversation and the optional `prompt`, and the session joins it. From a session token: only the session itself, at spawn depth 0, and not when it is a thread or in a thread already. |
 | `talyn_session_timing` | Show where a session's turns spent their time: tests, installs, builds, Docker and services, waits, git, file reads, other tool calls and model time. It also lists the slowest calls. Read-only. From a session token: the session itself, or a session in its thread. |
 | `talyn_get_session_changes` | List changed files with line counts. |
 | `talyn_get_session_diff` | Read the unified diff, or one file with `path`. Large diffs are cut. A sleeping sandbox answers from the copy that Talyn stored, or from GitHub when all the work is pushed. Pass `live` to wake the sandbox and read it now. |
@@ -368,6 +369,9 @@ is refused, because it undoes what a person chose to watch.
   `talyn_session_timing` and `talyn_session_sandbox_status` work on the session
   itself, or on a session in its thread.
 - The background job and wake-up tools work on the session itself only.
+- `talyn_continue_as_thread` works on the session itself only. It refuses a
+  session that another session started: the new thread starts at depth 0, so it
+  would escape the spawn-depth limit.
 - `talyn_close_pull_request` refuses the session's own pull request, and any
   pull request outside the session's repository. A thread has no repository,
   so it cannot close pull requests.
