@@ -1,6 +1,6 @@
 import type { PRRow } from '@talyn/client/native';
 import { SymbolView } from 'expo-symbols';
-import type { ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { GestureDetector, usePanGesture } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from 'react-native-reanimated';
@@ -28,7 +28,12 @@ export function QueueSwipeRow({ row, queued = row.mergeQueued, busy, onQueue, ch
   const x = useSharedValue(0);
   const armed = useSharedValue(0);
   const past = useSharedValue(false);
-  const commit = () => onQueue(row);
+  // The colour and label of the swipe that acted. A successful toggle flips `queued`
+  // while the row is still off screen, and the strip must not turn to the opposite action.
+  const [acted, setActed] = useState<boolean | null>(null);
+  const shown = acted ?? queued;
+  const commit = () => { setActed(queued); onQueue(row); };
+  const settle = () => setActed(null);
 
   const pan = usePanGesture({
     enabled: !busy,
@@ -53,16 +58,16 @@ export function QueueSwipeRow({ row, queued = row.mergeQueued, busy, onQueue, ch
         x.value = withSpring(0, { damping: 20, stiffness: 220 });
       }
       past.value = false;
-      armed.value = withTiming(0, { duration: 380 });
+      armed.value = withTiming(0, { duration: 380 }, () => scheduleOnRN(settle));
     },
   });
 
   const rowStyle = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
   const armedStyle = useAnimatedStyle(() => ({ opacity: armed.value }));
-  const label = queued ? 'Dequeue' : 'Queue';
+  const label = shown ? 'Dequeue' : 'Queue';
   // Green adds to the queue, red removes from it. Same pairs as the success and destructive buttons.
-  const fill = queued ? c.destructiveFill : c.success;
-  const ink = queued ? c.destructiveFillText : c.primaryText;
+  const fill = shown ? c.destructiveFill : c.success;
+  const ink = shown ? c.destructiveFillText : c.primaryText;
   // Both sides carry the label. The opaque row covers the side it has not left.
   const sides = (tint: string) => <View style={local.sides}>
     {[0, 1].map((side) => <View key={side} style={local.side}>
