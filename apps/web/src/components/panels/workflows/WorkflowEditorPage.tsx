@@ -87,8 +87,9 @@ const ACTION_HINTS: Record<WorkflowActionType, string> = {
   assign: 'Assignees must be collaborators on the repository.',
   comment: 'Posted as Talyn on the PR conversation.',
   approve_pr: 'Approves as your GitHub account. GitHub does not let you approve your own PR.',
-  run_skill: 'Starts a cloud task. Counts against your plan, and never runs twice on one PR.',
-  run_prompt: 'Starts a cloud task. Counts against your plan, and never runs twice on one PR.',
+  run_skill: 'Starts a session on the PR with this skill. It never runs twice on one PR.',
+  // Old actions. Rules never offer them: they start sessions now.
+  run_prompt: 'Starts a session on the PR with this prompt.',
   watch_pr: 'Adds the PR to My PRs, exactly as pasting its URL does.',
   enqueue_merge_queue: 'Waits for checks and handles a gated base branch.',
   run_code_review:
@@ -97,7 +98,7 @@ const ACTION_HINTS: Record<WorkflowActionType, string> = {
   start_session: 'Starts a session with this prompt.',
   slack_reply: 'Replies in the thread of the Slack message.',
   slack_react: 'Adds a reaction to the Slack message.',
-  start_task: 'Starts a cloud task on the repository with this prompt.',
+  start_task: 'Starts a session on the repository with this prompt.',
   issue_comment: 'Talyn posts this comment on the issue.',
   issue_set_status: 'Talyn moves the issue to this status.',
 };
@@ -172,7 +173,7 @@ export function WorkflowEditorPage({
   const oneStartAction = isIssueWorkflowIntegration(kind) || kind === 'posthog_inbox';
   // The trigger of a webhook or PostHog Inbox rule is fixed.
   const fixedTrigger = kind === 'webhook' || kind === 'posthog_inbox';
-  const hasStartAction = input.actions.some((a) => a.type === 'start_session' || a.type === 'start_task');
+  const hasStartAction = input.actions.some((a) => a.type === 'start_session');
   const problem = useMemo(() => workflowInputProblem(input), [input]);
   // "Run selected" in the backlog uses the saved rule, so the backlog says when the editor differs.
   const savedInput = useMemo(() => (editing ? JSON.stringify(workflowToInput(editing)) : null), [editing]);
@@ -469,7 +470,7 @@ export function WorkflowEditorPage({
                   label: WORKFLOW_ACTION_LABELS[t],
                   hint: ACTION_HINTS[t],
                   disabled: (t === 'slack_reply' && !canReply)
-                    || (oneStartAction && hasStartAction && (t === 'start_session' || t === 'start_task')),
+                    || (oneStartAction && hasStartAction && t === 'start_session'),
                 }))}
                 onPick={(type) =>
                   setInput((p) => ({
@@ -495,7 +496,7 @@ export function WorkflowEditorPage({
                     setInput((p) => ({ ...p, actions: p.actions.filter((_, j) => j !== i) }))
                   }
                 >
-                  {action.type === 'start_session' || action.type === 'start_task' ? (
+                  {action.type === 'start_session' ? (
                     <div className="space-y-3">
                       <StartSessionInput action={action} integration={kind} onChange={(next) => setInput((p) => ({ ...p, actions: p.actions.map((a, j) => j === i ? next : a) }))} />
                       {isIssueWorkflowIntegration(kind) && (

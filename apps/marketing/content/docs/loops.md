@@ -15,7 +15,7 @@ Use a scheduled automation for routine work, such as updating dependencies or wr
 3. Select **New automation**.
 4. Give it a name.
 5. Write the **Prompt**. This is the whole instruction the agent gets. It has the repository checked out and can open a pull request.
-6. Under **Start each run as**, choose **Session** or **Cloud task**. **Session** is the default. A session stays in Talyn for review and follow-up.
+6. Each run starts a session on Talyn Fleet. A session stays in Talyn for review and follow-up.
 7. Set the **Schedule**.
 8. Pick the **Repository**. A scheduled automation works on one repository.
 9. Pick the **Agent** and **Model**.
@@ -52,7 +52,7 @@ If the prompt has to call something outside, for example to post to a webhook, c
 
 ## MCP servers
 
-A scheduled automation that starts a cloud task on Talyn Fleet gets the tools of your workspace's [MCP servers](/docs/mcp-servers). The choice does not show for a session.
+Each session gets the tools of your workspace's [MCP servers](/docs/mcp-servers). A scheduled automation cannot choose its own servers.
 
 - **Whatever the workspace has on** (the default) gives it every server that is on, including servers you connect later.
 - **Choose for this loop** gives it only the servers you pick, or none.

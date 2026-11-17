@@ -188,16 +188,14 @@ export function SlackConditions({ conditions, onChange, settings }: {
  * PostHog Inbox rule always runs on the report's repository.
  */
 export function StartSessionInput({ action, onChange, integration }: {
-  action: Extract<WorkflowAction, { type: 'start_session' | 'start_task' }>;
+  action: Extract<WorkflowAction, { type: 'start_session' }>;
   onChange: (next: WorkflowAction) => void;
   integration: WorkflowIntegration;
 }) {
   const repositories = useWorkspaceStore((s) => s.repositories);
   useFleetModelCatalog();
   // A GitHub Issues rule can leave the repository empty: the issue's own repository.
-  const setRepository = (value: string) => onChange(action.type === 'start_task' && integration !== 'github_issues'
-    ? { ...action, repositoryId: value }
-    : { ...action, repositoryId: value || null });
+  const setRepository = (value: string) => onChange({ ...action, repositoryId: value || null });
   const emptyRepository = integration === 'slack'
     ? 'Let Talyn choose'
     : integration === 'github_issues' ? 'The issue\'s repository' : 'Pick a repository';

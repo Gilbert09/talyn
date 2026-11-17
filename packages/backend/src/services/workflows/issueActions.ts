@@ -6,7 +6,6 @@ import type {
   WorkflowTemplateExtras,
 } from '@talyn/shared';
 import { renderWorkflowTemplate, WORKFLOW_INTEGRATION_LABELS } from '@talyn/shared';
-import { isBoxGateError } from '../billing/entitlements.js';
 import { debugBus } from '../debugBus.js';
 import { GitHubNotConnectedError, githubService } from '../github.js';
 import { GitHubRateLimitError } from '../githubRateGate.js';
@@ -23,15 +22,13 @@ import { buildInboundPrompt } from '../inbound/prompt.js';
 import { LinearRateLimitError } from '../linear/api.js';
 import { createLinearComment, fetchLinearIssue, RECENT_COMMENTS, setLinearIssueState } from '../linear/issues.js';
 import { LinearConnectionUnavailableError } from '../linear/store.js';
-import { resolveCloudEnv } from '../prCloudFix.js';
-import { createCloudTask, TaskReferenceError } from '../taskCreate.js';
-import { boxRefused, no, ok, type OneResult } from './actionResult.js';
+import { no, ok, type OneResult } from './actionResult.js';
 import type { BaseActionContext, IssueActionContext } from './actions.js';
 import { repositoryName } from './inboundActions.js';
 
 /**
  * The actions of an issue rule (Linear, GitHub Issues): the start actions'
- * claim on the issue and their prompt, `start_task`, and the two write-backs.
+ * claim on the issue and their prompt, and the two write-backs.
  * `start_session` lives with the other session starts in `sessionAction.ts`
  * and uses {@link claimIssueForStart}, {@link issueRulePrompt} and
  * {@link finishIssueStart}.
@@ -184,46 +181,6 @@ export async function issueRulePrompt(instruction: string, ctx: IssueActionConte
     bodyLabel: 'issue',
     sourceUrl: facts.url,
   });
-}
-
-/** Start a cloud task for an issue. The claim comes first, then the dispatch. */
-export async function startIssueTask(
-  action: Extract<WorkflowAction, { type: 'start_task' }>,
-  ctx: IssueActionContext
-): Promise<OneResult> {
-  const repo = await issueRepository(action, ctx);
-  if (!repo) return noRepository('start_task');
-  const env = await resolveCloudEnv(ctx.workspaceId);
-  if (!env) {
-    return { outcome: no('start_task', 'no_cloud_provider', 'this workspace has no connected cloud provider to run the task on') };
-  }
-  const claim = await claimIssueForStart('start_task', ctx);
-  if (!claim.ok) return claim.result;
-
-  const name = ctx.workflowName ?? `${WORKFLOW_INTEGRATION_LABELS[ctx.integration]} automation`;
-  let result: OneResult;
-  try {
-    const task = await createCloudTask({
-      workspaceId: ctx.workspaceId,
-      type: 'code_writing',
-      source: 'workflow',
-      title: ctx.facts.identifier ? `${ctx.facts.identifier}: ${ctx.facts.title}`.slice(0, 200) : name,
-      description: `Started by the "${name}" automation from ${ctx.facts.identifier || 'an issue'}.`,
-      prompt: await issueRulePrompt(action.prompt, ctx, repo.name),
-      repositoryId: repo.id,
-      assignedEnvironmentId: env.envId,
-      ...(action.model ? { model: action.model } : {}),
-      ...(action.internetAccess ? { internetAccess: true } : {}),
-      workflow: { workflowId: ctx.workflowId, runId: ctx.runId, event: ctx.facts.event },
-    });
-    result = { outcome: ok('start_task', `started task ${task.id}`), taskId: task.id };
-  } catch (err) {
-    if (isBoxGateError(err)) result = boxRefused('start_task', err, null, ctx);
-    else if (err instanceof TaskReferenceError) result = { outcome: no('start_task', 'repository_unresolved', err.message) };
-    else result = { outcome: no('start_task', 'error', err instanceof Error ? err.message : String(err)) };
-  }
-  await finishIssueStart(claim.link, result);
-  return result;
 }
 
 // ---- Write-back -------------------------------------------------------------

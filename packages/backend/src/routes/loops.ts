@@ -141,8 +141,8 @@ export function loopRoutes(): Router {
     if (loop.mcpServerIds !== null && loop.provider !== 'selfhosted') {
       return 'MCP servers are only available on Talyn Fleet.';
     }
-    if (loop.target === 'session' && loop.mcpServerIds !== null) {
-      return 'A session uses the workspace MCP servers. Per-automation MCP selection is only available for cloud tasks.';
+    if (loop.mcpServerIds !== null) {
+      return 'A schedule starts a session, and a session uses the workspace MCP servers. A schedule cannot choose its own.';
     }
     if (loop.internetAccess && loop.provider !== 'selfhosted') {
       return 'Internet access is a Talyn Fleet capability — PostHog Code runs cannot be given it.';
@@ -161,18 +161,17 @@ export function loopRoutes(): Router {
         const label = agent === 'codex' ? 'Codex' : 'Claude';
         return `Talyn Fleet has no ${label} subscription connected to this workspace.`;
       }
-      if (loop.target === 'session') {
-        const owner = await getDbClient()
-          .select({ id: usersTable.id, email: usersTable.email })
-          .from(workspacesTable)
-          .innerJoin(usersTable, eq(usersTable.id, workspacesTable.ownerId))
-          .where(eq(workspacesTable.id, workspaceId))
-          .limit(1);
-        if (!owner[0]) return 'The workspace owner no longer exists.';
-        const readiness = await workbenchReadiness(workspaceId, owner[0]);
-        const reason = readiness.sandbox.reasons[0];
-        if (reason) return reason.message;
-      }
+      // Every loop starts a session, so the owner must be able to run one.
+      const owner = await getDbClient()
+        .select({ id: usersTable.id, email: usersTable.email })
+        .from(workspacesTable)
+        .innerJoin(usersTable, eq(usersTable.id, workspacesTable.ownerId))
+        .where(eq(workspacesTable.id, workspaceId))
+        .limit(1);
+      if (!owner[0]) return 'The workspace owner no longer exists.';
+      const readiness = await workbenchReadiness(workspaceId, owner[0]);
+      const reason = readiness.sandbox.reasons[0];
+      if (reason) return reason.message;
     }
     return null;
   }

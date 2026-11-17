@@ -9,7 +9,6 @@ import {
   type LoopWithStats,
 } from '@talyn/shared';
 import { callApi, type WatchedRepo } from '../api.js';
-import { posthogCodeRetiredForWorkspace } from '../../services/posthogCodeRetirement.js';
 import {
   bool,
   booleanSchema,
@@ -37,7 +36,6 @@ const fields = {
   target: { type: 'string', enum: LOOP_TARGETS },
   concurrency: { type: 'string', enum: LOOP_CONCURRENCIES },
   internetAccess: booleanSchema,
-  mcpServerIds: { type: ['array', 'null'], items: textSchema },
   repositoryId: textSchema,
   repoFullName: textSchema,
 };
@@ -138,7 +136,7 @@ export const LOOPS = [
   ),
   defineTool(
     'create_loop',
-    'Create a scheduled automation. Set target to session for a reviewable sandbox session, or task for a cloud task.',
+    'Create a scheduled automation. Each run starts a reviewable sandbox session on Talyn Fleet. A schedule cannot start a cloud task.',
     inputSchema,
     [],
     { openWorldHint: true },
@@ -149,13 +147,8 @@ export const LOOPS = [
       requireId(values, 'prompt');
       requireId(values, 'repositoryId');
       await repoName(ownerId, workspaceId, values);
+      // The blank loop is a Talyn Fleet session: every run starts a session.
       const defaults = emptyLoopInput('UTC');
-      // Sessions need the fleet. A task loop also defaults to it once PostHog
-      // Code is retired, because the blank loop still names PostHog Code.
-      if (values.provider === undefined &&
-          (values.target === 'session' || (await posthogCodeRetiredForWorkspace(workspaceId)))) {
-        values.provider = 'selfhosted';
-      }
       if (values.provider === 'selfhosted' || values.provider === 'posthog_code')
         defaults.model = defaultModelForLoopProvider(values.provider);
       return loopLine(
@@ -219,7 +212,7 @@ export const LOOPS = [
   ),
   defineTool(
     'run_loop_now',
-    'Run a scheduled automation now through its normal session or task checks.',
+    'Run a scheduled automation now through its normal session checks.',
     { loop_id: textSchema },
     ['loop_id'],
     { openWorldHint: true },

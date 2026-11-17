@@ -80,10 +80,6 @@ export function requireId(args: Record<string, unknown>, key: string): string {
   return v;
 }
 
-export function deriveTitle(prompt: string): string {
-  return prompt.split('\n')[0].trim().slice(0, 80) || 'New task';
-}
-
 export function trim(s: string, max = 280): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }

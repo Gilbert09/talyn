@@ -14,8 +14,8 @@ const VALID: LoopInput = {
   prompt: 'Look at yesterday’s failing checks and fix what you can.',
   cron: '0 9 * * 1-5',
   timezone: 'Europe/London',
-  provider: 'posthog_code',
-  model: 'claude-opus-5',
+  provider: 'selfhosted',
+  model: 'claude-sonnet-5-5',
   repositoryId: 'repo-1',
   repoFullName: 'Gilbert09/talyn',
 };
@@ -29,7 +29,8 @@ describe('validateLoop', () => {
     // Skip is the default, and it is what makes a tight schedule harmless.
     expect(out.concurrency).toBe('skip');
     expect(out.name).toBe('Morning triage');
-    expect(out.target).toBe('task');
+    // Every schedule starts a session.
+    expect(out.target).toBe('session');
   });
 
   it.each([null, undefined, 'a string', 42, []])('refuses %j as a loop', (raw) => {
@@ -82,9 +83,9 @@ describe('validateLoop', () => {
   });
 
   describe('provider and model coherence', () => {
-    it('accepts a Claude model on PostHog Code', () => {
-      expect(validateLoop(withField({ provider: 'posthog_code', model: 'claude-sonnet-5' })).model).toBe(
-        'claude-sonnet-5'
+    it('refuses a Claude model on PostHog Code, because a schedule starts a session', () => {
+      expect(() => validateLoop(withField({ provider: 'posthog_code', model: 'claude-sonnet-5' }))).toThrow(
+        /sessions run on Talyn Fleet/
       );
     });
 
@@ -106,7 +107,7 @@ describe('validateLoop', () => {
     });
 
     it('refuses a model neither catalogue has', () => {
-      expect(() => validateLoop(withField({ model: 'gpt-4' }))).toThrow(
+      expect(() => validateLoop(withField({ provider: 'posthog_code', model: 'gpt-4' }))).toThrow(
         /not a model PostHog Code can run/
       );
       expect(() =>
@@ -139,15 +140,25 @@ describe('validateLoop', () => {
       ).toBe('session');
     });
 
-    it('refuses a session on PostHog Code', () => {
-      expect(() => validateLoop(withField({ target: 'session' }))).toThrow(
-        /sessions run on Talyn Fleet/
+    it('starts a session when no target is given', () => {
+      expect(validateLoop(withField({ target: undefined })).target).toBe('session');
+    });
+
+    it('refuses a cloud task, and says a schedule starts a session', () => {
+      expect(() => validateLoop(withField({ target: 'task' }))).toThrow(
+        /a schedule starts a session\. Schedules cannot start cloud tasks/
       );
     });
 
-    it('refuses an unknown target', () => {
-      expect(() => validateLoop(withField({ target: 'thread' as LoopInput['target'] }))).toThrow(
-        /task or session/
+    it.each([undefined, 'session'] as const)('refuses PostHog Code with target %j', (target) => {
+      expect(() =>
+        validateLoop(withField({ target, provider: 'posthog_code', model: 'claude-opus-5' }))
+      ).toThrow(/sessions run on Talyn Fleet/);
+    });
+
+    it.each(['thread', '', 42])('refuses the unknown target %j', (target) => {
+      expect(() => validateLoop(withField({ target: target as LoopInput['target'] }))).toThrow(
+        /target must be session/
       );
     });
   });
@@ -215,7 +226,7 @@ describe('loopInputProblem', () => {
   it('returns exactly the message the server would 400 with', () => {
     // One definition of "valid", so the disabled button and the server cannot
     // disagree about what is wrong.
-    const bad = withField({ model: 'gpt-6.1-sol' });
+    const bad = withField({ model: 'gpt-4' });
     let thrown = '';
     try {
       validateLoop(bad);
@@ -223,5 +234,6 @@ describe('loopInputProblem', () => {
       thrown = (err as Error).message;
     }
     expect(loopInputProblem(bad)).toBe(thrown);
+    expect(thrown).toMatch(/not a model Talyn Fleet can run/);
   });
 });

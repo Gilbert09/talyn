@@ -60,13 +60,13 @@ The editor offers only the conditions that make sense for the triggers you picke
 | **Assign people** | Assigns people. They must be collaborators on the repository. |
 | **Post a comment** | Posts a comment on the pull request as Talyn. You can use templates such as `{{pr.author}}` and `{{pr.baseBranch}}`. |
 | **Approve the PR** | Approves the pull request as your GitHub account, with an optional review comment. GitHub does not let you approve your own pull request. If your approval still stands, Talyn does not approve again. |
-| **Run a skill** | Runs a [skill](/docs/skills) on the pull request with an agent. |
-| **Run a prompt** | Runs your prompt on the pull request with an agent. |
+| **Run a skill** | Starts a session on the pull request that runs a [skill](/docs/skills). |
+| **Start a session** | Starts a session with your prompt on the pull request's repository. |
 | **Add to My PRs** | Tracks the pull request on your **Pull requests** page. |
 | **Add to the merge queue** | Queues the pull request. You can pick the merge method: Squash, Merge commit, Rebase, or whatever the pull request is set to. |
 | **Run a code review** | Starts a [code review](/docs/code-review). The findings stay in Talyn. |
 
-**Run a skill** and **Run a prompt** run at most once on each pull request.
+**Run a skill** and **Start a session** run at most once on each pull request.
 
 ## Run history
 

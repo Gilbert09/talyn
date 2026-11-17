@@ -12,7 +12,7 @@ import type {
   WorkflowTriggerEvent,
   WorkflowWithStats,
 } from '@talyn/shared';
-import { workflowIntegrationOf } from '@talyn/shared';
+import { workflowActionAsSession, workflowIntegrationOf } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { workflowRuns as runsTable, workflows as workflowsTable } from '../../db/schema.js';
 import { posthogClaimsForRuns } from '../inbound/issueLinks.js';
@@ -45,7 +45,9 @@ function rowToWorkflow(row: WorkflowRow): WorkflowDefinition {
     enabled: row.enabled,
     events: (row.events ?? []) as WorkflowTriggerEvent[],
     conditions: (row.conditions ?? {}) as WorkflowDefinition['conditions'],
-    actions: (row.actions ?? []) as WorkflowDefinition['actions'],
+    // A rule saved before automations stopped starting cloud tasks reads its
+    // old task action as the session that replaces it.
+    actions: ((row.actions ?? []) as WorkflowDefinition['actions']).map(workflowActionAsSession),
     maxRunsPerPrPerHour: row.maxRunsPerPrPerHour,
     // Only when set, so a rule without a daily cap reads as it always has.
     ...(row.maxRunsPerDay !== null && row.maxRunsPerDay !== undefined ? { maxRunsPerDay: row.maxRunsPerDay } : {}),

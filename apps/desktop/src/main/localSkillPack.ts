@@ -199,16 +199,16 @@ Give the person a short list: the pull request, what blocks it, and the next ste
 
 ## Fix it in the cloud
 
-- For failing checks, merge conflicts and review comments: \`talyn_fix_pull_request\`.
-  Talyn starts a cloud task that makes the pull request ready to merge.
-- For a larger change: start a session on the pull request with the talyn-remote-session skill.
+- For failing checks, merge conflicts, review comments or a larger change: start a session
+  on the pull request with the talyn-remote-session skill. MCP cannot start a cloud task.
 - To keep a pull request mergeable automatically: \`talyn_set_auto_keep_mergeable\`.
 
 ## Review it
 
 - \`talyn_start_code_review\` with \`quick\`, \`standard\` or \`deep\`.
 - \`talyn_get_code_review\` reads the status and the findings.
-- \`talyn_fix_code_review_findings\` starts a cloud task for the findings that the person chooses.
+- To fix findings, start a session on the pull request with the talyn-remote-session skill.
+  Name the findings in the prompt.
 - \`talyn_dismiss_code_review_finding\` dismisses a finding that is wrong.
 
 ## Land it

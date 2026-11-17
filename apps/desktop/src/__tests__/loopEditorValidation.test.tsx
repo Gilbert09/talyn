@@ -17,8 +17,8 @@ import { LoopEditorPage } from '../renderer/components/panels/loops/LoopEditorPa
 
 const AGENTS: CloudAgentChoice[] = [
   {
-    type: 'posthog_code',
-    displayName: 'PostHog Code',
+    type: 'selfhosted',
+    displayName: 'Talyn Fleet',
     model: 'claude-opus-5',
     models: [{ id: 'claude-opus-5', label: 'Opus 5', blurb: 'Newest Opus.' }],
   },
@@ -66,10 +66,12 @@ describe('LoopEditorPage — when it complains', () => {
     expect(problemShown()).toBe(false);
   });
 
-  it('defaults new Fleet loops to reviewable sessions', () => {
-    renderEditor(async () => {}, [...AGENTS, FLEET_AGENT]);
+  it('offers Fleet agents only and has no run-as picker', () => {
+    const posthog = { ...AGENTS[0], type: 'posthog_code', displayName: 'PostHog Code' } as CloudAgentChoice;
+    renderEditor(async () => {}, [posthog, FLEET_AGENT]);
 
-    expect(screen.getByText('Session')).toHaveClass('bg-primary');
+    expect(screen.queryByText('Start each run as')).not.toBeInTheDocument();
+    expect(screen.queryByText('PostHog Code')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Agent')).toHaveValue('selfhosted:codex');
     expect(screen.queryByText('MCP servers')).not.toBeInTheDocument();
   });
@@ -113,5 +115,24 @@ describe('LoopEditorPage — when it complains', () => {
 
     fireEvent.click(createButton());
     await waitFor(() => expect(problemShown()).toBe(true));
+  });
+
+  it('saves a session loop with no per-loop MCP selection', async () => {
+    const onSave = jest.fn(async (_input: LoopInput) => {});
+    renderEditor(onSave);
+    expect(screen.queryByText('Start each run as')).toBeNull();
+    expect(screen.queryByText('MCP servers')).toBeNull();
+
+    fireEvent.change(document.querySelector('input')!, { target: { value: 'Triage' } });
+    fireEvent.change(document.querySelector('textarea')!, { target: { value: 'Do the thing.' } });
+    fireEvent.change(screen.getByDisplayValue('Pick a repository...'), { target: { value: 'repo-1' } });
+    fireEvent.click(createButton());
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0]).toMatchObject({
+      target: 'session',
+      provider: 'selfhosted',
+      mcpServerIds: null,
+    });
   });
 });
