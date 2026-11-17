@@ -56,7 +56,7 @@ function checkUpdateWorkflow(text, yaml) {
   assert.deepEqual(published, Object.keys(profiles).filter((name) => profiles[name].autoUpdate), 'Publish to every automatic channel, preview first.');
 }
 
-/** The automatic TestFlight path builds only iOS internal-beta, from main, through testflight-build.cjs. */
+/** The automatic internal-beta path builds iOS and Android, from main, through testflight-build.cjs. */
 function checkTestflightWorkflow(text, yaml) {
   const workflow = yaml.load(text);
   assert.deepEqual(Object.keys(workflow.on).sort(), ['push', 'workflow_dispatch']);

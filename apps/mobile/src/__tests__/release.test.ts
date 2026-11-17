@@ -391,12 +391,28 @@ describe('automatic TestFlight build', () => {
   it('refuses an EAS environment that sets the update switch', () => {
     expect(() => testflight.easEnvironment({ PATH: '/bin' }, { MOBILE_UPDATES_ENABLED: '0' })).toThrow('eas.json owns the switch');
   });
-  it('builds only the iOS internal-beta profile and lets EAS submit it', () => {
-    const args = testflight.buildArgs('fix: fixture (eeeeeee)');
-    expect(args).toEqual(['build', '--profile', 'internal-beta', '--platform', 'ios', '--auto-submit-with-profile', 'internal-beta',
+  it('checks both stores', () => {
+    expect(testflight.PLATFORMS).toEqual(['ios', 'android']);
+  });
+  it.each(['ios', 'android'])('builds only the %s internal-beta profile and lets EAS submit it', (platform) => {
+    const args = testflight.buildArgs(platform, 'fix: fixture (eeeeeee)');
+    expect(args).toEqual(['build', '--profile', 'internal-beta', '--platform', platform, '--auto-submit-with-profile', 'internal-beta',
       '--message', 'fix: fixture (eeeeeee)', '--no-wait', '--non-interactive', '--json']);
-    expect(testflight.fingerprintArgs()).toEqual(expect.arrayContaining(['--build-profile', 'internal-beta', '--platform', 'ios']));
-    expect(testflight.existingBuildArgs('a'.repeat(40))).toEqual(expect.arrayContaining(['--build-profile', 'internal-beta', '--runtime-version', 'a'.repeat(40)]));
+    expect(testflight.fingerprintArgs(platform)).toEqual(expect.arrayContaining(['--build-profile', 'internal-beta', '--platform', platform]));
+    expect(testflight.existingBuildArgs(platform, 'a'.repeat(40))).toEqual(expect.arrayContaining(['--platform', platform, '--build-profile', 'internal-beta',
+      '--runtime-version', 'a'.repeat(40)]));
+  });
+  it.each<[string | undefined, string[]]>([
+    [undefined, ['ios', 'android']],
+    ['', ['ios', 'android']],
+    ['all', ['ios', 'android']],
+    ['ios', ['ios']],
+    ['android', ['android']],
+  ])('selects platforms for %p', (value, expected) => {
+    expect(testflight.selectedPlatforms(value)).toEqual(expected);
+  });
+  it.each(['web', 'IOS', 'ios,android', ' all'])('refuses the platform selection %p', (value) => {
+    expect(() => testflight.selectedPlatforms(value)).toThrow('MOBILE_TESTFLIGHT_PLATFORMS');
   });
 
   it.each<[string, string[], boolean]>([
@@ -425,8 +441,14 @@ describe('automatic TestFlight build', () => {
   });
 
   const queued = { id: 'build-1', platform: 'IOS', buildProfile: 'internal-beta', gitCommitHash: sha, appBuildVersion: '12', updateChannel: { name: 'internal-beta' } };
-  it('accepts the build it queued', () => {
-    expect(testflight.assertQueuedBuild([queued], { sha, buildNumber: '12' })).toBe(queued);
+  it.each<[string, typeof queued]>([
+    ['ios', queued],
+    ['android', { ...queued, platform: 'ANDROID' }],
+  ])('accepts the %s build it queued', (platform, build) => {
+    expect(testflight.assertQueuedBuild([build], { platform, sha, buildNumber: '12' })).toBe(build);
+  });
+  it('refuses an iOS build when it queued Android', () => {
+    expect(() => testflight.assertQueuedBuild([queued], { platform: 'android', sha, buildNumber: '12' })).toThrow();
   });
   it.each<[string, unknown]>([
     ['no build', []],
@@ -437,7 +459,7 @@ describe('automatic TestFlight build', () => {
     ['another build number', [{ ...queued, appBuildVersion: '11' }]],
     ['another channel', [{ ...queued, updateChannel: { name: 'production' } }]],
   ])('refuses %s', (_name, builds) => {
-    expect(() => testflight.assertQueuedBuild(builds, { sha, buildNumber: '12' })).toThrow();
+    expect(() => testflight.assertQueuedBuild(builds, { platform: 'ios', sha, buildNumber: '12' })).toThrow();
   });
 });
 

@@ -335,24 +335,29 @@ A change that needs a new native build must not ship as an update. That includes
 and the native fields in `app.config.ts`. The change gives a new fingerprint, so its update reaches no current binary.
 Build and distribute a new binary for it.
 
-## Automatic TestFlight builds for internal-beta
+## Automatic TestFlight and Play builds for internal-beta
 
 `.github/workflows/mobile-testflight.yml` runs after each push to `main` that changes the same paths as the update workflow.
-It builds only the iOS `internal-beta` profile. Android and `production` builds stay on the protected release workflow.
+It builds the iOS and Android `internal-beta` profiles. `production` builds stay on the protected release workflow.
 Tom's call (2026-11-16): native changes on `main` go to TestFlight with no manual dispatch or approval record.
+Android was added on 2026-11-17, because no Android binary was built after build 1 (2026-11-12).
 
 `apps/mobile/scripts/testflight-build.cjs` does each run:
 
 1. It runs only in CI, on `main`, from a clean checkout of the pushed commit.
-2. It generates the iOS native fingerprint of the `internal-beta` profile with `eas fingerprint:generate`.
-3. It looks for an `internal-beta` iOS build with that runtime that is new, queued, in progress, or finished.
-   If one exists, it stops. The update workflow sends the change to that binary, so a new build is not necessary.
-4. It reserves the next build number. The number is one more than the highest of `MOBILE_BUILD_NUMBER` in the
+2. For each platform, it generates the native fingerprint of the `internal-beta` profile with `eas fingerprint:generate`.
+3. For each platform, it looks for an `internal-beta` build with that runtime that is new, queued, in progress, or finished.
+   If one exists, that platform needs no build. The update workflow sends the change to that binary.
+   If no platform needs a build, it stops.
+4. It reserves the next build number, one for the run. Both platforms use it. The number is one more than the highest of `MOBILE_BUILD_NUMBER` in the
    EAS `production` environment and the last 50 store builds on both platforms. It writes that number to
    `MOBILE_BUILD_NUMBER` in the EAS `production` environment, because the EAS builder reads the number from there.
-5. It queues `eas build --profile internal-beta --platform ios --auto-submit-with-profile internal-beta --no-wait`.
-   EAS submits the finished binary to App Store Connect. The runner does not wait for the build queue.
-6. It checks that EAS queued one iOS `internal-beta` build for the pushed commit with the reserved number.
+5. For each platform that needs a build, it queues
+   `eas build --profile internal-beta --platform <platform> --auto-submit-with-profile internal-beta --no-wait`.
+   EAS submits the finished iOS binary to App Store Connect. It submits the Android binary to the Play internal
+   track as a draft. A store owner must release that draft in Play Console. The runner does not wait for the build queue.
+6. It checks that EAS queued one `internal-beta` build of that platform for the pushed commit with the reserved number.
+   A failure on one platform does not stop the other platform. The run fails after both are tried.
 
 The workflow shares the `mobile-release` concurrency group with the protected release workflow.
 Thus only one run at a time reserves a build number.
@@ -362,6 +367,9 @@ It also sets `MOBILE_RELEASE_PROFILE=internal-beta`. EAS evaluates `app.config.t
 Without these values, the production config fails, or the fingerprint uses the wrong channel.
 Set the repository variable `MOBILE_TESTFLIGHT_AUTO=0` to stop it.
 **Actions → Mobile TestFlight → Run workflow** checks `main` again. Select **force** to build when the fingerprint is not new.
+Select **platform** to check only iOS or only Android.
+Android submission needs the Google Play service account key in EAS submission credentials.
+The first Play upload may need a manual Console upload before API submission works.
 EAS adds each build to both TestFlight groups, and the app answers export compliance in its `Info.plist`.
 See **TestFlight and Play preparation**.
 
