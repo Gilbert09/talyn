@@ -402,7 +402,8 @@ export const BUNDLED_FLEET_MODELS = [
   { id: 'claude-opus-4-8', label: 'Opus 4.8', provider: 'anthropic', tier: 'strong', blurb: 'The previous Opus flagship.' },
   { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', provider: 'anthropic', tier: 'economy', blurb: 'Cheapest of the Claude set.' },
   { id: 'gpt-6-astra', label: 'GPT-6 Astra', provider: 'openai', tier: 'flagship', blurb: 'Most capable: the hardest reasoning and coding.' },
-  { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', provider: 'openai', tier: 'strong', blurb: 'Near-Astra on complex work, for less.' },
+  { id: 'gpt-6.2-sol', label: 'GPT-6.2 Sol', provider: 'openai', tier: 'strong', blurb: 'Newest Sol: near-Astra on complex work, for less.' },
+  { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', provider: 'openai', tier: 'strong', blurb: 'The previous Sol.' },
   { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', provider: 'openai', tier: 'fast', blurb: 'Fast and efficient: the Codex default.' },
   { id: 'gpt-6-luna', label: 'GPT-6 Luna', provider: 'openai', tier: 'economy', blurb: 'Cheapest, for focused high-volume work.' },
 ] as const satisfies readonly FleetModel[];
