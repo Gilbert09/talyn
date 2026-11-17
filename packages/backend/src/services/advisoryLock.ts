@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { getPoolDbClient, isRealPostgres, type Database } from '../db/client.js';
 import { beginInflight, endInflight } from '../db/inflight.js';
+import { withTransactionPolicy } from '../db/stallBreaker.js';
 
 /**
  * Postgres advisory-lock guards for the side-effectful poll loops.
@@ -133,7 +134,9 @@ async function withDeadline<T>(
 type LockTx = Parameters<Parameters<Database['transaction']>[0]>[0];
 
 /** `db.transaction`, recorded in the in-flight registry from the moment the
- *  transaction holds its connection until it commits or rolls back. */
+ *  transaction holds its connection until it commits or rolls back. The lock
+ *  name labels the stall breaker's log line too. No idle limit: the lock
+ *  transaction is idle for the whole tick by design, and `maxHoldMs` bounds it. */
 async function inLockTransaction<T>(
   db: Database,
   name: string,
@@ -141,10 +144,12 @@ async function inLockTransaction<T>(
 ): Promise<T> {
   let inflightId = null as number | null;
   try {
-    return await db.transaction(async (tx) => {
-      inflightId = beginInflight('lock_tx', name);
-      return fn(tx);
-    });
+    return await withTransactionPolicy({ label: name, idleLimitMs: null }, () =>
+      db.transaction(async (tx) => {
+        inflightId = beginInflight('lock_tx', name);
+        return fn(tx);
+      })
+    );
   } finally {
     if (inflightId !== null) endInflight(inflightId);
   }

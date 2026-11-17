@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type postgres from 'postgres';
 import {
+  DbTransactionEndedError,
   getScopedDb,
   instrumentEgress,
   markScopeEnded,
@@ -359,7 +360,11 @@ describe('instrumentEgress transactions', () => {
 });
 
 describe('a query sent after its transaction ended', () => {
-  const sendLate = (tx: postgres.Sql) => awaitNow(tx.unsafe('select "id" from "integrations"', []));
+  const sendLate = (tx: postgres.Sql) =>
+    awaitNow(tx.unsafe('select "id" from "integrations"', [])).then(
+      () => null,
+      (e: unknown) => e,
+    );
 
   async function endedTx(nested: boolean): Promise<postgres.Sql> {
     const sql = fakeTxSql();
@@ -390,7 +395,8 @@ describe('a query sent after its transaction ended', () => {
   ])('logs the call site once on a %s', async (_name, nested) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const tx = await endedTx(nested);
-    for (let i = 0; i < 3; i++) await sendLate(tx);
+    for (let i = 0; i < 3; i++) expect(await sendLate(tx)).toBeInstanceOf(DbTransactionEndedError);
+    expect(inflightSize()).toBe(0);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0][0])).toMatch(
       /^\[db\] query sent after its transaction ended: SELECT "integrations"\n {2}at /,
@@ -403,7 +409,7 @@ describe('a query sent after its transaction ended', () => {
     instrumentEgress(sql);
     await (sql.begin as (fn: (tx: postgres.Sql) => Promise<unknown>) => Promise<unknown>)(
       async (tx) => {
-        await sendLate(tx);
+        expect(await sendLate(tx)).toBeNull();
       },
     );
     expect(warn).not.toHaveBeenCalled();
@@ -413,7 +419,9 @@ describe('a query sent after its transaction ended', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const tx = await endedTx(false);
     await sendLate(tx);
-    await awaitNow(tx.unsafe('select 1 from "tasks"', []));
+    await expect(awaitNow(tx.unsafe('select 1 from "tasks"', []))).rejects.toBeInstanceOf(
+      DbTransactionEndedError,
+    );
     expect(warn).toHaveBeenCalledTimes(2);
   });
 });
