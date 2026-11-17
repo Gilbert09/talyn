@@ -124,7 +124,7 @@ describe('mcp tool registry', () => {
 
   it('covers the full surface (listing, context, actions, tasks)', () => {
     const names = TOOLS.map((t) => t.name);
-    expect(names).toHaveLength(108);
+    expect(names).toHaveLength(109);
     for (const expected of [
       'talyn_ask_user',
       'talyn_list_workspaces',

@@ -42,6 +42,15 @@ export function isClaudeInterruptionEvent(event: AgentEvent): boolean {
     isClaudeInterruptionText(content.map((block) => block.text).join('\n'));
 }
 
+/**
+ * Shown when Claude's `result` arrives while a tool call has no result yet. Claude
+ * Code ends its run that way when the agent leaves its own background tasks
+ * (subagents, background shells) running: the open call stops, and the next
+ * turn's resume marks it interrupted.
+ */
+export const TURN_ENDED_WITH_OPEN_TOOL_NOTE =
+  "The agent ended its turn before a tool call finished. That call and the agent's background tasks stopped.";
+
 export function isClaudeRejectedToolResult(content: unknown, isError: boolean): boolean {
   if (!isError) return false;
   const text = typeof content === 'string'
@@ -139,6 +148,10 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
     interruptionOpen = true;
   };
   const permissionByRequestId = new Map<string, number>(); // requestId → blocks index
+  // Tool calls with no result yet, for TURN_ENDED_WITH_OPEN_TOOL_NOTE. Codex output is converted
+  // by Talyn and its runs have no background tasks, so a Codex run never gets the note.
+  const openToolIds = new Set<string>();
+  let codexRun = false;
   const askUserCalls = new Map<string, Block>(); // talyn_ask_user calls waiting for their result
   // Pair tool_result → tool_use by tool_use_id so the collapsed result
   // row can say "Read 40 lines from <file>" instead of dumping bytes.
@@ -160,6 +173,10 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
   for (const event of events) {
     const seqKey = String(event.seq);
     if (event.type !== 'user' && !(event.type === 'system' && event.subtype === 'talyn_interruption')) interruptionOpen = false;
+    if (event.type === 'system' && event.subtype === 'init') {
+      codexRun = (event as { agent?: unknown }).agent === 'codex';
+      openToolIds.clear();
+    }
 
     if (event.type === 'talyn_permission_request') {
       const reqId = String((event as { requestId?: unknown }).requestId ?? '');
@@ -245,7 +262,10 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
           const id = String(b.id ?? '');
           const name = String(b.name ?? 'unknown');
           const inp = b.input ?? {};
-          if (id) toolUseById.set(id, { name, input: inp });
+          if (id) {
+            toolUseById.set(id, { name, input: inp });
+            openToolIds.add(id);
+          }
           const block: Block = { kind: 'tool_use', key: `${seqKey}.${i}`, toolId: id, name, input: inp };
           // The question card shows a question. The call shows only when it fails.
           if (id && isAskUserToolName(name)) askUserCalls.set(id, block);
@@ -286,6 +306,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
         };
         if (b.type === 'tool_result') {
           const toolId = String(b.tool_use_id ?? '');
+          openToolIds.delete(toolId);
           const paired = toolId ? toolUseById.get(toolId) : undefined;
           const stopped = isClaudeRejectedToolResult(b.content, b.is_error === true);
           const askCall = askUserCalls.get(toolId);
@@ -317,6 +338,10 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
     }
 
     if (event.type === 'result') {
+      if (!event.is_error && !codexRun && openToolIds.size > 0) {
+        blocks.push({ kind: 'system', key: `${seqKey}.open`, text: TURN_ENDED_WITH_OPEN_TOOL_NOTE });
+      }
+      openToolIds.clear();
       const usage = (event.usage as { input_tokens?: number; output_tokens?: number }) ?? {};
       blocks.push({
         kind: 'result',
