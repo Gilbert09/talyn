@@ -1,17 +1,20 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Pencil, Play, Plus, Repeat, Trash2 } from 'lucide-react';
-import type { LoopInput, LoopWithStats } from '@talyn/shared';
+import { ChevronDown, ChevronRight, Loader2, Pencil, Play, Plus, Repeat, Trash2 } from 'lucide-react';
+import type { LoopInput, LoopRun, LoopWithStats } from '@talyn/shared';
 import {
   describeSchedule,
   presetForCron,
   LOOP_DISABLED_REASON_LABELS,
+  LOOP_RUN_FAILURE_LABELS,
   LOOP_RUN_STATUS_LABELS,
   LOOP_TARGET_LABELS,
 } from '@talyn/shared';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/confirm-dialog';
-import { toast } from '../../../stores/toast';
+import { toast, type ToastAction } from '../../../stores/toast';
+import { useNavigationStore } from '../../../stores/navigation';
+import { useWorkspaceStore } from '../../../stores/workspace';
 import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
 import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
@@ -76,6 +79,7 @@ function LoopRow({
   onDelete,
   onSetEnabled,
   onRunNow,
+  starting,
   liveRuns,
 }: {
   loop: LoopWithStats;
@@ -85,6 +89,8 @@ function LoopRow({
   onDelete: () => void;
   onSetEnabled: (enabled: boolean) => void;
   onRunNow: () => void;
+  /** A run-now request is in flight. The server answers only once the session or task exists. */
+  starting: boolean;
   liveRuns: ReturnType<typeof useLoops>['liveRuns'];
 }) {
   const { stats } = loop;
@@ -147,8 +153,15 @@ function LoopRow({
           >
             {loop.enabled ? 'On' : 'Off'}
           </Button>
-          <Button variant="ghost" size="sm" onClick={onRunNow} title="Run now">
-            <Play className="h-3.5 w-3.5" />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onRunNow}
+            disabled={starting}
+            title={starting ? 'Starting a run' : 'Run now'}
+            data-attr="loop-run-now"
+          >
+            {starting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
           </Button>
           <Button variant="ghost" size="sm" onClick={onEdit} title="Edit">
             <Pencil className="h-3.5 w-3.5" />
@@ -161,6 +174,12 @@ function LoopRow({
 
       {expanded && (
         <div className="border-t">
+          {starting && (
+            <p className="flex items-center gap-2 border-b px-3 py-2 text-[13px] text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Starting a run&hellip;
+            </p>
+          )}
           <LoopRunsList loopId={loop.id} liveRuns={liveRuns[loop.id]} />
         </div>
       )}
@@ -176,6 +195,10 @@ export function LoopsPanel() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<LoopWithStats | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [starting, setStarting] = useState<ReadonlySet<string>>(() => new Set());
+  const navigate = useNavigationStore((s) => s.navigate);
+  const selectTask = useWorkspaceStore((s) => s.selectTask);
+  const setActivePanel = useWorkspaceStore((s) => s.setActivePanel);
 
   /**
    * The one loop event the server cannot see.
@@ -294,17 +317,62 @@ export function LoopsPanel() {
     }
   };
 
+  /** A button on the toast that goes to what the run started. */
+  const openRunAction = (run: LoopRun): ToastAction | undefined => {
+    const sessionId = run.sessionId;
+    if (sessionId) return { label: 'Open session', onClick: () => navigate({ view: 'workbench', id: sessionId }) };
+    const taskId = run.taskId;
+    if (taskId) {
+      return {
+        label: 'Open task',
+        onClick: () => {
+          selectTask(taskId);
+          setActivePanel('queue');
+        },
+      };
+    }
+    return undefined;
+  };
+
+  /**
+   * Run now.
+   *
+   * The request returns only after the session or task exists, which takes some
+   * seconds. So the row shows that it is starting at once, and the toast at the
+   * end says what the run did — "started" for a run that was refused is wrong.
+   */
   const doRunNow = async (loop: LoopWithStats) => {
+    if (starting.has(loop.id)) return;
+    setStarting((prev) => new Set(prev).add(loop.id));
+    setExpandedId(loop.id);
     try {
-      await runNow(loop.id);
-      // Deliberately not "started": a run-now can legitimately end as
-      // "waiting for a task slot", and the history is where the answer is.
+      const run = await runNow(loop.id);
       trackEvent('loop_run_now');
-      setExpandedId(loop.id);
-      toast.info('Run requested', 'Watch the history for what it did.');
+      const reason = run?.failureCode ? LOOP_RUN_FAILURE_LABELS[run.failureCode] : run?.error ?? undefined;
+      if (!run) {
+        toast.info('Run requested', 'Watch the history for what it did.');
+      } else if (run.status === 'failed') {
+        toast.error('The run did not start', reason);
+      } else if (run.status === 'waiting_slot') {
+        toast.info('The run is waiting to start', reason);
+      } else if (run.status === 'skipped') {
+        toast.info('The run was skipped', reason);
+      } else {
+        toast.success(
+          `Started ${loop.name}`,
+          run.target === 'session' ? 'A new session is working on it.' : 'A new task is working on it.',
+          openRunAction(run)
+        );
+      }
     } catch (err) {
       captureAnalyticsException(err, { flow: 'loop_run_now' });
       toast.error('Could not run that', err instanceof Error ? err.message : undefined);
+    } finally {
+      setStarting((prev) => {
+        const next = new Set(prev);
+        next.delete(loop.id);
+        return next;
+      });
     }
   };
 
@@ -354,6 +422,7 @@ export function LoopsPanel() {
                 onEdit={() => openEditor(loop)}
                 onDelete={() => setPendingDelete(loop)}
                 onRunNow={() => void doRunNow(loop)}
+                starting={starting.has(loop.id)}
                 onSetEnabled={(enabled) => {
                   void setEnabled(loop, enabled)
                     .then(() => trackEvent(enabled ? 'loop_enabled' : 'loop_disabled'))
