@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, X } from 'lucide-react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp, Loader2, X } from 'lucide-react';
 import { IS_MAC } from '../../lib/shortcuts';
 import {
   OPEN_TRANSCRIPT_FIND_EVENT,
@@ -11,6 +11,7 @@ import {
   stepMatch,
   type OpenTranscriptFindDetail,
 } from '../../lib/transcriptFind';
+import type { OlderHistory } from './WorkbenchTranscript';
 
 /** The first match that is not above the top of the view, so a search starts where the person is reading. */
 function firstMatchInView(container: HTMLElement, ranges: Range[]): number {
@@ -21,22 +22,28 @@ function firstMatchInView(container: HTMLElement, ranges: Range[]): number {
   return i === -1 ? ranges.length - 1 : i;
 }
 
+const sameStart = (a: Range, b: Range) => a.startContainer === b.startContainer && a.startOffset === b.startOffset;
+
 /**
  * The find bar over a session transcript. It opens on `OPEN_TRANSCRIPT_FIND_EVENT`
  * for its own session and closes when another session's bar opens, so only one
  * set of highlights is on the page.
+ *
+ * The transcript loads its newest messages first. A search loads the earlier
+ * pages too, so it covers the whole transcript.
  */
 export function TranscriptFindBar({
   workbenchId,
   scrollRef,
-  partial,
+  older,
 }: {
   workbenchId: string;
   scrollRef: React.RefObject<HTMLDivElement | null>;
-  /** Earlier messages are not loaded, so they are not searched. */
-  partial: boolean;
+  older: OlderHistory;
 }) {
   const [open, setOpen] = useState(false);
+  // Goes up on each ⌘F, so the input gets the focus again when the bar is already open.
+  const [focusRequest, setFocusRequest] = useState(0);
   const [query, setQuery] = useState('');
   const [current, setCurrent] = useState(-1);
   const [count, setCount] = useState(0);
@@ -64,14 +71,18 @@ export function TranscriptFindBar({
         return;
       }
       setOpen(true);
-      requestAnimationFrame(() => {
-        inputRef.current?.focus();
-        inputRef.current?.select();
-      });
+      setFocusRequest((n) => n + 1);
     };
     window.addEventListener(OPEN_TRANSCRIPT_FIND_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_TRANSCRIPT_FIND_EVENT, onOpen);
   }, [workbenchId]);
+
+  // After the commit, so the input is in the DOM. A focus before the render lands would do nothing.
+  useLayoutEffect(() => {
+    if (!open || focusRequest === 0) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [open, focusRequest]);
 
   // A new query, or the bar opening: search again and start at the view.
   useEffect(() => {
@@ -82,7 +93,17 @@ export function TranscriptFindBar({
     select(firstMatchInView(el, rangesRef.current), true);
   }, [open, query, scrollRef, select]);
 
-  // The transcript changes while the bar is open: count again, keep the place, do not scroll.
+  // A search covers the whole transcript: load the earlier pages one after another.
+  const searching = open && query.trim() !== '';
+  const { hasOlder, loading: loadingOlder, error: olderError } = older;
+  const loadRef = useRef(older.load);
+  loadRef.current = older.load;
+  useEffect(() => {
+    if (searching && hasOlder && !loadingOlder && !olderError) void loadRef.current();
+  }, [searching, hasOlder, loadingOlder, olderError]);
+
+  // The transcript changes while the bar is open: count again and keep the current match.
+  // Earlier pages land above it, so find it by its text position, not by its index.
   useEffect(() => {
     const el = scrollRef.current;
     if (!open || !el || !query.trim() || typeof MutationObserver === 'undefined') return;
@@ -90,10 +111,17 @@ export function TranscriptFindBar({
     const observer = new MutationObserver(() => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        rangesRef.current = findTextRanges(el, query);
-        const n = rangesRef.current.length;
-        setCount(n);
-        select(n === 0 ? -1 : Math.min(Math.max(currentRef.current, 0), n - 1), false);
+        const prev = rangesRef.current[currentRef.current];
+        const ranges = findTextRanges(el, query);
+        rangesRef.current = ranges;
+        setCount(ranges.length);
+        if (!prev) {
+          // The first matches, for example from an earlier page: go to the nearest one.
+          select(firstMatchInView(el, ranges), true);
+          return;
+        }
+        const kept = ranges.findIndex((range) => sameStart(range, prev));
+        select(kept !== -1 ? kept : ranges.length === 0 ? -1 : Math.min(currentRef.current, ranges.length - 1), false);
       });
     });
     observer.observe(el, { childList: true, subtree: true, characterData: true });
@@ -148,13 +176,20 @@ export function TranscriptFindBar({
       <span className="min-w-[4.5rem] text-right tabular-nums text-muted-foreground" aria-live="polite">
         {label}
       </span>
-      {partial && (
-        <span
-          className="whitespace-nowrap text-muted-foreground"
-          title="Only loaded messages are searched. Scroll up to load earlier ones."
-        >
-          · loaded only
+      {searching && hasOlder && !olderError && (
+        <span className="flex items-center gap-1 whitespace-nowrap text-muted-foreground" title="Loading earlier messages to search them">
+          <Loader2 className="h-3 w-3 animate-spin" /> searching earlier
         </span>
+      )}
+      {searching && hasOlder && olderError && (
+        <button
+          type="button"
+          onClick={() => void older.load()}
+          className="whitespace-nowrap rounded px-1 text-destructive hover:bg-accent"
+          title={`Earlier messages did not load, so they are not searched: ${olderError}`}
+        >
+          Retry earlier
+        </button>
       )}
       <button
         type="button"

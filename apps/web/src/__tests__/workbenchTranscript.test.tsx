@@ -620,13 +620,32 @@ describe('message times', () => {
 });
 
 describe('WorkbenchTranscript find', () => {
-  it('opens the find bar for its session and searches the messages', () => {
-    render(<WorkbenchTranscript chat={chat} events={turns(1, 3)} loading={false} error={null} ops={ops} older={older({ hasOlder: true })} />);
+  const view = (events: WorkbenchEvent[], o: OlderHistory) => (
+    <WorkbenchTranscript chat={chat} events={events} loading={false} error={null} ops={ops} older={o} />
+  );
+  const input = () => screen.getByRole('textbox', { name: 'Find in transcript' });
+
+  it('opens the find bar for its session, focuses the input and searches the messages', () => {
+    render(view(turns(1, 3), older({ hasOlder: false })));
     expect(screen.queryByRole('search')).toBeNull();
     act(() => requestTranscriptFind('wb1'));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Find in transcript' }), { target: { value: 'MESSAGE' } });
+    expect(input()).toHaveFocus();
+    fireEvent.change(input(), { target: { value: 'MESSAGE' } });
     expect(screen.getByText('1 of 3')).toBeInTheDocument();
-    expect(screen.getByText('· loaded only')).toBeInTheDocument();
+  });
+
+  it('searches the earlier pages as they land and keeps the current match', async () => {
+    const o = older();
+    const { rerender } = render(view(turns(10, 3), o));
+    act(() => requestTranscriptFind('wb1'));
+    fireEvent.change(input(), { target: { value: 'MESSAGE' } });
+    expect(o.load).toHaveBeenCalled();
+    expect(screen.getByText('searching earlier')).toBeInTheDocument();
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    expect(screen.getByText('2 of 3')).toBeInTheDocument();
+    rerender(view(turns(1, 12), { ...o, hasOlder: false }));
+    await waitFor(() => expect(screen.getByText('11 of 12')).toBeInTheDocument());
+    expect(screen.queryByText('searching earlier')).toBeNull();
   });
 });
 
