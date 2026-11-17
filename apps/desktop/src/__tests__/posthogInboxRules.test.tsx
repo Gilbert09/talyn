@@ -2,6 +2,7 @@ import '@testing-library/jest-dom';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import {
+  POSTHOG_INBOX_DEFAULT_PROMPT,
   validateWorkflow,
   type PostHogClaimSummary,
   type PostHogInboxDryRun,
@@ -216,6 +217,40 @@ describe('PostHog Inbox rule editor', () => {
     expect(screen.queryByLabelText('Repository')).toBeNull();
     expect(screen.getByText(/The session works on the report's own repository/)).toBeTruthy();
     expect(screen.queryByLabelText('Remove Report ready for work')).toBeNull();
+  });
+
+  it('starts the prompt with the template', async () => {
+    await openEditor();
+    expect((screen.getByLabelText('Prompt') as HTMLTextAreaElement).value).toBe(POSTHOG_INBOX_DEFAULT_PROMPT);
+    expect(screen.queryByRole('button', { name: 'Use the template' })).toBeNull();
+  });
+
+  it('puts the template back into an empty prompt', async () => {
+    await openEditor();
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: '  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use the template' }));
+    expect((screen.getByLabelText('Prompt') as HTMLTextAreaElement).value).toBe(POSTHOG_INBOX_DEFAULT_PROMPT);
+  });
+
+  it.each(['{{report.title}}', '{{report.url}}', '{{report.summary}}', '{{report.id}}', '{{repo}}'])(
+    'inserts %s at the cursor',
+    async (placeholder) => {
+      await openEditor();
+      const prompt = screen.getByLabelText('Prompt') as HTMLTextAreaElement;
+      fireEvent.change(prompt, { target: { value: 'Fix  now' } });
+      prompt.setSelectionRange(4, 4);
+      fireEvent.click(screen.getByRole('button', { name: placeholder }));
+      expect(prompt.value).toBe(`Fix ${placeholder} now`);
+    }
+  );
+
+  it('replaces the selected text with a field', async () => {
+    await openEditor();
+    const prompt = screen.getByLabelText('Prompt') as HTMLTextAreaElement;
+    fireEvent.change(prompt, { target: { value: 'Fix TITLE now' } });
+    prompt.setSelectionRange(4, 9);
+    fireEvent.click(screen.getByRole('button', { name: '{{report.title}}' }));
+    expect(prompt.value).toBe('Fix {{report.title}} now');
   });
 
   it('allows one start action only', async () => {

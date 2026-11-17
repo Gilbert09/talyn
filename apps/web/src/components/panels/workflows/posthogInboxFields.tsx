@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { AlertCircle, Check, Loader2, Pencil, RefreshCw, Unlink } from 'lucide-react';
 import type {
   PostHogInboxConditionSpec,
@@ -17,7 +17,10 @@ import {
   POSTHOG_INBOX_ACTIONABILITY_LABELS,
   POSTHOG_INBOX_CONDITION_SPECS,
   POSTHOG_INBOX_OAUTH_UNAVAILABLE_CODE,
+  POSTHOG_INBOX_DEFAULT_PROMPT,
   POSTHOG_INBOX_PRIORITIES,
+  POSTHOG_INBOX_PROMPT_FIELDS,
+  posthogInboxPromptPlaceholder,
 } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
@@ -713,6 +716,67 @@ export function PostHogInboxConditions({
           if (spec) setConditions({ ...conditions, [spec.key]: emptyPostHogInboxConditionValue(spec) });
         }}
       />
+    </div>
+  );
+}
+
+/**
+ * The report fields under a PostHog Inbox rule's prompt. A button puts the
+ * field's placeholder at the cursor; Talyn fills it in when the session
+ * starts. "Use the template" fills an empty prompt with the default one.
+ */
+export function PostHogInboxPromptFields({
+  prompt,
+  onChange,
+  textareaRef,
+}: {
+  prompt: string;
+  onChange: (next: string) => void;
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
+}) {
+  const insert = (text: string) => {
+    const el = textareaRef.current;
+    const start = el ? el.selectionStart : prompt.length;
+    const end = el ? el.selectionEnd : prompt.length;
+    onChange(prompt.slice(0, start) + text + prompt.slice(end));
+    // Put the cursor after the placeholder once React has the new value.
+    requestAnimationFrame(() => {
+      const target = textareaRef.current;
+      if (!target) return;
+      target.focus();
+      target.setSelectionRange(start + text.length, start + text.length);
+    });
+  };
+  return (
+    <div className="space-y-1.5" data-attr="posthog-inbox-prompt-fields">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-muted-foreground">Insert from the report:</span>
+        {POSTHOG_INBOX_PROMPT_FIELDS.map((field) => (
+          <button
+            key={field.key}
+            type="button"
+            title={`${field.description} Adds ${posthogInboxPromptPlaceholder(field.key)}.`}
+            className="rounded border px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+            onClick={() => insert(posthogInboxPromptPlaceholder(field.key))}
+          >
+            {posthogInboxPromptPlaceholder(field.key)}
+          </button>
+        ))}
+        {!prompt.trim() && (
+          <button
+            type="button"
+            className="text-xs underline hover:text-foreground"
+            data-attr="posthog-inbox-use-template"
+            onClick={() => onChange(POSTHOG_INBOX_DEFAULT_PROMPT)}
+          >
+            Use the template
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Talyn fills in these fields when the session starts. It also adds the full report below your prompt as
+        untrusted text.
+      </p>
     </div>
   );
 }
