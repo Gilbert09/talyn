@@ -6,7 +6,7 @@ import {
   sessionAttentionKey,
   type ContextAttentionCounts,
 } from '@talyn/shared';
-import type { Database } from '../../db/client.js';
+import { getPoolDbClient, type Database } from '../../db/client.js';
 import {
   pullRequests as prTable,
   workbenchChats as chatsTable,
@@ -104,7 +104,10 @@ async function attentionKeys(
 ): Promise<{ session: AttentionSessionRow; key: string | null }[]> {
   if (sessions.length === 0) return [];
   const chats = new Map<string, { id: string; status: string; queued: number; turnCount: number; planPending: boolean }[]>();
-  for (const row of await attentionChatsQuery(db, sessions.map((s) => s.id))) {
+  // The pool, not `db`: the plan check reads `workbench_search_text`, which is
+  // backend-pool only (RLS on, no grant), so the owner-scoped handle gets
+  // "permission denied". `sessions` came from the owner-filtered query above.
+  for (const row of await attentionChatsQuery(getPoolDbClient(), sessions.map((s) => s.id))) {
     const list = chats.get(row.workbenchId) ?? [];
     list.push({
       id: row.id,

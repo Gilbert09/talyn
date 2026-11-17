@@ -330,6 +330,23 @@ describe('contextAttention (pglite)', () => {
       expect((await contextAttention(db, OWNER)).sessions).toEqual(counted ? { s1: 'plan' } : {});
     });
 
+    // The plan check reads `workbench_search_text`, which the owner-scoped role
+    // may not read in production. pglite has no roles, so prove the chat query
+    // does not run on the handle the route passes in.
+    it('reads chats on the pool, not on the owner-scoped handle', async () => {
+      await session('s1');
+      await transcript('s1-chat-0', 1, [['user', 'Plan it'], ['assistant', PLAN]]);
+      let selects = 0;
+      const scoped = new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop === 'select') selects++;
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+      expect((await contextAttention(scoped, OWNER)).sessions).toEqual({ s1: 'plan' });
+      expect(selects).toBe(1);
+    });
+
     it('counts a plan after tool calls and their results', async () => {
       await session('s1');
       await transcript('s1-chat-0', 1, [['user', 'Plan it']]);
