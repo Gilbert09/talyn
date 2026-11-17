@@ -1,7 +1,7 @@
 import {
-  POSTHOG_INBOX_DESTINATION_NAME,
   POSTHOG_INBOX_READY_EVENT,
   posthogDestinationUrl,
+  posthogInboxDestinationName,
   type PostHogInboxDestinationOutcome,
 } from '@talyn/shared';
 import { PostHogCodeApiError } from '../posthogCode/client.js';
@@ -33,6 +33,13 @@ import type { PostHogInboxConnection } from './connection.js';
  *   `internal_destination` edit is live at once.
  */
 
+/** What changes from one destination write to the next. */
+export interface DestinationInput {
+  url: string;
+  secret: string | null;
+  githubLogin?: string | null;
+}
+
 /** PostHog's webhook template. */
 export const WEBHOOK_TEMPLATE_ID = 'template-webhook';
 
@@ -56,11 +63,14 @@ export const DESTINATION_FILTERS = {
  *
  * `secret` is null for a URL without a secret. The secret headers are then
  * sent empty, which clears an old secret in PostHog.
+ *
+ * `githubLogin` is the login of the person who makes the change. It goes in
+ * the name, so people who share a PostHog project can tell the destinations apart.
  */
-export function destinationPayload(input: { url: string; secret: string | null }, mode: 'create' | 'update'): PostHogHogFunctionWrite {
+export function destinationPayload(input: DestinationInput, mode: 'create' | 'update'): PostHogHogFunctionWrite {
   return {
     ...(mode === 'create' ? { type: 'internal_destination' as const, template_id: WEBHOOK_TEMPLATE_ID } : {}),
-    name: POSTHOG_INBOX_DESTINATION_NAME,
+    name: posthogInboxDestinationName(input.githubLogin),
     description: DESCRIPTION,
     enabled: true,
     filters: { ...DESTINATION_FILTERS, events: DESTINATION_FILTERS.events.map((e) => ({ ...e })) },
@@ -133,7 +143,7 @@ export class DestinationSyncError extends Error {
 export async function upsertDestination(
   connection: Pick<PostHogInboxConnection, 'client'>,
   existingId: string | null,
-  input: { url: string; secret: string | null }
+  input: DestinationInput
 ): Promise<{ id: string; created: boolean }> {
   try {
     if (existingId) {
