@@ -16,11 +16,12 @@ const mockLifecycle = jest.requireActual<typeof import('./workflowFixtures')>('.
 const mockInboxStatus = jest.fn();
 const mockOpenExternal = jest.fn();
 const mockBacklog = jest.fn();
+const mockBacklogCount = jest.fn();
 const mockRuns = jest.fn(() => [] as unknown[]);
 
 jest.mock('@talyn/client/native', () => {
   const actual = jest.requireActual('@talyn/client/native');
-  return { ...actual, workflows: { ...actual.workflows, posthogInboxStatus: (...a: unknown[]) => mockInboxStatus(...a), posthogInboxBacklog: (...a: unknown[]) => mockBacklog(...a) } };
+  return { ...actual, workflows: { ...actual.workflows, posthogInboxStatus: (...a: unknown[]) => mockInboxStatus(...a), posthogInboxBacklog: (...a: unknown[]) => mockBacklog(...a), posthogInboxBacklogCount: (...a: unknown[]) => mockBacklogCount(...a) } };
 });
 jest.mock('../auth/AuthProvider', () => ({
   useNetwork: () => 'online',
@@ -37,6 +38,9 @@ jest.mock('../components/Workflow', () => ({
   openExternal: (...a: unknown[]) => mockOpenExternal(...a),
 }));
 jest.mock('expo-router', () => ({ Stack: { Screen: () => null }, Link: ({ children }: { children: React.ReactNode }) => children }));
+// The rule screen reads the workspace's spaces for its Space fact. No spaces here.
+jest.mock('../lib/features', () => ({ ...jest.requireActual('../lib/features'), useFeatures: () => null }));
+jest.mock('../features/spaces/data', () => ({ useTeams: () => ({ status: 'idle', data: undefined, refresh: jest.fn(), refreshing: false }) }));
 
 describe('PostHog Inbox rule model', () => {
   it('lists the rule integration', () => {
@@ -211,6 +215,11 @@ describe('PostHog Inbox backlog model', () => {
 describe('PostHog Inbox backlog on the rule screen', () => {
   beforeEach(() => {
     mockBacklog.mockReset();
+    mockBacklogCount.mockReset();
+    mockBacklogCount.mockResolvedValue({
+      days: 7, matched: 2, scanned: 2, total: 2, complete: true,
+      byState: { not_run: 1, running: 0, already_run: 1, claimed_elsewhere: 0, already_addressed: 0, repository_not_connected: 0, held_back: 0 },
+    });
     mockOpenExternal.mockReset();
     mockRuns.mockReturnValue([]);
   });
@@ -221,7 +230,9 @@ describe('PostHog Inbox backlog on the rule screen', () => {
     expect(await screen.findByText('Report r0')).toBeVisible();
     for (const state of STATES) expect(screen.getAllByText(new RegExp(POSTHOG_INBOX_BACKLOG_STATE_LABELS[state])).length).toBeGreaterThan(0);
     expect(screen.getByText(/use the web or desktop app/)).toBeVisible();
-    expect(mockBacklog).toHaveBeenCalledWith('ws-1', { workflowId: 'r1' });
+    expect(mockBacklog).toHaveBeenCalledWith('ws-1', { workflowId: 'r1', days: 7 });
+    expect(mockBacklogCount).toHaveBeenCalledWith('ws-1', { workflowId: 'r1', days: 7 });
+    expect(await screen.findByText('2 reports match in the last 7 days: 1 not run, 1 already run.')).toBeVisible();
     expect(screen.queryByText(/run selected/i)).toBeNull();
     expect(screen.queryByText(/^run$/i)).toBeNull();
     expect(screen.queryByText('Load more')).toBeNull();
@@ -236,7 +247,7 @@ describe('PostHog Inbox backlog on the rule screen', () => {
     await act(async () => { fireEvent.press(button); });
     expect(await screen.findByText('Report b')).toBeVisible();
     expect(screen.getByText('Report a')).toBeVisible();
-    expect(mockBacklog).toHaveBeenLastCalledWith('ws-1', { workflowId: 'r1', offset: 25 });
+    expect(mockBacklog).toHaveBeenLastCalledWith('ws-1', { workflowId: 'r1', days: 7, offset: 25 });
     expect(screen.queryByText('Load more')).toBeNull();
   });
 
@@ -244,6 +255,29 @@ describe('PostHog Inbox backlog on the rule screen', () => {
     mockBacklog.mockResolvedValue(backlogPage([]));
     await render(<RuleDetailScreen kind="workflow" id="r1" integration="posthog_inbox" />);
     expect(await screen.findByText('No matching reports')).toBeVisible();
+    expect(screen.getByText('No report in the last 7 days matches this rule.')).toBeVisible();
+  });
+
+  it.each([
+    ['30 days', 30, 'in the last 30 days'],
+    ['90 days', 90, 'in the last 90 days'],
+    ['All time', 'all', 'in all time'],
+  ] as const)('reads the backlog and the count again for %s', async (label, days, text) => {
+    mockBacklog.mockResolvedValue(backlogPage([]));
+    await render(<RuleDetailScreen kind="workflow" id="r1" integration="posthog_inbox" />);
+    await screen.findByText('No matching reports');
+    await act(async () => { fireEvent.press(screen.getByLabelText(label)); });
+    expect(mockBacklog).toHaveBeenLastCalledWith('ws-1', { workflowId: 'r1', days });
+    expect(mockBacklogCount).toHaveBeenLastCalledWith('ws-1', { workflowId: 'r1', days });
+    expect(await screen.findByText(`No report ${text} matches this rule.`)).toBeVisible();
+  });
+
+  it('says when the count fails, and still lists the reports', async () => {
+    mockBacklog.mockResolvedValue(backlogPage([backlogRow('a')]));
+    mockBacklogCount.mockRejectedValue(new Error('boom'));
+    await render(<RuleDetailScreen kind="workflow" id="r1" integration="posthog_inbox" />);
+    expect(await screen.findByText('Talyn could not count the matching reports.')).toBeVisible();
+    expect(screen.getByText('Report a')).toBeVisible();
   });
 
   it('shows an error notice when the backlog fails to load', async () => {

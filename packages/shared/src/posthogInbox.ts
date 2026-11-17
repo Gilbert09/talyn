@@ -366,8 +366,8 @@ export function posthogInboxPushActive(lastPushAt: string | Date | null | undefi
 
 // ---- Backlog (older reports) and manual runs --------------------------------
 
-/** The time ranges the backlog offers, in days. The default is the first. */
-export const POSTHOG_INBOX_BACKLOG_DAYS = [7, 30, 90] as const;
+/** The time ranges the backlog offers: days back, or `'all'` for every report. The default is the first. */
+export const POSTHOG_INBOX_BACKLOG_DAYS = [7, 30, 90, 'all'] as const;
 export type PostHogInboxBacklogDays = (typeof POSTHOG_INBOX_BACKLOG_DAYS)[number];
 export const DEFAULT_POSTHOG_INBOX_BACKLOG_DAYS: PostHogInboxBacklogDays = 7;
 
@@ -376,10 +376,21 @@ export const MAX_POSTHOG_INBOX_RUN_REPORTS = 20;
 
 /** PURE: a backlog range from user input. Anything unknown is the default. */
 export function posthogInboxBacklogDays(raw: unknown): PostHogInboxBacklogDays {
+  if (typeof raw === 'string' && raw.trim().toLowerCase() === 'all') return 'all';
   const n = typeof raw === 'string' ? Number(raw) : raw;
   return (POSTHOG_INBOX_BACKLOG_DAYS as readonly unknown[]).includes(n)
     ? (n as PostHogInboxBacklogDays)
     : DEFAULT_POSTHOG_INBOX_BACKLOG_DAYS;
+}
+
+/** PURE: the short label of a range, for a button: "7 days" or "All time". */
+export function posthogInboxBacklogRangeLabel(days: PostHogInboxBacklogDays): string {
+  return days === 'all' ? 'All time' : `${days} days`;
+}
+
+/** PURE: a range in a sentence: "in the last 7 days" or "in all time". */
+export function posthogInboxBacklogRangeText(days: PostHogInboxBacklogDays): string {
+  return days === 'all' ? 'in all time' : `in the last ${days} days`;
 }
 
 /**
@@ -489,6 +500,46 @@ export interface PostHogInboxBacklogPage {
   dailyCap: number | null;
   /** Runs in the last 24 hours that count toward the cap. */
   runsToday: number;
+}
+
+/**
+ * The most reports one backlog count reads from PostHog. A count that stops
+ * here is not complete, and says so.
+ */
+export const MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN = 1000;
+
+/**
+ * `POST /workflows/posthog-inbox/backlog/count`: how many reports in the range
+ * match a rule, after Talyn's matcher. The backlog page shows only a page.
+ */
+export interface PostHogInboxBacklogCount {
+  days: PostHogInboxBacklogDays;
+  /** Reports that match the rule. */
+  matched: number;
+  /** Matching reports by state. Every state is present. */
+  byState: Record<PostHogInboxBacklogState, number>;
+  /** How many reports Talyn read from PostHog. */
+  scanned: number;
+  /** How many reports PostHog's own filters keep, before Talyn's matcher. Null when unknown. */
+  total: number | null;
+  /** False when Talyn stopped at {@link MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN}: more reports may match. */
+  complete: boolean;
+}
+
+/** PURE: a count in one sentence, for example "12 reports match in the last 30 days: 8 not run, 4 already run." */
+export function posthogInboxBacklogCountText(count: PostHogInboxBacklogCount): string {
+  const reports = `${count.matched}${count.complete ? '' : '+'} report${count.matched === 1 && count.complete ? '' : 's'}`;
+  let text = `${reports} ${count.matched === 1 && count.complete ? 'matches' : 'match'} ${posthogInboxBacklogRangeText(count.days)}`;
+  const parts = (Object.keys(POSTHOG_INBOX_BACKLOG_STATE_LABELS) as PostHogInboxBacklogState[])
+    .filter((state) => count.byState[state] > 0)
+    .map((state) => {
+      const label = POSTHOG_INBOX_BACKLOG_STATE_LABELS[state];
+      return `${count.byState[state]} ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+    });
+  if (count.matched > 0 && parts.length > 0) text += `: ${parts.join(', ')}`;
+  text += '.';
+  if (!count.complete) text += ` Talyn read the newest ${count.scanned} reports only.`;
+  return text;
 }
 
 /**

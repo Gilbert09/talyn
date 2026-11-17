@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, Loader2 } from 'lucide-react';
 import type {
+  PostHogInboxBacklogCount,
   PostHogInboxBacklogDays,
   PostHogInboxBacklogPage,
   PostHogInboxBacklogRow,
@@ -14,6 +15,8 @@ import {
   POSTHOG_INBOX_ACTIONABILITY_LABELS,
   POSTHOG_INBOX_BACKLOG_DAYS,
   POSTHOG_INBOX_BACKLOG_STATE_LABELS,
+  posthogInboxBacklogCountText,
+  posthogInboxBacklogRangeLabel,
 } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
@@ -26,7 +29,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 
 /**
  * The backlog of a PostHog Inbox rule: older ready reports that match its
- * conditions. The person can pick reports and start work on them now.
+ * conditions, up to all time, with an exact count of the matches. The person
+ * can pick reports and start work on them now.
  *
  * The same file is in apps/desktop/src/renderer/components/panels/workflows/. Keep the two in step.
  */
@@ -188,13 +192,37 @@ export function PostHogInboxBacklog({
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState<PostHogInboxRunResponse | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  const [count, setCount] = useState<PostHogInboxBacklogCount | null>(null);
+  const [counting, setCounting] = useState(false);
+  const [countFailed, setCountFailed] = useState(false);
   // Only the newest read may land: a changed rule or range makes older answers wrong.
   const request = useRef(0);
+  const countRequest = useRef(0);
   // The newest inputs, for loads that start from an effect.
   const params = useRef({ workspaceId, workflowId: workflow?.id ?? null, conditions });
   params.current = { workspaceId, workflowId: workflow?.id ?? null, conditions };
   // Titles of the reports in the last run, for its messages.
   const titles = useRef(new Map<string, string>());
+
+  // The exact count reads the whole range, so it comes after the first page.
+  const loadCount = async (range: PostHogInboxBacklogDays) => {
+    const { workspaceId: ws, workflowId, conditions: match } = params.current;
+    if (!ws) return;
+    const id = ++countRequest.current;
+    setCount(null);
+    setCounting(true);
+    setCountFailed(false);
+    try {
+      const next = await api.workflows.posthogInboxBacklogCount(ws, { workflowId, conditions: match, days: range });
+      if (countRequest.current !== id) return;
+      setCount(next);
+    } catch (err) {
+      captureAnalyticsException(err, { flow: 'posthog_inbox_backlog_count' });
+      if (countRequest.current === id) setCountFailed(true);
+    } finally {
+      if (countRequest.current === id) setCounting(false);
+    }
+  };
 
   const load = async (range: PostHogInboxBacklogDays, offset: number) => {
     const { workspaceId: ws, workflowId, conditions: match } = params.current;
@@ -203,7 +231,10 @@ export function PostHogInboxBacklog({
     const append = offset > 0;
     setLoading(true);
     setError(null);
-    if (!append) setSelected([]);
+    if (!append) {
+      setSelected([]);
+      void loadCount(range);
+    }
     try {
       const next = await api.workflows.posthogInboxBacklog(ws, { workflowId, conditions: match, days: range, offset });
       if (request.current !== id) return;
@@ -241,6 +272,10 @@ export function PostHogInboxBacklog({
   );
   useEffect(() => {
     request.current += 1;
+    countRequest.current += 1;
+    setCount(null);
+    setCounting(false);
+    setCountFailed(false);
     setPage(null);
     setRows([]);
     setScanned(0);
@@ -344,7 +379,7 @@ export function PostHogInboxBacklog({
                 onClick={() => changeDays(d)}
                 data-attr={`posthog-inbox-backlog-days-${d}`}
               >
-                {d} days
+                {posthogInboxBacklogRangeLabel(d)}
               </button>
             ))}
           </div>
@@ -398,10 +433,20 @@ export function PostHogInboxBacklog({
               {page.runnable && unsavedChanges && (
                 <p className="text-xs text-muted-foreground">Run selected uses the saved version of this automation.</p>
               )}
-              <p className="text-xs text-muted-foreground" data-attr="posthog-inbox-backlog-count">
-                Talyn read {plural(scanned, 'report')} from the last {page.days} days. {rows.length} of them{' '}
-                {rows.length === 1 ? 'matches' : 'match'}.
-              </p>
+              <div className="space-y-0.5 text-xs text-muted-foreground">
+                <p className={cn(count && 'font-medium text-foreground')} data-attr="posthog-inbox-backlog-count">
+                  {count
+                    ? posthogInboxBacklogCountText(count)
+                    : counting
+                      ? 'Counting the matching reports...'
+                      : countFailed
+                        ? 'Talyn could not count the matching reports.'
+                        : null}
+                </p>
+                <p data-attr="posthog-inbox-backlog-shown">
+                  Showing {plural(rows.length, 'report')}. Talyn read {plural(scanned, 'report')} from PostHog for this list.
+                </p>
+              </div>
 
               {rows.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No reports match in this time range.</p>

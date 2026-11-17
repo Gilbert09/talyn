@@ -55,12 +55,19 @@ const { _resetWorkflowStore, createWorkflow, listWorkflowRuns } = await import('
 const { ingestPostHogReport } = await import('../services/posthogInbox/ingest.js');
 const { getPostHogInboxConnection } = await import('../services/posthogInbox/connection.js');
 const { _resetClaimGatesForTests } = await import('../services/posthogInbox/claims.js');
-const { posthogInboxBacklog, runPostHogInboxReports, runsInLastDay, BACKLOG_PAGE_SIZE } = await import(
-  '../services/posthogInbox/backlog.js'
-);
+const {
+  posthogInboxBacklog,
+  posthogInboxBacklogCount,
+  runPostHogInboxReports,
+  runsInLastDay,
+  BACKLOG_PAGE_SIZE,
+  BACKLOG_PAGE_SCAN_LIMIT,
+  BACKLOG_COUNT_READ_SIZE,
+} = await import('../services/posthogInbox/backlog.js');
 const { runWorkflowManually } = await import('../services/workflows/engine.js');
 const { posthogInboxWorkflowSource, posthogInboxDeliveryId } = await import('../services/workflows/sources/posthogInbox.js');
 const { reportToFacts } = await import('../services/posthogInbox/facts.js');
+const { MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN } = await import('@talyn/shared');
 
 const MODEL = 'claude-sonnet-4-5';
 const HOST = 'https://us.posthog.com';
@@ -256,6 +263,67 @@ describe('PostHog Inbox backlog', () => {
       const expected = { 7: ['rep-new'], 30: ['rep-new', 'rep-20d'], 90: ['rep-new', 'rep-20d', 'rep-60d'] }[days];
       expect(res.rows.map((r) => r.id)).toEqual(expected);
       expect(res.days).toBe(days);
+    });
+
+    it("sends no created_after for 'all' and keeps reports of any age", async () => {
+      const wf = await rule();
+      report('rep-new', {}, 1);
+      report('rep-400d', {}, 400);
+      const res = await page(wf, { days: 'all' });
+      const q = new URL(`http://x${listRequests()[0]}`).searchParams;
+      expect(q.has('created_after')).toBe(false);
+      expect(res.rows.map((r) => r.id)).toEqual(['rep-new', 'rep-400d']);
+      expect(res.days).toBe('all');
+    });
+
+    it('reads more PostHog pages until it has a page of matches', async () => {
+      posthog.filterList = false;
+      const wf = await rule({ priorities: ['P0'] });
+      // 60 reports; every third one matches. Newest first: rep-00 is the newest.
+      for (let i = 0; i < 60; i++) {
+        report(`rep-${String(i).padStart(2, '0')}`, { priority: i % 3 === 0 ? 'P0' : 'P2' }, i / 100);
+      }
+      const res = await page(wf);
+      expect(res.rows.map((r) => r.id)).toEqual(Array.from({ length: 20 }, (_, i) => `rep-${String(i * 3).padStart(2, '0')}`));
+      expect(res).toMatchObject({ scanned: 60, nextOffset: null, total: 60 });
+      expect(listRequests().map((r) => new URL(`http://x${r}`).searchParams.get('offset'))).toEqual(['0', '25', '50']);
+    });
+
+    it('stops at a full page of matches and starts the next page after its last row', async () => {
+      posthog.filterList = false;
+      const wf = await rule({ priorities: ['P0'] });
+      // rep-00..rep-19 do not match, rep-20..rep-69 do.
+      for (let i = 0; i < 70; i++) report(`rep-${String(i).padStart(2, '0')}`, { priority: i < 20 ? 'P2' : 'P0' }, i / 100);
+      const first = await page(wf);
+      expect(first.rows).toHaveLength(BACKLOG_PAGE_SIZE);
+      expect(first.rows[0].id).toBe('rep-20');
+      expect(first.rows.at(-1)!.id).toBe('rep-44');
+      expect(first).toMatchObject({ scanned: 45, nextOffset: 45 });
+
+      const second = await page(wf, { offset: first.nextOffset! });
+      expect(second.rows[0].id).toBe('rep-45');
+      expect(second.rows).toHaveLength(BACKLOG_PAGE_SIZE);
+      expect(second.nextOffset).toBeNull();
+    });
+
+    it(`stops after ${BACKLOG_PAGE_SCAN_LIMIT} reports when few match, and offers the rest`, async () => {
+      posthog.filterList = false;
+      const wf = await rule({ priorities: ['P0'] });
+      for (let i = 0; i < 150; i++) report(`rep-${String(i).padStart(3, '0')}`, { priority: i === 120 ? 'P0' : 'P2' }, i / 1000);
+      const first = await page(wf);
+      expect(first).toMatchObject({ rows: [], scanned: BACKLOG_PAGE_SCAN_LIMIT, nextOffset: BACKLOG_PAGE_SCAN_LIMIT });
+      const second = await page(wf, { offset: first.nextOffset! });
+      expect(second.rows.map((r) => r.id)).toEqual(['rep-120']);
+      expect(second).toMatchObject({ scanned: 50, nextOffset: null });
+    });
+
+    it("finds each report's repository in the workspace's repositories", async () => {
+      const wf = await rule();
+      for (let i = 0; i < 5; i++) report(`rep-${i}`, {}, i / 10);
+      const { workspaceRepositoryIds } = await import('../services/workflows/sources/posthogInbox.js');
+      expect((await workspaceRepositoryIds('ws1')).get('acme/web-app')).toBe('r-web');
+      const res = await page(wf);
+      expect(res.rows.map((r) => r.state)).toEqual(Array(5).fill('not_run'));
     });
 
     it.each<[string, { count?: number; next?: string | null; n: number }, number | null, number | null]>([
@@ -533,6 +601,85 @@ describe('PostHog Inbox backlog', () => {
       expect((await page(wf)).rows).toEqual([]);
       const res = await page(wf, { conditions: { priorities: ['P2'] }, unsavedChanges: true });
       expect(res.rows).toHaveLength(1);
+    });
+  });
+
+  describe('count', () => {
+    async function count(workflow: WorkflowDefinition | null, opts: Partial<Parameters<typeof posthogInboxBacklogCount>[1]> = {}) {
+      return posthogInboxBacklogCount(await connection(), {
+        conditions: workflow?.conditions ?? {},
+        workflow,
+        days: 7,
+        now,
+        ...opts,
+      });
+    }
+
+    it('counts every matching report in the range, by state', async () => {
+      posthog.filterList = false;
+      const wf = await rule({ priorities: ['P0'] });
+      for (let i = 0; i < 230; i++) report(`rep-${String(i).padStart(3, '0')}`, { priority: i % 2 === 0 ? 'P0' : 'P2' }, i / 1000);
+      report('rep-other-repo', { priority: 'P0', repo_slug: 'acme/unknown' }, 0.5);
+      report('rep-held', { priority: 'P0', status: 'suppressed', suppression_source: 'safety_judge' }, 0.6);
+      report('rep-dismissed', { priority: 'P0', status: 'suppressed', suppression_source: 'dismissed' }, 0.7);
+      await ingested('rep-000');
+
+      const res = await count(wf);
+      expect(res).toMatchObject({ days: 7, matched: 117, scanned: 233, total: 233, complete: true });
+      expect(res.byState).toEqual({
+        not_run: 114,
+        running: 1,
+        already_run: 0,
+        claimed_elsewhere: 0,
+        already_addressed: 0,
+        repository_not_connected: 1,
+        held_back: 1,
+      });
+      expect(listRequests().map((r) => new URL(`http://x${r}`).searchParams.get('limit'))).toEqual(
+        Array(3).fill(String(BACKLOG_COUNT_READ_SIZE))
+      );
+    });
+
+    it("counts all time with 'all'", async () => {
+      const wf = await rule();
+      report('rep-new', {}, 1);
+      report('rep-old', {}, 400);
+      expect((await count(wf)).matched).toBe(1);
+      expect(new URL(`http://x${listRequests()[0]}`).searchParams.has('created_after')).toBe(true);
+      expect(await count(wf, { days: 'all' })).toMatchObject({ days: 'all', matched: 2, complete: true });
+    });
+
+    it('counts an unsaved rule without run state', async () => {
+      report('rep-1');
+      expect(await count(null, { conditions: { priorities: ['P0', 'P1', 'P2', 'P3', 'P4'] } })).toMatchObject({
+        matched: 1,
+        byState: expect.objectContaining({ not_run: 1 }),
+      });
+    });
+
+    it(`stops at ${MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN} reports and says it is not complete`, async () => {
+      const wf = await rule();
+      const c = await connection();
+      const rows = Array.from({ length: BACKLOG_COUNT_READ_SIZE }, (_, i) => posthog.put(`rep-${i}`, { created_at: now.toISOString() }));
+      const spy = vi.spyOn(c.client, 'listReports').mockResolvedValue({ results: rows, count: 5000, next: 'more' });
+      const res = await posthogInboxBacklogCount(c, { conditions: {}, workflow: wf, days: 'all', now });
+      expect(spy).toHaveBeenCalledTimes(MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN / BACKLOG_COUNT_READ_SIZE);
+      expect(res).toMatchObject({ scanned: MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN, total: 5000, complete: false });
+    });
+
+    it('stops when PostHog sends an empty page that says there is more', async () => {
+      const wf = await rule();
+      const c = await connection();
+      const spy = vi.spyOn(c.client, 'listReports').mockResolvedValue({ results: [], count: 10, next: 'more' });
+      const res = await posthogInboxBacklogCount(c, { conditions: {}, workflow: wf, days: 7, now });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(res).toMatchObject({ matched: 0, scanned: 0, complete: true });
+    });
+
+    it('throws a PostHog refusal to the caller', async () => {
+      const wf = await rule();
+      posthog.status = 403;
+      await expect(count(wf)).rejects.toMatchObject({ status: 403 });
     });
   });
 

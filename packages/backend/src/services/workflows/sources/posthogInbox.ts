@@ -57,6 +57,23 @@ export async function workspaceRepositoryFor(workspaceId: string, slug: string |
 }
 
 /**
+ * Every repository of the workspace by lower-case `owner/repo`, for a caller
+ * that prepares many reports at once. One query instead of one per report.
+ */
+export async function workspaceRepositoryIds(workspaceId: string): Promise<Map<string, string>> {
+  const rows = await getDbClient()
+    .select({ id: repositoriesTable.id, name: repositoriesTable.name })
+    .from(repositoriesTable)
+    .where(eq(repositoriesTable.workspaceId, workspaceId));
+  const out = new Map<string, string>();
+  for (const row of rows) {
+    const key = row.name.trim().toLowerCase();
+    if (!out.has(key)) out.set(key, row.id);
+  }
+  return out;
+}
+
+/**
  * Fill in what the report read could not say, for one workspace: the Talyn
  * repository of the report's repository, and the suggested reviewers when a
  * rule asks for them. Returns null when PostHog blocked the report.
@@ -67,9 +84,15 @@ export async function preparePostHogInboxFacts(
   opts: {
     needsReviewers: boolean;
     client?: Pick<PostHogInboxConnection['client'], 'listArtefacts'>;
+    /** The workspace's repositories from {@link workspaceRepositoryIds}, to skip the per-report query. */
+    repositoryIds?: Map<string, string>;
   }
 ): Promise<PostHogInboxFacts> {
-  const workspaceRepositoryId = await workspaceRepositoryFor(workspaceId, raw.repository);
+  const workspaceRepositoryId = opts.repositoryIds
+    ? raw.repository
+      ? (opts.repositoryIds.get(raw.repository.trim().toLowerCase()) ?? null)
+      : null
+    : await workspaceRepositoryFor(workspaceId, raw.repository);
   let facts: PostHogInboxFacts = { ...raw, workspaceRepositoryId };
   if (opts.needsReviewers && opts.client && workspaceRepositoryId) {
     try {

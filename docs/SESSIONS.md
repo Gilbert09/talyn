@@ -7983,3 +7983,14 @@ A PostHog/posthog session showed "Interrupted" two times. Nobody stopped it, and
 Changes:
 - The briefing has a new **Background work** section. Each command that can take more than about 2 minutes goes to `talyn_run_background`, and the agent ends its turn. Subagents run in the foreground. The agent's own background tasks (`run_in_background`, `&`, `nohup`) are not used, and the agent never ends a turn while one runs. The `talyn-speed` skill and the tool description say the same. The old "poll a log with `nohup` and `sleep 45`" advice is gone.
 - `buildBlocks` adds a plain note before a Claude `result` that arrives while a tool call has no result: "The agent ended its turn before a tool call finished. …". Error results (a stop, a lost sandbox) and Codex runs get no note. The next turn still shows "Interrupted" for the same call.
+
+### 2026-11-17 — PostHog Inbox backlog: all time, full pages, exact count and a Reports tab
+
+User request: backfill the PostHog Inbox reports when the integration is connected, and see the reports an automation would have acted on. The person chose to improve the live backlog (#267), not to copy reports into Talyn.
+Range: `POSTHOG_INBOX_BACKLOG_DAYS` is now `[7, 30, 90, 'all']`. `'all'` sends no `created_after`. `posthogInboxBacklogDays` reads `"all"`; labels come from `posthogInboxBacklogRangeLabel`/`posthogInboxBacklogRangeText`.
+Page: `posthogInboxBacklog` reads PostHog 25 reports at a time until it has 25 matches, PostHog has no more, or it has read `BACKLOG_PAGE_SCAN_LIMIT` (100). A narrow rule no longer shows empty pages. `nextOffset` is the PostHog offset after the last match the page shows, so a read that brings more than 25 matches loses nothing.
+Count: `POST /workflows/posthog-inbox/backlog/count` (`posthogInboxBacklogCount`) reads the range 100 reports at a time, up to `MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN` (1000), and answers `matched`, `byState`, `scanned`, `total` and `complete`. Same body as the backlog, without `offset`. Link and run states are read once for each PostHog read, not once for each report.
+`workspaceRepositoryIds` loads the workspace's repositories once, and `preparePostHogInboxFacts` takes it as `repositoryIds`. The backlog and the count use it, so they do not send one repository query for each report.
+Clients: web and desktop show "All time", the count line above the list, and a **Reports** tab on the PostHog Inbox page (`posthogInboxReports.tsx`): an automation picker over the same backlog. Mobile shows the range picker and the count on the rule screen. MCP `talyn_list_posthog_inbox_backlog` takes `days: "all"` and `count: true`.
+The mobile `postHogInbox.test.tsx` rule screen tests failed on main (`useTeams` from #282 needs a runtime that the test did not mock). The test now mocks `useFeatures` and `useTeams`.
+

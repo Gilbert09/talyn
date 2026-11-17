@@ -35,6 +35,7 @@ import {
 
 import { WorkflowsPanel } from '../components/panels/workflows/WorkflowsPanel';
 import { LoopsPanel } from '../components/panels/loops/LoopsPanel';
+import { PostHogInboxReports } from '../components/panels/workflows/posthogInboxReports';
 
 type ConnectionState = 'connected' | 'not_connected' | 'built_in' | 'unknown';
 
@@ -201,7 +202,8 @@ function ConnectionSection({ kind }: { kind: IntegrationKind }) {
   );
 }
 
-type Section = IntegrationSection;
+/** `reports` is the PostHog Inbox page only. */
+type Section = IntegrationSection | 'reports';
 
 function GithubIssuesConnectionNote() {
   const navigate = useNavigationStore((s) => s.navigate);
@@ -243,7 +245,10 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
     setChosen(sectionFocus.section);
     useIntegrationSectionFocus.getState().clear();
   }, [sectionFocus, kind]);
-  const section: Section = chosen && (chosen === 'rules' ? hasRules : hasConnection) ? chosen : hasRules ? 'rules' : 'connection';
+  // The PostHog Inbox page also has Reports: the reports each automation matches.
+  const hasReports = kind === 'posthog_inbox' && hasRules && hasConnection;
+  const sectionShown = (s: Section): boolean => (s === 'rules' ? hasRules : s === 'reports' ? hasReports : hasConnection);
+  const section: Section = chosen && sectionShown(chosen) ? chosen : hasRules ? 'rules' : 'connection';
 
   useEffect(() => {
     if (features !== null && !offered) navigate({ view: 'integrations' }, { replace: true });
@@ -274,6 +279,11 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
               <TabsTrigger value="rules" data-attr={`integration-tab-rules-${kind}`}>
                 Automations
               </TabsTrigger>
+              {hasReports && (
+                <TabsTrigger value="reports" data-attr={`integration-tab-reports-${kind}`}>
+                  Reports
+                </TabsTrigger>
+              )}
               <TabsTrigger value="connection" data-attr={`integration-tab-connection-${kind}`}>
                 Connection
               </TabsTrigger>
@@ -304,6 +314,7 @@ function IntegrationPage({ kind }: { kind: IntegrationKind }) {
               </div>
             </div>
           )}
+          {section === 'reports' && hasReports && <PostHogInboxReports />}
           {section === 'rules' && kind === 'schedule' && <LoopsPanel />}
         </Suspense>
       </div>

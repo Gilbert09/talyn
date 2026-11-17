@@ -1,5 +1,6 @@
 import { and, desc, eq, gt, inArray, ne, sql } from 'drizzle-orm';
 import type {
+  PostHogInboxBacklogCount,
   PostHogInboxBacklogDays,
   PostHogInboxBacklogPage,
   PostHogInboxBacklogRow,
@@ -12,6 +13,7 @@ import type {
 } from '@talyn/shared';
 import {
   DEFAULT_POSTHOG_INBOX_ACTIONABILITY,
+  MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN,
   MAX_POSTHOG_INBOX_RUN_REPORTS,
   POSTHOG_INBOX_BACKLOG_STATE_LABELS,
   posthogInboxBacklogState,
@@ -28,6 +30,7 @@ import {
   posthogInboxDeliveryId,
   posthogInboxWorkflowSource,
   preparePostHogInboxFacts,
+  workspaceRepositoryIds,
 } from '../workflows/sources/posthogInbox.js';
 import type { PostHogInboxReport, PostHogInboxListQuery } from './api.js';
 import type { PostHogInboxConnection } from './connection.js';
@@ -38,28 +41,41 @@ import { reportToFacts } from './facts.js';
  * "Run selected" to start work on some of them.
  *
  * A rule acts only on reports that change after its connection's first poll
- * (the poller cursor). The backlog reads further back: PostHog's own filters
- * narrow the list (status, priority, actionability, source product, scout,
- * search, `created_after`), then Talyn's matcher applies the rest. Each row
- * says where the report stands for Talyn, and only a row the rule would act
- * on can be selected.
+ * (the poller cursor). The backlog reads further back, up to all time:
+ * PostHog's own filters narrow the list (status, priority, actionability,
+ * source product, scout, search, `created_after`), then Talyn's matcher
+ * applies the rest. A page reads more PostHog pages until it has a page of
+ * matches, so a narrow rule does not show empty pages. A separate count reads
+ * the whole range (up to a limit) and says exactly how many reports match.
+ * Each row says where the report stands for Talyn, and only a row the rule
+ * would act on can be selected.
  *
  * A manual run goes through the engine (`runWorkflowManually`): the same
  * matcher, caps, dedupe key, link, PostHog claim and session as a poll. It
  * reads each report again by id first, so a stale list never decides.
  */
 
-/** Reports one backlog page reads from PostHog. */
+/** Matching reports one backlog page shows, and the size of each PostHog read for it. */
 export const BACKLOG_PAGE_SIZE = 25;
+/** The most reports one backlog page reads from PostHog while it looks for a page of matches. */
+export const BACKLOG_PAGE_SCAN_LIMIT = 100;
+/** The size of each PostHog read for a backlog count. */
+export const BACKLOG_COUNT_READ_SIZE = 100;
+/** Parallel report reads (a list row without its repository, or the reviewers artefact). */
+const READ_CONCURRENCY = 5;
 
 const db = () => getPoolDbClient();
 
-/** PURE: PostHog's list filters for a rule's backlog. Each one keeps a superset of what the rule matches. */
+/**
+ * PURE: PostHog's list filters for a rule's backlog. Each one keeps a superset
+ * of what the rule matches. `'all'` sends no `created_after`.
+ */
 export function backlogQuery(
   conditions: WorkflowConditions,
   days: PostHogInboxBacklogDays,
   offset: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  limit: number = BACKLOG_PAGE_SIZE
 ): PostHogInboxListQuery {
   const join = (values: readonly string[] | undefined): string | undefined => {
     const list = [...new Set((values ?? []).map((v) => v.trim()).filter(Boolean))].sort();
@@ -76,12 +92,17 @@ export function backlogQuery(
     scout: join(conditions.scouts?.include),
     // PostHog's search reads the title OR the summary, a superset of either condition.
     search: search || undefined,
-    created_after: new Date(now.getTime() - days * 24 * 60 * 60_000).toISOString(),
+    created_after: days === 'all' ? undefined : new Date(now.getTime() - days * 24 * 60 * 60_000).toISOString(),
     ordering: '-created_at',
     include_source_metadata: true,
-    limit: BACKLOG_PAGE_SIZE,
+    limit,
     offset: Math.max(0, Math.floor(offset)),
   };
+}
+
+/** PURE: whether PostHog has more reports after this page. `next` decides when it is sent (null on the last page). */
+export function listHasMore(page: { next?: string | null }, read: number, limit: number): boolean {
+  return page.next !== undefined ? typeof page.next === 'string' && page.next.length > 0 : read >= limit;
 }
 
 /** PURE: whether somebody holds the report in PostHog. */
@@ -154,12 +175,48 @@ export async function runsInLastDay(workflowId: string, now: Date = new Date()):
 async function factsFor(
   connection: PostHogInboxConnection,
   row: PostHogInboxReport,
-  needsReviewers: boolean
+  needsReviewers: boolean,
+  repositoryIds: Map<string, string>
 ): Promise<PostHogInboxFacts | null> {
   const report = row.repo_slug === undefined ? await connection.client.getReport(row.id) : row;
   const raw = reportToFacts(report, connection);
   if (!raw) return null;
-  return preparePostHogInboxFacts(connection.workspaceId, raw, { needsReviewers, client: connection.client });
+  return preparePostHogInboxFacts(connection.workspaceId, raw, { needsReviewers, client: connection.client, repositoryIds });
+}
+
+interface MatchedReport {
+  row: PostHogInboxReport;
+  facts: PostHogInboxFacts;
+  /** The row's place in the PostHog list, from 0. */
+  index: number;
+}
+
+/**
+ * The rows of one PostHog list read that match the conditions, in list order.
+ * A report somebody dismissed is left out: only the safety judge's
+ * suppressions are shown, as held back. A report Talyn cannot read is left out.
+ */
+async function matchRows(
+  connection: PostHogInboxConnection,
+  listed: PostHogInboxReport[],
+  firstIndex: number,
+  conditions: WorkflowConditions,
+  repositoryIds: Map<string, string>
+): Promise<MatchedReport[]> {
+  const needsReviewers = (conditions.suggestedReviewers?.length ?? 0) > 0;
+  const read = await mapLimited(listed, READ_CONCURRENCY, async (row, i): Promise<MatchedReport | null> => {
+    if ((row.status ?? '').toLowerCase() === 'suppressed' && (row.suppression_source ?? '').toLowerCase() !== 'safety_judge') {
+      return null;
+    }
+    try {
+      const facts = await factsFor(connection, row, needsReviewers, repositoryIds);
+      if (!facts || !posthogInboxContentMatches(conditions, facts)) return null;
+      return { row, facts, index: firstIndex + i };
+    } catch {
+      return null;
+    }
+  });
+  return read.filter((r): r is MatchedReport => r !== null);
 }
 
 interface StateContext {
@@ -192,13 +249,13 @@ function stateOf(report: PostHogInboxReport, facts: PostHogInboxFacts, ctx: Stat
   };
 }
 
-async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (next < items.length) {
       const index = next++;
-      out[index] = await fn(items[index]);
+      out[index] = await fn(items[index], index);
     }
   });
   await Promise.all(workers);
@@ -217,6 +274,11 @@ export function manualRunRefusal(workflow: Pick<WorkflowDefinition, 'enabled'> |
  * one: it decides the dedupe state, the daily cap and whether rows can be
  * selected. `conditions` are what to match, the editor's unsaved ones or the
  * saved rule's. Reads only; starts nothing.
+ *
+ * The page reads PostHog {@link BACKLOG_PAGE_SIZE} reports at a time until it
+ * has {@link BACKLOG_PAGE_SIZE} matches, PostHog has no more, or it has read
+ * {@link BACKLOG_PAGE_SCAN_LIMIT} reports. `nextOffset` is the PostHog offset
+ * after the last report the page used.
  */
 export async function posthogInboxBacklog(
   connection: PostHogInboxConnection,
@@ -230,26 +292,29 @@ export async function posthogInboxBacklog(
     now?: Date;
   }
 ): Promise<PostHogInboxBacklogPage> {
-  const query = backlogQuery(opts.conditions, opts.days, opts.offset, opts.now);
-  const page = await connection.client.listReports(query);
-  const listed = (Array.isArray(page.results) ? page.results : []).slice(0, BACKLOG_PAGE_SIZE);
-  const needsReviewers = (opts.conditions.suggestedReviewers?.length ?? 0) > 0;
-
-  const read = await mapLimited(listed, 5, async (row) => {
-    // A report somebody dismissed is not in the backlog: only the safety
-    // judge's suppressions are shown, as held back.
-    if ((row.status ?? '').toLowerCase() === 'suppressed' && (row.suppression_source ?? '').toLowerCase() !== 'safety_judge') {
-      return null;
-    }
-    try {
-      const facts = await factsFor(connection, row, needsReviewers);
-      if (!facts || !posthogInboxContentMatches(opts.conditions, facts)) return null;
-      return { row, facts };
-    } catch {
-      return null;
-    }
-  });
-  const matched = read.filter((r): r is { row: PostHogInboxReport; facts: PostHogInboxFacts } => r !== null);
+  const start = Math.max(0, Math.floor(opts.offset));
+  const repositoryIds = await workspaceRepositoryIds(connection.workspaceId);
+  let matched: MatchedReport[] = [];
+  let offset = start;
+  let more = false;
+  let total: number | null = null;
+  for (;;) {
+    const query = backlogQuery(opts.conditions, opts.days, offset, opts.now);
+    const page = await connection.client.listReports(query);
+    const listed = (Array.isArray(page.results) ? page.results : []).slice(0, BACKLOG_PAGE_SIZE);
+    if (typeof page.count === 'number') total = page.count;
+    matched = matched.concat(await matchRows(connection, listed, offset, opts.conditions, repositoryIds));
+    offset += listed.length;
+    more = listHasMore(page, listed.length, BACKLOG_PAGE_SIZE) && listed.length > 0;
+    if (!more || matched.length >= BACKLOG_PAGE_SIZE || offset - start >= BACKLOG_PAGE_SCAN_LIMIT) break;
+  }
+  // The last read can bring more matches than a page shows. The next page
+  // starts after the last match this page shows.
+  if (matched.length > BACKLOG_PAGE_SIZE) {
+    matched = matched.slice(0, BACKLOG_PAGE_SIZE);
+    offset = matched[matched.length - 1].index + 1;
+    more = true;
+  }
 
   const ctx: StateContext = {
     links: await linksFor(connection.workspaceId, matched.map((m) => m.facts.reportId)),
@@ -281,14 +346,11 @@ export async function posthogInboxBacklog(
     };
   });
 
-  // PostHog's `next` decides when it is sent (null on the last page); an
-  // older answer without it has more when the page is full.
-  const more = page.next !== undefined ? typeof page.next === 'string' && page.next.length > 0 : listed.length >= BACKLOG_PAGE_SIZE;
   return {
     rows,
-    scanned: listed.length,
-    nextOffset: more ? query.offset! + BACKLOG_PAGE_SIZE : null,
-    total: typeof page.count === 'number' ? page.count : null,
+    scanned: offset - start,
+    nextOffset: more ? offset : null,
+    total,
     days: opts.days,
     workflowId: opts.workflow?.id ?? null,
     runnable,
@@ -296,6 +358,52 @@ export async function posthogInboxBacklog(
     dailyCap: opts.workflow?.maxRunsPerDay ?? null,
     runsToday: opts.workflow ? await runsInLastDay(opts.workflow.id, opts.now) : 0,
   };
+}
+
+/** PURE: a count with every state at zero. */
+export function emptyBacklogStateCounts(): Record<PostHogInboxBacklogState, number> {
+  const out = {} as Record<PostHogInboxBacklogState, number>;
+  for (const state of Object.keys(POSTHOG_INBOX_BACKLOG_STATE_LABELS) as PostHogInboxBacklogState[]) out[state] = 0;
+  return out;
+}
+
+/**
+ * How many reports in the range match a rule, by state. Reads PostHog
+ * {@link BACKLOG_COUNT_READ_SIZE} reports at a time, newest first, up to
+ * {@link MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN}. Reads only; starts nothing.
+ */
+export async function posthogInboxBacklogCount(
+  connection: PostHogInboxConnection,
+  opts: {
+    conditions: WorkflowConditions;
+    workflow: WorkflowDefinition | null;
+    days: PostHogInboxBacklogDays;
+    now?: Date;
+  }
+): Promise<PostHogInboxBacklogCount> {
+  const repositoryIds = await workspaceRepositoryIds(connection.workspaceId);
+  const byState = emptyBacklogStateCounts();
+  let matched = 0;
+  let offset = 0;
+  let more = true;
+  let total: number | null = null;
+  while (more && offset < MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN) {
+    const limit = Math.min(BACKLOG_COUNT_READ_SIZE, MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN - offset);
+    const page = await connection.client.listReports(backlogQuery(opts.conditions, opts.days, offset, opts.now, limit));
+    const listed = (Array.isArray(page.results) ? page.results : []).slice(0, limit);
+    if (typeof page.count === 'number') total = page.count;
+    const found = await matchRows(connection, listed, offset, opts.conditions, repositoryIds);
+    // The states of one read at a time: two queries per read, never one per report.
+    const ctx: StateContext = {
+      links: await linksFor(connection.workspaceId, found.map((m) => m.facts.reportId)),
+      runs: opts.workflow ? await runsFor(opts.workflow.id, found.map((m) => posthogInboxDeliveryId(m.facts))) : new Map(),
+    };
+    for (const { row, facts } of found) byState[stateOf(row, facts, ctx).state] += 1;
+    matched += found.length;
+    offset += listed.length;
+    more = listHasMore(page, listed.length, limit) && listed.length > 0;
+  }
+  return { days: opts.days, matched, byState, scanned: offset, total, complete: !more };
 }
 
 // ---- Run selected ------------------------------------------------------------
