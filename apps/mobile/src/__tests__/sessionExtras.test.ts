@@ -2,7 +2,7 @@ import type { Workbench, WorkbenchChangedFile, WorkbenchChanges } from '@talyn/s
 
 import { archivedAtOf, archivedItems, emptyHistoryText, historyRows } from '../features/history/model';
 import { copyActions, copyEntry } from '../features/sessions/actions';
-import { formatCountdown, formatRunTime, jobStatus, keepAwakeLabel, runningJobs, sortWakeups, wakeupWhen } from '../features/sessions/background';
+import { emptyLogText, formatCountdown, formatRunTime, jobStatus, keepAwakeLabel, runningJobs, sortWakeups, wakeupWhen } from '../features/sessions/background';
 import { changeGroups, clipLine, fileLabel, groupTotals, gutterDigits, needsWake, parseUnifiedDiff, splitPath, storedText,
   visibleDiff, type DiffLine } from '../features/sessions/changes';
 import { canCreatePullRequest, changesUnavailable, createPrSentText, hasChanges, sessionTabs, sessionUnavailable } from '../features/sessions/model';
@@ -203,6 +203,12 @@ describe('background jobs', () => {
     ['2026-11-09T12:00:00Z', null],
   ])('keep-awake for %s is %s', (until, expected) => {
     expect(keepAwakeLabel(until, now)).toBe(expected);
+  });
+  it.each([
+    [true, 'No output yet.'],
+    [false, 'The job printed no output.'],
+  ])('says what an empty log means when running is %s', (running, expected) => {
+    expect(emptyLogText(running)).toBe(expected);
   });
   it('says until when the box stays awake, in local time', () => {
     const until = new Date(now + 90 * 60_000);

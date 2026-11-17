@@ -60,3 +60,8 @@ export function keepAwakeLabel(until: string | null, now: Date | number = Date.n
 export function isActiveBackground(bg: WorkbenchBackground | null | undefined): boolean {
   return Boolean(bg?.jobs.some((job) => job.status === 'running') || bg?.wakeups.some((wakeup) => wakeup.status === 'scheduled'));
 }
+
+/** What a job's log box says when the job has printed nothing. */
+export function emptyLogText(running: boolean): string {
+  return running ? 'No output yet.' : 'The job printed no output.';
+}

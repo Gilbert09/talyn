@@ -63,3 +63,8 @@ export function sortWakeups(wakeups: readonly WorkbenchWakeup[]): WorkbenchWakeu
     return a.status === 'scheduled' ? a.wakeAt.localeCompare(b.wakeAt) : b.createdAt.localeCompare(a.createdAt);
   });
 }
+
+/** What a job's log box says when the job has printed nothing. */
+export function emptyLogText(running: boolean): string {
+  return running ? 'No output yet.' : 'The job printed no output.';
+}

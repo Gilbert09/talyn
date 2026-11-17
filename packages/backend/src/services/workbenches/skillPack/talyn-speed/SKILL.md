@@ -54,6 +54,7 @@ talyn_run_background
 ```
 
 - The job keeps running after your turn ends. Talyn starts a new turn in your chat when it exits, with the exit code and the last 40 lines of output.
+- Let the job print to its own output. Do not redirect it to a file or pipe it through `tail` or `head`. The person watches that output live in the Background tab, and `talyn_background_logs` reads all of it.
 - To run several long commands at the same time, start each one as its own job.
 - `keep_awake_seconds` (default 3600) keeps the sandbox awake while the job runs. That time is billed box time. Use 0 to let the sandbox sleep; the job then pauses with the sandbox.
 - Read output with `talyn_background_logs`, list jobs with `talyn_list_background`, stop one with `talyn_stop_background`.

@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { WorkbenchBackgroundJob, WorkbenchWakeup } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
-import { formatCountdown, formatRunTime, keepAwakeLabel, wakeupWhen } from '../../lib/sessionBackground';
+import { emptyLogText, formatCountdown, formatRunTime, keepAwakeLabel, wakeupWhen } from '../../lib/sessionBackground';
 import { useNow } from '../../hooks/useSessionBackground';
 import { useJobLogs } from '../../hooks/useJobLogs';
 import { useBackground } from '../../stores/sessionBackground';
@@ -51,6 +51,8 @@ function JobRow({ workbenchId, job }: { workbenchId: string; job: WorkbenchBackg
   const action = async (label: string, call: () => Promise<unknown>) => {
     try { await call(); } catch (cause) { toast.error(`Could not ${label}`, errorMessage(cause)); }
   };
+  const logText = logs ? logs.lines.join('\n') : '';
+  const logPlaceholder = logs ? emptyLogText(running) : loading ? 'Loading logs…' : '';
   const statusColor = running ? 'bg-emerald-500 animate-pulse' : job.status === 'exited' ? job.exitCode === 0 ? 'bg-muted-foreground/50' : 'bg-destructive' : job.status === 'lost' ? 'bg-amber-500' : 'bg-muted-foreground/50';
   return (
     <div className="border-b py-2 last:border-b-0">
@@ -78,7 +80,7 @@ function JobRow({ workbenchId, job }: { workbenchId: string; job: WorkbenchBackg
       {expanded && (
         <div className="ml-4 mt-2">
           {logs?.asleep ? <div className="rounded bg-muted p-2 text-muted-foreground">The box is asleep <button type="button" className="ml-2 text-foreground hover:underline" onClick={wakeAndLoad}>Wake and load logs</button></div> : (
-            <pre ref={logRef} onScroll={(event) => { const element = event.currentTarget; nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 32; }} className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2 font-mono text-[11px] text-foreground">{logs?.lines.join('\n') ?? (loading ? 'Loading logs…' : '')}</pre>
+            <pre ref={logRef} onScroll={(event) => { const element = event.currentTarget; nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 32; }} className={cn('max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2 font-mono text-[11px]', logText ? 'text-foreground' : 'text-muted-foreground')}>{logText || logPlaceholder}</pre>
           )}
           {error && <p role="alert" className="mt-1 text-destructive">{error}</p>}
         </div>
