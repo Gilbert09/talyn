@@ -706,12 +706,14 @@ describe('workbench routes', () => {
   });
 
   describe('cancel', () => {
-    it('stops the agent by its marker, keeps the queue, and does not drain it', async () => {
+    it('stops the agent by its marker, keeps its session, and starts the queued message', async () => {
       let kill!: () => void;
-      let started = false;
+      const agentScripts: string[] = [];
       scriptedFleet((script) => {
         if (isAgentTurn(script)) {
-          started = true;
+          agentScripts.push(script);
+          // The queued message runs to the end.
+          if (agentScripts.length > 1) return null;
           // The agent answered before the cancel, so its session is kept for the next turn.
           return { stdout: claudeTurnLines('sess-9', 'x').slice(0, 2), hold: new Promise<void>((_r, reject) => (kill = () => reject(new Error('killed')))) };
         }
@@ -720,7 +722,7 @@ describe('workbench routes', () => {
       const wb = await createSandboxWorkbench();
       const chatId = await chatIdOf(wb.id);
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'long job' });
-      await vi.waitFor(() => expect(started).toBe(true));
+      await vi.waitFor(() => expect(agentScripts).toHaveLength(1));
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'later' });
 
       fleet.handler = ((prev) => async (script, req) => {
@@ -733,13 +735,17 @@ describe('workbench routes', () => {
       })(fleet.handler);
       const res = await call('POST', `/workbenches/chats/${chatId}/cancel`);
       expect(res.status).toBe(200);
+      // A person pressed Stop, so the message queued behind the turn starts, in the same session.
+      await vi.waitFor(() => expect(agentScripts).toHaveLength(2));
+      expect(agentScripts[1]).toContain('sess-9');
       await idle(chatId);
 
       const chat = await getChat(chatId);
-      expect(chat).toMatchObject({ status: 'idle', statusMessage: 'Cancelled', turnCount: 1, agentSessionId: 'sess-9' });
-      expect(chat?.queuedMessages.map((m) => m.text)).toEqual(['later']);
+      expect(chat).toMatchObject({ status: 'idle', turnCount: 2 });
+      expect(chat?.queuedMessages).toEqual([]);
       const page = await call('GET', `/workbenches/chats/${chatId}/events`);
-      expect(page.body.data.events.at(-1).event).toMatchObject({ type: 'result', subtype: 'cancelled' });
+      const firstTurn = (page.body.data.events as Loose[]).filter((e) => e.turn === 1);
+      expect(firstTurn.at(-1).event).toMatchObject({ type: 'result', subtype: 'cancelled' });
     });
 
     it('is a no-op on an idle chat', async () => {
