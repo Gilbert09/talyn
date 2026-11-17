@@ -440,6 +440,20 @@ describe('PostHog Inbox rule editor', () => {
     expect(screen.queryByText(/Fix this first/)).toBeNull();
   });
 
+  it('adds a typed reviewer that was not entered when the field loses focus', async () => {
+    await openEditor();
+    addCondition('Suggested reviewer');
+    const reviewer = screen.getByPlaceholderText('GitHub login');
+    fireEvent.change(reviewer, { target: { value: 'Gilbert09' } });
+    fireEvent.blur(reviewer);
+    expect(screen.getByLabelText('Remove Gilbert09')).toBeTruthy();
+
+    fireEvent.click(document.querySelector('[data-attr="posthog-inbox-preview-run"]')!);
+    await waitFor(() => expect(api.workflows.posthogInboxDryRun).toHaveBeenCalled());
+    const [, input] = vi.mocked(api.workflows.posthogInboxDryRun).mock.calls[0]!;
+    expect(input.conditions?.suggestedReviewers).toEqual(['Gilbert09']);
+  });
+
   it('clears the preview when a condition changes', async () => {
     await openEditor();
     fillNameAndPrompt();
