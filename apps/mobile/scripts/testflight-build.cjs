@@ -102,7 +102,7 @@ function json(env, args, what) {
   try { return JSON.parse(text); } catch { throw new Error(`${what} returned no JSON.`); }
 }
 
-const STORE = { ios: 'App Store Connect (TestFlight)', android: 'the Play internal track as a draft' };
+const STORE = { ios: 'App Store Connect (TestFlight)', android: 'the Play internal track' };
 
 function run() {
   const mode = process.argv[2];

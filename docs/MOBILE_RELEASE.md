@@ -277,7 +277,9 @@ Store review sign-in: press and hold the Talyn owl on the sign-in screen for 2 s
 
 Submit the inspected beta build ID through the protected workflow.
 The wrapper verifies hosted platform, profile, identity, commit, version, build, runtime, and channel before submission.
-Android submission creates a draft on the internal track. A store owner must review and release that draft.
+Android submission to the internal track releases the build to internal testers at once (`releaseStatus: completed`, Tom's call,
+2026-11-17). EAS uploads with the `talyn-eas-submit@talyn-514510.iam.gserviceaccount.com` service account key
+(1Password: "Talyn Play submit key"), which has release rights for Talyn only. A production submission stays a draft.
 iOS submission uploads to App Store Connect. It does not release the app to the public.
 iOS submission adds the build to the TestFlight groups "Talyn internal" and "Talyn external" (`groups` in the
 `eas.json` submit profiles; Tom's call, 2026-11-16). Adding a build to an external group does not ask for

@@ -3,7 +3,7 @@ name: Mobile TestFlight
 # Every push to main that changes the app or the packages it bundles checks the iOS and Android internal-beta native
 # fingerprints. For each platform with no internal-beta build of its fingerprint yet, it queues an EAS build with the
 # next reserved build number. EAS submits the finished iOS binary to App Store Connect (TestFlight) and the Android
-# binary to the Play internal track as a draft. A change with the same fingerprint ships as an EAS update from the
+# binary to the Play internal track. A change with the same fingerprint ships as an EAS update from the
 # Mobile update workflow instead. Set the repository variable MOBILE_TESTFLIGHT_AUTO to 0 to stop this workflow.
 # Run it by hand with "force" to build a new binary for an unchanged fingerprint.
 on:

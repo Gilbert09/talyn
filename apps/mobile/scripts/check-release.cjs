@@ -153,7 +153,8 @@ function check() {
     if (policy.store) {
       assert.equal(profile.credentialsSource, 'remote');
       assert.equal(profile.android.buildType, 'app-bundle');
-      assert.equal(eas.submit[name].android.releaseStatus, 'draft');
+      // Internal testers get each build at once (Tom, 2026-11-17). Production stays a draft that a person sends for review.
+      assert.equal(eas.submit[name].android.releaseStatus, name === 'production' ? 'draft' : 'completed');
       assert.equal(eas.submit[name].android.changesNotSentForReview, true);
       assert.equal(eas.submit[name].android.track, name === 'production' ? 'production' : 'internal');
     }
