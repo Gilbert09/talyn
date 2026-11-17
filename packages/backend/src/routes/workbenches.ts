@@ -34,6 +34,7 @@ import {
   type WorkbenchSettings,
   type WorkbenchTranscriptMatch,
   type WorkbenchTurnPayer,
+  type WorkbenchMessageSender,
   type Workbench,
   boxRefusalReason,
 } from '@talyn/shared';
@@ -305,6 +306,18 @@ export function workbenchRoutes(): Router {
    * account, GitHub account and box-hours. Only POST /chats/:chatId/messages
    * uses it. Cancel goes through `readableChat` plus a payer check.
    */
+  /**
+   * `fromThreadId`: the session's own thread wrote the message (the MCP tool
+   * sets it for a thread's token). Only a label for the transcript, so any
+   * other value is ignored rather than refused.
+   */
+  async function threadSender(workbench: WorkbenchRow, fromThreadId: unknown): Promise<WorkbenchMessageSender | null> {
+    if (typeof fromThreadId !== 'string' || !fromThreadId || workbench.threadId !== fromThreadId) return null;
+    const thread = await getWorkbench(fromThreadId);
+    if (!thread || !isThread(thread)) return null;
+    return { kind: 'thread', threadId: thread.id, name: thread.title || thread.name };
+  }
+
   async function promptableChat(
     req: Request,
     res: Response,
@@ -425,7 +438,12 @@ export function workbenchRoutes(): Router {
     if (!found) return;
     try {
       if (found.chat.closedAt) throw new WorkbenchError('This chat is closed.', 409, 'chat_closed');
-      ok(res, await sendMessage(found.chat.id, req.body ?? {}, { sentAt, ...(found.payer ? { payer: found.payer } : {}) }));
+      const sender = await threadSender(found.workbench, req.body?.fromThreadId);
+      ok(res, await sendMessage(found.chat.id, req.body ?? {}, {
+        sentAt,
+        ...(found.payer ? { payer: found.payer } : {}),
+        ...(sender ? { sender } : {}),
+      }));
     } catch (err) {
       fail(res, err);
     }

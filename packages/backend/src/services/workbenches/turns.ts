@@ -43,6 +43,8 @@ import {
   type WorkbenchStatus,
   type WorkbenchTurnPayer,
   type WorkbenchMessageTrigger,
+  type WorkbenchMessageSender,
+  QUESTION_EVENT_TYPE,
 } from '@talyn/shared';
 import { payerRef, turnGitIdentityEnv } from '../teams/payer.js';
 import { debugBus, describeError } from '../debugBus.js';
@@ -323,7 +325,14 @@ function normaliseAttachment(a: WorkbenchAttachment): WorkbenchAttachment {
 export async function sendMessage(
   chatId: string,
   input: SendWorkbenchMessageInput,
-  opts: { origin?: 'talyn'; sentAt?: string; resumeVersion?: number; payer?: WorkbenchTurnPayer; trigger?: WorkbenchMessageTrigger } = {},
+  opts: {
+    origin?: 'talyn';
+    sentAt?: string;
+    resumeVersion?: number;
+    payer?: WorkbenchTurnPayer;
+    trigger?: WorkbenchMessageTrigger;
+    sender?: WorkbenchMessageSender;
+  } = {},
 ): Promise<{ queued: boolean; waitingFor?: string }> {
   const receivedAt = opts.sentAt ?? new Date().toISOString();
   const chat = await getChat(chatId);
@@ -342,6 +351,7 @@ export async function sendMessage(
   if (opts.origin === 'talyn') message.origin = 'talyn';
   if (opts.origin === 'talyn' && opts.trigger) message.trigger = opts.trigger;
   if (opts.payer) message.payer = opts.payer;
+  if (opts.sender && opts.origin !== 'talyn') message.sender = opts.sender;
   const payer = payerRef(message.payer);
   // A person's message that would start a turn now asks the plan first, so
   // the route can answer 402 and the composer keeps the text. A message
@@ -481,7 +491,7 @@ async function runTurnLoopBody(
       await recoverTurnFromDiskFull(chatId);
     }
     const fin = await finishTurn(chatId, {
-      finalStatus: outcome.status,
+      finalStatus: await turnEndStatus(chatId, heldTurn, outcome),
       statusMessage: outcome.statusMessage,
       drain: !outcome.cancelled || startQueue,
       owner: TURN_OWNER,
@@ -516,6 +526,21 @@ async function runTurnLoopBody(
       });
     }
     next = fin?.started ?? null;
+  }
+}
+
+/**
+ * A turn in which the agent asked the person a question (`talyn_ask_user`)
+ * ends waiting for the answer, not idle. A failed or stopped turn keeps its
+ * status: the person must see the failure first.
+ */
+async function turnEndStatus(chatId: string, turn: number, outcome: TurnOutcome): Promise<WorkbenchChatStatus> {
+  if (outcome.status !== 'idle' || outcome.cancelled) return outcome.status;
+  try {
+    return (await hasTurnEvent(chatId, turn, QUESTION_EVENT_TYPE)) ? 'awaiting_input' : outcome.status;
+  } catch (err) {
+    console.warn(`[workbench] reading chat ${chatId} turn ${turn} for a question failed:`, err);
+    return outcome.status;
   }
 }
 
@@ -559,7 +584,8 @@ async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): P
     if (linked.threadId) {
       if (linked.pullRequestId && linked.pullRequestId !== wb.pullRequestId) await notifyThread(linked, 'pr_opened', { wake: false });
       // A queued message already started the next turn: the thread hears when that one ends.
-      if (chat.status !== 'running') await notifyThread(linked, 'session_finished', { status: chat.status });
+      if (chat.status === 'awaiting_input') await notifyThread(linked, 'needs_input', { status: chat.status, chatId: chat.id });
+      else if (chat.status !== 'running') await notifyThread(linked, 'session_finished', { status: chat.status });
     }
     // The turn may have fixed the PR, so the merge queue and auto-keep look again.
     if (linked.pullRequestId) notifyPrSessionChanged(linked.workspaceId, linked.pullRequestId, 'session:turn_end');
@@ -739,6 +765,8 @@ export function userMessageEvent(
       ...(message.origin === 'talyn' ? { origin: 'talyn' } : {}),
       // A wake-up or a job exit: the clients show the turn as a system row.
       ...(message.origin === 'talyn' && message.trigger ? { trigger: message.trigger } : {}),
+      // The session's thread wrote it, for example an answer to the agent's question.
+      ...(message.sender ? { sender: message.sender } : {}),
       // Who prompted, for a teammate's turn. The payer's workspace stays on the backend.
       ...(message.payer
         ? { payer: { userId: message.payer.userId, githubLogin: message.payer.githubLogin, avatarUrl: message.payer.avatarUrl } }
@@ -1575,7 +1603,8 @@ async function finishSuccessfulAgent(
   let fresh = (await getWorkbench(wb.id)) ?? wb;
   if (message.intent === 'rename_branch') fresh = (await followBranchRename(fresh)) ?? fresh;
   if (message.intent === 'create_pr' || (wb.settings?.autoCreatePr !== false &&
-      (await getChat(chatId))?.status !== 'awaiting_input' && !fresh.pullRequestId && parseAutoPrDetails(text).ok)) {
+      (await getChat(chatId))?.status !== 'awaiting_input' && !fresh.pullRequestId && parseAutoPrDetails(text).ok &&
+      !(await hasTurnEvent(chatId, live.turn, QUESTION_EVENT_TYPE)))) {
     const opened = await openPullRequestFromTurn(await nameBeforePush(fresh, chatId, message, text), text);
     events.add(opened.event);
     await events.flush();

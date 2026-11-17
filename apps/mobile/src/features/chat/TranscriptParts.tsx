@@ -1,10 +1,13 @@
-import { describeTool, type Workbench } from '@talyn/shared';
+import {
+  describeTool, formatQuestionAnswers, isQuestionAnswered, type QuestionAnswer, type Workbench, type WorkbenchMessageSender,
+  type WorkbenchQuestionEvent, type WorkbenchQuestionItem,
+} from '@talyn/shared';
 import { Link, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 
-import { AppText, Button, type Symbol } from '../../components/UI';
+import { AppText, Button, IconButton, Input, type Symbol } from '../../components/UI';
 import { openExternal, safeExternalUrl } from '../../components/Workflow';
 import { parseMarkdown, inlineText, type MdBlock, type MdInline } from '../../lib/markdown';
 import { shortTime } from '../../lib/time';
@@ -14,7 +17,7 @@ import { MessageImages } from './AttachmentViews';
 import type { MessageImage } from './attachments';
 import { Markdown } from './Markdown';
 import { TypingDots } from './Pulse';
-import type { TranscriptRow } from './transcript';
+import { answeredLabel, senderLabel, type TranscriptRow } from './transcript';
 import { useHighlighter } from './findHighlight';
 import { BOX_REFUSALS, permissionTitle, systemRowText } from './transcriptFind';
 
@@ -50,11 +53,16 @@ function Spoken({ label, text, style, children }: { label: string; text: string;
     }}>{children}</View>;
 }
 
-export const UserBubble = memo(function UserBubble({ text, timestamp, attachments, files = [], workbenchId = '', now }: { text: string; timestamp: string | null; attachments: number; files?: MessageImage[]; workbenchId?: string; now: number }) {
+export const UserBubble = memo(function UserBubble({ text, timestamp, attachments, files = [], workbenchId = '', now, sender }: {
+  text: string; timestamp: string | null; attachments: number; files?: MessageImage[]; workbenchId?: string; now: number;
+  /** The thread that wrote the message. */
+  sender?: WorkbenchMessageSender;
+}) {
   const c = useTheme();
   const time = shortTime(timestamp, now);
   return <View style={styles.userWrap}>
-    <Spoken label={`You said: ${text}${time ? `, ${time}` : ''}`} text={text} style={{ ...styles.bubble, backgroundColor: c.surface }}>
+    {sender ? <AppText variant="caption" tone="muted" importantForAccessibility="no">{senderLabel(sender)}</AppText> : null}
+    <Spoken label={`${sender ? senderLabel(sender) : 'You said'}: ${text}${time ? `, ${time}` : ''}`} text={text} style={{ ...styles.bubble, backgroundColor: c.surface }}>
       <Markdown text={text} />
       {files.length ? <MessageImages workbenchId={workbenchId} attachments={files} />
         : attachments ? <AppText variant="caption" tone="muted">{attachments === 1 ? '1 attachment' : `${attachments} attachments`}</AppText> : null}
@@ -170,6 +178,98 @@ export function PlanCard({ plan, state, busy, disabled, onApprove, onKeepPlannin
   </View>;
 }
 
+/** One question, one single-select list of options: a tap on an option sends it. */
+function sendsOnPick(question: WorkbenchQuestionEvent): boolean {
+  const only = question.questions.length === 1 ? question.questions[0] : null;
+  return Boolean(only && !only.multiSelect && only.options.length > 0);
+}
+
+/**
+ * The agent's question. `open` with `waiting` off: the person can answer. Any
+ * other state shows the options read-only.
+ */
+export function QuestionCard({ question, state, answeredBy, busy, disabled, waiting, onAnswer }: {
+  question: WorkbenchQuestionEvent; state: 'open' | 'answered'; answeredBy: WorkbenchMessageSender | null;
+  busy: boolean; disabled: boolean;
+  /** The chat runs or has a message on its way. */
+  waiting: boolean;
+  onAnswer(text: string): void;
+}) {
+  const c = useTheme();
+  const [answers, setAnswers] = useState<QuestionAnswer[]>(() => question.questions.map(() => ({ selected: [] })));
+  const open = state === 'open' && !waiting;
+  const blocked = disabled || busy;
+  const instant = sendsOnPick(question);
+  const complete = answers.every((answer) => isQuestionAnswered(answer));
+  const many = question.questions.length > 1;
+
+  const send = (next: QuestionAnswer[]) => { if (!blocked) onAnswer(formatQuestionAnswers(question, next)); };
+  const update = (index: number, answer: QuestionAnswer) => setAnswers((current) => current.map((a, i) => (i === index ? answer : a)));
+  const pick = (index: number, item: WorkbenchQuestionItem, label: string) => {
+    const current = answers[index];
+    if (instant) return send([{ selected: [label] }]);
+    if (item.multiSelect) {
+      update(index, { ...current, selected: current.selected.includes(label) ? current.selected.filter((l) => l !== label) : [...current.selected, label] });
+    } else update(index, { selected: [label] });
+  };
+  const setOther = (index: number, item: WorkbenchQuestionItem, other: string) => {
+    const current = answers[index];
+    update(index, item.multiSelect || !other.trim() ? { ...current, other } : { selected: [], other });
+  };
+
+  return <View style={[styles.plan, { borderColor: open ? withAlpha(c.information, 0.5) : c.border, backgroundColor: open ? withAlpha(c.information, 0.04) : c.paper }]}>
+    <View style={[styles.planHeader, { borderColor: c.border }]}>
+      <SymbolView name={{ ios: 'questionmark.bubble', android: 'help' }} size={13} tintColor={c.information} />
+      <AppText variant="caption" tone="muted" accessibilityRole="header" style={{ flex: 1 }}>{many ? 'Questions' : 'Question'}</AppText>
+      {state === 'answered' ? <AppText variant="caption" tone="success">{answeredLabel(answeredBy)}</AppText> : null}
+    </View>
+    <View style={[styles.planBody, styles.questionBody]}>
+      {question.questions.map((item, index) => {
+        const answer = answers[index];
+        const role = instant ? 'button' : item.multiSelect ? 'checkbox' : 'radio';
+        return <View key={index} style={styles.questionItem}>
+          <View style={styles.questionTitle}>
+            {item.header ? <Text style={[type.caption, sans(600), styles.chip, { color: c.information, backgroundColor: withAlpha(c.information, 0.1) }]}>{item.header}</Text> : null}
+            <Text selectable style={[type.body, sans(600), { color: c.text, flex: 1 }]}>{item.question}</Text>
+          </View>
+          {open && item.multiSelect ? <AppText variant="caption" tone="muted">Pick one or more.</AppText> : null}
+          {item.options.map((option) => {
+            const selected = answer.selected.includes(option.label);
+            const body = <>
+              <Text style={[type.body, { color: c.text }]}>{option.label}</Text>
+              {option.description ? <Text style={[type.meta, { color: c.muted }]}>{option.description}</Text> : null}
+            </>;
+            if (!open) return <View key={option.label} style={[styles.option, { borderColor: c.border }]}>{body}</View>;
+            return <Pressable key={option.label} accessibilityRole={role} disabled={blocked}
+              accessibilityLabel={option.description ? `${option.label}. ${option.description}` : option.label}
+              accessibilityState={{ disabled: blocked, ...(role === 'button' ? {} : { checked: selected }) }}
+              onPress={() => pick(index, item, option.label)}
+              style={({ pressed }) => [styles.option, {
+                borderColor: selected ? c.information : c.border,
+                backgroundColor: selected ? withAlpha(c.information, 0.1) : pressed ? c.surface : c.background,
+                opacity: blocked ? 0.5 : 1,
+              }]}>{body}</Pressable>;
+          })}
+          {open ? <View style={styles.otherRow}>
+            <View style={{ flex: 1 }}>
+              <Input value={answer.other ?? ''} editable={!blocked} onChangeText={(text) => setOther(index, item, text)}
+                placeholder={item.options.length ? 'Other' : 'Type your answer'} returnKeyType="send"
+                accessibilityLabel={`${item.options.length ? 'Other answer' : 'Your answer'} ${index + 1}`}
+                onSubmitEditing={() => { if (complete) send(answers); }} />
+            </View>
+            {instant ? <IconButton label="Send answer" symbol={{ ios: 'arrow.up', android: 'arrow_upward' }}
+              disabled={blocked || !answer.other?.trim()} onPress={() => send(answers)} /> : null}
+          </View> : null}
+        </View>;
+      })}
+    </View>
+    {open && !instant ? <View style={[styles.planActions, { borderColor: c.border }]}>
+      <Button size="sm" title={many ? 'Send answers' : 'Send answer'} icon={{ ios: 'arrow.up', android: 'arrow_upward' }} loading={busy}
+        disabled={blocked || !complete} onPress={() => send(answers)} />
+    </View> : null}
+  </View>;
+}
+
 export function FailedLine({ text }: { text: string }) {
   const c = useTheme();
   const mark = useHighlighter();
@@ -209,5 +309,11 @@ const styles = StyleSheet.create({
   planHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth },
   planBody: { paddingHorizontal: 12, paddingVertical: 8 },
   planActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth },
+  questionBody: { gap: 14 },
+  questionItem: { gap: 6 },
+  questionTitle: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  chip: { borderRadius: radius.sm, paddingHorizontal: 6, paddingVertical: 1, overflow: 'hidden' },
+  option: { borderWidth: 1, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 8, gap: 2 },
+  otherRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   failed: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingVertical: 6 },
 });

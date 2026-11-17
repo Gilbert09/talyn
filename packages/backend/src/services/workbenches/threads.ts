@@ -5,7 +5,9 @@ import type {
   ThreadSessionEvent,
   Workbench,
   WorkbenchAgent,
+  WorkbenchQuestionEvent,
 } from '@talyn/shared';
+import { parseQuestionEvent, QUESTION_EVENT_TYPE, questionSummary, questionText } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import { pullRequests as prTable, workbenches } from '../../db/schema.js';
 import { createWorkbench } from './create.js';
@@ -13,7 +15,7 @@ import { emitWorkbenchEvents } from './emit.js';
 import { WorkbenchError } from './errors.js';
 import { linkedBeforeMerge, ownsLinkedPr } from './prEligibility.js';
 import type { ReadinessUser } from './readiness.js';
-import { appendEvents, getWorkbench, isThread, listChats, threadAutoWakeState, threadSessions, type ChatRow, type WorkbenchRow } from './store.js';
+import { appendEvents, getWorkbench, isThread, latestTurnEvent, listChats, threadAutoWakeState, threadSessions, type ChatRow, type WorkbenchRow } from './store.js';
 import { sendMessage } from './turns.js';
 
 /**
@@ -70,8 +72,32 @@ async function childFingerprint(threadId: string): Promise<string> {
   return JSON.stringify(state.sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
 }
 
+/** The question the session's chat asked in its latest turn: the named chat, else its newest one waiting for an answer. */
+async function pendingQuestion(sessionId: string, chatId?: string): Promise<WorkbenchQuestionEvent | null> {
+  const chats = (await listChats(sessionId)).filter((c) => !c.closedAt);
+  const chat = chatId
+    ? chats.find((c) => c.id === chatId)
+    : [...chats].filter((c) => c.status === 'awaiting_input').sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
+  if (!chat) return null;
+  const event = await latestTurnEvent(chat.id, chat.turnCount, QUESTION_EVENT_TYPE);
+  return event ? parseQuestionEvent(event) : null;
+}
+
 /** The message that wakes the thread. The agent cannot see transcript cards, so the facts go in the text. */
-export function threadWakeText(event: ThreadSessionEvent): string {
+export function threadWakeText(event: ThreadSessionEvent, question?: WorkbenchQuestionEvent | null): string {
+  if (event.action === 'needs_input' && question) {
+    const who = `"${event.name}" (session id ${event.sessionId}) on ${event.repo}`;
+    return [
+      `[Talyn] Session ${who} asks:`,
+      '',
+      questionText(question),
+      '',
+      'The person sees these questions in the session too. If the plan, the brief or the person\'s earlier messages give the answer, ' +
+        'send it with `talyn_send_session_message`: repeat each question with its answer. ' +
+        'If they do not, ask the person with `talyn_ask_user`, then send their answer to the session. ' +
+        'Other sessions of this thread may have changed too: see them all with `talyn_list_thread_sessions`.',
+    ].join('\n');
+  }
   const who = `"${event.name}" (session id ${event.sessionId}) on ${event.repo}`;
   const what =
     event.action === 'pr_opened'
@@ -98,7 +124,7 @@ export function threadWakeText(event: ThreadSessionEvent): string {
 export async function notifyThread(
   child: WorkbenchRow,
   action: ThreadSessionAction,
-  opts: { wake?: boolean; status?: string } = {},
+  opts: { wake?: boolean; status?: string; chatId?: string } = {},
 ): Promise<void> {
   try {
     if (!child.threadId || isThread(child)) return;
@@ -107,6 +133,7 @@ export async function notifyThread(
     const chat = activeChat(await listChats(thread.id));
     if (!chat) return;
     const prUrl = await prUrlOf(child.pullRequestId);
+    const question = action === 'needs_input' ? await pendingQuestion(child.id, opts.chatId) : null;
     const event: ThreadSessionEvent = {
       action,
       sessionId: child.id,
@@ -114,6 +141,7 @@ export async function notifyThread(
       repo: child.repoFullName,
       status: opts.status ?? activeChat(await listChats(child.id))?.status ?? 'idle',
       ...(prUrl ? { prUrl } : {}),
+      ...(question ? { question: questionSummary(question).slice(0, 300) } : {}),
     };
     const candidate = opts.wake !== false && WAKES.has(action);
     const coalesced = chat.queuedMessages.some((m) => m.origin === 'talyn');
@@ -135,7 +163,7 @@ export async function notifyThread(
     }
     // One waiting wake is enough: the agent lists every session when it runs.
     if (!willWake) return;
-    await sendMessage(chat.id, { text: threadWakeText(event) }, { origin: 'talyn' });
+    await sendMessage(chat.id, { text: threadWakeText(event, question) }, { origin: 'talyn' });
   } catch (err) {
     console.warn(`[thread] telling the thread of session ${child.id} about ${action} failed:`, err);
   }

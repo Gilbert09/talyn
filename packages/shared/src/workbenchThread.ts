@@ -4,6 +4,7 @@
  * its sessions changes: a `talyn_thread` event in the thread's transcript, and
  * for most changes a short Talyn message that gives the thread's agent a turn.
  */
+import type { WorkbenchMessageSender } from './workbench.js';
 
 export type ThreadSessionAction = 'session_started' | 'session_finished' | 'pr_opened' | 'pr_merged' | 'needs_input' | 'paused';
 export const THREAD_SESSION_ACTIONS: readonly ThreadSessionAction[] = [
@@ -25,6 +26,8 @@ export interface ThreadSessionEvent {
   /** The session's chat status when the event was written (`idle`, `error`, ...). */
   status: string;
   prUrl?: string;
+  /** For `needs_input`: the session's question, in one line. */
+  question?: string;
 }
 
 /** A stored `talyn_thread` event, or null when it is not one. */
@@ -41,6 +44,7 @@ export function parseThreadSessionEvent(event: Record<string, unknown>): ThreadS
     repo: text('repo'),
     status: text('status'),
     ...(text('prUrl') ? { prUrl: text('prUrl') } : {}),
+    ...(text('question') ? { question: text('question') } : {}),
   };
 }
 
@@ -55,12 +59,21 @@ export function threadSessionEventText(event: ThreadSessionEvent): string {
     case 'pr_merged':
       return `${who}: pull request merged`;
     case 'needs_input':
-      return `${who} needs an answer`;
+      return event.question ? `${who} asks: ${event.question}` : `${who} needs an answer`;
     case 'session_finished':
       return event.status === 'error' ? `${who} stopped with an error` : `${who} finished its turn`;
     case 'paused':
       return 'The thread stopped waking itself because its sessions made no progress since its last turn. It waits for the person.';
   }
+}
+
+/** The thread that wrote a stored user message (`talyn.sender`), or null when a person wrote it. */
+export function messageSender(talyn: unknown): WorkbenchMessageSender | null {
+  const sender = talyn && typeof talyn === 'object' ? (talyn as { sender?: unknown }).sender : null;
+  if (!sender || typeof sender !== 'object') return null;
+  const { kind, threadId, name } = sender as Record<string, unknown>;
+  if (kind !== 'thread' || typeof threadId !== 'string' || !threadId) return null;
+  return { kind, threadId, name: typeof name === 'string' ? name : '' };
 }
 
 /** True for a queued or stored message that Talyn wrote, not a person. */

@@ -100,6 +100,10 @@ To stop the agent, select **Stop the agent**.
 
 Type `@` to mention a file, and `/` for the agent's slash commands. The agent is the real Claude Code or Codex tool, so its commands, skills and plan mode work as they do on your own computer.
 
+## When the agent asks a question
+
+When the agent needs a decision from you, it asks a question and stops. The chat shows the question as a card with the agent's options. Select an option, or write your own answer under **Other**, and send. You can also answer in the composer. The session shows **Waiting for your answer** until you reply, and Talyn sends you a notification.
+
 ## Wait for CI
 
 An agent can wait for the checks on its pull request instead of polling them. It sets a wake-up that fires when the checks on the commit finish, when the pull request head moves, or when the pull request merges or closes. The wake-up also has a latest time, which is 3 hours unless the agent sets another. The session shows that it waits for CI, and the agent starts a new turn when the wake-up fires.
@@ -143,6 +147,8 @@ A thread is a conversation with no repository of its own. You give it a goal, an
 To start one, select **New thread** in the sidebar and describe the goal.
 
 The thread keeps track of its sessions. When a session finishes a turn, opens a pull request, has its pull request merged or needs an answer, the thread's agent hears about it and can act. When it needs you, it says so in the thread, with a link to the session.
+
+When a session in a thread asks a question, the thread gets the question too. If the plan or your earlier messages give the answer, the thread answers for you, and the session shows that answer as **From thread**. If the thread does not know the answer, it asks you. You can also answer in the session yourself.
 
 Every session a thread starts is an ordinary session. You can open it, read its diff and send it messages yourself.
 

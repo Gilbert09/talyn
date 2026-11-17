@@ -53,6 +53,7 @@ const { capabilityFor } = await import('../services/websocket.js');
 const { continueAsThreadMessage } = await import('../services/workbenches/create.js');
 const { announceSessionSpawn, announceThreadSession, notifyThread, notifyThreadsOfMergedPr, threadWakeText } = await import('../services/workbenches/threads.js');
 const { prMonitorService } = await import('../services/prMonitor.js');
+const { askPerson } = await import('../services/workbenches/questions.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Loose = any;
@@ -614,6 +615,85 @@ describe('threads', () => {
       await call('PATCH', `/workbenches/chats/${localChat}/local`, { status: 'idle' });
       await vi.waitFor(async () => expect(await cards(chatId)).toHaveLength(2));
       expect((await cards(chatId))[1]).toMatchObject({ action: 'session_finished', status: 'idle' });
+    });
+
+    describe('a session that asks the person a question', () => {
+      const QUESTIONS = [
+        { question: 'Which database?', header: 'Database', options: [{ label: 'Postgres' }, { label: 'SQLite', description: 'One file' }], multiSelect: false },
+      ];
+
+      /** The session's agent turn calls talyn_ask_user while it runs, then ends. */
+      function askingFleet(threadId: string, ask = true): void {
+        scriptedFleet();
+        const plain = fleet.handler;
+        fleet.handler = async (script, req) => {
+          if (!isAgentTurn(script) || !script.includes('pick a database')) return plain(script, req);
+          if (ask) {
+            const [row] = await testDb.db.select().from(workbenches).where(eq(workbenches.threadId, threadId));
+            await askPerson(row.id, QUESTIONS);
+          }
+          return { stdout: claudeTurnLines('sess-q', 'I asked which database to use.') };
+        };
+      }
+
+      it('ends the turn waiting for an answer and wakes the thread with the question', async () => {
+        const thread = await createThread();
+        const chatId = await threadChat(thread.id);
+        askingFleet(thread.id);
+        const session = await createSession({ threadId: thread.id, prompt: 'pick a database' });
+        const sessionChat = (await listChats(session.id))[0].id;
+
+        await vi.waitFor(async () => expect((await getChat(sessionChat))?.status).toBe('awaiting_input'), { timeout: 5000 });
+        const asked = (await eventsOf(sessionChat)).filter((e) => e.type === 'talyn_question');
+        expect(asked).toEqual([expect.objectContaining({ id: expect.any(String), questions: QUESTIONS })]);
+
+        await vi.waitFor(async () => expect(await talynMessages(chatId)).toHaveLength(1), { timeout: 5000 });
+        expect((await cards(chatId)).at(-1)).toMatchObject({ action: 'needs_input', status: 'awaiting_input', question: 'Which database?' });
+        const [wake] = await talynMessages(chatId);
+        const text: string = wake.message.content[0].text;
+        expect(text).toContain(`[Talyn] Session "${session.name}" (session id ${session.id}) on acme/app asks:`);
+        expect(text).toContain('[Database] Which database?');
+        expect(text).toContain('   - SQLite: One file');
+        expect(text).toContain('talyn_send_session_message');
+        expect(text).toContain('talyn_ask_user');
+      });
+
+      it("labels the thread's answer as the thread's, and ignores a thread id that is not the session's", async () => {
+        const thread = await createThread();
+        askingFleet(thread.id);
+        const session = await createSession({ threadId: thread.id, prompt: 'pick a database' });
+        const sessionChat = (await listChats(session.id))[0].id;
+        await vi.waitFor(async () => expect((await getChat(sessionChat))?.status).toBe('awaiting_input'), { timeout: 5000 });
+        scriptedFleet();
+
+        const answer = await call('POST', `/workbenches/chats/${sessionChat}/messages`, { text: 'Which database?\n→ Postgres', fromThreadId: thread.id });
+        expect(answer.status, answer.body.error).toBe(200);
+        await idle(sessionChat);
+        expect((await getChat(sessionChat))?.status).toBe('idle');
+        const other = await createThread();
+        expect((await call('POST', `/workbenches/chats/${sessionChat}/messages`, { text: 'Hi', fromThreadId: other.id })).status).toBe(200);
+        await idle(sessionChat);
+
+        const userMessages = (await eventsOf(sessionChat)).filter((e) => e.talyn?.kind === 'user_message');
+        expect(userMessages.at(-2).talyn.sender).toEqual({ kind: 'thread', threadId: thread.id, name: expect.any(String) });
+        expect(userMessages.at(-1).talyn.sender).toBeUndefined();
+      });
+
+      it('ends idle when the turn asked nothing', async () => {
+        const thread = await createThread();
+        askingFleet(thread.id, false);
+        const session = await createSession({ threadId: thread.id, prompt: 'pick a database' });
+        const sessionChat = (await listChats(session.id))[0].id;
+        await idle(sessionChat);
+        expect((await getChat(sessionChat))?.status).toBe('idle');
+      });
+
+      it('refuses a question when no turn runs', async () => {
+        const session = await createSession();
+        const sessionChat = (await listChats(session.id))[0].id;
+        await idle(sessionChat);
+        await expect(askPerson(session.id, QUESTIONS)).rejects.toMatchObject({ status: 409, code: 'no_turn' });
+      });
     });
 
     describe('a merged pull request', () => {

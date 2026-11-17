@@ -1,5 +1,6 @@
 import {
   createClaudeStreamParser,
+  messageSender,
   nextWorkbenchAction,
   prSummaryToNextActionPr,
   TALYN_SKILL_SUMMARIES,
@@ -10,6 +11,7 @@ import {
   type WorkbenchAttachment,
   type WorkbenchContextUsage,
   type WorkbenchEvent,
+  type WorkbenchMessageSender,
   type WorkbenchNextAction,
   type WorkbenchNextActionInput,
   type WorkbenchTodo,
@@ -89,6 +91,8 @@ export interface TranscriptTurn {
   userText: string | null;
   userSeq: number | null;
   attachments: ReturnType<typeof messageAttachments>;
+  /** The thread that wrote the user's message. Null when a person wrote it. */
+  sender: WorkbenchMessageSender | null;
   /** The agent's events for the turn, user message excluded. */
   events: AgentEvent[];
   /** When the user's message was stored. Null when unknown. */
@@ -104,13 +108,14 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
   for (const e of events) {
     const text = userMessageText(e.event);
     if (!current || current.turn !== e.turn || (text !== null && current.userText !== null)) {
-      current = { turn: e.turn, userText: null, userSeq: null, attachments: [], events: [], userAt: null, lastAt: null };
+      current = { turn: e.turn, userText: null, userSeq: null, attachments: [], sender: null, events: [], userAt: null, lastAt: null };
       turns.push(current);
     }
     if (text !== null && current.userText === null && current.events.length === 0) {
       current.userText = text;
       current.userSeq = e.seq;
       current.attachments = messageAttachments(e.event);
+      current.sender = messageSender((e.event as { talyn?: unknown }).talyn);
       current.userAt = e.createdAt ?? null;
     } else {
       current.events.push(e.event);

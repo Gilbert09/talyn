@@ -1,6 +1,6 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, History, Loader2, RotateCcw } from 'lucide-react';
-import { agentOutageFrom, buildBlocks, findTurnPlan, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
+import { agentOutageFrom, buildBlocks, findTurnPlan, findTurnQuestion, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent, type WorkbenchMessageSender } from '@talyn/shared';
 import { AgentBlocks } from '../terminal/AgentConversation';
 import { usePendingMessages } from './usePendingMessages';
 import { renderMarkdownish } from '../../lib/markdown';
@@ -8,6 +8,7 @@ import { chatTotals, compactCount, sendFailureText, splitTurns, type TranscriptT
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { PlanCard, type PlanCardState } from './PlanCard';
+import { QuestionCard, type QuestionCardState } from './QuestionCard';
 import { MessageAttachments } from './MessageAttachments';
 import { TranscriptFindBar } from './TranscriptFindBar';
 import { RelativeTime } from '../RelativeTime';
@@ -91,6 +92,7 @@ export function WorkbenchTranscript({
   const running = chat.status === 'running';
   const totals = useMemo(() => chatTotals(events), [events]);
   const plans = useMemo(() => turns.map((turn) => findTurnPlan(turn.events)), [turns]);
+  const questions = useMemo(() => turns.map((turn) => findTurnQuestion(turn.events)), [turns]);
 
   return (
     <div className="relative flex h-full min-w-0 flex-col bg-background">
@@ -122,6 +124,8 @@ export function WorkbenchTranscript({
               : turns[i + 1].userText === PLAN_APPROVED_MESSAGE
                 ? 'approved'
                 : 'past';
+            const question = questions[i];
+            const questionState: QuestionCardState = !last ? 'answered' : running || outgoing.length > 0 ? 'waiting' : 'open';
             return (
               <TurnView
                 key={`${chat.id}:${turn.turn}:${turn.userSeq ?? i}`}
@@ -137,6 +141,17 @@ export function WorkbenchTranscript({
                 plan={
                   plan ? (
                     <PlanCard plan={plan} state={planState} {...(last && planState === 'open' ? { chat, ops } : {})} />
+                  ) : null
+                }
+                question={
+                  question ? (
+                    <QuestionCard
+                      key={question.id}
+                      question={question}
+                      state={questionState}
+                      answeredBy={last ? null : turns[i + 1].sender}
+                      {...(questionState === 'open' ? { chat, ops } : {})}
+                    />
                   ) : null
                 }
               />
@@ -277,7 +292,7 @@ function useStableTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
       const last = turn.events.length ? turn.events[turn.events.length - 1].seq : -1;
       const prev = cache.current.get(key);
       const kept =
-        prev && prev.size === turn.events.length && prev.last === last && prev.turn.userText === turn.userText && prev.turn.attachments.length === turn.attachments.length
+        prev && prev.size === turn.events.length && prev.last === last && prev.turn.userText === turn.userText && prev.turn.attachments.length === turn.attachments.length && prev.turn.sender?.threadId === turn.sender?.threadId
           ? prev.turn
           : turn;
       next.set(key, { size: turn.events.length, last, turn: kept });
@@ -322,6 +337,7 @@ const TurnView = React.memo(function TurnView({
   retryResult,
   canRevert,
   plan,
+  question,
 }: {
   chatId: string;
   chat: WorkbenchChat;
@@ -333,11 +349,13 @@ const TurnView = React.memo(function TurnView({
   canRevert: boolean;
   /** The turn's plan card, drawn after its blocks. */
   plan: React.ReactNode;
+  /** The turn's question card, drawn after its blocks. */
+  question: React.ReactNode;
 }) {
   return (
     <div className="space-y-3">
       {turn.userText !== null && (
-        <UserMessage chatId={chatId} turn={turn.turn} text={turn.userText} attachments={turn.attachments} ops={ops} canRevert={canRevert} at={turn.userAt} />
+        <UserMessage chatId={chatId} turn={turn.turn} text={turn.userText} attachments={turn.attachments} ops={ops} canRevert={canRevert} at={turn.userAt} sender={turn.sender} />
       )}
       {turn.events.length > 0 && (
         <AgentBlocks
@@ -348,6 +366,7 @@ const TurnView = React.memo(function TurnView({
         />
       )}
       {plan}
+      {question}
       {!live && turn.events.length > 0 && turn.lastAt && (
         <RelativeTime iso={turn.lastAt} className="block text-[11px] text-muted-foreground" />
       )}
@@ -404,6 +423,7 @@ function UserMessage({
   at = null,
   sending = false,
   footer = null,
+  sender = null,
 }: {
   chatId: string;
   turn: number;
@@ -415,6 +435,8 @@ function UserMessage({
   at?: string | null;
   sending?: boolean;
   footer?: React.ReactNode;
+  /** The thread that wrote the message. */
+  sender?: WorkbenchMessageSender | null;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -435,6 +457,11 @@ function UserMessage({
   return (
     <div className="group flex justify-end">
       <div className="max-w-[85%] space-y-1">
+        {sender && (
+          <div className="text-right text-[11px] text-muted-foreground" data-attr="message-sender">
+            {sender.name ? `From thread ${sender.name}` : 'From the thread'}
+          </div>
+        )}
         <div className="rounded-lg bg-muted px-3 py-2 text-[13px] text-foreground [overflow-wrap:anywhere]">
           {renderMarkdownish(text, 'surface')}
           {attachments.length > 0 && <MessageAttachments attachments={attachments} ops={ops} />}

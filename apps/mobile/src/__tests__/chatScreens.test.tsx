@@ -21,7 +21,8 @@ jest.mock('../auth/AuthProvider', () => ({
   useWorkspace: () => ({ selected: 'one', choices: [{ id: 'one', name: 'Test workspace' }] }),
 }));
 const mockActions = { stop: jest.fn(async (_chatId: string) => undefined), approvePlan: jest.fn(async (_chatId: string) => ({ queued: false })),
-  setPlanMode: jest.fn(async (_chatId: string, _planMode: boolean) => ({})) };
+  setPlanMode: jest.fn(async (_chatId: string, _planMode: boolean) => ({})),
+  answerQuestion: jest.fn(async (_chatId: string, _text: string) => ({ queued: false })) };
 jest.mock('../features/chat/actions', () => ({ get chatActions() { return mockActions; } }));
 beforeEach(() => { mockActive.store.dispose(); mockActive = fixture(); mockParams = { id: 'session-one' }; });
 afterEach(() => { mockActive.store.dispose(); jest.restoreAllMocks(); });
@@ -109,6 +110,17 @@ describe('plans and stopping', () => {
     await render(<WorkbenchDetailScreen kind="session" />);
     expect(await screen.findByText('Approved')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Approve and build' })).toBeNull();
+  });
+  it('answers an open question with one tap and refreshes the conversation', async () => {
+    transcript([
+      ev(1, { type: 'user', talyn_user_message: true, message: { content: [{ type: 'text', text: 'Add storage' }] } }),
+      ev(2, { type: 'talyn_question', id: 'q1', questions: [{ question: 'Which database?', options: [{ label: 'Postgres' }, { label: 'SQLite' }] }] }),
+    ]);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    const calls = mockActive.api.workbenches.get.mock.calls.length;
+    await fireEvent.press(await screen.findByRole('button', { name: 'SQLite' }));
+    expect(mockActions.answerQuestion).toHaveBeenCalledWith('chat-one', 'Which database?\n→ SQLite');
+    await waitFor(() => expect(mockActive.api.workbenches.get.mock.calls.length).toBeGreaterThan(calls));
   });
   it('replaces send with a single-tap stop while the agent works', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ status: 'running' })] }));

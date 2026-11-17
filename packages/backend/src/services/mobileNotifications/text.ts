@@ -42,7 +42,7 @@ function bounded(text: PushText): PushText {
 /**
  * Only the parts of an event the summary reads: top-level type, the text and
  * AskUserQuestion blocks of an assistant message, a result's text and errors,
- * and a `talyn_pr` outcome. Tool results and other events come back NULL, so a
+ * a `talyn_pr` outcome and a `talyn_question` (small: its size is capped). Tool results and other events come back NULL, so a
  * large tool output never leaves the database.
  */
 const summaryEvent = sql<Record<string, unknown> | null>`CASE
@@ -58,7 +58,7 @@ const summaryEvent = sql<Record<string, unknown> | null>`CASE
     END))
   WHEN ${workbenchEvents.event} ->> 'type' = 'result' THEN jsonb_build_object(
     'type', 'result', 'result', ${workbenchEvents.event} -> 'result', 'errors', ${workbenchEvents.event} -> 'errors')
-  WHEN ${workbenchEvents.event} ->> 'type' = 'talyn_pr' THEN ${workbenchEvents.event}
+  WHEN ${workbenchEvents.event} ->> 'type' IN ('talyn_pr', 'talyn_question') THEN ${workbenchEvents.event}
 END`;
 
 /** The newest events of one chat, newest first, through the primary key. */

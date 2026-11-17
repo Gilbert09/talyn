@@ -1,5 +1,6 @@
 import type { Workbench, WorkbenchChat, WorkbenchEvent } from './workbench.js';
 import { workbenchDisplayName } from './workbenchTitle.js';
+import { parseQuestionEvent, questionSummary } from './workbenchQuestion.js';
 
 /**
  * The text of a "your agent finished" alert: the desktop and web OS
@@ -52,6 +53,8 @@ function lastAssistantText(events: WorkbenchEvent[]): string | null {
 
 function lastQuestion(events: WorkbenchEvent[]): string | null {
   for (let i = events.length - 1; i >= 0; i--) {
+    const asked = parseQuestionEvent(events[i].event as unknown as Record<string, unknown>);
+    if (asked) return questionSummary(asked);
     const content = events[i].event.message?.content;
     if (events[i].event.type !== 'assistant' || !Array.isArray(content)) continue;
     for (let j = content.length - 1; j >= 0; j--) {
