@@ -11,6 +11,9 @@ import {
   inboundConnections,
   inboundDeliveries,
   repositories,
+  spaces,
+  teamMembers,
+  teams,
   workflowRuns,
   workspaces,
 } from '../db/schema.js';
@@ -354,6 +357,48 @@ describe('inbound webhooks', () => {
       });
       // The run keeps no body: the delivery row holds it.
       expect(run.facts).toMatchObject({ integration: 'webhook', payload: null, deliveryRowId: row.id });
+    });
+
+    describe('a session action with a space', () => {
+      beforeEach(async () => {
+        await testDb.db.insert(teams).values([{ id: 'team-1', name: 'Acme' }, { id: 'team-2', name: 'Other' }]);
+        await testDb.db.insert(teamMembers).values([
+          { id: 'm-1', teamId: 'team-1', githubUserId: 100, userId: 'u1', githubLogin: 'owner', role: 'owner' },
+        ]);
+        await testDb.db.insert(spaces).values([
+          { id: 'space-1', teamId: 'team-1', name: 'Web' },
+          { id: 'space-old', teamId: 'team-1', name: 'Old', archivedAt: new Date() },
+          { id: 'space-2', teamId: 'team-2', name: 'Not mine' },
+        ]);
+      });
+
+      it.each([
+        ['a space the owner is in', 'true', 'space-1', 'space-1', 'started a session'],
+        ['an archived space', 'true', 'space-old', null, 'started a session in Personal, not in the chosen space: The space is archived.'],
+        ['a space of another team', 'true', 'space-2', null, 'started a session in Personal, not in the chosen space: The space was not found, or you are not in its team.'],
+        ['a space that does not exist', 'true', 'space-gone', null, 'started a session in Personal, not in the chosen space: The space was not found, or you are not in its team.'],
+        ['spaces switched off', 'false', 'space-1', null, 'started a session in Personal, not in the chosen space: Spaces are not available for this account.'],
+      ])('starts the session for %s', async (_label, flag, spaceId, expectedSpace, detail) => {
+        vi.stubEnv('SPACES_ENABLED', flag);
+        resetFeatureFlagsForTests();
+        const rule = await addRule({ actions: [sessionAction({ spaceId } as Partial<WorkflowAction>)] });
+        const res = await send(`${rule.connectionId}/${rule.secrets.token}`, '{"action":"opened"}');
+        expect((await settled(String(res.json.id))).outcome).toBe('handled');
+        expect(created).toHaveLength(1);
+        expect(created[0].input.spaceId).toBe(expectedSpace);
+        const [run] = await runs();
+        expect(run.status).toBe('succeeded');
+        expect(run.actions).toEqual([expect.objectContaining({ type: 'start_session', ok: true, detail })]);
+      });
+
+      it('starts the session in Personal when the action names no space', async () => {
+        vi.stubEnv('SPACES_ENABLED', 'true');
+        resetFeatureFlagsForTests();
+        const rule = await addRule();
+        const res = await send(`${rule.connectionId}/${rule.secrets.token}`, '{"action":"opened"}');
+        expect((await settled(String(res.json.id))).outcome).toBe('handled');
+        expect(created[0].input.spaceId).toBeNull();
+      });
     });
 
     it('ignores a request no condition matches', async () => {

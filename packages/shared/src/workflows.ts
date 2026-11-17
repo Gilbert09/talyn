@@ -768,6 +768,10 @@ export type WorkflowAction =
    * On a GitHub Issues rule, `null` means the issue's own repository. A
    * Linear rule must name one. A PostHog Inbox rule always works on the
    * report's own repository, so it must leave this `null`.
+   *
+   * `spaceId` puts the session in one of the owner's team spaces. Absent means
+   * Personal. The session still runs in the rule's workspace. The backend
+   * checks the space when the rule is saved and again when the rule fires.
    */
   | ({
       type: 'start_session';
@@ -775,6 +779,7 @@ export type WorkflowAction =
       prompt: string;
       model?: string;
       internetAccess?: boolean;
+      spaceId?: string;
     } & IssueWriteBackSettings)
   /** Reply in the thread of the Slack message that triggered the rule. */
   | { type: 'slack_reply'; text: string }
@@ -2892,12 +2897,17 @@ function validateAction(
         fail(`${at}.internetAccess must be a boolean`);
       }
       const model = typeof a.model === 'string' && a.model.trim() ? a.model.trim() : undefined;
+      if (a.spaceId !== undefined && a.spaceId !== null && typeof a.spaceId !== 'string') {
+        fail(`${at}.spaceId must be a string or null`);
+      }
+      const spaceId = typeof a.spaceId === 'string' && a.spaceId.trim() ? a.spaceId.trim() : undefined;
       return {
         type: 'start_session',
         repositoryId,
         prompt: a.prompt.trim(),
         ...(model ? { model } : {}),
         ...(a.internetAccess === true ? { internetAccess: true } : {}),
+        ...(spaceId ? { spaceId } : {}),
         ...validateIssueWriteBack(a, at, integration),
       };
     }

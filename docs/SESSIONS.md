@@ -7967,3 +7967,12 @@ Decisions:
 - A session token may call it on itself only. It refuses a thread, and a session that is in a thread already: that thread starts the other sessions.
 - It refuses a session at spawn depth 1 or more. A thread starts again at depth 0, so a child session could escape `MAX_SESSION_SPAWN_DEPTH`.
 - The briefing tells the agent to call the tool when the person asks for a thread. When the work needs several repositories and the person did not ask, the agent asks first.
+
+### 2026-11-17 — An automation can start its session in a team space
+
+Before, a session from an integration rule (GitHub, Slack, webhook, Linear, GitHub Issues, PostHog Inbox) always started in Personal. To share it, the owner had to move it by hand.
+Now the `start_session` action has an optional `spaceId`. The rule editor on web and desktop shows a **Space** picker when Spaces is offered and the person is in a space. Mobile shows the space on the rule's facts. Rules are read-only on mobile.
+Decisions:
+- The session runs in the rule's own workspace, not in the owner's home workspace for the team. This is the same as a move: a space is a container. So Talyn adds no repository and makes no change to the space's repository list.
+- The checks are the move checks, for the rule's owner: the `spaces` flag, team membership and a live space (`services/workflows/ruleSpace.ts`). The route checks only a space that is NEW to the rule. Thus a rule whose space went away can still be renamed or switched off.
+- When the rule fires and the space is no longer usable, the session starts in Personal. The run's action detail says why. Personal is visible only to the owner, so this fails closed and the work still happens.

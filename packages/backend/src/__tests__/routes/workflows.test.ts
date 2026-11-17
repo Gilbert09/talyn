@@ -12,7 +12,15 @@ import { wrapAsyncRoutes } from '../../middleware/asyncHandler.js';
 import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
-import { slackInstallations, slackUserLinks, workspaces as workspacesTable } from '../../db/schema.js';
+import { eq } from 'drizzle-orm';
+import {
+  slackInstallations,
+  slackUserLinks,
+  spaces as spacesTable,
+  teamMembers as teamMembersTable,
+  teams as teamsTable,
+  workspaces as workspacesTable,
+} from '../../db/schema.js';
 import { _resetWorkflowStore } from '../../services/workflows/store.js';
 import { encryptString } from '../../services/tokenCrypto.js';
 
@@ -117,6 +125,62 @@ describe('workflow routes', () => {
     expect(del.status).toBe(200);
     const after = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine`, { headers });
     expect(((await after.json()) as { data: unknown[] }).data).toEqual([]);
+  });
+
+  describe('a session action with a space', () => {
+    const sessionIn = (spaceId: string) => ({
+      actions: [{ type: 'start_session', repositoryId: null, prompt: 'Look at this PR', spaceId }],
+    });
+    const save = (method: 'POST' | 'PATCH', path: string, payload: Record<string, unknown>) =>
+      fetch(`${url}/api/v1/workflows${path}`, { method, headers, body: JSON.stringify(payload) });
+
+    beforeEach(async () => {
+      process.env.SPACES_ENABLED = 'true';
+      await db.insert(teamsTable).values([{ id: 'team-1', name: 'Acme' }, { id: 'team-2', name: 'Other' }]);
+      await db.insert(teamMembersTable).values([
+        { id: 'm-1', teamId: 'team-1', githubUserId: 100, userId: TEST_USER_ID, githubLogin: 'tom', role: 'owner' },
+      ]);
+      await db.insert(spacesTable).values([
+        { id: 'space-1', teamId: 'team-1', name: 'Web' },
+        { id: 'space-old', teamId: 'team-1', name: 'Old', archivedAt: new Date() },
+        { id: 'space-2', teamId: 'team-2', name: 'Not mine' },
+      ]);
+    });
+
+    afterEach(() => {
+      delete process.env.SPACES_ENABLED;
+    });
+
+    it('saves a space the caller is in', async () => {
+      const made = await create(sessionIn('space-1'));
+      expect(made.actions).toEqual([
+        { type: 'start_session', repositoryId: null, prompt: 'Look at this PR', spaceId: 'space-1' },
+      ]);
+    });
+
+    it.each([
+      ['a space of another team', 'true', 'space-2', 'The space was not found, or you are not in its team.'],
+      ['a space that does not exist', 'true', 'space-gone', 'The space was not found, or you are not in its team.'],
+      ['an archived space', 'true', 'space-old', 'The space is archived.'],
+      ['any space while Spaces is off', 'false', 'space-1', 'Spaces are not available for this account.'],
+    ])('refuses %s', async (_label, flag, spaceId, error) => {
+      process.env.SPACES_ENABLED = flag;
+      const res = await save('POST', '', body(sessionIn(spaceId)));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ success: false, error, code: 'space_unavailable' });
+    });
+
+    it('lets a rule keep a space the caller left, and refuses a new one', async () => {
+      const made = await create(sessionIn('space-1'));
+      await db.delete(teamMembersTable).where(eq(teamMembersTable.id, 'm-1'));
+
+      const off = await save('PATCH', `/${made.id}`, { enabled: false });
+      expect(off.status).toBe(200);
+
+      const moved = await save('PATCH', `/${made.id}`, sessionIn('space-2'));
+      expect(moved.status).toBe(400);
+      expect(((await moved.json()) as { code: string }).code).toBe('space_unavailable');
+    });
   });
 
   it('PATCH replaces the whole workflow', async () => {

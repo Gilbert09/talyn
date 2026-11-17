@@ -1,9 +1,9 @@
 import type { PostHogCodeStatus } from '@talyn/client/native';
-import { DEFAULT_POSTHOG_CODE_MODEL_ID, INVALID_RETURN_TO_CODE, type LinearConnection, type TrunkIntegrationStatus } from '@talyn/shared';
+import { DEFAULT_POSTHOG_CODE_MODEL_ID, INVALID_RETURN_TO_CODE, type LinearConnection, type SpacesTeam, type TrunkIntegrationStatus, type WorkflowAction } from '@talyn/shared';
 
 import {
   githubIssuesAvailable, isHttpsUrl, keyFormOpen, linearConnectionView, linearReturnError, postHogKeyConfig, postHogModelLabel, postHogModelOf, postHogOAuthOptions, postHogView, refusesReturnTarget,
-  ruleIntegration, TRUNK_DESCRIPTION, trunkFormOpen, trunkToken, trunkView, withAppReturn,
+  ruleIntegration, ruleSpaceText, TRUNK_DESCRIPTION, trunkFormOpen, trunkToken, trunkView, withAppReturn,
 } from '../features/integrations/model';
 
 describe('PostHog Code key form', () => {
@@ -188,5 +188,19 @@ describe('issue integrations model', () => {
 
   it.each([[true], [false]])('offers GitHub Issues when GitHub connected is %s', (connected) => {
     expect(githubIssuesAvailable(connected)).toBe(connected);
+  });
+});
+
+describe('ruleSpaceText', () => {
+  const teams = [{ id: 't1', name: 'Acme', spaces: [{ id: 'space-1', name: 'Web' }] }] as unknown as SpacesTeam[];
+  const start = (spaceId?: string) => ({ type: 'start_session', repositoryId: null, prompt: 'x', ...(spaceId ? { spaceId } : {}) }) as WorkflowAction;
+  it.each([
+    ['a rule with no session', [{ type: 'add_label', label: 'x' } as unknown as WorkflowAction], teams, null],
+    ['a session with no space', [start()], teams, 'Personal'],
+    ['a session in a known space', [start('space-1')], teams, 'Web'],
+    ['a space the person is not in', [start('space-2')], teams, 'A space you cannot use'],
+    ['teams not loaded yet', [start('space-1')], null, 'A space you cannot use'],
+  ])('%s', (_label, actions, list, expected) => {
+    expect(ruleSpaceText(actions, list)).toBe(expected);
   });
 });

@@ -37,6 +37,7 @@ import { createWebhookRule, deleteConnectionsForRule } from '../services/inbound
 import { webhookUrl } from '../services/inbound/url.js';
 import { getLinearConnection } from '../services/linear/store.js';
 import { workflowSuggestions } from '../services/workflows/suggestions.js';
+import { ruleSpaceIds, ruleSpaceRefusal } from '../services/workflows/ruleSpace.js';
 import { ownerReachesSlackTeam } from '../services/workflows/sources/slack.js';
 import { getPostHogInboxConnection } from '../services/posthogInbox/connection.js';
 import { posthogInboxDryRun, posthogInboxStatus } from '../services/posthogInbox/preview.js';
@@ -247,6 +248,32 @@ export function workflowRoutes(): Router {
       code: 'linear_connection_unavailable',
     });
     return false;
+  }
+
+  /**
+   * A space that a session action names must be one the caller can start a
+   * session in. Only spaces that are NEW to the rule are checked, so a rule
+   * whose space went away can still be renamed or switched off. Its runs then
+   * start in Personal.
+   */
+  async function spaceGate(
+    req: Request,
+    res: Response,
+    workflow: NormalizedWorkflow,
+    existing: Pick<WorkflowDefinition, 'actions'> | null
+  ): Promise<boolean> {
+    const known = new Set(existing ? ruleSpaceIds(existing.actions) : []);
+    const added = ruleSpaceIds(workflow.actions).filter((id) => !known.has(id));
+    if (added.length === 0) return true;
+    const user = assertUser(req);
+    for (const spaceId of added) {
+      const refusal = await ruleSpaceRefusal({ id: user.id, email: user.email ?? null }, spaceId);
+      if (refusal) {
+        res.status(400).json({ success: false, error: refusal, code: 'space_unavailable' });
+        return false;
+      }
+    }
+    return true;
   }
 
   async function slackTeamGate(
@@ -479,6 +506,7 @@ export function workflowRoutes(): Router {
     if (!(await integrationGate(req, res, workspaceId, normalized.integration))) return;
     if (!(await slackTeamGate(req, res, normalized))) return;
     if (!(await linearConnectionGate(res, workspaceId, normalized))) return;
+    if (!(await spaceGate(req, res, normalized, null))) return;
     // No plan caps how many workflows an owner keeps. A run a workflow starts
     // is gated where its task is created.
     let data: CreatedWorkflow;
@@ -540,6 +568,7 @@ export function workflowRoutes(): Router {
     }
     if (!(await slackTeamGate(req, res, normalized))) return;
     if (!(await linearConnectionGate(res, existing.workspaceId, normalized))) return;
+    if (!(await spaceGate(req, res, normalized, existing))) return;
     const data = await updateWorkflow(existing.id, existing.workspaceId, normalized);
     if (!data) return res.status(404).json({ success: false, error: 'Automation not found' });
 
