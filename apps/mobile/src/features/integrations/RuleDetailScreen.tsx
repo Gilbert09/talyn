@@ -14,8 +14,10 @@ import { longTime, shortTime, useNow } from '../../lib/time';
 import { sessionRoute } from '../../navigation/routes';
 import { useBacklog } from './backlog';
 import {
-  POSTHOG_INBOX_BACKLOG_NOTE, backlogRowText, dailyCapText, manualRunText, postHogInboxConditionFacts,
+  POSTHOG_INBOX_BACKLOG_NOTE, backlogRowText, dailyCapText, manualRunText, postHogInboxConditionFacts, ruleSpaceText,
 } from './model';
+import { useTeams } from '../spaces/data';
+import { spacesOffered } from '../spaces/model';
 import { Fact, Loading, Page, WebRow } from '../more/Page';
 import { useLoopList, useRuns, useWorkflowList } from '../automations/data';
 import {
@@ -56,10 +58,13 @@ function WorkflowFacts({ workflow, integration }: { workflow: WorkflowWithStats;
   const problems = problemsText(workflow.stats.failures7d);
   const inbox = integration === 'posthog_inbox' ? postHogInboxConditionFacts(workflow.conditions) : [];
   const cap = integration === 'posthog_inbox' ? dailyCapText(workflow.maxRunsPerDay) : null;
+  const teams = useTeams();
+  const space = spacesOffered(useFeatures()) ? ruleSpaceText(workflow.actions, teams.data) : null;
   return <><Group title="Automation">
     <Fact label="Status" value={workflow.enabled ? 'On' : 'Off'} />
     <Fact label="When" value={describeWorkflowTrigger(workflow)} />
     <Fact label="Then" value={describeWorkflowActions(workflow) || 'Nothing'} />
+    {space ? <Fact label="Space" value={space} /> : null}
     <Fact label="Runs" value={`${workflow.stats.runs24h} today · ${workflow.stats.runs7d} this week · ${workflow.stats.runsTotal} in all`} />
     <Fact label="Tasks started" value={String(workflow.stats.tasksStarted)} divider={Boolean(problems)} />
     {problems ? <Fact label="Problems" value={problems} tone="warning" divider={false} /> : null}

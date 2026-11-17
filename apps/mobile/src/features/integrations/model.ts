@@ -2,7 +2,7 @@ import type { PostHogCodeStatus } from '@talyn/client/native';
 import {
   DEFAULT_POSTHOG_CODE_MODEL_ID, DEFAULT_POSTHOG_INBOX_ACTIONABILITY, INVALID_RETURN_TO_CODE, isWorkflowIntegration, POSTHOG_CODE_MODELS,
   POSTHOG_INBOX_ACTIONABILITY_LABELS, POSTHOG_INBOX_BACKLOG_STATE_LABELS, POSTHOG_INBOX_CONDITION_SPECS, posthogInboxPushActive,
-  type LinearConnection, type PostHogInboxBacklogRow, type PostHogInboxStatus, type WorkflowRun, type WorkflowConditions, type TrunkIntegrationStatus, type WorkflowIntegration, type WorkspaceSettings,
+  type LinearConnection, type PostHogInboxBacklogRow, type SpacesTeam, type WorkflowAction, type PostHogInboxStatus, type WorkflowRun, type WorkflowConditions, type TrunkIntegrationStatus, type WorkflowIntegration, type WorkspaceSettings,
 } from '@talyn/shared';
 
 import type { Tone } from '../../components/UI';
@@ -324,4 +324,17 @@ export function manualRunText(run: Pick<WorkflowRun, 'trigger' | 'triggeredBy'>)
   if (run.trigger !== 'manual') return null;
   const who = run.triggeredBy?.trim();
   return who ? `Started by ${who}` : 'Started by hand';
+}
+
+/**
+ * Where a rule's session starts, for the rule's facts. Null when the rule
+ * starts no session. A space the person is no longer in still shows, because
+ * the session then starts in Personal. Same rule as web `RuleSpaceSelect`.
+ */
+export function ruleSpaceText(actions: readonly WorkflowAction[], teams: readonly SpacesTeam[] | null | undefined): string | null {
+  const start = actions.find((action) => action.type === 'start_session');
+  if (!start || start.type !== 'start_session') return null;
+  if (!start.spaceId) return 'Personal';
+  const space = (teams ?? []).flatMap((team) => team.spaces).find((row) => row.id === start.spaceId);
+  return space?.name ?? 'A space you cannot use';
 }

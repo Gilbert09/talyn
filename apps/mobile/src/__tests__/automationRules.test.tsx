@@ -10,6 +10,7 @@ const mockLifecycle = fixture().lifecycle;
 const mockList = jest.fn();
 const mockLoopList = jest.fn();
 const mockRuns = jest.fn();
+const mockTeamsList = jest.fn();
 const mockHrefs: unknown[] = [];
 let mockParams: { kind: string; id?: string } = { kind: 'slack' };
 let mockFeatures: Record<string, boolean> = { workbenches: true, workflows: true, slackChannelRules: true };
@@ -18,9 +19,11 @@ jest.mock('@talyn/client/native', () => {
   const actual = jest.requireActual('@talyn/client/native');
   return { ...actual, workflows: { ...actual.workflows,
     list: (...args: unknown[]) => mockList(...args), runs: (...args: unknown[]) => mockRuns(...args),
-  }, loops: { ...actual.loops, list: (...args: unknown[]) => mockLoopList(...args) } };
+  }, loops: { ...actual.loops, list: (...args: unknown[]) => mockLoopList(...args) },
+  teams: { ...actual.teams, list: (...args: unknown[]) => mockTeamsList(...args) } };
 });
 jest.mock('../auth/AuthProvider', () => ({
+  useAuth: () => ({ user: { id: 'u-1' } }),
   useMobileRuntime: () => ({ lifecycle: mockLifecycle }),
   useWorkspace: () => ({ status: 'ready', selected: 'ws-1', choices: [] }),
   useNetwork: () => 'online',
@@ -70,6 +73,7 @@ beforeEach(() => {
   mockLoopList.mockResolvedValue([]);
   mockRuns.mockResolvedValue([slackRun]);
   mockHrefs.length = 0;
+  mockTeamsList.mockReset();
 });
 
 describe('integration rules', () => {
@@ -145,6 +149,28 @@ describe('integration rules', () => {
     expect(await screen.findByText('Start a task')).toBeVisible();
     expect(await screen.findByText('Webhook request')).toBeVisible();
     expect(screen.getByText('Edit on the web')).toBeVisible();
+  });
+
+  it.each([
+    ['the chosen space', 'space-1', 'Web'],
+    ['Personal with no space', undefined, 'Personal'],
+    ['a space the person left', 'space-gone', 'A space you cannot use'],
+  ] as const)('shows %s on a rule that starts a session', async (_label, spaceId, text) => {
+    mockParams = { kind: 'slack', id: 'slack-1' };
+    mockFeatures = { workbenches: true, workflows: true, slackChannelRules: true, spaces: true };
+    mockTeamsList.mockResolvedValue([{ id: 't1', name: 'Acme', spaces: [{ id: 'space-1', name: 'Web' }] }]);
+    mockList.mockResolvedValue([{ ...slackRule, actions: [{ ...slackRule.actions[0], ...(spaceId ? { spaceId } : {}) }] }]);
+    await render(<RuleDetailRoute />);
+    expect(await screen.findByText('Space')).toBeVisible();
+    expect(await screen.findByText(text)).toBeVisible();
+  });
+
+  it('shows no space while Spaces is off', async () => {
+    mockParams = { kind: 'slack', id: 'slack-1' };
+    await render(<RuleDetailRoute />);
+    expect(await screen.findByText('New message in a channel')).toBeVisible();
+    expect(screen.queryByText('Space')).toBeNull();
+    expect(mockTeamsList).not.toHaveBeenCalled();
   });
 
   it('opens a Slack rule and shows the reply permission failure', async () => {
