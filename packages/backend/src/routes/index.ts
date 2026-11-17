@@ -3,12 +3,12 @@ import { mobileNotificationRoutes } from './mobileNotifications.js';
 import { workspaceRoutes } from './workspaces.js';
 import { environmentRoutes } from './environments.js';
 import { taskRoutes } from './tasks.js';
-import { githubRoutes, githubPublicRoutes } from './github.js';
+import { githubReadRoutes, githubRoutes, githubPublicRoutes } from './github.js';
 import { posthogRoutes, posthogPublicRoutes } from './posthog.js';
 import { posthogInboxRoutes } from './posthogInbox.js';
-import { cloudProviderRoutes } from './cloudProviders.js';
+import { cloudProviderReadRoutes, cloudProviderRoutes } from './cloudProviders.js';
 import { repositoryRoutes } from './repositories.js';
-import { skillRoutes } from './skills.js';
+import { skillDiscoveryRoutes, skillRoutes } from './skills.js';
 import { pullRequestRoutes } from './pullRequests.js';
 import { debugRoutes } from './debug.js';
 import { developerRoutes } from './developer.js';
@@ -261,6 +261,25 @@ export function setupRoutes(app: Express): void {
   // pool and the handler checks that the caller owns the workspace. See
   // routes/insights.ts.
   app.use(`${api}/insights`, mount(insightsRoutes()));
+
+  // Skill discovery (`GET /skills`, `GET /skills/repo/content`). Pre-ownerScope
+  // for the billing reason: discovery waits on GitHub, and the apps call it for
+  // every watched repository when a workspace opens. On 2026-11-17 four of these
+  // held owner transactions for 24 minutes. The platform-skill routes stay
+  // below ownerScope. See routes/skills.ts.
+  app.use(`${api}/skills`, mount(skillDiscoveryRoutes()));
+
+  // The GitHub reads (`/github/user`, `/installations`, `/coverage`, the repo
+  // and branch lists). Pre-ownerScope for the same reason: each one is a wait
+  // on GitHub, and the apps call the first three on boot and on every focus.
+  // `/status`, `/disconnect` and `/app/install-url` stay below ownerScope.
+  // See routes/github.ts.
+  app.use(`${api}/github`, mount(githubReadRoutes()));
+
+  // The fleet account list, which waits on the vendors' usage APIs. Settings
+  // polls it every 60 s. The other cloud-provider routes stay below ownerScope.
+  // See routes/cloudProviders.ts.
+  app.use(`${api}/cloud-providers`, mount(cloudProviderReadRoutes()));
 
   // Workbenches — a branch with an agent chat, a diff, a terminal and scripts.
   // Pre-ownerScope for the billing reason, and more so: most handlers wait on

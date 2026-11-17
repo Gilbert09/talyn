@@ -5,7 +5,7 @@ import type { FleetAccountsResponse } from '@talyn/shared';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
 import { workspaces } from '../../db/schema.js';
-import { cloudProviderRoutes } from '../../routes/cloudProviders.js';
+import { cloudProviderReadRoutes, cloudProviderRoutes } from '../../routes/cloudProviders.js';
 import { addFleetAccount, getFleetAccountWithCredential, listFleetAccounts, setFleetAccountUsage } from '../../services/selfHosted/accounts.js';
 import { patchSelfHostedConfig, readSelfHostedConfig } from '../../services/selfHosted/credentials.js';
 import { FleetClient } from '../../services/selfHosted/client.js';
@@ -19,7 +19,7 @@ const OTHER = 'fleet-api-other';
 describe('fleet accounts API', () => {
   let db: Database;
   let cleanup: () => Promise<void>;
-  let router: Router;
+  let routers: Router[];
 
   beforeEach(async () => {
     ({ db, cleanup } = await createTestDb());
@@ -33,7 +33,7 @@ describe('fleet accounts API', () => {
     vi.stubEnv('FLEET_MULTI_ACCOUNT_ENABLED', 'true');
     vi.stubEnv('TALYN_TOKEN_KEY', randomBytes(32).toString('base64'));
     registerCloudProvider(selfHostedProvider);
-    router = cloudProviderRoutes();
+    routers = [cloudProviderReadRoutes(), cloudProviderRoutes()];
   });
 
   afterEach(async () => {
@@ -52,10 +52,12 @@ describe('fleet accounts API', () => {
     const routePath = config ? '/:type/config' : idMatch
       ? `/selfhosted/accounts/:id${idMatch[2] ?? ''}`
       : url.pathname;
-    const stack = router as unknown as {
+    const stacks = routers as unknown as Array<{
       stack: Array<{ route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: (req: Request, res: Response) => Promise<unknown> }> } }>;
-    };
-    const route = stack.stack.find((layer) => layer.route?.path === routePath && layer.route.methods[method.toLowerCase()])?.route;
+    }>;
+    const route = stacks
+      .flatMap((r) => r.stack)
+      .find((layer) => layer.route?.path === routePath && layer.route.methods[method.toLowerCase()])?.route;
     if (!route) throw new Error(`Route missing: ${method} ${routePath}`);
     const request = {
       params: config ? { type: 'selfhosted' } : idMatch ? { id: idMatch[1] } : {},

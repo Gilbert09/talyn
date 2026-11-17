@@ -3,7 +3,7 @@ import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
 import { randomBytes } from 'node:crypto';
-import { githubRoutes, githubPublicRoutes } from '../../routes/github.js';
+import { githubReadRoutes, githubRoutes, githubPublicRoutes } from '../../routes/github.js';
 import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
@@ -18,7 +18,7 @@ async function makeServer(): Promise<{ url: string; close: () => Promise<void> }
   // Public routes (unauthenticated — hit by GitHub's browser redirect).
   app.use('/github', githubPublicRoutes());
   // Authenticated routes.
-  app.use('/api/v1/github', requireAuth, githubRoutes());
+  app.use('/api/v1/github', requireAuth, githubReadRoutes(), githubRoutes());
   const server: Server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   const addr = server.address() as AddressInfo;

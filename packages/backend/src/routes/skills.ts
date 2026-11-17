@@ -80,7 +80,25 @@ function isUniqueViolation(err: unknown): boolean {
   return false;
 }
 
-export function skillRoutes(): Router {
+/** The values of settled promises, or the first rejection in order, like `Promise.all`. */
+function settledValues<T extends readonly unknown[]>(
+  results: { [K in keyof T]: PromiseSettledResult<T[K]> }
+): T {
+  const list = results as readonly PromiseSettledResult<unknown>[];
+  for (const result of list) {
+    if (result.status === 'rejected') throw result.reason;
+  }
+  return list.map((result) => (result as PromiseFulfilledResult<unknown>).value) as unknown as T;
+}
+
+/**
+ * The two reads that wait on GitHub. Mounted BEFORE ownerScope, so no owner
+ * transaction is open while discovery waits on GitHub: the apps call
+ * `GET /skills` for every watched repository when a workspace opens.
+ * `requireWorkspaceAccess` checks the owner itself, and every query below is
+ * keyed by the workspace it proved, so the rows are the ones RLS would return.
+ */
+export function skillDiscoveryRoutes(): Router {
   const router = Router();
 
   // List platform skills + repo-discovered skills + usage stats in one call.
@@ -98,17 +116,21 @@ export function skillRoutes(): Router {
     }
     try {
       const db = getDbClient();
-      const [platformRows, usage, repoResult] = await Promise.all([
-        db
-          .select(SKILL_LIST_COLUMNS)
-          .from(skillsTable)
-          .where(eq(skillsTable.workspaceId, workspaceId))
-          .orderBy(skillsTable.name),
-        getSkillUsage(workspaceId),
-        repositoryId
-          ? listRepoSkills(workspaceId, repositoryId, { refresh })
-          : Promise.resolve<RepoSkillsResult>({ status: 'none', skills: [] }),
-      ]);
+      // allSettled, not all: the response waits for every read, so nothing the
+      // request started is still running when it ends.
+      const [platformRows, usage, repoResult] = settledValues(
+        await Promise.allSettled([
+          db
+            .select(SKILL_LIST_COLUMNS)
+            .from(skillsTable)
+            .where(eq(skillsTable.workspaceId, workspaceId))
+            .orderBy(skillsTable.name),
+          getSkillUsage(workspaceId),
+          repositoryId
+            ? listRepoSkills(workspaceId, repositoryId, { refresh })
+            : Promise.resolve<RepoSkillsResult>({ status: 'none', skills: [] }),
+        ])
+      );
       const data: ListSkillsResponse = {
         platform: platformRows.map(listRowToSummary),
         // Strip content from the repo listing — the launch flow fetches it
@@ -157,6 +179,13 @@ export function skillRoutes(): Router {
       res.status(500).json({ success: false, error: msg });
     }
   });
+
+  return router;
+}
+
+/** Platform-skill reads and writes. Mounted after ownerScope: they touch only the database. */
+export function skillRoutes(): Router {
+  const router = Router();
 
   // A platform skill with content.
   router.get('/:id', async (req, res) => {

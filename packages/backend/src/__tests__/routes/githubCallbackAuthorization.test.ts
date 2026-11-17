@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { githubPublicRoutes, githubRoutes } from '../../routes/github.js';
+import { githubPublicRoutes, githubReadRoutes, githubRoutes } from '../../routes/github.js';
 import { wrapAsyncRoutes } from '../../middleware/asyncHandler.js';
 import * as githubApp from '../../services/githubApp.js';
 import { githubService } from '../../services/github.js';
@@ -48,7 +48,7 @@ describe('GitHub callback authorization', () => {
       req.user = { id: TEST_USER_ID, email: 'a@example.test', isAdmin: false };
       next();
     });
-    app.use('/api/v1/github', wrapAsyncRoutes(githubRoutes()));
+    app.use('/api/v1/github', wrapAsyncRoutes(githubReadRoutes()), wrapAsyncRoutes(githubRoutes()));
     const server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
