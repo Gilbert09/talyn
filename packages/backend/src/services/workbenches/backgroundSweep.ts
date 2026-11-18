@@ -10,6 +10,7 @@ import { wakeWithCredentials } from './sandboxRuntime.js';
 import { chooseReadSource } from './sandboxReadSource.js';
 import { getWorkbench, listChats } from './store.js';
 import {
+  ARCHIVED_JOB_DETAIL,
   applyProbe,
   emitBackground,
   fireWakeup,
@@ -20,7 +21,9 @@ import {
 import {
   cancelArchivedWakeups,
   dueWakeupsQuery,
+  markArchivedJobsLost,
   markJobsLost,
+  noteJobChecked,
   scheduledCiWakeups,
   setJobKeepAwake,
   settleJob,
@@ -100,12 +103,23 @@ export async function checkJob(job: JobRow, now = new Date()): Promise<JobCheckO
   }
 }
 
+/** Outcomes that leave the job running without a probe. */
+const UNPROBED: ReadonlySet<JobCheckOutcome> = new Set(['skipped', 'idle', 'refused', 'error']);
+
 async function sweepJobs(now: Date): Promise<number> {
+  // Archived sessions first, in one statement: their boxes are gone, and a pass
+  // of 50 must not be what stands between an archive and its jobs ending.
+  for (const touched of await markArchivedJobsLost(ARCHIVED_JOB_DETAIL)) await emitBackground(touched.workspaceId, touched.workbenchId);
   const jobs = await sweepJobsQuery(JOB_PASS_LIMIT);
   let checked = 0;
   for (let i = 0; i < jobs.length; i += JOB_CHECK_PARALLEL) {
-    const outcomes = await Promise.all(jobs.slice(i, i + JOB_CHECK_PARALLEL).map((job) => checkJob(job, now)));
+    const batch = jobs.slice(i, i + JOB_CHECK_PARALLEL);
+    const outcomes = await Promise.all(batch.map((job) => checkJob(job, now)));
     checked += outcomes.filter((o) => o !== 'skipped' && o !== 'idle').length;
+    // A job the pass looked at goes to the back of the queue even when it was
+    // not probed. Otherwise 50 idle jobs hold the front for good, and no other
+    // job is ever checked again.
+    await Promise.all(batch.filter((_, j) => UNPROBED.has(outcomes[j])).map((job) => noteJobChecked(job.id, now)));
   }
   return checked;
 }
@@ -183,6 +197,21 @@ export async function markJobsLostAfterMove(workbenchId: string, workspaceId: st
     if (count > 0) await emitBackground(workspaceId, workbenchId);
   } catch (err) {
     console.warn(`[background] marking the jobs of ${workbenchId} lost failed:`, err);
+  }
+}
+
+/**
+ * An archive was asked for: the box and its processes are on their way out,
+ * and the session already shows as archived. Ends its running jobs and its
+ * scheduled wake-ups now rather than at the next sweep. Never throws.
+ */
+export async function endBackgroundOnArchive(workbenchId: string, workspaceId: string): Promise<void> {
+  try {
+    const jobs = await markArchivedJobsLost(ARCHIVED_JOB_DETAIL, workbenchId);
+    const wakeups = await cancelArchivedWakeups(workbenchId);
+    if (jobs.length || wakeups.length) await emitBackground(workspaceId, workbenchId);
+  } catch (err) {
+    console.warn(`[background] ending the background work of archived ${workbenchId} failed:`, err);
   }
 }
 

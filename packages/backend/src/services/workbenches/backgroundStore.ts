@@ -234,6 +234,25 @@ export async function markJobsLost(workbenchId: string, currentSandboxId: string
   return rows.length;
 }
 
+/** The sessions that are archived; `workbenchId` narrows it to one. */
+function archivedSessions(workbenchId?: string) {
+  return db().select({ id: workbenches.id }).from(workbenches)
+    .where(and(isNotNull(workbenches.archivedAt), ...(workbenchId ? [eq(workbenches.id, workbenchId)] : [])));
+}
+
+/**
+ * Mark every running job of an archived session lost: the archive deletes the
+ * box and its processes. Returns the sessions touched.
+ */
+export async function markArchivedJobsLost(detail: string, workbenchId?: string): Promise<Array<{ workbenchId: string; workspaceId: string }>> {
+  const now = new Date();
+  const rows = await db().update(jobs)
+    .set({ status: 'lost', detail, endedAt: now, lastCheckedAt: now })
+    .where(and(eq(jobs.status, 'running'), inArray(jobs.workbenchId, archivedSessions(workbenchId))))
+    .returning({ workbenchId: jobs.workbenchId, workspaceId: jobs.workspaceId });
+  return [...new Map(rows.map((r) => [r.workbenchId, r])).values()];
+}
+
 // ---------- Wake-ups ----------
 
 /** Insert a wake-up. Null when the job already has its exit wake-up. */
@@ -366,11 +385,10 @@ export async function cancelScheduledCiWakeups(workbenchId: string, chatId: stri
 }
 
 /** Cancel every scheduled wake-up of an archived session. Returns the sessions touched. */
-export async function cancelArchivedWakeups(): Promise<Array<{ workbenchId: string; workspaceId: string }>> {
-  const archived = db().select({ id: workbenches.id }).from(workbenches).where(isNotNull(workbenches.archivedAt));
+export async function cancelArchivedWakeups(workbenchId?: string): Promise<Array<{ workbenchId: string; workspaceId: string }>> {
   const rows = await db().update(wakeups)
     .set({ status: 'cancelled', failureDetail: 'The session is archived.' })
-    .where(and(eq(wakeups.status, 'scheduled'), inArray(wakeups.workbenchId, archived)))
+    .where(and(eq(wakeups.status, 'scheduled'), inArray(wakeups.workbenchId, archivedSessions(workbenchId))))
     .returning({ workbenchId: wakeups.workbenchId, workspaceId: wakeups.workspaceId });
   const seen = new Map(rows.map((r) => [r.workbenchId, r]));
   return [...seen.values()];
