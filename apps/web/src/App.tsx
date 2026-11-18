@@ -6,6 +6,7 @@ import { AppShell } from './components/layout/AppShell';
 import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
 import { StartingSpinner } from './components/StartingSpinner';
 import { Toaster } from './components/ui/toaster';
+import { TitleTooltipLayer } from './components/ui/title-tooltip';
 import { useApiConnection, useInitialDataLoad } from './hooks/useApi';
 import { useClosePopupAfterGithub } from './hooks/useClosePopupAfterGithub';
 import { useWorkspaceStore } from './stores/workspace';
@@ -23,6 +24,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <TitleTooltipLayer />
       <Routes>
         <Route path="/callback" element={<MobileCallback />} />
         <Route path="/mcp/callback" element={<McpCallback />} />
