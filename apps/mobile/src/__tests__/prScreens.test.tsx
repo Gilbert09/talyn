@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { Alert } from 'react-native';
+import { Alert, Text } from 'react-native';
 import { GestureHandlerRootView, State } from 'react-native-gesture-handler';
 import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-handler/jest-utils';
 
@@ -7,6 +7,7 @@ import type { MergeQueuePublic, PRRow } from '@talyn/client/native';
 
 import { PullRequestDetailScreen } from '../features/prs/PullRequestDetailScreen';
 import { PullRequestsScreen } from '../features/prs/PullRequestsScreen';
+import { QueueSwipeRow } from '../features/prs/QueueSwipeRow';
 import { forgetReviewSortMode } from '../features/prs/reviewSort';
 import { finding, fixture, pr, review } from './workflowFixtures';
 
@@ -276,6 +277,22 @@ describe('pull request pages', () => {
     await swipe('swiped', translationX);
     await waitFor(() => expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledWith('swiped', enabled));
     expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['queue', false, 'Queue'],
+    ['dequeue', true, 'Dequeue'],
+  ] as const)('a %s swipe keeps its own action on the strip after the queue state flips', async (_name, queued, label) => {
+    const row = pr({ id: 'flip', number: 125 });
+    const onQueue = jest.fn();
+    const ui = (q: boolean) => <QueueSwipeRow row={row} queued={q} busy={false} onQueue={onQueue}><Text>Row</Text></QueueSwipeRow>;
+    const view = await render(ui(queued), inGestureRoot);
+    await swipe('flip', 300);
+    expect(onQueue).toHaveBeenCalledWith(row);
+    // The toggle succeeds while the row is still sliding back.
+    await view.rerender(ui(!queued));
+    expect(screen.getAllByText(label, { includeHiddenElements: true }).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText(queued ? 'Queue' : 'Dequeue', { includeHiddenElements: true })).toHaveLength(0);
   });
 
   it.each([-224, -100, 0, 100, 224])('a short swipe of %i points leaves the queue alone', async (translationX) => {
