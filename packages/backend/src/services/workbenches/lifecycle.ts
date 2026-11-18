@@ -41,6 +41,7 @@ import {
   WorkbenchError,
 } from './errors.js';
 import { holdMoves, MOVE_SWEEP_INTERVAL_MS, sweepAbandonedMoves } from './move.js';
+import { endBackgroundOnArchive } from './backgroundSweep.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import {
   isHibernationLost,
@@ -999,6 +1000,7 @@ export async function archiveWorkbench(
   if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   await emitWorkbenchUpdated(await publicWorkbench(row));
   for (const chat of await listChats(row.id)) await cancelLimitResume(chat.id);
+  await endBackgroundOnArchive(row.id, row.workspaceId);
   scheduleArchive(row.id);
   return row;
 }

@@ -215,10 +215,12 @@ async function ownedJob(row: WorkbenchRow, jobId: string): Promise<JobRow> {
   return job;
 }
 
+export const ARCHIVED_JOB_DETAIL = 'The session was archived, and its sandbox with it.';
+
 /** Why a running job can no longer be running, or null. Facts from the row only. */
 export function jobLostReason(job: Pick<JobRow, 'sandboxId'>, row: WorkbenchRow | null): string | null {
   if (!row) return 'The session was deleted.';
-  if (row.archivedAt || row.status === 'archived') return 'The session was archived, and its sandbox with it.';
+  if (row.archivedAt || row.status === 'archived') return ARCHIVED_JOB_DETAIL;
   if (['lost', 'deleted', 'error'].includes(row.sandboxState)) return 'The sandbox was lost.';
   if (row.sandboxId !== job.sandboxId && row.status !== 'moving') {
     return 'The session moved to another sandbox. Running processes do not move with it.';
