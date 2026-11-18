@@ -4,6 +4,8 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { NavDrawer } from '../features/nav/NavDrawer';
 import { TRANSCRIPT_SEARCH_DEBOUNCE_MS } from '../features/nav/model';
+import { PULL_TO_SEARCH, pulledToSearch } from '../features/nav/pullToSearch';
+import { pullsRoute } from '../features/prs/lists';
 import { deferred, fixture, session } from './workflowFixtures';
 
 let mockActive: ReturnType<typeof fixture>;
@@ -40,6 +42,7 @@ const open = async () => {
   expect(await screen.findByRole('link', { name: /Current work/ })).toBeVisible();
 };
 const search = async (text: string) => {
+  if (!screen.queryByLabelText('Search sessions and threads')) await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Search' })); });
   await act(async () => { fireEvent.changeText(screen.getByLabelText('Search sessions and threads'), text); });
 };
 const pastDebounce = () => act(async () => { await new Promise((done) => setTimeout(done, TRANSCRIPT_SEARCH_DEBOUNCE_MS + 100)); });
@@ -116,6 +119,69 @@ describe('drawer transcript search', () => {
     await render(<SafeAreaProvider initialMetrics={insets}><NavDrawer close={jest.fn()} /></SafeAreaProvider>);
     await pastDebounce();
     expect(screen.queryByLabelText('Search sessions and threads')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Search' })).toBeNull();
     expect(mockActive.api.workbenches.searchTranscripts).not.toHaveBeenCalled();
+  });
+});
+
+describe('drawer search and bottom bar', () => {
+  const list = () => screen.getByLabelText('Sessions and threads');
+  const pull = (y: number) => act(async () => { fireEvent(list(), 'scrollEndDrag', { nativeEvent: { contentOffset: { x: 0, y } } }); });
+
+  it.each([
+    [-(PULL_TO_SEARCH + 20), true],
+    [-PULL_TO_SEARCH, true],
+    [-(PULL_TO_SEARCH - 1), false],
+    [-10, false],
+    [0, false],
+    [120, false],
+  ])('pulledToSearch(%d) is %s', (offset, expected) => {
+    expect(pulledToSearch(offset)).toBe(expected);
+  });
+
+  it('opens search with a pull past the top of the list', async () => {
+    await open();
+    expect(screen.queryByLabelText('Search sessions and threads')).toBeNull();
+    await pull(-20);
+    expect(screen.queryByLabelText('Search sessions and threads')).toBeNull();
+    await pull(-(PULL_TO_SEARCH + 10));
+    expect(screen.getByLabelText('Search sessions and threads')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Workspace: Fixture workspace' })).toBeNull();
+  });
+
+  it('clears the query and brings the workspace row back on Cancel', async () => {
+    await open();
+    await search('zzz');
+    expect(await screen.findByText('No sessions or threads match.')).toBeVisible();
+    await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'Cancel search' })); });
+    expect(screen.queryByLabelText('Search sessions and threads')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Workspace: Fixture workspace' })).toBeVisible();
+    expect(screen.getByRole('link', { name: /Current work/ })).toBeVisible();
+    expect(screen.queryByText('No sessions or threads match.')).toBeNull();
+  });
+
+  it.each([
+    [/^Pull requests/, 'mine'],
+    [/^Review requests/, 'reviews'],
+    [/^Merge queue/, 'queue'],
+  ] as const)('opens the %s list from the bar', async (name, tab) => {
+    await open();
+    await act(async () => { fireEvent.press(screen.getByRole('button', { name })); });
+    expect(mockPush).toHaveBeenCalledWith(pullsRoute(tab));
+  });
+
+  it('marks New session on home and keeps the old page rows out of the drawer', async () => {
+    await open();
+    expect(screen.getByRole('button', { name: 'New session', selected: true })).toBeVisible();
+    for (const label of ['Settings', 'Integrations', 'Insights', 'Agents', 'History']) expect(screen.queryByText(label)).toBeNull();
+  });
+
+  it('lists the other pages and Settings in the gear menu', async () => {
+    await open();
+    await act(async () => { fireEvent.press(screen.getByRole('button', { name: 'More pages and Settings' })); });
+    expect(await screen.findByRole('header', { name: 'More' })).toBeVisible();
+    for (const label of ['Integrations', 'Insights', 'Agents', 'History', 'Settings']) expect(screen.getByText(label)).toBeVisible();
+    await act(async () => { fireEvent.press(screen.getByText('Settings')); });
+    expect(mockPush).toHaveBeenCalledWith('/settings');
   });
 });
