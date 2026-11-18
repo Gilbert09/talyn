@@ -1,7 +1,7 @@
 import type { Space, SpacePresenceMember, SpaceSessionRow, SpaceTaskRow, Workbench } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
 import { useMemo, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth, useWorkspace } from '../../auth/AuthProvider';
 import { SessionStateIcon } from '../../components/Status';
@@ -17,15 +17,16 @@ import { spaceDrawerEntries, type SpaceDrawerEntry } from '../spaces/drawer';
 import { memberName, presenceSentence } from '../spaces/model';
 import { toggled } from './model';
 import { GroupHeader, Heading } from './DrawerParts';
+import type { PullToSearch } from './pullToSearch';
 
 /**
  * The drawer's lists in a space, like web's `SpaceSidebar`: my threads, every
- * member's sessions, the space's tasks, and what I cannot see.
+ * member's sessions, the space's tasks, and what I cannot see. Socket events
+ * keep it current, so a pull past the top opens search and does not refresh.
  */
-export function SpaceDrawerList({ space, owned, query, onNewThread, onLongPress }: {
-  space: Space; owned: ReadonlyMap<string, Workbench>; query: string; onNewThread?(): void; onLongPress(item: Workbench): void;
+export function SpaceDrawerList({ space, owned, query, pull, onNewThread, onLongPress }: {
+  space: Space; owned: ReadonlyMap<string, Workbench>; query: string; pull: PullToSearch; onNewThread?(): void; onLongPress(item: Workbench): void;
 }) {
-  const c = useTheme();
   const self = useAuth().user?.id ?? null;
   const items = useSpaceItems(space.id);
   const presence = useSpacePresence(space.id);
@@ -58,11 +59,13 @@ export function SpaceDrawerList({ space, owned, query, onNewThread, onLongPress 
     }
   };
 
-  return <FlatList data={entries} keyExtractor={(entry) => entry.key} renderItem={render} style={{ flex: 1 }}
-    accessibilityLabel={`Sessions and threads in ${space.name}`} contentContainerStyle={styles.list}
-    keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" initialNumToRender={20} maxToRenderPerBatch={16} windowSize={9}
-    refreshControl={<RefreshControl refreshing={items.refreshing && items.data !== undefined} onRefresh={() => { void items.refresh(); }}
-      tintColor={c.muted} colors={[c.primaryAction]} progressBackgroundColor={c.elevated} />} />;
+  return <View style={{ flex: 1 }}>
+    {pull.hint}
+    <Animated.FlatList data={entries} keyExtractor={(entry) => entry.key} renderItem={render} style={{ flex: 1 }}
+      accessibilityLabel={`Sessions and threads in ${space.name}`} contentContainerStyle={styles.list}
+      keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" initialNumToRender={20} maxToRenderPerBatch={16} windowSize={9}
+      {...pull.listProps} />
+  </View>;
 }
 
 /** A space session or thread: state, title, who started it, who has it open, and when it last changed. */
