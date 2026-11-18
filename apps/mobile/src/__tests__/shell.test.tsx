@@ -144,13 +144,17 @@ describe('native shell', () => {
     expect(screen.getByRole('button', { name: 'New session', selected: true })).toBeVisible();
     for (const name of ['Threads', 'Sessions']) expect(screen.getByRole('header', { name })).toBeVisible();
     expect(screen.getByRole('button', { name: 'example/project', expanded: true })).toBeVisible();
-    for (const name of ['Pull requests', 'Merge queue', 'Insights', 'Agents', 'History']) expect(screen.getByRole('button', { name })).toBeVisible();
+    for (const name of [/^Pull requests/, /^Review requests/, /^Merge queue/, 'Search', 'More pages and Settings']) {
+      expect(screen.getByRole('button', { name })).toBeVisible();
+    }
     await fireEvent.press(screen.getByRole('button', { name: /^Review requests/ }));
     expect(screen).toHavePathname('/pulls');
     expect(screen).toHaveSearchParams({ tab: 'reviews' });
     await testRouter.back('/home');
     await fireEvent.press(await screen.findByRole('button', { name: 'Open menu' }));
-    await fireEvent.press(screen.getByRole('button', { name: 'Settings' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'More pages and Settings' }));
+    for (const label of ['Insights', 'Agents', 'History']) expect(await screen.findByText(label)).toBeVisible();
+    await fireEvent.press(screen.getByText('Settings'));
     expect(screen).toHavePathname('/settings');
     expect(await screen.findByText('Signed in with GitHub')).toBeVisible();
   });
@@ -185,11 +189,12 @@ describe('native shell', () => {
     await renderRouter(routes, { initialUrl: '/sessions' });
     expect(await screen.findByTestId('navigation-drawer')).toBeVisible();
     expect(await inDrawer().findByRole('link', { name: /Current work/ })).toBeVisible();
+    await fireEvent.press(inDrawer().getByRole('button', { name: 'Search' }));
     await fireEvent.changeText(screen.getByLabelText('Search sessions and threads'), 'planning');
     expect(inDrawer().queryByRole('link', { name: /Current work/ })).toBeNull();
     expect(inDrawer().getByRole('link', { name: /Planning work/ })).toBeVisible();
     await fireEvent.changeText(screen.getByLabelText('Search sessions and threads'), 'nothing like this');
-    expect(screen.getByText('No sessions or threads match.')).toBeVisible();
+    expect(await screen.findByText('No sessions or threads match.')).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Clear search' }));
     expect(inDrawer().getByRole('link', { name: /Current work/ })).toBeVisible();
   });
