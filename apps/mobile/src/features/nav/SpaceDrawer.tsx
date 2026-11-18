@@ -1,6 +1,6 @@
 import type { Space, SpacePresenceMember, SpaceSessionRow, SpaceTaskRow, Workbench } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
-import { useMemo, useState, type ReactElement } from 'react';
+import { useMemo, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth, useWorkspace } from '../../auth/AuthProvider';
@@ -22,9 +22,8 @@ import { GroupHeader, Heading } from './DrawerParts';
  * The drawer's lists in a space, like web's `SpaceSidebar`: my threads, every
  * member's sessions, the space's tasks, and what I cannot see.
  */
-export function SpaceDrawerList({ space, owned, query, onNewThread, onLongPress, footer }: {
+export function SpaceDrawerList({ space, owned, query, onNewThread, onLongPress }: {
   space: Space; owned: ReadonlyMap<string, Workbench>; query: string; onNewThread?(): void; onLongPress(item: Workbench): void;
-  footer?: ReactElement;
 }) {
   const c = useTheme();
   const self = useAuth().user?.id ?? null;
@@ -63,8 +62,7 @@ export function SpaceDrawerList({ space, owned, query, onNewThread, onLongPress,
     accessibilityLabel={`Sessions and threads in ${space.name}`} contentContainerStyle={styles.list}
     keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" initialNumToRender={20} maxToRenderPerBatch={16} windowSize={9}
     refreshControl={<RefreshControl refreshing={items.refreshing && items.data !== undefined} onRefresh={() => { void items.refresh(); }}
-      tintColor={c.muted} colors={[c.primaryAction]} progressBackgroundColor={c.elevated} />}
-    ListFooterComponent={footer} />;
+      tintColor={c.muted} colors={[c.primaryAction]} progressBackgroundColor={c.elevated} />} />;
 }
 
 /** A space session or thread: state, title, who started it, who has it open, and when it last changed. */
