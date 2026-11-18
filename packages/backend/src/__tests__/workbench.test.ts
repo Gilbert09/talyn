@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ACCOUNT_FEATURE_FLAGS,
+  canCloseSessionPullRequest,
   DEFAULT_WORKBENCH_ACTION_PROMPTS,
   FEATURE_FLAGS,
   WORKBENCH_CITY_NAMES,
@@ -81,6 +82,29 @@ describe('pickWorkbenchName', () => {
 
   it('defaults to Math.random and always returns a city', () => {
     expect(WORKBENCH_CITY_NAMES).toContain(pickWorkbenchName([]));
+  });
+});
+
+describe('canCloseSessionPullRequest', () => {
+  const session = { createdAt: '2026-11-10T10:00:00Z' };
+  it.each<[string, Parameters<typeof canCloseSessionPullRequest>[1], boolean]>([
+    ['no PR', null, false],
+    ['an undefined PR', undefined, false],
+    ['an open PR the person opened', { state: 'open', authored: true }, true],
+    ['a merged PR the person opened', { state: 'merged', authored: true }, false],
+    ['a closed PR the person opened', { state: 'closed', authored: true }, false],
+    ['an open PR opened after the session started', { state: 'open', authored: false, summary: { createdAt: '2026-11-10T11:00:00Z' } }, true],
+    ['an open PR opened inside the two-minute slack', { state: 'open', authored: false, summary: { createdAt: '2026-11-10T09:58:30Z' } }, true],
+    ['an open PR opened before the slack', { state: 'open', authored: false, summary: { createdAt: '2026-11-10T09:57:00Z' } }, false],
+    ['an open PR somebody else opened days before', { state: 'open', authored: false, summary: { createdAt: '2026-11-01T10:00:00Z' } }, false],
+    ['an open PR with no open date', { state: 'open', authored: false, summary: {} }, false],
+    ['an open PR with a bad open date', { state: 'open', summary: { createdAt: 'not a date' } }, false],
+  ])('%s: %p', (_name, pr, expected) => {
+    expect(canCloseSessionPullRequest(session, pr)).toBe(expected);
+  });
+
+  it('refuses a session with a bad start time', () => {
+    expect(canCloseSessionPullRequest({ createdAt: '' }, { state: 'open', summary: { createdAt: '2026-11-10T11:00:00Z' } })).toBe(false);
   });
 });
 

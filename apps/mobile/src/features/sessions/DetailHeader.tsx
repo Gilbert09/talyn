@@ -1,5 +1,5 @@
 import type { PRRow } from '@talyn/client/native';
-import { sessionAutomation, type Workbench, type WorkbenchReadiness } from '@talyn/shared';
+import { canCloseSessionPullRequest, sessionAutomation, type Workbench, type WorkbenchReadiness } from '@talyn/shared';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
@@ -8,6 +8,7 @@ import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { PrPill, PrStatusPill, SessionStateIcon } from '../../components/Status';
 import { AppText, Banner, ChipButton, PrNumber, Row, SheetModal, type SheetAction, type Symbol, type Tone } from '../../components/UI';
 import { NativeText } from '../../components/Workflow';
+import { trackEvent } from '../../lib/analytics';
 import { showActionError } from '../../lib/errors';
 import { chatDetailsLine } from '../../lib/models';
 import { prNumberTone, prRowStatus, workbenchState } from '../../lib/status';
@@ -15,7 +16,7 @@ import { longTime, relativeTimeLabel, useNow } from '../../lib/time';
 import { pullRequestRoute, threadRoute } from '../../navigation/routes';
 import { mono, useTheme } from '../../theme/tokens';
 import { workbenchKind, workbenchTitle } from '../../workflow/model';
-import { canRetry, type SessionActionKind } from './actions';
+import { canRetry, isArchived, type SessionActionKind } from './actions';
 import { readinessProblem } from './model';
 import { canQueue, cycleActions, cycleDisabledReason, cycleLabel, diffTotals, type QuickAction, type QuickActionKind } from './quickActions';
 import { runPromptAction, sendCreatePullRequest } from './sessionPrActions';
@@ -33,7 +34,13 @@ export const QUICK_ACTION_ICON: Record<QuickActionKind | 'queue_remove', Symbol>
   queue_status: { ios: 'list.number', android: 'format_list_numbered' },
 };
 
-type RunnableKind = QuickActionKind | 'queue_remove';
+const CLOSE_PR_ICON: Symbol = { ios: 'xmark.circle', android: 'cancel' };
+
+type RunnableKind = QuickActionKind | 'queue_remove' | 'close_pr';
+
+/** Web's header offers "Close pull request" for an open PR the person or this session opened. */
+export const canClosePr = (item: Workbench, row: PRRow | null): row is PRRow =>
+  Boolean(row) && !isArchived(item) && workbenchKind(item) === 'session' && canCloseSessionPullRequest(item, row);
 
 /**
  * Runs the header's quick actions with the same client calls and confirmations
@@ -74,6 +81,18 @@ export function useQuickActions({ item, row, runSession, toast }: {
       }) },
     ]);
   };
+  const closePr = () => {
+    if (!row) return;
+    // Web confirms a close too. The words match its dialog.
+    Alert.alert(`Close ${ref}?`, `"${row.summary.title}" closes on GitHub without merging. The branch and this session stay. You can reopen the pull request on GitHub.`, [
+      { text: 'Cancel', style: 'cancel', isPreferred: true },
+      { text: 'Close pull request', style: 'destructive', onPress: () => void attempt('close_pr', `Could not close ${ref}`, async () => {
+        const result = await workflow.closePr(row.id);
+        trackEvent('pull_request_closed', { workbench_id: item.id, already_closed: result.alreadyClosed });
+        return result.alreadyClosed ? `${ref} was already closed.` : `Closed ${ref}.`;
+      }) },
+    ]);
+  };
   const run = (kind: RunnableKind) => {
     if (busy) return;
     switch (kind) {
@@ -83,6 +102,7 @@ export function useQuickActions({ item, row, runSession, toast }: {
       case 'resolve_conflicts': case 'fix_checks':
         void attempt(kind, `Could not ${cycleLabel(kind, row, item).toLowerCase()}`, () => runPromptAction(workflow, item, kind)); return;
       case 'merge': merge(); return;
+      case 'close_pr': closePr(); return;
       case 'queue_add': case 'queue_remove': {
         if (!row) return;
         const enabled = kind === 'queue_add';
@@ -112,6 +132,11 @@ export function quickMenuActions(item: Workbench, row: PRRow | null, options: { 
     const reason = reasonFor(null);
     out.push({ label: row.mergeQueued ? 'Remove from merge queue' : 'Add to merge queue', icon: QUICK_ACTION_ICON[kind], detail: reason,
       disabled: options.busy || Boolean(reason), onPress: () => options.run(kind) });
+  }
+  if (canClosePr(item, row)) {
+    const reason = reasonFor(null);
+    out.push({ label: 'Close pull request', icon: CLOSE_PR_ICON, destructive: true, detail: reason,
+      disabled: options.busy || Boolean(reason), onPress: () => options.run('close_pr') });
   }
   return out;
 }

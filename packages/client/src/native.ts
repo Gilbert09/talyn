@@ -1617,6 +1617,22 @@ export const pullRequests = {
       alreadyTerminal?: boolean;
     }>('POST', `/pull-requests/${id}/merge`, { method }),
   /**
+   * Close the PR on GitHub without merging, as the connected GitHub user, with
+   * an optional comment first. The backend closes only the person's own PRs
+   * (or PRs a Talyn session opened) and refuses a merged PR (409
+   * `pull_request_merged`). `alreadyClosed` means GitHub had it closed.
+   */
+  close: (id: string, comment?: string) =>
+    request<{
+      owner: string;
+      repo: string;
+      number: number;
+      url: string;
+      pullRequestId: string | null;
+      alreadyClosed: boolean;
+      commentPosted: boolean;
+    }>('POST', '/pull-requests/close', { pullRequestId: id, ...(comment?.trim() ? { comment: comment.trim() } : {}) }),
+  /**
    * Approve or request changes, as the connected GitHub user. `body` is
    * optional for `approve` and required for `request_changes` (400
    * `body_required`). 409 `pr_not_open` / `own_pull_request` when GitHub would

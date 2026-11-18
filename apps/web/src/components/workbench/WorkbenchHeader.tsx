@@ -10,6 +10,7 @@ import {
   GitBranch,
   GitMerge,
   GitPullRequest,
+  GitPullRequestClosed,
   ListChecks,
   Loader2,
   MessagesSquare,
@@ -20,7 +21,7 @@ import {
   Cloud,
   Wrench,
 } from 'lucide-react';
-import { CREATE_PR_MESSAGE, splitViewOffered, workbenchDisplayName, type Workbench, type WorkbenchChat } from '@talyn/shared';
+import { CREATE_PR_MESSAGE, canCloseSessionPullRequest, splitViewOffered, workbenchDisplayName, type Workbench, type WorkbenchChat } from '@talyn/shared';
 import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import {
@@ -198,6 +199,8 @@ export function WorkbenchHeader({
   const [restoring, setRestoring] = useState(false);
   const [restartOpen, setRestartOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [closeOpen, setCloseOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
   const rename = useRenameSession(workbench);
   const thread = isThread(workbench);
   const viewer = useSessionViewer(workbench);
@@ -346,6 +349,23 @@ export function WorkbenchHeader({
       toast.error(`Could not merge #${pr.number}`, err instanceof Error ? err.message : undefined);
     } finally {
       setBusy(null);
+    }
+  };
+
+  const canClose = owner && !archived && !thread && canCloseSessionPullRequest(workbench, pr);
+  const closePr = async () => {
+    if (!pr) return;
+    setClosing(true);
+    try {
+      const res = await api.pullRequests.close(pr.id);
+      trackEvent('pull_request_closed', { workbench_id: workbench.id, already_closed: res.alreadyClosed });
+      toast.success(res.alreadyClosed ? `#${pr.number} was already closed` : `Closed #${pr.number}`);
+      setCloseOpen(false);
+    } catch (err) {
+      captureWorkbenchFailure('close_pull_request', err, workbench.id);
+      toast.error(`Could not close #${pr.number}`, err instanceof Error ? err.message : undefined);
+    } finally {
+      setClosing(false);
     }
   };
 
@@ -513,6 +533,17 @@ export function WorkbenchHeader({
                       </DropdownMenuItem>
                     );
                   })}
+                  {canClose && (
+                    <DropdownMenuItem
+                      disabled={closing || busy !== null}
+                      onSelect={() => setCloseOpen(true)}
+                      title="Close the pull request on GitHub without merging"
+                      data-attr="workbench-close-pr"
+                    >
+                      <GitPullRequestClosed className="mr-2 h-3.5 w-3.5" />
+                      Close pull request
+                    </DropdownMenuItem>
+                  )}
                   {!thread && (
                     <>
                       <DropdownMenuSeparator />
@@ -774,6 +805,19 @@ export function WorkbenchHeader({
         busy={busy === 'merge'}
         onConfirm={() => void merge()}
         onCancel={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={closeOpen && pr !== null}
+        title={pr ? `Close #${pr.number}?` : 'Close the pull request?'}
+        description={
+          pr
+            ? `${pr.summary.title} closes on GitHub without merging. The branch and this session stay. You can reopen the pull request on GitHub.`
+            : undefined
+        }
+        confirmLabel="Close pull request"
+        busy={closing}
+        onConfirm={() => void closePr()}
+        onCancel={() => setCloseOpen(false)}
       />
       <ConfirmDialog
         open={restartOpen}
