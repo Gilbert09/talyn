@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { workbenchesOffered, type Workbench } from '@talyn/shared';
 import { MENU_COMMANDS } from '../../lib/menuCommands';
-import { FOCUS_COMPOSER_EVENT, OPEN_REPOSITORY_PICKER_EVENT, composerForTab, dispatchKeydown, isEmptyComposer, isInOverlay, registerShortcuts, type Shortcut } from '../../lib/shortcuts';
+import { FOCUS_COMPOSER_EVENT, OPEN_REPOSITORY_PICKER_EVENT, composerForTab, dispatchKeydown, isComposer, isEmptyComposer, isInOverlay, registerShortcuts, type Shortcut } from '../../lib/shortcuts';
 import { requestWorkbenchAction, type WorkbenchAction } from '../../lib/workbenchActions';
 import { useNavigationStore } from '../../stores/navigation';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -345,6 +345,17 @@ export function buildAppShortcuts(): Shortcut[] {
       // On Home, '/' is 'repository.open'. In a field, '/' types a slash.
       when: () => inWorkbench() && composerForTab() !== null,
       run: () => window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_EVENT)),
+    },
+    {
+      id: 'composer.blur',
+      keys: 'escape',
+      label: 'Leave chat input',
+      group: 'General',
+      // The composer uses Esc first to close its @ list or clear a branch, and
+      // marks the key as used. A plain Esc then frees the keys for 'g p' and others.
+      allowInInput: isComposer,
+      when: () => isComposer(document.activeElement),
+      run: () => (document.activeElement as HTMLElement | null)?.blur(),
     },
     ...buildGoToShortcuts(),
   ];
