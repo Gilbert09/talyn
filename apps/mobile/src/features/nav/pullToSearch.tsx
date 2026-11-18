@@ -1,6 +1,6 @@
 import { SymbolView } from 'expo-symbols';
 import { useRef, type ReactElement } from 'react';
-import { Animated, Platform, RefreshControl, StyleSheet, Text, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { Animated, Platform, StyleSheet, Text, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 
 import { type, useTheme } from '../../theme/tokens';
 
@@ -18,23 +18,20 @@ export interface PullToSearch {
     scrollEventThrottle?: number;
     onScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
     onScrollEndDrag?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
-    refreshControl?: ReactElement;
   };
   /** Drawn behind the list. It shows in the space that a pull opens above the list. */
   hint: ReactElement | null;
 }
 
 /**
- * A pull down at the top of a list opens search. iOS reads the bounce past
- * the top. Android has no bounce, so it uses the pull-to-refresh gesture.
+ * A pull down at the top of a list opens search. It reads the iOS bounce past
+ * the top. Android has no bounce, so there the search button is the only way in:
+ * its pull-to-refresh gesture looked like a refresh, and the lists are live.
  */
 export function usePullToSearch(onPull: () => void): PullToSearch {
   const c = useTheme();
   const pull = useRef(new Animated.Value(0)).current;
-  if (Platform.OS === 'android') {
-    return { listProps: { refreshControl: <RefreshControl refreshing={false} onRefresh={onPull} colors={[c.primaryAction]}
-      progressBackgroundColor={c.elevated} /> }, hint: null };
-  }
+  if (Platform.OS !== 'ios') return { listProps: {}, hint: null };
   const opacity = pull.interpolate({ inputRange: [-PULL_TO_SEARCH, -16], outputRange: [1, 0], extrapolate: 'clamp' });
   const scale = pull.interpolate({ inputRange: [-PULL_TO_SEARCH, -16], outputRange: [1, 0.85], extrapolate: 'clamp' });
   return {

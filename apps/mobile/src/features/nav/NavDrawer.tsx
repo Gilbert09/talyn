@@ -3,6 +3,8 @@ import { useGlobalSearchParams, usePathname, useRouter, type Href } from 'expo-r
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useMemo, useState } from 'react';
 import { Animated, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import Reanimated, { Easing, FadeIn, FadeInRight, FadeOut, FadeOutRight, LayoutAnimationConfig, withTiming, type EntryAnimationsValues, type ExitAnimationsValues }
+  from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SessionStateIcon } from '../../components/Status';
@@ -85,14 +87,16 @@ export function NavDrawer({ close }: { close(): void }) {
 
   return <View style={[styles.drawer, { backgroundColor: c.paper, paddingTop: insets.top + 8, paddingBottom: Math.max(insets.bottom, 8) }]}>
     <View style={styles.top}>
-      {offered && searching ? <SearchField value={query} onChange={setQuery} onCancel={closeSearch} />
-        : <View style={styles.header}>
-          <View style={styles.switcher}><ContextSwitcher state={place} /></View>
-          {offered ? <IconButton label="Search" symbol={{ ios: 'magnifyingglass', android: 'search' }} onPress={openSearch} /> : null}
-        </View>}
+      <LayoutAnimationConfig skipEntering>
+        {offered && searching ? <SearchField key="search" value={query} onChange={setQuery} onCancel={closeSearch} />
+          : <Reanimated.View key="header" entering={HEADER_IN} exiting={HEADER_OUT} style={styles.header}>
+            <View style={styles.switcher}><ContextSwitcher state={place} /></View>
+            {offered ? <IconButton label="Search" symbol={{ ios: 'magnifyingglass', android: 'search' }} onPress={openSearch} /> : null}
+          </Reanimated.View>}
+      </LayoutAnimationConfig>
     </View>
     {features === null || place.context.kind === 'pending' ? <View style={[styles.loading, { flex: 1 }]}><Spinner /></View>
-      : space ? <SpaceDrawerList key={space.id} space={space} owned={owned} query={query} onLongPress={menu.open}
+      : space ? <SpaceDrawerList key={space.id} space={space} owned={owned} query={query} pull={pull} onLongPress={menu.open}
         onNewThread={offered ? () => go(newWorkRoute('thread')) : undefined} />
       : !offered ? <View style={{ flex: 1 }} /> : <View style={{ flex: 1 }}>
         {pull.hint}
@@ -106,11 +110,46 @@ export function NavDrawer({ close }: { close(): void }) {
   </View>;
 }
 
-/** The search field that takes the workspace row's place while search is open. Cancel clears it and closes it. */
+const SEARCH_MS = 240;
+const SEARCH_EASING = Easing.bezier(0.2, 0.9, 0.3, 1);
+/** The width of the search button. The field grows out of it and shrinks back into it. */
+const SEARCH_BUTTON = 40;
+const HEADER_IN = FadeIn.duration(180).delay(80);
+const HEADER_OUT = FadeOut.duration(120);
+const CANCEL_IN = FadeInRight.duration(SEARCH_MS).easing(SEARCH_EASING);
+const CANCEL_OUT = FadeOutRight.duration(160);
+
+/** The field opens from the right, where the search button was, to its full width. */
+const searchGrow = (values: EntryAnimationsValues) => {
+  'worklet';
+  const timing = { duration: SEARCH_MS, easing: SEARCH_EASING };
+  return {
+    initialValues: { originX: values.targetOriginX + values.targetWidth - SEARCH_BUTTON, width: SEARCH_BUTTON, opacity: 0 },
+    animations: { originX: withTiming(values.targetOriginX, timing), width: withTiming(values.targetWidth, timing), opacity: withTiming(1, timing) },
+  };
+};
+
+/** On close, the field shrinks back to the right and fades out. */
+const searchShrink = (values: ExitAnimationsValues) => {
+  'worklet';
+  const timing = { duration: 160, easing: Easing.in(Easing.quad) };
+  return {
+    initialValues: { originX: values.currentOriginX, width: values.currentWidth, opacity: 1 },
+    animations: { originX: withTiming(values.currentOriginX + values.currentWidth - SEARCH_BUTTON, timing),
+      width: withTiming(SEARCH_BUTTON, timing), opacity: withTiming(0, timing) },
+  };
+};
+
+/**
+ * The search field that takes the workspace row's place while search is open.
+ * Cancel clears it and closes it. The field grows out of the search button and
+ * Cancel slides in, while the workspace row fades out.
+ */
 function SearchField({ value, onChange, onCancel }: { value: string; onChange(value: string): void; onCancel(): void }) {
   const c = useTheme();
   return <View style={styles.header}>
-    <View style={[styles.search, { backgroundColor: c.background, borderColor: c.primary }]}>
+    <Reanimated.View entering={searchGrow} exiting={searchShrink}
+      style={[styles.search, { backgroundColor: c.background, borderColor: c.primary }]}>
       <SymbolView name={{ ios: 'magnifyingglass', android: 'search' }} size={16} tintColor={c.muted} />
       <TextInput accessibilityLabel="Search sessions and threads" placeholder="Search" placeholderTextColor={c.muted}
         selectionColor={c.primary} value={value} onChangeText={onChange} autoCapitalize="none" autoCorrect={false} returnKeyType="search" autoFocus
@@ -118,10 +157,12 @@ function SearchField({ value, onChange, onCancel }: { value: string; onChange(va
       {value ? <Pressable accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={8} onPress={() => onChange('')}>
         <SymbolView name={{ ios: 'xmark.circle.fill', android: 'cancel' }} size={16} tintColor={c.muted} />
       </Pressable> : null}
-    </View>
-    <Pressable accessibilityRole="button" accessibilityLabel="Cancel search" hitSlop={8} onPress={onCancel}>
-      <Text style={[type.body, sans(500), { color: c.primary }]}>Cancel</Text>
-    </Pressable>
+    </Reanimated.View>
+    <Reanimated.View entering={CANCEL_IN} exiting={CANCEL_OUT}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Cancel search" hitSlop={8} onPress={onCancel}>
+        <Text style={[type.body, sans(500), { color: c.primary }]}>Cancel</Text>
+      </Pressable>
+    </Reanimated.View>
   </View>;
 }
 
