@@ -18,32 +18,16 @@ const PR_SEGMENTS: ReadonlyArray<{ tab: PullsTab; label: string; icon: Symbol }>
 ];
 
 const SIZE = 44;
+const FAB_SIZE = 52;
+const FAB_GAP = 12;
+/** The space that a list under the New session button keeps free at its end, so its last row can scroll clear of the button. */
+export const NEW_SESSION_CLEARANCE = FAB_SIZE + FAB_GAP * 2;
 
-/**
- * The drawer's bottom bar: New session, the three pull request lists with
- * their counts, and a menu with the other pages and Settings.
- */
-export function DrawerBar({ active, go, onNewSession, history }: {
-  active: DrawerTarget; go(href: Href): void; onNewSession?(): void; history: boolean;
-}) {
+/** The drawer's bottom bar: the three pull request lists with their counts, across the full width. */
+export function DrawerBar({ active, go }: { active: DrawerTarget; go(href: Href): void }) {
   const c = useTheme();
   const counts = usePrCounts();
-  const items = useNavItems();
-  const [menu, setMenu] = useState(false);
-  const pages: PickerItem[] = [
-    ...items.map((item) => ({ key: item.key, label: item.label, icon: item.icon, selected: active === item.key, onPress: () => go(item.route) })),
-    ...(history ? [{ key: 'history', label: 'History', icon: { ios: 'clock.arrow.circlepath', android: 'history' } as Symbol,
-      selected: active === 'history', onPress: () => go('/history') }] : []),
-  ];
-  const settings: PickerItem = { key: 'settings', label: 'Settings', icon: { ios: 'gearshape', android: 'settings' },
-    selected: active === 'settings', onPress: () => go('/settings') };
-  const menuActive = active !== null && active !== 'home' && !active.startsWith('pulls:');
-
   return <View style={[styles.bar, { borderTopColor: c.border }]}>
-    {onNewSession ? <Pressable accessibilityRole="button" accessibilityLabel="New session" accessibilityState={{ selected: active === 'home' }}
-      onPress={onNewSession} style={({ pressed }) => [styles.round, { backgroundColor: c.primaryAction, opacity: pressed ? 0.8 : 1 }]}>
-      <SymbolView name={{ ios: 'square.and.pencil', android: 'edit_square' }} size={18} tintColor={c.primaryText} />
-    </Pressable> : null}
     <View style={[styles.segments, { backgroundColor: c.background, borderColor: c.border }]}>
       {PR_SEGMENTS.map((segment) => {
         const selected = active === `pulls:${segment.tab}`;
@@ -56,20 +40,50 @@ export function DrawerBar({ active, go, onNewSession, history }: {
         </Pressable>;
       })}
     </View>
+  </View>;
+}
+
+/** The gear button beside search. It opens a menu with the other pages and Settings. */
+export function DrawerMenuButton({ active, go, history }: { active: DrawerTarget; go(href: Href): void; history: boolean }) {
+  const c = useTheme();
+  const items = useNavItems();
+  const [menu, setMenu] = useState(false);
+  const pages: PickerItem[] = [
+    ...items.map((item) => ({ key: item.key, label: item.label, icon: item.icon, selected: active === item.key, onPress: () => go(item.route) })),
+    ...(history ? [{ key: 'history', label: 'History', icon: { ios: 'clock.arrow.circlepath', android: 'history' } as Symbol,
+      selected: active === 'history', onPress: () => go('/history') }] : []),
+  ];
+  const settings: PickerItem = { key: 'settings', label: 'Settings', icon: { ios: 'gearshape', android: 'settings' },
+    selected: active === 'settings', onPress: () => go('/settings') };
+  const menuActive = active !== null && active !== 'home' && !active.startsWith('pulls:');
+
+  return <>
     <Pressable accessibilityRole="button" accessibilityLabel="More pages and Settings" accessibilityState={{ selected: menuActive }}
-      onPress={() => setMenu(true)}
-      style={({ pressed }) => [styles.round, { backgroundColor: menuActive || pressed ? c.surface : 'transparent' }]}>
+      hitSlop={4} onPress={() => setMenu(true)}
+      style={({ pressed }) => [styles.menuButton, { backgroundColor: menuActive || pressed ? c.surface : 'transparent' }]}>
       <SymbolView name={{ ios: 'gearshape', android: 'settings' }} size={20} tintColor={menuActive ? c.text : c.muted} />
     </Pressable>
     <PickerSheet visible={menu} title="More" onClose={() => setMenu(false)}
       sections={[{ key: 'pages', items: pages }, { key: 'settings', items: [settings] }].filter((section) => section.items.length)} />
-  </View>;
+  </>;
+}
+
+/** The New session button. It floats at the right, just above the bottom bar. */
+export function NewSessionButton({ selected, onPress }: { selected: boolean; onPress(): void }) {
+  const c = useTheme();
+  return <Pressable accessibilityRole="button" accessibilityLabel="New session" accessibilityState={{ selected }} onPress={onPress}
+    style={({ pressed }) => [styles.fab, { backgroundColor: c.primaryAction, opacity: pressed ? 0.85 : 1 }]}>
+    <SymbolView name={{ ios: 'square.and.pencil', android: 'edit_square' }} size={22} tintColor={c.primaryText} />
+  </Pressable>;
 }
 
 const styles = StyleSheet.create({
-  bar: { flexDirection: 'row', alignItems: 'center', gap: 8, borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingTop: 8 },
-  round: { width: SIZE, height: SIZE, borderRadius: radius.round, alignItems: 'center', justifyContent: 'center' },
-  segments: { flex: 1, flexDirection: 'row', height: SIZE, padding: 3, gap: 2, borderRadius: radius.round, borderWidth: StyleSheet.hairlineWidth },
+  bar: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingTop: 8 },
+  segments: { flexDirection: 'row', height: SIZE, padding: 3, gap: 2, borderRadius: radius.round, borderWidth: StyleSheet.hairlineWidth },
   segment: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: radius.round },
   count: { fontVariant: ['tabular-nums'] },
+  menuButton: { width: 40, height: 40, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  fab: { position: 'absolute', right: 16, bottom: FAB_GAP, width: FAB_SIZE, height: FAB_SIZE, borderRadius: radius.round,
+    alignItems: 'center', justifyContent: 'center',
+    elevation: 4, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
 });

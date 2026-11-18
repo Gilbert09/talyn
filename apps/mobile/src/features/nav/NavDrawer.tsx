@@ -18,7 +18,7 @@ import { useSessionMenu } from '../sessions/SessionMenu';
 import { WorkbenchRow } from '../sessions/WorkbenchRow';
 import { useActiveContext } from '../spaces/context';
 import { ContextSwitcher } from './ContextSwitcher';
-import { DrawerBar } from './DrawerBar';
+import { DrawerBar, DrawerMenuButton, NEW_SESSION_CLEARANCE, NewSessionButton } from './DrawerBar';
 import { GroupHeader, Heading } from './DrawerParts';
 import { SessionStarters } from './SessionStarters';
 import { SpaceDrawerList } from './SpaceDrawer';
@@ -29,9 +29,9 @@ import { usePullToSearch } from './pullToSearch';
 const LIST_LINKS = new Set(['/sessions', '/threads']);
 
 /**
- * The navigation drawer: the workspace with a search button, the session
- * lists, then a bar with New session, the pull request lists and a menu with
- * the other pages and Settings. A pull down at the top of the list opens search.
+ * The navigation drawer: the workspace with search and a menu with the other
+ * pages and Settings, the session lists with a floating New session button,
+ * then a bar with the pull request lists. A pull down at the top of the list opens search.
  */
 export function NavDrawer({ close }: { close(): void }) {
   const c = useTheme();
@@ -92,20 +92,24 @@ export function NavDrawer({ close }: { close(): void }) {
           : <Reanimated.View key="header" entering={HEADER_IN} exiting={HEADER_OUT} style={styles.header}>
             <View style={styles.switcher}><ContextSwitcher state={place} /></View>
             {offered ? <IconButton label="Search" symbol={{ ios: 'magnifyingglass', android: 'search' }} onPress={openSearch} /> : null}
+            <DrawerMenuButton active={active} go={go} history={offered} />
           </Reanimated.View>}
       </LayoutAnimationConfig>
     </View>
-    {features === null || place.context.kind === 'pending' ? <View style={[styles.loading, { flex: 1 }]}><Spinner /></View>
-      : space ? <SpaceDrawerList key={space.id} space={space} owned={owned} query={query} pull={pull} onLongPress={menu.open}
-        onNewThread={offered ? () => go(newWorkRoute('thread')) : undefined} />
-      : !offered ? <View style={{ flex: 1 }} /> : <View style={{ flex: 1 }}>
-        {pull.hint}
-        <Animated.FlatList data={entries} keyExtractor={(entry) => entry.key} renderItem={render} style={{ flex: 1 }}
-          accessibilityLabel="Sessions and threads" contentContainerStyle={styles.list}
-          keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
-          initialNumToRender={20} maxToRenderPerBatch={16} windowSize={9} {...pull.listProps} />
-      </View>}
-    <DrawerBar active={active} go={go} onNewSession={offered ? goHome : undefined} history={offered} />
+    <View style={{ flex: 1 }}>
+      {features === null || place.context.kind === 'pending' ? <View style={[styles.loading, { flex: 1 }]}><Spinner /></View>
+        : space ? <SpaceDrawerList key={space.id} space={space} owned={owned} query={query} pull={pull} onLongPress={menu.open}
+          onNewThread={offered ? () => go(newWorkRoute('thread')) : undefined} />
+        : !offered ? <View style={{ flex: 1 }} /> : <View style={{ flex: 1 }}>
+          {pull.hint}
+          <Animated.FlatList data={entries} keyExtractor={(entry) => entry.key} renderItem={render} style={{ flex: 1 }}
+            accessibilityLabel="Sessions and threads" contentContainerStyle={styles.list}
+            keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
+            initialNumToRender={20} maxToRenderPerBatch={16} windowSize={9} {...pull.listProps} />
+        </View>}
+      {offered ? <NewSessionButton selected={active === 'home'} onPress={goHome} /> : null}
+    </View>
+    <DrawerBar active={active} go={go} />
     {menu.elements}
   </View>;
 }
@@ -216,7 +220,7 @@ const styles = StyleSheet.create({
   search: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 40, borderRadius: radius.md,
     borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 10 },
   searchInput: { flex: 1, paddingVertical: 8 },
-  list: { paddingHorizontal: 12, paddingBottom: 16 },
+  list: { paddingHorizontal: 12, paddingBottom: NEW_SESSION_CLEARANCE },
   indent: { paddingLeft: 18 },
   notice: { paddingHorizontal: 6, paddingVertical: 8 },
   loading: { alignItems: 'center', justifyContent: 'center', paddingVertical: 16 },

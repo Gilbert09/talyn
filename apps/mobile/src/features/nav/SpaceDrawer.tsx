@@ -16,6 +16,7 @@ import { useSpaceEvents, useSpaceItems, useSpacePresence } from '../spaces/data'
 import { spaceDrawerEntries, type SpaceDrawerEntry } from '../spaces/drawer';
 import { memberName, presenceSentence } from '../spaces/model';
 import { toggled } from './model';
+import { NEW_SESSION_CLEARANCE } from './DrawerBar';
 import { GroupHeader, Heading } from './DrawerParts';
 import type { PullToSearch } from './pullToSearch';
 
@@ -131,7 +132,7 @@ function TaskRow({ task }: { task: SpaceTaskRow }) {
 }
 
 const styles = StyleSheet.create({
-  list: { paddingHorizontal: 12, paddingBottom: 16 },
+  list: { paddingHorizontal: 12, paddingBottom: NEW_SESSION_CLEARANCE },
   indent: { paddingLeft: 18 },
   notice: { paddingHorizontal: 6, paddingVertical: 8 },
   loading: { alignItems: 'center', justifyContent: 'center', paddingVertical: 16 },
