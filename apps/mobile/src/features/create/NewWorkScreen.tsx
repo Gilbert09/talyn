@@ -4,7 +4,7 @@ import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import Animated, { FadeIn, FadeOut, LinearTransition } from 'react-native-reanimated';
+import Animated, { FadeIn, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
 import { useAuth, useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { PickerSheet, type PickerSection } from '../../components/PickerSheet';
@@ -53,7 +53,7 @@ const CHIP_ICON: Record<Exclude<ComposerChip, 'mode'>, Symbol> = {
 // About eight lines of body text, then the field scrolls.
 const PROMPT_MAX_HEIGHT = 8 * 22 + 20;
 // The composer and heading glide between the middle and the bottom. Reduced motion is respected by default.
-const MOVE = LinearTransition.springify().damping(26).stiffness(260).mass(0.9);
+const MOVE = { damping: 26, stiffness: 260, mass: 0.9 };
 
 /**
  * Start a session or a thread, like web `NewWorkbenchPage`. With nothing typed
@@ -259,6 +259,14 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
     toast.show(internetMessage(next));
   };
 
+  const centered = composerLayout({ prompt, images: attached.length, focused, keyboardOpen: keyboard.open, busy }) === 'centered';
+  // 0 with the composer in the middle, 1 at the bottom. It drives the grow of two spacers, so Yoga places every frame of
+  // the move. Reanimated layout transitions drew the composer at a stale frame on Android, under the recent list.
+  const docked = useSharedValue(centered ? 0 : 1);
+  useEffect(() => { docked.value = withSpring(centered ? 0 : 1, MOVE); }, [centered, docked]);
+  const headingSpace = useAnimatedStyle(() => ({ flexGrow: docked.value }));
+  const belowSpace = useAnimatedStyle(() => ({ flexGrow: 1 - docked.value }));
+
   if (features === null || place.context.kind === 'pending') return <ScreenContainer topInset={presentation === 'home'}><View style={styles.center}><Spinner /></View></ScreenContainer>;
   if (!offered) return <ScreenContainer topInset={presentation === 'home'}>
     <EmptyState title="Sessions are not available on this account." />
@@ -293,23 +301,23 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
       disabled={busy} onPress={() => openSheet('model')} />;
   };
 
-  const centered = composerLayout({ prompt, images: attached.length, focused, keyboardOpen: keyboard.open, busy }) === 'centered';
-
   // One composer for both places, so the field keeps its focus and the keyboard stays up while it moves.
   // The keyboard inset is bottom padding on both platforms, so the move and the keyboard animate as one layout change.
   return <ScreenContainer topInset={presentation === 'home'}>
     <View style={[styles.page, { paddingBottom: keyboard.inset }]}>
-      <Pressable accessible={false} onPress={Keyboard.dismiss} style={[styles.greeting, centered && styles.greetingCentered]}>
-        <Animated.View layout={MOVE} style={styles.greetingText}>
+      <Pressable accessible={false} onPress={Keyboard.dismiss} style={styles.greeting}>
+        <View style={styles.headingTop} />
+        <View style={styles.greetingText}>
           <Text accessibilityRole="header" style={[styles.heading, { color: c.text }]}>What do you want to build?</Text>
           {inSpace ? <View accessible accessibilityLabel={`In ${inSpace.space.name}`} style={styles.inSpace}>
             <SpaceTile name={inSpace.space.name} color={inSpace.space.color} image={inSpace.space.image} size={14} />
             <Text numberOfLines={1} style={[styles.inSpaceText, { color: c.muted }]}>In {inSpace.space.name}</Text>
           </View> : null}
-        </Animated.View>
+        </View>
+        <Animated.View style={[styles.headingBottom, headingSpace]} />
         {toast.element}
       </Pressable>
-      <Animated.View layout={MOVE} style={styles.dock}>
+      <View style={styles.dock}>
         {notices}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
           style={styles.contextScroll} contentContainerStyle={styles.contextRow}>
@@ -337,10 +345,13 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
               onPress={() => { void start(); }} />
           </View>
         </View>
+      </View>
+      {/* No exiting animation: on Android a removed view with one can stay on screen. */}
+      <Animated.View style={[styles.below, belowSpace]}>
+        {centered ? <Animated.View entering={FadeIn.duration(240).delay(60)} style={styles.recent}>
+          {inSpace ? null : <RecentWork />}
+        </Animated.View> : null}
       </Animated.View>
-      {centered ? <Animated.View entering={FadeIn.duration(240).delay(60)} exiting={FadeOut.duration(120)} style={styles.below}>
-        {inSpace ? null : <RecentWork />}
-      </Animated.View> : null}
     </View>
 
     <PickerSheet visible={sheet === 'mode'} title="Start" onClose={closeSheet}
@@ -474,11 +485,14 @@ function trackCreated(item: Workbench, form: NewWorkForm, withImages = false) {
 const styles = StyleSheet.create({
   page: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  greeting: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, overflow: 'hidden' },
-  // Centred, the heading sits just above the composer, and the composer sits in the middle of the page.
-  greetingCentered: { justifyContent: 'flex-end', paddingBottom: 20 },
+  greeting: { flex: 1, alignItems: 'center', paddingHorizontal: 24, overflow: 'hidden' },
+  // Docked, both spaces grow and centre the heading. Centred, the bottom one shrinks to its minimum, so the heading sits
+  // just above the composer, and the space below the composer puts the composer in the middle of the page.
+  headingTop: { flexGrow: 1, flexBasis: 0 },
+  headingBottom: { flexBasis: 0, minHeight: 20 },
   greetingText: { alignItems: 'center', maxWidth: '100%' },
-  below: { flex: 1 },
+  below: { flexBasis: 0, overflow: 'hidden' },
+  recent: { flex: 1 },
   heading: { fontSize: 24, lineHeight: 30, letterSpacing: -0.3, textAlign: 'center', ...display(600) },
   inSpace: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, maxWidth: '100%' },
   inSpaceText: { fontSize: 13, lineHeight: 18, ...sans(500), flexShrink: 1 },
