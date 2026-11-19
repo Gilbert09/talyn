@@ -171,6 +171,20 @@ interface LiveTurn {
   turn: number;
   controller: AbortController;
   cancelRequested: boolean;
+  /**
+   * Aborted when a stop could not reach the box. The follower stops reading a
+   * log it may not reach for a long time, and the turn ends as stopped.
+   */
+  stopFollowing: AbortController;
+}
+
+function newLiveTurn(turn: number): LiveTurn {
+  return { turn, controller: new AbortController(), cancelRequested: false, stopFollowing: new AbortController() };
+}
+
+/** The signal a follower reads: this instance detaches, or a stop gave up on the box. */
+function followSignal(live: LiveTurn): AbortSignal {
+  return AbortSignal.any([live.controller.signal, live.stopFollowing.signal]);
 }
 
 /** chatId → the turn this process is following. */
@@ -820,7 +834,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     const refusal = await existingBoxRefusal(early, message.origin === 'talyn', payer);
     if (refusal) return holdTurn(chatId, message, refusal);
   }
-  const live: LiveTurn = { turn, controller: new AbortController(), cancelRequested: false };
+  const live = newLiveTurn(turn);
   liveTurns.set(chatId, live);
   const events = new EventBatcher(chat.workspaceId, chatId, turn);
   let needsUserMessage = !(await hasTurnEvent(chatId, turn, 'user_message'));
@@ -1029,7 +1043,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         continue;
       }
       const stopAccountWatch = startAccountWatch(wb, model, (note) => events.add(accountSwitchEvent(note)), agent, payer);
-      const stream = followTurnOutput(wb, chat, turn, attempt, parser, 0, live.controller.signal, () => {
+      const stream = followTurnOutput(wb, chat, turn, attempt, parser, 0, followSignal(live), () => {
         noteRecapStarted();
         if (parser.result) { sawResult = true; attemptSawResult = true; }
       }).finally(stopAccountWatch);
@@ -1548,9 +1562,16 @@ export async function cancelTurn(chatId: string, opts: { startQueue?: boolean } 
   const lease = await getTurnLease(chatId);
   if (lease && lease.turn !== chat.turnCount) return;
   if (wb.sandboxId) {
-    const marker = lease?.heartbeat ? await durableMarker(wb, turnLogKey(chatId, lease.turn, lease.attempt),
-      turnMarker(chatId, lease.turn, lease.attempt), turnMarker(chatId)) : turnMarker(chatId);
-    await killMarker(wb, marker);
+    // Stop always stops: a box that cannot be reached (no free runner, still
+    // waking) does not keep the turn running. The turn ends here, and the
+    // agent in the box is stopped once the box answers.
+    try {
+      await killTurnAgent(wb, chatId, lease);
+    } catch (err) {
+      noteTurn('turn_stop_unreached', chatId, chat.turnCount, 'the agent in the box could not be stopped; the turn ends anyway', err);
+      live?.stopFollowing.abort();
+      killTurnAgentLater(wb.id, chatId, lease);
+    }
   }
   if (!live) {
     const fin = await finishTurn(chatId, {
@@ -1570,6 +1591,48 @@ export async function cancelTurn(chatId: string, opts: { startQueue?: boolean } 
       await startPayerBlockedSiblings(fin.chat.workbenchId, chatId);
     }
   }
+}
+
+/** Kill the agent process of the leased turn's attempt (or the legacy marker). */
+async function killTurnAgent(wb: WorkbenchRow, chatId: string, lease: TurnLease | null): Promise<void> {
+  const marker = lease?.heartbeat ? await durableMarker(wb, turnLogKey(chatId, lease.turn, lease.attempt),
+    turnMarker(chatId, lease.turn, lease.attempt), turnMarker(chatId)) : turnMarker(chatId);
+  await killMarker(wb, marker);
+}
+
+/** The waits before each retry of a kill that could not reach the box: about 30 minutes in all. */
+const DEFAULT_STOP_RETRY_MS: readonly number[] = [15_000, 60_000, 4 * 60_000, 10 * 60_000, 15 * 60_000];
+let stopRetryMs = DEFAULT_STOP_RETRY_MS;
+
+/** Tests shorten the waits. */
+export function setStopRetryDelaysForTests(delays: readonly number[] | null): void {
+  stopRetryMs = delays ?? DEFAULT_STOP_RETRY_MS;
+}
+
+/**
+ * A stopped turn whose box did not answer the kill: try again in the
+ * background, so the agent does not wake with the box and keep working.
+ */
+function killTurnAgentLater(workbenchId: string, chatId: string, lease: TurnLease | null, attempt = 0): void {
+  const delay = stopRetryMs[attempt];
+  if (delay === undefined) {
+    noteTurn('turn_stop_gave_up', chatId, lease?.turn ?? 0, `the agent in the box could not be stopped after ${attempt} retries`, new Error('the box did not answer'));
+    return;
+  }
+  const timer = setTimeout(() => {
+    void runWithoutScope(async () => {
+      const wb = await getWorkbench(workbenchId);
+      if (!wb?.sandboxId || wb.runtime === 'local') return;
+      try {
+        await killTurnAgent(wb, chatId, lease);
+        noteTurn('turn_stop_reached', chatId, lease?.turn ?? 0, `the agent in the box was stopped on retry ${attempt + 1}`);
+      } catch (err) {
+        if (err instanceof FleetRunNotFoundError) return;
+        killTurnAgentLater(workbenchId, chatId, lease, attempt + 1);
+      }
+    }).catch((err: unknown) => console.warn(`[workbench] retrying the stop of chat ${chatId} failed:`, err));
+  }, delay);
+  timer.unref?.();
 }
 
 /** Abort every follower this process holds for a workbench (archive, delete). */
@@ -1677,7 +1740,7 @@ async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean)
   const chat = await getChat(chatId);
   const wb = chat ? await getWorkbench(chat.workbenchId) : null;
   if (!chat || !wb) return handoffOutcome('the chat or its session is gone');
-  const live: LiveTurn = { turn: lease.turn, controller: new AbortController(), cancelRequested: false };
+  const live = newLiveTurn(lease.turn);
   liveTurns.set(chatId, live);
   const events = new EventBatcher(chat.workspaceId, chatId, lease.turn);
   const parser = createAgentStreamParser(chat.agent === 'codex' ? 'codex' : 'claude', lease.parser);
@@ -1718,9 +1781,9 @@ async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean)
     if (!lease.parser && lease.offset > 0) {
       await followDurableExec(wb, key, turnMarker(chatId, lease.turn, lease.attempt), 0, async (record) => {
         if (record.stream === 'stdout') parser.push(record.line);
-      }, live.controller.signal, lease.offset, turnMarker(chatId));
+      }, followSignal(live), lease.offset, turnMarker(chatId));
     }
-    const outcome = await followTurnOutput(wb, chat, lease.turn, lease.attempt, parser, lease.offset, live.controller.signal,
+    const outcome = await followTurnOutput(wb, chat, lease.turn, lease.attempt, parser, lease.offset, followSignal(live),
       () => adoptFailures.delete(chatId));
     if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome('the follower was stopped');
     if (live.cancelRequested) return cancelledOutcome(events, Boolean(parser.result));
