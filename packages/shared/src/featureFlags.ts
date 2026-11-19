@@ -126,7 +126,7 @@ export const FEATURE_FLAGS = {
     envOverride: 'SESSION_SUBAGENTS_ENABLED',
     fallback: true,
     description: 'Subagent cards in sessions',
-    availability: 'gated',
+    availability: 'general',
     releaseScopes: ['session-subagents'],
   },
   /**
