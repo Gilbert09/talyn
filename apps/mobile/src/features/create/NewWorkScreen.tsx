@@ -34,6 +34,7 @@ import { activePullRequest, agentForModel, blockedReason, branchSuggestions, chi
   pullRequestChoices, pullRequestSource, rememberRepository, sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm,
   type NewWorkMode, type NewWorkPullRequest } from './model';
 import { composerLayout } from './recent';
+import { PendingSessionView } from './PendingSessionView';
 import { RecentWork } from './RecentWork';
 import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spacePullRequestRows, spaceRepositories } from './space';
 import { useInlineImages } from './useInlineImages';
@@ -195,6 +196,13 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
         const created = await spaces.createSession(inSpace.space.id, spaceCreateBody(form, withImages));
         trackCreated(created.workbench, form, withImages);
         if (mode === 'session' && repository) rememberRepository(repoKey, repository.id);
+        // With a chat to take the images, the session opens at once and the first message goes after, like web.
+        if (withImages && created.workspaceId === workspaceId && created.workbench.chats?.[0]?.id) {
+          workflow.updateLocal(draftKey, { draft: '' }); images.clear(); setBaseBranch(''); setPullRequest(null);
+          workflow.applyWorkbench(created.workbench); open(created.workbench.id); setBusy(false);
+          await sendFirstMessage(created.workbench, form, attached);
+          return;
+        }
         const kept = withImages && !(await sendFirstMessage(created.workbench, form, attached));
         if (!kept) { workflow.updateLocal(draftKey, { draft: '' }); images.clear(); }
         setBaseBranch('');
@@ -211,6 +219,12 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
       const item = await workflow.createWorkbench(createInput(form, workspaceId, withImages));
       trackCreated(item, form, withImages);
       if (mode === 'session' && repository) rememberRepository(repoKey, repository.id);
+      if (withImages && item.chats?.[0]?.id) {
+        workflow.updateLocal(draftKey, { draft: '' }); images.clear(); setBaseBranch(''); setPullRequest(null);
+        open(item.id); setBusy(false);
+        await sendFirstMessage(item, form, attached);
+        return;
+      }
       // When the first message could not go to the new chat, the text and images stay here.
       const kept = withImages && !(await sendFirstMessage(item, form, attached));
       if (!kept) { workflow.updateLocal(draftKey, { draft: '' }); images.clear(); }
@@ -270,6 +284,10 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   if (features === null || place.context.kind === 'pending') return <ScreenContainer topInset={presentation === 'home'}><View style={styles.center}><Spinner /></View></ScreenContainer>;
   if (!offered) return <ScreenContainer topInset={presentation === 'home'}>
     <EmptyState title="Sessions are not available on this account." />
+  </ScreenContainer>;
+
+  if (busy) return <ScreenContainer topInset={presentation === 'home'}>
+    <PendingSessionView mode={mode} repository={repository?.fullName} branch={startFrom ? null : baseBranch.trim()} prompt={prompt} images={attached.length} />
   </ScreenContainer>;
 
   const noRepositories = mode === 'session' && reposStatus === 'ready' && !repos.length;

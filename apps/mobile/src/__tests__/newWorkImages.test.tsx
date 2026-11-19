@@ -172,6 +172,7 @@ describe('new work with images', () => {
     await waitFor(() => expect(startButton()).toBeEnabled());
     await fireEvent.press(startButton());
     await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'session-new' } }));
+    await waitFor(() => expect(alert).toHaveBeenCalled());
     expect(alert.mock.calls[0][0]).toBe('The first message did not send');
     expect(alert.mock.calls[0][1]).toContain('Your text and images are in the new chat.');
     expect(mockActive.store.local('chat-one').draft).toBe('Fix this screen');

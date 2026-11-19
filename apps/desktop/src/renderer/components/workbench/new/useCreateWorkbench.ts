@@ -44,6 +44,8 @@ export interface CreateWorkbenchState {
   /** Create the workbench, open it, and start its first message. Null when it failed; `error` says why. */
   create: (spec: NewWorkbenchSpec) => Promise<Workbench | null>;
   busy: boolean;
+  /** The workbench being created. The page shows it as a session that loads, until it opens. */
+  pending: NewWorkbenchSpec | null;
   error: string | null;
   clearError: () => void;
 }
@@ -59,11 +61,11 @@ export interface CreateWorkbenchState {
  * (a readiness refusal, a worktree error) stays on the caller's page.
  */
 export function useCreateWorkbench(): CreateWorkbenchState {
-  const [busy, setBusy] = useState(false);
+  const [inFlight, setInFlight] = useState<NewWorkbenchSpec | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const create = useCallback(async (spec: NewWorkbenchSpec): Promise<Workbench | null> => {
-    setBusy(true);
+    setInFlight(spec);
     setError(null);
     try {
       const wb = await createWorkbench(spec);
@@ -85,7 +87,8 @@ export function useCreateWorkbench(): CreateWorkbenchState {
         : null;
       useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
       if (spec.runtime === 'local') void startLocalChat(wb, spec, pending);
-      else if (spec.attachments?.length) {
+      else void applyFirstChatSettings(wb, spec);
+      if (spec.runtime !== 'local' && spec.attachments?.length) {
         const firstInput: SendWorkbenchMessageInput = {
           text: spec.prompt.trim(), attachments: spec.attachments,
           model: spec.model, effort: spec.effort, planMode: spec.planMode,
@@ -114,12 +117,12 @@ export function useCreateWorkbench(): CreateWorkbenchState {
       setError(err instanceof Error && err.message ? err.message : spec.kind === 'thread' ? 'Could not create the thread.' : 'Could not create the session.');
       return null;
     } finally {
-      setBusy(false);
+      setInFlight(null);
     }
   }, []);
 
   const clearError = useCallback(() => setError(null), []);
-  return { create, busy, error, clearError };
+  return { create, busy: inFlight !== null, pending: inFlight, error, clearError };
 }
 
 async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
@@ -160,7 +163,7 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
     });
   }
 
-  const wb = await api.workbenches.create({
+  return api.workbenches.create({
     workspaceId: spec.workspaceId,
     repositoryId: spec.repositoryId,
     runtime: 'sandbox',
@@ -174,8 +177,6 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
     internetAccess: spec.internetAccess,
     autoCreatePr: spec.autoCreatePr ?? true,
   });
-  await applyFirstChatSettings(wb, spec);
-  return wb;
 }
 
 /** The same session or thread, started in a space by the space's create route. */
@@ -199,17 +200,17 @@ async function createInSpace(spaceId: string, spec: NewWorkbenchSpec, prompt: st
     fromPullRequestId: spec.fromPullRequestId,
     autoCreatePr: spec.autoCreatePr ?? true,
   });
-  await applyFirstChatSettings(workbench, spec);
   return workbench;
 }
 
 /**
  * The queued first message takes the chat's plan mode and effort when it
- * runs, and the box takes far longer to boot than this one request.
+ * runs, and the box takes far longer to boot than this one request. So the
+ * session opens first, and this request does not hold it back.
  */
 async function applyFirstChatSettings(wb: Workbench, spec: NewWorkbenchSpec): Promise<void> {
   const chat = wb.chats?.[0];
-  if (chat && (spec.planMode || spec.effort !== DEFAULT_WORKBENCH_EFFORT)) {
+  if (wb.kind !== 'thread' && chat && (spec.planMode || spec.effort !== DEFAULT_WORKBENCH_EFFORT)) {
     await api.workbenches
       .updateChat(chat.id, { planMode: spec.planMode, effort: spec.effort })
       .then((updated) => useWorkbenchStore.getState().upsertChat(updated))

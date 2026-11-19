@@ -195,6 +195,21 @@ describe('SpaceHomePage composer, like the personal one', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('No sandbox left');
     expect(composer().value).toBe('keep me');
   });
+
+  it('shows the new session loading while the create is in flight', async () => {
+    let finish: (value: { workbench: Workbench }) => void = () => undefined;
+    createSession.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    render(<SpaceHomePage active={ACTIVE} />);
+    fireEvent.change(composer(), { target: { value: 'plan the work' } });
+    fireEvent.keyDown(composer(), { key: 'Enter' });
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Creating the session…');
+    expect(screen.getByRole('heading', { name: 'New session' })).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'Task' })).not.toBeInTheDocument();
+
+    await act(async () => finish({ workbench: { ...CREATED, kind: 'session' } as Workbench }));
+    await waitFor(() => expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'new' }));
+  });
 });
 
 function feedRow(overrides: Partial<SpaceSessionRow>): SpaceSessionRow {

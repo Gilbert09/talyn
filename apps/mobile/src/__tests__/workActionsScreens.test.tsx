@@ -220,6 +220,32 @@ describe('start new work', () => {
       workspaceId: 'one', repositoryId: 'repo-one', runtime: 'sandbox', prompt: 'Fix the flaky test' })));
     expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'session-new' } });
   });
+  it('shows the pending session while the create is in flight', async () => {
+    let finish: (value: ReturnType<typeof session>) => void = () => {};
+    mockActive.api.workbenches.create.mockReturnValueOnce(new Promise((done) => { finish = done; }));
+    await render(<NewWorkScreen />);
+    await fireEvent.changeText(await screen.findByLabelText('Task'), 'Fix the flaky test');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    expect(await screen.findByText('Creating the session…')).toBeVisible();
+    expect(screen.getByText('New session')).toBeVisible();
+    expect(screen.getByText('Fix the flaky test')).toBeVisible();
+    expect(screen.getByText('You can write more when the session opens.')).toBeVisible();
+    expect(screen.queryByLabelText('Task')).toBeNull();
+    await act(async () => finish(session({ id: 'session-new' })));
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'session-new' } }));
+  });
+  it('returns to the composer with the prompt and the error when the create fails', async () => {
+    mockActive.api.workbenches.create.mockRejectedValueOnce(new Error('No box is free.'));
+    await render(<NewWorkScreen />);
+    await fireEvent.changeText(await screen.findByLabelText('Task'), 'Fix the flaky test');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    expect(await screen.findByText('No box is free.')).toBeVisible();
+    expect(screen.getByLabelText('Task').props.value).toBe('Fix the flaky test');
+    expect(screen.queryByText('Creating the session…')).toBeNull();
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
   const twoRepos = () => mockActive.api.repositories.list.mockResolvedValue([
     { id: 'repo-one', workspaceId: 'one', owner: 'example', repo: 'project', fullName: 'example/project', defaultBranch: 'main' },
     { id: 'repo-two', workspaceId: 'one', owner: 'example', repo: 'second', fullName: 'example/second', defaultBranch: 'main' }]);

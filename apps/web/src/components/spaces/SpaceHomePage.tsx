@@ -40,7 +40,8 @@ import {
   unconnectedAgents,
   type NewWorkbenchSource,
 } from '../workbench/new/NewWorkbenchControls';
-import { useCreateWorkbench } from '../workbench/new/useCreateWorkbench';
+import { useCreateWorkbench, type NewWorkbenchSpec } from '../workbench/new/useCreateWorkbench';
+import { PendingSessionView } from '../workbench/new/PendingSessionView';
 import { timeAgo } from '../workbench/new/RecentWorkbenches';
 import { MemberAvatar, PresenceAvatars, SpaceDot } from './SpaceAvatars';
 
@@ -66,16 +67,19 @@ function writeLastRepo(spaceId: string, repo: string): void {
 /** A space's home: a composer that starts a session or a thread in the space, then every member's sessions and the tasks. */
 export function SpaceHomePage({ active }: { active: SpaceRef }) {
   const { space, team } = active;
+  const [pending, setPending] = useState<NewWorkbenchSpec | null>(null);
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="h-full overflow-y-auto" data-attr="space-home">
+      {pending && <PendingSessionView spec={pending} />}
+      {/* Hidden, not unmounted: the composer keeps its draft and finishes the create. */}
+      <div className="h-full overflow-y-auto" data-attr="space-home" hidden={pending !== null}>
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-8 px-6 pb-16 pt-[10vh]">
           <div className="flex items-center justify-center gap-2" data-attr="space-header">
             <SpaceDot color={space.color} image={space.image} className="h-3 w-3" />
             <h1 className="font-display text-2xl font-semibold tracking-tight">{space.name}</h1>
             <span className="text-sm text-muted-foreground">{team.name}</span>
           </div>
-          <SpaceComposer key={space.id} active={active} />
+          <SpaceComposer key={space.id} active={active} onPendingChange={setPending} />
           <SpaceFeed spaceId={space.id} />
         </div>
       </div>
@@ -83,7 +87,13 @@ export function SpaceHomePage({ active }: { active: SpaceRef }) {
   );
 }
 
-function SpaceComposer({ active }: { active: SpaceRef }) {
+function SpaceComposer({
+  active,
+  onPendingChange,
+}: {
+  active: SpaceRef;
+  onPendingChange: (pending: NewWorkbenchSpec | null) => void;
+}) {
   const { space, team } = active;
   const repos = useSpacesStore((s) => s.repositories[space.id]);
   const openDialog = useSpacesStore((s) => s.openDialog);
@@ -95,7 +105,8 @@ function SpaceComposer({ active }: { active: SpaceRef }) {
   const readiness = useReadiness(team.homeWorkspaceId);
   const threadRoute = useNavigationStore((s) => s.route.view === 'home' && s.route.mode === 'thread');
   const route = useNavigationStore((s) => s.route);
-  const { create, busy, error, clearError } = useCreateWorkbench();
+  const { create, busy, pending, error, clearError } = useCreateWorkbench();
+  useEffect(() => onPendingChange(pending), [pending, onPendingChange]);
   // Read once: a change in Settings applies to the next new session, not to this draft.
   const [defaults] = useState(readSessionDefaults);
   const [agent, setAgent] = useState<WorkbenchAgent>(defaults.agent);
