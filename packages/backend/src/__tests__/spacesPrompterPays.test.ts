@@ -194,7 +194,7 @@ describe('the prompter pays', () => {
         return { stdout: claudeTurnLines('sess-1', 'done') };
       }
       if (script.includes('rev-list --count')) return { stdout: '1\n' };
-      if (script.includes('git push -u origin HEAD')) {
+      if (script.includes('git push --no-verify -u origin HEAD')) {
         pushTokens.push(fleet.credentialPushes.at(-1)?.creds.githubToken);
         return { exitCode: 0 };
       }
@@ -417,7 +417,7 @@ describe('the prompter pays', () => {
     // The push and the PR API call are one identity: the owner.
     expect(pushTokens).toEqual(['gh-owner']);
     expect(createPr).toHaveBeenCalledWith('ws-a', 'acme', 'app', expect.anything());
-    const gitPush = fleet.execs.find((e) => e.script.includes('git push -u origin HEAD'))!;
+    const gitPush = fleet.execs.find((e) => e.script.includes('git push --no-verify -u origin HEAD'))!;
     expect(gitPush.req.env?.GIT_AUTHOR_NAME).toBeUndefined();
   });
 
