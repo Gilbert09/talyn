@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
-import { createServer, type Server } from 'http';
-import type { AddressInfo } from 'net';
+import { IncomingMessage, ServerResponse } from 'http';
+import { Socket } from 'net';
 import { adminRoutes } from '../../routes/admin/index.js';
 import { createTestDb } from '../helpers/testDb.js';
 import { adminAuditLog, fleetHosts as fleetHostsTable } from '../../db/schema.js';
-import { resetFleetDispatcherCache } from '../../services/selfHosted/client.js';
+import { FleetClient, resetFleetDispatcherCache } from '../../services/selfHosted/client.js';
+import * as fleetProxy from '../../services/admin/fleetProxy.js';
+import { HOST_STALE_AFTER_MS } from '../../services/fleetHosts.js';
 import type { Database } from '../../db/client.js';
 
 /**
@@ -24,12 +26,37 @@ import type { Database } from '../../db/client.js';
 
 let db: Database;
 let cleanup: () => Promise<void>;
-let url: string;
-let closeServer: () => Promise<void>;
+const url = 'http://admin.test';
 let upstream: ReturnType<typeof vi.fn>;
-let realFetch: typeof fetch;
+let localFetch: typeof fetch;
 
 const REASON = 'rebooting fleetd to clear a wedged run';
+
+/** Send a request through Express without opening a network listener. */
+function appFetch(app: express.Express): typeof fetch {
+  return async (input, init = {}) => {
+    const target = new URL(String(input));
+    const req = new IncomingMessage(new Socket());
+    req.method = init.method ?? 'GET';
+    req.url = target.pathname + target.search;
+    req.headers = Object.fromEntries(new Headers(init.headers));
+    const body = typeof init.body === 'string' ? Buffer.from(init.body) : null;
+    if (body) req.headers['content-length'] = String(body.length);
+    return new Promise<Response>((resolve, reject) => {
+      const res = new ServerResponse(req) as express.Response;
+      res.json = (value) => {
+        resolve(new Response(JSON.stringify(value), { status: res.statusCode }));
+        return res;
+      };
+      app(req, res, (error?: unknown) => {
+        if (error) reject(error);
+        else reject(new Error(`No route for ${req.method} ${req.url}`));
+      });
+      if (body) req.push(body);
+      req.push(null);
+    });
+  };
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -42,7 +69,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 async function post(path: string, body: unknown) {
-  const res = await realFetch(`${url}${path}`, {
+  const res = await localFetch(`${url}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -62,6 +89,7 @@ async function auditRows() {
 beforeEach(async () => {
   ({ db, cleanup } = await createTestDb());
   process.env.FLEET_API_TOKEN = 'tok';
+  delete process.env.FLEET_PINNED_ENDPOINT;
   delete process.env.FLEET_HTTP_PROXY;
   resetFleetDispatcherCache();
   await db.insert(fleetHostsTable).values({
@@ -72,13 +100,8 @@ beforeEach(async () => {
     runsMax: 2,
   });
 
-  realFetch = globalThis.fetch;
   upstream = vi.fn().mockResolvedValue(jsonResponse({}));
-  vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
-    const target = typeof input === 'string' ? input : String(input);
-    if (target.includes('10.0.0.')) return upstream(target, init);
-    return realFetch(input, init);
-  });
+  vi.stubGlobal('fetch', upstream);
 
   const app = express();
   app.use(express.json());
@@ -90,33 +113,40 @@ beforeEach(async () => {
     },
     adminRoutes()
   );
-  const server: Server = createServer(app);
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
-  const addr = server.address() as AddressInfo;
-  url = `http://127.0.0.1:${addr.port}`;
-  closeServer = () =>
-    new Promise<void>((r) => {
-      server.closeAllConnections();
-      server.close(() => r());
-    });
+  localFetch = appFetch(app);
 });
 
 afterEach(async () => {
-  await closeServer();
   await cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   delete process.env.FLEET_API_TOKEN;
 });
 
 const MUTATIONS: Array<[label: string, path: string, body: Record<string, unknown>]> = [
   ['drain', '/api/v1/admin/fleet/hosts/hetzner-64/drain', { draining: true }],
+  ['undrain', '/api/v1/admin/fleet/hosts/hetzner-64/drain', { draining: false }],
   ['cancel run', '/api/v1/admin/fleet/hosts/hetzner-64/runs/talyn-1/cancel', {}],
   ['golden gc', '/api/v1/admin/fleet/hosts/hetzner-64/goldens/gc', { force: true }],
   ['golden pin', '/api/v1/admin/fleet/hosts/hetzner-64/goldens/pin', { path: '/x.img', pinned: true }],
+  ['golden unpin', '/api/v1/admin/fleet/hosts/hetzner-64/goldens/pin', { path: '/x.img', pinned: false }],
+  ['golden delete', '/api/v1/admin/fleet/hosts/hetzner-64/goldens/delete', { path: '/x.img' }],
   ['golden rebake', '/api/v1/admin/fleet/hosts/hetzner-64/goldens/rebake', { repo: 'o/r' }],
 ];
 
 describe('every fleet mutation', () => {
+  it.each(MUTATIONS)('%s refuses a tunnel host without a direct call', async (_l, path, body) => {
+    await db.update(fleetHostsTable).set({ apiEndpoint: 'http://coder-1.yas-tunnel.invalid' });
+    const res = await post(path, { ...body, reason: REASON });
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      code: 'host_not_dialable',
+      error: 'hetzner-64 is reachable only through the yas control plane.',
+    });
+    expect(upstream).not.toHaveBeenCalled();
+    expect((await auditRows())[0]!.outcome).toBe('error');
+  });
+
   it.each(MUTATIONS)('%s refuses without a reason and dials nothing', async (_l, path, body) => {
     const res = await post(path, body);
     expect(res.status).toBe(400);
@@ -160,6 +190,108 @@ describe('every fleet mutation', () => {
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('host_offline');
     expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+describe('tunnel host reads', () => {
+  it.each([
+    ['metrics', '/hosts/hetzner-64/metrics'],
+    ['run detail', '/hosts/hetzner-64/runs/talyn-1'],
+    ['transcript', '/hosts/hetzner-64/runs/talyn-1/events'],
+    ['transcript stream', '/hosts/hetzner-64/runs/talyn-1/stream'],
+    ['goldens', '/hosts/hetzner-64/goldens'],
+    ['rebake status', '/hosts/hetzner-64/goldens/rebake'],
+  ])('%s fails with a specific error before a direct call', async (_label, path) => {
+    await db.update(fleetHostsTable).set({ apiEndpoint: 'http://coder-1.yas-tunnel.invalid' });
+    const res = await localFetch(`${url}/api/v1/admin/fleet${path}`);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      code: 'host_not_dialable',
+      error: 'hetzner-64 is reachable only through the yas control plane.',
+    });
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it('lists runs with a specific degradation error and no direct call', async () => {
+    await db.update(fleetHostsTable).set({ apiEndpoint: 'http://coder-1.yas-tunnel.invalid' });
+    const res = await localFetch(`${url}/api/v1/admin/fleet/runs`);
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.degraded).toContainEqual({
+      host: 'hetzner-64',
+      error: 'hetzner-64 is reachable only through the yas control plane.',
+    });
+    expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+describe('host live views', () => {
+  it.each([
+    ['fresh', {}, true],
+    ['draining', { draining: true }, false],
+    ['full', { runsLive: 2 }, false],
+    ['unknown capacity', { runsMax: 0, runsLive: 99 }, true],
+    ['stale', { reportedAt: new Date(Date.now() - HOST_STALE_AFTER_MS) }, false],
+  ])('uses the %s tunnel report without a probe', async (_label, overrides, accepting) => {
+    await db.update(fleetHostsTable).set({
+      apiEndpoint: 'http://coder-1.yas-tunnel.invalid',
+      memReservedMib: 512,
+      memBudgetMib: 2048,
+      metrics: { old: true },
+      ...overrides,
+    });
+    delete process.env.FLEET_API_TOKEN;
+    const probe = vi.spyOn(fleetProxy, 'probe');
+    const capacity = vi.spyOn(FleetClient.prototype, 'capacity');
+    const stats = vi.spyOn(FleetClient.prototype, 'stats');
+    for (const path of ['/hosts?live=1', '/hosts/hetzner-64']) {
+      const res = await localFetch(`${url}/api/v1/admin/fleet${path}`);
+      expect(res.status).toBe(200);
+      const data = (await res.json()).data;
+      const host = Array.isArray(data) ? data[0] : data;
+      expect(host).toMatchObject({
+        liveSource: 'report',
+        liveError: null,
+        liveErrorCode: null,
+        live: {
+          draining: host.draining,
+          runsLive: host.runsLive,
+          runsMax: host.runsMax,
+          memReservedMib: 512,
+          memBudgetMib: 2048,
+          accepting,
+        },
+      });
+      expect(host.health ?? null).toBeNull();
+      expect(host.conditions ?? null).toBeNull();
+      expect(host.boxes ?? null).toBeNull();
+      if (!Array.isArray(data)) {
+        expect(host.metrics).toEqual({ old: true });
+        expect(host.liveMetrics).toBeNull();
+        expect(host.runsByStatus).toBeNull();
+      }
+    }
+    expect(probe).not.toHaveBeenCalled();
+    expect(capacity).not.toHaveBeenCalled();
+    expect(stats).not.toHaveBeenCalled();
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it('keeps direct capacity and stats probes for a normal host', async () => {
+    const capacity = { draining: false, runsLive: 0, runsMax: 4, memReservedMib: 0, memBudgetMib: 4096, accepting: true };
+    upstream.mockImplementation(async (target: string) => jsonResponse(
+      target.endsWith('/v1/capacity') ? capacity : { host: capacity, metrics: { current: true }, runsByStatus: { idle: 1 } },
+    ));
+    for (const path of ['/hosts?live=1', '/hosts/hetzner-64']) {
+      const res = await localFetch(`${url}/api/v1/admin/fleet${path}`);
+      expect(res.status).toBe(200);
+      const data = (await res.json()).data;
+      expect(Array.isArray(data) ? data[0] : data).toMatchObject({ liveSource: 'probe', live: capacity });
+    }
+    expect(upstream.mock.calls.map(([target]) => target).sort()).toEqual([
+      'http://10.0.0.1:8080/v1/capacity',
+      'http://10.0.0.1:8080/v1/stats',
+      'http://10.0.0.1:8080/v1/stats',
+    ]);
   });
 });
 
@@ -243,17 +375,12 @@ describe('the gate still applies', () => {
       },
       adminRoutes()
     );
-    const server = createServer(app);
-    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
-    const addr = server.address() as AddressInfo;
-    const res = await realFetch(`http://127.0.0.1:${addr.port}${path}`, {
+    const res = await appFetch(app)(`${url}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ...body, reason: REASON }),
     });
     expect(res.status).toBe(403);
-    server.closeAllConnections();
-    await new Promise<void>((r) => server.close(() => r()));
     expect(upstream).not.toHaveBeenCalled();
   });
 });

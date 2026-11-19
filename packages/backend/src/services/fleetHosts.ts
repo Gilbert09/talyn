@@ -55,6 +55,16 @@ import { fleetHosts as fleetHostsTable } from '../db/schema.js';
  */
 export const HOST_STALE_AFTER_MS = 60_000;
 
+/** These endpoints are reachable only through the yas control plane. */
+export function isControlTunnelEndpoint(apiEndpoint: string | null | undefined): boolean {
+  if (!apiEndpoint) return false;
+  try {
+    return new URL(apiEndpoint).hostname.toLowerCase().replace(/\.$/, '').endsWith('.yas-tunnel.invalid');
+  } catch {
+    return false;
+  }
+}
+
 export interface FleetHostReport {
   host: string;
   version?: string;

@@ -2,6 +2,18 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Admin fleet: capacity from tunnel reports (2026-11-19)
+
+Hosts with an endpoint under `.yas-tunnel.invalid` use their last report for the admin capacity view.
+The list and detail routes mark this source as `report`. The Hosts page shows a source tooltip.
+A stale report cannot accept work. A capacity of zero keeps its existing meaning: the limit is unknown.
+Health, conditions, box counts and live metrics remain absent without a direct read.
+
+The admin client factory refuses direct calls to these hosts with HTTP 409 and `host_not_dialable`.
+Its error names the host and the yas control plane.
+This covers metrics, drain, golden operations and direct sandbox calls.
+Run lists keep their per-host degradation errors. Existing sandbox calls through the gateway keep their current path.
+
 ## DB pool: transaction queries the stall breaker could not see (2026-11-17)
 
 **Incident.** At 13:25:44 UTC six owner-scope request transactions opened (GET /skills ×4, /cloud-providers, /github/status, one app boot). Their first `select "integrations"` and `select "pull_requests"` queries never settled. They stayed open for 24 minutes and the stall breaker never tripped, although it closed 38 stalled pool connections in the same 14 hours. With 12 lock transactions also open, the 20-connection pool filled from 13:45. Pool demand reached 305, and `dbWatchdog` restarted the process at 13:49:49. The in-flight registry also held owner-scope queries open for up to 10.5 hours, older than any transaction.

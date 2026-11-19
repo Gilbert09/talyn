@@ -13,6 +13,7 @@ import {
   adminSandboxClient,
   fleetClientForHost,
   handleFleetProxyError,
+  hostCapacityFromReport,
   hostHealthFromStats,
   listAdminFleetHosts,
   probe,
@@ -24,7 +25,7 @@ import { classifySandbox, loadSandboxClaims } from '../../services/admin/sandbox
 import { listHostAlerts } from '../../services/admin/hostAlerts.js';
 import { retiredEvents, retiredRun } from '../../services/admin/retiredRuns.js';
 import { listFleetIncidents } from '../../services/admin/incidents.js';
-import { getFleetHost } from '../../services/fleetHosts.js';
+import { getFleetHost, isControlTunnelEndpoint } from '../../services/fleetHosts.js';
 import {
   ADMIN_SLOW_MUTATION_TIMEOUT_MS,
 } from '../../services/admin/fleetProxy.js';
@@ -121,7 +122,6 @@ export function adminFleetRoutes(): Router {
     }
 
     const base = toAdminHost(host);
-    const stats = await probe(host.name, (client) => client.stats());
     const detail: AdminFleetHostDetail = {
       ...base,
       // The registry's last stored snapshot — present even when the host is
@@ -131,6 +131,15 @@ export function adminFleetRoutes(): Router {
       runsByStatus: null,
     };
 
+    if (isControlTunnelEndpoint(host.apiEndpoint)) {
+      detail.live = hostCapacityFromReport(host);
+      detail.liveSource = 'report';
+      res.json({ success: true, data: detail } as ApiResponse<AdminFleetHostDetail>);
+      return;
+    }
+
+    detail.liveSource = 'probe';
+    const stats = await probe(host.name, (client) => client.stats());
     if (stats.ok) {
       detail.live = {
         draining: stats.value.host.draining,
