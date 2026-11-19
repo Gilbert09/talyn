@@ -390,8 +390,13 @@ export function parseCommitsAhead(stdout: string): number | null {
 }
 
 /** Push the current branch and track it. Never prompts: a missing credential fails at once. */
+/**
+ * Talyn's own push skips the repository's pre-push hooks, as its commit skips the commit hooks. A hook can
+ * refuse for a reason that does not apply to this push (PostHog's refuses a branch in the Trunk merge queue),
+ * and it needs tools the sandbox may not have.
+ */
 export function pushHeadStep(): GitStep {
-  return { argv: ['git', 'push', '-u', 'origin', 'HEAD'], env: { GIT_TERMINAL_PROMPT: '0' } };
+  return { argv: ['git', 'push', '--no-verify', '-u', 'origin', 'HEAD'], env: { GIT_TERMINAL_PROMPT: '0' } };
 }
 
 /**
@@ -540,9 +545,11 @@ export function classifyPushFailure(stderr: string): PushFailureKind {
   return 'other';
 }
 
-export function describePushFailure(input: { stderr: string; runtime: 'sandbox' | 'local'; repoFullName: string }): string {
-  const detail = gitStderrTail(input.stderr);
-  const kind = classifyPushFailure(input.stderr);
+export function describePushFailure(input: { stderr: string; stdout?: string; runtime: 'sandbox' | 'local'; repoFullName: string }): string {
+  // A hook explains a refusal on stdout; git then prints only "failed to push some refs" on stderr.
+  const output = [input.stdout ?? '', input.stderr].filter((part) => part.trim()).join('\n');
+  const detail = gitStderrTail(output);
+  const kind = classifyPushFailure(output);
   let head: string;
   if (kind === 'workflow_refused' && input.runtime === 'sandbox') {
     head = `GitHub refused the push because the branch changes a file in .github/workflows. The Talyn GitHub App needs Workflows: Read & write on ${input.repoFullName}. Grant it, or remove the workflow change from the branch.`;

@@ -160,7 +160,7 @@ async function commitAndPushAsOwner(row: WorkbenchRow, input: { title: string; c
     await publishSigned(row, { message: input.title, base: input.base });
     return;
   }
-  const message = describePushFailure({ stderr: push.stderr, runtime: 'sandbox', repoFullName: row.repoFullName });
+  const message = describePushFailure({ stderr: push.stderr, stdout: push.stdout, runtime: 'sandbox', repoFullName: row.repoFullName });
   if (classifyPushFailure(push.stderr) === 'behind') throw new AgentFixablePullRequestError(message, 409, 'push_failed');
   throw new WorkbenchError(message, 409, 'push_failed');
 }

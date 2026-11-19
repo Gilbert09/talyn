@@ -343,7 +343,7 @@ describe('commit and push steps', () => {
   });
 
   it('pushes HEAD with tracking and never prompts for a password', () => {
-    expect(pushHeadStep()).toEqual({ argv: ['git', 'push', '-u', 'origin', 'HEAD'], env: { GIT_TERMINAL_PROMPT: '0' } });
+    expect(pushHeadStep()).toEqual({ argv: ['git', 'push', '--no-verify', '-u', 'origin', 'HEAD'], env: { GIT_TERMINAL_PROMPT: '0' } });
   });
 });
 
@@ -390,6 +390,17 @@ describe('describePushFailure', () => {
     const stderr = ['one', 'two', 'three', 'four', 'five', 'error: 403'].join('\n');
     const text = describePushFailure({ stderr, runtime: 'sandbox', repoFullName: 'acme/app' });
     expect(text.split('\n').slice(1)).toEqual(['three', 'four', 'five', 'error: 403']);
+  });
+
+  it('shows what a hook printed on stdout when git only says the push failed', () => {
+    const text = describePushFailure({
+      stdout: 'This PR is in the Trunk merge queue. Pushing would remove it.\n',
+      stderr: "error: failed to push some refs to 'http://127.0.0.1:8080/gh/acme/app.git'\n",
+      runtime: 'sandbox',
+      repoFullName: 'acme/app',
+    });
+    expect(text).toContain('Trunk merge queue');
+    expect(text).toContain('failed to push some refs');
   });
 });
 

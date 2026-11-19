@@ -59,7 +59,7 @@ export async function openLocalPullRequest(
   if (parseCommitsAhead(ahead.stdout) === 0) throw new Error(nothingToOpenMessage(input.base));
   const push = await bridge.exec(path, [pushHeadStep()]);
   if (push.exitCode !== 0) {
-    const message = describePushFailure({ stderr: push.stderr, runtime: 'local', repoFullName: workbench.repoFullName });
+    const message = describePushFailure({ stderr: push.stderr, stdout: push.stdout, runtime: 'local', repoFullName: workbench.repoFullName });
     throw classifyPushFailure(push.stderr) === 'behind' ? new FixablePullRequestError(message) : new Error(message);
   }
   return api.createPullRequest(workbench.id, { ...input, pushed: true });
