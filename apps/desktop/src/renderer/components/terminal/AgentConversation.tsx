@@ -1,3 +1,6 @@
+import { useWorkspaceStore } from '../../stores/workspace';
+import { useNow } from '../../hooks/useSessionBackground';
+import type { ToolBlock } from '@talyn/shared';
 import React, {
   useCallback,
   useLayoutEffect,
@@ -224,7 +227,7 @@ function BlockViewImpl({
       return <ThinkingBlock text={block.text} />;
     case 'tool': {
       const subagent = subagentCardModel(block);
-      if (subagent) return <SubagentCard model={subagent} />;
+      if (subagent) return <SubagentCard block={block} skills={skills} envName={envName} />;
       return (
         <ToolBlockView
           name={block.name}
@@ -338,7 +341,10 @@ function ThinkingBlock({ text, compact = false }: { text: string; compact?: bool
  *
  * Errors get more room: the failing part is the reason anyone is reading.
  */
-function SubagentCard({ model }: { model: NonNullable<ReturnType<typeof subagentCardModel>> }) {
+function SubagentCard({ block, skills, envName }: { block: ToolBlock; skills: Map<string, string>; envName?: string }) {
+  const enabled = useWorkspaceStore((s) => s.features?.sessionSubagents === true);
+  const now = useNow(enabled && !block.settled ? 1000 : null);
+  const model = subagentCardModel(block, enabled, now)!;
   const [open, setOpen] = useState(false);
   return (
     <div className="min-w-0 rounded-md border border-border bg-muted/20 text-[13px]">
@@ -351,6 +357,7 @@ function SubagentCard({ model }: { model: NonNullable<ReturnType<typeof subagent
           <span className={cn('flex items-center gap-1.5 text-xs', model.failed ? 'text-destructive' : 'text-muted-foreground')}>
             {model.running && <Loader2 aria-hidden className="h-3 w-3 shrink-0 animate-spin" />}
             {model.stepsLabel}
+            {model.detailsLabel && <span>{model.detailsLabel}</span>}
           </span>
         </span>
         {open ? <ChevronDown aria-hidden className="h-3 w-3 shrink-0" /> : <ChevronRight aria-hidden className="h-3 w-3 shrink-0" />}
@@ -360,6 +367,10 @@ function SubagentCard({ model }: { model: NonNullable<ReturnType<typeof subagent
           <h4 className="mb-1 text-xs font-medium">Brief from the agent</h4>
           {renderMarkdownish(model.brief, 'surface')}
         </section>
+        {model.children.length > 0 && <section className="space-y-2">
+          <h4 className="text-xs font-medium text-muted-foreground">Steps</h4>
+          {model.children.map((child) => <BlockView key={child.key} block={child} skills={skills} envName={envName} />)}
+        </section>}
         <section className="text-foreground">
           <h4 className="mb-1 text-xs font-medium text-muted-foreground">Result</h4>
           {model.result !== null && renderMarkdownish(model.result, 'surface')}

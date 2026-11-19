@@ -112,6 +112,7 @@ import { followBranchRename, nameBranchBeforePullRequest, startBranchNaming, typ
 import {
   abandonCapacityWait,
   appendEvents,
+  openSubagentCount,
   busyPayerLogin,
   claimOrEnqueue,
   earlierOtherPayerTurn,
@@ -490,6 +491,7 @@ async function runTurnLoopBody(
     else if (outcome.agentSaysDiskFull && !outcome.cancelled && (await diskFullConfirmed(chatId))) {
       await recoverTurnFromDiskFull(chatId);
     }
+    await appendSubagentsStoppedNote(chatId, heldTurn, TURN_OWNER);
     const fin = await finishTurn(chatId, {
       finalStatus: await turnEndStatus(chatId, heldTurn, outcome),
       statusMessage: outcome.statusMessage,
@@ -1500,6 +1502,22 @@ export async function restoreCheckpoint(chatId: string, turn: number): Promise<v
 // Cancel and the boot sweep
 // ============================================================================
 
+/** A note only. A failure here must never stop the turn from finishing. */
+async function appendSubagentsStoppedNote(chatId: string, turn: number, owner?: string): Promise<void> {
+  try {
+    const count = await openSubagentCount(chatId, turn);
+    if (count === 0) return;
+    const stored = await appendEvents(chatId, [{ turn, event: {
+      type: 'system', subtype: 'subagents_stopped',
+      text: `${count} ${count === 1 ? 'subagent was' : 'subagents were'} still running when the turn ended. These subagents stopped.`,
+    } }], owner ? { owner, turn } : undefined);
+    const chat = await getChat(chatId);
+    if (chat && stored.length) emitWorkbenchEvents(chat.workspaceId, chatId, stored);
+  } catch (err) {
+    console.warn('[turns] could not record stopped subagents', { chatId, turn, err });
+  }
+}
+
 /**
  * Stop the running turn. The kill goes to the sandbox by marker, so it works
  * whether or not this process is the one following the turn. When nothing
@@ -1539,6 +1557,7 @@ export async function cancelTurn(chatId: string, opts: { startQueue?: boolean } 
       finalStatus: 'idle', statusMessage: 'Cancelled', drain: opts.startQueue ?? false, turn: chat.turnCount,
     });
     if (fin) {
+      await appendSubagentsStoppedNote(chatId, chat.turnCount);
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
       sendWebhookSignal({ kind: 'turn_completed', workspaceId: fin.chat.workspaceId, chatId, turn: chat.turnCount, finalStatus: 'idle' });
       if (fin.started) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentEvent } from '../src/index.js';
-import { buildBlocks, groupToolRuns, mergeToolBlocks, mergedBlockSignature, subagentCardModel, type ToolBlock } from '../src/transcript.js';
+import { buildBlocks, groupToolRuns, mergeToolBlocks, mergedBlockSignature, runningSubagentCount, subagentCardModel, type ToolBlock } from '../src/transcript.js';
 
 const call = (id: string, name = 'Agent') => ({ type: 'tool_use', id, name, input: {} });
 const assistant = (seq: number, content: unknown[], parent?: string): AgentEvent => ({
@@ -88,5 +88,89 @@ describe('subagent step label', () => {
         message: { content: [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: '/work/repo/products/destinations/contracts.py' } }] } },
     ] as never);
     expect(blocks[0]).toMatchObject({ subagent: { steps: 1, current: 'read contracts.py' } });
+  });
+});
+
+describe('subagent card details', () => {
+  const at = '2026-11-19T12:00:00Z';
+  const progress = (patch: Partial<AgentEvent> = {}): AgentEvent => ({ seq: 3, type: 'system', subtype: 'task_progress',
+    tool_use_id: 'agent-1', description: 'Checking imports', usage: { total_tokens: 1234, tool_uses: 4, duration_ms: 2300 }, ...patch });
+  const card = (events: AgentEvent[]): ToolBlock => mergeToolBlocks(buildBlocks(events))[0] as ToolBlock;
+
+  it('keeps nested tools, text and stream tails inside their own card', () => {
+    const parent = card([
+      assistant(1, [call('agent-1'), call('agent-2')]),
+      assistant(2, [call('nested', 'Read'), { type: 'text', text: 'First answer' }], 'agent-1'),
+      { seq: 3, type: 'user', parent_tool_use_id: 'agent-1', message: { content: [{ type: 'tool_result', tool_use_id: 'nested', content: 'File content' }] } },
+      { seq: 4, type: 'stream_event', parent_tool_use_id: 'agent-1', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Live answer' } } },
+      assistant(5, [{ type: 'text', text: 'Other answer' }], 'agent-2'),
+    ]);
+    expect(subagentCardModel(parent, true)?.children).toMatchObject([
+      { kind: 'tool', name: 'Read', output: 'File content', settled: true },
+      { kind: 'text', text: 'First answer' }, { kind: 'text', text: 'Live answer' },
+    ]);
+    expect(subagentCardModel(parent, false)?.children).toEqual([]);
+  });
+
+  it('uses the same card for deeper Agent calls and rejects cycles', () => {
+    const events = [assistant(1, [call('agent-1')]), assistant(2, [call('agent-2')], 'agent-1'),
+      assistant(3, [call('agent-1')], 'agent-2')];
+    const children = subagentCardModel(card(events), true)?.children;
+    expect(children?.[0]).toMatchObject({ kind: 'tool', name: 'Agent', subagent: { steps: 1 } });
+    expect(() => JSON.stringify(children)).not.toThrow();
+  });
+
+  it.each([true, false])('gates task details and nested steps, enabled=%s', (enabled) => {
+    const parent = card([assistant(1, [call('agent-1')]), assistant(2, [call('read', 'Read')], 'agent-1'), progress()]);
+    expect(subagentCardModel(parent, enabled)).toMatchObject({
+      stepsLabel: enabled ? '4 tools · Checking imports' : '1 step · read',
+      detailsLabel: enabled ? '1,234 tokens · 2s' : undefined,
+    });
+  });
+
+  it.each([undefined, {}, { total_tokens: -1, tool_uses: '4', duration_ms: NaN }])('keeps the step fallback with usage %j', (usage) => {
+    const parent = card([assistant(1, [call('agent-1')]), assistant(2, [call('read', 'Read')], 'agent-1'), progress({ usage })]);
+    expect(subagentCardModel(parent, true)).toMatchObject({ stepsLabel: '1 step · Checking imports', detailsLabel: '' });
+  });
+
+  it('keeps the base step count with no task events', () => {
+    const parent = card([assistant(1, [call('agent-1')]), assistant(2, [call('read', 'Read')], 'agent-1')]);
+    expect(subagentCardModel(parent, true)?.stepsLabel).toBe('1 step · read');
+  });
+
+  it('uses timestamps while running and freezes elapsed time when the result arrives', () => {
+    const events: AgentEvent[] = [{ ...assistant(1, [call('agent-1')]), timestamp: at }];
+    expect(subagentCardModel(card(events), true, Date.parse(at) + 4000)?.detailsLabel).toBe('4s');
+    events.push({ seq: 2, type: 'user', timestamp: '2026-11-19T12:00:05Z', message: { content: [{ type: 'tool_result', tool_use_id: 'agent-1', content: 'done' }] } });
+    expect(subagentCardModel(card(events), true, Date.parse(at) + 9000)?.detailsLabel).toBe('5s');
+  });
+
+  it('links task updates by task id and keeps usage across partial updates', () => {
+    const parent = card([assistant(1, [call('agent-1')]),
+      { seq: 2, type: 'system', subtype: 'task_started', tool_use_id: 'agent-1', task_id: 'task', timestamp: at },
+      progress({ task_id: 'task', usage: { total_tokens: 0, tool_uses: 0 } }),
+      { seq: 4, type: 'system', subtype: 'task_updated', task_id: 'task', patch: { status: 'completed', end_time: '2026-11-19T12:00:07Z' } },
+    ]);
+    expect(subagentCardModel(parent, true, Date.parse(at) + 9000)).toMatchObject({ stepsLabel: '0 tools · Checking imports', detailsLabel: '0 tokens · 7s' });
+  });
+
+  it('updates the signature for task details and nested text without new steps', () => {
+    const events = [assistant(1, [call('agent-1')]), progress()];
+    const first = mergedBlockSignature(card(events));
+    expect(mergedBlockSignature(card([...events, progress({ seq: 4, description: 'Checking tests' })]))).not.toBe(first);
+    expect(mergedBlockSignature(card([...events, assistant(5, [{ type: 'text', text: 'Answer' }], 'agent-1')]))).not.toBe(first);
+  });
+});
+
+
+describe('running subagent count', () => {
+  it('counts only open Agent calls, including nested calls', () => {
+    const events = [assistant(1, [call('a'), call('b', 'Task'), call('read', 'Read')]), assistant(2, [call('c')], 'a')];
+    expect(runningSubagentCount(events)).toBe(3);
+    expect(runningSubagentCount([...events, assistant(3, [call('a')])])).toBe(3);
+    events.push({ seq: 4, type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'a', content: '' }] } });
+    expect(runningSubagentCount(events)).toBe(2);
+    events.push({ seq: 5, type: 'system', subtype: 'subagents_stopped' });
+    expect(runningSubagentCount(events)).toBe(0);
   });
 });

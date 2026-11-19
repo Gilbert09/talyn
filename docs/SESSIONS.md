@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Subagent card details (2026-11-19)
+
+The existing Subagent card now expands to its nested steps in web, desktop and mobile.
+Claude task events supply activity, token count, tool count and elapsed time. Older transcripts keep the step count.
+The `session-subagents` flag gates these additions and the running count. Its fallback is on.
+A turn with open Agent calls adds a `subagents_stopped` note. A failure to add this note cannot block completion.
+The briefing keeps the foreground rule. It directs long or separate work to a sub-session.
+
 ## Admin fleet: capacity from tunnel reports (2026-11-19)
 
 Hosts with an endpoint under `.yas-tunnel.invalid` use their last report for the admin capacity view.

@@ -1,4 +1,4 @@
-import type { ToolBlock, Workbench } from '@talyn/shared';
+import { runningSubagentCount, type ToolBlock, type Workbench } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ReactNode } from 'react';
 import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View, type TextInput } from 'react-native';
@@ -6,10 +6,12 @@ import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View, 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { AppText } from '../../components/UI';
 import { StateNotice, workflowStyles as styles } from '../../components/Workflow';
+import { useFeatures } from '../../lib/features';
 import { useNow } from '../../lib/time';
 import { radius, type, useTheme, withAlpha } from '../../theme/tokens';
 import { useLocal, useResource } from '../../workflow/hooks';
 import type { Transcript } from '../../workflow/model';
+import { slimTools } from '../../workflow/slim';
 import { FleetReconnectNotice } from '../agents/FleetReconnectNotice';
 import { TurnFailureActions } from './TurnFailureActions';
 import { isStarting, StartingHint, StartingLine } from '../sessions/Starting';
@@ -55,6 +57,10 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [planBusy, setPlanBusy] = useState(false);
   const [questionBusy, setQuestionBusy] = useState(false);
+  const subagents = useFeatures()?.sessionSubagents === true;
+  const runningAgents = useMemo(() => subagents && chat?.status === 'running'
+    ? runningSubagentCount((state.data?.events ?? []).filter((entry) => entry.turn === state.data?.events.at(-1)?.turn).map((entry) => entry.event)) : 0,
+  [subagents, chat?.status, state.data]);
   const cache = useRef(new TranscriptRowCache());
   /** The reader reached the oldest loaded message while another load ran. The older page is owed once it ends. */
   const olderOwed = useRef(false);
@@ -89,13 +95,15 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
     setFollowing(true); workflow.updateLocal(chat?.id ?? item.id, { following: true });
     ref.current?.scrollToOffset({ offset: 0, animated: true });
   };
+  const partialTools = useMemo(() => new Set((state.data?.events ?? []).flatMap((entry) => slimTools(entry.event))), [state.data]);
   const actions: TranscriptActions = useMemo(() => ({
+    partialTools,
     loadFullTool: async (tool: ToolBlock) => {
       const seq = toolSeq(tool);
       if (!chat || seq === null) return null;
       return fullToolFrom(tool, await workflow.fullEvents(chat.id, seq));
     },
-  }), [workflow, chat]);
+  }), [workflow, chat, partialTools]);
   const running = chat?.status === 'running';
   const plan: PlanControls = useMemo(() => ({
     busy: planBusy, disabled: running || offline || !ready,
@@ -224,6 +232,7 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
         <SymbolView name={{ ios: 'arrow.down', android: 'arrow_downward' }} size={16} tintColor={c.text} />
       </Pressable> : null}
     </View>
+    {runningAgents > 0 ? <AppText variant="caption" tone="muted">{runningAgents} {runningAgents === 1 ? 'subagent' : 'subagents'} running</AppText> : null}
     {chat ? <Composer item={item} chatId={chat.id} ready={ready} inputRef={inputRef} />
       : startHint ? null : <AppText variant="meta" tone="muted" style={local_.empty}>No conversation is available for this item.</AppText>}
   </View>;

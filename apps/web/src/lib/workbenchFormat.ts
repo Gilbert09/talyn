@@ -110,7 +110,7 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
   let current: TranscriptTurn | null = null;
   for (const e of events) {
     if (isSubagentEvent(e.event)) {
-      if (current) (current.subagentEvents ??= []).push(e.event);
+      if (current) (current.subagentEvents ??= []).push({ ...e.event, timestamp: e.event.timestamp ?? e.createdAt });
       continue;
     }
     const text = userMessageText(e.event);
@@ -125,7 +125,7 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
       current.sender = messageSender((e.event as { talyn?: unknown }).talyn);
       current.userAt = e.createdAt ?? null;
     } else {
-      current.events.push(e.event);
+      current.events.push({ ...e.event, timestamp: e.event.timestamp ?? e.createdAt });
       if (e.createdAt) current.lastAt = e.createdAt;
     }
   }

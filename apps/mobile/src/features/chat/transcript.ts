@@ -72,12 +72,12 @@ function splitTurns(turn: number, events: WorkbenchEvent[], interruption: (entry
   let current: Turn | null = null;
   for (const entry of events) {
     if (isSubagentEvent(entry.event)) {
-      if (current) (current.subagentEvents ??= []).push({ ...entry.event, seq: entry.seq });
+      if (current) (current.subagentEvents ??= []).push({ ...entry.event, seq: entry.seq, timestamp: entry.event.timestamp ?? entry.createdAt });
       continue;
     }
     // Claude's "[Request interrupted…]" user echo reads as a system line in the turn it stopped.
     const interrupted = interruption(entry);
-    const event: AgentEvent = interrupted ? { seq: entry.seq, type: 'system', subtype: 'talyn_interruption' } as AgentEvent : { ...entry.event, seq: entry.seq };
+    const event: AgentEvent = interrupted ? { seq: entry.seq, type: 'system', subtype: 'talyn_interruption' } as AgentEvent : { ...entry.event, seq: entry.seq, timestamp: entry.event.timestamp ?? entry.createdAt };
     // A turn Talyn started for a trigger (a wake-up, a job exit, a pull request retry) is a system line, as on web.
     const text = interrupted || messageTrigger(event.talyn) ? null : userMessageText(event);
     if (!current || (text !== null && current.user !== null)) {
@@ -150,7 +150,7 @@ function sameEntries(a: WorkbenchEvent[], b: WorkbenchEvent[]) {
 }
 const sameTool = (a: ToolBlock, b: ToolBlock) => a.key === b.key && a.toolId === b.toolId && a.name === b.name && a.input === b.input &&
   a.output === b.output && a.isError === b.isError && a.stopped === b.stopped && a.settled === b.settled &&
-  a.subagent?.steps === b.subagent?.steps && a.subagent?.current === b.subagent?.current;
+  sameJson(a.subagent, b.subagent);
 const sameJson = (a: unknown, b: unknown) => a === b || (typeof a === 'object' && typeof b === 'object' && JSON.stringify(a) === JSON.stringify(b));
 /** True when two rows draw the same. Lets an unchanged row keep its object, so its memoised view does not render again. */
 export function sameRow(a: TranscriptRow, b: TranscriptRow): boolean {

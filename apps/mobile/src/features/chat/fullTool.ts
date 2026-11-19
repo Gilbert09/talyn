@@ -1,4 +1,4 @@
-import { isSubagentEvent, type ToolBlock, type WorkbenchEvent } from '@talyn/shared';
+import type { ToolBlock, WorkbenchEvent } from '@talyn/shared';
 import { createContext, useContext } from 'react';
 
 /** The seq of the event that holds a tool call: block keys are `<seq>.<index>`. */
@@ -13,9 +13,10 @@ export function toolSeq(tool: Pick<ToolBlock, 'key'>): number | null {
  */
 export function fullToolFrom(tool: ToolBlock, events: WorkbenchEvent[]): ToolBlock | null {
   if (!tool.toolId) return null;
+  const parentId = events.find((entry) => entry.seq === toolSeq(tool))?.event.parent_tool_use_id ?? null;
   let input: unknown; let output: unknown; let foundInput = false; let foundOutput = false;
   for (const entry of events) {
-    if (isSubagentEvent(entry.event)) continue;
+    if ((entry.event.parent_tool_use_id ?? null) !== parentId) continue;
     const content = (entry.event.message as { content?: unknown } | undefined)?.content;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
@@ -31,6 +32,9 @@ export function fullToolFrom(tool: ToolBlock, events: WorkbenchEvent[]): ToolBlo
 }
 
 /** What the transcript offers its rows. Absent outside a conversation, where rows show only what they hold. */
-export interface TranscriptActions { loadFullTool(tool: ToolBlock): Promise<ToolBlock | null> }
+export interface TranscriptActions {
+  loadFullTool(tool: ToolBlock): Promise<ToolBlock | null>;
+  partialTools?: ReadonlySet<string>;
+}
 export const TranscriptContext = createContext<TranscriptActions | null>(null);
 export const useTranscriptActions = () => useContext(TranscriptContext);

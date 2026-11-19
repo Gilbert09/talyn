@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { WorkbenchQueuedMessage } from '@talyn/shared';
+import { isSubagentTool, type WorkbenchQueuedMessage } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { pullRequests, repositories, workspaces } from '../db/schema.js';
 import {
   appendEvents,
+  openSubagentCount,
   claimOrEnqueue,
   finishTurn,
   getChat,
@@ -33,6 +34,20 @@ const msg = (id: string, text = id): WorkbenchQueuedMessage => ({ id, text, queu
 
 describe('workbench store', () => {
   let testDb: Awaited<ReturnType<typeof createTestDb>>;
+
+  it.each(['Agent', 'Task', 'subagent', 'dispatch_agent', 'Bash', 'mcp__Agent'])(
+    'counts open %s calls with the shared tool rules', async (name) => {
+      await appendEvents('chat-1', [
+        { turn: 1, event: { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'a', name, input: {} }] } } },
+        { turn: 1, event: { type: 'user', message: { content: 'Not a result' } } },
+        { turn: 2, event: { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'a', content: 'another turn' }] } } },
+      ]);
+      expect(await openSubagentCount('chat-1', 1)).toBe(Number(isSubagentTool(name)));
+      expect(await openSubagentCount('other-chat', 1)).toBe(0);
+      await appendEvents('chat-1', [{ turn: 1, event: { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'a', content: 'done' }] } } }]);
+      expect(await openSubagentCount('chat-1', 1)).toBe(0);
+    },
+  );
 
   beforeEach(async () => {
     testDb = await createTestDb();

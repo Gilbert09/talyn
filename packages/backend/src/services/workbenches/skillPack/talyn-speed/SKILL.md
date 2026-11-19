@@ -62,6 +62,7 @@ talyn_run_background
 
 Rules for your agent's own tools:
 - Run subagents in the foreground (`run_in_background: false`).
+- Use a sub-session (`talyn_create_session`) for long or separate work that needs its own branch or pull request.
 - Do not end your turn while a subagent or a background task of your agent still runs.
 - If your agent moves a slow command to the background by itself, stop that task. Then start the command again with `talyn_run_background`.
 - Never `sleep` for minutes, and do not poll a log in a loop. A long wait wastes the turn and shows nothing to the person.

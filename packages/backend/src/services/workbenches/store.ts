@@ -2240,3 +2240,25 @@ export async function releaseArchive(row: WorkbenchRow): Promise<void> {
     eq(workbenchesTable.id, row.id), eq(workbenchesTable.archivePendingAt, row.archivePendingAt!),
   ));
 }
+
+/** Read only a count. The transcript stays in the database. */
+export async function openSubagentCount(chatId: string, turn: number): Promise<number> {
+  const result = await db().execute(sql`
+    WITH turn_events AS (
+      SELECT seq, event FROM workbench_events WHERE chat_id = ${chatId} AND turn = ${turn}
+    ), parts AS (
+      SELECT seq, event->>'type' AS type, part
+      FROM turn_events,
+        LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(event->'message'->'content') = 'array'
+          THEN event->'message'->'content' ELSE '[]'::jsonb END) AS part
+    )
+    SELECT count(DISTINCT call.part->>'id')::int AS count FROM parts AS call
+    WHERE call.type = 'assistant' AND call.part->>'type' = 'tool_use'
+      AND regexp_replace(lower(call.part->>'name'), '[^a-z0-9]', '', 'g') IN ('agent', 'task', 'subagent', 'dispatchagent')
+      AND NOT EXISTS (SELECT 1 FROM parts AS result
+        WHERE result.type = 'user' AND result.part->>'type' = 'tool_result'
+          AND result.part->>'tool_use_id' = call.part->>'id' AND result.seq > call.seq)
+      AND NOT EXISTS (SELECT 1 FROM turn_events WHERE event->>'subtype' = 'subagents_stopped')
+  `);
+  return rowsOf<{ count: number }>(result)[0]?.count ?? 0;
+}

@@ -3,14 +3,57 @@ import { SymbolView } from 'expo-symbols';
 import { memo, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { useFeatures } from '../../lib/features';
+import { useNow } from '../../lib/time';
 import { mono, radius, type, useTheme, withAlpha } from '../../theme/tokens';
 import { ROW_TEXT_LIMIT } from '../../workflow/model';
 import { useTranscriptActions } from './fullTool';
 import { Markdown } from './Markdown';
 import { StatusDot } from './Pulse';
 import { useHighlighter } from './findHighlight';
-import { ThinkingRow } from './TranscriptParts';
+import { AgentText, ThinkingRow } from './TranscriptParts';
 import { diffTone, preview, readableOutput, toolLine, type DiffTone } from './toolFormat';
+
+function SubagentCard({ tool, open, onToggle, isPreview, wholeStatus, canLoad, loadWhole }: {
+  tool: ToolBlock; open: boolean; onToggle(): void; isPreview: boolean;
+  wholeStatus: string; canLoad: boolean; loadWhole(): void;
+}) {
+  const c = useTheme();
+  const mark = useHighlighter();
+  const enabled = useFeatures()?.sessionSubagents === true;
+  const now = useNow();
+  const subagent = subagentCardModel(tool, enabled, now)!;
+  const state = !tool.settled ? 'running' : tool.isError ? 'error' : 'done';
+  return <View style={[styles.subagent, { borderColor: c.border, backgroundColor: c.card }]}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Subagent · ${subagent.type}, ${subagent.title}, ${subagent.stepsLabel}`}
+      accessibilityState={{ expanded: open }} onPress={onToggle} style={styles.cardHeader}>
+      <SymbolView name={{ ios: 'person.2', android: 'group' }} size={16} tintColor={c.muted} />
+      <View style={{ flex: 1, gap: 4 }}>
+        <Text style={[type.caption, { color: c.muted }]}>Subagent · {subagent.type}</Text>
+        <Text style={[type.rowTitle, { color: c.text }]}>{mark(subagent.title)}</Text>
+        <View style={styles.line}>
+          <StatusDot state={state} />
+          <Text style={[type.caption, { color: subagent.failed ? c.destructive : c.muted }]}>{subagent.stepsLabel}</Text>
+          {subagent.detailsLabel ? <Text style={[type.caption, { color: c.muted }]}>{subagent.detailsLabel}</Text> : null}
+        </View>
+      </View>
+      <Chevron open={open} />
+    </Pressable>
+    {open ? <View style={[styles.cardBody, { borderColor: c.border }]}>
+      <Section label="Brief from the agent"><View style={{ opacity: 0.7 }}><Markdown text={subagent.brief} /></View></Section>
+      {subagent.children.length ? <Section label="Steps">{subagent.children.map((child) =>
+        child.kind === 'tool' ? <ToolRow key={child.key} tool={child} nested />
+          : child.kind === 'tool_group' ? <ToolGroupRow key={child.key} group={child} />
+            : child.kind === 'text' ? <AgentText key={child.key} text={child.text} streaming={child.key.startsWith('stream-')} />
+              : child.kind === 'thinking' ? <ThinkingRow key={child.key} text={child.text} /> : null,
+      )}</Section> : null}
+      <Section label="Result">{subagent.result !== null ? <Markdown text={subagent.result} /> : null}</Section>
+      {isPreview ? wholeStatus === 'loading' ? <Text style={[type.caption, { color: c.muted }]}>Loading the whole call</Text>
+        : canLoad ? <ShowMore label={wholeStatus === 'failed' ? 'Could not load the whole call. Try again' : 'Show the whole call'} onPress={loadWhole} />
+          : <Text style={[type.caption, { color: c.muted }]}>Preview. Open the session on the web for the whole output.</Text> : null}
+    </View> : null}
+  </View>;
+}
 
 const PREVIEW_LINES = 12;
 const PREVIEW_CHARS = 1200;
@@ -91,7 +134,7 @@ export const ToolRow = memo(function ToolRow({ tool: held, nested = false, parti
   const [whole, setWhole] = useState<FullState>({ status: 'idle' });
   const asked = useRef(false);
   const tool = useMemo(() => whole.status === 'ready' ? { ...held, input: whole.tool.input, output: whole.tool.output ?? held.output } : held, [whole, held]);
-  const isPreview = partial && whole.status !== 'ready';
+  const isPreview = (partial || actions?.partialTools?.has(held.toolId)) && whole.status !== 'ready';
   const loadWhole = () => {
     if (!actions || asked.current) return;
     asked.current = true;
@@ -109,29 +152,9 @@ export const ToolRow = memo(function ToolRow({ tool: held, nested = false, parti
     : { ...preview(output.text, open ? PREVIEW_LINES : 3, PREVIEW_CHARS), ...(isPreview ? { hidden: true } : {}) } : null;
   const more = () => { setOpen(true); setFull(true); if (isPreview) loadWhole(); };
   const label = `${line.label}${line.detail ? ` ${line.detail}` : ''}${state === 'running' ? ', running' : state === 'error' ? ', failed' : ''}`;
-  const subagent = subagentCardModel(tool);
-  if (subagent) return <View style={[styles.subagent, { borderColor: c.border, backgroundColor: c.card }]}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`Subagent · ${subagent.type}, ${subagent.title}, ${subagent.stepsLabel}`}
-      accessibilityState={{ expanded: open }} onPress={() => { setOpen(!open); if (!open && isPreview) loadWhole(); }} style={styles.cardHeader}>
-      <SymbolView name={{ ios: 'person.2', android: 'group' }} size={16} tintColor={c.muted} />
-      <View style={{ flex: 1, gap: 4 }}>
-        <Text style={[type.caption, { color: c.muted }]}>Subagent · {subagent.type}</Text>
-        <Text style={[type.rowTitle, { color: c.text }]}>{mark(subagent.title)}</Text>
-        <View style={styles.line}>
-          <StatusDot state={state} />
-          <Text style={[type.caption, { color: subagent.failed ? c.destructive : c.muted }]}>{subagent.stepsLabel}</Text>
-        </View>
-      </View>
-      <Chevron open={open} />
-    </Pressable>
-    {open ? <View style={[styles.cardBody, { borderColor: c.border }]}>
-      <Section label="Brief from the agent"><View style={{ opacity: 0.7 }}><Markdown text={subagent.brief} /></View></Section>
-      <Section label="Result">{subagent.result !== null ? <Markdown text={subagent.result} /> : null}</Section>
-      {isPreview ? whole.status === 'loading' ? <Text style={[type.caption, { color: c.muted }]}>Loading the whole call</Text>
-        : actions ? <ShowMore label={whole.status === 'failed' ? 'Could not load the whole call. Try again' : 'Show the whole call'} onPress={loadWhole} />
-          : <Text style={[type.caption, { color: c.muted }]}>Preview. Open the session on the web for the whole output.</Text> : null}
-    </View> : null}
-  </View>;
+  if (subagentCardModel(tool)) return <SubagentCard tool={tool} open={open}
+    onToggle={() => { setOpen(!open); if (!open && isPreview) loadWhole(); }}
+    isPreview={Boolean(isPreview)} wholeStatus={whole.status} canLoad={Boolean(actions)} loadWhole={loadWhole} />;
   return <View style={[styles.tool, nested && { paddingVertical: 2 }]}>
     <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ expanded: open }}
       onPress={() => setOpen(!open)} style={styles.line} hitSlop={4}>

@@ -121,6 +121,14 @@ export interface FeatureFlagDefinition {
  * literal union of the keys below instead of widening to `string`.
  */
 export const FEATURE_FLAGS = {
+  sessionSubagents: {
+    posthogKey: 'session-subagents',
+    envOverride: 'SESSION_SUBAGENTS_ENABLED',
+    fallback: true,
+    description: 'Subagent cards in sessions',
+    availability: 'gated',
+    releaseScopes: ['session-subagents'],
+  },
   /**
    * Workflows — user-defined PR automation.
    *
@@ -678,6 +686,7 @@ export function gateForScope(scope: string | null | undefined): FeatureFlagKey |
  * cannot act on a workspace the gate refuses.
  */
 export const ACCOUNT_FEATURE_FLAGS = [
+  'sessionSubagents',
   'workflows',
   'loops',
   'mcpServers',

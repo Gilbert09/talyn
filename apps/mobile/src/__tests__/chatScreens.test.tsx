@@ -137,3 +137,27 @@ describe('plans and stopping', () => {
     expect(screen.queryByRole('button', { name: /Load older|Load latest|Conversation details/ })).toBeNull();
   });
 });
+
+describe('subagents in the conversation', () => {
+  it.each([false, true])('gates the live turn count, enabled=%s', async (enabled) => {
+    mockActive.api.features.get.mockResolvedValue({ workbenches: true, sessionSubagents: enabled });
+    mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ status: 'running', agent: 'claude' })] }));
+    const call = (id: string) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Agent', input: { description: id } }] } });
+    transcript([ev(1, call('old'), 1), ev(2, call('current'), 2)]);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(await screen.findByText('current')).toBeVisible();
+    expect(Boolean(screen.queryByText('1 subagent running'))).toBe(enabled);
+    expect(screen.queryByText('2 subagents running')).toBeNull();
+    await act(async () => mockActive.emit('workbench:event', { workspaceId: 'one', chatId: 'chat-one', events: [
+      ev(3, { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'current', content: 'done' }] } }, 2),
+    ] }));
+    expect(screen.queryByText('1 subagent running')).toBeNull();
+  });
+
+  it('shows the stopped subagents note with the flag off', async () => {
+    mockActive.api.features.get.mockResolvedValue({ workbenches: true, sessionSubagents: false });
+    transcript([ev(1, { type: 'system', subtype: 'subagents_stopped', text: 'Two subagents stopped.' })]);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(await screen.findByText('Two subagents stopped.')).toBeVisible();
+  });
+});

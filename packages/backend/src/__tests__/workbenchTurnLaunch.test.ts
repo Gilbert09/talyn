@@ -29,7 +29,7 @@ const { durablePaths } = await import('../services/workbenches/durableExec.js');
 const { TURN_OWNER, resetWorkbenchDrainForTests } = await import('../services/workbenches/ownership.js');
 const { settleAgentBackupsForTests } = await import('../services/workbenches/agentBackups.js');
 const {
-  LAUNCH_FAILED_MESSAGE, MAX_TURN_ATTEMPTS, ORPHAN_MESSAGE, launchTurnLoopForTests, normaliseMessage, sendMessage,
+  LAUNCH_FAILED_MESSAGE, MAX_TURN_ATTEMPTS, ORPHAN_MESSAGE, cancelTurn, launchTurnLoopForTests, normaliseMessage, sendMessage,
   setTurnRetryDelaysForTests, sweepOrphanedTurns, turnLogKey,
 } = await import('../services/workbenches/turns.js');
 
@@ -110,6 +110,41 @@ describe('workbench turn launch', () => {
   async function staleHeartbeat(at = new Date(Date.now() - 91_000)) {
     await testDb.db.update(workbenchChats).set({ turnHeartbeatAt: at }).where(eq(workbenchChats.id, 'chat'));
   }
+
+
+  it('records stopped subagents when cancellation has no local follower', async () => {
+    await store.updateChat('chat', { status: 'running', turnCount: 1 });
+    await store.appendEvents('chat', [{ turn: 1, event: { type: 'assistant', message: {
+      content: [{ type: 'tool_use', id: 'a', name: 'Agent', input: {} }],
+    } } }]);
+    await cancelTurn('chat');
+    expect((await events()).filter((event) => event.subtype === 'subagents_stopped')).toHaveLength(1);
+    expect((await store.getChat('chat'))?.status).toBe('idle');
+  });
+
+  it.each([false, true])('records open subagents at turn end, settled=%s', async (complete) => {
+    const normal = fleet.handler;
+    fleet.handler = (script) => {
+      if (!isAgentTurn(script)) return normal!(script);
+      return { stdout: [
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'a', name: 'Agent', input: {} }] } }),
+        ...(complete ? [JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'a', content: 'done' }] } })] : []),
+        JSON.stringify({ type: 'result', subtype: 'success', result: 'done' }),
+      ], exitCode: 0 };
+    };
+    await sendMessage('chat', { text: 'go' });
+    await settled('idle');
+    expect((await events()).filter((event) => event.subtype === 'subagents_stopped')).toHaveLength(complete ? 0 : 1);
+    expect(await store.openSubagentCount('chat', 1)).toBe(0);
+  });
+
+  it('finishes the turn when the stopped subagents count fails', async () => {
+    vi.spyOn(store, 'openSubagentCount').mockRejectedValue(new Error('count failed'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await sendMessage('chat', { text: 'go' });
+    await settled('idle');
+    expect(warn).toHaveBeenCalledWith('[turns] could not record stopped subagents', expect.objectContaining({ chatId: 'chat', turn: 1 }));
+  });
 
   it('parks a turn when Claude returns the reported 429', async () => {
     const reason = "API Error: Request rejected (429) · This request would exceed your account's rate limit. Please try again later.";

@@ -438,6 +438,12 @@ describe('workspace subjects', () => {
 });
 
 describe('featuresForUser', () => {
+  it.each([true, false])('returns the subagent flag from PostHog: %s', async (enabled) => {
+    process.env.TALYN_POSTHOG_KEY = 'phc_test';
+    answer = (key) => key === 'session-subagents' ? enabled : undefined;
+    expect((await featuresForUser(SUBJECT)).sessionSubagents).toBe(enabled);
+  });
+
   it.each([
     [false, false, false], [false, false, true],
     [false, true, false], [false, true, true],
@@ -486,6 +492,7 @@ describe('featuresForUser', () => {
       'reviewPriorityMode',
       'reviewRankingCandidate',
       'reviewRankingExport',
+      'sessionSubagents',
       'slackChannelRules',
       'spaces',
       'splitView',
@@ -500,6 +507,7 @@ describe('featuresForUser', () => {
   it('reflects the kill switch, so the UI stops drawing what the routes refuse', async () => {
     process.env.WORKFLOWS_ENABLED = 'false';
     expect(await featuresForUser(SUBJECT)).toEqual({
+      sessionSubagents: true,
       workflows: false,
       loops: false,
       mcpServers: false,
@@ -531,6 +539,7 @@ describe('featuresForUser', () => {
     // Teams stays OFF because it offers a checkout. posthogCodeRetired stays
     // ON, so an outage never offers a retired provider again.
     expect(await featuresForUser(SUBJECT)).toEqual({
+      sessionSubagents: true,
       workflows: true,
       loops: false,
       mcpServers: false,

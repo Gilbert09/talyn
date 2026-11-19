@@ -1,9 +1,13 @@
-import type { AgentEvent, ToolBlock, WorkbenchEvent } from '@talyn/shared';
+import { buildBlocks, mergeToolBlocks, type AgentEvent, type Features, type ToolBlock, type WorkbenchEvent } from '@talyn/shared';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 
 import { fullToolFrom, TranscriptContext } from '../features/chat/fullTool';
+import { useFeatures } from '../lib/features';
 import { ToolRow } from '../features/chat/ToolRow';
 import { TranscriptRowCache } from '../features/chat/transcript';
+
+jest.mock('../lib/features', () => ({ useFeatures: jest.fn(() => null) }));
+beforeEach(() => jest.mocked(useFeatures).mockReturnValue(null));
 
 jest.mock('../auth/AuthProvider', () => ({ useMobileRuntime: () => ({ workflow: {} }), useNetwork: () => 'online' }));
 
@@ -80,4 +84,59 @@ it('updates the cached row when nested tools arrive', async () => {
   expect(screen.getByText('1 step · read')).toBeVisible();
   expect(screen.queryByText('Hidden answer')).toBeNull();
   expect(getTool()).toBe(updated);
+});
+
+
+it.each([false, true])('gates nested steps and task details, enabled=%s', async (enabled) => {
+  jest.mocked(useFeatures).mockReturnValue({ sessionSubagents: enabled } as Features);
+  const events: AgentEvent[] = [
+    { seq: 1, type: 'assistant', message: { content: [{ type: 'tool_use', id: 'a', name: 'Agent', input: tool().input }] } },
+    { seq: 2, type: 'assistant', parent_tool_use_id: 'a', message: { content: [{ type: 'tool_use', id: 'read', name: 'Read', input: {} }] } },
+    { seq: 3, type: 'system', subtype: 'task_progress', tool_use_id: 'a', description: 'Checking imports', usage: { total_tokens: 1234, tool_uses: 3, duration_ms: 2000 } },
+  ];
+  const parent = () => mergeToolBlocks(buildBlocks(events))[0] as ToolBlock;
+  const view = await render(<ToolRow tool={parent()} />);
+  expect(screen.getByText(enabled ? '3 tools · Checking imports' : '1 step · read')).toBeVisible();
+  expect(Boolean(screen.queryByText('1,234 tokens · 2s'))).toBe(enabled);
+  await fireEvent.press(screen.getByRole('button', { name: /Subagent · Explore/ }));
+  events.push({ seq: 4, type: 'assistant', parent_tool_use_id: 'a', message: { content: [{ type: 'text', text: 'Nested answer' }] } });
+  await view.rerender(<ToolRow tool={parent()} />);
+  expect(Boolean(screen.queryByText('Nested answer'))).toBe(enabled);
+  expect(Boolean(screen.queryByText('Steps'))).toBe(enabled);
+  expect(Boolean(screen.queryByText('read'))).toBe(enabled);
+});
+
+it('keeps the step fallback with the flag on', async () => {
+  jest.mocked(useFeatures).mockReturnValue({ sessionSubagents: true } as Features);
+  await render(<ToolRow tool={tool({ settled: false })} />);
+  expect(screen.getByText('1 step · read')).toBeVisible();
+});
+
+it('keeps new text and task details in the row cache', () => {
+  const cache = new TranscriptRowCache();
+  const events: WorkbenchEvent[] = [{ chatId: 'c', seq: 1, turn: 1, event: { seq: 1, type: 'assistant', message: { content: [{ type: 'tool_use', id: 'a', name: 'Agent', input: {} }] } } }];
+  const first = cache.rows('c', events)[0];
+  events.push({ chatId: 'c', seq: 2, turn: 1, event: { seq: 2, type: 'system', subtype: 'task_progress', tool_use_id: 'a', description: 'Working' } });
+  const next = cache.rows('c', events)[0];
+  expect(next).not.toBe(first);
+  events.push({ chatId: 'c', seq: 3, turn: 1, event: { seq: 3, type: 'assistant', parent_tool_use_id: 'a', message: { content: [{ type: 'text', text: 'Nested answer' }] } } });
+  expect(cache.rows('c', events)[0]).not.toBe(next);
+});
+
+
+it('loads a nested tool with the same preview controls as a main tool', async () => {
+  jest.mocked(useFeatures).mockReturnValue({ sessionSubagents: true } as Features);
+  const child = tool({ key: '2.0', toolId: 'nested', name: 'Read', input: { file_path: 'src/main.ts' }, output: 'Preview', subagent: undefined });
+  const load = jest.fn(async () => fullToolFrom(child, [
+    { chatId: 'c', seq: 2, turn: 1, event: { seq: 2, type: 'assistant', parent_tool_use_id: 'a', message: { content: [{ type: 'tool_use', id: 'nested', name: 'Read', input: child.input }] } } },
+    { chatId: 'c', seq: 3, turn: 1, event: { seq: 3, type: 'user', parent_tool_use_id: 'a', message: { content: [{ type: 'tool_result', tool_use_id: 'nested', content: 'Whole nested output' }] } } },
+  ]));
+  await render(<TranscriptContext.Provider value={{ loadFullTool: load, partialTools: new Set(['nested']) }}>
+    <ToolRow tool={tool({ subagent: { steps: 1, children: [child] } })} />
+  </TranscriptContext.Provider>);
+  await fireEvent.press(screen.getByRole('button', { name: /Subagent · Explore/ }));
+  await fireEvent.press(screen.getByRole('button', { name: /read src/ }));
+  await fireEvent.press(screen.getByText('Show more'));
+  expect(await screen.findByText('Whole nested output')).toBeVisible();
+  expect(load).toHaveBeenCalledTimes(1);
 });

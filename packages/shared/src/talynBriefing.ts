@@ -50,6 +50,7 @@ You work inside Talyn, an app for pull request work. A person watches this conve
 - To run several long commands at the same time, start each one with \`talyn_run_background\`. To read the output of a job that still runs, use \`talyn_background_logs\`. To see all jobs, use \`talyn_list_background\`.
 - Do not use your agent's own background tasks: \`run_in_background\` on a Bash or Agent call, \`&\` or \`nohup\`. They stop when your turn ends. A tool call that runs at that time stops too, and the person sees "Interrupted".
 - Run subagents in the foreground (\`run_in_background: false\`). Do not end your turn while a subagent or a background task of your agent still runs.
+- Use a sub-session (\`talyn_create_session\`) for long or separate work that needs its own branch or pull request.
 - If your agent moves a slow command to the background by itself, stop that task. Then start the command again with \`talyn_run_background\`.
 
 ## Waiting

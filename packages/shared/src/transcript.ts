@@ -70,6 +70,19 @@ export function isClaudeRejectedToolResult(content: unknown, isError: boolean): 
 export interface SubagentProgress {
   steps: number;
   current?: string;
+  children?: GroupedBlock[];
+  task?: SubagentTaskDetails;
+  startedAt?: number;
+  endedAt?: number;
+}
+
+export interface SubagentTaskDetails {
+  activity?: string;
+  tokens?: number;
+  tools?: number;
+  durationMs?: number;
+  startedAt?: number;
+  endedAt?: number;
 }
 
 export type Block =
@@ -143,6 +156,7 @@ export const SESSION_NOTE_SUBTYPES: ReadonlySet<string> = new Set([
   'local_turn_interrupted',
   'sandbox_capacity_wait',
   'agent_session_reset',
+  'subagents_stopped',
 ]);
 
 /** A subagent's current step: the verb and a short subject, e.g. "read contracts.py". */
@@ -157,9 +171,57 @@ export function isSubagentEvent(event: { parent_tool_use_id?: unknown }): boolea
   return Boolean(event.parent_tool_use_id);
 }
 
+function eventTime(value: unknown): number | undefined {
+  const time = typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : NaN;
+  return Number.isFinite(time) ? time : undefined;
+}
+
+function taskDetails(events: AgentEvent[]): Map<string, SubagentTaskDetails> {
+  const tasks = new Map<string, SubagentTaskDetails>();
+  const calls = new Map<string, string>();
+  for (const event of events) {
+    if (event.type === 'system' && typeof event.task_id === 'string' && typeof event.tool_use_id === 'string') {
+      calls.set(event.task_id, event.tool_use_id);
+    }
+  }
+  for (const event of events) {
+    if (event.type !== 'system' || !['task_started', 'task_progress', 'task_updated', 'task_notification'].includes(event.subtype ?? '')) continue;
+    const id = typeof event.tool_use_id === 'string' ? event.tool_use_id : calls.get(String(event.task_id ?? ''));
+    if (!id) continue;
+    const task = tasks.get(id) ?? {};
+    const patch = event.patch && typeof event.patch === 'object' ? event.patch as Record<string, unknown> : {};
+    const usage = (event.usage ?? patch.usage) as Record<string, unknown> | undefined;
+    if (event.subtype === 'task_progress' && typeof event.description === 'string') task.activity = event.description;
+    else if (!task.activity && typeof event.last_tool_name === 'string') task.activity = event.last_tool_name;
+    for (const [source, target] of [['total_tokens', 'tokens'], ['tool_uses', 'tools'], ['duration_ms', 'durationMs']] as const) {
+      const value = usage?.[source];
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) task[target] = value;
+    }
+    if (event.subtype === 'task_started') task.startedAt = eventTime(event.timestamp) ?? task.startedAt;
+    if (['completed', 'failed', 'stopped'].includes(String(patch.status ?? event.status))) {
+      task.endedAt = eventTime(patch.end_time) ?? eventTime(event.timestamp) ?? task.endedAt;
+    }
+    tasks.set(id, task);
+  }
+  return tasks;
+}
+
 export function buildBlocks(events: AgentEvent[]): Block[] {
+  const children = new Map<string, AgentEvent[]>();
+  for (const event of events) {
+    if (!isSubagentEvent(event)) continue;
+    const id = String(event.parent_tool_use_id);
+    const list = children.get(id) ?? [];
+    list.push({ ...event, parent_tool_use_id: null });
+    children.set(id, list);
+  }
+  return buildTranscriptBlocks(events, children, taskDetails(events), new Set());
+}
+
+function buildTranscriptBlocks(
+  events: AgentEvent[], children: Map<string, AgentEvent[]>, tasks: Map<string, SubagentTaskDetails>, ancestors: Set<string>,
+): Block[] {
   const blocks: Block[] = [];
-  const subagents = new Map<string, SubagentProgress>();
   let interruptionOpen = false;
   const interrupt = (key: string) => {
     if (!interruptionOpen) blocks.push({ kind: 'system', key, text: 'Interrupted', subtype: 'talyn_interruption' });
@@ -189,21 +251,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
   let streamingMsgId: string | undefined;
 
   for (const event of events) {
-    // Subagent events belong to the Agent tool result, not the main transcript.
-    if (isSubagentEvent(event)) {
-      const parentId = String(event.parent_tool_use_id);
-      const content = event.type === 'assistant' ? event.message?.content : undefined;
-      if (Array.isArray(content)) {
-        for (const part of content) {
-          if (part?.type !== 'tool_use') continue;
-          const progress = subagents.get(parentId) ?? { steps: 0 };
-          progress.steps++;
-          progress.current = subagentStepLabel(describeTool(String(part.name ?? 'unknown'), part.input));
-          subagents.set(parentId, progress);
-        }
-      }
-      continue;
-    }
+    if (isSubagentEvent(event)) continue;
     const seqKey = String(event.seq);
     if (event.type !== 'user' && !(event.type === 'system' && event.subtype === 'talyn_interruption')) interruptionOpen = false;
     if (event.type === 'system' && event.subtype === 'init') {
@@ -534,8 +582,27 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
 
   for (const block of blocks) {
     if (block.kind === 'tool_use' && describeTool(block.name, block.input).label === 'agent') {
-      const progress = subagents.get(block.toolId);
-      if (progress) block.subagent = progress;
+      const nested = children.get(block.toolId) ?? [];
+      const progress: SubagentProgress = { steps: 0 };
+      for (const event of nested) {
+        const content = event.type === 'assistant' ? event.message?.content : undefined;
+        if (!Array.isArray(content)) continue;
+        for (const part of content) {
+          if (part?.type !== 'tool_use') continue;
+          progress.steps++;
+          progress.current = subagentStepLabel(describeTool(String(part.name ?? 'unknown'), part.input));
+        }
+      }
+      if (nested.length && !ancestors.has(block.toolId)) {
+        progress.children = groupToolRuns(mergeToolBlocks(buildTranscriptBlocks(nested, children, tasks, new Set([...ancestors, block.toolId]))));
+      }
+      progress.task = tasks.get(block.toolId);
+      const call = events.find((event) => String(event.seq) === block.key.split('.')[0]);
+      progress.startedAt = eventTime(call?.timestamp);
+      const result = events.find((event) => event.type === 'user' && Array.isArray(event.message?.content) &&
+        event.message.content.some((part) => part?.type === 'tool_result' && part.tool_use_id === block.toolId));
+      progress.endedAt = eventTime(result?.timestamp);
+      block.subagent = progress;
     }
   }
   return blocks;
@@ -1126,9 +1193,11 @@ export interface SubagentCardModel {
   running: boolean;
   failed: boolean;
   result: string | null;
+  children: GroupedBlock[];
+  detailsLabel?: string;
 }
 
-export function subagentCardModel(block: ToolBlock): SubagentCardModel | null {
+export function subagentCardModel(block: ToolBlock, details = false, now = Date.now()): SubagentCardModel | null {
   if (describeTool(block.name, block.input).label !== 'agent') return null;
   const input = block.input && typeof block.input === 'object' ? block.input as Record<string, unknown> : {};
   const brief = typeof input.prompt === 'string' ? input.prompt : '';
@@ -1136,13 +1205,28 @@ export function subagentCardModel(block: ToolBlock): SubagentCardModel | null {
   const title = typeof input.description === 'string' && input.description.trim()
     ? input.description.trim() : brief.trim().split('\n')[0].trim();
   const { steps, current } = block.subagent ?? { steps: 0 };
+  const task = details ? block.subagent?.task : undefined;
   const running = !block.settled;
   const failed = block.settled && block.isError;
   const count = plural(steps, 'step');
-  const stepsLabel = running
+  let stepsLabel = running
     ? steps === 0 ? 'Starting…' : `${count}${current ? ` · ${current}` : ''}`
     : `${failed ? 'Failed' : 'Finished'} · ${count}`;
+  if (task) {
+    const taskCount = task.tools === undefined ? plural(steps, 'step') : plural(task.tools, 'tool');
+    stepsLabel = running ? `${taskCount}${task.activity || current ? ` · ${task.activity || current}` : ''}`
+      : `${failed ? 'Failed' : 'Finished'} · ${taskCount}`;
+  }
+  const startedAt = task?.startedAt ?? block.subagent?.startedAt;
+  const endedAt = task?.endedAt ?? block.subagent?.endedAt;
+  const duration = task?.durationMs ?? (startedAt !== undefined && (running || endedAt !== undefined)
+    ? Math.max(0, (endedAt ?? now) - startedAt) : undefined);
+  const detailsLabel = details ? [
+    task?.tokens === undefined ? '' : `${task.tokens.toLocaleString('en-US')} tokens`,
+    duration === undefined ? '' : `${Math.floor(duration / 1000)}s`,
+  ].filter(Boolean).join(' · ') : undefined;
   return { type, title, brief, steps, current, stepsLabel, running, failed,
+    children: details ? block.subagent?.children ?? [] : [], detailsLabel,
     result: block.output == null ? null : formatToolOutput(block.output).text };
 }
 
@@ -1219,7 +1303,7 @@ export function mergedBlockSignature(block: MergedBlock): string {
   if (block.kind === 'tool') {
     const len =
       typeof block.output === 'string' ? block.output.length : block.output ? 1 : 0;
-    return `${block.key}:${block.settled ? 1 : 0}:${block.isError ? 1 : 0}:${block.stopped ? 1 : 0}:${len}:${block.subagent?.steps ?? 0}:${block.subagent?.current ?? ''}`;
+    return `${block.key}:${block.settled ? 1 : 0}:${block.isError ? 1 : 0}:${block.stopped ? 1 : 0}:${len}:${block.subagent?.steps ?? 0}:${block.subagent?.current ?? ''}:${JSON.stringify(block.subagent?.task)}:${block.subagent?.startedAt ?? ''}:${block.subagent?.endedAt ?? ''}:${block.subagent?.children?.map(groupedBlockSignature).join(',') ?? ''}`;
   }
   return blockSignature(block);
 }
@@ -1517,4 +1601,23 @@ export function groupedBlockSignature(block: GroupedBlock): string {
     return `${block.key}:${block.children.map((c) => (c.kind === 'tool' ? mergedBlockSignature(c) : c.key)).join(',')}`;
   }
   return mergedBlockSignature(block);
+}
+
+export function isSubagentTool(name: string): boolean {
+  return describeTool(name, {}).label === 'agent';
+}
+
+/** Count open Agent calls in the events of one live turn. */
+export function runningSubagentCount(events: AgentEvent[]): number {
+  const open = new Set<string>();
+  for (const event of events) {
+    if (event.type === 'system' && event.subtype === 'subagents_stopped') { open.clear(); continue; }
+    const content = event.message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (event.type === 'assistant' && part?.type === 'tool_use' && typeof part.id === 'string' && isSubagentTool(String(part.name ?? ''))) open.add(part.id);
+      if (event.type === 'user' && part?.type === 'tool_result') open.delete(String(part.tool_use_id));
+    }
+  }
+  return open.size;
 }

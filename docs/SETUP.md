@@ -355,6 +355,7 @@ reads as OFF only for `false`/`0`/`off`/`no`:
 | `REVIEW_PRIORITY_ENABLED` | `review-priority` | Ranked ordering of the Reviews tab | ON | general |
 | `REVIEW_RANKING_CANDIDATE_ENABLED` | `review-ranking-candidate-v1` | Fixed shared ranking candidate for the production experiment | OFF | gated |
 | `REVIEW_RANKING_EXPORT_ENABLED` | `review-ranking-export` | Export ranking data stored on this device | OFF | gated |
+| `SESSION_SUBAGENTS_ENABLED` | `session-subagents` | Nested steps, task details and running count on the existing Subagent card | ON | gated |
 | `SLACK_CHANNEL_RULES_ENABLED` | `slack-channel-rules` | A message in a watched Slack channel starts a session | OFF | gated |
 | `SPACES_ENABLED` | `spaces` | Teams and Spaces: shared sessions and tasks for a team | OFF | gated |
 | `TAILSCALE_PRIVATE_ROUTES_ENABLED` | `tailscale-private-routes` | Exact TCP destinations through a workspace Tailscale connector | OFF | gated |

@@ -52,7 +52,8 @@ describe('subagent transcript events', () => {
       event(4, 'user', [{ type: 'tool_result', tool_use_id: 'agent-1', content: 'Answer' }], false),
     ]);
     expect(blocks).toEqual([
-      { kind: 'tool_use', key: '1.0', toolId: 'agent-1', name: 'Agent', input: { prompt: 'Research this' } },
+      { kind: 'tool_use', key: '1.0', toolId: 'agent-1', name: 'Agent', input: { prompt: 'Research this' },
+        subagent: expect.objectContaining({ steps: 0, children: [{ kind: 'text', key: '3.0', text: 'Found an answer' }] }) },
       { kind: 'tool_result', key: '4.0', toolId: 'agent-1', content: 'Answer', isError: false, stopped: false,
         toolName: 'Agent', toolInput: { prompt: 'Research this' } },
     ]);
@@ -76,4 +77,10 @@ describe('subagent transcript events', () => {
       event(5, 'stream_event', { type: 'content_block_delta', delta: { type: 'text_delta', text: 'answer' } }, false),
     ])).toEqual([{ kind: 'text', key: 'stream-live', text: 'Main answer' }]);
   });
+});
+
+
+it('renders the stopped subagents note without a subtype label', () => {
+  expect(buildBlocks([{ seq: 1, type: 'system', subtype: 'subagents_stopped', text: 'Two subagents stopped.' }]))
+    .toEqual([{ kind: 'system', key: '1', text: 'Two subagents stopped.' }]);
 });

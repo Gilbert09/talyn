@@ -69,6 +69,18 @@ The panel on the right has four tabs:
 
 The terminal dock below has a **Run** tab for your run scripts and a **Terminal** tab with a shell in the sandbox. Press ⌘J on a Mac to show or hide it.
 
+## Subagents
+
+Claude subagents have a Subagent card in web, desktop and mobile. Codex does not have subagent cards yet.
+The card shows the type, title and progress. It shows Finished or Failed when the call ends.
+Expand the card to read the brief, its nested steps and the result.
+Nested steps stay out of the main conversation.
+
+When Claude sends task details, the card shows the current activity, token count, tool count and elapsed time.
+Older transcripts use the card's own step count. A chip shows how many subagents still run in the current turn.
+The extra steps, details and count require the `session-subagents` feature flag.
+If a turn ends with open subagents, Talyn adds a note that those subagents stopped.
+
 ## Find in the transcript
 
 Press ⌘F (Ctrl+F on Windows and Linux) to search the session's chat. The find bar shows the number of matches and highlights them.
