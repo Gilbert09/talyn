@@ -6,7 +6,7 @@ import { trackEvent } from '../../../lib/analytics';
 import { captureWorkbenchFailure } from '../../../lib/workbenchAnalytics';
 import { formatKeys } from '../../../lib/shortcuts';
 import { clampDockHeight } from '../../../lib/workbenchLayout';
-import { needsWake, type WorkbenchOps } from '../../../lib/workbenchOps';
+import { fleetUnavailable, needsWake, type WorkbenchOps } from '../../../lib/workbenchOps';
 import { toast } from '../../../stores/toast';
 import { useWorkbenchStore, type WorkbenchTerminalTab } from '../../../stores/workbenches';
 import { useSessionPreview } from '../../../hooks/useSessionPreview';
@@ -17,6 +17,8 @@ import { SessionPreviewChips } from '../SessionPreviewChips';
 import { ShellTerminal } from './ShellTerminal';
 import { parseAnsi } from './ansi';
 import { CONSOLE_FONT_FAMILY, CONSOLE_FONT_SIZE, CONSOLE_THEME } from './consoleTheme';
+
+const CONFIG_RETRY_MS = [5_000, 15_000, 30_000];
 
 const TABS: Array<{ id: WorkbenchTerminalTab; label: string }> = [
   { id: 'setup', label: 'Setup' },
@@ -60,19 +62,35 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
 
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     setLoaded(null);
-    if (!ops.unavailable) {
-      void ops.config().then((value) => {
-        if (!cancelled) setLoaded({ id: workbench.id, config: value });
-      }).catch((err) => {
-        // A sleeping sandbox with no stored config: the scripts show once it wakes. Not an error.
-        if (!cancelled && !needsWake(err)) {
-          captureWorkbenchFailure('read_config', err, workbench.id);
-          toast.error('Could not read the repository config', err instanceof Error ? err.message : undefined);
-        }
-      });
-    }
-    return () => { cancelled = true; };
+    // A fleet that cannot answer gives the default config; read again at these delays, then stop.
+    const read = (attempt: number) => {
+      const retry = () => {
+        if (attempt < CONFIG_RETRY_MS.length) timer = setTimeout(() => read(attempt + 1), CONFIG_RETRY_MS[attempt]);
+      };
+      ops
+        .config()
+        .then((value) => {
+          if (cancelled) return;
+          if (value.unavailable) retry();
+          setLoaded({ id: workbench.id, config: value });
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          if (fleetUnavailable(err)) return retry();
+          // A sleeping sandbox with no stored config: the scripts show once it wakes. Not an error.
+          if (!needsWake(err)) {
+            captureWorkbenchFailure('read_config', err, workbench.id);
+            toast.error('Could not read the repository config', err instanceof Error ? err.message : undefined);
+          }
+        });
+    };
+    if (!ops.unavailable) read(0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [workbench.id, ops]);
 
   useEffect(() => {

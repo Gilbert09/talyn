@@ -312,6 +312,7 @@ describe('workflow routes', () => {
         webhookRules: false,
         issueRules: false,
         posthogInboxRules: false,
+        onboardingLocalAgent: false,
       });
     });
 
@@ -348,6 +349,7 @@ describe('workflow routes', () => {
         webhookRules: false,
         issueRules: false,
         posthogInboxRules: false,
+        onboardingLocalAgent: false,
       });
     });
   });

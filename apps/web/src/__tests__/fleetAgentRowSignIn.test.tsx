@@ -39,6 +39,7 @@ vi.mock('../lib/analytics', async (importOriginal) => ({
 
 const { trackEvent } = await import('../lib/analytics');
 const { useWorkspaceStore } = await import('../stores/workspace');
+const { ApiError } = await import('../lib/api');
 const { FleetAgentRow } = await import('../components/panels/SettingsPanel');
 
 const SIGN_IN_URL = 'https://claude.ai/oauth/authorize?x=1';
@@ -108,6 +109,7 @@ describe('Claude sign-in on the web', () => {
       agent: 'claude',
       stage: 'start',
       error: 'backend said no',
+      error_code: null,
     });
   });
 
@@ -161,6 +163,7 @@ describe('Anthropic API key', () => {
         agent: 'claude',
         stage: 'save',
         error: 'x'.repeat(200),
+        error_code: null,
       })
     );
   });
@@ -187,7 +190,76 @@ describe('Codex paste', () => {
       agent: 'codex',
       stage: 'parse',
       error: message,
+      error_code: null,
     });
     expect(mocks.saveConfig).not.toHaveBeenCalled();
+  });
+});
+
+describe('abandoned sign-in', () => {
+  async function awaitCode() {
+    mocks.startClaudeSignIn.mockResolvedValue({ url: SIGN_IN_URL });
+    mocks.open.mockResolvedValue(true);
+    const view = renderRow('claude');
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in with Claude' }));
+    await screen.findByText('Code from Anthropic');
+    return view;
+  }
+  const abandoned = () => vi.mocked(trackEvent).mock.calls.filter(([name]) => name === 'cloud_provider_signin_abandoned');
+
+  it('fires once with via back, then not again on unmount', async () => {
+    const view = await awaitCode();
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    view.unmount();
+    expect(abandoned()).toHaveLength(1);
+    expect(abandoned()[0][1]).toEqual({
+      provider: 'selfhosted',
+      agent: 'claude',
+      method: 'claude_oauth',
+      via: 'back',
+      elapsed_ms: expect.any(Number),
+    });
+  });
+
+  it('fires via closed when unmounted while awaiting the code', async () => {
+    const view = await awaitCode();
+    view.unmount();
+    expect(abandoned()).toHaveLength(1);
+    expect(abandoned()[0][1]).toMatchObject({ via: 'closed', method: 'claude_oauth' });
+  });
+
+  it('does not fire after the sign-in connected', async () => {
+    mocks.completeClaudeSignIn.mockResolvedValue({ connected: true });
+    const view = await awaitCode();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'abc' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Finish sign-in' }));
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledWith('cloud_provider_connected', expect.anything()));
+    view.unmount();
+    expect(abandoned()).toHaveLength(0);
+  });
+
+  it('does not fire after a reported failure, and puts the API error code on it', async () => {
+    mocks.completeClaudeSignIn.mockRejectedValue(new ApiError('expired', 400, 'signin_expired'));
+    const view = await awaitCode();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'abc' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Finish sign-in' }));
+    await screen.findByText('expired');
+    view.unmount();
+    expect(abandoned()).toHaveLength(0);
+    expect(trackEvent).toHaveBeenCalledWith(
+      'cloud_provider_connect_failed',
+      expect.objectContaining({ stage: 'finish', error_code: 'signin_expired' })
+    );
+  });
+
+  it('fires for an unfinished Codex paste when the row closes', () => {
+    mocks.saveConfig.mockReturnValue(new Promise(() => {}));
+    const view = renderRow('codex');
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: '{"tokens":{"access_token":"a","refresh_token":"b"}}' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save & verify' }));
+    view.unmount();
+    expect(abandoned()[0][1]).toMatchObject({ method: 'codex_paste', via: 'closed' });
   });
 });

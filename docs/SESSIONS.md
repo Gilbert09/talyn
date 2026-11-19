@@ -2,6 +2,27 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Onboarding agent step: local option, sign-in events, quiet fleet faults (2026-11-19)
+
+PostHog (6–19 Nov): 26 signups, 17 passed Connect GitHub, 14 reached "Connect your agent", 2 connected an agent there, 7 skipped, 3 started a session. `cloud_provider_connect_failed` fired 0 times in 45 days, so people abandon the Claude sign-in. They do not get an error.
+Local option:
+- The new `onboarding-local-agent` flag is fallback OFF and gated.
+- With the flag on, the desktop agent step offers "Claude Code or Codex on this computer". The first session then runs locally (`runtime: 'local'`) on the known checkout, or on a folder that the person chooses.
+- Web shows a hint with a link to the desktop app. Mobile has no change.
+- The wizard reads `GET /features` itself, because `useSystemStatus` mounts only after onboarding.
+- Events: `onboarding_local_agent_checked`, `onboarding_local_agent_chosen`, `onboarding_desktop_app_suggested_viewed` and `onboarding_desktop_app_suggested_clicked`.
+- `onboarding_agent_option_selected` can have `agent: 'local'`. `first_session_created` has `runtime` and `agent`. `onboarding_completed` has `agent_mode`. `session_message_sent` has `runtime`.
+Sign-in events:
+- Each error answer of `/selfhosted/claude/complete` has a `code`, for example `signin_expired` or `scope_refused`.
+- The server sends `claude_signin_completed` with `outcome` and `code`. Thus people who block PostHog in the browser are counted.
+- `cloud_provider_connect_failed` has `error_code`.
+- The new `cloud_provider_signin_abandoned` event has `via` `back`, `cancel`, `closed` or `timeout`, and `elapsed_ms`. It fires on web, desktop and mobile.
+Fleet faults: a new user's first box (workbench 668a6ab3, 2026-11-16) waited for capacity (`no_capacity`). Then its host was out of reach (`host_unreachable`), so the config and wake requests answered 503.
+- `GET /workbenches/:id/config` now answers the default config with `unavailable: true` when the fault is `fleet_unavailable` or `sandbox_waking`.
+- `POST /workbenches/:id/wake` answers `{status: 'unavailable'}` for the same faults.
+- TerminalPanel reads the config again quietly after 5 s, 15 s and 30 s, with no toast. `reportApiError` does not report those 503s.
+- The fleet fault is not fixed here. It is a YAS issue.
+
 ## Child sessions and background subagents (2026-11-19)
 
 Migration 0145 stores parent links and opt-in notifications. It backfills links from session tokens.

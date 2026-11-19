@@ -484,6 +484,7 @@ describe('featuresForUser', () => {
       'issueRules',
       'loops',
       'mcpServers',
+      'onboardingLocalAgent',
       'posthogCodeRetired',
       'posthogInboxRules',
       'privateRoutes',
@@ -527,6 +528,7 @@ describe('featuresForUser', () => {
       webhookRules: false,
       issueRules: false,
       posthogInboxRules: false,
+      onboardingLocalAgent: false,
     });
   });
 
@@ -559,6 +561,7 @@ describe('featuresForUser', () => {
       webhookRules: false,
       issueRules: false,
       posthogInboxRules: false,
+      onboardingLocalAgent: false,
     });
   });
 

@@ -69,7 +69,7 @@ export function useCreateWorkbench(): CreateWorkbenchState {
       const wb = await createWorkbench(spec);
       trackEvent('session_created', { kind: wb.kind ?? 'session', runtime: wb.runtime, repository_id: wb.repositoryId, size: wb.settings.sandboxSize ?? wb.settings.boxSize ?? 'default' });
       if (spec.prompt.trim() && !spec.attachments?.length && spec.runtime !== 'local') {
-        trackEvent('session_message_sent', { queued: true, plan_mode: spec.planMode, model_id: spec.model, attachments_count: 0 });
+        trackEvent('session_message_sent', { queued: true, plan_mode: spec.planMode, model_id: spec.model, attachments_count: 0, runtime: wb.runtime });
       }
       const store = useWorkbenchStore.getState();
       // A space session can run in a workspace other than the one shown.
@@ -94,7 +94,7 @@ export function useCreateWorkbench(): CreateWorkbenchState {
           const chat = firstChat ?? await api.workbenches.createChat(wb.id, { model: spec.model, effort: spec.effort, planMode: spec.planMode });
           const sent = await api.workbenches.sendMessage(chat.id, firstInput);
           if (pending) useWorkbenchStore.getState().settleOutgoingMessage(pending.chatId, pending.id);
-          trackEvent('session_message_sent', { queued: sent.queued, plan_mode: spec.planMode, model_id: spec.model, attachments_count: spec.attachments.length });
+          trackEvent('session_message_sent', { queued: sent.queued, plan_mode: spec.planMode, model_id: spec.model, attachments_count: spec.attachments.length, runtime: wb.runtime });
         } catch (err) {
           captureWorkbenchFailure('send_first_message', err, wb.id);
           if (maybeHandleBillingLimit(err, 'workbench_send')) {
@@ -249,7 +249,7 @@ async function startLocalChat(wb: Workbench, spec: NewWorkbenchSpec, pending: Pe
         : undefined;
       const sent = await ops.send(chat, { text: prompt, attachments, model: spec.model, planMode: spec.planMode, effort });
       if (pending) useWorkbenchStore.getState().settleOutgoingMessage(pending.chatId, pending.id);
-      trackEvent('session_message_sent', { queued: sent.queued, plan_mode: spec.planMode, model_id: spec.model, attachments_count: attachments?.length ?? 0 });
+      trackEvent('session_message_sent', { queued: sent.queued, plan_mode: spec.planMode, model_id: spec.model, attachments_count: attachments?.length ?? 0, runtime: wb.runtime });
     }
   } catch (err) {
     if (pending) useWorkbenchStore.getState().removeOutgoingMessages(pending.chatId, [pending.id]);

@@ -14,7 +14,7 @@ const lastWake = new Map<string, number>();
  * not in `@talyn/client`.
  */
 interface WakeAnswer {
-  status: 'skipped' | 'moving' | 'resuming' | 'awake' | 'exhausted' | 'box_limit';
+  status: 'skipped' | 'moving' | 'resuming' | 'awake' | 'unavailable' | 'exhausted' | 'box_limit';
   code?: string;
   notice?: BoxNotice;
 }

@@ -196,9 +196,9 @@ it.each(['claude', 'codex'] as const)('creates and opens a real session through 
   expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: session.id });
   expect(useWorkbenchStore.getState().workbenches[session.id]).toEqual(session);
   expect(useWorkspaceStore.getState().justOnboarded).toBe(true);
-  expect(trackEvent).toHaveBeenCalledWith('first_session_created', { from: 'onboarding' });
+  expect(trackEvent).toHaveBeenCalledWith('first_session_created', { from: 'onboarding', runtime: 'sandbox', agent });
   expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', {
-    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, signup_source: 'reddit',
+    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, agent_mode: 'cloud', signup_source: 'reddit',
   });
   for (const step of ['github', 'repos', 'agent', 'first_session']) {
     expect(trackEvent).toHaveBeenCalledWith('onboarding_step_viewed', { step });
@@ -251,7 +251,7 @@ it('skips the first session, completes onboarding, and opens Home', async () => 
   expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
   expect(trackEvent).toHaveBeenCalledWith('onboarding_first_session_skipped');
   expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', {
-    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, signup_source: null,
+    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, agent_mode: 'cloud', signup_source: null,
   });
 });
 

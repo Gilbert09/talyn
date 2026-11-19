@@ -27,9 +27,13 @@ export function apiRoute(method: string, path: string): string {
   return `${method.toUpperCase()} /${parts.join('/')}`;
 }
 
+const PASSIVE_ROUTES = new Set(['GET /workbenches/:id/config', 'POST /workbenches/:id/wake']);
+
 export function reportApiError({ error, method, path, status, code }: RequestFailure): void {
   if (status === undefined ? !(error instanceof ApiNetworkError) : status < 500) return;
   const route = apiRoute(method, path);
+  // Passive reads (the repository config, the wake prefetch) retry quietly while the fleet is down.
+  if (status === 503 && (code === 'fleet_unavailable' || code === 'sandbox_waking') && PASSIVE_ROUTES.has(route)) return;
   const key = `${route}:${status ?? 'network'}`;
   const now = Date.now();
   if (now - (lastReported.get(key) ?? -Infinity) < 60_000) return;

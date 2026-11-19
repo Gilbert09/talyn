@@ -120,6 +120,12 @@ export function errorText(error: unknown): string {
   return String(typeof message === 'string' ? message : error).slice(0, 200);
 }
 
+/** The server's machine code on a failed request, or null. */
+export function errorCode(error: unknown): string | null {
+  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+  return typeof code === 'string' && code ? code : null;
+}
+
 /** The server's sentence for a failed account change, with web's words for a turned-off second account. */
 export function accountErrorMessage(error: unknown, fallback: string): string {
   if (error && typeof error === 'object') {

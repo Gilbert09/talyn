@@ -23,6 +23,7 @@ jest.mock('../renderer/lib/api', () => ({
     environments: { list: jest.fn().mockResolvedValue([]) },
     cloudProviders: { list: jest.fn().mockResolvedValue([]) },
     posthog: { getStatus: jest.fn().mockResolvedValue({ connected: false }) },
+    features: { get: jest.fn().mockResolvedValue(null) },
     ws: { on: jest.fn().mockReturnValue(() => {}) },
   },
 }));
@@ -42,6 +43,7 @@ async function setup(options: {
   posthogConnected?: boolean;
   github?: boolean;
   repos?: unknown[];
+  features?: unknown;
 }) {
   const { api } = await import('../renderer/lib/api');
   const { useWorkspaceStore } = await import('../renderer/stores/workspace');
@@ -56,6 +58,7 @@ async function setup(options: {
     repositories: (options.repos ?? [REPO]) as never,
     cloudProviders: null,
     posthogStatus: null,
+    features: (options.features ?? null) as never,
   });
 }
 
@@ -167,7 +170,7 @@ describe('skip at the agent step', () => {
     expect(trackEvent).toHaveBeenCalledWith('onboarding_agent_skipped');
     expect(trackEvent).toHaveBeenCalledWith(
       'onboarding_completed',
-      expect.objectContaining({ agent_skipped: true, agent_connected: false })
+      expect.objectContaining({ agent_skipped: true, agent_connected: false, agent_mode: 'none' })
     );
     expect(trackEvent).not.toHaveBeenCalledWith('onboarding_step_completed', { step: 'agent' });
     expect(navigate).toHaveBeenCalledWith({ view: 'home' }, { replace: true });
@@ -236,5 +239,134 @@ describe('GitHub status polling during onboarding', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe('the local agent option', () => {
+  const LOCAL_OPTION = 'Claude Code or Codex on this computer';
+  const READY = { claude: { ok: true, path: '/usr/bin/claude' }, codex: { ok: false }, pty: { ok: true }, git: { ok: true } };
+  const readiness = jest.fn();
+  const FLAG_ON = { onboardingLocalAgent: true };
+
+  function installBridge(local: unknown) {
+    readiness.mockReset();
+    readiness.mockResolvedValue(local);
+    (window as unknown as { electron?: unknown }).electron = { workbench: { readiness } };
+  }
+
+  async function events(name: string) {
+    const { trackEvent } = await import('../renderer/lib/analytics');
+    return jest.mocked(trackEvent).mock.calls.filter(([event]) => event === name);
+  }
+
+  afterEach(() => {
+    delete (window as unknown as { electron?: unknown }).electron;
+  });
+
+  it('is hidden, and nothing is checked, while the flag is off', async () => {
+    installBridge(READY);
+    await setup({ providers: [{ type: 'selfhosted', connected: false, connectedAgents: [] }] });
+    await walkToAgentStep();
+    await screen.findByRole('button', { name: /^Codex/ });
+    expect(screen.queryByRole('button', { name: new RegExp(LOCAL_OPTION) })).toBeNull();
+    expect(readiness).not.toHaveBeenCalled();
+    expect(await events('onboarding_local_agent_checked')).toHaveLength(0);
+    expect(nextButton()?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('reads the flag from GET /features when the store has none', async () => {
+    installBridge(READY);
+    const { api } = await import('../renderer/lib/api');
+    jest.mocked(api.features.get).mockResolvedValueOnce({ onboardingLocalAgent: true } as never);
+    await setup({ providers: [{ type: 'selfhosted', connected: false, connectedAgents: [] }] });
+    await walkToAgentStep();
+    expect(await screen.findByRole('button', { name: new RegExp(LOCAL_OPTION) })).toBeTruthy();
+  });
+
+  it('reports what this computer has once per wizard', async () => {
+    installBridge({ claude: { ok: true, path: '/c' }, codex: { ok: false }, pty: { ok: false }, git: { ok: true } });
+    await setup({ providers: [{ type: 'selfhosted', connected: false, connectedAgents: [] }], features: FLAG_ON });
+    await walkToAgentStep();
+    await waitFor(async () => expect(await events('onboarding_local_agent_checked')).toHaveLength(1));
+    expect(await events('onboarding_local_agent_checked')).toEqual([
+      ['onboarding_local_agent_checked', { claude_installed: true, codex_installed: false, git_installed: true, pty_ok: false }],
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(LOCAL_OPTION) }));
+    fireEvent.click(await screen.findByRole('button', { name: /Re-check/ }));
+    await waitFor(() => expect(readiness).toHaveBeenCalledWith(true));
+    expect(await events('onboarding_local_agent_checked')).toHaveLength(1);
+  });
+
+  it.each([
+    ['only Claude Code', { claude: true, codex: false, git: true }, undefined, 'claude'],
+    ['only Codex', { claude: false, codex: true, git: true }, undefined, 'codex'],
+    ['both, Claude Code by default', { claude: true, codex: true, git: true }, undefined, 'claude'],
+    ['both, Codex as the session default', { claude: true, codex: true, git: true }, 'codex', 'codex'],
+    ['Codex default but only Claude Code', { claude: true, codex: false, git: true }, 'codex', 'claude'],
+    ['neither', { claude: false, codex: false, git: true }, undefined, null],
+    ['no git', { claude: true, codex: true, git: false }, undefined, null],
+  ] as const)('%s', async (_name, found, defaultAgent, expected) => {
+    if (defaultAgent) localStorage.setItem('talyn.session.defaults', JSON.stringify({ agent: defaultAgent }));
+    installBridge({
+      claude: { ok: found.claude, path: found.claude ? '/c' : undefined },
+      codex: { ok: found.codex, path: found.codex ? '/x' : undefined },
+      pty: { ok: true },
+      git: { ok: found.git },
+    });
+    await setup({ providers: [{ type: 'selfhosted', connected: false, connectedAgents: [] }], features: FLAG_ON });
+    const { trackEvent } = await import('../renderer/lib/analytics');
+    await walkToAgentStep();
+
+    fireEvent.click(await screen.findByRole('button', { name: new RegExp(LOCAL_OPTION) }));
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_agent_option_selected', { agent: 'local' });
+    await waitFor(() => expect(readiness).toHaveBeenCalled());
+
+    if (expected) {
+      const name = expected === 'claude' ? 'Claude Code' : 'Codex';
+      expect(await screen.findByText(`Your sessions will use ${name} on this computer.`)).toBeTruthy();
+      await waitFor(() => expect(nextButton()?.hasAttribute('disabled')).toBe(false));
+      fireEvent.click(nextButton()!);
+      expect(trackEvent).toHaveBeenCalledWith('onboarding_local_agent_chosen', { agent: expected });
+      await screen.findByText('Start your first session', { selector: 'h2' });
+    } else {
+      await screen.findByText(/Install Claude Code or Codex, then press Re-check\./);
+      expect(nextButton()?.hasAttribute('disabled')).toBe(true);
+      expect(screen.getByText('Install Claude Code or Codex on this computer, or skip for now.')).toBeTruthy();
+      expect(trackEvent).not.toHaveBeenCalledWith('onboarding_local_agent_chosen', expect.anything());
+    }
+  });
+
+  it('goes back to the subscriptions when another agent is chosen', async () => {
+    installBridge(READY);
+    await setup({ providers: [{ type: 'selfhosted', connected: false, connectedAgents: [] }], features: FLAG_ON });
+    await walkToAgentStep();
+    fireEvent.click(await screen.findByRole('button', { name: new RegExp(LOCAL_OPTION) }));
+    await waitFor(() => expect(nextButton()?.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: /Choose a different agent/ }));
+    expect(nextButton()?.hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: new RegExp(LOCAL_OPTION) })).toBeTruthy();
+  });
+
+  it('keeps the local choice after Back from the first session step', async () => {
+    installBridge(READY);
+    await setup({ providers: [{ type: 'selfhosted', connected: false, connectedAgents: [] }], features: FLAG_ON });
+    await walkToAgentStep();
+    fireEvent.click(await screen.findByRole('button', { name: new RegExp(LOCAL_OPTION) }));
+    await waitFor(() => expect(nextButton()?.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(nextButton()!);
+    fireEvent.click(screen.getByRole('button', { name: /Back/ }));
+    expect(await screen.findByText('Your sessions will use Claude Code on this computer.')).toBeTruthy();
+    expect(nextButton()?.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('skipping after choosing local reports no agent', async () => {
+    installBridge({ claude: { ok: false }, codex: { ok: false }, pty: { ok: true }, git: { ok: true } });
+    await setup({ providers: [{ type: 'selfhosted', connected: false, connectedAgents: [] }], features: FLAG_ON });
+    const { trackEvent } = await import('../renderer/lib/analytics');
+    await walkToAgentStep();
+    fireEvent.click(await screen.findByRole('button', { name: new RegExp(LOCAL_OPTION) }));
+    await screen.findByText(/Install Claude Code or Codex, then press Re-check\./);
+    fireEvent.click(skipButton()!);
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', expect.objectContaining({ agent_skipped: true, agent_mode: 'none' }));
   });
 });

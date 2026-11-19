@@ -49,6 +49,8 @@ export interface WorkbenchConfig {
   source: WorkbenchConfigSource;
   /** Parse problems, including those of a file that was skipped because it was broken. */
   errors: string[];
+  /** The fleet could not be reached, so this is the default config, not the repository's. Read again later. */
+  unavailable?: boolean;
 }
 
 export interface WorkbenchConfigFiles {

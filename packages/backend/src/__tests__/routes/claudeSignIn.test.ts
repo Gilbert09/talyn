@@ -3,6 +3,7 @@ import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
 import { eq, and } from 'drizzle-orm';
+import { ClaudeOAuthError, ClaudeReauthRequiredError } from '../../services/selfHosted/claudeOauth.js';
 import { cloudProviderRoutes } from '../../routes/cloudProviders.js';
 import { apiErrorHandler } from '../../routes/index.js';
 import { wrapAsyncRoutes } from '../../middleware/asyncHandler.js';
@@ -45,11 +46,17 @@ vi.mock('../../services/cloudProviders/fleetAccess.js', async (orig) => ({
   workspaceMayUseFleet: async () => true,
   fleetRefusalReason: () => 'fleet off',
 }));
+const { capture, exchange } = vi.hoisted(() => ({
+  capture: vi.fn(),
+  exchange: vi.fn(),
+}));
+vi.mock('../../services/analytics.js', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  captureWorkspaceEvent: capture,
+}));
 vi.mock('../../services/selfHosted/claudeOauth.js', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
-  exchangeCode: async () => {
-    throw new Error('test token exchange failed');
-  },
+  exchangeCode: exchange,
 }));
 
 async function makeServer(): Promise<{ url: string; close: () => Promise<void> }> {
@@ -78,6 +85,9 @@ describe('Claude sign-in on a workspace with no fleet integration row', () => {
 
   beforeEach(async () => {
     process.env.TALYN_TOKEN_KEY = Buffer.alloc(32, 7).toString('base64');
+    capture.mockReset();
+    exchange.mockReset();
+    exchange.mockRejectedValue(new Error('test token exchange failed'));
     ({ db, cleanup } = await createTestDb());
     await seedUser(db);
     await db.insert(workspacesTable).values({
@@ -178,5 +188,91 @@ describe('Claude sign-in on a workspace with no fleet integration row', () => {
     // not the code; it is the PKCE verifier, and it stays good until it expires.
     expect(second.error).not.toContain('was not found');
     expect(second.error).toBe(first.error);
+  });
+
+  describe('error codes and the claude_signin_completed event', () => {
+    const authorize = () =>
+      fetch(`${url}/cloud-providers/selfhosted/claude/authorize`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ workspaceId: 'ws1' }),
+      });
+    const complete = async (body: Record<string, unknown>) => {
+      const res = await fetch(`${url}/cloud-providers/selfhosted/claude/complete`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ workspaceId: 'ws1', ...body }),
+      });
+      return { status: res.status, body: (await res.json()) as { code?: string; error?: string; success: boolean } };
+    };
+
+    it('answers missing_input without an event (no workspace resolved yet)', async () => {
+      const res = await complete({ code: '  ' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('missing_input');
+      expect(capture).not.toHaveBeenCalled();
+    });
+
+    it('answers signin_not_found when nothing was started', async () => {
+      const res = await complete({ code: 'abc' });
+      expect(res.body.code).toBe('signin_not_found');
+      expect(res.body.error).toBe('Start the Claude sign-in again — this one was not found.');
+      expect(capture).toHaveBeenCalledWith('ws1', 'claude_signin_completed', {
+        agent: 'claude',
+        outcome: 'failed',
+        code: 'signin_not_found',
+      });
+    });
+
+    it('answers signin_expired for an old pending sign-in', async () => {
+      await authorize();
+      const row = await integrationRow();
+      const config = row!.config as { claudePendingAuth: Record<string, unknown> };
+      await db
+        .update(integrationsTable)
+        .set({ config: { ...config, claudePendingAuth: { ...config.claudePendingAuth, expiresAt: new Date(0).toISOString() } } })
+        .where(and(eq(integrationsTable.workspaceId, 'ws1'), eq(integrationsTable.type, 'selfhosted')));
+      const res = await complete({ code: 'abc' });
+      expect(res.body.code).toBe('signin_expired');
+    });
+
+    it('answers signin_account_mismatch for a different account target', async () => {
+      await authorize();
+      const res = await complete({ code: 'abc', label: 'Other' });
+      expect(res.body.code).toBe('signin_account_mismatch');
+    });
+
+    it('answers signin_state_mismatch for a code from another sign-in', async () => {
+      await authorize();
+      const res = await complete({ code: 'abc#not-the-state' });
+      expect(res.body.code).toBe('signin_state_mismatch');
+    });
+
+    it.each([
+      ['grant_rejected', new ClaudeReauthRequiredError('Anthropic rejected the stored sign-in')],
+      ['scope_refused', new ClaudeOAuthError('came back without permission to run models', 'scope_refused')],
+      ['token_exchange_failed', new ClaudeOAuthError('Claude token request failed (400): nope')],
+      ['token_exchange_failed', new Error('network down')],
+    ])('classifies an exchange failure as %s', async (code, err) => {
+      exchange.mockRejectedValue(err);
+      await authorize();
+      const res = await complete({ code: 'abc' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe(code);
+      expect(res.body.error).toBe(err.message);
+      expect(capture).toHaveBeenCalledWith('ws1', 'claude_signin_completed', { agent: 'claude', outcome: 'failed', code });
+    });
+
+    it('captures a connected outcome with no code', async () => {
+      exchange.mockResolvedValue({
+        accessTokenEnc: { iv: '', tag: '', data: '' },
+        refreshTokenEnc: { iv: '', tag: '', data: '' },
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      });
+      await authorize();
+      const res = await complete({ code: 'abc' });
+      expect(res.body.success).toBe(true);
+      expect(capture).toHaveBeenCalledWith('ws1', 'claude_signin_completed', { agent: 'claude', outcome: 'connected' });
+    });
   });
 });

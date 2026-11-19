@@ -14,7 +14,7 @@ import { useResource } from '../../../workflow/hooks';
 import { webUrl } from '../../more/Page';
 import { useRemote } from '../../more/useRemote';
 import { ApiKeyForm } from './ApiKeyForm';
-import { accountErrorMessage, errorText, AGENT_SHORT, agentState, CODEX_SETTINGS_PATH, CODEX_STEPS, connectTarget, FLEET_AGENTS,
+import { accountErrorMessage, errorCode, errorText, AGENT_SHORT, agentState, CODEX_SETTINGS_PATH, CODEX_STEPS, connectTarget, FLEET_AGENTS,
   looksLikeClaudeCode, REAUTH_DETAIL, type ConnectTarget } from './model';
 
 export interface ConnectAgentPanelProps {
@@ -168,7 +168,17 @@ function ClaudeSignIn({ workspaceId, target, reconnecting, onConnected }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
+  // The sign-in in flight, until it connects, fails or is abandoned.
+  const pending = useRef<number | null>(null);
+  const abandon = useCallback((via: 'back' | 'closed') => {
+    if (pending.current === null) return;
+    const elapsed = Date.now() - pending.current;
+    pending.current = null;
+    trackEvent('cloud_provider_signin_abandoned', {
+      provider: 'selfhosted', agent: 'claude', method: 'claude_oauth', via, elapsed_ms: elapsed,
+    });
+  }, []);
+  useEffect(() => () => { mounted.current = false; abandon('closed'); }, [abandon]);
 
   const prefill = useCallback(async () => {
     try {
@@ -198,13 +208,15 @@ function ClaudeSignIn({ workspaceId, target, reconnecting, onConnected }: {
   const start = async () => {
     setBusy(true); setError(null);
     trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent: 'claude', method: 'claude_oauth' });
+    pending.current = Date.now();
     try {
       const result = await cloudProviders.startClaudeSignIn(workspaceId, target);
       setUrl(result.url); setStarted(target); setStep('code');
       setBusy(false);
       await open(result.url);
     } catch (failure) {
-      trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent: 'claude', stage: 'start', error: errorText(failure) });
+      pending.current = null;
+      trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent: 'claude', stage: 'start', error: errorText(failure), error_code: errorCode(failure) });
       if (mounted.current) setError(accountErrorMessage(failure, 'Could not start the Claude sign-in.'));
     } finally { if (mounted.current) setBusy(false); }
   };
@@ -213,11 +225,13 @@ function ClaudeSignIn({ workspaceId, target, reconnecting, onConnected }: {
     setBusy(true); setError(null);
     try {
       const result = await cloudProviders.completeClaudeSignIn(workspaceId, code.trim(), started);
+      pending.current = null;
       trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent: 'claude' });
       setCode('');
       await onConnected(started && 'newAccount' in started ? result.accountId : undefined);
     } catch (failure) {
-      trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent: 'claude', stage: 'finish', error: errorText(failure) });
+      pending.current = null;
+      trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent: 'claude', stage: 'finish', error: errorText(failure), error_code: errorCode(failure) });
       if (mounted.current) setError(accountErrorMessage(failure, 'Could not finish the Claude sign-in.'));
     } finally { if (mounted.current) setBusy(false); }
   };
@@ -254,7 +268,7 @@ function ClaudeSignIn({ workspaceId, target, reconnecting, onConnected }: {
     <View style={styles.actions}>
       {url ? <Button size="sm" variant="quiet" title="Open the sign-in page again" disabled={busy}
         onPress={() => { void open(url).catch(() => setError('Could not open the sign-in page.')); }} /> : null}
-      <Button size="sm" variant="quiet" title="Back" disabled={busy} onPress={() => { setStep('start'); setCode(''); setError(null); }} />
+      <Button size="sm" variant="quiet" title="Back" disabled={busy} onPress={() => { abandon('back'); setStep('start'); setCode(''); setError(null); }} />
     </View>
   </View>;
 }

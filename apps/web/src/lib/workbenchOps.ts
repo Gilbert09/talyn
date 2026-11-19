@@ -91,6 +91,12 @@ export function needsWake(err: unknown): boolean {
   return err instanceof Error && (err as { code?: unknown }).code === 'snapshot_unavailable';
 }
 
+/** True when the fleet could not answer now (full or out of reach). The read can try again shortly. */
+export function fleetUnavailable(err: unknown): boolean {
+  const { status, code } = (err ?? {}) as { status?: unknown; code?: unknown };
+  return status === 503 && (code === 'fleet_unavailable' || code === 'sandbox_waking');
+}
+
 export function sandboxOps(workbench: Workbench): WorkbenchOps {
   const id = workbench.id;
   const unavailable = sandboxUnavailableReason(workbench);

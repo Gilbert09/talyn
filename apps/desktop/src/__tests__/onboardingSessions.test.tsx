@@ -10,6 +10,7 @@ import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { useNavigationStore } from '../renderer/stores/navigation';
 import { usePullRequestStore } from '../renderer/stores/pullRequests';
+import { createLocalWorkbench } from '../renderer/lib/localWorkbench';
 
 jest.mock('../renderer/lib/api', () => ({
   loadAllRepos: jest.fn(),
@@ -196,9 +197,9 @@ it.each(['claude', 'codex'] as const)('creates and opens a real session through 
   expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: session.id });
   expect(useWorkbenchStore.getState().workbenches[session.id]).toEqual(session);
   expect(useWorkspaceStore.getState().justOnboarded).toBe(true);
-  expect(trackEvent).toHaveBeenCalledWith('first_session_created', { from: 'onboarding' });
+  expect(trackEvent).toHaveBeenCalledWith('first_session_created', { from: 'onboarding', runtime: 'sandbox', agent });
   expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', {
-    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, signup_source: 'reddit',
+    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, agent_mode: 'cloud', signup_source: 'reddit',
   });
   for (const step of ['github', 'repos', 'agent', 'first_session']) {
     expect(trackEvent).toHaveBeenCalledWith('onboarding_step_viewed', { step });
@@ -251,7 +252,93 @@ it('skips the first session, completes onboarding, and opens Home', async () => 
   expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
   expect(trackEvent).toHaveBeenCalledWith('onboarding_first_session_skipped');
   expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', {
-    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, signup_source: null,
+    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, agent_mode: 'cloud', signup_source: null,
+  });
+});
+
+describe('a first session on this computer', () => {
+  const localSession: Workbench = { ...session, id: 'session-local', runtime: 'local', localPath: '/wt/app' };
+  let bridge: {
+    readiness: jest.Mock;
+    pickRepoFolder: jest.Mock;
+    repoPaths: { get: jest.Mock; set: jest.Mock; remove: jest.Mock };
+  };
+
+  beforeEach(() => {
+    bridge = {
+      readiness: jest.fn().mockResolvedValue({
+        claude: { ok: false }, codex: { ok: true, path: '/bin/codex' }, pty: { ok: true }, git: { ok: true },
+      }),
+      pickRepoFolder: jest.fn(),
+      repoPaths: { get: jest.fn().mockResolvedValue({}), set: jest.fn(), remove: jest.fn() },
+    };
+    (window as unknown as { electron?: unknown }).electron = { workbench: bridge };
+    jest.mocked(createLocalWorkbench).mockResolvedValue(localSession);
+    useWorkspaceStore.setState({ features: { onboardingLocalAgent: true } as never });
+  });
+
+  afterEach(() => {
+    cleanup();
+    delete (window as unknown as { electron?: unknown }).electron;
+    useWorkspaceStore.setState({ features: null });
+  });
+
+  async function toLocalSession() {
+    await toAgent();
+    fireEvent.click(screen.getByRole('button', { name: /Claude Code or Codex on this computer/ }));
+    await screen.findByText('Your sessions will use Codex on this computer.');
+    await waitFor(() => expect(next()).toBeEnabled());
+    fireEvent.click(next());
+    // The checkout map loads after the step mounts.
+    await act(async () => {});
+    expect(screen.getByRole('heading', { name: 'Start your first session' })).toBeInTheDocument();
+  }
+
+  it('asks for the checkout folder, then creates a local session there', async () => {
+    bridge.pickRepoFolder.mockResolvedValue('/src/app');
+    bridge.repoPaths.get.mockResolvedValueOnce({}).mockResolvedValue({ 'acme/app': '/src/app' });
+    await toLocalSession();
+    expect(screen.getByText('The session runs on this computer, in a new git worktree of your checkout.')).toBeInTheDocument();
+    expect(screen.queryByText(/box-hours/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/sandbox image/)).not.toBeInTheDocument();
+    enterPrompt();
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Choose folder/ }));
+    expect(bridge.pickRepoFolder).toHaveBeenCalledWith('acme/app');
+    expect(await screen.findByText('/src/app')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+
+    await waitFor(() => expect(useWorkspaceStore.getState().onboardingComplete).toBe(true));
+    expect(api.workbenches.create).not.toHaveBeenCalled();
+    expect(createLocalWorkbench).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: 'ws1', repositoryId: 'r1', repoFullName: 'acme/app', agent: 'codex',
+      model: defaultFleetModelForAgent('codex'), repoPath: '/src/app', prompt: 'Fix the private issue',
+    }));
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_local_agent_chosen', { agent: 'codex' });
+    expect(trackEvent).toHaveBeenCalledWith('first_session_created', { from: 'onboarding', runtime: 'local', agent: 'codex' });
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', expect.objectContaining({
+      agent_connected: false, agent_skipped: false, agent_mode: 'local',
+    }));
+  });
+
+  it('uses a known checkout without asking', async () => {
+    bridge.repoPaths.get.mockResolvedValue({ 'Acme/App': '/src/app' });
+    await toLocalSession();
+    expect(await screen.findByText('/src/app')).toBeInTheDocument();
+    enterPrompt();
+    fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+    await waitFor(() => expect(createLocalWorkbench).toHaveBeenCalledWith(expect.objectContaining({ repoPath: '/src/app' })));
+  });
+
+  it('shows why a folder was refused and keeps Start disabled', async () => {
+    bridge.pickRepoFolder.mockRejectedValue(new Error('That folder is not a git checkout.'));
+    await toLocalSession();
+    enterPrompt();
+    fireEvent.click(screen.getByRole('button', { name: /Choose folder/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('That folder is not a git checkout.');
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeDisabled();
+    expect(createLocalWorkbench).not.toHaveBeenCalled();
   });
 });
 

@@ -25,6 +25,7 @@ import {
   usePostHogCodeRetiringNotice,
 } from '../widgets/PostHogCodeRetirement';
 import { ipcErrorMessage } from '../../lib/ipcError';
+import { errorCode, isCodexSignInTimeout, useSignInAbandon } from '../../lib/signInFunnel';
 
 /**
  * The two provider connect cards (PostHog Code + Claude Code), shared by the
@@ -216,19 +217,22 @@ export function FleetAgentRow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [claudeToken, setClaudeToken] = useState('');
+  const funnel = useSignInAbandon();
 
   const label = agent === 'claude' ? 'Claude subscription' : 'Codex (ChatGPT) subscription';
 
   const reportFailure = useCallback(
-    (stage: 'start' | 'finish' | 'save', message: string) => {
+    (stage: 'start' | 'finish' | 'save', message: string, code: string | null = null) => {
+      funnel.end();
       trackEvent('cloud_provider_connect_failed', {
         provider: 'selfhosted',
         agent,
         stage,
         error: message.slice(0, 200),
+        error_code: code,
       });
     },
-    [agent]
+    [agent, funnel]
   );
 
   /**
@@ -254,6 +258,7 @@ export function FleetAgentRow({
       setError(null);
       try {
         await api.cloudProviders.saveConfig('selfhosted', currentWorkspaceId, config);
+        funnel.end();
         trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent });
         setClaudeToken('');
         setEditing(false);
@@ -262,12 +267,12 @@ export function FleetAgentRow({
       } catch (e) {
         const message = e instanceof Error ? e.message : 'Failed to save credentials';
         setError(message);
-        if (!config.clearClaude && !config.clearCodex) reportFailure('save', message);
+        if (!config.clearClaude && !config.clearCodex) reportFailure('save', message, errorCode(e));
       } finally {
         setBusy(false);
       }
     },
-    [agent, currentWorkspaceId, refresh, onChanged, reportFailure]
+    [agent, currentWorkspaceId, refresh, onChanged, reportFailure, funnel]
   );
 
   const disconnect = useCallback(async () => {
@@ -281,6 +286,7 @@ export function FleetAgentRow({
 
   const signInToCodex = useCallback(async () => {
     trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent: 'codex', method: 'codex_oauth' });
+    funnel.begin('codex', 'codex_oauth');
     setBusy(true);
     setError(null);
     try {
@@ -294,10 +300,11 @@ export function FleetAgentRow({
     } catch (e) {
       const message = ipcErrorMessage(e, 'ChatGPT sign-in failed');
       setError(message);
-      reportFailure('start', message);
+      if (isCodexSignInTimeout(e)) funnel.abandon('timeout');
+      else reportFailure('start', message, errorCode(e));
       setBusy(false);
     }
-  }, [save, reportFailure]);
+  }, [save, reportFailure, funnel]);
 
   /**
    * Claude sign-in: open Anthropic's page, take the code back.
@@ -310,6 +317,7 @@ export function FleetAgentRow({
   const startClaudeSignIn = useCallback(async () => {
     if (!currentWorkspaceId) return;
     trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent: 'claude', method: 'claude_oauth' });
+    funnel.begin('claude', 'claude_oauth');
     setBusy(true);
     setError(null);
     try {
@@ -319,11 +327,11 @@ export function FleetAgentRow({
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Could not start the Claude sign-in';
       setError(message);
-      reportFailure('start', message);
+      reportFailure('start', message, errorCode(e));
     } finally {
       setBusy(false);
     }
-  }, [currentWorkspaceId, reportFailure]);
+  }, [currentWorkspaceId, reportFailure, funnel]);
 
   const finishClaudeSignIn = useCallback(async () => {
     if (!currentWorkspaceId) return;
@@ -333,6 +341,7 @@ export function FleetAgentRow({
       await api.cloudProviders.completeClaudeSignIn(currentWorkspaceId, claudeCode);
       setAwaitingClaudeCode(false);
       setClaudeCode('');
+      funnel.end();
       trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent: 'claude' });
       setEditing(false);
       // Re-read rather than guess: the card renders off `connectedAgents`,
@@ -342,11 +351,11 @@ export function FleetAgentRow({
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Could not finish the Claude sign-in';
       setError(message);
-      reportFailure('finish', message);
+      reportFailure('finish', message, errorCode(e));
     } finally {
       setBusy(false);
     }
-  }, [currentWorkspaceId, claudeCode, refresh, onChanged, reportFailure]);
+  }, [currentWorkspaceId, claudeCode, refresh, onChanged, reportFailure, funnel]);
 
   const showForm = editing || !connected;
 
@@ -426,7 +435,10 @@ export function FleetAgentRow({
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => setAwaitingClaudeCode(false)}
+                      onClick={() => {
+                        funnel.abandon('back');
+                        setAwaitingClaudeCode(false);
+                      }}
                       disabled={busy}
                     >
                       Back
@@ -494,6 +506,7 @@ export function FleetAgentRow({
               size="sm"
               variant="ghost"
               onClick={() => {
+                funnel.abandon('cancel');
                 setEditing(false);
                 setError(null);
               }}
