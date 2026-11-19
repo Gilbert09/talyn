@@ -26,7 +26,7 @@ For example, a ten-minute run on a Standard box uses a sixth of a box-hour.
 
 A box is billed for the memory it uses, up to its size. Talyn checks the memory once a minute. A box that uses 4 GB or less is billed at the Standard rate, and a Small box always at the Small rate. For example, a Large box that uses 2 GB is billed as Standard. When a box uses more memory, the higher rate starts at once. When it uses less, the lower rate starts after five minutes.
 
-Sessions, threads, fix runs, code reviews, skills and automations all run on boxes. Local sessions in the desktop app run on your computer and use no box-hours.
+Sessions, threads, fix runs, code reviews, skills and automations all run on boxes. Local sessions in the desktop app run in a git worktree on your computer. They use no box-hours and do not count toward the boxes running at once, so they are free and unlimited on every plan.
 
 ## Plans
 
@@ -34,6 +34,7 @@ Sessions, threads, fix runs, code reviews, skills and automations all run on box
 | --- | --- | --- | --- |
 | Price | $0 | $40 a month, or $400 a year | $100 a month (monthly only) |
 | Box-hours each month | 10 | 200 | 1,000 |
+| Local sessions (desktop app) | Unlimited, free | Unlimited, free | Unlimited, free |
 | Boxes running at once | 2 | 100 | 100 |
 | Box sizes | Small and Standard | All sizes | All sizes |
 | Credits and auto top-up | No | Yes | Yes |

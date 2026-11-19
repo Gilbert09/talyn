@@ -139,6 +139,7 @@ export function Pricing() {
 
         <Reveal className="mx-auto mt-8 max-w-2xl text-center">
           <p className="text-sm leading-relaxed text-ink-500">{pricing.boxHour}</p>
+          <p className="mt-3 text-sm leading-relaxed text-ink-500">{pricing.local}</p>
           <p className="mt-3 text-sm leading-relaxed text-ink-500">{pricing.comingSoon}</p>
           <p className="mt-4 text-xs leading-relaxed text-ink-400">{pricing.footnote}</p>
         </Reveal>

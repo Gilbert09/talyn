@@ -19,6 +19,7 @@ const LIMITS: Array<{ label: string; free: string; pro: string; max: string }> =
   { label: "Price, billed monthly", free: "$0", pro: "$40 per month", max: "$100 per month" },
   { label: "Price, billed annually", free: "$0", pro: "$400 per year ($33.33 per month)", max: "Monthly only" },
   { label: "Box-hours included each month", free: "10", pro: "200", max: "1,000" },
+  { label: "Local sessions in a git worktree (desktop app)", free: "Unlimited, free", pro: "Unlimited, free", max: "Unlimited, free" },
   { label: "Cost of an included box-hour", free: "Free", pro: "$0.20", max: "$0.10" },
   { label: "Box sizes", free: "Small and standard", pro: "Small, standard, medium, large and xlarge", max: "Small, standard, medium, large and xlarge" },
   { label: "Boxes running at once", free: "2", pro: "Up to 100", max: "Up to 100" },

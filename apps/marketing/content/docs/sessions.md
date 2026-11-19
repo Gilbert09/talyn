@@ -202,7 +202,7 @@ To delete a session for good, open **History** and select delete. This removes t
 
 ## Local sessions
 
-In the desktop app, a session can also run in a git worktree on your own computer, with your own tools. Choose **Local** instead of **Sandbox** when you start it. A local session has no sandbox, so it does not use your plan's box-hours.
+In the desktop app, a session can also run in a git worktree on your own computer, with your own tools. Choose **Local** instead of **Sandbox** when you start it. A local session has no sandbox, so it does not use your plan's box-hours and does not count toward the boxes running at once. Local sessions are free and unlimited on every plan.
 
 ## Limits
 
