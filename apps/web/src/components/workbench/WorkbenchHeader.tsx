@@ -745,6 +745,7 @@ export function WorkbenchHeader({
             {!thread && workbench.threadId && (
               <ThreadChip threadId={workbench.threadId} />
             )}
+            {!thread && <ParentSessions workbench={workbench} />}
             {slackSourceOf(workbench) && (
               <SlackThreadChip source={slackSourceOf(workbench)!} />
             )}
@@ -830,7 +831,6 @@ export function WorkbenchHeader({
         onConfirm={() => void restartSandbox()}
         onCancel={() => setRestartOpen(false)}
       />
-      {!thread && <ParentSessions workbench={workbench} />}
       <ArchiveWorkbenchDialog
         workbench={workbench}
         open={confirm === 'archive'}
