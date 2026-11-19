@@ -8,10 +8,31 @@ import {
   getFleetHost,
   hostIsDispatchable,
   hostIsOnline,
+  isControlTunnelEndpoint,
   listFleetHosts,
   pickFleetHost,
   recordFleetHostReport,
 } from '../services/fleetHosts.js';
+
+describe('isControlTunnelEndpoint', () => {
+  it.each([
+    ['http://coder-1.yas-tunnel.invalid', true],
+    ['https://CODER-1.YAS-TUNNEL.INVALID:8080/v1', true],
+    ['http://zone.coder-1.yas-tunnel.invalid.', true],
+    ['http://yas-tunnel.invalid', false],
+    ['http://coder-1.yas-tunnel.invalid.example.com', false],
+    ['http://fake-yas-tunnel.invalid', false],
+    ['http://coder-1.yas-tunnel.invalid@normal.example', false],
+    ['http://normal.example/coder-1.yas-tunnel.invalid', false],
+    ['http://10.0.0.1:8080', false],
+    ['invalid endpoint', false],
+    ['', false],
+    [null, false],
+    [undefined, false],
+  ])('classifies %s as %s', (endpoint, expected) => {
+    expect(isControlTunnelEndpoint(endpoint)).toBe(expected);
+  });
+});
 
 /**
  * These queries must never run on the owner-scoped handle.

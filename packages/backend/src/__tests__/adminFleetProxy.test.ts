@@ -4,6 +4,7 @@ import { fleetHosts as fleetHostsTable } from '../db/schema.js';
 import {
   fanOutHosts,
   fleetClientForHost,
+  HostControlTunnelError,
   HostNotDialableError,
   HostOfflineError,
   HostUnknownError,
@@ -110,6 +111,20 @@ describe('fleetClientForHost', () => {
     await seedHost();
     await expect(fleetClientForHost('hetzner-64')).rejects.toBeInstanceOf(FleetNotConfiguredError);
   });
+
+  it.each([false, true])('refuses a tunnel host with allowOffline=%s', async (allowOffline) => {
+    await seedHost({ apiEndpoint: 'http://coder-1.yas-tunnel.invalid', reportedAt: STALE() });
+    delete process.env.FLEET_API_TOKEN;
+    await expect(fleetClientForHost('hetzner-64', { allowOffline })).rejects.toBeInstanceOf(HostControlTunnelError);
+    const read = vi.fn();
+    expect(await probe('hetzner-64', read, { allowOffline })).toEqual({
+      ok: false,
+      code: 'host_not_dialable',
+      error: 'hetzner-64 is reachable only through the yas control plane.',
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('probe', () => {
@@ -195,6 +210,19 @@ describe('listAdminFleetHosts', () => {
 });
 
 describe('fanOutHosts', () => {
+  it('reports a tunnel host as degraded without a direct call', async () => {
+    await seedHost({ apiEndpoint: 'http://coder-1.yas-tunnel.invalid' });
+    const read = vi.fn();
+    const results = await fanOutHosts(read);
+    expect(results[0]!.result).toMatchObject({
+      ok: false,
+      code: 'host_not_dialable',
+      error: 'hetzner-64 is reachable only through the yas control plane.',
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('skips offline hosts entirely', async () => {
     await seedHost();
     await seedHost({ name: 'gone', apiEndpoint: 'http://10.0.0.9:8080', reportedAt: STALE() });

@@ -85,7 +85,9 @@ export function HostHealthPanel({ host }: { host: AdminFleetHost }) {
       )}
       {!h ? (
         <p className="text-sm text-muted-foreground">
-          {host.live ? 'This host’s fleetd does not report health yet.' : 'No live read of this host.'}
+          {host.live && host.liveSource !== 'report'
+            ? 'This host’s fleetd does not report health yet.'
+            : 'No live read of this host.'}
         </p>
       ) : (
         <>

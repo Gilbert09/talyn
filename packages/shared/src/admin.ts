@@ -295,10 +295,8 @@ export type AdminFleetMetrics = Record<string, unknown>;
 /**
  * A host row.
  *
- * `live` is null whenever we could not or would not dial — and `liveError`
- * says which. That pairing is the whole degradation contract: the fleet page is
- * the page you open BECAUSE a host is misbehaving, so a dead box must render as
- * a row with a reason, never as a failed request.
+ * Tunnel hosts use their last report for capacity. Other hosts use a direct probe.
+ * A failed probe leaves `live` null and supplies `liveError`.
  */
 export interface AdminFleetHost {
   name: string;
@@ -317,6 +315,8 @@ export interface AdminFleetHost {
   /** Online, not draining, has capacity, and advertised somewhere to dial. */
   dispatchable: boolean;
   live: AdminFleetCapacity | null;
+  /** The capacity source. Null when no live view was requested. */
+  liveSource?: 'report' | 'probe' | null;
   liveError: string | null;
   liveErrorCode: AdminFleetLiveErrorCode | null;
   /** From a live `GET /v1/stats`. Null without a live read. */
