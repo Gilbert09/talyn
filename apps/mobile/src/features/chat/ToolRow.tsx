@@ -1,6 +1,6 @@
-import { editDiffFromInput, subagentCardModel, type EditDiff, type ToolBlock, type ToolGroupBlock } from '@talyn/shared';
+import { editDiffFromInput, subagentCardModel, type EditDiff, type SubagentCardModel, type ToolBlock, type ToolGroupBlock } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
-import { memo, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, memo, useContext, useMemo, useRef, useState, type ComponentRef, type ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useFeatures } from '../../lib/features';
@@ -14,45 +14,92 @@ import { useHighlighter } from './findHighlight';
 import { AgentText, ThinkingRow } from './TranscriptParts';
 import { diffTone, preview, readableOutput, toolLine, type DiffTone } from './toolFormat';
 
+/**
+ * Opens a subagent's tab in the conversation. Null where there are no tabs:
+ * the subagents that a subagent starts.
+ */
+export const SubagentTabOpener = createContext<((toolId: string) => void) | null>(null);
+
 function SubagentCard({ tool, open, onToggle, isPreview, wholeStatus, canLoad, loadWhole }: {
   tool: ToolBlock; open: boolean; onToggle(): void; isPreview: boolean;
   wholeStatus: string; canLoad: boolean; loadWhole(): void;
 }) {
   const c = useTheme();
-  const mark = useHighlighter();
   const enabled = useFeatures()?.sessionSubagents === true;
   const now = useNow();
+  const openTab = useContext(SubagentTabOpener);
   const subagent = subagentCardModel(tool, enabled, now)!;
-  const state = !tool.settled ? 'running' : tool.isError ? 'error' : 'done';
   return <View style={[styles.subagent, { borderColor: c.border, backgroundColor: c.card }]}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`Subagent · ${subagent.type}, ${subagent.title}, ${subagent.stepsLabel}`}
-      accessibilityState={{ expanded: open }} onPress={onToggle} style={styles.cardHeader}>
-      <SymbolView name={{ ios: 'person.2', android: 'group' }} size={16} tintColor={c.muted} />
-      <View style={{ flex: 1, gap: 4 }}>
-        <Text style={[type.caption, { color: c.muted }]}>Subagent · {subagent.type}</Text>
-        <Text style={[type.rowTitle, { color: c.text }]}>{mark(subagent.title)}</Text>
-        <View style={styles.line}>
-          <StatusDot state={state} />
-          <Text style={[type.caption, { color: subagent.failed ? c.destructive : c.muted }]}>{subagent.stepsLabel}</Text>
-          {subagent.detailsLabel ? <Text style={[type.caption, { color: c.muted }]}>{subagent.detailsLabel}</Text> : null}
-        </View>
-      </View>
-      <Chevron open={open} />
-    </Pressable>
+    <View style={styles.cardTop}>
+      <Pressable accessibilityRole="button" accessibilityLabel={`Subagent · ${subagent.type}, ${subagent.title}, ${subagent.stepsLabel}`}
+        accessibilityState={{ expanded: open }} onPress={onToggle} style={styles.cardHeader}>
+        <SubagentHeading tool={tool} subagent={subagent} />
+        <Chevron open={open} />
+      </Pressable>
+      {enabled && openTab ? <Pressable accessibilityRole="button" accessibilityLabel={`Open ${subagent.title} in a tab`} hitSlop={6}
+        onPress={() => openTab(tool.toolId)} style={styles.openTab}>
+        <Text style={[type.caption, { color: c.primaryAction }]}>Open</Text>
+      </Pressable> : null}
+    </View>
     {open ? <View style={[styles.cardBody, { borderColor: c.border }]}>
-      <Section label="Brief from the agent"><View style={{ opacity: 0.7 }}><Markdown text={subagent.brief} /></View></Section>
-      {subagent.children.length ? <Section label="Steps">{subagent.children.map((child) =>
-        child.kind === 'tool' ? <ToolRow key={child.key} tool={child} nested />
-          : child.kind === 'tool_group' ? <ToolGroupRow key={child.key} group={child} />
-            : child.kind === 'text' ? <AgentText key={child.key} text={child.text} streaming={child.key.startsWith('stream-')} />
-              : child.kind === 'thinking' ? <ThinkingRow key={child.key} text={child.text} /> : null,
-      )}</Section> : null}
-      <Section label="Result">{subagent.result !== null ? <Markdown text={subagent.result} /> : null}</Section>
+      <SubagentBody subagent={subagent} />
       {isPreview ? wholeStatus === 'loading' ? <Text style={[type.caption, { color: c.muted }]}>Loading the whole call</Text>
         : canLoad ? <ShowMore label={wholeStatus === 'failed' ? 'Could not load the whole call. Try again' : 'Show the whole call'} onPress={loadWhole} />
           : <Text style={[type.caption, { color: c.muted }]}>Preview. Open the session on the web for the whole output.</Text> : null}
     </View> : null}
   </View>;
+}
+
+function SubagentHeading({ tool, subagent }: { tool: ToolBlock; subagent: SubagentCardModel }) {
+  const c = useTheme();
+  const mark = useHighlighter();
+  const state = !tool.settled ? 'running' : tool.isError ? 'error' : 'done';
+  return <>
+    <SymbolView name={{ ios: 'person.2', android: 'group' }} size={16} tintColor={c.muted} />
+    <View style={{ flex: 1, gap: 4 }}>
+      <Text style={[type.caption, { color: c.muted }]}>Subagent · {subagent.type}</Text>
+      <Text style={[type.rowTitle, { color: c.text }]}>{mark(subagent.title)}</Text>
+      <View style={styles.line}>
+        <StatusDot state={state} />
+        <Text style={[type.caption, { color: subagent.failed ? c.destructive : c.muted }]}>{subagent.stepsLabel}</Text>
+        {subagent.detailsLabel ? <Text style={[type.caption, { color: c.muted }]}>{subagent.detailsLabel}</Text> : null}
+      </View>
+    </View>
+  </>;
+}
+
+/** The brief, the steps and the result of a subagent. Its own subagents get no tabs. */
+function SubagentBody({ subagent }: { subagent: SubagentCardModel }) {
+  const c = useTheme();
+  return <SubagentTabOpener.Provider value={null}>
+    <Section label="Brief from the agent"><View style={{ opacity: 0.7 }}><Markdown text={subagent.brief} /></View></Section>
+    {subagent.children.length ? <Section label="Steps">{subagent.children.map((child) =>
+      child.kind === 'tool' ? <ToolRow key={child.key} tool={child} nested />
+        : child.kind === 'tool_group' ? <ToolGroupRow key={child.key} group={child} />
+          : child.kind === 'text' ? <AgentText key={child.key} text={child.text} streaming={child.key.startsWith('stream-')} />
+            : child.kind === 'thinking' ? <ThinkingRow key={child.key} text={child.text} /> : null,
+    )}</Section> : null}
+    <Section label="Result">{subagent.result !== null ? <Markdown text={subagent.result} />
+      : subagent.running ? <Text style={[type.caption, { color: c.muted }]}>Still working</Text> : null}</Section>
+  </SubagentTabOpener.Provider>;
+}
+
+/** A subagent's own transcript, shown in its tab. Follows new steps while the reader is at the end. */
+export function SubagentTranscript({ tool }: { tool: ToolBlock }) {
+  const now = useNow();
+  const subagent = subagentCardModel(tool, true, now)!;
+  const ref = useRef<ComponentRef<typeof ScrollView>>(null);
+  const following = useRef(subagent.running);
+  return <ScrollView ref={ref} testID="subagent-transcript" accessibilityLabel={`Subagent transcript: ${subagent.title}`}
+    contentContainerStyle={styles.transcript} keyboardShouldPersistTaps="handled" scrollEventThrottle={100}
+    onScroll={(event) => {
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      following.current = contentSize.height - contentOffset.y - layoutMeasurement.height < 64;
+    }}
+    onContentSizeChange={() => { if (following.current) ref.current?.scrollToEnd({ animated: false }); }}>
+    <View style={styles.transcriptHeader}><SubagentHeading tool={tool} subagent={subagent} /></View>
+    <SubagentBody subagent={subagent} />
+  </ScrollView>;
 }
 
 const PREVIEW_LINES = 12;
@@ -206,7 +253,11 @@ export const ToolGroupRow = memo(function ToolGroupRow({ group, partial = [] }: 
 
 const styles = StyleSheet.create({
   subagent: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, marginVertical: 3 },
-  cardHeader: { flexDirection: 'row', alignItems: 'flex-start', padding: 12, gap: 8 },
+  cardTop: { flexDirection: 'row', alignItems: 'flex-start' },
+  cardHeader: { flex: 1, flexDirection: 'row', alignItems: 'flex-start', padding: 12, gap: 8 },
+  openTab: { paddingHorizontal: 10, paddingVertical: 12 },
+  transcript: { padding: 16, gap: 12 },
+  transcriptHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   cardBody: { borderTopWidth: StyleSheet.hairlineWidth, padding: 12, gap: 12 },
   tool: { paddingVertical: 3 },
   line: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 28 },

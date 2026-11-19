@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react';
-import { runningSubagentCount } from '@talyn/shared';
+import { nextRunningSubagentTab, runningSubagentCount, subagentTabs } from '@talyn/shared';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { Clock, X } from 'lucide-react';
 import { api } from '../../lib/api';
@@ -30,12 +30,25 @@ export function BackgroundChips({ workbenchId, chatId, canOpen }: { workbenchId:
   const wakeups = useScheduledWakeupsForChat(workbenchId, chatId ?? '');
   const now = useNow(jobs.length ? 1000 : wakeups.length ? 15_000 : null);
   const setSideTab = useWorkbenchStore((s) => s.setSideTab);
+  const subagentTab = useWorkbenchStore((s) => (chatId ? s.subagentTab[chatId] ?? null : null));
+  const openSubagentTab = useWorkbenchStore((s) => s.openSubagentTab);
   if (!jobs.length && !wakeups.length && !agents) return null;
   const open = canOpen ? () => setSideTab('background') : undefined;
   const hidden = jobs.length - MAX_JOB_CHIPS;
   return (
     <div className="mb-2 flex flex-wrap gap-1.5" data-testid="background-chips">
-      {agents > 0 && <span className={CHIP} role="status">{agents} {agents === 1 ? 'subagent' : 'subagents'} running</span>}
+      {agents > 0 && chatId && (
+        <button type="button" data-testid="subagent-chip" className={cn(CHIP, OPENS)}
+          aria-label={`${agents} ${agents === 1 ? 'subagent' : 'subagents'} running. Open a subagent's tab`}
+          onClick={() => {
+            // Each click opens the next running subagent, so repeated clicks go through all of them.
+            const next = nextRunningSubagentTab(subagentTabs(events ?? [], subagentTab), subagentTab);
+            if (next) openSubagentTab(chatId, next);
+          }}>
+          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-sky-500" aria-hidden />
+          {agents} {agents === 1 ? 'subagent' : 'subagents'} running
+        </button>
+      )}
       {jobs.slice(0, MAX_JOB_CHIPS).map((job) => (
         <OpenTarget key={job.id} open={open} testId="job-chip" label={`Background job ${job.name}: running for ${formatRunTime(job.startedAt, null, now)}`} title={job.command}>
           <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-emerald-500" aria-hidden />

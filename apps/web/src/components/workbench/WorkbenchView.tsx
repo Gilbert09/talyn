@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Loader2, Moon, RefreshCw } from 'lucide-react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { api } from '../../lib/api';
@@ -15,6 +15,8 @@ import { isThread } from '../../lib/threads';
 import { WorkbenchHeader } from './WorkbenchHeader';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
 import { WorkbenchTranscript } from './WorkbenchTranscript';
+import { SubagentTabOpener, SubagentTranscript } from './AgentBlocks';
+import { SubagentTabBar, useSubagentTabs } from './SubagentTabs';
 import { trackEvent } from '../../lib/analytics';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { isStarting, StartingHint } from './WorkbenchStarting';
@@ -109,27 +111,38 @@ export function ChatView({
   // The whole chat column takes image drops, not only the composer strip.
   const attachRef = useRef<((files: File[]) => void) | null>(null);
   const { dragging, dropProps } = useImageDropZone((files) => attachRef.current?.(files));
+  const subagents = useSubagentTabs(chat?.id ?? null, state.events);
+  const showingSubagent = subagents.current !== null;
+  const agentEvents = useMemo(() => (showingSubagent ? state.events.map((entry) => entry.event) : []), [showingSubagent, state.events]);
+  const openSubagentTab = useWorkbenchStore((s) => s.openSubagentTab);
+  const chatId = chat?.id;
+  const openTab = useCallback((toolId: string) => { if (chatId) openSubagentTab(chatId, toolId); }, [chatId, openSubagentTab]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col" data-attr="workbench-chat-drop-zone" {...dropProps}>
       <ImageDropOverlay dragging={dragging} />
+      {chat && subagents.tabs.length > 0 && <SubagentTabBar chatId={chat.id} tabs={subagents.tabs} current={subagents.current} />}
       <div className="min-h-0 flex-1">
-        {chat ? (
-          <WorkbenchTranscript
-            chat={chat}
-            events={state.events}
-            loading={state.loading}
-            error={state.error}
-            ops={ops}
-            canRetry={queued === 0 && workbench.status !== 'error' && workbench.sandboxState !== 'error'}
-            emptyHint={startingHint}
-            older={{
-              hasOlder: state.hasOlder,
-              loading: state.loadingOlder,
-              error: state.olderError,
-              load: () => loadOlderEvents(chat.id),
-            }}
-          />
+        {chat && subagents.current ? (
+          <SubagentTranscript block={subagents.current.block} events={agentEvents} />
+        ) : chat ? (
+          <SubagentTabOpener.Provider value={openTab}>
+            <WorkbenchTranscript
+              chat={chat}
+              events={state.events}
+              loading={state.loading}
+              error={state.error}
+              ops={ops}
+              canRetry={queued === 0 && workbench.status !== 'error' && workbench.sandboxState !== 'error'}
+              emptyHint={startingHint}
+              older={{
+                hasOlder: state.hasOlder,
+                loading: state.loadingOlder,
+                error: state.olderError,
+                load: () => loadOlderEvents(chat.id),
+              }}
+            />
+          </SubagentTabOpener.Provider>
         ) : (
           <div className="flex h-full items-center justify-center bg-background px-6 text-center text-xs text-muted-foreground">
             {startingHint ?? 'No chat yet. Send a message to start one.'}
