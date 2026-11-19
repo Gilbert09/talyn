@@ -145,13 +145,63 @@ describe('subagents in the conversation', () => {
     const call = (id: string) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Agent', input: { description: id } }] } });
     transcript([ev(1, call('old'), 1), ev(2, call('current'), 2)]);
     await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await screen.findByText('current')).toBeVisible();
+    expect((await screen.findAllByText('current'))[0]).toBeVisible();
     expect(Boolean(screen.queryByText('1 subagent running'))).toBe(enabled);
+    expect(Boolean(screen.queryByRole('tab', { name: 'Subagent current, running' }))).toBe(enabled);
     expect(screen.queryByText('2 subagents running')).toBeNull();
     await act(async () => mockActive.emit('workbench:event', { workspaceId: 'one', chatId: 'chat-one', events: [
       ev(3, { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'current', content: 'done' }] } }, 2),
     ] }));
     expect(screen.queryByText('1 subagent running')).toBeNull();
+  });
+
+  const agent = (id: string, description: string) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Agent',
+    input: { subagent_type: 'Explore', description, prompt: `Brief for ${description}.` } }] } });
+  const step = (id: string, parent: string) => ({ type: 'assistant', parent_tool_use_id: parent,
+    message: { content: [{ type: 'tool_use', id, name: 'Grep', input: { pattern: 'entry' } }] } });
+
+  it('opens each running subagent from the chip, then goes back to the main transcript', async () => {
+    mockActive.api.features.get.mockResolvedValue({ workbenches: true, sessionSubagents: true });
+    mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ status: 'running', agent: 'claude' })] }));
+    transcript([ev(1, agent('a', 'Find the entry')), ev(2, agent('b', 'Check the tests')), ev(3, step('g', 'a'))]);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    const chip = await screen.findByRole('button', { name: "2 subagents running. Open a subagent's tab" });
+    expect(screen.getByRole('tab', { name: 'Main transcript', selected: true })).toBeVisible();
+    await fireEvent.press(chip);
+    expect(screen.getByRole('tab', { name: 'Subagent Find the entry, running', selected: true })).toBeVisible();
+    expect(screen.getByTestId('subagent-transcript')).toBeVisible();
+    expect(screen.getByText('Brief for Find the entry.')).toBeVisible();
+    expect(screen.getByText('Still working')).toBeVisible();
+    await fireEvent.press(chip);
+    expect(screen.getByRole('tab', { name: 'Subagent Check the tests, running', selected: true })).toBeVisible();
+    expect(screen.getByText('Brief for Check the tests.')).toBeVisible();
+    await fireEvent.press(screen.getByRole('tab', { name: 'Main transcript' }));
+    expect(screen.queryByTestId('subagent-transcript')).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Main transcript', selected: true })).toBeVisible();
+  });
+
+  it('opens a subagent tab from the card and shows its result when it ends', async () => {
+    mockActive.api.features.get.mockResolvedValue({ workbenches: true, sessionSubagents: true });
+    mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ status: 'running', agent: 'claude' })] }));
+    transcript([ev(1, agent('a', 'Find the entry'))]);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Open Find the entry in a tab' }));
+    expect(screen.getByTestId('subagent-transcript')).toBeVisible();
+    await act(async () => mockActive.emit('workbench:event', { workspaceId: 'one', chatId: 'chat-one', events: [
+      ev(2, { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'a', content: 'Found it in main.ts.' }] } }),
+    ] }));
+    expect(screen.getByText('Found it in main.ts.')).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Subagent Find the entry', selected: true })).toBeVisible();
+  });
+
+  it('shows no tabs and no Open button with the flag off', async () => {
+    mockActive.api.features.get.mockResolvedValue({ workbenches: true, sessionSubagents: false });
+    mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ status: 'running', agent: 'claude' })] }));
+    transcript([ev(1, agent('a', 'Find the entry'))]);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(await screen.findByText('Find the entry')).toBeVisible();
+    expect(screen.queryByRole('tab', { name: 'Main transcript' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open Find the entry in a tab' })).toBeNull();
   });
 
   it('shows the stopped subagents note with the flag off', async () => {

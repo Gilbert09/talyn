@@ -1,4 +1,4 @@
-import { runningSubagentCount, type ToolBlock, type Workbench } from '@talyn/shared';
+import { nextRunningSubagentTab, runningSubagentCount, subagentTabs, type ToolBlock, type Workbench } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ReactNode } from 'react';
 import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View, type TextInput } from 'react-native';
@@ -19,11 +19,13 @@ import { chatActions } from './actions';
 import { Composer } from './Composer';
 import { FindBar } from './FindBar';
 import { fullToolFrom, TranscriptContext, toolSeq, type TranscriptActions } from './fullTool';
-import { TypingDots } from './Pulse';
+import { StatusDot, TypingDots } from './Pulse';
 import { RowBoundary } from './RowBoundary';
 import { TranscriptRowCache, type TranscriptRow as Row } from './transcript';
 import { findMatches, matchCountLabel, normalizeQuery, selectedIndex, stepIndex, type FindMatch, type FindSelection } from './transcriptFind';
 import { TranscriptRow, type PlanControls, type QuestionControls } from './TranscriptRow';
+import { SubagentTabBar } from './SubagentTabs';
+import { SubagentTabOpener, SubagentTranscript } from './ToolRow';
 
 /** How close to the newest message still counts as following new output. */
 const FOLLOW_DISTANCE = 64;
@@ -61,6 +63,12 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
   const runningAgents = useMemo(() => subagents && chat?.status === 'running'
     ? runningSubagentCount((state.data?.events ?? []).filter((entry) => entry.turn === state.data?.events.at(-1)?.turn).map((entry) => entry.event)) : 0,
   [subagents, chat?.status, state.data]);
+  // The subagent tab shown, by Agent call id. Null shows the conversation. Another chat starts on the conversation.
+  const [subagentTab, setSubagentTab] = useState<{ chatId: string; toolId: string } | null>(null);
+  const selectedTab = subagentTab && subagentTab.chatId === chat?.id ? subagentTab.toolId : null;
+  const tabs = useMemo(() => subagents ? subagentTabs(state.data?.events ?? [], selectedTab) : [], [subagents, state.data, selectedTab]);
+  const currentTab = tabs.find((tab) => tab.toolId === selectedTab) ?? null;
+  const openTab = useCallback((toolId: string | null) => setSubagentTab(toolId && chat ? { chatId: chat.id, toolId } : null), [chat]);
   const cache = useRef(new TranscriptRowCache());
   /** The reader reached the oldest loaded message while another load ran. The older page is owed once it ends. */
   const olderOwed = useRef(false);
@@ -176,8 +184,13 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
     <FleetReconnectNotice />
     {findOpen ? <FindBar query={query} onChangeQuery={changeQuery} count={matches.length} label={matchCountLabel(current, matches.length, query)}
       partial={Boolean(data?.hasOlder)} focusKey={find} onPrevious={() => step(-1)} onNext={() => step(1)} onClose={closeFind} /> : null}
-    <View style={{ flex: 1 }}>
-      <RowBoundary label="The conversation" resetKey={chat?.id} retry><TranscriptContext.Provider value={actions}>
+    {tabs.length ? <SubagentTabBar tabs={tabs} current={currentTab} onSelect={openTab} /> : null}
+    {currentTab ? <View style={{ flex: 1 }}>
+      <RowBoundary label="The subagent" resetKey={currentTab.toolId} retry><TranscriptContext.Provider value={actions}>
+        <SubagentTranscript tool={currentTab.block} />
+      </TranscriptContext.Provider></RowBoundary>
+    </View> : <View style={{ flex: 1 }}>
+      <RowBoundary label="The conversation" resetKey={chat?.id} retry><TranscriptContext.Provider value={actions}><SubagentTabOpener.Provider value={openTab}>
       <FlatList ref={ref} key={chat?.id ?? item.id} inverted data={rows} keyExtractor={(row) => row.key} accessibilityRole="list" accessibilityLabel="Conversation transcript"
         initialNumToRender={14} maxToRenderPerBatch={10} windowSize={9} contentContainerStyle={[styles.content, local_.content]}
         contentOffset={{ x: 0, y: local.offset }} scrollEventThrottle={100}
@@ -223,7 +236,7 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
             && !chat.queuedMessages?.length ? <TurnFailureActions chatId={chat.id} workbenchId={item.id} text={row.text}
               reconnect={row.reason === 'reauth'} resumeAt={chat.resumeAt} resumeReason={chat.resumeReason} disabled={offline || !ready} /> : null}
         </View>} />
-      </TranscriptContext.Provider></RowBoundary>
+      </SubagentTabOpener.Provider></TranscriptContext.Provider></RowBoundary>
       {startHint ? <View pointerEvents="box-none" style={local_.startHint}>
         <StartingHint workbench={item} queued={chat?.queuedMessages.length ?? 0} canWrite={Boolean(chat)} />
       </View> : null}
@@ -231,8 +244,15 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
         style={[local_.jump, { backgroundColor: c.elevated, borderColor: c.border }]}>
         <SymbolView name={{ ios: 'arrow.down', android: 'arrow_downward' }} size={16} tintColor={c.text} />
       </Pressable> : null}
-    </View>
-    {runningAgents > 0 ? <AppText variant="caption" tone="muted">{runningAgents} {runningAgents === 1 ? 'subagent' : 'subagents'} running</AppText> : null}
+    </View>}
+    {runningAgents > 0 ? <Pressable accessibilityRole="button" testID="subagent-chip" hitSlop={6}
+      accessibilityLabel={`${runningAgents} ${runningAgents === 1 ? 'subagent' : 'subagents'} running. Open a subagent's tab`}
+      // Each tap opens the next running subagent, so repeated taps go through all of them.
+      onPress={() => { const next = nextRunningSubagentTab(tabs, selectedTab); if (next) openTab(next); }}
+      style={[local_.chip, { borderColor: c.border, backgroundColor: c.surface }]}>
+      <StatusDot state="running" />
+      <AppText variant="caption" tone="muted">{runningAgents} {runningAgents === 1 ? 'subagent' : 'subagents'} running</AppText>
+    </Pressable> : null}
     {chat ? <Composer item={item} chatId={chat.id} ready={ready} inputRef={inputRef} />
       : startHint ? null : <AppText variant="meta" tone="muted" style={local_.empty}>No conversation is available for this item.</AppText>}
   </View>;
@@ -242,6 +262,8 @@ const local_ = StyleSheet.create({
   content: { paddingTop: 8, paddingBottom: 12 },
   current: { borderRadius: radius.md, marginHorizontal: -6, paddingHorizontal: 6 },
   working: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
+  chip: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, marginBottom: 6, paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: 999, borderWidth: StyleSheet.hairlineWidth },
   top: { gap: 8, paddingBottom: 8 },
   older: { height: 28, alignItems: 'center', justifyContent: 'center' },
   note: { textAlign: 'center' },

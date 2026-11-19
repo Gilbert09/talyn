@@ -221,6 +221,8 @@ interface WorkbenchState {
   /** The chat shown per workbench. */
   selectedChatByWorkbench: Record<string, string>;
   sideTab: WorkbenchSideTab;
+  /** The subagent tab shown per chat, by Agent tool call id. Absent: the main transcript. */
+  subagentTab: Record<string, string>;
   /** The right panel (files, changes, pull request and the terminal dock). ⌘⌥B. */
   rightPanelOpen: boolean;
   rightPanelWidth: number;
@@ -268,6 +270,8 @@ interface WorkbenchState {
   selectWorkbench: (id: string | null) => void;
   selectChat: (workbenchId: string, chatId: string) => void;
   setSideTab: (tab: WorkbenchSideTab) => void;
+  /** Show a subagent's tab in the chat's transcript, or the main transcript with null. */
+  openSubagentTab: (chatId: string, toolId: string | null) => void;
   /** The Talyn pull request id shown in the session's details overlay, or null. */
   prDetailId: string | null;
   openPrDetail: (pullRequestId: string | null) => void;
@@ -334,6 +338,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   selectedWorkbenchId: null,
   selectedChatByWorkbench: {},
   sideTab: initialLayout.gitPanelTab,
+  subagentTab: {},
   prDetailId: null,
   rightPanelOpen: true,
   rightPanelWidth: initialLayout.gitPanelWidth,
@@ -529,6 +534,13 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     writeLayout({ dockHeight: terminalHeight });
   },
   setTerminalTab: (terminalTab) => set({ terminalTab, terminalOpen: true, rightPanelOpen: true }),
+  openSubagentTab: (chatId, toolId) =>
+    set((s) => {
+      const subagentTab = { ...s.subagentTab };
+      if (toolId) subagentTab[chatId] = toolId;
+      else delete subagentTab[chatId];
+      return { subagentTab };
+    }),
 
   setDraft: (key, text) =>
     set((s) => {

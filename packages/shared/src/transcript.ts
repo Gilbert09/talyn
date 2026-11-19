@@ -1648,3 +1648,55 @@ export function runningSubagentCount(events: AgentEvent[]): number {
   }
   return open.size;
 }
+
+/** A subagent that the transcript shows in its own tab. */
+export interface SubagentTab {
+  toolId: string;
+  /** The chat turn that started the subagent. */
+  turn: number;
+  block: ToolBlock;
+}
+
+/**
+ * The subagents for the transcript's tabs: each Agent call of the latest turn
+ * that started one, plus `keep` (a subagent that the person opened from an
+ * older card). Builds blocks only for those turns.
+ */
+export function subagentTabs(
+  entries: readonly { turn: number; event: AgentEvent; createdAt?: string }[],
+  keep?: string | null,
+): SubagentTab[] {
+  const turnOf = new Map<string, number>();
+  for (const { turn, event } of entries) {
+    const content = event.message?.content;
+    if (event.type !== 'assistant' || isSubagentEvent(event) || !Array.isArray(content)) continue;
+    for (const part of content) {
+      if (part?.type === 'tool_use' && typeof part.id === 'string' && isSubagentTool(String(part.name ?? ''))) turnOf.set(part.id, turn);
+    }
+  }
+  if (!turnOf.size) return [];
+  const latest = Math.max(...turnOf.values());
+  const keepTurn = keep ? turnOf.get(keep) : undefined;
+  const turns = [...new Set(keepTurn === undefined ? [latest] : [keepTurn, latest])].sort((a, b) => a - b);
+  const tabs: SubagentTab[] = [];
+  for (const turn of turns) {
+    const events = entries.filter((entry) => entry.turn === turn).map(({ event, createdAt }) =>
+      isSubagentEvent(event) ? { ...event, timestamp: event.timestamp ?? createdAt } : event);
+    for (const block of mergeToolBlocks(buildBlocks(events))) {
+      if (block.kind !== 'tool' || turnOf.get(block.toolId) !== turn) continue;
+      if (turn === latest || block.toolId === keep) tabs.push({ toolId: block.toolId, turn, block });
+    }
+  }
+  return tabs;
+}
+
+/**
+ * The tab that the "subagents running" chip opens: the next running subagent
+ * after `current`, back to the first after the last. Null when none runs.
+ */
+export function nextRunningSubagentTab(tabs: readonly SubagentTab[], current: string | null, now = Date.now()): string | null {
+  const running = tabs.filter((tab) => subagentCardModel(tab.block, true, now)?.running);
+  if (!running.length) return null;
+  const index = running.findIndex((tab) => tab.toolId === current);
+  return running[(index + 1) % running.length].toolId;
+}

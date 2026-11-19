@@ -78,7 +78,14 @@ Nested steps stay out of the main conversation.
 
 When Claude sends task details, the card shows the current activity, token count, tool count and elapsed time.
 Older transcripts use the card's own step count. A chip shows how many subagents still run in the current turn.
-The extra steps, details and count require the `session-subagents` feature flag.
+
+Each subagent of the latest turn that started subagents also has a tab above the transcript. The first tab, **Main**, shows the conversation.
+A subagent's tab shows its brief, its steps as they happen, and its result.
+Click the chip to open the tab of a running subagent. Click the chip again to open the next running subagent.
+To open the tab of a subagent from an earlier turn, click **Open** on its card.
+Tabs work the same way in web, desktop and mobile.
+
+The extra steps, details, count and tabs require the `session-subagents` feature flag.
 If a turn ends with open subagents, Talyn adds a note that those subagents stopped.
 
 ## Find in the transcript
