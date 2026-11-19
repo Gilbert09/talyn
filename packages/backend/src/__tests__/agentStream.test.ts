@@ -317,7 +317,9 @@ describe('createClaudeStreamParser', () => {
 
   it('renders through buildBlocks as text, tool calls, results and a result card', () => {
     const blocks = buildBlocks(sequence(feed(createClaudeStreamParser(), claudeStream)));
-    expect(blocks.map((b) => b.kind)).toEqual(['text', 'tool_use', 'tool_result', 'tool_use', 'text', 'tool_result', 'text', 'result']);
+    // The subagent's own message ('subagent says hi') belongs to its Agent call, not the main transcript.
+    expect(blocks.map((b) => b.kind)).toEqual(['text', 'tool_use', 'tool_result', 'tool_use', 'tool_result', 'text', 'result']);
+    expect(blocks.some((b) => b.kind === 'text' && b.text.includes('subagent says hi'))).toBe(false);
     const merged = mergeToolBlocks(blocks);
     const bash = merged.find((b) => b.kind === 'tool' && b.name === 'Bash');
     expect(bash).toMatchObject({ settled: true, output: '3 passing', isError: false });
