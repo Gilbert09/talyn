@@ -27,7 +27,7 @@ export const site = {
    * When the home, pricing, download and about pages last changed, as the
    * sitemap's lastmod. Move it when one of those pages changes.
    */
-  updated: "2026-11-10",
+  updated: "2026-11-19",
 };
 
 /**
@@ -102,7 +102,7 @@ export const hero = {
   // after an install.
   // Carries the price too: "What does it cost?" is a top FAQ question, and
   // half of visitors never scroll past the hero.
-  microtrust: "Free with 10 box-hours a month. For GitHub, on macOS, Windows, Linux or your browser.",
+  microtrust: "Free with 10 box-hours a month, and unlimited local worktree sessions. For GitHub, on macOS, Windows, Linux or your browser.",
 };
 
 /**
@@ -202,6 +202,8 @@ export const pricing = {
   annualBadge: "2 months free",
   boxHour:
     "A box-hour is one standard box running for one hour. Smaller boxes use less of your allowance and bigger boxes use more. Billing is per running second, and a sleeping box costs nothing.",
+  local:
+    "Local sessions are free on every plan, with no limit. In the desktop app, a session can run in a git worktree on your own machine, with your own tools and your own Claude Code or Codex. It uses no box, so it uses no box-hours and does not count toward the boxes running at once.",
   tiers: [
     {
       name: "Free",
@@ -212,6 +214,7 @@ export const pricing = {
       periodAnnualNote: null,
       blurb: "The whole app, 10 box-hours a month, and no card to start.",
       features: [
+        "Unlimited local sessions in git worktrees, in the desktop app",
         "10 box-hours a month",
         "Small and standard boxes",
         "Up to 2 boxes running at once",
@@ -343,6 +346,10 @@ export const pricingFaq = [
     a: "Work that is already running finishes. Nothing new starts until you add credits or your hours reset at the start of the next month. Runs that Talyn starts for you, such as scheduled automations and merge queue fixes, wait with a notice in the app and start once there is room. Talyn never stops a run part way through.",
   },
   {
+    q: "Do local sessions cost anything?",
+    a: "No. A local session runs in a git worktree on your own machine, in the desktop app. It uses no box, so it uses no box-hours and does not count toward the boxes running at once. Local sessions are free and unlimited on every plan, including Free. You still get the diff, the pull request, the checks and the merge queue in Talyn.",
+  },
+  {
     q: "Do idle boxes cost anything?",
     a: "No. A box that has been idle for 3 minutes goes to sleep, and a sleeping box is free. You only pay for the seconds a box is awake and running.",
   },
@@ -412,7 +419,7 @@ export const faq = [
   },
   {
     q: "What does it cost?",
-    a: "Free includes 10 box-hours a month. Pro is $40 a month ($400 a year) and includes 200 box-hours, every box size and up to 100 boxes at once. Max is $100 a month for 1,000 box-hours. A box is the sandbox a session or an agent run uses, and it counts only while it is awake. The model runs on your own Claude or ChatGPT plan, so you pay us for the machines, not the model.",
+    a: "Free includes 10 box-hours a month. Pro is $40 a month ($400 a year) and includes 200 box-hours, every box size and up to 100 boxes at once. Max is $100 a month for 1,000 box-hours. A box is the sandbox a session or an agent run uses, and it counts only while it is awake. The model runs on your own Claude or ChatGPT plan, so you pay us for the machines, not the model. Local sessions in the desktop app run in a git worktree on your machine, and they are free and unlimited on every plan.",
   },
   {
     q: "What platforms are supported?",

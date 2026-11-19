@@ -163,7 +163,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         heading: "Local when you want it",
         paragraphs: [
-          "On the desktop app, a session can also run in a git worktree on your own machine, with your own tools. You can also move a Claude Code conversation from your computer into a sandbox and carry on there.",
+          "On the desktop app, a session can also run in a git worktree on your own machine, with your own tools. A local session uses no box, so it is free and unlimited on every plan. You can also move a Claude Code conversation from your computer into a sandbox and carry on there.",
         ],
       },
     ],
@@ -174,11 +174,11 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
       {
         q: "How many sessions can I run at once?",
-        a: "Two sandboxes at once on the free plan and up to 100 on Pro, counted across all your workspaces.",
+        a: "Two sandboxes at once on the free plan and up to 100 on Pro, counted across all your workspaces. Local sessions in the desktop app have no limit.",
       },
       {
         q: "What does a session cost?",
-        a: "Its sandbox uses box-hours while it is awake: 10 a month on the free plan, 200 on Pro. A sleeping sandbox uses none. The model runs on your own subscription, so there is no token bill from us.",
+        a: "Its sandbox uses box-hours while it is awake: 10 a month on the free plan, 200 on Pro. A sleeping sandbox uses none. The model runs on your own subscription, so there is no token bill from us. A local session in a git worktree on your machine is free and uses no box-hours.",
       },
       {
         q: "Does Talyn push my work to save it?",
@@ -190,10 +190,10 @@ export const FEATURE_PAGES: FeaturePage[] = [
       },
     ],
     planNote:
-      "Free: 10 box-hours a month and two sandboxes at once. Pro: 200 box-hours and up to 100 at once. Max: 1,000 box-hours.",
+      "Free: 10 box-hours a month and two sandboxes at once. Pro: 200 box-hours and up to 100 at once. Max: 1,000 box-hours. Local sessions are free and unlimited on every plan.",
     related: ["threads", "fix-pull-requests", "agents"],
     relatedCompare: ["conductor", "t3-code", "cursor-background-agents"],
-    updated: "2026-11-04",
+    updated: "2026-11-19",
   },
 
   {

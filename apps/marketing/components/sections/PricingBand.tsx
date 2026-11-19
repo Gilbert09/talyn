@@ -34,7 +34,9 @@ export function PricingBand() {
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-ink-500">
             Free includes 10 box-hours a month. Pro includes 200, and Max is
-            $100 a month for 1,000. A sleeping sandbox costs nothing.
+            $100 a month for 1,000. A sleeping sandbox costs nothing, and
+            local sessions in a git worktree on your machine are free and
+            unlimited on every plan.
           </p>
           <a
             href="/pricing"
