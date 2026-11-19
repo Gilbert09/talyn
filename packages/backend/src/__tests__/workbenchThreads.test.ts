@@ -512,6 +512,48 @@ describe('threads', () => {
       expect(emitted.some((e) => e.type === 'workbench:event' && (e.payload as Loose).chatId === parentChatId)).toBe(true);
     });
 
+    it.each([false, true])('notifies a normal parent with notifyParent=%s', async (notifyParent) => {
+      const parent = await createSession();
+      const parentChat = await threadChat(parent.id);
+      const child = await createSession({ parentId: parent.id, notifyParent, prompt: 'child task' });
+      expect(child.parentId).toBe(parent.id);
+      const childChat = await threadChat(child.id);
+      await idle(childChat);
+      await vi.waitFor(async () => expect(await cards(parentChat)).toEqual([
+        expect.objectContaining({ action: 'session_finished', sessionId: child.id }),
+      ]));
+      if (notifyParent) await vi.waitFor(async () => expect(await talynMessages(parentChat)).toHaveLength(1));
+      else expect(await talynMessages(parentChat)).toHaveLength(0);
+      await idle(parentChat);
+      const row = (await getWorkbench(child.id))!;
+      await Promise.all([notifyThread(row, 'session_finished', { chatId: childChat }), notifyThread(row, 'session_finished', { chatId: childChat })]);
+      expect(await talynMessages(parentChat)).toHaveLength(notifyParent ? 1 : 0);
+      const listed = await call('GET', `/workbenches/${parent.id}/sessions`);
+      expect(listed.body.data.map((item: { id: string }) => item.id)).toEqual([child.id]);
+    });
+
+    it('adds parent PR cards without a wake and ignores self events', async () => {
+      const parent = await createSession();
+      const parentChat = await threadChat(parent.id);
+      const child = await createSession({ parentId: parent.id, notifyParent: true });
+      const row = (await getWorkbench(child.id))!;
+      for (const action of ['pr_opened', 'pr_merged'] as const) await notifyThread(row, action);
+      await notifyThread({ ...(await getWorkbench(parent.id))!, parentWorkbenchId: parent.id }, 'session_finished');
+      expect((await cards(parentChat)).map((event) => event.action)).toEqual(['pr_opened', 'pr_merged']);
+      expect(await talynMessages(parentChat)).toHaveLength(0);
+    });
+
+    it('gates parent notifications and child lists', async () => {
+      const parent = await createSession();
+      const parentChat = await threadChat(parent.id);
+      const child = await createSession({ parentId: parent.id, notifyParent: true });
+      vi.stubEnv('SESSION_SUBAGENTS_ENABLED', '0');
+      resetFeatureFlagsForTests();
+      await notifyThread((await getWorkbench(child.id))!, 'session_finished');
+      expect(await cards(parentChat)).toHaveLength(0);
+      expect((await call('GET', `/workbenches/${parent.id}/sessions`)).status).toBe(409);
+    });
+
     it('keeps one waiting wake when several sessions change during a thread turn', async () => {
       let release!: () => void;
       const hold = new Promise<void>((resolve) => { release = resolve; });

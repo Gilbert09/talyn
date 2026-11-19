@@ -217,3 +217,21 @@ An older sandbox can run only one agent. When you have connected the other agent
 The restart keeps your branch and uncommitted changes. It starts after all running turns end.
 Running processes stop. Large ignored files may not transfer.
 If the transfer fails, the session keeps its old sandbox.
+
+## Child sessions
+
+Use a subagent for searches, reviews, or independent work on the current branch that finishes within the turn.
+Claude supports background Agent calls with `run_in_background: true`.
+The chat stays running until the process exits, after those subagents finish.
+For long shell commands, use `talyn_run_background`. Bash background calls, `&`, and `nohup` remain unsupported.
+
+Use a child session for another repository, a separate branch and pull request, or work beyond the current turn.
+Each child has its own box. It spends box-hours and counts against the concurrent box limit.
+The child header links to its parent. The parent shows a **Sessions started** list with each child's status.
+These controls appear in web, desktop, and mobile when `session-subagents` is enabled.
+
+A parent gets cards when a child ends a turn, opens a pull request, or merges one.
+Set `notify_parent: true` on `talyn_create_session` to wake a normal parent when the child's turn ends.
+The default adds cards without a wake. Thread notifications keep their existing behavior.
+Use `talyn_list_thread_sessions` to follow children from a normal session.
+The `talyn-delegate` skill explains these choices and costs.

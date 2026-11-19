@@ -93,7 +93,7 @@ describe('talyn_restart_session', () => {
   ])('refuses %s, and changes nothing', async (_name, ctx, target) => {
     const { calls } = mockApi({ 'GET /api/v1/workbenches/other': () => target });
     await expect(tool('restart_session').handler(OWNER, { session_id: 'other' }, ctx)).rejects.toThrow(
-      'A session can restart itself, or a session in its thread.'
+      'A session can restart itself, a child, or a session in its thread.'
     );
     expect(calls.every((c) => c.method === 'GET')).toBe(true);
   });

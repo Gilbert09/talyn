@@ -543,6 +543,8 @@ export async function createSessionInSpace(
       ...(body.namingText !== undefined ? { namingText: body.namingText } : {}),
       ...(body.internetAccess !== undefined ? { internetAccess: body.internetAccess } : {}),
       ...(body.autoCreatePr !== undefined ? { autoCreatePr: body.autoCreatePr } : {}),
+      ...(body.parentId !== undefined ? { parentId: body.parentId } : {}),
+      ...(body.notifyParent !== undefined ? { notifyParent: body.notifyParent } : {}),
       spaceId,
     },
     actor,

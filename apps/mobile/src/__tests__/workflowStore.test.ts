@@ -247,6 +247,18 @@ describe('text delivery without automatic resend', () => {
 });
 
 describe('targeted invalidation and stale-while-revalidate', () => {
+  it('patches parent links and child status without a refetch', async () => {
+    const { store, api, emit } = active;
+    api.workbenches.threadSessions.mockResolvedValueOnce([session({ id: 'child', parentId: 'session-one' })]);
+    await store.load('children', 'session-one');
+    expect(store.read<Workbench[]>('children', 'session-one').data).toHaveLength(1);
+    emit('workbench:updated', { workbench: session({ id: 'child', parentId: 'session-one', status: 'error' }) });
+    expect(store.read<Workbench[]>('children', 'session-one').data?.[0].status).toBe('error');
+    emit('workbench:updated', { workbench: session({ id: 'child', parentId: null }) });
+    expect(store.read<Workbench[]>('children', 'session-one').data).toEqual([]);
+    expect(api.workbenches.threadSessions).toHaveBeenCalledTimes(1);
+  });
+
   it('patches the named workbench in place and leaves other workbenches alone', async () => {
     const { store, api, emit } = active;
     const stopA = store.watch('workbench', 'session-one'); const stopB = store.watch('workbench', 'session-two'); await settle();

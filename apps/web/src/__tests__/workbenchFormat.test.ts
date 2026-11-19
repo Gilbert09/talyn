@@ -217,6 +217,15 @@ describe('chatTotals', () => {
     expect(totals.outputTokens).toBe(25);
   });
 
+  it('counts two cumulative results as one turn and one process cost', () => {
+    const stamp = { kind: 'process_result', attempt: 0 };
+    const entries = [
+      { ...result(1, { total_cost_usd: 0.1, talyn: stamp, usage: { input_tokens: 10 } }), turn: 1 },
+      { ...result(2, { total_cost_usd: 0.3, talyn: stamp, usage: { input_tokens: 30 } }), turn: 1 },
+    ];
+    expect(chatTotals(entries)).toMatchObject({ turns: 1, costUsd: 0.3, inputTokens: 30 });
+  });
+
   it('has no cost when no turn reported one', () => {
     expect(chatTotals([result(1, { usage: { output_tokens: 4 } })])).toEqual({
       turns: 1,

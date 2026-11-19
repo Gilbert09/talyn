@@ -583,11 +583,11 @@ async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): P
     // The thread hears about a new pull request in the `session_finished` wake below, not in a second one.
     const linked = await linkPullRequest(wb, { notifyThread: false });
     if (linked.pullRequestId !== wb.pullRequestId) await emitWorkbenchUpdated(await publicWorkbench(linked));
-    if (linked.threadId) {
+    if (linked.threadId || linked.parentWorkbenchId) {
       if (linked.pullRequestId && linked.pullRequestId !== wb.pullRequestId) await notifyThread(linked, 'pr_opened', { wake: false });
       // A queued message already started the next turn: the thread hears when that one ends.
-      if (chat.status === 'awaiting_input') await notifyThread(linked, 'needs_input', { status: chat.status, chatId: chat.id });
-      else if (chat.status !== 'running') await notifyThread(linked, 'session_finished', { status: chat.status });
+      if (chat.status === 'awaiting_input') await notifyThread(linked, 'needs_input', { status: chat.status, chatId: chat.id, turn: chat.turnCount });
+      else if (chat.status !== 'running') await notifyThread(linked, 'session_finished', { status: chat.status, chatId: chat.id, turn: chat.turnCount });
     }
     // The turn may have fixed the PR, so the merge queue and auto-keep look again.
     if (linked.pullRequestId) notifyPrSessionChanged(linked.workspaceId, linked.pullRequestId, 'session:turn_end');
@@ -1847,6 +1847,9 @@ async function followTurnOutput(
         }
         const parsed = record.stream === 'stdout' ? parser.push(record.line) : [];
         return parsed.map((draft) => {
+          if (draft.type === 'result' && !draft.parent_tool_use_id) {
+            return { ...draft, talyn: { kind: 'process_result', turn, attempt } };
+          }
           if (draft.type !== 'system' || draft.subtype !== 'init' || !record.timing) return draft;
           const { queuedAt, spawnedAt, at } = record.timing;
           if (![queuedAt, spawnedAt, at].every(Number.isFinite) || spawnedAt < queuedAt || at < spawnedAt) return draft;

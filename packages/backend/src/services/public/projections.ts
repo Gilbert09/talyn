@@ -132,6 +132,7 @@ export const PUBLIC_SESSION_COLUMNS = {
   spaceId: workbenchesTable.spaceId,
   kind: workbenchesTable.kind,
   threadId: workbenchesTable.threadId,
+  parentId: workbenchesTable.parentWorkbenchId,
   repositoryId: workbenchesTable.repositoryId,
   repoFullName: workbenchesTable.repoFullName,
   name: workbenchesTable.name,
@@ -161,6 +162,7 @@ export interface PublicSessionRow {
   spaceId: string | null;
   kind: string;
   threadId: string | null;
+  parentId: string | null;
   repositoryId: string | null;
   repoFullName: string;
   name: string;
@@ -209,6 +211,7 @@ export function toPublicSession(row: PublicSessionRow, chats?: PublicChatRow[]) 
     space_id: row.spaceId ?? null,
     kind: row.kind === 'thread' ? ('thread' as const) : ('session' as const),
     thread_id: row.threadId ?? null,
+    parent_id: row.parentId ?? null,
     repository_id: row.repositoryId ?? null,
     repository_full_name: row.repoFullName || null,
     name: row.name,

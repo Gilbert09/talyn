@@ -42,6 +42,7 @@ import {
 import type { SessionResizeResult } from '../../services/workbenches/resize.js';
 import type { SessionRestartResult } from '../../services/workbenches/restart.js';
 import { announceSessionSpawn } from '../../services/workbenches/threads.js';
+import { workspaceHasFeature } from '../../services/featureFlags.js';
 import { callApi, McpApiError } from '../api.js';
 import {
   bool,
@@ -273,7 +274,8 @@ async function threadScopedSession(
   if (!sessionId) throw new Error('session_id is required');
   if (self && sessionId !== self) {
     const target = await loadSession(ownerId, sessionId);
-    if (target.threadId !== self) throw new Error(`A session can ${action} itself, or a session in its thread.`);
+    const ownChild = target.parentId === self && (await workspaceHasFeature('sessionSubagents', target.workspaceId)).enabled;
+    if (target.threadId !== self && !ownChild) throw new Error(`A session can ${action} itself, a child, or a session in its thread.`);
   }
   return sessionId;
 }
@@ -515,6 +517,8 @@ async function createInSpace(
 ): Promise<string> {
   const created = await callApi<CreateSpaceSessionResponse>(ownerId, 'POST', `/spaces/${encodeURIComponent(spaceId)}/sessions`, {
     repoFullName, agent,
+    ...(ctx?.session ? { parentId: ctx.session.workbenchId } : {}),
+    ...(args.notify_parent !== undefined ? { notifyParent: bool(args, 'notify_parent') } : {}),
     ...(str(args.model) ? { model: str(args.model) } : {}),
     ...(str(args.prompt) ? { prompt: str(args.prompt) } : {}),
     ...(str(args.name) ? { name: str(args.name) } : {}),
@@ -630,6 +634,7 @@ export const SESSIONS = [
       name: { type: 'string', description: 'Lowercase letters, digits and hyphens. A name in use gets `-2`, `-3` and so on.' },
       internet_access: booleanSchema,
       auto_create_pr: booleanSchema,
+      notify_parent: { type: 'boolean', description: 'Wake the calling session when the child turn ends. Default: false.' },
     },
     ['agent'],
     { openWorldHint: true },
@@ -691,6 +696,8 @@ export const SESSIONS = [
       if (args.internet_access !== undefined) body.internetAccess = bool(args, 'internet_access');
       if (args.auto_create_pr !== undefined) body.autoCreatePr = bool(args, 'auto_create_pr');
       if (reserved?.threadId) body.threadId = reserved.threadId;
+      if (reserved?.parentId) body.parentId = reserved.parentId;
+      if (args.notify_parent !== undefined) body.notifyParent = bool(args, 'notify_parent');
       const created = await callApi<Workbench>(ownerId, 'POST', '/workbenches', body);
       if (ctx?.session) {
         await recordSessionSpawn(created.id, ctx.session);
@@ -702,8 +709,8 @@ export const SESSIONS = [
   ),
   defineTool(
     'list_thread_sessions',
-    "List the sessions of a thread, newest first: status, repository, branch, chat status and pull request. From a thread, thread_id defaults to the thread itself.",
-    { thread_id: { type: 'string', description: 'The thread id. Default: the calling thread.' } },
+    "List thread sessions or children of a normal session, newest first, with status and pull request. thread_id defaults to the caller. Child lists require session-subagents.",
+    { thread_id: { type: 'string', description: 'The thread or parent session id. Default: the calling session.' } },
     [],
     { readOnlyHint: true },
     async (ownerId, args, ctx) => {
@@ -832,12 +839,7 @@ export const SESSIONS = [
       sandboxOnly(async () => {
         const size = requireId(args, 'size');
         const self = ctx?.session?.workbenchId;
-        const sessionId = str(args.session_id) ?? self;
-        if (!sessionId) throw new Error('session_id is required');
-        if (self && sessionId !== self) {
-          const target = await loadSession(ownerId, sessionId);
-          if (target.threadId !== self) throw new Error('A session can resize itself, or a session in its thread.');
-        }
+        const sessionId = await threadScopedSession(ownerId, args, ctx, 'resize');
         const body: Record<string, unknown> = { size };
         if (str(args.reason)) body.reason = str(args.reason);
         if (args.remember_for_repository !== undefined) body.rememberForRepository = bool(args, 'remember_for_repository');
@@ -868,12 +870,7 @@ export const SESSIONS = [
     async (ownerId, args, ctx) =>
       sandboxOnly(async () => {
         const self = ctx?.session?.workbenchId;
-        const sessionId = str(args.session_id) ?? self;
-        if (!sessionId) throw new Error('session_id is required');
-        if (self && sessionId !== self) {
-          const target = await loadSession(ownerId, sessionId);
-          if (target.threadId !== self) throw new Error('A session can restart itself, or a session in its thread.');
-        }
+        const sessionId = await threadScopedSession(ownerId, args, ctx, 'restart');
         const body: Record<string, unknown> = {};
         if (str(args.reason)) body.reason = str(args.reason);
         if (str(args.continue_with)) body.continueWith = str(args.continue_with);

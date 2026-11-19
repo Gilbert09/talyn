@@ -66,6 +66,7 @@ import { SessionPreviewLinks } from './SessionPreviewLinks';
 import { timeAgo } from './new/RecentWorkbenches';
 import { RelativeTime } from '../RelativeTime';
 import { newestEventAt } from '../../lib/relativeTime';
+import { ParentSessions } from './ParentSessions';
 import { ThreadChip } from '../threads/ThreadChip';
 import { isThread } from '../../lib/threads';
 import { continueAsThread } from '../../lib/threadActions';
@@ -829,6 +830,7 @@ export function WorkbenchHeader({
         onConfirm={() => void restartSandbox()}
         onCancel={() => setRestartOpen(false)}
       />
+      {!thread && <ParentSessions workbench={workbench} />}
       <ArchiveWorkbenchDialog
         workbench={workbench}
         open={confirm === 'archive'}

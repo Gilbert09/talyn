@@ -175,6 +175,8 @@ export interface Workbench {
   kind?: WorkbenchKind;
   /** The thread this session belongs to. Null for a thread and for a session outside a thread. */
   threadId?: string | null;
+  /** The session that started this session. */
+  parentId?: string | null;
   /** Null for a thread. */
   repositoryId: string | null;
   /** `owner/name`, denormalised so a list renders without a repository lookup. '' for a thread. */
@@ -692,6 +694,8 @@ export interface CreateWorkbenchInput {
   repositoryId?: string;
   /** Put the new session in this thread (a thread of the same workspace). */
   threadId?: string;
+  parentId?: string;
+  notifyParent?: boolean;
   runtime: WorkbenchRuntimeKind;
   agent: WorkbenchAgent;
   internetAccess?: boolean;

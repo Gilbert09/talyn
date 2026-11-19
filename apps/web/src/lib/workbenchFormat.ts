@@ -289,9 +289,16 @@ export interface ChatTotals {
 /** One chat's spend, added up over every turn's result. */
 export function chatTotals(events: WorkbenchEvent[]): ChatTotals {
   const totals: ChatTotals = { turns: 0, costUsd: null, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
-  for (const { event } of events) {
+  const results = new Map<string, WorkbenchEvent>();
+  for (const entry of events) {
+    const { event } = entry;
     if (isSubagentEvent(event) || event.type !== 'result') continue;
-    totals.turns += 1;
+    const stamp = event.talyn as { kind?: string; attempt?: number } | undefined;
+    const key = stamp?.kind === 'process_result' ? `${entry.turn}:${stamp.attempt}` : `legacy:${entry.seq}`;
+    results.set(key, entry);
+  }
+  totals.turns = new Set([...results.values()].map((entry) => entry.turn)).size;
+  for (const { event } of results.values()) {
     if (typeof event.total_cost_usd === 'number') totals.costUsd = (totals.costUsd ?? 0) + event.total_cost_usd;
     const usage = (event.usage ?? {}) as {
       input_tokens?: number;

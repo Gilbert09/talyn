@@ -504,6 +504,15 @@
             "maxLength": 200,
             "description": "The thread this session belongs to, if any."
           },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "The session that started this session, if any."
+          },
           "repository_id": {
             "type": [
               "string",
@@ -656,6 +665,7 @@
           "kind",
           "space_id",
           "thread_id",
+          "parent_id",
           "repository_id",
           "repository_full_name",
           "name",
@@ -872,6 +882,15 @@
             "maxLength": 200,
             "description": "The thread this session belongs to, if any."
           },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "The session that started this session, if any."
+          },
           "repository_id": {
             "type": [
               "string",
@@ -1025,6 +1044,7 @@
           "kind",
           "space_id",
           "thread_id",
+          "parent_id",
           "repository_id",
           "repository_full_name",
           "name",

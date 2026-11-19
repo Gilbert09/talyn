@@ -107,13 +107,14 @@ describe('public projections', () => {
     expectNoSecrets(session);
     expect(Object.keys(session).sort()).toEqual(
       [
-        'object', 'id', 'workspace_id', 'space_id', 'kind', 'thread_id', 'repository_id', 'repository_full_name', 'name', 'title',
+        'object', 'id', 'workspace_id', 'space_id', 'kind', 'thread_id', 'parent_id', 'repository_id', 'repository_full_name', 'name', 'title',
         'branch', 'base_branch', 'runtime', 'agent', 'model', 'status', 'status_message', 'pull_request_id',
         'internet_access', 'auto_create_pr', 'diff_stat', 'archived_at', 'created_at', 'updated_at', 'chats',
       ].sort(),
     );
     expect(session).toMatchObject({
       object: 'session',
+      parent_id: null,
       runtime: 'local',
       repository_full_name: 'acme/app',
       internet_access: false,
@@ -122,6 +123,18 @@ describe('public projections', () => {
       status: 'ready',
     });
     expect(session.chats).toHaveLength(1);
+  });
+
+  it('projects the parent without the wake setting', async () => {
+    await testDb.db.insert(workbenches).values({
+      id: 'child', workspaceId: 'ws-a', repositoryId: 'repo-a', repoFullName: 'acme/app',
+      name: 'child', branch: 'child', baseBranch: 'main', runtime: 'sandbox', agent: 'claude',
+      parentWorkbenchId: 'wb-1', notifyParent: true,
+    });
+    const [row] = await getSessionQuery('child');
+    const value = toPublicSession(row);
+    expect(value.parent_id).toBe('wb-1');
+    expect(value).not.toHaveProperty('notify_parent');
   });
 
   it('a chat says how many messages are queued, never what they are', async () => {

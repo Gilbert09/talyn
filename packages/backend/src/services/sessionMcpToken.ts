@@ -92,6 +92,10 @@ export async function ensureSessionMcpToken(session: {
     .limit(1);
   if (!owner) throw new Error(`workspace ${session.workspaceId} not found`);
 
+  const [lineage] = await db.select({ parentId: workbenches.parentWorkbenchId, depth: sessionMcpTokens.spawnDepth })
+    .from(workbenches)
+    .leftJoin(sessionMcpTokens, eq(sessionMcpTokens.workbenchId, workbenches.parentWorkbenchId))
+    .where(eq(workbenches.id, session.id)).limit(1);
   const token = `${SESSION_TOKEN_PREFIX}${randomBytes(TOKEN_BYTES).toString('base64url')}`;
   await db
     .insert(sessionMcpTokens)
@@ -99,6 +103,8 @@ export async function ensureSessionMcpToken(session: {
       id: uuid(),
       workbenchId: session.id,
       ownerId: owner.ownerId,
+      parentWorkbenchId: lineage?.parentId ?? null,
+      spawnDepth: lineage?.parentId ? (lineage.depth ?? 0) + 1 : 0,
       tokenHash: hashToken(token),
       tokenCiphertext: encryptString(token),
     })
@@ -197,7 +203,7 @@ export async function validateSessionMcpToken(
  */
 export async function reserveSessionCreate(
   binding: SessionMcpBinding
-): Promise<{ threadId: string | null; spaceId: string | null }> {
+): Promise<{ threadId: string | null; spaceId: string | null; parentId: string }> {
   if (binding.depth + 1 > MAX_SESSION_SPAWN_DEPTH) {
     throw new SessionSpawnRefusedError(
       `This session was itself started by another session ${binding.depth} level(s) down, and ` +
@@ -213,6 +219,7 @@ export async function reserveSessionCreate(
     .limit(1);
   const isThread = caller?.kind === 'thread';
   return {
+    parentId: binding.workbenchId,
     threadId: isThread ? binding.workbenchId : null,
     spaceId: isThread ? null : (caller?.spaceId ?? null),
   };
@@ -234,6 +241,7 @@ export async function recordSessionSpawn(
     .where(eq(workbenches.id, childWorkbenchId))
     .limit(1);
   if (!child) return;
+  await db.update(workbenches).set({ parentWorkbenchId: parent.workbenchId }).where(eq(workbenches.id, childWorkbenchId));
   await ensureSessionMcpToken(child);
   await db
     .update(sessionMcpTokens)

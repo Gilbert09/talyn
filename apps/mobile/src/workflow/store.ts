@@ -170,7 +170,7 @@ export class WorkflowStore {
     }
     for (const entry of this.entries.values()) {
       if (entry.entity !== 'children') continue;
-      changed = this.updateData<Workbench[]>(entry, (rows) => upsertWorkbench(rows, item, item.threadId === entry.id)) || changed;
+      changed = this.updateData<Workbench[]>(entry, (rows) => upsertWorkbench(rows, item, (item.threadId === entry.id || item.parentId === entry.id))) || changed;
     }
     if (changed) this.emit();
   }
@@ -297,7 +297,7 @@ export class WorkflowStore {
       case 'children': {
         await this.authorizedWorkbench(id, scope);
         assertScope();
-        return (await this.api.workbenches.threadSessions(id)).filter((item) => item.workspaceId === scope.workspace && item.threadId === id);
+        return (await this.api.workbenches.threadSessions(id)).filter((item) => item.workspaceId === scope.workspace && (item.threadId === id || item.parentId === id));
       }
       case 'readiness': return this.api.workbenches.readiness(scope.workspace);
       case 'pr': return this.authorizedPr(id, scope);

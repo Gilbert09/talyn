@@ -100,7 +100,7 @@ describe('talyn_resize_session', () => {
   ])('refuses %s, and changes nothing', async (_name, ctx, target) => {
     const { calls } = mockApi({ 'GET /api/v1/workbenches/other': () => target });
     await expect(tool('resize_session').handler(OWNER, { session_id: 'other', size: 'large' }, ctx)).rejects.toThrow(
-      'A session can resize itself, or a session in its thread.'
+      'A session can resize itself, a child, or a session in its thread.'
     );
     expect(calls.every((c) => c.method === 'GET')).toBe(true);
   });

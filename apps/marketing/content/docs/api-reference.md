@@ -1927,6 +1927,7 @@ Returns `200`: Every event type an endpoint can receive.
 | `kind` | `session` \| `thread` |  |
 | `space_id` | string |  |
 | `thread_id` | string | The thread this session belongs to, if any. |
+| `parent_id` | string or null | The session that started this session, if any. |
 | `repository_id` | string | Null for a thread. |
 | `repository_full_name` | string |  |
 | `name` | string |  |

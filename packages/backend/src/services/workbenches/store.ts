@@ -62,6 +62,8 @@ export const WORKBENCH_COLUMNS = {
   repoFullName: workbenchesTable.repoFullName,
   kind: workbenchesTable.kind,
   threadId: workbenchesTable.threadId,
+  parentWorkbenchId: workbenchesTable.parentWorkbenchId,
+  notifyParent: workbenchesTable.notifyParent,
   name: workbenchesTable.name,
   title: workbenchesTable.title,
   branch: workbenchesTable.branch,
@@ -142,9 +144,10 @@ export type ChatRow = Pick<typeof chatsTable.$inferSelect, keyof typeof CHAT_COL
 /** The start timeline and the last wake are for the Sandbox panel only: they stay out of every list and broadcast. */
 function publicSettings(settings: WorkbenchRow['settings'] | null): Workbench['settings'] {
   if (!settings) return {};
-  if (!BOX_START_SETTINGS_KEYS.some((key) => key in settings)) return settings;
+  if (!BOX_START_SETTINGS_KEYS.some((key) => key in settings) && !('parentWakeTurns' in settings)) return settings;
   const out = { ...settings } as Record<string, unknown>;
   for (const key of BOX_START_SETTINGS_KEYS) delete out[key];
+  delete out.parentWakeTurns;
   return out as Workbench['settings'];
 }
 
@@ -154,6 +157,7 @@ export function rowToWorkbench(row: WorkbenchRow): Workbench {
     workspaceId: row.workspaceId,
     kind: row.kind === 'thread' ? 'thread' : 'session',
     threadId: row.threadId ?? null,
+    parentId: row.parentWorkbenchId ?? null,
     repositoryId: row.repositoryId,
     repoFullName: row.repoFullName,
     name: row.name,
@@ -264,6 +268,12 @@ export async function threadSessions(threadId: string): Promise<WorkbenchRow[]> 
     .select(WORKBENCH_COLUMNS)
     .from(workbenchesTable)
     .where(eq(workbenchesTable.threadId, threadId))
+    .orderBy(desc(workbenchesTable.createdAt));
+}
+
+export async function childSessions(parentId: string): Promise<WorkbenchRow[]> {
+  return db().select(WORKBENCH_COLUMNS).from(workbenchesTable)
+    .where(eq(workbenchesTable.parentWorkbenchId, parentId))
     .orderBy(desc(workbenchesTable.createdAt));
 }
 

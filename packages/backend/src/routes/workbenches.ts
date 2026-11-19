@@ -117,6 +117,7 @@ import {
   setGeneratedTitle,
   storeNumberedEvents,
   threadSessions,
+  childSessions,
   updateChat,
   updateWorkbench,
   type ChatRow,
@@ -135,7 +136,7 @@ import {
 } from '../services/workbenches/memory.js';
 import { manualReviewRefusal, memoryReviewState, startMemoryReview } from '../services/workbenches/memoryReview.js';
 import { assertWorkbenchBoxStart, existingBoxRefusal } from '../services/workbenches/boxGate.js';
-import { isFeatureEnabled } from '../services/featureFlags.js';
+import { isFeatureEnabled, workspaceHasFeature } from '../services/featureFlags.js';
 import { canPrompt, canViewItem, ownsWorkspace } from '../services/teams/access.js';
 import { turnPayerFor } from '../services/teams/payer.js';
 
@@ -576,8 +577,8 @@ export function workbenchRoutes(): Router {
       })) ?? found.chat;
     emitWorkbenchChat(row.workspaceId, rowToChat(row));
     // A local session in a thread: its turns run on the desktop, so the change of status is the turn's end.
-    if (found.workbench.threadId && found.chat.status === 'running' && body.status !== 'running') {
-      await notifyThread(found.workbench, body.status === 'awaiting_input' ? 'needs_input' : 'session_finished', { status: body.status });
+    if ((found.workbench.threadId || found.workbench.parentWorkbenchId) && found.chat.status === 'running' && body.status !== 'running') {
+      await notifyThread(found.workbench, body.status === 'awaiting_input' ? 'needs_input' : 'session_finished', { status: body.status, chatId: row.id, turn: row.turnCount });
     }
     ok(res, rowToChat(row));
   });
@@ -784,8 +785,10 @@ export function workbenchRoutes(): Router {
   router.get('/:id/sessions', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
-    if (!isThread(row)) return bad(res, 409, 'This is a session, not a thread.', 'not_thread');
-    ok(res, await publicWorkbenches(await threadSessions(row.id)));
+    if (!isThread(row) && !(await workspaceHasFeature('sessionSubagents', row.workspaceId)).enabled) {
+      return bad(res, 409, 'Child sessions are not available.', 'not_thread');
+    }
+    ok(res, await publicWorkbenches(await (isThread(row) ? threadSessions(row.id) : childSessions(row.id))));
   });
 
   /** Continue a session as a thread: the session joins the new thread, which starts with a recap of its chat. */

@@ -151,7 +151,7 @@ describe('subagent card details', () => {
       progress({ task_id: 'task', usage: { total_tokens: 0, tool_uses: 0 } }),
       { seq: 4, type: 'system', subtype: 'task_updated', task_id: 'task', patch: { status: 'completed', end_time: '2026-11-19T12:00:07Z' } },
     ]);
-    expect(subagentCardModel(parent, true, Date.parse(at) + 9000)).toMatchObject({ stepsLabel: '0 tools · Checking imports', detailsLabel: '0 tokens · 7s' });
+    expect(subagentCardModel(parent, true, Date.parse(at) + 9000)).toMatchObject({ stepsLabel: 'Finished · 0 tools', detailsLabel: '0 tokens · 7s' });
   });
 
   it('updates the signature for task details and nested text without new steps', () => {
@@ -172,5 +172,30 @@ describe('running subagent count', () => {
     expect(runningSubagentCount(events)).toBe(2);
     events.push({ seq: 5, type: 'system', subtype: 'subagents_stopped' });
     expect(runningSubagentCount(events)).toBe(0);
+  });
+});
+
+
+describe('background subagents', () => {
+  it('keeps a background task running after its Agent call returns', () => {
+    const events: AgentEvent[] = [
+      assistant(1, [call('a')]),
+      { seq: 2, type: 'system', subtype: 'task_started', task_id: 'task-a', tool_use_id: 'a' },
+      { seq: 3, type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'a', content: 'Started in background' }] } },
+      { seq: 4, type: 'result', subtype: 'success', result: 'Waiting', talyn: { kind: 'process_result', turn: 1, attempt: 0 } },
+    ];
+    expect(runningSubagentCount(events)).toBe(1);
+    const blocks = mergeToolBlocks(buildBlocks(events));
+    expect(subagentCardModel(blocks[0] as ToolBlock, true)?.running).toBe(true);
+    const finished: AgentEvent[] = [...events,
+      { seq: 5, type: 'system', subtype: 'task_notification', task_id: 'task-a', status: 'completed' },
+      { seq: 6, type: 'system', subtype: 'init', session_id: 'same' },
+      assistant(7, [{ type: 'text', text: 'Final answer' }]),
+      { seq: 8, type: 'result', subtype: 'success', result: 'Final answer', talyn: { kind: 'process_result', turn: 1, attempt: 0 } },
+    ];
+    expect(runningSubagentCount(finished)).toBe(0);
+    const finalBlocks = mergeToolBlocks(buildBlocks(finished));
+    expect(finalBlocks.filter((block) => block.kind === 'result')).toHaveLength(2);
+    expect(subagentCardModel(finalBlocks[0] as ToolBlock, true)?.running).toBe(false);
   });
 });

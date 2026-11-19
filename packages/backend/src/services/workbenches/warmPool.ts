@@ -166,7 +166,7 @@ function boxRow(box: Pick<WarmBox, 'id' | 'workspaceId' | 'repositoryId' | 'agen
   const now = new Date();
   return {
     id: box.id, workspaceId: box.workspaceId, repositoryId: box.repositoryId, repoFullName: slug, kind: 'session',
-    threadId: null, name: 'warm-pool', title: null, branch: box.baseBranch, baseBranch: box.baseBranch, runtime: 'sandbox',
+    threadId: null, parentWorkbenchId: null, notifyParent: false, name: 'warm-pool', title: null, branch: box.baseBranch, baseBranch: box.baseBranch, runtime: 'sandbox',
     agent: box.agent, model: null, deviceId: null, localPath: null, sandboxId: box.sandboxId, sandboxGeneration: box.sandboxId,
     sandboxState: 'running', memoryRestorePending: null, archivePendingAt: null, archiveRetryAt: null, restoreRequestedAt: null,
     archiveLeaseUntil: null, archiveFailures: 0, fleetHost: box.fleetHost, status: 'provisioning', statusMessage: null, startProgress: null,

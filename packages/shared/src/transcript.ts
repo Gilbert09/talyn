@@ -77,6 +77,7 @@ export interface SubagentProgress {
 }
 
 export interface SubagentTaskDetails {
+  status?: 'running' | 'completed' | 'failed' | 'stopped';
   activity?: string;
   tokens?: number;
   tools?: number;
@@ -185,6 +186,10 @@ function taskDetails(events: AgentEvent[]): Map<string, SubagentTaskDetails> {
     }
   }
   for (const event of events) {
+    if (event.type === 'system' && event.subtype === 'subagents_stopped') {
+      for (const task of tasks.values()) if (task.status === 'running') task.status = 'stopped';
+      continue;
+    }
     if (event.type !== 'system' || !['task_started', 'task_progress', 'task_updated', 'task_notification'].includes(event.subtype ?? '')) continue;
     const id = typeof event.tool_use_id === 'string' ? event.tool_use_id : calls.get(String(event.task_id ?? ''));
     if (!id) continue;
@@ -197,8 +202,12 @@ function taskDetails(events: AgentEvent[]): Map<string, SubagentTaskDetails> {
       const value = usage?.[source];
       if (typeof value === 'number' && Number.isFinite(value) && value >= 0) task[target] = value;
     }
-    if (event.subtype === 'task_started') task.startedAt = eventTime(event.timestamp) ?? task.startedAt;
+    if (event.subtype === 'task_started') {
+      task.startedAt = eventTime(event.timestamp) ?? task.startedAt;
+      task.status = 'running';
+    }
     if (['completed', 'failed', 'stopped'].includes(String(patch.status ?? event.status))) {
+      task.status = (patch.status ?? event.status) as 'completed' | 'failed' | 'stopped';
       task.endedAt = eventTime(patch.end_time) ?? eventTime(event.timestamp) ?? task.endedAt;
     }
     tasks.set(id, task);
@@ -222,6 +231,15 @@ function buildTranscriptBlocks(
   events: AgentEvent[], children: Map<string, AgentEvent[]>, tasks: Map<string, SubagentTaskDetails>, ancestors: Set<string>,
 ): Block[] {
   const blocks: Block[] = [];
+  const processKey = (event: AgentEvent): string | null => {
+    const stamp = event.talyn as { kind?: string; turn?: number; attempt?: number } | undefined;
+    return stamp?.kind === 'process_result' ? `${stamp.turn}:${stamp.attempt}` : null;
+  };
+  const lastResults = new Map<string, AgentEvent>();
+  for (const event of events) {
+    const key = processKey(event);
+    if (key && event.type === 'result' && !isSubagentEvent(event)) lastResults.set(key, event);
+  }
   let interruptionOpen = false;
   const interrupt = (key: string) => {
     if (!interruptionOpen) blocks.push({ kind: 'system', key, text: 'Interrupted', subtype: 'talyn_interruption' });
@@ -419,10 +437,13 @@ function buildTranscriptBlocks(
     }
 
     if (event.type === 'result') {
-      if (!event.is_error && !codexRun && openToolIds.size > 0) {
+      const key = processKey(event);
+      const finalResult = !key || event === lastResults.get(key);
+      const activeTasks = [...tasks.values()].some((task) => task.status === 'running');
+      if (finalResult && !activeTasks && !event.is_error && !codexRun && openToolIds.size > 0) {
         blocks.push({ kind: 'system', key: `${seqKey}.open`, text: TURN_ENDED_WITH_OPEN_TOOL_NOTE });
       }
-      openToolIds.clear();
+      if (finalResult && !activeTasks) openToolIds.clear();
       const usage = (event.usage as { input_tokens?: number; output_tokens?: number }) ?? {};
       blocks.push({
         kind: 'result',
@@ -1206,8 +1227,8 @@ export function subagentCardModel(block: ToolBlock, details = false, now = Date.
     ? input.description.trim() : brief.trim().split('\n')[0].trim();
   const { steps, current } = block.subagent ?? { steps: 0 };
   const task = details ? block.subagent?.task : undefined;
-  const running = !block.settled;
-  const failed = block.settled && block.isError;
+  const running = task?.status ? task.status === 'running' : !block.settled;
+  const failed = task?.status === 'failed' || task?.status === 'stopped' || (block.settled && block.isError);
   const count = plural(steps, 'step');
   let stepsLabel = running
     ? steps === 0 ? 'Starting…' : `${count}${current ? ` · ${current}` : ''}`
@@ -1618,6 +1639,12 @@ export function runningSubagentCount(events: AgentEvent[]): number {
       if (event.type === 'assistant' && part?.type === 'tool_use' && typeof part.id === 'string' && isSubagentTool(String(part.name ?? ''))) open.add(part.id);
       if (event.type === 'user' && part?.type === 'tool_result') open.delete(String(part.tool_use_id));
     }
+  }
+  let stopped = -1;
+  events.forEach((event, index) => { if (event.type === 'system' && event.subtype === 'subagents_stopped') stopped = index; });
+  for (const [id, task] of taskDetails(events.slice(stopped + 1))) {
+    if (task.status === 'running') open.add(id);
+    else if (task.status) open.delete(id);
   }
   return open.size;
 }

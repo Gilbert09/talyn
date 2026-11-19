@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Child sessions and background subagents (2026-11-19)
+
+Migration 0145 stores parent links and opt-in notifications. It backfills links from session tokens.
+Normal parents get the existing session cards. Only opted-in turn completions wake them.
+A stored claim permits at most one wake per child chat turn. The existing progress guard remains.
+`talyn_list_thread_sessions` now also lists children for normal sessions.
+Web, desktop, and mobile show a parent link and a Sessions started list behind `session-subagents`.
+Claude processes can emit several results. The turn ends on process exit and uses the final result for follow-up work.
+Usage totals keep the last cumulative result per process attempt. Separate attempts still add their costs.
+The briefing and delegation skills allow background Agent calls. Long shell commands still use `talyn_run_background`.
+
 ## Subagent card details (2026-11-19)
 
 The existing Subagent card now expands to its nested steps in web, desktop and mobile.

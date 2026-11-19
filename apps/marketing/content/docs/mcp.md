@@ -166,3 +166,15 @@ Some actions stay in the app on purpose:
 ## Limits
 
 The server allows 300 requests a minute from one IP address.
+
+### Child sessions
+
+`talyn_create_session` accepts `notify_parent: true` from a session agent.
+The child records its parent before its first turn starts.
+The default is false. The parent gets cards when the child finishes a turn, opens a PR, or merges a PR.
+Only an opted-in child's turn end wakes a normal parent. Multiple waiting notifications share one wake.
+`talyn_list_thread_sessions` lists the caller's children when the caller is a normal session.
+Its optional `thread_id` can name a parent session. Thread callers still get their thread members.
+A parent can read timing and sandbox state, resize, and restart its own children.
+These additions require `session-subagents`, evaluated for the workspace owner.
+Each child spends box-hours and counts against the concurrent box limit.

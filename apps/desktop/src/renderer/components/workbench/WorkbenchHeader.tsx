@@ -65,6 +65,7 @@ import { AutomationChip } from './AutomationChip';
 import { SlackThreadChip } from './SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
+import { ParentSessions } from './ParentSessions';
 import { ThreadChip } from '../threads/ThreadChip';
 import { isThread } from '../../lib/threads';
 import { continueAsThread } from '../../lib/threadActions';
@@ -812,6 +813,7 @@ export function WorkbenchHeader({
         onConfirm={() => void restartSandbox()}
         onCancel={() => setRestartOpen(false)}
       />
+      {!thread && <ParentSessions workbench={workbench} />}
       <ArchiveWorkbenchDialog
         workbench={workbench}
         open={confirm === 'archive'}

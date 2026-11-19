@@ -227,7 +227,7 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | `talyn_cancel_wakeup` | Cancel a scheduled wake-up. |
 | `talyn_record_setup_step` | Add a setup step to the repository of the session. Record only a step that every session on the repository needs. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell, sends data out or pushes code. The new step is `suggested`: it runs on new boxes only when a person accepts it or when enough recent sessions need it. From a session token: the session itself, or a session in its thread. |
 | `talyn_create_session` | Start a sandbox session on a new branch, an existing branch, or a pull request. A `prompt` is the first message. With `space_id`, the session starts in a team space, and Talyn refuses `pull_request_id` and `auto_create_pr`. From a session in a space, with no `space_id`, the new session starts in the same space. Talyn uses Personal and says why when `pull_request_id` is given, `workspace_id` is not the home workspace of the team, the repository is not in the space, or the space is archived or the owner left its team. In an inherited space, `auto_create_pr: true` is accepted (it is the default there), and `auto_create_pr: false` is refused. `space_id: "personal"` starts in Personal. Spaces are not yet available to all accounts. |
-| `talyn_list_thread_sessions` | List the sessions of a thread, newest first: status, repository, branch, chat status and pull request. From a thread, `thread_id` is the thread itself by default. Read-only. |
+| `talyn_list_thread_sessions` | List thread members or the children of a normal session, with status and pull request. `thread_id` defaults to the caller. Read-only. |
 | `talyn_send_session_message` | Send a message to a chat. With only `session_id`, it uses the first open chat. If a turn runs, the message waits in the queue. From a thread's token to a session of that thread, the session shows the message as sent by the thread. |
 | `talyn_ask_user` | Ask the person 1 to 4 `questions`, each with `options` (none, or 2 to 6, each a `label` and an optional `description`), an optional `header` and `multi_select`. Talyn writes the questions in the calling turn's transcript. The turn then ends as `awaiting_input`: the person gets a notification, the apps show the questions as a card with the options, and a session in a thread wakes the thread with the questions. The next message in the chat is the answer. The agent must end its turn after the call. Only for a session token: a user token does not see this tool. |
 | `talyn_list_accounts` | List the workspace's Claude and Codex subscriptions, in the order Talyn tries them: label, usage, and if the account is usable now. It also shows the account of a session, or of each session in a thread. It never shows secrets. Read-only. |
@@ -405,3 +405,15 @@ Backend, under `packages/backend/src/`:
   box, and its tool allowlist.
 
 Desktop: `components/settings/sections/McpSettings.tsx` → `MCPServerSettings` and `LocalAgentsCard`; `main/localAgentKit.ts` and `main/localSkillPack.ts` for the one-click install.
+
+### Child sessions
+
+`talyn_create_session` accepts `notify_parent: true` from a session agent.
+The child records its parent before its first turn starts.
+The default is false. The parent gets cards when the child finishes a turn, opens a PR, or merges a PR.
+Only an opted-in child's turn end wakes a normal parent. Multiple waiting notifications share one wake.
+`talyn_list_thread_sessions` lists the caller's children when the caller is a normal session.
+Its optional `thread_id` can name a parent session. Thread callers still get their thread members.
+A parent can read timing and sandbox state, resize, and restart its own children.
+These additions require `session-subagents`, evaluated for the workspace owner.
+Each child spends box-hours and counts against the concurrent box limit.

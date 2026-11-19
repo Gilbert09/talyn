@@ -181,8 +181,8 @@ describe('session skill pack', () => {
         expect(text).toContain('talyn_resize_session');
         expect(text).toContain('talyn_run_background');
         expect(text).toContain('more than about 2 minutes');
-        expect(text).toContain('Run subagents in the foreground (`run_in_background: false`).');
-        expect(text).toContain('Do not end your turn while a subagent or a background task of your agent still runs.');
+        expect(text).toContain('Claude Agent calls can use `run_in_background: true`.');
+        expect(text).toContain('turn stays open until');
         expect(text).not.toMatch(/nohup <command>|sleep 45/);
         expect(text).toContain('cargo binstall');
         expect(text).toContain('Never `sleep` for minutes');
@@ -204,9 +204,9 @@ describe('session skill pack', () => {
       const section = TALYN_BRIEFING.split('## Background work\n')[1]?.split('\n## ')[0] ?? '';
       expect(section).not.toBe('');
       expect(section).toContain('Then end your turn.');
-      for (const own of ['`run_in_background`', '`&`', '`nohup`', '"Interrupted"']) expect(section).toContain(own);
+      for (const own of ['`run_in_background`', '`&`', '`nohup`']) expect(section).toContain(own);
       const named = new Set(section.match(/\btalyn_[a-z0-9_]+\b/g));
-      expect(named).toEqual(new Set(['talyn_run_background', 'talyn_background_logs', 'talyn_list_background', 'talyn_create_session']));
+      expect(named).toEqual(new Set(['talyn_run_background', 'talyn_background_logs', 'talyn_list_background', 'talyn_create_session', 'talyn_list_thread_sessions', 'talyn_get_session_transcript']));
       for (const tool of named) expect(toolsByName.has(tool)).toBe(true);
       expect(toolsByName.get('talyn_run_background')!.description).toContain('more than about 2 minutes');
     });

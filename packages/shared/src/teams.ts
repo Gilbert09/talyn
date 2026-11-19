@@ -165,6 +165,8 @@ export interface InviteTeamMemberRequest {
 }
 
 export interface CreateSpaceSessionRequest {
+  parentId?: string;
+  notifyParent?: boolean;
   /** Default 'session'. A thread takes no repository, branch or base branch. */
   kind?: WorkbenchKind;
   /** Required for a session. */

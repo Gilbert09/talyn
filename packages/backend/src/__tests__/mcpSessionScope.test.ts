@@ -20,6 +20,12 @@ vi.mock('../services/sessionMcpToken.js', async (original) => ({
 vi.mock('../services/workbenches/threads.js', () => ({ announceSessionSpawn: vi.fn(async () => undefined) }));
 const { announceSessionSpawn } = await import('../services/workbenches/threads.js');
 
+vi.mock('../services/featureFlags.js', async (original) => ({
+  ...(await original<typeof import('../services/featureFlags.js')>()),
+  workspaceHasFeature: vi.fn(async () => ({ enabled: true, source: 'fallback' })),
+}));
+const { workspaceHasFeature } = await import('../services/featureFlags.js');
+
 const OWNER = 'user-test';
 const SELF: McpCallContext = { session: { tokenId: 'token-1', workbenchId: 's1', depth: 0 } };
 
@@ -406,7 +412,7 @@ describe('sessions started by a session in a space', () => {
     }, SELF);
     expect(created(calls)).toEqual([{
       path: `/api/v1/spaces/${SPACE}/sessions`,
-      body: { repoFullName: 'Acme/Web', agent: 'claude', prompt: 'Second PR', branch: 'tom/two', internetAccess: true },
+      body: { parentId: 's1', repoFullName: 'Acme/Web', agent: 'claude', prompt: 'Second PR', branch: 'tom/two', internetAccess: true },
     }]);
     expect(result).toContain(`team space "Warehouse" (${SPACE})`);
     expect(recordSessionSpawn).toHaveBeenCalledWith('child', SELF.session);
@@ -421,7 +427,7 @@ describe('sessions started by a session in a space', () => {
     vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: null, spaceId: SPACE });
     const { calls } = mockApi(spaceRoutes());
     await tool('create_session').handler(OWNER, { agent: 'claude', ...extra }, SELF);
-    expect(created(calls)).toEqual([{ path: `/api/v1/spaces/${SPACE}/sessions`, body: { repoFullName: 'Acme/Web', agent: 'claude' } }]);
+    expect(created(calls)).toEqual([{ path: `/api/v1/spaces/${SPACE}/sessions`, body: { parentId: 's1', repoFullName: 'Acme/Web', agent: 'claude' } }]);
   });
 
   it('lets an explicit space_id win over the parent space', async () => {
@@ -430,7 +436,7 @@ describe('sessions started by a session in a space', () => {
       'POST /api/v1/spaces/space-2/sessions': () => ({ workbench: session({ id: 'child' }), workspaceId: 'ws1', addedRepository: false }),
     });
     await tool('create_session').handler(OWNER, { space_id: 'space-2', repository_full_name: 'acme/web', agent: 'claude' }, SELF);
-    expect(created(calls)).toEqual([{ path: '/api/v1/spaces/space-2/sessions', body: { repoFullName: 'acme/web', agent: 'claude' } }]);
+    expect(created(calls)).toEqual([{ path: '/api/v1/spaces/space-2/sessions', body: { parentId: 's1', repoFullName: 'acme/web', agent: 'claude' } }]);
   });
 
   it('starts in Personal when space_id is "personal"', async () => {
@@ -520,5 +526,35 @@ describe('sessions started by a session in a space', () => {
     const spaceArg = (t.inputSchema.properties as Record<string, { description: string }>).space_id;
     expect(spaceArg.description).toContain('Pass "personal" to start in Personal');
     expect(spaceArg.description).toContain('Default from a session in a space: that space');
+  });
+});
+
+
+describe('parent session scope', () => {
+  it.each([
+    ['session_timing', 'GET', 'timing', { workbenchId: 'child', turns: 0 }],
+    ['resize_session', 'PUT', 'sandbox-size', { outcome: 'unchanged', size: 'standard' }],
+    ['restart_session', 'POST', 'restart', { outcome: 'restarting' }],
+  ] as const)('allows a parent to call %s on its child', async (name, method, path, response) => {
+    mockApi({
+      'GET /api/v1/workbenches/child': () => session({ id: 'child', parentId: 's1' }),
+      [`${method} /api/v1/workbenches/child/${path}`]: () => response,
+    });
+    await expect(tool(name).handler(OWNER, { session_id: 'child', size: 'standard' }, SELF)).resolves.toBeTypeOf('string');
+    expect(workspaceHasFeature).toHaveBeenCalledWith('sessionSubagents', 'ws1');
+  });
+
+  it.each([['other', true], ['s1', false]] as const)('refuses parent %s with flag %s', async (parentId, enabled) => {
+    vi.mocked(workspaceHasFeature).mockResolvedValueOnce({ enabled, source: 'fallback' });
+    mockApi({ 'GET /api/v1/workbenches/child': () => session({ id: 'child', parentId }) });
+    await expect(tool('session_timing').handler(OWNER, { session_id: 'child' }, SELF)).rejects.toThrow('A session can');
+    vi.mocked(workspaceHasFeature).mockReset().mockResolvedValue({ enabled: true, source: 'fallback' });
+  });
+
+  it('passes the parent and opt-in through creation', async () => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue({ parentId: 's1', threadId: null, spaceId: null });
+    const { calls } = mockApi({ 'POST /api/v1/workbenches': () => session({ id: 'child' }) });
+    await tool('create_session').handler(OWNER, { workspace_id: 'ws1', repository_id: 'r1', agent: 'claude', notify_parent: true }, SELF);
+    expect(calls[0].body).toMatchObject({ parentId: 's1', notifyParent: true });
   });
 });

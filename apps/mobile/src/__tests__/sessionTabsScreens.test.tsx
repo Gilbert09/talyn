@@ -462,3 +462,23 @@ describe('history', () => {
     expect(await screen.findByText('No archived sessions')).toBeVisible();
   });
 });
+
+
+describe('parent and child sessions', () => {
+  it.each([false, true])('shows parent controls only with the flag enabled: %s', async (enabled) => {
+    mockActive.api.features.get.mockResolvedValue({ workbenches: true, sessionSubagents: enabled });
+    mockActive.api.workbenches.get.mockResolvedValue(session({ parentId: 'parent-one' }));
+    mockActive.api.workbenches.threadSessions.mockResolvedValue([session({ id: 'child-one', parentId: 'session-one', title: 'Child work' })]);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    if (enabled) {
+      const parent = await screen.findByText('Open parent session');
+      await fireEvent.press(parent);
+      expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'parent-one' } });
+      expect(await screen.findByText('Sessions started (1)')).toBeTruthy();
+    } else {
+      await waitFor(() => expect(mockActive.api.features.get).toHaveBeenCalled());
+      expect(screen.queryByText('Open parent session')).toBeNull();
+      expect(screen.queryByText('Sessions started (1)')).toBeNull();
+    }
+  });
+});

@@ -7,12 +7,13 @@ import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 're
 
 import { useNetwork } from '../../auth/AuthProvider';
 import { ScreenContainer } from '../../components/ScreenContainer';
-import { AppText, Banner, Disclosure, IconButton, Row, SheetModal, useActionSheet, type SheetAction } from '../../components/UI';
+import { AppText, Banner, ChipButton, Disclosure, IconButton, Row, SheetModal, useActionSheet, type SheetAction } from '../../components/UI';
 import { StateNotice, workflowStyles as styles } from '../../components/Workflow';
 import { useKeyboardInset } from '../../lib/keyboard';
+import { useFeatures } from '../../lib/features';
 import { useNow } from '../../lib/time';
 import { completeIntent } from '../../navigation/intents';
-import { pullRequestRoute } from '../../navigation/routes';
+import { pullRequestRoute, sessionRoute, threadRoute } from '../../navigation/routes';
 import { useResource } from '../../workflow/hooks';
 import { workbenchKind } from '../../workflow/model';
 import { Conversation } from '../chat/Conversation';
@@ -52,7 +53,9 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
   const state = useResource<Workbench>('workbench', id, Boolean(id), true);
   const valid = Boolean(state.data && workbenchKind(state.data) === kind);
-  const children = useResource<Workbench[]>('children', id, valid && kind === 'thread');
+  const features = useFeatures();
+  const showChildren = kind === 'thread' || features?.sessionSubagents === true;
+  const children = useResource<Workbench[]>('children', id, valid && showChildren);
   const readiness = useResource<WorkbenchReadiness>('readiness', '', valid);
   const offline = useNetwork() === 'offline';
   const now = useNow();
@@ -65,7 +68,7 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
   const menu = useSessionMenu({ onThreadScreen: kind === 'thread',
     onArchived: () => { if (router.canGoBack()) router.back(); else router.replace(list); } });
   useEffect(() => { if (item) completeIntent(`/${kind === 'session' ? 'sessions' : 'threads'}/${encodeURIComponent(id)}`); }, [item, kind, id]);
-  const childItems = kind === 'thread' ? children.data ?? [] : [];
+  const childItems = showChildren ? children.data ?? [] : [];
   const keyboard = useKeyboardInset();
   const background = useBackground(item);
   const [view, setView] = useState<View_>(null);
@@ -80,20 +83,22 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
     const actions = primaryActions(item, row, { offline });
     const problem = readinessProblem(readiness.data, item.agent);
     const notice = state.status === 'error' || offline;
-    const fixed = notice || (Boolean(problem) && !keyboard.open) || (actions.length > 0 && !keyboard.open);
+    const showParent = features?.sessionSubagents === true && Boolean(item.parentId);
+    const fixed = showParent || notice || (Boolean(problem) && !keyboard.open) || (actions.length > 0 && !keyboard.open);
     // Only a real problem and the quick actions stay above the transcript. The rest is in the details sheet.
     const header = fixed ? <View style={local.fixed}>
+      {showParent ? <ChipButton label="Open parent session" onPress={() => router.push(item.threadId === item.parentId ? threadRoute(item.parentId!) : sessionRoute(item.parentId!))} /> : null}
       {notice ? <View style={local.notice}><StateNotice resource={state} offline={offline} refresh={state.refresh} /></View> : null}
       {problem && !keyboard.open ? <View style={local.notice}><Banner message={problem} tone="warning" /></View> : null}
       {keyboard.open ? null : <QuickActionRow actions={actions} busy={quick.busy} run={quick.run} />}
     </View> : null;
     content = <Conversation key={item.id} item={item} ready={state.status === 'ready' || state.status === 'error'} header={header}
       find={find} onCloseFind={() => setFind(0)}
-      top={kind === 'thread' ? (pause) => <View style={{ gap: 4 }}>
+      top={showChildren ? (pause) => <View style={{ gap: 4 }}>
         <StateNotice resource={children} offline={offline} refresh={children.refresh} refreshLabel="Refresh child sessions" />
-        {childItems.length ? <Disclosure title={`Related sessions (${childItems.length})`} onToggle={pause}>
+        {childItems.length ? <Disclosure title={`${kind === 'thread' ? 'Related sessions' : 'Sessions started'} (${childItems.length})`} onToggle={pause}>
           <View>{childItems.map((child, index) => <WorkbenchRow key={child.id} item={child} now={now} divider={index < childItems.length - 1} />)}</View>
-        </Disclosure> : children.status === 'ready' ? <AppText variant="meta" tone="muted">No sessions started from this thread yet.</AppText> : null}
+        </Disclosure> : kind === 'thread' && children.status === 'ready' ? <AppText variant="meta" tone="muted">No sessions started from this thread yet.</AppText> : null}
       </View> : undefined} />;
   }
 

@@ -61,7 +61,7 @@ export type TalynSkillName = (typeof TALYN_SKILL_PACK)[number];
 /** One line per built-in skill, for the composer's `/` list. The SKILL.md text is for the agent. */
 export const TALYN_SKILL_SUMMARIES: Record<TalynSkillName, string> = {
   'talyn-multi-repo': 'Make a change in another repository through a new session',
-  'talyn-delegate': 'Split large work into child sessions that run in parallel',
+  'talyn-delegate': 'Choose subagents or child sessions and follow their work',
   'talyn-ci-triage': 'Find why CI fails, re-run flaky jobs and fix real failures',
   'talyn-ship-pr': 'Open or update the pull request for this session',
   'talyn-review-loop': 'Fix review comments and bot findings on the pull request',

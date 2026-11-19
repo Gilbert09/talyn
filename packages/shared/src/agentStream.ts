@@ -235,7 +235,7 @@ export interface AgentStreamParser {
   /** One line of stdout in, zero or more events out. Blank lines yield nothing. */
   push(line: string): AgentEventDraft[];
   readonly sessionId: string | null;
-  /** Set once the run's final `result` arrives. */
+  /** The latest result. A process can emit several results before it exits. */
   readonly result: AgentStreamResult | null;
   /** The agent's latest to-do list, or null if it never wrote one. */
   readonly todos: WorkbenchTodo[] | null;

@@ -15,6 +15,8 @@ vi.mock('../services/mcpServers/dispatch.js', async (importOriginal) => ({
   mcpIntegrationSecrets: vi.fn(async () => ({})),
 }));
 
+const { recordTurnUsage } = await import('../services/insights/turnUsage.js');
+const branchNames = await import('../services/workbenches/branchName.js');
 const runtime = await import('../services/workbenches/sandboxRuntime.js');
 const instructions = await import('../services/workbenches/instructions.js');
 const skills = await import('../services/workbenches/skillPack.js');
@@ -111,6 +113,36 @@ describe('workbench turn launch', () => {
     await testDb.db.update(workbenchChats).set({ turnHeartbeatAt: at }).where(eq(workbenchChats.id, 'chat'));
   }
 
+
+  it('keeps a turn running through two results until process exit', async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    const naming = vi.spyOn(branchNames, 'startBranchNaming').mockImplementation(() => undefined);
+    const plain = fleet.handler;
+    const lines = (text: string, cost: number) => claudeTurnLines('sess', text).map((line) => {
+      const event = JSON.parse(line);
+      return JSON.stringify(event.type === 'result' ? { ...event, total_cost_usd: cost, usage: { input_tokens: cost * 100 } } : event);
+    });
+    fleet.handler = (script, req) => isAgentTurn(script) ? {
+      stdout: [...lines('First answer', 0.1), ...lines('Final answer', 0.3)], hold,
+    } : plain(script, req);
+    try {
+      await sendMessage('chat', { text: 'Run background subagents' });
+      await vi.waitFor(async () => expect((await events()).filter((event) => event.type === 'result')).toHaveLength(2));
+      expect((await store.getChat('chat'))?.status).toBe('running');
+      expect(statuses().every((status) => status === 'running')).toBe(true);
+      expect((await events()).filter((event) => event.type === 'result')).toEqual([
+        expect.objectContaining({ result: 'First answer', talyn: { kind: 'process_result', turn: 1, attempt: 0 } }),
+        expect.objectContaining({ result: 'Final answer', talyn: { kind: 'process_result', turn: 1, attempt: 0 } }),
+      ]);
+    } finally { release(); }
+    await settled('idle');
+    expectNoTransientStop('idle');
+    expect((await store.getChat('chat'))?.turnCount).toBe(1);
+    await vi.waitFor(() => expect(naming).toHaveBeenCalledWith('wb', { message: 'Run background subagents', finalMessage: 'Final answer' }));
+    expect(naming).toHaveBeenCalledTimes(1);
+    expect(await recordTurnUsage('chat', 1)).toEqual([expect.objectContaining({ costEstimateMicros: 300000, inputTokens: 30 })]);
+  });
 
   it('records stopped subagents when cancellation has no local follower', async () => {
     await store.updateChat('chat', { status: 'running', turnCount: 1 });

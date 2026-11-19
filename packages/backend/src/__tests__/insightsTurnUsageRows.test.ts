@@ -51,6 +51,15 @@ describe('buildTurnUsageRows: Claude', () => {
     expect(small).toMatchObject({ isPrimary: false, costEstimateMicros: 10_000, durationMs: null, agentSteps: null, firstReplyMs: null });
   });
 
+  it('counts only the last cumulative result per process attempt', () => {
+    const [row] = buildTurnUsageRows(claudeChat, facts([
+      result({ seq: 1, attempt: 0, usage: { input_tokens: 10 }, costUsd: 0.1, durationMs: 1000, numTurns: 1 }),
+      result({ seq: 2, attempt: 0, usage: { input_tokens: 30 }, costUsd: 0.3, durationMs: 3000, numTurns: 3 }),
+      result({ seq: 3, attempt: 1, usage: { input_tokens: 5 }, costUsd: 0.05, durationMs: 500, numTurns: 1 }),
+    ]));
+    expect(row).toMatchObject({ inputTokens: 35, costEstimateMicros: 350000, durationMs: 3500, agentSteps: 4 });
+  });
+
   it('adds up two runs of one turn (a relaunch spent tokens twice)', () => {
     const run = (seq: number, cost: number) => result({
       seq, modelUsage: { m: { inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 30, cacheCreationInputTokens: 40, costUSD: cost } },

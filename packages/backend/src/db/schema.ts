@@ -2365,6 +2365,8 @@ export const workbenches = pgTable(
     kind: text('kind').notNull().default('session'),
     /** The thread this session belongs to. Null for a thread and for a session outside a thread. */
     threadId: text('thread_id').references((): AnyPgColumn => workbenches.id, { onDelete: 'set null' }),
+    parentWorkbenchId: text('parent_workbench_id').references((): AnyPgColumn => workbenches.id, { onDelete: 'set null' }),
+    notifyParent: boolean('notify_parent').notNull().default(false),
     name: text('name').notNull(),
     /** The display title (model-written or a person's). Null: show `name`. Never renames the branch. */
     title: text('title'),
@@ -2455,6 +2457,7 @@ export const workbenches = pgTable(
     pullRequestIdx: index('idx_workbenches_pull_request')
       .on(t.pullRequestId)
       .where(sql`${t.archivedAt} IS NULL`),
+    parentIdx: index('idx_workbenches_parent').on(t.parentWorkbenchId).where(sql`${t.parentWorkbenchId} IS NOT NULL`),
     threadIdx: index('idx_workbenches_thread')
       .on(t.threadId)
       .where(sql`${t.threadId} IS NOT NULL`),

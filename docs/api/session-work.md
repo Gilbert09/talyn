@@ -303,3 +303,10 @@ if (changes.files.length > 0) {
   console.log(pr.existing ? "Linked" : "Opened", pr.url);
 }
 ```
+
+## Parent session
+
+Session responses include `parent_id`, the id of the session that started them.
+It is null for sessions without a parent.
+Deleting the parent clears this link. Existing children keep their own session and box.
+The MCP creation tool sets this link. The public creation endpoint does not accept it.

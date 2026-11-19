@@ -42,7 +42,7 @@ A whole suite of a large repository can run longer than one command may run. Do 
 
 ## 4. Wait on long commands
 
-A command stops after about 10 minutes. Your agent's own background tasks (`run_in_background` on a Bash or Agent call, `&`, `nohup`) stop when your turn ends. A tool call that runs at that time stops too, and the person sees "Interrupted".
+A command stops after about 10 minutes. Do not use Bash `run_in_background`, `&` or `nohup`. Use `talyn_run_background` for long commands.
 
 Start each command that can take more than about 2 minutes with Talyn's tool, then end your turn:
 
@@ -61,9 +61,9 @@ talyn_run_background
 - A move or resize of the session stops every job.
 
 Rules for your agent's own tools:
-- Run subagents in the foreground (`run_in_background: false`).
+- Claude Agent calls can use `run_in_background: true`. Start several independent subagents in parallel.
 - Use a sub-session (`talyn_create_session`) for long or separate work that needs its own branch or pull request.
-- Do not end your turn while a subagent or a background task of your agent still runs.
+- The turn stays open until these subagents finish. The box stays awake during this time.
 - If your agent moves a slow command to the background by itself, stop that task. Then start the command again with `talyn_run_background`.
 - Never `sleep` for minutes, and do not poll a log in a loop. A long wait wastes the turn and shows nothing to the person.
 
