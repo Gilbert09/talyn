@@ -138,7 +138,7 @@ export async function sendCreatePullRequest(
     const target = chat ?? (await createSessionChat(workbench));
     if (!target) return;
     const res = await ops.send(target, { text: CREATE_PR_MESSAGE, intent: 'create_pr', planMode: false });
-    trackEvent('session_message_sent', { queued: res.queued, plan_mode: false, model_id: target.model, attachments_count: 0 });
+    trackEvent('session_message_sent', { queued: res.queued, plan_mode: false, model_id: target.model, attachments_count: 0, runtime: workbench.runtime });
     if (res.queued && workbench.status !== 'moving') {
       toast.info(
         'Queued',

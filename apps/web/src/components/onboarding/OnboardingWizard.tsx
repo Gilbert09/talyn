@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react';
+import type { WorkbenchAgent } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useGithubConnection } from '../../hooks/useGithubConnection';
 import { trackEvent } from '../../lib/analytics';
+import { api } from '../../lib/api';
 import { FirstSessionStep } from './steps/FirstSessionStep';
 import { ConnectAgentStep } from './steps/ConnectAgentStep';
 import { ConnectGitHubStep } from './steps/ConnectGitHubStep';
@@ -38,10 +40,20 @@ export function OnboardingWizard() {
   const reportedAgents = useRef(new Set<string>());
   const [signupSource, setSignupSource] = useState<SignupSource | null>(null);
   const latestSignupSource = useRef<SignupSource | null>(null);
+  const setFeatures = useWorkspaceStore((s) => s.setFeatures);
 
   useEffect(() => {
     setOnboardingComplete(false);
   }, [setOnboardingComplete]);
+
+  // `useSystemStatus` loads features only after onboarding, so the wizard asks once itself.
+  useEffect(() => {
+    if (useWorkspaceStore.getState().features) return;
+    Promise.resolve()
+      .then(() => api.features.get())
+      .then(setFeatures)
+      .catch(() => {});
+  }, [setFeatures]);
 
   useEffect(() => {
     const key = STEPS[step].key;
@@ -94,6 +106,7 @@ export function OnboardingWizard() {
       repos_watched: repositories.length,
       agent_connected: agentConnected,
       agent_skipped: agentSkipped,
+      agent_mode: !agentSkipped && agentConnected ? 'cloud' : 'none',
       // The answer can change while the session request is pending.
       signup_source: latestSignupSource.current,
     });
@@ -107,8 +120,8 @@ export function OnboardingWizard() {
     setStep((s) => s + 1);
   }
 
-  function handleSessionCreated() {
-    trackEvent('first_session_created', { from: 'onboarding' });
+  function handleSessionCreated(created: { runtime: 'sandbox'; agent: WorkbenchAgent }) {
+    trackEvent('first_session_created', { from: 'onboarding', runtime: created.runtime, agent: created.agent });
     trackEvent('onboarding_step_completed', { step: 'first_session' });
     finishOnboarding();
   }

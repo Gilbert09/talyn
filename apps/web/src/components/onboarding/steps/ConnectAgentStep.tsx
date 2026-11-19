@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, Check } from 'lucide-react';
 import { POSTHOG_LOGO } from '../../../assets/providers/logos';
 import { useAgentConnections } from '../../../hooks/useAgentConnections';
@@ -16,6 +16,8 @@ import { usePostHogCodeOffered } from '../../widgets/PostHogCodeRetirement';
 
 type AgentChoice = 'claude' | 'codex' | 'posthog';
 
+const DESKTOP_DOWNLOAD_URL = 'https://talyn.dev/download';
+
 /** Connect a subscription (or PostHog Code, where it is still offered) before starting a session. */
 export function ConnectAgentStep() {
   // The cards read the store, and nothing else fills it during onboarding:
@@ -27,6 +29,15 @@ export function ConnectAgentStep() {
   const posthogConnected = useWorkspaceStore((s) => s.posthogStatus?.connected === true);
   const [choice, setChoice] = useState<AgentChoice | null>(null);
   const posthogOffered = usePostHogCodeOffered();
+  const localOffered = useWorkspaceStore((s) => s.features?.onboardingLocalAgent === true);
+  const desktopHintShown = localOffered && cloudProviders !== null && choice === null;
+  const desktopHintViewed = useRef(false);
+
+  useEffect(() => {
+    if (!desktopHintShown || desktopHintViewed.current) return;
+    desktopHintViewed.current = true;
+    trackEvent('onboarding_desktop_app_suggested_viewed');
+  }, [desktopHintShown]);
 
   // Until the provider list arrives the fleet is unknown, so draw nothing
   // rather than flash PostHog Code at a workspace that turns out to have the fleet.
@@ -140,6 +151,21 @@ export function ConnectAgentStep() {
             </button>
         ))}
       </div>
+      {desktopHintShown && (
+        <p className="text-[13px] text-muted-foreground">
+          Already use Claude Code or Codex on your computer? The desktop app runs sessions on your computer with no
+          sign-in.{' '}
+          <a
+            href={DESKTOP_DOWNLOAD_URL}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => trackEvent('onboarding_desktop_app_suggested_clicked')}
+            className="font-medium text-foreground underline underline-offset-4 hover:no-underline"
+          >
+            Get the desktop app
+          </a>
+        </p>
+      )}
     </div>
   );
 }

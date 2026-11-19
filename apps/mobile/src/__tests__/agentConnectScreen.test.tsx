@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 import * as Clipboard from 'expo-clipboard';
 import * as WebBrowser from 'expo-web-browser';
 
+import { trackEvent } from '../lib/analytics';
 import { ConnectAgentPanel } from '../features/agents/connect/ConnectAgentSheet';
 import { fixture } from './workflowFixtures';
 
@@ -32,6 +33,7 @@ jest.mock('../auth/AuthProvider', () => ({
 jest.mock('../workflow/hooks', () => ({
   useResource: () => ({ status: 'ready', data: [{ type: 'selfhosted', connectedAgents: [], reauthAgents: [] }], refresh: jest.fn() }),
 }));
+jest.mock('../lib/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('expo-web-browser', () => ({ openBrowserAsync: jest.fn(async () => ({ type: 'dismiss' })) }));
 jest.mock('expo-clipboard', () => ({
   hasStringAsync: jest.fn(async () => true), getStringAsync: jest.fn(async () => ''), setStringAsync: jest.fn(async () => true),
@@ -43,6 +45,7 @@ const clipboard = Clipboard as jest.Mocked<typeof Clipboard>;
 const browser = WebBrowser as jest.Mocked<typeof WebBrowser>;
 
 beforeEach(() => {
+  (trackEvent as jest.Mock).mockClear();
   mockList.mockResolvedValue(accounts());
   mockStart.mockResolvedValue({ url: 'https://claude.com/cai/oauth/authorize?x=1' });
   mockComplete.mockResolvedValue({ connected: true });
@@ -227,5 +230,65 @@ describe('Codex', () => {
     expect(await screen.findByText('Finish on your computer')).toBeTruthy();
     await act(async () => { fireEvent.press(screen.getByLabelText('Choose a different agent')); });
     expect(screen.getByLabelText('Claude: Not connected')).toBeTruthy();
+  });
+});
+
+describe('Claude sign-in analytics', () => {
+  const abandoned = () => (trackEvent as jest.Mock).mock.calls.filter(([name]) => name === 'cloud_provider_signin_abandoned');
+
+  it('fires abandoned once with via back', async () => {
+    const view = await render(<ConnectAgentPanel agent="claude" onConnected={jest.fn()} />);
+    await startSignIn();
+    await act(async () => { fireEvent.press(screen.getByLabelText('Back')); });
+    await view.unmount();
+    expect(abandoned()).toHaveLength(1);
+    expect(abandoned()[0][1]).toEqual({
+      provider: 'selfhosted', agent: 'claude', method: 'claude_oauth', via: 'back', elapsed_ms: expect.any(Number),
+    });
+  });
+
+  it('fires via closed when unmounted while awaiting the code', async () => {
+    const view = await render(<ConnectAgentPanel agent="claude" onConnected={jest.fn()} />);
+    await startSignIn();
+    await view.unmount();
+    expect(abandoned()).toHaveLength(1);
+    expect(abandoned()[0][1]).toMatchObject({ via: 'closed' });
+  });
+
+  it('does not fire after connected', async () => {
+    const onConnected = jest.fn();
+    const view = await render(<ConnectAgentPanel agent="claude" onConnected={onConnected} />);
+    await startSignIn();
+    await act(async () => { fireEvent.changeText(screen.getByLabelText('Code from Anthropic'), CODE); });
+    await act(async () => { fireEvent.press(screen.getByLabelText('Finish sign-in')); });
+    await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(1));
+    await view.unmount();
+    expect(abandoned()).toHaveLength(0);
+  });
+
+  it('sends the error code on a failed finish and does not fire', async () => {
+    mockComplete.mockRejectedValue(Object.assign(new Error('That sign-in expired. Start it again.'), { code: 'signin_expired' }));
+    const view = await render(<ConnectAgentPanel agent="claude" onConnected={jest.fn()} />);
+    await startSignIn();
+    await act(async () => { fireEvent.changeText(screen.getByLabelText('Code from Anthropic'), CODE); });
+    await act(async () => { fireEvent.press(screen.getByLabelText('Finish sign-in')); });
+    await screen.findByText('That sign-in expired. Start it again.');
+    await view.unmount();
+    expect(trackEvent).toHaveBeenCalledWith('cloud_provider_connect_failed', expect.objectContaining({
+      stage: 'finish', error_code: 'signin_expired',
+    }));
+    expect(abandoned()).toHaveLength(0);
+  });
+
+  it('has a null error code for a plain error', async () => {
+    mockStart.mockRejectedValue(new Error('offline'));
+    await render(<ConnectAgentPanel agent="claude" onConnected={jest.fn()} />);
+    await screen.findByText('Sign in with Claude');
+    await act(async () => { fireEvent.press(screen.getByLabelText('Sign in with Claude')); });
+    await screen.findByText('offline');
+    expect(trackEvent).toHaveBeenCalledWith('cloud_provider_connect_failed', {
+      provider: 'selfhosted', agent: 'claude', stage: 'start', error: 'offline', error_code: null,
+    });
+    expect(abandoned()).toHaveLength(0);
   });
 });

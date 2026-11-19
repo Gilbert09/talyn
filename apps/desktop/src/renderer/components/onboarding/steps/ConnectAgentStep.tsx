@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
-import { ArrowLeft, Check } from 'lucide-react';
+import { ArrowLeft, Check, Laptop } from 'lucide-react';
+import type { WorkbenchAgent, WorkbenchLocalReadiness } from '@talyn/shared';
 import { POSTHOG_LOGO } from '../../../assets/providers/logos';
 import { useAgentConnections } from '../../../hooks/useAgentConnections';
 import { FleetAgentMark } from '../../../lib/providerMeta';
@@ -13,11 +14,36 @@ import {
 } from '../../panels/SettingsPanel';
 import { Card } from '../../ui/card';
 import { usePostHogCodeOffered } from '../../widgets/PostHogCodeRetirement';
+import { LocalAgentStatus } from './LocalAgentStatus';
 
-type AgentChoice = 'claude' | 'codex' | 'posthog';
+type AgentChoice = 'claude' | 'codex' | 'posthog' | 'local';
+
+/** Where the first session runs: a connected subscription on the fleet, or the CLI on this computer. */
+export type AgentMode = 'cloud' | 'local';
+
+const LOCAL_AGENT_NAMES: Record<WorkbenchAgent, string> = { claude: 'Claude Code', codex: 'Codex' };
+
+interface ConnectAgentStepProps {
+  /** The `onboardingLocalAgent` flag: offer the agent CLI on this computer. */
+  localOffered?: boolean;
+  mode?: AgentMode;
+  onModeChange?: (mode: AgentMode) => void;
+  /** The installed CLI a local session will use. Null when none is usable. */
+  localAgent?: WorkbenchAgent | null;
+  /** Why no local agent is usable, once this computer was checked. */
+  localReason?: string;
+  onLocalReadiness?: (local: WorkbenchLocalReadiness) => void;
+}
 
 /** Connect a subscription (or PostHog Code, where it is still offered) before starting a session. */
-export function ConnectAgentStep() {
+export function ConnectAgentStep({
+  localOffered = false,
+  mode = 'cloud',
+  onModeChange,
+  localAgent = null,
+  localReason,
+  onLocalReadiness,
+}: ConnectAgentStepProps = {}) {
   // The cards read the store, and nothing else fills it during onboarding:
   // `useSystemStatus` mounts in `MainLayout`, which renders only once the
   // wizard is done.
@@ -25,7 +51,7 @@ export function ConnectAgentStep() {
 
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const posthogConnected = useWorkspaceStore((s) => s.posthogStatus?.connected === true);
-  const [choice, setChoice] = useState<AgentChoice | null>(null);
+  const [choice, setChoice] = useState<AgentChoice | null>(localOffered && mode === 'local' ? 'local' : null);
   const posthogOffered = usePostHogCodeOffered();
 
   // Until the provider list arrives the fleet is unknown, so draw nothing
@@ -39,9 +65,28 @@ export function ConnectAgentStep() {
   const connectedAgents = fleet?.connectedAgents ?? [];
   const reauthAgents = fleet?.reauthAgents ?? [];
 
+  const chooseAgain = () => {
+    setChoice(null);
+    onModeChange?.('cloud');
+  };
+
+  if (choice === 'local') {
+    return (
+      <ChosenAgent onBack={chooseAgain}>
+        <LocalAgentStatus recheck onReadiness={onLocalReadiness} />
+        <p className="text-[13px] text-muted-foreground" role="status">
+          {localAgent
+            ? `Your sessions will use ${LOCAL_AGENT_NAMES[localAgent]} on this computer.`
+            : localReason
+              ? `${localReason}. Install Claude Code or Codex, then press Re-check.`
+              : 'Checking this computer…'}
+        </p>
+      </ChosenAgent>
+    );
+  }
   if (choice === 'claude' || choice === 'codex') {
     return (
-      <ChosenAgent onBack={() => setChoice(null)}>
+      <ChosenAgent onBack={chooseAgain}>
         <Card className="p-4">
           <FleetAgentRow
             agent={choice}
@@ -54,7 +99,7 @@ export function ConnectAgentStep() {
   }
   if (choice === 'posthog') {
     return (
-      <ChosenAgent onBack={() => setChoice(null)}>
+      <ChosenAgent onBack={chooseAgain}>
         <PostHogCodeCard />
       </ChosenAgent>
     );
@@ -99,6 +144,17 @@ export function ConnectAgentStep() {
             icon: <img src={POSTHOG_LOGO} alt="" className="w-5 h-5 object-contain" />,
           },
         ]),
+    ...(localOffered
+      ? [
+          {
+            id: 'local' as const,
+            name: 'Claude Code or Codex on this computer',
+            detail: 'Run sessions in a git worktree on this computer with the CLI you already use. No sign-in, no box-hours.',
+            connected: false,
+            icon: <Laptop className="w-5 h-5 text-muted-foreground" />,
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -108,7 +164,9 @@ export function ConnectAgentStep() {
           ? 'Use your Claude or ChatGPT subscription'
           : posthogOffered
             ? 'Connect PostHog Code to run your sessions.'
-            : 'Sessions run on Claude or Codex. Neither is available for this workspace yet, so skip this step for now.'}
+            : localOffered
+              ? 'Run sessions with the Claude Code or Codex CLI on this computer.'
+              : 'Sessions run on Claude or Codex. Neither is available for this workspace yet, so skip this step for now.'}
       </p>
       <div className="space-y-2">
         {options.map((option) => (
@@ -118,6 +176,7 @@ export function ConnectAgentStep() {
               onClick={() => {
                 trackEvent('onboarding_agent_option_selected', { agent: option.id });
                 setChoice(option.id);
+                onModeChange?.(option.id === 'local' ? 'local' : 'cloud');
               }}
               className={cn(
                 'w-full flex items-center gap-3 rounded-lg border p-4 text-left transition-colors',

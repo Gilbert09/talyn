@@ -114,7 +114,7 @@ it('tracks a created session and its first queued message', async () => {
     kind: 'session', runtime: 'sandbox', repository_id: 'repo1', size: 'small',
   });
   expect(trackEvent).toHaveBeenCalledWith('session_message_sent', {
-    queued: true, plan_mode: true, model_id: 'model1', attachments_count: 0,
+    queued: true, plan_mode: true, model_id: 'model1', attachments_count: 0, runtime: 'sandbox',
   });
   expect(JSON.stringify(vi.mocked(trackEvent).mock.calls)).not.toContain('private prompt');
 });

@@ -571,6 +571,26 @@ export const FEATURE_FLAGS = {
     releaseScopes: ['posthog-inbox-rules', 'posthog-inbox'],
   },
 
+  /**
+   * Onboarding local agent: the desktop wizard's "Connect your agent" step
+   * offers the Claude Code or Codex CLI already installed on the computer, so
+   * the first session runs locally with no subscription sign-in. Web shows a
+   * hint that points to the desktop app.
+   *
+   * Drawing only: local sessions already exist for every desktop account, so
+   * nothing server-side is gated on it. Fallback OFF and gated while PostHog
+   * measures the onboarding funnel. `ONBOARDING_LOCAL_AGENT_ENABLED=true`
+   * turns it on locally.
+   */
+  onboardingLocalAgent: {
+    posthogKey: 'onboarding-local-agent',
+    envOverride: 'ONBOARDING_LOCAL_AGENT_ENABLED',
+    fallback: false,
+    description: 'Onboarding local agent — offer the agent CLI on this computer in the desktop onboarding',
+    availability: 'gated',
+    releaseScopes: ['onboarding'],
+  },
+
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */
@@ -705,6 +725,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'webhookRules',
   'issueRules',
   'posthogInboxRules',
+  'onboardingLocalAgent',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

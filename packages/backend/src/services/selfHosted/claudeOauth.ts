@@ -116,7 +116,7 @@ export const CLAUDE_REFRESH_SCOPE = CLAUDE_SCOPE;
 const REFRESH_MARGIN_MS = 5 * 60_000;
 
 export class ClaudeOAuthError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly kind?: 'scope_refused') {
     super(message);
     this.name = 'ClaudeOAuthError';
   }
@@ -393,6 +393,7 @@ export async function exchangeCode(input: {
         `(granted: ${body.scope}). It is probably an Anthropic Console/organization ` +
         'account rather than a Claude subscription — sign in with the account that ' +
         'has your Claude Pro or Max plan.',
+      'scope_refused',
     );
   }
   return {

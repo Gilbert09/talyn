@@ -9,6 +9,7 @@ import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { ipcErrorMessage } from '../../lib/ipcError';
+import { errorCode, isCodexSignInTimeout, useSignInAbandon, type SignInAbandon } from '../../lib/signInFunnel';
 
 type Account = FleetAccountView;
 
@@ -22,20 +23,28 @@ function errorMessage(error: unknown): string {
 type ConnectMethod = 'claude_oauth' | 'codex_paste' | 'codex_oauth' | 'claude_api_key' | 'codex_api_key';
 type ConnectStage = 'start' | 'finish' | 'save' | 'parse';
 
-function trackStarted(agent: FleetAgent, method: ConnectMethod) {
+function trackStarted(agent: FleetAgent, method: ConnectMethod, funnel: SignInAbandon) {
   trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent, method });
+  funnel.begin(agent, method);
 }
 
-function trackConnected(agent: FleetAgent) {
+function trackConnected(agent: FleetAgent, funnel: SignInAbandon) {
+  funnel.end();
   trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent });
 }
 
 // Report a failed connect attempt, then rethrow so `run` still shows the error.
-async function trackFailure<T>(agent: FleetAgent, stage: ConnectStage, action: () => Promise<T>): Promise<T> {
+async function trackFailure<T>(agent: FleetAgent, stage: ConnectStage, funnel: SignInAbandon, action: () => Promise<T>): Promise<T> {
   try {
     return await action();
   } catch (e) {
-    trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent, stage, error: errorMessage(e).slice(0, 200) });
+    // A timeout means the user never finished in the browser: abandonment, not failure.
+    if (agent === 'codex' && stage === 'start' && isCodexSignInTimeout(e)) {
+      funnel.abandon('timeout');
+    } else {
+      funnel.end();
+      trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent, stage, error: errorMessage(e).slice(0, 200), error_code: errorCode(e) });
+    }
     throw e;
   }
 }
@@ -126,6 +135,7 @@ export function FleetAccountRow({
   const [label, setLabel] = useState(account.label);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [busy, setBusy] = useState(false);
+  const funnel = useSignInAbandon();
   const [error, setError] = useState<string | null>(null);
   const [codeStep, setCodeStep] = useState(false);
   const [code, setCode] = useState('');
@@ -182,8 +192,8 @@ export function FleetAccountRow({
   const reconnect = async () => {
     if (account.kind === 'claude_oauth') {
       await run(async () => {
-        trackStarted(account.agent, 'claude_oauth');
-        await trackFailure(account.agent, 'start', async () => {
+        trackStarted(account.agent, 'claude_oauth', funnel);
+        await trackFailure(account.agent, 'start', funnel, async () => {
           const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { accountId: account.id });
           await openExternal(url);
         });
@@ -191,10 +201,10 @@ export function FleetAccountRow({
       });
     } else if (account.kind === 'codex_oauth') {
       await run(async () => {
-        trackStarted(account.agent, 'codex_oauth');
-        const result = await trackFailure(account.agent, 'start', () => window.electron.codex.signIn());
-        await trackFailure(account.agent, 'save', () => api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(result), { codexFleetAccountId: account.id }));
-        trackConnected(account.agent);
+        trackStarted(account.agent, 'codex_oauth', funnel);
+        const result = await trackFailure(account.agent, 'start', funnel, () => window.electron.codex.signIn());
+        await trackFailure(account.agent, 'save', funnel, () => api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(result), { codexFleetAccountId: account.id }));
+        trackConnected(account.agent, funnel);
       });
     }
   };
@@ -256,7 +266,7 @@ export function FleetAccountRow({
       {usageExpanded && <div className="space-y-2 pt-1">{windows.map((window) => <UsageWindowRow key={window.key} window={window} switchAtPercent={switchAtPercent} />)}</div>}
       {codeStep && <div className="flex gap-2">
         <Input aria-label={`Code for ${account.label}`} value={code} onChange={(e) => setCode(e.target.value)} />
-        <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await trackFailure(account.agent, 'finish', () => api.cloudProviders.completeClaudeSignIn(workspaceId, code, { accountId: account.id })); trackConnected(account.agent); setCodeStep(false); setCode(''); })}>Finish sign-in</Button>
+        <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await trackFailure(account.agent, 'finish', funnel, () => api.cloudProviders.completeClaudeSignIn(workspaceId, code, { accountId: account.id })); trackConnected(account.agent, funnel); setCodeStep(false); setCode(''); })}>Finish sign-in</Button>
       </div>}
       {confirmRemove && <div className="flex items-center gap-2 text-xs">
         <span>Remove {account.label}?</span>
@@ -286,6 +296,7 @@ export function FleetAccountsList({ agent, workspaceId, accounts, activeId, swit
   const [code, setCode] = useState('');
   const [codeStep, setCodeStep] = useState(false);
   const [busy, setBusy] = useState(false);
+  const funnel = useSignInAbandon();
   const [error, setError] = useState<string | null>(null);
 
   const run = async (action: () => Promise<void>) => {
@@ -316,17 +327,17 @@ export function FleetAccountsList({ agent, workspaceId, accounts, activeId, swit
     void run(async () => {
       try {
         if (agent === 'claude') {
-          trackStarted(agent, 'claude_oauth');
-          await trackFailure(agent, 'start', async () => {
+          trackStarted(agent, 'claude_oauth', funnel);
+          await trackFailure(agent, 'start', funnel, async () => {
             const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { newAccount: true });
             await openExternal(url);
           });
           setCodeStep(true);
         } else {
-          trackStarted(agent, 'codex_oauth');
-          const result = await trackFailure(agent, 'start', () => window.electron.codex.signIn());
-          const saved = await trackFailure(agent, 'save', () => api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(result), { codexNewAccount: true }));
-          trackConnected(agent);
+          trackStarted(agent, 'codex_oauth', funnel);
+          const result = await trackFailure(agent, 'start', funnel, () => window.electron.codex.signIn());
+          const saved = await trackFailure(agent, 'save', funnel, () => api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(result), { codexNewAccount: true }));
+          trackConnected(agent, funnel);
           await done(saved.accountId);
         }
       } catch (e) {
@@ -348,13 +359,13 @@ export function FleetAccountsList({ agent, workspaceId, accounts, activeId, swit
         </div>}
         {method === 'key' && <div className="space-y-2">
           <Input label={`${agentLabel} API key`} aria-label={`${agentLabel} API key`} type="password" value={key} onChange={(e) => setKey(e.target.value)} disabled={busy} />
-          <Button size="sm" disabled={busy || !key.trim()} onClick={() => void run(async () => { trackStarted(agent, agent === 'claude' ? 'claude_api_key' : 'codex_api_key'); const added = await trackFailure(agent, 'save', () => api.cloudProviders.fleetAccounts.add(workspaceId, agent, agent === 'claude' ? 'anthropic_key' : 'openai_key', key.trim())); trackConnected(agent); await done(added.id); })}>Add account</Button>
+          <Button size="sm" disabled={busy || !key.trim()} onClick={() => void run(async () => { trackStarted(agent, agent === 'claude' ? 'claude_api_key' : 'codex_api_key', funnel); const added = await trackFailure(agent, 'save', funnel, () => api.cloudProviders.fleetAccounts.add(workspaceId, agent, agent === 'claude' ? 'anthropic_key' : 'openai_key', key.trim())); trackConnected(agent, funnel); await done(added.id); })}>Add account</Button>
         </div>}
         {method === 'sign_in' && agent === 'claude' && codeStep && <div className="space-y-2">
           <Input label="Code from Anthropic" aria-label="Code from Anthropic" value={code} onChange={(e) => setCode(e.target.value)} disabled={busy} />
-          <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { const result = await trackFailure(agent, 'finish', () => api.cloudProviders.completeClaudeSignIn(workspaceId, code, { newAccount: true })); trackConnected(agent); await done(result.accountId); })}>Finish sign-in</Button>
+          <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { const result = await trackFailure(agent, 'finish', funnel, () => api.cloudProviders.completeClaudeSignIn(workspaceId, code, { newAccount: true })); trackConnected(agent, funnel); await done(result.accountId); })}>Finish sign-in</Button>
         </div>}
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setAdding(false); setMethod(null); setCodeStep(false); setError(null); }}>Cancel</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => { funnel.abandon('cancel'); setAdding(false); setMethod(null); setCodeStep(false); setError(null); }}>Cancel</Button>
         {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
       </div>
     )}

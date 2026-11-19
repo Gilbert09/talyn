@@ -37,6 +37,7 @@ import {
   type WorkbenchMessageSender,
   type Workbench,
   boxRefusalReason,
+  resolveWorkbenchConfig,
 } from '@talyn/shared';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
@@ -1074,6 +1075,13 @@ export function workbenchRoutes(): Router {
       lastWake.set(row.id, { at: Date.now(), status });
       res.status(status === 'awake' ? 200 : 202).json({ success: true, data: { status } });
     } catch (err) {
+      // A best-effort prefetch: a fleet that is full or out of reach is not an error for the client.
+      const refusal = fleetErrorAsRefusal(err);
+      if (refusal && (refusal.code === 'fleet_unavailable' || refusal.code === 'sandbox_waking')) {
+        console.warn(`[workbench] wake skipped: workbench=${row.id} code=${refusal.code}`);
+        ok(res, { status: 'unavailable' });
+        return;
+      }
       fail(res, err);
     }
   });
@@ -1219,6 +1227,13 @@ export function workbenchRoutes(): Router {
     try {
       ok(res, await readSessionConfig(row, { live: wantsLive(req) }));
     } catch (err) {
+      // A passive read: a fleet fault answers the default config, marked, and the client reads again later.
+      const refusal = fleetErrorAsRefusal(err);
+      if (refusal && (refusal.code === 'fleet_unavailable' || refusal.code === 'sandbox_waking')) {
+        console.warn(`[workbench] config read fell back to the default: workbench=${row.id} code=${refusal.code}`);
+        ok(res, { ...resolveWorkbenchConfig({}), unavailable: true });
+        return;
+      }
       fail(res, err);
     }
   });

@@ -4,8 +4,9 @@ import { randomBytes } from 'crypto';
 import { eq, sql } from 'drizzle-orm';
 import { getDbClient } from '../db/client.js';
 import { workspaces as workspacesTable } from '../db/schema.js';
+import { captureWorkspaceEvent } from '../services/analytics.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
-import { buildAuthorizeUrl, exchangeCode, splitPastedCode } from '../services/selfHosted/claudeOauth.js';
+import { ClaudeOAuthError, ClaudeReauthRequiredError, buildAuthorizeUrl, exchangeCode, splitPastedCode } from '../services/selfHosted/claudeOauth.js';
 import {
   patchSelfHostedConfig,
   readSelfHostedConfig,
@@ -464,57 +465,52 @@ export function cloudProviderRoutes(): Router {
   router.post('/selfhosted/claude/complete', async (req, res) => {
     const { workspaceId, code, accountId, label, newAccount } = req.body as { workspaceId?: string; code?: string; accountId?: string; label?: string; newAccount?: boolean };
     if (!workspaceId || !code?.trim()) {
-      return res.status(400).json({ success: false, error: 'workspaceId and code are required' });
+      return res.status(400).json({ success: false, code: 'missing_input', error: 'workspaceId and code are required' });
     }
     try {
       await requireWorkspaceAccess(req, workspaceId);
     } catch (err) {
       return handleAccessError(err, res);
     }
+    const fail = (status: number, failureCode: string, error: string) => {
+      captureWorkspaceEvent(workspaceId, 'claude_signin_completed', { agent: 'claude', outcome: 'failed', code: failureCode });
+      return res.status(status).json({ success: false, code: failureCode, error });
+    };
 
     const pending = (await readSelfHostedConfig(workspaceId))?.claudePendingAuth as
       | ({ state: string; codeVerifierEnc: Parameters<typeof decryptString>[0]; expiresAt: string; accountId?: string; label?: string; newAccount?: boolean })
       | undefined;
     if (!pending) {
-      return res.status(400).json({
-        success: false,
-        error: 'Start the Claude sign-in again — this one was not found.',
-      });
+      return fail(400, 'signin_not_found', 'Start the Claude sign-in again — this one was not found.');
     }
     if ((accountId !== undefined && typeof accountId !== 'string') || (label !== undefined && typeof label !== 'string') ||
         (newAccount !== undefined && typeof newAccount !== 'boolean')) {
-      return res.status(400).json({ success: false, error: 'Invalid account target' });
+      return fail(400, 'signin_account_mismatch', 'Invalid account target');
     }
     // A row written before `newAccount` existed says "add" with its label alone.
     const pendingAdds = Boolean(pending.newAccount || pending.label);
     if (Date.parse(pending.expiresAt) <= Date.now()) {
       await patchSelfHostedConfig(workspaceId, { claudePendingAuth: undefined });
-      return res.status(400).json({
-        success: false,
-        error: 'That sign-in expired. Start it again.',
-      });
+      return fail(400, 'signin_expired', 'That sign-in expired. Start it again.');
     }
     if ((accountId && accountId !== pending.accountId) || (label && label !== pending.label) || (newAccount && !pendingAdds)) {
-      return res.status(400).json({ success: false, error: 'This sign-in targets a different account' });
+      return fail(400, 'signin_account_mismatch', 'This sign-in targets a different account');
     }
     if (pending.accountId) {
       const target = await getFleetAccount(pending.accountId);
       if (!target || target.workspaceId !== workspaceId || target.kind !== 'claude_oauth') {
-        return res.status(404).json({ success: false, error: 'Account not found' });
+        return fail(404, 'account_not_found', 'Account not found');
       }
     }
     if (pendingAdds && !(await mayAddAccount(workspaceId, 'claude'))) {
-      return res.status(403).json({ success: false, code: 'multi_account_disabled', error: 'Multiple accounts are disabled' });
+      return fail(403, 'multi_account_disabled', 'Multiple accounts are disabled');
     }
 
     const { code: authCode, state } = splitPastedCode(code);
     // The state Anthropic echoes back must be the one we minted. A mismatch
     // means the code came from a different sign-in — most likely an older tab.
     if (state && state !== pending.state) {
-      return res.status(400).json({
-        success: false,
-        error: 'That code is from a different sign-in. Start again and use the newest one.',
-      });
+      return fail(400, 'signin_state_mismatch', 'That code is from a different sign-in. Start again and use the newest one.');
     }
 
     try {
@@ -548,6 +544,7 @@ export function cloudProviderRoutes(): Router {
         agent: 'claude',
         detail: 'Claude signed in with a Claude Pro/Max subscription.',
       });
+      captureWorkspaceEvent(workspaceId, 'claude_signin_completed', { agent: 'claude', outcome: 'connected' });
       res.json({ success: true, data: { connected: true, ...(connectedAccountId ? { accountId: connectedAccountId } : {}) } });
     } catch (err) {
       // The pending sign-in is KEPT, and the reasoning that cleared it was a
@@ -561,10 +558,11 @@ export function cloudProviderRoutes(): Router {
       // Keeping it is at worst neutral and usually better: the authorize URL is
       // still valid, so going back for a fresh code works, and starting over
       // overwrites the row anyway. The TTL is what ends it.
-      res.status(400).json({
-        success: false,
-        error: err instanceof Error ? err.message : 'Could not complete the Claude sign-in.',
-      });
+      const failureCode =
+        err instanceof ClaudeReauthRequiredError ? 'grant_rejected'
+        : err instanceof ClaudeOAuthError && err.kind === 'scope_refused' ? 'scope_refused'
+        : 'token_exchange_failed';
+      return fail(400, failureCode, err instanceof Error ? err.message : 'Could not complete the Claude sign-in.');
     }
   });
 

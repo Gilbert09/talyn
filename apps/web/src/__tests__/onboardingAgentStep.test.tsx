@@ -22,6 +22,7 @@ vi.mock('../lib/api', () => ({
     environments: { list: vi.fn().mockResolvedValue([]) },
     cloudProviders: { list: vi.fn().mockResolvedValue([]) },
     posthog: { getStatus: vi.fn().mockResolvedValue({ connected: false }) },
+    features: { get: vi.fn().mockResolvedValue(null) },
     ws: { on: vi.fn().mockReturnValue(() => {}) },
   },
 }));
@@ -40,6 +41,7 @@ async function setup(options: {
   posthogConnected?: boolean;
   github?: boolean;
   repos?: unknown[];
+  features?: unknown;
 }) {
   const { api } = await import('../lib/api');
   const { useWorkspaceStore } = await import('../stores/workspace');
@@ -54,6 +56,7 @@ async function setup(options: {
     repositories: (options.repos ?? [REPO]) as never,
     cloudProviders: null,
     posthogStatus: null,
+    features: (options.features ?? null) as never,
   });
 }
 
@@ -165,7 +168,7 @@ describe('skip at the agent step', () => {
     expect(trackEvent).toHaveBeenCalledWith('onboarding_agent_skipped');
     expect(trackEvent).toHaveBeenCalledWith(
       'onboarding_completed',
-      expect.objectContaining({ agent_skipped: true, agent_connected: false })
+      expect.objectContaining({ agent_skipped: true, agent_connected: false, agent_mode: 'none' })
     );
     expect(trackEvent).not.toHaveBeenCalledWith('onboarding_step_completed', { step: 'agent' });
     expect(navigate).toHaveBeenCalledWith({ view: 'home' }, { replace: true });
@@ -234,5 +237,58 @@ describe('GitHub status polling during onboarding', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('the desktop app hint', () => {
+  const HINT = /Already use Claude Code or Codex on your computer\?/;
+  const FLEET = [{ type: 'selfhosted', connected: false, connectedAgents: [] }];
+
+  async function events(name: string) {
+    const { trackEvent } = await import('../lib/analytics');
+    return vi.mocked(trackEvent).mock.calls.filter(([event]) => event === name);
+  }
+
+  it.each([
+    ['flag on', { onboardingLocalAgent: true }, true],
+    ['flag off', { onboardingLocalAgent: false }, false],
+    ['no features', undefined, false],
+  ])('%s', async (_name, features, shown) => {
+    await setup({ providers: FLEET, features });
+    await walkToAgentStep();
+    await screen.findByRole('button', { name: /^Codex/ });
+    expect(screen.queryByText(HINT) !== null).toBe(shown);
+    expect(screen.queryByRole('link', { name: 'Get the desktop app' }) !== null).toBe(shown);
+    expect(await events('onboarding_desktop_app_suggested_viewed')).toHaveLength(shown ? 1 : 0);
+    // The web app never offers a local option.
+    expect(screen.queryByRole('button', { name: /on this computer/ })).toBeNull();
+  });
+
+  it('reads the flag from GET /features when the store has none', async () => {
+    const { api } = await import('../lib/api');
+    vi.mocked(api.features.get).mockResolvedValueOnce({ onboardingLocalAgent: true } as never);
+    await setup({ providers: FLEET });
+    await walkToAgentStep();
+    expect(await screen.findByText(HINT)).toBeTruthy();
+  });
+
+  it('links to the download page and tracks the click', async () => {
+    await setup({ providers: FLEET, features: { onboardingLocalAgent: true } });
+    await walkToAgentStep();
+    const link = await screen.findByRole('link', { name: 'Get the desktop app' });
+    expect(link.getAttribute('href')).toBe('https://talyn.dev/download');
+    expect(link.getAttribute('target')).toBe('_blank');
+    fireEvent.click(link);
+    expect(await events('onboarding_desktop_app_suggested_clicked')).toHaveLength(1);
+  });
+
+  it('reports the view once, also after choosing an agent and coming back', async () => {
+    await setup({ providers: FLEET, features: { onboardingLocalAgent: true } });
+    await walkToAgentStep();
+    fireEvent.click(await screen.findByRole('button', { name: /^Codex/ }));
+    expect(screen.queryByText(HINT)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Choose a different agent/ }));
+    expect(await screen.findByText(HINT)).toBeTruthy();
+    expect(await events('onboarding_desktop_app_suggested_viewed')).toHaveLength(1);
   });
 });

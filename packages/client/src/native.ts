@@ -2777,7 +2777,7 @@ export const workbenches = {
     request<{ acknowledged: boolean }>('POST', `/workbenches/${enc(id)}/attention/seen`),
   /** Start waking the session's box before the first turn. Never waits for the box. */
   wake: (id: string) =>
-    request<{ status: 'skipped' | 'moving' | 'resuming' | 'awake' }>('POST', `/workbenches/${enc(id)}/wake`),
+    request<{ status: 'skipped' | 'moving' | 'resuming' | 'awake' | 'unavailable' }>('POST', `/workbenches/${enc(id)}/wake`),
   /** Provision again after a failed start. */
   retry: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/retry`),
   /** Where the session's turns spent their time, by category, with the slowest calls. */

@@ -287,7 +287,7 @@ export function Composer({
       setTrigger(null);
       const res = await ops.send(target, input);
       useWorkbenchStore.getState().settleOutgoingMessage(target.id, outgoingId, res.queued);
-      trackEvent('session_message_sent', { queued: res.queued, plan_mode: planMode, model_id: model, attachments_count: attachments.length });
+      trackEvent('session_message_sent', { queued: res.queued, plan_mode: planMode, model_id: model, attachments_count: attachments.length, runtime: workbench.runtime });
       if (res.queued && workbench.status !== 'moving') {
         toast.info(
           'Queued',
