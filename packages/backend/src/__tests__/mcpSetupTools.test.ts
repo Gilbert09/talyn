@@ -92,7 +92,7 @@ describe('session setup and timing tools', () => {
 
     it('refuses a session outside the caller and its thread', async () => {
       const { calls } = mockApi({ 'GET /api/v1/workbenches/other': () => wb({ id: 'other', threadId: 'thread9' }) });
-      await expect(tool('session_timing').handler(OWNER, { session_id: 'other' }, SELF)).rejects.toThrow(/itself, or a session in its thread/);
+      await expect(tool('session_timing').handler(OWNER, { session_id: 'other' }, SELF)).rejects.toThrow(/itself, a child, or a session in its thread/);
       expect(calls.map((c) => c.url.pathname)).toEqual(['/api/v1/workbenches/other']);
     });
 
@@ -229,7 +229,7 @@ describe('session setup and timing tools', () => {
 
     it('refuses a session outside the caller and its thread', async () => {
       const { calls } = mockApi({ 'GET /api/v1/workbenches/other': () => wb({ id: 'other', threadId: 'thread9' }) });
-      await expect(tool('session_sandbox_status').handler(OWNER, { session_id: 'other' }, SELF)).rejects.toThrow(/itself, or a session in its thread/);
+      await expect(tool('session_sandbox_status').handler(OWNER, { session_id: 'other' }, SELF)).rejects.toThrow(/itself, a child, or a session in its thread/);
       expect(calls.map((c) => c.url.pathname)).toEqual(['/api/v1/workbenches/other']);
     });
 
@@ -306,7 +306,7 @@ describe('session setup and timing tools', () => {
     it('refuses a session outside the caller and its thread', async () => {
       const { calls } = mockApi({ 'GET /api/v1/workbenches/other': () => wb({ id: 'other', threadId: null }) });
       await expect(tool('record_setup_step').handler(OWNER, { command: 'cargo install x', why: 'y', session_id: 'other' }, SELF))
-        .rejects.toThrow(/itself, or a session in its thread/);
+        .rejects.toThrow(/itself, a child, or a session in its thread/);
       expect(calls.every((c) => c.method === 'GET')).toBe(true);
     });
 
