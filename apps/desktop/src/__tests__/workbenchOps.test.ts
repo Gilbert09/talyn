@@ -232,7 +232,7 @@ describe('openLocalPullRequest', () => {
         return { exitCode: over.statusExit ?? 0, stdout: over.status ?? '', stderr: over.statusExit ? 'fatal: not a git repository' : '' };
       }
       if (has(steps, 'rev-list', '--count')) return { exitCode: 0, stdout: over.ahead ?? '2\n' };
-      if (has(steps, 'push', '-u', 'origin', 'HEAD')) return { stdout: '', ...(over.push ?? { exitCode: 0, stderr: '' }) };
+      if (has(steps, 'push', '--no-verify', '-u', 'origin', 'HEAD')) return { stdout: '', ...(over.push ?? { exitCode: 0, stderr: '' }) };
       return undefined;
     });
   }
@@ -252,7 +252,7 @@ describe('openLocalPullRequest', () => {
     const commit = argvs.find((a) => a[1] === 'commit');
     if (commitArgv) expect(commit).toEqual(commitArgv);
     else expect(commit).toBeUndefined();
-    expect(argvs).toContainEqual(['git', 'push', '-u', 'origin', 'HEAD']);
+    expect(argvs).toContainEqual(['git', 'push', '--no-verify', '-u', 'origin', 'HEAD']);
     expect(api.createPullRequest).toHaveBeenCalledWith('wb1', { ...given, pushed: true });
   });
 
