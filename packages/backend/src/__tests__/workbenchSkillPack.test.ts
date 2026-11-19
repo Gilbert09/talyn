@@ -206,7 +206,7 @@ describe('session skill pack', () => {
       expect(section).toContain('Then end your turn.');
       for (const own of ['`run_in_background`', '`&`', '`nohup`', '"Interrupted"']) expect(section).toContain(own);
       const named = new Set(section.match(/\btalyn_[a-z0-9_]+\b/g));
-      expect(named).toEqual(new Set(['talyn_run_background', 'talyn_background_logs', 'talyn_list_background']));
+      expect(named).toEqual(new Set(['talyn_run_background', 'talyn_background_logs', 'talyn_list_background', 'talyn_create_session']));
       for (const tool of named) expect(toolsByName.has(tool)).toBe(true);
       expect(toolsByName.get('talyn_run_background')!.description).toContain('more than about 2 minutes');
     });
