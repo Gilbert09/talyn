@@ -28,15 +28,17 @@ describe('parent sessions', () => {
     useWorkspaceStore.setState({ features: { sessionSubagents: enabled } as never });
     render(<ParentSessions workbench={{ id: 'current', parentId: 'parent' } as Workbench} />);
     if (!enabled) {
-      expect(screen.queryByText(/Parent:/)).toBeNull();
-      expect(screen.queryByText(/Sessions started/)).toBeNull();
+      expect(screen.queryByText(/Started by/)).toBeNull();
+      expect(screen.queryByText(/session/)).toBeNull();
       expect(mockList).not.toHaveBeenCalled();
       return;
     }
     await waitFor(() => expect(mockList).toHaveBeenCalledWith('current'));
-    expect(screen.getByText('Sessions started (1)')).toBeInTheDocument();
+    expect(screen.queryByText('Child work: ready')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show the 1 session this session started' }));
+    expect(await screen.findByText('Sessions started (1)')).toBeInTheDocument();
     expect(screen.getByText('Child work: ready')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Parent:/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open the parent session Parent work' }));
     expect(navigate).toHaveBeenCalledWith({ view: 'workbench', id: 'parent' });
   });
 });

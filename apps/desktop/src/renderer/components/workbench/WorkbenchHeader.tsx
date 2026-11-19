@@ -740,6 +740,7 @@ export function WorkbenchHeader({
             {!thread && workbench.threadId && (
               <ThreadChip threadId={workbench.threadId} />
             )}
+            {!thread && <ParentSessions workbench={workbench} />}
             {!thread && <SessionPreviewChips workbench={workbench} ops={ops} />}
             {pr?.state === 'open' && (
               <PRStatusPill
@@ -813,7 +814,6 @@ export function WorkbenchHeader({
         onConfirm={() => void restartSandbox()}
         onCancel={() => setRestartOpen(false)}
       />
-      {!thread && <ParentSessions workbench={workbench} />}
       <ArchiveWorkbenchDialog
         workbench={workbench}
         open={confirm === 'archive'}
