@@ -44,6 +44,7 @@ import {
   useClaudeImportDialog,
 } from '../components/workbench/new/ContinueClaudeConversation';
 import { useCreateWorkbench } from '../components/workbench/new/useCreateWorkbench';
+import { PendingSessionView } from '../components/workbench/new/PendingSessionView';
 import { useRepoPaths } from '../components/workbench/new/useRepoPaths';
 import { defaultRepositoryId, writeLastRepository } from '../components/workbench/new/lastRepository';
 
@@ -77,7 +78,7 @@ export function NewWorkbenchPage() {
   const workbenches = useWorkspaceWorkbenches();
   const readiness = useReadiness(workspaceId);
   const repoPaths = useRepoPaths();
-  const { create, busy, error: createError, clearError } = useCreateWorkbench();
+  const { create, busy, pending, error: createError, clearError } = useCreateWorkbench();
 
   const [prompt, setPrompt] = useState('');
   const [repositoryId, setRepositoryId] = useState(() =>
@@ -380,6 +381,9 @@ export function NewWorkbenchPage() {
   const missingAgents =
     readinessKnown && effectiveRuntime === 'sandbox' && runtimes.sandbox.available ? unconnectedAgents(agent, choiceFor) : [];
   const connectAgent = () => openSettings('agents');
+
+  // The draft stays in this page's state, so a failed create comes back to it with the error.
+  if (pending) return <PendingSessionView spec={pending} />;
 
   return (
     <TooltipProvider delayDuration={300}>
