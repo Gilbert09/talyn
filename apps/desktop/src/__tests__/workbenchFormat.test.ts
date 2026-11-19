@@ -155,6 +155,15 @@ describe('transcript turns', () => {
     ]);
   });
 
+  it('ignores nested events before they can start or split a turn', () => {
+    const nested = user(2, 2, 'Research this');
+    nested.event.parent_tool_use_id = 'agent-1';
+    const nestedAssistant = we(3, 2, { type: 'assistant', parent_tool_use_id: 'agent-1', message: { content: [{ type: 'text', text: 'Nested answer' }] } });
+    expect(userMessageText(nested.event)).toBeNull();
+    const turns = splitTurns([user(1, 1, 'Start'), nested, nestedAssistant, we(4, 1, { type: 'assistant' })]);
+    expect(turns.map((turn) => [turn.userText, turn.events.map((event) => event.seq)])).toEqual([['Start', [4]]]);
+  });
+
   it.each([
     ['a person wrote it', undefined, null],
     ['the thread wrote it', { sender: { kind: 'thread', threadId: 't1', name: 'Storage plan' } }, { kind: 'thread', threadId: 't1', name: 'Storage plan' }],

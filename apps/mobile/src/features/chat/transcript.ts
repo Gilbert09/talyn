@@ -1,5 +1,5 @@
 import {
-  PLAN_APPROVED_MESSAGE, buildBlocks, findTurnPlan, findTurnQuestion, groupToolRuns, isClaudeInterruptionEvent, mergeToolBlocks, messageSender,
+  PLAN_APPROVED_MESSAGE, buildBlocks, findTurnPlan, findTurnQuestion, groupToolRuns, isClaudeInterruptionEvent, isSubagentEvent, mergeToolBlocks, messageSender,
   messageTrigger, messageTriggerText, questionSummary, stripAutoPrBlock, stripPlanBlocks, type AgentEvent, type GroupedBlock, type ThreadSessionEvent,
   type ToolBlock, type ToolGroupBlock, type WorkbenchEvent, type WorkbenchMessageSender, type WorkbenchQuestionEvent,
 } from '@talyn/shared';
@@ -42,6 +42,7 @@ function injected(event: AgentEvent) {
 }
 /** The text of a user message event, or null for any other event. Mirrors web `userMessageText`. */
 export function userMessageText(event: AgentEvent): string | null {
+  if (isSubagentEvent(event)) return null;
   if (event.type === 'talyn_user_message' && typeof event.text === 'string') return event.text;
   if (event.type !== 'user' || injected(event)) return null;
   const content = event.message?.content;
@@ -64,12 +65,16 @@ const timeOf = (entry: WorkbenchEvent) => {
   return typeof raw === 'string' && Number.isFinite(Date.parse(raw)) ? raw : null;
 };
 
-interface Turn { turn: number; user: { text: string; seq: number; at: string | null; files: MessageImage[]; sender: WorkbenchMessageSender | null } | null; events: AgentEvent[]; times: Map<number, string | null> }
+interface Turn { turn: number; user: { text: string; seq: number; at: string | null; files: MessageImage[]; sender: WorkbenchMessageSender | null } | null; events: AgentEvent[]; subagentEvents?: AgentEvent[]; times: Map<number, string | null> }
 /** Split one turn's events at each new user message, like web `splitTurns`. */
 function splitTurns(turn: number, events: WorkbenchEvent[], interruption: (entry: WorkbenchEvent) => boolean): Turn[] {
   const turns: Turn[] = [];
   let current: Turn | null = null;
   for (const entry of events) {
+    if (isSubagentEvent(entry.event)) {
+      if (current) (current.subagentEvents ??= []).push({ ...entry.event, seq: entry.seq });
+      continue;
+    }
     // Claude's "[Request interrupted…]" user echo reads as a system line in the turn it stopped.
     const interrupted = interruption(entry);
     const event: AgentEvent = interrupted ? { seq: entry.seq, type: 'system', subtype: 'talyn_interruption' } as AgentEvent : { ...entry.event, seq: entry.seq };
@@ -101,7 +106,7 @@ function turnRows(chatId: string, turn: Turn, partial: ReadonlySet<string>): Tra
   }
   if (!turn.events.length) return rows;
   const cancelled = turn.events.some((event) => event.type === 'result' && event.subtype === 'cancelled');
-  for (const block of groupToolRuns(mergeToolBlocks(buildBlocks(turn.events)))) {
+  for (const block of groupToolRuns(mergeToolBlocks(buildBlocks([...turn.events, ...(turn.subagentEvents ?? [])])))) {
     const key = `${chatId}:${block.key}`;
     const seq = Number(block.key.replace(/^(group-|perm-)/, '').split('.')[0]);
     const timestamp = turn.times.get(seq) ?? null;
@@ -144,7 +149,8 @@ function sameEntries(a: WorkbenchEvent[], b: WorkbenchEvent[]) {
   return true;
 }
 const sameTool = (a: ToolBlock, b: ToolBlock) => a.key === b.key && a.toolId === b.toolId && a.name === b.name && a.input === b.input &&
-  a.output === b.output && a.isError === b.isError && a.stopped === b.stopped && a.settled === b.settled;
+  a.output === b.output && a.isError === b.isError && a.stopped === b.stopped && a.settled === b.settled &&
+  a.subagent?.steps === b.subagent?.steps && a.subagent?.current === b.subagent?.current;
 const sameJson = (a: unknown, b: unknown) => a === b || (typeof a === 'object' && typeof b === 'object' && JSON.stringify(a) === JSON.stringify(b));
 /** True when two rows draw the same. Lets an unchanged row keep its object, so its memoised view does not render again. */
 export function sameRow(a: TranscriptRow, b: TranscriptRow): boolean {
@@ -196,6 +202,10 @@ export class TranscriptRowCache {
     const runs: Array<{ turn: number; entries: WorkbenchEvent[] }> = [];
     let lastTurn: number | null = null;
     for (const entry of events) {
+      if (isSubagentEvent(entry.event)) {
+        runs[runs.length - 1]?.entries.push(entry);
+        continue;
+      }
       const turn: number = this.interrupted(entry) ? lastTurn ?? entry.turn : entry.turn;
       lastTurn = turn;
       const run = runs[runs.length - 1];

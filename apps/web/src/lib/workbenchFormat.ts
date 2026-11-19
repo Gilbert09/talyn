@@ -1,5 +1,6 @@
 import {
   createClaudeStreamParser,
+  isSubagentEvent,
   messageSender,
   nextWorkbenchAction,
   prSummaryToNextActionPr,
@@ -71,6 +72,7 @@ export function messageAttachments(event: AgentEvent): Array<{ name: string; mim
  * such as a launched skill's SKILL.md: the Skill call draws that.
  */
 export function userMessageText(event: AgentEvent): string | null {
+  if (isSubagentEvent(event)) return null;
   if (event.type === 'talyn_user_message' && typeof event.text === 'string') return event.text;
   if (event.type !== 'user' || isInjectedUserMessage(event)) return null;
   const content = event.message?.content;
@@ -95,6 +97,7 @@ export interface TranscriptTurn {
   sender: WorkbenchMessageSender | null;
   /** The agent's events for the turn, user message excluded. */
   events: AgentEvent[];
+  subagentEvents?: AgentEvent[];
   /** When the user's message was stored. Null when unknown. */
   userAt: string | null;
   /** When the turn's newest agent event was stored. Null when unknown. */
@@ -106,6 +109,10 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
   const turns: TranscriptTurn[] = [];
   let current: TranscriptTurn | null = null;
   for (const e of events) {
+    if (isSubagentEvent(e.event)) {
+      if (current) (current.subagentEvents ??= []).push(e.event);
+      continue;
+    }
     const text = userMessageText(e.event);
     if (!current || current.turn !== e.turn || (text !== null && current.userText !== null)) {
       current = { turn: e.turn, userText: null, userSeq: null, attachments: [], sender: null, events: [], userAt: null, lastAt: null };
@@ -225,8 +232,9 @@ export function chatInsights(events: WorkbenchEvent[]): ChatInsights {
   let init = -1;
   for (let i = events.length - 1; i >= 0 && (todo < 0 || assistant < 0 || result < 0 || init < 0); i--) {
     const ev = events[i].event;
+    if (isSubagentEvent(ev)) continue;
     if (ev.type === 'assistant') {
-      if (assistant < 0 && !ev.parent_tool_use_id && ev.message?.usage) assistant = i;
+      if (assistant < 0 && ev.message?.usage) assistant = i;
       if (todo < 0 && Array.isArray(ev.message?.content)) {
         const hasTodo = (ev.message?.content as Array<{ type?: unknown; name?: unknown }>).some(
           (b) => b?.type === 'tool_use' && b.name === 'TodoWrite'
@@ -282,7 +290,7 @@ export interface ChatTotals {
 export function chatTotals(events: WorkbenchEvent[]): ChatTotals {
   const totals: ChatTotals = { turns: 0, costUsd: null, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
   for (const { event } of events) {
-    if (event.type !== 'result') continue;
+    if (isSubagentEvent(event) || event.type !== 'result') continue;
     totals.turns += 1;
     if (typeof event.total_cost_usd === 'number') totals.costUsd = (totals.costUsd ?? 0) + event.total_cost_usd;
     const usage = (event.usage ?? {}) as {

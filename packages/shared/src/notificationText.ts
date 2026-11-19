@@ -1,6 +1,7 @@
 import type { Workbench, WorkbenchChat, WorkbenchEvent } from './workbench.js';
 import { workbenchDisplayName } from './workbenchTitle.js';
 import { parseQuestionEvent, questionSummary } from './workbenchQuestion.js';
+import { isSubagentEvent } from './transcript.js';
 
 /**
  * The text of a "your agent finished" alert: the desktop and web OS
@@ -42,7 +43,7 @@ function cleanSummary(text: string): string | null {
 function lastAssistantText(events: WorkbenchEvent[]): string | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i].event;
-    if (event.type !== 'assistant' || event.parent_tool_use_id || !Array.isArray(event.message?.content)) continue;
+    if (event.type !== 'assistant' || isSubagentEvent(event) || !Array.isArray(event.message?.content)) continue;
     for (let j = event.message.content.length - 1; j >= 0; j--) {
       const block = event.message.content[j] as { type?: unknown; text?: unknown };
       if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim()) return block.text;
@@ -53,6 +54,7 @@ function lastAssistantText(events: WorkbenchEvent[]): string | null {
 
 function lastQuestion(events: WorkbenchEvent[]): string | null {
   for (let i = events.length - 1; i >= 0; i--) {
+    if (isSubagentEvent(events[i].event)) continue;
     const asked = parseQuestionEvent(events[i].event as unknown as Record<string, unknown>);
     if (asked) return questionSummary(asked);
     const content = events[i].event.message?.content;
@@ -71,6 +73,7 @@ function lastQuestion(events: WorkbenchEvent[]): string | null {
 function lastResultError(events: WorkbenchEvent[]): string | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i].event;
+    if (isSubagentEvent(event)) continue;
     if (event.type !== 'result') continue;
     if (typeof event.result === 'string' && event.result.trim()) return event.result;
     const errors = event.errors;
@@ -92,8 +95,9 @@ function lastResultError(events: WorkbenchEvent[]): string | null {
 
 /** A short account of the latest turn, when its events contain one. */
 export function notificationSummary(chat: NotificationChat, events: WorkbenchEvent[]): string | null {
-  const turn = latestEventTurn(events);
-  const current = events.filter((event) => event.turn === turn);
+  const mainEvents = events.filter((entry) => !isSubagentEvent(entry.event));
+  const turn = latestEventTurn(mainEvents);
+  const current = mainEvents.filter((event) => event.turn === turn);
   for (let i = current.length - 1; i >= 0; i--) {
     const event = current[i].event;
     if (event.type === 'talyn_pr' && event.ok === true && typeof event.number === 'number') {

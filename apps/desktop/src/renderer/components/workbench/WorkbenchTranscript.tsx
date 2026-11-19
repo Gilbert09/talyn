@@ -1,6 +1,6 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, History, Loader2, RotateCcw } from 'lucide-react';
-import { agentOutageFrom, buildBlocks, findTurnPlan, findTurnQuestion, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent, type WorkbenchMessageSender } from '@talyn/shared';
+import { agentOutageFrom, buildBlocks, findTurnPlan, findTurnQuestion, isClaudeInterruptionEvent, isSubagentEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent, type WorkbenchMessageSender } from '@talyn/shared';
 import { AgentBlocks } from '../terminal/AgentConversation';
 import { usePendingMessages } from './usePendingMessages';
 import { renderMarkdownish } from '../../lib/markdown';
@@ -275,6 +275,7 @@ function useStableTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
     const next = new Map<string, { size: number; last: number; turn: TranscriptTurn }>();
     let lastTurn: number | null = null;
     const displayEvents = events.map((entry) => {
+      if (isSubagentEvent(entry.event)) return entry;
       if (!isClaudeInterruptionEvent(entry.event)) {
         lastTurn = entry.turn;
         return entry;
@@ -289,13 +290,14 @@ function useStableTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
     });
     const out = splitTurns(displayEvents).map((turn, i) => {
       const key = `${turn.turn}:${turn.userSeq ?? i}`;
-      const last = turn.events.length ? turn.events[turn.events.length - 1].seq : -1;
+      const size = turn.events.length + (turn.subagentEvents?.length ?? 0);
+      const last = Math.max(turn.events.at(-1)?.seq ?? -1, turn.subagentEvents?.at(-1)?.seq ?? -1);
       const prev = cache.current.get(key);
       const kept =
-        prev && prev.size === turn.events.length && prev.last === last && prev.turn.userText === turn.userText && prev.turn.attachments.length === turn.attachments.length && prev.turn.sender?.threadId === turn.sender?.threadId
+        prev && prev.size === size && prev.last === last && prev.turn.userText === turn.userText && prev.turn.attachments.length === turn.attachments.length && prev.turn.sender?.threadId === turn.sender?.threadId
           ? prev.turn
           : turn;
-      next.set(key, { size: turn.events.length, last, turn: kept });
+      next.set(key, { size, last, turn: kept });
       return kept;
     });
     cache.current = next;
@@ -359,7 +361,7 @@ const TurnView = React.memo(function TurnView({
       )}
       {turn.events.length > 0 && (
         <AgentBlocks
-          events={turn.events}
+          events={turn.subagentEvents ? [...turn.events, ...turn.subagentEvents] : turn.events}
           scopeId={`${chatId}:${turn.turn}`}
           hideCompletedResults
           retryResult={retryResult ? { key: retryResult.key, action: <RetryTurn chat={chat} ops={ops} reason={retryResult.reason} reconnect={retryResult.reconnect} /> } : undefined}

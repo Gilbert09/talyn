@@ -99,6 +99,15 @@ describe('transcript rows', () => {
     expect(userMessageText({ type: 'assistant', message: { content: 'Agent' } } as AgentEvent)).toBeNull();
   });
 
+  it('ignores nested events before they can start a turn', () => {
+    const nestedUser = at({ type: 'user', parent_tool_use_id: 'agent-1', message: { content: [{ type: 'text', text: 'Research this' }] } }, 2);
+    const nestedAssistant = at({ type: 'assistant', parent_tool_use_id: 'agent-1', message: { content: [{ type: 'text', text: 'Nested answer' }] } }, 2);
+    expect(userMessageText(nestedUser.event)).toBeNull();
+    const rows = transcriptRows('chat-one', [user('Start'), nestedUser, nestedAssistant, assistant([{ type: 'text', text: 'Main answer' }])]);
+    expect(kinds(rows)).toEqual(['user', 'text']);
+    expect(rows.map((row) => row.kind === 'user' || row.kind === 'text' ? row.text : null)).toEqual(['Start', 'Main answer']);
+  });
+
   it('builds a user bubble, agent text, and a paired tool call', () => {
     const rows = transcriptRows('chat-one', [user('Fix it', 1, { createdAt: '2026-11-08T11:00:00Z' }),
       assistant([{ type: 'text', text: 'Looking' }, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }]),

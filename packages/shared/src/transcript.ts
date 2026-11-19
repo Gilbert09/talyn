@@ -34,7 +34,7 @@ export function isClaudeInterruptionText(text: string): boolean {
 }
 
 export function isClaudeInterruptionEvent(event: AgentEvent): boolean {
-  if (event.type !== 'user') return false;
+  if (isSubagentEvent(event) || event.type !== 'user') return false;
   const content = (event.message as { content?: unknown })?.content;
   if (typeof content === 'string') return isClaudeInterruptionText(content);
   return Array.isArray(content) && content.length > 0 &&
@@ -67,10 +67,15 @@ export function isClaudeRejectedToolResult(content: unknown, isError: boolean): 
 // prompt, etc.). `buildBlocks` collapses a flat event list into this shape.
 // ---------------------------------------------------------------------------
 
+export interface SubagentProgress {
+  steps: number;
+  current?: string;
+}
+
 export type Block =
   | { kind: 'text'; key: string; text: string }
   | { kind: 'thinking'; key: string; text: string }
-  | { kind: 'tool_use'; key: string; toolId: string; name: string; input: unknown }
+  | { kind: 'tool_use'; key: string; toolId: string; name: string; input: unknown; subagent?: SubagentProgress }
   | {
       kind: 'tool_result';
       key: string;
@@ -140,8 +145,21 @@ export const SESSION_NOTE_SUBTYPES: ReadonlySet<string> = new Set([
   'agent_session_reset',
 ]);
 
+/** A subagent's current step: the verb and a short subject, e.g. "read contracts.py". */
+function subagentStepLabel({ label, detail, isCommand }: ToolDescription): string {
+  const line = detail.split('\n')[0].trim();
+  if (!line) return label;
+  const subject = isCommand || !line.includes('/') ? line : line.split('/').filter(Boolean).pop() ?? line;
+  return `${label} ${subject.length > 60 ? `${subject.slice(0, 59)}…` : subject}`;
+}
+
+export function isSubagentEvent(event: { parent_tool_use_id?: unknown }): boolean {
+  return Boolean(event.parent_tool_use_id);
+}
+
 export function buildBlocks(events: AgentEvent[]): Block[] {
   const blocks: Block[] = [];
+  const subagents = new Map<string, SubagentProgress>();
   let interruptionOpen = false;
   const interrupt = (key: string) => {
     if (!interruptionOpen) blocks.push({ kind: 'system', key, text: 'Interrupted', subtype: 'talyn_interruption' });
@@ -171,6 +189,21 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
   let streamingMsgId: string | undefined;
 
   for (const event of events) {
+    // Subagent events belong to the Agent tool result, not the main transcript.
+    if (isSubagentEvent(event)) {
+      const parentId = String(event.parent_tool_use_id);
+      const content = event.type === 'assistant' ? event.message?.content : undefined;
+      if (Array.isArray(content)) {
+        for (const part of content) {
+          if (part?.type !== 'tool_use') continue;
+          const progress = subagents.get(parentId) ?? { steps: 0 };
+          progress.steps++;
+          progress.current = subagentStepLabel(describeTool(String(part.name ?? 'unknown'), part.input));
+          subagents.set(parentId, progress);
+        }
+      }
+      continue;
+    }
     const seqKey = String(event.seq);
     if (event.type !== 'user' && !(event.type === 'system' && event.subtype === 'talyn_interruption')) interruptionOpen = false;
     if (event.type === 'system' && event.subtype === 'init') {
@@ -499,6 +532,12 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
     });
   }
 
+  for (const block of blocks) {
+    if (block.kind === 'tool_use' && describeTool(block.name, block.input).label === 'agent') {
+      const progress = subagents.get(block.toolId);
+      if (progress) block.subagent = progress;
+    }
+  }
   return blocks;
 }
 
@@ -1067,6 +1106,7 @@ export interface ToolBlock {
   toolId: string;
   name: string;
   input: unknown;
+  subagent?: SubagentProgress;
   /** Absent while the call is still in flight. */
   output?: unknown;
   /** Only meaningful once `output` has landed. */
@@ -1074,6 +1114,36 @@ export interface ToolBlock {
   stopped: boolean;
   /** False until the result arrives — lets a renderer show a spinner. */
   settled: boolean;
+}
+
+export interface SubagentCardModel {
+  type: string;
+  title: string;
+  brief: string;
+  steps: number;
+  current?: string;
+  stepsLabel: string;
+  running: boolean;
+  failed: boolean;
+  result: string | null;
+}
+
+export function subagentCardModel(block: ToolBlock): SubagentCardModel | null {
+  if (describeTool(block.name, block.input).label !== 'agent') return null;
+  const input = block.input && typeof block.input === 'object' ? block.input as Record<string, unknown> : {};
+  const brief = typeof input.prompt === 'string' ? input.prompt : '';
+  const type = typeof input.subagent_type === 'string' && input.subagent_type.trim() ? input.subagent_type.trim() : 'Subagent';
+  const title = typeof input.description === 'string' && input.description.trim()
+    ? input.description.trim() : brief.trim().split('\n')[0].trim();
+  const { steps, current } = block.subagent ?? { steps: 0 };
+  const running = !block.settled;
+  const failed = block.settled && block.isError;
+  const count = plural(steps, 'step');
+  const stepsLabel = running
+    ? steps === 0 ? 'Starting…' : `${count}${current ? ` · ${current}` : ''}`
+    : `${failed ? 'Failed' : 'Finished'} · ${count}`;
+  return { type, title, brief, steps, current, stepsLabel, running, failed,
+    result: block.output == null ? null : formatToolOutput(block.output).text };
 }
 
 export type MergedBlock = Exclude<Block, { kind: 'tool_use' } | { kind: 'tool_result' }> | ToolBlock;
@@ -1098,6 +1168,7 @@ export function mergeToolBlocks(blocks: Block[]): MergedBlock[] {
         toolId: block.toolId,
         name: block.name,
         input: block.input,
+        ...(block.subagent && describeTool(block.name, block.input).label === 'agent' ? { subagent: block.subagent } : {}),
         isError: false,
         stopped: false,
         settled: false,
@@ -1148,7 +1219,7 @@ export function mergedBlockSignature(block: MergedBlock): string {
   if (block.kind === 'tool') {
     const len =
       typeof block.output === 'string' ? block.output.length : block.output ? 1 : 0;
-    return `${block.key}:${block.settled ? 1 : 0}:${block.isError ? 1 : 0}:${block.stopped ? 1 : 0}:${len}`;
+    return `${block.key}:${block.settled ? 1 : 0}:${block.isError ? 1 : 0}:${block.stopped ? 1 : 0}:${len}:${block.subagent?.steps ?? 0}:${block.subagent?.current ?? ''}`;
   }
   return blockSignature(block);
 }
@@ -1411,6 +1482,11 @@ export function groupToolRuns(blocks: MergedBlock[]): GroupedBlock[] {
   for (const block of blocks) {
     if (block.kind === 'tool') {
       if (isHiddenTool(block.name)) continue;
+      if (describeTool(block.name, block.input).label === 'agent') {
+        flush();
+        out.push(block);
+        continue;
+      }
       children.push(...pending);
       pending = [];
       run.push(block);

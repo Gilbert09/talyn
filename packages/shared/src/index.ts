@@ -1430,6 +1430,8 @@ export interface AgentEvent {
   subtype?: string;
   /** Session id the CLI assigned to this run. Lets us `--resume` later. */
   session_id?: string;
+  /** The Agent tool call that owns a subagent event. */
+  parent_tool_use_id?: string | null;
   /** For assistant/user events — the message content blocks. */
   message?: {
     role?: string;

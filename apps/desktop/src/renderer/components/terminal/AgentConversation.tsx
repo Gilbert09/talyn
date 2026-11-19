@@ -5,7 +5,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { ChevronDown, ChevronRight, GitPullRequest, PauseCircle, Shield } from 'lucide-react';
+import { Bot, Loader2, ChevronDown, ChevronRight, GitPullRequest, PauseCircle, Shield } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { PROSE_MEASURE, renderMarkdownish } from '../../lib/markdown';
 import { skillInstructionsByToolId } from '../../lib/skillInstructions';
@@ -28,6 +28,7 @@ import {
   mergeToolBlocks,
   stripAutoPrBlock,
   stripPlanBlocks,
+  subagentCardModel,
 } from '@talyn/shared';
 
 interface AgentConversationProps {
@@ -221,7 +222,9 @@ function BlockViewImpl({
       return <TextBlock text={block.text} />;
     case 'thinking':
       return <ThinkingBlock text={block.text} />;
-    case 'tool':
+    case 'tool': {
+      const subagent = subagentCardModel(block);
+      if (subagent) return <SubagentCard model={subagent} />;
       return (
         <ToolBlockView
           name={block.name}
@@ -233,6 +236,7 @@ function BlockViewImpl({
           skillInstructions={skills.get(block.toolId)}
         />
       );
+    }
     case 'tool_group':
       return (
         <ToolGroupView
@@ -334,6 +338,37 @@ function ThinkingBlock({ text, compact = false }: { text: string; compact?: bool
  *
  * Errors get more room: the failing part is the reason anyone is reading.
  */
+function SubagentCard({ model }: { model: NonNullable<ReturnType<typeof subagentCardModel>> }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="min-w-0 rounded-md border border-border bg-muted/20 text-[13px]">
+      <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-start gap-2 p-3 text-left">
+        <Bot aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 space-y-1">
+          <span className="block text-xs text-muted-foreground">Subagent · {model.type}</span>
+          <span className="block font-medium text-foreground [overflow-wrap:anywhere]">{model.title}</span>
+          <span className={cn('flex items-center gap-1.5 text-xs', model.failed ? 'text-destructive' : 'text-muted-foreground')}>
+            {model.running && <Loader2 aria-hidden className="h-3 w-3 shrink-0 animate-spin" />}
+            {model.stepsLabel}
+          </span>
+        </span>
+        {open ? <ChevronDown aria-hidden className="h-3 w-3 shrink-0" /> : <ChevronRight aria-hidden className="h-3 w-3 shrink-0" />}
+      </button>
+      {open && <div className="space-y-3 border-t border-border p-3 [overflow-wrap:anywhere]">
+        <section className="text-muted-foreground">
+          <h4 className="mb-1 text-xs font-medium">Brief from the agent</h4>
+          {renderMarkdownish(model.brief, 'surface')}
+        </section>
+        <section className="text-foreground">
+          <h4 className="mb-1 text-xs font-medium text-muted-foreground">Result</h4>
+          {model.result !== null && renderMarkdownish(model.result, 'surface')}
+        </section>
+      </div>}
+    </div>
+  );
+}
+
 const PREVIEW_LINES = 6;
 const PREVIEW_CHARS = 500;
 const PREVIEW_LINES_ERROR = 14;

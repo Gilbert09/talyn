@@ -240,6 +240,19 @@ it.each(['[Request interrupted by user]', '[Request interrupted by user for tool
   },
 );
 
+it('keeps an interruption in the main turn after a nested event', () => {
+  const nested = userEvent(2, 2);
+  nested.event.parent_tool_use_id = 'agent-1';
+  const marker = '[Request interrupted by user]';
+  const interrupted: WorkbenchEvent = {
+    chatId: 'c1', seq: 3, turn: 3,
+    event: { seq: 3, type: 'user', message: { content: [{ type: 'text', text: marker }] } } as AgentEvent,
+  };
+  render(<WorkbenchTranscript chat={chat} events={[userEvent(1, 1), nested, interrupted]} loading={false} error={null} ops={ops} />);
+  expect(screen.queryByText('message 2')).not.toBeInTheDocument();
+  expect(screen.getByText('Interrupted').closest('.space-y-3')).toContainElement(screen.getByText('message 1'));
+});
+
 it('shows an interruption system block as a quiet note without its subtype', () => {
   const events: WorkbenchEvent[] = [userEvent(1, 1), {
     chatId: 'c1', seq: 2, turn: 1,

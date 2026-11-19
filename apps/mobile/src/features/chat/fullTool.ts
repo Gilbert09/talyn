@@ -1,4 +1,4 @@
-import type { ToolBlock, WorkbenchEvent } from '@talyn/shared';
+import { isSubagentEvent, type ToolBlock, type WorkbenchEvent } from '@talyn/shared';
 import { createContext, useContext } from 'react';
 
 /** The seq of the event that holds a tool call: block keys are `<seq>.<index>`. */
@@ -15,6 +15,7 @@ export function fullToolFrom(tool: ToolBlock, events: WorkbenchEvent[]): ToolBlo
   if (!tool.toolId) return null;
   let input: unknown; let output: unknown; let foundInput = false; let foundOutput = false;
   for (const entry of events) {
+    if (isSubagentEvent(entry.event)) continue;
     const content = (entry.event.message as { content?: unknown } | undefined)?.content;
     if (!Array.isArray(content)) continue;
     for (const block of content) {

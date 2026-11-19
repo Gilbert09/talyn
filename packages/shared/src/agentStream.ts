@@ -15,6 +15,7 @@
  */
 import type { AgentEvent } from './index.js';
 import type { WorkbenchAgent, WorkbenchContextUsage, WorkbenchEffort, WorkbenchTodo } from './workbench.js';
+import { isSubagentEvent } from './transcript.js';
 
 /** An AgentEvent before the store assigns its `seq`. */
 export type AgentEventDraft = Partial<Pick<AgentEvent, 'seq'>> &
@@ -317,6 +318,7 @@ export function createClaudeStreamParser(state?: AgentStreamSnapshot): AgentStre
         nonJsonLines++;
         return [];
       }
+      if (isSubagentEvent(obj)) return [obj as AgentEventDraft];
       if (typeof obj.session_id === 'string' && obj.session_id) sessionId = obj.session_id;
 
       if (obj.type === 'system' && obj.subtype === 'init' && typeof obj.model === 'string') {
@@ -325,13 +327,11 @@ export function createClaudeStreamParser(state?: AgentStreamSnapshot): AgentStre
 
       if (obj.type === 'assistant') {
         const message = (obj.message ?? {}) as { content?: unknown; usage?: unknown; model?: unknown };
-        if (!obj.parent_tool_use_id) {
-          if (typeof message.model === 'string' && !model) model = message.model;
-          if (message.usage && typeof message.usage === 'object') {
-            const u = message.usage as Record<string, unknown>;
-            usedTokens =
-              num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens);
-          }
+        if (typeof message.model === 'string' && !model) model = message.model;
+        if (message.usage && typeof message.usage === 'object') {
+          const u = message.usage as Record<string, unknown>;
+          usedTokens =
+            num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens);
         }
         if (Array.isArray(message.content)) {
           for (const block of message.content) {
