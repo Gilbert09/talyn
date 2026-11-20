@@ -125,6 +125,17 @@ Select text in a session's or a thread's chat. A **New session from selection** 
 
 In the mobile app, select text in the conversation and tap **Copy**. Then open the session menu and tap **New session from copied text**.
 
+## Share to Talyn from another app
+
+In the mobile app, you can start a session from a link or from text in another app. Open the app's share sheet and pick **Talyn**:
+
+- The new-session page opens. A link shows with the page title when the app sends one. Other text shows as a Markdown quote. Type your task under it.
+- The page keeps your usual repository.
+- Nothing starts until you send the message.
+- When you are signed out, sign in first. The shared item then opens.
+
+Talyn takes text and links. It does not take images or files from the share sheet. To attach an image, use the image button in the composer.
+
 ## Talk to the agent while it works
 
 You can send a message while the agent is in the middle of a turn. The message waits in a queue and goes in when the turn ends. Queued messages show above the composer, and you can remove one before it is sent.

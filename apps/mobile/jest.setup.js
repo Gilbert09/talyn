@@ -31,3 +31,8 @@ jest.mock('posthog-react-native', () => {
   function PostHog() {}
   return { __esModule: true, default: PostHog, PostHog, PostHogProvider: ({ children }) => children };
 });
+
+// The share extension's native module. Tests that check sharing mock it themselves; the rest get no shared item.
+jest.mock('expo-share-intent', () => ({
+  useShareIntent: () => ({ isReady: true, hasShareIntent: false, shareIntent: { text: null, webUrl: null, files: null, type: null }, resetShareIntent: () => {}, error: null }),
+}));

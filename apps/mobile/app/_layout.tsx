@@ -15,6 +15,7 @@ import { AuthProvider, useAuth, useMobileRuntime } from '../src/auth/AuthProvide
 import { AnalyticsRoot, useAnalyticsReady } from '../src/components/Analytics';
 import { Status } from '../src/components/AuthControls';
 import { ShellScreen, useShellColors } from '../src/components/ShellScreen';
+import { ShareIntentBridge } from '../src/features/share/ShareIntentBridge';
 import { UpdateBanner } from '../src/features/updates/UpdateBanner';
 import { useFleetModelCatalogSync } from '../src/lib/fleetModelCatalog';
 import { useAppFonts } from '../src/theme/fonts';
@@ -43,6 +44,8 @@ function AuthenticatedRoutes() {
     statusBarStyle: colors.mode === 'dark' ? 'light' : 'dark', contentStyle: { backgroundColor: colors.background } }}>
     <RootStack.Screen name="index" />
     <RootStack.Screen name="auth/callback" />
+    {/* The iOS share extension's link. It waits for the shared item, then opens the composer or sign-in. */}
+    <RootStack.Screen name="share" options={{ headerShown: false, animation: 'none' }} />
     <RootStack.Screen name="+not-found" options={{ headerShown: false }} />
     <RootStack.Protected guard={!signedIn}><RootStack.Screen name="(auth)" /></RootStack.Protected>
     <RootStack.Protected guard={signedIn}>
@@ -114,7 +117,7 @@ export default function RootLayout() {
   return <GestureHandlerRootView style={[styles.root, { backgroundColor: colors.background }]}>
     {/* Boot state 1 of 3: the bundled fonts load, which takes about one frame. */}
     {!fonts || !analytics ? <AppLoading phase="fonts" /> : <AnalyticsRoot><SafeAreaProvider style={{ backgroundColor: colors.background }}>
-      <SystemChrome /><AuthProvider><AuthenticatedRoutes /></AuthProvider>
+      <SystemChrome /><AuthProvider><ShareIntentBridge /><AuthenticatedRoutes /></AuthProvider>
       {/* Over every screen, and never a modal: it offers a restart and does not take one. */}
       <UpdateBanner />
     </SafeAreaProvider></AnalyticsRoot>}
