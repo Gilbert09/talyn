@@ -18,6 +18,7 @@ import { isStarting, StartingHint, StartingLine } from '../sessions/Starting';
 import { chatActions } from './actions';
 import { Composer } from './Composer';
 import { FindBar } from './FindBar';
+import { MessageMenuContext, useMessageMenu } from './messageMenu';
 import { fullToolFrom, TranscriptContext, toolSeq, type TranscriptActions } from './fullTool';
 import { StatusDot, TypingDots } from './Pulse';
 import { RowBoundary } from './RowBoundary';
@@ -69,6 +70,7 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
   const tabs = useMemo(() => subagents ? subagentTabs(state.data?.events ?? [], selectedTab) : [], [subagents, state.data, selectedTab]);
   const currentTab = tabs.find((tab) => tab.toolId === selectedTab) ?? null;
   const openTab = useCallback((toolId: string | null) => setSubagentTab(toolId && chat ? { chatId: chat.id, toolId } : null), [chat]);
+  const messageMenu = useMessageMenu(item);
   const cache = useRef(new TranscriptRowCache());
   /** The reader reached the oldest loaded message while another load ran. The older page is owed once it ends. */
   const olderOwed = useRef(false);
@@ -179,7 +181,7 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
   // A new sandbox: show what it does in place of the empty conversation, also while the first load runs.
   const startHint = starting && rows.length === 0 && (state.status === 'idle' || state.status === 'loading' || state.status === 'ready');
 
-  return <View style={{ flex: 1 }}>
+  return <MessageMenuContext.Provider value={messageMenu.open}><View style={{ flex: 1 }}>
     {header}
     <FleetReconnectNotice />
     {findOpen ? <FindBar query={query} onChangeQuery={changeQuery} count={matches.length} label={matchCountLabel(current, matches.length, query)}
@@ -255,7 +257,8 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
     </Pressable> : null}
     {chat ? <Composer item={item} chatId={chat.id} ready={ready} inputRef={inputRef} />
       : startHint ? null : <AppText variant="meta" tone="muted" style={local_.empty}>No conversation is available for this item.</AppText>}
-  </View>;
+    {messageMenu.elements}
+  </View></MessageMenuContext.Provider>;
 }
 
 const local_ = StyleSheet.create({

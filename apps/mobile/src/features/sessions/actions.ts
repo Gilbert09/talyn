@@ -103,17 +103,30 @@ export function copyEntry(kind: CopyActionKind, item: Pick<Workbench, 'id' | 'ki
   }
 }
 
-/** The menu label for starting a session from text copied out of the transcript. */
-export const NEW_FROM_COPIED_LABEL = 'New session from copied text';
+/** The long-press menu on a transcript message, and the "Select text" screen's button. */
+export const MESSAGE_ACTION_LABEL = {
+  new_session: 'New session from message',
+  copy: 'Copy message',
+  select: 'Select text',
+  new_from_selection: 'New session from selection',
+} as const;
+
+/** The selected part of a message, or '' when the selection is empty or only whitespace. */
+export function selectedText(text: string, selection: { start: number; end: number }): string {
+  const start = Math.max(0, Math.min(selection.start, selection.end));
+  const end = Math.min(text.length, Math.max(selection.start, selection.end));
+  const part = text.slice(start, end);
+  return part.trim() ? part : '';
+}
 
 /**
- * Where "New session from copied text" goes: the new-session composer with
- * the text quoted, in this session's repository. Web shows a button over a
- * transcript selection; a phone's selection menu takes no app items, so the
- * person copies the text first. Null when the clipboard holds no text.
+ * Where "New session from message" goes: the new-session composer with the
+ * text quoted, in this session's repository. Web shows a button over a
+ * transcript selection; a phone's selection menu takes no app items, so a long
+ * press on the message opens Talyn's own menu. Null when the text is empty.
  */
-export function newSessionFromTextRoute(item: Pick<Workbench, 'kind' | 'repositoryId' | 'repoFullName'>, copied: string) {
-  const prompt = transcriptQuotePrompt(copied);
+export function newSessionFromTextRoute(item: Pick<Workbench, 'kind' | 'repositoryId' | 'repoFullName'>, text: string) {
+  const prompt = transcriptQuotePrompt(text);
   if (!prompt) return null;
   const repository = item.kind === 'thread' ? undefined : item.repoFullName || item.repositoryId || undefined;
   return newWorkRoute('session', { repository, prompt });

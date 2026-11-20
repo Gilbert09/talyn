@@ -1,5 +1,5 @@
 import { SymbolView } from 'expo-symbols';
-import { memo, useMemo, useState, type ReactNode } from 'react';
+import { createContext, memo, useContext, useMemo, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View, type TextStyle } from 'react-native';
 
 import { AppText, Button } from '../../components/UI';
@@ -15,6 +15,8 @@ const CODE_CHUNK = 4000;
 const IMAGE_MAX_HEIGHT = 280;
 
 type Mark = (text: string, key?: string) => ReactNode;
+/** False in a transcript message, where a long press opens the message menu instead of native selection. */
+const Selectable = createContext(true);
 const plain: Mark = (text) => text;
 
 function renderInline(nodes: MdInline[], c: Theme, key = '', mark: Mark = plain): ReactNode[] {
@@ -41,17 +43,19 @@ function renderInline(nodes: MdInline[], c: Theme, key = '', mark: Mark = plain)
 function Paragraph({ children, style }: { children: MdInline[]; style?: TextStyle }) {
   const c = useTheme();
   const mark = useHighlighter();
-  return <Text selectable style={[type.body, { color: c.text }, style]}>{renderInline(children, c, '', mark)}</Text>;
+  const selectable = useContext(Selectable);
+  return <Text selectable={selectable} style={[type.body, { color: c.text }, style]}>{renderInline(children, c, '', mark)}</Text>;
 }
 
 function CodeBlock({ lang, text }: { lang: string; text: string }) {
   const c = useTheme();
   const mark = useHighlighter();
+  const selectable = useContext(Selectable);
   const chunks = Array.from({ length: Math.max(1, Math.ceil(text.length / CODE_CHUNK)) }, (_, index) => text.slice(index * CODE_CHUNK, (index + 1) * CODE_CHUNK));
   return <View accessibilityLabel={lang ? `${lang} code` : 'Code'} style={[styles.code, { backgroundColor: c.surface }]}>
     {lang ? <AppText variant="caption" tone="muted" style={styles.codeLang}>{lang}</AppText> : null}
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.codeScroll}>
-      <View>{chunks.map((chunk, index) => <Text key={index} selectable style={[styles.codeText, { color: c.text }]}>{mark(chunk, String(index))}</Text>)}</View>
+      <View>{chunks.map((chunk, index) => <Text key={index} selectable={selectable} style={[styles.codeText, { color: c.text }]}>{mark(chunk, String(index))}</Text>)}</View>
     </ScrollView>
   </View>;
 }
@@ -122,10 +126,11 @@ function MarkdownImage({ block }: { block: MdImage }) {
 function Blocks({ blocks, depth = 0 }: { blocks: MdBlock[]; depth?: number }) {
   const c = useTheme();
   const mark = useHighlighter();
+  const selectable = useContext(Selectable);
   return <View style={styles.blocks}>{blocks.map((block, index) => {
     switch (block.type) {
       case 'paragraph': return <Paragraph key={index}>{block.children}</Paragraph>;
-      case 'heading': return <Text key={index} accessibilityRole="header" selectable
+      case 'heading': return <Text key={index} accessibilityRole="header" selectable={selectable}
         style={[block.depth <= 1 ? styles.h1 : block.depth === 2 ? styles.h2 : styles.h3, index > 0 && styles.headingAfter, { color: c.text }]}>{renderInline(block.children, c, '', mark)}</Text>;
       case 'code': return <CodeBlock key={index} lang={block.lang} text={block.text} />;
       case 'list': return <List key={index} block={block} depth={depth} />;
@@ -138,12 +143,12 @@ function Blocks({ blocks, depth = 0 }: { blocks: MdBlock[]; depth?: number }) {
 }
 
 /** Rendered markdown for agent and user messages. Links open through the external link confirmation. Images open full screen. */
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({ text, selectable = true }: { text: string; selectable?: boolean }) {
   const doc = useMemo(() => parseMarkdown(text), [text]);
-  return <View>
+  return <Selectable.Provider value={selectable}><View>
     <Blocks blocks={doc.blocks} />
     {doc.truncated ? <AppText variant="meta" tone="muted" style={{ marginTop: 6 }}>Long text is limited in this view.</AppText> : null}
-  </View>;
+  </View></Selectable.Provider>;
 });
 
 const styles = StyleSheet.create({

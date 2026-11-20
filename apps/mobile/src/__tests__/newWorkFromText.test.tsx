@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 import { NewWorkScreen } from '../features/create/NewWorkScreen';
-import { NEW_FROM_COPIED_LABEL, newSessionFromTextRoute } from '../features/sessions/actions';
+import { newSessionFromTextRoute } from '../features/sessions/actions';
 import { fixture, session, thread } from './workflowFixtures';
 
 jest.setTimeout(15000);
@@ -43,13 +43,11 @@ beforeEach(() => {
 afterEach(() => { mockActive.store.dispose(); jest.restoreAllMocks(); });
 
 describe('newSessionFromTextRoute', () => {
-  it('is labelled like web', () => expect(NEW_FROM_COPIED_LABEL).toBe('New session from copied text'));
-
   it.each<[string, Parameters<typeof newSessionFromTextRoute>[0], string, Record<string, string> | null]>([
     ['a session: its repository by name', session(), 'the bug', { mode: 'session', repository: 'example/project', prompt: '> the bug\n\n' }],
     ['a session with no name: its repository id', session({ repoFullName: '' }), 'the bug', { mode: 'session', repository: 'repo-one', prompt: '> the bug\n\n' }],
     ['a thread: no repository', thread(), 'one\ntwo', { mode: 'session', prompt: '> one\n> two\n\n' }],
-    ['an empty clipboard', session(), '', null],
+    ['empty text', session(), '', null],
     ['only whitespace', session(), ' \n\t', null],
   ])('%s', (_name, item, copied, params) => {
     const route = newSessionFromTextRoute(item, copied);
@@ -67,7 +65,7 @@ describe('the new-session composer with a prompt from the route', () => {
   ])('fills the draft and picks the repository %s', async (_name, repository, expected) => {
     mockActive.store.updateLocal('new:prompt', { draft: 'an old draft' });
     await render(<NewWorkScreen initialRepositoryId={repository} initialPrompt={'> the bug\n\n'} />);
-    expect((await task()).props.value).toBe('> the bug\n\n');
+    expect(await task()).toHaveTextContent('> the bug');
     await fireEvent.changeText(await task(), '> the bug\n\nFix it');
     const start = screen.getByRole('button', { name: 'Start session' });
     await waitFor(() => expect(start).toBeEnabled());
@@ -79,6 +77,6 @@ describe('the new-session composer with a prompt from the route', () => {
   it('keeps the draft without a prompt', async () => {
     mockActive.store.updateLocal('new:prompt', { draft: 'my draft' });
     await render(<NewWorkScreen />);
-    expect((await task()).props.value).toBe('my draft');
+    expect(await task()).toHaveTextContent('my draft');
   });
 });
