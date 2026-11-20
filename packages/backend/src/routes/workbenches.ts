@@ -112,6 +112,7 @@ import {
   listCheckpoints,
   listEvents,
   listOlderEvents,
+  listOlderVisibleEvents,
   listWorkbenches,
   liveWorkbenchNames,
   rowToChat,
@@ -500,7 +501,13 @@ export function workbenchRoutes(): Router {
       const ceiling = Number.isFinite(rawCeiling) && rawCeiling > 0
         ? Math.min(MAX_EVENT_PAGE, Math.max(limit, Math.floor(rawCeiling)))
         : MAX_EVENT_PAGE;
-      return ok(res, await listOlderEvents(found.chat.id, before, limit, ceiling));
+      // An older page skips the stream deltas that draw nothing, so it shows `limit` real rows.
+      return ok(
+        res,
+        before === null
+          ? await listOlderEvents(found.chat.id, null, limit, ceiling)
+          : await listOlderVisibleEvents(found.chat.id, before, limit, ceiling),
+      );
     }
     ok(res, await listEvents(found.chat.id, Number.isFinite(after) && after > 0 ? Math.floor(after) : 0, limit));
   });

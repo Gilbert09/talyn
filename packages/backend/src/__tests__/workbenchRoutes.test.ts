@@ -2344,6 +2344,21 @@ describe('workbench routes', () => {
       expect((await call('GET', `/workbenches/chats/${chatId}/events?after=0`)).body.data).not.toHaveProperty('hasOlder');
     });
 
+    it('skips replaced stream deltas in an older page, but not in the newest page', async () => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      const types = ['user', 'stream_event', 'stream_event', 'assistant', 'user', 'stream_event', 'stream_event', 'assistant'];
+      const events = types.map((type, i) => ({ chatId, seq: i + 1, turn: i < 4 ? 1 : 2, event: { seq: i + 1, type } }));
+      await call('POST', `/workbenches/chats/${chatId}/local-events`, { events });
+
+      const latest = (await call('GET', `/workbenches/chats/${chatId}/events?before=latest&limit=2`)).body.data;
+      expect(latest.events.map((e: Loose) => e.seq)).toEqual([5, 6, 7, 8]);
+
+      const older = (await call('GET', `/workbenches/chats/${chatId}/events?before=5&limit=2`)).body.data;
+      expect(older.events.map((e: Loose) => e.seq)).toEqual([1, 4]);
+      expect(older).toMatchObject({ cursor: 4, oldestSeq: 1, hasOlder: false });
+    });
+
     it.each([
       ['no ceiling extends to the turn start', '', [2, 3, 4, 5, 6]],
       ['a ceiling equal to the limit cuts the turn', '&ceiling=2', [5, 6]],

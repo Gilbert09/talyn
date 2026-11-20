@@ -16,6 +16,7 @@ import {
   listEventsQuery,
   listEventRangeQuery,
   listOlderEvents,
+  listOlderVisibleEvents,
   listWorkbenchesQuery,
   openChatsQuery,
   failQueued,
@@ -238,6 +239,140 @@ describe('workbench store', () => {
         );
         expect((await listOlderEvents('chat-1', null, 1, 100)).events.map((e) => e.seq)).toEqual([9, 12]);
         expect((await listOlderEvents('chat-1', 9, 1, 100)).events.map((e) => e.seq)).toEqual([2, 5]);
+      });
+
+      describe('without replaced stream deltas', () => {
+        type Row = [turn: number, type: string, parent?: string];
+        const store = (rows: Row[]) =>
+          storeNumberedEvents(
+            'chat-1',
+            rows.map(([turn, type, parent], i) => ({
+              chatId: 'chat-1',
+              seq: i + 1,
+              turn,
+              event: { seq: i + 1, type, ...(parent ? { parent_tool_use_id: parent } : {}) },
+            })),
+          );
+        const seqsOf = (page: { events: { seq: number }[] }) => page.events.map((e) => e.seq);
+        /** One turn: a prompt, `deltas` stream deltas, then the assistant message that replaces them. */
+        const turnOf = (turn: number, deltas: number): Row[] => [
+          [turn, 'user'],
+          ...Array.from({ length: deltas }, (): Row => [turn, 'stream_event']),
+          [turn, 'assistant'],
+        ];
+
+        it.each<[string, Row[], number, number[]]>([
+          [
+            'drops deltas before an assistant and keeps a trailing tail',
+            [[1, 'user'], [1, 'stream_event'], [1, 'stream_event'], [1, 'assistant'], [1, 'stream_event'], [1, 'result']],
+            7,
+            [1, 4, 5, 6],
+          ],
+          [
+            'keeps deltas when only the next turn has an assistant',
+            [[1, 'user'], [1, 'stream_event'], [2, 'user'], [2, 'assistant']],
+            5,
+            [1, 2, 3, 4],
+          ],
+          [
+            'keeps a subagent delta that only a main assistant follows',
+            [[1, 'user'], [1, 'stream_event', 'tool-a'], [1, 'assistant']],
+            4,
+            [1, 2, 3],
+          ],
+          [
+            'drops a subagent delta that its own assistant follows',
+            [[1, 'user'], [1, 'stream_event', 'tool-a'], [1, 'assistant', 'tool-a'], [1, 'stream_event']],
+            5,
+            [1, 3, 4],
+          ],
+          [
+            'keeps the oldest row, so oldestSeq is the first event',
+            [[1, 'stream_event'], [1, 'stream_event'], [1, 'assistant']],
+            4,
+            [1, 3],
+          ],
+          [
+            'drops deltas that an assistant above the page replaces',
+            [[1, 'user'], [1, 'stream_event'], [1, 'stream_event'], [1, 'assistant']],
+            4,
+            [1],
+          ],
+          [
+            'ignores a subagent assistant above the page',
+            [[1, 'user'], [1, 'stream_event'], [1, 'assistant', 'tool-a']],
+            3,
+            [1, 2],
+          ],
+          [
+            'ignores an assistant above the page in another turn',
+            [[1, 'user'], [1, 'stream_event'], [2, 'assistant']],
+            3,
+            [1, 2],
+          ],
+        ])('%s', async (_name, rows, before, seqs) => {
+          await store(rows);
+          const page = await listOlderVisibleEvents('chat-1', before, 50, 100);
+          expect(seqsOf(page)).toEqual(seqs);
+          expect(page.events.every((e) => e.event.seq === e.seq)).toBe(true);
+          expect(page).toMatchObject({ oldestSeq: seqs[0], cursor: seqs[seqs.length - 1], hasOlder: false });
+        });
+
+        it('answers an empty page below the first event', async () => {
+          await store(turnOf(1, 2));
+          expect(await listOlderVisibleEvents('chat-1', 1, 10, 100)).toEqual({ events: [], cursor: 0, oldestSeq: null, hasOlder: false });
+        });
+
+        it('counts only kept events toward the limit, and pages by whole turns', async () => {
+          // Three turns of 40 events each, two of them kept.
+          await store([...turnOf(1, 38), ...turnOf(2, 38), ...turnOf(3, 38), [4, 'user']]);
+          const raw = await listOlderEvents('chat-1', 121, 3, 100);
+          expect(raw.events).toHaveLength(40);
+
+          const first = await listOlderVisibleEvents('chat-1', 121, 3, 100);
+          expect(seqsOf(first)).toEqual([41, 80, 81, 120]);
+          expect(first).toMatchObject({ oldestSeq: 41, cursor: 120, hasOlder: true });
+          const second = await listOlderVisibleEvents('chat-1', 41, 3, 100);
+          expect(seqsOf(second)).toEqual([1, 40]);
+          expect(second.hasOlder).toBe(false);
+        });
+
+        it('cuts a turn at the ceiling, and pages the rest of it next', async () => {
+          await store([...Array.from({ length: 8 }, (): Row => [1, 'x']), [2, 'user']]);
+          const pages: number[][] = [];
+          let before = 9;
+          for (;;) {
+            const page = await listOlderVisibleEvents('chat-1', before, 2, 3);
+            pages.push(seqsOf(page));
+            if (!page.hasOlder) break;
+            before = page.oldestSeq!;
+          }
+          expect(pages).toEqual([[6, 7, 8], [3, 4, 5], [1, 2]]);
+        });
+
+        it.each([
+          ['one chunk', { chunk: 2000, max: 20 }],
+          ['many small chunks', { chunk: 3, max: 20 }],
+        ])('stops after reading the scan maximum, in %s', async (_name, scan) => {
+          await store(turnOf(1, 30));
+          const page = await listOlderVisibleEvents('chat-1', 33, 500, 2000, scan);
+          // The assistant, then the oldest row read: a replaced delta, kept as the page start.
+          expect(seqsOf(page)).toEqual([13, 32]);
+          expect(page).toMatchObject({ oldestSeq: 13, hasOlder: true });
+        });
+
+        it('reads across chunks and stops at the turn boundary', async () => {
+          await store([...turnOf(1, 5), ...turnOf(2, 5), ...turnOf(3, 5)]);
+          const page = await listOlderVisibleEvents('chat-1', 22, 3, 100, { chunk: 4, max: 100 });
+          expect(seqsOf(page)).toEqual([8, 14, 15, 21]);
+          expect(page.hasOlder).toBe(true);
+        });
+
+        it('sees an assistant above the page only within one chunk', async () => {
+          await store([[1, 'user'], [1, 'stream_event'], [1, 'x'], [1, 'x'], [1, 'assistant']]);
+          expect(seqsOf(await listOlderVisibleEvents('chat-1', 3, 50, 100, { chunk: 3, max: 100 }))).toEqual([1]);
+          expect(seqsOf(await listOlderVisibleEvents('chat-1', 3, 50, 100, { chunk: 2, max: 100 }))).toEqual([1, 2]);
+        });
       });
 
       it('leaves the forward mode as it was', async () => {
