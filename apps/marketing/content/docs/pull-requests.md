@@ -77,6 +77,8 @@ Hover over a row to see its actions: **Fix**, run a skill, add to the merge queu
 
 Select a row to open the pull request. The tabs are **Overview**, **Findings**, **Checks**, **Reviews** and **Files**: the summary, the code review findings, every check with the failing job's output, the review conversation, and the diff.
 
+Images in the description, the reviews and the comments show in the app. Click an image (tap it on mobile) to see it full size. Images pasted into a private repository also show, because Talyn gets a short-lived link for each image from GitHub.
+
 The buttons at the top are **Code review**, **Fix with agent**, **Auto-keep mergeable**, **Add to merge queue** and **Merge**.
 
 ## Review requests

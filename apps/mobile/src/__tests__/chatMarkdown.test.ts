@@ -1,4 +1,4 @@
-import { decodeEntities, inlineText, MARKDOWN_TEXT_LIMIT, parseMarkdown, stripHtml, type MdBlock } from '../lib/markdown';
+import { decodeEntities, inlineText, MARKDOWN_TEXT_LIMIT, parseMarkdown, safeImageUrl, stripHtml, type MdBlock } from '../lib/markdown';
 
 const first = (text: string) => parseMarkdown(text).blocks[0];
 
@@ -16,8 +16,7 @@ describe('markdown to native nodes', () => {
       { type: 'link', href: 'https://example.com/docs', children: [{ type: 'text', text: 'Docs' }] }] }],
     ['a bare URL', 'see https://example.com', { type: 'paragraph', children: [
       { type: 'text', text: 'see ' }, { type: 'link', href: 'https://example.com', children: [{ type: 'text', text: 'https://example.com' }] }] }],
-    ['an image as a link', '![Diagram](https://example.com/a.png)', { type: 'paragraph', children: [
-      { type: 'link', href: 'https://example.com/a.png', children: [{ type: 'text', text: 'Diagram' }] }] }],
+    ['an image', '![Diagram](https://example.com/a.png)', { type: 'image', src: 'https://example.com/a.png', alt: 'Diagram' }],
     ['a heading', '## Summary', { type: 'heading', depth: 2, children: [{ type: 'text', text: 'Summary' }] }],
     ['a fenced code block', '```ts\nconst a = 1;\n```', { type: 'code', lang: 'ts', text: 'const a = 1;' }],
     ['a code block without a language', '```\nplain\n```', { type: 'code', lang: '', text: 'plain' }],
@@ -90,4 +89,85 @@ describe('markdown to native nodes', () => {
     ['line<br>next', 'line\nnext'],
     ['<a href="x">link</a>', 'link'],
   ])('strips %s', (source, expected) => expect(stripHtml(source)).toBe(expected));
+});
+
+describe('markdown images', () => {
+  const SHOT = 'https://github.com/user-attachments/assets/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0';
+  const blocks = (text: string) => parseMarkdown(text).blocks;
+  const para = (text: string): MdBlock => ({ type: 'paragraph', children: [{ type: 'text', text }] });
+
+  it.each<[string, string, MdBlock[]]>([
+    ['a markdown image with no alt text', `![](${SHOT})`, [{ type: 'image', src: SHOT, alt: '' }]],
+    ['a GitHub screenshot tag', `<img width="1096" height="1280" alt="Screenshot 2026-11-19" src="${SHOT}" />`,
+      [{ type: 'image', src: SHOT, alt: 'Screenshot 2026-11-19', width: 1096, height: 1280 }]],
+    ['single quotes and entities', `<img alt='a &amp; b' src='${SHOT}?x=1&amp;y=2' width='300px' height='50%'>`,
+      [{ type: 'image', src: `${SHOT}?x=1&y=2`, alt: 'a & b', width: 300 }]],
+    ['an unquoted source', `<img src=${SHOT}>`, [{ type: 'image', src: SHOT, alt: '' }]],
+    ['a centred paragraph', `<p align="center"><img src="${SHOT}" alt="Centred" /></p>`, [{ type: 'image', src: SHOT, alt: 'Centred' }]],
+    ['a centred paragraph with a linked image', `<p align="center">\n  <a href="https://example.com"><img src="${SHOT}" alt="Logo"></a>\n</p>`,
+      [{ type: 'image', src: SHOT, alt: 'Logo' }]],
+    ['two tags with text between', `<img src="${SHOT}" alt="Before">\nthen\n<img src="${SHOT}" alt="After">`,
+      [{ type: 'image', src: SHOT, alt: 'Before' }, para('then'), { type: 'image', src: SHOT, alt: 'After' }]],
+    ['an inline tag in a paragraph', `Before <img src="${SHOT}" alt="Shot"> after`,
+      [para('Before'), { type: 'image', src: SHOT, alt: 'Shot' }, para('after')]],
+    ['a markdown image between lines', `Before\n![Shot](${SHOT})\nAfter`, [para('Before'), { type: 'image', src: SHOT, alt: 'Shot' }, para('After')]],
+    ['an image in a link', `[![Shot](${SHOT})](https://example.com/full)`, [{ type: 'image', src: SHOT, alt: 'Shot' }]],
+    ['an image tag in a link', `<a href="https://example.com/full"><img src="${SHOT}" alt="Shot"></a>`, [{ type: 'image', src: SHOT, alt: 'Shot' }]],
+    ['an image in a link with text', `[See ![Shot](${SHOT})](https://example.com/full)`, [
+      { type: 'paragraph', children: [{ type: 'link', href: 'https://example.com/full', children: [{ type: 'text', text: 'See' }] }] },
+      { type: 'image', src: SHOT, alt: 'Shot' }]],
+    ['an image in bold text', `**Look ![Shot](${SHOT})**`, [
+      { type: 'paragraph', children: [{ type: 'strong', children: [{ type: 'text', text: 'Look' }] }] }, { type: 'image', src: SHOT, alt: 'Shot' }]],
+    ['two images in one paragraph', `![One](${SHOT}) ![Two](${SHOT})`, [{ type: 'image', src: SHOT, alt: 'One' }, { type: 'image', src: SHOT, alt: 'Two' }]],
+    ['a javascript source, keeping the alt text', '![Bad](javascript:alert(1))', [para('Bad')]],
+    ['a data source', '<img src="data:image/png;base64,AAAA" alt="Inline data">', [para('Inline data')]],
+    ['a relative source', 'See ![Local](./shot.png) here', [para('See Local here')]],
+    ['a source with credentials', `<img src="https://user:secret@example.com/a.png" alt="Secret">`, [para('Secret')]],
+    ['a source with no alt text that is dropped', '<img src="file:///etc/passwd">', []],
+    ['an SVG badge, which stays a link', '![CI](https://img.shields.io/badge/ci-passing-green.svg)', [{ type: 'paragraph', children: [
+      { type: 'link', href: 'https://img.shields.io/badge/ci-passing-green.svg', children: [{ type: 'text', text: 'CI' }] }] }]],
+  ])('maps %s', (_name, source, expected) => expect(blocks(source)).toEqual(expected));
+
+  it('keeps an image in a list item as a block of the item', () => {
+    const [list] = blocks(`- Before\n  ![Shot](${SHOT})`);
+    if (list.type !== 'list') throw new Error('not a list');
+    expect(list.items[0].children).toEqual([para('Before'), { type: 'image', src: SHOT, alt: 'Shot' }]);
+  });
+
+  it.each([
+    ['a markdown image', `![Shot](${SHOT})`],
+    ['an image tag', `<img src="${SHOT}" alt="Shot">`],
+  ])('keeps %s in a table cell as a link', (_name, image) => {
+    const table = blocks(`| Before | After |\n| --- | --- |\n| ${image} | text |`)[0];
+    if (table.type !== 'table') throw new Error('not a table');
+    expect(table.rows[0][0]).toEqual([{ type: 'link', href: SHOT, children: [{ type: 'text', text: 'Shot' }] }]);
+  });
+
+  it('keeps an image in a table cell with an unsafe source as its alt text', () => {
+    const table = blocks('| A |\n| --- |\n| ![Bad](javascript:x) |')[0];
+    if (table.type !== 'table') throw new Error('not a table');
+    expect(table.rows[0][0]).toEqual([{ type: 'text', text: 'Bad' }]);
+  });
+
+  it('keeps an image in a heading as a link', () => {
+    expect(blocks(`## Result ![Shot](${SHOT})`)).toEqual([{ type: 'heading', depth: 2, children: [
+      { type: 'text', text: 'Result ' }, { type: 'link', href: SHOT, children: [{ type: 'text', text: 'Shot' }] }] }]);
+  });
+
+  it('keeps the summary line bold and the images of a details block in order', () => {
+    expect(blocks(`<details><summary>Screenshots</summary>\n<img src="${SHOT}" alt="One">\nNotes\n</details>`)).toEqual([
+      { type: 'paragraph', children: [{ type: 'strong', children: [{ type: 'text', text: 'Screenshots' }] }] },
+      { type: 'image', src: SHOT, alt: 'One' }, para('Notes')]);
+  });
+
+  it.each([
+    ['https://example.com/a.png', 'https://example.com/a.png'],
+    ['http://example.com/a.png', 'http://example.com/a.png'],
+    ['javascript:alert(1)', null],
+    ['data:image/png;base64,AAAA', null],
+    ['https://user:pass@example.com/a.png', null],
+    ['https://example.com/a b.png', null],
+    [`https://example.com/${'a'.repeat(4100)}`, null],
+    ['not a url', null],
+  ])('accepts only safe image sources: %s', (source, expected) => expect(safeImageUrl(source)).toBe(expected));
 });

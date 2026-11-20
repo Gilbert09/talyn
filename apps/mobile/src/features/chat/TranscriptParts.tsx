@@ -36,6 +36,7 @@ function markdownLinks(text: string): Array<{ url: string; label: string }> {
       else if (block.type === 'blockquote') walk(block.children);
       else if (block.type === 'list') block.items.forEach((item) => walk(item.children));
       else if (block.type === 'table') [block.header, ...block.rows].forEach((row) => row.forEach(walkInline));
+      else if (block.type === 'image') links.push({ url: block.src, label: `image: ${block.alt || 'Image'}` });
     }
   };
   walk(parseMarkdown(text).blocks);

@@ -2,6 +2,23 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Image preview in PR descriptions, reviews and comments (2026-11-20)
+
+Jovan asked to see a screenshot from a PR description without opening GitHub.
+Why images did not show:
+- GitHub stores a pasted image as `https://github.com/user-attachments/assets/<uuid>`. For a private repository that URL answers 404 without a github.com browser session.
+- The web CSP allows images only from `*.githubusercontent.com`, so web blocked every attachment image, also for public repositories.
+- Mobile turned a markdown image into a link and dropped `<img>` tags.
+Backend (`services/githubAttachments.ts`):
+- GitHub's `bodyHTML` has a signed `private-user-images.githubusercontent.com/...-<uuid>.png?jwt=...` URL for each attachment. The JWT expires after about 5 minutes.
+- `GET /pull-requests/:id` (live `fresh.body`) and `GET /:id/description` replace attachment URLs in image positions (`![](…)`, `<img src>`) with the signed URLs. They call GitHub only when the body shows an attachment image.
+- `/:id/description` signs too, because a merged or closed PR gets no live body (the live fetch returns open PRs only).
+- The Reviews query now asks for `bodyHTML` on each node, and the decode signs each body.
+- A signed body is for the response only. It is never persisted or compared, because the URL expires. Bare attachment links (videos) stay unchanged, because a person can click them after the JWT expires.
+Clients:
+- Web and desktop: `lib/imagePreview.tsx`. A markdown image is a button that opens a portalled full-size preview with "Open original". Escape is caught on `window` in the capture phase, so it does not also close the PR sheet. A broken image becomes a link.
+- Mobile: `MdBlock` has an `image` node. A paragraph with images splits into text and image blocks. SVG stays a link, because React Native `Image` cannot draw SVG. `FullScreenImage` is shared with the message attachment viewer and has pinch zoom on iOS.
+
 ## Onboarding agent step: local option, sign-in events, quiet fleet faults (2026-11-19)
 
 PostHog (6–19 Nov): 26 signups, 17 passed Connect GitHub, 14 reached "Connect your agent", 2 connected an agent there, 7 skipped, 3 started a session. `cloud_provider_connect_failed` fired 0 times in 45 days, so people abandon the Claude sign-in. They do not get an error.

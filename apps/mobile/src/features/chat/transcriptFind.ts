@@ -42,6 +42,7 @@ function blockText(blocks: MdBlock[]): string[] {
     else if (block.type === 'blockquote') lines.push(...blockText(block.children));
     else if (block.type === 'list') for (const item of block.items) lines.push(...blockText(item.children));
     else if (block.type === 'table') for (const row of [block.header, ...block.rows]) lines.push(...row.map(inlineText));
+    else if (block.type === 'image' && block.alt) lines.push(block.alt);
   }
   return lines;
 }

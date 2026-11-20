@@ -16,7 +16,9 @@ export type MdBlock =
   | { type: 'list'; ordered: boolean; start: number; items: MdListItem[] }
   | { type: 'blockquote'; children: MdBlock[] }
   | { type: 'table'; align: MdAlign[]; header: MdInline[][]; rows: MdInline[][][] }
+  | { type: 'image'; src: string; alt: string; width?: number; height?: number }
   | { type: 'hr' };
+export type MdImage = Extract<MdBlock, { type: 'image' }>;
 export interface MdDocument { blocks: MdBlock[]; truncated: boolean }
 
 /** The most text one message parses. Longer text is cut and marked as truncated. */
@@ -40,52 +42,110 @@ export function stripHtml(html: string): string {
   return decodeEntities(html.replace(/<!--[\s\S]*?-->/g, '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/?[a-z][^>]*>/gi, ''));
 }
 
-function pushText(out: MdInline[], text: string) {
+function pushText(out: Piece[], text: string) {
   if (!text) return;
   const last = out[out.length - 1];
   if (last?.type === 'text') out[out.length - 1] = { type: 'text', text: last.text + text };
   else out.push({ type: 'text', text });
 }
 
-function inlines(tokens: Token[] | undefined, depth = 0): MdInline[] {
-  const out: MdInline[] = [];
+/** An http(s) URL with no credentials or control characters, like `safeExternalUrl`. Other image sources are dropped. */
+export function safeImageUrl(value: string): string | null {
+  try {
+    if (value.length > 4096 || Array.from(value).some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)) return null;
+    const url = new URL(value);
+    return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : null;
+  } catch { return null; }
+}
+
+const IMG_TAG = /<img\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi;
+/** The `src`, `alt`, `width` and `height` of one `<img>` tag. */
+function imgTag(tag: string): { src: string; alt: string; width?: number; height?: number } {
+  const attrs: Record<string, string> = {};
+  for (const match of tag.matchAll(/([a-z_:][-a-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi)) {
+    const name = match[1].toLowerCase();
+    if (!(name in attrs)) attrs[name] = decodeEntities(match[2] ?? match[3] ?? match[4] ?? '');
+  }
+  const size = (value: string | undefined) => {
+    const number = value && /^\s*\d+(?:px)?\s*$/i.test(value) ? Number.parseInt(value, 10) : NaN;
+    return number > 0 && number <= 100000 ? number : undefined;
+  };
+  const width = size(attrs.width), height = size(attrs.height);
+  return { src: (attrs.src ?? '').trim(), alt: (attrs.alt ?? '').trim(), ...(width ? { width } : null), ...(height ? { height } : null) };
+}
+
+/** Inline nodes, plus images when the caller can show them as blocks. */
+type Piece = MdInline | MdImage;
+/**
+ * An image becomes an image piece where images are allowed. Elsewhere (tables,
+ * headings) it stays a link, or its alt text when the source is not safe.
+ */
+function pushImage(out: Piece[], image: { src: string; alt: string; width?: number; height?: number }, images: boolean) {
+  const src = safeImageUrl(image.src);
+  // React Native's Image cannot draw SVG (most badges), so an SVG stays a link.
+  if (src && images && !/\.svgz?$/i.test(src.split(/[?#]/)[0])) out.push({ type: 'image', ...image, src });
+  else if (src) out.push({ type: 'link', href: src, children: [{ type: 'text', text: image.alt || 'Image' }] });
+  else pushText(out, image.alt);
+}
+/** Wraps each run of inline nodes with `wrap`, so images inside a link or emphasis come out to the top. */
+function lift(children: Piece[], wrap: (run: MdInline[]) => MdInline, into: Piece[]) {
+  const split = children.some((child) => child.type === 'image');
+  let run: MdInline[] = [];
+  const flush = () => { const nodes = split ? trimRun(run) : run; if (nodes.length) into.push(wrap(nodes)); run = []; };
+  for (const child of children) {
+    if (child.type === 'image') { flush(); into.push(child); } else run.push(child);
+  }
+  flush();
+}
+
+function inlines(tokens: Token[] | undefined, depth?: number): MdInline[];
+function inlines(tokens: Token[] | undefined, depth: number, images: true): Piece[];
+function inlines(tokens: Token[] | undefined, depth = 0, images = false): Piece[] {
+  const out: Piece[] = [];
   // `<summary>` text reads as a heading line, so it is bold until its closing tag.
-  let summary: MdInline[] | null = null;
+  let summary: Piece[] | null = null;
   const target = () => summary ?? out;
+  const nested = (children: Token[] | undefined) => images ? inlines(children, depth + 1, true) : inlines(children, depth + 1);
   for (const token of tokens ?? []) {
     const into = target();
     switch (token.type) {
       case 'text': case 'escape': {
         const children = (token as Tokens.Text).tokens;
         if (children?.length && depth < MAX_DEPTH) {
-          for (const child of inlines(children, depth + 1)) {
+          for (const child of nested(children)) {
             if (child.type === 'text') pushText(into, child.text); else into.push(child);
           }
         } else pushText(into, decodeEntities(token.text));
         break;
       }
-      case 'strong': case 'em': case 'del':
-        into.push({ type: token.type, children: depth < MAX_DEPTH ? inlines((token as Tokens.Strong).tokens, depth + 1) : [{ type: 'text', text: token.text }] });
+      case 'strong': case 'em': case 'del': {
+        const kind = token.type;
+        if (depth < MAX_DEPTH) lift(nested((token as Tokens.Strong).tokens), (children) => ({ type: kind, children }), into);
+        else into.push({ type: kind, children: [{ type: 'text', text: token.text }] });
         break;
+      }
       case 'codespan': into.push({ type: 'code', text: decodeEntities(token.text) }); break;
       case 'br': into.push({ type: 'br' }); break;
       case 'link': {
         const link = token as Tokens.Link;
-        const children = depth < MAX_DEPTH ? inlines(link.tokens, depth + 1) : [];
-        into.push({ type: 'link', href: link.href, children: children.length ? children : [{ type: 'text', text: link.href }] });
+        const children = depth < MAX_DEPTH ? nested(link.tokens) : [];
+        if (!children.length) into.push({ type: 'link', href: link.href, children: [{ type: 'text', text: link.href }] });
+        // A linked image (a badge or a screenshot) shows as the image. Other link text keeps its link.
+        else lift(children, (run) => ({ type: 'link', href: link.href, children: run }), into);
         break;
       }
       case 'image': {
         const image = token as Tokens.Image;
-        into.push({ type: 'link', href: image.href, children: [{ type: 'text', text: image.text || 'Image' }] });
+        pushImage(into, { src: image.href, alt: decodeEntities(image.text).trim() }, images);
         break;
       }
       case 'html': {
         const tag = token.text.trim().toLowerCase();
         if (/^<br\s*\/?>$/.test(tag)) into.push({ type: 'br' });
+        else if (tag.startsWith('<img')) pushImage(into, imgTag(token.text), images);
         else if (tag.startsWith('<summary')) summary = [];
         else if (tag.startsWith('</summary') && summary) {
-          if (summary.length) out.push({ type: 'strong', children: summary });
+          if (summary.length) lift(summary, (children) => ({ type: 'strong', children }), out);
           summary = null;
         } else pushText(into, stripHtml(token.text));
         break;
@@ -94,8 +154,49 @@ function inlines(tokens: Token[] | undefined, depth = 0): MdInline[] {
         if ('text' in token && typeof token.text === 'string') pushText(into, decodeEntities(token.text));
     }
   }
-  if (summary?.length) out.push({ type: 'strong', children: summary });
+  if (summary?.length) lift(summary, (children) => ({ type: 'strong', children }), out);
   return out;
+}
+
+/** Drops the white space and line breaks at the ends of a paragraph that an image split. */
+function trimRun(run: MdInline[]): MdInline[] {
+  const nodes = [...run];
+  const blank = (node: MdInline | undefined) => node?.type === 'br' || (node?.type === 'text' && !node.text.trim());
+  while (blank(nodes[0])) nodes.shift();
+  while (blank(nodes[nodes.length - 1])) nodes.pop();
+  if (nodes[0]?.type === 'text') nodes[0] = { type: 'text', text: nodes[0].text.trimStart() };
+  const last = nodes[nodes.length - 1];
+  if (last?.type === 'text') nodes[nodes.length - 1] = { type: 'text', text: last.text.trimEnd() };
+  return nodes;
+}
+
+/** A paragraph with images becomes text paragraphs and image blocks, in order. */
+function paragraphs(pieces: Piece[], out: MdBlock[]) {
+  if (!pieces.some((piece) => piece.type === 'image')) {
+    if (pieces.length) out.push({ type: 'paragraph', children: pieces as MdInline[] });
+    return;
+  }
+  let run: MdInline[] = [];
+  const flush = () => { const children = trimRun(run); if (children.length) out.push({ type: 'paragraph', children }); run = []; };
+  for (const piece of pieces) {
+    if (piece.type === 'image') { flush(); out.push(piece); } else run.push(piece);
+  }
+  flush();
+}
+
+/** Block HTML keeps its text and its `<img>` tags, in order. */
+function htmlBlocks(html: string, out: MdBlock[]) {
+  let rest = 0;
+  const text = (part: string) => { const value = stripHtml(part).trim(); if (value) out.push({ type: 'paragraph', children: [{ type: 'text', text: value }] }); };
+  for (const match of html.matchAll(IMG_TAG)) {
+    const at = match.index ?? 0;
+    text(html.slice(rest, at));
+    rest = at + match[0].length;
+    const image: Piece[] = [];
+    pushImage(image, imgTag(match[0]), true);
+    for (const piece of image) out.push(piece.type === 'image' ? piece : { type: 'paragraph', children: [piece] });
+  }
+  text(html.slice(rest));
 }
 
 function blocks(tokens: Token[], depth: number): MdBlock[] {
@@ -104,8 +205,7 @@ function blocks(tokens: Token[], depth: number): MdBlock[] {
     switch (token.type) {
       case 'space': case 'def': break;
       case 'paragraph': case 'text': {
-        const children = inlines((token as Tokens.Paragraph).tokens ?? [{ type: 'text', raw: token.raw, text: token.text } as Tokens.Text], depth);
-        if (children.length) out.push({ type: 'paragraph', children });
+        paragraphs(inlines((token as Tokens.Paragraph).tokens ?? [{ type: 'text', raw: token.raw, text: token.text } as Tokens.Text], depth, true), out);
         break;
       }
       case 'heading': out.push({ type: 'heading', depth: (token as Tokens.Heading).depth, children: inlines((token as Tokens.Heading).tokens, depth) }); break;
@@ -136,8 +236,7 @@ function blocks(tokens: Token[], depth: number): MdBlock[] {
         const summary = /<summary[^>]*>([\s\S]*?)<\/summary>/i.exec(token.text);
         const title = summary ? stripHtml(summary[1]).trim() : '';
         if (title) out.push({ type: 'paragraph', children: [{ type: 'strong', children: [{ type: 'text', text: title }] }] });
-        const text = stripHtml(summary ? token.text.replace(summary[0], '') : token.text).trim();
-        if (text) out.push({ type: 'paragraph', children: [{ type: 'text', text }] });
+        htmlBlocks(summary ? token.text.replace(summary[0], '') : token.text, out);
         break;
       }
       default:
@@ -149,7 +248,8 @@ function blocks(tokens: Token[], depth: number): MdBlock[] {
 
 /**
  * Markdown to a small node tree that the native renderer draws. GitHub
- * flavour, like web. Raw HTML is reduced to its text and never rendered.
+ * flavour, like web. Raw HTML is reduced to its text and never rendered,
+ * except `<img>` tags, which become image blocks like markdown images.
  */
 export function parseMarkdown(text: string): MdDocument {
   const truncated = text.length > MARKDOWN_TEXT_LIMIT;

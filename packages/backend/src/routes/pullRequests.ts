@@ -18,9 +18,11 @@ import { startPrMergeableRun } from '../services/prCloudFix.js';
 import { rowToTask } from '../services/taskSerialize.js';
 import {
   batchPullRequests,
+  fetchPRBodyHtml,
   fetchPRReviewDetail,
   type PRSummary,
 } from '../services/githubGraphql.js';
+import { hasAttachmentImages, signAttachmentImages } from '../services/githubAttachments.js';
 import {
   GitHubApiError,
   githubService,
@@ -265,6 +267,34 @@ export function parsePrRef(
   const number = Number(m[3]);
   if (!Number.isInteger(number) || number <= 0) return null;
   return { owner: m[1], repo: m[2].replace(/\.git$/, ''), number };
+}
+
+/**
+ * The description with its GitHub attachment images pointed at signed URLs, so
+ * the apps can show them for a private repository (see `githubAttachments.ts`).
+ * Any failure answers the body unchanged: the images then fall back to the
+ * github.com URL, which still works for a public repository on desktop.
+ */
+async function signedBody(
+  pr: { workspaceId: string; owner: string; repo: string; number: number },
+  body: string
+): Promise<string> {
+  if (!hasAttachmentImages(body)) return body;
+  try {
+    const html = await fetchPRBodyHtml({
+      workspaceId: pr.workspaceId,
+      owner: pr.owner,
+      repo: pr.repo,
+      number: pr.number,
+    });
+    return signAttachmentImages(body, html);
+  } catch (err) {
+    console.warn(
+      `[pull-requests] attachment signing failed for ${pr.owner}/${pr.repo}#${pr.number}:`,
+      err
+    );
+    return body;
+  }
 }
 
 export function pullRequestRoutes(): Router {
@@ -713,7 +743,9 @@ export function pullRequestRoutes(): Router {
       success: true,
       data: {
         row: await publicPrRow(outRow, db),
-        fresh,
+        // Signed only in the response: `fresh` above is what gets persisted
+        // and compared, and a signed URL expires in minutes.
+        fresh: fresh ? { ...fresh, body: await signedBody(row, fresh.body) } : null,
       },
     });
   });
@@ -737,7 +769,13 @@ export function pullRequestRoutes(): Router {
   router.get('/:id/description', async (req, res) => {
     const db = getDbClient();
     const rows = await db
-      .select({ workspaceId: pullRequestsTable.workspaceId, body: pullRequestsTable.body })
+      .select({
+        workspaceId: pullRequestsTable.workspaceId,
+        owner: pullRequestsTable.owner,
+        repo: pullRequestsTable.repo,
+        number: pullRequestsTable.number,
+        body: pullRequestsTable.body,
+      })
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, req.params.id))
       .limit(1);
@@ -750,7 +788,11 @@ export function pullRequestRoutes(): Router {
     } catch (err) {
       return handleAccessError(err, res);
     }
-    return res.json({ success: true, data: { body: row.body } });
+    // A merged or closed PR gets no live body from `GET /:id`, so this is the
+    // only text its panel shows. It pays for a GitHub call only when the
+    // description has an attachment image.
+    const body = row.body === null ? null : await signedBody(row, row.body);
+    return res.json({ success: true, data: { body } });
   });
 
   // File-by-file diff for a PR. Returns each changed file's status,
