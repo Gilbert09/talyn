@@ -123,7 +123,11 @@ Select text in a session's or a thread's chat. A **New session from selection** 
 - Nothing starts until you send the message.
 - The quote holds the first 8,000 characters of a longer selection.
 
-In the mobile app, select text in the conversation and tap **Copy**. Then open the session menu and tap **New session from copied text**.
+In the mobile app, touch and hold a message in the conversation. A menu opens:
+
+- **New session from message** quotes the full message in a new session.
+- **Copy message** copies the message text.
+- **Select text** shows the message in a text view. Select the part you want, then tap **New session from selection**.
 
 ## Talk to the agent while it works
 

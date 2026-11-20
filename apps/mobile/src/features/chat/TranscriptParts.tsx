@@ -19,6 +19,7 @@ import { Markdown } from './Markdown';
 import { TypingDots } from './Pulse';
 import { answeredLabel, senderLabel, type TranscriptRow } from './transcript';
 import { useHighlighter } from './findHighlight';
+import { useMessageMenuOpener } from './messageMenu';
 import { BOX_REFUSALS, permissionTitle, systemRowText } from './transcriptFind';
 
 /** Links in a message, offered to screen readers as actions on the message. */
@@ -43,15 +44,28 @@ function markdownLinks(text: string): Array<{ url: string; label: string }> {
   return links.slice(0, 10);
 }
 
-/** A message read as one unit by screen readers, with its links as actions. */
-function Spoken({ label, text, style, children }: { label: string; text: string; style?: ViewStyle; children: ReactNode }) {
+/**
+ * A message read as one unit by screen readers, with its links as actions.
+ * In a conversation a long press opens the message menu; the text is then
+ * not natively selectable, so the two long presses do not fight.
+ */
+function Spoken({ label, text, style, children }: { label: string; text: string; style?: ViewStyle; children(selectable: boolean): ReactNode }) {
   const links = useMemo(() => markdownLinks(text), [text]);
-  return <View accessible accessibilityLabel={label} style={style}
-    accessibilityActions={links.map((link, index) => ({ name: `link-${index}`, label: `Open ${link.label}` }))}
-    onAccessibilityAction={(event) => {
-      const index = Number(event.nativeEvent.actionName.replace('link-', ''));
-      if (links[index]) openExternal(links[index].url);
-    }}>{children}</View>;
+  const openMenu = useMessageMenuOpener();
+  const actions = [
+    ...links.map((link, index) => ({ name: `link-${index}`, label: `Open ${link.label}` })),
+    ...(openMenu ? [{ name: 'longpress', label: 'Message actions' }] : []),
+  ];
+  const onAction = (name: string) => {
+    if (name === 'longpress') { openMenu?.(text); return; }
+    const index = Number(name.replace('link-', ''));
+    if (links[index]) openExternal(links[index].url);
+  };
+  if (!openMenu) return <View accessible accessibilityLabel={label} style={style} accessibilityActions={actions}
+    onAccessibilityAction={(event) => onAction(event.nativeEvent.actionName)}>{children(true)}</View>;
+  return <Pressable accessible accessibilityLabel={label} accessibilityHint="Long press for message actions." style={style}
+    accessibilityActions={actions} onAccessibilityAction={(event) => onAction(event.nativeEvent.actionName)}
+    onLongPress={() => openMenu(text)}>{children(false)}</Pressable>;
 }
 
 export const UserBubble = memo(function UserBubble({ text, timestamp, attachments, files = [], workbenchId = '', now, sender }: {
@@ -64,9 +78,11 @@ export const UserBubble = memo(function UserBubble({ text, timestamp, attachment
   return <View style={styles.userWrap}>
     {sender ? <AppText variant="caption" tone="muted" importantForAccessibility="no">{senderLabel(sender)}</AppText> : null}
     <Spoken label={`${sender ? senderLabel(sender) : 'You said'}: ${text}${time ? `, ${time}` : ''}`} text={text} style={{ ...styles.bubble, backgroundColor: c.surface }}>
-      <Markdown text={text} />
-      {files.length ? <MessageImages workbenchId={workbenchId} attachments={files} />
-        : attachments ? <AppText variant="caption" tone="muted">{attachments === 1 ? '1 attachment' : `${attachments} attachments`}</AppText> : null}
+      {(selectable) => <>
+        <Markdown text={text} selectable={selectable} />
+        {files.length ? <MessageImages workbenchId={workbenchId} attachments={files} />
+          : attachments ? <AppText variant="caption" tone="muted">{attachments === 1 ? '1 attachment' : `${attachments} attachments`}</AppText> : null}
+      </>}
     </Spoken>
     {time ? <AppText variant="caption" tone="muted" importantForAccessibility="no">{time}</AppText> : null}
   </View>;
@@ -74,8 +90,10 @@ export const UserBubble = memo(function UserBubble({ text, timestamp, attachment
 
 export const AgentText = memo(function AgentText({ text, streaming }: { text: string; streaming: boolean }) {
   return <Spoken label={`Agent said: ${text}`} text={text} style={styles.flat}>
-    <Markdown text={text} />
-    {streaming ? <TypingDots /> : null}
+    {(selectable) => <>
+      <Markdown text={text} selectable={selectable} />
+      {streaming ? <TypingDots /> : null}
+    </>}
   </Spoken>;
 });
 
