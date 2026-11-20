@@ -1,15 +1,18 @@
 import { SymbolView } from 'expo-symbols';
-import { memo, useMemo, type ReactNode } from 'react';
-import { ScrollView, StyleSheet, Text, View, type TextStyle } from 'react-native';
+import { memo, useMemo, useState, type ReactNode } from 'react';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View, type TextStyle } from 'react-native';
 
-import { AppText } from '../../components/UI';
+import { AppText, Button } from '../../components/UI';
 import { openExternal, safeExternalUrl } from '../../components/Workflow';
-import { inlineText, parseMarkdown, type MdBlock, type MdInline } from '../../lib/markdown';
+import { inlineText, parseMarkdown, type MdBlock, type MdImage, type MdInline } from '../../lib/markdown';
 import { mono, radius, sans, type, useTheme, type Theme } from '../../theme/tokens';
 import { useHighlighter } from './findHighlight';
+import { FullScreenImage } from './FullScreenImage';
 
 /** Characters per code `Text`. Very long single texts are slow to lay out on Android. */
 const CODE_CHUNK = 4000;
+/** The tallest an image thumbnail gets in the column. Tap it to see the full size. */
+const IMAGE_MAX_HEIGHT = 280;
 
 type Mark = (text: string, key?: string) => ReactNode;
 const plain: Mark = (text) => text;
@@ -85,6 +88,37 @@ function Table({ block }: { block: Extract<MdBlock, { type: 'table' }> }) {
   </ScrollView>;
 }
 
+/** Width over height, kept in a range so a very wide or tall image still shows a usable box. */
+const imageRatio = (width?: number, height?: number) => width && height ? Math.min(6, Math.max(0.2, width / height)) : null;
+
+/** A markdown image: a thumbnail the width of the column. Tap it to see it full screen. */
+function MarkdownImage({ block }: { block: MdImage }) {
+  const c = useTheme();
+  const [ratio, setRatio] = useState(() => imageRatio(block.width, block.height));
+  const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [viewing, setViewing] = useState(false);
+  const label = block.alt || 'Image';
+  if (status === 'failed') return <Pressable accessibilityRole="link" accessibilityLabel={`Image unavailable: ${label}. Open in browser`}
+    onPress={() => openExternal(block.src)} style={[styles.imageError, { borderColor: c.border, backgroundColor: c.surface }]}>
+    <SymbolView name={{ ios: 'photo', android: 'image' }} size={16} tintColor={c.muted} />
+    <AppText variant="meta" tone="muted" numberOfLines={2} style={styles.imageErrorText}>Image unavailable{block.alt ? `: ${block.alt}` : ''}</AppText>
+  </Pressable>;
+  return <>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Open image: ${label}`} onPress={() => setViewing(true)}
+      style={({ pressed }) => [styles.image, { aspectRatio: ratio ?? 16 / 9, borderColor: c.border, backgroundColor: c.surface, opacity: pressed ? 0.8 : 1 }]}>
+      <Image testID="markdown-image" source={{ uri: block.src }} resizeMode="contain" accessibilityIgnoresInvertColors style={styles.imageFill} onError={() => setStatus('failed')}
+        onLoad={(event) => {
+          setStatus('ready');
+          const { width, height } = event.nativeEvent.source ?? {};
+          setRatio((current) => current ?? imageRatio(width, height));
+        }} />
+      {status === 'loading' ? <View style={styles.imageOverlay}><ActivityIndicator size="small" color={c.muted} /></View> : null}
+    </Pressable>
+    {viewing ? <FullScreenImage source={{ uri: block.src }} label={label} onClose={() => setViewing(false)} zoomable
+      footer={<Button title="Open in browser" variant="secondary" size="sm" icon={{ ios: 'safari', android: 'open_in_new' }} onPress={() => openExternal(block.src)} />} /> : null}
+  </>;
+}
+
 function Blocks({ blocks, depth = 0 }: { blocks: MdBlock[]; depth?: number }) {
   const c = useTheme();
   const mark = useHighlighter();
@@ -97,12 +131,13 @@ function Blocks({ blocks, depth = 0 }: { blocks: MdBlock[]; depth?: number }) {
       case 'list': return <List key={index} block={block} depth={depth} />;
       case 'blockquote': return <View key={index} style={[styles.quote, { borderColor: c.border }]}><Blocks blocks={block.children} depth={depth + 1} /></View>;
       case 'table': return <Table key={index} block={block} />;
+      case 'image': return <MarkdownImage key={index} block={block} />;
       case 'hr': return <View key={index} style={[styles.hr, { backgroundColor: c.border }]} />;
     }
   })}</View>;
 }
 
-/** Rendered markdown for agent and user messages. Links open through the external link confirmation. */
+/** Rendered markdown for agent and user messages. Links open through the external link confirmation. Images open full screen. */
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const doc = useMemo(() => parseMarkdown(text), [text]);
   return <View>
@@ -134,4 +169,9 @@ const styles = StyleSheet.create({
   // A heading starts a new section. Give it more space above than below.
   headingAfter: { marginTop: 8 },
   hr: { height: StyleSheet.hairlineWidth, marginVertical: 4 },
+  image: { width: '100%', minWidth: 160, maxHeight: IMAGE_MAX_HEIGHT, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  imageFill: { width: '100%', height: '100%' },
+  imageOverlay: { ...StyleSheet.absoluteFill as object, alignItems: 'center', justifyContent: 'center' },
+  imageError: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 8, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth },
+  imageErrorText: { flex: 1 },
 });

@@ -1730,6 +1730,38 @@ describe('decodeReviewDetail', () => {
     } as Parameters<typeof decodeReviewDetail>[0];
   }
 
+  it('signs attachment images in reviews, thread comments and conversation comments', () => {
+    const uuid = '27ad58e7-b0e3-4c9f-9f22-156ac33515ed';
+    const raw = `![shot](https://github.com/user-attachments/assets/${uuid})`;
+    const signed = `https://private-user-images.githubusercontent.com/1/2-${uuid}.png?jwt=a.b.c`;
+    const html = `<img src="${signed}">`;
+    const author = { login: 'a', avatarUrl: null };
+    const out = decodeReviewDetail(
+      resp({
+        reviews: [{ id: 'r', author, state: 'APPROVED', body: raw, bodyHTML: html, submittedAt: 's', url: 'u' }],
+        threads: [
+          {
+            id: 't',
+            isResolved: false,
+            isOutdated: false,
+            path: 'a.ts',
+            line: 1,
+            comments: { nodes: [{ id: 'tc', author, body: raw, bodyHTML: html, diffHunk: null, createdAt: 'c', url: 'u' }] },
+          },
+        ],
+        comments: [
+          { id: 'c', author, body: raw, bodyHTML: html, createdAt: 'c', url: 'u' },
+          // No bodyHTML (an older response): the body stays as it is.
+          { id: 'plain', author, body: raw, createdAt: 'd', url: 'u' },
+        ],
+      })
+    );
+    const want = `![shot](${signed})`;
+    expect(out.reviews[0].body).toBe(want);
+    expect(out.threads[0].comments[0].body).toBe(want);
+    expect(out.comments.map((c) => c.body)).toEqual([want, raw]);
+  });
+
   it('returns empty arrays when the PR is missing', () => {
     const out = decodeReviewDetail({ repository: null } as Parameters<typeof decodeReviewDetail>[0]);
     expect(out).toEqual({ reviews: [], threads: [], comments: [] });

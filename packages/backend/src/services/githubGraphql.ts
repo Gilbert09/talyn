@@ -8,6 +8,7 @@ import {
   type PRStackInfo,
 } from '@talyn/shared';
 import { githubService } from './github.js';
+import { signAttachmentImages } from './githubAttachments.js';
 
 /**
  * Batched GraphQL fetch for a workspace's PRs, modelled on supacode's
@@ -1857,6 +1858,8 @@ interface RawReviewDetailResponse {
           author: { login: string; avatarUrl: string | null } | null;
           state: string;
           body: string | null;
+          /** Rendered HTML. Holds signed URLs for attachment images. */
+          bodyHTML?: string | null;
           submittedAt: string | null;
           url: string;
         }>;
@@ -1873,6 +1876,8 @@ interface RawReviewDetailResponse {
               id: string;
               author: { login: string; avatarUrl: string | null } | null;
               body: string | null;
+              /** Rendered HTML. Holds signed URLs for attachment images. */
+              bodyHTML?: string | null;
               diffHunk: string | null;
               createdAt: string;
               url: string;
@@ -1885,6 +1890,8 @@ interface RawReviewDetailResponse {
           id: string;
           author: { login: string; avatarUrl: string | null } | null;
           body: string | null;
+          /** Rendered HTML. Holds signed URLs for attachment images. */
+          bodyHTML?: string | null;
           createdAt: string;
           url: string;
         }>;
@@ -1897,7 +1904,7 @@ const REVIEW_DETAIL_QUERY = `query PRReviewDetail($owner: String!, $repo: String
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
       reviews(first: 50) {
-        nodes { id author { login avatarUrl } state body submittedAt url }
+        nodes { id author { login avatarUrl } state body bodyHTML submittedAt url }
       }
       reviewThreads(first: 100) {
         nodes {
@@ -1907,12 +1914,12 @@ const REVIEW_DETAIL_QUERY = `query PRReviewDetail($owner: String!, $repo: String
           path
           line
           comments(first: 100) {
-            nodes { id author { login avatarUrl } body diffHunk createdAt url }
+            nodes { id author { login avatarUrl } body bodyHTML diffHunk createdAt url }
           }
         }
       }
       comments(first: 100) {
-        nodes { id author { login avatarUrl } body createdAt url }
+        nodes { id author { login avatarUrl } body bodyHTML createdAt url }
       }
     }
   }
@@ -1938,6 +1945,34 @@ export async function fetchPRReviewDetail(opts: {
   return decodeReviewDetail(data);
 }
 
+const PR_BODY_HTML_QUERY = `query PRBodyHtml($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) { bodyHTML }
+  }
+${RATE_LIMIT_FIELD}
+}`;
+
+/**
+ * The PR description as GitHub renders it. Used only to sign attachment
+ * images (see `githubAttachments.ts`), so callers ask for it only when the
+ * description shows one. Works for merged and closed PRs too.
+ */
+export async function fetchPRBodyHtml(opts: {
+  workspaceId: string;
+  owner: string;
+  repo: string;
+  number: number;
+}): Promise<string | null> {
+  const data = await githubService.executeGraphql<{
+    repository: { pullRequest: { bodyHTML: string | null } | null } | null;
+  }>(opts.workspaceId, PR_BODY_HTML_QUERY, {
+    owner: opts.owner,
+    repo: opts.repo,
+    number: opts.number,
+  });
+  return data.repository?.pullRequest?.bodyHTML ?? null;
+}
+
 export function decodeReviewDetail(data: RawReviewDetailResponse): PRReviewDetail {
   const pr = data.repository?.pullRequest;
   if (!pr) return { reviews: [], threads: [], comments: [] };
@@ -1956,7 +1991,7 @@ export function decodeReviewDetail(data: RawReviewDetailResponse): PRReviewDetai
       author: r.author?.login ?? 'unknown',
       avatarUrl: r.author?.avatarUrl ?? null,
       state: (r.state || '').toUpperCase(),
-      body: r.body ?? '',
+      body: signAttachmentImages(r.body ?? '', r.bodyHTML),
       submittedAt: r.submittedAt,
       url: r.url,
     }))
@@ -1974,7 +2009,7 @@ export function decodeReviewDetail(data: RawReviewDetailResponse): PRReviewDetai
         id: c.id,
         author: c.author?.login ?? 'unknown',
         avatarUrl: c.author?.avatarUrl ?? null,
-        body: c.body ?? '',
+        body: signAttachmentImages(c.body ?? '', c.bodyHTML),
         createdAt: c.createdAt,
         url: c.url,
       })),
@@ -1993,7 +2028,7 @@ export function decodeReviewDetail(data: RawReviewDetailResponse): PRReviewDetai
       id: c.id,
       author: c.author?.login ?? 'unknown',
       avatarUrl: c.author?.avatarUrl ?? null,
-      body: c.body ?? '',
+      body: signAttachmentImages(c.body ?? '', c.bodyHTML),
       createdAt: c.createdAt,
       url: c.url,
     }))

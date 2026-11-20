@@ -49,6 +49,28 @@ describe('markdown messages', () => {
     expect(screen.queryByRole('link')).toBeNull();
     expect(screen.getByText('click')).toBeVisible();
   });
+  const SHOT = 'https://github.com/user-attachments/assets/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0';
+  it('shows an image as a thumbnail that opens full screen, with an open in browser action', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    await render(<Markdown text={`Before\n\n<img width="1096" height="1280" alt="Login screen" src="${SHOT}" />`} />);
+    expect(screen.getByText('Before')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Close image' })).toBeNull();
+    await fireEvent.press(screen.getByRole('button', { name: 'Open image: Login screen' }));
+    expect(screen.getByRole('button', { name: 'Close image' })).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: 'Open in browser' }));
+    expect(alert).toHaveBeenCalledWith('Open external website?', SHOT, expect.any(Array));
+    await fireEvent.press(screen.getByRole('button', { name: 'Close image' }));
+    expect(screen.queryByRole('button', { name: 'Close image' })).toBeNull();
+  });
+  it('shows an image that does not load as a row that opens the image in the browser', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    await render(<Markdown text={`![Diagram](${SHOT})`} />);
+    await fireEvent(screen.getByTestId('markdown-image'), 'error');
+    expect(screen.queryByRole('button', { name: 'Open image: Diagram' })).toBeNull();
+    expect(screen.getByText('Image unavailable: Diagram')).toBeVisible();
+    await fireEvent.press(screen.getByRole('link', { name: 'Image unavailable: Diagram. Open in browser' }));
+    expect(alert).toHaveBeenCalledWith('Open external website?', SHOT, expect.any(Array));
+  });
 });
 
 describe('conversation rows', () => {

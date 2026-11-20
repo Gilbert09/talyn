@@ -1,12 +1,13 @@
 import { getApiBaseUrl } from '@talyn/client/native';
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, StyleSheet, View } from 'react-native';
 
 import { useMobileRuntime } from '../../auth/AuthProvider';
-import { AppText, IconButton } from '../../components/UI';
-import { radius, useTheme, withAlpha } from '../../theme/tokens';
+import { AppText } from '../../components/UI';
+import { radius, useTheme } from '../../theme/tokens';
 import { attachmentUrl, isImage, isVideo, type ImageDraft, type MessageImage } from './attachments';
+import { FullScreenImage } from './FullScreenImage';
 
 const THUMB = 56;
 
@@ -108,12 +109,7 @@ function MessageThumb({ workbenchId, image, onOpen }: { workbenchId: string; ima
 
 function ImageViewer({ workbenchId, image, onClose }: { workbenchId: string; image: MessageImage; onClose(): void }) {
   const source = useImageSource(workbenchId, image);
-  return <Modal visible transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
-    <View style={[styles.viewer, { backgroundColor: withAlpha('#000000', 0.92) }]}>
-      {source ? <Image source={source} resizeMode="contain" accessibilityLabel={image.name} style={styles.full} /> : <ActivityIndicator color="#ffffff" />}
-      <View style={styles.close}><IconButton label="Close image" symbol={{ ios: 'xmark', android: 'close' }} onPress={onClose} filled /></View>
-    </View>
-  </Modal>;
+  return <FullScreenImage source={source} label={image.name} onClose={onClose} />;
 }
 
 const styles = StyleSheet.create({
@@ -127,7 +123,4 @@ const styles = StyleSheet.create({
   overlay: { ...StyleSheet.absoluteFill as object, alignItems: 'center', justifyContent: 'center' },
   remove: { position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   error: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 28 },
-  viewer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  full: { width: '100%', height: '80%' },
-  close: { position: 'absolute', top: 48, right: 16 },
 });

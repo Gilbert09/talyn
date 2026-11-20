@@ -3,6 +3,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
+import { MarkdownImage } from './imagePreview';
 import { MermaidDiagram, mermaidSourceFromPre } from './mermaid';
 import { cn } from './utils';
 
@@ -209,8 +210,9 @@ function makeComponents(c: MdClasses, forceDark: boolean, s: MdSpacing = COMPACT
     summary: ({ children }) => (
       <summary className={cn('cursor-pointer font-medium', c.heading)}>{children}</summary>
     ),
+    // Click to see it full size (see `imagePreview.tsx`).
     img: ({ src, alt }) => (
-      <img src={typeof src === 'string' ? src : undefined} alt={alt} className="max-w-full rounded" />
+      <MarkdownImage src={typeof src === 'string' ? src : undefined} alt={alt} />
     ),
   };
 }
