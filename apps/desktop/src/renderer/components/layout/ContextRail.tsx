@@ -48,7 +48,7 @@ export function ContextRail() {
         {entries.map((entry, i) => {
           const key = `${entry.kind}:${entry.id}`;
           const isActive = key === activeKey;
-          const count = railEntryAttention(entry, counts);
+          const count = railEntryAttention(entry, counts, entries);
           return (
             <div key={key} className="flex w-full flex-col items-center gap-2">
               {entry.groupStart && <div aria-hidden className="h-px w-8 bg-border" />}

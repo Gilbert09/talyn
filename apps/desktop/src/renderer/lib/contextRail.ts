@@ -61,9 +61,19 @@ export function railEntries(workspaces: Workspace[], teams: SpacesTeam[] | null,
   return out;
 }
 
-export function railEntryAttention(entry: RailEntry, counts: ContextAttentionCounts | null): number {
+/**
+ * The count on a tile. A space tile counts its sessions. A workspace tile
+ * counts the sessions of its Personal sidebar: a session in a space that has
+ * its own tile is counted there, so the workspace tile leaves it out.
+ */
+export function railEntryAttention(entry: RailEntry, counts: ContextAttentionCounts | null, entries: readonly RailEntry[] = []): number {
   if (!counts) return 0;
-  return (entry.kind === 'workspace' ? counts.workspaces[entry.id] : counts.spaces[entry.id]) ?? 0;
+  if (entry.kind === 'space') return counts.spaces[entry.id] ?? 0;
+  const total = counts.workspaces[entry.id] ?? 0;
+  const bySpace = counts.workspaceSpaces?.[entry.id];
+  if (!bySpace) return total;
+  const inTiles = entries.reduce((sum, e) => (e.kind === 'space' ? sum + (bySpace[e.id] ?? 0) : sum), 0);
+  return Math.max(0, total - inTiles);
 }
 
 /** Up to two letters for a space tile: "Growth" -> "G", "Data Platform" -> "DP". */

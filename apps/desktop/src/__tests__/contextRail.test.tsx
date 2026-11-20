@@ -106,6 +106,32 @@ describe('railEntryAttention', () => {
   ] as const)('%s', (_label, entry, c, expected) => {
     expect(railEntryAttention(entry, c)).toBe(expected);
   });
+
+  describe('a workspace with sessions in spaces', () => {
+    // ws1: 1 Personal session, 2 in s1, 1 in s3 (a space with no tile here).
+    const spaced = {
+      workspaces: { ws1: 4, ws2: 1 },
+      spaces: { s1: 3, s3: 1 },
+      workspaceSpaces: { ws1: { s1: 2, s3: 1 }, ws2: { s1: 1 } },
+    };
+    const withSpaces = railEntries([ws('ws1', 'Mine'), ws('ws2', 'Side')], [TEAM], true);
+    const noSpaces = railEntries([ws('ws1', 'Mine'), ws('ws2', 'Side')], [TEAM], false);
+    const [m, side] = withSpaces;
+    it.each([
+      ['leaves out the sessions of spaces with a tile', m, spaced, withSpaces, 2],
+      ['answers 0 when every session is in a space with a tile', side, spaced, withSpaces, 0],
+      ['counts every session when no space has a tile', m, spaced, noSpaces, 4],
+      ['counts every session from an older server', m, { workspaces: { ws1: 4 }, spaces: { s1: 3 } }, withSpaces, 4],
+      ['counts every session with no entries passed', m, spaced, [], 4],
+      ['never goes below 0', m, { ...spaced, workspaces: { ws1: 1 } }, withSpaces, 0],
+    ] as const)('%s', (_label, entry, c, entries, expected) => {
+      expect(railEntryAttention(entry, c, entries)).toBe(expected);
+    });
+
+    it('leaves a space tile unchanged', () => {
+      expect(railEntryAttention(withSpaces[2], spaced, withSpaces)).toBe(3);
+    });
+  });
 });
 
 describe('railInitials', () => {
@@ -157,6 +183,18 @@ describe('ContextRail', () => {
     expect(open).toHaveAttribute('aria-current', 'true');
     expect(open).toHaveTextContent('5');
     expect(screen.getAllByText((_, el) => el?.getAttribute('data-attr') === 'context-rail-badge')).toHaveLength(3);
+  });
+
+  it('counts a session in a space on the space tile only', async () => {
+    setup({
+      workspaces: [ws('ws1', 'Mine')],
+      teams: [TEAM],
+      spaces: true,
+      counts: { workspaces: { ws1: 2 }, spaces: { s1: 1 }, workspaceSpaces: { ws1: { s1: 1 } } },
+    });
+    render(<ContextRail />);
+    expect(await screen.findByRole('button', { name: 'Mine, 1 item needs you' })).toHaveTextContent('1');
+    expect(screen.getByRole('button', { name: 'Web (Acme), 1 item needs you' })).toBeInTheDocument();
   });
 
   it('switches to a space and asks again for the counts', async () => {

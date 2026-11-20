@@ -6,12 +6,20 @@ import type { WorkbenchChatStatus, WorkbenchKind, WorkbenchSandboxState, Workben
  * `GET /workspaces/attention` answers it.
  *
  * The keys are ids. A workspace or a space with nothing waiting is left out.
- * A session in a space counts for its space and its workspace. The workspace
- * tile is the desktop launcher, so its count covers Personal and every space.
+ * A session in a space counts for its space and its workspace.
  */
 export interface ContextAttentionCounts {
+  /** Every session that waits on me in the workspace, in Personal and in its spaces. */
   workspaces: Record<string, number>;
   spaces: Record<string, number>;
+  /**
+   * The space part of `workspaces`: per workspace, the count of each space.
+   * The rail takes away the spaces that have their own tile, so the
+   * workspace tile counts the rows of its Personal sidebar. A space session
+   * shows in Personal when its space has no tile (Spaces off, or the space
+   * is gone), so it stays in the count. An older server leaves it out.
+   */
+  workspaceSpaces?: Record<string, Record<string, number>>;
   /**
    * The sessions that the counts count, by id, with what each waits on me
    * for. The sidebar marks these rows, so a badge always points at a row.
@@ -109,10 +117,13 @@ function bump(map: Record<string, number>, key: string): void {
 export function countContextAttention(
   sessions: { id: string; workspaceId: string; spaceId: string | null; reason: ContextAttentionReason }[],
 ): Required<ContextAttentionCounts> {
-  const out: Required<ContextAttentionCounts> = { workspaces: {}, spaces: {}, sessions: {} };
+  const out: Required<ContextAttentionCounts> = { workspaces: {}, spaces: {}, workspaceSpaces: {}, sessions: {} };
   for (const s of sessions) {
     bump(out.workspaces, s.workspaceId);
-    if (s.spaceId) bump(out.spaces, s.spaceId);
+    if (s.spaceId) {
+      bump(out.spaces, s.spaceId);
+      bump((out.workspaceSpaces[s.workspaceId] ??= {}), s.spaceId);
+    }
     out.sessions[s.id] = s.reason;
   }
   return out;
