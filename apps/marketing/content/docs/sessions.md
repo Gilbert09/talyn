@@ -112,6 +112,18 @@ Press ⌘K (Ctrl+K on Windows and Linux) and type at least three characters. Bel
 
 In the mobile app, type in the search field of the menu. The matches show under **In transcripts**.
 
+## Start a session from part of a transcript
+
+Select text in a session's or a thread's chat. A **New session from selection** button shows above the selected text. Click it to open the new-session page:
+
+- The composer holds the selected text as a Markdown quote. Type your task under the quote.
+- The repository of the session is selected. A thread has no repository, so the page keeps its usual repository.
+- In a space, the space's composer opens.
+- Nothing starts until you send the message.
+- The quote holds the first 8,000 characters of a longer selection.
+
+In the mobile app, select text in the conversation and tap **Copy**. Then open the session menu and tap **New session from copied text**.
+
 ## Talk to the agent while it works
 
 You can send a message while the agent is in the middle of a turn. The message waits in a queue and goes in when the turn ends. Queued messages show above the composer, and you can remove one before it is sent.

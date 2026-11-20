@@ -8046,3 +8046,13 @@ Count: `POST /workflows/posthog-inbox/backlog/count` (`posthogInboxBacklogCount`
 Clients: web and desktop show "All time", the count line above the list, and a **Reports** tab on the PostHog Inbox page (`posthogInboxReports.tsx`): an automation picker over the same backlog. Mobile shows the range picker and the count on the rule screen. MCP `talyn_list_posthog_inbox_backlog` takes `days: "all"` and `count: true`.
 The mobile `postHogInbox.test.tsx` rule screen tests failed on main (`useTeams` from #282 needs a runtime that the test did not mock). The test now mocks `useFeatures` and `useTeams`.
 
+
+### 2026-11-20 — New session from a transcript selection
+
+User request (Jovan, Slack): select text in a transcript, then start a new session from it.
+Web and desktop: `TranscriptSelectionAction` shows **New session from selection** over a selection in the main chat transcript. It ignores selections outside the transcript and in text fields. The button calls `openNewWorkbench` with the text as a Markdown quote (`transcriptQuotePrompt` in `@talyn/shared`, cut at 8,000 characters) and the session's repository. Nothing is sent; the person types the task under the quote.
+Decisions:
+- `NewWorkbenchPrefill` has a new `repoFullName`. The space composer (`SpaceHomePage`) now reads the prefill (prompt and repository by name), because a home route in a space renders it, not `NewWorkbenchPage`. The repository id goes in the prefill only when the session is in the shown workspace.
+- A thread has no repository, so its prefill has only the prompt. Desktop does not copy the runtime: the person's default runtime applies.
+- Mobile: a phone's text selection menu takes no app items without a native module (and a new binary). So the session menu on the detail screen has **New session from copied text**. It reads the clipboard (`expo-clipboard`, already in the binary) and opens `/new` with a new `prompt` route parameter. `NewWorkScreen` now matches the route's repository by id or by full name.
+- Analytics: `session_from_selection` with `source_kind`, `chars` and `repository_prefilled`, on all three front ends.

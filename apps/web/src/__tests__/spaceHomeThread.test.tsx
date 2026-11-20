@@ -259,3 +259,43 @@ describe('SpaceHomePage session feed', () => {
     expect(screen.queryByText(/· working/)).toBeNull();
   });
 });
+
+describe('SpaceHomePage prefill from "New session from selection"', () => {
+  beforeEach(() => {
+    act(() => useNavigationStore.getState().navigate({ view: 'home' }));
+    useSpacesStore.setState({
+      repositories: {
+        s1: [
+          { spaceId: 's1', repoFullName: 'acme/web', githubRepoId: 1, createdAt: '' },
+          { spaceId: 's1', repoFullName: 'acme/api', githubRepoId: 2, createdAt: '' },
+        ],
+      },
+    });
+  });
+
+  it.each<[string, { prompt?: string; repoFullName?: string }, string, string]>([
+    ['the quote and the repository', { prompt: '> the bug\n\n', repoFullName: 'acme/api' }, '> the bug\n\n', 'acme/api'],
+    ['only the quote', { prompt: '> the bug\n\n' }, '> the bug\n\n', 'acme/web'],
+  ])('applies %s, then forgets the prefill', (_name, prefill, prompt, repo) => {
+    act(() => useWorkbenchStore.getState().requestNewWorkbench(prefill));
+    render(<SpaceHomePage active={ACTIVE} />);
+    expect(composer().value).toBe(prompt);
+    expect(screen.getByLabelText('Repository')).toHaveTextContent(repo);
+    expect(useWorkbenchStore.getState().newWorkbench.prefill).toBeNull();
+  });
+
+  it('applies a prefill that arrives while the page is open', () => {
+    render(<SpaceHomePage active={ACTIVE} />);
+    fireEvent.change(composer(), { target: { value: 'old draft' } });
+    act(() => useWorkbenchStore.getState().requestNewWorkbench({ prompt: '> new\n\n', repoFullName: 'acme/api' }));
+    expect(composer().value).toBe('> new\n\n');
+    expect(screen.getByLabelText('Repository')).toHaveTextContent('acme/api');
+  });
+
+  it('keeps the draft on a request with no prefill', () => {
+    render(<SpaceHomePage active={ACTIVE} />);
+    fireEvent.change(composer(), { target: { value: 'my draft' } });
+    act(() => useWorkbenchStore.getState().requestNewWorkbench());
+    expect(composer().value).toBe('my draft');
+  });
+});

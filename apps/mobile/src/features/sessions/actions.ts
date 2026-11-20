@@ -1,6 +1,7 @@
-import type { Workbench, WorkbenchChat } from '@talyn/shared';
+import { transcriptQuotePrompt, type Workbench, type WorkbenchChat } from '@talyn/shared';
 
 import { safeExternalUrl } from '../../components/Workflow';
+import { newWorkRoute } from '../../navigation/routes';
 import { workbenchKind } from '../../workflow/model';
 import { prMarkdownLink } from '../prs/copyLink';
 import { WEB_APP_URL } from '../settings/about';
@@ -100,4 +101,20 @@ export function copyEntry(kind: CopyActionKind, item: Pick<Workbench, 'id' | 'ki
     case 'copy_branch': return { label: 'Copy branch name', text: item.branch, done: 'Branch name copied.' };
     case 'copy_id': return { label: `Copy ${noun} ID`, text: item.id, done: `${noun[0].toUpperCase()}${noun.slice(1)} ID copied.` };
   }
+}
+
+/** The menu label for starting a session from text copied out of the transcript. */
+export const NEW_FROM_COPIED_LABEL = 'New session from copied text';
+
+/**
+ * Where "New session from copied text" goes: the new-session composer with
+ * the text quoted, in this session's repository. Web shows a button over a
+ * transcript selection; a phone's selection menu takes no app items, so the
+ * person copies the text first. Null when the clipboard holds no text.
+ */
+export function newSessionFromTextRoute(item: Pick<Workbench, 'kind' | 'repositoryId' | 'repoFullName'>, copied: string) {
+  const prompt = transcriptQuotePrompt(copied);
+  if (!prompt) return null;
+  const repository = item.kind === 'thread' ? undefined : item.repoFullName || item.repositoryId || undefined;
+  return newWorkRoute('session', { repository, prompt });
 }
