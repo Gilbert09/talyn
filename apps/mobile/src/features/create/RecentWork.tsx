@@ -1,8 +1,8 @@
 import type { PRRow } from '@talyn/client/native';
 import type { Workbench } from '@talyn/shared';
 import { useRouter } from 'expo-router';
-import { memo, useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { memo, useMemo, useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
 import { PrPill, SessionStateIcon } from '../../components/Status';
@@ -14,14 +14,16 @@ import { useResource } from '../../workflow/hooks';
 import { workbenchKind, workbenchTitle } from '../../workflow/model';
 import { useDrawerWork } from '../nav/data';
 import { useSessionMenu } from '../sessions/SessionMenu';
-import { branchChanges, recentWork, shortRepository } from './recent';
+import { branchChanges, recentLift, recentWork, shortRepository } from './recent';
 
 /**
  * Web's "Recent" list on the home composer: the newest sessions and threads,
  * one tap away. Rows read the live store lists, so their state, changes and
  * pull request follow socket events. A long press opens the session menu.
+ * A drag down the list lifts the composer (`onLift`), and a pull back to the
+ * top brings it down again.
  */
-export function RecentWork() {
+export function RecentWork({ lifted = false, onLift }: { lifted?: boolean; onLift?(lifted: boolean): void } = {}) {
   const { personal } = useDrawerWork();
   const items = useMemo(() => recentWork(personal.sessions, personal.threads), [personal.sessions, personal.threads]);
   // The open pull request rows carry CI and review, which the workbench's own summary does not. Shared with the PR pages.
@@ -30,9 +32,25 @@ export function RecentWork() {
   const menu = useSessionMenu();
   const now = useNow();
   const c = useTheme();
+  const dragging = useRef(false);
+  const [height, setHeight] = useState(0);
   if (!items.length) return null;
-  return <ScrollView style={styles.scroll} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled"
-    showsVerticalScrollIndicator={false}>
+  const follow = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const next = recentLift({ offset: event.nativeEvent.contentOffset.y, dragging: dragging.current, lifted });
+    if (next !== lifted) onLift?.(next);
+  };
+  // A drag or a fling ends where the person left it, so its last offset counts too.
+  const settle = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    dragging.current = true;
+    follow(event);
+    dragging.current = false;
+  };
+  // Lifted, the list keeps one point to scroll, so a pull back to the top still reaches it when the rows fit.
+  return <ScrollView testID="recent-work" style={styles.scroll} contentContainerStyle={[styles.content, lifted && height ? { minHeight: height + 1 } : null]}
+    keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} scrollEventThrottle={16}
+    onLayout={(event) => setHeight(event.nativeEvent.layout.height)} onScroll={onLift ? follow : undefined}
+    onScrollBeginDrag={() => { dragging.current = true; }} onScrollEndDrag={settle}
+    onMomentumScrollBegin={() => { dragging.current = true; }} onMomentumScrollEnd={settle}>
     <Text accessibilityRole="header" style={[styles.label, { color: c.muted }]}>Recent</Text>
     <View accessibilityRole="list" accessibilityLabel="Recent sessions"
       style={[styles.card, { backgroundColor: c.elevated, borderColor: c.border }]}>

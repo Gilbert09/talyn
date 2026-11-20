@@ -61,6 +61,8 @@ const MOVE = { damping: 26, stiffness: 260, mass: 0.9 };
  * Start a session or a thread, like web `NewWorkbenchPage`. With nothing typed
  * the composer waits in the middle of the page with the recent work below it.
  * Typing or the keyboard moves it to the bottom, and the list fades out.
+ * A drag down the list lifts the composer to the top as a compact field, so
+ * the list gets the page. A pull back to the top or a tap on the field undoes it.
  * Repository, branch and internet sit in a row above the composer, and the
  * mode and model sit inside it. Each opens a sheet. Works as the home screen
  * (`presentation="home"`) and as a pushed route. After a start a route
@@ -285,6 +287,14 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   const docked = useSharedValue(centered ? 0 : 1);
   useEffect(() => { docked.value = withSpring(centered ? 0 : 1, MOVE); }, [centered, docked]);
   const headingSpace = useAnimatedStyle(() => ({ flexGrow: docked.value }));
+  // Only with the composer in the middle: focus or typing docks it at the bottom, and that ends the lift.
+  const [lifted, setLifted] = useState(false);
+  const compact = centered && lifted;
+  useEffect(() => { if (!centered) setLifted(false); }, [centered]);
+  // 0 with the heading shown, 1 with the composer lifted to the top. The heading's space shrinks to nothing.
+  const raised = useSharedValue(0);
+  useEffect(() => { raised.value = withSpring(compact ? 1 : 0, MOVE); }, [compact, raised]);
+  const greetingSpace = useAnimatedStyle(() => ({ flexGrow: 1 - raised.value }));
   const belowSpace = useAnimatedStyle(() => ({ flexGrow: 1 - docked.value }));
 
   if (features === null || place.context.kind === 'pending') return <ScreenContainer topInset={presentation === 'home'}><View style={styles.center}><Spinner /></View></ScreenContainer>;
@@ -329,7 +339,7 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   // The keyboard inset is bottom padding on both platforms, so the move and the keyboard animate as one layout change.
   return <ScreenContainer topInset={presentation === 'home'}>
     <View style={[styles.page, { paddingBottom: keyboard.inset }]}>
-      <Pressable accessible={false} onPress={Keyboard.dismiss} style={styles.greeting}>
+      <Animated.View style={[styles.greetingSpace, greetingSpace]}><Pressable accessible={false} onPress={Keyboard.dismiss} style={styles.greeting}>
         <View style={styles.headingTop} />
         <View style={styles.greetingText}>
           <Text accessibilityRole="header" style={[styles.heading, { color: c.text }]}>What do you want to build?</Text>
@@ -340,13 +350,13 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
         </View>
         <Animated.View style={[styles.headingBottom, headingSpace]} />
         {toast.element}
-      </Pressable>
+      </Pressable></Animated.View>
       <View style={styles.dock}>
         {notices}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
+        {compact ? null : <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
           style={styles.contextScroll} contentContainerStyle={styles.contextRow}>
           {chips.context.map(chip)}
-        </ScrollView>
+        </ScrollView>}
         <View style={[styles.card, { backgroundColor: c.elevated, borderColor: focused ? c.primary : c.border, opacity: busy ? 0.85 : 1 }]}>
           {attached.length ? <View style={styles.images}>
             <ComposerImages drafts={attached} errors={[]} onRemove={images.remove} onRetry={images.retry} onDismissError={() => undefined} />
@@ -355,10 +365,10 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
             placeholder={inSpace ? spacePlaceholder(mode, inSpace.space.name) : PLACEHOLDER[mode]} placeholderTextColor={c.muted} selectionColor={c.primary}
             onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
             onChangeText={(text) => { workflow.updateLocal(draftKey, { draft: text }); if (error) setError(null); }}
-            style={[styles.prompt, { color: c.text }]}>
+            style={[styles.prompt, compact ? styles.promptCompact : null, { color: c.text }]}>
             <ComposerFormattedText text={prompt} />
           </TextInput>
-          <View style={styles.controls}>
+          {compact ? null : <View style={styles.controls}>
             <Pressable accessibilityRole="button" accessibilityLabel="Attach an image" accessibilityState={{ disabled: busy }}
               disabled={busy} hitSlop={6} onPress={() => { Keyboard.dismiss(); showImagePicker(images.add); }}
               style={({ pressed }) => [styles.attach, { borderColor: c.border, backgroundColor: pressed ? c.surface : 'transparent', opacity: busy ? 0.5 : 1 }]}>
@@ -369,13 +379,13 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
             {chip('model')}
             <SendButton enabled={send.enabled} busy={busy} hint={send.hint} label={mode === 'thread' ? 'Start thread' : 'Start session'}
               onPress={() => { void start(); }} />
-          </View>
+          </View>}
         </View>
       </View>
       {/* No exiting animation: on Android a removed view with one can stay on screen. */}
       <Animated.View style={[styles.below, belowSpace]}>
         {centered ? <Animated.View entering={FadeIn.duration(240).delay(60)} style={styles.recent}>
-          {inSpace ? null : <RecentWork />}
+          {inSpace ? null : <RecentWork lifted={lifted} onLift={setLifted} />}
         </Animated.View> : null}
       </Animated.View>
     </View>
@@ -511,6 +521,7 @@ function trackCreated(item: Workbench, form: NewWorkForm, withImages = false) {
 const styles = StyleSheet.create({
   page: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  greetingSpace: { flex: 1, overflow: 'hidden' },
   greeting: { flex: 1, alignItems: 'center', paddingHorizontal: 24, overflow: 'hidden' },
   // Docked, both spaces grow and centre the heading. Centred, the bottom one shrinks to its minimum, so the heading sits
   // just above the composer, and the space below the composer puts the composer in the middle of the page.
@@ -528,6 +539,8 @@ const styles = StyleSheet.create({
   // Two lines tall from the start, so the first typed line does not resize the field.
   prompt: { ...type.body, minHeight: 64, maxHeight: PROMPT_MAX_HEIGHT, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8,
     textAlignVertical: 'top' },
+  // One line: the lifted composer is only a way back to typing.
+  promptCompact: { minHeight: 44, paddingBottom: 12 },
   images: { paddingHorizontal: 10, paddingTop: 10 },
   attach: { width: 32, height: 32, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
   controls: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 8, paddingRight: 8, paddingBottom: 8 },

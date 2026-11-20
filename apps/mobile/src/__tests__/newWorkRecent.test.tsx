@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 import type { Workbench } from '@talyn/shared';
 
 import { NewWorkScreen } from '../features/create/NewWorkScreen';
-import { branchChanges, composerLayout, recentWork, RECENT_LIMIT, shortRepository } from '../features/create/recent';
+import { branchChanges, composerLayout, LIFT_AFTER, recentLift, recentWork, RECENT_LIMIT, shortRepository } from '../features/create/recent';
 import { chat, fixture, pr, session, thread } from './workflowFixtures';
 
 jest.setTimeout(15000);
@@ -94,6 +94,20 @@ describe('composerLayout', () => {
   ])('puts the composer for %s', (_name, patch, expected) => expect(composerLayout({ ...idle, ...patch })).toBe(expected));
 });
 
+describe('recentLift', () => {
+  it.each<[string, number, boolean, boolean, boolean]>([
+    ['a drag past the threshold lifts', LIFT_AFTER + 1, true, false, true],
+    ['a drag to the threshold keeps it down', LIFT_AFTER, true, false, false],
+    ['a drag inside the threshold keeps a lift', 10, true, true, true],
+    ['a drag inside the threshold keeps it down', 10, true, false, false],
+    ['a drag back to the top drops the lift', 0, true, true, false],
+    ['a pull past the top drops the lift', -30, true, true, false],
+    ['a far drag keeps a lift', 400, true, true, true],
+    ['a layout move to the top keeps a lift', 0, false, true, true],
+    ['a layout move far down does not lift', 400, false, false, false],
+  ])('%s', (_name, offset, dragging, lifted, expected) => expect(recentLift({ offset, dragging, lifted })).toBe(expected));
+});
+
 describe('home composer with recent work', () => {
   const recent = () => screen.queryByLabelText('Recent sessions');
 
@@ -171,5 +185,76 @@ describe('home composer with recent work', () => {
     expect(await screen.findByLabelText('Task')).toBeVisible();
     await waitFor(() => expect(mockActive.api.workbenches.list).toHaveBeenCalled());
     expect(recent()).toBeNull();
+  });
+
+  describe('lifted by a drag down the list', () => {
+    const scroll = (y: number) => ({ nativeEvent: { contentOffset: { x: 0, y }, contentSize: { width: 400, height: 900 },
+      layoutMeasurement: { width: 400, height: 300 } } });
+    const list = () => screen.getByTestId('recent-work');
+    const heading = () => screen.queryByText('What do you want to build?');
+    const compact = () => screen.queryByLabelText('Attach an image') === null;
+    const dragTo = async (y: number) => {
+      await fireEvent(list(), 'scrollBeginDrag', scroll(0));
+      await fireEvent.scroll(list(), scroll(y));
+      await fireEvent(list(), 'scrollEndDrag', scroll(y));
+    };
+
+    it('shows the full composer before a drag', async () => {
+      await render(<NewWorkScreen presentation="home" />);
+      await waitFor(() => expect(recent()).not.toBeNull());
+      expect(compact()).toBe(false);
+      expect(heading()).not.toBeNull();
+    });
+
+    it('turns compact after a drag down and back after a drag to the top', async () => {
+      await render(<NewWorkScreen presentation="home" />);
+      await waitFor(() => expect(recent()).not.toBeNull());
+      await dragTo(LIFT_AFTER + 40);
+      expect(compact()).toBe(true);
+      expect(screen.getByLabelText('Task')).toBeVisible();
+      expect(recent()).not.toBeNull();
+      await dragTo(0);
+      expect(compact()).toBe(false);
+    });
+
+    it('stays compact when the layout moves the list to the top without a drag', async () => {
+      await render(<NewWorkScreen presentation="home" />);
+      await waitFor(() => expect(recent()).not.toBeNull());
+      await dragTo(LIFT_AFTER + 40);
+      await fireEvent.scroll(list(), scroll(0));
+      expect(compact()).toBe(true);
+    });
+
+    it('drops the lift when a fling ends at the top', async () => {
+      await render(<NewWorkScreen presentation="home" />);
+      await waitFor(() => expect(recent()).not.toBeNull());
+      await dragTo(LIFT_AFTER + 40);
+      await fireEvent(list(), 'momentumScrollBegin', scroll(LIFT_AFTER + 40));
+      await fireEvent.scroll(list(), scroll(0));
+      expect(compact()).toBe(false);
+    });
+
+    it('does not lift for a scroll that is not a drag', async () => {
+      await render(<NewWorkScreen presentation="home" />);
+      await waitFor(() => expect(recent()).not.toBeNull());
+      await fireEvent.scroll(list(), scroll(LIFT_AFTER + 40));
+      expect(compact()).toBe(false);
+    });
+
+    it('docks the full composer when the compact field gets focus, then comes back unlifted', async () => {
+      await render(<NewWorkScreen presentation="home" />);
+      await waitFor(() => expect(recent()).not.toBeNull());
+      await dragTo(LIFT_AFTER + 40);
+      const field = screen.getByLabelText('Task');
+      mockKeyboard = { open: true, inset: 300 };
+      await fireEvent(field, 'focus');
+      expect(recent()).toBeNull();
+      expect(compact()).toBe(false);
+      expect(screen.getByLabelText('Task')).toBe(field);
+      mockKeyboard = { open: false, inset: 0 };
+      await fireEvent(field, 'blur');
+      await waitFor(() => expect(recent()).not.toBeNull());
+      expect(compact()).toBe(false);
+    });
   });
 });
