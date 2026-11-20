@@ -38,6 +38,7 @@ import { PendingSessionView } from './PendingSessionView';
 import { RecentWork } from './RecentWork';
 import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spacePullRequestRows, spaceRepositories } from './space';
 import { useInlineImages } from './useInlineImages';
+import { ComposerFormattedText } from '../chat/ComposerFormatting';
 
 type SheetKind = 'mode' | 'repository' | 'branch' | 'model';
 
@@ -345,11 +346,13 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
           {attached.length ? <View style={styles.images}>
             <ComposerImages drafts={attached} errors={[]} onRemove={images.remove} onRetry={images.retry} onDismissError={() => undefined} />
           </View> : null}
-          <TextInput accessibilityLabel={mode === 'thread' ? 'What to get done' : 'Task'} multiline value={prompt} editable={!busy}
+          <TextInput accessibilityLabel={mode === 'thread' ? 'What to get done' : 'Task'} multiline editable={!busy}
             placeholder={inSpace ? spacePlaceholder(mode, inSpace.space.name) : PLACEHOLDER[mode]} placeholderTextColor={c.muted} selectionColor={c.primary}
             onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
             onChangeText={(text) => { workflow.updateLocal(draftKey, { draft: text }); if (error) setError(null); }}
-            style={[styles.prompt, { color: c.text }]} />
+            style={[styles.prompt, { color: c.text }]}>
+            <ComposerFormattedText text={prompt} />
+          </TextInput>
           <View style={styles.controls}>
             <Pressable accessibilityRole="button" accessibilityLabel="Attach an image" accessibilityState={{ disabled: busy }}
               disabled={busy} hitSlop={6} onPress={() => { Keyboard.dismiss(); showImagePicker(images.add); }}

@@ -47,6 +47,7 @@ import { useCreateWorkbench } from '../components/workbench/new/useCreateWorkben
 import { PendingSessionView } from '../components/workbench/new/PendingSessionView';
 import { useRepoPaths } from '../components/workbench/new/useRepoPaths';
 import { defaultRepositoryId, writeLastRepository } from '../components/workbench/new/lastRepository';
+import { MarkdownTextarea } from '../components/workbench/MarkdownTextarea';
 
 const PLACEHOLDER = 'Describe a task. @ references files. Enter creates and starts the session. ⇧Enter adds a line.';
 const THREAD_PLACEHOLDER = 'What do you want to get done? A thread can work across repositories.';
@@ -410,7 +411,7 @@ export function NewWorkbenchPage() {
                   onHover={setActive}
                 />
               )}
-              <textarea
+              <MarkdownTextarea
                 ref={textareaRef}
                 data-new-workbench-composer
                 value={prompt}
@@ -427,7 +428,8 @@ export function NewWorkbenchPage() {
                 aria-label="Task"
                 rows={3}
                 disabled={busy}
-                className="block min-h-[96px] w-full resize-none border-0 bg-transparent px-4 pb-2 pt-4 text-[15px] leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0"
+                textClassName="px-4 pb-2 pt-4 text-[15px] leading-relaxed"
+                className="block min-h-[96px] w-full resize-none border-0 bg-transparent placeholder:text-muted-foreground focus:outline-none focus:ring-0"
               />
               <ImageAttachmentChips attachments={images.attachments} pendingUploads={images.pendingUploads} imageNotReady={images.imageNotReady} onRemove={(index) => images.setAttachments((current) => current.filter((_, i) => i !== index))} />
               <div className="flex flex-wrap items-center gap-1 px-2 pb-2">

@@ -12,6 +12,7 @@ import { canCompose, deliveryLabel, workbenchKind } from '../../workflow/model';
 import { isStarting } from '../sessions/Starting';
 import { chatActions } from './actions';
 import { ComposerImages } from './AttachmentViews';
+import { ComposerFormattedText } from './ComposerFormatting';
 import { useImageDrafts } from './attachmentDrafts';
 import { attachmentsFailed, attachmentsUploading, buildMessageInput, checkAttachment, imageErrorMessage, sendBlock, type ImageDraft, type PickedImage } from './attachments';
 import { showImagePicker } from './imagePicker';
@@ -173,10 +174,12 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
         <SymbolView name={{ ios: 'plus', android: 'add' }} size={18} tintColor={c.muted} />
       </Pressable>
       <TextInput ref={inputRef} multiline accessibilityLabel="Message" accessibilityHint="Drafts stay on this device for this account and workspace."
-        value={local.draft} maxLength={20000} onChangeText={(draft) => workflow.updateLocal(chatId, { draft })}
+        maxLength={20000} onChangeText={(draft) => workflow.updateLocal(chatId, { draft })}
         editable={delivery.status !== 'sending' && !sendingImages} placeholder={placeholder} placeholderTextColor={c.muted} selectionColor={c.primary}
         onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-        style={[styles.input, { color: c.text, opacity: delivery.status === 'sending' ? 0.6 : 1 }]} />
+        style={[styles.input, { color: c.text, opacity: delivery.status === 'sending' ? 0.6 : 1 }]}>
+        <ComposerFormattedText text={local.draft} />
+      </TextInput>
       <View style={styles.buttons}>
         {running && !hasDraft ? <RoundButton label="Stop the agent" symbol={{ ios: 'stop.fill', android: 'stop' }} tone="destructive"
           disabled={stopping} busy={stopping} onPress={() => { void stop(); }} /> : null}

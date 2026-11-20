@@ -242,7 +242,7 @@ describe('start new work', () => {
     await waitFor(() => expect(sendButton()).toBeEnabled());
     await fireEvent.press(sendButton());
     expect(await screen.findByText('No box is free.')).toBeVisible();
-    expect(screen.getByLabelText('Task').props.value).toBe('Fix the flaky test');
+    expect(screen.getByLabelText('Task')).toHaveTextContent('Fix the flaky test');
     expect(screen.queryByText('Creating the session…')).toBeNull();
     expect(mockRouter.replace).not.toHaveBeenCalled();
   });

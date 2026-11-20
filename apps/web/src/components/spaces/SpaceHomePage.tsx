@@ -44,6 +44,7 @@ import { useCreateWorkbench, type NewWorkbenchSpec } from '../workbench/new/useC
 import { PendingSessionView } from '../workbench/new/PendingSessionView';
 import { timeAgo } from '../workbench/new/RecentWorkbenches';
 import { MemberAvatar, PresenceAvatars, SpaceDot } from './SpaceAvatars';
+import { MarkdownTextarea } from '../workbench/MarkdownTextarea';
 
 const AGENTS: WorkbenchAgent[] = ['claude', 'codex'];
 const LAST_REPO_KEY = 'talyn-space-last-repo';
@@ -369,7 +370,7 @@ function SpaceComposer({
             onHover={setActiveMention}
           />
         )}
-        <textarea
+        <MarkdownTextarea
           ref={textareaRef}
           data-new-workbench-composer
           value={prompt}
@@ -390,7 +391,8 @@ function SpaceComposer({
           aria-label="Task"
           rows={3}
           disabled={busy}
-          className="block min-h-[96px] w-full resize-none border-0 bg-transparent px-4 pb-2 pt-4 text-[15px] leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0"
+          textClassName="px-4 pb-2 pt-4 text-[15px] leading-relaxed"
+          className="block min-h-[96px] w-full resize-none border-0 bg-transparent placeholder:text-muted-foreground focus:outline-none focus:ring-0"
         />
         <ImageAttachmentChips
           attachments={images.attachments}
