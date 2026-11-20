@@ -105,6 +105,15 @@ Add the Mobile checks to required branch protection. These GitHub settings are e
 Use EAS-managed iOS distribution, provisioning, APNs, Android upload, and submission credentials.
 Use Play App Signing. Confirm custody, least privilege, recovery access, two-factor authentication, and rotation owners.
 Provision credentials through the approved EAS dashboard before non-interactive builds.
+
+### iOS share extension
+
+"Share to Talyn" adds a second iOS target, `ShareExtension`, with the bundle ID `<app bundle ID>.share-extension` (`apps/mobile/plugins/withShareIntent.cjs`).
+The app and the extension share the app group `group.<app bundle ID>`.
+A non-interactive build cannot create the extension's provisioning profile or register the app group.
+Before the first iOS build of each profile that has the extension, run `eas credentials -p ios` or one interactive `eas build -p ios --profile <profile>` with an Apple account.
+EAS then registers the app group, enables it on both identifiers, and makes the extension's distribution profile.
+Until then, the TestFlight workflow's iOS build stops at the credentials step. Android needs no new credentials.
 For iOS submission, reserve the app in App Store Connect and configure the approved ASC app and Apple team IDs.
 The submit profiles resolve those IDs from environment variables. No Apple password enters CI.
 For Android, assign the service account to the correct EAS app and Play application with minimum release permissions.

@@ -202,7 +202,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       mode: release.profile === 'development' ? 'development' : 'production', enableBackgroundRemoteNotifications: false,
       // Android draws the small icon as a white silhouette; without one it uses the opaque app icon, a white square.
       icon: './assets/notification-icon.png', color: '#a94d2e',
-    }]],
+    }],
+    // "Share to Talyn" from other apps' share sheets: an iOS share extension and an Android SEND filter.
+    './plugins/withShareIntent.cjs'],
     experiments: { typedRoutes: true },
     extra: { release: { profile: release.profile, urls: release.urls }, appEnvironment: identity.environment, mobile,
       analytics: readAnalyticsConfig(process.env), eas: { projectId } },

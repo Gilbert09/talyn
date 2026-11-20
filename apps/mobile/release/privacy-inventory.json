@@ -1,6 +1,6 @@
 {
   "status": "Approved by the privacy owner (Tom Owers) on 2026-11-13: the Google Play Data safety and Apple App Privacy answers match this inventory. Re-approve after any change to collected data.",
-  "lockfileSha256": "fe6c346af955ca16a365a9d3d57d9a0aa8f7f8eea295f134902b72237b232abc",
+  "lockfileSha256": "06bf196f438d2898fb67759669d1edb19f4d9ddf2c7568d67e24f000ce84b87c",
   "mobileDependencies": {
     "@expo-google-fonts/inter": "^0.4.2",
     "@expo-google-fonts/jetbrains-mono": "^0.4.1",
@@ -28,6 +28,7 @@
     "expo-notifications": "~58.1.9",
     "expo-router": "~58.0.31",
     "expo-secure-store": "~58.0.3",
+    "expo-share-intent": "9.0.0",
     "expo-splash-screen": "~58.0.14",
     "expo-symbols": "~58.0.5",
     "expo-system-ui": "~58.0.7",
@@ -157,6 +158,15 @@
       "purpose": "Prefill the Claude sign-in code field; the person confirms before it is sent",
       "location": "Process memory only; sent to the Talyn backend only when the person submits",
       "retention": "Not stored on the device"
+    },
+    {
+      "category": "Shared items",
+      "fields": [
+        "text or a link the person shares to Talyn from another app, with the page title when that app sends one"
+      ],
+      "purpose": "Prefill the new-session composer, only when the person picks Talyn in a share sheet. Nothing is sent until the person sends the message",
+      "location": "iOS: the app group container (UserDefaults) between the share extension and the app, cleared when the app reads the item; Android: the share intent. Then process memory; sent to the Talyn backend only as a message the person sends",
+      "retention": "Not kept on the device after the composer shows it. A sent message follows Product content"
     },
     {
       "category": "Agent credentials",

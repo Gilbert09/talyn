@@ -4,12 +4,14 @@ import {
 
 import { receiveCallback } from '../src/auth/callback';
 import { receiveGithubReturn } from '../src/features/onboarding/githubReturn';
-import { productPath, rememberIntent } from '../src/navigation/intents';
+import { productPath, rememberIntent, SHARE_ROUTE } from '../src/navigation/intents';
 import { billingReturnPath, linkPath } from '../src/navigation/returnLinks';
 
 const PULLS_TAB_VALUES = ['mine', 'reviews', 'queue'] as const;
 
 export function redirectSystemPath({ path }: { path: string; initial: boolean }): string {
+  // The iOS share extension opens `<scheme>://dataUrl=<key>?nonce=...#<type>`. ShareIntentBridge reads the item.
+  if (/^[a-z][a-z0-9+.-]*:\/\/dataUrl=/i.test(path)) return SHARE_ROUTE;
   try {
     const url = new URL(path, 'https://local.invalid');
     const logical = linkPath(url);
