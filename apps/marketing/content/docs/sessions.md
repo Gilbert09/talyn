@@ -24,6 +24,7 @@ Other options in the composer:
 - **Create from…** starts the session on an existing branch or an open pull request, instead of a new branch. In the mobile app, the branch control above the message opens **Start from**, which lists a base branch for a new branch and the repository's open pull requests.
 - To start a session from a pull request, you can also use **Open in session** on the pull request. On mobile, it is in the pull request's menu.
 - **Plan** turns on plan mode. The agent reads the code and writes a plan, and changes nothing until you approve it. Press Shift+Tab to switch plan mode.
+- The composer shows Markdown formatting while you type: quotes, headings, lists, bold, italic, strikethrough, code, code blocks and links. It also marks file mentions (@) and a slash command at the start of the message. The marks such as `**` and `>` stay in the text, so the agent gets the Markdown that you typed.
 - Press Esc to leave the composer. Then you can use keyboard shortcuts such as G then P, which opens your pull requests. The text that you typed stays in the composer.
 - **Internet on** / **Internet off** controls whether the sandbox can reach the internet. See [Internet access](/docs/sandboxes#internet-access).
 - The attach button adds images, videos and text files. You can also paste or drop them into the chat. Images can be PNG, JPEG, WebP or GIF, up to 10 MB. Videos can be MP4, MOV or WebM, up to 50 MB. On the phone, pick a video from your library.

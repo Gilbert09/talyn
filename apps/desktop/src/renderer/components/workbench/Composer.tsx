@@ -49,6 +49,7 @@ import { BackgroundChips } from './BackgroundChips';
 import { SandboxAgentNotice } from './SandboxAgentNotice';
 import { WakeLaterPopover } from './WakeLaterPopover';
 import { usePendingMessages } from './usePendingMessages';
+import { MarkdownTextarea } from './MarkdownTextarea';
 
 
 export function Composer({
@@ -438,7 +439,7 @@ export function Composer({
           />
         )}
         <ImageAttachmentChips attachments={attachments} pendingUploads={pendingUploads} imageNotReady={imageNotReady} sendHeld={heldSend.held} onRemove={(index) => setAttachments((current) => current.filter((_, i) => i !== index))} />
-        <textarea
+        <MarkdownTextarea
           data-session-composer
           ref={textareaRef}
           value={draft}
@@ -458,7 +459,8 @@ export function Composer({
             ops.unavailable ??
             (running ? 'The agent is working. A message now is queued for when it finishes.' : 'Ask the agent… (@ for files, / for commands)')
           }
-          className="block max-h-[33vh] w-full resize-none bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+          textClassName="px-3 py-2 text-sm"
+          className="block max-h-[33vh] w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
           aria-label="Message the agent"
         />
         <div className="flex items-center gap-1 px-2 pb-1.5">

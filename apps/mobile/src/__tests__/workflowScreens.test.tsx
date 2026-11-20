@@ -135,7 +135,7 @@ describe('detail and composer accessibility', () => {
     await render(<WorkbenchDetailScreen kind="session" />); await screen.findByText('Agent response 1');
     await fireEvent.changeText(screen.getByLabelText('Message'), 'Keep this draft'); mockNetwork = 'offline';
     await act(async () => mockActive.network({ reachability: 'offline' }));
-    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled(); expect(screen.getByDisplayValue('Keep this draft')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled(); expect(screen.getByLabelText('Message')).toHaveTextContent('Keep this draft');
   });
   it('handles a supported human gate through text and leaves permissions read-only', async () => {
     mockActive.api.workbenches.get.mockResolvedValueOnce(session({ chats: [chat({ status: 'awaiting_input' })] }));
@@ -162,7 +162,7 @@ describe('detail and composer accessibility', () => {
     await fireEvent.changeText(await screen.findByLabelText('Message'), 'Second draft');
     expect(mockActive.store.local('selected:session-one').selectedChat).toBe('chat-two');
     await view.unmount(); await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await screen.findByDisplayValue('Second draft')).toBeVisible();
+    expect(await screen.findByLabelText('Message')).toHaveTextContent('Second draft');
   });
   it('shows a reviewer PR detail with one merge line, a review action and the website link', async () => {
     mockParams = { id: 'pr-one' }; await render(<PullRequestDetailScreen />);
