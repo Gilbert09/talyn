@@ -175,6 +175,7 @@ export * from './workbenchQuestion.js';
 export * from './claudeSessionImport.js';
 export * from './sessionLinks.js';
 export * from './sessionStarters.js';
+export * from './transcriptQuote.js';
 export * from './mobileNotifications.js';
 export * from './deskPresence.js';
 

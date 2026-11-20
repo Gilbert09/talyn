@@ -1,6 +1,6 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, History, Loader2, RotateCcw } from 'lucide-react';
-import { agentOutageFrom, buildBlocks, findTurnPlan, findTurnQuestion, isClaudeInterruptionEvent, isSubagentEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent, type WorkbenchMessageSender } from '@talyn/shared';
+import { agentOutageFrom, buildBlocks, findTurnPlan, findTurnQuestion, isClaudeInterruptionEvent, isSubagentEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type Workbench, type WorkbenchChat, type WorkbenchEvent, type WorkbenchMessageSender } from '@talyn/shared';
 import { AgentBlocks } from './AgentBlocks';
 import { usePendingMessages } from './usePendingMessages';
 import { renderMarkdownish } from '../../lib/markdown';
@@ -11,6 +11,7 @@ import { PlanCard, type PlanCardState } from './PlanCard';
 import { QuestionCard, type QuestionCardState } from './QuestionCard';
 import { MessageAttachments } from './MessageAttachments';
 import { TranscriptFindBar } from './TranscriptFindBar';
+import { TranscriptSelectionAction } from './TranscriptSelectionAction';
 import { RelativeTime } from '../RelativeTime';
 import { api } from '../../lib/api';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -33,6 +34,7 @@ export function WorkbenchTranscript({
   emptyHint,
   older = NO_OLDER,
   canRetry = true,
+  workbench,
 }: {
   chat: WorkbenchChat;
   events: WorkbenchEvent[];
@@ -43,7 +45,10 @@ export function WorkbenchTranscript({
   /** Paging backwards: the transcript holds the newest events and loads older ones as it scrolls up. */
   older?: OlderHistory;
   canRetry?: boolean;
+  /** The session the chat belongs to. With it, selected text offers "New session from selection". */
+  workbench?: Workbench;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
   const { shown: outgoing } = usePendingMessages(chat, events);
@@ -95,8 +100,9 @@ export function WorkbenchTranscript({
   const questions = useMemo(() => turns.map((turn) => findTurnQuestion(turn.events)), [turns]);
 
   return (
-    <div className="relative flex h-full min-w-0 flex-col bg-background">
+    <div ref={containerRef} className="relative flex h-full min-w-0 flex-col bg-background">
       <TranscriptFindBar workbenchId={chat.workbenchId} scrollRef={scrollRef} older={older} />
+      {workbench && <TranscriptSelectionAction workbench={workbench} scrollRef={scrollRef} containerRef={containerRef} />}
       <div
         ref={scrollRef}
         onScroll={onScroll}

@@ -65,8 +65,10 @@ const MOVE = { damping: 26, stiffness: 260, mass: 0.9 };
  * (`presentation="home"`) and as a pushed route. After a start a route
  * replaces itself and home pushes.
  */
-export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, initialPullRequestId, presentation = 'route' }: {
-  initialMode?: NewWorkMode; initialRepositoryId?: string; initialPullRequestId?: string; presentation?: 'home' | 'route';
+export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, initialPullRequestId, initialPrompt, presentation = 'route' }: {
+  initialMode?: NewWorkMode; initialRepositoryId?: string; initialPullRequestId?: string;
+  /** Replaces the draft, as web's prefill does: "New session from copied text" quotes the text here. */
+  initialPrompt?: string; presentation?: 'home' | 'route';
 }) {
   const { workflow, workspace: workspaces } = useMobileRuntime();
   const router = useRouter();
@@ -98,6 +100,7 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   const settingsSource = remoteHome ? homeWorkspace.data : workspace.data;
   const repoKey = lastRepositoryKey(user, spaceId ? `space:${spaceId}` : workspaceId);
   const prompt = useLocal(draftKey).draft;
+  useEffect(() => { if (initialPrompt) workflow.updateLocal(draftKey, { draft: initialPrompt }); }, [initialPrompt, workflow]);
   const images = useInlineImages(draftKey);
   const attached = images.drafts;
   // Pull requests belong to the workspace shown, so a space offers them only when that is my home workspace.
@@ -140,10 +143,12 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
     return () => { live = false; };
   }, [repoKey]);
   useEffect(() => {
-    if (wantedRepo && repos.some((repo) => repo.id === wantedRepo)) {
+    // By id, or by full name: a space's repository ids are full names, and a session names its repository both ways.
+    const wanted = wantedRepo ? repos.find((repo) => repo.id === wantedRepo) ?? repos.find((repo) => repo.fullName.toLowerCase() === wantedRepo.toLowerCase()) : undefined;
+    if (wanted) {
       setWantedRepo(null);
       pickedFor.current = repoKey;
-      if (wantedRepo !== repositoryId) { setRepositoryId(wantedRepo); setBaseBranch(''); }
+      if (wanted.id !== repositoryId) { setRepositoryId(wanted.id); setBaseBranch(''); }
       return;
     }
     const last = saved?.key === repoKey && pickedFor.current !== repoKey ? saved.id : null;

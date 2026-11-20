@@ -166,6 +166,7 @@ export function ChatView({
         ) : chat ? (
           <SubagentTabOpener.Provider value={openTab}>
             <WorkbenchTranscript
+              workbench={workbench}
               chat={chat}
               events={state.events}
               loading={state.loading}

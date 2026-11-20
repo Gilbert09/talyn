@@ -68,6 +68,8 @@ export interface NewWorkbenchPrefill {
   branch?: string;
   /** Text for the composer, from a starter suggestion. The person can edit it before sending. */
   prompt?: string;
+  /** The repository by name, for the space composer: a space picks repositories by name, not by id. */
+  repoFullName?: string;
   runtime?: 'sandbox' | 'local';
 }
 

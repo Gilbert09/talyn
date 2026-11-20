@@ -20,6 +20,7 @@ import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkspaceStore, type WatchedRepo } from '../../stores/workspace';
 import { emptySpaceList, loadSpaceSessions, useSpacesStore, type SpaceRef } from '../../stores/spaces';
 import { useNavigationStore } from '../../stores/navigation';
+import { useWorkbenchStore } from '../../stores/workbenches';
 import { workbenchPlaceLabel } from '../../lib/threads';
 import { spaceSessionState } from '../../lib/sessionState';
 import { useSpaceSidebarModel } from '../layout/spaceSidebarModel';
@@ -200,10 +201,25 @@ function SpaceComposer({
 
   const focus = () => textareaRef.current?.focus();
   useEffect(() => {
-    focus();
     window.addEventListener(FOCUS_COMPOSER_EVENT, focus);
     return () => window.removeEventListener(FOCUS_COMPOSER_EVENT, focus);
   }, []);
+
+  // A "New session" request with a prefill (a transcript selection): apply its text and repository once.
+  const newWorkbenchSeq = useWorkbenchStore((s) => s.newWorkbench.seq);
+  useEffect(() => {
+    const { prefill } = useWorkbenchStore.getState().newWorkbench;
+    if (prefill) {
+      if (prefill.prompt !== undefined) {
+        const text = prefill.prompt;
+        setPrompt(text);
+        window.requestAnimationFrame(() => textareaRef.current?.setSelectionRange(text.length, text.length));
+      }
+      if (prefill.repoFullName) setRepoFullName(prefill.repoFullName);
+      useWorkbenchStore.getState().clearNewWorkbenchPrefill();
+    }
+    focus();
+  }, [newWorkbenchSeq]);
 
   // ⌘I opens "Create from…" from anywhere on the page.
   useEffect(() => {

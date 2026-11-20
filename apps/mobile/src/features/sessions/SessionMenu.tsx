@@ -15,7 +15,7 @@ import { workbenchKind, workbenchTitle } from '../../workflow/model';
 import { spacesOffered } from '../spaces/model';
 import { useMoveToSpace, type MoveToSpaceAction } from '../spaces/actions';
 import { sessionGlanceText } from './glance';
-import { archiveCopy, copyActions, copyEntry, runningChat, SESSION_ACTION_LABEL, sessionActions, webLink, type SessionActionKind } from './actions';
+import { archiveCopy, copyActions, copyEntry, NEW_FROM_COPIED_LABEL, newSessionFromTextRoute, runningChat, SESSION_ACTION_LABEL, sessionActions, webLink, type SessionActionKind } from './actions';
 
 const ICONS: Record<SessionActionKind, Symbol> = {
   stop: { ios: 'stop.circle', android: 'stop_circle' },
@@ -29,6 +29,7 @@ const ICONS: Record<SessionActionKind, Symbol> = {
   restore: { ios: 'arrow.uturn.backward', android: 'unarchive' },
 };
 const COPY_ICON: Symbol = { ios: 'doc.on.doc', android: 'content_copy' };
+const NEW_FROM_COPIED_ICON: Symbol = { ios: 'plus.bubble', android: 'add_comment' };
 type MoveBuilder = (item: Workbench) => MoveToSpaceAction | null;
 
 /**
@@ -66,6 +67,19 @@ export function useSessionMenu({ onArchived, onThreadScreen = false }: { onArchi
   const onMoved = useCallback((item: Workbench) => workflow.applyWorkbench(item), [workflow]);
   const copyText = (text: string, done: string) => {
     Clipboard.setStringAsync(text).then(() => toast.show(done), () => Alert.alert('Could not copy', 'Please try again.'));
+  };
+  /** Web's "New session from selection": a phone's text menu takes no app items, so the text comes from the clipboard. */
+  const newFromCopied = async (item: Workbench) => {
+    let copied = '';
+    try { copied = await Clipboard.getStringAsync(); } catch { /* read as empty */ }
+    const route = newSessionFromTextRoute(item, copied);
+    if (!route) {
+      Alert.alert('Nothing copied', 'Select text in the conversation, tap Copy, then choose this again.');
+      return;
+    }
+    trackEvent('session_from_selection', { source_kind: item.kind === 'thread' ? 'thread' : 'session', chars: copied.length,
+      repository_prefilled: Boolean(route.params.repository) });
+    router.push(route);
   };
 
   const attempt = async (title: string, action: () => Promise<unknown>) => {
@@ -135,6 +149,8 @@ export function useSessionMenu({ onArchived, onThreadScreen = false }: { onArchi
       const copy = copyEntry(kind, item, more.prTitle);
       actions.push({ label: copy.label, icon: COPY_ICON, onPress: () => copyText(copy.text, copy.done) });
     }
+    // Only the detail screen shows the conversation to copy from.
+    if (more.views) actions.push({ label: NEW_FROM_COPIED_LABEL, icon: NEW_FROM_COPIED_ICON, onPress: () => { void newFromCopied(item); } });
     const move = moveBuilder?.build(item);
     if (move) actions.push({ label: move.label, icon: move.icon, disabled: move.disabled, detail: move.detail, onPress: move.run });
     if (last) actions.push(last);
