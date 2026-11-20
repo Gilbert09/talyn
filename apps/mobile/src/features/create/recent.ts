@@ -46,3 +46,19 @@ export function composerLayout(input: { prompt: string; images: number; focused:
   if (input.prompt.trim() || input.images > 0 || input.busy) return 'docked';
   return input.focused && input.keyboardOpen ? 'docked' : 'centered';
 }
+
+/** How far the recent list scrolls down before the composer moves to the top. */
+export const LIFT_AFTER = 24;
+
+/**
+ * Whether the composer is lifted to the top of the page as a compact field,
+ * to give the recent list more room. Only a drag or its fling changes it:
+ * a scroll offset that the layout changes (the list grows when the composer
+ * lifts) is not a request from the person.
+ */
+export function recentLift(input: { offset: number; dragging: boolean; lifted: boolean }): boolean {
+  if (!input.dragging) return input.lifted;
+  if (input.offset > LIFT_AFTER) return true;
+  if (input.offset <= 0) return false;
+  return input.lifted;
+}
