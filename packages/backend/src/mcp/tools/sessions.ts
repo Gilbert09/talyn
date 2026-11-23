@@ -112,12 +112,18 @@ const chatLine = (chat: WorkbenchChat) =>
   `  ${chat.id}  "${chat.title}"  [${chat.status}]  ${chat.agent}/${chat.model ?? 'default'}${chat.queuedMessages.length ? `  queued: ${chat.queuedMessages.length}` : ''}`;
 
 /** One line for the code review of the session's pull request. */
-export function sessionReviewLine(review: CodeReviewPublic): string {
+export function sessionReviewLine(review: CodeReviewPublic, sessionId?: string): string {
   const { blocker, major, minor, nit } = review.counts;
+  const report = review.sessionReport;
+  const sent = !report
+    ? ''
+    : report.workbenchId === sessionId
+      ? ` Sent to this session at ${report.sentAt}.`
+      : ` Sent to session ${report.workbenchId} at ${report.sentAt}.`;
   return (
     `code review: ${review.id} [${review.phase}] ${review.openCount} open ` +
     `(blocker ${blocker}, major ${major}, minor ${minor}, nit ${nit})` +
-    `${review.staleForHead ? ', older than the head' : ''}. Findings: talyn_get_code_review`
+    `${review.staleForHead ? ', older than the head' : ''}.${sent} Findings: talyn_get_code_review`
   );
 }
 
@@ -149,7 +155,7 @@ function sessionDetail(wb: Workbench, review: CodeReviewPublic | null = null): s
     wb.pr
       ? `pull request: #${wb.pr.number} ${wb.pr.state}, ${wb.pr.mergeable}, checks ${wb.pr.ciStatus}  ${wb.pr.url}`
       : '',
-    review ? sessionReviewLine(review) : '',
+    review ? sessionReviewLine(review, wb.id) : '',
     'chats:',
     ...(wb.chats?.length ? wb.chats.map(chatLine) : ['  none']),
   ];

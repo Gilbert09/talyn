@@ -1,7 +1,8 @@
 import type { CodeReviewFinding } from '@talyn/client/native';
 
 import { agreementLabel, bucketFindings, droppedFindings, findingLocation, findingMeta, fixableIds, fixedFindings, groupFindings,
-  notNeededCount, openFindingCounts, plainCopy, postConfirmation, postToPrState, reviewHeadline, reviewRunning, reviewSummary } from '../features/prs/codeReview';
+  notNeededCount, openFindingCounts, plainCopy, postConfirmation, postToPrState, reviewHeadline, reviewRunning, reviewSummary,
+  sessionReportLine } from '../features/prs/codeReview';
 import { finding, review } from './workflowFixtures';
 
 const list: CodeReviewFinding[] = [
@@ -132,4 +133,13 @@ describe('code review summary', () => {
       { title: 'Looking for problems (4 of 4)', findings: null, failure: null, waiting: false, stale: false }],
   ] as const)('sums up a review that is %s', (_name, patch, expected) =>
     expect(reviewSummary(review(patch as Parameters<typeof review>[0]))).toEqual(expected));
+
+  it.each([
+    ['no report', null, null],
+    ['an older backend', undefined, null],
+    ['a report to this session', { workbenchId: 's1', sentAt: '2026-11-23T10:00:00Z', findingCount: 2 }, 'Talyn sent 2 findings to this session.'],
+    ['one finding', { workbenchId: 's1', sentAt: '2026-11-23T10:00:00Z', findingCount: 1 }, 'Talyn sent 1 finding to this session.'],
+    ['a report to another session', { workbenchId: 's9', sentAt: '2026-11-23T10:00:00Z', findingCount: 3 }, 'Talyn sent 3 findings to another session.'],
+  ] as const)('says where the findings went: %s', (_name, sessionReport, expected) =>
+    expect(sessionReportLine({ sessionReport }, 's1')).toBe(expected));
 });

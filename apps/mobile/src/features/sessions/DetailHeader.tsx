@@ -256,7 +256,7 @@ export function SessionDetailsSheet({ visible, onClose, item, row, readiness, on
         trailing={<PrPill number={number} state={row?.state ?? item.pr?.state ?? 'open'} draft={row?.summary.draft} />}>
         {row ? <View style={{ alignSelf: 'flex-start' }}><PrStatusPill variant={prRowStatus(row)} /></View> : null}
       </Row> : null}
-      {row?.codeReview ? <CodeReviewSummary review={row.codeReview} pullRequestId={row.id}
+      {row?.codeReview ? <CodeReviewSummary review={row.codeReview} pullRequestId={row.id} sessionId={item.id}
         onPress={() => go(pullRequestRoute(row.id, { tab: 'findings' }))} /> : null}
       {item.threadId ? <Row divider={false} chevron title="Open parent thread" onPress={() => go(threadRoute(item.threadId!))} /> : null}
       {automation ? <Row divider={false} chevron title={`${automation.label} automation`} subtitle="Started this session"

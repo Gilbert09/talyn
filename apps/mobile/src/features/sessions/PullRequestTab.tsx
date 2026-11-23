@@ -54,7 +54,7 @@ function LinkedPullRequest({ item }: { item: Workbench }) {
         <AppText variant="caption" style={{ color: c.muted }}>{`${summary.headBranch} → ${summary.baseBranch}`}</AppText>
       </Row>
     </Group>
-    {row.codeReview ? <CodeReviewSummary review={row.codeReview} pullRequestId={row.id} /> : null}
+    {row.codeReview ? <CodeReviewSummary review={row.codeReview} pullRequestId={row.id} sessionId={item.id} /> : null}
     {url ? <View style={{ alignSelf: 'flex-start' }}>
       <Button variant="quiet" size="sm" icon={{ ios: 'arrow.up.right.square', android: 'open_in_new' }} title="Open on GitHub" onPress={() => openExternal(url)} />
     </View> : null}

@@ -108,6 +108,14 @@ export function reviewSummary(review: CodeReviewPublic): ReviewSummary {
   };
 }
 
+/** Where the report-back sent the findings, seen from the session `sessionId`. Null when none went. */
+export function sessionReportLine(review: Pick<CodeReviewPublic, 'sessionReport'>, sessionId: string): string | null {
+  const report = review.sessionReport;
+  if (!report) return null;
+  const findings = `${report.findingCount} ${report.findingCount === 1 ? 'finding' : 'findings'}`;
+  return `Talyn sent ${findings} to ${report.workbenchId === sessionId ? 'this' : 'another'} session.`;
+}
+
 export const REVIEW_WAITING = 'Waiting for a runner to become free.';
 export const REVIEW_STALE = 'There are newer commits.';
 

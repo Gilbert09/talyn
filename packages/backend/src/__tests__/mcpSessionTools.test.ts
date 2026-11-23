@@ -181,6 +181,16 @@ describe('session tools', () => {
       () => ({ pullRequestId: 'pr1', review: sessionReview({ staleForHead: true }) }),
       'code review: rev1 [ready] 3 open (blocker 1, major 2, minor 0, nit 4), older than the head.',
     ],
+    [
+      'a review sent to this session',
+      () => ({ pullRequestId: 'pr1', review: sessionReview({ sessionReport: { workbenchId: 's1', sentAt: '2026-11-23T10:00:00Z', findingCount: 3 } }) }),
+      '(blocker 1, major 2, minor 0, nit 4). Sent to this session at 2026-11-23T10:00:00Z. Findings',
+    ],
+    [
+      'a review sent to another session',
+      () => ({ pullRequestId: 'pr1', review: sessionReview({ sessionReport: { workbenchId: 's9', sentAt: '2026-11-23T10:00:00Z', findingCount: 3 } }) }),
+      'Sent to session s9 at 2026-11-23T10:00:00Z.',
+    ],
     ['no review', () => ({ pullRequestId: 'pr1', review: null }), null],
     ['a failed read', () => ({ status: 500, body: { success: false, error: 'boom' } }), null],
   ])('get_session shows the code review: %s', async (_name, answer, line) => {

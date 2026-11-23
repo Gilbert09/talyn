@@ -11,7 +11,7 @@ import type { WorkbenchOps } from '../lib/workbenchOps';
 import { GIT_PANEL_MAX_WIDTH, GIT_PANEL_MIN_WIDTH, readLayout } from '../lib/workbenchLayout';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { GitPanel } from '../components/workbench/GitPanel';
-import { PullRequestTab } from '../components/workbench/PullRequestTab';
+import { PullRequestTab, sessionReportText } from '../components/workbench/PullRequestTab';
 import { toast } from '../stores/toast';
 import { usePullRequestStore } from '../stores/pullRequests';
 import { ChangesTab, CHANGES_REFRESH_MS } from '../components/workbench/ChangesTab';
@@ -526,6 +526,31 @@ describe('Pull request tab', () => {
     expect(shown ? Array.from(shown.children).map((c) => c.textContent?.trim()) : []).toEqual(counts);
     fireEvent.click(within(section).getByRole('button', { name: 'View findings' }));
     expect(screen.getByTestId('pr-sheet')).toHaveAttribute('data-tab', 'findings');
+  });
+
+  const NOW = Date.parse('2026-11-23T12:00:00Z');
+  it.each([
+    { name: 'to this session just now', report: { workbenchId: 'wb1', sentAt: '2026-11-23T11:59:30Z', findingCount: 2 }, text: 'Talyn sent 2 findings to this session just now.' },
+    { name: 'to this session earlier', report: { workbenchId: 'wb1', sentAt: '2026-11-23T10:00:00Z', findingCount: 1 }, text: 'Talyn sent 1 finding to this session 2h ago.' },
+    { name: 'to another session', report: { workbenchId: 'wb9', sentAt: '2026-11-23T10:00:00Z', findingCount: 3 }, text: 'Talyn sent 3 findings to another session.' },
+  ])('says the findings went $name', ({ report, text }) => {
+    expect(sessionReportText(report, 'wb1', NOW)).toBe(text);
+  });
+
+  it.each([
+    { name: 'shows', sessionReport: { workbenchId: 'wb1', sentAt: new Date().toISOString(), findingCount: 2 }, text: 'Talyn sent 2 findings to this session just now.' },
+    { name: 'hides with no report', sessionReport: null, text: null },
+    { name: 'hides on an older backend', sessionReport: undefined, text: null },
+  ])('the report-back line $name', ({ sessionReport, text }) => {
+    getPr.mockResolvedValue({ row: PR, fresh });
+    const row = prWith({
+      codeReview: {
+        phase: 'ready', phasePlan: [], openCount: 2, counts: { blocker: 2, major: 0, minor: 0, nit: 0 },
+        deferredSince: null, staleForHead: false, sessionReport,
+      } as unknown as PRRow['codeReview'],
+    });
+    render(<PullRequestTab workbench={WB} chat={chat} pr={row} visible turnsEnded={0} />);
+    expect(screen.queryByTestId('pr-code-review-sent')?.textContent ?? null).toBe(text);
   });
 
   it('Details and the title open the full view on its overview', () => {

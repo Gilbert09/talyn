@@ -740,6 +740,20 @@ export interface CodeReviewPublic {
    * no session links the pull request. Absent from an older backend.
    */
   session?: CodeReviewSession | null;
+  /**
+   * When this cycle's confirmed findings went to a session as a message (the
+   * report-back). Null when they did not go. Absent from an older backend.
+   */
+  sessionReport?: CodeReviewSessionReport | null;
+}
+
+/** The report-back of one cycle, as {@link CodeReviewPublic.sessionReport} carries it. */
+export interface CodeReviewSessionReport {
+  /** The session that got the message. */
+  workbenchId: string;
+  sentAt: string;
+  /** How many findings the message carried. */
+  findingCount: number;
 }
 
 /** The session a review belongs to, as {@link CodeReviewPublic.session} carries it. */

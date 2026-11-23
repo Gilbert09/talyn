@@ -26,8 +26,12 @@ const sessionPart = (review: CodeReviewPublic) =>
   review.session
     ? `  session: ${review.session.id} (${review.session.name}${review.session.archived ? ', archived' : ''})`
     : '';
+const reportPart = (review: CodeReviewPublic) =>
+  review.sessionReport
+    ? `  sent to session ${review.sessionReport.workbenchId}: ${review.sessionReport.findingCount} findings at ${review.sessionReport.sentAt}`
+    : '';
 const reviewLine = (review: CodeReviewPublic) =>
-  `${review.id}  [${review.phase}]  head: ${review.headSha}  preset: ${review.preset}${sessionPart(review)}${review.failureReason ? `  ${review.failureReason}` : ''}`;
+  `${review.id}  [${review.phase}]  head: ${review.headSha}  preset: ${review.preset}${sessionPart(review)}${reportPart(review)}${review.failureReason ? `  ${review.failureReason}` : ''}`;
 const findingLine = (finding: CodeReviewFinding) =>
   `${finding.id} [${finding.severity}] [${finding.disposition}] ${finding.filePath}:${finding.lineStart ?? '?'} ${finding.title} (${finding.lenses.join(', ')}, ${finding.verdict})`;
 const findingSchema = { ...prSchema, finding_id: textSchema };

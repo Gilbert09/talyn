@@ -18,7 +18,7 @@ import { useResource } from '../../workflow/hooks';
 import type { CodeReviewData } from '../../workflow/store';
 import { Markdown } from '../chat/Markdown';
 import { bucketFindings, droppedFindings, findingLocation, findingMeta, fixableIds, fixedFindings, groupFindings, notNeededCount,
-  plainCopy, postConfirmation, postToPrState, REVIEW_STALE, REVIEW_WAITING, reviewRunning, reviewSummary, SEVERITY_TONE } from './codeReview';
+  plainCopy, postConfirmation, postToPrState, REVIEW_STALE, REVIEW_WAITING, reviewRunning, reviewSummary, SEVERITY_TONE, sessionReportLine } from './codeReview';
 
 const POLL = 5000;
 type Busy = 'start' | 'stop' | 'fix' | 'post' | null;
@@ -256,9 +256,14 @@ function FindingCard({ finding, review, names, expanded, onToggleExpanded, openS
  * A review's status and open findings, as one row that opens the PR on its
  * Findings tab. Pass `onPress` to navigate yourself, for example to close a sheet first.
  */
-export function CodeReviewSummary({ review, pullRequestId, onPress }: { review: CodeReviewPublic; pullRequestId: string; onPress?(): void }) {
+export function CodeReviewSummary({ review, pullRequestId, sessionId, onPress }: {
+  review: CodeReviewPublic; pullRequestId: string;
+  /** The session that shows the summary. Set: say whether the findings went to it. */
+  sessionId?: string; onPress?(): void;
+}) {
   const summary = reviewSummary(review);
-  const lines = [summary.findings, summary.failure, summary.waiting ? REVIEW_WAITING : null, summary.stale ? REVIEW_STALE : null]
+  const sent = sessionId ? sessionReportLine(review, sessionId) : null;
+  const lines = [summary.findings, summary.failure, summary.waiting ? REVIEW_WAITING : null, summary.stale ? REVIEW_STALE : null, sent]
     .filter((line): line is string => Boolean(line));
   return <Group title="Code review">
     <Row title={summary.title} chevron divider={false} href={onPress ? undefined : pullRequestRoute(pullRequestId, { tab: 'findings' })} onPress={onPress}
@@ -267,6 +272,7 @@ export function CodeReviewSummary({ review, pullRequestId, onPress }: { review: 
       {summary.failure ? <AppText variant="meta" tone="destructive">{summary.failure}</AppText> : null}
       {summary.waiting ? <AppText variant="meta" tone="warning">{REVIEW_WAITING}</AppText> : null}
       {summary.stale ? <AppText variant="meta" tone="warning">{REVIEW_STALE}</AppText> : null}
+      {sent ? <AppText variant="meta" tone="muted">{sent}</AppText> : null}
     </Row>
   </Group>;
 }

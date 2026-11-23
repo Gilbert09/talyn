@@ -3,13 +3,19 @@ import type { AddressInfo } from 'net';
 import express from 'express';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb, seedUser } from './helpers/testDb.js';
-import { prCodeReviews, pullRequests, repositories, workbenches, workspaces } from '../db/schema.js';
+import { prCodeReviewEvents, prCodeReviews, pullRequests, repositories, workbenches, workspaces } from '../db/schema.js';
 import {
   liveWorkbenchesForPrs,
   owningWorkbenchesForPrs,
   owningWorkbenchesForPrsQuery,
 } from '../services/workbenches/prSessions.js';
-import { codeReviewForPr, codeReviewsForPrs, publicReviewById } from '../services/codeReview/public.js';
+import {
+  codeReviewForPr,
+  codeReviewsForPrs,
+  publicReviewById,
+  sessionReportsFor,
+} from '../services/codeReview/public.js';
+import { SESSION_REPORT_SENT } from '../services/codeReview/sessionReport.js';
 
 const { workbenchRoutes } = await import('../routes/workbenches.js');
 const { apiErrorHandler } = await import('../routes/index.js');
@@ -183,6 +189,68 @@ describe('the session a code review belongs to', () => {
     expect((await codeReviewForPr('p1'))?.session).toBeNull();
     await testDb.db.insert(workbenches).values(session({ id: 'late' }));
     expect((await codeReviewForPr('p1'))?.session?.id).toBe('late');
+  });
+});
+
+describe('the report-back on a code review', () => {
+  let testDb: Awaited<ReturnType<typeof createTestDb>>;
+
+  const sent = (cycle: number, when: Date, detail: Record<string, unknown> = {}) => ({
+    reviewId: 'rev1', at: when, toPhase: 'ready', trigger: 'executor', code: SESSION_REPORT_SENT,
+    detail: { workbenchId: 'w1', findingIds: ['f1', 'f2'], cycle, ...detail },
+  });
+
+  beforeEach(async () => {
+    testDb = await createTestDb();
+    const { db } = testDb;
+    await seedUser(db, { id: 'owner-a' });
+    await db.insert(workspaces).values({ id: 'ws-a', ownerId: 'owner-a', name: 'A' });
+    await db.insert(repositories).values({ id: 'repo-a', workspaceId: 'ws-a', name: 'o/r', url: 'https://github.com/o/r' });
+    await db.insert(pullRequests).values({
+      id: 'p1', workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'o', repo: 'r', number: 1, state: 'open', lastSummary: {},
+    });
+    await db.insert(prCodeReviews).values({
+      id: 'rev1', workspaceId: 'ws-a', repositoryId: 'repo-a', pullRequestId: 'p1', cycle: 2, phase: 'ready',
+    });
+  });
+
+  afterEach(async () => {
+    await testDb.cleanup();
+  });
+
+  it.each([
+    { name: 'no report', events: [], expected: null },
+    {
+      name: 'a report of this cycle',
+      events: [sent(2, at(5))],
+      expected: { workbenchId: 'w1', sentAt: at(5).toISOString(), findingCount: 2 },
+    },
+    { name: 'a report of an older cycle only', events: [sent(1, at(5))], expected: null },
+    {
+      name: 'the newest of two reports of this cycle',
+      events: [sent(2, at(5)), sent(2, at(7), { workbenchId: 'w2', findingIds: ['f1'] })],
+      expected: { workbenchId: 'w2', sentAt: at(7).toISOString(), findingCount: 1 },
+    },
+    { name: 'a report with no session id', events: [sent(2, at(5), { workbenchId: null })], expected: null },
+    {
+      name: 'a report with no finding ids',
+      events: [sent(2, at(5), { findingIds: undefined })],
+      expected: { workbenchId: 'w1', sentAt: at(5).toISOString(), findingCount: 0 },
+    },
+    {
+      name: 'another event code',
+      events: [{ ...sent(2, at(5)), code: 'session_report_failed' }],
+      expected: null,
+    },
+  ])('shows $name', async ({ events, expected }) => {
+    if (events.length) await testDb.db.insert(prCodeReviewEvents).values(events);
+    expect((await sessionReportsFor([{ id: 'rev1', cycle: 2 }])).get('rev1') ?? null).toEqual(expected);
+    expect((await codeReviewForPr('p1'))?.sessionReport ?? null).toEqual(expected);
+    expect((await codeReviewsForPrs(['p1'])).get('p1')?.sessionReport ?? null).toEqual(expected);
+  });
+
+  it('answers an empty map for no reviews', async () => {
+    expect((await sessionReportsFor([])).size).toBe(0);
   });
 });
 
