@@ -77,7 +77,11 @@ export function SpaceHomePage({ active }: { active: SpaceRef }) {
       <div className="h-full overflow-y-auto" data-attr="space-home" hidden={pending !== null}>
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-8 px-6 pb-16 pt-[10vh]">
           <div className="flex items-baseline justify-center gap-2" data-attr="space-header">
-            <SpaceDot color={space.color} image={space.image} className="h-3 w-3 self-center" />
+            <SpaceDot
+              color={space.color}
+              image={space.image}
+              className={cn('self-center', space.image ? 'h-7 w-7 rounded-md' : 'h-4 w-4')}
+            />
             <h1 className="font-display text-2xl font-semibold tracking-tight">{space.name}</h1>
             <span className="text-sm text-muted-foreground">{team.name}</span>
           </div>
