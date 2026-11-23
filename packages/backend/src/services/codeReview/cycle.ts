@@ -65,7 +65,7 @@ export interface StartReviewInput {
   /** Set when the clock started this rather than a person. */
   auto?: boolean;
   /** What asked for the cycle, for analytics. Absent means `auto` decides. */
-  trigger?: 'api' | 'auto' | 'workflow';
+  trigger?: 'api' | 'auto' | 'workflow' | 'session_complete';
   userId?: string | null;
 }
 

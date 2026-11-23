@@ -9,6 +9,7 @@ import * as changes from '../services/workbenches/changes.js';
 import * as prLink from '../services/workbenches/prLink.js';
 import * as instructions from '../services/workbenches/instructions.js';
 import * as title from '../services/workbenches/title.js';
+import * as reviewAutoStart from '../services/codeReview/sessionAutoStart.js';
 import { LAUNCH_FAILED_MESSAGE, sendMessage, setTurnRetryDelaysForTests } from '../services/workbenches/turns.js';
 import * as turns from '../services/workbenches/turns.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
@@ -154,6 +155,34 @@ describe('agent memory backups', () => {
       expect((await getChat('chat'))?.statusMessage).toContain(LAUNCH_FAILED_MESSAGE);
       expect((await state()).pending).toBe(true);
     } finally { setTurnRetryDelaysForTests(null); }
+  });
+
+  it('hands the box HEAD to the code review auto-start when the turn ends idle', async () => {
+    vi.spyOn(moves, 'needsFreshGolden').mockResolvedValue(false);
+    vi.spyOn(runtime, 'refreshSandboxCredentials').mockResolvedValue({ accountId: null, note: null });
+    vi.spyOn(runtime, 'startAccountWatch').mockReturnValue(() => undefined);
+    vi.spyOn(instructions, 'syncInstructionFiles').mockResolvedValue(undefined);
+    vi.spyOn(title, 'startTitleGeneration').mockReturnValue(undefined);
+    vi.spyOn(changes, 'refreshDiffStat').mockImplementation(async (row, opts) => {
+      opts?.onHead?.('c'.repeat(40));
+      return row;
+    });
+    vi.spyOn(prLink, 'linkPullRequest').mockImplementation(async (row) => ({ ...row, pullRequestId: 'pr-1' }));
+    const autoStart = vi.spyOn(reviewAutoStart, 'startReviewIfCodeComplete').mockResolvedValue({ kind: 'skipped', reason: 'flag_off' });
+    vi.spyOn(durable, 'startDurableExec').mockResolvedValue(undefined);
+    vi.spyOn(durable, 'followDurableBatches').mockImplementation(async (_row, _key, _marker, _offset, onRecord) => {
+      let offset = 0;
+      for (const line of claudeTurnLines(SESSION, 'done')) {
+        const record = { stream: 'stdout' as const, line };
+        offset += Buffer.byteLength(JSON.stringify(record) + '\n');
+        await onRecord([{ record, offset }]);
+      }
+      return { exitCode: 0, stderrTail: '' };
+    });
+    await sendMessage('chat', { text: 'finish' });
+    await vi.waitFor(() => expect(autoStart).toHaveBeenCalledTimes(1), { timeout: 5000 });
+    expect(autoStart.mock.calls[0][0]).toMatchObject({ id: 'wb', pullRequestId: 'pr-1' });
+    expect(autoStart.mock.calls[0][1]).toBe('c'.repeat(40));
   });
 
   it('starts backups after real turns without waiting, and sends the recap only once', async () => {

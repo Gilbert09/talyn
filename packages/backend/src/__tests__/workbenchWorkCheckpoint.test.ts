@@ -9,6 +9,7 @@ import { createTestDb, seedUser } from './helpers/testDb.js';
 import { repositories, workbenchChats, workbenches, workbenchTurnTimings, workspaces } from '../db/schema.js';
 import * as changes from '../services/workbenches/changes.js';
 import * as prLink from '../services/workbenches/prLink.js';
+import * as emit from '../services/workbenches/emit.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
 import * as readSource from '../services/workbenches/sandboxReadSource.js';
 import * as sandboxRun from '../services/selfHosted/sandboxRun.js';
@@ -795,6 +796,26 @@ describe('saved work in a session', () => {
       // A new checkpoint is confirmed at its own time, so the loss note does not report a later check.
       const at = line.startsWith('BUNDLE') ? new Date(T0) : new Date(T0 + 1_000);
       expect(await getWorkbench(WB)).toMatchObject({ ...expected, workCheckedAt: at, workSaveFailures: 0 });
+    });
+
+    it('tells the clients when the unpushed count moves, and only then', async () => {
+      const updated = vi.spyOn(emit, 'emitWorkbenchUpdated').mockResolvedValue(undefined);
+      const counts = () => updated.mock.calls.map(([wb]) => wb.unpushedCommits);
+      working(`UNCHANGED ${SHA} 2`);
+      clock.advance(1_000);
+      await save();
+      expect(counts()).toEqual([2]);
+      clock.advance(1_000);
+      await save();
+      expect(counts()).toEqual([2]);
+      working('CLEAN');
+      clock.advance(1_000);
+      await save();
+      expect(counts()).toEqual([2, 0]);
+      working(`UNCHANGED ${SHA}`);
+      clock.advance(1_000);
+      await save();
+      expect(counts()).toEqual([2, 0]);
     });
 
     it('counts a bundle that is too large as a failed save, with only its own note', async () => {

@@ -2,9 +2,10 @@ import type { AgentEventDraft } from '@talyn/shared';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import { refreshDiffStat } from './changes.js';
 import { captureChanges } from './changesCapture.js';
-import { emitWorkbenchEvents } from './emit.js';
+import { emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { userFacingError } from './errors.js';
 import { moveReadChunkScript } from './move.js';
+import { publicWorkbench } from './prLink.js';
 import { writeSandboxFiles } from './sandboxFiles.js';
 import { recordWorkbenchEvent, runCapture } from './sandboxRuntime.js';
 import { chooseReadSource } from './sandboxReadSource.js';
@@ -634,6 +635,8 @@ async function recordSaveResult(row: WorkbenchRow & { sandboxId: string }, resul
     const unpushed = result.kind === 'clean' ? 0 : result.unpushed ?? null;
     const ended = await recordWorkSaveSuccess(row.id, row.sandboxId, result.kind === 'saved' ? result.at : now, unpushed);
     if (ended) await noteChats(row, 'work_checkpoint_recovered', CHECKPOINT_RECOVERED_NOTE);
+    // The clients read the count to know whether the session is code complete.
+    if (unpushed !== null && unpushed !== row.workUnpushedCommits) await emitUnpushedChange(row.id);
     return;
   }
   const detail = result.kind === 'too_large'
@@ -646,6 +649,16 @@ async function recordSaveResult(row: WorkbenchRow & { sandboxId: string }, resul
     await noteChats(row, 'work_checkpoint_failed', checkpointFailedNote(result.detail, row.workCheckpointAt));
   } else if (failures === CHECKPOINT_KEEPS_FAILING_AFTER) {
     await noteChats(row, 'work_checkpoint_failed', checkpointKeepsFailingNote(failures, row.workCheckpointAt));
+  }
+}
+
+/** Tell the clients the unpushed count moved. Best effort. */
+async function emitUnpushedChange(id: string): Promise<void> {
+  try {
+    const latest = await getWorkbench(id);
+    if (latest) await emitWorkbenchUpdated(await publicWorkbench(latest));
+  } catch (err) {
+    console.warn(`[workbench] telling the clients about the pushed work of ${id} failed:`, err);
   }
 }
 

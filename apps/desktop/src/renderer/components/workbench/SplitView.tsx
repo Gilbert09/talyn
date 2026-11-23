@@ -34,6 +34,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
 import { PrPill, SessionStateIcon } from './WorkbenchBadges';
 import { Banner, ChatView, StatusBanner } from './WorkbenchView';
+import { WorkbenchCodeReviewBadge } from './CodeCompleteReviewCard';
 import { getDeviceId } from '../../lib/workbenchBridge';
 import { isArchived, useLiveThreads, useOrderedLiveWorkbenches, useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSelectors';
 
@@ -318,6 +319,7 @@ function PaneHeader({
         </span>
       </div>
       {pr && <PrPill number={pr.number} state={pr.state} draft={pr.summary.draft} />}
+      <WorkbenchCodeReviewBadge workbench={workbench} pr={prRow ?? null} />
       <div className="flex shrink-0 items-center">
         {count > 1 && (
           <>

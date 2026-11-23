@@ -115,6 +115,8 @@ export * from './codeReview.js';
 // into prMergeable for the publishing dialect, and codeReview is deliberately
 // dependency-free so the parser and the dedupe key stay trivially testable.
 export * from './reviewFixPrompt.js';
+// Code complete: when a session's work is ready for a review. Clients and the backend share the rule.
+export * from './sessionCodeComplete.js';
 
 // The agent picker — which agents a workspace can start a task on. One pure
 // derivation, shared by the per-PR task menu and the Loop editor on both forks.

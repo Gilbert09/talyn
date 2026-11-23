@@ -1,12 +1,13 @@
 import type { PRRow } from '@talyn/client/native';
 import { canCloseSessionPullRequest, sessionAutomation, type Workbench, type WorkbenchReadiness } from '@talyn/shared';
 import { useRouter } from 'expo-router';
+import { SymbolView } from 'expo-symbols';
 import { useState } from 'react';
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { PrPill, PrStatusPill, SessionStateIcon } from '../../components/Status';
-import { AppText, Banner, ChipButton, PrNumber, Row, SheetModal, type SheetAction, type Symbol, type Tone } from '../../components/UI';
+import { AppText, Banner, ChipButton, PrNumber, Row, SheetModal, toneColor, type SheetAction, type Symbol, type Tone } from '../../components/UI';
 import { NativeText } from '../../components/Workflow';
 import { trackEvent } from '../../lib/analytics';
 import { showActionError } from '../../lib/errors';
@@ -14,10 +15,11 @@ import { chatDetailsLine } from '../../lib/models';
 import { prNumberTone, prRowStatus, workbenchState } from '../../lib/status';
 import { longTime, relativeTimeLabel, useNow } from '../../lib/time';
 import { pullRequestRoute, threadRoute } from '../../navigation/routes';
-import { mono, useTheme } from '../../theme/tokens';
+import { mono, radius, sans, useTheme, withAlpha } from '../../theme/tokens';
 import { workbenchKind, workbenchTitle } from '../../workflow/model';
 import { CodeReviewSummary } from '../prs/CodeReviewSection';
 import { canRetry, isArchived, type SessionActionKind } from './actions';
+import type { ReviewBadgeIcon, ReviewBadgeView } from './codeComplete';
 import { readinessProblem } from './model';
 import { canQueue, cycleActions, cycleDisabledReason, cycleLabel, diffTotals, type QuickAction, type QuickActionKind } from './quickActions';
 import { runPromptAction, sendCreatePullRequest } from './sessionPrActions';
@@ -160,18 +162,22 @@ export function QuickActionRow({ actions, busy, run }: { actions: QuickAction[];
   </View>;
 }
 
+/** Below this window width the review badge shows its icon and at most a count. */
+const NARROW = 420;
+
 /** Width the header's trailing items take, so the title knows how much it may use. */
-function trailingWidth(item: Workbench) {
+function trailingWidth(item: Workbench, badge: ReviewBadgeView | null | undefined, width: number) {
   const session = workbenchKind(item) === 'session';
-  return 44 + (session && item.pullRequestId ? 56 : 0) + (session && diffTotals(item) ? 84 : 0);
+  const badgeWidth = session && badge ? (width < NARROW ? 40 : 28 + badge.label.length * 7) : 0;
+  return 44 + (session && item.pullRequestId ? 56 : 0) + (session && diffTotals(item) ? 84 : 0) + badgeWidth;
 }
 
 /** The native header's title: state icon and one line of title. Tapping it opens the details. */
-export function HeaderTitle({ item, row, onPress }: { item: Workbench; row: PRRow | null; onPress(): void }) {
+export function HeaderTitle({ item, row, badge, onPress }: { item: Workbench; row: PRRow | null; badge?: ReviewBadgeView | null; onPress(): void }) {
   const { width } = useWindowDimensions();
   const state = workbenchState(item, row);
   const title = workbenchTitle(item);
-  const right = trailingWidth(item);
+  const right = trailingWidth(item, badge, width);
   // iOS centres the title, so it gets the same room on both sides. Android puts it after the back button.
   const maxWidth = Math.max(120, Platform.OS === 'ios' ? width - 2 * Math.max(right, 72) : width - right - 88);
   return <Pressable accessibilityRole="header" accessibilityLabel={`${title}. ${state.label}.`}
@@ -182,8 +188,29 @@ export function HeaderTitle({ item, row, onPress }: { item: Workbench; row: PRRo
   </Pressable>;
 }
 
-/** The header's trailing marks: the branch's +/- count (opens Changes) and the PR number (opens the PR). */
-export function HeaderTrailing({ item, row, onChanges }: { item: Workbench; row: PRRow | null; onChanges(): void }) {
+const BADGE_ICON: Record<Exclude<ReviewBadgeIcon, 'spinner'>, Symbol> = {
+  clock: { ios: 'clock', android: 'schedule' },
+  findings: { ios: 'exclamationmark.bubble', android: 'feedback' },
+  check: { ios: 'checkmark.circle', android: 'check_circle' },
+  failed: { ios: 'xmark.circle', android: 'cancel' },
+  review: { ios: 'checklist', android: 'checklist' },
+};
+
+/** The code review's status in the header. A narrow window shows the icon and at most a count. Opens the PR's findings. */
+export function ReviewBadge({ badge, onPress }: { badge: ReviewBadgeView; onPress(): void }) {
+  const c = useTheme();
+  const { width } = useWindowDimensions();
+  const color = toneColor(c, badge.tone);
+  const text = width < NARROW ? badge.short : badge.label;
+  return <Pressable testID="session-review-badge" accessibilityRole="button" accessibilityLabel={badge.accessibilityLabel} onPress={onPress} hitSlop={6}
+    style={({ pressed }) => [styles.badge, { backgroundColor: withAlpha(color, c.mode === 'dark' ? 0.16 : 0.1), opacity: pressed ? 0.6 : 1 }]}>
+    {badge.icon === 'spinner' ? <ActivityIndicator size={12} color={color} /> : <SymbolView name={BADGE_ICON[badge.icon]} size={13} tintColor={color} />}
+    {text ? <Text numberOfLines={1} style={[styles.badgeText, { color }]}>{text}</Text> : null}
+  </Pressable>;
+}
+
+/** The header's trailing marks: the review badge, the branch's +/- count (opens Changes) and the PR number (opens the PR). */
+export function HeaderTrailing({ item, row, badge, onChanges }: { item: Workbench; row: PRRow | null; badge?: ReviewBadgeView | null; onChanges(): void }) {
   const c = useTheme();
   const router = useRouter();
   if (workbenchKind(item) !== 'session') return null;
@@ -192,6 +219,7 @@ export function HeaderTrailing({ item, row, onChanges }: { item: Workbench; row:
   const status = row ? prRowStatus(row) : null;
   const tone = (row?.state === 'open' && status ? status.tone : prNumberTone(row?.state ?? item.pr?.state ?? 'open', row?.summary.draft)) as Tone;
   return <>
+    {badge && row ? <ReviewBadge badge={badge} onPress={() => router.push(pullRequestRoute(row.id, { tab: 'findings' }))} /> : null}
     {totals ? <Pressable accessibilityRole="button" accessibilityLabel={`Changes: ${totals.files} ${totals.files === 1 ? 'file' : 'files'}, ${totals.added} added, ${totals.removed} removed`}
       onPress={onChanges} hitSlop={4} style={({ pressed }) => [styles.diff, { backgroundColor: pressed ? c.surface : 'transparent' }]}>
       <Text style={[styles.diffText, { color: c.success }]}>+{totals.added}</Text>
@@ -272,6 +300,8 @@ const styles = StyleSheet.create({
   diff: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, minHeight: 32, borderRadius: 6 },
   diffText: { fontSize: 12, lineHeight: 16, ...mono(500) },
   pr: { minHeight: 32, justifyContent: 'center', paddingHorizontal: 2 },
+  badge: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 26, paddingHorizontal: 7, borderRadius: radius.round, marginRight: 2 },
+  badgeText: { fontSize: 12, lineHeight: 16, ...sans(600) },
   details: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 24, gap: 12 },
   state: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   fact: { flexDirection: 'row', gap: 12, paddingVertical: 4 },

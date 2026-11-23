@@ -38,8 +38,10 @@ const OLDER_DISTANCE = 0.6;
  * the newest message, so it opens at the newest message with no scroll after
  * layout. Older history loads by itself when the reader reaches the top.
  */
-export function Conversation({ item, ready, header, top, find = 0, onCloseFind }: {
+export function Conversation({ item, ready, header, top, bottom, find = 0, onCloseFind }: {
   item: Workbench; ready: boolean; header?: ReactNode;
+  /** Content below the newest message, while no turn runs. */
+  bottom?: ReactNode;
   /** 0 hides the find bar. Each new value opens it and focuses its field. */
   find?: number; onCloseFind?(): void;
   /** Content above the oldest message. Receives a callback that stops following new output while the reader expands it. */
@@ -217,7 +219,7 @@ export function Conversation({ item, ready, header, top, find = 0, onCloseFind }
         ListHeaderComponent={starting && !running && rows.length ? <StartingLine workbench={item} /> : running ? <View accessibilityLiveRegion="polite" style={local_.working}>
           <TypingDots />
           <Text style={[type.caption, { color: c.muted }]}>{chat?.phase === 'restoring' ? 'Restoring the sandbox. This can take a few minutes.' : 'Working'}</Text>
-        </View> : undefined}
+        </View> : bottom ? <View>{bottom}</View> : undefined}
         ListFooterComponent={<View style={local_.top}>
           {top ? <View>{top(pauseFollowing)}</View> : null}
           {startHint ? null : <StateNotice resource={state} offline={offline} refresh={state.refresh} refreshLabel="Try again" />}

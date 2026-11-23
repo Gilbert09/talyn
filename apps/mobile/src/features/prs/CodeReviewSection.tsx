@@ -161,7 +161,8 @@ export function CodeReviewStartSheet({ review: cr, visible, onClose, onStarted }
   </SheetModal>;
 }
 
-function Progress({ fraction, label }: { fraction: number | null; label: string }) {
+/** A review's progress bar. Indeterminate when `fraction` is null. */
+export function ReviewProgress({ fraction, label }: { fraction: number | null; label: string }) {
   const c = useTheme();
   return <View accessibilityRole="progressbar" accessibilityLabel={label}
     accessibilityValue={fraction === null ? undefined : { min: 0, max: 100, now: Math.round(fraction * 100) }}
@@ -342,7 +343,7 @@ export function CodeReviewSection({ review: cr, open, openSheet, onReviewRequest
       backgroundColor: stale ? withAlpha(c.warning, c.mode === 'dark' ? 0.08 : 0.05) : c.paper }]}>
       <AppText variant="rowTitle" accessibilityLiveRegion="polite">{summary.title}</AppText>
       <AppText variant="caption" tone="muted">{scope}</AppText>
-      {running ? <Progress fraction={progress.fraction} label={progress.label} /> : null}
+      {running ? <ReviewProgress fraction={progress.fraction} label={progress.label} /> : null}
       {summary.failure ? <AppText variant="meta" tone="destructive">{summary.failure}</AppText> : null}
       {summary.waiting ? <AppText variant="meta" tone="warning">{REVIEW_WAITING}</AppText> : null}
       <View style={local.actions}>

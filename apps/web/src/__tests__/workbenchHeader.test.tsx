@@ -797,14 +797,80 @@ describe('WorkbenchHeader code review', () => {
   });
 
   it.each([
-    { name: 'a clean review', workbench: WB, codeReview: review({}) },
     { name: 'no review', workbench: WB, codeReview: null },
+    { name: 'a clean review of an older commit', workbench: WB, codeReview: review({ staleForHead: true }) },
+    { name: 'a cancelled review with no findings', workbench: WB, codeReview: review({ phase: 'cancelled' }) },
     { name: 'a thread', workbench: { ...WB, kind: 'thread' } as Workbench, codeReview: review({ openCount: 2, counts: { blocker: 0, major: 2, minor: 0, nit: 0 } }) },
   ])('draws no review chip for $name', ({ workbench, codeReview }) => {
     const { container } = render(<WorkbenchHeader workbench={workbench} pr={withReview(codeReview)} chat={chat} ops={ops()} />);
     const slot = container.querySelector('[data-attr="workbench-code-review"]');
     expect(slot === null || slot.childElementCount === 0).toBe(true);
     expect(screen.queryByRole('button', { name: /finding/ })).not.toBeInTheDocument();
+  });
+
+  it('shows No findings for a clean review of the head, and opens the findings tab', () => {
+    render(<WorkbenchHeader workbench={WB} pr={withReview(review({}))} chat={chat} ops={ops()} />);
+    fireEvent.click(screen.getByRole('button', { name: /No findings/ }));
+    expect(useWorkbenchStore.getState()).toMatchObject({ prDetailId: 'pr1', prDetailTab: 'findings' });
+  });
+
+  it.each([
+    { name: 'open findings', codeReview: review({ openCount: 3, counts: { blocker: 1, major: 2, minor: 0, nit: 0 } }) },
+    { name: 'a clean review', codeReview: review({}) },
+    { name: 'a running review', codeReview: review({ phase: 'reviewing', phasePlan: ['reviewing'] }) },
+  ])('keeps the badge for $name outside the scrolling chips strip, so a narrow header shows it', ({ codeReview }) => {
+    const { container } = render(<WorkbenchHeader workbench={WB} pr={withReview(codeReview)} chat={chat} ops={ops()} />);
+    const slot = container.querySelector('[data-attr="workbench-code-review"]');
+    expect(slot).not.toBeNull();
+    expect(slot).toHaveClass('shrink-0');
+    expect(container.querySelector('[data-attr="workbench-header-chips"]')).not.toContainElement(slot as HTMLElement);
+    expect(container.querySelector('[data-attr="workbench-header-meta-row"]')).toContainElement(slot as HTMLElement);
+  });
+
+  describe('Ready for review', () => {
+    const idle = { id: 'c1', workbenchId: 'wb1', status: 'idle', queuedMessages: [] } as unknown as WorkbenchChat;
+    afterEach(() => useWorkbenchStore.setState({ chats: {} }));
+
+    it.each([
+      { name: 'no review', codeReview: null },
+      { name: 'a review of an older commit', codeReview: review({ staleForHead: true }) },
+      { name: 'a cancelled review', codeReview: review({ phase: 'cancelled' }) },
+    ])('shows when the session is code complete with $name, and opens the findings with no card on screen', ({ codeReview }) => {
+      useWorkbenchStore.setState({ chats: { wb1: [idle] } });
+      render(<WorkbenchHeader workbench={WB} pr={withReview(codeReview)} chat={chat} ops={ops()} />);
+      fireEvent.click(screen.getByRole('button', { name: /Ready for review/ }));
+      expect(useWorkbenchStore.getState()).toMatchObject({ prDetailId: 'pr1', prDetailTab: 'findings' });
+    });
+
+    it('scrolls to the card at the end of the chat when it is on screen', () => {
+      useWorkbenchStore.setState({ chats: { wb1: [idle] } });
+      const card = document.createElement('div');
+      card.setAttribute('data-attr', 'code-complete-review-card');
+      card.setAttribute('data-workbench-id', 'wb1');
+      const scrollIntoView = vi.fn();
+      card.scrollIntoView = scrollIntoView;
+      document.body.appendChild(card);
+      try {
+        render(<WorkbenchHeader workbench={WB} pr={withReview(null)} chat={chat} ops={ops()} />);
+        fireEvent.click(screen.getByRole('button', { name: /Ready for review/ }));
+        expect(scrollIntoView).toHaveBeenCalled();
+        expect(useWorkbenchStore.getState().prDetailId).toBeNull();
+      } finally {
+        card.remove();
+      }
+    });
+
+    it.each([
+      { name: 'a turn runs', chats: [{ ...idle, status: 'running' }], workbench: WB, state: 'open' as const },
+      { name: 'no chat', chats: [], workbench: WB, state: 'open' as const },
+      { name: 'the PR is merged', chats: [idle], workbench: WB, state: 'merged' as const },
+      { name: 'files are uncommitted', chats: [idle], workbench: { ...WB, uncommittedStats: { added: 1, removed: 0, files: 1 } }, state: 'open' as const },
+      { name: 'commits are not pushed', chats: [idle], workbench: { ...WB, unpushedCommits: 2 }, state: 'open' as const },
+    ])('does not show when $name', ({ chats, workbench, state }) => {
+      useWorkbenchStore.setState({ chats: { wb1: chats as WorkbenchChat[] } });
+      render(<WorkbenchHeader workbench={workbench as Workbench} pr={withReview(null, state)} chat={chat} ops={ops()} />);
+      expect(screen.queryByRole('button', { name: /Ready for review/ })).not.toBeInTheDocument();
+    });
   });
 
   it('closing the details resets the tab to the overview', () => {

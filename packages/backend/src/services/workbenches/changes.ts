@@ -300,10 +300,15 @@ export async function storeDiffStat(row: WorkbenchRow, changes: WorkbenchChanges
  * Recompute the diff stat and, when it moved, store it and tell the clients.
  * Best effort: a sandbox that cannot answer leaves the old number in place.
  */
-export async function refreshDiffStat(row: WorkbenchRow): Promise<WorkbenchRow> {
+export async function refreshDiffStat(
+  row: WorkbenchRow,
+  opts: { onHead?: (headSha: string) => void } = {},
+): Promise<WorkbenchRow> {
   if (row.runtime !== 'sandbox' || !row.sandboxId || row.kind === 'thread') return row;
   try {
-    return await storeDiffStat(row, await getChanges(row));
+    const changes = await getChanges(row);
+    if (changes.headSha) opts.onHead?.(changes.headSha);
+    return await storeDiffStat(row, changes);
   } catch (err) {
     console.warn(`[workbench] diff stat for ${row.id} failed:`, err instanceof Error ? err.message : err);
     return row;

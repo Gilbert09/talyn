@@ -1,0 +1,320 @@
+/**
+ * @jest-environment jsdom
+ */
+import '@testing-library/jest-dom';
+import React from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { AgentEvent, Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
+import { api, type PRRow } from '../renderer/lib/api';
+import { trackEvent } from '../renderer/lib/analytics';
+import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
+import { CodeCompleteReviewCard } from '../renderer/components/workbench/CodeCompleteReviewCard';
+import { WorkbenchTranscript } from '../renderer/components/workbench/WorkbenchTranscript';
+import { usePullRequestStore } from '../renderer/stores/pullRequests';
+import { useSessionBackgroundStore } from '../renderer/stores/sessionBackground';
+import { useWorkbenchStore } from '../renderer/stores/workbenches';
+
+jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
+jest.mock('../renderer/stores/toast', () => ({ toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() } }));
+jest.mock('../renderer/lib/api', () => ({
+  api: {
+    pullRequests: {
+      startCodeReview: jest.fn(),
+      get: jest.fn(() => new Promise(() => {})),
+    },
+  },
+}));
+
+const startCodeReview = api.pullRequests.startCodeReview as unknown as jest.Mock;
+
+const WB = {
+  id: 'wb1',
+  workspaceId: 'ws1',
+  repositoryId: 'r1',
+  repoFullName: 'acme/app',
+  name: 'lisbon',
+  branch: 'lisbon',
+  baseBranch: 'main',
+  runtime: 'sandbox',
+  agent: 'claude',
+  deviceId: null,
+  localPath: null,
+  sandboxId: 'sb1',
+  sandboxState: 'running',
+  status: 'ready',
+  pullRequestId: 'pr1',
+  settings: {},
+  diffStat: { added: 4, removed: 1, files: 1 },
+  uncommittedStats: { added: 0, removed: 0, files: 0 },
+  unpushedCommits: 0,
+  archivedAt: null,
+  createdAt: '2026-11-20T00:00:00Z',
+  updatedAt: '2026-11-20T00:00:00Z',
+} as Workbench;
+
+const IDLE = { id: 'c1', workbenchId: 'wb1', status: 'idle', queuedMessages: [] } as unknown as WorkbenchChat;
+
+const COUNTS = { blocker: 0, major: 0, minor: 0, nit: 0 };
+
+function review(over: Record<string, unknown> = {}): NonNullable<PRRow['codeReview']> {
+  return {
+    id: 'rev1',
+    preset: 'standard',
+    phase: 'ready',
+    phasePlan: [],
+    runsDone: 0,
+    runsTotal: 0,
+    lensesRun: [],
+    chunkTotal: 1,
+    headSha: 'abc',
+    headShaShort: 'abc',
+    reviewedHeadSha: 'abc',
+    staleForHead: false,
+    counts: COUNTS,
+    openCount: 0,
+    dismissedCount: 0,
+    funnel: { raised: 0, kept: 0, rejected: 0 },
+    failureReason: null,
+    deferredSince: null,
+    fixTaskId: null,
+    lastFix: null,
+    startedAt: null,
+    finishedAt: null,
+    sessionReport: null,
+    ...over,
+  } as unknown as NonNullable<PRRow['codeReview']>;
+}
+
+function prRow(over: Partial<PRRow> = {}): PRRow {
+  return {
+    id: 'pr1',
+    number: 42,
+    state: 'open',
+    mergeQueued: false,
+    codeReview: null,
+    summary: {
+      title: 'Add a thing',
+      url: 'https://github.com/acme/app/pull/42',
+      baseBranch: 'main',
+      headBranch: 'lisbon',
+      draft: false,
+      mergeable: 'MERGEABLE',
+      ciStatus: 'passing',
+    },
+    ...over,
+  } as PRRow;
+}
+
+/** A code-complete session; `over` changes one fact. */
+function arrange(
+  over: {
+    pr?: Partial<PRRow>;
+    workbench?: Partial<Workbench>;
+    chats?: WorkbenchChat[];
+    jobs?: number;
+    scripts?: boolean;
+  } = {},
+) {
+  usePullRequestStore.setState({ rows: [prRow(over.pr)] });
+  useWorkbenchStore.setState({
+    chats: { wb1: over.chats ?? [IDLE] },
+    scriptOutput: over.scripts ? ({ wb1: { dev: { running: true } } } as never) : {},
+  });
+  useSessionBackgroundStore.setState({
+    byWorkbench: over.jobs
+      ? ({ wb1: { workbenchId: 'wb1', jobs: Array.from({ length: over.jobs }, (_, i) => ({ id: `j${i}`, status: 'running' })), wakeups: [] } } as never)
+      : {},
+  });
+  return { ...WB, ...over.workbench } as Workbench;
+}
+
+const card = () => screen.queryByTestId('code-complete-review-card');
+
+beforeEach(() => {
+  useWorkbenchStore.setState({ prDetailId: null, prDetailTab: 'overview', outgoingMessages: {}, chatEvents: {} });
+});
+
+afterEach(() => {
+  cleanup();
+  usePullRequestStore.setState({ rows: [] });
+  useWorkbenchStore.setState({ chats: {}, scriptOutput: {} });
+  useSessionBackgroundStore.setState({ byWorkbench: {} });
+  jest.clearAllMocks();
+});
+
+describe('CodeCompleteReviewCard states', () => {
+  it.each([
+    {
+      name: 'no review',
+      codeReview: null,
+      state: 'none',
+      texts: ['Ready for review', 'The work is pushed and the pull request is open.'],
+      buttons: ['Run code review'],
+    },
+    {
+      name: 'a review of an older commit',
+      codeReview: review({ staleForHead: true, openCount: 2, counts: { ...COUNTS, major: 2 } }),
+      state: 'none',
+      texts: ['Ready for review'],
+      buttons: ['Run code review'],
+    },
+    {
+      name: 'a cancelled review',
+      codeReview: review({ phase: 'cancelled' }),
+      state: 'none',
+      texts: ['Ready for review'],
+      buttons: ['Run code review'],
+    },
+    {
+      name: 'a running review',
+      codeReview: review({ phase: 'reviewing', phasePlan: ['preparing', 'reviewing', 'validating'], runsDone: 1, runsTotal: 3 }),
+      state: 'running',
+      texts: ['Code review running'],
+      buttons: [],
+    },
+    {
+      name: 'a review that waits for a runner',
+      codeReview: review({ phase: 'queued', deferredSince: '2026-11-20T00:00:00Z' }),
+      state: 'waiting',
+      texts: ['Code review is waiting for a runner'],
+      buttons: [],
+    },
+    {
+      name: 'a failed review',
+      codeReview: review({ phase: 'failed', failureReason: 'The runner stopped.' }),
+      state: 'failed',
+      texts: ['The code review did not finish.', 'The runner stopped.'],
+      buttons: ['Run again', 'View findings'],
+    },
+    {
+      name: 'a done review with findings',
+      codeReview: review({ openCount: 3, counts: { blocker: 1, major: 2, minor: 0, nit: 0 } }),
+      state: 'done',
+      texts: ['Code review done', '1 must fix', '2 should fix'],
+      buttons: ['View findings'],
+    },
+    {
+      name: 'a clean done review',
+      codeReview: review({}),
+      state: 'done',
+      texts: ['Code review done', 'No open findings'],
+      buttons: ['View findings'],
+    },
+  ])('shows $name', ({ codeReview, state, texts, buttons }) => {
+    render(<CodeCompleteReviewCard workbench={arrange({ pr: { codeReview } })} />);
+    expect(card()).toHaveAttribute('data-state', state);
+    for (const text of texts) expect(card()).toHaveTextContent(text);
+    for (const name of ['Run code review', 'Run again', 'View findings']) {
+      if (buttons.includes(name)) expect(screen.getByRole('button', { name })).toBeInTheDocument();
+      else expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    }
+    expect(screen.queryByTestId('code-complete-review-sent')).not.toBeInTheDocument();
+  });
+
+  it('shows no failure reason when the review has none', () => {
+    render(<CodeCompleteReviewCard workbench={arrange({ pr: { codeReview: review({ phase: 'failed' }) } })} />);
+    expect(card()).toHaveTextContent('The code review did not finish.');
+    expect(screen.queryByTestId('code-complete-review-reason')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { name: 'this session', workbenchId: 'wb1', text: /^Talyn sent 2 findings to this session/ },
+    { name: 'another session', workbenchId: 'wb2', text: 'Talyn sent 2 findings to another session.' },
+  ])('says the findings went to $name', ({ workbenchId, text }) => {
+    const codeReview = review({
+      openCount: 2,
+      counts: { ...COUNTS, major: 2 },
+      sessionReport: { workbenchId, sentAt: new Date().toISOString(), findingCount: 2 },
+    });
+    render(<CodeCompleteReviewCard workbench={arrange({ pr: { codeReview } })} />);
+    expect(screen.getByTestId('code-complete-review-sent')).toHaveTextContent(text);
+  });
+
+  it.each([
+    { name: 'failed', codeReview: review({ phase: 'failed' }) },
+    { name: 'done', codeReview: review({ openCount: 1, counts: { ...COUNTS, blocker: 1 } }) },
+  ])('View findings on a $name review opens the findings tab', ({ codeReview }) => {
+    render(<CodeCompleteReviewCard workbench={arrange({ pr: { codeReview } })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'View findings' }));
+    expect(useWorkbenchStore.getState()).toMatchObject({ prDetailId: 'pr1', prDetailTab: 'findings' });
+  });
+});
+
+describe('CodeCompleteReviewCard runs a review', () => {
+  it.each([
+    { name: 'Run code review', codeReview: null },
+    { name: 'Run again', codeReview: review({ phase: 'failed' }) },
+  ])('$name starts a review and shows it running', async ({ name, codeReview }) => {
+    let resolve: (value: unknown) => void = () => {};
+    startCodeReview.mockReturnValue(new Promise((r) => (resolve = r)));
+    render(<CodeCompleteReviewCard workbench={arrange({ pr: { codeReview } })} />);
+    const button = screen.getByRole('button', { name });
+    fireEvent.click(button);
+    expect(startCodeReview).toHaveBeenCalledWith('pr1');
+    expect(button).toBeDisabled();
+    await act(async () => resolve(review({ phase: 'preparing', phasePlan: ['preparing', 'reviewing'] })));
+    await waitFor(() => expect(card()).toHaveAttribute('data-state', 'running'));
+    expect(trackEvent).toHaveBeenCalledWith('code_review_started', { preset: 'standard', depth: 'standard' });
+  });
+});
+
+describe('CodeCompleteReviewCard is hidden when the session is not code complete', () => {
+  it.each([
+    { name: 'a turn runs', over: { chats: [{ ...IDLE, status: 'running' } as WorkbenchChat] } },
+    { name: 'a message is queued', over: { chats: [{ ...IDLE, queuedMessages: [{ id: 'q1' }] } as unknown as WorkbenchChat] } },
+    { name: 'a chat failed', over: { chats: [{ ...IDLE, status: 'error' } as WorkbenchChat] } },
+    { name: 'there is no chat', over: { chats: [] } },
+    { name: 'the PR is closed', over: { pr: { state: 'closed' as const } } },
+    { name: 'the PR is merged', over: { pr: { state: 'merged' as const } } },
+    { name: 'there is no PR', over: { workbench: { pullRequestId: null } } },
+    { name: 'a background job runs', over: { jobs: 1 } },
+    { name: 'a session script runs', over: { scripts: true } },
+    { name: 'files are uncommitted', over: { workbench: { uncommittedStats: { added: 3, removed: 0, files: 2 } } } },
+    { name: 'commits are not pushed', over: { workbench: { unpushedCommits: 1 } } },
+    { name: 'the session is archived', over: { workbench: { archivedAt: '2026-11-21T00:00:00Z' } } },
+    { name: 'it is a thread', over: { workbench: { kind: 'thread' as const } } },
+  ])('$name', ({ over }) => {
+    render(<CodeCompleteReviewCard workbench={arrange(over as Parameters<typeof arrange>[0])} />);
+    expect(card()).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { name: 'unknown uncommitted files', workbench: { uncommittedStats: undefined } },
+    { name: 'unknown unpushed commits', workbench: { unpushedCommits: null } },
+    { name: 'a local session', workbench: { runtime: 'local' as const, sandboxId: null } },
+  ])('shows with $name', ({ workbench }) => {
+    render(<CodeCompleteReviewCard workbench={arrange({ workbench })} />);
+    expect(card()).toBeInTheDocument();
+  });
+});
+
+describe('the transcript shows the card after the last turn', () => {
+  const ops = { unavailable: null } as unknown as WorkbenchOps;
+  const events: WorkbenchEvent[] = [1, 2].map((n) => ({
+    chatId: 'c1',
+    seq: n,
+    turn: n,
+    event: { seq: n, type: 'user', message: { role: 'user', content: [{ type: 'text', text: `message ${n}` }] } } as AgentEvent,
+  }));
+  const transcript = (workbench: Workbench | undefined, chat: WorkbenchChat) => (
+    <WorkbenchTranscript workbench={workbench} chat={chat} events={events} loading={false} error={null} ops={ops} />
+  );
+
+  it('puts the card below the last message', () => {
+    render(transcript(arrange(), IDLE));
+    const shown = card();
+    expect(shown).toBeInTheDocument();
+    expect(shown?.parentElement?.lastElementChild).toBe(shown);
+    expect(screen.getByText('message 2').compareDocumentPosition(shown as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it.each([
+    { name: 'the shown chat runs', chat: { ...IDLE, status: 'running' } as WorkbenchChat, workbench: true },
+    { name: 'the transcript has no session', chat: IDLE, workbench: false },
+  ])('has no card when $name', ({ chat, workbench }) => {
+    const wb = arrange();
+    render(transcript(workbench ? wb : undefined, chat));
+    expect(card()).not.toBeInTheDocument();
+  });
+});
