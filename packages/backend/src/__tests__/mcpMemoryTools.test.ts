@@ -368,6 +368,28 @@ describe('memory_read and memory_forget by name', () => {
     expect(calls.map((c) => c.url.pathname)).toEqual(['/api/v1/workbenches/memory/m1']);
   });
 
+  // The index says "read an entry by its name", and an agent often calls the deferred tool before its schema loads.
+  it.each<[string, Record<string, unknown>]>([
+    ['name', { name: NAME }],
+    ['id', { id: NAME }],
+    ['memory_id over name', { memory_id: NAME, name: 'something-else' }],
+    ['name after a blank memory_id', { memory_id: '  ', name: NAME }],
+  ])('reads the entry named in %s', async (_label, args) => {
+    mockNames([summary()], { m1: memory({ name: NAME }) });
+    expect(await tool('memory_read').handler(OWNER, args, SELF)).toMatch(/\n\nnpm run build$/);
+  });
+
+  it('forgets the entry named in name', async () => {
+    const { calls } = mockNames([summary()], { m1: memory({ name: NAME }) });
+    await tool('memory_forget').handler(OWNER, { name: NAME }, SELF);
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.url.pathname)).toEqual(['/api/v1/workbenches/memory/m1']);
+  });
+
+  it.each(['memory_read', 'memory_forget'])('%s with no entry asks for memory_id', async (name) => {
+    mockNames([]);
+    await expect(tool(name).handler(OWNER, {}, SELF)).rejects.toThrow(/^memory_id is required/);
+  });
+
   it('reads by the name the index shows, in the scopes the session sees', async () => {
     const { calls } = mockNames([summary()], { m1: memory({ name: NAME }) });
     const text = await tool('memory_read').handler(OWNER, { memory_id: NAME }, SELF);
