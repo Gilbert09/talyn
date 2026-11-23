@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import {
   CODE_REVIEW_ACTIVE_PHASES,
   type CodeReviewCycleReviewer,
@@ -115,6 +115,7 @@ export const RUN_COLUMNS = {
   findingCount: prCodeReviewRuns.findingCount,
   parseAttempts: prCodeReviewRuns.parseAttempts,
   dispatchedAt: prCodeReviewRuns.dispatchedAt,
+  capacityWaitSince: prCodeReviewRuns.capacityWaitSince,
   settledAt: prCodeReviewRuns.settledAt,
   createdAt: prCodeReviewRuns.createdAt,
 } as const;
@@ -194,6 +195,14 @@ export const IN_FLIGHT_RUN_STATUSES: RunStatus[] = [
 
 /** Units that have a live sandbox behind them, or should have. */
 export const DISPATCHED_RUN_STATUSES: RunStatus[] = ['dispatching', 'running', 'parsing'];
+
+/**
+ * How long a unit with no sandbox may go without a write before it counts as
+ * lost. A unit that waits for a runner renews `updated_at` after each pause
+ * of its wait (one minute at most), so only a wait whose process died goes
+ * quiet for this long. Five minutes, matching the task path's dispatch grace.
+ */
+export const UNIT_HEARTBEAT_GRACE_MS = 5 * 60_000;
 
 // ---------- Reviews ----------
 
@@ -593,6 +602,7 @@ export interface RunPatch {
   parseError?: string | null;
   costUsd?: string | null;
   dispatchedAt?: Date | null;
+  capacityWaitSince?: Date | null;
   settledAt?: Date | null;
 }
 
@@ -731,12 +741,17 @@ export async function loadDispatchedRuns(limit: number): Promise<RunRow[]> {
 }
 
 /**
- * Units claimed long ago that never got a sandbox.
+ * Units that never got a sandbox and that nobody has written for a while.
  *
- * `dispatched_at IS NULL` is the whole predicate, and it is why that column
- * exists: it separates "never got a runner" from "had one and it vanished". The
- * second case has its own failure code and its own recovery, and a reaper that
- * could not tell them apart would report every lost sandbox as a lost dispatch.
+ * `dispatched_at IS NULL` is the core of the predicate, and it is why that
+ * column exists: it separates "never got a runner" from "had one and it
+ * vanished". The second case has its own failure code and its own recovery,
+ * and a reaper that could not tell them apart would report every lost sandbox
+ * as a lost dispatch.
+ *
+ * `dispatching` too: a process that died during the create leaves the unit
+ * there, and nothing else would ever move it. A unit that waits for a runner
+ * renews `updated_at`, so a live wait is never in this list.
  */
 export async function loadOrphanedClaims(olderThan: Date, limit: number): Promise<RunRow[]> {
   return getDbClient()
@@ -744,7 +759,7 @@ export async function loadOrphanedClaims(olderThan: Date, limit: number): Promis
     .from(prCodeReviewRuns)
     .where(
       and(
-        eq(prCodeReviewRuns.status, 'claimed'),
+        inArray(prCodeReviewRuns.status, ['claimed', 'dispatching']),
         isNull(prCodeReviewRuns.dispatchedAt),
         // Since the claim was last written, not since the row was created. A
         // unit taken for its second dispatch is an old row with a new claim,
@@ -755,47 +770,119 @@ export async function loadOrphanedClaims(olderThan: Date, limit: number): Promis
     .limit(limit);
 }
 
+// ---------- A unit that waits for a runner ----------
+//
+// The waiting state: `claimed`, no `dispatched_at`, `failure_code`
+// `capacity_deferred`, `capacity_wait_since` set, and `sandbox_id` naming the
+// box the fleet holds for it (null when no box exists yet). Every write below
+// is conditional on that state, so a unit cancelled or settled during the
+// wait is never written back to life.
+
+/** Not yet dispatched and not settled: the states a wait may write. */
+const WAITABLE_STATUSES: RunStatus[] = ['claimed', 'dispatching'];
+
 /**
- * How many of this workspace's units are live right now.
- *
- * The pacing read, taken immediately before each dispatch. No advisory lock
- * around it, deliberately, and the contrast with the plan gate is the point:
- * losing this race costs one extra microVM, which the fleet itself refuses with a
- * 503 the spill path already handles. Losing the PLAN gate's race lets a free
- * user run two cycles, which is why that one is locked. Do not "fix" one by
- * copying the other.
+ * The unit starts (or goes on) waiting for a runner. False when the unit moved
+ * on: it was cancelled, settled or dispatched.
  */
-export async function countLiveUnits(workspaceId: string): Promise<number> {
-  const rows = await getDbClient()
-    .select({ count: sql<number>`cast(count(*) as int)` })
-    .from(prCodeReviewRuns)
+export async function markUnitWaiting(
+  runId: string,
+  input: { sandboxId: string | null; since: Date }
+): Promise<boolean> {
+  const updated = await getDbClient()
+    .update(prCodeReviewRuns)
+    .set({
+      status: 'claimed',
+      failureCode: 'capacity_deferred',
+      sandboxId: input.sandboxId,
+      capacityWaitSince: input.since,
+      updatedAt: new Date(),
+    })
     .where(
       and(
-        eq(prCodeReviewRuns.workspaceId, workspaceId),
-        inArray(prCodeReviewRuns.status, DISPATCHED_RUN_STATUSES)
+        eq(prCodeReviewRuns.id, runId),
+        inArray(prCodeReviewRuns.status, WAITABLE_STATUSES),
+        isNull(prCodeReviewRuns.dispatchedAt)
       )
-    );
-  return rows[0]?.count ?? 0;
+    )
+    .returning({ id: prCodeReviewRuns.id });
+  return updated.length > 0;
 }
 
 /**
- * Units dispatched so recently that the fleet's own capacity report cannot know
- * about them yet.
- *
- * Hosts push a snapshot every ~15 seconds, so `runsLive` lags. Without this
- * correction a burst of dispatches all read the same stale "there is room" and
- * overshoot together.
+ * The wait's heartbeat, and its ownership check in one write. False when the
+ * unit no longer waits on `sandboxId`.
  */
-export async function countUnitsDispatchedSince(since: Date): Promise<number> {
-  const rows = await getDbClient()
-    .select({ count: sql<number>`cast(count(*) as int)` })
-    .from(prCodeReviewRuns)
+export async function renewUnitWait(runId: string, sandboxId: string): Promise<boolean> {
+  const updated = await getDbClient()
+    .update(prCodeReviewRuns)
+    .set({ updatedAt: new Date() })
     .where(
       and(
-        inArray(prCodeReviewRuns.status, DISPATCHED_RUN_STATUSES),
-        // `gte`, never an interpolated `sql` fragment — see loadStaleReviews.
-        gte(prCodeReviewRuns.dispatchedAt, since)
+        eq(prCodeReviewRuns.id, runId),
+        eq(prCodeReviewRuns.status, 'claimed'),
+        isNull(prCodeReviewRuns.dispatchedAt),
+        eq(prCodeReviewRuns.sandboxId, sandboxId)
       )
-    );
-  return rows[0]?.count ?? 0;
+    )
+    .returning({ id: prCodeReviewRuns.id });
+  return updated.length > 0;
 }
+
+/** The fleet lost the queued box: the wait goes on with `toId`. False when the unit moved on. */
+export async function moveUnitWait(runId: string, fromId: string, toId: string): Promise<boolean> {
+  const updated = await getDbClient()
+    .update(prCodeReviewRuns)
+    .set({ sandboxId: toId, updatedAt: new Date() })
+    .where(
+      and(
+        eq(prCodeReviewRuns.id, runId),
+        inArray(prCodeReviewRuns.status, WAITABLE_STATUSES),
+        isNull(prCodeReviewRuns.dispatchedAt),
+        or(isNull(prCodeReviewRuns.sandboxId), eq(prCodeReviewRuns.sandboxId, fromId))
+      )
+    )
+    .returning({ id: prCodeReviewRuns.id });
+  return updated.length > 0;
+}
+
+/**
+ * Take over a wait whose process stopped renewing it (a deploy, a crash). The
+ * update is the claim: of two reconciler passes, only one matches.
+ */
+export async function takeStaleWait(runId: string, staleBefore: Date): Promise<RunRow | null> {
+  const rows = await getDbClient()
+    .update(prCodeReviewRuns)
+    .set({ updatedAt: new Date() })
+    .where(
+      and(
+        eq(prCodeReviewRuns.id, runId),
+        eq(prCodeReviewRuns.status, 'claimed'),
+        isNull(prCodeReviewRuns.dispatchedAt),
+        eq(prCodeReviewRuns.failureCode, 'capacity_deferred'),
+        lt(prCodeReviewRuns.updatedAt, staleBefore)
+      )
+    )
+    .returning(RUN_COLUMNS);
+  return rows[0] ?? null;
+}
+
+/**
+ * Record the sandbox a unit now runs on. Conditional, like the wait's writes:
+ * false when the unit was cancelled or settled while its create ran.
+ */
+export async function markRunDispatched(runId: string, patch: RunPatch): Promise<boolean> {
+  const updated = await getDbClient()
+    .update(prCodeReviewRuns)
+    .set({ ...patch, updatedAt: new Date() })
+    .where(
+      and(
+        eq(prCodeReviewRuns.id, runId),
+        inArray(prCodeReviewRuns.status, WAITABLE_STATUSES),
+        isNull(prCodeReviewRuns.dispatchedAt)
+      )
+    )
+    .returning({ id: prCodeReviewRuns.id });
+  return updated.length > 0;
+}
+

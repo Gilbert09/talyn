@@ -35,7 +35,7 @@ import {
   REVIEW_COLUMNS,
   type ReviewRow,
 } from './store.js';
-import { hasDeferredUnit, settledUnitCount } from './decide.js';
+import { deferredSinceOf, hasDeferredUnit, settledUnitCount } from './decide.js';
 import { owningWorkbenchesForPrs } from '../workbenches/prSessions.js';
 import { SESSION_REPORT_SENT } from './sessionReport.js';
 
@@ -64,6 +64,8 @@ interface ReviewFacts {
   reportingBar: CodeReviewSeverity;
   runsDone: number;
   deferred: boolean;
+  /** When the longest wait for a runner began, when a unit records it. */
+  deferredSince: Date | null;
   currentHead: string | null;
   /** The session that owns the pull request, resolved now rather than stored. */
   session: CodeReviewSession | null;
@@ -111,7 +113,7 @@ function shapeReview(review: ReviewRow, facts: ReviewFacts): CodeReviewPublic {
     // Mirrors `autoMergeState.deferredSince` field for field, so the desktop's
     // existing deferral announcement covers this with no new mechanism.
     deferredSince: facts.deferred
-      ? (review.phaseStartedAt ?? review.updatedAt).toISOString()
+      ? (facts.deferredSince ?? review.phaseStartedAt ?? review.updatedAt).toISOString()
       : null,
     fixTaskId: review.fixTaskId ?? null,
     lastFix: null,
@@ -190,6 +192,7 @@ export async function toPublicReview(
     reportingBar: bars.get(review.workspaceId) ?? CODE_REVIEW_REPORTING_BAR,
     runsDone: settledUnitCount(runs, review.cycle),
     deferred: hasDeferredUnit(runs, review.cycle),
+    deferredSince: deferredSinceOf(runs, review.cycle),
     currentHead,
     session: sessions.get(review.pullRequestId) ?? null,
     sessionReport: reports.get(review.id) ?? null,
@@ -284,7 +287,11 @@ export async function codeReviewsForPrs(
       // row shows as an amber chip. One query for the page rather than a run read
       // per review.
       db
-        .selectDistinct({ reviewId: prCodeReviewRuns.reviewId, cycle: prCodeReviewRuns.cycle })
+        .select({
+          reviewId: prCodeReviewRuns.reviewId,
+          cycle: prCodeReviewRuns.cycle,
+          since: sql<Date | string | null>`min(${prCodeReviewRuns.capacityWaitSince})`,
+        })
         .from(prCodeReviewRuns)
         .where(
           and(
@@ -292,7 +299,8 @@ export async function codeReviewsForPrs(
             eq(prCodeReviewRuns.status, 'claimed'),
             isNull(prCodeReviewRuns.dispatchedAt)
           )
-        ),
+        )
+        .groupBy(prCodeReviewRuns.reviewId, prCodeReviewRuns.cycle),
       db
         .select({ id: pullRequestsTable.id, lastSummary: pullRequestsTable.lastSummary })
         .from(pullRequestsTable)
@@ -308,6 +316,9 @@ export async function codeReviewsForPrs(
     const headById = new Map(
       heads.map((h) => [h.id, ((h.lastSummary ?? {}) as { headSha?: string }).headSha ?? null])
     );
+
+    const deferredRow = (review: ReviewRow) =>
+      deferredRows.find((r) => r.reviewId === review.id && r.cycle === review.cycle);
 
     for (const review of reviews) {
       const counts = { ...EMPTY_CODE_REVIEW_COUNTS };
@@ -340,7 +351,8 @@ export async function codeReviewsForPrs(
           runsDone:
             settledRows.find((r) => r.reviewId === review.id && r.cycle === review.cycle)?.count ??
             0,
-          deferred: deferredRows.some((r) => r.reviewId === review.id && r.cycle === review.cycle),
+          deferred: Boolean(deferredRow(review)),
+          deferredSince: toDate(deferredRow(review)?.since),
           currentHead: headById.get(review.pullRequestId) ?? null,
           session: sessions.get(review.pullRequestId) ?? null,
           sessionReport: reports.get(review.id) ?? null,
@@ -352,4 +364,11 @@ export async function codeReviewsForPrs(
     console.warn('[code-review] could not build the payloads for a pull-request list:', err);
     return out;
   }
+}
+
+/** A raw `min(timestamptz)`: a Date from some drivers, a string from others. */
+function toDate(value: Date | string | null | undefined): Date | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }

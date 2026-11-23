@@ -21,12 +21,17 @@ import { pullRequests as pullRequestsTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
 import { resolveCloudEnvChain } from '../prCloudFix.js';
 import { posthogCodeRetiredForWorkspace } from '../posthogCodeRetirement.js';
-import { dispatchSandboxRun } from '../selfHosted/sandboxRun.js';
+import {
+  dispatchSandboxRun,
+  SandboxRunSupersededError,
+  type SandboxRunCapacityWait,
+  type SandboxRunResult,
+} from '../selfHosted/sandboxRun.js';
+import { getSelfHostedClient } from '../selfHosted/credentials.js';
 import { meterBoxOpened } from '../billing/usageHooks.js';
 import { reviewSystemPrompt } from '../selfHosted/systemPrompts.js';
 import { withMemoryIndex } from '../workbenches/memory.js';
 import { startCodeRun } from '../posthogCode/codeRun.js';
-import { listFleetHosts, hostIsDispatchable } from '../fleetHosts.js';
 import {
   buildJudgePrompt,
   buildLensPrompt,
@@ -49,14 +54,19 @@ import {
   appendReviewEvent,
   casTransition,
   claimRun,
-  countLiveUnits,
-  countUnitsDispatchedSince,
   getPrForReview,
   getReview,
+  getRun,
+  markRunDispatched,
+  markUnitWaiting,
+  moveUnitWait,
   patchRun,
+  renewUnitWait,
   runsForCycle,
   settleRun,
   takeRequeuedRun,
+  takeStaleWait,
+  UNIT_HEARTBEAT_GRACE_MS,
   type ReviewRow,
   type RunFailureCode,
   type RunKind,
@@ -92,35 +102,12 @@ export { anchorVerifier, filesForChunk, keyFor, matchJudgeKeep } from './unitPur
  * graph itself is next door and pure.
  */
 
-// ---------- Pacing ----------
+// ---------- Limits ----------
 
-/**
- * How many of one workspace's review units may be live at once.
- *
- * Three, and the number is about the hardware rather than the plan: the fleet is
- * one box whose memory budget fits a couple of concurrent runs alongside whatever
- * ordinary task work is happening. A wider fan-out does not go faster — it gets
- * refused and spills onto the metered fall-back provider.
- *
- * There is NO advisory lock around the check, deliberately, and the contrast with
- * the plan gate is the point: losing this race costs one extra microVM, which the
- * fleet itself refuses with a 503 the spill path already handles. Losing the plan
- * gate's race lets a free user run two cycles. Do not "fix" one by copying the
- * other.
- */
-export const MAX_LIVE_UNITS_PER_WORKSPACE = 3;
-
-/**
- * How long a dispatch stays invisible to the fleet's own capacity report.
- *
- * Hosts push a snapshot every ~15 seconds, so `runsLive` lags. Without counting
- * our own very recent dispatches, a burst all reads the same stale "there is
- * room" and overshoots together.
- */
-const CAPACITY_BLIND_WINDOW_MS = 20_000;
-
-/** Free memory a host must still have before we ask it for another microVM. */
-const MIN_FREE_MEM_MIB = 2048;
+// There is NO per-workspace cap on live units. Each unit's box is metered
+// (`meterBoxOpened`, subject `review_unit`) and comes out of the user's compute
+// time, as a session's box does. Room is the fleet's to give: a unit waits for
+// it (`capacityWait` below), as a session's box does.
 
 /**
  * At most this many units of one cycle may run on the fall-back provider.
@@ -152,40 +139,6 @@ const UNIT_TIMEOUT_SEC: Record<string, number> = {
   validate: 1200,
   repair: 120,
 };
-
-export interface CapacityView {
-  /** How many units this pass may fire. */
-  unitsAllowed: number;
-  /** Whether the fleet has room, which decides where a unit is offered first. */
-  fleetHasRoom: boolean;
-}
-
-/**
- * How much room there is for this workspace's units right now.
- *
- * The fleet reading is a DATABASE read of the host registry, not an HTTP call:
- * hosts report inwards every ~15 seconds and dialling one per unit would cost
- * more than letting the occasional 503 happen.
- */
-export async function readCapacity(workspaceId: string): Promise<CapacityView> {
-  const live = await countLiveUnits(workspaceId);
-  const unitsAllowed = Math.max(0, MAX_LIVE_UNITS_PER_WORKSPACE - live);
-  if (unitsAllowed === 0) return { unitsAllowed: 0, fleetHasRoom: false };
-
-  const hosts = await listFleetHosts().catch(() => []);
-  const justDispatched = await countUnitsDispatchedSince(
-    new Date(Date.now() - CAPACITY_BLIND_WINDOW_MS)
-  ).catch(() => 0);
-
-  const fleetHasRoom = hosts.some((host) => {
-    if (!hostIsDispatchable(host)) return false;
-    const slots = (host.runsMax ?? 0) - (host.runsLive ?? 0) - justDispatched;
-    const freeMem = (host.memBudgetMib ?? 0) - (host.memReservedMib ?? 0);
-    return slots > 0 && freeMem >= MIN_FREE_MEM_MIB;
-  });
-
-  return { unitsAllowed, fleetHasRoom };
-}
 
 // ---------- Prompt context ----------
 
@@ -375,9 +328,25 @@ function chunkCountFor(files: unknown[]): number {
  * for one lens, and it has to happen before anything expensive: a claim that loses
  * costs one wasted insert, while a dispatch that loses costs a microVM.
  *
- * A capacity refusal leaves the unit claimed with no `dispatched_at`, which is
- * exactly the state the reconciler retries — the unit is not burned, and the user
- * sees "waiting for a runner" rather than a failure.
+ * # Waiting for a runner
+ *
+ * Where the bounded spill to PostHog Code is still allowed, a full fleet sends
+ * the unit there, as before. Everywhere else the unit waits for room as a
+ * session's box does (`capacityWait`): the fleet queues the box or Talyn tries
+ * the create again on the same id, for up to 30 minutes. While it waits the unit is
+ * `claimed` with `capacity_deferred` and no `dispatched_at`, which is the state
+ * the review shows as "waiting for a runner". The evaluation pass does not
+ * wait with it: once the wait starts, the dispatch goes on by itself and the
+ * pass returns.
+ *
+ * The wait renews the row after each pause. A wait whose process died (a
+ * deploy) stops renewing it, and the reconciler resumes it here, on the same
+ * sandbox id, with the same bound (`capacity_wait_since`). After the bound the
+ * unit fails and says so.
+ *
+ * A unit that cannot run on the fleet for other reasons (a held-back
+ * subscription with no other agent) waits in the same state with no box, and
+ * the reconciler tries it again until the same bound.
  *
  * # A second dispatch
  *
@@ -406,23 +375,38 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
     chunkIndex: unit.chunkIndex,
     chunkTotal: review.chunkTotal,
   });
-  // Somebody else owns it. Their pass will dispatch it; ours must not. The one
-  // exception is a unit waiting for its second dispatch, and taking it is a
-  // conditional update that a second pass loses.
+  // Somebody else owns it. Their pass will dispatch it; ours must not. The
+  // exceptions are a unit waiting for its second dispatch, and a wait for a
+  // runner whose process died. Taking either is a conditional update that a
+  // second pass loses.
   const moved = !claim.fresh && claim.status === 'requeued' ? await takeRequeuedRun(claim.id) : null;
-  if (!claim.fresh && !moved) return;
+  const resumed =
+    !claim.fresh && !moved && claim.status === 'claimed'
+      ? await takeStaleWait(claim.id, new Date(Date.now() - UNIT_HEARTBEAT_GRACE_MS))
+      : null;
+  if (!claim.fresh && !moved && !resumed) return;
   // What the unit settles with when its second dispatch finds nowhere to run.
   const movedReason = moved && isLimitReason(moved.failureCode) ? moved.failureCode : 'usage_limit';
+  // A resumed wait of a unit that had moved keeps what the move decided: the
+  // account's model, no spill, and its `failed_over_from`.
+  const priorMove = moved ?? (resumed?.failedOverFrom ? resumed : null);
+  const unitDetail = { kind: unit.kind, lens: unit.lens, chunkIndex: unit.chunkIndex };
+  /** A resumed wait that ends before any create: the box the fleet holds for it goes. */
+  const dropResumedBox = async () => {
+    if (resumed?.sandboxId) await dropUnitBox(review.workspaceId, resumed.sandboxId);
+  };
 
   const loaded = await loadPromptContext(review);
   if (!loaded) {
     await settleRun(claim.id, { status: 'failed', failureCode: 'dispatch_failed' });
+    await dropResumedBox();
     return;
   }
 
   const built = await buildUnitPrompt(review, unit, loaded.ctx);
   if (!built) {
     await settleRun(claim.id, { status: 'skipped', failureCode: 'dispatch_failed' });
+    await dropResumedBox();
     return;
   }
   if (!built.ok) {
@@ -430,12 +414,13 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
     // never an empty success: it read nothing, and the timeline says which skill
     // and why. The other units of the cycle are untouched.
     await settleRun(claim.id, { status: 'failed', failureCode: built.code });
+    await dropResumedBox();
     await appendReviewEvent(review.id, {
       toPhase: review.phase as CodeReviewPhase,
       trigger: 'executor',
       code: built.code,
       message: built.message,
-      detail: { kind: unit.kind, lens: unit.lens, chunkIndex: unit.chunkIndex },
+      detail: unitDetail,
     });
     return;
   }
@@ -444,6 +429,7 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
   const chain = await resolveCloudEnvChain(review.workspaceId);
   if (!chain.length) {
     await settleRun(claim.id, { status: 'failed', failureCode: 'no_provider' });
+    await dropResumedBox();
     await appendReviewEvent(review.id, {
       toPhase: review.phase as CodeReviewPhase,
       trigger: 'executor',
@@ -468,7 +454,7 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
   const limited = await limitedAgentsAfterAccounts(review.workspaceId, cycleRuns);
   // A unit that moved to another account of the SAME agent dispatches there,
   // whatever the other agent can do.
-  const movedToAccount = moved ? movedFromAccount(moved.failedOverFrom) !== null : false;
+  const movedToAccount = priorMove ? movedFromAccount(priorMove.failedOverFrom) !== null : false;
   const alternative = limited.size
     ? await eligibleFleetAgent(review.workspaceId, limited.keys(), limitedAccounts)
     : null;
@@ -485,18 +471,166 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
   }
   const avoidAgents = alternative && !movedToAccount ? [...limited.keys()] : [];
 
-  await patchRun(claim.id, { status: 'dispatching' });
+  // A resumed wait stays `claimed`: it is still waiting until a box answers.
+  if (!resumed) await patchRun(claim.id, { status: 'dispatching' });
+
+  /** What the fleet's answer means for the unit. `next`: try the next link of the chain. */
+  const settleFleetResult = async (result: SandboxRunResult, waited: boolean): Promise<'done' | 'next'> => {
+    if (result.ok) {
+      // A swap on a FIRST dispatch: the unit never tried the limited agent.
+      // A moved unit already has its `failed_over_from`, and that first
+      // answer is the one to keep.
+      const swap = priorMove ? null : result.handle.quotaSwap;
+      const sandboxId = result.handle.sandbox.id;
+      const recorded = await markRunDispatched(claim.id, {
+        status: 'running',
+        provider: 'selfhosted',
+        model: result.handle.model,
+        // Which account it ran on, so a limit moves the unit to the next one.
+        fleetAccountId: result.handle.accountId ?? null,
+        sandboxId,
+        host: result.handle.host ?? null,
+        endpoint: result.handle.endpoint,
+        dispatchedAt: new Date(),
+        // A wait for a runner is over.
+        failureCode: null,
+        ...(swap ? { failedOverFrom: swap.from } : {}),
+        // The row now describes the second run. Why the first one stopped
+        // is on the timeline.
+        ...(moved ? { failureDetail: null } : {}),
+      });
+      if (!recorded) {
+        // Cancelled or settled while the box came up. Nobody reads its output,
+        // so it goes, unless the row already runs on this very box.
+        const now = await getRun(claim.id);
+        if (!(now?.dispatchedAt && now.sandboxId === sandboxId)) await dropUnitBox(review.workspaceId, sandboxId);
+        return 'done';
+      }
+      await meterBoxOpened({
+        workspaceId: review.workspaceId,
+        subjectKind: 'review_unit',
+        subjectId: claim.id,
+        sandboxId,
+        size: result.handle.size,
+      });
+      if (swap) {
+        // A workspace hold is only ever written for a spent subscription.
+        // Anything else that caused a swap is this cycle's own record.
+        const held = await heldBackAgents(review.workspaceId).catch(
+          () => ({}) as Awaited<ReturnType<typeof heldBackAgents>>
+        );
+        const reason = held[swap.from]
+          ? 'quota_exhausted'
+          : (limited.get(swap.from) ?? 'quota_exhausted');
+        await appendReviewEvent(review.id, {
+          toPhase: review.phase as CodeReviewPhase,
+          trigger: 'executor',
+          code: 'unit_failed_over',
+          message: failoverMessage(swap.from, swap.to, reason),
+          detail: { kind: unit.kind, lens: unit.lens, from: swap.from, to: swap.to, reason },
+        });
+        captureUnitFailedOver(review.workspaceId, {
+          from_agent: swap.from,
+          to_agent: swap.to,
+          reason,
+          kind: unit.kind,
+          lens: unit.lens,
+          cycle: review.cycle,
+          at: 'dispatch',
+        });
+      }
+      return 'done';
+    }
+    // Cancelled or settled during the wait. The wait already let the box go.
+    if (result.superseded) return 'done';
+    if (result.noRoom) {
+      await settleRun(claim.id, {
+        status: 'failed',
+        failureCode: moved ? movedReason : priorMove ? 'usage_limit' : 'capacity_deferred',
+      });
+      await appendReviewEvent(review.id, {
+        toPhase: review.phase as CodeReviewPhase,
+        trigger: 'executor',
+        code: 'capacity_gave_up',
+        message: CAPACITY_GAVE_UP_MESSAGE,
+        detail: unitDetail,
+      });
+      return 'done';
+    }
+    if (!result.capacity || waited) {
+      // A moved unit keeps the limit as its reason. That is why it is not
+      // running, and `dispatch_failed` would hide it.
+      await settleRun(claim.id, {
+        status: 'failed',
+        failureCode: moved ? movedReason : 'dispatch_failed',
+      });
+      await appendReviewEvent(review.id, {
+        toPhase: review.phase as CodeReviewPhase,
+        trigger: 'executor',
+        code: 'dispatch_failed',
+        message: result.error,
+      });
+      return 'done';
+    }
+    // Refused before any wait (a held-back subscription). Fall through to the next link.
+    return 'next';
+  };
+
+  // The bounded spill to PostHog Code stays the first answer to a full fleet
+  // where it is still allowed. Everywhere else the unit waits for the fleet. A
+  // resumed wait goes on waiting: the fleet holds its box.
+  const fleetAt = chain.findIndex((l) => l.provider === 'selfhosted');
+  const canSpill =
+    !priorMove &&
+    !resumed &&
+    spilled < MAX_SPILLED_UNITS_PER_CYCLE &&
+    chain.some((l, i) => i > fleetAt && l.provider === 'posthog_code') &&
+    !(await posthogCodeRetiredForWorkspace(review.workspaceId));
 
   let sawFleet = false;
   for (const link of chain) {
     if (link.provider === 'selfhosted') {
       sawFleet = true;
-      const result = await dispatchSandboxRun({
+      let startedWaiting!: () => void;
+      const waiting = new Promise<'waiting'>((resolve) => {
+        startedWaiting = () => resolve('waiting');
+      });
+      const capacityWait: SandboxRunCapacityWait | undefined = canSpill
+        ? undefined
+        : {
+            label: `review unit ${claim.id.slice(0, 8)}`,
+            startedAt: resumed?.capacityWaitSince?.getTime() ?? null,
+            onWait: async (why, sandboxId) => {
+              const since = resumed?.capacityWaitSince ?? new Date();
+              if (!(await markUnitWaiting(claim.id, { sandboxId, since }))) {
+                throw new SandboxRunSupersededError();
+              }
+              // Reported, because a silent wait is indistinguishable from a
+              // broken feature. Once per wait: a resumed one said it already.
+              if (!resumed) {
+                await appendReviewEvent(review.id, {
+                  toPhase: review.phase as CodeReviewPhase,
+                  trigger: 'executor',
+                  code: 'capacity_deferred',
+                  message: 'Waiting for a runner.',
+                  detail: { ...unitDetail, why },
+                });
+              }
+              startedWaiting();
+            },
+            owned: (sandboxId) => renewUnitWait(claim.id, sandboxId),
+            nextId: async (fromId) => {
+              const next = nextUnitSandboxId(fromId);
+              return (await moveUnitWait(claim.id, fromId, next)) ? next : null;
+            },
+          };
+      const dispatching = dispatchSandboxRun({
         // The fleet's create is idempotent on this id. A second dispatch with
         // the first one's id would be handed back the sandbox that just died,
         // and the unit would settle the moment it started. A unit moves once,
-        // so one suffix is enough.
-        runId: moved ? `talyn-rev-${claim.id}-r1` : `talyn-rev-${claim.id}`,
+        // so one suffix is enough. A resumed wait goes on with the box it
+        // waited on.
+        runId: resumed?.sandboxId ?? (moved ? `talyn-rev-${claim.id}-r1` : `talyn-rev-${claim.id}`),
         workspaceId: review.workspaceId,
         repositoryId: review.repositoryId,
         taskType: 'code_writing',
@@ -522,78 +656,20 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
         avoidAccountIds: [...limitedAccounts],
         // A move to another account keeps the vendor, so it keeps the model the
         // first run had. The ladder could otherwise land on the other agent.
-        ...(movedToAccount && moved?.model ? { model: moved.model } : {}),
+        ...(movedToAccount && priorMove?.model ? { model: priorMove.model } : {}),
+        ...(capacityWait ? { capacityWait } : {}),
       });
-      if (result.ok) {
-        await meterBoxOpened({
-          workspaceId: review.workspaceId,
-          subjectKind: 'review_unit',
-          subjectId: claim.id,
-          sandboxId: result.handle.sandbox.id,
-          size: result.handle.size,
-        });
-        // A swap on a FIRST dispatch: the unit never tried the limited agent.
-        // A moved unit already has its `failed_over_from`, and that first
-        // answer is the one to keep.
-        const swap = moved ? null : result.handle.quotaSwap;
-        await patchRun(claim.id, {
-          status: 'running',
-          provider: 'selfhosted',
-          model: result.handle.model,
-          // Which account it ran on, so a limit moves the unit to the next one.
-          fleetAccountId: result.handle.accountId ?? null,
-          sandboxId: result.handle.sandbox.id,
-          host: result.handle.host ?? null,
-          endpoint: result.handle.endpoint,
-          dispatchedAt: new Date(),
-          ...(swap ? { failedOverFrom: swap.from } : {}),
-          // The row now describes the second run. Why the first one stopped
-          // is on the timeline.
-          ...(moved ? { failureCode: null, failureDetail: null } : {}),
-        });
-        if (swap) {
-          // A workspace hold is only ever written for a spent subscription.
-          // Anything else that caused a swap is this cycle's own record.
-          const held = await heldBackAgents(review.workspaceId).catch(
-            () => ({}) as Awaited<ReturnType<typeof heldBackAgents>>
-          );
-          const reason = held[swap.from]
-            ? 'quota_exhausted'
-            : (limited.get(swap.from) ?? 'quota_exhausted');
-          await appendReviewEvent(review.id, {
-            toPhase: review.phase as CodeReviewPhase,
-            trigger: 'executor',
-            code: 'unit_failed_over',
-            message: failoverMessage(swap.from, swap.to, reason),
-            detail: { kind: unit.kind, lens: unit.lens, from: swap.from, to: swap.to, reason },
-          });
-          captureUnitFailedOver(review.workspaceId, {
-            from_agent: swap.from,
-            to_agent: swap.to,
-            reason,
-            kind: unit.kind,
-            lens: unit.lens,
-            cycle: review.cycle,
-            at: 'dispatch',
-          });
-        }
+      const first = await Promise.race([dispatching, waiting]);
+      if (first === 'waiting') {
+        // The wait goes on without this pass. Whatever it ends with, the
+        // review is evaluated again.
+        void dispatching
+          .then((result) => settleFleetResult(result, true))
+          .catch((err) => console.warn(`[code-review] unit ${claim.id} after its wait for a runner:`, err))
+          .finally(() => void reevaluate(review.id, 'executor:capacity_wait_ended'));
         return;
       }
-      if (!result.capacity) {
-        // A moved unit keeps the limit as its reason. That is why it is not
-        // running, and `dispatch_failed` would hide it.
-        await settleRun(claim.id, {
-          status: 'failed',
-          failureCode: moved ? movedReason : 'dispatch_failed',
-        });
-        await appendReviewEvent(review.id, {
-          toPhase: review.phase as CodeReviewPhase,
-          trigger: 'executor',
-          code: 'dispatch_failed',
-          message: result.error,
-        });
-        return;
-      }
+      if ((await settleFleetResult(first, false)) === 'done') return;
       // Busy or unreachable. Fall through to the next link.
       continue;
     }
@@ -623,6 +699,7 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
           remoteTaskId: result.remoteTaskId,
           remoteRunId: result.remoteRunId,
           dispatchedAt: new Date(),
+          failureCode: null,
         });
         return;
       }
@@ -643,17 +720,68 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
     return;
   }
 
-  // Nothing had room. The unit stays claimed with no dispatch time, which is the
-  // state the reconciler retries — and it is reported, because a silent deferral
-  // is indistinguishable from a broken feature.
-  await patchRun(claim.id, { status: 'claimed', failureCode: 'capacity_deferred' });
+  // Nothing could take it now, and nothing waits on a box for it. The unit
+  // waits with no box: the reconciler tries it again after the heartbeat
+  // grace, until the same 30-minute bound.
+  const since = resumed?.capacityWaitSince ?? new Date();
+  if (!(await markUnitWaiting(claim.id, { sandboxId: resumed?.sandboxId ?? null, since }))) return;
+  if (resumed) return;
   await appendReviewEvent(review.id, {
     toPhase: review.phase as CodeReviewPhase,
     trigger: 'executor',
     code: 'capacity_deferred',
     message: 'Waiting for a runner.',
-    detail: { kind: unit.kind, lens: unit.lens, chunkIndex: unit.chunkIndex },
+    detail: unitDetail,
   });
+}
+
+/** What a unit's failure says when no runner became free inside the bound. */
+export const CAPACITY_GAVE_UP_MESSAGE = 'No runner became free in 30 minutes for one part of this review.';
+
+/**
+ * The next sandbox id for a unit whose queued box the fleet lost. It keeps the
+ * `talyn-rev-<unit id>-rN` shape that billing and the admin pages parse. A
+ * first dispatch goes to even generations (-r2, -r4) and a moved unit, which
+ * starts at -r1, to odd ones (-r3, -r5), so the two never meet.
+ */
+export function nextUnitSandboxId(id: string): string {
+  const match = /^(.*)-r(\d+)$/.exec(id);
+  return match ? `${match[1]}-r${Number(match[2]) + 2}` : `${id}-r2`;
+}
+
+/** Best effort: a unit's box that nobody will read, queued or booted. */
+export async function dropUnitBox(workspaceId: string, sandboxId: string): Promise<void> {
+  try {
+    const client = await getSelfHostedClient(workspaceId);
+    await client?.deleteSandbox(sandboxId);
+  } catch (err) {
+    console.warn(`[code-review] deleting sandbox ${sandboxId} failed:`, err);
+  }
+}
+
+/**
+ * The reconciler's way in for a unit whose wait for a runner went quiet (a
+ * deploy, a crash). Inside the bound the wait resumes on the same sandbox id.
+ * A unit whose cycle moved on is cancelled, and its queued box goes.
+ */
+export async function resumeUnitWait(run: RunRow): Promise<void> {
+  const review = await getReview(run.reviewId);
+  if (!review || review.cycle !== run.cycle || !UNIT_PHASES.has(review.phase)) {
+    if ((await settleRun(run.id, { status: 'cancelled' })) && run.sandboxId) {
+      await dropUnitBox(run.workspaceId, run.sandboxId);
+    }
+    return;
+  }
+  await dispatchUnit(review, { kind: run.kind as RunKind, lens: run.lens, chunkIndex: run.chunkIndex });
+}
+
+/** The phases in which a review has units in flight. */
+const UNIT_PHASES: ReadonlySet<string> = new Set(['reviewing', 'sweeping', 'validating']);
+
+/** Late import: the evaluator imports this module. */
+async function reevaluate(reviewId: string, trigger: string): Promise<void> {
+  const { scheduleReviewEvaluation } = await import('./evaluator.js');
+  scheduleReviewEvaluation(reviewId, trigger);
 }
 
 /** A lens key as a person reads it, with this cycle's own reviewers named. */

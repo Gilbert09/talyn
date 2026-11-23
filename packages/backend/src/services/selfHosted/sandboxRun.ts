@@ -25,6 +25,7 @@ import {
   type FleetSandbox,
 } from './client.js';
 import { workspaceMayUseMcpServers } from '../mcpServersAccess.js';
+import { NoFreeSandboxError, waitForFleetCapacity } from './capacityWait.js';
 import { mcpServersForDispatch, type McpServerWithSecret } from '../mcpServers/store.js';
 import {
   getSelfHostedCredentials,
@@ -166,6 +167,12 @@ export interface SandboxRunSpec {
    * idle instead and Talyn can suspend it and give it the next prompt.
    */
   ephemeral?: boolean;
+  /**
+   * Wait for room at the fleet instead of a capacity refusal, up to 30
+   * minutes, as a session's box does. Absent: a full fleet is `capacity: true`
+   * at once, and the caller may try another provider.
+   */
+  capacityWait?: SandboxRunCapacityWait;
 }
 
 export interface SandboxRunHandle {
@@ -202,7 +209,87 @@ export interface SandboxRunHandle {
 
 export type SandboxRunResult =
   | { ok: true; handle: SandboxRunHandle }
-  | { ok: false; error: string; capacity?: boolean };
+  | {
+      ok: false;
+      error: string;
+      /** Nothing is wrong with the work: try elsewhere. Never set after a `capacityWait` ran out. */
+      capacity?: boolean;
+      /** `capacityWait` only: no runner became free inside the bound. */
+      noRoom?: boolean;
+      /** `capacityWait` only: the caller's `owned` said no. The queued box is gone, or a new owner waits on it. */
+      superseded?: boolean;
+    };
+
+/** The words for a run that waited the whole bound for room. */
+export const NO_FREE_RUNNER_MESSAGE = 'No runner became free in 30 minutes.';
+
+/**
+ * How a run waits for room at the fleet, as a session's box does. The caller
+ * owns the record of the wait; this only creates and polls.
+ */
+export interface SandboxRunCapacityWait {
+  /** Who waits, for logs and the warm-pool yield. */
+  label: string;
+  /** When an earlier run of this wait started (ms epoch). A resumed wait keeps one bound. */
+  startedAt?: number | null;
+  /** The first wait: the fleet has no room now. Throw {@link SandboxRunSupersededError} when the run moved on. */
+  onWait(why: string, sandboxId: string): Promise<void>;
+  /** Read after each pause. False ends the wait. The caller can renew a heartbeat here. */
+  owned(sandboxId: string): Promise<boolean>;
+  /** Nothing runs on `fromId`: the next id, recorded by the caller. Null when the run moved on. */
+  nextId(fromId: string): Promise<string | null>;
+}
+
+/** A waiting run that is no longer its caller's. */
+export class SandboxRunSupersededError extends Error {
+  constructor(message = 'the run moved on while it waited for room') {
+    super(message);
+    this.name = 'SandboxRunSupersededError';
+  }
+}
+
+/**
+ * The create of a run that waits for room: `queueWhenFull`, 503 and 429 tried
+ * again on the same id, a queued box polled until it leaves the queue, and a
+ * new id when a fleetd restart lost the queued box. A box that left the queue
+ * goes back to the caller in any state: an ephemeral run can finish before the
+ * next poll, and the caller's own poller reads how it ended. Null: the run
+ * moved on.
+ */
+async function createWaitingForRoom(
+  client: FleetClient,
+  body: CreateSandboxInput,
+  wait: SandboxRunCapacityWait,
+): Promise<{ sandbox: FleetSandbox; host?: string } | null> {
+  let currentId = body.id;
+  const result = await waitForFleetCapacity<{ sandbox: FleetSandbox; host?: string }>({
+    label: wait.label,
+    sandboxId: body.id,
+    startedAt: wait.startedAt,
+    create: (id) => createSandboxRetryingUncertain(client, { ...body, id, queueWhenFull: true }),
+    queueOf: (answer) => ({ client, record: answer.sandbox }),
+    withRecord: (answer, sandbox) => ({ ...answer, sandbox }),
+    booted: (record) => record.status !== 'starting',
+    control: {
+      draining: () => false,
+      lost: () => false,
+      owned: () => wait.owned(currentId),
+      superseded: () => new SandboxRunSupersededError(),
+      isSuperseded: (err) => err instanceof SandboxRunSupersededError,
+    },
+    onWait: (why) => wait.onWait(why, currentId),
+    nextId: async (fromId, _cause, detail) => {
+      const next = await wait.nextId(fromId);
+      if (!next) throw new SandboxRunSupersededError();
+      console.warn(`[fleet] ${wait.label}: ${detail}; creating ${next}`);
+      currentId = next;
+      return next;
+    },
+  });
+  if (!result) return null;
+  // No boot retries are asked for, so the wait answers only `created`.
+  return result.kind === 'created' ? result.answer : null;
+}
 
 /**
  * How many times a dispatch that got 504 `dispatch_uncertain` is re-sent.
@@ -630,15 +717,21 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
       milliVcpu: SANDBOX_SIZES[size].milliVcpu,
     });
     let size = wantedSize;
-    let created: { sandbox: FleetSandbox; host?: string };
+    // One create, or (with `capacityWait`) a create that waits for room.
+    const createAt = async (atSize: SandboxSize): Promise<{ sandbox: FleetSandbox; host?: string } | null> =>
+      spec.capacityWait
+        ? createWaitingForRoom(client, sized(atSize), spec.capacityWait)
+        : createSandboxRetryingUncertain(client, sized(atSize));
+    let created: { sandbox: FleetSandbox; host?: string } | null;
     try {
-      created = await createSandboxRetryingUncertain(client, sized(wantedSize));
+      created = await createAt(wantedSize);
     } catch (err) {
       if (!isSizeRefusal(err) || SANDBOX_SIZES[wantedSize].memMib <= SANDBOX_SIZES.standard.memMib) throw err;
       console.warn(`[fleet] run ${spec.runId}: the tenant refused ${wantedSize}, using standard: ${err.message}`);
       size = 'standard';
-      created = await createSandboxRetryingUncertain(client, sized(size));
+      created = await createAt(size);
     }
+    if (!created) return { ok: false, error: 'This run moved on while it waited for room.', superseded: true };
     const { sandbox, host } = created;
 
     // WHICH BOX IS RUNNING THIS, from whichever party actually knows.
@@ -675,6 +768,13 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
       },
     };
   } catch (err) {
+    if (err instanceof NoFreeSandboxError) {
+      console.warn(`[fleet] no room for ${spec.runId} after ${Math.round(err.waitedMs / 1000)} s of waiting`);
+      return { ok: false, error: NO_FREE_RUNNER_MESSAGE, noRoom: true };
+    }
+    if (err instanceof SandboxRunSupersededError) {
+      return { ok: false, error: 'This run moved on while it waited for room.', superseded: true };
+    }
     if (err instanceof FleetCapacityError) {
       // Availability, not failure: the work is fine and another provider can
       // run it. `capacity` is what a caller routes on (§10.7, §11.6).

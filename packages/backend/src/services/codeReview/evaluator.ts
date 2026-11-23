@@ -1,6 +1,6 @@
 import { runWithoutScope } from '../../db/client.js';
 import { decide } from './decide.js';
-import { applyActions, readCapacity } from './executor.js';
+import { applyActions } from './executor.js';
 import { getPrForReview, getReview, touchEvaluated } from './store.js';
 import { runsForCycle } from './store.js';
 import { broadcastReview } from './broadcast.js';
@@ -90,10 +90,9 @@ async function evaluateOnce(reviewId: string, trigger: string): Promise<void> {
     const review = await getReview(reviewId);
     if (!review) return;
 
-    const [pr, runs, capacity] = await Promise.all([
+    const [pr, runs] = await Promise.all([
       getPrForReview(review.pullRequestId),
       runsForCycle(review.id, review.cycle),
-      readCapacity(review.workspaceId),
     ]);
 
     const actions = decide({
@@ -105,7 +104,6 @@ async function evaluateOnce(reviewId: string, trigger: string): Promise<void> {
       validate: review.validate,
       chunkTotal: review.chunkTotal,
       runs,
-      unitsAllowed: capacity.unitsAllowed,
       prOpen: pr?.state === 'open',
     });
 

@@ -89,12 +89,22 @@ vi.mock('../services/analytics.js', async () => {
 
 const { codeReviewPoller } = await import('../services/codeReview/poller.js');
 const { dispatchUnit } = await import('../services/codeReview/executor.js');
-const { countLiveUnits, getReview, getRun } = await import('../services/codeReview/store.js');
+const { getReview, getRun } = await import('../services/codeReview/store.js');
+const { FLEET_CAPACITY_WAIT } = await import('../services/selfHosted/capacityWait.js');
 const { heldBackAgents } = await import('../services/selfHosted/exhaustedQuota.js');
 const { cycleFailureMessage } = await import('../services/codeReview/failureMessage.js');
 const { FleetCapacityError } = await import('../services/selfHosted/client.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 type RunRow = import('../services/codeReview/store.js').RunRow;
+
+const DEFAULT_CAPACITY_WAIT = { ...FLEET_CAPACITY_WAIT };
+/** A wait for a runner short enough to end inside a test. */
+function shortenCapacityWait(): void {
+  Object.assign(FLEET_CAPACITY_WAIT, { maxMs: 300, firstDelayMs: 5, maxDelayMs: 20, checkMs: 5, queuePollMs: 5 });
+  onTestFinished(() => {
+    Object.assign(FLEET_CAPACITY_WAIT, DEFAULT_CAPACITY_WAIT);
+  });
+}
 
 const reconcile = (run: RunRow) =>
   (codeReviewPoller as unknown as { reconcileRun(run: RunRow): Promise<void> }).reconcileRun(run);
@@ -341,9 +351,6 @@ describe('moving a unit to the other fleet agent', () => {
       eventCursor: 0,
       dispatchedAt: null,
     });
-    // A requeued unit gives its slot back, so the second dispatch goes through
-    // the workspace ceiling like any other.
-    expect(await countLiveUnits('ws1')).toBe(0);
     expect(scheduleReviewEvaluation).toHaveBeenCalledWith('rev1', 'poller:unit_failed_over');
     expect(failoverEvents()).toEqual([
       {
@@ -473,6 +480,7 @@ describe('moving a unit to the other fleet agent', () => {
   });
 
   it('never moves a unit to PostHog Code, even when the fleet is full', async () => {
+    shortenCapacityWait();
     const run = await runningUnit();
     sandboxEnded('failed', INCIDENT);
     await reconcile(run);
@@ -480,6 +488,10 @@ describe('moving a unit to the other fleet agent', () => {
 
     await dispatchUnit((await getReview('rev1'))!, LENS);
 
+    // It waits for the fleet, and when no runner comes it settles with the
+    // limit it was moved for.
+    expect(startCodeRun).not.toHaveBeenCalled();
+    await vi.waitFor(async () => expect((await getRun(run.id))!.status).toBe('failed'));
     expect(startCodeRun).not.toHaveBeenCalled();
     expect(await getRun(run.id)).toMatchObject({
       status: 'failed',
@@ -534,12 +546,34 @@ describe('spilling a fresh unit to PostHog Code when the fleet is full', () => {
   it.each([
     ['on', 'true'],
     ['unset', undefined],
-  ])('waits for the fleet instead with the flag %s', async (_label, value) => {
+  ])('waits for the fleet instead with the flag %s, then gives up after the bound', async (_label, value) => {
+    shortenCapacityWait();
     if (value !== undefined) process.env.POSTHOG_CODE_RETIRED = value;
     resetFeatureFlagsForTests();
     await dispatchUnit((await getReview('rev1'))!, LENS);
     expect(startCodeRun).not.toHaveBeenCalled();
+    expect(await unitRow()).toMatchObject({
+      status: 'claimed',
+      failureCode: 'capacity_deferred',
+      dispatchedAt: null,
+      capacityWaitSince: expect.any(Date),
+    });
+    await vi.waitFor(async () => expect((await unitRow()).status).toBe('failed'));
+    expect(await unitRow()).toMatchObject({ failureCode: 'capacity_deferred' });
+    expect(await eventCodes()).toEqual(['capacity_deferred', 'capacity_gave_up']);
+    expect(startCodeRun).not.toHaveBeenCalled();
+  });
+
+  it('stops spilling once the cycle spent its spill, and waits for the fleet', async () => {
+    shortenCapacityWait();
+    process.env.POSTHOG_CODE_RETIRED = 'false';
+    resetFeatureFlagsForTests();
+    await runningUnit({ lens: 'security', provider: 'posthog_code' });
+    await runningUnit({ lens: 'reliability', provider: 'posthog_code' });
+    await dispatchUnit((await getReview('rev1'))!, LENS);
+    expect(startCodeRun).not.toHaveBeenCalled();
     expect(await unitRow()).toMatchObject({ status: 'claimed', failureCode: 'capacity_deferred' });
+    await vi.waitFor(async () => expect((await unitRow()).status).toBe('failed'));
   });
 });
 

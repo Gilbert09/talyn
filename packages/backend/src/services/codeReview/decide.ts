@@ -6,8 +6,8 @@ import type { RunKind, RunRow, RunStatus } from './store.js';
  *
  * Pure on purpose, and the merge queue's `decide.ts` is the precedent: the phase
  * graph is the part most likely to be wrong and the part hardest to test through
- * a database. Everything here is decided from a review row, its units and a
- * capacity number; nothing reads, writes, or dispatches.
+ * a database. Everything here is decided from a review row and its units;
+ * nothing reads, writes, or dispatches.
  *
  * The executor performs what comes back and then calls this again, so a pass that
  * dispatches two units and then discovers the phase should advance does both in
@@ -43,8 +43,6 @@ export interface DecideState {
   validate: boolean;
   chunkTotal: number;
   runs: RunRow[];
-  /** How many more units this pass may fire. Zero means "not now", not "never". */
-  unitsAllowed: number;
   /** A closed pull request stops being worth reviewing. */
   prOpen: boolean;
 }
@@ -193,7 +191,9 @@ function decideUnitPhase(
 
   // A requeued unit needs a dispatch as much as one with no row. It ran, its
   // agent reported a usage limit, and it waits to run once on the other agent.
-  // It goes through `unitsAllowed` like any other dispatch.
+  //
+  // A unit waiting for a runner is in flight, not missing: its dispatch waits
+  // at the fleet, and the reconciler resumes a wait whose process died.
   const awaitsDispatch = (run: RunRow | undefined) => !run || run.status === 'requeued';
   const missing = existing.filter((e) => awaitsDispatch(e.run)).map((e) => e.unit);
   const inFlight = existing.filter(
@@ -201,16 +201,13 @@ function decideUnitPhase(
   );
   const settled = existing.filter((e) => e.run && isSettled(e.run)).map((e) => e.run!);
 
-  // Fire what we can, bounded by what the pacing allows. The remainder is not
-  // lost: it has no row yet, or is still requeued, so the next pass finds it
-  // again.
-  if (missing.length && state.unitsAllowed > 0) {
-    return missing.slice(0, state.unitsAllowed).map((unit) => ({ type: 'dispatch', unit }));
-  }
+  // Fire everything that is missing. There is no per-workspace cap: each box
+  // is metered against the user's compute time, and room is the fleet's to
+  // give, so a unit that finds none waits for it.
+  if (missing.length) return missing.map((unit) => ({ type: 'dispatch', unit }));
 
-  // Something is still running, or we are out of slots this pass. Either way
-  // there is nothing to decide until a unit settles or a slot frees.
-  if (inFlight.length || missing.length) return [];
+  // Something is still running. Nothing to decide until a unit settles.
+  if (inFlight.length) return [];
 
   const succeeded = settled.filter((r) => r.status === 'succeeded');
   if (!succeeded.length) {
@@ -311,7 +308,19 @@ export function settledUnitCount(runs: RunRow[], cycle: number): number {
 
 /** Whether any unit of this cycle is still waiting for a runner. */
 export function hasDeferredUnit(runs: RunRow[], cycle: number): boolean {
-  return runs.some(
-    (r) => r.cycle === cycle && r.status === 'claimed' && r.dispatchedAt === null
-  );
+  return runs.some((r) => isWaitingUnit(r, cycle));
+}
+
+/** When the longest wait for a runner in this cycle began. Null when no unit records it. */
+export function deferredSinceOf(runs: RunRow[], cycle: number): Date | null {
+  let since: Date | null = null;
+  for (const r of runs) {
+    if (!isWaitingUnit(r, cycle) || !r.capacityWaitSince) continue;
+    if (!since || r.capacityWaitSince < since) since = r.capacityWaitSince;
+  }
+  return since;
+}
+
+function isWaitingUnit(r: RunRow, cycle: number): boolean {
+  return r.cycle === cycle && r.status === 'claimed' && r.dispatchedAt === null;
 }

@@ -2226,6 +2226,11 @@ export const prCodeReviewRuns = pgTable(
     costUsd: numeric('cost_usd', { precision: 10, scale: 4 }),
     /** NULL separates "never got a sandbox" from "had one and it is gone". */
     dispatchedAt: timestamp('dispatched_at', { withTimezone: true }),
+    /**
+     * When the unit began to wait for a free runner. One 30-minute bound
+     * counts from here, also across a restart that resumes the wait.
+     */
+    capacityWaitSince: timestamp('capacity_wait_since', { withTimezone: true }),
     settledAt: timestamp('settled_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

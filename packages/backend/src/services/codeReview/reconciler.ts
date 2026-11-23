@@ -3,7 +3,16 @@ import { TickGuard } from '../tickGuard.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { runWithoutScope } from '../../db/client.js';
 import { scheduleReviewEvaluation } from './evaluator.js';
-import { appendReviewEvent, loadOrphanedClaims, loadStaleReviews, settleRun } from './store.js';
+import {
+  appendReviewEvent,
+  loadOrphanedClaims,
+  loadStaleReviews,
+  settleRun,
+  UNIT_HEARTBEAT_GRACE_MS,
+  type RunRow,
+} from './store.js';
+import { CAPACITY_GAVE_UP_MESSAGE, dropUnitBox, resumeUnitWait } from './executor.js';
+import { FLEET_CAPACITY_WAIT } from '../selfHosted/capacityWait.js';
 import type { CodeReviewPhase } from '@talyn/shared';
 
 /**
@@ -25,17 +34,25 @@ const STALE_AFTER_MS = 2 * 60_000;
 const BATCH = 20;
 
 /**
- * How long a claim may sit with no sandbox before it is written off.
- *
- * Five minutes, matching the task path's dispatch grace: long enough that no
- * dispatch in flight could still be inside it, short enough that a unit nobody
- * will ever run stops holding a slot in the workspace's ceiling.
+ * How long a unit with no sandbox may go unwritten before this sweep acts on
+ * it. A dispatch in flight finishes inside it, and a unit that waits for a
+ * runner renews its row well inside it.
  *
  * `dispatched_at IS NULL` is what makes this safe to do at all — it separates
  * "never got a runner" from "had one and it vanished", and the second case has its
  * own detection and its own failure code.
  */
-const ORPHAN_GRACE_MS = 5 * 60_000;
+const ORPHAN_GRACE_MS = UNIT_HEARTBEAT_GRACE_MS;
+
+/** A wait for a runner that went quiet, still inside its 30-minute bound: it resumes. */
+export function isResumableWait(run: RunRow, now = Date.now()): boolean {
+  return (
+    run.status === 'claimed' &&
+    run.failureCode === 'capacity_deferred' &&
+    run.capacityWaitSince !== null &&
+    now - run.capacityWaitSince.getTime() < FLEET_CAPACITY_WAIT.maxMs
+  );
+}
 
 class CodeReviewReconciler {
   private timer: NodeJS.Timeout | null = null;
@@ -89,28 +106,41 @@ class CodeReviewReconciler {
   }
 
   /**
-   * Claims that never became a sandbox.
+   * Units with no sandbox that nobody has written for a while.
    *
-   * Two quite different causes end up here and both are handled the same way: a
-   * dispatch that crashed between claiming and creating, and a unit deferred for
-   * capacity that never found room. The second is much the commoner, which is why
-   * the event says so rather than reporting a fault.
+   * A unit that waits for a runner renews its row, so it is never here while
+   * its wait runs. Three causes end up here:
+   *
+   * - A wait for a runner whose process died (a deploy). Inside its 30-minute
+   *   bound it resumes, on the same sandbox id: the fleet still holds a queued
+   *   box for it.
+   * - A wait for a runner past its bound. It fails and says so.
+   * - A dispatch that crashed between claiming and creating. It fails as lost.
    */
   private async reapOrphans(): Promise<void> {
     const orphans = await loadOrphanedClaims(new Date(Date.now() - ORPHAN_GRACE_MS), BATCH);
     for (const run of orphans) {
+      if (isResumableWait(run)) {
+        try {
+          await resumeUnitWait(run);
+        } catch (err) {
+          console.warn(`[code-review] resuming the wait of ${run.id} failed:`, err);
+        }
+        continue;
+      }
       const deferred = run.failureCode === 'capacity_deferred';
-      await settleRun(run.id, {
+      const settled = await settleRun(run.id, {
         status: 'failed',
         failureCode: deferred ? 'capacity_deferred' : 'dispatch_lost',
       });
+      if (!settled) continue;
+      // A queued box the fleet still holds for it would run for nobody.
+      if (deferred && run.sandboxId) await dropUnitBox(run.workspaceId, run.sandboxId);
       await appendReviewEvent(run.reviewId, {
         toPhase: 'reviewing' as CodeReviewPhase,
         trigger: 'reconcile',
         code: deferred ? 'capacity_gave_up' : 'dispatch_lost',
-        message: deferred
-          ? 'No runner became free in time for one part of this review.'
-          : 'One part of this review never started.',
+        message: deferred ? CAPACITY_GAVE_UP_MESSAGE : 'One part of this review never started.',
         detail: { kind: run.kind, lens: run.lens, chunkIndex: run.chunkIndex },
       });
       scheduleReviewEvaluation(run.reviewId, 'reconcile:orphan');
