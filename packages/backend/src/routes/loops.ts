@@ -8,7 +8,7 @@ import {
   type NormalizedLoop,
 } from '@talyn/shared';
 import { captureWorkspaceEvent } from '../services/analytics.js';
-import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { getDbClient } from '../db/client.js';
 import { repositories as reposTable, users as usersTable, workspaces as workspacesTable } from '../db/schema.js';
 import { fleetRefusalReason, workspaceMayUseFleet } from '../services/cloudProviders/fleetAccess.js';
@@ -18,6 +18,7 @@ import { loopsRefusalReason, workspaceMayUseLoops } from '../services/loopsAcces
 import { dispatchRun } from '../services/loops/dispatch.js';
 import { claimFiring } from '../services/loops/runs.js';
 import { workbenchReadiness } from '../services/workbenches/readiness.js';
+import { ruleSpaceRefusal } from '../services/workflows/ruleSpace.js';
 import {
   countLoops,
   createLoop,
@@ -71,6 +72,8 @@ function loopShape(id: string, loop: NormalizedLoop): Record<string, unknown> {
     internet_access: loop.internetAccess,
     // Shape, never content: how many, not which. A server id is the user's.
     mcp_servers_pinned: loop.mcpServerIds === null ? null : loop.mcpServerIds.length,
+    // Whether, never which: a space id is the user's.
+    in_space: loop.spaceId !== null,
     prompt_length: loop.prompt.length,
   };
 }
@@ -176,6 +179,28 @@ export function loopRoutes(): Router {
     return null;
   }
 
+  /**
+   * A loop's space must be one the caller can start a session in. The caller
+   * is the workspace owner (`requireWorkspaceAccess`), the same identity the
+   * run uses. This is the check a workflow rule's space gets.
+   *
+   * Only a NEW space is checked, so a loop whose space went away can still be
+   * renamed or switched off. Its runs then start in Personal.
+   */
+  async function spaceGate(
+    req: Request,
+    res: Response,
+    loop: NormalizedLoop,
+    existingSpaceId: string | null
+  ): Promise<boolean> {
+    if (!loop.spaceId || loop.spaceId === existingSpaceId) return true;
+    const user = assertUser(req);
+    const refusal = await ruleSpaceRefusal({ id: user.id, email: user.email ?? null }, loop.spaceId);
+    if (!refusal) return true;
+    res.status(400).json({ success: false, error: refusal, code: 'space_unavailable' });
+    return false;
+  }
+
   router.get('/', async (req, res) => {
     const workspaceId = req.query.workspaceId as string;
     if (!(await gate(req, res, workspaceId))) return;
@@ -212,6 +237,7 @@ export function loopRoutes(): Router {
     }
     const problem = await checkTarget(workspaceId, normalized);
     if (problem) return res.status(400).json({ success: false, error: problem });
+    if (!(await spaceGate(req, res, normalized, null))) return;
 
     // No plan caps how many loops an owner keeps. Each firing is gated where
     // its task is created, and parks visibly when the plan refuses it.
@@ -240,6 +266,7 @@ export function loopRoutes(): Router {
     }
     const problem = await checkTarget(existing.workspaceId, normalized);
     if (problem) return res.status(400).json({ success: false, error: problem });
+    if (!(await spaceGate(req, res, normalized, existing.spaceId))) return;
 
     const data = await updateLoop(existing.id, normalized);
     if (!data) return res.status(404).json({ success: false, error: 'Automation not found' });
@@ -323,6 +350,7 @@ export function loopRoutes(): Router {
       mcpServerIds: existing.mcpServerIds,
       repositoryId: existing.repositoryId,
       repoFullName: existing.repoFullName,
+      spaceId: existing.spaceId,
       nextRunAt: existing.nextRunAt ? new Date(existing.nextRunAt) : null,
       consecutiveFailures: 0,
     };

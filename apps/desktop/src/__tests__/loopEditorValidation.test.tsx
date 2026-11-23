@@ -3,6 +3,7 @@ import React from 'react';
 import { render, fireEvent, waitFor, cleanup, screen } from '@testing-library/react';
 import type { CloudAgentChoice, LoopInput } from '@talyn/shared';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
+import { useSpacesStore } from '../renderer/stores/spaces';
 import { LoopEditorPage } from '../renderer/components/panels/loops/LoopEditorPage';
 
 /**
@@ -134,5 +135,115 @@ describe('LoopEditorPage — when it complains', () => {
       provider: 'selfhosted',
       mcpServerIds: null,
     });
+  });
+});
+
+describe('LoopEditorPage — the Space section', () => {
+  const TEAM = {
+    id: 'team-1',
+    name: 'Acme',
+    role: 'member',
+    homeWorkspaceId: 'ws1',
+    createdAt: '2026-11-01T00:00:00Z',
+    spaces: [{ id: 'space-1', teamId: 'team-1', name: 'Web' }],
+  };
+
+  function renderWith(
+    opts: { spaces: boolean; teams: unknown[] | null; editing?: unknown },
+    onSave: (i: LoopInput) => Promise<void> = async () => {}
+  ) {
+    useWorkspaceStore.setState({
+      currentWorkspaceId: 'ws1',
+      features: { spaces: opts.spaces },
+      repositories: [
+        { id: 'repo-1', workspaceId: 'ws1', owner: 'acme', repo: 'widget', fullName: 'acme/widget' },
+      ],
+    } as never);
+    useSpacesStore.setState({ teams: opts.teams } as never);
+    return render(
+      <LoopEditorPage
+        editing={(opts.editing ?? null) as never}
+        agents={AGENTS}
+        onCancel={() => {}}
+        onSave={onSave}
+      />
+    );
+  }
+
+  afterEach(() => {
+    cleanup();
+    useSpacesStore.setState({ teams: null } as never);
+    useWorkspaceStore.setState({ features: null } as never);
+  });
+
+  it('is hidden while Spaces is off', () => {
+    renderWith({ spaces: false, teams: [TEAM] });
+    expect(screen.queryByText('Space')).toBeNull();
+  });
+
+  it('is hidden when I am in no team with a space', () => {
+    renderWith({ spaces: true, teams: [] });
+    expect(screen.queryByText('Space')).toBeNull();
+  });
+
+  it('defaults to Personal and saves the space I pick', async () => {
+    const onSave = jest.fn(async (_input: LoopInput) => {});
+    renderWith({ spaces: true, teams: [TEAM] }, onSave);
+    const select = document.querySelector('[data-attr="loop-space"]') as HTMLSelectElement;
+    expect(select.value).toBe('');
+    expect(screen.getByText("Every run's session goes to this space.")).toBeTruthy();
+
+    fireEvent.change(select, { target: { value: 'space-1' } });
+    fireEvent.change(document.querySelector('input')!, { target: { value: 'Triage' } });
+    fireEvent.change(document.querySelector('textarea')!, { target: { value: 'Do the thing.' } });
+    fireEvent.change(screen.getByDisplayValue('Pick a repository...'), { target: { value: 'repo-1' } });
+    fireEvent.click(createButton());
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0]).toMatchObject({ spaceId: 'space-1' });
+  });
+
+  it('saves Personal as null', async () => {
+    const onSave = jest.fn(async (_input: LoopInput) => {});
+    renderWith({ spaces: true, teams: [TEAM] }, onSave);
+    fireEvent.change(document.querySelector('input')!, { target: { value: 'Triage' } });
+    fireEvent.change(document.querySelector('textarea')!, { target: { value: 'Do the thing.' } });
+    fireEvent.change(screen.getByDisplayValue('Pick a repository...'), { target: { value: 'repo-1' } });
+    fireEvent.click(createButton());
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0]).toMatchObject({ spaceId: null });
+  });
+
+  it('keeps a saved space I can no longer use, and says so', () => {
+    renderWith({
+      spaces: true,
+      teams: [],
+      editing: {
+        id: 'loop-1',
+        workspaceId: 'ws1',
+        name: 'Triage',
+        enabled: true,
+        prompt: 'Do the thing.',
+        cron: '0 9 * * *',
+        timezone: 'UTC',
+        provider: 'selfhosted',
+        model: AGENTS[0].model,
+        target: 'session',
+        concurrency: 'skip',
+        internetAccess: false,
+        mcpServerIds: null,
+        repositoryId: 'repo-1',
+        repoFullName: 'acme/widget',
+        spaceId: 'space-gone',
+        nextRunAt: null,
+        disabledReason: null,
+        createdAt: '2026-11-01T00:00:00Z',
+        updatedAt: '2026-11-01T00:00:00Z',
+        stats: { runsTotal: 0, runs7d: 0, failures7d: 0, lastRunAt: null, lastStatus: null },
+      },
+    });
+    const select = document.querySelector('[data-attr="loop-space"]') as HTMLSelectElement;
+    expect(select.value).toBe('space-gone');
+    expect(screen.getByText('A space you cannot use')).toBeTruthy();
   });
 });

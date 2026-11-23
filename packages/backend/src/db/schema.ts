@@ -1777,6 +1777,12 @@ export const loops = pgTable(
     /** Denormalised, and it outlives the FK: repo rows are re-minted on re-add. */
     repoFullName: text('repo_full_name').notNull(),
     /**
+     * The team space each run's session goes to. Null is Personal. A run
+     * checks the space again and starts in Personal when the owner cannot use
+     * it any more (migration 0148).
+     */
+    spaceId: text('space_id').references((): AnyPgColumn => spaces.id, { onDelete: 'set null' }),
+    /**
      * The next occurrence. The scheduler's whole read.
      *
      * Null only while disabled — an enabled loop always knows when it next
@@ -1910,6 +1916,12 @@ export const loopRuns = pgTable(
     /** `LoopRunFailureCode` — the machine-readable why, so the UI can explain. */
     failureCode: text('failure_code'),
     error: text('error'),
+    /**
+     * Something the run did differently from the loop, such as a session
+     * started in Personal because the loop's space was not usable. Unlike
+     * `error`, settling the run does not clear it.
+     */
+    notice: text('notice'),
     /** When a `waiting_slot` run next re-attempts. Null for every other status. */
     retryAfter: timestamp('retry_after', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
