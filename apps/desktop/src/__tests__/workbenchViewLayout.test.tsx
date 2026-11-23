@@ -10,6 +10,7 @@ import { wakeWorkbench } from '../renderer/lib/wakeWorkbench';
 jest.mock('../renderer/lib/workbenchData', () => ({ loadWorkbench: jest.fn(), ensureChatHistory: jest.fn(), loadOlderEvents: jest.fn() }));
 jest.mock('../renderer/lib/wakeWorkbench', () => ({ wakeWorkbench: jest.fn() }));
 jest.mock('../renderer/components/workbench/workbenchSelectors', () => ({
+  useSessionCodeComplete: () => false,
   useWorkbenchOps: () => ({ runtime: 'sandbox', unavailable: null }),
   useSelectedChat: () => null,
   useWorkbenchPr: () => null,

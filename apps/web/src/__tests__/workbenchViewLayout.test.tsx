@@ -11,6 +11,7 @@ import { wakeWorkbench } from '../lib/wakeWorkbench';
 vi.mock('../lib/workbenchData', () => ({ loadWorkbench: vi.fn(), ensureChatHistory: vi.fn(), loadOlderEvents: vi.fn() }));
 vi.mock('../lib/wakeWorkbench', () => ({ wakeWorkbench: vi.fn() }));
 vi.mock('../components/workbench/workbenchSelectors', () => ({
+  useSessionCodeComplete: () => false,
   useWorkbenchOps: () => ({ runtime: 'sandbox', unavailable: null }),
   useSelectedChat: () => null,
   useWorkbenchPr: () => null,
