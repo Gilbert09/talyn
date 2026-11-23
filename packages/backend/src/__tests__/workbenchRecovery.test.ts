@@ -12,7 +12,12 @@ import {
 import { SANDBOX_WAKING_MESSAGE, userFacingError } from '../services/workbenches/errors.js';
 import { AGENT_MEMORY_RECAP_NOTE, SANDBOX_LOST_MESSAGE, SANDBOX_RESTORED_NOTE, recordRecoveredTranscript, resetLostRecoveryForTests } from '../services/workbenches/recovery.js';
 import { NO_CHECKPOINT_NOTE } from '../services/workbenches/workCheckpointScripts.js';
-import { runCapture, setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
+import {
+  runCapture,
+  setResumeCredentialsTimeoutForTests,
+  setWorkbenchFleetClientForTests,
+  wakeWithCredentials,
+} from '../services/workbenches/sandboxRuntime.js';
 import { getChat, getWorkbench, insertChat, insertWorkbench, listEvents, updateWorkbench } from '../services/workbenches/store.js';
 import { sendMessage } from '../services/workbenches/turns.js';
 
@@ -175,6 +180,58 @@ describe('lost workbench recovery', () => {
       expect(userFacingError(err)).toBe(SANDBOX_WAKING_MESSAGE);
       expect(await getWorkbench(old.id)).toMatchObject({ status: 'ready', sandboxState: 'running', sandboxId: 'talyn-wb-wbrecovery' });
       expect(scheduleProvision).not.toHaveBeenCalled();
+    });
+
+    describe('when the turn start wakes a box asleep on its host', () => {
+      let resumes: number;
+
+      /** The box sleeps on its host and in the bucket; `answer` is what the fleet says to the resume. */
+      function hostAnswers(answer: () => Response): void {
+        resumes = 0;
+        resetFleetOptionalSupport();
+        setResumeCredentialsTimeoutForTests(50);
+        setWorkbenchFleetClientForTests(async () => new FleetClient('https://fleet.test', 'tok'));
+        vi.stubGlobal('fetch', async (url: string) => {
+          const path = url.replace('https://fleet.test', '');
+          if (path.endsWith('/resume')) {
+            resumes++;
+            return answer();
+          }
+          return json({ sandbox: { id: 'talyn-wb-wbrecovery', status: 'suspended', suspendDir: '/d', suspendUploaded: true } }, 200);
+        });
+      }
+
+      afterEach(() => setResumeCredentialsTimeoutForTests(null));
+
+      it.each([
+        ['409 hibernation_unusable', () => json({ error: 'hibernation_unusable', message: RAW, localCopy: false }, 409)],
+        ['hibernation_lost', () => json({ error: 'hibernation_lost', message: 'the copy is gone' }, 409)],
+        ['the message only', () => json({ message: RAW }, 500)],
+      ] as const)('replaces the box after one resume and throws (%s)', async (_label, answer) => {
+        hostAnswers(answer);
+        const old = (await getWorkbench('wb-recovery'))!;
+        const err = await wakeWithCredentials(old).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(FleetHibernationLostError);
+        expect(resumes).toBe(1);
+        const lost = (await getWorkbench(old.id))!;
+        expect(lost).toMatchObject({
+          status: 'provisioning', sandboxState: 'lost', statusMessage: SANDBOX_LOST_MESSAGE, sandboxId: 'talyn-wb-wbrecovery-r1',
+        });
+        expect(lost.settings.keptSandboxIds).toEqual(['talyn-wb-wbrecovery']);
+        expect(scheduleProvision).toHaveBeenCalledTimes(1);
+      });
+
+      it.each([
+        ['a failed fetch', () => json({ error: 'hibernation_fetch_failed', message: RAW, retryable: true }, 503)],
+        ['an unrelated refusal', () => json({ error: 'guest_too_old', message: 'too old' }, 409)],
+        ['a fleet error', () => json({ error: 'internal', message: 'boom' }, 500)],
+      ] as const)('keeps the box and leaves the wake to the next exec on %s', async (_label, answer) => {
+        hostAnswers(answer);
+        const old = (await getWorkbench('wb-recovery'))!;
+        await expect(wakeWithCredentials(old)).resolves.toBeUndefined();
+        expect(await getWorkbench(old.id)).toMatchObject({ status: 'ready', sandboxState: 'running', sandboxId: 'talyn-wb-wbrecovery' });
+        expect(scheduleProvision).not.toHaveBeenCalled();
+      });
     });
 
     it('does not recover on an unrelated refusal', async () => {

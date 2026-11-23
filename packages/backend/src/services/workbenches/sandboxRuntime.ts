@@ -69,7 +69,7 @@ import {
 import { missingSessionCredential } from './credentialFailure.js';
 import { WorkbenchError } from './errors.js';
 import { assertSandboxAgent } from './credentialPolicy.js';
-import { recoverLostSandbox, withLostRecovery } from './recovery.js';
+import { isHibernationLost, recoverLostSandbox, withLostRecovery } from './recovery.js';
 import { meterWorkbenchAwakeBySandboxId } from './usageMeter.js';
 import { noteRepoSetupRead, withBoxSetup } from './setupLayers.js';
 import { recordSandboxWake } from './boxStart.js';
@@ -321,8 +321,10 @@ export function resumeOnce(
  * credentials before the boot, which was 3.6-4.3 s of a 5.4 s wake. A box in
  * object storage is left to `withWake`, whose resume carries them too.
  *
- * Never throws: on any failure the exec that follows wakes the box the old
- * way, and reports a lost box as it always did.
+ * On most failures it does not throw: the exec that follows wakes the box the
+ * old way. A hibernated copy the fleet cannot restore is different. A second
+ * resume fetches and rebuilds the same broken copy again, which took up to 5
+ * minutes. So Talyn replaces the box now and throws the lost-box error.
  */
 export async function wakeWithCredentials(row: WorkbenchRow): Promise<void> {
   if (!row.sandboxId) return;
@@ -333,6 +335,11 @@ export async function wakeWithCredentials(row: WorkbenchRow): Promise<void> {
     if (sandbox.suspendUploaded && !sandbox.suspendDir) return;
     await resumeOnce(client, row.sandboxId, 'host', () => resumeCredentialsFor(row));
   } catch (err) {
+    if (isHibernationLost(err)) {
+      await recoverLostSandbox(row, err).catch((error) =>
+        console.warn(`[workbench] recovering the lost sandbox ${row.sandboxId} failed:`, error));
+      throw err;
+    }
     console.warn(`[workbench] waking ${row.sandboxId} with its credentials failed; the next exec wakes it:`, err);
   }
 }
