@@ -2,10 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   attentionBadgeLabel,
   attentionReason,
+  attentionReasonText,
   countContextAttention,
   sessionAttentionKey,
   sessionNeedsAttention,
   type AttentionSessionInput,
+  type ContextAttentionReason,
 } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
@@ -165,6 +167,26 @@ describe('attentionReason', () => {
       'plan',
       'conflict',
     ]);
+  });
+});
+
+describe('attentionReasonText', () => {
+  it.each<[ContextAttentionReason, number | null | undefined, RegExp]>([
+    ['failed', undefined, /failed\. Open it to see the error/],
+    ['reply', 42, /asked you a question/],
+    ['plan', null, /wrote a plan\. Open the session to approve it/],
+    ['conflict', 42, /^#42 has merge conflicts with its base branch/],
+    ['conflict', null, /^The pull request has merge conflicts/],
+    ['conflict', undefined, /^The pull request has merge conflicts/],
+    ['conflict', 0, /^The pull request has merge conflicts/],
+  ])('%s with PR %s', (reason, prNumber, expected) => {
+    expect(attentionReasonText(reason, prNumber)).toMatch(expected);
+  });
+
+  it('mentions the PR number only for conflicts', () => {
+    for (const reason of ['failed', 'reply', 'plan'] as const) {
+      expect(attentionReasonText(reason, 42)).not.toContain('#42');
+    }
   });
 });
 

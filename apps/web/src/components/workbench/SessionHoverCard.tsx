@@ -1,16 +1,19 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import {
   agentGlance,
+  attentionReasonText,
   checksGlance,
   prSizeGlance,
   sandboxGlance,
   sessionGlanceFacts,
   workbenchDisplayName,
+  type ContextAttentionReason,
   type SessionGlanceFact,
   type SpaceSessionRow,
   type Workbench,
 } from '@talyn/shared';
 import { cn } from '../../lib/utils';
+import { useAttentionReason } from '../../lib/contextRail';
 import type { PRRow } from '../../lib/api';
 import { relativeTimeLabel, useRelativeNow } from '../../lib/relativeTime';
 import type { SessionState } from '../../lib/sessionState';
@@ -22,6 +25,20 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PRReviewPill } from '../widgets/PRReviewPill';
 import { PrPill, SessionStateIcon } from './WorkbenchBadges';
+
+/**
+ * Why the session is in "Needs you", from the context rail's last answer, or
+ * null. Live work on this client wins: the server's answer can be 30 seconds old.
+ */
+function useNeedsYouText(id: string, state: SessionState, prNumber: number | null | undefined): string | null {
+  const reason: ContextAttentionReason | undefined = useAttentionReason(id);
+  if (!reason || state.kind === 'working' || state.kind === 'starting') return null;
+  return attentionReasonText(reason, prNumber);
+}
+
+function cardLabel(title: string, state: SessionState, needsYou: string | null): string {
+  return needsYou ? `${title}. ${state.label}. Needs you: ${needsYou}` : `${title}. ${state.label}.`;
+}
 
 /**
  * The card a sidebar session row shows on hover or focus, with no delay: the
@@ -87,18 +104,32 @@ export function WorkbenchHoverCard({
   children: ReactElement;
 }) {
   const title = workbenchDisplayName(workbench);
+  const pr = usePullRequestStore((s) =>
+    workbench.pullRequestId ? s.rows.find((r) => r.id === workbench.pullRequestId) : undefined
+  );
+  const needsYou = useNeedsYouText(workbench.id, state, pr?.number ?? workbench.pr?.number);
   return (
     <HoverCardShell
-      label={`${title}. ${state.label}.`}
+      label={cardLabel(title, state, needsYou)}
       disabled={disabled}
-      content={() => <WorkbenchGlance workbench={workbench} state={state} shortcut={shortcut ?? null} />}
+      content={() => <WorkbenchGlance workbench={workbench} state={state} shortcut={shortcut ?? null} needsYou={needsYou} />}
     >
       {children}
     </HoverCardShell>
   );
 }
 
-function WorkbenchGlance({ workbench, state, shortcut }: { workbench: Workbench; state: SessionState; shortcut: string | null }) {
+function WorkbenchGlance({
+  workbench,
+  state,
+  shortcut,
+  needsYou,
+}: {
+  workbench: Workbench;
+  state: SessionState;
+  shortcut: string | null;
+  needsYou: string | null;
+}) {
   const now = useRelativeNow();
   const chats = useWorkbenchStore((s) => s.chats[workbench.id]);
   const row = usePullRequestStore((s) =>
@@ -116,6 +147,7 @@ function WorkbenchGlance({ workbench, state, shortcut }: { workbench: Workbench;
       title={workbenchDisplayName(workbench)}
       state={state}
       shortcut={shortcut}
+      needsYou={needsYou}
       location={thread ? null : <BranchLine repo={workbench.repoFullName} branch={workbench.branch} base={workbench.baseBranch} />}
       pullRequest={
         row ? (
@@ -143,17 +175,28 @@ export function SpaceSessionHoverCard({
   children: ReactElement;
 }) {
   const title = row.title || row.name;
+  const needsYou = useNeedsYouText(row.id, state, row.pullRequest?.number);
   return (
     <HoverCardShell
-      label={`${title}. ${state.label}.`}
-      content={() => <SpaceSessionGlance row={row} state={state} shortcut={shortcut ?? null} />}
+      label={cardLabel(title, state, needsYou)}
+      content={() => <SpaceSessionGlance row={row} state={state} shortcut={shortcut ?? null} needsYou={needsYou} />}
     >
       {children}
     </HoverCardShell>
   );
 }
 
-function SpaceSessionGlance({ row, state, shortcut }: { row: SpaceSessionRow; state: SessionState; shortcut: string | null }) {
+function SpaceSessionGlance({
+  row,
+  state,
+  shortcut,
+  needsYou,
+}: {
+  row: SpaceSessionRow;
+  state: SessionState;
+  shortcut: string | null;
+  needsYou: string | null;
+}) {
   const now = useRelativeNow();
   const facts: SessionGlanceFact[] = [
     { label: 'Started by', value: row.creator.githubLogin ? `@${row.creator.githubLogin}` : 'A teammate' },
@@ -167,6 +210,7 @@ function SpaceSessionGlance({ row, state, shortcut }: { row: SpaceSessionRow; st
       title={row.title || row.name}
       state={state}
       shortcut={shortcut}
+      needsYou={needsYou}
       location={row.kind === 'thread' ? null : <BranchLine repo={row.repoFullName} branch={row.branch} base={row.baseBranch} />}
       pullRequest={row.pullRequest ? <PullRequestGlanceShort number={row.pullRequest.number} state={prState} title={null} /> : null}
       facts={facts}
@@ -179,6 +223,7 @@ function GlanceLayout({
   title,
   state,
   shortcut,
+  needsYou,
   location,
   pullRequest,
   facts,
@@ -187,6 +232,7 @@ function GlanceLayout({
   title: string;
   state: SessionState;
   shortcut: string | null;
+  needsYou: string | null;
   location: ReactNode;
   pullRequest: ReactNode;
   facts: SessionGlanceFact[];
@@ -208,6 +254,12 @@ function GlanceLayout({
           </kbd>
         )}
       </div>
+      {needsYou && (
+        <div className="rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1.5" data-attr="session-glance-needs-you">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-red-500">Needs you</div>
+          <div className="text-foreground">{needsYou}</div>
+        </div>
+      )}
       {location}
       {pullRequest}
       {facts.length > 0 && (

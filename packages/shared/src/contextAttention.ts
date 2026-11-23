@@ -99,6 +99,24 @@ export function attentionReason(key: string | null): ContextAttentionReason | nu
   return 'failed';
 }
 
+/**
+ * Why a session is in "Needs you" and what to do about it, in plain words.
+ * The hover card shows it, so a person does not have to open the session to
+ * find out.
+ */
+export function attentionReasonText(reason: ContextAttentionReason, prNumber?: number | null): string {
+  switch (reason) {
+    case 'failed':
+      return 'The session or one of its chats failed. Open it to see the error, then retry.';
+    case 'reply':
+      return 'The agent asked you a question. Open the session to answer it.';
+    case 'plan':
+      return 'The agent wrote a plan. Open the session to approve it or ask for changes.';
+    case 'conflict':
+      return `${prNumber ? `#${prNumber}` : 'The pull request'} has merge conflicts with its base branch. Resolve them, or ask the agent to.`;
+  }
+}
+
 function chatKey(reason: string, chats: AttentionSessionInput['chats']): string {
   return `${reason}:${chats
     .map((c) => `${c.id ?? ''}@${c.turnCount ?? 0}`)
