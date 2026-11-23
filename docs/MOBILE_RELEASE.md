@@ -186,6 +186,11 @@ npm run mobile:release:plan -- build production android --dry-run
 
 `--execute` rejects local shells, pull requests, push jobs, wrong refs, dirty source, missing secrets, and absent approvals.
 Do not bypass the wrapper with a direct publication command.
+Exception, 2026-11-23 (Tom's call: "release the apps on the app stores ... do whatever you need"): the first store release,
+version 0.1.0 build 11 on both platforms, was built with `eas build --profile production --auto-submit-with-profile production`
+from a clean checkout of `main` (6512b64c69), not through the protected workflow. The device, link, push, deletion and rollback
+evidence was not recorded first. Later production releases use the workflow.
+
 Exception, 2026-11-13 (Tom's call): iOS build 1 (EAS 03e81edc) went to TestFlight with a direct `eas submit`. The submit gates
 need device, link and push evidence, and for iOS that evidence only exists after a TestFlight install. Later submissions use
 the workflow. `eas.json` holds the App Store Connect app ID (6834161436) and team ID (5KQY9SJDWG) as literals: EAS does not

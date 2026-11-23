@@ -15,8 +15,8 @@
     "deletionUrl": "https://www.talyn.dev/delete-account",
     "copyright": "2026 Thomas Owers",
     "reviewAccess": {
-      "account": "GitHub user talynreviewer (password in 1Password: \"Github review account for talyn\"; entered by the store owner)",
-      "notes": "Sign in with the GitHub account below. Talyn uses GitHub sign-in only, because Talyn is a client for GitHub repositories and pull requests (App Review Guideline 4.8, exception for a client of a specific third-party service).\nRunning a new agent needs a Claude or ChatGPT subscription that the person connects. The reviewer can read sessions, threads, transcripts and pull requests without one.\nThe app sells nothing. Plans and usage are shown only; there is no purchase, upgrade or external payment link in the app.\nAccount deletion: Settings > Delete account."
+      "account": "Email tom@todiex.com (the talynreviewer GitHub account, with a Talyn password for the review sign-in; the store owner enters the password)",
+      "notes": "To sign in: on the sign-in screen, press and hold the Talyn owl for 2 seconds. A \"Review sign-in\" form opens. Enter the email and password from the sign-in fields of this review.\nWhy: Talyn normally signs in with GitHub only, because it is a client for GitHub repositories and pull requests (App Review Guideline 4.8, exception for a client of a specific third-party service). GitHub asks a new device for a code sent by email, which a reviewer cannot read. The form exists for review only; only the review account has a password.\nRunning a new agent needs a Claude or ChatGPT subscription that the person connects. The reviewer can read sessions, threads, transcripts and pull requests without one.\nThe app sells nothing. Plans and usage are shown only; there is no purchase, upgrade or external payment link in the app.\nAccount deletion: Settings > Delete account."
     },
     "releaseNotes": "The first release of Talyn for iPhone.",
     "countries": "all available",
@@ -37,8 +37,8 @@
     "deletionUrl": "https://www.talyn.dev/delete-account",
     "copyright": "2026 Thomas Owers",
     "reviewAccess": {
-      "account": "GitHub user talynreviewer (entered in Play Console by the store owner)",
-      "notes": "Sign in with the GitHub account below. Talyn uses GitHub sign-in only, because Talyn is a client for GitHub repositories and pull requests (App Review Guideline 4.8, exception for a client of a specific third-party service).\nRunning a new agent needs a Claude or ChatGPT subscription that the person connects. The reviewer can read sessions, threads, transcripts and pull requests without one.\nThe app sells nothing. Plans and usage are shown only; there is no purchase, upgrade or external payment link in the app.\nAccount deletion: Settings > Delete account."
+      "account": "Email tom@todiex.com (the talynreviewer GitHub account, with a Talyn password for the review sign-in; the store owner enters the password)",
+      "notes": "To sign in: on the sign-in screen, press and hold the Talyn owl for 2 seconds. A \"Review sign-in\" form opens. Enter the email and password from the sign-in fields of this review.\nWhy: Talyn normally signs in with GitHub only, because it is a client for GitHub repositories and pull requests (App Review Guideline 4.8, exception for a client of a specific third-party service). GitHub asks a new device for a code sent by email, which a reviewer cannot read. The form exists for review only; only the review account has a password.\nRunning a new agent needs a Claude or ChatGPT subscription that the person connects. The reviewer can read sessions, threads, transcripts and pull requests without one.\nThe app sells nothing. Plans and usage are shown only; there is no purchase, upgrade or external payment link in the app.\nAccount deletion: Settings > Delete account."
     },
     "releaseNotes": "The first release of Talyn for Android.",
     "countries": "all available",
