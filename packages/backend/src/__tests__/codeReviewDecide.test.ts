@@ -8,7 +8,7 @@
  * sandbox failures; reaching them here is an object literal.
  */
 import { describe, expect, it } from 'vitest';
-import { decide, hasDeferredUnit, settledUnitCount, type DecideState } from '../services/codeReview/decide.js';
+import { decide, deferredSinceOf, hasDeferredUnit, settledUnitCount, type DecideState } from '../services/codeReview/decide.js';
 import type { RunRow, RunStatus } from '../services/codeReview/store.js';
 
 function run(overrides: Partial<RunRow>): RunRow {
@@ -34,6 +34,7 @@ function run(overrides: Partial<RunRow>): RunRow {
     findingCount: 0,
     parseAttempts: 0,
     dispatchedAt: new Date(),
+    capacityWaitSince: null,
     settledAt: null,
     createdAt: new Date(),
     ...overrides,
@@ -50,7 +51,6 @@ function state(overrides: Partial<DecideState> = {}): DecideState {
     validate: true,
     chunkTotal: 1,
     runs: [],
-    unitsAllowed: 3,
     prOpen: true,
     ...overrides,
   };
@@ -92,21 +92,45 @@ describe('decide', () => {
       ]);
     });
 
-    it('fires only as many as the pacing allows, and leaves the rest for later', () => {
-      // The fleet is one box. The remainder has no row yet, so the next pass finds
-      // it missing again — nothing is lost by firing fewer.
-      const actions = decide(state({ unitsAllowed: 2 }));
-      expect(actions).toHaveLength(2);
+    it.each([
+      ['one chunk, three lenses', 1, ['correctness', 'security', 'reliability'], 3],
+      ['four chunks, three lenses', 4, ['correctness', 'security', 'reliability'], 12],
+      ['two chunks, six lenses', 2, ['correctness', 'security', 'reliability', 'performance', 'tests', 'style'], 12],
+    ])('fires every missing unit at once, with no workspace cap (%s)', (_label, chunkTotal, lensKeys, expected) => {
+      // No per-workspace ceiling: each box is metered against the user's compute
+      // time, and a unit that finds the fleet full waits there for room.
+      const actions = decide(state({ chunkTotal, lensKeys }));
+      expect(actions).toHaveLength(expected);
+      expect(actions.every((a) => a.type === 'dispatch')).toBe(true);
     });
 
-    it('fires nothing at all when there is no room, rather than failing', () => {
-      // "Waiting for a runner" is a state, not an error. A review that failed
-      // because the box was busy would be indistinguishable from a broken one.
-      expect(decide(state({ unitsAllowed: 0 }))).toEqual([]);
+    it('fires only the units that are missing, beside units already in flight', () => {
+      const runs = [
+        run({ id: 'a', lens: 'correctness', status: 'running' }),
+        run({ id: 'b', lens: 'security', status: 'claimed', dispatchedAt: null, failureCode: 'capacity_deferred' }),
+      ];
+      expect(decide(state({ runs }))).toEqual([
+        { type: 'dispatch', unit: { kind: 'lens', lens: 'reliability', chunkIndex: 0 } },
+      ]);
+    });
+
+    it.each([
+      ['waiting at the fleet', { status: 'claimed', dispatchedAt: null, failureCode: 'capacity_deferred', capacityWaitSince: new Date() }],
+      ['waiting with no box', { status: 'claimed', dispatchedAt: null, failureCode: 'capacity_deferred', sandboxId: null }],
+      ['mid-dispatch', { status: 'dispatching', dispatchedAt: null }],
+    ] as const)('neither re-dispatches nor ends the phase while a unit is %s', (_label, waiting) => {
+      // "Waiting for a runner" is a state, not an error, and not a missing unit:
+      // its dispatch waits at the fleet, and the reconciler resumes a lost wait.
+      const runs = [
+        run({ id: 'a', lens: 'correctness', status: 'succeeded' }),
+        run({ id: 'b', lens: 'security', status: 'succeeded' }),
+        run({ id: 'c', lens: 'reliability', ...waiting }),
+      ];
+      expect(decide(state({ runs }))).toEqual([]);
     });
 
     it('fires a lens per chunk when the pull request was split', () => {
-      const actions = decide(state({ chunkTotal: 2, unitsAllowed: 99 }));
+      const actions = decide(state({ chunkTotal: 2 }));
       expect(actions).toHaveLength(6);
       expect(new Set(actions.map((a) => (a.type === 'dispatch' ? a.unit.chunkIndex : -1)))).toEqual(
         new Set([0, 1])
@@ -262,5 +286,25 @@ describe('progress helpers', () => {
     expect(hasDeferredUnit([run({ status: 'claimed', dispatchedAt: null })], 1)).toBe(true);
     expect(hasDeferredUnit([run({ status: 'claimed', dispatchedAt: new Date() })], 1)).toBe(false);
     expect(hasDeferredUnit([run({ status: 'running' })], 1)).toBe(false);
+    expect(hasDeferredUnit([run({ status: 'dispatching', dispatchedAt: null })], 1)).toBe(false);
+    expect(hasDeferredUnit([run({ status: 'claimed', dispatchedAt: null, cycle: 0 })], 1)).toBe(false);
+  });
+
+  describe('when the wait for a runner began', () => {
+    const early = new Date('2026-11-23T10:00:00Z');
+    const late = new Date('2026-11-23T10:05:00Z');
+    const waiting = (over: Partial<RunRow>) =>
+      run({ status: 'claimed', dispatchedAt: null, failureCode: 'capacity_deferred', ...over });
+
+    it.each([
+      ['no unit waits', [run({ status: 'running' })], null],
+      ['a waiting unit records no start', [waiting({ capacityWaitSince: null })], null],
+      ['one unit waits', [waiting({ capacityWaitSince: late })], late],
+      ['the longest wait wins', [waiting({ id: 'a', capacityWaitSince: late }), waiting({ id: 'b', capacityWaitSince: early })], early],
+      ['a dispatched unit no longer counts', [run({ status: 'running', capacityWaitSince: early }), waiting({ capacityWaitSince: late })], late],
+      ['an earlier cycle does not count', [waiting({ cycle: 0, capacityWaitSince: early }), waiting({ capacityWaitSince: late })], late],
+    ])('%s', (_label, runs, expected) => {
+      expect(deferredSinceOf(runs, 1)).toEqual(expected);
+    });
   });
 });

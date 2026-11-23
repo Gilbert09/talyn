@@ -416,7 +416,6 @@ describe('which reviewers a cycle runs', () => {
       validate: review.validate,
       chunkTotal: review.chunkTotal,
       runs: [],
-      unitsAllowed: 3,
       prOpen: true,
     });
     expect(actions).toEqual([{ type: 'dispatch', unit: lensUnit(PLATFORM_LENS) }]);
@@ -726,7 +725,6 @@ describe('dispatching a custom reviewer', () => {
       validate: review.validate,
       chunkTotal: review.chunkTotal,
       runs: await runsForCycle(review.id, review.cycle),
-      unitsAllowed: 3,
       prOpen: true,
     };
     expect(decide(state)).toEqual([{ type: 'phase', to: 'sweeping', code: 'reviewing_done' }]);
@@ -758,7 +756,6 @@ describe('dispatching a custom reviewer', () => {
       validate: false,
       chunkTotal: 1,
       runs: await runsForCycle(review.id, review.cycle),
-      unitsAllowed: 3,
       prOpen: true,
     });
     // Never a finish: a reviewer that could not read its instructions has not

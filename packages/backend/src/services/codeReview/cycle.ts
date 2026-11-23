@@ -246,7 +246,11 @@ export async function cancelReviewCycle(review: ReviewRow): Promise<void> {
   await Promise.all(
     runs.map(async (run) => {
       try {
-        if (run.provider === 'selfhosted' && run.sandboxId) {
+        if (run.sandboxId && !run.dispatchedAt) {
+          // A unit waiting for a runner: the fleet may hold a queued box for it.
+          const client = await getSelfHostedClient(run.workspaceId);
+          await client?.deleteSandbox(run.sandboxId);
+        } else if (run.provider === 'selfhosted' && run.sandboxId) {
           const client = await getSelfHostedClient(run.workspaceId);
           await client?.cancelSandbox(run.sandboxId);
         } else if (run.provider === 'posthog_code' && run.remoteTaskId && run.remoteRunId) {

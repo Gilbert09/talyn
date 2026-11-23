@@ -63,7 +63,6 @@ function state(overrides: Partial<DecideState> = {}): DecideState {
     validate: true,
     chunkTotal: 1,
     runs: [],
-    unitsAllowed: 3,
     prOpen: true,
     ...overrides,
   };
@@ -276,19 +275,13 @@ describe('decide, for a unit waiting for its second dispatch', () => {
     run({ id: 'r', lens: 'reliability' }),
   ];
 
-  it('dispatches it again when the ceiling has room', () => {
-    expect(decide(state({ runs: [requeued, ...others], unitsAllowed: 1 }))).toEqual([
+  it.each([
+    ['while the others run', others],
+    ['when every other unit settled', others.map((r) => ({ ...r, status: 'succeeded' }) as RunRow)],
+  ])('dispatches it again %s, with no workspace cap in the way', (_label, rest) => {
+    expect(decide(state({ runs: [requeued, ...rest] }))).toEqual([
       { type: 'dispatch', unit: { kind: 'lens', lens: 'correctness', chunkIndex: 0 } },
     ]);
-  });
-
-  it('waits when the workspace ceiling is full', () => {
-    expect(decide(state({ runs: [requeued, ...others], unitsAllowed: 0 }))).toEqual([]);
-  });
-
-  it('does not end the phase while it waits, even when every other unit settled', () => {
-    const settled = others.map((r) => ({ ...r, status: 'succeeded' }) as RunRow);
-    expect(decide(state({ runs: [requeued, ...settled], unitsAllowed: 0 }))).toEqual([]);
   });
 
   it('does not dispatch a unit that is already running its second run', () => {
