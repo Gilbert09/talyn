@@ -69,7 +69,6 @@ import {
 } from './execFailures.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { notifyPrSessionChanged } from './prSessions.js';
-import { startReviewIfCodeComplete } from '../codeReview/sessionAutoStart.js';
 import { isHibernationFetchFailed, isWakeRefusal, localRuntimeError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
 import { capacityWaitDelayMs, PROVISION_CAPACITY_WAIT, WAITING_FOR_SANDBOX_MESSAGE } from './lifecycle.js';
 import { isSizeRefusal } from './sandboxSize.js';
@@ -609,7 +608,12 @@ async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): P
     // The turn may have fixed the PR, so the merge queue and auto-keep look again.
     if (linked.pullRequestId) notifyPrSessionChanged(linked.workspaceId, linked.pullRequestId, 'session:turn_end');
     // Code complete: a review of the pushed head can start by itself (flagged).
-    if (linked.pullRequestId && chat.status === 'idle') void startReviewIfCodeComplete(linked, boxHead);
+    // Loaded here, not at the top: the code review engine is a large import graph for every module that loads turns.ts.
+    if (linked.pullRequestId && chat.status === 'idle') {
+      void import('../codeReview/sessionAutoStart.js')
+        .then(({ startReviewIfCodeComplete }) => startReviewIfCodeComplete(linked, boxHead))
+        .catch((err) => console.warn(`[workbench] code review auto-start for ${linked.id} failed:`, err));
+    }
     // After the link: a PR this turn opened keeps the branch its name.
     if (succeeded && linked.runtime === 'sandbox') startBranchNaming(linked.id, succeeded);
     // A resize or a restart asked for during this turn. When a queued message already started the next turn, its start applies it.
