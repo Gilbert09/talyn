@@ -16,6 +16,7 @@ import { useWorkbenchStore } from '../stores/workbenches';
 import { installNavigation, useNavigationStore } from '../stores/navigation';
 import { usePullRequestStore } from '../stores/pullRequests';
 import { useSessionBackgroundStore } from '../stores/sessionBackground';
+import { useContextAttentionStore } from '../lib/contextRail';
 
 function wb(id: string, over: Partial<Workbench> = {}): Workbench {
   return {
@@ -116,6 +117,7 @@ beforeEach(() => {
   useWorkbenchStore.setState({ listLoaded: true, selectedWorkbenchId: null });
   usePullRequestStore.setState({ rows: [prRow()] as never });
   useSessionBackgroundStore.setState({ byWorkbench: {} });
+  useContextAttentionStore.setState({ counts: null });
   useNavigationStore.getState().navigate({ view: 'home' });
 });
 
@@ -242,6 +244,64 @@ describe('session hover card', () => {
     await hover(row());
     expect(card()!.textContent).toContain('Running: npm test');
   });
+
+  it.each([
+    ['conflict', '#134522 has merge conflicts with its base branch'],
+    ['failed', 'failed. Open it to see the error'],
+    ['reply', 'The agent asked you a question'],
+    ['plan', 'The agent wrote a plan'],
+  ] as const)('says why a %s session needs you', async (reason, expected) => {
+    useContextAttentionStore.setState({ counts: { workspaces: { ws1: 1 }, spaces: {}, sessions: { incidents: reason } } });
+    show();
+    await hover(row());
+    const box = document.querySelector('[data-attr="session-glance-needs-you"]');
+    expect(box).not.toBeNull();
+    expect(box!.textContent).toContain('Needs you');
+    expect(box!.textContent).toContain(expected);
+    expect(screen.getByRole('tooltip')).toHaveTextContent(`Needs you: `);
+  });
+
+  it('has no needs-you box when the rail does not count the session', async () => {
+    useContextAttentionStore.setState({ counts: { workspaces: {}, spaces: {}, sessions: { other: 'reply' } } });
+    show();
+    await hover(row());
+    expect(card()).not.toBeNull();
+    expect(document.querySelector('[data-attr="session-glance-needs-you"]')).toBeNull();
+    expect(screen.getByRole('tooltip')).not.toHaveTextContent('Needs you');
+  });
+
+  it('says the session failed when this client sees a failure that the rail does not know yet', async () => {
+    useContextAttentionStore.setState({ counts: { workspaces: { ws1: 1 }, spaces: {}, sessions: { incidents: 'reply' } } });
+    store().upsertChat({
+      id: 'c1',
+      workbenchId: 'incidents',
+      status: 'error',
+      agent: 'claude',
+      createdAt: '2026-10-13T00:00:00Z',
+      updatedAt: '2026-10-13T00:00:00Z',
+    } as WorkbenchChat);
+    show();
+    await hover(row());
+    const box = document.querySelector('[data-attr="session-glance-needs-you"]')!;
+    expect(box.textContent).toContain('failed. Open it to see the error');
+    expect(box.textContent).not.toContain('asked you a question');
+  });
+
+  it('has no needs-you box while the session works, because the rail can be stale', async () => {
+    useContextAttentionStore.setState({ counts: { workspaces: { ws1: 1 }, spaces: {}, sessions: { incidents: 'reply' } } });
+    store().upsertChat({
+      id: 'c1',
+      workbenchId: 'incidents',
+      status: 'running',
+      agent: 'claude',
+      createdAt: '2026-10-13T00:00:00Z',
+      updatedAt: '2026-10-13T00:00:00Z',
+    } as WorkbenchChat);
+    show();
+    await hover(row());
+    expect(card()).not.toBeNull();
+    expect(document.querySelector('[data-attr="session-glance-needs-you"]')).toBeNull();
+  });
 });
 
 describe('space session hover card', () => {
@@ -284,5 +344,18 @@ describe('space session hover card', () => {
     expect(text).toContain('Codex');
     expect(text).toContain('#9');
     expect(text).toContain('Awake');
+  });
+
+  it('says why a space session needs you', async () => {
+    useContextAttentionStore.setState({ counts: { workspaces: { ws1: 1 }, spaces: { sp1: 1 }, sessions: { s1: 'conflict' } } });
+    render(
+      <SpaceSessionHoverCard row={spaceRow} state={{ kind: 'pr_attention', label: '#9 has conflicts' }}>
+        <button type="button">row</button>
+      </SpaceSessionHoverCard>
+    );
+    await hover(screen.getByText('row'));
+    expect(document.querySelector('[data-attr="session-glance-needs-you"]')!.textContent).toContain(
+      '#9 has merge conflicts with its base branch'
+    );
   });
 });
