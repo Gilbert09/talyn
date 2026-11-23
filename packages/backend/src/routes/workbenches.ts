@@ -160,6 +160,8 @@ const DEFAULT_EVENT_PAGE = 500;
 const MAX_EVENT_PAGE = 2000;
 /** One local-events upload. The JSON body limit (2 MB) bounds it anyway; this makes the refusal say why. */
 const MAX_LOCAL_EVENT_BATCH = 1000;
+/** One "Archive all". Each archive answers fast (the save runs later), so this bounds the request time. */
+const MAX_BULK_ARCHIVE = 200;
 
 const CHAT_STATUSES: readonly WorkbenchChatStatus[] = ['idle', 'running', 'awaiting_input', 'error'];
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -955,6 +957,54 @@ export function workbenchRoutes(): Router {
     const data = await publicWorkbench(updated);
     await emitWorkbenchUpdated(data);
     ok(res, data);
+  });
+
+  /**
+   * Archive many sessions in one request, for "Archive all". Each id is checked
+   * and archived on its own: an unknown, foreign or failed id goes into
+   * `failed` and the others continue.
+   */
+  router.post('/archive', async (req, res) => {
+    const ids: unknown = req.body?.ids;
+    if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id) => typeof id === 'string' && id.length > 0)) {
+      bad(res, 400, 'ids must be a non-empty list of session ids');
+      return;
+    }
+    const unique = [...new Set(ids as string[])];
+    if (unique.length > MAX_BULK_ARCHIVE) {
+      bad(res, 400, `ids can hold at most ${MAX_BULK_ARCHIVE} sessions`);
+      return;
+    }
+    const user = assertUser(req);
+    if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
+      bad(res, 403, `Sessions are not available: ${workbenchesRefusalReason()}.`, 'workbenches_unavailable');
+      return;
+    }
+    const access = new Map<string, boolean>();
+    const mayArchive = async (workspaceId: string) => {
+      let allowed = access.get(workspaceId);
+      if (allowed === undefined) {
+        allowed = await requireWorkspaceAccess(req, workspaceId).then(() => true, () => false);
+        access.set(workspaceId, allowed);
+      }
+      return allowed;
+    };
+    const archived: WorkbenchRow[] = [];
+    const failed: Array<{ id: string; error: string }> = [];
+    for (const id of unique) {
+      const row = await getWorkbench(id);
+      if (!row || !(await mayArchive(row.workspaceId))) {
+        failed.push({ id, error: 'Session not found' });
+        continue;
+      }
+      try {
+        archived.push(await archiveWorkbench(row.id));
+      } catch (err) {
+        console.warn(`[workbench] bulk archive of ${id} failed:`, err);
+        failed.push({ id, error: fleetErrorAsRefusal(err)?.message ?? 'Could not archive the session' });
+      }
+    }
+    ok(res, { archived: await publicWorkbenches(archived), failed });
   });
 
   router.post('/:id/archive', async (req, res) => {
