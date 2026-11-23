@@ -18,6 +18,7 @@ const m = vi.hoisted(() => ({
   owner: vi.fn(),
   autoFeatures: vi.fn(),
   start: vi.fn(),
+  countStarted: vi.fn(),
 }));
 
 vi.mock('../services/featureFlags.js', async (orig) => ({
@@ -28,6 +29,7 @@ vi.mock('../services/codeReview/store.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/store.js')>()),
   getPrForReview: m.getPrForReview,
   getReviewForPr: m.getReviewForPr,
+  countCyclesStartedFor: m.countStarted,
 }));
 vi.mock('../services/workbenches/store.js', async (orig) => ({
   ...(await orig<typeof import('../services/workbenches/store.js')>()),
@@ -59,7 +61,7 @@ vi.mock('../services/codeReview/cycle.js', async (orig) => ({
   startReviewCycle: m.start,
 }));
 
-const { startReviewIfCodeComplete } = await import('../services/codeReview/sessionAutoStart.js');
+const { SESSION_AUTO_START_MAX_CYCLES, startReviewIfCodeComplete } = await import('../services/codeReview/sessionAutoStart.js');
 
 type Wb = Parameters<typeof startReviewIfCodeComplete>[0];
 
@@ -98,6 +100,7 @@ beforeEach(() => {
   m.owner.mockResolvedValue('user-1');
   m.autoFeatures.mockResolvedValue(true);
   m.start.mockResolvedValue({ ok: true, started: true, review: { id: 'rev-1' } });
+  m.countStarted.mockResolvedValue(0);
 });
 
 afterEach(() => vi.resetAllMocks());
@@ -214,6 +217,35 @@ describe('startReviewIfCodeComplete', () => {
     const out = await startReviewIfCodeComplete(WB, HEAD);
     expect(out.kind).toBe(kind);
     if (out.kind === 'skipped') expect(out.reason).toBe('settings_off');
+  });
+
+  describe('the bound on automatic cycles per pull request', () => {
+    const OLDER = { id: 'rev-1', phase: 'ready', reviewedHeadSha: OLD, targetHeadSha: OLD };
+
+    it('is three', () => {
+      expect(SESSION_AUTO_START_MAX_CYCLES).toBe(3);
+    });
+
+    it.each([
+      [0, 'started'],
+      [1, 'started'],
+      [SESSION_AUTO_START_MAX_CYCLES - 1, 'started'],
+      [SESSION_AUTO_START_MAX_CYCLES, 'skipped'],
+      [SESSION_AUTO_START_MAX_CYCLES + 4, 'skipped'],
+    ])('with %i earlier automatic cycles, the outcome is %s', async (earlier, kind) => {
+      m.getReviewForPr.mockResolvedValue(OLDER);
+      m.countStarted.mockResolvedValue(earlier);
+      const out = await startReviewIfCodeComplete(WB, HEAD);
+      expect(m.countStarted).toHaveBeenCalledWith('rev-1', 'session_complete');
+      expect(out.kind).toBe(kind);
+      if (out.kind === 'skipped') expect(out.reason).toBe('limit_reached');
+      expect(m.start).toHaveBeenCalledTimes(kind === 'started' ? 1 : 0);
+    });
+
+    it('does not count for a pull request with no review yet', async () => {
+      expect(await startReviewIfCodeComplete(WB, HEAD)).toMatchObject({ kind: 'started' });
+      expect(m.countStarted).not.toHaveBeenCalled();
+    });
   });
 
   it('never throws', async () => {

@@ -19,8 +19,17 @@ import { runningJobsQuery } from '../workbenches/backgroundStore.js';
 import { storedScriptNames } from '../workbenches/scriptStore.js';
 import { listChats, type WorkbenchRow } from '../workbenches/store.js';
 import { startReviewCycle } from './cycle.js';
-import { getPrForReview, getReviewForPr, type ReviewPrRow } from './store.js';
+import { countCyclesStartedFor, getPrForReview, getReviewForPr, type ReviewPrRow } from './store.js';
 import { workspaceOwner, workspaceReviewSettings } from './workspaceSettings.js';
+
+/**
+ * The most cycles the auto-start begins on one pull request. With the
+ * report-back on, a review sends findings to the session, the agent pushes a
+ * fix, and the next turn end is code complete on a new head: without a bound
+ * that loop runs until a review finds nothing. A person can still start more
+ * reviews by hand; those do not count.
+ */
+export const SESSION_AUTO_START_MAX_CYCLES = 3;
 
 export type SessionAutoStartSkip =
   | 'local'
@@ -33,7 +42,8 @@ export type SessionAutoStartSkip =
   | 'not_code_complete'
   | 'head_not_pushed'
   | 'plan'
-  | 'settings_off';
+  | 'settings_off'
+  | 'limit_reached';
 
 export type SessionAutoStartOutcome =
   | { kind: 'started'; reviewId: string; headSha: string }
@@ -102,6 +112,9 @@ export async function startReviewIfCodeComplete(
     const review = await getReviewForPr(pullRequestId);
     if (review && reviewCoversHead({ ...review, phase: review.phase as CodeReviewPhase }, head)) {
       return { kind: 'skipped', reason: 'already_reviewed' };
+    }
+    if (review && (await countCyclesStartedFor(review.id, 'session_complete')) >= SESSION_AUTO_START_MAX_CYCLES) {
+      return { kind: 'skipped', reason: 'limit_reached' };
     }
 
     const settings = await workspaceReviewSettings(wb.workspaceId);

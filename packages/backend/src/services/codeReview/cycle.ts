@@ -172,6 +172,8 @@ export async function startReviewCycle(input: StartReviewInput): Promise<StartOu
               cycle: review.cycle + 1,
               builtInReviewers: builtInLenses.length > 0,
               customReviewers: customReviewers.length,
+              // What asked for the cycle. The session auto-start counts its own starts by it.
+              startedFor: input.trigger ?? (input.auto ? 'auto' : 'api'),
             },
           }
         );
