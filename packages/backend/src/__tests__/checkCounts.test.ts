@@ -812,6 +812,10 @@ describe('checkCounts', () => {
     it('returns nothing for another commit', async () => {
       expect(await readLedgerFacts('acme/widget', 'sha-OTHER')).toEqual([]);
     });
+
+    it.each(['acme/widget', 'Acme/Widget', 'ACME/WIDGET'])('finds the lowercase ledger for %s', async (repo) => {
+      expect(await readLedgerFacts(repo, 'sha-A')).toHaveLength(LEDGER.length);
+    });
   });
 
   // The recompute reads counts, the digest's md5 and the failing rows from SQL,

@@ -621,7 +621,9 @@ export function verdictFor(
  * `state = 'failure'`. The digests read name and state alone.
  *
  * The recompute uses this only when {@link ledgerTallyQuery} cannot build the
- * digest in SQL.
+ * digest in SQL. The CI waits (`ciPark.ts`, `workbenches/ciWakeups.ts`) also
+ * use it, with `owner/repo` as the pull request row stores it. The ledger key
+ * is lowercase, so the name is lowercased here.
  */
 export async function readLedgerFacts(repoFullName: string, headSha: string): Promise<CheckFact[]> {
   const rows = await getPoolDbClient()
@@ -633,7 +635,7 @@ export async function readLedgerFacts(repoFullName: string, headSha: string): Pr
       url: sql<string | null>`CASE WHEN ${prCheckStates.state} = 'failure' THEN ${prCheckStates.url} END`,
     })
     .from(prCheckStates)
-    .where(and(eq(prCheckStates.repoFullName, repoFullName), eq(prCheckStates.headSha, headSha)));
+    .where(and(eq(prCheckStates.repoFullName, repoFullName.toLowerCase()), eq(prCheckStates.headSha, headSha)));
   return rows.map((r) => ({
     name: r.name,
     state: r.state as CheckState,
