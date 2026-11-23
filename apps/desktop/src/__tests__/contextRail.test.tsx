@@ -10,6 +10,7 @@ import {
   railEntries,
   railEntryAttention,
   railInitials,
+  moveWorkspace,
   useAttentionSeen,
   useAttentionSessions,
   useContextAttentionStore,
@@ -18,6 +19,7 @@ import { SidebarNeedsYou, useNeedsYouItems } from '../renderer/components/layout
 import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useSpacesStore } from '../renderer/stores/spaces';
 import { useNavigationStore } from '../renderer/stores/navigation';
+import { useToastStore } from '../renderer/stores/toast';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
@@ -247,6 +249,115 @@ describe('ContextRail', () => {
       await Promise.resolve();
     });
     expect(screen.getByRole('button', { name: 'Side, 4 items need you' })).toBeInTheDocument();
+  });
+});
+
+describe('moveWorkspace', () => {
+  const list = [ws('a', 'A'), ws('b', 'B'), ws('c', 'C'), ws('d', 'D')];
+  const ids = (l: Workspace[]) => l.map((w) => w.id);
+
+  it.each([
+    ['a', 'c', ['b', 'c', 'a', 'd']],
+    ['d', 'a', ['d', 'a', 'b', 'c']],
+    ['b', 'd', ['a', 'c', 'd', 'b']],
+    ['c', 'b', ['a', 'c', 'b', 'd']],
+  ])('moves %s onto %s', (from, to, expected) => {
+    expect(ids(moveWorkspace(list, from, to))).toEqual(expected);
+    expect(ids(list)).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it.each([
+    ['a', 'a'],
+    ['x', 'a'],
+    ['a', 'x'],
+  ])('keeps the same list for %s onto %s', (from, to) => {
+    expect(moveWorkspace(list, from, to)).toBe(list);
+  });
+});
+
+describe('ContextRail drag to reorder', () => {
+  let reorder: jest.SpyInstance;
+  const dataTransfer = () => ({ setData: jest.fn(), getData: jest.fn(), effectAllowed: '', dropEffect: '' });
+  const slots = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLElement>('[data-attr="context-rail-workspace-slot"]'));
+  const order = () => useWorkspaceStore.getState().workspaces.map((w) => w.id);
+  const drag = (from: HTMLElement, to: HTMLElement) => {
+    fireEvent.dragStart(from, { dataTransfer: dataTransfer() });
+    fireEvent.dragOver(to, { dataTransfer: dataTransfer() });
+  };
+
+  beforeEach(() => {
+    reorder = jest.spyOn(api.workspaces, 'reorder');
+    useToastStore.setState({ toasts: [] });
+  });
+
+  it('moves a workspace onto another and saves the new order', async () => {
+    reorder.mockResolvedValue(null);
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side'), ws('ws3', 'Third')] });
+    const { container } = render(<ContextRail />);
+    await flush();
+    const [first, , third] = slots(container);
+    drag(first, third);
+    fireEvent.drop(third, { dataTransfer: dataTransfer() });
+    expect(order()).toEqual(['ws2', 'ws3', 'ws1']);
+    expect(reorder).toHaveBeenCalledWith(['ws2', 'ws3', 'ws1']);
+    await flush();
+    expect(screen.getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Side', 'Third', 'Mine']);
+    expect(container.querySelector('[data-attr="context-rail-drop-line"]')).toBeNull();
+  });
+
+  it('shows where the tile lands while it is dragged', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side'), ws('ws3', 'Third')] });
+    const { container } = render(<ContextRail />);
+    await flush();
+    const [first, second, third] = slots(container);
+    drag(third, first);
+    expect(first.querySelector('[data-attr="context-rail-drop-line"]')).toHaveClass('-top-[5px]');
+    fireEvent.dragOver(second, { dataTransfer: dataTransfer() });
+    expect(first.querySelector('[data-attr="context-rail-drop-line"]')).toBeNull();
+    expect(second.querySelector('[data-attr="context-rail-drop-line"]')).toHaveClass('-top-[5px]');
+    fireEvent.dragEnd(third);
+    expect(container.querySelector('[data-attr="context-rail-drop-line"]')).toBeNull();
+    expect(reorder).not.toHaveBeenCalled();
+    expect(order()).toEqual(['ws1', 'ws2', 'ws3']);
+  });
+
+  it('puts the old order back and says so when the save fails', async () => {
+    reorder.mockRejectedValue(new Error('offline'));
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')] });
+    const { container } = render(<ContextRail />);
+    await flush();
+    const [first, second] = slots(container);
+    drag(first, second);
+    fireEvent.drop(second, { dataTransfer: dataTransfer() });
+    await waitFor(() => expect(order()).toEqual(['ws1', 'ws2']));
+    expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual(['Could not save the workspace order']);
+  });
+
+  it('does nothing when a tile is dropped on itself', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')] });
+    const { container } = render(<ContextRail />);
+    await flush();
+    const [first] = slots(container);
+    drag(first, first);
+    expect(first.querySelector('[data-attr="context-rail-drop-line"]')).toBeNull();
+    fireEvent.drop(first, { dataTransfer: dataTransfer() });
+    expect(reorder).not.toHaveBeenCalled();
+  });
+
+  it('lets only workspace tiles move, and not a lone workspace', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine')], teams: [TEAM], spaces: true });
+    const { container } = render(<ContextRail />);
+    await flush();
+    expect(container.querySelectorAll('[draggable="true"]')).toHaveLength(0);
+  });
+
+  it('lets workspace tiles move but not space tiles', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')], teams: [TEAM], spaces: true });
+    const { container } = render(<ContextRail />);
+    await flush();
+    expect(container.querySelectorAll('[draggable="true"]')).toHaveLength(2);
+    expect(slots(container).every((slot) => slot.getAttribute('draggable') === 'true')).toBe(true);
   });
 });
 

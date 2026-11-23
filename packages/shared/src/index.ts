@@ -2473,6 +2473,11 @@ export interface UpdateWorkspaceRequest {
   settings?: Partial<WorkspaceSettings>;
 }
 
+/** `PUT /workspaces/order`: my workspace ids in the order the workspace list shows them. */
+export interface ReorderWorkspacesRequest {
+  workspaceIds: string[];
+}
+
 // Task API
 export interface CreateTaskRequest {
   workspaceId: string;

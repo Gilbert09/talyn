@@ -38,6 +38,7 @@ import {
   type WorkspaceIntegrations,
   type CreateWorkspaceRequest,
   type UpdateWorkspaceRequest,
+  type ReorderWorkspacesRequest,
   type ApiResponse,
   type PromptKind,
   type PromptTemplateOverride,
@@ -242,12 +243,39 @@ export function workspaceRoutes(): Router {
       .select()
       .from(workspacesTable)
       .where(eq(workspacesTable.ownerId, user.id))
-      .orderBy(workspacesTable.name);
+      .orderBy(sql`${workspacesTable.position} asc nulls last`, workspacesTable.name, workspacesTable.id);
     const relations = await loadWorkspaceRelations(db, rows.map((r) => r.id));
     res.json({
       success: true,
       data: rows.map((r) => rowToWorkspace(r, relations)),
     } as ApiResponse<Workspace[]>);
+  });
+
+  // The owner's order for the workspace list, from a drag in the context rail.
+  // The body lists workspace ids in the new order. A workspace of mine that the
+  // list leaves out goes after the listed ones.
+  router.put('/order', async (req, res) => {
+    const user = assertUser(req);
+    const ids = (req.body as Partial<ReorderWorkspacesRequest> | undefined)?.workspaceIds;
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string') || new Set(ids).size !== ids.length) {
+      return res.status(400).json({ success: false, error: 'workspaceIds must be a list of unique workspace ids' });
+    }
+    const db = getDbClient();
+    const owned = await db
+      .select({ id: workspacesTable.id })
+      .from(workspacesTable)
+      .where(eq(workspacesTable.ownerId, user.id));
+    const ownedIds = new Set(owned.map((r) => r.id));
+    if (ids.some((id) => !ownedIds.has(id))) {
+      return res.status(404).json({ success: false, error: 'Workspace not found' });
+    }
+    // One statement, so a second drag in flight cannot interleave with this one.
+    const order = sql`ARRAY[${sql.join(ids.map((id) => sql`${id}`), sql`, `)}]::text[]`;
+    await db
+      .update(workspacesTable)
+      .set({ position: sql`array_position(${order}, ${workspacesTable.id}) - 1` })
+      .where(eq(workspacesTable.ownerId, user.id));
+    res.json({ success: true, data: null } as ApiResponse<null>);
   });
 
   // The context rail's badges. Before `/:id`, which would read "attention" as an id.

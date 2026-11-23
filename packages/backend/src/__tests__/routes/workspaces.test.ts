@@ -334,6 +334,78 @@ describe('routes/workspaces', () => {
     });
   });
 
+  describe('PUT /workspaces/order', () => {
+    beforeEach(async () => {
+      await db.insert(workspacesTable).values([
+        { id: 'a', ownerId: TEST_USER_ID, name: 'Alpha', settings: {} },
+        { id: 'b', ownerId: TEST_USER_ID, name: 'Beta', settings: {} },
+        { id: 'c', ownerId: TEST_USER_ID, name: 'Charlie', settings: {} },
+        { id: 'other', ownerId: OTHER_USER_ID, name: 'Other', settings: {}, position: 0 },
+      ]);
+    });
+
+    const listIds = async (): Promise<string[]> => {
+      const res = await fetch(`${serverUrl}/workspaces`, { headers: authHeaders });
+      const body = await res.json();
+      return (body.data as Array<{ id: string }>).map((w) => w.id);
+    };
+
+    const putOrder = (body: unknown) =>
+      fetch(`${serverUrl}/workspaces/order`, { method: 'PUT', headers: authHeaders, body: JSON.stringify(body) });
+
+    it('lists by name before any order is saved', async () => {
+      expect(await listIds()).toEqual(['a', 'b', 'c']);
+    });
+
+    it.each([
+      { order: ['c', 'a', 'b'], expected: ['c', 'a', 'b'] },
+      { order: ['b', 'c', 'a'], expected: ['b', 'c', 'a'] },
+      // Left-out workspaces go after the listed ones, by name.
+      { order: ['c'], expected: ['c', 'a', 'b'] },
+      { order: ['b', 'a'], expected: ['b', 'a', 'c'] },
+      { order: [], expected: ['a', 'b', 'c'] },
+    ])('saves the order $order', async ({ order, expected }) => {
+      const res = await putOrder({ workspaceIds: order });
+      expect(res.status).toBe(200);
+      expect(await listIds()).toEqual(expected);
+    });
+
+    it('replaces an earlier order rather than merging with it', async () => {
+      await putOrder({ workspaceIds: ['c', 'b', 'a'] });
+      await putOrder({ workspaceIds: ['b'] });
+      expect(await listIds()).toEqual(['b', 'a', 'c']);
+    });
+
+    it('puts a workspace created after a reorder last', async () => {
+      await putOrder({ workspaceIds: ['c', 'b', 'a'] });
+      await db.insert(workspacesTable).values({ id: 'aa', ownerId: TEST_USER_ID, name: 'Aardvark', settings: {} });
+      expect(await listIds()).toEqual(['c', 'b', 'a', 'aa']);
+    });
+
+    it('leaves another owner workspace alone', async () => {
+      await putOrder({ workspaceIds: ['c', 'b', 'a'] });
+      const rows = await db.select().from(workspacesTable).where(eq(workspacesTable.id, 'other'));
+      expect(rows[0].position).toBe(0);
+    });
+
+    it('404s an id that is not mine, and changes nothing', async () => {
+      await putOrder({ workspaceIds: ['c', 'b', 'a'] });
+      const res = await putOrder({ workspaceIds: ['a', 'other'] });
+      expect(res.status).toBe(404);
+      expect(await listIds()).toEqual(['c', 'b', 'a']);
+    });
+
+    it.each([
+      { name: 'no body', body: {} },
+      { name: 'not a list', body: { workspaceIds: 'a' } },
+      { name: 'a non-string id', body: { workspaceIds: ['a', 1] } },
+      { name: 'a repeated id', body: { workspaceIds: ['a', 'a'] } },
+    ])('400s $name', async ({ body }) => {
+      const res = await putOrder(body);
+      expect(res.status).toBe(400);
+    });
+  });
+
   describe('GET /workspaces/:id', () => {
     it('returns an owned workspace', async () => {
       await db.insert(workspacesTable).values({
