@@ -242,6 +242,16 @@ describe('firing a CI wake-up', () => {
     expect(await getWakeup('ci-wake')).toMatchObject({ status: 'fired' });
   });
 
+  it('reads the lowercase ledger when the pull request has a mixed-case owner and repo', async () => {
+    await setPr({ owner: 'Acme', repo: 'Web' });
+    await insertCiWakeup();
+    await ledger(SHA_A, [['lint', 'success'], ['test', 'failure', false]]);
+    await sweepBackground();
+    const { text, opts } = sentTurn();
+    expect(text).toContain('CI finished on aaaaaaaaaaaa of Acme/Web#42, and no required check failed.');
+    expect(opts).toMatchObject({ trigger: { ci: 'passing' } });
+  });
+
   it('names the required checks that failed', async () => {
     await insertCiWakeup();
     await ledger(SHA_A, [['lint', 'failure', true], ['flaky', 'failure', false], ['test', 'success']]);
