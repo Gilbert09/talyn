@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import {
   sessionAttentionKey,
@@ -156,12 +156,11 @@ export function useContextAttention(enabled: boolean, refreshKey: string): Conte
 /**
  * The client's view of the session's alert. It does not match the server's
  * key exactly (the client has no turn counts), but it changes when the alert
- * changes, which is all {@link useAttentionSeen} needs.
+ * changes, which is all {@link useAttentionRefresh} needs.
  *
  * A plan that waits for approval is in the transcript only, so the client
  * cannot see it here. While a turn runs the key is `busy`, so the key also
- * changes when a turn ends. Then an open session tells the server that I saw
- * the plan that the turn wrote.
+ * changes when a turn ends. Then the rail asks again and sees the plan.
  */
 export function clientAttentionKey(
   workbench: Pick<Workbench, 'kind' | 'status' | 'sandboxState' | 'archivedAt'>,
@@ -179,31 +178,17 @@ export function clientAttentionKey(
   return key ?? (chats.some((c) => c.status === 'running') ? 'busy' : null);
 }
 
-/** Tell the server I saw the session's alert, then ask for the rail's badges again. */
-export function markAttentionSeen(workbenchId: string): void {
-  Promise.resolve()
-    .then(() => api.workbenches.attentionSeen(workbenchId))
-    .then(() => refreshContextAttention())
-    .catch(() => {
-      // A teammate's session or a lost request: the badge stays until the next open.
-    });
-}
-
 /**
- * Looking at a session sees its alert, so the context rail stops counting it.
- * Runs when the session opens, when its alert changes while it is open, and
- * when the window comes back with an alert showing.
+ * Opening a session does not clear its alert: it stays in "Needs you" until I
+ * resolve it. When the open session's alert changes (I answered, a retry
+ * started, a turn ended), the rail asks again at once, so the row leaves or
+ * comes back without the 30-second wait.
  */
-export function useAttentionSeen(workbenchId: string, attentionKey: string | null): void {
+export function useAttentionRefresh(attentionKey: string | null): void {
+  const last = useRef(attentionKey);
   useEffect(() => {
-    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return undefined;
-    markAttentionSeen(workbenchId);
-    return undefined;
-  }, [workbenchId, attentionKey]);
-  useEffect(() => {
-    if (attentionKey === null) return undefined;
-    const onFocus = () => markAttentionSeen(workbenchId);
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [workbenchId, attentionKey]);
+    if (last.current === attentionKey) return;
+    last.current = attentionKey;
+    refreshContextAttention();
+  }, [attentionKey]);
 }
