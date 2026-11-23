@@ -7,7 +7,10 @@ import {
   loopRuns as runsTable,
   loops as loopsTable,
   repositories as repositoriesTable,
+  spaces as spacesTable,
   tasks as tasksTable,
+  teamMembers as teamMembersTable,
+  teams as teamsTable,
   workbenchChats as chatsTable,
   workbenches as workbenchesTable,
   workspaces as workspacesTable,
@@ -355,6 +358,108 @@ describe('loop scheduler', () => {
       await dueLoop(db, internetAccess === undefined ? {} : { internetAccess });
       await loopScheduler.tick();
       expect(createSession.mock.calls[0][0].internetAccess).toBe(expected);
+    });
+  });
+
+  describe('space', () => {
+    beforeEach(async () => {
+      process.env.SPACES_ENABLED = 'true';
+      await db.insert(teamsTable).values([{ id: 'team-1', name: 'Acme' }, { id: 'team-2', name: 'Other' }]);
+      await db.insert(teamMembersTable).values([
+        { id: 'm-1', teamId: 'team-1', githubUserId: 100, userId: TEST_USER_ID, githubLogin: 'tom', role: 'owner' },
+      ]);
+      await db.insert(spacesTable).values([
+        { id: 'space-1', teamId: 'team-1', name: 'Web' },
+        { id: 'space-old', teamId: 'team-1', name: 'Old', archivedAt: new Date() },
+        { id: 'space-2', teamId: 'team-2', name: 'Not mine' },
+      ]);
+    });
+
+    afterEach(() => {
+      delete process.env.SPACES_ENABLED;
+    });
+
+    it('starts a loop with no space in Personal, with no notice', async () => {
+      const loop = await dueLoop(db);
+      await loopScheduler.tick();
+      expect(createSession.mock.calls[0][0].spaceId).toBeNull();
+      const [run] = await runsFor(db, loop.id);
+      expect(run.notice).toBeNull();
+    });
+
+    it('passes the loop’s space to the session', async () => {
+      const loop = await dueLoop(db, { spaceId: 'space-1' });
+      await loopScheduler.tick();
+      expect(createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ spaceId: 'space-1', source: expect.objectContaining({ loopId: loop.id }) }),
+        expect.objectContaining({ id: TEST_USER_ID })
+      );
+      const [run] = await runsFor(db, loop.id);
+      expect(run).toMatchObject({ status: 'queued', notice: null });
+    });
+
+    it.each([
+      ['archived', 'space-old', 'true', 'The space is archived.'],
+      ['of a team the owner is not in', 'space-2', 'true', 'The space was not found, or you are not in its team.'],
+      ['behind Spaces switched off', 'space-1', 'false', 'Spaces are not available for this account.'],
+    ])('falls back to Personal when the space is %s, and the run says why', async (_label, spaceId, flag, reason) => {
+      process.env.SPACES_ENABLED = flag;
+      const loop = await dueLoop(db);
+      // Written straight to the row: the route refuses these on save, but each
+      // can happen after the save.
+      await db.update(loopsTable).set({ spaceId }).where(eq(loopsTable.id, loop.id));
+      await loopScheduler.tick();
+
+      expect(createSession).toHaveBeenCalledTimes(1);
+      expect(createSession.mock.calls[0][0].spaceId).toBeNull();
+      const [run] = await runsFor(db, loop.id);
+      expect(run.status).toBe('queued');
+      expect(run.notice).toBe(`Started in Personal, not in the chosen space: ${reason}`);
+    });
+
+    it('falls back when the owner leaves the team after the save, and keeps the notice once the run settles', async () => {
+      const loop = await dueLoop(db, { spaceId: 'space-1' });
+      await db.delete(teamMembersTable).where(eq(teamMembersTable.id, 'm-1'));
+      await loopScheduler.tick();
+      expect(createSession.mock.calls[0][0].spaceId).toBeNull();
+
+      const [run] = await runsFor(db, loop.id);
+      await setChat(run.workbenchChatId, { status: 'idle', turnCount: 1 });
+      await loopScheduler.tick();
+
+      const [settled] = await runsFor(db, loop.id);
+      expect(settled.status).toBe('succeeded');
+      expect(settled.notice).toBe(
+        'Started in Personal, not in the chosen space: The space was not found, or you are not in its team.'
+      );
+      // The loop keeps its space: rejoining the team puts later runs back in it.
+      const [row] = await db.select().from(loopsTable).where(eq(loopsTable.id, loop.id));
+      expect(row.spaceId).toBe('space-1');
+    });
+
+    it('a deleted space sets the loop back to Personal', async () => {
+      const loop = await dueLoop(db, { spaceId: 'space-1' });
+      await db.delete(spacesTable).where(eq(spacesTable.id, 'space-1'));
+      const [row] = await db.select().from(loopsTable).where(eq(loopsTable.id, loop.id));
+      expect(row.spaceId).toBeNull();
+      await loopScheduler.tick();
+      expect(createSession.mock.calls[0][0].spaceId).toBeNull();
+      const [run] = await runsFor(db, loop.id);
+      expect(run.notice).toBeNull();
+    });
+
+    it('a parked run that retries still starts in the space', async () => {
+      createSession.mockRejectedValueOnce(new ConcurrentBoxLimitError(3, 3));
+      const loop = await dueLoop(db, { spaceId: 'space-1' });
+      await loopScheduler.tick();
+      await db
+        .update(runsTable)
+        .set({ retryAfter: new Date(Date.now() - 1_000) })
+        .where(eq(runsTable.loopId, loop.id));
+      await loopScheduler.tick();
+
+      expect(createSession).toHaveBeenCalledTimes(2);
+      expect(createSession.mock.calls[1][0].spaceId).toBe('space-1');
     });
   });
 

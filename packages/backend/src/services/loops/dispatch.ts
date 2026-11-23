@@ -14,6 +14,7 @@ import { fleetRefusalReason, workspaceMayUseFleet } from '../cloudProviders/flee
 import { fleetAgentStatus } from '../selfHosted/credentials.js';
 import { captureWorkspaceEvent } from '../analytics.js';
 import { workspaceMayUseLoops } from '../loopsAccess.js';
+import { ruleSpaceRefusal } from '../workflows/ruleSpace.js';
 import { createWorkbench } from '../workbenches/create.js';
 import { WorkbenchError } from '../workbenches/errors.js';
 import {
@@ -175,6 +176,11 @@ export async function dispatchRun(
     // Every firing starts a session. An automation never creates a cloud task.
     const owner = await workspaceOwner(loop.workspaceId);
     if (!owner) return refuse(runId, 'failed', 'dispatch_failed', 'The workspace owner no longer exists.');
+    // A space the owner can no longer use does not stop the run: the session
+    // starts in Personal, which only the owner sees, and the run says why.
+    // This is what a workflow rule's session does (`createRuleSession`).
+    const spaceRefusal = loop.spaceId ? await ruleSpaceRefusal(owner, loop.spaceId) : null;
+    const spaceId = loop.spaceId && !spaceRefusal ? loop.spaceId : null;
     const session = await createWorkbench(
       {
         workspaceId: loop.workspaceId,
@@ -187,12 +193,14 @@ export async function dispatchRun(
         internetAccess: loop.internetAccess,
         autoCreatePr: true,
         source: { kind: 'loop', loopId: loop.id, runId },
+        spaceId,
       },
       owner
     );
     const chatId = session.chats?.[0]?.id;
     if (!chatId) throw new Error('The session was created without a chat.');
-    await markSessionDispatched(runId, session.id, chatId);
+    const notice = spaceRefusal ? `Started in Personal, not in the chosen space: ${spaceRefusal}` : null;
+    await markSessionDispatched(runId, session.id, chatId, notice);
     return { ok: true, sessionId: session.id };
   } catch (err) {
     if (isBoxGateError(err)) {

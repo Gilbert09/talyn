@@ -465,6 +465,7 @@ class LoopScheduler {
           mcpServerIds: loop.mcpServerIds,
           repositoryId: loop.repositoryId,
           repoFullName: loop.repoFullName,
+          spaceId: loop.spaceId,
           nextRunAt: loop.nextRunAt ? new Date(loop.nextRunAt) : null,
           consecutiveFailures: 0,
         },

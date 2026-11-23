@@ -25,6 +25,8 @@ import { Select } from '../../ui/select';
 import { Textarea } from '../../ui/textarea';
 import { cn } from '../../../lib/utils';
 import { useWorkspaceStore } from '../../../stores/workspace';
+import { useSpacesStore } from '../../../stores/spaces';
+import { spacesOffered } from '../../../lib/spaces';
 import { Section, TextField } from '../workflows/workflowFields';
 import { RepoPicker } from '../../workbench/new/NewWorkbenchControls';
 
@@ -380,6 +382,11 @@ export function LoopEditorPage({
             />
           </Section>
 
+          <LoopSpaceSection
+            spaceId={input.spaceId ?? null}
+            onChange={(spaceId) => setInput((p) => ({ ...p, spaceId }))}
+          />
+
           <Section
             title="Agent"
             description="Which agent runs the prompt, and on which model."
@@ -497,5 +504,53 @@ export function LoopEditorPage({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Where each run's session goes: Personal, or a space of one of my teams.
+ *
+ * Shown only when Spaces is offered and I am in a team with a space, or the
+ * loop already names one. The session still runs in this workspace. The space
+ * makes it visible to the space's team. The server checks the space when the
+ * loop is saved, and again at each run.
+ */
+function LoopSpaceSection({
+  spaceId,
+  onChange,
+}: {
+  spaceId: string | null;
+  onChange: (spaceId: string | null) => void;
+}) {
+  const offered = useWorkspaceStore((s) => spacesOffered(s.features));
+  const teams = useSpacesStore((s) => s.teams);
+  const withSpaces = (teams ?? []).filter((team) => team.spaces.length > 0);
+  if (!offered || (withSpaces.length === 0 && !spaceId)) return null;
+  const known = withSpaces.some((team) => team.spaces.some((space) => space.id === spaceId));
+  return (
+    <Section title="Space" description="Every run's session goes to this space.">
+      <Select
+        value={spaceId ?? ''}
+        onChange={(e) => onChange(e.target.value || null)}
+        data-attr="loop-space"
+      >
+        <option value="">Personal</option>
+        {spaceId && !known && <option value={spaceId}>A space you cannot use</option>}
+        {withSpaces.map((team) => (
+          <optgroup key={team.id} label={team.name}>
+            {team.spaces.map((space) => (
+              <option key={space.id} value={space.id}>
+                {space.name}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </Select>
+      <p className="text-xs text-muted-foreground">
+        {spaceId
+          ? "The session runs in this workspace. People in the space's team can see it. If you leave the team or the space is archived, runs go to Personal."
+          : 'Only you can see the session.'}
+      </p>
+    </Section>
   );
 }

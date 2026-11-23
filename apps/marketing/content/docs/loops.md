@@ -18,8 +18,9 @@ Use a scheduled automation for routine work, such as updating dependencies or wr
 6. Each run starts a session on Talyn Fleet. A session stays in Talyn for review and follow-up.
 7. Set the **Schedule**.
 8. Pick the **Repository**. A scheduled automation works on one repository.
-9. Pick the **Agent** and **Model**.
-10. Select **Create**.
+9. If you are in a team, pick the **Space**. The default is **Personal**.
+10. Pick the **Agent** and **Model**.
+11. Select **Create**.
 
 ## Schedule
 
@@ -42,6 +43,18 @@ Choose what happens when a run is due and the last one has not finished:
 
 - **Skip this run** (the default). The skipped run shows in the history.
 - **Start it anyway**.
+
+## Space
+
+Pick where each run's session goes:
+
+- **Personal** (the default). Only you can see the session.
+- A space of one of your teams. People in that team can see the session and follow its work.
+
+The session still runs in your workspace, with your repository and your agent subscriptions. The **Space** setting shows only when you are in a team that has a space.
+
+You can pick only a space of a team you are in, and the space must not be archived.
+If you leave the team, or someone archives the space, later runs start in **Personal**. The history shows why on each of those runs. Edit the automation to pick a different space.
 
 ## Internet access
 
