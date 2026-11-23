@@ -241,7 +241,8 @@ describe('LoopEditorPage — the Space section', () => {
     fireEvent.change(select, { target: { value: 'space-1' } });
     fireEvent.change(document.querySelector('input')!, { target: { value: 'Triage' } });
     fireEvent.change(document.querySelector('textarea')!, { target: { value: 'Do the thing.' } });
-    fireEvent.change(screen.getByDisplayValue('Pick a repository...'), { target: { value: 'repo-1' } });
+    fireEvent.click(repoPicker());
+    fireEvent.click(await screen.findByRole('option', { name: /acme\/widget/ }));
     fireEvent.click(createButton());
 
     await waitFor(() => expect(onSave).toHaveBeenCalled());
@@ -253,7 +254,8 @@ describe('LoopEditorPage — the Space section', () => {
     renderWith({ spaces: true, teams: [TEAM] }, onSave);
     fireEvent.change(document.querySelector('input')!, { target: { value: 'Triage' } });
     fireEvent.change(document.querySelector('textarea')!, { target: { value: 'Do the thing.' } });
-    fireEvent.change(screen.getByDisplayValue('Pick a repository...'), { target: { value: 'repo-1' } });
+    fireEvent.click(repoPicker());
+    fireEvent.click(await screen.findByRole('option', { name: /acme\/widget/ }));
     fireEvent.click(createButton());
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls[0][0]).toMatchObject({ spaceId: null });
