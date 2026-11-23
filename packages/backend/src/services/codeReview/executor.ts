@@ -161,7 +161,7 @@ async function loadPromptContext(
     headSha?: string;
   };
 
-  // EVERY changed file, not the first page. `getPRFiles` returns GitHub's
+  // EVERY changed file, not the first page. The old `getPRFiles` returned GitHub's
   // default page of 30, so a review of a 317-file pull request read 30 files,
   // said "Reviewing 25 changed files", and could not verify one anchor in the
   // other 287 (2026-10-07). The parts a large change is split into are what

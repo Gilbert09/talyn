@@ -732,7 +732,7 @@ describe('routes/pullRequests', () => {
   describe('GET /pull-requests/:id/files', () => {
     it('returns the file list (with patches) from githubService', async () => {
       const id = await insertPR(db);
-      const spy = vi.spyOn(githubService, 'getPRFiles').mockResolvedValue([
+      const spy = vi.spyOn(githubService, 'getAllPRFiles').mockResolvedValue([
         {
           sha: 'abc',
           filename: 'src/app.ts',
@@ -751,6 +751,43 @@ describe('routes/pullRequests', () => {
       expect(body.data[0].filename).toBe('src/app.ts');
       expect(body.data[0].patch).toContain('@@');
       expect(spy).toHaveBeenCalledWith('ws-mine', 'acme', 'widgets', expect.any(Number));
+    });
+
+    it.each([
+      ['48 files, one page', 48, ['1']],
+      ['100 files, two pages (the second empty)', 100, ['1', '2']],
+      ['130 files, two pages', 130, ['1', '2']],
+      ['250 files, three pages', 250, ['1', '2', '3']],
+    ])('returns every changed file, not only the first 30 (%s)', async (_name, total, pages) => {
+      const id = await insertPR(db);
+      const all = Array.from({ length: total }, (_, index) => ({
+        sha: `sha-${index}`,
+        filename: `src/file-${index}.ts`,
+        status: 'modified',
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        patch: '@@ -0,0 +1 @@\n+x',
+      }));
+      // GitHub's pagination: `per_page` files from `page`, 30 when no `per_page` is sent.
+      const api = githubService as unknown as { apiRequest: (ws: string, path: string) => Promise<unknown> };
+      const spy = vi.spyOn(api, 'apiRequest').mockImplementation(async (_ws, path) => {
+        const query = new URLSearchParams(path.split('?')[1] ?? '');
+        const perPage = Number(query.get('per_page') ?? 30);
+        const page = Number(query.get('page') ?? 1);
+        return all.slice((page - 1) * perPage, page * perPage);
+      });
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/files`, {
+        headers: authMine,
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { data: Array<{ filename: string }> };
+      expect(body.data).toHaveLength(total);
+      expect(body.data.map((file) => file.filename)).toEqual(all.map((file) => file.filename));
+      const requested = spy.mock.calls.map(([, path]) => new URLSearchParams(path.split('?')[1] ?? ''));
+      expect(requested.map((query) => query.get('page'))).toEqual(pages);
+      expect(requested.every((query) => query.get('per_page') === '100')).toBe(true);
+      expect(spy.mock.calls.every(([, path]) => path.startsWith('/repos/acme/widgets/pulls/'))).toBe(true);
     });
 
     it('returns 404 for a missing PR', async () => {
@@ -773,7 +810,7 @@ describe('routes/pullRequests', () => {
 
     it('surfaces a 400 when the GitHub fetch throws (e.g. token revoked)', async () => {
       const id = await insertPR(db);
-      vi.spyOn(githubService, 'getPRFiles').mockRejectedValue(new Error('bad credentials'));
+      vi.spyOn(githubService, 'getAllPRFiles').mockRejectedValue(new Error('bad credentials'));
       const res = await fetch(`${serverUrl}/pull-requests/${id}/files`, {
         headers: authMine,
       });

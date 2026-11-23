@@ -1,4 +1,7 @@
-import { decodeEntities, inlineText, MARKDOWN_TEXT_LIMIT, parseMarkdown, safeImageUrl, stripHtml, type MdBlock } from '../lib/markdown';
+import {
+  chunkInlines, chunkRanges, chunkText, decodeEntities, inlineText, MARKDOWN_TEXT_LIMIT, parseMarkdown, safeImageUrl, stripHtml,
+  TEXT_CHUNK_CHARS, TEXT_CHUNK_LINES, type MdBlock, type MdInline,
+} from '../lib/markdown';
 
 const first = (text: string) => parseMarkdown(text).blocks[0];
 
@@ -170,4 +173,115 @@ describe('markdown images', () => {
     [`https://example.com/${'a'.repeat(4100)}`, null],
     ['not a url', null],
   ])('accepts only safe image sources: %s', (source, expected) => expect(safeImageUrl(source)).toBe(expected));
+});
+
+describe('long text in chunks for native Text views', () => {
+  /** The text again from its chunks: each cut drops one newline or space, unless it is a hard cut. */
+  const joined = (text: string, ranges: Array<[number, number]>) => ranges.map(([start, end], index) =>
+    text.slice(start, end) + (index < ranges.length - 1 ? text.slice(end, ranges[index + 1][0]) : '')).join('');
+  const words = (count: number) => Array.from({ length: count }, (_, index) => `word${index}`).join(' ');
+  const lines = (count: number, line = 'a line of text') => Array.from({ length: count }, (_, index) => `${index}: ${line}`).join('\n');
+
+  it.each([
+    ['empty text', ''],
+    ['short text', 'Hello world'],
+    ['text at the character limit', 'x'.repeat(TEXT_CHUNK_CHARS)],
+    ['text at the line limit', lines(TEXT_CHUNK_LINES)],
+  ])('keeps %s as one chunk', (_name, text) => {
+    expect(chunkRanges(text)).toEqual([[0, text.length]]);
+    expect(chunkText(text)).toEqual([text]);
+  });
+
+  it.each([
+    ['many short lines', lines(500)],
+    ['few long lines', lines(30, words(80))],
+    ['one long line of words', words(3000)],
+    ['one long word', 'x'.repeat(10000)],
+    ['blank lines', `${'para\n\n'.repeat(300)}end`],
+    ['a brief with headings and bullets', Array.from({ length: 80 }, (_, index) => `## Step ${index}\n- ${words(20)}\n- ${words(15)}`).join('\n')],
+  ])('cuts %s into chunks under the limits and loses nothing', (_name, text) => {
+    const ranges = chunkRanges(text);
+    expect(ranges.length).toBeGreaterThan(1);
+    for (const [start, end] of ranges) {
+      expect(end).toBeGreaterThan(start);
+      expect(end - start).toBeLessThanOrEqual(TEXT_CHUNK_CHARS);
+      expect(text.slice(start, end).split('\n').length).toBeLessThanOrEqual(TEXT_CHUNK_LINES);
+    }
+    expect(joined(text, ranges)).toBe(text);
+  });
+
+  it('cuts at a newline before a space, and drops the newline', () => {
+    const text = `${words(150)}\n${words(150)}`;
+    expect(chunkText(text)).toEqual([words(150), words(150)]);
+  });
+
+  it('cuts at a space when a line is longer than the limit', () => {
+    const chunks = chunkText(words(1000));
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join(' ')).toBe(words(1000));
+    for (const chunk of chunks) expect(chunk).toMatch(/^word\d+( word\d+)*$/);
+  });
+
+  it('does not cut code at a space', () => {
+    const line = `const value = ${'1 + '.repeat(600)}1;`;
+    const chunks = chunkText(line, { chars: 1000, wrap: false });
+    expect(chunks.map((chunk) => chunk.length)).toEqual([1000, 1000, line.length - 2000]);
+    expect(chunks.join('')).toBe(line);
+  });
+
+  it('honours the line limit for code', () => {
+    const code = lines(130, 'x');
+    const chunks = chunkText(code, { lines: 60, wrap: false });
+    expect(chunks.map((chunk) => chunk.split('\n').length)).toEqual([60, 60, 10]);
+    expect(chunks.join('\n')).toBe(code);
+  });
+
+  it('does not split a surrogate pair at a hard cut', () => {
+    const text = `${'x'.repeat(9)}😀${'y'.repeat(20)}`;
+    const chunks = chunkText(text, { chars: 10 });
+    expect(chunks.join('')).toBe(text);
+    expect(chunks[0]).toBe('x'.repeat(9));
+    expect(chunks[1].startsWith('😀')).toBe(true);
+  });
+
+  it('gives back the same nodes for a short paragraph', () => {
+    const nodes: MdInline[] = [{ type: 'text', text: 'short' }];
+    expect(chunkInlines(nodes)).toEqual([nodes]);
+    expect(chunkInlines(nodes)[0]).toBe(nodes);
+  });
+
+  it('keeps bold, links and code on each part of a long paragraph', () => {
+    const nodes: MdInline[] = [
+      { type: 'text', text: 'Start ' },
+      { type: 'strong', children: [{ type: 'text', text: 'bold one two three four five six' }] },
+      { type: 'text', text: ' then ' },
+      { type: 'link', href: 'https://example.com', children: [{ type: 'text', text: 'a link with words' }] },
+      { type: 'br' },
+      { type: 'code', text: 'npm test' },
+      { type: 'text', text: ' end' },
+    ];
+    const chunks = chunkInlines(nodes, { chars: 20 });
+    expect(chunks.length).toBeGreaterThan(2);
+    const text = inlineText(nodes);
+    expect(joined(text, chunkRanges(text, { chars: 20 }))).toBe(text);
+    expect(chunks.map(inlineText)).toEqual(chunkText(text, { chars: 20 }));
+    // The bold text is cut in the middle: both parts stay bold.
+    const bold = chunks.flatMap((chunk) => chunk.filter((node) => node.type === 'strong')).map((node) => inlineText([node]));
+    expect(bold.length).toBeGreaterThan(1);
+    expect(bold.join(' ')).toBe('bold one two three four five six');
+    // The link and the code keep their type and target.
+    const flat = chunks.flat();
+    expect(flat.filter((node) => node.type === 'link').every((node) => node.type === 'link' && node.href === 'https://example.com')).toBe(true);
+    expect(flat).toContainEqual({ type: 'code', text: 'npm test' });
+  });
+
+  it('cuts a long paragraph from a real brief, with single newlines only', () => {
+    const brief = Array.from({ length: 120 }, (_, index) => `- Point ${index}: ${words(12)}`).join('\n');
+    const paragraph = parseMarkdown(`Intro line\n${brief}`.replace(/^- /gm, '')).blocks;
+    expect(paragraph).toHaveLength(1);
+    if (paragraph[0].type !== 'paragraph') throw new Error('not a paragraph');
+    const chunks = chunkInlines(paragraph[0].children);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.map(inlineText).join('\n')).toBe(inlineText(paragraph[0].children));
+  });
 });

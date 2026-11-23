@@ -4,13 +4,13 @@ import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View
 
 import { AppText, Button } from '../../components/UI';
 import { openExternal, safeExternalUrl } from '../../components/Workflow';
-import { inlineText, parseMarkdown, type MdBlock, type MdImage, type MdInline } from '../../lib/markdown';
+import { chunkInlines, chunkText, inlineText, parseMarkdown, type MdBlock, type MdImage, type MdInline } from '../../lib/markdown';
 import { mono, radius, sans, type, useTheme, type Theme } from '../../theme/tokens';
 import { useHighlighter } from './findHighlight';
 import { FullScreenImage } from './FullScreenImage';
 
-/** Characters per code `Text`. Very long single texts are slow to lay out on Android. */
-const CODE_CHUNK = 4000;
+/** Characters and lines per code `Text`. Android draws a `Text` that is too tall as a blank box. */
+const CODE_CHUNK = { chars: 4000, lines: 60, wrap: false };
 /** The tallest an image thumbnail gets in the column. Tap it to see the full size. */
 const IMAGE_MAX_HEIGHT = 280;
 
@@ -44,14 +44,18 @@ function Paragraph({ children, style }: { children: MdInline[]; style?: TextStyl
   const c = useTheme();
   const mark = useHighlighter();
   const selectable = useContext(Selectable);
-  return <Text selectable={selectable} style={[type.body, { color: c.text }, style]}>{renderInline(children, c, '', mark)}</Text>;
+  const chunks = useMemo(() => chunkInlines(children), [children]);
+  const textStyle = [type.body, { color: c.text }, style];
+  if (chunks.length === 1) return <Text selectable={selectable} style={textStyle}>{renderInline(children, c, '', mark)}</Text>;
+  // A long paragraph is several `Text` views. One `Text` that is too tall draws blank on Android.
+  return <View>{chunks.map((chunk, index) => <Text key={index} selectable={selectable} style={textStyle}>{renderInline(chunk, c, `${index}:`, mark)}</Text>)}</View>;
 }
 
 function CodeBlock({ lang, text }: { lang: string; text: string }) {
   const c = useTheme();
   const mark = useHighlighter();
   const selectable = useContext(Selectable);
-  const chunks = Array.from({ length: Math.max(1, Math.ceil(text.length / CODE_CHUNK)) }, (_, index) => text.slice(index * CODE_CHUNK, (index + 1) * CODE_CHUNK));
+  const chunks = useMemo(() => chunkText(text, CODE_CHUNK), [text]);
   return <View accessibilityLabel={lang ? `${lang} code` : 'Code'} style={[styles.code, { backgroundColor: c.surface }]}>
     {lang ? <AppText variant="caption" tone="muted" style={styles.codeLang}>{lang}</AppText> : null}
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.codeScroll}>

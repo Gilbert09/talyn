@@ -818,7 +818,8 @@ export function pullRequestRoutes(): Router {
       return handleAccessError(err, res);
     }
     try {
-      const files = await githubService.getPRFiles(
+      // Every page: GitHub's default page has only 30 files.
+      const files = await githubService.getAllPRFiles(
         row.workspaceId,
         row.owner,
         row.repo,
