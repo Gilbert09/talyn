@@ -7,6 +7,7 @@ import {
   type CodeReviewCounts,
   type CodeReviewPhase,
   type CodeReviewPublic,
+  type CodeReviewSession,
   type CodeReviewSeverity,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
@@ -33,6 +34,7 @@ import {
   type ReviewRow,
 } from './store.js';
 import { hasDeferredUnit, settledUnitCount } from './decide.js';
+import { owningWorkbenchesForPrs } from '../workbenches/prSessions.js';
 
 /**
  * The one public shape a review takes.
@@ -60,6 +62,8 @@ interface ReviewFacts {
   runsDone: number;
   deferred: boolean;
   currentHead: string | null;
+  /** The session that owns the pull request, resolved now rather than stored. */
+  session: CodeReviewSession | null;
 }
 
 /** Pure: facts in, payload out. Shared by the one-review and the batch paths. */
@@ -111,6 +115,7 @@ function shapeReview(review: ReviewRow, facts: ReviewFacts): CodeReviewPublic {
       phase === 'ready' || phase === 'failed' || phase === 'cancelled' || phase === 'fixed'
         ? review.updatedAt.toISOString()
         : null,
+    session: facts.session,
   };
 }
 
@@ -118,12 +123,13 @@ export async function toPublicReview(
   review: ReviewRow,
   options: { headSha?: string | null } = {}
 ): Promise<CodeReviewPublic> {
-  const [counts, dismissedCount, funnel, runs, bars] = await Promise.all([
+  const [counts, dismissedCount, funnel, runs, bars, sessions] = await Promise.all([
     severityCounts(review.id),
     countDismissed(review.id),
     funnelCounts(review.id),
     runsForCycle(review.id, review.cycle),
     reportingBarsFor([review.workspaceId]),
+    owningWorkbenchesForPrs(review.workspaceId, [review.pullRequestId]),
   ]);
   const currentHead =
     options.headSha !== undefined
@@ -140,6 +146,7 @@ export async function toPublicReview(
     runsDone: settledUnitCount(runs, review.cycle),
     deferred: hasDeferredUnit(runs, review.cycle),
     currentHead,
+    session: sessions.get(review.pullRequestId) ?? null,
   });
 }
 
@@ -192,7 +199,8 @@ export async function codeReviewsForPrs(
 
     const reviewIds = reviews.map((r) => r.id);
 
-    const [countRows, settledRows, deferredRows, heads, bars] = await Promise.all([
+    const workspaceIds = [...new Set(reviews.map((r) => r.workspaceId))];
+    const [countRows, settledRows, deferredRows, heads, bars, sessions] = await Promise.all([
       db
         .select({
           reviewId: prCodeReviewFindings.reviewId,
@@ -245,7 +253,9 @@ export async function codeReviewsForPrs(
         .where(inArray(pullRequestsTable.id, pullRequestIds)),
       // One query for the page, not one per review — a list usually spans one
       // workspace, and never enough to be worth a read each.
-      reportingBarsFor([...new Set(reviews.map((r) => r.workspaceId))]),
+      reportingBarsFor(workspaceIds),
+      // One query for the page. It degrades to no links rather than failing.
+      owningWorkbenchesForPrs(workspaceIds, pullRequestIds),
     ]);
 
     const headById = new Map(
@@ -285,6 +295,7 @@ export async function codeReviewsForPrs(
             0,
           deferred: deferredRows.some((r) => r.reviewId === review.id && r.cycle === review.cycle),
           currentHead: headById.get(review.pullRequestId) ?? null,
+          session: sessions.get(review.pullRequestId) ?? null,
         })
       );
     }

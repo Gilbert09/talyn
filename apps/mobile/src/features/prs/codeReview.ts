@@ -1,6 +1,6 @@
 import type { CodeReviewFinding, CodeReviewPublic, CodeReviewSeverity } from '@talyn/client/native';
-import { CODE_REVIEW_PHASE_AT_REST, CODE_REVIEW_PRESET_PLAN, CODE_REVIEW_SEVERITY_ORDER, codeReviewLensLabel, isCustomReviewerLens,
-  severityAtOrAbove, type CodeReviewLensNames } from '@talyn/shared';
+import { CODE_REVIEW_PHASE_AT_REST, CODE_REVIEW_PRESET_PLAN, CODE_REVIEW_SEVERITY_GROUP_LABELS, CODE_REVIEW_SEVERITY_ORDER, codeReviewLensLabel,
+  codeReviewProgress, isCustomReviewerLens, severityAtOrAbove, type CodeReviewLensNames } from '@talyn/shared';
 
 import type { StatusTone } from '../../lib/status';
 
@@ -65,6 +65,51 @@ export function reviewHeadline(review: Pick<CodeReviewPublic, 'phase' | 'openCou
   if (review.openCount === 0) return 'Nothing to flag';
   return `${review.openCount} finding${review.openCount === 1 ? '' : 's'}`;
 }
+
+/**
+ * The severities that make up `openCount`, most serious first, as "Must fix 1".
+ * The server counts against the workspace's bar, so the levels are read back
+ * from the counts: a level below the bar would push the sum past `openCount`.
+ */
+export function openFindingCounts(review: Pick<CodeReviewPublic, 'counts' | 'openCount'>): string[] {
+  const out: string[] = [];
+  let total = 0;
+  for (const severity of CODE_REVIEW_SEVERITY_ORDER) {
+    if (total >= review.openCount) break;
+    const count = review.counts[severity];
+    if (count > 0) out.push(`${CODE_REVIEW_SEVERITY_GROUP_LABELS[severity]} ${count}`);
+    total += count;
+  }
+  return out;
+}
+
+export interface ReviewSummary {
+  /** The progress label while it runs, else the headline. */
+  title: string;
+  /** "Must fix 1 · Should fix 2", or null when nothing is open or it still runs. */
+  findings: string | null;
+  failure: string | null;
+  /** It runs, but no runner is free yet. */
+  waiting: boolean;
+  /** The findings are for an older commit. */
+  stale: boolean;
+}
+
+/** A review's status in a few lines. The Findings tab header and the session's link to it both read it. */
+export function reviewSummary(review: CodeReviewPublic): ReviewSummary {
+  const running = reviewRunning(review);
+  const counts = running ? [] : openFindingCounts(review);
+  return {
+    title: running ? codeReviewProgress(review).label : reviewHeadline(review),
+    findings: counts.length ? counts.join(' · ') : null,
+    failure: !running && review.phase === 'failed' ? review.failureReason : null,
+    waiting: running && Boolean(review.deferredSince),
+    stale: !running && review.staleForHead,
+  };
+}
+
+export const REVIEW_WAITING = 'Waiting for a runner to become free.';
+export const REVIEW_STALE = 'There are newer commits.';
 
 /** How many of Talyn's own reviewers sat this change out. Web `notNeededCount`. */
 export function notNeededCount(review: Pick<CodeReviewPublic, 'lensesRun' | 'preset'>): number {

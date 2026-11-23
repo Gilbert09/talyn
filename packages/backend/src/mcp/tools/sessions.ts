@@ -10,6 +10,7 @@ import {
   TURN_TIME_CATEGORIES,
   TURN_TIME_CATEGORY_LABELS,
   type AgentEvent,
+  type CodeReviewPublic,
   type CreateWorkbenchPullRequestResult,
   type FleetAccountView,
   type FleetAccountsResponse,
@@ -110,7 +111,32 @@ const threadSessionLine = (wb: Workbench) =>
 const chatLine = (chat: WorkbenchChat) =>
   `  ${chat.id}  "${chat.title}"  [${chat.status}]  ${chat.agent}/${chat.model ?? 'default'}${chat.queuedMessages.length ? `  queued: ${chat.queuedMessages.length}` : ''}`;
 
-function sessionDetail(wb: Workbench): string {
+/** One line for the code review of the session's pull request. */
+export function sessionReviewLine(review: CodeReviewPublic): string {
+  const { blocker, major, minor, nit } = review.counts;
+  return (
+    `code review: ${review.id} [${review.phase}] ${review.openCount} open ` +
+    `(blocker ${blocker}, major ${major}, minor ${minor}, nit ${nit})` +
+    `${review.staleForHead ? ', older than the head' : ''}. Findings: talyn_get_code_review`
+  );
+}
+
+/** The review of the session's pull request. Null when there is none or the read fails. */
+async function sessionReview(ownerId: string, wb: Workbench): Promise<CodeReviewPublic | null> {
+  if (!wb.pullRequestId) return null;
+  try {
+    const data = await callApi<{ review: CodeReviewPublic | null }>(
+      ownerId,
+      'GET',
+      `/workbenches/${encodeURIComponent(wb.id)}/code-review`
+    );
+    return data.review ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function sessionDetail(wb: Workbench, review: CodeReviewPublic | null = null): string {
   const lines = [
     sessionLine(wb),
     `base: ${wb.baseBranch}`,
@@ -123,6 +149,7 @@ function sessionDetail(wb: Workbench): string {
     wb.pr
       ? `pull request: #${wb.pr.number} ${wb.pr.state}, ${wb.pr.mergeable}, checks ${wb.pr.ciStatus}  ${wb.pr.url}`
       : '',
+    review ? sessionReviewLine(review) : '',
     'chats:',
     ...(wb.chats?.length ? wb.chats.map(chatLine) : ['  none']),
   ];
@@ -602,11 +629,14 @@ export const SESSIONS = [
   ),
   defineTool(
     'get_session',
-    'Get one session: status, runtime, repository, branch, pull request, and its chats with their ids and status.',
+    'Get one session: status, runtime, repository, branch, pull request with its code review, and its chats with their ids and status.',
     sessionIdSchema,
     ['session_id'],
     { readOnlyHint: true },
-    async (ownerId, args) => sessionDetail(await loadSession(ownerId, requireId(args, 'session_id'))),
+    async (ownerId, args) => {
+      const wb = await loadSession(ownerId, requireId(args, 'session_id'));
+      return sessionDetail(wb, await sessionReview(ownerId, wb));
+    },
     FEATURE
   ),
   defineTool(

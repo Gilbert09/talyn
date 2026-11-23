@@ -16,6 +16,7 @@ import { longTime, relativeTimeLabel, useNow } from '../../lib/time';
 import { pullRequestRoute, threadRoute } from '../../navigation/routes';
 import { mono, useTheme } from '../../theme/tokens';
 import { workbenchKind, workbenchTitle } from '../../workflow/model';
+import { CodeReviewSummary } from '../prs/CodeReviewSection';
 import { canRetry, isArchived, type SessionActionKind } from './actions';
 import { readinessProblem } from './model';
 import { canQueue, cycleActions, cycleDisabledReason, cycleLabel, diffTotals, type QuickAction, type QuickActionKind } from './quickActions';
@@ -255,6 +256,8 @@ export function SessionDetailsSheet({ visible, onClose, item, row, readiness, on
         trailing={<PrPill number={number} state={row?.state ?? item.pr?.state ?? 'open'} draft={row?.summary.draft} />}>
         {row ? <View style={{ alignSelf: 'flex-start' }}><PrStatusPill variant={prRowStatus(row)} /></View> : null}
       </Row> : null}
+      {row?.codeReview ? <CodeReviewSummary review={row.codeReview} pullRequestId={row.id}
+        onPress={() => go(pullRequestRoute(row.id, { tab: 'findings' }))} /> : null}
       {item.threadId ? <Row divider={false} chevron title="Open parent thread" onPress={() => go(threadRoute(item.threadId!))} /> : null}
       {automation ? <Row divider={false} chevron title={`${automation.label} automation`} subtitle="Started this session"
         accessibilityLabel={`Open the ${automation.label} automation that started this session`}

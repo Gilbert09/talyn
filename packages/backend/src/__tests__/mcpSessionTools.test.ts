@@ -154,6 +154,47 @@ describe('session tools', () => {
     expect(text).toContain('c2  "Second"');
   });
 
+  it('get_session with no pull request does not read a code review', async () => {
+    const { calls } = mockApi({ 'GET /api/v1/workbenches/s1': () => session() });
+    const text = await tool('get_session').handler(OWNER, { session_id: 's1' });
+    expect(calls).toHaveLength(1);
+    expect(text).not.toContain('code review:');
+  });
+
+  const sessionReview = (overrides: Record<string, unknown> = {}) => ({
+    id: 'rev1',
+    phase: 'ready',
+    openCount: 3,
+    counts: { blocker: 1, major: 2, minor: 0, nit: 4 },
+    staleForHead: false,
+    ...overrides,
+  });
+
+  it.each([
+    [
+      'a finished review',
+      () => ({ pullRequestId: 'pr1', review: sessionReview() }),
+      'code review: rev1 [ready] 3 open (blocker 1, major 2, minor 0, nit 4). Findings: talyn_get_code_review',
+    ],
+    [
+      'a review older than the head',
+      () => ({ pullRequestId: 'pr1', review: sessionReview({ staleForHead: true }) }),
+      'code review: rev1 [ready] 3 open (blocker 1, major 2, minor 0, nit 4), older than the head.',
+    ],
+    ['no review', () => ({ pullRequestId: 'pr1', review: null }), null],
+    ['a failed read', () => ({ status: 500, body: { success: false, error: 'boom' } }), null],
+  ])('get_session shows the code review: %s', async (_name, answer, line) => {
+    const { calls } = mockApi({
+      'GET /api/v1/workbenches/s1': () => session({ pullRequestId: 'pr1' }),
+      'GET /api/v1/workbenches/s1/code-review': answer,
+    });
+    const text = await tool('get_session').handler(OWNER, { session_id: 's1' });
+    expect(calls.map((c) => c.url.pathname)).toEqual(['/api/v1/workbenches/s1', '/api/v1/workbenches/s1/code-review']);
+    if (line) expect(text).toContain(line);
+    else expect(text).not.toContain('code review:');
+    expect(text).toContain('c1  "Chat"  [idle]');
+  });
+
   it.each([
     [
       { workspace_id: 'ws1', repository_id: 'r1', agent: 'codex', prompt: 'Fix it', internet_access: false },

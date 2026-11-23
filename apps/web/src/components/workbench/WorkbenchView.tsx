@@ -35,6 +35,7 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   const pr = useWorkbenchPr(workbench);
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
   const prDetailId = useWorkbenchStore((s) => s.prDetailId);
+  const prDetailTab = useWorkbenchStore((s) => s.prDetailTab);
   const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
   const storeChats = useWorkbenchStore((s) => s.chats[workbench.id]);
   useAttentionRefresh(
@@ -66,9 +67,11 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
           ))}
       </div>
       <PRDetailSheet
+        key={prDetailTab}
         pullRequestId={prDetailId}
         onClose={() => openPrDetail(null)}
         layout="overlay"
+        initialTab={prDetailTab}
         seedRow={pr && pr.id === prDetailId ? pr : null}
       />
     </div>

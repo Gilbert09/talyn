@@ -13,6 +13,7 @@ import { pullRequestRoute } from '../../navigation/routes';
 import { useTheme } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
 import { checksLine, mergeLine } from '../prs/actions';
+import { CodeReviewSummary } from '../prs/CodeReviewSection';
 import { canCreatePullRequest, sessionUnavailable } from './model';
 import { sendCreatePullRequest } from './sessionPrActions';
 
@@ -53,6 +54,7 @@ function LinkedPullRequest({ item }: { item: Workbench }) {
         <AppText variant="caption" style={{ color: c.muted }}>{`${summary.headBranch} → ${summary.baseBranch}`}</AppText>
       </Row>
     </Group>
+    {row.codeReview ? <CodeReviewSummary review={row.codeReview} pullRequestId={row.id} /> : null}
     {url ? <View style={{ alignSelf: 'flex-start' }}>
       <Button variant="quiet" size="sm" icon={{ ios: 'arrow.up.right.square', android: 'open_in_new' }} title="Open on GitHub" onPress={() => openExternal(url)} />
     </View> : null}

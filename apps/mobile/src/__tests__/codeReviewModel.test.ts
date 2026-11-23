@@ -1,7 +1,7 @@
 import type { CodeReviewFinding } from '@talyn/client/native';
 
 import { agreementLabel, bucketFindings, droppedFindings, findingLocation, findingMeta, fixableIds, fixedFindings, groupFindings,
-  notNeededCount, plainCopy, postConfirmation, postToPrState, reviewHeadline, reviewRunning } from '../features/prs/codeReview';
+  notNeededCount, openFindingCounts, plainCopy, postConfirmation, postToPrState, reviewHeadline, reviewRunning, reviewSummary } from '../features/prs/codeReview';
 import { finding, review } from './workflowFixtures';
 
 const list: CodeReviewFinding[] = [
@@ -103,4 +103,33 @@ describe('code review findings', () => {
     ['No second pass — what the reviewer finds is what you get', 'No second pass: what the reviewer finds is what you get'],
     ['Plain words.', 'Plain words.'],
   ])('removes dashes from %s', (input, expected) => expect(plainCopy(input)).toBe(expected));
+});
+
+describe('code review summary', () => {
+  it.each([
+    ['nothing open', { blocker: 0, major: 0, minor: 0, nit: 2 }, 0, []],
+    ['a blocker and a major', { blocker: 1, major: 2, minor: 0, nit: 3 }, 3, ['Must fix 1', 'Should fix 2']],
+    ['the default bar, skipping nitpicks', { blocker: 0, major: 1, minor: 2, nit: 3 }, 3, ['Should fix 1', 'Worth considering 2']],
+    ['a blocker-only bar', { blocker: 2, major: 1, minor: 1, nit: 0 }, 2, ['Must fix 2']],
+    ['the nitpick bar', { blocker: 0, major: 0, minor: 1, nit: 2 }, 3, ['Worth considering 1', 'Nitpicks 2']],
+  ] as const)('counts open findings by severity: %s', (_name, counts, openCount, expected) =>
+    expect(openFindingCounts({ counts, openCount })).toEqual(expected));
+
+  it.each([
+    ['running', { phase: 'reviewing', runsDone: 1, runsTotal: 4 },
+      { title: 'Looking for problems (2 of 4)', findings: null, failure: null, waiting: false, stale: false }],
+    ['waiting for a runner', { phase: 'queued', runsDone: 0, deferredSince: '2026-11-08T10:00:00Z' },
+      { title: 'Waiting to start', findings: null, failure: null, waiting: true, stale: false }],
+    ['failed', { phase: 'failed', failureReason: 'The runner stopped.', openCount: 0 },
+      { title: 'The review did not finish', findings: null, failure: 'The runner stopped.', waiting: false, stale: false }],
+    ['open findings', {},
+      { title: '2 findings', findings: 'Must fix 1 · Should fix 1', failure: null, waiting: false, stale: false }],
+    ['clean', { counts: { blocker: 0, major: 0, minor: 0, nit: 1 }, openCount: 0 },
+      { title: 'Nothing to flag', findings: null, failure: null, waiting: false, stale: false }],
+    ['for an older commit', { staleForHead: true },
+      { title: '2 findings', findings: 'Must fix 1 · Should fix 1', failure: null, waiting: false, stale: true }],
+    ['running on a newer commit', { phase: 'reviewing', staleForHead: true, deferredSince: null },
+      { title: 'Looking for problems (4 of 4)', findings: null, failure: null, waiting: false, stale: false }],
+  ] as const)('sums up a review that is %s', (_name, patch, expected) =>
+    expect(reviewSummary(review(patch as Parameters<typeof review>[0]))).toEqual(expected));
 });

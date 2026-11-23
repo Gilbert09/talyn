@@ -30,6 +30,7 @@ import { MergeQueueSection, PRDetailSheet, ReviewsTab, usePrAutoKeep } from '../
 import { PRStatusPill, blockingReasonText } from '../widgets/PRStatusPill';
 import { PRReviewPill } from '../widgets/PRReviewPill';
 import { CodeReviewRowChip } from '../widgets/codeReview/CodeReviewRowChip';
+import { CodeReviewSeverityCounts } from '../widgets/codeReview/CodeReviewSeverityCounts';
 import { NoPullRequest, PrChecksList, usePrDetail } from './WorkbenchChecks';
 import { PrPill } from './WorkbenchBadges';
 import { timeAgo } from './new/RecentWorkbenches';
@@ -98,7 +99,8 @@ export function PullRequestTab({
   const open = pr.state === 'open';
   const summary = pr.summary;
   const review = pr.codeReview ?? null;
-  const reviewRunning = review ? !CODE_REVIEW_PHASE_AT_REST[(review as unknown as CodeReviewPublic).phase] : false;
+  const reviewPhase = review ? (review as unknown as CodeReviewPublic).phase : null;
+  const reviewRunning = reviewPhase ? !CODE_REVIEW_PHASE_AT_REST[reviewPhase] : false;
   const mergedAgo = pr.mergedAt ? timeAgo(pr.mergedAt) : null;
 
   const toggleQueue = async () => {
@@ -244,13 +246,23 @@ export function PullRequestTab({
           </Button>
         </div>
         {review && (
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground" data-testid="pr-code-review">
-            <span>Code review</span>
-            <CodeReviewRowChip review={review} onOpen={() => setSheet('findings')} />
-            {!reviewRunning && review.openCount === 0 && (review as unknown as CodeReviewPublic).phase !== 'failed' && (
-              <button type="button" className="hover:underline" onClick={() => setSheet('findings')}>
-                No open findings
+          <div className="space-y-1 text-[11px] text-muted-foreground" data-testid="pr-code-review">
+            <div className="flex items-center gap-1.5">
+              <span>Code review</span>
+              <CodeReviewRowChip review={review} onOpen={() => setSheet('findings')} />
+              {reviewPhase !== 'failed' && !reviewRunning && review.openCount === 0 && <span>No open findings</span>}
+              <span className="flex-1" />
+              <button
+                type="button"
+                className="shrink-0 rounded px-1 py-0.5 hover:bg-accent hover:text-foreground"
+                onClick={() => setSheet('findings')}
+                data-testid="pr-code-review-open"
+              >
+                View findings
               </button>
+            </div>
+            {!reviewRunning && review.openCount > 0 && (
+              <CodeReviewSeverityCounts counts={review.counts} openCount={review.openCount} />
             )}
           </div>
         )}

@@ -1,6 +1,9 @@
 import type { Workbench } from '@talyn/shared';
 import { usePullRequestStore } from '../stores/pullRequests';
 
+/** The tabs of the pull request detail sheet. */
+export type PrDetailTab = 'overview' | 'findings' | 'files' | 'checks' | 'reviews';
+
 /**
  * The Talyn pull request id behind "PR #number" in a session, or null when the
  * session cannot say. A session knows its own PR by id; any other number is

@@ -476,10 +476,55 @@ describe('Pull request tab', () => {
         phase: 'ready',
         phasePlan: [],
         openCount: 0,
+        counts: { blocker: 0, major: 0, minor: 0, nit: 0 },
       } as unknown as PRRow['codeReview'],
     });
     render(<PullRequestTab workbench={WB} chat={chat} pr={done} visible turnsEnded={0} />);
-    fireEvent.click(screen.getByText('No open findings'));
+    expect(screen.getByText('No open findings')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('pr-code-review-open'));
+    expect(screen.getByTestId('pr-sheet')).toHaveAttribute('data-tab', 'findings');
+  });
+
+  it.each([
+    {
+      name: 'running',
+      review: { phase: 'reviewing', phasePlan: ['reviewing'], openCount: 0, counts: { blocker: 0, major: 0, minor: 0, nit: 0 } },
+      noFindings: false,
+      counts: [] as string[],
+    },
+    {
+      name: 'failed',
+      review: { phase: 'failed', phasePlan: [], openCount: 0, counts: { blocker: 0, major: 0, minor: 0, nit: 0 }, failureReason: 'Boom' },
+      noFindings: false,
+      counts: [],
+    },
+    {
+      name: 'clean',
+      review: { phase: 'ready', phasePlan: [], openCount: 0, counts: { blocker: 0, major: 0, minor: 0, nit: 0 } },
+      noFindings: true,
+      counts: [],
+    },
+    {
+      name: 'open findings',
+      review: { phase: 'ready', phasePlan: [], openCount: 3, counts: { blocker: 2, major: 1, minor: 0, nit: 0 } },
+      noFindings: false,
+      counts: ['2 must fix', '1 should fix'],
+    },
+    {
+      name: 'open findings with nitpicks below the bar',
+      review: { phase: 'ready', phasePlan: [], openCount: 2, counts: { blocker: 0, major: 1, minor: 1, nit: 4 } },
+      noFindings: false,
+      counts: ['1 should fix', '1 consider'],
+    },
+  ])('the code review summary when $name', ({ review, noFindings, counts }) => {
+    getPr.mockResolvedValue({ row: PR, fresh });
+    const row = prWith({ codeReview: { deferredSince: null, staleForHead: false, ...review } as unknown as PRRow['codeReview'] });
+    render(<PullRequestTab workbench={WB} chat={chat} pr={row} visible turnsEnded={0} />);
+    const section = screen.getByTestId('pr-code-review');
+    expect(within(section).queryByText('No open findings') !== null).toBe(noFindings);
+    const shown = within(section).queryByTestId('code-review-severity-counts');
+    expect(shown ? Array.from(shown.children).map((c) => c.textContent?.trim()) : []).toEqual(counts);
+    fireEvent.click(within(section).getByRole('button', { name: 'View findings' }));
     expect(screen.getByTestId('pr-sheet')).toHaveAttribute('data-tab', 'findings');
   });
 

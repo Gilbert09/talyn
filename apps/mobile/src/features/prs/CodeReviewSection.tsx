@@ -7,17 +7,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import { useMobileRuntime } from '../../auth/AuthProvider';
-import { AppText, BottomBar, Button, Disclosure, Dot, Notice, Pill, SectionLabel, Segmented, SheetModal, toneColor, type SheetRequest,
-  type Tone } from '../../components/UI';
+import { AppText, BottomBar, Button, Disclosure, Dot, Group, Notice, Pill, Row, SectionLabel, Segmented, SheetModal, toneColor,
+  type SheetRequest, type Tone } from '../../components/UI';
 import { openExternal, safeExternalUrl } from '../../components/Workflow';
 import { trackEvent } from '../../lib/analytics';
 import { errorMessage, showActionError } from '../../lib/errors';
+import { pullRequestRoute, sessionRoute } from '../../navigation/routes';
 import { mono, radius, sans, useTheme, withAlpha } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
 import type { CodeReviewData } from '../../workflow/store';
 import { Markdown } from '../chat/Markdown';
 import { bucketFindings, droppedFindings, findingLocation, findingMeta, fixableIds, fixedFindings, groupFindings, notNeededCount,
-  plainCopy, postConfirmation, postToPrState, reviewHeadline, reviewRunning, SEVERITY_TONE } from './codeReview';
+  plainCopy, postConfirmation, postToPrState, REVIEW_STALE, REVIEW_WAITING, reviewRunning, reviewSummary, SEVERITY_TONE } from './codeReview';
 
 const POLL = 5000;
 type Busy = 'start' | 'stop' | 'fix' | 'post' | null;
@@ -251,6 +252,25 @@ function FindingCard({ finding, review, names, expanded, onToggleExpanded, openS
   </View>;
 }
 
+/**
+ * A review's status and open findings, as one row that opens the PR on its
+ * Findings tab. Pass `onPress` to navigate yourself, for example to close a sheet first.
+ */
+export function CodeReviewSummary({ review, pullRequestId, onPress }: { review: CodeReviewPublic; pullRequestId: string; onPress?(): void }) {
+  const summary = reviewSummary(review);
+  const lines = [summary.findings, summary.failure, summary.waiting ? REVIEW_WAITING : null, summary.stale ? REVIEW_STALE : null]
+    .filter((line): line is string => Boolean(line));
+  return <Group title="Code review">
+    <Row title={summary.title} chevron divider={false} href={onPress ? undefined : pullRequestRoute(pullRequestId, { tab: 'findings' })} onPress={onPress}
+      accessibilityLabel={`Code review: ${[summary.title, ...lines].map((line) => line.replace(/\.$/, '')).join('. ')}. Show the findings.`}>
+      {summary.findings ? <AppText variant="meta" tone="muted">{summary.findings}</AppText> : null}
+      {summary.failure ? <AppText variant="meta" tone="destructive">{summary.failure}</AppText> : null}
+      {summary.waiting ? <AppText variant="meta" tone="warning">{REVIEW_WAITING}</AppText> : null}
+      {summary.stale ? <AppText variant="meta" tone="warning">{REVIEW_STALE}</AppText> : null}
+    </Row>
+  </Group>;
+}
+
 /** The PR detail's Findings tab: follow a review, read and act on its findings. Starting one opens the start sheet. */
 export function CodeReviewSection({ review: cr, open, openSheet, onReviewRequest }: {
   review: CodeReviewController; open: boolean; openSheet(request: SheetRequest): void; onReviewRequest(): void;
@@ -300,6 +320,8 @@ export function CodeReviewSection({ review: cr, open, openSheet, onReviewRequest
   }
 
   const progress = codeReviewProgress(review);
+  const summary = reviewSummary(review);
+  const session = review.session;
   const lensesRun = review.lensesRun.map((lens) => codeReviewLensLabel(lens, names)).join(', ');
   const skipped = notNeededCount(review);
   const scope = [
@@ -312,11 +334,11 @@ export function CodeReviewSection({ review: cr, open, openSheet, onReviewRequest
   return <View style={local.section}>
     <View style={[local.panel, { borderColor: stale ? withAlpha(c.warning, 0.45) : c.border,
       backgroundColor: stale ? withAlpha(c.warning, c.mode === 'dark' ? 0.08 : 0.05) : c.paper }]}>
-      <AppText variant="rowTitle" accessibilityLiveRegion="polite">{running ? progress.label : reviewHeadline(review)}</AppText>
+      <AppText variant="rowTitle" accessibilityLiveRegion="polite">{summary.title}</AppText>
       <AppText variant="caption" tone="muted">{scope}</AppText>
       {running ? <Progress fraction={progress.fraction} label={progress.label} /> : null}
-      {!running && review.phase === 'failed' && review.failureReason ? <AppText variant="meta" tone="destructive">{review.failureReason}</AppText> : null}
-      {review.deferredSince && running ? <AppText variant="meta" tone="warning">Waiting for a runner to become free.</AppText> : null}
+      {summary.failure ? <AppText variant="meta" tone="destructive">{summary.failure}</AppText> : null}
+      {summary.waiting ? <AppText variant="meta" tone="warning">{REVIEW_WAITING}</AppText> : null}
       <View style={local.actions}>
         {groups.length > 0 ? <Button variant="secondary" size="sm" title={post.label} icon={{ ios: 'text.bubble', android: 'comment' }}
           accessibilityLabel={post.disabledReason ? `${post.label}. ${post.disabledReason}` : post.label}
@@ -330,6 +352,8 @@ export function CodeReviewSection({ review: cr, open, openSheet, onReviewRequest
         </>}
       </View>
       {post.disabledReason && groups.length > 0 && !running ? <AppText variant="caption" tone="muted">{post.disabledReason}</AppText> : null}
+      {session ? <Row title="View session" subtitle={session.archived ? `${session.name} · Archived` : session.name} href={sessionRoute(session.id)}
+        chevron divider={false} accessibilityLabel={`View session ${session.name}${session.archived ? '. The session is archived' : ''}`} /> : null}
     </View>
 
     {running && !fixing && groups.length > 0 ? <AppText variant="meta" tone="muted">

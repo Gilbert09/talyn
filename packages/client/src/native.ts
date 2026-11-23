@@ -2789,6 +2789,9 @@ export const workbenches = {
   retry: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/retry`),
   /** Where the session's turns spent their time, by category, with the slowest calls. */
   timing: (id: string) => request<WorkbenchTiming>('GET', `/workbenches/${enc(id)}/timing`),
+  /** The code review of the session's pull request. `review` is null when there is none. */
+  codeReview: (id: string) =>
+    request<{ pullRequestId: string | null; review: CodeReviewPublic | null }>('GET', `/workbenches/${enc(id)}/code-review`),
   /** The Sandbox panel: the box's state, what runs on it, and whether its work is saved. */
   sandboxStatus: (id: string) =>
     request<import('@talyn/shared').WorkbenchSandboxStatus>('GET', `/workbenches/${enc(id)}/sandbox-status`),

@@ -6,7 +6,7 @@ import { Alert } from 'react-native';
 import { HistoryScreen } from '../features/history/HistoryScreen';
 import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
 import { palettes } from '../theme/tokens';
-import { chat, fixture, pr, session, thread } from './workflowFixtures';
+import { chat, fixture, pr, review, session, thread } from './workflowFixtures';
 
 jest.setTimeout(15000);
 
@@ -125,6 +125,23 @@ describe('compact session header', () => {
     expect(screen.getByRole('button', { name: /Pull request 42: Review current work\. Conflicts\./ })).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Open parent thread' }));
     expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/threads/[id]', params: { id: 'thread-one' } });
+  });
+  it.each([
+    ['with findings', review(), 'Code review: 2 findings. Must fix 1 · Should fix 1. Show the findings.'],
+    ['that failed', review({ phase: 'failed', openCount: 0, failureReason: 'The runner stopped.' }),
+      'Code review: The review did not finish. The runner stopped. Show the findings.'],
+  ])('shows the code review %s in the details sheet and opens its findings', async (_name, codeReview, label) => {
+    withRow({ codeReview });
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('header', { name: /^Current work\./ }));
+    await fireEvent.press(await screen.findByRole('button', { name: label }));
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/attention/[id]', params: { id: 'pr-one', tab: 'findings' } });
+  });
+  it('shows no code review in the details sheet when the PR has none', async () => {
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('header', { name: /^Current work\./ }));
+    await screen.findByRole('header', { name: 'Session details' });
+    expect(screen.queryByRole('button', { name: /^Code review/ })).toBeNull();
   });
   it.each([
     ['a GitHub rule', { kind: 'workflow', workflowId: 'wf-one', runId: 'r' }, 'GitHub', { kind: 'github', id: 'wf-one' }],
