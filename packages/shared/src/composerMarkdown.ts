@@ -84,6 +84,36 @@ export function composerMarkdown(text: string): ComposerLine[] {
   return lines;
 }
 
+/**
+ * Ends each quote at the first line without `>`, as the composer shows it.
+ *
+ * In CommonMark a plain line after `> quote` is a "lazy continuation": it
+ * joins the quoted paragraph. The composer styles each line on its own, so
+ * `> quote` then `my reply` looks like a quote and a reply while typed, but
+ * rendered as one quote. A blank line before the plain line makes the
+ * rendered message match the composer. Lines in a code fence stay as they are.
+ */
+export function endQuotesAtPlainLines(text: string): string {
+  if (!text.includes('>')) return text;
+  const out: string[] = [];
+  let fence: string | null = null;
+  let inQuote = false;
+  for (const line of text.split('\n')) {
+    const fenceMatch = FENCE.exec(line);
+    if (fence !== null) {
+      if (fenceMatch !== null && fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length && line.trim() === fenceMatch[1]) fence = null;
+      out.push(line);
+      continue;
+    }
+    const quote = QUOTE.test(line);
+    if (inQuote && !quote && line.trim() !== '') out.push('');
+    if (!quote && fenceMatch) fence = fenceMatch[1];
+    inQuote = quote;
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
 // Order matters: code spans first (nothing inside them is Markdown), then the
 // double markers before the single ones.
 const INLINE =

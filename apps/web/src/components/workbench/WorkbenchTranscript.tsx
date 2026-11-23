@@ -1,6 +1,6 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, History, Loader2, RotateCcw } from 'lucide-react';
-import { agentOutageFrom, buildBlocks, findTurnPlan, findTurnQuestion, isClaudeInterruptionEvent, isSubagentEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type Workbench, type WorkbenchChat, type WorkbenchEvent, type WorkbenchMessageSender } from '@talyn/shared';
+import { agentOutageFrom, buildBlocks, endQuotesAtPlainLines, findTurnPlan, findTurnQuestion, isClaudeInterruptionEvent, isSubagentEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type Workbench, type WorkbenchChat, type WorkbenchEvent, type WorkbenchMessageSender } from '@talyn/shared';
 import { AgentBlocks } from './AgentBlocks';
 import { usePendingMessages } from './usePendingMessages';
 import { renderMarkdownish } from '../../lib/markdown';
@@ -486,7 +486,7 @@ function UserMessage({
           </div>
         )}
         <div className="rounded-lg bg-muted px-3 py-2 text-[13px] text-foreground [overflow-wrap:anywhere]">
-          {renderMarkdownish(text, 'surface')}
+          {renderMarkdownish(endQuotesAtPlainLines(text), 'surface')}
           {attachments.length > 0 && <MessageAttachments attachments={attachments} ops={ops} />}
         </div>
         {sending && (

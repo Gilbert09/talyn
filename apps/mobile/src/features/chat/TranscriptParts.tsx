@@ -1,5 +1,5 @@
 import {
-  describeTool, formatQuestionAnswers, isQuestionAnswered, type QuestionAnswer, type Workbench, type WorkbenchMessageSender,
+  describeTool, endQuotesAtPlainLines, formatQuestionAnswers, isQuestionAnswered, type QuestionAnswer, type Workbench, type WorkbenchMessageSender,
   type WorkbenchQuestionEvent, type WorkbenchQuestionItem,
 } from '@talyn/shared';
 import { Link, type Href } from 'expo-router';
@@ -79,7 +79,7 @@ export const UserBubble = memo(function UserBubble({ text, timestamp, attachment
     {sender ? <AppText variant="caption" tone="muted" importantForAccessibility="no">{senderLabel(sender)}</AppText> : null}
     <Spoken label={`${sender ? senderLabel(sender) : 'You said'}: ${text}${time ? `, ${time}` : ''}`} text={text} style={{ ...styles.bubble, backgroundColor: c.surface }}>
       {(selectable) => <>
-        <Markdown text={text} selectable={selectable} />
+        <Markdown text={endQuotesAtPlainLines(text)} selectable={selectable} />
         {files.length ? <MessageImages workbenchId={workbenchId} attachments={files} />
           : attachments ? <AppText variant="caption" tone="muted">{attachments === 1 ? '1 attachment' : `${attachments} attachments`}</AppText> : null}
       </>}
