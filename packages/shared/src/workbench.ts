@@ -776,6 +776,12 @@ export type ConfirmWorkbenchBranchNameResult =
   | { outcome: 'renamed'; workbench: Workbench }
   | { outcome: 'refused'; reason: 'name_taken' | 'row_changed' };
 
+/** POST /workbenches/archive: the sessions it archived, and each id it could not archive with the reason. */
+export interface ArchiveWorkbenchesResult {
+  archived: Workbench[];
+  failed: Array<{ id: string; error: string }>;
+}
+
 export interface UpdateWorkbenchInput {
   /** The local runtime reports a branch after checkout. */
   branch?: string;

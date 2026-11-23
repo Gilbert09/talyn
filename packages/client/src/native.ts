@@ -2773,6 +2773,9 @@ export const workbenches = {
   update: (id: string, patch: UpdateWorkbenchInput) =>
     request<Workbench>('PATCH', `/workbenches/${enc(id)}`, patch),
   archive: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/archive`),
+  /** Archive many sessions in one request. An id that fails goes into `failed`; the others still archive. */
+  archiveMany: (ids: string[]) =>
+    request<import('@talyn/shared').ArchiveWorkbenchesResult>('POST', '/workbenches/archive', { ids }),
   restore: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/restore`),
   /** Start waking the session's box before the first turn. Never waits for the box. */
   wake: (id: string) =>

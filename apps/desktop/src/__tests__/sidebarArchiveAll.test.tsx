@@ -11,9 +11,9 @@ import { installNavigation, useNavigationStore } from '../renderer/stores/naviga
 import { usePullRequestStore } from '../renderer/stores/pullRequests';
 import { toast } from '../renderer/stores/toast';
 
-const archive = jest.fn();
+const archiveMany = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
-  api: { workbenches: { archive: (...a: unknown[]) => archive(...a), update: jest.fn() } },
+  api: { workbenches: { archiveMany: (...a: unknown[]) => archiveMany(...a), update: jest.fn() } },
 }));
 jest.mock('../renderer/stores/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() },
@@ -57,11 +57,13 @@ function renderList() {
 
 const archiveAllButton = () => screen.getByRole('button', { name: 'Archive all sessions without an open pull request' });
 
+const archivedRow = (id: string) => ({ ...wb(id), status: 'archived', archivedAt: '2026-11-06T00:00:00Z' });
+
 beforeAll(() => installNavigation());
 
 beforeEach(() => {
-  archive.mockReset();
-  archive.mockImplementation(async (id: string) => ({ ...wb(id), status: 'archived', archivedAt: '2026-11-06T00:00:00Z' }));
+  archiveMany.mockReset();
+  archiveMany.mockImplementation(async (ids: string[]) => ({ archived: ids.map(archivedRow), failed: [] }));
   jest.mocked(toast.success).mockClear();
   jest.mocked(toast.error).mockClear();
   useWorkbenchStore.getState().setWorkspace('ws1');
@@ -89,7 +91,8 @@ describe('sidebar archive all', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Archive all' }));
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Archived 2 sessions'));
-    expect(archive.mock.calls.map((c) => c[0]).sort()).toEqual(['lisbon', 'porto']);
+    expect(archiveMany).toHaveBeenCalledTimes(1);
+    expect([...archiveMany.mock.calls[0][0]].sort()).toEqual(['lisbon', 'porto']);
     await waitFor(() => expect(screen.queryByText('Archive 2 sessions?')).not.toBeInTheDocument());
   });
 
@@ -97,7 +100,7 @@ describe('sidebar archive all', () => {
     renderList();
     fireEvent.click(archiveAllButton());
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
-    expect(archive).not.toHaveBeenCalled();
+    expect(archiveMany).not.toHaveBeenCalled();
   });
 
   it('is disabled when every session has an open PR or works now', () => {
@@ -113,28 +116,29 @@ describe('sidebar archive all', () => {
     renderList();
     fireEvent.click(archiveAllButton());
     fireEvent.click(await screen.findByRole('button', { name: 'Archive all' }));
-    await waitFor(() => expect(archive).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(archiveMany).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(useWorkbenchStore.getState().selectedWorkbenchId).toBeNull());
   });
 
   it('counts only the sessions that archived when one fails', async () => {
-    archive.mockImplementation(async (id: string) => {
-      if (id === 'porto') throw new Error('boom');
-      return { ...wb(id), status: 'archived', archivedAt: '2026-11-06T00:00:00Z' };
-    });
+    archiveMany.mockImplementation(async (ids: string[]) => ({
+      archived: ids.filter((id) => id !== 'porto').map(archivedRow),
+      failed: [{ id: 'porto', error: 'boom' }],
+    }));
     renderList();
     fireEvent.click(archiveAllButton());
     fireEvent.click(await screen.findByRole('button', { name: 'Archive all' }));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Archived 1 session'));
-    expect(toast.error).toHaveBeenCalledWith('Could not archive the session', 'boom');
+    expect(toast.error).toHaveBeenCalledWith('Could not archive 1 session', 'boom');
   });
 
-  it('shows no toast when every archive fails', async () => {
-    archive.mockRejectedValue(new Error('down'));
+  it('shows one error and no success when the request fails', async () => {
+    archiveMany.mockRejectedValue(new Error('down'));
     renderList();
     fireEvent.click(archiveAllButton());
     fireEvent.click(await screen.findByRole('button', { name: 'Archive all' }));
-    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not archive the sessions', 'down'));
+    expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.success).not.toHaveBeenCalled();
   });
 });

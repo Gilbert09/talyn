@@ -878,6 +878,55 @@ describe('workbench routes', () => {
     });
   });
 
+  describe('bulk archive', () => {
+    it('archives every session in one request and answers the archived rows', async () => {
+      const a = await createLocalWorkbench();
+      const b = await createLocalWorkbench();
+      const res = await call('POST', '/workbenches/archive', { ids: [a.id, b.id, a.id] });
+      expect(res.status).toBe(200);
+      expect(res.body.data.failed).toEqual([]);
+      expect(res.body.data.archived.map((w: Loose) => w.id).sort()).toEqual([a.id, b.id].sort());
+      expect(res.body.data.archived.every((w: Loose) => w.status === 'archived' && w.archivedAt)).toBe(true);
+      expect((await getWorkbench(a.id))?.archivedAt).not.toBeNull();
+      expect((await getWorkbench(b.id))?.archivedAt).not.toBeNull();
+    });
+
+    it('reports unknown and foreign ids as not found and still archives the others', async () => {
+      const mine = await createLocalWorkbench();
+      const theirs = await createLocalWorkbench();
+      const res = await call('POST', '/workbenches/archive', { ids: [mine.id, 'missing'] });
+      expect(res.body.data.archived.map((w: Loose) => w.id)).toEqual([mine.id]);
+      expect(res.body.data.failed).toEqual([{ id: 'missing', error: 'Session not found' }]);
+
+      const asB = await call('POST', '/workbenches/archive', { ids: [theirs.id] }, 'owner-b');
+      expect(asB.status).toBe(200);
+      expect(asB.body.data).toEqual({ archived: [], failed: [{ id: theirs.id, error: 'Session not found' }] });
+      expect((await getWorkbench(theirs.id))?.archivedAt).toBeNull();
+    });
+
+    it.each([
+      ['no body', undefined],
+      ['no ids', {}],
+      ['an empty list', { ids: [] }],
+      ['a string', { ids: 'wb-1' }],
+      ['a non-string id', { ids: ['wb-1', 7] }],
+      ['an empty id', { ids: [''] }],
+      ['too many ids', { ids: Array.from({ length: 201 }, (_, i) => `wb-${i}`) }],
+    ])('refuses %s with 400', async (_name, body) => {
+      expect((await call('POST', '/workbenches/archive', body)).status).toBe(400);
+    });
+
+    it('refuses with 403 when sessions are turned off', async () => {
+      const wb = await createLocalWorkbench();
+      vi.stubEnv('WORKBENCHES_ENABLED', 'false');
+      resetFeatureFlagsForTests();
+      const res = await call('POST', '/workbenches/archive', { ids: [wb.id] });
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('workbenches_unavailable');
+      expect((await getWorkbench(wb.id))?.archivedAt).toBeNull();
+    });
+  });
+
   describe('archive and restore', () => {
     it('answers immediately, then saves and deletes the box', async () => {
       const wb = await createSandboxWorkbench();

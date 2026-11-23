@@ -5,6 +5,7 @@ import type { LocalWorktreeStatus, Workbench } from '@talyn/shared';
 import {
   ArchiveWorkbenchDialog,
   archiveWorkbench,
+  archiveWorkbenches,
   restoreWorkbench,
 } from '../renderer/components/workbench/archiveWorkbench';
 import { api } from '../renderer/lib/api';
@@ -26,7 +27,7 @@ jest.mock('../renderer/lib/workbenchBridge', () => ({
   getDeviceId: () => 'dev1',
 }));
 jest.mock('../renderer/lib/api', () => ({
-  api: { workbenches: { archive: jest.fn(), restore: jest.fn(), update: jest.fn() } },
+  api: { workbenches: { archive: jest.fn(), archiveMany: jest.fn(), restore: jest.fn(), update: jest.fn() } },
 }));
 jest.mock('../renderer/lib/coderPreview', () => ({ stopCoderPreview: jest.fn() }));
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
@@ -59,6 +60,7 @@ const status = (over: Partial<LocalWorktreeStatus> = {}): LocalWorktreeStatus =>
 });
 
 const archive = api.workbenches.archive as jest.Mock;
+const archiveMany = api.workbenches.archiveMany as jest.Mock;
 const restore = api.workbenches.restore as jest.Mock;
 const update = api.workbenches.update as jest.Mock;
 
@@ -172,6 +174,53 @@ describe('archiveWorkbench', () => {
       'Could not delete the worktree',
       `The worktree has uncommitted changes, so Talyn kept it. The session is archived. Its folder stays at ${WB.localPath}.`
     );
+  });
+});
+
+describe('archiveWorkbenches', () => {
+  const archivedRow = (id: string, over: Partial<Workbench> = {}) =>
+    ({ ...WB, id, localPath: `/wt/${id}`, status: 'archived', archivedAt: '2026-11-01T00:00:00Z', ...over }) as Workbench;
+
+  it('archives every session in one request, then cleans up each one here', async () => {
+    archiveMany.mockResolvedValue({
+      archived: [archivedRow('wb1'), archivedRow('wb2'), archivedRow('wb3', { runtime: 'sandbox', localPath: null })],
+      failed: [],
+    });
+    expect(await archiveWorkbenches(['wb1', 'wb2', 'wb3'], null)).toBe(3);
+    expect(archiveMany).toHaveBeenCalledTimes(1);
+    expect(archiveMany).toHaveBeenCalledWith(['wb1', 'wb2', 'wb3']);
+    expect(archive).not.toHaveBeenCalled();
+    expect(bridge.removeWorktree.mock.calls.map(([input]) => input).sort((a, b) => a.workbenchId.localeCompare(b.workbenchId))).toEqual([
+      { path: '/wt/wb1', workbenchId: 'wb1', force: false },
+      { path: '/wt/wb2', workbenchId: 'wb2', force: false },
+    ]);
+    expect(bridge.preview.stop).toHaveBeenCalledTimes(3);
+    expect(toast.success).toHaveBeenCalledWith('Archived 3 sessions');
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('archives the others and says which failed when the server refuses some ids', async () => {
+    archiveMany.mockResolvedValue({
+      archived: [archivedRow('wb1')],
+      failed: [{ id: 'wb2', error: 'Session not found' }],
+    });
+    expect(await archiveWorkbenches(['wb1', 'wb2'], null)).toBe(1);
+    expect(bridge.removeWorktree).toHaveBeenCalledTimes(1);
+    expect(toast.success).toHaveBeenCalledWith('Archived 1 session');
+    expect(toast.error).toHaveBeenCalledWith('Could not archive 1 session', 'Session not found');
+  });
+
+  it('removes nothing when the request failed', async () => {
+    archiveMany.mockRejectedValue(new Error('offline'));
+    expect(await archiveWorkbenches(['wb1', 'wb2'], null)).toBe(0);
+    expect(bridge.removeWorktree).not.toHaveBeenCalled();
+    expect(bridge.stopWorkbench).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith('Could not archive the sessions', 'offline');
+  });
+
+  it('sends nothing for an empty list', async () => {
+    expect(await archiveWorkbenches([], null)).toBe(0);
+    expect(archiveMany).not.toHaveBeenCalled();
   });
 });
 
