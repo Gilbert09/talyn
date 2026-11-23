@@ -20,12 +20,7 @@ import {
   workspaces as workspacesTable,
 } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
-import {
-  acknowledgeAttention,
-  attentionChatsQuery,
-  attentionSessionsQuery,
-  contextAttention,
-} from '../services/workbenches/attention.js';
+import { attentionChatsQuery, attentionSessionsQuery, contextAttention } from '../services/workbenches/attention.js';
 
 const BASE: AttentionSessionInput = {
   kind: 'session',
@@ -374,15 +369,15 @@ describe('contextAttention (pglite)', () => {
       expect(await contextAttention(db, OWNER)).toEqual({ workspaces: { ws1: 1 }, spaces: { sp1: 1 }, workspaceSpaces: { ws1: { sp1: 1 } }, sessions: { s1: 'plan' } });
     });
 
-    it('stops counting when the session is opened, and counts a new plan in a later turn', async () => {
+    it('keeps counting a plan until a person answers it', async () => {
       await session('s1', { chats: [{ status: 'idle', turnCount: 1 }] });
       await transcript('s1-chat-0', 1, [['user', 'Plan it'], ['assistant', PLAN]]);
-      expect(await acknowledgeAttention(db, OWNER, 's1')).toBe(true);
-      expect((await contextAttention(db, OWNER)).sessions).toEqual({});
+      await db.update(workbenchesTable).set({ attentionAck: 'plan:s1-chat-0@1' }).where(eq(workbenchesTable.id, 's1'));
+      expect((await contextAttention(db, OWNER)).sessions).toEqual({ s1: 'plan' });
 
       await db.update(chatsTable).set({ turnCount: 2 }).where(eq(chatsTable.id, 's1-chat-0'));
-      await transcript('s1-chat-0', 2, [['user', 'Keep planning: add docs'], ['assistant', PLAN]]);
-      expect((await contextAttention(db, OWNER)).sessions).toEqual({ s1: 'plan' });
+      await transcript('s1-chat-0', 2, [['user', 'Approve and build']]);
+      expect((await contextAttention(db, OWNER)).sessions).toEqual({});
     });
   });
 
@@ -396,75 +391,49 @@ describe('contextAttention (pglite)', () => {
     expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {}, workspaceSpaces: {}, sessions: {} });
   });
 
-  describe('acknowledgeAttention', () => {
-    const ackOf = async (id: string) =>
-      (await db.select({ ack: workbenchesTable.attentionAck }).from(workbenchesTable).where(eq(workbenchesTable.id, id)))[0]?.ack;
+  describe('a session stays counted until its alert is resolved', () => {
     const setChat = (id: string, patch: { status: string; turnCount?: number }) =>
       db.update(chatsTable).set(patch).where(eq(chatsTable.id, id));
+    const sessionKeys = async () => (await contextAttention(db, OWNER)).sessions;
 
-    it.each<[string, Parameters<typeof session>[1]]>([
-      ['a question', { chats: [{ status: 'awaiting_input' }] }],
-      ['a failed start', { status: 'error' }],
-      ['a failed chat', { chats: [{ status: 'error' }] }],
-      ['a conflicting PR', { pullRequestId: 'pr-conflict' }],
-      ['a question in a space', { spaceId: 'sp1', chats: [{ status: 'awaiting_input' }] }],
-    ])('opening the session stops counting %s', async (_label, opts) => {
+    it.each<[string, Parameters<typeof session>[1], string, 'failed' | 'reply' | 'conflict']>([
+      ['a question', { chats: [{ status: 'awaiting_input' }] }, 'reply:s1-chat-0@1', 'reply'],
+      ['a failed start', { status: 'error' }, 'error', 'failed'],
+      ['a failed chat', { chats: [{ status: 'error' }] }, 'chat_error:s1-chat-0@1', 'failed'],
+      ['a conflicting PR', { pullRequestId: 'pr-conflict' }, 'conflict:pr-conflict:', 'conflict'],
+      ['a question in a space', { spaceId: 'sp1', chats: [{ status: 'awaiting_input' }] }, 'reply:s1-chat-0@1', 'reply'],
+    ])('ignores a stored "seen" key for %s', async (_label, opts, key, reason) => {
       await session('s1', opts);
-      await session('other', { chats: [{ status: 'awaiting_input' }] });
-      expect((await contextAttention(db, OWNER)).workspaces.ws1).toBe(2);
-
-      expect(await acknowledgeAttention(db, OWNER, 's1')).toBe(true);
-
-      const counts = await contextAttention(db, OWNER);
-      expect(counts.workspaces.ws1).toBe(1);
-      expect(counts.spaces.sp1).toBeUndefined();
+      await db.update(workbenchesTable).set({ attentionAck: key }).where(eq(workbenchesTable.id, 's1'));
+      expect(await sessionKeys()).toEqual({ s1: reason });
     });
 
-    it('counts the session again when a new question comes in a later turn', async () => {
+    it('stops counting a question when the person answers it', async () => {
       await session('s1', { chats: [{ status: 'awaiting_input', turnCount: 1 }] });
-      await acknowledgeAttention(db, OWNER, 's1');
-      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {}, workspaceSpaces: {}, sessions: {} });
-
+      expect(await sessionKeys()).toEqual({ s1: 'reply' });
       await setChat('s1-chat-0', { status: 'running', turnCount: 2 });
-      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {}, workspaceSpaces: {}, sessions: {} });
-      await setChat('s1-chat-0', { status: 'awaiting_input' });
-      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: { ws1: 1 }, spaces: {}, workspaceSpaces: {}, sessions: { s1: 'reply' } });
+      expect(await sessionKeys()).toEqual({});
     });
 
-    it('counts the session again when its conflicts come back on a new head', async () => {
-      await db.update(prTable).set({ lastSummary: { mergeable: 'CONFLICTING', headSha: 'a' } as never }).where(eq(prTable.id, 'pr-conflict'));
+    it('stops counting a failed chat when it is retried', async () => {
+      await session('s1', { chats: [{ status: 'error', turnCount: 1 }] });
+      expect(await sessionKeys()).toEqual({ s1: 'failed' });
+      await setChat('s1-chat-0', { status: 'running', turnCount: 2 });
+      expect(await sessionKeys()).toEqual({});
+    });
+
+    it('stops counting a failed start when the session is ready', async () => {
+      await session('s1', { status: 'error' });
+      expect(await sessionKeys()).toEqual({ s1: 'failed' });
+      await db.update(workbenchesTable).set({ status: 'ready' }).where(eq(workbenchesTable.id, 's1'));
+      expect(await sessionKeys()).toEqual({});
+    });
+
+    it('stops counting conflicts when the PR merges cleanly again', async () => {
       await session('s1', { pullRequestId: 'pr-conflict' });
-      await acknowledgeAttention(db, OWNER, 's1');
-      expect(await ackOf('s1')).toBe('conflict:pr-conflict:a');
-      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: {}, spaces: {}, workspaceSpaces: {}, sessions: {} });
-
-      await db.update(prTable).set({ lastSummary: { mergeable: 'CONFLICTING', headSha: 'b' } as never }).where(eq(prTable.id, 'pr-conflict'));
-      expect(await contextAttention(db, OWNER)).toEqual({ workspaces: { ws1: 1 }, spaces: {}, workspaceSpaces: {}, sessions: { s1: 'conflict' } });
-    });
-
-    it('clears the stored key when the session is opened with no alert', async () => {
-      await session('s1', { chats: [{ status: 'awaiting_input' }] });
-      await acknowledgeAttention(db, OWNER, 's1');
-      expect(await ackOf('s1')).toBe('reply:s1-chat-0@1');
-
-      await setChat('s1-chat-0', { status: 'idle' });
-      await acknowledgeAttention(db, OWNER, 's1');
-      expect(await ackOf('s1')).toBeNull();
-    });
-
-    it('does nothing for another owner’s session, and leaves their badge', async () => {
-      await session('theirs', { workspaceId: 'ws-other', spaceId: 'sp1', chats: [{ status: 'awaiting_input' }] });
-      expect(await acknowledgeAttention(db, OWNER, 'theirs')).toBe(false);
-      expect(await ackOf('theirs')).toBeNull();
-      expect(await contextAttention(db, OTHER)).toEqual({ workspaces: { 'ws-other': 1 }, spaces: { sp1: 1 }, workspaceSpaces: { 'ws-other': { sp1: 1 } }, sessions: { theirs: 'reply' } });
-    });
-
-    it.each([
-      ['an unknown session', 'nope', false],
-      ['an archived session', 'gone', true],
-    ])('answers false for %s', async (_label, id, create) => {
-      if (create) await session(id, { status: 'error', archived: true });
-      expect(await acknowledgeAttention(db, OWNER, id)).toBe(false);
+      expect(await sessionKeys()).toEqual({ s1: 'conflict' });
+      await db.update(prTable).set({ lastSummary: { mergeable: 'MERGEABLE', headSha: 'b' } as never }).where(eq(prTable.id, 'pr-conflict'));
+      expect(await sessionKeys()).toEqual({});
     });
   });
 

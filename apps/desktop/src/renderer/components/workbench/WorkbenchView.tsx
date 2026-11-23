@@ -28,7 +28,7 @@ import { useRepoPaths } from './new/useRepoPaths';
 import { getDeviceId } from '../../lib/workbenchBridge';
 import { checkoutFor, takeOverLocalWorkbench } from '../../lib/localTakeover';
 import { useWorkbenchBackgroundLoad } from '../../hooks/useSessionBackground';
-import { clientAttentionKey, useAttentionSeen } from '../../lib/contextRail';
+import { clientAttentionKey, useAttentionRefresh } from '../../lib/contextRail';
 import { sessionPr } from '../../lib/sessionState';
 import { ImageDropOverlay, useImageDropZone } from './useComposerImages';
 
@@ -50,8 +50,7 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   const prDetailId = useWorkbenchStore((s) => s.prDetailId);
   const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
   const storeChats = useWorkbenchStore((s) => s.chats[workbench.id]);
-  useAttentionSeen(
-    workbench.id,
+  useAttentionRefresh(
     clientAttentionKey(workbench, storeChats ?? workbench.chats ?? [], sessionPr(workbench, pr)),
   );
 

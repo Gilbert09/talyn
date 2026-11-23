@@ -2432,9 +2432,9 @@ export const workbenches = pgTable(
     /** The space this session is in (migration 0116). Null: Personal. */
     spaceId: text('space_id').references((): AnyPgColumn => spaces.id, { onDelete: 'set null' }),
     /**
-     * The `sessionAttentionKey` the owner saw when they last opened the session
-     * (migration 0126). The context rail does not count the session while its
-     * key is the same. Null: never seen.
+     * Unused. It held the `sessionAttentionKey` the owner saw when they last
+     * opened the session (migration 0126). A session now counts on the
+     * context rail until its alert is resolved, whether or not it was opened.
      */
     attentionAck: text('attention_ack'),
     archivedAt: timestamp('archived_at', { withTimezone: true }),

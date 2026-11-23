@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
@@ -11,7 +11,7 @@ import {
   railEntries,
   railEntryAttention,
   railInitials,
-  useAttentionSeen,
+  useAttentionRefresh,
   useAttentionSessions,
   useContextAttentionStore,
 } from '../lib/contextRail';
@@ -322,46 +322,32 @@ describe('clientAttentionKey', () => {
   });
 });
 
-describe('useAttentionSeen', () => {
-  let seen: MockInstance<typeof api.workbenches.attentionSeen>;
+describe('useAttentionRefresh', () => {
+  it('does not ask the rail again on open, so the session stays in Needs you', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')], counts: { workspaces: { ws1: 1 }, spaces: {} } });
+    render(<ContextRail />);
+    expect(await screen.findByRole('button', { name: 'Mine, 1 item needs you' })).toBeInTheDocument();
+    expect(attention).toHaveBeenCalledTimes(1);
 
-  beforeEach(() => {
-    seen = vi.spyOn(api.workbenches, 'attentionSeen').mockResolvedValue({ acknowledged: true });
+    const { rerender } = renderHook(({ key }) => useAttentionRefresh(key), { initialProps: { key: 'conflict::' as string | null } });
+    rerender({ key: 'conflict::' });
+
+    expect(attention).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Mine, 1 item needs you' })).toBeInTheDocument();
   });
 
-  it('marks the session seen on open and asks the rail again, so its badge clears', async () => {
+  it('asks the rail again when the alert is resolved while the session is open', async () => {
     setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')], counts: { workspaces: { ws1: 1 }, spaces: {} } });
     render(<ContextRail />);
     expect(await screen.findByRole('button', { name: 'Mine, 1 item needs you' })).toBeInTheDocument();
     attention.mockResolvedValue({ workspaces: {}, spaces: {} });
 
-    renderHook(() => useAttentionSeen('wb1', 'conflict::'));
+    const { rerender } = renderHook(({ key }) => useAttentionRefresh(key), {
+      initialProps: { key: 'reply:c1@0' as string | null },
+    });
+    rerender({ key: 'busy' });
 
-    await waitFor(() => expect(seen).toHaveBeenCalledWith('wb1'));
     expect(await screen.findByRole('button', { name: 'Mine' })).toBeInTheDocument();
     expect(attention).toHaveBeenCalledTimes(2);
-  });
-
-  it('marks again when the alert changes while the session is open, not on a plain re-render', async () => {
-    const { rerender } = renderHook(({ key }) => useAttentionSeen('wb1', key), {
-      initialProps: { key: null as string | null },
-    });
-    await waitFor(() => expect(seen).toHaveBeenCalledTimes(1));
-    rerender({ key: null });
-    rerender({ key: 'reply:c1@0' });
-    await waitFor(() => expect(seen).toHaveBeenCalledTimes(2));
-  });
-
-  it('marks again when the window comes back with an alert showing', async () => {
-    renderHook(() => useAttentionSeen('wb1', 'error'));
-    await waitFor(() => expect(seen).toHaveBeenCalledTimes(1));
-    window.dispatchEvent(new Event('focus'));
-    await waitFor(() => expect(seen).toHaveBeenCalledTimes(2));
-  });
-
-  it('keeps quiet about a failed mark', async () => {
-    seen.mockRejectedValue(new Error('forbidden'));
-    renderHook(() => useAttentionSeen('wb1', 'error'));
-    await waitFor(() => expect(seen).toHaveBeenCalledTimes(1));
   });
 });

@@ -9,8 +9,8 @@ import { WorkbenchRow } from './SidebarWorkbenchList';
 /**
  * The sessions that the context rail's red badge counts for this context, at
  * the top of the sidebar. The badge says how many; this says which, so I do
- * not have to scroll the list to find them. Opening one marks its alert as
- * seen, so it leaves this list on the next rail answer.
+ * not have to scroll the list to find them. A session stays here until I
+ * resolve what it waits on. Opening it does not remove it.
  */
 export function SidebarNeedsYou<T extends { id: string }>({
   items,

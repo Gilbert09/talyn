@@ -19,7 +19,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { loadWorkbench } from '../../lib/workbenchData';
-import { clientAttentionKey, useAttentionSeen } from '../../lib/contextRail';
+import { clientAttentionKey, useAttentionRefresh } from '../../lib/contextRail';
 import { sessionPr, sessionState } from '../../lib/sessionState';
 import { loadExtraWorkbench, spacesOffered } from '../../lib/spaces';
 import { carriesSession, draggingSession, droppedSession, sessionDragProps } from '../../lib/splitView';
@@ -232,8 +232,7 @@ function SessionPane({
   const chat = useSelectedChat(workbench.id);
   const pr = useWorkbenchPr(workbench);
   const storeChats = useWorkbenchStore((s) => s.chats[workbench.id]);
-  useAttentionSeen(
-    workbench.id,
+  useAttentionRefresh(
     clientAttentionKey(workbench, storeChats ?? workbench.chats ?? [], sessionPr(workbench, pr)),
   );
 
