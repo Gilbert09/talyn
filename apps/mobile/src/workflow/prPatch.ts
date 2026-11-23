@@ -85,3 +85,20 @@ export function applyPrUpdate(rows: PRRow[], update: PullRequestUpdate): { rows:
   next[index] = merged;
   return { rows: next, refetch: false };
 }
+
+/**
+ * Keep the held row object for each fetched row that did not change, so a list
+ * refetch re-renders only the rows that moved. Returns `held` itself when nothing changed.
+ */
+export function reuseRows(held: PRRow[] | undefined, fresh: PRRow[]): PRRow[] {
+  if (!held?.length) return fresh;
+  const byId = new Map(held.map((row) => [row.id, row]));
+  let same = held.length === fresh.length;
+  const rows = fresh.map((row, index) => {
+    const prior = byId.get(row.id);
+    const kept = prior && jsonEqual(prior, row) ? prior : row;
+    if (kept !== held[index]) same = false;
+    return kept;
+  });
+  return same ? held : rows;
+}

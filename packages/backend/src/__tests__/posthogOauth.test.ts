@@ -107,7 +107,8 @@ describe('PostHog OAuth', () => {
       return payload?.data.find((provider) => provider.type === 'posthog_code');
     };
 
-    expect(await list()).toMatchObject({ connected: false, needsReconnect: false });
+    // PostHog Code is retired, so the list leaves it out until a row exists.
+    expect(await list()).toBeUndefined();
     await db.insert(integrationsTable).values({
       id: 'int-reconnect', workspaceId: WS, type: 'posthog', enabled: true,
       config: {
@@ -243,7 +244,7 @@ describe('PostHog OAuth', () => {
       expect(url.searchParams.get('state')).toBe(state);
       // The scope ask is the consent screen's contents — keep it minimal and
       // keep it pinned, so widening it is a deliberate diff.
-      expect(url.searchParams.get('scope')).toBe('openid task:read task:write');
+      expect(url.searchParams.get('scope')).toBe('openid task:read task:write inbox:read inbox:write');
       // Drives PostHog's single-project picker, which is also how we learn the
       // project id without asking the user to paste one.
       expect(url.searchParams.get('required_access_level')).toBe('project');

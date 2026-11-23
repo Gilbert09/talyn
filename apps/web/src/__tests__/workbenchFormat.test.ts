@@ -152,6 +152,26 @@ describe('transcript turns', () => {
     ]);
   });
 
+  it('ignores nested events before they can start or split a turn', () => {
+    const nested = user(2, 2, 'Research this');
+    nested.event.parent_tool_use_id = 'agent-1';
+    const nestedAssistant = we(3, 2, { type: 'assistant', parent_tool_use_id: 'agent-1', message: { content: [{ type: 'text', text: 'Nested answer' }] } });
+    expect(userMessageText(nested.event)).toBeNull();
+    const turns = splitTurns([user(1, 1, 'Start'), nested, nestedAssistant, we(4, 1, { type: 'assistant' })]);
+    expect(turns.map((turn) => [turn.userText, turn.events.map((event) => event.seq)])).toEqual([['Start', [4]]]);
+  });
+
+  it.each([
+    ['a person wrote it', undefined, null],
+    ['the thread wrote it', { sender: { kind: 'thread', threadId: 't1', name: 'Storage plan' } }, { kind: 'thread', threadId: 't1', name: 'Storage plan' }],
+    ['the sender has no thread id', { sender: { kind: 'thread', name: 'Storage plan' } }, null],
+    ['the sender is not a thread', { sender: { kind: 'person', threadId: 't1' } }, null],
+  ])('keeps who sent the user message: %s', (_n, talyn, expected) => {
+    const message = user(1, 1, 'hi');
+    const [turn] = splitTurns([{ ...message, event: { ...message.event, ...(talyn ? { talyn } : {}) } as AgentEvent }, we(2, 1, {})]);
+    expect(turn.sender).toEqual(expected);
+  });
+
   it('keeps a turn whose user message was never recorded', () => {
     const turns = splitTurns([we(1, 1, {}), we(2, 1, {})]);
     expect(turns).toHaveLength(1);
@@ -195,6 +215,15 @@ describe('chatTotals', () => {
     expect(totals.inputTokens).toBe(115);
     expect(totals.cachedInputTokens).toBe(100);
     expect(totals.outputTokens).toBe(25);
+  });
+
+  it('counts two cumulative results as one turn and one process cost', () => {
+    const stamp = { kind: 'process_result', attempt: 0 };
+    const entries = [
+      { ...result(1, { total_cost_usd: 0.1, talyn: stamp, usage: { input_tokens: 10 } }), turn: 1 },
+      { ...result(2, { total_cost_usd: 0.3, talyn: stamp, usage: { input_tokens: 30 } }), turn: 1 },
+    ];
+    expect(chatTotals(entries)).toMatchObject({ turns: 1, costUsd: 0.3, inputTokens: 30 });
   });
 
   it('has no cost when no turn reported one', () => {

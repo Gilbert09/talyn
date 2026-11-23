@@ -17,6 +17,8 @@ Sandboxes are separate from each other. Two sessions on the same repository cann
 | Large | 6 | 12 GB | Full test stacks | 2 |
 | X-Large | 8 | 16 GB | The heaviest stacks | 2.5 |
 
+A box is billed for the memory it uses, up to its size. A box that uses 4 GB or less is billed at the Standard rate, and a Small box always at the Small rate. So a Large box keeps its room for a full stack, but you pay the Large rate only while it uses more than 8 GB.
+
 The free plan can use Small and Standard. Pro can use every size. See [Plans, usage and billing](/docs/billing).
 
 ### Set the size for a repository
@@ -27,7 +29,7 @@ The free plan can use Small and Standard. Pro can use every size. See [Plans, us
 
 **Auto** lets Talyn pick a size for the repository and shows the reason. New sessions on the repository use this size.
 
-Work that runs without you, such as loops, workflows and fix runs, uses a Small box.
+Work that runs without you, such as automations and fix runs, uses a Small box.
 
 ### Move a session to another size
 
@@ -37,7 +39,7 @@ To see if a session needs a larger box, open the **Sandbox** tab. The **Resource
 
 ## Sleep and wake
 
-A sandbox that is idle for 10 minutes goes to sleep. A sleeping sandbox uses no box-hours.
+A sandbox that is idle for 3 minutes goes to sleep. A sleeping sandbox uses no box-hours.
 
 Your next message wakes it, usually in a few seconds. You can also select **Wake** in the **Sandbox** tab. While it sleeps, you can still read the session's changes and files from the copy Talyn keeps.
 
@@ -58,7 +60,7 @@ The **Internet on** / **Internet off** switch decides what a session's sandbox c
 
 Turn it off for work on code you do not trust, or when you do not want the agent to send anything outside.
 
-Runs that Talyn starts for you on a pull request, such as fix runs and code reviews, reach only the repository and the agent's API. Loops have their own switch. See [Loops](/docs/loops#internet-access).
+Runs that Talyn starts for you on a pull request, such as fix runs and code reviews, reach only the repository and the agent's API. Automations have their own switch. See [Automations](/docs/loops#internet-access).
 
 ## Run your app
 

@@ -57,6 +57,11 @@ export function initPostHog(): void {
     // We capture pageviews manually on route change (App Router).
     capture_pageview: false,
     capture_pageleave: true,
+    // Click and scroll heatmaps, and clicks on things that do nothing. Both
+    // were off, so the only click map of the home page was autocapture on
+    // links and buttons, which misses clicks on the product mocks.
+    enable_heatmaps: true,
+    capture_dead_clicks: true,
     before_send: (event) =>
       event && isLinkScannerException(event) ? null : event,
   });

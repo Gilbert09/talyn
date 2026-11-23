@@ -1,9 +1,11 @@
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Button } from '../../src/components/UI';
 import { useAuth, useMobileRuntime, useNetwork } from '../../src/auth/AuthProvider';
 import { Status } from '../../src/components/AuthControls';
 import { BlinkingOwl } from '../../src/components/BootScreen';
+import { ReviewSignInSheet } from '../../src/components/ReviewSignIn';
 import { ScreenContainer } from '../../src/components/ScreenContainer';
 import { useShellColors } from '../../src/components/ShellScreen';
 import { fonts } from '../../src/theme/tokens';
@@ -14,6 +16,7 @@ const messages = {
   failed: 'Sign-in could not finish. Please try again.',
   cancelled: 'Sign-in was cancelled. You can try again.',
   timeout: 'Sign-in took too long. Please try again.',
+  credentials: 'That email and password did not work.',
   storage: 'Secure storage is not available. Unlock this device and try again.',
   outage: 'Sign-in is temporarily unavailable. Please try again.',
 };
@@ -23,10 +26,13 @@ export default function SignInScreen() {
   const { auth: controller } = useMobileRuntime();
   const offline = useNetwork() === 'offline';
   const busy = auth.status === 'signingIn';
+  const [review, setReview] = useState(false);
   return <ScreenContainer topInset>
     <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
       <View style={styles.hero}>
-        <BlinkingOwl />
+        <Pressable accessibilityLabel="Talyn logo" delayLongPress={2000} onLongPress={() => setReview(true)}>
+          <BlinkingOwl />
+        </Pressable>
         <Text accessibilityRole="header" style={[styles.title, { color: colors.text }]}>Talyn</Text>
         <Text style={[styles.lead, { color: colors.muted }]}>Sign in to continue. Your tasks, workspaces, and connections stay on your account.</Text>
       </View>
@@ -41,6 +47,8 @@ export default function SignInScreen() {
       </View>
       <Text style={[styles.note, { color: colors.muted }]}>A browser window opens to sign you in. You return to Talyn when you finish.</Text>
     </ScrollView>
+    <ReviewSignInSheet visible={review} busy={busy} failed={auth.issue === 'credentials'} onCancel={() => setReview(false)}
+      onSubmit={(email, password) => { void controller.signInWithPassword(email, password); }} />
   </ScreenContainer>;
 }
 

@@ -19,7 +19,7 @@ describe('isolated memory keys and selectors', () => {
     expect(humanGate(session({ chats: [chat({ status: 'awaiting_input' })] }))).toBe(true);
   });
   it.each([undefined, null, 'new_provider_state', 'UNKNOWN', ''])('keeps %s unknown', (value) => expect(statusLabel(value)).toBe('Unknown'));
-  it.each([['failing_required', 'Required checks failing'], ['failing_optional', 'Optional checks failing'], ['awaiting_stack', 'Waiting for stack'], ['blocked_manual', 'Human action needed']])('labels %s accurately', (state, label) => expect(statusLabel(state)).toBe(label));
+  it.each([['failing_required', 'Required checks failing'], ['failing_optional', 'Optional checks failing'], ['awaiting_stack', 'Waiting for stack'], ['blocked_manual', 'Human action needed'], ['waiting_ci', 'Waiting for CI']])('labels %s accurately', (state, label) => expect(statusLabel(state)).toBe(label));
   it('keeps absent stack state unknown', () => {
     expect(stackLabel(pr({ summary: { ...pr().summary, stack: undefined } }))).toBe('Unknown');
     expect(stackLabel(pr())).toBe('Standalone');
@@ -54,13 +54,15 @@ describe('bounded cursor reconciliation', () => {
     expect(result.cursor).toBe(100); expect(result.gap).toBe(false); expect(result.hasOlder).toBe(true);
   });
   it('retains a bounded latest window for large transcripts', () => {
-    const result = mergeEvents('chat-one', emptyTranscript(), Array.from({ length: 10000 }, (_, index) => event(index + 1)), 'rest');
-    expect(result.events).toHaveLength(EVENT_LIMIT); expect(result.events.at(-1)?.seq).toBe(10000); expect(result.trimmed).toBe(true);
+    const result = mergeEvents('chat-one', emptyTranscript(), Array.from({ length: EVENT_LIMIT + 500 }, (_, index) => event(index + 1)), 'rest');
+    expect(result.events).toHaveLength(EVENT_LIMIT); expect(result.events.at(-1)?.seq).toBe(EVENT_LIMIT + 500);
+    expect(result.hasOlder).toBe(true); expect(result.limited).toBe(false);
   });
-  it('retains the requested older window when its history exceeds the bound', () => {
-    const current = mergeEvents('chat-one', emptyTranscript(), [event(2000)], 'rest', { events: [], cursor: 2000, oldestSeq: 2000 });
-    const older = mergeEvents('chat-one', current, Array.from({ length: 1999 }, (_, index) => event(index + 1)), 'older', { events: [], cursor: 1999, oldestSeq: 1, hasOlder: false });
-    expect(older.events[0].seq).toBe(1); expect(older.events).toHaveLength(EVENT_LIMIT); expect(older.trimmed).toBe(true);
+  it('keeps the newest events when an older page exceeds the bound', () => {
+    const current = mergeEvents('chat-one', emptyTranscript(), [event(EVENT_LIMIT + 500)], 'rest', { events: [], cursor: EVENT_LIMIT + 500, oldestSeq: EVENT_LIMIT + 500, hasOlder: true });
+    const older = mergeEvents('chat-one', current, Array.from({ length: EVENT_LIMIT + 499 }, (_, index) => event(index + 1)), 'older', { events: [], cursor: EVENT_LIMIT + 499, oldestSeq: 1, hasOlder: false });
+    expect(older.events.at(-1)?.seq).toBe(EVENT_LIMIT + 500); expect(older.events).toHaveLength(EVENT_LIMIT);
+    expect(older.limited).toBe(true); expect(older.hasOlder).toBe(true);
   });
 });
 

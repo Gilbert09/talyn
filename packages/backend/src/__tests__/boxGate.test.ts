@@ -269,6 +269,13 @@ describe('the box gate', () => {
         for (const heavy of ['transcript', 'last_summary', 'metadata']) expect(text).not.toContain(heavy);
       }
     });
+
+    it('does not count a task paused for CI: its box is asleep until a wake passes the gate', () => {
+      const { params } = countPendingTaskBoxesQuery(OWNER).toSQL();
+      expect(params).toContain('in_progress');
+      expect(params).toContain('queued');
+      expect(params).not.toContain('waiting_ci');
+    });
   });
 
   describe('replacesBox (resize, move)', () => {

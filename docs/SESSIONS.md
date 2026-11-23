@@ -2,6 +2,478 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Image preview in PR descriptions, reviews and comments (2026-11-20)
+
+Jovan asked to see a screenshot from a PR description without opening GitHub.
+Why images did not show:
+- GitHub stores a pasted image as `https://github.com/user-attachments/assets/<uuid>`. For a private repository that URL answers 404 without a github.com browser session.
+- The web CSP allows images only from `*.githubusercontent.com`, so web blocked every attachment image, also for public repositories.
+- Mobile turned a markdown image into a link and dropped `<img>` tags.
+Backend (`services/githubAttachments.ts`):
+- GitHub's `bodyHTML` has a signed `private-user-images.githubusercontent.com/...-<uuid>.png?jwt=...` URL for each attachment. The JWT expires after about 5 minutes.
+- `GET /pull-requests/:id` (live `fresh.body`) and `GET /:id/description` replace attachment URLs in image positions (`![](…)`, `<img src>`) with the signed URLs. They call GitHub only when the body shows an attachment image.
+- `/:id/description` signs too, because a merged or closed PR gets no live body (the live fetch returns open PRs only).
+- The Reviews query now asks for `bodyHTML` on each node, and the decode signs each body.
+- A signed body is for the response only. It is never persisted or compared, because the URL expires. Bare attachment links (videos) stay unchanged, because a person can click them after the JWT expires.
+Clients:
+- Web and desktop: `lib/imagePreview.tsx`. A markdown image is a button that opens a portalled full-size preview with "Open original". Escape is caught on `window` in the capture phase, so it does not also close the PR sheet. A broken image becomes a link.
+- Mobile: `MdBlock` has an `image` node. A paragraph with images splits into text and image blocks. SVG stays a link, because React Native `Image` cannot draw SVG. `FullScreenImage` is shared with the message attachment viewer and has pinch zoom on iOS.
+
+## Onboarding agent step: local option, sign-in events, quiet fleet faults (2026-11-19)
+
+PostHog (6–19 Nov): 26 signups, 17 passed Connect GitHub, 14 reached "Connect your agent", 2 connected an agent there, 7 skipped, 3 started a session. `cloud_provider_connect_failed` fired 0 times in 45 days, so people abandon the Claude sign-in. They do not get an error.
+Local option:
+- The new `onboarding-local-agent` flag is fallback OFF and gated.
+- With the flag on, the desktop agent step offers "Claude Code or Codex on this computer". The first session then runs locally (`runtime: 'local'`) on the known checkout, or on a folder that the person chooses.
+- Web shows a hint with a link to the desktop app. Mobile has no change.
+- The wizard reads `GET /features` itself, because `useSystemStatus` mounts only after onboarding.
+- Events: `onboarding_local_agent_checked`, `onboarding_local_agent_chosen`, `onboarding_desktop_app_suggested_viewed` and `onboarding_desktop_app_suggested_clicked`.
+- `onboarding_agent_option_selected` can have `agent: 'local'`. `first_session_created` has `runtime` and `agent`. `onboarding_completed` has `agent_mode`. `session_message_sent` has `runtime`.
+Sign-in events:
+- Each error answer of `/selfhosted/claude/complete` has a `code`, for example `signin_expired` or `scope_refused`.
+- The server sends `claude_signin_completed` with `outcome` and `code`. Thus people who block PostHog in the browser are counted.
+- `cloud_provider_connect_failed` has `error_code`.
+- The new `cloud_provider_signin_abandoned` event has `via` `back`, `cancel`, `closed` or `timeout`, and `elapsed_ms`. It fires on web, desktop and mobile.
+Fleet faults: a new user's first box (workbench 668a6ab3, 2026-11-16) waited for capacity (`no_capacity`). Then its host was out of reach (`host_unreachable`), so the config and wake requests answered 503.
+- `GET /workbenches/:id/config` now answers the default config with `unavailable: true` when the fault is `fleet_unavailable` or `sandbox_waking`.
+- `POST /workbenches/:id/wake` answers `{status: 'unavailable'}` for the same faults.
+- TerminalPanel reads the config again quietly after 5 s, 15 s and 30 s, with no toast. `reportApiError` does not report those 503s.
+- The fleet fault is not fixed here. It is a YAS issue.
+
+## Child sessions and background subagents (2026-11-19)
+
+Migration 0145 stores parent links and opt-in notifications. It backfills links from session tokens.
+Normal parents get the existing session cards. Only opted-in turn completions wake them.
+A stored claim permits at most one wake per child chat turn. The existing progress guard remains.
+`talyn_list_thread_sessions` now also lists children for normal sessions.
+Web, desktop, and mobile show a parent link and a Sessions started list behind `session-subagents`.
+Claude processes can emit several results. The turn ends on process exit and uses the final result for follow-up work.
+Usage totals keep the last cumulative result per process attempt. Separate attempts still add their costs.
+The briefing and delegation skills allow background Agent calls. Long shell commands still use `talyn_run_background`.
+
+## Subagent card details (2026-11-19)
+
+The existing Subagent card now expands to its nested steps in web, desktop and mobile.
+Claude task events supply activity, token count, tool count and elapsed time. Older transcripts keep the step count.
+The `session-subagents` flag gates these additions and the running count. Its fallback is on.
+A turn with open Agent calls adds a `subagents_stopped` note. A failure to add this note cannot block completion.
+The briefing keeps the foreground rule. It directs long or separate work to a sub-session.
+
+## Admin fleet: capacity from tunnel reports (2026-11-19)
+
+Hosts with an endpoint under `.yas-tunnel.invalid` use their last report for the admin capacity view.
+The list and detail routes mark this source as `report`. The Hosts page shows a source tooltip.
+A stale report cannot accept work. A capacity of zero keeps its existing meaning: the limit is unknown.
+Health, conditions, box counts and live metrics remain absent without a direct read.
+
+The admin client factory refuses direct calls to these hosts with HTTP 409 and `host_not_dialable`.
+Its error names the host and the yas control plane.
+This covers metrics, drain, golden operations and direct sandbox calls.
+Run lists keep their per-host degradation errors. Existing sandbox calls through the gateway keep their current path.
+
+## DB pool: transaction queries the stall breaker could not see (2026-11-17)
+
+**Incident.** At 13:25:44 UTC six owner-scope request transactions opened (GET /skills ×4, /cloud-providers, /github/status, one app boot). Their first `select "integrations"` and `select "pull_requests"` queries never settled. They stayed open for 24 minutes and the stall breaker never tripped, although it closed 38 stalled pool connections in the same 14 hours. With 12 lock transactions also open, the 20-connection pool filled from 13:45. Pool demand reached 305, and `dbWatchdog` restarted the process at 13:49:49. The in-flight registry also held owner-scope queries open for up to 10.5 hours, older than any transaction.
+
+**Root cause, shown against real postgres-js 3.4.9** (`__tests__/dbTransactionStall.test.ts`, with a wire-protocol test server in `__tests__/helpers/fakePgServer.ts`):
+- postgres-js gives each transaction a private queue (`index.js` `begin` → `scope` → `handler`). After any query with parameters (`describeFirst` with `prepare: false`, which is every drizzle query through Supavisor), the connection goes to the `full` queue. The next queries of the transaction wait in the private queue until a ReadyForQuery reaches `connection.reserved()`. A query there is never `active`, so the breaker, which starts its timer on `Query.active`, never times it.
+- Nothing rejects that private queue. When the connection closes, `onclose` rejects only the `begin`. The queued queries wait forever, also after a breaker trip.
+- On a ReadyForQuery that says "idle" while the transaction is open, postgres-js sets `connection.reserved = null` and gives the connection to the pool (`connection.js` `ReadyForQuery`). The queued query then waits forever. The next query runs outside the transaction, without RLS. This is the only client-side path we found that strands the first route query of an owner transaction with no trip and no close. That matches the incident exactly. We cannot confirm from our side that the pooler sent that ReadyForQuery.
+- COMMIT, ROLLBACK and SAVEPOINT are tagged-template queries on the scope `sql`, not `sql.unsafe`. So they had no timer either: a COMMIT with no reply held its transaction (and the lock transactions' ROLLBACK after `maxHoldMs`) forever. `prReconcileSweep:tick` was open for 558 s, past its 300 s deadline.
+- The 10.5-hour orphans are late queries: a request ended (GET /skills answers 500 when one `Promise.all` leg rejects) and its `fetchRepoSkills` kept calling `resolveAuth` on the ended scope. When the old connection is in `full`, postgres-js parks the query in the dead transaction's queue for good. These queries hold no connection, only a registry entry and a hung caller. When the connection is idle, the query runs on the bare connection, outside the transaction and RLS.
+
+**Fixes (`db/stallBreaker.ts`, `db/client.ts`, `db/scope.ts`).**
+- A query on a transaction or savepoint whose body has settled is rejected at once with `DbTransactionEndedError` (`DB_TRANSACTION_ENDED`) and never reaches postgres-js. The call site is still logged once.
+- A transaction watchdog in the breaker covers what the query timer cannot. "stuck": queries of the transaction wait, none is active, and nothing moved for `DB_STALL_MS`. "commit": the body settled and COMMIT or ROLLBACK did not end the transaction in `DB_STALL_MS`. Both use the existing 135 s, which is the statement timeout plus the margin. The watchdog closes the connection if the transaction still holds it, rejects every waiting query, and rejects the `begin`, so the in-flight entries end. `withStallLimit(null)` (the boot migrator) turns it off.
+- When a transaction has lost its connection without a close (`connection.reserved` is no longer its own), its next query is rejected with `DbTransactionLostError` (`how: 'released'`) before postgres-js sends it outside the transaction.
+- When a `begin` settles, any query of the transaction that still waits is rejected. Before, a stall trip left them hanging.
+- Owner-scope request transactions have an idle limit, `OWNER_SCOPE_IDLE_MS` = `DB_STALL_MS`. The longest single wait on another service below `ownerScope` is the 45 s fleet create, GitHub calls stop at 30 s, and no SSE route runs below it. The 10-minute sandbox resume, Polar and Slack routes are mounted before `ownerScope`. An idle owner transaction is closed, its writes roll back and the request fails. This is the client-side form of the 30 s `idle_in_transaction_session_timeout` that Supavisor drops. Lock transactions get no idle limit: they are idle for the whole tick by design, and `maxHoldMs` bounds them. They now label the breaker's log line with the lock name.
+- A transaction's policy (label, idle limit) passes through `withTransactionPolicy` and applies only to that `begin`. A transaction opened from inside an owner request does not inherit it.
+
+**Supavisor and the pool size (no change made).** The pooler is set to 30 server connections per user and database (400 client connections, `max_connections` 90). One backend uses at most 20 (`DB_POOL_MAX`). During a deploy overlap two backends can ask for 40, and any idle-in-transaction connection (each lock transaction for its whole tick, each owner request waiting on GitHub) pins a server connection. So in an overlap the pooler can run out first, and queries then wait in its checkout queue. This incident was not that case: our own 20 were full. Recommendation: raise the pooler pool size to at least 2 × `DB_POOL_MAX` (40), which `max_connections` 90 allows, or lower `DB_POOL_MAX` to 15. The larger cost is the 12 lock transactions that each hold a connection for a whole tick. That is a design follow-up.
+
+**Not done here.** The route fixes (GET /skills and the other routes that hold the owner transaction across GitHub calls, and `resolveAuth` on an ended scope) are a separate change. The pool acquire deadline and `continueWithoutOwnerScope` in the 2026-11-10 note below were reverted the same day (a9fe293804, 4779ca080b), so a `begin` that waits in the postgres-js queue still has no deadline.
+
+## PostHog Inbox: Talyn sets up the push in PostHog (2026-11-16)
+
+**What.** "Set up push in PostHog" on the PostHog Inbox Connection tab. Talyn makes or rotates the webhook URL and creates the PostHog webhook destination itself, so the person does not copy a URL and a secret into PostHog. The manual path (#257) stays, for personal API keys without the scopes and for people who prefer it.
+
+**PostHog API, read from PostHog's OpenAPI and source.** `POST/PATCH /api/projects/:id/hog_functions/[:id/]` (`hog_function:write`). On `$signals_report_ready` PostHog also needs `inbox:read` and Inbox viewer access (`INTERNAL_EVENT_READ_SCOPES`), and refuses a truthy `debug` input. The sub-template is `internal_destination` + `template-webhook`. A create copies `hog` and `inputs_schema` from the template, but not the input values, so Talyn sends them all. `secret_headers` is the template's encrypted dictionary input; PostHog answers `{"secret": true}` for it. `DELETE` answers 405; `PATCH {deleted: true}` is the delete, and a deleted function answers 404. Agent sources make PostHog stage a draft, but only for `destination` edits, so an `internal_destination` edit is live at once. The app path is `/project/:id/functions/:id`.
+
+**Design.**
+- Scopes: the Inbox OAuth grant now asks for `hog_function:read hog_function:write`. Old grants keep working; `pushSetupMissingScopes` lists the gap apart from `missingScopes`, so the connection does not read as broken.
+- Setup order: mint, save in PostHog, then store. A 403, 5xx or missing scope leaves the old URL working. A failed store after PostHog accepted leaves an out-of-date error on the row.
+- Rotate stays a rotate: it always rotates (it may be a leak), then updates the destination. A failure is stored in `posthog_destination_error` and shown, until setup runs again. A destination deleted in PostHog is forgotten, not re-created.
+- Remove and disconnect delete the destination best effort, before the URL or the grant goes. Disconnect is bounded to 10 seconds. A destination PostHog did not delete keeps its id, so a later setup updates it.
+- Setup, rotate sync and delete run one at a time per workspace on a replica, so a double click does not make two destinations.
+- Migration `0140_posthog_inbox_destination` (idx 142; main skips idx 138).
+
+**Not tested against a real PostHog project.** The request body comes from PostHog's source.
+
+## PostHog Inbox rules, step 2: claims (2026-11-16)
+
+**What.** A PostHog Inbox rule now claims the report in PostHog before its session starts. It attaches the session's pull request to the claim and releases the claim when the work ends without one. PostHog resolves the report itself when a linked pull request merges, so Talyn sends nothing on a merge.
+
+**API, checked against PostHog's OpenAPI and MCP.** One endpoint does it all: `POST /api/projects/:id/signals/reports/:id/claim/` (`signals_reports_claim`). No `claim_id` starts a claim. `claim_id` resumes it, `pull_requests` adds PR URLs (additive, deduplicated), and `release: true` ends it. The answer is the report, with the claim id in `assignee.claim_id`. A 409 means another actor holds the report, the claim id is stale, or the status does not allow a claim. The claim needs `inbox:write`; adding pull requests also needs `task:write`. The release has no reason field. The state endpoint has `dismissal_reason: analysis_wrong`, but it suppresses the report and closes its pull request, so Talyn does not use it for an agent's judgement.
+
+**Order.** Talyn's own link first (cheap, local, the guard against a second session), then the PostHog claim, then the session. No claim, no session.
+
+**Releases.** `linkIsLive` already decides when the work ended (an archived or deleted session, a closed pull request). Two signals are new and PostHog-only: the agent's `TALYN_REPORT_NOT_FIXED:` last line, and a session in `error` for an hour. A deleted session clears the link's session id, so its claim is released after the 10-minute unattached grace.
+
+**Why a sweep.** A session links its pull request on several paths (Create PR, the turn-end branch match, adoption). The sweep reads the link's work by structured ids, so it covers all of them. `pr:session` and the merge listener are the fast paths.
+
+**Connection.** #256 gave the Inbox its own PostHog connection. `getPostHogInboxConnection` answers for both, and a grant without `inbox:write` and `task:write` reads as `reconnect` with the missing scopes, so the rules start nothing.
+
+## PostHog Inbox step 3: push from PostHog (2026-11-16)
+
+**What.** PostHog's webhook destination on `$signals_report_ready` now nudges Talyn, so rules act within seconds. The poller stays as a reconcile.
+
+**What PostHog sends.** I read PostHog's webhook template and the sub-template from PostHog/posthog#135880. The default is `POST`, `Content-Type: application/json`, body `{"event": {...}, "person": null}`. `event.uuid` is the internal event uuid, and PostHog's retries repeat it. `event.properties` has only `report_id`, `report_url`, `priority`, `actionability`, `source_products`, `source_products_text` and `updated_at`. Users can add plain headers and encrypted "secret headers". PostHog retries 408, 429 and 5xx up to 3 times, with a 3-second timeout.
+
+**Design.**
+- A new inbound kind `posthog_inbox`, with one URL per workspace and PostHog project. It uses the same receiver, rate limits and size cap as the generic webhook.
+- The adapter is a "nudge" adapter (`InboundNudgeAdapter`). It makes no facts from the body. `nudge` reads the report by id through `ingestPostHogReport`.
+- The URL token is the credential. An optional `X-Talyn-Secret` secret header is required when the URL was made with a secret (the default). A stored secret that no longer decrypts refuses every request.
+- The delivery id is the event uuid, else `posthog_inbox:<id>:<updated_at>`. The run key stays `posthog_inbox:<id>:<updated_at>` from the report Talyn read, so a push and a poll never both fire.
+- A 404 or 400 from PostHog drops the request (200 to PostHog, `ignored` with a note). A 401 or 403 fails the request without a retry. Other errors retry through the inbound sweep.
+- `last_push_at` is set only by a push whose report Talyn read, and never by a replay. It switches the poller to 30 minutes for 24 hours.
+- The URL belongs to the workspace and the PostHog project (`external_account_id`), never to the PostHog Code `integrations` row. Every read of the connection goes through `getPostHogInboxConnection`, so a separate Inbox connection can replace the row later. `last_push_at` is migration 0137 (#240 holds 0136); expect to renumber at merge.
+
+**UI.** The web and desktop PostHog Inbox Connection tab can make, rotate and remove the URL. It shows the URL and secret once, the PostHog steps, the last push and the requests (`WebhookDeliveriesList` now takes a source). The rule editor shows the push line. Mobile shows the push line read-only.
+
+**Not tested against a real PostHog project.** The body shape comes from the PostHog source, not from a captured request.
+
+## Keep box agents through quota holds (2026-11-16)
+
+New session boxes and warm boxes include every agent with an account that does not need sign-in.
+Temporary quota holds do not remove an agent from the box. Turn selection still avoids held accounts.
+The fleet fixes its routes and credential policy at creation. A credential push cannot add a suppressed vendor.
+Web, desktop, and mobile now offer a restart beside the chat input for boxes with one agent.
+The existing restart transfers branches and uncommitted changes before it deletes the old box.
+It waits for running turns. Running processes stop, and large ignored files can be excluded from the transfer.
+Limit resume keeps checking the current box's recorded agents, including after a restart.
+
+## Resume sessions after a credential refusal (2026-11-16)
+
+Credential refusals now use the existing limit resume sweep and retry count, with at most eight retries.
+Known usage resets set the wait time. Missing reset times use the existing retry delay.
+Fresh credentials make matching reconnect waits due in the payer's workspace.
+Web, desktop, and mobile show the wait and a cancel action.
+
+## PostHog Inbox gets its own PostHog connection (2026-11-16)
+
+**Why.** PostHog Inbox rules read reports through the PostHog Code connection. PostHog Code is retired, so its connect routes answer 410 for a new workspace. A new workspace could not connect PostHog for the Inbox.
+
+**What changed.**
+- The Inbox has its own `integrations` row (type `posthog_inbox`): an OAuth grant (`openid inbox:read inbox:write task:write`, one project) or a personal API key. It is not a cloud provider.
+- The OAuth code moved to `services/posthogOAuth/core.ts`. PostHog Code and the Inbox share the client, the callback URL and `posthog_oauth_states`. The state row has a `kind` (migration 0138), and each completion refuses the other kind. So the client metadata document and `POSTHOG_OAUTH_REDIRECT_URI` did not change.
+- Refresh stays single-flighted per row: the promise map is keyed by row type, and the Inbox has its own advisory lock name. The PostHog Code lock name did not change, so old and new replicas still exclude each other during a deploy.
+- `getPostHogInboxConnection` keeps its shape. It takes the Inbox row first, in any state. Else it uses a PostHog Code row with `inbox:read` that PostHog has not revoked, or a PostHog Code key. The poller polls one row per workspace, the same one.
+- A new connection clears the workspace's poller error and backoff, so the status does not ask for a reconnect for 30 more minutes.
+- Web and desktop: the Inbox card connects, reconnects and disconnects on its own. Mobile shows the same state, read-only, with a link to the web.
+
+**Not done.** The PostHog Code grant still asks for `inbox:*`. It can stop when PostHog Code is deleted (retirement step 2).
+
+## Show Fleet accounts that need sign-in (2026-11-16)
+
+Fleet status now reports any account that needs sign-in, with its name and ID. Healthy accounts remain available.
+Turn errors name affected accounts and report known usage resets. Web, desktop, and mobile show reconnect notices and actions.
+
+## Retire PostHog Code, step 1 (2026-11-15)
+
+**Why.** PostHog Code confused users. It sat next to Claude and Codex as a third agent, but it cannot run sessions.
+
+**What step 1 did.** The `posthogCodeRetired` flag (`posthog-code-retired`, break glass `POSTHOG_CODE_RETIRED`) gates the retirement. With it on:
+- A workspace with no PostHog Code row never sees it on web, desktop or mobile. Its connect routes answer 410 `posthog_code_retired`.
+- New work never falls back to it. The resolver keeps it only as the chosen default or the only connected provider. Code review units wait for the fleet. Quota failover stops at the other fleet agent.
+- An existing connection keeps working and shows "PostHog Code is going away. Move your work to Claude or Codex."
+- The connect banner and onboarding name only Claude or Codex.
+
+**Fallback ON.** Nobody could create the flag in PostHog, so its fallback is ON. An outage or an absent flag keeps PostHog Code hidden for everyone. A `false` answer in PostHog brings it back for one account. `POSTHOG_CODE_RETIRED=false` brings it back for the deployment. Clients still read "features not loaded" as off, so they never hide a connection on a guess. The connect routes refuse on their own.
+
+**Docs.** The public site no longer mentions the PostHog Code connection. The privacy and terms pages still name it, because existing connections still send data to it. Internal docs say it is retired.
+
+**Loop default.** `emptyLoopInput` still defaults a new loop to PostHog Code. The web and desktop editors switch it to the fleet when a fleet agent is connected. The MCP `create_loop` tool now sets a task loop with no provider to the fleet while the flag is on.
+
+**Step 2.** Delete the provider: the provider module, the code review spill, the quota failover hop, the loop provider option, the settings screens on all three apps and the flag. The list is in `ROADMAP.md`.
+
+## Code review on ReviewBench (2026-11-13)
+
+`benchmarks/review-bench/` runs the review pipeline as a [ReviewBench](https://github.com/review-bench/ReviewBench) reviewer image. It reuses the prompt builders, parser, dedupe key and judge matching. Only the order of the units is new. The pure helpers moved from `executor.ts` to `unitPure.ts`, so the bundle has no database code.
+
+**Result.** On the 25-PR test set, Standard scores 66.7% high-severity grounded F1 at 100% precision (recall 50%). The leaderboard middle row is 67.2% F1 at 97.2% precision. Our judge was `gpt-6.1-sol` on a ChatGPT subscription, not the leaderboard's Claude judge, so the numbers are local only.
+
+**The first 0% score was a harness bug.** Codex's `read-only` sandbox uses bubblewrap, which Docker does not allow. Every agent command failed and the reviewers saw only the diff. The container now runs Codex without its sandbox, and a unit whose commands fail for an environment reason fails.
+
+**Prompt experiments did not generalize.** A counterexample pass plus a "second defect in the same workflow" sweep raised dev F1 from 62.9% to 70.3%. On the held-out PRs it fell from 73.7% to 58.8%, and the 25-PR total did not move. The production prompts are unchanged. The diff is in `benchmarks/review-bench/experiments/`. One finding moves F1 by about 2 points, so a prompt change needs repeated runs or the 219-PR corpus. See `benchmarks/review-bench/FINDINGS.md`.
+
+## Sessions wait for CI through Talyn (2026-11-12)
+
+**Symptom.** A PostHog/posthog session pushed, said "the background poll checks every 5 minutes", and its Background tab showed no jobs and no wake-ups. The agent waited with Claude Code's own tools: a blocked foreground `sleep`, then `Monitor`, then a background Bash loop of 14 polls. That kept the box awake and the turn open, and the person could not see the wait.
+
+**Causes.**
+- `session-ci-wait` was gated with fallback OFF, and PostHog project 459813 had no flag with that key. So every `until_ci` request got 403 `ci_wait_unavailable`.
+- The always-loaded briefing (`talynBriefing.ts`) did not name wake-ups. Only `talyn-ci-triage` and `talyn-speed` did, and the agent loads them only for failing CI or a slow build. Claude Code also defers the `talyn` tools behind ToolSearch, while its own `run_in_background` and `Monitor` are always in view.
+
+**Fix.**
+- `sessionCiWait` is released: fallback ON, `availability: 'general'`. `SESSION_CI_WAIT_ENABLED=false` still turns it off.
+- The briefing has a `## Waiting` section: `talyn_schedule_wakeup` with `until_ci` after a push, a timed wake-up for anything else, `talyn_run_background` for a command that outlives the turn, no waits with the agent's own tools, and load deferred `talyn` tools first. A test in `workbenchSkillPack.test.ts` pins it.
+- Not done: a deny list for Claude Code's `Monitor` and `ScheduleWakeup` in session turns. The guest in YAS starts `claude`, so that change goes there.
+
+## Session hover card in the sidebar (2026-11-12)
+
+A sidebar session row used a native `title` tooltip. It waited about a second and showed two lines of text. Web and desktop now show a card with no delay (`components/workbench/SessionHoverCard.tsx`, a Radix tooltip with `delayDuration={0}`). The card shows the state, the full title, the repository and the branch with its base, and the pull request: title, compact CI pill, review pill, check counts, size and author. It then lists the session facts and the last-activity and start times.
+
+The facts come from `packages/shared/src/sessionGlance.ts`, so the three front ends say the same thing: error, uncommitted and committed changes, background jobs and wake-ups, agent and model (catalogue label), sandbox state and source. The card mounts only while it is open, so a row does no extra store reads until someone points at it. `WorkbenchHoverCard` covers my sessions, thread children and loaded threads. `SpaceSessionHoverCard` covers space rows and adds who started the session. The card stays closed while a row is being renamed. The row and its diff counts lost their `title`, because a native tooltip would show on top of the card.
+
+Mobile has no hover. A long press on a session row puts the same facts (`features/sessions/glance.ts`) in the action sheet's message. The detail screen's menu does not, because the screen already shows them.
+
+## Background refreshes ran on a closed request transaction (2026-11-12)
+
+**Symptom.** Settings → Repositories showed no sandbox size picker, and the Setup row stayed on "Loading the setup…". At 22:36 UTC the backend stopped answering. The DB watchdog then restarted it at 22:38.
+
+**Cause.** Two places started work without waiting for it, inside the request's owner scope:
+
+- `refreshInBackground` in `routes/repositories.ts`, which refreshes the sandbox-size and preview detection when the stored answer is stale (older than 6 hours).
+- `refreshWebhookIndex()`, which the add-repository, PR, and space routes call without `await`.
+
+AsyncLocalStorage gave that work the request transaction handle. Its queries ran after the transaction had ended. Production logged `owner scope used after its transaction ended` from `githubService.resolveAuth` and from `mergeSandboxSize` / `mergePreview`. The `UPDATE "repositories"` statements then waited on row locks until the statement timeout. The settings page sends three requests for each repository (sandbox size, preview, setup). Each request holds one of the 20 pool connections for its full duration. The pool filled: "pool demand 294 > max 20", with 17 owner transactions. Every route stalled, not only these. The `select "integrations"` reads that an index rebuild started at 20:09 were still open 2.5 hours later. That rebuild also checked other owners' access under the caller's RLS scope.
+
+**Fix.** Both paths now call `runWithoutScope`. In `webhookIndex.ts` the call is in `build()` itself, because the index covers every owner and must never use one caller's RLS scope. `backgroundWorkLeavesOwnerScope.test.ts` pins both paths.
+
+**Not done.** Each repository row still sends its sandbox-size request twice (once from the row, once from `RepoSandboxSize`). The page also sends all requests for all rows at the same time. Neither causes the hang, but both add load to the pool.
+
+## Issue rules: Linear and GitHub Issues, phase 2 (2026-11-12)
+
+Phase 2 of `docs/INBOUND_INTEGRATIONS.md`. A Linear or GitHub issue event starts a session (the default) or a task, and Talyn writes back to the issue. It is behind the `issueRules` flag (`issue-rules`, break glass `ISSUE_RULES_ENABLED`, fallback OFF, gated). The routes ask the caller; the engine and the Linear receiver ask the workspace owner. Migration `0132` (`external_issue_links`, `inbound_oauth_states`).
+
+Vocabulary (`packages/shared/src/workflows.ts`):
+- Two integrations, `linear` and `github_issues`, share `IssueEventFacts` and the events `issue_created | issue_labeled | issue_assigned | issue_status_changed | issue_commented | issue_updated`. The rate cap subject is `issue:<integration>:<externalId>`.
+- Conditions: `connectionId` (Linear, required), `repos` (GitHub Issues), `teams`, `projects`, `statuses`, `priorities`, the label lists, `labelName`, `issueAssignee` (`talyn` on Linear, `me` on GitHub, `unassigned`, `people`), `issueAuthors`, `titleContains`, `bodyContains` (the description, or the new comment). A Linear comment's payload has no issue, so the adapter reads the issue from Linear and marks the gaps `unknownFields` when it cannot.
+- Actions: `start_session`, `start_task` (`repositoryId: null` means the issue's own repository on GitHub Issues only), `issue_comment`, `issue_set_status` (`done` = Linear's first `completed` state by position, or GitHub "closed as completed"). One start action per rule. The start action carries `issueStartComment` and `issueDoneOnMerge`, both default on, only `false` stored.
+- `effectiveWorkflowActions` adds an `issue_comment { afterStart }` after the start action. The engine and the retry sweep both run that list, so outcomes stay positional. When the start did not happen, the comment takes the start's code, so a parked start retries both.
+
+Links (`services/inbound/issueLinks.ts`):
+- The start action claims the issue before the dispatch; the partial UNIQUE on active rows refuses a second start with `issue_already_running` (a refusal code). The run's own claim counts as its own, so a parked retry reuses it.
+- "Ended without a merge" is decided lazily, when the next event arrives (`linkIsLive`), from the task, the session and their pull request rows. A terminal task with no pull request, a session archived or deleted with no open pull request, a closed pull request, or a claim with no work whose run is not `pending_retry` and is older than 10 minutes, releases the issue. No archive or failure path has to remember the link.
+- `inbound/onMerge.ts` listens to `pr:snapshot`. A merged or closed pull request finds active links by `pull_request_id` on the link, the task or the session (structured ids only). Merged: CAS the link to `done`, then a workflow run claimed on `(workflow_id, 'merge:<link>')` with event `issue_pr_merged` runs `issueMergeActions` (comment with the PR link, then done unless turned off). Closed: the link is `failed`. The retry sweep reads `issueMergeActions` for a run with that event.
+
+Write-back (`services/workflows/issueActions.ts`) runs in the backend with the GitHub App token or the Linear app token. A vendor rate limit is `rate_gated`; Linear's is remembered per connection (`linearBlockedUntil`), so the next write-back on that connection waits too. Self-echo: the Talyn App bot on GitHub, Linear's app user id (`viewer.id`, stored at connect), and `our_comment_ids` on any link of the issue.
+
+GitHub Issues: `sources/githubIssues.ts`, called from `processWebhookDelivery` beside the PR rules, above the refresh gate. `issues` moved to the slow lane, because its rules call GitHub. An `issue_comment` on a pull request is ignored there.
+
+Linear:
+- OAuth app with `actor=app`, PKCE S256, `prompt=consent`, scopes `read,write,issues:create,comments:create,app:assignable` (`app:assignable` is documented for agents: assigning an issue to the app sets its `delegate`, which the adapter reads). Tokens last 24 h and the refresh token rotates; the refresh is advisory-locked per connection and re-reads inside the lock, as in `mcpServers/oauth.ts`. `invalid_grant` records `reauthRequiredAt`.
+- One app-level webhook, `POST /api/v1/webhooks/in/linear`. The receiver gained vendor routes (`InboundVendorRoute`): verify with the app secret before any database read, handle app messages (the `OAuthApp` `revoked` event marks the connection), then store one delivery per connection of that organization. An unknown organization answers 200 and is dropped, because Linear disables a webhook that keeps failing. `webhookTimestamp` must be within 60 s either way.
+- Routes `routes/linear.ts`: status, connect (`returnTo` for mobile), disconnect (revokes), editor options (60 s cache), and the public callback. A Linear rule save checks the connection is the workspace's (`linear_connection_unavailable`).
+
+Prompt: `buildInboundPrompt` gained text `fields` and an `issue` body label. The issue title, description and up to 10 newest comments are quoted in the fence. `{{issue.identifier}}`, `{{issue.url}}` and `{{issue.title}}` render inline only when they pass the identifier check.
+
+Clients: Linear and GitHub Issues catalog cards (GitHub Issues only when GitHub is connected), the Linear connection section with "Also connect as an MCP server" (the existing MCP flow; a separate grant), and the issue rule editor in web and desktop. Mobile has the cards, the Linear status screen with native connect, and the rules list. Task links are `/open/task/:id`.
+
+Not done or assumed:
+- Linear's Issue webhook payload is not documented field by field. The adapter reads `labelIds`, `labels`, `assigneeId`, `delegateId`, `stateId`, `state`, `team`, `project`, `priorityLabel` and `updatedFrom` defensively; a field that is absent fails its condition.
+- The `OAuthApp` revoked payload is documented only as fields (`oauthClientId`, `organizationId`). The handler reads `type: 'OAuthApp'` and `action: 'revoked'`.
+- Write-back is not shown on the issue link anywhere in the UI. The run history shows it.
+- An issue's work stays "running" while its session stays unarchived, even when nobody uses it.
+
+## Webhook rules: inbound layer, phase 1 (2026-11-12)
+
+Phase 1 of `docs/INBOUND_INTEGRATIONS.md`. A rule of the new Webhooks integration gets its own URL, and a request to it starts a session (the default) or a task. It is behind the `webhookRules` flag (`webhook-rules`, break glass `WEBHOOK_RULES_ENABLED`, fallback OFF, gated). The routes ask the caller; the receiver and the engine ask the workspace owner.
+
+The shared inbound layer (`services/inbound/`), built so Linear, Sentry and Jira are thin adapters:
+- Tables `inbound_connections` and `inbound_deliveries` (migration `0131`), backend-pool only. A generic connection belongs to one rule (`rule_id`, unique, cascade). Talyn keeps only the sha256 of the URL token, so it shows the URL once (on create and on rotate). The signing secret is encrypted.
+- `adapter.ts` is the vendor seam: `verify`, `deliveryId`, `eventType`, `toFacts`, a rules-engine source and the flag. `adapters/webhook.ts` is the only adapter. The token is compared in constant time against the hash. `X-Talyn-Signature: sha256=<hex>` is optional, and a present but wrong one is refused. The delivery id is `X-Talyn-Delivery`, else `body:<sha256 of the body>`.
+- `receiver.ts`: `POST /api/v1/webhooks/in/:connectionId/:token`, mounted before `express.json` with its own raw parser. 1 MB body cap (413), 120 requests a minute per URL and 600 per IP. 404 for an unknown URL and for the flag off, 401 for a bad token or signature. It stores, answers 200, and processes after the response.
+- `process.ts` generalises `processSlackEvent`: claim CAS, `runWithoutScope`, 5 attempts. `sweep.ts` retries what a crash left and deletes deliveries 7 days after they arrived (`inbound_delivery_sweep` poller).
+- `prompt.ts` `buildInboundPrompt` mirrors `buildSlackPrompt`. Identifier placeholders (`{{repo}}`, `{{webhook.delivery}}`, `{{webhook.received_at}}`) render inline only when the value is one token of identifier characters, 200 characters or fewer. Otherwise they move into the fence. `{{payload.<path>}}` never renders inline. The body is quoted up to 16 KB, with a note outside the fence when it was cut.
+
+Rules engine:
+- `webhook` is a `WorkflowIntegration` with one event, `webhook_received`, and one condition, `payloadMatches` (`{ path, op: equals | contains | exists, value? }`, ANDed, dot paths with indexes). `workflowMatches` also requires the rule id to equal the facts' `ruleId`. The rate cap subject is `webhook:<ruleId>`.
+- A run row stores webhook facts WITHOUT the body (`storedFacts`), because a body can be 1 MB and the run history reads `facts`. The retry sweep reads the body again from `inbound_deliveries` by `deliveryRowId`, and gives the run up when the row is gone.
+- `start_task` is new and inbound-only: `createCloudTask({ type: 'code_writing', source: 'workflow' })`, so the box gate, the unattended deferral and the attribution are unchanged. `start_session` on a webhook rule needs a repository (the validator refuses `null`).
+
+Routes: creating a webhook rule writes the rule and its connection in one pool transaction (`createWebhookRule`), because the connection table has no grant for the scoped role and points at the rule. The answer carries `webhook: { connectionId, url, signingSecret }` once. `routes/workflowWebhooks.ts` adds `GET /workflows/:id/webhook`, `POST /:id/webhook/rotate`, `GET /:id/deliveries` (no body), `GET /:id/deliveries/:deliveryId`, and `POST /:id/deliveries/:deliveryId/replay` (`<orig>:replay:<n>`, so the run claim is fresh). Rotate also repairs a rule that lost its connection. The URL uses `TALYN_PUBLIC_API_URL` when set, else the caller's host. Set it in production, because the MCP tools call over loopback.
+
+Clients: a Webhooks catalog card and rules page in web and desktop, with the payload test editor, the start forms, a once-only URL dialog, a URL section with Rotate, and a Requests list with Replay. Mobile shows the card and the rules list with the toggle and "Edit on the web". MCP `create_workflow` returns the URL once. Docs: `integrations-webhook.md`.
+
+Not done:
+- No "require a signature" setting: a sender that signs cannot stop an unsigned request that has the URL.
+- Deliveries do not update live. There is no WebSocket event for them, so the list loads on open and after a replay.
+- `IssueEventFacts` and `ErrorEventFacts` are not added yet. They belong to phases 2 and 3.
+
+## Bill boxes on measured memory (2026-11-12)
+
+A posthog/posthog session boots as Large (12 GB, 6 vCPU, weight 2). Compose-file detection sees ClickHouse and Kafka and picks that size. But a session uses about 1.5 GB, so the user paid two box-hours for each hour of a box that used an eighth of its memory. The box still boots at the detected size, so a session that starts the full stack has room. The bill now follows the memory the box uses.
+
+The rule (`billedSizeFor` in `packages/shared/src/pricing.ts`):
+- Take the smallest of Standard, Medium, Large and X-Large whose memory holds the box's `memUsedMib` (the VMM's resident size). If none holds it, X-Large.
+- Never bill above the booted size. A Small box always bills Small, because Small and Standard differ only in CPU.
+- An unknown, zero or non-finite reading bills the booted size, which is the old bill.
+
+How the sweep applies it (`UsageSweep.resizeIfNeeded` in `services/billing/usage/sweep.ts`):
+- Each minute, for each running box it read, the sweep compares the measured size with the open interval's size. A heavier size splits the interval at once.
+- A lighter size splits only after five lighter ticks in a row (`DOWNSIZE_AFTER_TICKS`). The sweep reads memory once a minute and cannot see a peak between two reads. Five minutes stop a build whose memory drops for a moment from billing small, and they limit interval churn. The move goes to the heaviest size the lighter ticks measured. An equal, heavier or unknown tick resets the count. The count is in memory, so a deploy only delays a move down, which bills the higher size.
+- A split closes the interval with `end_reason` `resize` and opens the next one at the same instant, with the same owner, payer, workspace and subject. The split point is `max(billedThrough, now - 60 s)`: the minute since the last charge bills at the new size, and a stale cursor never reprices more than one minute. The new interval starts where the close actually ended, so a charge that moved the cursor in between cannot make two intervals overlap. `end_reason` is plain text with no CHECK, so no migration.
+- No split when the box reports no memory figure, or no resources to name its booted size.
+- An interval the sweep opens for a running box with none starts at the measured size.
+- Each split is a `usage_resize` debug-bus event (sandbox id, from, to, `memUsedMib`) and counts in `SweepResult.resized`.
+
+What the hooks do: `meterBoxOpened` still opens at the booted size, but `insertOpenInterval` does nothing while an interval is open, so a hook only opens on boot, wake, a payer change or a move to a new box. The next sweep then corrects the size: up at once, down after five minutes. The hooks and the sweep do not fight.
+
+What reads the size: the box gate's `size_requires_pro` check uses the REQUESTED size, and the concurrent-box count counts open intervals, so a split changes neither. The usage report and the admin console show the billed size of each interval, which is correct. The Insights box count skips intervals that ended with `resize`, so a resized box counts once. The admin console's "started" count still counts each segment.
+
+Not covered:
+- CPU is not billed on its own. A Large box that uses 1.5 GB and all six vCPUs bills Standard.
+- The fleet still reserves the booted size for host capacity. A light Large box still takes Large room on the host, so this change moves margin from us to the user on those boxes.
+- `memUsedMib` is the VMM's resident size. Pages the guest touched and freed can stay resident until the balloon takes them back, so a box can bill a step higher after a peak until that happens.
+
+The copy says it in each app (web Billing and the size picker, desktop Plan and usage, the mobile size sheet) with `MEASURED_BILLING_NOTE`, and in `docs/billing.md` and `docs/sandboxes.md`.
+
+### Peak memory and cost in the admin console (2026-11-12)
+
+The admin console's billing card now shows, for each workbench and task, the peak memory and what it cost.
+
+- `usage_intervals.peak_mem_used_mib` (migration 0133) holds the highest `memUsedMib` the sweep read for the interval, in whole MiB (rounded up). NULL means no reading yet.
+- The sweep raises the peak of each running box's open interval in one `UPDATE … FROM (VALUES …)` per tick (`raiseIntervalPeaks`). It never lowers a peak and never writes a closed interval. A failed write is a `usage_peak_failed` debug-bus event and does not stop the sweep, because the peak is shown, not billed.
+- An interval the sweep opens, or the next interval after a resize, starts with the reading of that tick. The interval that a resize closes keeps its own peak. An interval that a hook opens has no peak until the next sweep.
+- `GET /admin/users/:id/billing` returns `subjects`: up to 25 workbenches, tasks and review units with intervals that started in the last 30 days, newest first. Each row has the title, the interval count, the peak memory over all intervals, the heaviest billed size, the box-hours and the cost. Each interval and open box also carries `peakMemUsedMib` and `costMicros`.
+- The cost is `billedWsec` at the box-hour list price (`costMicrosForWeightedSeconds`). It does not subtract included hours, so it is not what the user paid in cash.
+- Peak memory is sampled once a minute. A spike between two reads does not show.
+
+## Slack channel rules run on app and bot messages (2026-11-12)
+
+A channel automation on #alerts-warehouse-sources never ran. Every message there comes from the incident.io app, and the Slack source adapter dropped every message with a `bot_id` or the `bot_message` subtype.
+
+Changes:
+- `slackFactsFromEvent` accepts app and bot messages. `isChannelRuleMessage` is the cheap check that `onChannelMessage` runs before the install read. The author is the message's bot user, or its `bot_id` when Slack sends no user (a legacy integration or webhook).
+- Talyn's own messages stay out: the bot user id, plus the install's `app_id` on the message or on `bot_profile`. Without this, a rule could answer itself.
+- `slackMessageText` reads the whole message. For a bot, Block Kit blocks replace `text`, which is only a fallback. Attachments are added for every message. Buttons, images and dividers are skipped. A person's rich text blocks are not read, because `text` already has the same words. The facts, `textContains` and the quoted Slack text in a session prompt (rules and personal triggers) all use it.
+- The personal triggers did not change: a bot still cannot mention Talyn or DM it to start a session.
+
+The per-channel rate cap (`maxRunsPerPrPerHour`) is the guard against a noisy bot. The `linked` author setting excludes bots, because a bot never has a Talyn link.
+
+## Session boots cancelled on a busy host (2026-11-12)
+
+At 12:15 UTC nine posthog/posthog sessions on scaleway-1 ended with "The sandbox was lost. Retry to start a new one." No box was lost. None of them booted.
+
+What happened:
+- Eleven sessions asked for a box within 23 seconds. The same host started a posthog repo layer rebuild at the same time, because `pnpm-lock.yaml` changed. Staging a box usually takes about a second. Here it took 8 to 31 seconds, longer for each box in the queue.
+- A session's create is synchronous in fleetd: the boot runs inside the request, on the request's context (`sandbox_create.go`). Talyn sent it with the 20-second default timeout. When Talyn gave up, fleetd cancelled the boot (`context canceled`).
+- Talyn read the timeout as "unreachable" and sent the create again with the same id. fleetd answers an id it knows with that id's record, here a failed one. Provisioning went on, and the first call to the box answered "not found", which `userFacingError` shows as a lost sandbox.
+
+Two changes:
+- `createSandbox` waits `CREATE_TIMEOUT_MS` (45 s). fleetd allows a boot 30 s (`BootTimeout`, staging included) and the gateway waits 30 s for a host, so the fleet's own answer now arrives before Talyn cancels.
+- `createWaitingForCapacity` treats a failed boot as a reason to try a new id: a failed record that is not queued, or fleetd's 400 `sandbox did not boot`. It pauses `firstDelayMs`, moves the row to the next id (the move the lost-queue path already used, now one helper) and creates again, at most `PROVISION_BOOT_RETRIES.max` (2) times. After that the session fails with "The sandbox did not start: <fleet reason>". The failure is returned, not thrown, because the row is on a new id by then and `failProvision` writes only for the id it is given.
+
+Not done: the YAS side. A layer rebuild and many box stages share the disk with nothing to share it fairly. A lower I/O priority for rebuilds, or a limit on parallel staging, belongs in YAS.
+
+Running these suites locally needs `TMPDIR` set to a writable folder when the shell is sandboxed. The pglite template lives in `os.tmpdir()`, and a blocked write there fails every suite with `ErrnoError 20` before a test runs.
+
+## Release notes split between desktop and mobile (2026-11-11)
+
+Mobile changes showed in the desktop and web "What's new" modal. `surfacesForScope` mapped every scope except `desktop` and `web` to both forks, so `feat(mobile)` commits counted as desktop and web.
+- `ReleaseSurface` has a third value, `mobile`. `RELEASE_SURFACES` lists all three, and the backend validates against it.
+- The `mobile` scope maps to `['mobile']` only. Mobile is never a default: other scopes still map to desktop and web.
+- The generator prompt tells the model to keep mobile highlights apart. The model adds `mobile` to a desktop or web change only when the mobile app clearly shows it.
+- Old desktop builds need no change: they filter by `surfaces.includes('desktop')`, so a mobile-only highlight never shows there.
+- The mobile app has Settings → About → What's new (`app/settings/whatsNew.tsx`). It shows only `mobile` highlights, and heads each release by date, because the release version is the desktop build number.
+- **Not covered:** rows published before this change keep their old surfaces. Mobile items in them stay on desktop and web, and are not on mobile.
+
+## Integrations area and rules (2026-11-11)
+
+Steps 1 to 4 brought connections, rules, and runs into one Integrations area.
+- Rules use the `integration` field. The vocabulary covers GitHub and Slack.
+- One rule engine uses GitHub and Slack adapters in `services/workflows/sources/`.
+- Slack channel rules use the `slackChannelRules` flag.
+- The Slack connection reports `canReply` from the `chat:write` scope. A channels route lists channels the bot joined.
+- Web, desktop, and mobile show Integrations in place of Automations.
+- MCP tools and public docs now describe integration rules and scheduled rules.
+
+## Sessions can wait for CI (2026-11-11)
+
+A session that pushed had only a timed wake-up, so the agent guessed how long CI takes. A short guess woke the box to find CI still running. A long guess lost time after CI finished. Now `talyn_schedule_wakeup` takes `until_ci` and `head_sha`, and Talyn sends the turn when CI settles. This is the session form of CI park (below). A session needs no suspend or resume, because its box sleeps when idle and a wake-up turn wakes it. Behind the `session-ci-wait` PostHog flag (`sessionCiWait`, fallback OFF, `availability: 'gated'`, break glass `SESSION_CI_WAIT_ENABLED`), asked against the workspace owner when the wake-up is scheduled. With the flag off, the request gets 403 `ci_wait_unavailable` and the skills tell the agent to use a timed wake-up.
+- **A CI wake-up is a wake-up row** with `ci_pull_request_id`, `ci_head_sha` and `ci_pr_head_at_schedule` (migration `0129`, partial index on scheduled CI rows). `wake_at` is the latest time it fires (default `CI_WAKEUP_DEFAULT_WAIT_SECONDS`, 3 hours). It needs the session's linked, open pull request. `head_sha` must be a full commit id; the default is the head Talyn knows. A new CI wake-up cancels the earlier scheduled ones in the same chat, because after another push they would only report a moved head.
+- **Firing** (`backgroundSweep.ts`): the `pr:checks` listener reads only the pull requests that a flush touched, and the 30 s background sweep reads every scheduled CI row. Both use `decideCiWakeup` (`ciWakeups.ts`) and the `settledOutcome` that CI park uses (moved to `services/ciSettle.ts`). A head equal to the head at schedule time is the stale value from before the agent's push, not a moved head. Neither path fires while the chat runs a turn, because the agent is awake. When `wake_at` comes first, the due sweep fires it, and the outcome is read at fire time (a settled result, else `timed_out`). The claim is the usual `scheduled → fired` CAS, so a race sends one turn.
+- **The turn** says the outcome: passing, the failed required checks, the new head, timed out, merged or closed. The message `trigger` carries `ci: <outcome>`, so the clients show "CI passed: <reason>" and older clients still show "Woke up: <reason>".
+- **Clients** (web, desktop, mobile): the chip and the Background tab say "Waits for CI on <sha>" and the latest time. On web and desktop, the sidebar state is `waiting_ci` (an hourglass), between merged/closed and the PR's other states.
+- **Skills:** `talyn-ci-triage` step 8 and `talyn-speed` tell the agent to use `until_ci` after a push, and to fall back to the proxy wait or a timed wake-up when the call fails.
+- **Not covered:** a repository with no CI never settles, so the wake-up fires at its latest time as `timed_out`.
+- Analytics: `session_ci_wakeup_scheduled` and `session_ci_wakeup_fired` (with `outcome`) through `captureWorkspaceEvent`.
+
+## Split view: several sessions side by side (2026-11-11)
+
+Web and desktop can show up to four sessions at once, each pane a session's transcript and composer, so a person can watch and prompt several agents without switching pages. Behind the `split-view` PostHog flag (`splitView`, fallback OFF, `availability: 'gated'`, break glass `SPLIT_VIEW_ENABLED`), in `ACCOUNT_FEATURE_FLAGS` so `GET /features` answers it. Drawing only: the panes call the same session routes as the session page, so nothing server-side is gated. Released to every account on 2026-11-11: the PostHog flag serves everyone, the fallback is ON and `availability` is `'general'`, so the release notes now announce it.
+- **Route `{ view: 'split' }`** (`/split` on web; persisted like any route on desktop). The panes are NOT in the route: `stores/splitView.ts` keeps them in localStorage (`talyn:split-view`), and the pane rules (max 4, the oldest pane makes room, move, parse, grid shape) are in `packages/shared/src/splitView.ts` so web and desktop agree.
+- **Focus is the split store's own, never `selectedWorkbenchId`.** `selectWorkbench` navigates to the session page (the subscription in `installNavigation`), so using it for pane focus would leave split view. A consequence: a turn that finishes in a pane is marked unread for a moment, and the pane's `ChatView` clears it on the status change, as it does on window focus.
+- **Only the focused pane's composer takes focus.** `Composer` and `ChatView` take `autoFocus` (default true); off, the composer neither grabs the caret on open nor answers ⌘L. Without it every pane's composer fought for focus and ⌘L went to whichever mounted last.
+- **Panes reuse the session page's parts**: `StatusBanner` and `ChatView` are exported from `WorkbenchView`. Desktop shows a banner instead of a composer for a local session on another device; moving it needs the folder picker on the session page.
+- **Ways in:** the Split view sidebar item and palette entry, the header button on a session, Open in split view on a sidebar row's menu, ⌘/Ctrl-click on a row, and, while in split view, a plain click on a row adds it as a pane. An archived session's pane closes; a teammate's session is fetched like the session page does.
+- **Not on mobile** (a phone has no room for two transcripts), and no public docs yet while the flag is gated. Both are in `ROADMAP.md`.
+- Analytics: `split_view_pane_added` with `source`.
+
+## Onboarding agent step: Claude or Codex is required (2026-11-11)
+
+A PostHog investigation of sign-ups that never connected an agent found four causes. Each now has a fix in web, desktop and mobile.
+- **Agent step.** Where the fleet is offered, onboarding shows only Claude and Codex, and Next needs one of them. PostHog Code stays in Settings. Where the fleet is not offered (`GET /cloud-providers` has no `selfhosted` entry), the PostHog Code path stays so that user is not trapped. The step draws nothing until the provider list arrives, so PostHog Code does not flash at a fleet workspace. Mobile loses the "Skip for now" button unless the sandbox is unavailable (`agentStepSkippable`). Each step with a disabled Next now says what is missing.
+- **PostHog Code OAuth was never counted.** The flow ends in a browser redirect, so no client saw the result. The OAuth callback now fires `cloud_provider_connected` (`provider: 'posthog_code'`) from the backend through `captureCloudProviderConnected`. The API-key path still fires from the client, so there is no double count.
+- **Codex region error.** The desktop sign-in maps OpenAI's 403 `unsupported_country_region_territory` to "OpenAI does not offer ChatGPT sign-in in your region. Connect Claude instead." The renderer strips the Electron `Error invoking remote method` prefix (`ipcErrorMessage`). Web and mobile do not start this flow: web takes a pasted `auth.json`, mobile finishes on a computer.
+- **GitHub step.** The status check ran only on window focus, so a return from the browser that fires no focus event left "Not connected yet" for good. `useGithubConnection` now takes `pollMs`, and the wizard re-checks every 4 s until GitHub connects. Not proven as the cause of the one reported case. Other candidates, not changed: `pendingOAuthStates` in `routes/github.ts` is an in-memory map, so a deploy or a second replica inside the 10-minute window gives `invalid_state` on the callback page; and the token map in `services/github.ts` is per process. Mobile already refreshes on its deep-link return.
+
+## CI park: pause fleet fix runs while CI runs (2026-11-11)
+
+A fleet fix run kept a large box awake for 228 minutes, 52 of them in `sleep` calls waiting for PostHog/posthog's 40-minute CI. Now a run can end its turn after a publish, and Talyn suspends the box and resumes the same conversation when the checks settle. Behind the `ci-park` PostHog flag (fallback OFF, `availability: 'gated'`, break glass `CI_PARK_ENABLED`). The flag is not on anywhere.
+- **One decision, stamped.** `createCloudTask` asks the flag once, against the workspace owner, for a `pr_response` task with a PR on a `selfhosted` env, and stamps `metadata.ciPark`. The executor and the poller read only the stamp, like `internetAccess`. With no stamp, dispatch is byte-identical: no `ephemeral` key, so the default `true` stays, and the same prompt.
+- **The backend owns the prompt.** The clients build the fix prompt, so the fleet executor applies `withAwaitCiRule` to a stamped run at dispatch. It replaces the "wait for CI" loop line and appends the CI WAITING rule, so a template that drops `{{loopRules}}` still gets it. The stored prompt does not change, so a quota failover to PostHog Code sends today's prompt. `GET /features` does not carry the flag: no client draws anything from it.
+- **New status `waiting_ci`**, active (`TASK_STATUS_TERMINAL.waiting_ci = false`). Deviations from "active": `countPendingTaskBoxesQuery` leaves it out (the box is asleep, a wake goes through the gate); the generic poller still polls only `in_progress`; `PATCH /tasks/:id` refuses it (only the poller parks); stop accepts it, and the fleet provider's cancel deletes a stamped run's box instead of cancelling its task (a non-ephemeral box only goes idle on a cancel).
+- **The sentinel** is `TALYN_AWAIT_CI: <sha>`, with the `parseNeedsHumanSentinel` rules. The needs-human sentinel is read first. A box runs several turns in one event ring, so the final text is scoped to the current fleet task, after its `task_started` marker (`eventsOfTask`). Without that, a resumed turn that said nothing re-read the previous turn's sentinel.
+- **Park** (`selfHosted/poller.ts` `settleTurn` + `ciPark.ts` `parkForCi`): writes `metadata.awaitCi` first, then a CAS `in_progress → waiting_ci`, so the sweep never sees a parked row without its state. A failed suspend still parks: the 10-minute idle timeout suspends the box, and the meter sweep closes the interval. Six parks at most. A turn that does not park is finished and its box deleted.
+- **Wake** (`ciPark.ts`): the `pr:checks` listener and a 60 s sweep (`ci_park_sweep` on the debug bus, `guardCrossReplica`). The claim is a CAS from `waiting_ci` with the park's token. The gate is `checkBoxGate` as unattended work, not `withBoxGate`: the resume is a long HTTP call and the lock path would hold a pool transaction across it, so losing a race on Free costs one box. A claimed wake marks `awaitCi.wakingAt`, and the poller leaves the parked task alone for 15 minutes so it does not re-park on the old turn.
+- **Merge queue:** fix state `waiting`, live like `active`, and `submitHeldForRun` does not release on silence while it waits.
+- **Release scope** is `ci-park`, not `fleet`. A gated flag withholds every highlight with its scopes, and `fleet` would hide every released fleet note.
+- **Not verified on a real box:** that the fleet guests advertise the `tasks` capability (a `tasks_unsupported` refusal finishes the run), and that the resumed pi session really continues the conversation after a rootfs suspend. The resume sends the system prompt and the model again.
+- Analytics: `task_ci_parked` and `task_ci_woken` through `captureWorkspaceEvent`. A run finished by the sweep (PR merged or closed, box lost) sends no task outcome event.
+
+## DB pool: four fixes after the pool filled (2026-11-10)
+
+The pool diagnostics below showed where connections were wasted. Four changes, one commit each:
+- **Webhook fast lane.** The worker ran a whole batch of up to 32 fast deliveries at once. A semaphore (`FAST_LANE_MAX = 8`) now bounds it. The batch still waits for all of them before the next read.
+- **`requireWorkspaceAccess`** ran two selects on the same workspace row. It now runs one, with the same 404s.
+- **PR routes and GitHub.** `GET /pull-requests/:id`, `POST /pull-requests/:id/refresh` and `POST /repositories/poll` waited on GitHub with the owner-scope transaction open, idle in transaction. `runWithoutScope` alone does not help: the request transaction stays open until the response ends. The new `continueWithoutOwnerScope(req, fn)` in `middleware/ownerScope.ts` commits the scope, then runs `fn` on the pool. Use it only after the handler has proved ownership, and keep every write keyed by the proved row, because RLS does not filter it. Do not query after it returns: the scoped handle is closed. The two PR routes build their response in a new short owner scope, so RLS filters the response as before.
+- **Acquire deadline.** postgres-js has no acquire timeout. `instrumentEgress` now cancels a pool query or `begin` that is still in the postgres-js queue after 10 s (`DbAcquireTimeoutError`, code `DB_POOL_ACQUIRE_TIMEOUT`). It never cancels a started query (that sends a server cancel) or a query in a transaction. It also leaves alone a query that postgres-js opens a new connection for. A cancel there skips the query, so the new connection never reports open and stays stuck until `max_lifetime`. The pool handler tells the cases apart: it returns undefined when it queues a query and the connection when it opens one. When a connection closes, postgres-js opens it for the head of the queue, so the queries queued at that moment lose their deadline. A check against real postgres-js and a silent TCP server confirmed it: the queued query failed at 10 s, and the connecting one failed at `connect_timeout`.
+
+## Private connector read: retry and cache (2026-11-10)
+
+From 14:40 to 14:48 UTC, Railway's edge answered 429 to calls from the backend to the fleet control plane. Every session start reads the workspace's private connector, so one 429 failed the start with "Private routes are rate limited".
+
+`sandboxPolicyForWorkspace` now reads the connector through `connectorForPolicy` in `services/selfHosted/privateRoutes.ts`. A throttled read retries twice. It waits `retryAfterMs` or 1 s, each wait capped at 5 s, 10 s in total. Writes never retry. The result, including "no connector" (404), stays in process memory for 60 s. If a fresh read then fails with a throttle, a capacity error, a 5xx or a network error, the entry is used when it is at most 10 minutes old, and the code logs one warning. A 4xx other than 404 is never masked.
+
+`startPrivateConnector`, `replacePrivateRoutes` and `deletePrivateConnector` drop the entry before and after the call. A read that started before a write is not stored (`connectorWriteEpoch`). The `workspaceId` check runs on every use. The routes in `routes/workspaces.ts` and the MCP reads still call `getPrivateConnector` live.
+
+## DB pool diagnostics (2026-11-10)
+
+On 2026-11-10 the 20-connection pool filled between 10:39 and 10:54 UTC. The loops wedged, every request waited, and `dbWatchdog` restarted the process. No query logged a statement timeout, and nothing could say what held the connections. Now the backend keeps an always-on in-flight registry (`db/inflight.ts`): each awaited query until it settles (operation and table only, never values), each open owner-scope transaction (labelled `METHOD /path`, no query string) and each advisory-lock transaction (by lock name). `instrumentEgress` now also wraps `begin` and `savepoint`, because postgres-js gives each transaction its own `sql` object. Before this, no query inside a transaction passed the meter, so the Debug panel's DB tiles now count request queries too. `services/dbInflightReporter.ts` runs every 15 s. It logs `[db-inflight]` lines for entries open over 30 s (then at most once a minute each, 15 lines and a "+N more" line per tick), and it warns when pool demand (pool queries plus open transactions) is above `DB_POOL_MAX`. The watchdog logs a summary on each failed probe and dumps the 15 oldest entries of each kind before it exits. A note on the warning: postgres-js can pipeline pool queries on a busy connection, so demand above the max is a strong sign of queueing, not an exact count.
+
+## Marketing pass: sessions first, Conductor Cloud users (2026-11-10)
+
+Tom asked for a marketing pass that moves the site towards Conductor's positioning and away from PR management.
+- **Conductor is joining Meta** (announced 2026-11-04). Conductor Cloud goes read-only on 2026-11-13 and shuts down on 2026-11-20. Local Conductor gets fixes until early 2027. Its home page had become "Run a team of coding agents in the cloud" on Firecracker microVMs, so it was the closest competitor. `/compare/conductor` is now a guide for moving off Conductor Cloud, and the hero badge links to it through `hero.announcement` in `lib/content.ts`. Set that to null once the shutdown has passed.
+- Talyn already reads `conductor.json` and `.conductor/settings.toml` and sets the `CONDUCTOR_*` variables (`packages/shared/src/workbenchConfig.ts`). That is the main claim on the page.
+- The Devin, Cursor, Codex cloud, T3 Code and Graphite pages said "mission control for the pull requests you already have", and also no local worktrees, no Slack and no public API. They now lead with sessions. The competitor facts and the `updated` dates did not change.
+- The feature menu order is set by `FEATURE_ORDER` in `lib/features.ts` (agents, then automation, then PR work). `/compare` shows "Cloud coding agents" first.
+- **PostHog findings (90 days, filtered).** Datacentre link scanners made about 35% of raw visitors and most Windows download clicks. 1,174 real visitors, 95% see only `/`, and half stop just below the hero. 31 sign-ups, about 1 in 3 attributable to a marketing visit. Active users use auto-keep, PR fixes and the merge queue. Almost no external user has used sessions or threads yet, because those features are new.
+- Heatmaps and dead-click capture are now on in `lib/analytics.ts`. The proof strip below the hero answers "will it merge without me asking" in place of the macOS signing note.
+
+## PostHog on mobile (2026-11-10)
+
+Tom's call: the mobile app now has PostHog product analytics, session replay, and error tracking, like web. This reverses the MVP rule of no analytics or replay SDK.
+- Official SDK only: `posthog-react-native` and `posthog-react-native-session-replay`, plus the Expo peers `expo-application`, `expo-file-system` and `expo-localization`. A new native build is required.
+- `src/lib/analytics.ts` ports web's guarded helpers. No `EXPO_PUBLIC_TALYN_POSTHOG_KEY` means nothing is sent. The root waits up to 1.5 s for init, so the saved opt-out (AsyncStorage) is read before the first event and touch autocapture wraps the tree without a remount.
+- Replay is not masked (text, inputs, images, and sandboxed views show), records no console logs or network requests, and is off in development. Exceptions go through the shared drop and tag rules, like web `before_send`. `RowBoundary` reports what it catches.
+- Screens are `$screen` events named by route pattern (`/pulls/[id]`). Touch autocapture reads component names and test IDs only, because text children and accessibility labels can hold titles.
+- Events reuse the web names and keys. The PR detail and code review screens were being edited in parallel, so `code_review_started` and the PR events there are a follow-up.
+- Apple tracking stays false. Store privacy answers must declare analytics, diagnostics, and the user ID before submission.
+
 ## Mobile app aligned with web (2026-11-09)
 
 An on-device review of `apps/mobile` found it looked and worked like a form, not like Talyn. This session rebuilt it to match web and added the features a phone needs.
@@ -9,7 +481,10 @@ An on-device review of `apps/mobile` found it looked and worked like a form, not
 - **The store marked every entry stale on every socket event**, which kept a "Stale data" banner up and locked the composer on busy repos. Invalidation is now per id, refetches are silent and coalesced, and data stays on screen.
 - **Navigation is a drawer that mirrors the web sidebar**, not bottom tabs. Home is the new-session composer, as on web. Pinning every page above Settings left no room for sessions on a phone, so only the pull request lists stay pinned.
 - **Edge-to-edge Android does not resize for the keyboard.** A disabled `KeyboardAvoidingView` with `behavior="padding"` writes `paddingBottom: 0` over its own style, and the reported keyboard height leaves out the navigation bar. The inset now comes from the keyboard's `screenY`.
-- New: Markdown chat with tool rows, plan approval, stop, image attachments, session menu actions, PR actions and code review, changes and diffs, jobs, history, spaces, automations, usage, agents, insights, feature flags (`GET /features`), the owl boot and sign-in screens, and a native splash.
+- New: Markdown chat, tool rows, plan approval, stop, and image attachments.
+- The client added session menus, PR actions, code review, changes, diffs, jobs, and history.
+- It added spaces, integrations, usage, agents, insights, and feature flags through `GET /features`.
+- It also added the owl boot, sign-in screens, and a native splash.
 - Metro caches the worklets Babel plugin in memory. After adding reanimated or worklets, restart Metro with `--clear`, or the app fails with a version mismatch.
 
 ## Check ledger recompute reads one row (2026-11-09)
@@ -124,7 +599,7 @@ Phase P4 of Teams and Spaces: the web app can switch between Personal and a team
 
 - **Context.** `stores/workspace.ts` holds `currentContext` (`personal` with a workspace, or `space` with a space id), kept in localStorage like `currentWorkspaceId`. In a space, `currentWorkspaceId` keeps its Personal value, so code that reads it does not change. Picking a workspace goes back to Personal. A stored space that is gone falls back to Personal when the teams load.
 - **Teams store.** `stores/spaces.ts` holds my teams, members, each space's sessions, tasks, repositories and presence. It applies `workbench:*` and `task:*` frames to the space lists, and re-lists a space when a frame names a session it does not have, because a row needs its creator.
-- **Teammate sessions are "extras" in the workbench store.** `extraWorkbenchIds` lets the session view hold a session from another workspace without it showing in the Personal lists. A workbench in the main list is always mine; only an extra is checked against my workspaces (`useIsWorkbenchOwner`). On a teammate's session the header, chat tabs, composer settings, terminal and sandbox tab hide their owner-only actions. The composer says who pays, and shows a refusal from send-message inline (`payer_busy`, or any 403/409).
+- **Teammate sessions are "extras" in the workbench store.** `extraWorkbenchIds` lets the session view hold a session from another workspace without it showing in the Personal lists. A workbench in the main list is always mine; only an extra is checked against my workspaces (`useIsWorkbenchOwner`). On a teammate's session the header, composer settings, terminal and sandbox tab hide their owner-only actions. The composer says who pays, and shows a refusal from send-message inline (`payer_busy`, or any 403/409).
 - **Presence.** `usePresenceHeartbeat` subscribes to the space, sends the open session on each navigation and every 20s, and sends `away` while the tab is hidden. The client also resends the last presence on its own heartbeat; the extra frame costs little.
 - **Keys.** The browser keeps ⌘1–9, and ⌘⌥1–9 opens a session, so a context jump is ⌘⇧1–9 (`context.jump.N` in `appShortcuts.ts`).
 - **Not done here.** A teammate's task shows status, creator and PR link only: there is no member read route for a task transcript yet. Sending to a teammate's session depends on P3 (prompter pays). Until it lands, the send route is owner-only and the composer shows its error as a toast. The desktop port is P6.
@@ -7482,3 +7957,120 @@ Before, a session that needed me kept its red count on the context rail until th
 Now opening a session marks its current alert as seen. `sessionAttentionKey` (`packages/shared/src/contextAttention.ts`) names the alert: `error`, `chat_error:<chat>@<turn>`, `reply:<chat>@<turn>` or `conflict:<pr>:<headSha>`. `POST /workbenches/:id/attention/seen` stores the current key in `workbenches.attention_ack` (migration 0126), and `contextAttention` does not count a session whose key equals it. A new alert has a new key, so it counts again: a question in a later turn, a failure in a later turn, or conflicts on a new head.
 The route is owner-only through `attentionSessionsQuery`, so a teammate who opens a space session does not clear the owner's badge.
 In both apps, `useAttentionSeen` (`lib/contextRail.ts`) runs in `WorkbenchView` when the session opens, when its alert changes while it is open, and on window focus with an alert showing. It then asks the rail again (`refreshContextAttention`), so the badge clears at once.
+
+### 2026-11-12 — Video attachments in sessions
+
+Before, a session took only image attachments. Now the session composer on web, desktop and mobile also takes MP4, MOV and WebM videos.
+The types and limits are in `packages/shared/src/workbench.ts` (`WORKBENCH_VIDEO_TYPES`, `WORKBENCH_MAX_VIDEO_BYTES`, `workbenchAttachmentMaxBytes`). An image stays at 10 MB. A video can be 50 MB, because the backend holds the upload in memory and writes it into the sandbox in ~288 KB execs.
+`POST /workbenches/:id/attachments` checks the first bytes of a video (`ftyp` and the other QuickTime boxes, or the WebM EBML header). It gives the stored file an extension that agrees with the type (`workbenchAttachmentFileName`), because the raw route reads the type back from the extension.
+A video goes up as it is: no re-encoding, and never inline. The JSON body of a message is capped at 2 MB, so the new-session page (web, desktop and mobile) still takes images only. A video can be attached once the session has started.
+The agent gets the video path under "Attached files" with `WORKBENCH_VIDEO_PROMPT_NOTE`: it cannot watch a video, but it can extract frames. Codex gets no `--image` for a video.
+Web and desktop show a sent video as a chip that loads and plays the file only when it is opened. The CSPs gain `media-src 'self' blob:`. Mobile picks videos from the library only (no recording: the microphone permission is off, and turning it on needs a new binary) and shows a sent video as a tile with no playback, because playback needs a native module.
+A local desktop session writes a video over IPC. Main's attachment limit is now the video limit.
+
+### 2026-11-13 — The agent fixes a failed Create PR push
+
+Before, a Create PR turn (or an automatic PR) ended with a red `talyn_pr` line when Talyn's own push or commit failed. A common case was "the remote branch has commits this branch does not have", and the person then had to ask the agent to merge.
+Now a failure that the agent can fix queues one more turn with `origin: 'talyn'`, `intent: 'create_pr'` and a new trigger kind `pr_retry` (`{ attempt, error }`, `packages/shared/src/workbenchBackground.ts`). The agent can fix these failures:
+- A push that `classifyPushFailure` calls `behind` (`[rejected]`, `fetch first`, `non-fast-forward`).
+- The signed-commit path when GitHub has commits that HEAD does not contain.
+- A failed commit.
+- A title that is empty or too long.
+On the backend these throw `AgentFixablePullRequestError` (`services/workbenches/errors.ts`; it is in that file because `pullRequest.ts` is on an import cycle). `openPullRequestFromTurn` returns `fixableError`, and `queuePullRequestRetry` in `turns.ts` sends the turn.
+The retry turn gets `buildCreatePrTurnInstructions({ retryError })`. Those instructions replace "do not commit" with "fetch and merge `origin/<branch>`, no rebase or reset", and they still forbid a push, `gh` and `fleet-publish`. The agent ends with a new `talyn-pr` block. Then the usual end-of-turn path opens the PR.
+Limits: `PR_RETRY_MAX` (2) retries in a row, counted from the trigger of the turn that just ran. No retry when the person already has a message in the queue. No retry for a 403, a workflow refusal or an unknown push failure.
+The desktop local runtime does the same in `LocalTurnController.handleTurnEnd` (`FixablePullRequestError` in `localPullRequest.ts`). It records the user event with `talyn.origin`/`trigger`, so all clients show a system row.
+Web and desktop `TriggerRow` show the line with **Show error**. Mobile now shows every triggered Talyn turn (wake-up, job exit, PR retry) as one system line, as web does. Before, it showed these turns as a user bubble.
+
+
+### 2026-11-14 — PostHog Inbox rules (step 1 of 3)
+
+A new rule source, `posthog_inbox`, acts on PostHog self-driving reports (`SignalReport`). It is behind the new `posthogInboxRules` flag (`posthog-inbox-rules`, fallback OFF, gated). A rule has one event (`report_ready`) and one action (`start_session`, always on the report's own repository).
+The engine path: `services/posthogInbox/poller.ts` → `ingestPostHogReport(connection, reportId)` (`ingest.ts`) → `evaluateWorkflows(posthogInboxWorkflowSource, …)`. The ingest reads the report by id every time, so the later webhook receiver can call it with only an id and never trust a pushed payload.
+PostHog's list has no "updated after" filter. The poller sorts by `-updated_at`, pages down to its cursor (PostHog's timestamp text, with the report ids at that instant for ties) and handles at most 10 reports per poll, oldest first. Its state is in `posthog_inbox_pollers` (migration 0134). A connection is taken with a conditional UPDATE and a lease, not an advisory lock, because a poll that starts sessions can outlast the lock's hold limit.
+The run key is `posthog_inbox:<reportId>:<updated_at>`. The report is claimed in `external_issue_links` (now also for `posthog_inbox`, `connection_id` null), so a new version of a report cannot start a second session beside live work. The merge listener settles the link and writes nothing back to PostHog yet.
+Conditions: priorities, actionability (default `immediately_actionable`), source products, scouts (include/exclude), repositories, suggested reviewers (GitHub logins, read from the `suggested_reviewers` artefact only when a rule asks), title, summary and minimum signal count. Every rule refuses a report whose `suppression_source` is `safety_judge`, a report that is not `ready` or already addressed, and a report whose `repo_slug` is not a repository of the workspace. Only the single-report read has `repo_slug`; the list does not.
+New: `workflows.max_runs_per_day`, a per-rule daily cap beside the hourly one (default 10 for PostHog Inbox, null for the other sources). The PostHog OAuth grant now asks for `inbox:read inbox:write`; an older grant keeps working for PostHog Code and the editor says "Reconnect PostHog". `GET /workflows/posthog-inbox/status` and `POST /workflows/posthog-inbox/dry-run` back the editor's notice and its preview.
+Web and desktop have the editor (`posthogInboxFields.tsx`). Mobile shows the rules read-only. Steps 2 and 3: claim the report in PostHog and attach the pull request, and the PostHog webhook receiver.
+
+### 2026-11-16 — Find in the session transcript (⌘F)
+
+User request (Jovan): "let me do a `cmd` + `f` in the session transcript". Electron has no built-in find, so ⌘F did nothing in the desktop app.
+Web and desktop: `transcript.find` (`mod+f`) opens `TranscriptFindBar` over `WorkbenchTranscript` through `OPEN_TRANSCRIPT_FIND_EVENT` with the target `workbenchId` (the open session, or the focused split view pane; `findTargetWorkbenchId`). `lib/transcriptFind.ts` walks the transcript's text nodes and paints matches with the CSS Custom Highlight API (`::highlight(transcript-find)` in `app.css`/`App.css`), so React-owned nodes are not changed. A `MutationObserver` counts again while the agent streams. The transcript is not virtualized, so the search covers every loaded message; collapsed tool output is not in the DOM and is not searched.
+Desktop: the menu item is `rendererOnly`, so the Monaco code viewer keeps ⌘F. On both clients ⌘F is left alone in `.xterm`, `.monaco-editor`, `.cm-editor` and `diffs-container`, and on web outside a session (the browser's find).
+Mobile: a search button in the session header opens `FindBar` above the conversation. `features/chat/transcriptFind.ts` matches the text each row shows; the current row is tinted and matched words are marked, markdown included.
+
+### 2026-11-16 — The sidebar shows which session the rail badge counts
+
+Before, a context rail tile could say "1 item needs you" while no sidebar row looked different. The server counts a failure, a question, or a pull request with conflicts. The sidebar works out each row's state on the client, and the client can miss these: a space row has no chats and no mergeable state, and a session whose chats are not loaded shows as idle. So the counted row could be a grey dot, far down the list.
+Now `GET /workspaces/attention` also sends `sessions`: the counted session ids, each with a reason (`failed`, `reply` or `conflict`, from `attentionReason` in `packages/shared/src/contextAttention.ts`). An older server leaves it out, and the clients then show nothing new.
+In both apps, the rail keeps its last answer in `useContextAttentionStore` (`lib/contextRail.ts`), so the sidebar can read it. `withServerAttention` (`lib/sessionState.ts`) gives a counted row the state of its reason. Live work and a failure that the client sees win, because the server's answer can be up to 30 seconds old. The sidebar rows, the thread rows, the space model and the ⌘1–9 order all use it, so a counted row is in the active group.
+A "Needs you" section (`SidebarNeedsYou.tsx`) at the top of the Personal and space sidebars lists the counted sessions of that context. Opening one marks it as seen, so it leaves the section. With one context the rail is hidden and does not ask, so the section does not show.
+Mobile has no context rail, so it has no change.
+
+### 2026-11-16 — A session started from a PR keeps its PR link
+
+Before, a session started from a pull request (`fromPullRequestId`) linked the PR at create time. The merge backfill (`backfillMergeArchives`, every 10 minutes) then removed the link. The PR was older than the session, and the session pushed none of its commits, so `eligiblePr()` refused it. A manual "Link PR" to an older PR had the same problem.
+Now `workbenches.pull_request_link_explicit` (migration 0135) marks a link that a person or a caller chose. `createWorkbench` sets it for `fromPullRequestId`, and a manual link (`trackAndLink` strict) sets it too. `ownsLinkedPr()` (`prEligibility.ts`) accepts an explicit link or an eligible one. The backfill, merge auto-archive and the thread merge notice use it. So a session started from a PR also archives when that PR merges.
+The `stamp_workbench_pr_link` trigger clears the flag on an unlink, and on any PR change that does not set the flag. Branch-name links still need the evidence test.
+Sessions that lost their link before this fix stay unlinked. Use "Link PR" to link them again.
+
+### 2026-11-16 — PostHog Inbox backlog and "Run selected"
+
+Before, a PostHog Inbox rule acted only on reports that changed after the poller's first poll. Older reports that match a rule stayed untouched. Now a person can browse them and start work on the ones they pick.
+Backlog view: `POST /workflows/posthog-inbox/backlog` (`services/posthogInbox/backlog.ts`) lists reports that PostHog created in the last 7, 30 or 90 days, newest first. PostHog filters the list with the rule's conditions. Talyn's matcher (`posthogInboxContentMatches`) then checks each row. Each row has a state (`posthogInboxBacklogState`): not run, running, already run, claimed elsewhere, already addressed, repository not connected or held back.
+Run selected: `POST /workflows/:id/posthog-inbox/run` takes up to 20 report ids. For each id it reads the report, checks the state and the conditions, and checks the daily cap. Then `runWorkflowManually` uses the poller's path: same link, same PostHog claim, same session start. The rule must be saved and enabled.
+Migration 0141 adds `workflow_runs.trigger_source` (`event` or `manual`), `triggered_by_user_id` and `triggered_by_label`. The run history shows "manual by <who>". MCP has `talyn_list_posthog_inbox_backlog` (also for session tokens) and `talyn_run_posthog_inbox_reports` (not for session tokens). Mobile shows the backlog read-only on the rule screen, with "Started by <who>" on manual runs. It has no run button.
+Decisions:
+- A manual run that hits a cap records no skipped run. A skipped row would use up the dedupe key, and the report could not run later.
+- List rows now carry `repo_slug`, as PostHog's OpenAPI says. Before, only the single-report read had it. When a row has no `repo_slug` key, Talyn reads the report by id.
+- The list asks for status `ready,suppressed`, so reports that the safety judge held back show as "Held back for safety". Other suppressed rows are dropped.
+- The `search` parameter is a superset filter. PostHog may return rows that do not contain the words, so Talyn's matcher decides.
+Left: an editor for these rules on mobile, mobile "Run selected", and an exact count of matching reports. PostHog's `count` is before Talyn's matcher, so the page shows only how many reports Talyn read.
+
+### 2026-11-17 — A session can turn itself into a thread
+
+Before, only a person could continue a session as a thread, with **Continue as thread** in the session menu. The `talyn` MCP server had no tool for it. A person asked a session to "turn this into a thread", and the agent could only tell them to press the menu item. Nothing happened until they did.
+Now `talyn_continue_as_thread` calls the same route, `POST /workbenches/:id/thread`, with an optional `prompt`. The thread's first message recaps the session's chat and then gives the prompt, so the agent hands its plan to the thread. The tool tells the agent to end its turn.
+Decisions:
+- A session token may call it on itself only. It refuses a thread, and a session that is in a thread already: that thread starts the other sessions.
+- It refuses a session at spawn depth 1 or more. A thread starts again at depth 0, so a child session could escape `MAX_SESSION_SPAWN_DEPTH`.
+- The briefing tells the agent to call the tool when the person asks for a thread. When the work needs several repositories and the person did not ask, the agent asks first.
+
+### 2026-11-17 — An automation can start its session in a team space
+
+Before, a session from an integration rule (GitHub, Slack, webhook, Linear, GitHub Issues, PostHog Inbox) always started in Personal. To share it, the owner had to move it by hand.
+Now the `start_session` action has an optional `spaceId`. The rule editor on web and desktop shows a **Space** picker when Spaces is offered and the person is in a space. Mobile shows the space on the rule's facts. Rules are read-only on mobile.
+Decisions:
+- The session runs in the rule's own workspace, not in the owner's home workspace for the team. This is the same as a move: a space is a container. So Talyn adds no repository and makes no change to the space's repository list.
+- The checks are the move checks, for the rule's owner: the `spaces` flag, team membership and a live space (`services/workflows/ruleSpace.ts`). The route checks only a space that is NEW to the rule. Thus a rule whose space went away can still be renamed or switched off.
+- When the rule fires and the space is no longer usable, the session starts in Personal. The run's action detail says why. Personal is visible only to the owner, so this fails closed and the work still happens.
+
+### 2026-11-17 — Agents use `talyn_run_background`, and an open tool call at turn end is explained
+
+A PostHog/posthog session showed "Interrupted" two times. Nobody stopped it, and no limit or sandbox loss occurred. The agent started Claude Code background tasks (Agent subagents and `run_in_background` Bash) and wrote "waiting for the agent's report". `claude -p` stayed alive for those tasks and kept making tool calls. It then emitted `result` and exited while a Bash call was still open. The next turn's `--resume` marked that call as rejected, and the transcript showed "Interrupted".
+Changes:
+- The briefing has a new **Background work** section. Each command that can take more than about 2 minutes goes to `talyn_run_background`, and the agent ends its turn. Subagents run in the foreground. The agent's own background tasks (`run_in_background`, `&`, `nohup`) are not used, and the agent never ends a turn while one runs. The `talyn-speed` skill and the tool description say the same. The old "poll a log with `nohup` and `sleep 45`" advice is gone.
+- `buildBlocks` adds a plain note before a Claude `result` that arrives while a tool call has no result: "The agent ended its turn before a tool call finished. …". Error results (a stop, a lost sandbox) and Codex runs get no note. The next turn still shows "Interrupted" for the same call.
+
+### 2026-11-17 — PostHog Inbox backlog: all time, full pages, exact count and a Reports tab
+
+User request: backfill the PostHog Inbox reports when the integration is connected, and see the reports an automation would have acted on. The person chose to improve the live backlog (#267), not to copy reports into Talyn.
+Range: `POSTHOG_INBOX_BACKLOG_DAYS` is now `[7, 30, 90, 'all']`. `'all'` sends no `created_after`. `posthogInboxBacklogDays` reads `"all"`; labels come from `posthogInboxBacklogRangeLabel`/`posthogInboxBacklogRangeText`.
+Page: `posthogInboxBacklog` reads PostHog 25 reports at a time until it has 25 matches, PostHog has no more, or it has read `BACKLOG_PAGE_SCAN_LIMIT` (100). A narrow rule no longer shows empty pages. `nextOffset` is the PostHog offset after the last match the page shows, so a read that brings more than 25 matches loses nothing.
+Count: `POST /workflows/posthog-inbox/backlog/count` (`posthogInboxBacklogCount`) reads the range 100 reports at a time, up to `MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN` (1000), and answers `matched`, `byState`, `scanned`, `total` and `complete`. Same body as the backlog, without `offset`. Link and run states are read once for each PostHog read, not once for each report.
+`workspaceRepositoryIds` loads the workspace's repositories once, and `preparePostHogInboxFacts` takes it as `repositoryIds`. The backlog and the count use it, so they do not send one repository query for each report.
+Clients: web and desktop show "All time", the count line above the list, and a **Reports** tab on the PostHog Inbox page (`posthogInboxReports.tsx`): an automation picker over the same backlog. Mobile shows the range picker and the count on the rule screen. MCP `talyn_list_posthog_inbox_backlog` takes `days: "all"` and `count: true`.
+The mobile `postHogInbox.test.tsx` rule screen tests failed on main (`useTeams` from #282 needs a runtime that the test did not mock). The test now mocks `useFeatures` and `useTeams`.
+
+
+### 2026-11-20 — New session from a transcript selection
+
+User request (Jovan, Slack): select text in a transcript, then start a new session from it.
+Web and desktop: `TranscriptSelectionAction` shows **New session from selection** over a selection in the main chat transcript. It ignores selections outside the transcript and in text fields. The button calls `openNewWorkbench` with the text as a Markdown quote (`transcriptQuotePrompt` in `@talyn/shared`, cut at 8,000 characters) and the session's repository. Nothing is sent; the person types the task under the quote.
+Decisions:
+- `NewWorkbenchPrefill` has a new `repoFullName`. The space composer (`SpaceHomePage`) now reads the prefill (prompt and repository by name), because a home route in a space renders it, not `NewWorkbenchPage`. The repository id goes in the prefill only when the session is in the shown workspace.
+- A thread has no repository, so its prefill has only the prompt. Desktop does not copy the runtime: the person's default runtime applies.
+- Mobile: a phone's text selection menu takes no app items without a native module (and a new binary). So the session menu on the detail screen has **New session from copied text**. It reads the clipboard (`expo-clipboard`, already in the binary) and opens `/new` with a new `prompt` route parameter. `NewWorkScreen` now matches the route's repository by id or by full name.
+- Analytics: `session_from_selection` with `source_kind`, `chars` and `repository_prefilled`, on all three front ends.
+- Later change (Tom): mobile replaces the clipboard item with a long-press menu on user and agent messages (`features/chat/messageMenu.tsx`). Items: **New session from message**, **Copy message**, **Select text**. **Select text** opens the message in a read-only `TextInput`, because a `Text` cannot report its selection and iOS `selectable` text copies only the whole block. The button there uses the selected part (`selectedText`). Inside a conversation the message `Markdown` is not natively selectable (`selectable={false}`), so the native long press and the menu do not both start. On Android the field stays editable with `showSoftInputOnFocus={false}` and drops edits, because a non-editable Android field cannot select. Analytics adds `via: 'message' | 'selection'`.

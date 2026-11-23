@@ -36,6 +36,18 @@ function fixture() {
 }
 
 describe('notification registration', () => {
+  it.each([
+    ['absent', undefined, true],
+    ['false', false, false],
+    ['true', true, true],
+  ] as const)('reads onlyWhenAway %s from the backend as %s', async (_name, value, expected) => {
+    const f = fixture();
+    const { onlyWhenAway: _dropped, ...legacy } = f.preferences;
+    f.api.getPreferences.mockResolvedValue({ preferences: (value === undefined ? legacy : { ...legacy, onlyWhenAway: value }) as typeof f.preferences, providerAvailable: true });
+    await f.controller.refresh();
+    expect(f.controller.getSnapshot().preferences?.onlyWhenAway).toBe(expected);
+    f.controller.dispose();
+  });
   it('does not request permission or register on first launch', async () => {
     const f = fixture(); await f.controller.refresh();
     expect(f.device.permission).not.toHaveBeenCalled(); expect(f.api.registerInstallation).not.toHaveBeenCalled();

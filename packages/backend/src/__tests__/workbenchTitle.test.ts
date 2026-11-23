@@ -184,6 +184,25 @@ describe('generateSandboxTitle', () => {
     expect((run.mock.calls[0] as unknown as [unknown, string])[1].startsWith('codex exec --ephemeral')).toBe(true);
   });
 
+  // A box started while Claude had no usable key holds only the Codex key.
+  it.each([
+    ['the session agent the box holds', 'claude', ['claude', 'codex'], undefined, 'claude'],
+    ['the box key when the session agent has none', 'claude', ['codex'], undefined, 'codex'],
+    ['the box key for a codex session in a claude box', 'codex', ['claude'], undefined, 'claude'],
+    ['the preferred agent the box holds', 'claude', ['claude', 'codex'], 'codex', 'codex'],
+    ['the box key when the preferred agent has none', 'codex', ['claude'], 'codex', 'claude'],
+    ['the session agent when the box has no record', 'codex', null, undefined, 'codex'],
+  ] as const)('runs %s', async (_label, sessionAgent, held, preferred, expected) => {
+    await updateWorkbench('wb-1', {
+      agent: sessionAgent,
+      ...(held ? { settings: { sandboxAgents: { 'talyn-wb-wb-1': [...held] } } } : {}),
+    });
+    const run = vi.fn(reply('Explain Merge Queue'));
+    await generateSandboxTitle(await row(), 'explain it', { run, agent: preferred });
+    expect((run.mock.calls[0] as unknown as [unknown, string])[1].split(' ')[0]).toBe(expected);
+    expect((await row()).title).toBe('Explain Merge Queue');
+  });
+
   it.each([
     ['a non-zero exit', reply('Usage limit reached', 1)],
     ['empty output', reply('')],
@@ -308,6 +327,26 @@ describe('generateSandboxTitle', () => {
       const run = vi.fn(reply('Generated'));
       await startTitleFromQueue(await row(), { run });
       expect(run).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['codex', 'codex exec'],
+      ['claude', 'claude -p'],
+    ] as const)('asks the agent of the chat that holds the message (%s)', async (agent, command) => {
+      await updateWorkbench('wb-1', { settings: { sandboxAgents: { 'talyn-wb-wb-1': ['claude', 'codex'] } } });
+      await insertChat({ id: 'chat-1', workbenchId: 'wb-1', workspaceId: 'ws-a', title: 'Chat', agent, queuedMessages: [queued('fix it')] });
+      const run = vi.fn(reply('Fix It'));
+      await startTitleFromQueue(await row(), { run });
+      expect((run.mock.calls[0] as unknown as [unknown, string])[1].startsWith(command)).toBe(true);
+    });
+
+    it('titles a claude session whose box holds only the codex key', async () => {
+      await updateWorkbench('wb-1', { settings: { sandboxAgents: { 'talyn-wb-wb-1': ['codex'] } } });
+      await chat('chat-1', ['fix the scaffolding prompt']);
+      const run = vi.fn(reply('Fix Scaffolding Prompt'));
+      await startTitleFromQueue(await row(), { run });
+      expect((run.mock.calls[0] as unknown as [unknown, string])[1].startsWith('codex exec')).toBe(true);
+      expect((await row()).title).toBe('Fix Scaffolding Prompt');
     });
 
     it('lets the first turn try again after an early failure', async () => {

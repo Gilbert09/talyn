@@ -197,6 +197,29 @@ describe('localOps', () => {
     expect(exec).not.toHaveBeenCalled();
     expect(attachment).toEqual({ name: 'shot.png', mimeType: 'image/png', path: '.context/attachments/1-abc-shot.png' });
   });
+
+  it('encodes a video blob and sends it over IPC', async () => {
+    const { bridge, exec } = bridgeWith(() => undefined);
+    const writeAttachment = jest.fn(async () => '.context/attachments/1-abc-clip.mp4');
+    const attachment = await localOps(wb(), { ...bridge, writeAttachment }, null).attach({
+      name: 'clip.mp4',
+      mimeType: 'video/mp4',
+      blob: new Blob(['hello'], { type: 'video/mp4' }),
+    });
+    expect(writeAttachment).toHaveBeenCalledWith('/work/lisbon', 'clip.mp4', 'aGVsbG8=');
+    expect(exec).not.toHaveBeenCalled();
+    expect(attachment).toEqual({ name: 'clip.mp4', mimeType: 'video/mp4', path: '.context/attachments/1-abc-clip.mp4' });
+  });
+
+  it('refuses a video when main cannot write it over IPC', async () => {
+    const { bridge, exec } = bridgeWith(() => undefined);
+    await expect(localOps(wb(), { ...bridge, writeAttachment: undefined }, null).attach({
+      name: 'clip.mp4',
+      mimeType: 'video/mp4',
+      blob: new Blob(['hello'], { type: 'video/mp4' }),
+    })).rejects.toThrow('Update Talyn');
+    expect(exec).not.toHaveBeenCalled();
+  });
 });
 
 describe('openLocalPullRequest', () => {
@@ -209,7 +232,7 @@ describe('openLocalPullRequest', () => {
         return { exitCode: over.statusExit ?? 0, stdout: over.status ?? '', stderr: over.statusExit ? 'fatal: not a git repository' : '' };
       }
       if (has(steps, 'rev-list', '--count')) return { exitCode: 0, stdout: over.ahead ?? '2\n' };
-      if (has(steps, 'push', '-u', 'origin', 'HEAD')) return { stdout: '', ...(over.push ?? { exitCode: 0, stderr: '' }) };
+      if (has(steps, 'push', '--no-verify', '-u', 'origin', 'HEAD')) return { stdout: '', ...(over.push ?? { exitCode: 0, stderr: '' }) };
       return undefined;
     });
   }
@@ -217,9 +240,9 @@ describe('openLocalPullRequest', () => {
   const fakeApi = () => ({ createPullRequest: jest.fn(async () => result as never) });
 
   it.each([
-    ['dirty: commits with the agent’s message, as one argv element', ' M a.ts\n', input, ['git', 'commit', '-m', 'feat: the change']],
-    ['dirty, no message: commits with the title', '?? b.ts\n', { ...input, commitMessage: '' }, ['git', 'commit', '-m', 'feat: add it']],
-    ['a message with shell syntax stays one argument', ' M a.ts\n', { ...input, commitMessage: 'fix: $(rm -rf /) `x`' }, ['git', 'commit', '-m', 'fix: $(rm -rf /) `x`']],
+    ['dirty: commits with the agent’s message, as one argv element', ' M a.ts\n', input, ['git', 'commit', '--no-verify', '-m', 'feat: the change']],
+    ['dirty, no message: commits with the title', '?? b.ts\n', { ...input, commitMessage: '' }, ['git', 'commit', '--no-verify', '-m', 'feat: add it']],
+    ['a message with shell syntax stays one argument', ' M a.ts\n', { ...input, commitMessage: 'fix: $(rm -rf /) `x`' }, ['git', 'commit', '--no-verify', '-m', 'fix: $(rm -rf /) `x`']],
     ['clean: no commit', '', input, null],
   ] as const)('%s, then pushes and asks the backend to open the PR', async (_n, status, given, commitArgv) => {
     const { bridge, exec } = gitBridge({ status });
@@ -229,7 +252,7 @@ describe('openLocalPullRequest', () => {
     const commit = argvs.find((a) => a[1] === 'commit');
     if (commitArgv) expect(commit).toEqual(commitArgv);
     else expect(commit).toBeUndefined();
-    expect(argvs).toContainEqual(['git', 'push', '-u', 'origin', 'HEAD']);
+    expect(argvs).toContainEqual(['git', 'push', '--no-verify', '-u', 'origin', 'HEAD']);
     expect(api.createPullRequest).toHaveBeenCalledWith('wb1', { ...given, pushed: true });
   });
 

@@ -6,13 +6,16 @@ import { AppShell } from './components/layout/AppShell';
 import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
 import { StartingSpinner } from './components/StartingSpinner';
 import { Toaster } from './components/ui/toaster';
+import { TitleTooltipLayer } from './components/ui/title-tooltip';
 import { useApiConnection, useInitialDataLoad } from './hooks/useApi';
 import { useClosePopupAfterGithub } from './hooks/useClosePopupAfterGithub';
 import { useWorkspaceStore } from './stores/workspace';
 import { AuthCallback } from './routes/AuthCallback';
 import { McpCallback } from './routes/McpCallback';
 import { AcceptInvite } from './routes/AcceptInvite';
+import { MobileCallback } from './components/auth/MobileCallback';
 import { OpenSession } from './routes/OpenSession';
+import { OpenTask } from './routes/OpenTask';
 
 export default function App() {
   // Before anything else: if this window is the GitHub-connect popup coming
@@ -22,7 +25,9 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <TitleTooltipLayer />
       <Routes>
+        <Route path="/callback" element={<MobileCallback />} />
         <Route path="/mcp/callback" element={<McpCallback />} />
         <Route path="/open/session/:id" element={<OpenSession />} />
         <Route path="/invite/:token" element={<AcceptInvite />} />
@@ -38,6 +43,7 @@ function SessionRoutes() {
       <Routes>
         <Route path="/login" element={<LoginScreen />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/open/task/:id" element={<OpenTask />} />
         <Route path="/*" element={<RequireAuth />} />
       </Routes>
       <Toaster />

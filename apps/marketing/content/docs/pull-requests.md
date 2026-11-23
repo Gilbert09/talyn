@@ -37,9 +37,11 @@ The filters at the top narrow the list. Each shows a count.
 | **Ready to merge** | Pull requests that can merge now: checks done, no conflicts, no review outstanding. |
 | **Watching** | Pull requests you track by hand. |
 
-You can also filter by repository, sort by **Newest** or **Oldest**, and search by title, repository or number. Press ⌘F on a Mac to search.
+You can also filter by repository, sort by **Newest** or **Oldest**, and search by title, repository or number. You can also paste a GitHub pull request link into the search box. Press ⌘F on a Mac to search.
 
-To save a set of filters, use the saved filters bar. A saved filter can match repositories, labels, words in the title and authors.
+To ask GitHub for fresh data, select **Refresh** (the circular arrow) in the page header. It is on the **Pull requests**, **Review requests** and **Merge queue** pages. In the mobile app, pull down on the list.
+
+To save a set of filters, use the saved filters bar. A saved filter can match repositories, labels, words in the title, authors and review state (approved or not approved).
 
 ### Track any pull request
 
@@ -75,6 +77,8 @@ Hover over a row to see its actions: **Fix**, run a skill, add to the merge queu
 
 Select a row to open the pull request. The tabs are **Overview**, **Findings**, **Checks**, **Reviews** and **Files**: the summary, the code review findings, every check with the failing job's output, the review conversation, and the diff.
 
+Images in the description, the reviews and the comments show in the app. Click an image (tap it on mobile) to see it full size. Images pasted into a private repository also show, because Talyn gets a short-lived link for each image from GitHub.
+
 The buttons at the top are **Code review**, **Fix with agent**, **Auto-keep mergeable**, **Add to merge queue** and **Merge**.
 
 ## Review requests
@@ -86,6 +90,8 @@ Sort it by **Newest**, **Oldest** or **Priority**. Priority puts first the pull 
 To drop a pull request from the list and the count, select the hide icon on its row. It stays hidden even if you are asked again. To bring it back, select **Show N hidden pull requests** at the bottom of the list, then the eye icon on its row.
 
 To keep a pull request on **My PRs** after you review it, select the bookmark icon.
+
+In every app, a pull request that asks for your review has **Approve** and **Request changes** buttons. On web and desktop, they are at the top of the pull request. The review goes to GitHub from your own account. Approve takes an optional comment. Request changes needs a comment.
 
 ## Share a list
 

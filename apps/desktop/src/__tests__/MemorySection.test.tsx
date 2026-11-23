@@ -31,8 +31,9 @@ jest.mock('../renderer/lib/api', () => ({
   },
 }));
 const mockToastError = jest.fn();
+const mockToastInfo = jest.fn();
 jest.mock('../renderer/stores/toast', () => ({
-  toast: { success: (...args: unknown[]) => mockToastSuccess(...args), error: (...args: unknown[]) => mockToastError(...args), info: jest.fn() },
+  toast: { success: (...args: unknown[]) => mockToastSuccess(...args), error: (...args: unknown[]) => mockToastError(...args), info: (...args: unknown[]) => mockToastInfo(...args) },
 }));
 const mockNavigate = jest.fn();
 jest.mock('../renderer/stores/navigation', () => ({
@@ -69,7 +70,7 @@ const entry = (over: Partial<MemoryEntrySummary> = {}): MemoryEntrySummary => ({
   source: { kind: 'user' },
   createdAt: NOW,
   updatedAt: NOW,
-  forgottenAt: null,
+  forgottenAt: null, forgottenReason: null, useCount: 0, lastUsedAt: null,
   ...over,
 });
 
@@ -224,6 +225,41 @@ describe('MemorySection', () => {
     );
     await waitFor(() => expect(within(screen.getByRole('group', { name: 'acme/api' })).getByText('Staging URL')).toBeTruthy());
     expect(screen.getByTestId('memory-count').textContent).toBe('4 of 500');
+  });
+
+  it.each<[string, Partial<MemoryEntrySummary>, string]>([
+    ['an entry nobody read', {}, 'Never read'],
+    ['an entry read once', { useCount: 1, lastUsedAt: NOW }, 'Read once'],
+    ['an entry read many times', { useCount: 12, lastUsedAt: NOW }, 'Read 12 times'],
+  ])('shows how often sessions read %s', async (_label, over, text) => {
+    mockList.mockResolvedValue([entry(over)]);
+    render(<MemorySection />);
+    await waitFor(() => expect(screen.getByTestId('memory-uses').textContent).toBe(text));
+  });
+
+  it('says when Talyn forgot an entry to make room', async () => {
+    mockList.mockResolvedValue([entry({ forgottenAt: NOW, forgottenReason: 'evicted' }), entry({ id: 'm2', forgottenAt: NOW })]);
+    render(<MemorySection />);
+    await waitFor(() => expect(screen.getAllByTestId('memory-row')).toHaveLength(2));
+    expect(screen.getAllByText('Forgotten to make room')).toHaveLength(1);
+  });
+
+  it('loads the list again when Talyn forgot an entry to make room', async () => {
+    mockPut.mockImplementation(async (input: Record<string, unknown>) => ({
+      outcome: 'created',
+      entry: { ...entry({ id: 'm9', ...input, source: { kind: 'user' } } as Partial<MemoryEntrySummary>), body: input.body },
+      evicted: [{ ...ENTRIES[2], forgottenAt: NOW, forgottenReason: 'evicted' }],
+    }));
+    render(<MemorySection />);
+    await loaded();
+    fireEvent.click(screen.getByRole('button', { name: 'Add memory' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Memory name' }), { target: { value: 'New note' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Memory description' }), { target: { value: 'Something new.' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Memory note' }), { target: { value: 'Body' } });
+    const calls = mockList.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockList.mock.calls.length).toBe(calls + 1));
+    expect(mockToastInfo).toHaveBeenCalledWith('Memory is full, so Talyn forgot the least-read entry "API docs"');
   });
 
   it('refuses an empty create with the validator message', async () => {

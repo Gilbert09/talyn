@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import type { PRRow } from '@talyn/client/native';
 import { Alert, Keyboard } from 'react-native';
 
+import { forgetLastRepositories } from '../features/create/model';
 import { NewWorkScreen } from '../features/create/NewWorkScreen';
 import { PullRequestDetailScreen } from '../features/prs/PullRequestDetailScreen';
 import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
@@ -21,7 +23,10 @@ jest.mock('expo-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
   Redirect: ({ href }: { href: string }) => { const { Text } = jest.requireActual('react-native'); return <Text>{`Redirect ${href}`}</Text>; },
   useRouter: () => mockRouter,
-  Stack: { Screen: ({ options }: { options?: { headerRight?: () => React.ReactNode } }) => options?.headerRight?.() ?? null },
+  Stack: { Screen: ({ options }: { options?: { headerTitle?: () => React.ReactNode; headerRight?: () => React.ReactNode } }) => {
+    const React_ = jest.requireActual('react'); const { View } = jest.requireActual('react-native');
+    return React_.createElement(View, null, options?.headerTitle?.(), options?.headerRight?.());
+  } },
 }));
 const mockContext = { getSnapshot: () => mockContextSnapshot, subscribe: () => () => {}, select: jest.fn(async () => {}) };
 const mockContextSnapshot = { status: 'ready' as const, spaceId: null };
@@ -31,8 +36,11 @@ jest.mock('../auth/AuthProvider', () => ({
   useNetwork: () => mockNetwork, useAuth: () => ({ user: { id: 'user-one' } }),
   useWorkspace: () => mockWorkspace,
 }));
+const mockStorage = { getItem: jest.fn(async (_key: string): Promise<string | null> => null), setItem: jest.fn(async (_key: string, _value: string) => {}) };
+jest.mock('@react-native-async-storage/async-storage', () => ({ __esModule: true, default: mockStorage }));
 beforeEach(() => {
   mockActive.store.dispose(); mockActive = fixture(); mockParams = { id: 'session-one' }; mockNetwork = 'online';
+  forgetLastRepositories(); mockStorage.getItem.mockReset().mockResolvedValue(null); mockStorage.setItem.mockClear();
   mockWorkspace = { status: 'ready', selected: 'one', choices: [{ id: 'one', name: 'Test workspace' }] };
   Object.values(mockRouter).forEach((value) => { if (jest.isMockFunction(value)) value.mockClear(); });
 });
@@ -56,18 +64,18 @@ describe('session controls', () => {
     expect(mockActive.api.workbenches.archive).toHaveBeenCalledWith('session-one');
     expect(mockRouter.back).toHaveBeenCalled();
   });
-  it('shrinks the header to one line while the keyboard is open', async () => {
+  it('hides the quick actions while the keyboard is open and keeps the title', async () => {
     const listeners = new Map<string, (event: { endCoordinates: { height: number } }) => void>();
     jest.spyOn(Keyboard, 'addListener').mockImplementation(((name: string, listener: (event: { endCoordinates: { height: number } }) => void) => {
       listeners.set(name, listener); return { remove: jest.fn() };
     }) as never);
     await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await screen.findByRole('link', { name: 'Open related pull request' })).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Add to merge queue' })).toBeVisible();
     await act(async () => listeners.get('keyboardWillShow')?.({ endCoordinates: { height: 300 } }));
-    expect(screen.getByRole('header', { name: 'Current work' })).toBeVisible();
-    expect(screen.queryByRole('link', { name: 'Open related pull request' })).toBeNull();
+    expect(screen.getByRole('header', { name: /^Current work\./ })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Add to merge queue' })).toBeNull();
     await act(async () => listeners.get('keyboardWillHide')?.({ endCoordinates: { height: 0 } }));
-    expect(screen.getByRole('link', { name: 'Open related pull request' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Add to merge queue' })).toBeVisible();
   });
   it('renames through the prompt sheet', async () => {
     await render(<WorkbenchDetailScreen kind="session" />);
@@ -89,8 +97,9 @@ describe('session controls', () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ status: 'error', error: 'The sandbox did not start.' }));
     mockActive.api.workbenches.retry.mockRejectedValueOnce({ status: 402, code: 'usage_exhausted', details: { notice: { message: 'No box-hours left.' } } });
     await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await screen.findByText('The sandbox did not start.')).toBeVisible();
-    await fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    expect(retry.props.accessibilityHint).toBe('The sandbox did not start.');
+    await fireEvent.press(retry);
     await waitFor(() => expect(alert).toHaveBeenCalledWith('Out of box-hours', 'No box-hours left.', expect.any(Array)));
   });
   it('disables network actions offline', async () => {
@@ -128,8 +137,9 @@ describe('session controls', () => {
 });
 
 describe('pull request actions', () => {
-  const mine = () => pr({ authored: true, summary: { ...pr().summary, blockingReason: 'mergeable', mergeable: 'MERGEABLE',
+  const mine = () => pr({ authored: true, summary: { ...pr().summary, blockingReason: 'mergeable', mergeable: 'MERGEABLE', reviewDecision: 'APPROVED',
     checks: { total: 3, passed: 2, failed: 1, inProgress: 0, skipped: 0 } } });
+  const openMenu = async () => fireEvent.press(await screen.findByRole('button', { name: 'Pull request actions' }));
   beforeEach(() => { mockParams = { id: 'pr-one' }; });
 
   it('merges after a confirmation', async () => {
@@ -141,16 +151,37 @@ describe('pull request actions', () => {
     await confirmLast(alert, 'Merge');
     expect(mockActive.api.pullRequests.merge).toHaveBeenCalledWith('pr-one');
     expect(await screen.findByText('Merged #42.')).toBeVisible();
-    expect(screen.getByText('3 checks: 2 passed, 1 failing')).toBeVisible();
+    expect(screen.getByText('Ready to merge')).toBeVisible();
+  });
+  it('opens a new session on the pull request from the menu', async () => {
+    await render(<PullRequestDetailScreen />);
+    await waitFor(() => expect(mockActive.api.features.get).toHaveBeenCalled());
+    await openMenu();
+    await fireEvent.press(await screen.findByRole('button', { name: 'Open in session' }));
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/new', params: { mode: 'session', pullRequest: 'pr-one' } });
+  });
+  it.each<[string, Partial<PRRow>, Record<string, boolean>]>([
+    ['a pull request with a session', { session: { id: 'session-one', name: 'Current work', status: 'active' } }, { workbenches: true }],
+    ['a closed pull request', { state: 'closed' }, { workbenches: true }],
+    ['an account without sessions', {}, { workbenches: false }],
+  ])('offers no Open in session for %s', async (_name, patch, features) => {
+    mockActive.api.features.get.mockResolvedValue(features);
+    mockActive.api.pullRequests.get.mockResolvedValue({ row: pr(patch), fresh: null });
+    await render(<PullRequestDetailScreen />);
+    await waitFor(() => expect(mockActive.api.features.get).toHaveBeenCalled());
+    await openMenu();
+    expect(await screen.findByRole('button', { name: 'Refresh' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Open in session' })).toBeNull();
   });
   it('toggles the merge queue and auto-keep', async () => {
     mockActive.api.pullRequests.get.mockResolvedValue({ row: mine(), fresh: null });
     await render(<PullRequestDetailScreen />);
-    const queue = await screen.findByLabelText('Merge queue');
-    await fireEvent(queue, 'valueChange', true);
+    const queue = await screen.findByRole('switch', { name: 'Merge queue' });
+    expect(queue.props.accessibilityState).toMatchObject({ checked: false });
+    await fireEvent.press(queue);
     expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledWith('pr-one', true);
-    const keep = await screen.findByLabelText('Keep mergeable');
-    await fireEvent(keep, 'valueChange', true);
+    const keep = await screen.findByRole('switch', { name: 'Keep mergeable' });
+    await fireEvent.press(keep);
     expect(mockActive.api.pullRequests.setAutoKeepMergeable).toHaveBeenCalledWith('pr-one', true);
   });
   it('starts a fix with the agent picker when the workspace asks', async () => {
@@ -158,6 +189,8 @@ describe('pull request actions', () => {
     mockActive.api.workspaces.get.mockResolvedValue({ id: 'one', name: 'Test workspace', settings: { defaultCloudProvider: 'ask' }, repos: [] });
     await render(<PullRequestDetailScreen />);
     await waitFor(() => expect(mockActive.api.workspaces.get).toHaveBeenCalled());
+    // A ready PR's primary is Merge, so the fix is in the menu.
+    await openMenu();
     await fireEvent.press(await screen.findByRole('button', { name: 'Fix with agent' }));
     await fireEvent.press(await screen.findByRole('button', { name: 'PostHog Code' }));
     await waitFor(() => expect(mockActive.api.tasks.create).toHaveBeenCalledWith(expect.objectContaining({ assignedEnvironmentId: 'env-posthog' })));
@@ -167,7 +200,10 @@ describe('pull request actions', () => {
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     mockActive.api.pullRequests.get.mockResolvedValue({ row: pr({ authored: true, summary: { ...pr().summary, blockingReason: 'mergeable', mergeable: 'MERGEABLE' } }), fresh: null });
     await render(<PullRequestDetailScreen />);
-    await fireEvent.press(await screen.findByRole('button', { name: /^Fix with agent\. Nothing to fix/ }));
+    await openMenu();
+    const item = await screen.findByRole('button', { name: 'Fix with agent' });
+    expect(item.props.accessibilityHint).toMatch(/^Nothing to fix/);
+    await fireEvent.press(item);
     expect(alert.mock.calls[0][0]).toBe('Nothing to hand to an agent');
     expect(mockActive.api.tasks.create).not.toHaveBeenCalled();
   });
@@ -183,6 +219,70 @@ describe('start new work', () => {
     await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId: 'one', repositoryId: 'repo-one', runtime: 'sandbox', prompt: 'Fix the flaky test' })));
     expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'session-new' } });
+  });
+  it('shows the pending session while the create is in flight', async () => {
+    let finish: (value: ReturnType<typeof session>) => void = () => {};
+    mockActive.api.workbenches.create.mockReturnValueOnce(new Promise((done) => { finish = done; }));
+    await render(<NewWorkScreen />);
+    await fireEvent.changeText(await screen.findByLabelText('Task'), 'Fix the flaky test');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    expect(await screen.findByText('Creating the session…')).toBeVisible();
+    expect(screen.getByText('New session')).toBeVisible();
+    expect(screen.getByText('Fix the flaky test')).toBeVisible();
+    expect(screen.getByText('You can write more when the session opens.')).toBeVisible();
+    expect(screen.queryByLabelText('Task')).toBeNull();
+    await act(async () => finish(session({ id: 'session-new' })));
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'session-new' } }));
+  });
+  it('returns to the composer with the prompt and the error when the create fails', async () => {
+    mockActive.api.workbenches.create.mockRejectedValueOnce(new Error('No box is free.'));
+    await render(<NewWorkScreen />);
+    await fireEvent.changeText(await screen.findByLabelText('Task'), 'Fix the flaky test');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    expect(await screen.findByText('No box is free.')).toBeVisible();
+    expect(screen.getByLabelText('Task')).toHaveTextContent('Fix the flaky test');
+    expect(screen.queryByText('Creating the session…')).toBeNull();
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
+  const twoRepos = () => mockActive.api.repositories.list.mockResolvedValue([
+    { id: 'repo-one', workspaceId: 'one', owner: 'example', repo: 'project', fullName: 'example/project', defaultBranch: 'main' },
+    { id: 'repo-two', workspaceId: 'one', owner: 'example', repo: 'second', fullName: 'example/second', defaultBranch: 'main' }]);
+  it.each([
+    ['the saved repository', 'repo-two', 'example/second', 'repo-two'],
+    ['the first repository when nothing is saved', null, 'example/project', 'repo-one'],
+    ['the first repository when the saved one is gone', 'repo-gone', 'example/project', 'repo-one'],
+  ])('defaults the repository to %s', async (_name, saved, fullName, repositoryId) => {
+    twoRepos();
+    mockStorage.getItem.mockResolvedValue(saved);
+    await render(<NewWorkScreen />);
+    expect(await screen.findByRole('button', { name: `Repository: ${fullName}. Change repository` })).toBeVisible();
+    expect(mockStorage.getItem).toHaveBeenCalledWith('talyn.new-work-repo.user-one.one');
+    await fireEvent.changeText(screen.getByLabelText('Task'), 'Use the default');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({ repositoryId })));
+    expect(mockStorage.setItem).toHaveBeenCalledWith('talyn.new-work-repo.user-one.one', repositoryId);
+  });
+  it('switches to the saved repository when it loads after the list', async () => {
+    twoRepos();
+    let resolve: (value: string | null) => void = () => {};
+    mockStorage.getItem.mockReturnValue(new Promise((done) => { resolve = done; }));
+    await render(<NewWorkScreen />);
+    expect(await screen.findByRole('button', { name: 'Repository: example/project. Change repository' })).toBeVisible();
+    await act(async () => resolve('repo-two'));
+    expect(await screen.findByRole('button', { name: 'Repository: example/second. Change repository' })).toBeVisible();
+  });
+  it('keeps a picked repository when the saved one loads later', async () => {
+    twoRepos();
+    let resolve: (value: string | null) => void = () => {};
+    mockStorage.getItem.mockReturnValue(new Promise((done) => { resolve = done; }));
+    await render(<NewWorkScreen />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Repository: example/project. Change repository' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'example/second' }));
+    await act(async () => resolve('repo-one'));
+    expect(await screen.findByRole('button', { name: 'Repository: example/second. Change repository' })).toBeVisible();
   });
   it('starts a thread without a repository', async () => {
     await render(<NewWorkScreen initialMode="thread" />);
@@ -215,15 +315,51 @@ describe('start new work', () => {
   });
   it('picks the base branch in its sheet', async () => {
     await render(<NewWorkScreen />);
-    const chip = await screen.findByRole('button', { name: /^Base branch: .*\. Change base branch$/ });
+    const chip = await screen.findByRole('button', { name: /^Base branch: .*\. Change what to start from$/ });
     await fireEvent.press(chip);
     await fireEvent.changeText(screen.getByLabelText('Base branch'), 'develop');
     await fireEvent.press(screen.getByRole('button', { name: 'Close' }));
-    expect(await screen.findByRole('button', { name: 'Base branch: develop. Change base branch' })).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Base branch: develop. Change what to start from' })).toBeVisible();
     await fireEvent.changeText(screen.getByLabelText('Task'), 'On develop');
     await waitFor(() => expect(sendButton()).toBeEnabled());
     await fireEvent.press(sendButton());
     await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({ baseBranch: 'develop' })));
+  });
+  it('starts from the pull request the route asks for', async () => {
+    await render(<NewWorkScreen initialPullRequestId="pr-one" />);
+    expect(await screen.findByRole('button', { name: 'Starts from pull request 42, Review current work. Change what to start from' })).toBeVisible();
+    await fireEvent.changeText(screen.getByLabelText('Task'), 'Fix the checks');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({
+      repositoryId: 'repo-one', branch: 'tom/example', fromPullRequestId: 'pr-one', baseBranch: 'main', prompt: 'Fix the checks' })));
+  });
+  it('starts on a new branch when the route asks for a closed pull request', async () => {
+    mockActive.api.pullRequests.list.mockResolvedValue([pr({ state: 'closed' })]);
+    await render(<NewWorkScreen initialPullRequestId="pr-one" />);
+    await waitFor(() => expect(mockActive.api.pullRequests.list).toHaveBeenCalled());
+    expect(await screen.findByRole('button', { name: /^Base branch: .*\. Change what to start from$/ })).toBeVisible();
+    await fireEvent.changeText(screen.getByLabelText('Task'), 'New work');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalled());
+    expect(mockActive.api.workbenches.create.mock.calls[0][0]).not.toHaveProperty('fromPullRequestId');
+  });
+  it('picks a pull request in the Start from sheet, and a typed branch drops it', async () => {
+    await render(<NewWorkScreen />);
+    await fireEvent.press(await screen.findByRole('button', { name: /^Base branch: .*\. Change what to start from$/ }));
+    expect(screen.getByRole('header', { name: 'Start from' })).toBeVisible();
+    await fireEvent.press(await screen.findByRole('button', { name: '#42 Review current work' }));
+    expect(await screen.findByRole('button', { name: /^Starts from pull request 42/ })).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: /^Starts from pull request 42/ }));
+    await fireEvent.changeText(screen.getByLabelText('Base branch'), 'develop');
+    await fireEvent.press(screen.getByRole('button', { name: 'Close' }));
+    expect(await screen.findByRole('button', { name: 'Base branch: develop. Change what to start from' })).toBeVisible();
+    await fireEvent.changeText(screen.getByLabelText('Task'), 'On develop');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({ baseBranch: 'develop' })));
+    expect(mockActive.api.workbenches.create.mock.calls[0][0]).not.toHaveProperty('fromPullRequestId');
   });
   it('toggles internet access from its chip', async () => {
     await render(<NewWorkScreen />);

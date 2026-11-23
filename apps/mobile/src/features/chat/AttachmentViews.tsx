@@ -1,16 +1,17 @@
 import { getApiBaseUrl } from '@talyn/client/native';
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, StyleSheet, View } from 'react-native';
 
 import { useMobileRuntime } from '../../auth/AuthProvider';
-import { AppText, IconButton } from '../../components/UI';
-import { radius, useTheme, withAlpha } from '../../theme/tokens';
-import { attachmentUrl, isImage, type ImageDraft, type MessageImage } from './attachments';
+import { AppText } from '../../components/UI';
+import { radius, useTheme } from '../../theme/tokens';
+import { attachmentUrl, isImage, isVideo, type ImageDraft, type MessageImage } from './attachments';
+import { FullScreenImage } from './FullScreenImage';
 
 const THUMB = 56;
 
-/** Thumbnails above the text field, each with a remove button and its own upload state. */
+/** Thumbnails (a video glyph and name for videos) above the text field, each with a remove button and its own upload state. */
 export function ComposerImages({ drafts, errors, onRemove, onRetry, onDismissError }: {
   drafts: ImageDraft[]; errors: string[]; onRemove(id: string): void; onRetry(id: string): void; onDismissError(index: number): void;
 }) {
@@ -19,11 +20,12 @@ export function ComposerImages({ drafts, errors, onRemove, onRetry, onDismissErr
   return <View style={styles.strip}>
     {drafts.length ? <View style={styles.thumbs}>
       {drafts.map((draft) => <View key={draft.id} style={styles.thumbWrap}>
-        <Pressable accessibilityRole={draft.status === 'error' ? 'button' : 'image'}
+        <Pressable accessibilityRole={draft.status === 'error' ? 'button' : draft.mimeType.startsWith('video/') ? 'text' : 'image'}
           accessibilityLabel={draft.status === 'error' ? `Retry ${draft.name}. ${draft.error ?? 'The upload failed.'}` : `${draft.name}${draft.status === 'uploading' ? ', uploading' : ''}`}
           disabled={draft.status !== 'error'} onPress={() => onRetry(draft.id)}
           style={[styles.thumb, { borderColor: draft.status === 'error' ? c.destructive : c.border, backgroundColor: c.surface }]}>
-          <Image source={{ uri: draft.uri }} style={[styles.thumbImage, draft.status !== 'ready' && { opacity: 0.45 }]} />
+          {draft.mimeType.startsWith('video/') ? <VideoGlyph name={draft.name} faded={draft.status !== 'ready'} />
+            : <Image source={{ uri: draft.uri }} style={[styles.thumbImage, draft.status !== 'ready' && { opacity: 0.45 }]} />}
           {draft.status === 'uploading' ? <View style={styles.overlay}><ActivityIndicator size="small" color={c.text} /></View> : null}
           {draft.status === 'error' ? <View style={styles.overlay}><SymbolView name={{ ios: 'arrow.clockwise', android: 'refresh' }} size={18} tintColor={c.destructive} /></View> : null}
         </Pressable>
@@ -41,15 +43,41 @@ export function ComposerImages({ drafts, errors, onRemove, onRetry, onDismissErr
   </View>;
 }
 
-/** Image attachments on a sent message. Tap one to see it full screen. */
+/** A video has no thumbnail without a native module, so it shows a glyph and its name. A text file does the same. */
+function VideoGlyph({ name, faded, text }: { name: string; faded?: boolean; text?: boolean }) {
+  const c = useTheme();
+  return <View style={[styles.videoGlyph, faded && { opacity: 0.45 }]}>
+    <SymbolView name={text ? { ios: 'doc.text', android: 'description' } : { ios: 'video.fill', android: 'videocam' }} size={20} tintColor={c.muted} />
+    <AppText variant="caption" tone="muted" numberOfLines={1} style={styles.videoName}>{name}</AppText>
+  </View>;
+}
+
+/** The attachments on a sent message: images, videos and other files. Tap an image to see it full screen. */
 export function MessageImages({ workbenchId, attachments }: { workbenchId: string; attachments: MessageImage[] }) {
-  const images = attachments.filter(isImage);
   const [viewing, setViewing] = useState<MessageImage | null>(null);
-  if (!images.length) return null;
+  if (!attachments.length) return null;
   return <View style={styles.thumbs}>
-    {images.map((image, index) => <MessageThumb key={`${image.path ?? image.name}:${index}`} workbenchId={workbenchId} image={image} onOpen={() => setViewing(image)} />)}
+    {attachments.map((item, index) => {
+      const key = `${item.path ?? item.name}:${index}`;
+      if (isVideo(item)) return <MessageVideo key={key} video={item} />;
+      if (!isImage(item)) return <MessageFile key={key} file={item} />;
+      return <MessageThumb key={key} workbenchId={workbenchId} image={item} onOpen={() => setViewing(item)} />;
+    })}
     {viewing ? <ImageViewer workbenchId={workbenchId} image={viewing} onClose={() => setViewing(null)} /> : null}
   </View>;
+}
+
+function MessageVideo({ video }: { video: MessageImage }) {
+  const c = useTheme();
+  return <View accessible accessibilityRole="text" accessibilityLabel={`Video: ${video.name}`}
+    style={[styles.thumb, { borderColor: c.border, backgroundColor: c.surface }]}><VideoGlyph name={video.name} /></View>;
+}
+
+/** A text file (or any other file) shows a glyph and its name. The app does not open it. */
+function MessageFile({ file }: { file: MessageImage }) {
+  const c = useTheme();
+  return <View accessible accessibilityRole="text" accessibilityLabel={`File: ${file.name}`}
+    style={[styles.thumb, { borderColor: c.border, backgroundColor: c.surface }]}><VideoGlyph name={file.name} text /></View>;
 }
 
 /** The image request carries the sign-in token, so the source is built once the token is known. */
@@ -81,12 +109,7 @@ function MessageThumb({ workbenchId, image, onOpen }: { workbenchId: string; ima
 
 function ImageViewer({ workbenchId, image, onClose }: { workbenchId: string; image: MessageImage; onClose(): void }) {
   const source = useImageSource(workbenchId, image);
-  return <Modal visible transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
-    <View style={[styles.viewer, { backgroundColor: withAlpha('#000000', 0.92) }]}>
-      {source ? <Image source={source} resizeMode="contain" accessibilityLabel={image.name} style={styles.full} /> : <ActivityIndicator color="#ffffff" />}
-      <View style={styles.close}><IconButton label="Close image" symbol={{ ios: 'xmark', android: 'close' }} onPress={onClose} filled /></View>
-    </View>
-  </Modal>;
+  return <FullScreenImage source={source} label={image.name} onClose={onClose} />;
 }
 
 const styles = StyleSheet.create({
@@ -95,10 +118,9 @@ const styles = StyleSheet.create({
   thumbWrap: { width: THUMB, height: THUMB },
   thumb: { width: THUMB, height: THUMB, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   thumbImage: { width: '100%', height: '100%' },
+  videoGlyph: { alignItems: 'center', justifyContent: 'center', gap: 2, paddingHorizontal: 4 },
+  videoName: { maxWidth: THUMB - 8, fontSize: 9 },
   overlay: { ...StyleSheet.absoluteFill as object, alignItems: 'center', justifyContent: 'center' },
   remove: { position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   error: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 28 },
-  viewer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  full: { width: '100%', height: '80%' },
-  close: { position: 'absolute', top: 48, right: 16 },
 });

@@ -4,10 +4,10 @@
  * The two agents report usage differently, and getting that wrong is how a
  * token chart lies:
  *
- *  - Claude Code: each result event is one `claude -p` run. `usage` is that
+ *  - Claude Code can emit several cumulative results from one `claude -p` run. `usage` is that
  *    run's own total, `input_tokens` EXCLUDES the cache, and `modelUsage`
  *    splits it per model with a `costUSD` estimate each. A turn that ran twice
- *    (a relaunch) has two result events, and both runs spent tokens: add them.
+ *    (a relaunch) spends tokens in both runs. Keep the last result per attempt, then add them.
  *  - Codex: `turn.completed` carries the THREAD's running total, across turns
  *    and resumes (`codex exec resume` keeps counting), and `input_tokens`
  *    INCLUDES the cached tokens. One turn's use is this total minus the last
@@ -19,6 +19,7 @@ import { FLEET_MODELS, fleetProviderForModel } from '@talyn/shared';
 
 export interface StoredResultUsage {
   seq: number;
+  attempt?: number;
   at: Date;
   sessionId: string | null;
   usage: Record<string, unknown> | null;
@@ -218,7 +219,11 @@ function tokenSum(t: Tokens): number {
  * only a Codex chat reads it.
  */
 export function buildTurnUsageRows(chat: ChatFacts, facts: TurnFacts, previousCodexResult: StoredResultUsage | null = null): TurnUsageRow[] {
-  const results = [...facts.results].sort((a, b) => a.seq - b.seq);
+  const processResults = new Map<string, StoredResultUsage>();
+  for (const result of [...facts.results].sort((a, b) => a.seq - b.seq)) {
+    processResults.set(result.attempt === undefined ? `legacy:${result.seq}` : `attempt:${result.attempt}`, result);
+  }
+  const results = [...processResults.values()];
   if (results.length === 0) return [];
   const perModel = new Map<string, ModelTotals>();
   const add = (model: string, tokens: Tokens, costMicros: number | null) => {
@@ -316,6 +321,7 @@ export function parseStoredResult(raw: unknown): StoredResultUsage | null {
     sessionId: typeof r.sessionId === 'string' && r.sessionId ? r.sessionId : null,
     usage: obj(r.usage),
     modelUsage: obj(r.modelUsage),
+    ...(typeof r.attempt === 'number' ? { attempt: r.attempt } : {}),
     costUsd: num(r.cost),
     durationMs: num(r.durationMs),
     numTurns: num(r.numTurns),

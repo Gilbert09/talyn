@@ -18,7 +18,7 @@
  * separator and the body has exactly one valid reading.
  */
 import type { WorkbenchChat } from './workbench.js';
-import { isClaudeInterruptionText } from './transcript.js';
+import { isClaudeInterruptionText, isSubagentEvent } from './transcript.js';
 
 /**
  * The largest upload. Every Claude Code conversation on a heavy user's machine
@@ -116,7 +116,7 @@ function parseLine(line: string): Json | null {
  * Meta, sidechain, compact-summary, command and tool-result lines are not prompts.
  */
 export function claudePromptText(line: Json): string | null {
-  if (line.type !== 'user' || line.isMeta || line.isSidechain || line.isCompactSummary) return null;
+  if (line.type !== 'user' || isSubagentEvent(line) || line.isMeta || line.isSidechain || line.isCompactSummary) return null;
   const content = (line.message as { content?: unknown } | undefined)?.content;
   if (typeof content === 'string') {
     return content.trim() && !isInjectedClaudePrompt(content) && !isClaudeInterruptionText(content) ? content : null;
@@ -182,7 +182,7 @@ function assistantBlocks(content: unknown, max: number): unknown[] {
  * that breaks (a parent the file does not hold) falls back to every line.
  */
 function currentBranch(lines: Json[]): Json[] {
-  const isMessage = (l: Json) => (l.type === 'user' || l.type === 'assistant') && !l.isSidechain;
+  const isMessage = (l: Json) => (l.type === 'user' || l.type === 'assistant') && !l.isSidechain && !isSubagentEvent(l);
   const byUuid = new Map<string, Json>();
   for (const l of lines) if (typeof l.uuid === 'string') byUuid.set(l.uuid, l);
   let leaf: Json | undefined;
@@ -231,7 +231,7 @@ export function claudeSessionToEvents(
   const events: ClaudeSessionEvents['events'] = [];
   let turn = 0;
   for (const line of currentBranch(parsed)) {
-    if (line.isSidechain || line.isMeta) continue;
+    if (isSubagentEvent(line) || line.isSidechain || line.isMeta) continue;
     const sessionId = typeof line.sessionId === 'string' ? { session_id: line.sessionId } : {};
     if (line.type === 'user') {
       const prompt = claudePromptText(line);

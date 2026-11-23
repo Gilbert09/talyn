@@ -4,6 +4,7 @@ import {
   AUTO_TOPUP_DEFAULTS,
   autoTopupMonthKey,
   BOX_HOUR_PRICE_MICROS,
+  billedSizeFor,
   boxHoursToWeightedSeconds,
   breakEvenBoxHourMicros,
   FLEET_BOX_HOUR_COST_ESTIMATE_MICROS,
@@ -13,6 +14,9 @@ import {
   isTierUpgrade,
   MIN_FULL_USE_MARGIN_PERCENT,
   netOfPaymentFees,
+  isUsageResetTier,
+  USAGE_RESET_TIERS,
+  usageResetPriceMicros,
   sellableTierPrices,
   tierSoldAnnually,
   type BillingPricing,
@@ -23,15 +27,21 @@ import {
   CREDIT_PACK_IDS,
   CREDIT_PACKS,
   creditBalanceMicros,
+  creditDrawDetail,
+  creditDrawHeadline,
+  creditDrawOf,
   creditExpiresAt,
   creditPackBonusMicros,
   crossedUsageThresholds,
   expiringSoonMicros,
   formatBoxHours,
   formatBoxHoursLabel,
+  formatBoxHoursPrecise,
   formatBoxHoursUsage,
+  formatCreditBalance,
   formatCreditPack,
   formatPricePerHour,
+  isCreditDrawLow,
   formatSizePrice,
   formatUsd,
   includedWeightedSeconds,
@@ -252,6 +262,26 @@ describe('margins', () => {
     const net = netOfPaymentFees(PLAN_PRICES[tier].monthlyMicros);
     const cost = PLAN_LIMITS[tier].includedBoxHours * FLEET_BOX_HOUR_COST_ESTIMATE_MICROS;
     expect(((net - cost) * 100) / net).toBeGreaterThanOrEqual(MIN_FULL_USE_MARGIN_PERCENT);
+  });
+
+  // A usage reset sells one more full allowance at the monthly price, so it
+  // must keep the same margin as a month of the plan.
+  it.each(USAGE_RESET_TIERS)('a %s usage reset costs the monthly price and keeps the minimum margin', (tier) => {
+    expect(usageResetPriceMicros(tier)).toBe(PLAN_PRICES[tier].monthlyMicros);
+    const net = netOfPaymentFees(usageResetPriceMicros(tier));
+    const cost = PLAN_LIMITS[tier].includedBoxHours * FLEET_BOX_HOUR_COST_ESTIMATE_MICROS;
+    expect(((net - cost) * 100) / net).toBeGreaterThanOrEqual(MIN_FULL_USE_MARGIN_PERCENT);
+  });
+
+  it.each([
+    ['pro', true],
+    ['max', true],
+    ['legacy_pro', true],
+    ['free', false],
+    ['gold', false],
+    [null, false],
+  ])('isUsageResetTier(%s) is %s', (value, expected) => {
+    expect(isUsageResetTier(value)).toBe(expected);
   });
 
   it.each(PLAN_TIERS.filter((tier) => PLAN_PRICES[tier].annualMicros != null))(
@@ -651,6 +681,18 @@ describe('formatting', () => {
   });
 
   it.each<[number, string]>([
+    [0, '$0'],
+    [100_000_000, '$100'],
+    [105_000_000, '$105'],
+    [98_370_000, '$98.37'],
+    [12_500_000, '$12.50'],
+    [4_999_999, '$5'],
+    [1_234_000_000, '$1,234'],
+  ])('formatCreditBalance(%s) = %s', (micros, text) => {
+    expect(formatCreditBalance(micros)).toBe(text);
+  });
+
+  it.each<[number, string]>([
     [220_000, '$0.22/h'],
     [275_000, '$0.275/h'],
     [1_000_000, '$1.00/h'],
@@ -673,6 +715,24 @@ describe('formatting', () => {
   });
 
   it.each<[number, string]>([
+    [0, '0'],
+    [-50, '0'],
+    [1, '<0.001'],
+    [3, '<0.001'],
+    [4, '0.001'],
+    [7, '0.001'],
+    [58, '0.016'],
+    [360, '0.1'],
+    [1800, '0.5'],
+    [10_458, '2.905'],
+    [HOUR, '1'],
+    [HOUR + 36, '1.01'],
+    [3_601_800, '1,000.5'],
+  ])('formatBoxHoursPrecise(%s) = %s', (wsec, text) => {
+    expect(formatBoxHoursPrecise(wsec)).toBe(text);
+  });
+
+  it.each<[number, string]>([
     [HOUR, '1 box-hour'],
     [0, '0 box-hours'],
     [9000, '2.5 box-hours'],
@@ -688,5 +748,91 @@ describe('formatting', () => {
     [1800, HOUR, '0.5 of 1 box-hour'],
   ])('formatBoxHoursUsage(%s, %s) = %s', (used, included, text) => {
     expect(formatBoxHoursUsage(used, included)).toBe(text);
+  });
+});
+
+describe('billedSizeFor: a box bills the memory it uses, up to its booted size', () => {
+  const MEMORY = [null, undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, 1, 1536, 4096, 4097, 8192, 8193, 12288, 12289, 16384, 20000] as const;
+  // The size the memory alone needs, before the booted cap. Unknown memory is null.
+  const fits = (mem: number | null | undefined): SandboxSize | null => {
+    if (typeof mem !== 'number' || !Number.isFinite(mem) || mem <= 0) return null;
+    if (mem <= 4096) return 'standard';
+    if (mem <= 8192) return 'medium';
+    if (mem <= 12288) return 'large';
+    return 'xlarge';
+  };
+  const ORDER: SandboxSize[] = ['small', 'standard', 'medium', 'large', 'xlarge'];
+  const cases = ORDER.flatMap((booted) =>
+    MEMORY.map((mem) => {
+      const need = fits(mem);
+      const expected = booted === 'small' || need === null ? booted : ORDER.indexOf(need) < ORDER.indexOf(booted) ? need : booted;
+      return [booted, mem, expected] as const;
+    }),
+  );
+
+  it.each(cases)('booted %s using %s MiB bills %s', (booted, mem, expected) => {
+    expect(billedSizeFor(booted, mem)).toBe(expected);
+  });
+
+  it.each([
+    ['large', 1536, 'standard'],
+    ['large', 9000, 'large'],
+    ['medium', 10_000, 'medium'],
+    ['xlarge', 20_000, 'xlarge'],
+    ['xlarge', 8193, 'large'],
+    ['small', 16_384, 'small'],
+    ['standard', 12_000, 'standard'],
+  ] as const)('the stated examples: %s at %s MiB bills %s', (booted, mem, expected) => {
+    expect(billedSizeFor(booted, mem)).toBe(expected);
+  });
+
+  it('never bills a heavier weight than the booted size', () => {
+    for (const [booted, mem] of cases) {
+      expect(SIZE_WEIGHT[billedSizeFor(booted, mem)]).toBeLessThanOrEqual(SIZE_WEIGHT[booted]);
+    }
+  });
+});
+
+describe('creditDrawOf: the credit bar once the included hours are used up', () => {
+  const usage = (usedWsec: number, exhausted = false) => ({ usedWsec, includedWsec: 1000, exhausted });
+
+  it.each([
+    ['hours left', usage(999), { balanceMicros: 10_000_000, drawStartMicros: 20_000_000 }],
+    ['exhausted', usage(1000, true), { balanceMicros: 10_000_000, drawStartMicros: 20_000_000 }],
+    ['no credit', usage(1000), { balanceMicros: 0, drawStartMicros: 20_000_000 }],
+    ['no credit summary', usage(1000), undefined],
+    ['null credit summary', usage(1000), null],
+  ] as const)('%s: no draw', (_label, u, credits) => {
+    expect(creditDrawOf(u, credits)).toBeNull();
+  });
+
+  it.each([
+    ['full bar at the start', 1000, 25_000_000, 25_000_000, 100],
+    ['a quarter spent', 1000, 75_000_000, 100_000_000, 75],
+    ['past the included hours', 5000, 1_000_000, 4_000_000, 25],
+    ['an old backend without a start reads as full', 1000, 9_384_000, undefined, 100],
+    ['a start below the balance clamps to the balance', 1000, 9_384_000, 1_000_000, 100],
+  ] as const)('%s', (_label, usedWsec, balanceMicros, drawStartMicros, leftPercent) => {
+    const draw = creditDrawOf(usage(usedWsec), { balanceMicros, drawStartMicros });
+    expect(draw).toEqual({
+      balanceMicros,
+      startMicros: Math.max(balanceMicros, drawStartMicros ?? 0),
+      leftPercent,
+    });
+  });
+
+  it.each([
+    [21, false],
+    [20, false],
+    [19.9, true],
+    [0.5, true],
+  ] as const)('%s%% left is low: %s', (leftPercent, low) => {
+    expect(isCreditDrawLow({ leftPercent })).toBe(low);
+  });
+
+  it('writes the headline and the detail', () => {
+    const draw = { balanceMicros: 93_840_000, startMicros: 120_000_000 };
+    expect(creditDrawHeadline(draw)).toBe('Using credits · $93.84 left');
+    expect(creditDrawDetail(draw)).toBe('Included hours used up. Using credits: $93.84 of $120 left');
   });
 });

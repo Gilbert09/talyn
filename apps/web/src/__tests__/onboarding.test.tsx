@@ -19,10 +19,11 @@ import { render, renderHook, screen, fireEvent, waitFor, cleanup } from '@testin
  */
 
 vi.mock('../lib/api', () => ({
+  loadAllRepos: vi.fn().mockResolvedValue([]),
+  mergeRepos: vi.fn(),
   api: {
     github: {
       getStatus: vi.fn().mockResolvedValue({ connected: false }),
-      listAllRepos: vi.fn().mockResolvedValue([]),
       listInstallations: vi.fn().mockResolvedValue([]),
       getUser: vi.fn().mockResolvedValue({ login: 'octocat' }),
       installViaApp: vi.fn().mockResolvedValue({

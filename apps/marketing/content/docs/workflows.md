@@ -1,21 +1,26 @@
 ---
-title: Workflows
-description: Write a rule once and it runs on every pull request in your repositories. When something happens, and these conditions hold, Talyn labels, assigns, comments, runs an agent or queues the merge.
+title: GitHub automations
+description: Run actions when pull request events match your conditions.
 ---
 
-A workflow is a rule for your pull requests: when this happens, only if these conditions hold, do these things. It runs on every pull request in the repositories your workspace watches, including ones you did not open. It runs on Talyn's servers, so the app does not need to be open.
+A GitHub automation watches pull request events. It checks your conditions, then runs your actions.
+It covers every pull request in repositories your workspace watches, including pull requests you did not open.
+Talyn runs automations on its servers, so the app can stay closed.
 
-## Create a workflow
+## Create a GitHub automation
 
-1. Select **Automations** in the sidebar.
-2. Open the **Workflows** tab.
-3. Select **New workflow** and give it a name, for example "Label new PRs from bots".
+1. Select **Integrations** in the sidebar.
+2. Open **GitHub > Automations**.
+3. Select **New automation** and give it a name, for example "Label new PRs from bots".
 4. Under **When this happens**, select **Add trigger** and pick an event.
 5. Optionally, under **Only if**, select **Add condition**.
 6. Under **Do this**, select **Add action**. Actions run in order, top to bottom.
-7. Select **Create workflow**.
+7. Select **Create**.
 
-Any one of the triggers starts the workflow. Every condition must hold.
+Any one of the triggers starts the automation. Every condition must hold.
+
+To open an automation from anywhere in the desktop or web app, press **⌘K** (**Ctrl+K** on Windows and Linux) and type its name.
+The command palette lists every automation in the workspace, including Slack, webhook, issue and schedule automations.
 
 ## Triggers
 
@@ -32,7 +37,7 @@ Any one of the triggers starts the workflow. Every condition must hold.
 
 ## Conditions
 
-With no conditions, a workflow runs on every pull request its trigger fires for. Add conditions to narrow it:
+With no conditions, an automation runs on every pull request its trigger fires for. Add conditions to narrow it:
 
 - Repository, base branch, or **Targets the default branch**
 - **Opened by**, **Done by**, or **The person named**: Anyone, Me, Any person, Any bot, or specific accounts
@@ -54,24 +59,30 @@ The editor offers only the conditions that make sense for the triggers you picke
 | **Request reviewers** | Requests reviews. The author is left out. |
 | **Assign people** | Assigns people. They must be collaborators on the repository. |
 | **Post a comment** | Posts a comment on the pull request as Talyn. You can use templates such as `{{pr.author}}` and `{{pr.baseBranch}}`. |
-| **Run a skill** | Runs a [skill](/docs/skills) on the pull request with an agent. |
-| **Run a prompt** | Runs your prompt on the pull request with an agent. |
+| **Approve the PR** | Approves the pull request as your GitHub account, with an optional review comment. GitHub does not let you approve your own pull request. If your approval still stands, Talyn does not approve again. |
+| **Run a skill** | Starts a session on the pull request that runs a [skill](/docs/skills). |
+| **Start a session** | Starts a session with your prompt on the pull request's repository. |
 | **Add to My PRs** | Tracks the pull request on your **Pull requests** page. |
 | **Add to the merge queue** | Queues the pull request. You can pick the merge method: Squash, Merge commit, Rebase, or whatever the pull request is set to. |
 | **Run a code review** | Starts a [code review](/docs/code-review). The findings stay in Talyn. |
 
-**Run a skill** and **Run a prompt** run at most once on each pull request.
+**Run a skill** and **Start a session** run at most once on each pull request.
 
 ## Run history
 
-Expand a workflow to see its runs. Each run shows the pull request, the event and what each action did. A run is **Running**, **Waiting to retry**, **Done**, **Partly done**, **Failed** or **Stood down**.
+On **Integrations > GitHub > Automations**, select **Show history** on an automation to see its runs. Each run shows the pull request, event, and action results.
+A run is **Running**, **Waiting to retry**, **Done**, **Partly done**, **Failed**, or **Stood down**.
+When a run starts a session, select **Open the session it started** to go to that session. On mobile, open the automation and tap the run.
 
 **Waiting to retry** means GitHub rate-limited an action. Talyn tries it again later, and does not repeat the actions that already worked.
 
 ## Loop protection
 
-Talyn ignores events caused by its own actions, so a workflow does not trigger itself. In **Advanced**, **Stop after this many runs on one PR per hour** limits how often one workflow runs on one pull request. The default is 5. A run over the limit is recorded as stood down.
+Talyn ignores events caused by its own actions, so an automation does not trigger itself.
+In **Advanced**, set **Stop after this many runs on one PR per hour**. The default is 5.
+A run over the limit is recorded as stood down.
 
 ## Cost
 
-Workflows are free to create. Actions that run an agent (a skill, a prompt or a code review) use box-hours. When you are out of box-hours or every box is busy, the action waits and runs when there is room.
+GitHub automations are free to create. Actions that run an agent use box-hours.
+When no box is available, the action waits until there is room.

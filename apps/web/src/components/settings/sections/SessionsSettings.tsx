@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import {
-  FLEET_MODELS,
   DEFAULT_AUTO_ARCHIVE_IDLE_DAYS,
   WORKBENCH_EFFORTS,
   defaultFleetModelForAgent,
@@ -14,6 +13,7 @@ import {
 import { api } from '../../../lib/api';
 import { toast } from '../../../stores/toast';
 import { useWorkspaceStore, type SidebarOrder } from '../../../stores/workspace';
+import { useFleetModelCatalog } from '../../../lib/fleetModelCatalog';
 import { useSessionDefaults, writeSessionDefaults } from '../../../lib/sessionDefaults';
 import { useActiveSpace } from '../../../lib/spaces';
 import type { SpaceRef } from '../../../stores/spaces';
@@ -84,7 +84,7 @@ function LimitResumeSection() {
   };
   return <SettingsSection title="Usage limits">
     <SettingToggle label="Continue when an agent hits its limit"
-      description="Move the chat to your other agent, or wait for the limit to reset and continue."
+      description="Move the chat to your other agent, or wait for the limit to reset and continue. When the model API fails, suspend the box and try again later."
       checked={workspace?.settings?.autoResumeOnLimit !== false} disabled={saving || !workspace}
       onChange={(value) => void save(value)} />
   </SettingsSection>;
@@ -283,7 +283,7 @@ function ModelRow({ agent }: { agent: WorkbenchAgent }) {
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
   const [saving, setSaving] = useState(false);
   const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
-  const models = FLEET_MODELS.filter((m) => fleetAgentForModel(m.id) === agent);
+  const models = useFleetModelCatalog().models.filter((m) => fleetAgentForModel(m.id) === agent);
   const current = storedFleetModelForAgent(workspace?.settings, agent) ?? defaultFleetModelForAgent(agent);
   const agentLabel = agent === 'codex' ? 'Codex' : 'Claude';
 
@@ -394,14 +394,6 @@ export function SessionsSettings() {
       <ClaudeCoAuthorshipSection />
       <LimitResumeSection />
       <AutoArchiveSection />
-      <SettingsSection title="Notifications">
-        <SettingToggle
-          label="Notify me when an agent finishes"
-          description="Get a browser notification when a chat stops while Talyn is in the background."
-          checked={defaults.notifyOnFinish}
-          onChange={(notifyOnFinish) => writeSessionDefaults({ notifyOnFinish })}
-        />
-      </SettingsSection>
     </SettingsPage>
   );
 }

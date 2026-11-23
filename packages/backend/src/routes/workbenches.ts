@@ -32,14 +32,16 @@ import {
   type WorkbenchEvent,
   type WorkbenchKind,
   type WorkbenchSettings,
+  type WorkbenchTranscriptMatch,
   type WorkbenchTurnPayer,
+  type WorkbenchMessageSender,
   type Workbench,
   boxRefusalReason,
+  resolveWorkbenchConfig,
 } from '@talyn/shared';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { runWorkbenchAction } from '../services/workbenches/actions.js';
-import { acknowledgeAttention } from '../services/workbenches/attention.js';
 import { getDbClient } from '../db/client.js';
 import { changesResponseEtag } from '../services/workbenches/changesStored.js';
 import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
@@ -50,6 +52,7 @@ import { chooseReadSource } from '../services/workbenches/sandboxReadSource.js';
 import { BOX_START_SETTINGS_KEYS } from '../services/workbenches/boxStart.js';
 import { requestArchiveAfterTurn } from '../services/workbenches/autoArchive.js';
 import { createWorkbench, type CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
+import { searchTranscripts } from '../services/workbenches/transcriptSearch.js';
 import {
   archiveWorkbench,
   deleteWorkbench,
@@ -108,12 +111,14 @@ import {
   listCheckpoints,
   listEvents,
   listOlderEvents,
+  listOlderVisibleEvents,
   listWorkbenches,
   liveWorkbenchNames,
   rowToChat,
   setGeneratedTitle,
   storeNumberedEvents,
   threadSessions,
+  childSessions,
   updateChat,
   updateWorkbench,
   type ChatRow,
@@ -132,7 +137,7 @@ import {
 } from '../services/workbenches/memory.js';
 import { manualReviewRefusal, memoryReviewState, startMemoryReview } from '../services/workbenches/memoryReview.js';
 import { assertWorkbenchBoxStart, existingBoxRefusal } from '../services/workbenches/boxGate.js';
-import { isFeatureEnabled } from '../services/featureFlags.js';
+import { isFeatureEnabled, workspaceHasFeature } from '../services/featureFlags.js';
 import { canPrompt, canViewItem, ownsWorkspace } from '../services/teams/access.js';
 import { turnPayerFor } from '../services/teams/payer.js';
 
@@ -155,6 +160,8 @@ const DEFAULT_EVENT_PAGE = 500;
 const MAX_EVENT_PAGE = 2000;
 /** One local-events upload. The JSON body limit (2 MB) bounds it anyway; this makes the refusal say why. */
 const MAX_LOCAL_EVENT_BATCH = 1000;
+/** One "Archive all". Each archive answers fast (the save runs later), so this bounds the request time. */
+const MAX_BULK_ARCHIVE = 200;
 
 const CHAT_STATUSES: readonly WorkbenchChatStatus[] = ['idle', 'running', 'awaiting_input', 'error'];
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -191,7 +198,7 @@ function fail(res: Response, err: unknown): void {
       res.status(refusal.status).json({ success: false, error: refusal.message, code: refusal.code, wake: true });
       return;
     }
-    bad(res, refusal.status, refusal.message, refusal.code);
+    res.status(refusal.status).json({ success: false, error: refusal.message, code: refusal.code, ...refusal.details });
     return;
   }
   throw err;
@@ -303,6 +310,18 @@ export function workbenchRoutes(): Router {
    * account, GitHub account and box-hours. Only POST /chats/:chatId/messages
    * uses it. Cancel goes through `readableChat` plus a payer check.
    */
+  /**
+   * `fromThreadId`: the session's own thread wrote the message (the MCP tool
+   * sets it for a thread's token). Only a label for the transcript, so any
+   * other value is ignored rather than refused.
+   */
+  async function threadSender(workbench: WorkbenchRow, fromThreadId: unknown): Promise<WorkbenchMessageSender | null> {
+    if (typeof fromThreadId !== 'string' || !fromThreadId || workbench.threadId !== fromThreadId) return null;
+    const thread = await getWorkbench(fromThreadId);
+    if (!thread || !isThread(thread)) return null;
+    return { kind: 'thread', threadId: thread.id, name: thread.title || thread.name };
+  }
+
   async function promptableChat(
     req: Request,
     res: Response,
@@ -423,7 +442,12 @@ export function workbenchRoutes(): Router {
     if (!found) return;
     try {
       if (found.chat.closedAt) throw new WorkbenchError('This chat is closed.', 409, 'chat_closed');
-      ok(res, await sendMessage(found.chat.id, req.body ?? {}, { sentAt, ...(found.payer ? { payer: found.payer } : {}) }));
+      const sender = await threadSender(found.workbench, req.body?.fromThreadId);
+      ok(res, await sendMessage(found.chat.id, req.body ?? {}, {
+        sentAt,
+        ...(found.payer ? { payer: found.payer } : {}),
+        ...(sender ? { sender } : {}),
+      }));
     } catch (err) {
       fail(res, err);
     }
@@ -451,7 +475,7 @@ export function workbenchRoutes(): Router {
       if (!mine) return bad(res, 403, 'You can stop only a turn you started.', 'not_your_turn');
     }
     try {
-      await cancelTurn(found.chat.id);
+      await cancelTurn(found.chat.id, { startQueue: true });
       ok(res, null);
     } catch (err) {
       fail(res, err);
@@ -472,8 +496,19 @@ export function workbenchRoutes(): Router {
       if (before !== null && !(Number.isInteger(before) && before > 0)) {
         return bad(res, 400, 'before must be "latest" or a positive integer');
       }
-      // The ceiling that bounds a turn-aligned page is the forward page's own cap.
-      return ok(res, await listOlderEvents(found.chat.id, before, limit, MAX_EVENT_PAGE));
+      // `ceiling` bounds how far a page extends to reach the start of a turn. The default is the
+      // forward page's own cap. A phone asks for less: one long turn otherwise answers 2000 events.
+      const rawCeiling = Number(req.query.ceiling);
+      const ceiling = Number.isFinite(rawCeiling) && rawCeiling > 0
+        ? Math.min(MAX_EVENT_PAGE, Math.max(limit, Math.floor(rawCeiling)))
+        : MAX_EVENT_PAGE;
+      // An older page skips the stream deltas that draw nothing, so it shows `limit` real rows.
+      return ok(
+        res,
+        before === null
+          ? await listOlderEvents(found.chat.id, null, limit, ceiling)
+          : await listOlderVisibleEvents(found.chat.id, before, limit, ceiling),
+      );
     }
     ok(res, await listEvents(found.chat.id, Number.isFinite(after) && after > 0 ? Math.floor(after) : 0, limit));
   });
@@ -551,8 +586,8 @@ export function workbenchRoutes(): Router {
       })) ?? found.chat;
     emitWorkbenchChat(row.workspaceId, rowToChat(row));
     // A local session in a thread: its turns run on the desktop, so the change of status is the turn's end.
-    if (found.workbench.threadId && found.chat.status === 'running' && body.status !== 'running') {
-      await notifyThread(found.workbench, body.status === 'awaiting_input' ? 'needs_input' : 'session_finished', { status: body.status });
+    if ((found.workbench.threadId || found.workbench.parentWorkbenchId) && found.chat.status === 'running' && body.status !== 'running') {
+      await notifyThread(found.workbench, body.status === 'awaiting_input' ? 'needs_input' : 'session_finished', { status: body.status, chatId: row.id, turn: row.turnCount });
     }
     ok(res, rowToChat(row));
   });
@@ -716,6 +751,19 @@ export function workbenchRoutes(): Router {
     ok(res, await publicWorkbenches(rows));
   });
 
+  /** Sessions and threads whose transcripts match `q` (⌘K), archived ones too. */
+  router.get('/search', async (req, res) => {
+    const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+    const query = typeof req.query.q === 'string' ? req.query.q : '';
+    if (!(await gate(req, res, workspaceId))) return;
+    const hits = await searchTranscripts(workspaceId, query);
+    const publics = await publicWorkbenches(hits.map((h) => h.row));
+    const matches: WorkbenchTranscriptMatch[] = hits.map((h, i) => ({
+      workbench: publics[i], chatId: h.chatId, seq: h.seq, role: h.role, snippet: h.snippet,
+    }));
+    ok(res, matches);
+  });
+
   router.get('/:id', async (req, res) => {
     const found = await readableWorkbench(req, res, await getWorkbench(req.params.id), 'Session not found');
     if (!found) return;
@@ -746,8 +794,10 @@ export function workbenchRoutes(): Router {
   router.get('/:id/sessions', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
-    if (!isThread(row)) return bad(res, 409, 'This is a session, not a thread.', 'not_thread');
-    ok(res, await publicWorkbenches(await threadSessions(row.id)));
+    if (!isThread(row) && !(await workspaceHasFeature('sessionSubagents', row.workspaceId)).enabled) {
+      return bad(res, 409, 'Child sessions are not available.', 'not_thread');
+    }
+    ok(res, await publicWorkbenches(await (isThread(row) ? threadSessions(row.id) : childSessions(row.id))));
   });
 
   /** Continue a session as a thread: the session joins the new thread, which starts with a recap of its chat. */
@@ -909,6 +959,54 @@ export function workbenchRoutes(): Router {
     ok(res, data);
   });
 
+  /**
+   * Archive many sessions in one request, for "Archive all". Each id is checked
+   * and archived on its own: an unknown, foreign or failed id goes into
+   * `failed` and the others continue.
+   */
+  router.post('/archive', async (req, res) => {
+    const ids: unknown = req.body?.ids;
+    if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id) => typeof id === 'string' && id.length > 0)) {
+      bad(res, 400, 'ids must be a non-empty list of session ids');
+      return;
+    }
+    const unique = [...new Set(ids as string[])];
+    if (unique.length > MAX_BULK_ARCHIVE) {
+      bad(res, 400, `ids can hold at most ${MAX_BULK_ARCHIVE} sessions`);
+      return;
+    }
+    const user = assertUser(req);
+    if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
+      bad(res, 403, `Sessions are not available: ${workbenchesRefusalReason()}.`, 'workbenches_unavailable');
+      return;
+    }
+    const access = new Map<string, boolean>();
+    const mayArchive = async (workspaceId: string) => {
+      let allowed = access.get(workspaceId);
+      if (allowed === undefined) {
+        allowed = await requireWorkspaceAccess(req, workspaceId).then(() => true, () => false);
+        access.set(workspaceId, allowed);
+      }
+      return allowed;
+    };
+    const archived: WorkbenchRow[] = [];
+    const failed: Array<{ id: string; error: string }> = [];
+    for (const id of unique) {
+      const row = await getWorkbench(id);
+      if (!row || !(await mayArchive(row.workspaceId))) {
+        failed.push({ id, error: 'Session not found' });
+        continue;
+      }
+      try {
+        archived.push(await archiveWorkbench(row.id));
+      } catch (err) {
+        console.warn(`[workbench] bulk archive of ${id} failed:`, err);
+        failed.push({ id, error: fleetErrorAsRefusal(err)?.message ?? 'Could not archive the session' });
+      }
+    }
+    ok(res, { archived: await publicWorkbenches(archived), failed });
+  });
+
   router.post('/:id/archive', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
@@ -927,16 +1025,12 @@ export function workbenchRoutes(): Router {
   });
 
   /**
-   * The person opened the session: its current alert stops counting on the
-   * context rail. Owner-only by the query, so a teammate's view is a no-op.
+   * Older desktop builds call this when a session opens. Opening a session no
+   * longer clears its alert: it stays on the context rail until it is resolved.
    */
-  router.post('/:id/attention/seen', async (req, res) => {
-    const user = assertUser(req);
-    try {
-      ok(res, { acknowledged: await acknowledgeAttention(getDbClient(), user.id, req.params.id) });
-    } catch (err) {
-      fail(res, err);
-    }
+  router.post('/:id/attention/seen', (req, res) => {
+    assertUser(req);
+    ok(res, { acknowledged: false });
   });
 
   /** Provision again after a failed or stuck start. Refused, unchanged, while the fleet still cannot run it. */
@@ -1033,6 +1127,13 @@ export function workbenchRoutes(): Router {
       lastWake.set(row.id, { at: Date.now(), status });
       res.status(status === 'awake' ? 200 : 202).json({ success: true, data: { status } });
     } catch (err) {
+      // A best-effort prefetch: a fleet that is full or out of reach is not an error for the client.
+      const refusal = fleetErrorAsRefusal(err);
+      if (refusal && (refusal.code === 'fleet_unavailable' || refusal.code === 'sandbox_waking')) {
+        console.warn(`[workbench] wake skipped: workbench=${row.id} code=${refusal.code}`);
+        ok(res, { status: 'unavailable' });
+        return;
+      }
       fail(res, err);
     }
   });
@@ -1178,6 +1279,13 @@ export function workbenchRoutes(): Router {
     try {
       ok(res, await readSessionConfig(row, { live: wantsLive(req) }));
     } catch (err) {
+      // A passive read: a fleet fault answers the default config, marked, and the client reads again later.
+      const refusal = fleetErrorAsRefusal(err);
+      if (refusal && (refusal.code === 'fleet_unavailable' || refusal.code === 'sandbox_waking')) {
+        console.warn(`[workbench] config read fell back to the default: workbench=${row.id} code=${refusal.code}`);
+        ok(res, { ...resolveWorkbenchConfig({}), unavailable: true });
+        return;
+      }
       fail(res, err);
     }
   });

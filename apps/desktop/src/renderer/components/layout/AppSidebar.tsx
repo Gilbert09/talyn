@@ -1,11 +1,12 @@
 import { useEffect, type ReactNode } from 'react';
-import { workbenchesOffered } from '@talyn/shared';
+import { INTEGRATION_CATALOG, integrationsOffered, splitViewOffered, workbenchesOffered } from '@talyn/shared';
 import {
   ArrowLeft,
   ArrowRight,
   BarChart3,
   ChevronLeft,
   ChevronRight,
+  Columns2,
   FolderPlus,
   Eye,
   GitMerge,
@@ -17,8 +18,9 @@ import {
   Workflow,
 } from 'lucide-react';
 import { cn, isMacDesktop } from '../../lib/utils';
+import { INTEGRATION_LOGOS } from '../../assets/integrations/IntegrationLogos';
 import { formatKeys } from '../../lib/shortcuts';
-import { PR_PAGE_TABS, offeredAutomationTabs } from '../../lib/routeLabels';
+import { PR_PAGE_TABS } from '../../lib/routeLabels';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useSidebarWidth } from '../../lib/sidebarWidth';
 import { useNavigationStore } from '../../stores/navigation';
@@ -31,17 +33,19 @@ import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { SidebarWorkbenchList } from './SidebarWorkbenchList';
 import { SidebarThreadList } from './SidebarThreadList';
 import { SidebarSlackPending } from './SidebarSlackPending';
+import { PersonalNeedsYou } from './SidebarNeedsYou';
 import { UpdateNotice } from './UpdateNotice';
 import { SidebarAccountStatus } from './UsageGauge';
 import { UserChip } from './UserChip';
 import { SpaceSidebar } from './SpaceSidebar';
 import { useActiveSpace } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
+import { useSplitViewStore } from '../../stores/splitView';
 
 /**
  * The app's left column, top to bottom: the macOS drag strip, the workspace,
  * Search and New workbench, the threads, the workbenches by repository,
- * then the PR area and Automations, then the footer. 240px by
+ * then the PR area and Integrations, then the footer. 240px by
  * default and resizable on its right edge, or an icon rail when collapsed
  * (⌘B). Both are remembered.
  */
@@ -63,8 +67,9 @@ export function AppSidebar() {
   }, [user?.id]);
 
   const offered = workbenchesOffered(features);
+  const splitOffered = splitViewOffered(features);
+  const splitPanes = useSplitViewStore((s) => s.panes.length);
   const prCounts = usePrBadgeCounts();
-  const automationTabs = offeredAutomationTabs(features);
 
   const newWorkbench = () => openNewWorkbench();
 
@@ -120,10 +125,22 @@ export function AppSidebar() {
             onClick={() => setPaletteOpen(true)}
             dataAttr="sidebar-search"
           />
+          {splitOffered && (
+            <SidebarItem
+              icon={Columns2}
+              label="Split view"
+              badge={splitPanes || undefined}
+              collapsed={collapsed}
+              active={route.view === 'split'}
+              onClick={() => navigate({ view: 'split' })}
+              dataAttr="sidebar-split-view"
+            />
+          )}
         </div>
 
         <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5" aria-label="Sessions">
           {offered && !collapsed && space && <SpaceSidebar active={space} />}
+          {offered && !collapsed && !space && <PersonalNeedsYou workbenches={workbenches} />}
           {offered && !collapsed && !space && <SidebarSlackPending />}
           {offered && !collapsed && !space && <SidebarThreadList workbenches={workbenches} />}
           {offered && !collapsed && !space && <SidebarWorkbenchList workbenches={workbenches} />}
@@ -186,18 +203,17 @@ export function AppSidebar() {
             onClick={() => navigate({ view: 'prs', tab: 'merge_queue' })}
             dataAttr="nav-merge-queue"
           />
-          {automationTabs.length > 0 && (
-            <SidebarItem
-              icon={Workflow}
-              label="Automations"
-              collapsed={collapsed}
-              active={route.view === 'automations'}
-              onClick={() => {
-                if (route.view !== 'automations') navigate({ view: 'automations', tab: automationTabs[0] });
-              }}
-              dataAttr="nav-automations"
-            />
-          )}
+          <SidebarItem
+            icon={Workflow}
+            label="Integrations"
+            trailing={<IntegrationLogoStrip features={features} />}
+            collapsed={collapsed}
+            active={route.view === 'integrations'}
+            onClick={() => {
+              if (route.view !== 'integrations') navigate({ view: 'integrations' });
+            }}
+            dataAttr="nav-integrations"
+          />
           <SidebarItem
             icon={BarChart3}
             label="Insights"
@@ -247,11 +263,14 @@ function SidebarItem({
   onClick,
   className,
   dataAttr,
+  trailing,
 }: {
   icon: typeof Search;
   label: string;
   keys?: string;
   badge?: number;
+  /** Drawn after the label when expanded and there is no badge or shortcut. The label then keeps its full width. */
+  trailing?: ReactNode;
   active?: boolean;
   collapsed: boolean;
   onClick: () => void;
@@ -275,7 +294,7 @@ function SidebarItem({
       <Icon className="h-4 w-4 shrink-0" />
       {!collapsed && (
         <>
-          <span className="min-w-0 flex-1 truncate">{label}</span>
+          <span className={cn('min-w-0 truncate', trailing ? 'shrink-0' : 'flex-1')}>{label}</span>
           {badge !== undefined && badge > 0 && (
             <span
               data-attr={dataAttr ? `${dataAttr}-badge` : undefined}
@@ -287,6 +306,7 @@ function SidebarItem({
           {keys && badge === undefined && (
             <span className="shrink-0 text-[11px] text-muted-foreground">{formatKeys(keys)}</span>
           )}
+          {trailing && badge === undefined && !keys && trailing}
         </>
       )}
       {collapsed && badge !== undefined && badge > 0 && <span className="sr-only">{badge}</span>}
@@ -297,6 +317,32 @@ function SidebarItem({
     <WithTooltip label={label} keys={keys} badge={badge}>
       {button}
     </WithTooltip>
+  );
+}
+
+/** The vendor apps this workspace can connect, as small marks. Schedule is built in, so it has none. */
+function IntegrationLogoStrip({ features }: { features: Parameters<typeof integrationsOffered>[0] }) {
+  // Some apps share a mark (PostHog Code and PostHog Inbox), so show each mark one time.
+  const icons = [
+    ...new Set(
+      integrationsOffered(features)
+        .filter((kind) => !INTEGRATION_CATALOG[kind].builtIn)
+        .map((kind) => INTEGRATION_CATALOG[kind].icon)
+    ),
+  ];
+  if (icons.length === 0) return null;
+  return (
+    // One fixed-height row: in a narrow sidebar the marks that do not fit wrap out of sight, whole.
+    <span
+      className="flex h-3 min-w-0 flex-1 flex-wrap justify-end gap-x-1.5 overflow-hidden"
+      data-attr="nav-integrations-logos"
+      aria-hidden
+    >
+      {icons.map((icon) => {
+        const Logo = INTEGRATION_LOGOS[icon];
+        return <Logo key={icon} className="h-3 w-3 shrink-0" />;
+      })}
+    </span>
   );
 }
 

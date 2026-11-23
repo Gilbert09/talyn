@@ -20,9 +20,9 @@
  * is handled at run time instead — see services/selfHosted/withdrawnModels.ts.
  */
 import {
-  FLEET_MODELS,
+  BUNDLED_FLEET_MODELS,
+  BUNDLED_RETIRED_FLEET_MODELS,
   LEGACY_POSTHOG_CODE_MODEL_IDS,
-  RETIRED_FLEET_MODELS,
 } from '../packages/shared/dist/cjs/index.js';
 
 /**
@@ -56,7 +56,7 @@ const alias = (id) => id.replace(/-\d{8}$/, '');
  */
 const acceptedNotOffered = new Set([
   ...LEGACY_POSTHOG_CODE_MODEL_IDS,
-  ...Object.keys(RETIRED_FLEET_MODELS),
+  ...Object.keys(BUNDLED_RETIRED_FLEET_MODELS),
 ]);
 
 const KEY = process.env.ANTHROPIC_API_KEY;
@@ -81,7 +81,7 @@ const live = new Map(
   (await res.json()).data.map((m) => [alias(m.id), m.display_name ?? m.id]),
 );
 const offered = new Set(
-  FLEET_MODELS.filter((m) => m.provider === 'anthropic').map((m) => alias(m.id)),
+  BUNDLED_FLEET_MODELS.filter((m) => m.provider === 'anthropic').map((m) => alias(m.id)),
 );
 
 // The dangerous direction: we offer something the vendor no longer serves.
@@ -101,8 +101,8 @@ if (gone.length) {
   for (const id of gone) console.log(`  ${id}`);
 }
 if (missing.length) {
-  console.log('\nSERVED BUT NOT OFFERED — add to FLEET_MODELS, or to NOT_OFFERED with a reason:');
+  console.log('\nSERVED BUT NOT OFFERED — add to BUNDLED_FLEET_MODELS, or to NOT_OFFERED with a reason:');
   for (const id of missing) console.log(`  ${id}  (${live.get(id)})`);
 }
-console.log('\npackages/shared/src/index.ts → FLEET_MODELS');
+console.log('\npackages/shared/src/index.ts → BUNDLED_FLEET_MODELS');
 process.exit(1);

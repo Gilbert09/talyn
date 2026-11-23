@@ -25,7 +25,7 @@ import {
   type FeatureSection,
 } from "@/lib/features";
 import { listGuides } from "@/lib/guides";
-import { listComparePages } from "@/lib/compare";
+import { compareCardTitle, listComparePages } from "@/lib/compare";
 
 /**
  * One template, ten pages. `dynamicParams = false` means only the slugs in
@@ -226,7 +226,7 @@ export default function FeaturePageRoute({ params }: Params) {
                     <FeatureCard
                       key={c.slug}
                       eyebrow="Compare"
-                      title={`Talyn vs ${c.competitor}`}
+                      title={compareCardTitle(c)}
                       body={c.description}
                       href={`/compare/${c.slug}`}
                       cta="Read the comparison"

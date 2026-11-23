@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { Archive, BarChart3, GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
-import { mcpServersOffered, privateRoutesOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
+import { Archive, BarChart3, Columns2, GitPullRequest, History, Home, MessagesSquare, Settings, Workflow } from 'lucide-react';
+import { INTEGRATION_CATALOG, integrationsOffered, mcpServersOffered, splitViewOffered, workbenchDisplayName, workbenchesOffered, type Workbench } from '@talyn/shared';
 import { formatKeys, getShortcut, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { goToShortcutIdForNavItem } from './layout/goToShortcuts';
 import { sessionPr, sessionState } from '../lib/sessionState';
@@ -11,12 +11,15 @@ import { useNavigationStore, type Route, PR_TABS } from '../stores/navigation';
 import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
-import { AUTOMATION_TAB_LABEL, PR_PAGE_TABS, PR_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
+import { PR_PAGE_TABS, PR_TAB_LABEL } from '../lib/routeLabels';
 import { isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelectors';
 import { openNewThread, openNewWorkbench } from './workbench/new/openNewWorkbench';
 import { claudeImportAvailable, useClaudeImportDialog } from './workbench/new/ContinueClaudeConversation';
 import { SessionStateIcon } from './workbench/WorkbenchBadges';
-import { PaletteAppCommands } from './PaletteAppCommands';
+import { usePaletteAppSections } from './PaletteAppCommands';
+import { usePaletteAutomationsSection } from './PaletteAutomations';
+import { usePaletteTranscriptsSection } from './PaletteTranscripts';
+import { rankPaletteSections, type PaletteEntry, type PaletteSection } from '../lib/paletteSearch';
 import { SlackSessionMark } from './workbench/SlackThreadChip';
 import { slackSourceOf } from '../lib/slackSession';
 import { workbenchPlaceLabel } from '../lib/threads';
@@ -30,21 +33,22 @@ import {
   CommandShortcut,
 } from './ui/command';
 
+const ICON = 'h-3.5 w-3.5 shrink-0 text-muted-foreground';
+
 const SETTINGS_LABEL: Record<SettingsSection, string> = {
   sessions: 'Sessions',
   agents: 'Agents',
   repositories: 'Repositories',
   sandboxSetup: 'Sandbox setup',
-  privateRoutes: 'Private routes',
   shortcuts: 'Shortcuts',
   pullRequests: 'Pull requests',
   workspace: 'Workspace',
   integrations: 'Integrations',
-  slack: 'Slack',
   skills: 'Skills',
   instructions: 'Instructions',
   memory: 'Memory',
   codeReview: 'Code review',
+  notifications: 'Notifications',
   account: 'Account',
   billing: 'Billing',
   teams: 'Teams',
@@ -81,7 +85,10 @@ function navShortcut(key: string): Shortcut | undefined {
 
 /**
  * ⌘K. Jump to any workbench, go anywhere in the app, or run any shortcut
- * that applies now (listed with its keys). Closes on Escape or on a pick.
+ * that applies now (listed with its keys). A search also finds the sessions
+ * whose transcripts hold it. With no search the rows are
+ * grouped by type; a search ranks every match in one list, best first.
+ * Closes on Escape or on a pick.
  */
 export function CommandPalette() {
   const open = useNavigationStore((s) => s.paletteOpen);
@@ -111,15 +118,10 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     );
     return () => { active = false; };
   }, [workspaceId, sessionsOffered]);
-  const archivedMatches = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q || !sessionsOffered) return [];
-    return archived
-      .filter((wb) => [workbenchDisplayName(wb), wb.name, wb.branch, wb.repoFullName]
-        .some((value) => value.toLowerCase().includes(q)))
-      .sort((a, b) => archivedAtOf(b).localeCompare(archivedAtOf(a)))
-      .slice(0, 8);
-  }, [archived, query, sessionsOffered]);
+  const archivedSessions = useMemo(
+    () => (sessionsOffered ? [...archived].sort((a, b) => archivedAtOf(b).localeCompare(archivedAtOf(a))) : []),
+    [archived, sessionsOffered]
+  );
   // Re-render when the registry changes; `when` is read on each render, and the palette renders on open.
   useSyncExternalStore(subscribeVersion, readVersion);
 
@@ -134,6 +136,9 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     if (workbenchesOffered(features)) {
       items.push({ key: 'history', label: 'History', icon: History, route: { view: 'history' } });
     }
+    if (splitViewOffered(features)) {
+      items.push({ key: 'split', label: 'Split view', icon: Columns2, route: { view: 'split' } });
+    }
     for (const tab of PR_TABS) {
       items.push({
         key: `prs:${tab}`,
@@ -142,19 +147,18 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         route: { view: 'prs', tab },
       });
     }
-    for (const tab of offeredAutomationTabs(features)) {
+    items.push({ key: 'integrations', label: 'Integrations', icon: Workflow, route: { view: 'integrations' } });
+    for (const kind of integrationsOffered(features)) {
       items.push({
-        key: `automations:${tab}`,
-        label: `Automations: ${AUTOMATION_TAB_LABEL[tab]}`,
+        key: `integrations:${kind}`,
+        label: `Integrations: ${INTEGRATION_CATALOG[kind].name}`,
         icon: Workflow,
-        route: { view: 'automations', tab },
+        route: { view: 'integrations', kind },
       });
     }
     items.push({ key: 'insights', label: 'Insights', icon: BarChart3, route: { view: 'insights' } });
     for (const section of Object.keys(SETTINGS_LABEL) as SettingsSection[]) {
       if (section === 'mcpServers' && !mcpServersOffered(features)) continue;
-      if (section === 'privateRoutes' && !privateRoutesOffered(features)) continue;
-      if (section === 'slack' && !workbenchesOffered(features)) continue;
       if (section === 'memory' && !workbenchesOffered(features)) continue;
       if (section === 'sandboxSetup' && !workbenchesOffered(features)) continue;
       items.push({
@@ -174,99 +178,174 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     fn();
   };
 
+  const appSections = usePaletteAppSections(pick);
+  const automationsSection = usePaletteAutomationsSection(pick);
+  const transcripts = usePaletteTranscriptsSection(query, pick);
+
+  const navEntries: PaletteEntry[] = [];
+  if (workbenchesOffered(features)) {
+    navEntries.push({
+      id: 'new:session',
+      label: 'New session',
+      onSelect: () => pick(() => openNewWorkbench()),
+      content: (
+        <>
+          <Home className={ICON} />
+          New session
+        </>
+      ),
+    });
+  }
+  if (workbenchesOffered(features) && claudeImportAvailable()) {
+    navEntries.push({
+      id: 'new:claude-import',
+      label: 'Continue a Claude Code conversation',
+      keywords: ['import session'],
+      onSelect: () =>
+        pick(() => {
+          openNewWorkbench();
+          useClaudeImportDialog.getState().setOpen(true);
+        }),
+      content: (
+        <>
+          <History className={ICON} />
+          Continue a Claude Code conversation
+        </>
+      ),
+    });
+  }
+  if (workbenchesOffered(features)) {
+    navEntries.push({
+      id: 'new:thread',
+      label: 'New thread',
+      onSelect: () => pick(openNewThread),
+      content: (
+        <>
+          <MessagesSquare className={ICON} />
+          New thread
+        </>
+      ),
+    });
+  }
+  for (const item of navItems) {
+    const shortcut = navShortcut(item.key);
+    navEntries.push({
+      id: `go:${item.key}`,
+      label: item.label,
+      keywords: ['go'],
+      onSelect: () => pick(() => navigate(item.route)),
+      content: (
+        <>
+          <item.icon className={ICON} />
+          {item.label}
+          {shortcut && <CommandShortcut>{formatKeys(shortcut.keys)}</CommandShortcut>}
+        </>
+      ),
+    });
+  }
+
+  const sections: PaletteSection[] = [
+    {
+      id: 'sessions',
+      heading: 'Sessions',
+      kind: 'Session',
+      entries: workbenches.map((wb) => ({
+        id: `session:${wb.id}`,
+        label: workbenchDisplayName(wb),
+        keywords: [wb.name, wb.branch, wb.repoFullName, wb.id],
+        group: `workbench:${wb.id}`,
+        onSelect: () => pick(() => navigate({ view: 'workbench', id: wb.id })),
+        content: <PaletteSessionContent workbench={wb} />,
+      })),
+    },
+    {
+      id: 'archived',
+      heading: 'Archived',
+      kind: 'Archived',
+      searchOnly: true,
+      limit: 8,
+      entries: archivedSessions.map((wb) => ({
+        id: `archived:${wb.id}`,
+        label: workbenchDisplayName(wb),
+        keywords: [wb.name, wb.branch, wb.repoFullName],
+        group: `workbench:${wb.id}`,
+        onSelect: () =>
+          pick(() => {
+            useWorkbenchStore.getState().upsertWorkbench(wb);
+            navigate({ view: 'workbench', id: wb.id });
+          }),
+        content: (
+          <>
+            <Archive className={ICON} />
+            <span className="truncate">{workbenchDisplayName(wb)}</span>
+            <span className="truncate font-mono text-[11px] text-muted-foreground">{workbenchPlaceLabel(wb)}</span>
+            <span className="ml-auto shrink-0 text-[11px] text-muted-foreground" title={new Date(archivedAtOf(wb)).toLocaleString()}>
+              {relativeTime(archivedAtOf(wb))}
+            </span>
+          </>
+        ),
+      })),
+    },
+    ...(transcripts.section ? [transcripts.section] : []),
+    ...(automationsSection ? [automationsSection] : []),
+    { id: 'navigate', heading: 'Navigate', kind: 'Navigate', entries: navEntries },
+    ...appSections,
+    {
+      id: 'actions',
+      heading: 'Actions',
+      kind: 'Action',
+      entries: actions.map((s) => ({
+        id: `action:${s.id}`,
+        label: s.label,
+        keywords: [s.group, 'action'],
+        onSelect: () => pick(s.run),
+        content: (
+          <>
+            <span className="truncate">{s.label}</span>
+            <CommandShortcut>{formatKeys(s.keys)}</CommandShortcut>
+          </>
+        ),
+      })),
+    },
+  ];
+
+  const searching = query.trim() !== '';
+
   return (
-    <CommandDialog open onOpenChange={(next) => !next && onClose()}>
-      <CommandInput placeholder="Search sessions, pages, spaces, settings and actions…" value={query} onValueChange={setQuery} autoFocus />
+    <CommandDialog open onOpenChange={(next) => !next && onClose()} shouldFilter={false}>
+      <CommandInput placeholder="Search sessions, transcripts, automations, pages, spaces, settings and actions…" value={query} onValueChange={setQuery} autoFocus />
       <CommandList>
-        <CommandEmpty>Nothing matches.</CommandEmpty>
-        {workbenches.length > 0 && (
-          <CommandGroup heading="Sessions">
-            {workbenches.map((wb) => (
-              <PaletteSessionItem key={wb.id} workbench={wb} onSelect={() => pick(() => navigate({ view: 'workbench', id: wb.id }))} />
-            ))}
-          </CommandGroup>
-        )}
-        {archivedMatches.length > 0 && (
-          <CommandGroup heading="Archived">
-            {archivedMatches.map((wb) => (
-              <CommandItem
-                key={wb.id}
-                value={`archived ${workbenchDisplayName(wb)} ${wb.name} ${wb.branch} ${wb.repoFullName}`}
-                onSelect={() => pick(() => {
-                  useWorkbenchStore.getState().upsertWorkbench(wb);
-                  navigate({ view: 'workbench', id: wb.id });
-                })}
-              >
-                <Archive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate">{workbenchDisplayName(wb)}</span>
-                <span className="truncate font-mono text-[11px] text-muted-foreground">{workbenchPlaceLabel(wb)}</span>
-                <span className="ml-auto shrink-0 text-[11px] text-muted-foreground" title={new Date(archivedAtOf(wb)).toLocaleString()}>
-                  {relativeTime(archivedAtOf(wb))}
-                </span>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
-        <CommandGroup heading="Navigate">
-          {workbenchesOffered(features) && (
-            <CommandItem
-              value="new session"
-              onSelect={() =>
-                pick(() => openNewWorkbench())
-              }
-            >
-              <Home className="h-3.5 w-3.5 text-muted-foreground" />
-              New session
-            </CommandItem>
-          )}
-          {workbenchesOffered(features) && claudeImportAvailable() && (
-            <CommandItem
-              value="continue a claude code conversation import session"
-              onSelect={() =>
-                pick(() => {
-                  openNewWorkbench();
-                  useClaudeImportDialog.getState().setOpen(true);
-                })
-              }
-            >
-              <History className="h-3.5 w-3.5 text-muted-foreground" />
-              Continue a Claude Code conversation
-            </CommandItem>
-          )}
-          {workbenchesOffered(features) && (
-            <CommandItem value="new thread" onSelect={() => pick(openNewThread)}>
-              <MessagesSquare className="h-3.5 w-3.5 text-muted-foreground" />
-              New thread
-            </CommandItem>
-          )}
-          {navItems.map((item) => {
-            const shortcut = navShortcut(item.key);
-            return (
-              <CommandItem key={item.key} value={`go ${item.label}`} onSelect={() => pick(() => navigate(item.route))}>
-                <item.icon className="h-3.5 w-3.5 text-muted-foreground" />
-                {item.label}
-                {shortcut && <CommandShortcut>{formatKeys(shortcut.keys)}</CommandShortcut>}
-              </CommandItem>
-            );
-          })}
-        </CommandGroup>
-        <PaletteAppCommands pick={pick} />
-        {actions.length > 0 && (
-          <CommandGroup heading="Actions">
-            {actions.map((s) => (
-              <CommandItem key={s.id} value={`action ${s.label} ${s.group}`} onSelect={() => pick(s.run)}>
-                <span className="truncate">{s.label}</span>
-                <CommandShortcut>{formatKeys(s.keys)}</CommandShortcut>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
+        <CommandEmpty>{transcripts.loading ? 'Searching transcripts…' : 'Nothing matches.'}</CommandEmpty>
+        {searching
+          ? rankPaletteSections(query, sections).map(({ entry, kind }) => <PaletteRow key={entry.id} entry={entry} kind={kind} />)
+          : sections
+              .filter((section) => !section.searchOnly && section.entries.length > 0)
+              .map((section) => (
+                <CommandGroup key={section.id} heading={section.heading}>
+                  {section.entries.map((entry) => <PaletteRow key={entry.id} entry={entry} />)}
+                </CommandGroup>
+              ))}
       </CommandList>
     </CommandDialog>
   );
 }
 
-function PaletteSessionItem({ workbench, onSelect }: { workbench: Workbench; onSelect: () => void }) {
+/** A palette row. In the ranked list it also shows what type of row it is. */
+function PaletteRow({ entry, kind }: { entry: PaletteEntry; kind?: string }) {
+  return (
+    <CommandItem value={entry.id} onSelect={() => entry.onSelect()}>
+      {entry.content}
+      {kind && (
+        // Right-aligned, after any keys or time that the row already pushes right.
+        <span className="ml-auto shrink-0 rounded border border-border px-1 text-[10px] text-muted-foreground [.ml-auto~&]:ml-2" data-palette-kind="">
+          {kind}
+        </span>
+      )}
+    </CommandItem>
+  );
+}
+
+function PaletteSessionContent({ workbench }: { workbench: Workbench }) {
   const chats = useWorkbenchStore((s) => s.chats[workbench.id]);
   const unread = useWorkbenchStore((s) => s.unread);
   const pr = usePullRequestStore((s) =>
@@ -276,16 +355,13 @@ function PaletteSessionItem({ workbench, onSelect }: { workbench: Workbench; onS
   const state = sessionState(workbench, chats ?? [], unread, sessionPr(workbench, pr), false, background);
 
   return (
-    <CommandItem
-      value={`session ${workbenchDisplayName(workbench)} ${workbench.name} ${workbench.branch} ${workbench.repoFullName} ${workbench.id}`}
-      onSelect={onSelect}
-    >
+    <>
       <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
         <SessionStateIcon state={state} />
       </span>
       <SlackSessionMark source={slackSourceOf(workbench)} />
       <span className="truncate">{workbenchDisplayName(workbench)}</span>
       <span className="truncate font-mono text-[11px] text-muted-foreground">{workbenchPlaceLabel(workbench)}</span>
-    </CommandItem>
+    </>
   );
 }

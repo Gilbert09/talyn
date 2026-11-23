@@ -1,18 +1,20 @@
 import { spaces, workbenches, workspaces as workspaceApi, type PRRow, type WatchedRepo } from '@talyn/client/native';
-import type { SpaceRepository, WorkbenchAgent, WorkbenchReadiness, Workspace } from '@talyn/shared';
+import type { SpaceRepository, Workbench, WorkbenchAgent, WorkbenchReadiness, Workspace } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
-import { HeaderHeightContext } from 'expo-router/react-navigation';
-import { useContext, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import Animated, { FadeIn, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
-import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
+import { useAuth, useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { PickerSheet, type PickerSection } from '../../components/PickerSheet';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { AppText, Banner, Button, EmptyState, Spinner, useToast, type Symbol } from '../../components/UI';
 import { openExternal } from '../../components/Workflow';
+import { trackEvent } from '../../lib/analytics';
 import { boxRefusal, errorMessage, showBoxRefusal } from '../../lib/errors';
 import { featureOffered, useFeatures } from '../../lib/features';
+import { useFleetModelCatalog } from '../../lib/fleetModelCatalog';
 import { useKeyboardInset } from '../../lib/keyboard';
 import { sessionRoute, threadRoute } from '../../navigation/routes';
 import { display, mono, radius, sans, type, useTheme } from '../../theme/tokens';
@@ -20,12 +22,23 @@ import { useLocal, useResource } from '../../workflow/hooks';
 import { useRemote } from '../more/useRemote';
 import { WEB_APP_URL } from '../settings/about';
 import { SpaceTile } from '../spaces/Avatars';
+import { chatActions } from '../chat/actions';
+import { ComposerImages } from '../chat/AttachmentViews';
+import { writeImageDrafts } from '../chat/attachmentDrafts';
+import { buildMessageInput, type ImageDraft } from '../chat/attachments';
+import { showImagePicker } from '../chat/imagePicker';
 import { useActiveContext } from '../spaces/context';
 import { ConnectAgentSheet } from '../agents/connect/ConnectAgentSheet';
-import { agentForModel, blockedReason, branchSuggestions, chipLabel, composerChips, CONNECT_ACTION, connectNotice, createInput, defaultRepositoryId,
-  effectiveBranch, filterBranches, filterRepositories, internetMessage, MODES, modelFor, modelSections, modelsFor, PLACEHOLDER,
-  rememberRepository, sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm, type NewWorkMode } from './model';
-import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spaceRepositories } from './space';
+import { activePullRequest, agentForModel, blockedReason, branchSuggestions, chipLabel, composerChips, CONNECT_ACTION, connectNotice, createInput, defaultRepositoryId,
+  effectiveBranch, filterBranches, filterRepositories, internetMessage, lastRepositoryKey, loadLastRepository, MODES, modelFor, modelSections, modelsFor, PLACEHOLDER,
+  pullRequestChoices, pullRequestSource, rememberRepository, sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm,
+  type NewWorkMode, type NewWorkPullRequest } from './model';
+import { composerLayout } from './recent';
+import { PendingSessionView } from './PendingSessionView';
+import { RecentWork } from './RecentWork';
+import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spacePullRequestRows, spaceRepositories } from './space';
+import { useInlineImages } from './useInlineImages';
+import { ComposerFormattedText } from '../chat/ComposerFormatting';
 
 type SheetKind = 'mode' | 'repository' | 'branch' | 'model';
 
@@ -41,29 +54,40 @@ const CHIP_ICON: Record<Exclude<ComposerChip, 'mode'>, Symbol> = {
 };
 // About eight lines of body text, then the field scrolls.
 const PROMPT_MAX_HEIGHT = 8 * 22 + 20;
+// The composer and heading glide between the middle and the bottom. Reduced motion is respected by default.
+const MOVE = { damping: 26, stiffness: 260, mass: 0.9 };
 
 /**
- * Start a session or a thread, like web `NewWorkbenchPage`: a calm page with
- * one composer at the bottom. Repository, branch and internet sit in a row
- * above it, and the mode and model sit inside it. Each opens a sheet. Works as
- * the home screen (`presentation="home"`) and as a pushed route. After a start
- * a route replaces itself and home pushes.
+ * Start a session or a thread, like web `NewWorkbenchPage`. With nothing typed
+ * the composer waits in the middle of the page with the recent work below it.
+ * Typing or the keyboard moves it to the bottom, and the list fades out.
+ * A drag down the list lifts the composer to the top as a compact field, so
+ * the list gets the page. A pull back to the top or a tap on the field undoes it.
+ * Repository, branch and internet sit in a row above the composer, and the
+ * mode and model sit inside it. Each opens a sheet. Works as the home screen
+ * (`presentation="home"`) and as a pushed route. After a start a route
+ * replaces itself and home pushes.
  */
-export function NewWorkScreen({ initialMode = 'session', presentation = 'route' }: { initialMode?: NewWorkMode; presentation?: 'home' | 'route' }) {
+export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, initialPullRequestId, initialPrompt, presentation = 'route' }: {
+  initialMode?: NewWorkMode; initialRepositoryId?: string; initialPullRequestId?: string;
+  /** Replaces the draft, as web's prefill does: "New session from copied text" quotes the text here. */
+  initialPrompt?: string; presentation?: 'home' | 'route';
+}) {
   const { workflow, workspace: workspaces } = useMobileRuntime();
   const router = useRouter();
   const c = useTheme();
   const offline = useNetwork() === 'offline';
   const features = useFeatures();
+  // Subscribes, so the model picker renders again when the backend's catalogue arrives.
+  useFleetModelCatalog();
   const offered = featureOffered(features, 'workbenches');
   const repositories = useResource<WatchedRepo[]>('repositories', '', offered);
   const readiness = useResource<WorkbenchReadiness>('readiness', '', offered);
   const workspace = useResource<Workspace>('workspace', '', offered);
   const keyboard = useKeyboardInset();
   const toast = useToast();
-  const headerHeight = useContext(HeaderHeightContext) ?? 0;
-  const android = Platform.OS === 'android';
   const workspaceId = workflow.getScope()?.workspace ?? '';
+  const user = useAuth().user?.id ?? '';
   const draftKey = 'new:prompt';
   // In a space, new work goes through the space and runs in my home workspace for its team, like web.
   const place = useActiveContext();
@@ -77,14 +101,21 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const homeWorkspace = useRemote<Workspace>(offered && remoteHome ? `workspace:${remoteHome}` : null, () => workspaceApi.get(remoteHome ?? ''));
   const readinessSource = remoteHome ? homeReadiness : readiness;
   const settingsSource = remoteHome ? homeWorkspace.data : workspace.data;
-  const repoKey = spaceId ? `space:${spaceId}` : workspaceId;
+  const repoKey = lastRepositoryKey(user, spaceId ? `space:${spaceId}` : workspaceId);
   const prompt = useLocal(draftKey).draft;
+  useEffect(() => { if (initialPrompt) workflow.updateLocal(draftKey, { draft: initialPrompt }); }, [initialPrompt, workflow]);
+  const images = useInlineImages(draftKey);
+  const attached = images.drafts;
+  // Pull requests belong to the workspace shown, so a space offers them only when that is my home workspace.
+  const homePrs = Boolean(inSpace) && home === workspaceId;
+  const prsOn = !inSpace || homePrs;
 
   const [mode, setMode] = useState<NewWorkMode>(initialMode);
   const [repositoryId, setRepositoryId] = useState('');
   const [wantedAgent, setWantedAgent] = useState<WorkbenchAgent>('claude');
   const [pickedModel, setPickedModel] = useState<string | null>(null);
   const [baseBranch, setBaseBranch] = useState('');
+  const [pullRequest, setPullRequest] = useState<NewWorkPullRequest | null>(null);
   const [internetAccess, setInternetAccess] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,15 +124,53 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   const [connectAgent, setConnectAgent] = useState<WorkbenchAgent | null>(null);
   const [repoQuery, setRepoQuery] = useState('');
   useEffect(() => { setMode(initialMode); }, [initialMode]);
-  // Open pull requests give the branch sheet its suggestions, so they load only while it is open.
-  const openPrs = useResource<PRRow[]>('attention', '', offered && sheet === 'branch');
+  // A pull request the route asks to start from. It applies once its row has loaded.
+  const [wantedPr, setWantedPr] = useState(initialPullRequestId ?? null);
+  useEffect(() => { setWantedPr(initialPullRequestId ?? null); }, [initialPullRequestId]);
+  // Open pull requests fill the "Start from" sheet, so they load while it is open or a pull request is wanted.
+  const openPrs = useResource<PRRow[]>('attention', '', offered && prsOn && (sheet === 'branch' || Boolean(wantedPr)));
 
-  const repos = useMemo(() => spaceId ? spaceRepositories(spaceId, spaceRepos.data) : repositories.data ?? [],
-    [spaceId, spaceRepos.data, repositories.data]);
+  const repos = useMemo(() => spaceId ? spaceRepositories(spaceId, spaceRepos.data, settingsSource?.repos) : repositories.data ?? [],
+    [spaceId, spaceRepos.data, repositories.data, settingsSource?.repos]);
+  const prRows = useMemo(() => inSpace ? spacePullRequestRows(openPrs.data, repos) : openPrs.data, [inSpace, openPrs.data, repos]);
   const reposStatus = spaceId ? spaceRepos.status : repositories.status;
+  // The repository last started here, saved on the device. It loads after the first draw; a pick made before that wins.
+  const [saved, setSaved] = useState<{ key: string; id: string | null } | null>(null);
+  const pickedFor = useRef<string | null>(null);
+  // A repository the route asks for wins over the saved one, once the repositories have loaded.
+  const [wantedRepo, setWantedRepo] = useState(initialRepositoryId ?? null);
+  useEffect(() => { setWantedRepo(initialRepositoryId ?? null); }, [initialRepositoryId]);
   useEffect(() => {
+    let live = true;
+    void loadLastRepository(repoKey).then((id) => { if (live) setSaved({ key: repoKey, id }); });
+    return () => { live = false; };
+  }, [repoKey]);
+  useEffect(() => {
+    // By id, or by full name: a space's repository ids are full names, and a session names its repository both ways.
+    const wanted = wantedRepo ? repos.find((repo) => repo.id === wantedRepo) ?? repos.find((repo) => repo.fullName.toLowerCase() === wantedRepo.toLowerCase()) : undefined;
+    if (wanted) {
+      setWantedRepo(null);
+      pickedFor.current = repoKey;
+      if (wanted.id !== repositoryId) { setRepositoryId(wanted.id); setBaseBranch(''); }
+      return;
+    }
+    const last = saved?.key === repoKey && pickedFor.current !== repoKey ? saved.id : null;
+    if (last && last !== repositoryId && repos.some((repo) => repo.id === last)) { setRepositoryId(last); setBaseBranch(''); return; }
     if (!repos.some((repo) => repo.id === repositoryId)) setRepositoryId(defaultRepositoryId(repoKey, repos));
-  }, [repos, repositoryId, repoKey]);
+  }, [repos, repositoryId, repoKey, saved, wantedRepo]);
+  useEffect(() => {
+    if (!wantedPr || !prsOn) return;
+    const found = prRows?.find((item) => item.id === wantedPr);
+    const stored = workflow.findPr(wantedPr);
+    const row = found ?? (stored && inSpace ? spacePullRequestRows([stored], repos)[0] : stored);
+    if (!row) return;
+    setWantedPr(null);
+    if (row.state !== 'open') return;
+    setMode('session');
+    setPullRequest(pullRequestSource(row));
+    setBaseBranch('');
+    setWantedRepo(row.repositoryId);
+  }, [wantedPr, prsOn, inSpace, prRows, repos, workflow]);
   const repository = repos.find((repo) => repo.id === repositoryId) ?? null;
   // A failed readiness read is reported like web: the server or the connection, not the agents.
   const sandbox = readinessSource.data?.sandbox ?? (readinessSource.status === 'error' || readinessSource.status === 'offline' || offline
@@ -109,16 +178,17 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
       agents: { claude: { ok: false }, codex: { ok: false } } } as WorkbenchReadiness['sandbox'] : null);
   const agent = usableAgent(sandbox, wantedAgent);
   const model = pickedModel && modelsFor(agent).some((item) => item.id === pickedModel) ? pickedModel : modelFor(settingsSource?.settings, agent);
-  const form: NewWorkForm = { mode, prompt, repository, agent, model, baseBranch, internetAccess };
-  const blocked = inSpace ? spaceBlockedReason(form, inSpace.team, sandbox, offline) : blockedReason(form, sandbox, offline);
+  const startFrom = prsOn ? activePullRequest(pullRequest, repository) : null;
+  const form: NewWorkForm = { mode, prompt, repository, agent, model, baseBranch, internetAccess, pullRequest: startFrom };
+  const blocked = (inSpace ? spaceBlockedReason(form, inSpace.team, sandbox, offline, attached.length) : blockedReason(form, sandbox, offline, attached.length)) ?? images.block;
   const send = sendState(blocked, busy, workspaceId);
   const sandboxOk = sandboxChoice(sandbox);
   const connect = connectNotice(sandbox, agent);
   const unreachable = sandbox?.reasons[0]?.code === 'unreachable';
   const branch = effectiveBranch(baseBranch, repository);
   const chipState: ChipState = { mode, repository, repositoriesLoading: reposStatus !== 'ready' && !repos.length,
-    branch, internetAccess, agent, model };
-  const chips = composerChips(mode, repository, Boolean(inSpace));
+    branch, pullRequest: startFrom, internetAccess, agent, model };
+  const chips = composerChips(mode, repository);
   const addsNote = inSpace && home ? addsRepositoryNote(mode, repository?.fullName, settingsSource) : null;
 
   const start = async () => {
@@ -129,10 +199,22 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
         const href = mode === 'thread' ? threadRoute(id) : sessionRoute(id);
         if (presentation === 'route') router.replace(href); else router.push(href);
       };
+      const withImages = attached.length > 0;
       if (inSpace) {
-        const created = await spaces.createSession(inSpace.space.id, spaceCreateBody(form));
+        const created = await spaces.createSession(inSpace.space.id, spaceCreateBody(form, withImages));
+        trackCreated(created.workbench, form, withImages);
         if (mode === 'session' && repository) rememberRepository(repoKey, repository.id);
-        workflow.updateLocal(draftKey, { draft: '' });
+        // With a chat to take the images, the session opens at once and the first message goes after, like web.
+        if (withImages && created.workspaceId === workspaceId && created.workbench.chats?.[0]?.id) {
+          workflow.updateLocal(draftKey, { draft: '' }); images.clear(); setBaseBranch(''); setPullRequest(null);
+          workflow.applyWorkbench(created.workbench); open(created.workbench.id); setBusy(false);
+          await sendFirstMessage(created.workbench, form, attached);
+          return;
+        }
+        const kept = withImages && !(await sendFirstMessage(created.workbench, form, attached));
+        if (!kept) { workflow.updateLocal(draftKey, { draft: '' }); images.clear(); }
+        setBaseBranch('');
+        setPullRequest(null);
         // The detail screens read the selected workspace, so a session in another of mine switches to it first.
         if (created.workspaceId === workspaceId) { workflow.applyWorkbench(created.workbench); open(created.workbench.id); }
         else {
@@ -142,16 +224,52 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
         }
         return;
       }
-      const item = await workflow.createWorkbench(createInput(form, workspaceId));
-      if (mode === 'session' && repository) rememberRepository(workspaceId, repository.id);
-      workflow.updateLocal(draftKey, { draft: '' });
+      const item = await workflow.createWorkbench(createInput(form, workspaceId, withImages));
+      trackCreated(item, form, withImages);
+      if (mode === 'session' && repository) rememberRepository(repoKey, repository.id);
+      if (withImages && item.chats?.[0]?.id) {
+        workflow.updateLocal(draftKey, { draft: '' }); images.clear(); setBaseBranch(''); setPullRequest(null);
+        open(item.id); setBusy(false);
+        await sendFirstMessage(item, form, attached);
+        return;
+      }
+      // When the first message could not go to the new chat, the text and images stay here.
+      const kept = withImages && !(await sendFirstMessage(item, form, attached));
+      if (!kept) { workflow.updateLocal(draftKey, { draft: '' }); images.clear(); }
       setBaseBranch('');
+      setPullRequest(null);
       open(item.id);
     } catch (failure) {
       const refusal = boxRefusal(failure);
-      if (refusal) showBoxRefusal(refusal);
+      if (refusal) showBoxRefusal(refusal, mode === 'thread' ? 'thread_create' : 'session_create');
       setError(refusal?.message ?? errorMessage(failure, mode === 'thread' ? 'Could not create the thread.' : 'Could not create the session.'));
     } finally { setBusy(false); }
+  };
+
+  /**
+   * Like web: a first message with images goes after the create. When it fails, the new chat's composer keeps it.
+   * False when there is no chat to keep it in.
+   */
+  const sendFirstMessage = async (item: Workbench, sent: NewWorkForm, drafts: ImageDraft[]): Promise<boolean> => {
+    const input = buildMessageInput(sent.prompt.trim(), drafts);
+    let chatId = item.chats?.[0]?.id ?? null;
+    try {
+      chatId ??= (await workbenches.createChat(item.id, { model: sent.model })).id;
+      const ack = await chatActions.send(chatId, input);
+      trackEvent('session_message_sent', { queued: ack.queued, plan_mode: false, model_id: sent.model, attachments_count: input.attachments?.length ?? 0 });
+      void workflow.load('workbench', item.id);
+      return true;
+    } catch (failure) {
+      const reason = errorMessage(failure, 'The message did not send.');
+      if (!chatId) {
+        Alert.alert('The first message did not send', `${reason} The ${sent.mode} started without it. Your text and images are still on this page.`);
+        return false;
+      }
+      workflow.updateLocal(chatId, { draft: sent.prompt.trim() });
+      writeImageDrafts(chatId, drafts);
+      Alert.alert('The first message did not send', `${reason} Your text and images are in the new chat. Send them again from there.`);
+      return true;
+    }
   };
 
   const openSheet = (kind: SheetKind) => { Keyboard.dismiss(); setSheet(kind); };
@@ -163,9 +281,29 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
     toast.show(internetMessage(next));
   };
 
+  const centered = composerLayout({ prompt, images: attached.length, focused, keyboardOpen: keyboard.open, busy }) === 'centered';
+  // 0 with the composer in the middle, 1 at the bottom. It drives the grow of two spacers, so Yoga places every frame of
+  // the move. Reanimated layout transitions drew the composer at a stale frame on Android, under the recent list.
+  const docked = useSharedValue(centered ? 0 : 1);
+  useEffect(() => { docked.value = withSpring(centered ? 0 : 1, MOVE); }, [centered, docked]);
+  const headingSpace = useAnimatedStyle(() => ({ flexGrow: docked.value }));
+  // Only with the composer in the middle: focus or typing docks it at the bottom, and that ends the lift.
+  const [lifted, setLifted] = useState(false);
+  const compact = centered && lifted;
+  useEffect(() => { if (!centered) setLifted(false); }, [centered]);
+  // 0 with the heading shown, 1 with the composer lifted to the top. The heading's space shrinks to nothing.
+  const raised = useSharedValue(0);
+  useEffect(() => { raised.value = withSpring(compact ? 1 : 0, MOVE); }, [compact, raised]);
+  const greetingSpace = useAnimatedStyle(() => ({ flexGrow: 1 - raised.value }));
+  const belowSpace = useAnimatedStyle(() => ({ flexGrow: 1 - docked.value }));
+
   if (features === null || place.context.kind === 'pending') return <ScreenContainer topInset={presentation === 'home'}><View style={styles.center}><Spinner /></View></ScreenContainer>;
   if (!offered) return <ScreenContainer topInset={presentation === 'home'}>
     <EmptyState title="Sessions are not available on this account." />
+  </ScreenContainer>;
+
+  if (busy) return <ScreenContainer topInset={presentation === 'home'}>
+    <PendingSessionView mode={mode} repository={repository?.fullName} branch={startFrom ? null : baseBranch.trim()} prompt={prompt} images={attached.length} />
   </ScreenContainer>;
 
   const noRepositories = mode === 'session' && reposStatus === 'ready' && !repos.length;
@@ -197,39 +335,60 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
       disabled={busy} onPress={() => openSheet('model')} />;
   };
 
+  // One composer for both places, so the field keeps its focus and the keyboard stays up while it moves.
+  // The keyboard inset is bottom padding on both platforms, so the move and the keyboard animate as one layout change.
   return <ScreenContainer topInset={presentation === 'home'}>
-    <KeyboardAvoidingView style={[styles.page, android && { paddingBottom: keyboard.inset }]}
-      behavior={android ? undefined : 'padding'} keyboardVerticalOffset={presentation === 'route' ? headerHeight : 0}>
-      <Pressable accessible={false} onPress={Keyboard.dismiss} style={styles.greeting}>
-        <Text accessibilityRole="header" style={[styles.heading, { color: c.text }]}>What do you want to build?</Text>
-        {inSpace ? <View accessible accessibilityLabel={`In ${inSpace.space.name}`} style={styles.inSpace}>
-          <SpaceTile name={inSpace.space.name} color={inSpace.space.color} image={inSpace.space.image} size={14} />
-          <Text numberOfLines={1} style={[styles.inSpaceText, { color: c.muted }]}>In {inSpace.space.name}</Text>
-        </View> : null}
+    <View style={[styles.page, { paddingBottom: keyboard.inset }]}>
+      <Animated.View style={[styles.greetingSpace, greetingSpace]}><Pressable accessible={false} onPress={Keyboard.dismiss} style={styles.greeting}>
+        <View style={styles.headingTop} />
+        <View style={styles.greetingText}>
+          <Text accessibilityRole="header" style={[styles.heading, { color: c.text }]}>What do you want to build?</Text>
+          {inSpace ? <View accessible accessibilityLabel={`In ${inSpace.space.name}`} style={styles.inSpace}>
+            <SpaceTile name={inSpace.space.name} color={inSpace.space.color} image={inSpace.space.image} size={14} />
+            <Text numberOfLines={1} style={[styles.inSpaceText, { color: c.muted }]}>In {inSpace.space.name}</Text>
+          </View> : null}
+        </View>
+        <Animated.View style={[styles.headingBottom, headingSpace]} />
         {toast.element}
-      </Pressable>
+      </Pressable></Animated.View>
       <View style={styles.dock}>
         {notices}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
+        {compact ? null : <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
           style={styles.contextScroll} contentContainerStyle={styles.contextRow}>
           {chips.context.map(chip)}
-        </ScrollView>
+        </ScrollView>}
         <View style={[styles.card, { backgroundColor: c.elevated, borderColor: focused ? c.primary : c.border, opacity: busy ? 0.85 : 1 }]}>
-          <TextInput accessibilityLabel={mode === 'thread' ? 'What to get done' : 'Task'} multiline value={prompt} editable={!busy}
+          {attached.length ? <View style={styles.images}>
+            <ComposerImages drafts={attached} errors={[]} onRemove={images.remove} onRetry={images.retry} onDismissError={() => undefined} />
+          </View> : null}
+          <TextInput accessibilityLabel={mode === 'thread' ? 'What to get done' : 'Task'} multiline editable={!busy}
             placeholder={inSpace ? spacePlaceholder(mode, inSpace.space.name) : PLACEHOLDER[mode]} placeholderTextColor={c.muted} selectionColor={c.primary}
             onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
             onChangeText={(text) => { workflow.updateLocal(draftKey, { draft: text }); if (error) setError(null); }}
-            style={[styles.prompt, { color: c.text }]} />
-          <View style={styles.controls}>
+            style={[styles.prompt, compact ? styles.promptCompact : null, { color: c.text }]}>
+            <ComposerFormattedText text={prompt} />
+          </TextInput>
+          {compact ? null : <View style={styles.controls}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Attach an image" accessibilityState={{ disabled: busy }}
+              disabled={busy} hitSlop={6} onPress={() => { Keyboard.dismiss(); showImagePicker(images.add); }}
+              style={({ pressed }) => [styles.attach, { borderColor: c.border, backgroundColor: pressed ? c.surface : 'transparent', opacity: busy ? 0.5 : 1 }]}>
+              <SymbolView name={{ ios: 'plus', android: 'add' }} size={16} tintColor={c.muted} />
+            </Pressable>
             {chip('mode')}
             <View style={styles.spacer} />
             {chip('model')}
             <SendButton enabled={send.enabled} busy={busy} hint={send.hint} label={mode === 'thread' ? 'Start thread' : 'Start session'}
               onPress={() => { void start(); }} />
-          </View>
+          </View>}
         </View>
       </View>
-    </KeyboardAvoidingView>
+      {/* No exiting animation: on Android a removed view with one can stay on screen. */}
+      <Animated.View style={[styles.below, belowSpace]}>
+        {centered ? <Animated.View entering={FadeIn.duration(240).delay(60)} style={styles.recent}>
+          {inSpace ? null : <RecentWork lifted={lifted} onLift={setLifted} />}
+        </Animated.View> : null}
+      </Animated.View>
+    </View>
 
     <PickerSheet visible={sheet === 'mode'} title="Start" onClose={closeSheet}
       sections={[{ key: 'modes', items: MODES.map((option) => ({ key: option.value, label: option.label, detail: option.detail,
@@ -238,14 +397,15 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
     <PickerSheet visible={sheet === 'repository'} title="Repository" onClose={closeSheet}
       search={repos.length > 6 ? { value: repoQuery, onChange: setRepoQuery, placeholder: 'Find a repository' } : undefined}
       sections={[{ key: 'repositories', items: filterRepositories(repos, repoQuery).map((repo) => ({ key: repo.id, label: repo.fullName,
-        selected: repo.id === repositoryId, onPress: () => { setRepositoryId(repo.id); setBaseBranch(''); } })) }]}
+        selected: repo.id === repositoryId, onPress: () => { pickedFor.current = repoKey; setRepositoryId(repo.id); setBaseBranch(''); setPullRequest(null); } })) }]}
       empty={repos.length ? <EmptyState title="No repository matches." />
         : <EmptyState title="No repositories yet." detail="Add repositories in Talyn on the web.">
           <Button variant="quiet" size="sm" title="Open web" onPress={() => openExternal(WEB_APP_URL)} />
         </EmptyState>} />
 
-    <BranchSheet visible={sheet === 'branch'} onClose={closeSheet} repository={repository} value={baseBranch} onChange={setBaseBranch}
-      rows={openPrs.data} />
+    <BranchSheet visible={sheet === 'branch'} onClose={closeSheet} repository={repository} value={baseBranch}
+      onChange={(value) => { setBaseBranch(value); setPullRequest(null); }} rows={prRows} loading={prsOn && openPrs.status === 'loading'} pullRequests={prsOn}
+      pullRequest={startFrom} onPickPullRequest={(row) => { setPullRequest(pullRequestSource(row)); setBaseBranch(''); closeSheet(); }} />
 
     <PickerSheet visible={sheet === 'model'} title="Model" onClose={closeSheet} sections={modelSections(sandbox, agent).map((section): PickerSection => ({
       key: section.agent, title: section.title, note: section.note,
@@ -267,24 +427,41 @@ export function NewWorkScreen({ initialMode = 'session', presentation = 'route' 
   </ScreenContainer>;
 }
 
-function BranchSheet({ visible, onClose, repository, value, onChange, rows }: {
+/**
+ * "Start from": a new branch from a base branch, or an open pull request's
+ * branch. Like web's "Create from…", in one sheet.
+ */
+function BranchSheet({ visible, onClose, repository, value, onChange, rows, loading, pullRequest, onPickPullRequest, pullRequests = true }: {
   visible: boolean; onClose(): void; repository: WatchedRepo | null; value: string; onChange(value: string): void; rows?: PRRow[];
+  loading?: boolean; pullRequest: NewWorkPullRequest | null; onPickPullRequest(row: PRRow): void;
+  /** False when this composer cannot start from a pull request. */
+  pullRequests?: boolean;
 }) {
   const c = useTheme();
-  const current = effectiveBranch(value, repository);
+  const current = pullRequest ? null : effectiveBranch(value, repository);
   const suggestions = filterBranches(branchSuggestions(repository, rows), value);
+  const prs = pullRequestChoices(repository, rows ?? []);
   const pick = (branch: string) => onChange(branch === repository?.defaultBranch ? '' : branch);
-  return <PickerSheet visible={visible} title="Base branch" onClose={onClose}
+  const sections: PickerSection[] = [{ key: 'branches', title: suggestions.length ? 'New branch from' : undefined, items: suggestions.map((branch) => ({
+    key: branch, label: branch, mono: true, selected: branch === current,
+    detail: branch === repository?.defaultBranch ? 'Default branch' : undefined, onPress: () => pick(branch) })) }];
+  if (prs.length) sections.push({ key: 'pull-requests', title: 'Pull requests', items: prs.map((row) => ({
+    key: row.id, label: `#${row.number} ${row.summary.title ?? ''}`.trim(), detail: row.summary.headBranch,
+    selected: row.id === pullRequest?.id, onPress: () => onPickPullRequest(row) })) });
+  else if (loading) sections.push({ key: 'pull-requests', title: 'Pull requests', note: 'Loading pull requests…', items: [] });
+  return <PickerSheet visible={visible} title="Start from" onClose={onClose}
     header={<View style={styles.branchField}>
       <TextInput accessibilityLabel="Base branch" value={value} onChangeText={onChange} placeholder={repository?.defaultBranch || 'main'}
         placeholderTextColor={c.muted} selectionColor={c.primary} autoCapitalize="none" autoCorrect={false} spellCheck={false}
         returnKeyType="done" onSubmitEditing={onClose}
         style={[styles.branchInput, { color: c.text, backgroundColor: c.surface }]} />
-      <AppText variant="meta" tone="muted">The session starts a new branch from this one.</AppText>
+      <AppText variant="meta" tone="muted">{pullRequest
+        ? `The session checks out the branch of pull request #${pullRequest.number}. Type a branch to start a new branch instead.`
+        : pullRequests
+          ? 'The session starts a new branch from this one. Or pick a pull request to work on its branch.'
+          : 'The session starts a new branch from this one.'}</AppText>
     </View>}
-    sections={[{ key: 'branches', title: suggestions.length ? 'Branches' : undefined, items: suggestions.map((branch) => ({
-      key: branch, label: branch, mono: true, selected: branch === current,
-      detail: branch === repository?.defaultBranch ? 'Default branch' : undefined, onPress: () => pick(branch) })) }]} />;
+    sections={sections} />;
 }
 
 /** A control inside the composer card. */
@@ -330,10 +507,29 @@ function SendButton({ enabled, busy, hint, label, onPress }: { enabled: boolean;
   </Pressable>;
 }
 
+
+/**
+ * Web's create events, with the same names and keys. A prompt without images goes with the create, so it counts as a
+ * sent message here. A prompt with images counts when it is sent.
+ */
+function trackCreated(item: Workbench, form: NewWorkForm, withImages = false) {
+  trackEvent('session_created', { kind: item.kind ?? 'session', runtime: item.runtime, repository_id: item.repositoryId ?? null,
+    size: item.settings.sandboxSize ?? item.settings.boxSize ?? 'default' });
+  if (form.prompt.trim() && !withImages) trackEvent('session_message_sent', { queued: true, plan_mode: false, model_id: form.model, attachments_count: 0 });
+}
+
 const styles = StyleSheet.create({
   page: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  greeting: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, overflow: 'hidden' },
+  greetingSpace: { flex: 1, overflow: 'hidden' },
+  greeting: { flex: 1, alignItems: 'center', paddingHorizontal: 24, overflow: 'hidden' },
+  // Docked, both spaces grow and centre the heading. Centred, the bottom one shrinks to its minimum, so the heading sits
+  // just above the composer, and the space below the composer puts the composer in the middle of the page.
+  headingTop: { flexGrow: 1, flexBasis: 0 },
+  headingBottom: { flexBasis: 0, minHeight: 20 },
+  greetingText: { alignItems: 'center', maxWidth: '100%' },
+  below: { flexBasis: 0, overflow: 'hidden' },
+  recent: { flex: 1 },
   heading: { fontSize: 24, lineHeight: 30, letterSpacing: -0.3, textAlign: 'center', ...display(600) },
   inSpace: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, maxWidth: '100%' },
   inSpaceText: { fontSize: 13, lineHeight: 18, ...sans(500), flexShrink: 1 },
@@ -343,6 +539,10 @@ const styles = StyleSheet.create({
   // Two lines tall from the start, so the first typed line does not resize the field.
   prompt: { ...type.body, minHeight: 64, maxHeight: PROMPT_MAX_HEIGHT, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8,
     textAlignVertical: 'top' },
+  // One line: the lifted composer is only a way back to typing.
+  promptCompact: { minHeight: 44, paddingBottom: 12 },
+  images: { paddingHorizontal: 10, paddingTop: 10 },
+  attach: { width: 32, height: 32, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
   controls: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 8, paddingRight: 8, paddingBottom: 8 },
   spacer: { flex: 1 },
   contextScroll: { flexGrow: 0 },

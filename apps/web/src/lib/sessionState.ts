@@ -1,4 +1,4 @@
-import type { SpaceSessionRow, Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
+import type { ContextAttentionReason, SpaceSessionRow, Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from './api';
 import type { WorkbenchPrLike } from './workbenchFormat';
 import { primaryWorkbenchAction } from './workbenchActions';
@@ -24,7 +24,7 @@ export function sessionPr(workbench: Pick<Workbench, 'pr'>, storeRow: PRRow | nu
  * One answer to "what is this session doing, and does it need me?", for the
  * sidebar row. In priority order: a failure, then live work, then a reply
  * that waits for you, then a running background job, then the pull request's
- * state, then a scheduled wake-up. A new pull request that is the only unseen
+ * state (a CI wake-up shows as waiting for CI), then a scheduled wake-up. A new pull request that is the only unseen
  * news (`prOnlyUnseen`) shows the PR mark, not the dot.
  *
  * The PR part reuses the header's next action, so the row and the header
@@ -45,6 +45,7 @@ export type SessionStateKind =
   | 'merged'
   | 'closed'
   | 'unshipped'
+  | 'waiting_ci'
   | 'wakeup'
   | 'idle';
 
@@ -89,6 +90,30 @@ export function spaceSessionState(
   );
 }
 
+/**
+ * Make a row agree with the context rail's badge. The server counts a session
+ * that failed, asks a question, has a plan that waits for approval, or has a
+ * pull request with conflicts. The client can miss that: a session whose chats
+ * are not loaded, a space row, which has no chats and no mergeable state, or a
+ * plan, which only the transcript shows. Then the row shows the server's
+ * reason. Live work and a failure the client sees win, because the server's
+ * answer can be up to 30 seconds old. A reason this client does not know
+ * keeps the row's own state.
+ */
+export function withServerAttention(
+  state: SessionState,
+  reason: ContextAttentionReason | undefined,
+  prNumber?: number | null,
+): SessionState {
+  if (!reason) return state;
+  if (state.kind === 'failed' || state.kind === 'working' || state.kind === 'starting') return state;
+  if (reason === 'failed') return { kind: 'failed', label: 'Failed: open it to see why' };
+  if (reason === 'reply') return { kind: 'needs_reply', label: 'Waiting for your answer' };
+  if (reason === 'plan') return { kind: 'needs_reply', label: 'A plan waits for your approval' };
+  if (reason !== 'conflict' || state.kind === 'pr_attention') return state;
+  return { kind: 'pr_attention', label: prNumber ? `#${prNumber} has conflicts` : 'The pull request has conflicts' };
+}
+
 /** True when a session belongs in the sidebar's active group. */
 export function isActiveSessionState(state: SessionState): boolean {
   return state.kind !== 'idle' && state.kind !== 'merged' && state.kind !== 'closed';
@@ -111,7 +136,10 @@ export function sessionState(
   }
   if (chats.some((c) => c.status === 'running')) return { kind: 'working', label: 'Working' };
   // A message that waits for the box is work in progress, not an idle session.
-  if (chats.some((c) => (c.queuedMessages?.length ?? 0) > 0)) return { kind: 'working', label: 'A message waits for the sandbox' };
+  // An archived session has no box: its queued message waits for a restore.
+  if (!workbench.archivedAt && chats.some((c) => (c.queuedMessages?.length ?? 0) > 0)) {
+    return { kind: 'working', label: 'A message waits for the sandbox' };
+  }
   if (chats.some((c) => c.status === 'awaiting_input')) {
     return { kind: 'needs_reply', label: 'Waiting for your answer' };
   }
@@ -128,6 +156,10 @@ export function sessionState(
   if (pr) {
     if (pr.state === 'merged') return { kind: 'merged', label: `Done: #${pr.number} merged` };
     if (pr.state === 'closed') return { kind: 'closed', label: `#${pr.number} closed` };
+    // The agent asked to be woken when CI finishes: say that, not "waiting on checks or review".
+    if (background?.wakeups.some((wakeup) => wakeup.status === 'scheduled' && wakeup.ci)) {
+      return { kind: 'waiting_ci', label: `#${pr.number}: waiting for CI, then the agent continues` };
+    }
     if (pr.summary.draft) return { kind: 'draft', label: `Draft PR #${pr.number}` };
     const next = primaryWorkbenchAction(workbench, { state: pr.state, summary: pr.summary });
     if (next === 'resolve_conflicts') return { kind: 'pr_attention', label: `#${pr.number} has conflicts` };

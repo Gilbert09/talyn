@@ -1,8 +1,10 @@
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
+import { nextRunningSubagentTab, runningSubagentCount, subagentTabs } from '@talyn/shared';
+import { useWorkspaceStore } from '../../stores/workspace';
 import { Clock, X } from 'lucide-react';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
-import { formatCountdown, formatRunTime } from '../../lib/sessionBackground';
+import { formatRunTime, wakeupTitle, wakeupWhen } from '../../lib/sessionBackground';
 import { useNow } from '../../hooks/useSessionBackground';
 import { useRunningJobs, useScheduledWakeupsForChat } from '../../stores/sessionBackground';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -18,15 +20,35 @@ const OPENS = 'hover:bg-accent hover:text-foreground';
  * above the composer. When `canOpen`, a click opens the Background tab.
  */
 export function BackgroundChips({ workbenchId, chatId, canOpen }: { workbenchId: string; chatId: string | null; canOpen: boolean }) {
+  const enabled = useWorkspaceStore((s) => s.features?.sessionSubagents === true);
+  const events = useWorkbenchStore((s) => chatId ? s.chatEvents[chatId]?.events : undefined);
+  const chat = useWorkbenchStore((s) => chatId ? s.chats[workbenchId]?.find((c) => c.id === chatId) : undefined);
+  const agents = useMemo(() => enabled && chat?.status === 'running'
+    ? runningSubagentCount((events ?? []).filter((e) => e.turn === events?.at(-1)?.turn).map((e) => e.event)) : 0,
+  [enabled, events, chat?.status]);
   const jobs = useRunningJobs(workbenchId);
   const wakeups = useScheduledWakeupsForChat(workbenchId, chatId ?? '');
   const now = useNow(jobs.length ? 1000 : wakeups.length ? 15_000 : null);
   const setSideTab = useWorkbenchStore((s) => s.setSideTab);
-  if (!jobs.length && !wakeups.length) return null;
+  const subagentTab = useWorkbenchStore((s) => (chatId ? s.subagentTab[chatId] ?? null : null));
+  const openSubagentTab = useWorkbenchStore((s) => s.openSubagentTab);
+  if (!jobs.length && !wakeups.length && !agents) return null;
   const open = canOpen ? () => setSideTab('background') : undefined;
   const hidden = jobs.length - MAX_JOB_CHIPS;
   return (
     <div className="mb-2 flex flex-wrap gap-1.5" data-testid="background-chips">
+      {agents > 0 && chatId && (
+        <button type="button" data-testid="subagent-chip" className={cn(CHIP, OPENS)}
+          aria-label={`${agents} ${agents === 1 ? 'subagent' : 'subagents'} running. Open a subagent's tab`}
+          onClick={() => {
+            // Each click opens the next running subagent, so repeated clicks go through all of them.
+            const next = nextRunningSubagentTab(subagentTabs(events ?? [], subagentTab), subagentTab);
+            if (next) openSubagentTab(chatId, next);
+          }}>
+          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-sky-500" aria-hidden />
+          {agents} {agents === 1 ? 'subagent' : 'subagents'} running
+        </button>
+      )}
       {jobs.slice(0, MAX_JOB_CHIPS).map((job) => (
         <OpenTarget key={job.id} open={open} testId="job-chip" label={`Background job ${job.name}: running for ${formatRunTime(job.startedAt, null, now)}`} title={job.command}>
           <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-emerald-500" aria-hidden />
@@ -40,16 +62,16 @@ export function BackgroundChips({ workbenchId, chatId, canOpen }: { workbenchId:
         </OpenTarget>
       )}
       {wakeups.map((wakeup) => (
-        <span key={wakeup.id} data-testid="wakeup-chip" className={cn(CHIP, 'gap-1 pr-1')} title={`${formatCountdown(wakeup.wakeAt, now)}: ${wakeup.reason}`}>
+        <span key={wakeup.id} data-testid="wakeup-chip" className={cn(CHIP, 'gap-1 pr-1')} title={wakeupTitle(wakeup, now)}>
           {open ? (
             <button type="button" className="inline-flex min-w-0 items-center gap-1 hover:text-foreground" onClick={open}>
               <Clock className="h-3 w-3 shrink-0" aria-hidden />
-              <span className="min-w-0 truncate">{formatCountdown(wakeup.wakeAt, now)}: {wakeup.reason}</span>
+              <span className="min-w-0 truncate">{wakeupWhen(wakeup, now)}: {wakeup.reason}</span>
             </button>
           ) : (
             <>
               <Clock className="h-3 w-3 shrink-0" aria-hidden />
-              <span className="min-w-0 truncate">{formatCountdown(wakeup.wakeAt, now)}: {wakeup.reason}</span>
+              <span className="min-w-0 truncate">{wakeupWhen(wakeup, now)}: {wakeup.reason}</span>
             </>
           )}
           <button type="button" aria-label={`Cancel wake-up: ${wakeup.reason}`} className="rounded-full p-0.5 hover:bg-accent hover:text-foreground" onClick={() => {

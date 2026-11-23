@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const plist = require('@expo/plist').default;
 const { AndroidConfig } = require('@expo/config-plugins');
 const { getConfig } = require('@expo/config');
+const { SHARE_EXTENSION_INFO, SHARE_EXTENSION_TARGET, SHARE_INTENT_OPTIONS } = require('../plugins/withShareIntent.cjs');
 
 const root = path.resolve(__dirname, '..');
 
@@ -21,6 +22,12 @@ async function inspect() {
   assert(gradle.includes(`versionName "${exp.version}"`) || gradle.includes(`versionName '${exp.version}'`));
   const app = manifest.manifest.application[0];
   assert.notEqual(app.$['android:usesCleartextTraffic'], 'true');
+  // "Share to Talyn" takes one shared text or link, nothing else (plugins/withShareIntent.cjs).
+  const mainActivity = app.activity.find((activity) => activity.$['android:name'] === '.MainActivity');
+  const sends = (mainActivity['intent-filter'] ?? []).filter((filter) => (filter.action ?? []).some((action) => /\.SEND(_MULTIPLE)?$/.test(action.$['android:name'])));
+  assert.deepEqual(sends.map((filter) => [filter.action.map((action) => action.$['android:name']), (filter.data ?? []).map((data) => data.$['android:mimeType'])]),
+    [[['android.intent.action.SEND'], [...SHARE_INTENT_OPTIONS.androidIntentFilters]]], 'Review the Android share intent filters.');
+  assert.equal(mainActivity.$['android:launchMode'], 'singleTask');
   if (exp.updates.enabled) {
     // The app starts its own checks (src/features/updates); native code checks only to recover from a failed launch.
     const meta = Object.fromEntries((app['meta-data'] ?? []).map((entry) => [entry.$['android:name'], entry.$['android:value']]));
@@ -45,11 +52,27 @@ async function inspect() {
   const entitlementsFile = fs.readdirSync(path.join(iosRoot, project)).find((name) => name.endsWith('.entitlements'));
   assert(entitlementsFile, 'Missing iOS entitlements.');
   const entitlements = parse(entitlementsFile);
-  for (const key of Object.keys(entitlements)) assert(['aps-environment', 'com.apple.developer.associated-domains'].includes(key), `Review unexpected iOS entitlement: ${key}`);
+  const reviewedEntitlements = ['aps-environment', 'com.apple.developer.associated-domains', 'com.apple.security.application-groups'];
+  for (const key of Object.keys(entitlements)) assert(reviewedEntitlements.includes(key), `Review unexpected iOS entitlement: ${key}`);
+  // The share extension hands the shared item to the app through one app group, named after the bundle ID.
+  const appGroup = `group.${exp.ios.bundleIdentifier}`;
+  assert.deepEqual(entitlements['com.apple.security.application-groups'], [appGroup]);
+  assert.equal(info.AppGroupIdentifier, appGroup);
+  const readIos = (file) => plist.parse(fs.readFileSync(path.join(iosRoot, file), 'utf8'));
+  const shareInfo = readIos(SHARE_EXTENSION_INFO);
+  assert.equal(shareInfo.CFBundleDisplayName, exp.name, 'The share sheet must show the app name.');
+  assert.equal(shareInfo.AppGroupIdentifier, appGroup);
+  assert.equal(shareInfo.NSExtension.NSExtensionPointIdentifier, 'com.apple.share-services');
+  assert.deepEqual({ ...shareInfo.NSExtension.NSExtensionAttributes.NSExtensionActivationRule }, { ...SHARE_INTENT_OPTIONS.iosActivationRules }, 'Review the iOS share activation rules.');
+  assert.deepEqual({ ...readIos(`${SHARE_EXTENSION_TARGET}/${SHARE_EXTENSION_TARGET}.entitlements`) }, { 'com.apple.security.application-groups': [appGroup] });
+  // EAS signs only the targets listed here. A second listed extension needs its own review.
+  assert.deepEqual((exp.extra.eas.build?.experimental?.ios?.appExtensions ?? []).map(({ targetName, bundleIdentifier }) => ({ targetName, bundleIdentifier })),
+    [{ targetName: SHARE_EXTENSION_TARGET, bundleIdentifier: `${exp.ios.bundleIdentifier}.share-extension` }]);
   assert.equal(entitlements['aps-environment'], exp.extra.release.profile === 'development' ? 'development' : 'production');
   assert.deepEqual(entitlements['com.apple.developer.associated-domains'] ?? [], exp.ios.associatedDomains ?? []);
   assert(!(info.UIBackgroundModes ?? []).includes('remote-notification'), 'No background push execution is approved.');
   const privacy = parse('PrivacyInfo.xcprivacy');
+  // PostHog analytics and masked replay are first-party with no cross-app tracking (Tom's call, 2026-11-10), so tracking stays false.
   assert.equal(privacy.NSPrivacyTracking, false);
   assert.deepEqual(privacy.NSPrivacyTrackingDomains ?? [], []);
   const expoPlist = parse('Supporting/Expo.plist');
@@ -62,7 +85,7 @@ async function inspect() {
     assert.equal(expoPlist.EXUpdatesCheckOnLaunch, 'ERROR_RECOVERY_ONLY');
     assert.equal(expoPlist.EXUpdatesLaunchWaitMs, 0);
   }
-  console.log('Generated native identity, version, permissions, entitlements, privacy, and update settings passed.');
+  console.log('Generated native identity, version, permissions, entitlements, share extension, privacy, and update settings passed.');
   console.log('Signed archives, merged dependency manifests, and 16 KB binary alignment remain release gates.');
 }
 

@@ -1,5 +1,6 @@
 import { useState, type ComponentType } from 'react';
 import {
+  Bell,
   Bot,
   Box,
   Brain,
@@ -11,8 +12,6 @@ import {
   GitPullRequest,
   Info,
   Keyboard,
-  MessageSquare,
-  Network,
   Palette,
   KeyRound,
   Plug,
@@ -25,7 +24,7 @@ import {
   Users,
   Wand2,
 } from 'lucide-react';
-import { mcpServersOffered, privateRoutesOffered, workbenchesOffered } from '@talyn/shared';
+import { mcpServersOffered, workbenchesOffered } from '@talyn/shared';
 import { TeamsSettings } from './sections/TeamsSettings';
 import { spacesOffered } from '../../lib/spaces';
 import { cn } from '../../lib/utils';
@@ -35,7 +34,6 @@ import { useWorkspaceStore, type SettingsSection } from '../../stores/workspace'
 import { CodeReviewSettingsCard } from '../panels/codeReview/CodeReviewSettingsCard';
 import { McpServersPanel } from '../panels/mcpServers/McpServersPanel';
 import { SkillsSettings } from '../panels/SkillsSettings';
-import { SlackSettings } from '../panels/SlackSettings';
 import { TeamSettings } from '../panels/TeamBilling';
 import { InstructionsPage } from './InstructionsPage';
 import { MemoryPage } from './MemoryPage';
@@ -50,9 +48,9 @@ import { BillingSettings } from './sections/BillingSettings';
 import { DeveloperSettings } from './sections/DeveloperSettings';
 import { IntegrationsSettings } from './sections/IntegrationsSettings';
 import { MCPServerSettings } from './sections/McpSettings';
+import { NotificationsSettings } from './sections/NotificationsSettings';
 import { ApiTokensSettings } from './sections/ApiTokensSettings';
 import { PullRequestsSettings } from './sections/PullRequestsSettings';
-import { PrivateRoutesSettings } from './sections/PrivateRoutesSettings';
 import { RepositoriesSettings } from './sections/RepositoriesSettings';
 import { SandboxSetupSettings } from './sections/SandboxSetupSettings';
 import { SessionsSettings } from './sections/SessionsSettings';
@@ -66,23 +64,22 @@ interface NavEntry {
 }
 
 const SETTINGS_SEARCH_TERMS: Record<SettingsSection, string> = {
-  sessions: 'defaults runtime agent model reasoning effort plan mode internet access notifications archive idle branch prefix sidebar order usage limits',
+  sessions: 'defaults runtime agent model reasoning effort plan mode internet access archive idle branch prefix sidebar order usage limits',
   agents: 'Claude Codex subscriptions accounts providers API keys models usage rate limits',
   repositories: 'GitHub watched repositories local checkouts scan setup run command preview',
   sandboxSetup: 'dotfiles setup steps install commands branch repository',
-  privateRoutes: 'Tailscale tailnet connector destinations hostname IP TCP port devices',
   shortcuts: 'keyboard hotkeys keys navigation',
   instructions: 'AGENTS.md CLAUDE.md prompts templates plan implement review fix repository files',
   memory: 'notes session remember forget review clean up cleanup schedule overlap contradict',
   skills: 'SKILL.md local repository workspace tools',
   mcpServers: 'model context protocol tools servers integrations',
-  pullRequests: 'auto keep mergeable fix runs tasks defaults model notifications merge queue blocked labels human comments',
+  pullRequests: 'auto keep mergeable fix runs tasks defaults model merge queue labels human comments',
   codeReview: 'automatic reviews depth reviewers attention findings fixes inline comments summary',
   workspace: 'name logo delete',
   integrations: 'GitHub Anthropic Claude Codex PostHog providers API keys connect',
-  slack: 'workspace bot emoji invite sessions channel',
   teams: 'members roles invite spaces home workspace seats',
   billing: 'plan usage box hours limits upgrade invoices orders payment auto top-up balance',
+  notifications: 'alerts desktop phone mobile push agent finishes merge queue blocked quiet hours timezone away',
   account: 'email sign out privacy analytics usage data session replays',
   appearance: 'theme light dark system look',
   developer: 'build version commit GitHub rate limits events account delete data local storage',
@@ -112,15 +109,6 @@ function CodeReviewPage() {
     <SettingsPage title="Code review">
       <CodeReviewSettingsCard />
     </SettingsPage>
-  );
-}
-
-// SlackSettings draws its own heading, so it gets the page padding without a title.
-function SlackPage() {
-  return (
-    <div className="mx-auto max-w-xl px-6 py-5">
-      <SlackSettings />
-    </div>
   );
 }
 
@@ -155,7 +143,6 @@ const SECTION_BODY: Record<SettingsSection, ComponentType> = {
   agents: AgentsSettings,
   repositories: RepositoriesSettings,
   sandboxSetup: SandboxSetupPage,
-  privateRoutes: PrivateRoutesSettings,
   shortcuts: ShortcutsSettings,
   instructions: InstructionsPage,
   memory: MemoryPage,
@@ -164,9 +151,9 @@ const SECTION_BODY: Record<SettingsSection, ComponentType> = {
   codeReview: CodeReviewPage,
   workspace: WorkspaceSettings,
   integrations: IntegrationsSettings,
-  slack: SlackPage,
   teams: TeamPage,
   billing: BillingSettings,
+  notifications: NotificationsSettings,
   account: AccountSettings,
   appearance: AppearanceSettings,
   developer: DeveloperSettings,
@@ -195,9 +182,6 @@ export function SettingsShell() {
         ...(workbenchesOffered(features)
           ? [{ id: 'sandboxSetup' as const, icon: Box, label: 'Sandbox setup' }]
           : []),
-        ...(privateRoutesOffered(features)
-          ? [{ id: 'privateRoutes' as const, icon: Network, label: 'Private routes' }]
-          : []),
         { id: 'shortcuts', icon: Keyboard, label: 'Shortcuts' },
         { id: 'instructions', icon: FileText, label: 'Instructions' },
         ...(workbenchesOffered(features)
@@ -223,10 +207,6 @@ export function SettingsShell() {
       entries: [
         { id: 'workspace', icon: FolderKanban, label: 'Workspace' },
         { id: 'integrations', icon: Settings, label: 'Integrations' },
-        // Slack starts sessions, so it shares the workbenches flag.
-        ...(workbenchesOffered(features)
-          ? [{ id: 'slack' as const, icon: MessageSquare, label: 'Slack' }]
-          : []),
         // Drawn for anyone the flag offers teams to, and for anyone already on a
         // team whatever the flag says: a seated member must always be able to
         // see who pays for them, and leave.
@@ -240,6 +220,7 @@ export function SettingsShell() {
       label: 'App',
       entries: [
         { id: 'account', icon: User, label: 'Account' },
+        { id: 'notifications', icon: Bell, label: 'Notifications' },
         { id: 'appearance', icon: Palette, label: 'Appearance' },
         { id: 'developer', icon: Bug, label: 'Developer' },
         { id: 'mcp', icon: Plug, label: 'Talyn MCP server' },

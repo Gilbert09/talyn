@@ -4,32 +4,33 @@ import type {
   WorkflowActionFailureCode,
   WorkflowActionOutcome,
   WorkflowActionType,
-  WorkflowEventFacts,
+  WorkflowTemplateExtras,
+  GithubEventFacts,
+  SlackEventFacts,
+  WebhookEventFacts,
+  IssueEventFacts,
+  IssueWorkflowIntegration,
+  PostHogInboxFacts,
   CodeReviewPreset,
 } from '@talyn/shared';
-import {
-  boxRefusalReason,
-  buildSkillPrompt,
-  renderWorkflowComment,
-  SKILL_MAX_BYTES,
-} from '@talyn/shared';
+import { buildSkillPrompt, renderWorkflowComment, SKILL_MAX_BYTES, workflowActionAsSession } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { startReviewCycle } from '../codeReview/cycle.js';
-import { isBoxGateError, type BoxGateError } from '../billing/entitlements.js';
-import { deferralRetryAt } from '../billing/boxDeferral.js';
+import { isBoxGateError } from '../billing/entitlements.js';
 import { pullRequests as pullRequestsTable, skills as skillsTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
 import { GitHubRateLimitError } from '../githubRateGate.js';
 import { prMonitorService } from '../prMonitor.js';
 import { getOrFetchPRSummary } from '../prCache.js';
-import { activePrTaskId, resolveCloudEnv } from '../prCloudFix.js';
-import { createCloudTask } from '../taskCreate.js';
-import { liveWorkbenchForPr, sessionHoldReason } from '../workbenches/prSessions.js';
 import { setQueueMembership } from '../mergeQueue/membership.js';
 import { getRepoSkillContent } from '../skills.js';
 import { workspacePromptTemplate } from '../promptTemplates.js';
-import { captureWorkspaceEvent } from '../analytics.js';
 import type { PRSummary } from '../githubGraphql.js';
+import { boxRefused, no, ok, type OneResult } from './actionResult.js';
+import { startGithubSession, startSession } from './sessionAction.js';
+import { issueComment, issueSetStatus } from './issueActions.js';
+import { taskLaunchUrl } from '../webApp.js';
+import { slackReact, slackReply } from './slackActions.js';
 
 /**
  * Executing a matched workflow's actions.
@@ -51,17 +52,71 @@ import type { PRSummary } from '../githubGraphql.js';
  * rather than on prose.
  */
 
-/** Everything an action needs, resolved once per run. */
-export interface ActionContext {
+/** What every action context carries, whatever the integration. */
+export interface BaseActionContext {
   workspaceId: string;
   /** The workspace's owner — the identity every plan gate is keyed on. */
   ownerId: string;
+  workflowId: string;
+  /** The rule's name, for a task title. Absent on contexts built before it was passed. */
+  workflowName?: string;
+  runId: string;
+}
+
+/** Everything a GitHub rule's action needs, resolved once per run. */
+export interface GithubActionContext extends BaseActionContext {
+  integration?: 'github';
   repositoryId: string;
   owner: string;
   repo: string;
-  facts: WorkflowEventFacts;
-  workflowId: string;
-  runId: string;
+  facts: GithubEventFacts;
+}
+
+/** Everything a Slack rule's action needs. Built by the Slack source adapter. */
+export interface SlackActionContext extends BaseActionContext {
+  integration: 'slack';
+  /** The repository a `start_session` resolved to, when there is one. */
+  repositoryId: string | null;
+  facts: SlackEventFacts;
+}
+
+/** Everything a webhook rule's action needs. Built by the webhook source adapter. */
+export interface WebhookActionContext extends BaseActionContext {
+  integration: 'webhook';
+  repositoryId: null;
+  facts: WebhookEventFacts;
+}
+
+/** Everything an issue rule's action needs. Built by the Linear or GitHub Issues source adapter. */
+export interface IssueActionContext extends BaseActionContext {
+  integration: IssueWorkflowIntegration;
+  /** GitHub Issues: the watched repository the issue is in. Linear: null. */
+  repositoryId: string | null;
+  facts: IssueEventFacts;
+}
+
+/** Everything a PostHog Inbox rule's action needs. Built by the PostHog Inbox source adapter. */
+export interface PostHogInboxActionContext extends BaseActionContext {
+  integration: 'posthog_inbox';
+  /** The Talyn repository that matches the report's repository, or null. */
+  repositoryId: string | null;
+  facts: PostHogInboxFacts;
+}
+
+/** The context the action runner takes, tagged by integration. */
+export type WorkflowActionContext =
+  | GithubActionContext
+  | SlackActionContext
+  | WebhookActionContext
+  | IssueActionContext
+  | PostHogInboxActionContext;
+
+export function isIssueContext(ctx: WorkflowActionContext): ctx is IssueActionContext {
+  return ctx.integration === 'linear' || ctx.integration === 'github_issues';
+}
+
+export function isGithubContext(ctx: WorkflowActionContext): ctx is GithubActionContext {
+  return ctx.integration === undefined || ctx.integration === 'github';
 }
 
 /** What one run produced beyond its outcomes. */
@@ -71,24 +126,26 @@ export interface ActionResults {
   taskId: string | null;
   /** The PR row, if any action had cause to materialise one. */
   pullRequestId: string | null;
+  /** The session a `start_session` started, for `workflow_runs.workbench_id`. */
+  workbenchId: string | null;
   /**
-   * When the latest box refusal among the outcomes clears (epoch ms), 0 when
-   * none. The run's retry is scheduled from it, as a rate gate's is from the
+   * When the latest parked outcome should be tried again (epoch ms), 0 when
+   * none: a box refusal's recheck time, or a Slack rate limit's Retry-After.
+   * The run's retry is scheduled from it, as a GitHub rate gate's is from the
    * gate: a refusal names when to look again.
    */
   boxRetryAtMs: number;
 }
 
-function ok(type: WorkflowActionType, detail: string): WorkflowActionOutcome {
-  return { type, ok: true, detail };
-}
-
-function no(
-  type: WorkflowActionType,
-  code: WorkflowActionFailureCode,
-  error: string
-): WorkflowActionOutcome {
-  return { type, ok: false, code, error };
+/** What a run carries from one action to the next. */
+export interface RunActionsOptions {
+  /**
+   * The link of a session this run already started, for `{{session.url}}`. A
+   * retry passes the session its first attempt started.
+   */
+  sessionUrl?: string | null;
+  /** The link of a task this run already started, for `{{task.url}}`. */
+  taskUrl?: string | null;
 }
 
 /**
@@ -105,7 +162,7 @@ function no(
 class PrRowCache {
   private resolved: { id: string; summary: PRSummary } | null | undefined;
 
-  constructor(private readonly ctx: ActionContext) {}
+  constructor(private readonly ctx: GithubActionContext) {}
 
   async get(): Promise<{ id: string; summary: PRSummary } | null> {
     if (this.resolved !== undefined) return this.resolved;
@@ -139,21 +196,30 @@ class PrRowCache {
  */
 export async function runWorkflowActions(
   actions: WorkflowAction[],
-  ctx: ActionContext
+  ctx: WorkflowActionContext,
+  opts: RunActionsOptions = {}
 ): Promise<ActionResults> {
-  const prRow = new PrRowCache(ctx);
+  const prRow = isGithubContext(ctx) ? new PrRowCache(ctx) : null;
   const outcomes: WorkflowActionOutcome[] = [];
   let taskId: string | null = null;
   let pullRequestId: string | null = null;
+  let workbenchId: string | null = null;
   let boxRetryAtMs = 0;
+  // `{{session.url}}` in a later action of the same run.
+  const extras: WorkflowTemplateExtras = { sessionUrl: opts.sessionUrl ?? null, taskUrl: opts.taskUrl ?? null };
 
   for (const action of actions) {
     let outcome: WorkflowActionOutcome;
     try {
-      const result = await runOne(action, ctx, prRow);
+      const result = await runOne(action, ctx, prRow, extras, outcomes[outcomes.length - 1]);
       outcome = result.outcome;
-      if (result.taskId) taskId = result.taskId;
+      if (result.taskId) {
+        taskId = result.taskId;
+        extras.taskUrl = taskLaunchUrl(result.taskId);
+      }
       if (result.pullRequestId) pullRequestId = result.pullRequestId;
+      if (result.workbenchId) workbenchId = result.workbenchId;
+      if (result.sessionUrl) extras.sessionUrl = result.sessionUrl;
       if (result.retryAt) boxRetryAtMs = Math.max(boxRetryAtMs, result.retryAt.getTime());
     } catch (err) {
       // A handler that throws is a bug, not a refusal — record it as one rather
@@ -167,21 +233,63 @@ export async function runWorkflowActions(
     outcomes.push(outcome);
   }
 
-  return { outcomes, taskId, pullRequestId, boxRetryAtMs };
-}
-
-interface OneResult {
-  outcome: WorkflowActionOutcome;
-  taskId?: string | null;
-  pullRequestId?: string | null;
-  /** A box refusal's recheck time; see {@link ActionResults.boxRetryAtMs}. */
-  retryAt?: Date | null;
+  return { outcomes, taskId, pullRequestId, workbenchId, boxRetryAtMs };
 }
 
 async function runOne(
   action: WorkflowAction,
-  ctx: ActionContext,
-  prRow: PrRowCache
+  ctx: WorkflowActionContext,
+  prRow: PrRowCache | null,
+  extras: WorkflowTemplateExtras,
+  previous: WorkflowActionOutcome | undefined
+): Promise<OneResult> {
+  // An automation never starts a cloud task. The store already reads an old
+  // task action as a session; this holds for any other caller.
+  if (action.type === 'run_prompt' || action.type === 'start_task') {
+    const session = workflowActionAsSession(action);
+    if (session.type === 'start_session') return startSession(session, ctx, prRow);
+  }
+  if (action.type === 'start_session') return startSession(action, ctx, prRow);
+  if (action.type === 'start_task') {
+    return { outcome: no(action.type, 'error', 'An automation starts a session, not a cloud task') };
+  }
+  if (action.type === 'issue_comment' || action.type === 'issue_set_status') {
+    if (!isIssueContext(ctx)) {
+      return { outcome: no(action.type, 'error', 'This action acts on an issue, and this automation has none') };
+    }
+    return action.type === 'issue_comment'
+      ? issueComment(action, ctx, extras, previous)
+      : issueSetStatus(action, ctx);
+  }
+  if (action.type === 'slack_reply' || action.type === 'slack_react') {
+    if (ctx.integration !== 'slack') {
+      // The validator refuses a Slack action on a GitHub rule. A stored rule
+      // that bypassed it has no message to answer.
+      return { outcome: no(action.type, 'error', 'This action answers a Slack message, and a GitHub automation has none') };
+    }
+    return action.type === 'slack_reply'
+      ? slackReply(action.text, ctx, extras)
+      : slackReact(action.emoji, ctx);
+  }
+  if (!isGithubContext(ctx) || !prRow) {
+    // The validator refuses a PR action on a Slack or webhook rule. Reaching
+    // here means a stored rule bypassed it, so record a refusal rather than
+    // guess at a PR.
+    return {
+      outcome: no(action.type, 'error', 'This action works on a pull request, and this automation has none'),
+    };
+  }
+  return runPrAction(action, ctx, prRow, extras);
+}
+
+async function runPrAction(
+  action: Exclude<
+    WorkflowAction,
+    { type: 'start_session' | 'slack_reply' | 'slack_react' | 'start_task' | 'issue_comment' | 'issue_set_status' }
+  >,
+  ctx: GithubActionContext,
+  prRow: PrRowCache,
+  extras: WorkflowTemplateExtras
 ): Promise<OneResult> {
   switch (action.type) {
     case 'add_labels':
@@ -193,14 +301,18 @@ async function runOne(
     case 'assign':
       return { outcome: await assign(action.users, ctx) };
     case 'comment':
-      return { outcome: await comment(action.body, ctx) };
+      return { outcome: await comment(action.body, ctx, extras) };
+    case 'approve_pr':
+      return { outcome: await approve(action.body, ctx, extras) };
     case 'watch_pr':
       return watchPr(ctx);
     case 'enqueue_merge_queue':
       return enqueue(action.method, ctx, prRow);
     case 'run_skill':
+      return startSkillSession(action, ctx, prRow);
     case 'run_prompt':
-      return startTask(action, ctx, prRow);
+      // Read as `start_session` in `runOne`; never reaches here.
+      return { outcome: no(action.type, 'error', 'An automation starts a session, not a cloud task') };
     case 'run_code_review':
       return runCodeReview(action.preset, ctx, prRow);
   }
@@ -222,7 +334,7 @@ async function runOne(
  */
 async function runCodeReview(
   preset: CodeReviewPreset | undefined,
-  ctx: ActionContext,
+  ctx: GithubActionContext,
   prRow: PrRowCache
 ): Promise<OneResult> {
   const resolved = await prRow.get();
@@ -275,17 +387,6 @@ async function runCodeReview(
   if (outcome.code === 'deferred') return boxRefused('run_code_review', outcome.error, resolved.id, ctx);
 
   return { outcome: no('run_code_review', workflowCodeFor(outcome.code), outcome.message) };
-}
-
-/**
- * A box the plan refused, as a parked outcome. `usage_exhausted` and
- * `box_limit_reached` are retryable and carry their recheck time; a size the
- * plan cannot start is not (unattended runs are downsized before it).
- */
-function boxRefused(type: WorkflowActionType, err: BoxGateError, pullRequestId: string, ctx?: ActionContext): OneResult {
-  const code = boxRefusalReason(err.code);
-  if (ctx) recordDeferral(ctx, code);
-  return { outcome: no(type, code, err.message), pullRequestId, retryAt: deferralRetryAt(err) };
 }
 
 /**
@@ -346,7 +447,7 @@ function githubOutcome(type: WorkflowActionType, err: unknown): WorkflowActionOu
   return no(type, 'github_error', err instanceof Error ? err.message : String(err));
 }
 
-async function addLabels(labels: string[], ctx: ActionContext): Promise<WorkflowActionOutcome> {
+async function addLabels(labels: string[], ctx: GithubActionContext): Promise<WorkflowActionOutcome> {
   try {
     await githubService.addPullRequestLabels(
       ctx.workspaceId,
@@ -361,7 +462,7 @@ async function addLabels(labels: string[], ctx: ActionContext): Promise<Workflow
   }
 }
 
-async function removeLabels(labels: string[], ctx: ActionContext): Promise<WorkflowActionOutcome> {
+async function removeLabels(labels: string[], ctx: GithubActionContext): Promise<WorkflowActionOutcome> {
   const removed: string[] = [];
   const absent: string[] = [];
   for (const label of labels) {
@@ -389,7 +490,7 @@ async function removeLabels(labels: string[], ctx: ActionContext): Promise<Workf
 
 async function requestReviewers(
   action: { users?: string[]; teams?: string[] },
-  ctx: ActionContext
+  ctx: GithubActionContext
 ): Promise<WorkflowActionOutcome> {
   // GitHub 422s the WHOLE request when it is asked to make the PR's author a
   // reviewer, which would take the other reviewers down with it. Drop the
@@ -415,7 +516,7 @@ async function requestReviewers(
   }
 }
 
-async function assign(users: string[], ctx: ActionContext): Promise<WorkflowActionOutcome> {
+async function assign(users: string[], ctx: GithubActionContext): Promise<WorkflowActionOutcome> {
   try {
     const assigned = await githubService.addPullRequestAssignees(
       ctx.workspaceId,
@@ -444,8 +545,12 @@ async function assign(users: string[], ctx: ActionContext): Promise<WorkflowActi
   }
 }
 
-async function comment(body: string, ctx: ActionContext): Promise<WorkflowActionOutcome> {
-  const rendered = renderWorkflowComment(body, ctx.facts);
+async function comment(
+  body: string,
+  ctx: GithubActionContext,
+  extras: WorkflowTemplateExtras
+): Promise<WorkflowActionOutcome> {
+  const rendered = renderWorkflowComment(body, ctx.facts, extras);
   try {
     await githubService.createIssueComment(
       ctx.workspaceId,
@@ -457,6 +562,48 @@ async function comment(body: string, ctx: ActionContext): Promise<WorkflowAction
     return ok('comment', `commented (${rendered.length} chars)`);
   } catch (err) {
     return githubFailure('comment', err);
+  }
+}
+
+/**
+ * Approve the pull request as the workspace's GitHub account.
+ *
+ * GitHub 422s an approval on your own pull request, so that case is refused
+ * here with a clear reason. An approval that still stands is not repeated: a
+ * rule on a frequent event (checks passing) would otherwise stack a new
+ * approval on the PR every time it matched.
+ */
+async function approve(
+  body: string | undefined,
+  ctx: GithubActionContext,
+  extras: WorkflowTemplateExtras
+): Promise<WorkflowActionOutcome> {
+  try {
+    const viewer = (await githubService.getViewerLogin(ctx.workspaceId))?.toLowerCase() ?? null;
+    if (viewer && ctx.facts.author.login.toLowerCase() === viewer) {
+      return no('approve_pr', 'github_error', 'GitHub does not let you approve your own pull request');
+    }
+    if (viewer) {
+      const reviews = await githubService.getPRReviews(ctx.workspaceId, ctx.owner, ctx.repo, ctx.facts.number);
+      // Only these states change the viewer's verdict; a later COMMENTED
+      // review leaves an approval in place.
+      const latest = reviews
+        .filter(
+          (r) =>
+            r.user?.login?.toLowerCase() === viewer &&
+            (r.state === 'APPROVED' || r.state === 'CHANGES_REQUESTED' || r.state === 'DISMISSED')
+        )
+        .at(-1);
+      if (latest?.state === 'APPROVED') return ok('approve_pr', 'already approved');
+    }
+    const rendered = body ? renderWorkflowComment(body, ctx.facts, extras) : undefined;
+    await githubService.createPRReview(ctx.workspaceId, ctx.owner, ctx.repo, ctx.facts.number, {
+      event: 'APPROVE',
+      ...(rendered ? { body: rendered } : {}),
+    });
+    return ok('approve_pr', 'approved');
+  } catch (err) {
+    return githubFailure('approve_pr', err);
   }
 }
 
@@ -473,7 +620,7 @@ const githubFailure = githubOutcome;
  * watch path is what sets it, primes the head index and arms the workspace's
  * auto-keep default — the same thing pasting a PR's URL does.
  */
-async function watchPr(ctx: ActionContext): Promise<OneResult> {
+async function watchPr(ctx: GithubActionContext): Promise<OneResult> {
   const repos = await prMonitorService.getWatchedRepos(ctx.workspaceId);
   const repo = repos.find((r) => r.id === ctx.repositoryId);
   if (!repo) {
@@ -522,7 +669,7 @@ async function watchPr(ctx: ActionContext): Promise<OneResult> {
  */
 async function enqueue(
   method: string | undefined,
-  ctx: ActionContext,
+  ctx: GithubActionContext,
   prRow: PrRowCache
 ): Promise<OneResult> {
   const resolved = await prRow.get();
@@ -587,11 +734,16 @@ async function enqueue(
   }
 }
 
-// ---- run_skill / run_prompt ----------------------------------------------
+// ---- run_skill ------------------------------------------------------------
 
-async function startTask(
-  action: Extract<WorkflowAction, { type: 'run_skill' | 'run_prompt' }>,
-  ctx: ActionContext,
+/**
+ * Run a skill on the pull request, in a session. An automation never starts a
+ * cloud task. The session guards (a run or a live session already on the PR)
+ * are the ones `start_session` uses.
+ */
+async function startSkillSession(
+  action: Extract<WorkflowAction, { type: 'run_skill' }>,
+  ctx: GithubActionContext,
   prRow: PrRowCache
 ): Promise<OneResult> {
   const resolved = await prRow.get();
@@ -604,103 +756,38 @@ async function startTask(
       ),
     };
   }
-
-  // Never two runs at one PR. This is the Session 111 bug: three concurrent
-  // runs at one PR filled the plan's task cap and starved a real fix run.
-  const inFlight = await activePrTaskId(ctx.workspaceId, resolved.id);
-  if (inFlight) {
-    return {
-      outcome: no(
-        action.type,
-        'task_already_running',
-        'a run is already working this PR'
-      ),
-      pullRequestId: resolved.id,
-    };
-  }
-  // Nor a run beside a live session: both would push to the one branch.
-  const session = await liveWorkbenchForPr(ctx.workspaceId, resolved.id);
-  if (session) {
-    return {
-      outcome: no(action.type, 'session_active', sessionHoldReason(session.name)),
-      pullRequestId: resolved.id,
-    };
-  }
-
-  const env = await resolveCloudEnv(ctx.workspaceId);
-  if (!env) {
-    return {
-      outcome: no(
-        action.type,
-        'no_cloud_provider',
-        'this workspace has no connected cloud provider to run the task on'
-      ),
-      pullRequestId: resolved.id,
-    };
-  }
+  const loaded = await loadSkill(action.skillKey, ctx);
+  if (!loaded.ok) return { outcome: loaded.outcome, pullRequestId: resolved.id };
 
   const summary = resolved.summary;
-  const ref = `${ctx.owner}/${ctx.repo}#${ctx.facts.number}`;
-  let prompt: string;
-  let title: string;
-  let skill: { key: string; name: string; source: 'repo' | 'platform'; repositoryId?: string; platformSkillId?: string } | undefined;
-
-  if (action.type === 'run_skill') {
-    const loaded = await loadSkill(action.skillKey, ctx);
-    if (!loaded.ok) return { outcome: loaded.outcome, pullRequestId: resolved.id };
-    prompt = buildSkillPrompt({
-      owner: ctx.owner,
-      repo: ctx.repo,
-      number: ctx.facts.number,
-      pr: {
-        url: summary.url,
-        title: summary.title,
-        headBranch: summary.headBranch,
-        baseBranch: summary.baseBranch,
-      },
-      skill: loaded.skill,
-      provider: env.provider,
-      template: await workspacePromptTemplate(ctx.workspaceId, 'skill'),
-    });
-    title = `Run skill "${loaded.skill.name}" on ${ref}`;
-    skill = loaded.info;
-  } else {
-    // A freeform prompt is handed over verbatim, with the PR named up front so
-    // the agent does not have to guess which one it is on.
-    prompt = `You are working on pull request ${ref} (${summary.url}).\n\n${action.prompt}`;
-    title = `Workflow run on ${ref}`;
-  }
-
-  try {
-    const task = await createCloudTask({
-      workspaceId: ctx.workspaceId,
-      type: 'pr_response',
-      source: 'workflow',
-      title,
-      description: `Started by the "${ctx.workflowId}" workflow on ${ref}.`,
-      prompt,
-      repositoryId: ctx.repositoryId,
-      assignedEnvironmentId: env.envId,
-      pullRequestId: resolved.id,
-      model: action.model,
-      ...(skill ? { skill } : {}),
-      workflow: { workflowId: ctx.workflowId, runId: ctx.runId, event: ctx.facts.event },
-    });
-    return {
-      outcome: ok(action.type, `started task ${task.id}`),
-      taskId: task.id,
-      pullRequestId: resolved.id,
-    };
-  } catch (err) {
-    if (isBoxGateError(err)) {
-      // Same treatment the merge-queue and auto-keep watchers give it: there is
-      // no request to answer, so nothing can 402 and no modal can open. The
-      // action parks (`pending_retry`) until the refusal's recheck time, and
-      // the deferral is captured server-side (Session 116).
-      return boxRefused(action.type, err, resolved.id, ctx);
-    }
-    return { outcome: githubFailure(action.type, err), pullRequestId: resolved.id };
-  }
+  const prompt = buildSkillPrompt({
+    owner: ctx.owner,
+    repo: ctx.repo,
+    number: ctx.facts.number,
+    pr: {
+      url: summary.url,
+      title: summary.title,
+      headBranch: summary.headBranch,
+      baseBranch: summary.baseBranch,
+    },
+    skill: loaded.skill,
+    // Sessions run on Talyn Fleet.
+    provider: 'selfhosted',
+    template: await workspacePromptTemplate(ctx.workspaceId, 'skill'),
+  });
+  const result = await startGithubSession(
+    {
+      type: 'start_session',
+      repositoryId: null,
+      prompt: `Run the skill "${loaded.skill.name}"`,
+      ...(action.model ? { model: action.model } : {}),
+    },
+    ctx,
+    prRow,
+    prompt
+  );
+  // The outcome belongs to this action, so the run history names the skill.
+  return { ...result, outcome: { ...result.outcome, type: action.type } };
 }
 
 type LoadedSkill =
@@ -720,7 +807,7 @@ type LoadedSkill =
  * save time. This is the second line of that defence, for a rule stored before
  * the check existed.
  */
-async function loadSkill(key: string, ctx: ActionContext): Promise<LoadedSkill> {
+async function loadSkill(key: string, ctx: GithubActionContext): Promise<LoadedSkill> {
   const unavailable = (reason: string): LoadedSkill => ({
     ok: false,
     outcome: no('run_skill', 'skill_unavailable', reason),
@@ -792,24 +879,6 @@ async function loadSkill(key: string, ctx: ActionContext): Promise<LoadedSkill> 
   }
 
   return unavailable(
-    'Talyn runs workflows on the server, so it cannot reach a skill stored on your machine'
+    'Talyn runs automations on the server, so it cannot reach a skill stored on your machine'
   );
-}
-
-/**
- * A plan limit hit with nobody watching.
- *
- * Captured server-side for the reason Session 116 gives: a workflow run has no
- * request behind it, so there is no 402 to answer and no UpgradeModal to open.
- * The population that hits this hardest is exactly the one whose clients report
- * nothing.
- */
-function recordDeferral(ctx: ActionContext, gate: WorkflowActionFailureCode): void {
-  captureWorkspaceEvent(ctx.workspaceId, 'paywall_deferred', {
-    source: 'workflow',
-    gate,
-    workflow_id: ctx.workflowId,
-    repo: `${ctx.owner}/${ctx.repo}`,
-    pr_number: ctx.facts.number,
-  });
 }

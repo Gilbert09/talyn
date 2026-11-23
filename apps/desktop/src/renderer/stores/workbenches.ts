@@ -66,6 +66,10 @@ export interface NewWorkbenchPrefill {
   baseBranch?: string;
   /** An existing branch to check out. */
   branch?: string;
+  /** Text for the composer, from a starter suggestion. The person can edit it before sending. */
+  prompt?: string;
+  /** The repository by name, for the space composer: a space picks repositories by name, not by id. */
+  repoFullName?: string;
   runtime?: 'sandbox' | 'local';
 }
 
@@ -216,11 +220,11 @@ interface WorkbenchState {
   /** Transcript events per chat. */
   chatEvents: Record<string, ChatEventsState>;
   selectedWorkbenchId: string | null;
-  /** The open chat tab per workbench. */
+  /** The chat shown per workbench. */
   selectedChatByWorkbench: Record<string, string>;
-  /** Chat tabs the user closed. There is no server-side close, so this is a view decision. */
-  hiddenChatIds: Record<string, true>;
   sideTab: WorkbenchSideTab;
+  /** The subagent tab shown per chat, by Agent tool call id. Absent: the main transcript. */
+  subagentTab: Record<string, string>;
   /** The right panel (files, changes, pull request and the terminal dock). ⌘⌥B. */
   rightPanelOpen: boolean;
   rightPanelWidth: number;
@@ -267,8 +271,9 @@ interface WorkbenchState {
   prependOlderPage: (chatId: string, events: WorkbenchEvent[], marker: OlderEventsMarker) => void;
   selectWorkbench: (id: string | null) => void;
   selectChat: (workbenchId: string, chatId: string) => void;
-  hideChat: (workbenchId: string, chatId: string) => void;
   setSideTab: (tab: WorkbenchSideTab) => void;
+  /** Show a subagent's tab in the chat's transcript, or the main transcript with null. */
+  openSubagentTab: (chatId: string, toolId: string | null) => void;
   /** The Talyn pull request id shown in the session's details overlay, or null. */
   prDetailId: string | null;
   openPrDetail: (pullRequestId: string | null) => void;
@@ -281,9 +286,13 @@ interface WorkbenchState {
   setTerminalTab: (tab: WorkbenchTerminalTab) => void;
   setDraft: (key: string, text: string) => void;
   /** Show a sent prompt in the chat's transcript. Returns its id. `settled`: the send already finished. */
-  addOutgoingMessage: (chatId: string, message: { text: string; attachments?: WorkbenchAttachment[]; settled?: boolean }) => string;
-  /** The send request finished: the prompt stays until its event arrives or it stops being pending. */
-  settleOutgoingMessage: (chatId: string, messageId: string) => void;
+  /** `queued`: a turn is running, so the message is expected to wait in the chat's queue. */
+  addOutgoingMessage: (chatId: string, message: { text: string; attachments?: WorkbenchAttachment[]; settled?: boolean; queued?: boolean }) => string;
+  /**
+   * The send request finished: the prompt stays until its event arrives or it stops being pending.
+   * `queued` is the response's answer to whether the message waits in the queue.
+   */
+  settleOutgoingMessage: (chatId: string, messageId: string, queued?: boolean) => void;
   /** The send request failed: the prompt stays, with the error, until it is sent again or discarded. */
   failOutgoingMessage: (chatId: string, messageId: string, failure: { error: string; input: SendWorkbenchMessageInput }) => void;
   /** A failed prompt is being sent again: it shows as in flight. */
@@ -330,8 +339,8 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   chatEvents: {},
   selectedWorkbenchId: null,
   selectedChatByWorkbench: {},
-  hiddenChatIds: {},
   sideTab: initialLayout.gitPanelTab,
+  subagentTab: {},
   prDetailId: null,
   rightPanelOpen: true,
   rightPanelWidth: initialLayout.gitPanelWidth,
@@ -501,16 +510,6 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       return { selectedChatByWorkbench: { ...s.selectedChatByWorkbench, [workbenchId]: chatId }, unread, unseen };
     }),
 
-  hideChat: (workbenchId, chatId) =>
-    set((s) => {
-      const visible = (s.chats[workbenchId] ?? []).filter((c) => c.id !== chatId && !s.hiddenChatIds[c.id]);
-      const selected = { ...s.selectedChatByWorkbench };
-      if (selected[workbenchId] === chatId) {
-        if (visible.length) selected[workbenchId] = visible[visible.length - 1].id;
-        else delete selected[workbenchId];
-      }
-      return { hiddenChatIds: { ...s.hiddenChatIds, [chatId]: true }, selectedChatByWorkbench: selected };
-    }),
 
   openPrDetail: (prDetailId) => set({ prDetailId }),
   setSideTab: (sideTab) => {
@@ -537,6 +536,13 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     writeLayout({ dockHeight: terminalHeight });
   },
   setTerminalTab: (terminalTab) => set({ terminalTab, terminalOpen: true, rightPanelOpen: true }),
+  openSubagentTab: (chatId, toolId) =>
+    set((s) => {
+      const subagentTab = { ...s.subagentTab };
+      if (toolId) subagentTab[chatId] = toolId;
+      else delete subagentTab[chatId];
+      return { subagentTab };
+    }),
 
   setDraft: (key, text) =>
     set((s) => {
@@ -547,7 +553,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       return { drafts };
     }),
 
-  addOutgoingMessage: (chatId, { text, attachments = [], settled = false }) => {
+  addOutgoingMessage: (chatId, { text, attachments = [], settled = false, queued = false }) => {
     outgoingSequence += 1;
     const id = `outgoing-${Date.now()}-${outgoingSequence}`;
     set((s) => {
@@ -558,20 +564,27 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         attachments,
         afterSeq: held.length ? held[held.length - 1].seq : null,
         ...(settled ? { settledAt: Date.now() } : {}),
+        ...(queued ? { queued: true } : {}),
       };
       return { outgoingMessages: { ...s.outgoingMessages, [chatId]: [...(s.outgoingMessages[chatId] ?? []), message] } };
     });
     return id;
   },
 
-  settleOutgoingMessage: (chatId, messageId) =>
-    set((s) => patchOutgoing(s, chatId, messageId, (message) => ({ ...message, settledAt: Date.now(), failed: undefined }))),
+  settleOutgoingMessage: (chatId, messageId, queued) =>
+    set((s) => patchOutgoing(s, chatId, messageId, (message) => ({
+      ...message,
+      settledAt: Date.now(),
+      failed: undefined,
+      ...(queued === undefined ? {} : { queued }),
+    }))),
 
   failOutgoingMessage: (chatId, messageId, failed) =>
     set((s) => patchOutgoing(s, chatId, messageId, (message) => ({ ...message, settledAt: undefined, failed }))),
 
+  // A retry stays in the transcript, where the failed message was, until the response says it queued.
   resendOutgoingMessage: (chatId, messageId) =>
-    set((s) => patchOutgoing(s, chatId, messageId, (message) => ({ ...message, settledAt: undefined, failed: undefined }))),
+    set((s) => patchOutgoing(s, chatId, messageId, (message) => ({ ...message, settledAt: undefined, failed: undefined, queued: false }))),
 
   removeOutgoingMessages: (chatId, messageIds) =>
     set((s) => {
@@ -669,11 +682,6 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
 /** Where the composer keeps its draft: the chat's, or the workbench's before it has a chat. */
 export function composerDraftKey(workbenchId: string, chat: Pick<WorkbenchChat, 'id'> | null): string {
   return chat?.id ?? `wb:${workbenchId}`;
-}
-
-/** The chats of a workbench the user has not closed. */
-export function visibleChats(state: Pick<WorkbenchState, 'chats' | 'hiddenChatIds'>, workbenchId: string): WorkbenchChat[] {
-  return (state.chats[workbenchId] ?? []).filter((c) => !state.hiddenChatIds[c.id]);
 }
 
 export const emptyChatEvents = EMPTY_EVENTS;

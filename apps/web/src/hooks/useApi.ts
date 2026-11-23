@@ -32,6 +32,7 @@ import { trackEvent } from '../lib/analytics';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { reconcileWorkbenches } from '../lib/workbenchData';
 import { installWorkbenchNotifications, toastPullRequestFailures } from '../lib/workbenchNotify';
+import { installDeskPresence } from '../lib/deskPresence';
 import { useSessionBackgroundStore } from '../stores/sessionBackground';
 
 // ---------------------------------------------------------------------------
@@ -289,6 +290,11 @@ export function useApiConnection() {
     addEnvironment,
   } = useWorkspaceStore();
 
+  // Desk presence: phone pushes wait while the person uses this tab.
+  // Declared before the connect effect so its cleanup sends `away` while the
+  // socket is still open.
+  useEffect(() => installDeskPresence(), []);
+
   // Connect to WebSocket on mount. `connect()` is async because it needs
   // to fetch the auth token before opening the socket.
   useEffect(() => {
@@ -381,6 +387,9 @@ export function useApiConnection() {
         updateTask(payload.taskId, {
           status: payload.status,
           result: payload.result,
+          // Replace (or clear) the completion time, so a reused task does not
+          // keep its previous run's. Older backends do not send the key.
+          ...('completedAt' in payload ? { completedAt: payload.completedAt ?? undefined } : {}),
         });
         // A run that just ended grew the history by one. Only on the crossing
         // into a terminal status, so an in_progress heartbeat does not put a

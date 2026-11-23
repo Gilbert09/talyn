@@ -233,7 +233,7 @@ describe('WebSocket authorization and message limits', () => {
     db.limit.mockReturnValue(pending.promise);
     socket.receive({ type: 'subscribe', workspaceId: 'workspace' });
     await vi.advanceTimersByTimeAsync(0);
-    for (let i = 0; i < 66; i++) socket.receive({ type: 'subscribe', workspaceId: `workspace-${i}` });
+    for (let i = 0; i < 67; i++) socket.receive({ type: 'subscribe', workspaceId: `workspace-${i}` });
     expect(socket.close).toHaveBeenCalledWith(1008, 'too many pending messages');
     pending.resolve([{ ownerId: user.id }]);
     await vi.advanceTimersByTimeAsync(0);

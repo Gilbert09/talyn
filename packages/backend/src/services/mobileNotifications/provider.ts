@@ -1,8 +1,20 @@
 import { z } from 'zod';
-import type { MobileNotificationPayload, MobileProviderReceipt } from '@talyn/shared';
+import type { MobileNotificationCategory, MobileNotificationPayload, MobileProviderReceipt } from '@talyn/shared';
 
 export type PushErrorClass = 'temporary' | 'permanent' | 'device_not_registered';
-export interface PushMessage { token: string; data: MobileNotificationPayload; ttlSeconds?: number; }
+export interface PushText { title: string; body: string; }
+/** `title` and `body` are the alert text (`text.ts`). Absent, the category's generic text is sent. */
+export interface PushMessage { token: string; data: MobileNotificationPayload; ttlSeconds?: number; title?: string; body?: string; }
+const GENERIC_PUSH_TEXT: Record<MobileNotificationCategory, PushText> = {
+  session_update: { title: 'Session update', body: 'A session needs your attention.' },
+  human_gate: { title: 'Needs your input', body: 'Something in Talyn is waiting for you.' },
+  pr_review: { title: 'Pull request review', body: 'A pull request review changed.' },
+  ci_failure: { title: 'Checks failed', body: 'Required checks failed on a pull request.' },
+  merge_ready: { title: 'Ready to merge', body: 'A pull request is ready to merge.' },
+};
+export function genericPushText(category: MobileNotificationCategory): PushText {
+  return GENERIC_PUSH_TEXT[category] ?? GENERIC_PUSH_TEXT.session_update;
+}
 export type PushTicket = { status: 'ok'; ticketId: string } | { status: 'error'; errorClass: PushErrorClass };
 export interface MobilePushProvider {
   send(messages: readonly PushMessage[]): Promise<PushTicket[]>;
@@ -67,10 +79,11 @@ export class ExpoPushProvider implements MobilePushProvider {
   async send(messages: readonly PushMessage[]): Promise<PushTicket[]> {
     if (messages.length === 0) return [];
     if (messages.length > 100) throw new PushProviderError('permanent');
-    const response = z.object({ data: z.array(z.unknown()).max(100) }).safeParse(await this.request('send', messages.map((message) => ({
-      to: message.token, body: 'A session needs your attention.',
-      data: message.data, channelId: message.data.category, sound: 'default', ttl: message.ttlSeconds ?? 3600,
-    }))));
+    const response = z.object({ data: z.array(z.unknown()).max(100) }).safeParse(await this.request('send', messages.map((message) => {
+      const generic = genericPushText(message.data.category);
+      return { to: message.token, title: message.title?.trim() || generic.title, body: message.body?.trim() || generic.body,
+        data: message.data, channelId: message.data.category, sound: 'default', ttl: message.ttlSeconds ?? 3600 };
+    })));
     if (!response.success || response.data.data.length > messages.length) throw new PushProviderError('temporary');
     return messages.map((_message, index): PushTicket => {
       const raw = response.data.data[index];

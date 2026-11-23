@@ -192,17 +192,16 @@ describe('POST /admin/users/:id/plan-override', () => {
     expect(res.status).toBe(200);
   });
 
-  it('refuses to comp YOUR OWN account', async () => {
-    // Blocks the quiet self-comp. psql still works, and leaving shell history
-    // instead of a silent API call is the feature.
+  it('comps YOUR OWN account, with an audit row', async () => {
     const res = await post(`/api/v1/admin/users/${OPERATOR}/plan-override`, {
       planOverride: 'unlimited',
       reason: REASON,
       confirm: 'op@talyn.dev',
     });
-    expect(res.status).toBe(403);
-    expect(res.body.code).toBe('self_mutation_forbidden');
-    expect(await auditRows()).toHaveLength(0);
+    expect(res.status).toBe(200);
+    const rows = await auditRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ action: 'user.plan_override', targetId: OPERATOR, reason: REASON });
   });
 
   it.each([['free'], ['unlimited'], ['pro'], ['max'], ['legacy_pro']])(

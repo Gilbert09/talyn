@@ -1,8 +1,8 @@
 import type { PRRow } from '@talyn/client/native';
 import type { Workbench } from '@talyn/shared';
 
-import { EVENT_LIMIT, type Transcript } from '../workflow/model';
-import { EVENT_REFETCH_INTERVAL, RECOVERY_DEBOUNCE } from '../workflow/store';
+import { EVENT_LIMIT, PAGE_CEILING, PAGE_SIZE, RELEASE_KEEP, type Transcript } from '../workflow/model';
+import { EVENT_REFETCH_INTERVAL, FULL_LOOKUP, RECOVERY_DEBOUNCE } from '../workflow/store';
 import { chat, deferred, event, fixture, pr, scope, session } from './workflowFixtures';
 
 const settle = async () => { for (let index = 0; index < 20; index++) await Promise.resolve(); };
@@ -55,6 +55,40 @@ describe('authoritative reads and boundaries', () => {
     network({ activity: 'suspended' }); network({ activity: 'active' });
     store.setScope({ ...scope }); expect(store.local('chat-one')).toMatchObject({ draft: 'Unsent', offset: 1840, following: false });
   });
+  it('remembers a list position without notifying subscribers', () => {
+    const { store } = active; const listener = jest.fn(); const stop = store.subscribe(listener);
+    store.rememberOffset('list:pulls:mine', 320); store.rememberOffset('list:pulls:mine', 320);
+    expect(listener).not.toHaveBeenCalled(); expect(store.local('list:pulls:mine').offset).toBe(320);
+    store.setScope({ ...scope }); expect(store.local('list:pulls:mine').offset).toBe(320);
+    stop();
+  });
+  it('keeps unchanged PR rows when the open list is fetched again', async () => {
+    const { store, api } = active; await store.load('attention');
+    const held = store.read<PRRow[]>('attention').data!;
+    await store.load('attention');
+    expect(store.read<PRRow[]>('attention').data).toBe(held);
+    api.pullRequests.list.mockResolvedValueOnce([pr(), pr({ id: 'pr-two', number: 43 })]);
+    await store.load('attention');
+    const next = store.read<PRRow[]>('attention').data!;
+    expect(next).not.toBe(held); expect(next[0]).toBe(held[0]); expect(next[1].id).toBe('pr-two');
+  });
+  it('asks GitHub before it re-reads the PR list on pull to refresh', async () => {
+    const { store, api } = active; const order: string[] = [];
+    api.repositories.forcePoll.mockImplementationOnce(async () => { order.push('poll'); return { message: 'Poll triggered' }; });
+    api.pullRequests.list.mockImplementationOnce(async () => { order.push('list'); return [pr({ id: 'pr-new', number: 99 })]; });
+    await store.refreshPullRequests();
+    expect(order).toEqual(['poll', 'list']); expect(store.read<PRRow[]>('attention').data?.[0].id).toBe('pr-new');
+  });
+  it('still re-reads the PR list when the GitHub poll fails', async () => {
+    const { store, api } = active; api.repositories.forcePoll.mockRejectedValueOnce(new Error('Could not reach GitHub'));
+    await store.refreshPullRequests();
+    expect(api.pullRequests.list).toHaveBeenCalledTimes(1); expect(store.read('attention').status).toBe('ready');
+  });
+  it('does not ask GitHub while offline', async () => {
+    const { store, api, network } = active; network({ reachability: 'offline' });
+    await store.refreshPullRequests();
+    expect(api.repositories.forcePoll).not.toHaveBeenCalled(); expect(api.pullRequests.list).not.toHaveBeenCalled();
+  });
   it('makes no requests while offline and never retries failed snapshots in a loop', async () => {
     const { store, api, network } = active; network({ reachability: 'offline' }); await store.load('sessions');
     expect(api.workbenches.list).not.toHaveBeenCalled(); expect(store.read('sessions').status).toBe('offline');
@@ -96,7 +130,7 @@ describe('socket invalidation, resume, and transcript reconciliation', () => {
     expect(store.read<Transcript>('transcript', 'chat-one').data?.gap).toBe(true);
     api.workbenches.events.mockResolvedValueOnce({ events: [event(2), event(3)], cursor: 3, oldestSeq: 2, hasOlder: false });
     jest.advanceTimersByTime(250); await settle();
-    expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { after: 1, limit: 200 });
+    expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { after: 1, limit: PAGE_SIZE });
     const state = store.read<Transcript>('transcript', 'chat-one');
     expect(state.data?.events.map((item) => item.seq)).toEqual([1, 2, 3]); expect(state.stale).toBe(false);
   });
@@ -121,14 +155,14 @@ describe('socket invalidation, resume, and transcript reconciliation', () => {
     api.workbenches.events.mockResolvedValueOnce({ events: [event(10)], cursor: 10, oldestSeq: 10, hasOlder: true });
     await store.load('transcript', 'chat-one');
     api.workbenches.events.mockResolvedValueOnce({ events: [event(9)], cursor: 9, oldestSeq: 9, hasOlder: false });
-    await store.older('chat-one'); expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { before: 10, limit: 200 });
+    await store.older('chat-one'); expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { before: 10, limit: PAGE_SIZE, ceiling: PAGE_CEILING });
     expect(store.read<Transcript>('transcript', 'chat-one').data?.events.map((item) => item.seq)).toEqual([9, 10]);
   });
   it('caps recovery batches and retained events for large histories', async () => {
     const { store, api } = active;
     api.workbenches.events.mockImplementation(async (_id, options) => {
       const after = (options as { after?: number })?.after ?? 0;
-      return { events: Array.from({ length: 200 }, (_, index) => event(after + index + 1)), cursor: after + 200 } as Awaited<ReturnType<typeof api.workbenches.events>>;
+      return { events: Array.from({ length: PAGE_SIZE }, (_, index) => event(after + index + 1)), cursor: after + PAGE_SIZE } as Awaited<ReturnType<typeof api.workbenches.events>>;
     });
     await store.load('transcript', 'chat-one');
     expect(api.workbenches.events.mock.calls.length).toBeLessThanOrEqual(5);
@@ -213,6 +247,18 @@ describe('text delivery without automatic resend', () => {
 });
 
 describe('targeted invalidation and stale-while-revalidate', () => {
+  it('patches parent links and child status without a refetch', async () => {
+    const { store, api, emit } = active;
+    api.workbenches.threadSessions.mockResolvedValueOnce([session({ id: 'child', parentId: 'session-one' })]);
+    await store.load('children', 'session-one');
+    expect(store.read<Workbench[]>('children', 'session-one').data).toHaveLength(1);
+    emit('workbench:updated', { workbench: session({ id: 'child', parentId: 'session-one', status: 'error' }) });
+    expect(store.read<Workbench[]>('children', 'session-one').data?.[0].status).toBe('error');
+    emit('workbench:updated', { workbench: session({ id: 'child', parentId: null }) });
+    expect(store.read<Workbench[]>('children', 'session-one').data).toEqual([]);
+    expect(api.workbenches.threadSessions).toHaveBeenCalledTimes(1);
+  });
+
   it('patches the named workbench in place and leaves other workbenches alone', async () => {
     const { store, api, emit } = active;
     const stopA = store.watch('workbench', 'session-one'); const stopB = store.watch('workbench', 'session-two'); await settle();
@@ -247,6 +293,25 @@ describe('targeted invalidation and stale-while-revalidate', () => {
     jest.advanceTimersByTime(EVENT_REFETCH_INTERVAL * 2); await settle();
     expect(api.workbenches.get).toHaveBeenCalledTimes(1); expect(api.workbenches.list).toHaveBeenCalledTimes(1);
     expect(api.workbenches.events).not.toHaveBeenCalled(); stopList(); stopItem();
+  });
+  it.each([
+    ['a turn starts', 'running', 2],
+    ['the status does not change', 'idle', 1],
+  ] as const)('refetches the attention reasons when %s', async (_name, status, calls) => {
+    const { store, api, emit } = active;
+    const stopList = store.watch('sessions'); const stop = store.watch('contextAttention'); await settle();
+    api.workspaces.attention.mockResolvedValue({ sessions: { 'session-one': 'plan' } });
+    expect(store.read('contextAttention').data).toEqual({});
+    emit('workbench:chat', { chat: chat({ status }) });
+    jest.advanceTimersByTime(EVENT_REFETCH_INTERVAL * 2); await settle();
+    expect(api.workspaces.attention).toHaveBeenCalledTimes(calls);
+    expect(store.read('contextAttention').data).toEqual(calls === 2 ? { 'session-one': 'plan' } : {}); stopList(); stop();
+  });
+  it('reads no reasons when the server sends none', async () => {
+    const { store, api } = active;
+    api.workspaces.attention.mockResolvedValueOnce({});
+    const stop = store.watch('contextAttention'); await settle();
+    expect(store.read('contextAttention').data).toEqual({}); stop();
   });
   it('removes a deleted workbench from lists without a refetch', async () => {
     const { store, api, emit } = active; const stop = store.watch('threads'); await settle();
@@ -292,5 +357,77 @@ describe('targeted invalidation and stale-while-revalidate', () => {
     emit('connection:status', { connected: true });
     jest.advanceTimersByTime(RECOVERY_DEBOUNCE); await settle();
     expect(api.workbenches.list).toHaveBeenCalledTimes(2); stop();
+  });
+});
+
+describe('transcript paging on a phone', () => {
+  type Page = Awaited<ReturnType<typeof active.api.workbenches.events>>;
+  const page = (from: number, to: number, hasOlder = from > 1): Page =>
+    ({ events: Array.from({ length: to - from + 1 }, (_, index) => event(from + index)), cursor: to, oldestSeq: from, hasOlder });
+  const held = () => active.store.read<Transcript>('transcript', 'chat-one').data!;
+  it('asks for a bounded newest page', async () => {
+    const { store, api } = active;
+    await store.load('transcript', 'chat-one');
+    expect(api.workbenches.events).toHaveBeenCalledWith('chat-one', { before: 'latest', limit: PAGE_SIZE, ceiling: PAGE_CEILING });
+  });
+  it('fetches the newest page when only socket events are held', async () => {
+    const { store, api, emit } = active;
+    api.workbenches.events.mockRejectedValueOnce({ status: 503 }); await store.load('transcript', 'chat-one');
+    emit('workbench:event', { chatId: 'chat-one', events: [event(57)] });
+    expect(held()).toMatchObject({ anchored: false });
+    api.workbenches.events.mockResolvedValueOnce(page(1, 57, false));
+    await store.load('transcript', 'chat-one');
+    expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { before: 'latest', limit: PAGE_SIZE, ceiling: PAGE_CEILING });
+    expect(held().events).toHaveLength(57); expect(held().anchored).toBe(true);
+  });
+  it('pages older history back to the start and keeps the newest events', async () => {
+    const { store, api } = active;
+    api.workbenches.events.mockResolvedValueOnce(page(601, 800)); await store.load('transcript', 'chat-one');
+    for (const [from, to] of [[401, 600], [201, 400], [1, 200]]) {
+      api.workbenches.events.mockResolvedValueOnce(page(from, to)); await store.older('chat-one');
+    }
+    expect(held().events).toHaveLength(800); expect(held().events.at(-1)?.seq).toBe(800); expect(held().hasOlder).toBe(false);
+    api.workbenches.events.mockClear(); await store.older('chat-one');
+    expect(api.workbenches.events).not.toHaveBeenCalled();
+  });
+  it('keeps the window and offers a retry when an older page fails', async () => {
+    const { store, api } = active;
+    api.workbenches.events.mockResolvedValueOnce(page(201, 400)); await store.load('transcript', 'chat-one');
+    api.workbenches.events.mockRejectedValueOnce(new Error('offline')); await store.older('chat-one');
+    expect(store.read('transcript', 'chat-one').status).toBe('ready');
+    expect(held()).toMatchObject({ olderFailed: true, hasOlder: true }); expect(held().events).toHaveLength(200);
+    api.workbenches.events.mockClear(); await store.older('chat-one');
+    expect(api.workbenches.events).not.toHaveBeenCalled();
+    api.workbenches.events.mockResolvedValueOnce(page(1, 200)); await store.retryOlder('chat-one');
+    expect(held()).toMatchObject({ olderFailed: false, hasOlder: false }); expect(held().events).toHaveLength(400);
+  });
+  it('fetches nothing when the window is full and marks it limited', async () => {
+    const { store, api } = active;
+    api.workbenches.events.mockResolvedValueOnce(page(1001, 1000 + EVENT_LIMIT)); await store.load('transcript', 'chat-one');
+    api.workbenches.events.mockClear(); await store.older('chat-one');
+    expect(api.workbenches.events).not.toHaveBeenCalled(); expect(held().limited).toBe(true);
+    store.release('chat-one');
+    expect(held()).toMatchObject({ limited: false, hasOlder: true }); expect(held().events).toHaveLength(RELEASE_KEEP);
+    expect(held().events.at(-1)?.seq).toBe(1000 + EVENT_LIMIT);
+  });
+  it.each([
+    ['following the newest', true, 1],
+    ['reading older history', false, 0],
+  ])('trims live growth by where the reader is: %s', async (_name, following, dropped) => {
+    const { store, api, emit } = active;
+    api.workbenches.events.mockResolvedValueOnce(page(1, EVENT_LIMIT, false)); await store.load('transcript', 'chat-one');
+    store.updateLocal('chat-one', { following });
+    emit('workbench:event', { chatId: 'chat-one', events: [event(EVENT_LIMIT + 1)] });
+    expect(held().events[0].seq).toBe(1 + dropped);
+  });
+  it('reads a whole tool call without putting it in the window', async () => {
+    const { store, api } = active;
+    await store.load('transcript', 'chat-one');
+    const before = held();
+    api.workbenches.events.mockResolvedValueOnce({ events: [event(3), event(4, { chatId: 'other' })], cursor: 4 } as Page);
+    const events = await store.fullEvents('chat-one', 3);
+    expect(api.workbenches.events).toHaveBeenLastCalledWith('chat-one', { after: 2, limit: FULL_LOOKUP });
+    expect(events.map((item) => item.seq)).toEqual([3]);
+    expect(held()).toBe(before);
   });
 });

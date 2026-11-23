@@ -266,7 +266,7 @@ export async function signInToCodex(
   });
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(`OpenAI refused the sign-in (${res.status}): ${text.slice(0, 300)}`);
+    throw new Error(describeTokenRefusal(res.status, text));
   }
   let body: { access_token?: string; refresh_token?: string; expires_in?: number };
   try {
@@ -285,4 +285,19 @@ export async function signInToCodex(
     accountId: accountIdFrom(body.access_token),
     expiresIn: body.expires_in,
   };
+}
+
+/** What a person reads when OpenAI refuses the token exchange. */
+export function describeTokenRefusal(status: number, body: string): string {
+  let code: unknown;
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown };
+    code = typeof parsed.error === 'string' ? parsed.error : (parsed.error as { code?: unknown } | undefined)?.code;
+  } catch {
+    // Not JSON: fall through to the generic message.
+  }
+  if (status === 403 && code === 'unsupported_country_region_territory') {
+    return 'OpenAI does not offer ChatGPT sign-in in your region. Connect Claude instead.';
+  }
+  return `OpenAI refused the sign-in (${status}): ${body.slice(0, 300)}`;
 }

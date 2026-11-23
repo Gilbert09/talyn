@@ -408,6 +408,21 @@ describe('usage billing in the billing store', () => {
       expect(global.fetch).not.toHaveBeenCalled();
     });
 
+    it('waits for a usage reset to land, then announces it', () => {
+      jest.useFakeTimers();
+      const withResets = (resets: number) => {
+        const next = usageStatus('pro', { usedHours: 50 });
+        next.usage = { ...next.usage!, resets };
+        return next;
+      };
+      useBillingStore.getState().setStatus(withResets(0));
+      useBillingStore.getState().startCheckoutPollBurst('reset');
+      useBillingStore.getState().setStatus(withResets(0));
+      expect(toastMock.success).not.toHaveBeenCalled();
+      useBillingStore.getState().setStatus(withResets(1));
+      expect(toastMock.success).toHaveBeenCalledWith('Usage reset', 'Your box-hours are back.');
+    });
+
     it('waits for Legacy Pro to become Pro, not merely for a paid plan', () => {
       useBillingStore.getState().setStatus(usageStatus('legacy_pro'));
       useBillingStore.getState().startCheckoutPollBurst('plan');

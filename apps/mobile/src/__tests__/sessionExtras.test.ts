@@ -2,12 +2,15 @@ import type { Workbench, WorkbenchChangedFile, WorkbenchChanges } from '@talyn/s
 
 import { archivedAtOf, archivedItems, emptyHistoryText, historyRows } from '../features/history/model';
 import { copyActions, copyEntry } from '../features/sessions/actions';
-import { formatCountdown, formatRunTime, jobStatus, keepAwakeLabel, runningJobs, sortWakeups } from '../features/sessions/background';
+import { emptyLogText, formatCountdown, formatRunTime, jobStatus, keepAwakeLabel, runningJobs, sortWakeups, wakeupWhen } from '../features/sessions/background';
 import { changeGroups, clipLine, fileLabel, groupTotals, gutterDigits, needsWake, parseUnifiedDiff, splitPath, storedText,
   visibleDiff, type DiffLine } from '../features/sessions/changes';
 import { canCreatePullRequest, changesUnavailable, createPrSentText, hasChanges, sessionTabs, sessionUnavailable } from '../features/sessions/model';
 import { session, thread } from './workflowFixtures';
 
+const PR: NonNullable<Workbench['pr']> = {
+  number: 42, url: 'https://github.com/example/project/pull/42', state: 'open', mergeable: 'mergeable', ciStatus: 'success',
+};
 const stat = (files: number) => ({ added: files * 2, removed: files, files });
 const file = (patch: Partial<WorkbenchChangedFile> = {}): WorkbenchChangedFile => ({ path: 'src/app.ts', status: 'modified', added: 3, removed: 1, binary: false, ...patch });
 
@@ -201,6 +204,12 @@ describe('background jobs', () => {
   ])('keep-awake for %s is %s', (until, expected) => {
     expect(keepAwakeLabel(until, now)).toBe(expected);
   });
+  it.each([
+    [true, 'No output yet.'],
+    [false, 'The job printed no output.'],
+  ])('says what an empty log means when running is %s', (running, expected) => {
+    expect(emptyLogText(running)).toBe(expected);
+  });
   it('says until when the box stays awake, in local time', () => {
     const until = new Date(now + 90 * 60_000);
     const hh = String(until.getHours()).padStart(2, '0'); const mm = String(until.getMinutes()).padStart(2, '0');
@@ -215,6 +224,12 @@ describe('background jobs', () => {
     [24 * 3600_000, 'Wakes in 1 day'],
   ])('counts down %d ms', (delta, expected) => {
     expect(formatCountdown(new Date(now + delta).toISOString(), now)).toBe(expected);
+  });
+  it.each([
+    ['a timed wake-up', null, ['Wakes in 5 min']],
+    ['a CI wake-up', { pullRequestId: 'p1', headSha: 'abcdef1234567890abcdef1234567890abcdef12' }, ['Waits for CI on abcdef1', 'Wakes in 5 min at the latest']],
+  ])('says when %s fires', (_name, ci, expected) => {
+    expect(wakeupWhen({ wakeAt: new Date(now + 5 * 60_000).toISOString(), ci }, now)).toEqual(expected);
   });
   it.each<[{ status: 'running' | 'exited' | 'stopped' | 'lost'; exitCode: number | null }, { label: string; tone: string }]>([
     [{ status: 'running', exitCode: null }, { label: 'Running', tone: 'success' }],
@@ -247,6 +262,9 @@ describe('copy and create PR copy', () => {
     [session(), ['copy_link', 'copy_branch', 'copy_id']],
     [session({ branch: '' }), ['copy_link', 'copy_id']],
     [thread(), ['copy_link', 'copy_id']],
+    [session({ pr: PR }), ['copy_link', 'copy_pr_link', 'copy_pr_markdown', 'copy_branch', 'copy_id']],
+    [session({ pr: { ...PR, state: 'merged' } }), ['copy_link', 'copy_pr_link', 'copy_pr_markdown', 'copy_branch', 'copy_id']],
+    [session({ pr: { ...PR, url: 'javascript:alert(1)' } }), ['copy_link', 'copy_branch', 'copy_id']],
   ])('offers copy entries', (item, expected) => {
     expect(copyActions(item)).toEqual(expected);
   });
@@ -255,8 +273,18 @@ describe('copy and create PR copy', () => {
     ['copy_branch', session(), { label: 'Copy branch name', text: 'tom/example', done: 'Branch name copied.' }],
     ['copy_id', session(), { label: 'Copy session ID', text: 'session-one', done: 'Session ID copied.' }],
     ['copy_id', thread(), { label: 'Copy thread ID', text: 'thread-one', done: 'Thread ID copied.' }],
+    ['copy_pr_link', session({ pr: PR }), { label: 'Copy pull request link', text: PR.url, done: 'Pull request link copied.' }],
+    ['copy_pr_markdown', session({ pr: PR }),
+      { label: 'Copy pull request as Markdown link', text: `[PR #42](${PR.url})`, done: 'Markdown link copied.' }],
   ] as const)('%s', (kind, item, expected) => {
     expect(copyEntry(kind, item)).toEqual(expected);
+  });
+  it.each([
+    ['Fix the bug', `[Fix the bug](${PR.url})`],
+    ['  ', `[PR #42](${PR.url})`],
+    [undefined, `[PR #42](${PR.url})`],
+  ])('names the Markdown PR link with the title %j', (title, expected) => {
+    expect(copyEntry('copy_pr_markdown', session({ pr: PR }), title).text).toBe(expected);
   });
   it.each<[boolean, Partial<Workbench>, string]>([
     [false, {}, 'Sent to the agent. It opens the pull request when its turn ends.'],

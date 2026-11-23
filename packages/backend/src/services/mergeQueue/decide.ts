@@ -1226,7 +1226,7 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
     holdingNow &&
     providerHolding
   ) {
-    if (ctx.fixTaskState === 'active') {
+    if (fixRunLive(ctx)) {
       // A run dispatched before the provider took the PR is still going, and
       // its push will eject it — nothing here can un-push that. Parking now
       // would also strand the run's accounting, which lives in R8 below this
@@ -1256,7 +1256,7 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
   // this PR: the queue's own fix run (fixTaskId) OR any other run linked via
   // pull_requests.taskId (a manual task, the keep-mergeable watcher) — which
   // v1 checked separately because taskId gets reassigned by other flows.
-  const runActive = ctx.fixTaskState === 'active' || ctx.otherLinkedTaskActive;
+  const runActive = fixRunLive(ctx) || ctx.otherLinkedTaskActive;
   if (runActive && queueBlockedFor(pr, ctx) && hasSettledBlockerFor(pr, ctx)) {
     // An in-flight run only HOLDS BACK a PR with a SETTLED blocker — the
     // thing the run is actually fixing. A clean PR falls through to the merge
@@ -2880,12 +2880,23 @@ export const SUBMIT_HOLD_RUN_SILENCE_MS = 10 * 60_000;
  * (`otherLinkedTaskActive`, with no timestamp of our own to read) holds the
  * submission until it ends, exactly as it did before.
  */
+/** The queue's own fix run is working the PR: running, or paused for CI. */
+function fixRunLive(ctx: DecisionContext): boolean {
+  return ctx.fixTaskState === 'active' || ctx.fixTaskState === 'waiting';
+}
+
 function submitHeldForRun(
   d: DecisionBuilder,
   ctx: DecisionContext,
   runActive: boolean
 ): Decision | null {
   if (!runActive) return null;
+  // A run paused for CI is silent on purpose, and it resumes to push again
+  // when CI says so. Its silence is not a dead run.
+  if (ctx.fixTaskState === 'waiting') {
+    d.ensure('fixing');
+    return d.done('advance');
+  }
   const lastActivity = ctx.fixTaskLastActivityAt ? Date.parse(ctx.fixTaskLastActivityAt) : NaN;
   const silentFor = Number.isNaN(lastActivity) ? 0 : Date.parse(ctx.nowIso) - lastActivity;
   // An unparseable or missing timestamp reads as "it just said something" —
@@ -3150,7 +3161,7 @@ function decideAppRefusal(
   }
   if ((ctx.unsignedCount ?? 0) > 0) {
     d.act({ kind: 'mark_signing_required' });
-    const runActive = ctx.fixTaskState === 'active' || ctx.otherLinkedTaskActive;
+    const runActive = fixRunLive(ctx) || ctx.otherLinkedTaskActive;
     return dispatchResign(d, ctx, runActive);
   }
 

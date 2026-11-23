@@ -27,6 +27,11 @@ export interface NewWorkbenchSpec {
   /** The first message. Empty creates the workbench with nothing to do yet. */
   prompt: string;
   attachments?: WorkbenchAttachment[];
+  /**
+   * Start it in this space. It runs in my home workspace for the space's
+   * team (`workspaceId`), and the space takes the repository by its full name.
+   */
+  spaceId?: string;
   baseBranch?: string;
   /** An existing branch to check out instead of a new one. */
   branch?: string;
@@ -39,6 +44,8 @@ export interface CreateWorkbenchState {
   /** Create the workbench, open it, and start its first message. Null when it failed; `error` says why. */
   create: (spec: NewWorkbenchSpec) => Promise<Workbench | null>;
   busy: boolean;
+  /** The workbench being created. The page shows it as a session that loads, until it opens. */
+  pending: NewWorkbenchSpec | null;
   error: string | null;
   clearError: () => void;
 }
@@ -54,31 +61,34 @@ export interface CreateWorkbenchState {
  * (a readiness refusal, a worktree error) stays on the caller's page.
  */
 export function useCreateWorkbench(): CreateWorkbenchState {
-  const [busy, setBusy] = useState(false);
+  const [inFlight, setInFlight] = useState<NewWorkbenchSpec | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const create = useCallback(async (spec: NewWorkbenchSpec): Promise<Workbench | null> => {
-    setBusy(true);
+    setInFlight(spec);
     setError(null);
     try {
       const wb = await createWorkbench(spec);
       trackEvent('session_created', { kind: wb.kind ?? 'session', runtime: wb.runtime, repository_id: wb.repositoryId, size: wb.settings.sandboxSize ?? wb.settings.boxSize ?? 'default' });
       if (spec.prompt.trim() && !spec.attachments?.length && spec.runtime !== 'local') {
-        trackEvent('session_message_sent', { queued: true, plan_mode: spec.planMode, model_id: spec.model, attachments_count: 0 });
+        trackEvent('session_message_sent', { queued: true, plan_mode: spec.planMode, model_id: spec.model, attachments_count: 0, runtime: wb.runtime });
       }
       const store = useWorkbenchStore.getState();
-      store.upsertWorkbench(wb);
+      // A space session can run in a workspace other than the one shown.
+      if (!spec.spaceId || store.workspaceId === wb.workspaceId) store.upsertWorkbench(wb);
+      else store.addExtraWorkbench(wb);
       // The session opens with the prompt already in its chat, not an empty
       // one: the prompt's own event comes only when the sandbox starts the turn.
       const firstChat = wb.chats?.[0];
       // A sandbox prompt without images went with the create request, so it is already sent.
       const alreadySent = spec.runtime !== 'local' && !spec.attachments?.length;
-      const pending: PendingFirstMessage | null = firstChat && spec.prompt.trim()
+      const pending: PendingFirstMessage | null = firstChat && (spec.prompt.trim() || spec.attachments?.length)
         ? { chatId: firstChat.id, id: store.addOutgoingMessage(firstChat.id, { text: spec.prompt.trim(), attachments: spec.attachments, settled: alreadySent }) }
         : null;
       useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
       if (spec.runtime === 'local') void startLocalChat(wb, spec, pending);
-      else if (spec.attachments?.length) {
+      else void applyFirstChatSettings(wb, spec);
+      if (spec.runtime !== 'local' && spec.attachments?.length) {
         const firstInput: SendWorkbenchMessageInput = {
           text: spec.prompt.trim(), attachments: spec.attachments,
           model: spec.model, effort: spec.effort, planMode: spec.planMode,
@@ -87,7 +97,7 @@ export function useCreateWorkbench(): CreateWorkbenchState {
           const chat = firstChat ?? await api.workbenches.createChat(wb.id, { model: spec.model, effort: spec.effort, planMode: spec.planMode });
           const sent = await api.workbenches.sendMessage(chat.id, firstInput);
           if (pending) useWorkbenchStore.getState().settleOutgoingMessage(pending.chatId, pending.id);
-          trackEvent('session_message_sent', { queued: sent.queued, plan_mode: spec.planMode, model_id: spec.model, attachments_count: spec.attachments.length });
+          trackEvent('session_message_sent', { queued: sent.queued, plan_mode: spec.planMode, model_id: spec.model, attachments_count: spec.attachments.length, runtime: wb.runtime });
         } catch (err) {
           captureWorkbenchFailure('send_first_message', err, wb.id);
           if (maybeHandleBillingLimit(err, 'workbench_send')) {
@@ -107,16 +117,17 @@ export function useCreateWorkbench(): CreateWorkbenchState {
       setError(err instanceof Error && err.message ? err.message : spec.kind === 'thread' ? 'Could not create the thread.' : 'Could not create the session.');
       return null;
     } finally {
-      setBusy(false);
+      setInFlight(null);
     }
   }, []);
 
   const clearError = useCallback(() => setError(null), []);
-  return { create, busy, error, clearError };
+  return { create, busy: inFlight !== null, pending: inFlight, error, clearError };
 }
 
 async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
   const prompt = spec.prompt.trim();
+  if (spec.spaceId) return createInSpace(spec.spaceId, spec, prompt);
   if (spec.kind === 'thread') {
     return api.workbenches.create({
       workspaceId: spec.workspaceId,
@@ -152,7 +163,7 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
     });
   }
 
-  const wb = await api.workbenches.create({
+  return api.workbenches.create({
     workspaceId: spec.workspaceId,
     repositoryId: spec.repositoryId,
     runtime: 'sandbox',
@@ -166,16 +177,45 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
     internetAccess: spec.internetAccess,
     autoCreatePr: spec.autoCreatePr ?? true,
   });
-  // The queued first message takes the chat's plan mode and effort when it
-  // runs, and the box takes far longer to boot than this one request.
+}
+
+/** The same session or thread, started in a space by the space's create route. */
+async function createInSpace(spaceId: string, spec: NewWorkbenchSpec, prompt: string): Promise<Workbench> {
+  const shared = {
+    agent: spec.agent,
+    model: spec.model,
+    prompt: spec.attachments?.length ? undefined : prompt || undefined,
+    namingText: namingTextFor(spec, prompt),
+    internetAccess: spec.internetAccess,
+  };
+  if (spec.kind === 'thread') {
+    return (await api.spaces.createSession(spaceId, { kind: 'thread', ...shared })).workbench;
+  }
+  if (!spec.repoFullName) throw new Error('Choose a repository.');
+  const { workbench } = await api.spaces.createSession(spaceId, {
+    repoFullName: spec.repoFullName,
+    ...shared,
+    baseBranch: spec.baseBranch?.trim() || undefined,
+    branch: spec.branch?.trim() || undefined,
+    fromPullRequestId: spec.fromPullRequestId,
+    autoCreatePr: spec.autoCreatePr ?? true,
+  });
+  return workbench;
+}
+
+/**
+ * The queued first message takes the chat's plan mode and effort when it
+ * runs, and the box takes far longer to boot than this one request. So the
+ * session opens first, and this request does not hold it back.
+ */
+async function applyFirstChatSettings(wb: Workbench, spec: NewWorkbenchSpec): Promise<void> {
   const chat = wb.chats?.[0];
-  if (chat && (spec.planMode || spec.effort !== DEFAULT_WORKBENCH_EFFORT)) {
+  if (wb.kind !== 'thread' && chat && (spec.planMode || spec.effort !== DEFAULT_WORKBENCH_EFFORT)) {
     await api.workbenches
       .updateChat(chat.id, { planMode: spec.planMode, effort: spec.effort })
       .then((updated) => useWorkbenchStore.getState().upsertChat(updated))
       .catch((error) => captureWorkbenchFailure('update_first_chat', error, wb.id));
   }
-  return wb;
 }
 
 /** The first prompt, as the new session's transcript shows it before its event arrives. */
@@ -201,7 +241,7 @@ async function startLocalChat(wb: Workbench, spec: NewWorkbenchSpec, pending: Pe
     store.upsertChat(chat);
     store.setChatEventsState(chat.id, { loaded: true });
     store.selectChat(wb.id, chat.id);
-    if (prompt) {
+    if (prompt || spec.attachments?.length) {
       const ops = opsFor(wb);
       const attachments = spec.attachments?.length
         ? await Promise.all(spec.attachments.map(async (attachment) => attachment.dataBase64
@@ -210,7 +250,7 @@ async function startLocalChat(wb: Workbench, spec: NewWorkbenchSpec, pending: Pe
         : undefined;
       const sent = await ops.send(chat, { text: prompt, attachments, model: spec.model, planMode: spec.planMode, effort });
       if (pending) useWorkbenchStore.getState().settleOutgoingMessage(pending.chatId, pending.id);
-      trackEvent('session_message_sent', { queued: sent.queued, plan_mode: spec.planMode, model_id: spec.model, attachments_count: attachments?.length ?? 0 });
+      trackEvent('session_message_sent', { queued: sent.queued, plan_mode: spec.planMode, model_id: spec.model, attachments_count: attachments?.length ?? 0, runtime: wb.runtime });
     }
   } catch (err) {
     if (pending) useWorkbenchStore.getState().removeOutgoingMessages(pending.chatId, [pending.id]);

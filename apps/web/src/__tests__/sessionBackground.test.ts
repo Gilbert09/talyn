@@ -4,7 +4,7 @@ import type { WorkbenchBackground, WorkbenchBackgroundJob, WorkbenchWakeup } fro
 vi.mock('../lib/api', () => ({ api: { workbenches: { background: vi.fn() } } }));
 
 import { api } from '../lib/api';
-import { formatCountdown, formatRunTime, isActiveBackground, keepAwakeLabel, wakeLaterPresets } from '../lib/sessionBackground';
+import { emptyLogText, formatCountdown, formatRunTime, isActiveBackground, keepAwakeLabel, wakeLaterPresets, wakeupTitle, wakeupWhen } from '../lib/sessionBackground';
 import { loadBackground, useSessionBackgroundStore } from '../stores/sessionBackground';
 
 const empty = (workbenchId: string): WorkbenchBackground => ({ workbenchId, jobs: [], wakeups: [] });
@@ -44,6 +44,13 @@ describe('session background store', () => {
 });
 
 describe('session background helpers', () => {
+  it.each([
+    [true, 'No output yet.'],
+    [false, 'The job printed no output.'],
+  ])('says what an empty log means when running is %s', (running, expected) => {
+    expect(emptyLogText(running)).toBe(expected);
+  });
+
   it('formats run times and wake-up countdowns', () => {
     const start = '2026-11-08T10:00:00Z';
     expect(formatRunTime(start, null, new Date('2026-11-08T10:00:42Z'))).toBe('42s');
@@ -52,6 +59,16 @@ describe('session background helpers', () => {
     expect(formatCountdown('2026-11-08T10:00:30Z', new Date(start))).toBe('Wakes in less than a minute');
     expect(formatCountdown('2026-11-08T11:05:00Z', new Date(start))).toBe('Wakes in 1 h 5 min');
     expect(formatCountdown('2026-11-10T10:00:00Z', new Date(start))).toBe('Wakes in 2 days');
+  });
+
+  it.each([
+    ['a timed wake-up', null, 'Wakes in 1 h 5 min', 'Wakes in 1 h 5 min: Check'],
+    ['a CI wake-up', { pullRequestId: 'p1', headSha: 'abcdef1234567890abcdef1234567890abcdef12' }, 'Waits for CI on abcdef1', 'Waits for CI on abcdef1. Wakes in 1 h 5 min at the latest: Check'],
+  ])('says when %s fires', (_name, ci, when, title) => {
+    const now = new Date('2026-11-08T10:00:00Z');
+    const wakeup = { wakeAt: '2026-11-08T11:05:00Z', ci, reason: 'Check' };
+    expect(wakeupWhen(wakeup, now)).toBe(when);
+    expect(wakeupTitle(wakeup, now)).toBe(title);
   });
 
   it('sets tomorrow at 09:00 local time', () => {

@@ -29,9 +29,10 @@ async function setup(restored: Session | null = null) {
       return { data: { url: 'https://supabase.test/auth/v1/authorize?state=library-state' }, error: null };
     }),
     exchangeCodeForSession: jest.fn<ReturnType<AuthGateway['exchangeCodeForSession']>, Parameters<AuthGateway['exchangeCodeForSession']>>(async () => result(session())), signOut: jest.fn<ReturnType<AuthGateway['signOut']>, Parameters<AuthGateway['signOut']>>(async () => ({ error: null })),
+    signInWithPassword: jest.fn<ReturnType<AuthGateway['signInWithPassword']>, Parameters<AuthGateway['signInWithPassword']>>(async () => result(session('reviewer', 'review-access'))),
     startAutoRefresh: jest.fn(), stopAutoRefresh: jest.fn(),
   };
-  const response = deferred<{ type: string; url?: string }>();
+  const response = deferred<{ type: string; url?: string; error?: string | null }>();
   const browser = { open: jest.fn(() => response.promise), dismiss: jest.fn() };
   const boundary = jest.fn(async () => {});
   let now = 1000;
@@ -60,11 +61,30 @@ describe('native authentication', () => {
     expect(auth.exchangeCodeForSession).toHaveBeenCalledTimes(1);
     expect(controller.getSnapshot().status).toBe('signedIn');
   });
-  it.each(['cancel', 'dismiss'])('handles browser %s', async (type) => {
+  it.each([
+    [{ type: 'cancel' }, 'cancel'],
+    [{ type: 'dismiss' }, 'dismiss'],
+    [{ type: 'cancel', error: null }, 'cancel'],
+    [{ type: 'cancel', error: 'The operation couldn’t be completed.' }, 'cancel: The operation couldn’t be completed.'],
+  ])('handles browser result %j', async (value, detail) => {
     const { begin, response, controller, storage } = await setup();
-    const { task } = await begin(); response.resolve({ type }); await task;
-    expect(controller.getSnapshot()).toMatchObject({ status: 'signedOut', issue: 'cancelled' });
+    const { task } = await begin(); response.resolve(value); await task;
+    expect(controller.getSnapshot()).toEqual({ status: 'signedOut', user: null, issue: 'cancelled', detail });
     expect(await storage.getItem('session-code-verifier')).toBeNull();
+  });
+  it('reports why the browser could not start', async () => {
+    const { auth, storage, browser, controller } = await setup();
+    browser.open.mockImplementationOnce(() => Promise.reject(new Error('x'.repeat(300))));
+    await controller.signIn();
+    expect(auth.signInWithOAuth).toHaveBeenCalled();
+    expect(controller.getSnapshot()).toEqual({ status: 'signedOut', user: null, issue: 'failed', detail: 'x'.repeat(200) });
+    expect(await storage.getItem('attempt')).toBeNull();
+  });
+  it('reports no detail when the auth service refuses to start', async () => {
+    const { auth, controller } = await setup();
+    auth.signInWithOAuth.mockResolvedValueOnce({ data: { url: null }, error: new Error('provider is disabled') });
+    await controller.signIn();
+    expect(controller.getSnapshot()).toEqual({ status: 'signedOut', user: null, issue: 'failed' });
   });
   it('handles timeout and dismisses the browser', async () => {
     jest.useFakeTimers();
@@ -221,4 +241,54 @@ it('stops a pending refresh start after suspension', async () => {
 it('does not sign out from an event without auth-service rejection', async () => {
   const { controller, auth } = await setup(session()); controller.authEvent('SIGNED_OUT', null);
   expect(controller.getSnapshot().status).toBe('signedIn'); expect(auth.signOut).not.toHaveBeenCalled();
+});
+
+describe('password sign-in for store review', () => {
+  it('signs in like the OAuth exchange and passes the password through unchanged', async () => {
+    const { controller, auth, boundary, browser } = await setup();
+    await controller.signInWithPassword('reviewer@example.com', '  p@ss word  ');
+    expect(auth.signInWithPassword).toHaveBeenCalledWith({ email: 'reviewer@example.com', password: '  p@ss word  ' });
+    expect(controller.getSnapshot()).toEqual({ status: 'signedIn', user: { id: 'reviewer', email: 'reviewer@example.com' }, issue: null });
+    expect(boundary).toHaveBeenCalledWith(null);
+    expect(browser.open).not.toHaveBeenCalled();
+    expect(auth.signInWithOAuth).not.toHaveBeenCalled();
+    expect(JSON.stringify(controller.getSnapshot())).not.toContain('p@ss');
+  });
+  it('keeps the session for later access tokens', async () => {
+    const { controller, auth } = await setup();
+    auth.getSession.mockResolvedValue(result(session('reviewer', 'review-access')));
+    await controller.signInWithPassword('reviewer@example.com', 'secret');
+    expect(await controller.getAccessToken()).toBe('review-access');
+  });
+  it.each([
+    ['an auth error', result(null, new Error('Invalid login credentials secret-password'))],
+    ['no session', result(null)],
+  ])('stays signed out on %s and sets the issue', async (_name, outcome) => {
+    const { controller, auth } = await setup();
+    auth.signInWithPassword.mockResolvedValueOnce(outcome);
+    await controller.signInWithPassword('reviewer@example.com', 'secret-password');
+    expect(controller.getSnapshot()).toEqual({ status: 'signedOut', user: null, issue: 'credentials' });
+    expect(await controller.getAccessToken()).toBeNull();
+  });
+  it('stays signed out when the request throws', async () => {
+    const { controller, auth } = await setup();
+    auth.signInWithPassword.mockRejectedValueOnce(new Error('network down'));
+    await controller.signInWithPassword('reviewer@example.com', 'secret');
+    expect(controller.getSnapshot()).toMatchObject({ status: 'signedOut', user: null, issue: 'failed' });
+  });
+  it('serializes calls and ignores a call while signed in', async () => {
+    const { controller, auth } = await setup();
+    const first = controller.signInWithPassword('reviewer@example.com', 'secret');
+    expect(controller.signInWithPassword('reviewer@example.com', 'secret')).toBe(first);
+    await first;
+    await controller.signInWithPassword('reviewer@example.com', 'secret');
+    expect(auth.signInWithPassword).toHaveBeenCalledTimes(1);
+  });
+  it('can sign in again after a failure', async () => {
+    const { controller, auth } = await setup();
+    auth.signInWithPassword.mockResolvedValueOnce(result(null, new Error('bad')));
+    await controller.signInWithPassword('reviewer@example.com', 'wrong');
+    await controller.signInWithPassword('reviewer@example.com', 'right');
+    expect(controller.getSnapshot().status).toBe('signedIn');
+  });
 });

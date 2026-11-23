@@ -40,6 +40,8 @@ export function usageStatus(
     balanceMicros?: number;
     lots?: CreditLot[];
     expiringSoonMicros?: number;
+    /** The credit draw's start, as the backend sends it while the account draws on credit. */
+    drawStartMicros?: number;
     /** Send Max prices, as a backend does when this account may buy Max. A Max holder always gets them. */
     maxOffered?: boolean;
     overrides?: Partial<BillingStatus>;
@@ -71,6 +73,7 @@ export function usageStatus(
             balanceMicros: opts.balanceMicros ?? 0,
             expiringSoonMicros: opts.expiringSoonMicros ?? 0,
             lots: opts.lots ?? [],
+            ...(opts.drawStartMicros !== undefined ? { drawStartMicros: opts.drawStartMicros } : {}),
           },
         }
       : {}),

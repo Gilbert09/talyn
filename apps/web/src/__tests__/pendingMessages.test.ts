@@ -29,7 +29,7 @@ const message = (over: Partial<PendingUserMessage> = {}): PendingUserMessage => 
 });
 
 describe('pendingMessageState', () => {
-  it.each<[string, Partial<PendingUserMessage>, { events?: WorkbenchEvent[]; queued?: { text: string }[]; running?: boolean; now?: number }, 'show' | 'hide' | 'done']>([
+  it.each<[string, Partial<PendingUserMessage>, { events?: WorkbenchEvent[]; queued?: { text: string }[]; running?: boolean; now?: number }, 'show' | 'queue' | 'hide' | 'done']>([
     ['in flight, nothing else known', {}, {}, 'show'],
     ['in flight, even when the queue has the same text', {}, { queued: [{ text: 'Fix the login' }] }, 'show'],
     ['in flight, the chat idle long after', {}, { now: NOW + 60_000 }, 'show'],
@@ -50,6 +50,17 @@ describe('pendingMessageState', () => {
     ['failed, the chat running', { failed }, { running: true }, 'show'],
     ['failed, the queue has the same text', { failed }, { queued: [{ text: 'Fix the login' }] }, 'show'],
     ['failed, its event arrived after all', { failed }, { events: [userEvent(1, 'Fix the login')] }, 'done'],
+    ['in flight, sent while a turn runs', { queued: true }, { running: true }, 'queue'],
+    ['in flight, sent while a turn runs, the chat idle now', { queued: true }, {}, 'queue'],
+    ['in flight, sent while a turn runs, its event arrived', { queued: true }, { events: [userEvent(1, 'Fix the login')], running: true }, 'done'],
+    ['queued, the chat not yet updated', { queued: true, settledAt: NOW - 1_000 }, { running: true }, 'queue'],
+    ['queued, the chat idle and not yet updated', { queued: true, settledAt: NOW - 1_000 }, {}, 'queue'],
+    ['queued, the queue lists it', { queued: true, settledAt: NOW - 1_000 }, { queued: [{ text: 'Fix the login' }], running: true }, 'hide'],
+    ['queued, its turn started after the grace', { queued: true, settledAt: NOW - PENDING_MESSAGE_GRACE_MS }, { running: true }, 'show'],
+    ['queued, the chat idle after the grace', { queued: true, settledAt: NOW - 60_000 }, {}, 'done'],
+    ['queued, its event arrived', { queued: true, settledAt: NOW - 1_000 }, { events: [userEvent(1, 'Fix the login')] }, 'done'],
+    ['queued, then the send failed', { queued: true, failed }, { running: true }, 'show'],
+    ['not queued, sent while idle', { queued: false, settledAt: NOW - 1_000 }, { running: true }, 'show'],
     ['failed, an older message has the same text', { afterSeq: 5, failed }, { events: [userEvent(5, 'Fix the login')] }, 'show'],
   ])('%s', (_name, over, ctx, expected) => {
     expect(

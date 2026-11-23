@@ -3,6 +3,7 @@ import type { AgentEvent, CloudTaskMetadata, TaskResult, TaskStatus } from '@tal
 import {
   fleetAgentForModel,
   isSandboxSize,
+  parseAwaitCiSentinel,
   parseNeedsHumanSentinel,
   readCloudTaskMeta,
   readCloudTaskProvider,
@@ -27,7 +28,7 @@ import { githubService } from '../github.js';
 import { getSelfHostedClient } from './credentials.js';
 import { resolveRunCredential } from './accountSelection.js';
 import { findHotSwap, forgetHotSwapRun, recordHotSwap } from './hotSwap.js';
-import { finalTextFromEvents, toAgentEvent } from './eventCursor.js';
+import { eventsOfTask, finalTextFromEvents, toAgentEvent } from './eventCursor.js';
 import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
 import { FleetRunNotFoundError, fleetInstant } from './client.js';
 import type { FleetClient, FleetEvent, FleetSandbox, FleetSandboxTask } from './client.js';
@@ -40,7 +41,8 @@ import {
 } from './exhaustedQuota.js';
 import { failoverExhaustedRun } from '../cloudProviders/quotaFailover.js';
 import { meterBoxClosed, meterBoxOpened } from '../billing/usageHooks.js';
-import { fleetRunAttempt, fleetRunIdForTask } from './executor.js';
+import { ciParkFromTask, fleetRunAttempt, fleetRunIdForTask } from './executor.js';
+import { parkForCi, readAwaitCi, RESUME_FAILED_SUMMARY } from '../ciPark.js';
 
 // Re-exported, not redeclared. This module and the other providers' pollers
 // each had a byte-identical copy of the predicate and the two constants behind
@@ -80,6 +82,27 @@ export function initialTaskOf(sandbox: FleetSandbox): FleetSandboxTask | undefin
 }
 
 /**
+ * The task on a sandbox that a Talyn task is following: the one it recorded
+ * (`cloudTask.extra.fleetTaskId`, written when a parked run is resumed with
+ * the next prompt), else the latest. On an ephemeral sandbox both are the
+ * initial task, its only entry.
+ */
+export function currentTaskOf(
+  sandbox: FleetSandbox,
+  fleetTaskId?: string | null,
+): FleetSandboxTask | undefined {
+  const tasks = sandbox.tasks ?? [];
+  if (fleetTaskId) {
+    const recorded = tasks.find((t) => t.taskId === fleetTaskId);
+    if (recorded) return recorded;
+  }
+  return tasks[tasks.length - 1];
+}
+
+/** How long a claimed wake may go without putting the next prompt on the box. */
+export const CI_PARK_WAKE_STALE_MS = 15 * 60_000;
+
+/**
  * Map a terminal sandbox onto a local task outcome.
  *
  * The sandbox's own terminal state is not the answer: an EPHEMERAL sandbox
@@ -95,8 +118,8 @@ export function initialTaskOf(sandbox: FleetSandbox): FleetSandboxTask | undefin
  * `failed` label hid. Keeping the two apart is what makes the failure count
  * mean something.
  */
-export function taskOutcomeForSandbox(sandbox: FleetSandbox): TaskStatus {
-  const task = initialTaskOf(sandbox);
+export function taskOutcomeForSandbox(sandbox: FleetSandbox, fleetTaskId?: string | null): TaskStatus {
+  const task = currentTaskOf(sandbox, fleetTaskId);
   if (task?.status === 'completed') return 'completed';
   if (task?.status === 'cancelled') return 'cancelled';
   if (task?.status === 'failed') return 'failed';
@@ -304,7 +327,8 @@ class SelfHostedPoller {
 
     // The PR can be reported on the task history entry or on the sandbox
     // record itself, depending on which side of the merge the host is.
-    const prUrl = sandbox.prUrl ?? initialTaskOf(sandbox)?.prUrl ?? cloud.prUrl ?? null;
+    const fleetTaskId = (cloud.extra as { fleetTaskId?: string } | undefined)?.fleetTaskId ?? null;
+    const prUrl = sandbox.prUrl ?? currentTaskOf(sandbox, fleetTaskId)?.prUrl ?? cloud.prUrl ?? null;
     // Everything Talyn stores and emits keeps the pre-merge run-status
     // vocabulary — see cloudStatusForSandbox.
     const cloudStatus = cloudStatusForSandbox(sandbox);
@@ -324,12 +348,88 @@ class SelfHostedPoller {
       metadata: { cloudTask: { status: cloudStatus, prUrl: prUrl ?? undefined } },
     });
 
-    if (!terminal) return;
+    if (!terminal) {
+      // A box that outlives its task (`ci-park`): its turn ending is the
+      // moment to park it or finish it, because the fleet will not stop it.
+      if (ciParkFromTask(row) && sandbox.ephemeral !== true) {
+        await this.settleTurn(row, client, runId, sandbox, fleetTaskId, prUrl);
+      }
+      return;
+    }
 
     if (prUrl && row.repositoryId) {
       await this.linkPr(row.workspaceId, row.repositoryId, row.id, prUrl);
     }
-    await this.finalize(row.id, row.workspaceId, sandbox, prUrl);
+    await this.finalize(row.id, row.workspaceId, sandbox, prUrl, { fleetTaskId });
+  }
+
+  /**
+   * The current task on a box that is not ephemeral has ended. Park the run
+   * when its last line asks to wait for CI; otherwise finish it the usual way
+   * and delete the box, which would otherwise idle on the bill.
+   */
+  private async settleTurn(
+    row: CloudTaskRow,
+    client: FleetClient,
+    runId: string,
+    sandbox: FleetSandbox,
+    fleetTaskId: string | null,
+    prUrl: string | null,
+  ): Promise<void> {
+    const current = currentTaskOf(sandbox, fleetTaskId);
+    if (!current || current.status === 'running') return;
+
+    const parked = readAwaitCi(row.metadata);
+    let finalText: string | null | undefined;
+    if (parked && current.taskId === parked.fleetTaskId) {
+      // A wake has claimed the task and not yet put the next prompt on the box,
+      // so the latest task is still the one that parked. Leave it to the wake,
+      // unless the wake died part-way.
+      const wakingAt = parked.wakingAt ? Date.parse(parked.wakingAt) : Number.NaN;
+      if (Number.isFinite(wakingAt) && Date.now() - wakingAt < CI_PARK_WAKE_STALE_MS) return;
+      finalText = null;
+    }
+
+    await this.cursors.persistIfDue(row.id, this.transcripts.get(row.id) ?? [], { force: true });
+    if (finalText === undefined) {
+      finalText = await this.finalAssistantText(row.id, this.transcripts.get(row.id), current.taskId);
+      if (current.status === 'completed' && !parseNeedsHumanSentinel(finalText)) {
+        const sentinel = parseAwaitCiSentinel(finalText);
+        if (sentinel) {
+          const done = await parkForCi({
+            taskId: row.id,
+            workspaceId: row.workspaceId,
+            metadata: row.metadata,
+            runId,
+            client,
+            fleetTask: current,
+            headSha: sentinel.headSha,
+          });
+          if (done) {
+            // The transcript cursor stays: the next turn continues this ring.
+            this.stopFollow(row.id);
+            return;
+          }
+        }
+      }
+    }
+
+    if (prUrl && row.repositoryId) {
+      await this.linkPr(row.workspaceId, row.repositoryId, row.id, prUrl);
+    }
+    await this.finalize(row.id, row.workspaceId, sandbox, prUrl, {
+      fleetTaskId: current.taskId,
+      finalText,
+      ...(finalText === null && parked ? { summary: RESUME_FAILED_SUMMARY } : {}),
+    });
+    await markTranscriptFinal(row.id);
+    try {
+      await client.deleteSandbox(runId);
+    } catch (err) {
+      console.warn(`[selfhosted] deleting finished box ${runId} failed:`, err instanceof Error ? err.message : err);
+    }
+    this.meterSuspended.delete(runId);
+    await meterBoxClosed({ sandboxId: runId, reason: 'deleted', workspaceId: row.workspaceId });
   }
 
   /**
@@ -855,16 +955,23 @@ class SelfHostedPoller {
     workspaceId: string,
     sandbox: FleetSandbox,
     prUrl: string | null,
+    turn: {
+      fleetTaskId?: string | null;
+      /** Already read by `settleTurn`, scoped to the current task. Null means unknown. */
+      finalText?: string | null;
+      /** Replaces the completed summary. */
+      summary?: string;
+    } = {},
   ): Promise<void> {
     // Kept before `stopStreaming` deletes it: the sentinel is read from it below.
     const events = this.transcripts.get(taskId);
     this.stopStreaming(taskId);
     clearWatched(taskId);
 
-    // The OUTCOME is the initial task's, not the sandbox's own state — an
+    // The OUTCOME is the current task's, not the sandbox's own state — an
     // ephemeral sandbox reports `stopped` after success and failure alike.
-    const status = taskOutcomeForSandbox(sandbox);
-    const failureDetail = initialTaskOf(sandbox)?.error || sandbox.error;
+    const status = taskOutcomeForSandbox(sandbox, turn.fleetTaskId);
+    const failureDetail = currentTaskOf(sandbox, turn.fleetTaskId)?.error || sandbox.error;
 
     // The vendor telling us, the only way it ever will, that a model we offer
     // is no longer usable on a subscription. There is no endpoint for this —
@@ -924,7 +1031,9 @@ class SelfHostedPoller {
     // Exact match only, so an infra failure is never re-read as a refusal.
     const needsHuman =
       parseNeedsHumanSentinel(failureDetail) ??
-      parseNeedsHumanSentinel(await this.finalAssistantText(taskId, events));
+      parseNeedsHumanSentinel(
+        turn.finalText !== undefined ? turn.finalText : await this.finalAssistantText(taskId, events),
+      );
 
     const outcome: TaskStatus = needsHuman ? 'needs_human' : status;
     const result: TaskResult = needsHuman
@@ -936,7 +1045,7 @@ class SelfHostedPoller {
       : status === 'completed'
         ? {
             success: true,
-            summary: prUrl ? `The fleet opened ${prUrl}` : 'Fleet run completed',
+            summary: turn.summary ?? (prUrl ? `The fleet opened ${prUrl}` : 'Fleet run completed'),
           }
         : {
             success: false,
@@ -966,11 +1075,16 @@ class SelfHostedPoller {
   private async finalAssistantText(
     taskId: string,
     events: readonly AgentEvent[] | undefined,
+    fleetTaskId?: string,
   ): Promise<string | null> {
-    if (events?.length) return finalTextFromEvents(events);
+    // A box that ran several turns holds them all in one ring. Only the
+    // current turn's words count, or a resumed run that said nothing would be
+    // read as repeating the previous turn's sentinel.
+    const scope = (all: readonly AgentEvent[]) => (fleetTaskId ? eventsOfTask(all, fleetTaskId) : all);
+    if (events?.length) return finalTextFromEvents(scope(events));
     try {
       const [row] = await finalAssistantTailQuery(taskId);
-      return finalTextFromEvents(row?.events ?? []);
+      return finalTextFromEvents(scope(row?.events ?? []));
     } catch (err) {
       console.error(`[selfhosted] failed to read transcript tail for ${taskId.slice(0, 8)}:`, err);
       return null;

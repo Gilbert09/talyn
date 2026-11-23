@@ -1,13 +1,106 @@
-import { editDiffFromInput, type EditDiff, type ToolBlock, type ToolGroupBlock } from '@talyn/shared';
+import { editDiffFromInput, subagentCardModel, type EditDiff, type SubagentCardModel, type ToolBlock, type ToolGroupBlock } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
-import { memo, useMemo, useState, type ReactNode } from 'react';
+import { createContext, memo, useContext, useMemo, useRef, useState, type ComponentRef, type ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { mono, type, useTheme, withAlpha } from '../../theme/tokens';
+import { useFeatures } from '../../lib/features';
+import { useNow } from '../../lib/time';
+import { mono, radius, type, useTheme, withAlpha } from '../../theme/tokens';
 import { ROW_TEXT_LIMIT } from '../../workflow/model';
+import { useTranscriptActions } from './fullTool';
+import { Markdown } from './Markdown';
 import { StatusDot } from './Pulse';
-import { ThinkingRow } from './TranscriptParts';
+import { useHighlighter } from './findHighlight';
+import { AgentText, ThinkingRow } from './TranscriptParts';
 import { diffTone, preview, readableOutput, toolLine, type DiffTone } from './toolFormat';
+
+/**
+ * Opens a subagent's tab in the conversation. Null where there are no tabs:
+ * the subagents that a subagent starts.
+ */
+export const SubagentTabOpener = createContext<((toolId: string) => void) | null>(null);
+
+function SubagentCard({ tool, open, onToggle, isPreview, wholeStatus, canLoad, loadWhole }: {
+  tool: ToolBlock; open: boolean; onToggle(): void; isPreview: boolean;
+  wholeStatus: string; canLoad: boolean; loadWhole(): void;
+}) {
+  const c = useTheme();
+  const enabled = useFeatures()?.sessionSubagents === true;
+  const now = useNow();
+  const openTab = useContext(SubagentTabOpener);
+  const subagent = subagentCardModel(tool, enabled, now)!;
+  return <View style={[styles.subagent, { borderColor: c.border, backgroundColor: c.card }]}>
+    <View style={styles.cardTop}>
+      <Pressable accessibilityRole="button" accessibilityLabel={`Subagent · ${subagent.type}, ${subagent.title}, ${subagent.stepsLabel}`}
+        accessibilityState={{ expanded: open }} onPress={onToggle} style={styles.cardHeader}>
+        <SubagentHeading tool={tool} subagent={subagent} />
+        <Chevron open={open} />
+      </Pressable>
+      {enabled && openTab ? <Pressable accessibilityRole="button" accessibilityLabel={`Open ${subagent.title} in a tab`} hitSlop={6}
+        onPress={() => openTab(tool.toolId)} style={styles.openTab}>
+        <Text style={[type.caption, { color: c.primaryAction }]}>Open</Text>
+      </Pressable> : null}
+    </View>
+    {open ? <View style={[styles.cardBody, { borderColor: c.border }]}>
+      <SubagentBody subagent={subagent} />
+      {isPreview ? wholeStatus === 'loading' ? <Text style={[type.caption, { color: c.muted }]}>Loading the whole call</Text>
+        : canLoad ? <ShowMore label={wholeStatus === 'failed' ? 'Could not load the whole call. Try again' : 'Show the whole call'} onPress={loadWhole} />
+          : <Text style={[type.caption, { color: c.muted }]}>Preview. Open the session on the web for the whole output.</Text> : null}
+    </View> : null}
+  </View>;
+}
+
+function SubagentHeading({ tool, subagent }: { tool: ToolBlock; subagent: SubagentCardModel }) {
+  const c = useTheme();
+  const mark = useHighlighter();
+  const state = !tool.settled ? 'running' : tool.isError ? 'error' : 'done';
+  return <>
+    <SymbolView name={{ ios: 'person.2', android: 'group' }} size={16} tintColor={c.muted} />
+    <View style={{ flex: 1, gap: 4 }}>
+      <Text style={[type.caption, { color: c.muted }]}>Subagent · {subagent.type}</Text>
+      <Text style={[type.rowTitle, { color: c.text }]}>{mark(subagent.title)}</Text>
+      <View style={styles.line}>
+        <StatusDot state={state} />
+        <Text style={[type.caption, { color: subagent.failed ? c.destructive : c.muted }]}>{subagent.stepsLabel}</Text>
+        {subagent.detailsLabel ? <Text style={[type.caption, { color: c.muted }]}>{subagent.detailsLabel}</Text> : null}
+      </View>
+    </View>
+  </>;
+}
+
+/** The brief, the steps and the result of a subagent. Its own subagents get no tabs. */
+function SubagentBody({ subagent }: { subagent: SubagentCardModel }) {
+  const c = useTheme();
+  return <SubagentTabOpener.Provider value={null}>
+    <Section label="Brief from the agent"><View style={{ opacity: 0.7 }}><Markdown text={subagent.brief} /></View></Section>
+    {subagent.children.length ? <Section label="Steps">{subagent.children.map((child) =>
+      child.kind === 'tool' ? <ToolRow key={child.key} tool={child} nested />
+        : child.kind === 'tool_group' ? <ToolGroupRow key={child.key} group={child} />
+          : child.kind === 'text' ? <AgentText key={child.key} text={child.text} streaming={child.key.startsWith('stream-')} />
+            : child.kind === 'thinking' ? <ThinkingRow key={child.key} text={child.text} /> : null,
+    )}</Section> : null}
+    <Section label="Result">{subagent.result !== null ? <Markdown text={subagent.result} />
+      : subagent.running ? <Text style={[type.caption, { color: c.muted }]}>Still working</Text> : null}</Section>
+  </SubagentTabOpener.Provider>;
+}
+
+/** A subagent's own transcript, shown in its tab. Follows new steps while the reader is at the end. */
+export function SubagentTranscript({ tool }: { tool: ToolBlock }) {
+  const now = useNow();
+  const subagent = subagentCardModel(tool, true, now)!;
+  const ref = useRef<ComponentRef<typeof ScrollView>>(null);
+  const following = useRef(subagent.running);
+  return <ScrollView ref={ref} testID="subagent-transcript" accessibilityLabel={`Subagent transcript: ${subagent.title}`}
+    contentContainerStyle={styles.transcript} keyboardShouldPersistTaps="handled" scrollEventThrottle={100}
+    onScroll={(event) => {
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      following.current = contentSize.height - contentOffset.y - layoutMeasurement.height < 64;
+    }}
+    onContentSizeChange={() => { if (following.current) ref.current?.scrollToEnd({ animated: false }); }}>
+    <View style={styles.transcriptHeader}><SubagentHeading tool={tool} subagent={subagent} /></View>
+    <SubagentBody subagent={subagent} />
+  </ScrollView>;
+}
 
 const PREVIEW_LINES = 12;
 const PREVIEW_CHARS = 1200;
@@ -70,47 +163,75 @@ function inputText(input: unknown): string {
   try { return JSON.stringify(input, null, 2) ?? ''; } catch { return String(input); }
 }
 
+type FullState = { status: 'idle' | 'loading' | 'failed' } | { status: 'ready'; tool: ToolBlock };
+
 /**
  * One tool call as a compact mono line, like web: a status dot, the verb and
  * what it acted on. Tapping opens the input and the result.
+ *
+ * `partial`: the transcript holds a preview of the call or its result. "Show more" loads the
+ * whole call once and keeps it in this row only, so it leaves memory with the row.
  */
-export const ToolRow = memo(function ToolRow({ tool, nested = false }: { tool: ToolBlock; nested?: boolean }) {
+export const ToolRow = memo(function ToolRow({ tool: held, nested = false, partial = false }: { tool: ToolBlock; nested?: boolean; partial?: boolean }) {
   const c = useTheme();
+  const mark = useHighlighter();
+  const actions = useTranscriptActions();
   const [open, setOpen] = useState(false);
   const [full, setFull] = useState(false);
+  const [whole, setWhole] = useState<FullState>({ status: 'idle' });
+  const asked = useRef(false);
+  const tool = useMemo(() => whole.status === 'ready' ? { ...held, input: whole.tool.input, output: whole.tool.output ?? held.output } : held, [whole, held]);
+  const isPreview = (partial || actions?.partialTools?.has(held.toolId)) && whole.status !== 'ready';
+  const loadWhole = () => {
+    if (!actions || asked.current) return;
+    asked.current = true;
+    setWhole({ status: 'loading' });
+    const failed = () => { asked.current = false; setWhole({ status: 'failed' }); };
+    actions.loadFullTool(held).then((loaded) => { if (loaded) setWhole({ status: 'ready', tool: loaded }); else failed(); }, failed);
+  };
   const line = useMemo(() => toolLine(tool.name, tool.input), [tool.name, tool.input]);
   const editDiff = useMemo(() => editDiffFromInput(tool.name, tool.input), [tool.name, tool.input]);
   const output = useMemo(() => open || tool.isError ? readableOutput(editDiff && !tool.isError ? undefined : tool.output) : null,
     [open, tool.isError, tool.output, editDiff]);
   const input = useMemo(() => open && !editDiff ? inputText(tool.input) : '', [open, editDiff, tool.input]);
   const state = !tool.settled ? 'running' : tool.isError ? 'error' : 'done';
-  const shown = output ? full ? { text: output.text.slice(0, ROW_TEXT_LIMIT), hidden: output.text.length > ROW_TEXT_LIMIT }
-    : preview(output.text, open ? PREVIEW_LINES : 3, PREVIEW_CHARS) : null;
+  const shown = output ? full ? { text: output.text.slice(0, ROW_TEXT_LIMIT), hidden: output.text.length > ROW_TEXT_LIMIT || isPreview }
+    : { ...preview(output.text, open ? PREVIEW_LINES : 3, PREVIEW_CHARS), ...(isPreview ? { hidden: true } : {}) } : null;
+  const more = () => { setOpen(true); setFull(true); if (isPreview) loadWhole(); };
   const label = `${line.label}${line.detail ? ` ${line.detail}` : ''}${state === 'running' ? ', running' : state === 'error' ? ', failed' : ''}`;
+  if (subagentCardModel(tool)) return <SubagentCard tool={tool} open={open}
+    onToggle={() => { setOpen(!open); if (!open && isPreview) loadWhole(); }}
+    isPreview={Boolean(isPreview)} wholeStatus={whole.status} canLoad={Boolean(actions)} loadWhole={loadWhole} />;
   return <View style={[styles.tool, nested && { paddingVertical: 2 }]}>
     <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ expanded: open }}
       onPress={() => setOpen(!open)} style={styles.line} hitSlop={4}>
       <StatusDot state={state} />
-      <Text numberOfLines={1} style={[styles.label, { color: tool.isError ? c.destructive : c.text }]}>{line.label}</Text>
-      {line.detail ? <Text numberOfLines={1} style={[styles.detail, { color: c.muted }]}>{line.detail}</Text> : <View style={{ flex: 1 }} />}
-      {editDiff ? <Text style={styles.counts}><Text style={{ color: c.success }}>+{editDiff.added}</Text> <Text style={{ color: c.destructive }}>−{editDiff.removed}</Text></Text> : null}
+      <Text numberOfLines={1} style={[styles.label, { color: tool.isError ? c.destructive : c.text }]}>{mark(line.label)}</Text>
+      {line.detail ? <Text numberOfLines={1} style={[styles.detail, { color: c.muted }]}>{mark(line.detail)}</Text> : <View style={{ flex: 1 }} />}
+      {editDiff && !isPreview ? <Text style={styles.counts}><Text style={{ color: c.success }}>+{editDiff.added}</Text> <Text style={{ color: c.destructive }}>−{editDiff.removed}</Text></Text> : null}
       {tool.stopped ? <Text style={[styles.counts, { color: c.muted }]}>stopped</Text> : null}
       <Chevron open={open} />
     </Pressable>
     {open || (tool.isError && shown?.text) ? <View style={[styles.body, { borderColor: tool.isError ? withAlpha(c.destructive, 0.4) : c.border }]}>
       {open && input ? <Section label="Input"><Text selectable style={[styles.code, { color: c.text }]}>{input.slice(0, PREVIEW_CHARS * 4)}</Text></Section> : null}
+      {open && isPreview && actions && !shown?.text ? whole.status === 'loading' ? <Text style={[type.caption, { color: c.muted }]}>Loading the whole call</Text>
+        : <ShowMore label={whole.status === 'failed' ? 'Could not load the whole call. Try again' : 'Show the whole call'} onPress={loadWhole} /> : null}
       {open && editDiff && editDiff.lines.length ? <EditDiffBody diff={editDiff} /> : null}
       {shown?.text ? <Section label={tool.isError ? 'Error' : `Result${output?.summary ? ` · ${output.summary}` : ''}`}>
         <CodeText text={shown.text} diff={Boolean(output?.diff)} tone={tool.isError ? 'error' : undefined} />
-        {shown.hidden && !full ? <ShowMore label="Show more" onPress={() => { setOpen(true); setFull(true); }} /> : null}
+        {whole.status === 'loading' ? <Text style={[type.caption, { color: c.muted }]}>Loading the whole output</Text>
+          : whole.status === 'failed' ? <ShowMore label="Could not load the whole output. Try again" onPress={loadWhole} />
+            : shown.hidden && (!full || (isPreview && actions)) ? <ShowMore label="Show more" onPress={more} />
+              : isPreview ? <Text style={[type.caption, { color: c.muted }]}>Preview. Open the session on the web for the whole output.</Text> : null}
       </Section> : open && !editDiff && tool.settled ? <Text style={[type.caption, { color: c.muted }]}>No output.</Text> : null}
     </View> : null}
   </View>;
 });
 
 /** A run of tool calls folded into one line, like web: "Ran 3 commands, read a file". */
-export const ToolGroupRow = memo(function ToolGroupRow({ group }: { group: ToolGroupBlock }) {
+export const ToolGroupRow = memo(function ToolGroupRow({ group, partial = [] }: { group: ToolGroupBlock; partial?: readonly string[] }) {
   const c = useTheme();
+  const mark = useHighlighter();
   const [open, setOpen] = useState(group.lastFailed && !group.running);
   const state = group.running ? 'running' : group.isError ? 'error' : 'done';
   return <View style={styles.tool}>
@@ -118,19 +239,26 @@ export const ToolGroupRow = memo(function ToolGroupRow({ group }: { group: ToolG
       accessibilityState={{ expanded: open }} onPress={() => setOpen(!open)} style={styles.line} hitSlop={4}>
       <StatusDot state={state} />
       <Text numberOfLines={1} style={[styles.detail, { color: c.muted }]}>
-        {group.summary}{group.failedCount > 0 ? <Text style={{ color: c.destructive }}> · {group.failedCount} failed</Text> : null}
+        {mark(group.summary)}{group.failedCount > 0 ? <Text style={{ color: c.destructive }}> · {group.failedCount} failed</Text> : null}
       </Text>
       <Chevron open={open} />
     </Pressable>
     {open ? <View style={[styles.group, { borderColor: c.border }]}>
       {group.children.map((child) => child.kind === 'thinking'
         ? <ThinkingRow key={child.key} text={child.text} compact />
-        : <ToolRow key={child.key} tool={child} nested />)}
+        : <ToolRow key={child.key} tool={child} nested partial={partial.includes(child.toolId)} />)}
     </View> : null}
   </View>;
 });
 
 const styles = StyleSheet.create({
+  subagent: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, marginVertical: 3 },
+  cardTop: { flexDirection: 'row', alignItems: 'flex-start' },
+  cardHeader: { flex: 1, flexDirection: 'row', alignItems: 'flex-start', padding: 12, gap: 8 },
+  openTab: { paddingHorizontal: 10, paddingVertical: 12 },
+  transcript: { padding: 16, gap: 12 },
+  transcriptHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  cardBody: { borderTopWidth: StyleSheet.hairlineWidth, padding: 12, gap: 12 },
   tool: { paddingVertical: 3 },
   line: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 28 },
   label: { ...mono(500), fontSize: 12.5, lineHeight: 18, flexShrink: 0, maxWidth: '45%' },

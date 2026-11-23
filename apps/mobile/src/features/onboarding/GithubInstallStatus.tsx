@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { AppText, Banner, Button, Pill, Spinner } from '../../components/UI';
+import { trackEvent } from '../../lib/analytics';
 import { showActionError } from '../../lib/errors';
 import { formatOwnerList, openGithubAppFlow, uncoveredOwners } from './githubFlow';
 
@@ -34,6 +35,8 @@ export function GithubInstallStatus({ workspaceId, installations, checked, loadi
 
   const install = async (target: 'connect' | 'manage') => {
     setOpening(true);
+    // A first install outside onboarding is web's `panel` source.
+    if (target === 'connect') trackEvent('github_connect_started', { source: 'panel' });
     try { await openGithubAppFlow(workspaceId, target); } catch (error) { showActionError('Could not open GitHub', error); } finally { setOpening(false); }
     onRefresh();
   };

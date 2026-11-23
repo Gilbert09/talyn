@@ -11,7 +11,6 @@ import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
 import {
-  environments as environmentsTable,
   repositories as reposTable,
   users as usersTable,
   workspaces as workspacesTable,
@@ -19,6 +18,9 @@ import {
 import { createLoop } from '../../services/loops/store.js';
 import * as loopsAccess from '../../services/loopsAccess.js';
 import * as registry from '../../services/cloudProviders/registry.js';
+import * as fleetAccess from '../../services/cloudProviders/fleetAccess.js';
+import * as fleetCredentials from '../../services/selfHosted/credentials.js';
+import * as workbenchReadiness from '../../services/workbenches/readiness.js';
 
 /**
  * POST /loops has no plan cap any more: usage billing removed the free plan's
@@ -66,8 +68,9 @@ describe('POST /loops has no plan cap', () => {
       prompt: 'Fix yesterday’s failing checks.',
       cron: '0 9 * * *',
       timezone: 'UTC',
-      provider: 'posthog_code',
-      model: 'claude-opus-5',
+      provider: 'selfhosted',
+      model: 'claude-sonnet-5-5',
+      target: 'session',
       repositoryId: workspaceId === 'ws-second' ? 'repo-second' : 'repo-mine',
       repoFullName: workspaceId === 'ws-second' ? 'acme/second' : 'acme/widget',
       ...over,
@@ -118,15 +121,16 @@ describe('POST /loops has no plan cap', () => {
         defaultBranch: 'main',
       },
     ]);
-    await db.insert(environmentsTable).values({
-      id: 'env-1',
-      ownerId: TEST_USER_ID,
-      name: 'PostHog Code',
-      type: 'posthog_code',
-      config: {},
-    });
     vi.spyOn(loopsAccess, 'workspaceMayUseLoops').mockResolvedValue(true);
-    vi.spyOn(registry, 'getCloudProvider').mockReturnValue({ type: 'posthog_code' } as never);
+    vi.spyOn(registry, 'getCloudProvider').mockReturnValue({ type: 'selfhosted' } as never);
+    vi.spyOn(fleetAccess, 'workspaceMayUseFleet').mockResolvedValue(true);
+    vi.spyOn(fleetCredentials, 'fleetAgentStatus').mockResolvedValue({
+      connectedAgents: ['claude', 'codex'],
+      reauthAgents: [],
+    });
+    vi.spyOn(workbenchReadiness, 'workbenchReadiness').mockResolvedValue({
+      sandbox: { ok: true, reasons: [], agents: { claude: { ok: true }, codex: { ok: true } } },
+    });
     ({ url, close } = await makeServer());
   });
 
@@ -141,7 +145,7 @@ describe('POST /loops has no plan cap', () => {
 
   // Usage billing removed the loop cap (it was 3 on the free plan). A loop
   // keeps a schedule and spends nothing until it fires; each firing is a box,
-  // gated by withBoxGate where the task is created.
+  // gated by withBoxGate where the session is created.
   const MANY = 8;
 
   it.each([

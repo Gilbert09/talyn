@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { callApi, McpApiError } from '../mcp/api.js';
 import { buildMcpServer, listToolsFor } from '../mcp/server.js';
-import { emptyLoopInput, type Features } from '@talyn/shared';
+import { SESSION_ONLY_TOOLS } from '../mcp/sessionScope.js';
+import { defaultModelForLoopProvider, emptyLoopInput, type Features } from '@talyn/shared';
 import { TOOLS, type McpToolDefinition } from '../mcp/tools/index.js';
 
 const OWNER = 'user-test';
@@ -90,10 +91,42 @@ describe('mcp tool registry', () => {
     }
   });
 
+  it('returns the Slack vocabulary without calling the API', async () => {
+    const { calls } = mockApi({});
+    const text = await tool('talyn_get_workflow_vocabulary').handler(OWNER, {
+      workspace_id: 'ws1',
+      integration: 'slack',
+    });
+    expect(calls).toHaveLength(0);
+    for (const word of ['slack_message', 'slackAuthors', 'start_session', 'slack_reply', 'slack_react'])
+      expect(text).toContain(word);
+    expect(text).not.toContain('add_labels');
+  });
+
+  it('create_workflow passes the integration through', async () => {
+    const { calls } = mockApi({
+      'POST /api/v1/workflows': () => ({ ...workflow, integration: 'slack' }),
+    });
+    const text = await tool('talyn_create_workflow').handler(OWNER, {
+      workspace_id: 'ws1',
+      workflow: { ...workflowBody, integration: 'slack' },
+    });
+    expect(calls[0].body).toEqual({ ...workflowBody, integration: 'slack', workspaceId: 'ws1' });
+    expect(text).toContain('integration: slack');
+  });
+
+  it('rejects an unknown integration', async () => {
+    mockApi({});
+    await expect(
+      tool('talyn_list_workflows').handler(OWNER, { workspace_id: 'ws1', integration: 'jira' })
+    ).rejects.toThrow('integration must be one of');
+  });
+
   it('covers the full surface (listing, context, actions, tasks)', () => {
     const names = TOOLS.map((t) => t.name);
-    expect(names).toHaveLength(103);
+    expect(names).toHaveLength(106);
     for (const expected of [
+      'talyn_ask_user',
       'talyn_list_workspaces',
       'talyn_get_workspace',
       'talyn_list_repositories',
@@ -112,7 +145,6 @@ describe('mcp tool registry', () => {
       'talyn_set_auto_keep_mergeable',
       'talyn_merge_pull_request',
       'talyn_close_pull_request',
-      'talyn_fix_pull_request',
       'talyn_set_merge_queue',
       'talyn_set_merge_queue_stack',
       'talyn_get_merge_queue_timeline',
@@ -120,16 +152,15 @@ describe('mcp tool registry', () => {
       'talyn_start_code_review',
       'talyn_cancel_code_review',
       'talyn_get_code_review_finding',
-      'talyn_fix_code_review_findings',
       'talyn_dismiss_code_review_finding',
       'talyn_list_code_reviews',
-      'talyn_create_task',
       'talyn_list_tasks',
       'talyn_list_sessions',
       'talyn_list_spaces',
       'talyn_get_session_transcript',
       'talyn_resize_session',
       'talyn_restart_session',
+      'talyn_continue_as_thread',
       'talyn_retry_session',
       'talyn_session_sandbox_status',
       'talyn_run_background',
@@ -161,6 +192,8 @@ describe('mcp tool registry', () => {
       'talyn_set_workflow_enabled',
       'talyn_delete_workflow',
       'talyn_list_workflow_runs',
+      'talyn_list_posthog_inbox_backlog',
+      'talyn_run_posthog_inbox_reports',
       'talyn_list_loops',
       'talyn_get_loop',
       'talyn_create_loop',
@@ -168,6 +201,8 @@ describe('mcp tool registry', () => {
       'talyn_set_loop_enabled',
       'talyn_delete_loop',
       'talyn_list_loop_runs',
+      'talyn_list_slack_channels',
+      'talyn_slack_reply',
       'talyn_run_loop_now',
       'talyn_list_mcp_servers',
       'talyn_get_mcp_server',
@@ -238,31 +273,6 @@ describe('mcp tool handlers', () => {
       include_patch: true,
     });
     expect(withPatch).toContain('PATCHTEXT');
-  });
-
-  it('fix_pull_request calls the standard /fix action (no freeform params)', async () => {
-    const { calls } = mockApi({
-      'POST /api/v1/pull-requests/pr1/fix': () => ({
-        id: 'task1',
-        type: 'pr_response',
-        title: 'Get acme/web#42 mergeable',
-        status: 'queued',
-      }),
-    });
-
-    const out = await tool('talyn_fix_pull_request').handler(OWNER, {
-      pull_request_id: 'pr1',
-      model: 'claude-opus-4-8',
-    });
-
-    // Hits the dedicated fix endpoint — the backend builds the standard prompt.
-    const post = calls.find(
-      (c) => c.method === 'POST' && c.url.pathname === '/api/v1/pull-requests/pr1/fix'
-    );
-    expect(post).toBeTruthy();
-    expect(post!.body).toEqual({ model: 'claude-opus-4-8' });
-    expect(out).toContain('task1');
-    expect(out).toContain('Get acme/web#42 mergeable');
   });
 
   it('passes internal-proxy headers identifying the owner', async () => {
@@ -434,14 +444,6 @@ const writeCases: {
     response: review,
   },
   {
-    name: 'fix_code_review_findings',
-    args: { pull_request_id: 'pr1', finding_ids: ['f1', 'f2'] },
-    method: 'POST',
-    path: '/pull-requests/pr1/code-review/fix',
-    body: { findingIds: ['f1', 'f2'] },
-    response: { taskId: 't1', review },
-  },
-  {
     name: 'dismiss_code_review_finding',
     args: { pull_request_id: 'pr1', finding_id: 'f1', reason: 'not_a_problem' },
     method: 'POST',
@@ -509,7 +511,8 @@ const writeCases: {
     },
     method: 'POST',
     path: '/loops',
-    body: { ...loopBody, workspaceId: 'ws1' },
+    // PostHog Code is retired by default, so a task loop with no provider runs on the fleet.
+    body: { ...loopBody, provider: 'selfhosted', model: defaultModelForLoopProvider('selfhosted'), workspaceId: 'ws1' },
     response: loop,
   },
   {
@@ -643,12 +646,12 @@ describe('MCP product coverage', () => {
     }
   );
 
-  it.each(['workflows', 'loops', 'mcpServers', 'workbenches'] as const)(
+  it.each(['workflows', 'loops', 'mcpServers', 'workbenches', 'slackChannelRules'] as const)(
     'hides tools when %s is off',
     (feature) => {
       const visible = listToolsFor({ ...features, [feature]: false });
       expect(visible.map((entry) => entry.name)).toEqual(
-        TOOLS.filter((entry) => entry.feature !== feature).map((entry) => entry.name)
+        TOOLS.filter((entry) => entry.feature !== feature && !SESSION_ONLY_TOOLS.has(entry.name)).map((entry) => entry.name)
       );
       expect(visible[0].annotations).toEqual(TOOLS[0].annotations);
     }
@@ -1026,6 +1029,21 @@ const readCases: {
     expected: 'labels: bug',
   },
   {
+    name: 'list_workflows',
+    args: { workspace_id: 'ws1', integration: 'slack' },
+    path: '/workflows',
+    query: { workspaceId: 'ws1', integration: 'slack' },
+    response: [{ ...workflow, integration: 'slack' }],
+    expected: 'integration: slack',
+  },
+  {
+    name: 'list_slack_channels',
+    args: { teamId: 'T1' },
+    path: '/slack/teams/T1/channels',
+    response: { channels: [{ id: 'C1', name: 'eng-bugs', isPrivate: false }] },
+    expected: 'C1  #eng-bugs',
+  },
+  {
     name: 'list_workflow_runs',
     args: { workflow_id: 'w1', limit: 1, cursor: '2026-10-01T09:00:00Z' },
     path: '/workflows/w1/runs',
@@ -1151,6 +1169,7 @@ describe('MCP reads and edge cases', () => {
           connected: true,
           connectedAgents: ['codex'],
           reauthAgents: ['claude'],
+          reauthAccounts: [{ id: 'account-1', label: 'Personal Claude', agent: 'claude' }],
           secret: 'NEVER_SHOW',
         },
       ],
@@ -1161,6 +1180,7 @@ describe('MCP reads and edge cases', () => {
     });
     const out = await tool('talyn_list_cloud_providers').handler(OWNER, { workspace_id: 'ws1' });
     expect(out).toContain('agents: codex  reauth needed: claude');
+    expect(out).toContain('Personal Claude (account-1)');
     expect(out).toContain('default provider: selfhosted');
     expect(out).not.toContain('NEVER_SHOW');
   });
@@ -1247,34 +1267,13 @@ describe('MCP reads and edge cases', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('passes the structured task skill reference', async () => {
-    const descriptor = {
-      key: 'platform:s1',
-      name: 'Check',
-      source: 'platform',
-      platformSkillId: 's1',
-    };
-    const { calls } = mockApi({
-      'POST /api/v1/tasks': () => ({
-        id: 't1',
-        title: 'Check',
-        type: 'code_writing',
-        status: 'queued',
-      }),
-    });
-    await tool('talyn_create_task').handler(OWNER, {
-      workspace_id: 'ws1',
-      repository_id: 'r1',
-      prompt: 'Read the skill instructions',
-      skill: descriptor,
-      pull_request_id: 'pr1',
-    });
-    expect(calls[0].body).toMatchObject({
-      skill: descriptor,
-      pullRequestId: 'pr1',
-      repositoryId: 'r1',
-    });
-  });
+  it.each(['talyn_create_task', 'talyn_fix_pull_request', 'talyn_fix_code_review_findings'])(
+    'offers no tool that creates a task: %s',
+    (name) => {
+      // Only the app creates cloud tasks. MCP callers start sessions.
+      expect(TOOLS.map((t) => t.name)).not.toContain(name);
+    }
+  );
 
   it('prints human intervention and quota failover details', async () => {
     mockApi({

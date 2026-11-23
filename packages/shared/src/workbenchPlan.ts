@@ -24,6 +24,7 @@ export function buildPlanTurnInstructions(): string {
     '',
     '1. Read the code you need, then make the plan.',
     '2. If you must have an answer from the person before you can plan, ask the question and stop. Do not write a plan block.',
+    '   When the `talyn_ask_user` tool is available, ask with it.',
     `3. When the plan is ready, end the reply with the complete plan in one fenced block that opens with \`\`\`${PLAN_BLOCK_FENCE}.`,
     '   Write the plan in Markdown inside the block, and write nothing after it.',
     `   If the plan contains \`\`\` code blocks, open the block with \`\`\`\`${PLAN_BLOCK_FENCE} and close it with \`\`\`\`.`,
@@ -60,7 +61,7 @@ export type TalynSkillName = (typeof TALYN_SKILL_PACK)[number];
 /** One line per built-in skill, for the composer's `/` list. The SKILL.md text is for the agent. */
 export const TALYN_SKILL_SUMMARIES: Record<TalynSkillName, string> = {
   'talyn-multi-repo': 'Make a change in another repository through a new session',
-  'talyn-delegate': 'Split large work into child sessions that run in parallel',
+  'talyn-delegate': 'Choose subagents or child sessions and follow their work',
   'talyn-ci-triage': 'Find why CI fails, re-run flaky jobs and fix real failures',
   'talyn-ship-pr': 'Open or update the pull request for this session',
   'talyn-review-loop': 'Fix review comments and bot findings on the pull request',
@@ -81,7 +82,8 @@ export const TALYN_SKILLS_NOTE =
 export const TALYN_THREAD_NOTE =
   'This is a Talyn thread. It has no repository: plan the work, start sessions on repositories with ' +
   '`talyn_create_session`, then end your turn. Talyn wakes you when a session finishes, opens a pull request ' +
-  'or needs an answer. Use the `talyn-thread` skill.';
+  'or needs an answer. When a session asks a question, answer it with `talyn_send_session_message` if you can, ' +
+  'or ask the person with `talyn_ask_user`. Use the `talyn-thread` skill.';
 
 /** Told to every turn of a session whose workspace has memory on and whose box has Talyn's MCP server. */
 export const TALYN_MEMORY_NOTE =
@@ -100,7 +102,7 @@ export function workbenchTurnPrompt(input: {
   text: string;
   planMode: boolean;
   intent?: WorkbenchMessageIntent;
-  createPr: { branch: string; baseBranch: string; extra?: string | null };
+  createPr: { branch: string; baseBranch: string; extra?: string | null; retryError?: string | null };
   internetAccess?: boolean;
   autoCreatePr?: boolean;
   hasPullRequest?: boolean;

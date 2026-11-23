@@ -1,5 +1,5 @@
-import type { Workbench, WorkbenchChat, WorkbenchEvent, WorkbenchReadiness } from '@talyn/shared';
-import type { ClientLifecycleEvent, ClientState, CodeReviewFinding, CodeReviewPublic, PRRow } from '@talyn/client/native';
+import type { Workbench, WorkbenchChat, WorkbenchEvent, WorkbenchReadiness, WorkbenchTranscriptMatch } from '@talyn/shared';
+import type { ClientLifecycleEvent, ClientState, CodeReviewFinding, CodeReviewPublic, PRFile, PRReviewDetail, PRRow } from '@talyn/client/native';
 
 import { WorkflowStore, type WorkflowApi, type WorkflowSocket } from '../workflow/store';
 import type { Scope } from '../workflow/model';
@@ -65,6 +65,7 @@ export function fixture() {
       list: jest.fn(async (_workspace?: string, _opts?: unknown) => [session(), thread()]),
       get: jest.fn(async (id: string) => id.includes('thread') ? thread() : session({ id })),
       threadSessions: jest.fn(async () => [session({ threadId: 'thread-one' })]),
+      searchTranscripts: jest.fn(async (_workspace?: string, _q?: string): Promise<WorkbenchTranscriptMatch[]> => []),
       readiness: jest.fn(async (): Promise<WorkbenchReadiness> => ({ sandbox: { ok: true, reasons: [], agents: { claude: { ok: true }, codex: { ok: true } } } })),
       events: jest.fn(async (_id?: string, _opts?: unknown) => ({ events: [event(1, { chatId: _id ?? 'chat-one' })], cursor: 1, oldestSeq: 1, hasOlder: false })),
       sendMessage: jest.fn(async (_id?: string, _input?: unknown) => ({ queued: false })),
@@ -81,6 +82,9 @@ export function fixture() {
       list: jest.fn(async () => [pr()]), get: jest.fn(async () => ({ row: pr(), fresh: null })),
       mergeQueueTimeline: jest.fn(async () => ({ events: [] })),
       merge: jest.fn(async (_id?: string) => ({ merged: true, message: 'Merged.' } as { merged: boolean; message: string; submitted?: boolean; alreadyTerminal?: boolean })),
+      submitReview: jest.fn(async (id?: string, input?: { event: string; body?: string }) => ({
+        review: { id: 1, state: input?.event === 'request_changes' ? 'CHANGES_REQUESTED' : 'APPROVED', url: 'https://github.com/example/project/pull/42#pullrequestreview-1' },
+        row: pr({ id: id ?? 'pr-1', reviewRequested: false }) as PRRow | null })),
       setMergeQueue: jest.fn(async (_id?: string, _enabled?: boolean) => null),
       setAutoKeepMergeable: jest.fn(async (_id?: string, _enabled?: boolean) => null),
       resubmitMergeQueue: jest.fn(async (_id?: string) => null),
@@ -93,16 +97,22 @@ export function fixture() {
       codeReviewFinding: jest.fn(async (_id?: string, findingId?: string) => finding({ id: findingId, body: 'The body.', anchor: 'const user = load();', suggestion: 'Check it first.' })),
       dismissCodeReviewFinding: jest.fn(async (_id?: string, _findingId?: string, _reason?: string) => review({ openCount: 1, dismissedCount: 1 })),
       undismissCodeReviewFinding: jest.fn(async (_id?: string, _findingId?: string) => review()),
+      description: jest.fn(async (_id?: string) => ({ body: null as string | null })),
+      files: jest.fn(async (_id?: string) => [] as PRFile[]),
+      reviews: jest.fn(async (_id?: string): Promise<PRReviewDetail> => ({ reviews: [], threads: [], comments: [] })),
+      setReviewHidden: jest.fn(async (_id?: string, _hidden?: boolean) => null),
     },
     features: { get: jest.fn(async () => ({ workbenches: true } as Record<string, boolean>)) },
     repositories: { list: jest.fn(async () => [{ id: 'repo-one', workspaceId: 'one', owner: 'example', repo: 'project',
-      fullName: 'example/project', defaultBranch: 'main' }]) },
+      fullName: 'example/project', defaultBranch: 'main' }]),
+      forcePoll: jest.fn(async () => ({ message: 'Poll triggered' })) },
     cloudProviders: { list: jest.fn(async () => [{ type: 'selfhosted', displayName: 'Talyn Fleet', connected: true, connectedAgents: ['claude'] },
       { type: 'posthog_code', displayName: 'PostHog Code', connected: true }]) },
     // An onboarded workspace: GitHub is connected, so home opens without the setup steps.
     workspaces: { get: jest.fn(async (): Promise<{ id: string; name: string; settings: Record<string, unknown>; repos: unknown[];
       integrations?: Record<string, unknown> }> => ({ id: 'one', name: 'Test workspace', settings: {}, repos: [],
-      integrations: { github: { enabled: true, watchedRepos: [] } } })) },
+      integrations: { github: { enabled: true, watchedRepos: [] } } })),
+      attention: jest.fn(async (): Promise<{ sessions?: Record<string, string> }> => ({ sessions: {} })) },
     environments: { list: jest.fn(async () => [{ id: 'env-fleet', type: 'selfhosted' }, { id: 'env-posthog', type: 'posthog_code' }]) },
     tasks: {
       get: jest.fn(async (_id?: string) => ({ id: 'task-one', status: 'completed' })),

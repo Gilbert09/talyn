@@ -28,6 +28,7 @@ import { verifyTokenAndGetUser, enforceAllowList, AuthError, type AuthUser } fro
 import { isFeatureEnabled } from './featureFlags.js';
 import { assertSpaceMember } from './teams/access.js';
 import { PresenceStore, startPresenceSweep } from './teams/presence.js';
+import { deskPresence } from './deskPresence.js';
 import { spaceEvent, spaceItem, mayViewSpaceItem, SPACE_EVENT_TYPES } from './teams/spaceEvents.js';
 import { getDbClient } from '../db/client.js';
 import { workspaces as workspacesTable, users as usersTable } from '../db/schema.js';
@@ -46,6 +47,8 @@ const presence = new PresenceStore(undefined, (spaceId) => {
   void broadcastSpacePresence(spaceId).catch((err) => console.warn('[ws] presence broadcast failed:', err));
 });
 const connectionUsers = new Map<WebSocket, AuthUser>();
+// The last desk presence each socket reported, so a beat that repeats it is not traced.
+const deskStates = new Map<WebSocket, 'active' | 'away'>();
 const connectionDeadlines = new Map<WebSocket, number>();
 // Per-client owner filter for the admin Debug stream. Absent = all owners.
 const debugFilters = new Map<WebSocket, DebugOwnerFilter>();
@@ -77,8 +80,8 @@ const AUTHORIZATION_REFRESH_MS = 15_000;
 const MAX_MESSAGES_PER_MINUTE = 120;
 const MAX_SUBSCRIPTIONS = 64;
 const MAX_CONNECTIONS_PER_OWNER = 20;
-// A reconnect sends every subscription, then the debug filter and heartbeat.
-const MAX_PENDING_MESSAGES = MAX_SUBSCRIPTIONS + 2;
+// A reconnect sends every subscription, then the debug filter, desk presence and heartbeat.
+const MAX_PENDING_MESSAGES = MAX_SUBSCRIPTIONS + 3;
 
 /** The deployment has exactly one trusted proxy hop, matching HTTP's fixed trust setting. */
 export function createWebSocketUpgradeGuard(): (req: IncomingMessage) => boolean {
@@ -123,14 +126,15 @@ function canDeliver(ws: WebSocket): boolean {
 }
 
 /**
- * Fan a debug event out only to ADMIN clients, and only to those whose current
- * owner filter matches — so a non-admin never receives debug data and an admin
- * watching a single user isn't fed everyone else's traffic over the wire.
- * Bypasses `broadcast()` (which would hit every client) for exactly this reason.
+ * Fan a debug event out only to ADMIN clients that opted in with `debug:filter`
+ * (the Debug panel), and only when their owner filter matches. Every DB query
+ * and outbound call is a debug event, so streaming them to every admin socket,
+ * panel open or not, cost several GB of egress per day per open app.
+ * Bypasses `broadcast()` (which would hit every client) for the same reason.
  */
 function fanOutDebugEvent(event: DebugEvent): void {
   let message: string | null = null;
-  for (const client of clients) {
+  for (const client of debugFilters.keys()) {
     if (!canDeliver(client)) continue;
     if (!connectionUsers.get(client)?.isAdmin) continue;
     if (!matchesOwnerFilter(event.ownerId, debugFilters.get(client))) continue;
@@ -204,9 +208,12 @@ export function setupWebSocket(
       spaceSubscriptions.delete(ws);
       presenceVersions.delete(ws);
       socketIds.delete(ws);
+      const wasAtDesk = deskStates.get(ws) === 'active';
+      deskStates.delete(ws);
       if (user && socketId) {
         void messageChain.catch(() => undefined).then(async () => {
           for (const spaceId of spaceIds) await presence.disconnect(spaceId, user.id, socketId);
+          if (wasAtDesk) await deskPresence.forget(user.id, socketId);
         }).catch((err) => console.warn('[ws] presence cleanup failed:', err));
       }
       subscriptions.delete(ws);
@@ -413,8 +420,9 @@ async function handleMessage(
     }
   }
   // Inbound message trace. Skip `ping` — it fires every 25s per client and
-  // would drown out the signal.
-  if (message?.type && message.type !== 'ping') {
+  // would drown out the signal. `desk_presence` beats every 30s; its handler
+  // traces only a change of state.
+  if (message?.type && message.type !== 'ping' && message.type !== 'desk_presence') {
     debugBus.recordWs({
       action: 'recv',
       summary: `recv ${message.type}${message.workspaceId ? ` ${String(message.workspaceId).slice(0, 8)}` : ''}`,
@@ -465,6 +473,32 @@ async function handleMessage(
       });
       break;
     }
+    case 'desk_presence': {
+      // Only the state is read. The account is the socket's own; any other field is ignored.
+      const state = message.state;
+      if (state !== 'active' && state !== 'away') {
+        close(1008, 'invalid presence');
+        break;
+      }
+      const user = connectionUsers.get(ws);
+      const socketId = socketIds.get(ws);
+      if (!user || !socketId) break;
+      const previous = deskStates.get(ws);
+      deskStates.set(ws, state);
+      if (state === 'away' && previous !== 'active') break;
+      try {
+        await deskPresence.report(user.id, socketId, state === 'active');
+      } catch (err) {
+        // A presence write that fails costs a skipped push at most; it must not close the socket.
+        console.warn('[desk] presence write failed:', err);
+        break;
+      }
+      if (previous !== state) {
+        debugBus.recordWs({ action: 'recv', summary: `recv desk_presence ${state}`, meta: { type: 'desk_presence', state } });
+        console.log(`[desk] ${state}: user=${user.id.slice(0, 8)} socket=${socketId.slice(0, 8)}`);
+      }
+      break;
+    }
     case 'subscribe': {
       // Capabilities are per connection; every subscribe carries the full list.
       if (Array.isArray(message.capabilities)) {
@@ -509,6 +543,11 @@ async function handleMessage(
       debugFilters.set(ws, typeof owner === 'string' ? owner : undefined);
       break;
     }
+
+    case 'debug:unsubscribe':
+      // The Debug panel closed: stop the live debug stream to this client.
+      debugFilters.delete(ws);
+      break;
 
     case 'ping':
       sendToClient(ws, {
@@ -739,7 +778,10 @@ export function broadcastToUser(userId: string, event: WSEvent): void {
 export function emitTaskStatus(workspaceId: string, taskId: string, status: string, result?: unknown): void {
   broadcastToWorkspace(workspaceId, {
     type: 'task:status',
-    payload: { taskId, status, result },
+    // Every write that moves a task to `completed` sets `completed_at` to now
+    // and every other move clears it, so the event can say the same without a
+    // read. Clients use it to replace a reused task's old completion time.
+    payload: { taskId, status, result, completedAt: status === 'completed' ? new Date().toISOString() : null },
     timestamp: new Date().toISOString(),
   });
   domainEvents.emit('task:status', {

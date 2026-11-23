@@ -1,9 +1,16 @@
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { countContextAttention, sessionAttentionKey, type ContextAttentionCounts } from '@talyn/shared';
-import type { Database } from '../../db/client.js';
+import {
+  attentionReason,
+  countContextAttention,
+  PLAN_BLOCK_FENCE,
+  sessionAttentionKey,
+  type ContextAttentionCounts,
+} from '@talyn/shared';
+import { getPoolDbClient, type Database } from '../../db/client.js';
 import {
   pullRequests as prTable,
   workbenchChats as chatsTable,
+  workbenchSearchText as searchTextTable,
   workbenches as workbenchesTable,
   workspaces as workspacesTable,
 } from '../../db/schema.js';
@@ -11,7 +18,7 @@ import {
 /**
  * The context rail's badges: for each workspace the caller owns, and for each
  * space their sessions are in, how many live sessions wait on them. A session
- * whose alert the owner already saw (`attention_ack`) does not count.
+ * counts until the thing it waits on is resolved. Opening it does not clear it.
  *
  * Two narrow reads. Neither ships `settings`, the queued prompts or the PR
  * summary blob: the rail asks every 30 seconds, so the egress rule in
@@ -29,7 +36,6 @@ export function attentionSessionsQuery(db: Database, ownerId: string, workbenchI
       status: workbenchesTable.status,
       sandboxState: workbenchesTable.sandboxState,
       archivedAt: workbenchesTable.archivedAt,
-      attentionAck: workbenchesTable.attentionAck,
       prId: prTable.id,
       prState: prTable.state,
       prMergeable: sql<string | null>`${prTable.lastSummary} ->> 'mergeable'`,
@@ -47,6 +53,33 @@ export function attentionSessionsQuery(db: Database, ownerId: string, workbenchI
     );
 }
 
+/**
+ * The opening fence of a plan block, as `parsePlanBlock` reads it: a line of
+ * three or more backticks or tildes, then `talyn-plan`. A Postgres regex.
+ */
+const PLAN_OPENER_SQL = `(^|\n)(\`{3,}|~{3,})[ \t]*${PLAN_BLOCK_FENCE}[ \t]*\r?(\n|$)`;
+
+/**
+ * True when an idle chat's agent wrote a plan after the last message from a
+ * person, so the plan waits for "Approve and build" or "Keep planning". Both
+ * buttons send a message, which ends the wait. It reads
+ * `workbench_search_text` (the text of user and assistant events only) on its
+ * primary key, never the event stream, and only for an idle chat with no queue.
+ */
+const planPendingSql = sql<boolean>`CASE WHEN ${chatsTable.status} = 'idle'
+    AND COALESCE(jsonb_array_length(${chatsTable.queuedMessages}), 0) = 0
+  THEN EXISTS (
+    SELECT 1 FROM ${searchTextTable} plan_text
+    WHERE plan_text.chat_id = ${chatsTable.id}
+      AND plan_text.role = 'assistant'
+      AND plan_text.seq > COALESCE((
+        SELECT max(asked.seq) FROM ${searchTextTable} asked
+        WHERE asked.chat_id = ${chatsTable.id} AND asked.role = 'user'
+      ), 0)
+      AND plan_text.body ~ ${PLAN_OPENER_SQL}
+  )
+  ELSE false END`;
+
 export function attentionChatsQuery(db: Database, workbenchIds: string[]) {
   return db
     .select({
@@ -55,6 +88,7 @@ export function attentionChatsQuery(db: Database, workbenchIds: string[]) {
       status: chatsTable.status,
       queued: sql<number>`COALESCE(jsonb_array_length(${chatsTable.queuedMessages}), 0)::int`,
       turnCount: chatsTable.turnCount,
+      planPending: planPendingSql,
     })
     .from(chatsTable)
     .where(and(inArray(chatsTable.workbenchId, workbenchIds), isNull(chatsTable.closedAt)));
@@ -68,10 +102,19 @@ async function attentionKeys(
   sessions: AttentionSessionRow[],
 ): Promise<{ session: AttentionSessionRow; key: string | null }[]> {
   if (sessions.length === 0) return [];
-  const chats = new Map<string, { id: string; status: string; queued: number; turnCount: number }[]>();
-  for (const row of await attentionChatsQuery(db, sessions.map((s) => s.id))) {
+  const chats = new Map<string, { id: string; status: string; queued: number; turnCount: number; planPending: boolean }[]>();
+  // The pool, not `db`: the plan check reads `workbench_search_text`, which is
+  // backend-pool only (RLS on, no grant), so the owner-scoped handle gets
+  // "permission denied". `sessions` came from the owner-filtered query above.
+  for (const row of await attentionChatsQuery(getPoolDbClient(), sessions.map((s) => s.id))) {
     const list = chats.get(row.workbenchId) ?? [];
-    list.push({ id: row.id, status: row.status, queued: Number(row.queued) || 0, turnCount: row.turnCount });
+    list.push({
+      id: row.id,
+      status: row.status,
+      queued: Number(row.queued) || 0,
+      turnCount: row.turnCount,
+      planPending: row.planPending === true,
+    });
     chats.set(row.workbenchId, list);
   }
   return sessions.map((s) => ({
@@ -87,23 +130,13 @@ async function attentionKeys(
   }));
 }
 
-export async function contextAttention(db: Database, ownerId: string): Promise<ContextAttentionCounts> {
+export async function contextAttention(db: Database, ownerId: string): Promise<Required<ContextAttentionCounts>> {
   const keyed = await attentionKeys(db, await attentionSessionsQuery(db, ownerId));
   return countContextAttention(
-    keyed.filter(({ session, key }) => key !== null && key !== session.attentionAck).map(({ session }) => session),
+    keyed.flatMap(({ session, key }) => {
+      const reason = attentionReason(key);
+      if (reason === null) return [];
+      return [{ id: session.id, workspaceId: session.workspaceId, spaceId: session.spaceId, reason }];
+    }),
   );
-}
-
-/**
- * The owner opened the session: keep its current alert as seen, so the rail
- * stops counting it. Answers false for a session the caller does not own, or
- * one that is archived. A teammate's view never clears the owner's badge.
- */
-export async function acknowledgeAttention(db: Database, ownerId: string, workbenchId: string): Promise<boolean> {
-  const [entry] = await attentionKeys(db, await attentionSessionsQuery(db, ownerId, workbenchId));
-  if (!entry) return false;
-  if (entry.key !== entry.session.attentionAck) {
-    await db.update(workbenchesTable).set({ attentionAck: entry.key }).where(eq(workbenchesTable.id, workbenchId));
-  }
-  return true;
 }

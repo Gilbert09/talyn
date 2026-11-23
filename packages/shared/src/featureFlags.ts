@@ -121,6 +121,14 @@ export interface FeatureFlagDefinition {
  * literal union of the keys below instead of widening to `string`.
  */
 export const FEATURE_FLAGS = {
+  sessionSubagents: {
+    posthogKey: 'session-subagents',
+    envOverride: 'SESSION_SUBAGENTS_ENABLED',
+    fallback: true,
+    description: 'Subagent cards in sessions',
+    availability: 'general',
+    releaseScopes: ['session-subagents'],
+  },
   /**
    * Workflows — user-defined PR automation.
    *
@@ -306,6 +314,29 @@ export const FEATURE_FLAGS = {
   },
 
   /**
+   * PostHog Code is retired for everyone. With this flag on, a workspace that
+   * has not connected it never sees it, and new work never falls back to it.
+   * A workspace that is already connected keeps its connection and is told to
+   * move to Claude or Codex.
+   *
+   * Asked for the caller at the connect routes and for the workspace OWNER in
+   * the resolver, the code review spill and quota failover.
+   *
+   * Fallback ON, so a PostHog outage or an absent flag keeps PostHog Code
+   * hidden. To bring it back for one account, create the flag in PostHog and
+   * answer `false` for that account. `POSTHOG_CODE_RETIRED=false` brings it
+   * back for the whole deployment.
+   */
+  posthogCodeRetired: {
+    posthogKey: 'posthog-code-retired',
+    envOverride: 'POSTHOG_CODE_RETIRED',
+    fallback: true,
+    description: 'PostHog Code retired: no new connections and no fall-back onto it',
+    availability: 'general',
+    releaseScopes: [],
+  },
+
+  /**
    * Team plan — one buyer pays for seats, and each seat gives a GitHub account
    * Unlimited on its own account. Consolidated billing only; nothing is shared.
    *
@@ -392,6 +423,172 @@ export const FEATURE_FLAGS = {
     description: 'Public API — personal access tokens and the /v1 endpoints',
     availability: 'general',
     releaseScopes: ['api', 'public-api'],
+  },
+
+  /**
+   * Park fleet fix runs while CI runs: a run that published ends its turn,
+   * Talyn suspends its box and resumes the same conversation when the checks
+   * settle. Evaluated once per dispatch against the workspace OWNER and
+   * stamped on the task (`metadata.ciPark`), so a run keeps the posture it
+   * started with.
+   *
+   * Fallback OFF and gated: it changes the prompt and the lifecycle of runs
+   * that push to other people's pull requests, and a PostHog outage must not
+   * switch that on for accounts nobody chose. The release scope is its own,
+   * not `fleet`: a gated flag withholds every highlight with its scopes, and
+   * `fleet` would hide every released fleet note too.
+   */
+  ciPark: {
+    posthogKey: 'ci-park',
+    envOverride: 'CI_PARK_ENABLED',
+    fallback: false,
+    description: 'CI park — suspend fleet fix runs while CI runs, then resume them',
+    availability: 'gated',
+    releaseScopes: ['ci-park'],
+  },
+
+  /**
+   * Split view — several sessions side by side, each with its transcript and
+   * composer, so a person can watch and prompt them at once.
+   *
+   * Drawing only: every pane talks to the same session routes the full
+   * session page uses, so nothing server-side is gated on it. Released to
+   * every account on 2026-11-11, so the flag is now a kill switch: fallback ON,
+   * because a PostHog outage must not take a released page away.
+   * `SPLIT_VIEW_ENABLED=false` turns it off without PostHog.
+   */
+  splitView: {
+    posthogKey: 'split-view',
+    envOverride: 'SPLIT_VIEW_ENABLED',
+    fallback: true,
+    description: 'Split view — several sessions side by side, each with its transcript and composer',
+    availability: 'general',
+    releaseScopes: ['split-view'],
+  },
+
+  /**
+   * Session wake-ups that wait for CI: `talyn_schedule_wakeup` with
+   * `until_ci` sends the turn when the checks on the session's pull request
+   * settle, the head moves or the PR closes, instead of at a guessed time.
+   *
+   * Server-only, asked against the workspace owner when the agent schedules
+   * one. With it off, the request is refused and the agent schedules a timed
+   * wake-up instead.
+   *
+   * RELEASED 2026-11-12: fallback ON and 'general'. While it was gated, no
+   * PostHog flag existed, so every agent was refused and polled CI from its
+   * own shell, which kept the box awake for the whole run.
+   */
+  sessionCiWait: {
+    posthogKey: 'session-ci-wait',
+    envOverride: 'SESSION_CI_WAIT_ENABLED',
+    fallback: true,
+    description: 'Session CI wait — wake a session when the checks on its pull request settle',
+    availability: 'general',
+    releaseScopes: ['session-ci-wait'],
+  },
+
+  /**
+   * Slack channel rules: a message in a watched Slack channel starts work
+   * (a session, a reply, a reaction), as a rule of the Slack integration.
+   *
+   * Gates Slack rules only. GitHub rules stay behind `workflows`. Asked for the
+   * caller at the routes and for the workspace OWNER in the engine, because a
+   * Slack message has no Talyn caller. Fallback OFF and gated: a rule starts
+   * sessions that bill box-hours from messages nobody in Talyn sent, so a
+   * PostHog outage must not switch that on for accounts nobody chose.
+   * `SLACK_CHANNEL_RULES_ENABLED=true` turns it on locally with no PostHog
+   * project.
+   *
+   * The release scope is `slack-rules`, not `slack`: `slack` belongs to the
+   * released Slack session triggers (under `workbenches`), and a gated flag
+   * withholds every highlight that carries one of its scopes.
+   */
+  slackChannelRules: {
+    posthogKey: 'slack-channel-rules',
+    envOverride: 'SLACK_CHANNEL_RULES_ENABLED',
+    fallback: false,
+    description: 'Slack channel rules — a message in a watched Slack channel starts a session',
+    availability: 'gated',
+    releaseScopes: ['slack-rules'],
+  },
+
+  /**
+   * Webhook rules: a request to a rule's own URL starts work (a session or a
+   * task), as a rule of the Webhooks integration.
+   *
+   * Asked for the caller at the routes and for the workspace OWNER in the
+   * engine and the receiver, because a webhook has no Talyn caller. Fallback
+   * OFF and gated: anybody who holds the URL can start work that bills
+   * box-hours, so a PostHog outage must not switch that on for accounts nobody
+   * chose. `WEBHOOK_RULES_ENABLED=true` turns it on locally.
+   */
+  webhookRules: {
+    posthogKey: 'webhook-rules',
+    envOverride: 'WEBHOOK_RULES_ENABLED',
+    fallback: false,
+    description: 'Webhook rules — a request to a rule URL starts a session or a task',
+    availability: 'gated',
+    releaseScopes: ['webhook-rules', 'inbound'],
+  },
+
+  /**
+   * Issue rules: a Linear or GitHub Issues event starts work (a session or a
+   * task), and Talyn writes back to the issue.
+   *
+   * Asked for the caller at the routes and for the workspace OWNER in the
+   * engine and the Linear receiver, because an issue event has no Talyn
+   * caller. Fallback OFF and gated: an issue anybody can file starts work
+   * that bills box-hours, so a PostHog outage must not switch it on for
+   * accounts nobody chose. `ISSUE_RULES_ENABLED=true` turns it on locally.
+   */
+  issueRules: {
+    posthogKey: 'issue-rules',
+    envOverride: 'ISSUE_RULES_ENABLED',
+    fallback: false,
+    description: 'Issue rules — a Linear or GitHub issue starts a session or a task',
+    availability: 'gated',
+    releaseScopes: ['issue-rules', 'linear'],
+  },
+
+  /**
+   * PostHog Inbox rules: a PostHog self-driving report that is ready for work
+   * starts a session that opens a pull request.
+   *
+   * Asked for the caller at the routes and for the workspace OWNER in the
+   * poller and the engine, because a report has no Talyn caller. Fallback OFF
+   * and gated: one PostHog project can make thousands of reports a week, and
+   * each run bills box-hours, so a PostHog outage must not switch it on for
+   * accounts nobody chose. `POSTHOG_INBOX_RULES_ENABLED=true` turns it on
+   * locally.
+   */
+  posthogInboxRules: {
+    posthogKey: 'posthog-inbox-rules',
+    envOverride: 'POSTHOG_INBOX_RULES_ENABLED',
+    fallback: false,
+    description: 'PostHog Inbox rules — a ready PostHog self-driving report starts a session that opens a PR',
+    availability: 'gated',
+    releaseScopes: ['posthog-inbox-rules', 'posthog-inbox'],
+  },
+
+  /**
+   * Onboarding local agent: the desktop wizard's "Connect your agent" step
+   * offers the Claude Code or Codex CLI already installed on the computer, so
+   * the first session runs locally with no subscription sign-in. Web shows a
+   * hint that points to the desktop app.
+   *
+   * Drawing only: local sessions already exist for every desktop account, so
+   * nothing server-side is gated on it. Fallback OFF and gated while PostHog
+   * measures the onboarding funnel. `ONBOARDING_LOCAL_AGENT_ENABLED=true`
+   * turns it on locally.
+   */
+  onboardingLocalAgent: {
+    posthogKey: 'onboarding-local-agent',
+    envOverride: 'ONBOARDING_LOCAL_AGENT_ENABLED',
+    fallback: false,
+    description: 'Onboarding local agent — offer the agent CLI on this computer in the desktop onboarding',
+    availability: 'gated',
+    releaseScopes: ['onboarding'],
   },
 
 } as const satisfies Record<string, FeatureFlagDefinition>;
@@ -509,6 +706,7 @@ export function gateForScope(scope: string | null | undefined): FeatureFlagKey |
  * cannot act on a workspace the gate refuses.
  */
 export const ACCOUNT_FEATURE_FLAGS = [
+  'sessionSubagents',
   'workflows',
   'loops',
   'mcpServers',
@@ -516,11 +714,18 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'reviewRankingCandidate',
   'reviewRankingExport',
   'teams',
+  'posthogCodeRetired',
   'spaces',
   'workbenches',
   'trunkMergeEta',
   'privateRoutes',
   'publicApi',
+  'splitView',
+  'slackChannelRules',
+  'webhookRules',
+  'issueRules',
+  'posthogInboxRules',
+  'onboardingLocalAgent',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

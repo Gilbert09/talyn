@@ -19,8 +19,10 @@ import { MCPSERVERS } from './mcpServers.js';
 import { MEMORY } from './memory.js';
 import { MERGEQUEUE } from './mergeQueue.js';
 import { PULLREQUESTS } from './pullRequests.js';
+import { QUESTIONS } from './questions.js';
 import { REPOSITORIES } from './repositories.js';
 import { SESSIONS } from './sessions.js';
+import { SLACK } from './slack.js';
 import { SPACES } from './spaces.js';
 import { SKILLS } from './skills.js';
 import { TASKS } from './tasks.js';
@@ -59,11 +61,13 @@ export const TOOLS: McpToolDefinition[] = [
   ...TASKS,
   ...SESSIONS,
   ...BACKGROUND,
+  ...QUESTIONS,
   ...SPACES,
   ...MEMORY,
   ...SKILLS,
   ...WORKFLOWS,
   ...LOOPS,
+  ...SLACK,
   ...MCPSERVERS,
   ...ACCOUNT,
 ];

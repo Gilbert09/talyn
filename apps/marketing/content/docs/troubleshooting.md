@@ -45,6 +45,10 @@ Open the **Sandbox** tab in the session. It shows what the sandbox is doing and 
 
 **Retry** deletes the sandbox and starts a new one from the branch on GitHub. Changes that are not pushed are lost, so push first if you can.
 
+## The model API is failing
+
+When the Claude or OpenAI API fails on their side, a session can wait and try again. This follows the usage-limit auto-resume setting in **Settings > Sessions**, which is on by default. The session shows that the model API is failing and the time of the next try. The box sleeps while it waits, so the wait uses no box-hours. Talyn tries again after 2, 5, 10, 20 and 30 minutes, and at most 8 times.
+
 ## A run says "Needs you"
 
 The agent stopped because only a person can continue, for example to approve a visual check, add a credential, or make a product decision. The agent's reason is on the run. Deal with it, then select **Run again**.

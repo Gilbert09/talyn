@@ -1,14 +1,28 @@
 import {
-  WORKFLOW_ACTION_LABELS,
-  WORKFLOW_ACTION_TYPES,
+  ALL_WORKFLOW_ACTION_TYPES,
+  ALL_WORKFLOW_TRIGGER_EVENTS,
+  DEFAULT_POSTHOG_INBOX_RUNS_PER_DAY,
+  MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN,
+  MAX_POSTHOG_INBOX_RUN_REPORTS,
+  POSTHOG_INBOX_BACKLOG_DAYS,
+  POSTHOG_INBOX_BACKLOG_STATE_LABELS,
+  POSTHOG_INBOX_ACTIONABILITY,
+  POSTHOG_INBOX_PRIORITIES,
+  posthogInboxBacklogCountText,
+  posthogInboxBacklogRangeText,
   WORKFLOW_ACTOR_KINDS,
-  WORKFLOW_CONDITION_SPECS,
-  WORKFLOW_EVENT_LABELS,
-  WORKFLOW_TRIGGER_EVENTS,
+  WORKFLOW_INTEGRATIONS,
+  workflowVocabulary,
   type NormalizedWorkflow,
+  type WorkflowIntegration,
+  type WorkflowDefinition,
   type WorkflowRun,
   type WorkflowSuggestions,
   type WorkflowWithStats,
+  type CreatedWorkflow,
+  type PostHogInboxBacklogCount,
+  type PostHogInboxBacklogPage,
+  type PostHogInboxRunResponse,
 } from '@talyn/shared';
 import { callApi } from '../api.js';
 import {
@@ -28,20 +42,40 @@ import {
 } from './helpers.js';
 
 const idSchema = { ...workspaceSchema, workflow_id: textSchema };
+const integrationSchema = {
+  type: 'string',
+  enum: WORKFLOW_INTEGRATIONS,
+  description: 'Which integration the automation belongs to. Default: github.',
+};
 const workflowSchema = {
   type: 'object',
   properties: {
+    integration: integrationSchema,
     name: textSchema,
     enabled: booleanSchema,
-    events: { type: 'array', items: { type: 'string', enum: WORKFLOW_TRIGGER_EVENTS } },
+    events: { type: 'array', items: { type: 'string', enum: ALL_WORKFLOW_TRIGGER_EVENTS } },
     conditions: { type: 'object' },
     actions: { type: 'array', items: { type: 'object' } },
     maxRunsPerPrPerHour: { type: 'integer' },
+    maxRunsPerDay: {
+      type: ['integer', 'null'],
+      description: 'Most runs in 24 hours. Null means no daily cap. PostHog Inbox automations default to 10.',
+    },
   },
 };
 
+function integrationArg(args: Record<string, unknown>): WorkflowIntegration | undefined {
+  const value = str(args.integration);
+  if (value === undefined) return undefined;
+  if (!(WORKFLOW_INTEGRATIONS as readonly string[]).includes(value))
+    throw new Error(`integration must be one of: ${WORKFLOW_INTEGRATIONS.join(', ')}.`);
+  return value as WorkflowIntegration;
+}
+
 async function list(ownerId: string, args: Record<string, unknown>): Promise<WorkflowWithStats[]> {
   const params = new URLSearchParams({ workspaceId: await resolveWorkspace(ownerId, args) });
+  const integration = integrationArg(args);
+  if (integration) params.set('integration', integration);
   return callApi(ownerId, 'GET', `/workflows?${params}`);
 }
 
@@ -52,14 +86,24 @@ async function current(ownerId: string, args: Record<string, unknown>): Promise<
   return workflow;
 }
 
-function definition(workflow: NormalizedWorkflow): NormalizedWorkflow {
+// No `integration`: a PATCH keeps the rule's own, and the route refuses a change.
+function definition(workflow: WorkflowDefinition): Omit<NormalizedWorkflow, 'integration'> {
   const { name, enabled, events, conditions, actions, maxRunsPerPrPerHour } = workflow;
-  return { name, enabled, events, conditions, actions, maxRunsPerPrPerHour };
+  return {
+    name,
+    enabled,
+    events,
+    conditions,
+    actions,
+    maxRunsPerPrPerHour,
+    // Only when set: a PATCH keeps the stored value, and a rule without a cap sends nothing new.
+    ...(workflow.maxRunsPerDay !== undefined && workflow.maxRunsPerDay !== null ? { maxRunsPerDay: workflow.maxRunsPerDay } : {}),
+  };
 }
 
 function workflowLine(workflow: WorkflowWithStats): string {
   const stats = workflow.stats;
-  return `${workflow.id}  ${workflow.name}  enabled: ${workflow.enabled}  events: ${workflow.events.join(', ')}  actions: ${workflow.actions.map((action) => action.type).join(', ')}${stats ? `  runs: ${stats.runsTotal}, last: ${stats.lastStatus ?? 'none'}, failures/7d: ${stats.failures7d}` : ''}`;
+  return `${workflow.id}  ${workflow.name}  integration: ${workflow.integration ?? 'github'}  enabled: ${workflow.enabled}  events: ${workflow.events.join(', ')}  actions: ${workflow.actions.map((action) => action.type).join(', ')}${stats ? `  runs: ${stats.runsTotal}, last: ${stats.lastStatus ?? 'none'}, failures/7d: ${stats.failures7d}` : ''}`;
 }
 
 async function update(
@@ -76,24 +120,58 @@ async function update(
   );
 }
 
-const actionFields: Record<(typeof WORKFLOW_ACTION_TYPES)[number], string> = {
+const actionFields: Record<(typeof ALL_WORKFLOW_ACTION_TYPES)[number], string> = {
   add_labels: 'labels: string[]',
   remove_labels: 'labels: string[]',
   request_reviewers: 'users?: string[], teams?: string[]',
   assign: 'users: string[]',
   comment: 'body: string',
-  run_skill: 'skillKey: string, model?: string',
-  run_prompt: 'prompt: string, model?: string',
+  approve_pr: 'body?: string (an optional review comment; same {{pr.*}} fields as comment)',
+  run_skill: 'skillKey: string, model?: string (starts a session on the pull request that runs the skill)',
+  run_prompt: 'not offered: an automation starts a session, not a cloud task. Saved as start_session',
   watch_pr: 'no extra fields',
   enqueue_merge_queue: 'method?: squash | merge | rebase',
   run_code_review: 'preset?: quick | standard | deep',
+  start_session:
+    'repositoryId: string | null (null lets Talyn choose on Slack, and means the issue repository on github_issues; webhook and linear need one), prompt: string, model?: string, internetAccess?: boolean, spaceId?: string (a team space the session starts in; absent means Personal), issueStartComment?: boolean (issue rules, default true), issueDoneOnMerge?: boolean (issue rules, default true)',
+  start_task: 'not offered: an automation starts a session, not a cloud task. Saved as start_session',
+  issue_comment: 'body: string (may use {{issue.identifier}}, {{issue.url}}, {{session.url}}, {{task.url}})',
+  issue_set_status: 'status: string (done, a Linear state name, or open / closed on GitHub Issues)',
+  slack_reply: 'text: string (may use {{session.url}} and {{message.permalink}})',
+  slack_react: 'emoji: string (a name without colons, for example eyes)',
 };
+
+/** A saved PostHog Inbox automation of this workspace, or an error the agent can read. */
+async function inboxRule(ownerId: string, args: Record<string, unknown>): Promise<WorkflowWithStats> {
+  const workflow = await current(ownerId, args);
+  if ((workflow.integration ?? 'github') !== 'posthog_inbox') {
+    throw new Error(`Workflow ${workflow.id} is not a PostHog Inbox automation.`);
+  }
+  return workflow;
+}
+
+function backlogText(page: PostHogInboxBacklogPage, count: PostHogInboxBacklogCount | null): string {
+  const head = [
+    `Reports created ${posthogInboxBacklogRangeText(page.days)} that match, newest first. Talyn read ${page.scanned} report(s) from PostHog for this page${page.total !== null ? ` (PostHog's filters keep ${page.total})` : ''}.`,
+    ...(count ? [`Exact count: ${posthogInboxBacklogCountText(count)}`] : []),
+    page.runnable
+      ? `Run reports with talyn_run_posthog_inbox_reports. Only rows marked [selectable] can run.${page.dailyCap !== null ? ` Daily cap: ${page.runsToday} of ${page.dailyCap} runs used in the last 24 hours.` : ''}`
+      : `Reports cannot run now: ${page.notRunnableReason ?? 'the automation is not runnable'}`,
+  ];
+  const rows = linesOrNone(
+    page.rows,
+    (row) =>
+      `${row.id}  [${POSTHOG_INBOX_BACKLOG_STATE_LABELS[row.state]}]${row.selectable ? ' [selectable]' : ''}  ${row.priority ?? 'no priority'}  ${row.repository ?? 'no repository'}  ${row.title || '(no title)'}  created ${row.createdAt ?? 'unknown'}  ${row.url}${row.workbenchId ? `  session: ${row.workbenchId}` : ''}${row.prUrl ? `  pr: ${row.prUrl}` : ''}`
+  );
+  const more = page.nextOffset !== null ? `\nMore reports: call again with offset ${page.nextOffset}.` : '';
+  return `${head.join('\n')}\n${rows}${more}`;
+}
 
 export const WORKFLOWS = [
   defineTool(
     'list_workflows',
-    'List workflow definitions and run statistics.',
-    workspaceSchema,
+    'List automations and run statistics. Pass integration to list one integration only: github, slack, webhook, linear, github_issues or posthog_inbox.',
+    { ...workspaceSchema, integration: integrationSchema },
     [],
     { readOnlyHint: true },
     async (ownerId, args) => linesOrNone(await list(ownerId, args), workflowLine),
@@ -101,33 +179,45 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'get_workflow',
-    'Get the full workflow definition as JSON for editing.',
+    'Get the full automation definition as JSON for editing.',
     idSchema,
     ['workflow_id'],
     { readOnlyHint: true },
-    async (ownerId, args) => JSON.stringify(definition(await current(ownerId, args)), null, 2),
-    'workflows'
-  ),
-  defineTool(
-    'create_workflow',
-    'Create a workflow object with name, events, conditions, and actions. Read talyn_get_workflow_vocabulary for allowed values.',
-    { ...workspaceSchema, workflow: workflowSchema },
-    ['workflow'],
-    { openWorldHint: true },
     async (ownerId, args) => {
-      const workflow = objectArg(args, 'workflow');
-      return workflowLine(
-        await callApi<WorkflowWithStats>(ownerId, 'POST', '/workflows', {
-          ...workflow,
-          workspaceId: await resolveWorkspace(ownerId, args),
-        })
+      const workflow = await current(ownerId, args);
+      return JSON.stringify(
+        { integration: workflow.integration ?? 'github', ...definition(workflow) },
+        null,
+        2
       );
     },
     'workflows'
   ),
   defineTool(
+    'create_workflow',
+    'Create an automation with integration (github, slack, webhook, linear, github_issues or posthog_inbox), name, events, conditions, and actions. Read talyn_get_workflow_vocabulary for the allowed values of that integration. Slack, webhook, issue (linear, github_issues) and PostHog Inbox automations need their own features. A webhook automation answers with its URL and signing secret ONCE: give them to the user, because Talyn cannot show them again.',
+    { ...workspaceSchema, workflow: workflowSchema },
+    ['workflow'],
+    { openWorldHint: true },
+    async (ownerId, args) => {
+      const workflow = objectArg(args, 'workflow');
+      const created = await callApi<CreatedWorkflow>(ownerId, 'POST', '/workflows', {
+        ...workflow,
+        workspaceId: await resolveWorkspace(ownerId, args),
+      });
+      if (!created.webhook) return workflowLine(created);
+      return [
+        workflowLine(created),
+        `webhook url (shown once): ${created.webhook.url}`,
+        `signing secret (shown once, optional): ${created.webhook.signingSecret}`,
+        'Send a POST with a JSON body. To sign, set X-Talyn-Signature: sha256=<hex HMAC-SHA256 of the raw body with the signing secret>.',
+      ].join('\n');
+    },
+    'workflows'
+  ),
+  defineTool(
     'update_workflow',
-    'Merge supplied workflow fields into the current definition. Read talyn_get_workflow_vocabulary before editing events, conditions, or actions.',
+    'Merge supplied automation fields into the current definition. Read talyn_get_workflow_vocabulary before editing events, conditions, or actions.',
     { ...idSchema, workflow: workflowSchema },
     ['workflow_id', 'workflow'],
     { openWorldHint: true, idempotentHint: true },
@@ -136,11 +226,61 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'get_workflow_vocabulary',
-    'Get event, condition, and action fields with concrete suggestions. Pass repos to fetch their GitHub labels and users.',
-    { ...workspaceSchema, repos: { type: 'array', items: textSchema } },
+    'Get the events, conditions, and actions of one integration (github, slack, webhook, linear, github_issues or posthog_inbox, default github). For github, pass repos to fetch their GitHub labels and users.',
+    { ...workspaceSchema, integration: integrationSchema, repos: { type: 'array', items: textSchema } },
     [],
     { readOnlyHint: true, openWorldHint: true },
     async (ownerId, args) => {
+      const integration = integrationArg(args) ?? 'github';
+      const vocabulary = workflowVocabulary(integration);
+      const lines = [
+        `integration: ${integration}`,
+        ...vocabulary.events.map((event) => `${event.event}  ${event.label}`),
+        ...vocabulary.conditions.map(
+          (spec) =>
+            `${spec.key}  ${spec.label}  ${spec.hint}${spec.required ? '  required' : ''}  events: ${spec.appliesTo?.join(', ') ?? 'all'}`
+        ),
+        ...vocabulary.actions.map(
+          (action) =>
+            `${action.type}  ${action.label}  {type: ${action.type}, ${actionFields[action.type]}}`
+        ),
+      ];
+      if (integration === 'webhook') {
+        return [
+          ...lines,
+          'payloadMatches (optional): [{path: string, op: equals | contains | exists, value?: string}]. path is a dot path with indexes, like issue.labels[0].name. Every test must pass.',
+          'The automation gets its own URL when it is created. Use talyn_list_repositories to find repository ids.',
+        ].join('\n');
+      }
+      if (integration === 'linear' || integration === 'github_issues') {
+        return [
+          ...lines,
+          'issueAssignee (optional): {kind: talyn (linear only) | me (github_issues only) | unassigned | people, people?: string[]}',
+          ...(integration === 'linear'
+            ? ['connectionId is required: the Linear connection id. The Linear page in Talyn lists connections.']
+            : ['repos (optional): owner/repo names. Without it, every repository the workspace watches.']),
+          'An issue automation can have one start_session action. By default Talyn comments on the issue when it starts and, when the pull request merges, comments and moves the issue to done. Set issueStartComment: false or issueDoneOnMerge: false on the start action to turn either off.',
+        ].join('\n');
+      }
+      if (integration === 'posthog_inbox') {
+        return [
+          ...lines,
+          `priorities (optional): ${POSTHOG_INBOX_PRIORITIES.join(', ')}`,
+          `actionability (optional, default immediately_actionable): ${POSTHOG_INBOX_ACTIONABILITY.join(', ')}`,
+          'scouts (optional): {include?: string[], exclude?: string[]} of scout skill names.',
+          'repositories (optional): owner/repo names. A report always runs on its own repository, and only when that repository is connected to the workspace.',
+          'start_session must have repositoryId: null. The prompt quotes the report as untrusted text and tells the agent to check the diagnosis first.',
+          `maxRunsPerDay: most runs in 24 hours (default ${DEFAULT_POSTHOG_INBOX_RUNS_PER_DAY}). Talyn never acts on a report the PostHog safety judge suppressed.`,
+          "The PostHog connection is the PostHog Inbox page's own connection (inbox:read, inbox:write, task:write). Without one, Talyn uses a PostHog Code connection that has inbox:read.",
+        ].join('\n');
+      }
+      if (integration === 'slack') {
+        return [
+          ...lines,
+          'slackAuthors (optional, default anyone in the channel): {kind: any | linked | users, userIds?: string[] of Slack user ids}',
+          'Use talyn_list_slack_channels to find channel ids. Only channels Talyn is in are listed.',
+        ].join('\n');
+      }
       const params = new URLSearchParams({
         workspaceId: await resolveWorkspace(ownerId, args),
         github: '1',
@@ -152,17 +292,9 @@ export const WORKFLOWS = [
         `/workflows/suggestions?${params}`
       );
       return [
-        ...WORKFLOW_TRIGGER_EVENTS.map((event) => `${event}  ${WORKFLOW_EVENT_LABELS[event]}`),
-        ...WORKFLOW_CONDITION_SPECS.map(
-          (spec) =>
-            `${spec.key}  ${spec.input}  ${spec.hint}  events: ${spec.appliesTo?.join(', ') ?? 'all'}`
-        ),
+        ...lines,
         `actor kinds: ${WORKFLOW_ACTOR_KINDS.join(', ')}; logins uses {kind: logins, logins: string[]}`,
         'reviewStates: approved, changes_requested, commented; checkConclusions: success, failure',
-        ...WORKFLOW_ACTION_TYPES.map(
-          (type) =>
-            `${type}  ${WORKFLOW_ACTION_LABELS[type]}  {type: ${type}, ${actionFields[type]}}`
-        ),
         `repos: ${suggestions.repos.join(', ')}`,
         `labels: ${suggestions.labels.join(', ')}`,
         `branches: ${suggestions.branches.join(', ')}`,
@@ -177,7 +309,7 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'set_workflow_enabled',
-    'Enable or disable a workflow while preserving its definition.',
+    'Enable or disable an automation while preserving its definition.',
     { ...idSchema, enabled: booleanSchema },
     ['workflow_id', 'enabled'],
     { openWorldHint: true, idempotentHint: true },
@@ -186,7 +318,7 @@ export const WORKFLOWS = [
   ),
   defineTool(
     'delete_workflow',
-    'Delete a workflow and its run history.',
+    'Delete an automation and its run history.',
     { workflow_id: textSchema },
     ['workflow_id'],
     { destructiveHint: true },
@@ -198,8 +330,64 @@ export const WORKFLOWS = [
     'workflows'
   ),
   defineTool(
+    'list_posthog_inbox_backlog',
+    'List older PostHog Inbox reports that a saved PostHog Inbox automation matches, newest first, up to all time, with where each one stands for Talyn (not run, running or PR open, already run, claimed elsewhere, already addressed, repository not connected, held back for safety). Starts nothing.',
+    {
+      ...idSchema,
+      days: {
+        enum: [...POSTHOG_INBOX_BACKLOG_DAYS],
+        description: 'How far back reports were created: 7, 30 or 90 days, or "all" for all time. Default 7.',
+      },
+      offset: { type: 'integer', description: 'The offset a previous call returned, for more reports.' },
+      count: {
+        type: 'boolean',
+        description: `Also count every matching report in the range, by state (reads up to ${MAX_POSTHOG_INBOX_BACKLOG_COUNT_SCAN} reports, so it is slower). Default false.`,
+      },
+    },
+    ['workflow_id'],
+    { readOnlyHint: true, openWorldHint: true },
+    async (ownerId, args) => {
+      const workflow = await inboxRule(ownerId, args);
+      const page = await callApi<PostHogInboxBacklogPage>(ownerId, 'POST', '/workflows/posthog-inbox/backlog', {
+        workspaceId: workflow.workspaceId,
+        workflowId: workflow.id,
+        ...(args.days !== undefined ? { days: args.days } : {}),
+        ...(args.offset !== undefined ? { offset: args.offset } : {}),
+      });
+      const count =
+        args.count === true
+          ? await callApi<PostHogInboxBacklogCount>(ownerId, 'POST', '/workflows/posthog-inbox/backlog/count', {
+              workspaceId: workflow.workspaceId,
+              workflowId: workflow.id,
+              ...(args.days !== undefined ? { days: args.days } : {}),
+            })
+          : null;
+      return backlogText(page, count);
+    },
+    'workflows'
+  ),
+  defineTool(
+    'run_posthog_inbox_reports',
+    `Start a saved, enabled PostHog Inbox automation on older reports, by id (at most ${MAX_POSTHOG_INBOX_RUN_REPORTS}). Each report starts a session that opens a pull request. Talyn reads each report again, checks the automation's conditions, claims it in PostHog and never runs the same report version twice. The runs count toward the automation's daily cap. Get ids from talyn_list_posthog_inbox_backlog, and confirm with the user first.`,
+    {
+      ...idSchema,
+      report_ids: { type: 'array', items: { type: 'string' }, maxItems: MAX_POSTHOG_INBOX_RUN_REPORTS },
+    },
+    ['workflow_id', 'report_ids'],
+    { openWorldHint: true },
+    async (ownerId, args) => {
+      const workflow = await inboxRule(ownerId, args);
+      if (!Array.isArray(args.report_ids)) throw new Error('report_ids must be a list of report ids.');
+      const data = await callApi<PostHogInboxRunResponse>(ownerId, 'POST', `/workflows/${workflow.id}/posthog-inbox/run`, {
+        reportIds: args.report_ids.map(String),
+      });
+      return [data.summary, linesOrNone(data.results, (r) => `${r.reportId}  [${r.outcome}]  ${r.message}${r.workbenchId ? `  session: ${r.workbenchId}` : ''}`)].join('\n');
+    },
+    'workflows'
+  ),
+  defineTool(
     'list_workflow_runs',
-    'List workflow runs. Use the returned cursor to fetch older runs.',
+    'List automation runs. Use the returned cursor to fetch older runs.',
     { workflow_id: textSchema, ...pageSchema },
     ['workflow_id'],
     { readOnlyHint: true },
@@ -213,7 +401,7 @@ export const WORKFLOWS = [
         rows,
         args,
         (run) =>
-          `${run.id}  [${run.status}]  ${run.createdAt}  ${run.repoFullName}#${run.prNumber}  ${run.event}${run.taskId ? `  task: ${run.taskId}` : ''}${str(run.error) ? `  ${run.error}` : ''}`
+          `${run.id}  [${run.status}]  ${run.createdAt}  ${run.subjectLabel ?? `${run.repoFullName}#${run.prNumber}`}  ${run.event}${run.trigger === 'manual' ? `  manual${run.triggeredBy ? ` by ${run.triggeredBy}` : ''}` : ''}${run.taskId ? `  task: ${run.taskId}` : ''}${str(run.error) ? `  ${run.error}` : ''}`
       );
     },
     'workflows'

@@ -1,0 +1,94 @@
+name: Mobile TestFlight
+
+# Every push to main that changes the app or the packages it bundles checks the iOS and Android internal-beta native
+# fingerprints. For each platform with no internal-beta build of its fingerprint yet, it queues an EAS build with the
+# next reserved build number. EAS submits the finished iOS binary to App Store Connect (TestFlight) and the Android
+# binary to the Play internal track. A change with the same fingerprint ships as an EAS update from the
+# Mobile update workflow instead. Set the repository variable MOBILE_TESTFLIGHT_AUTO to 0 to stop this workflow.
+# Run it by hand with "force" to build a new binary for an unchanged fingerprint.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/mobile/**'
+      - 'packages/client/**'
+      - 'packages/shared/**'
+      - 'package-lock.json'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even when an internal-beta build already runs this fingerprint
+        type: boolean
+        default: false
+      platform:
+        description: Platforms to check
+        type: choice
+        options: [all, ios, android]
+        default: all
+
+permissions:
+  contents: read
+
+# The manual release workflow uses the same group, so build number reservations never run at the same time.
+concurrency:
+  group: mobile-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and submit internal-beta (iOS and Android)
+    # An unset variable is null, and null != '0' is false in Actions expressions (both coerce to 0),
+    # so the kill switch defaults to '1' before the comparison.
+    if: github.repository == 'Gilbert09/talyn' && github.ref == 'refs/heads/main' && (vars.MOBILE_TESTFLIGHT_AUTO || '1') != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: mobile-updates
+    env:
+      CI: 'true'
+      EXPO_NO_TELEMETRY: '1'
+      EXPO_NO_DOTENV: '1'
+      MOBILE_TESTFLIGHT_AUTO: ${{ vars.MOBILE_TESTFLIGHT_AUTO }}
+      MOBILE_TESTFLIGHT_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force && 'true' || 'false' }}
+      MOBILE_TESTFLIGHT_PLATFORMS: ${{ github.event_name == 'workflow_dispatch' && inputs.platform || 'all' }}
+    steps:
+      - name: Require the Expo token
+        id: gate
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::notice::EXPO_TOKEN is not set, so no internal-beta build was queued."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check out the pushed commit
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          node-version: '22.23.4'
+      - name: Install without release secrets or caches
+        if: steps.gate.outputs.run == 'true'
+        run: npm ci --ignore-scripts
+      - name: Install the pinned EAS tool outside the app
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          npm install --prefix "$RUNNER_TEMP/mobile-eas-cli" --no-save --ignore-scripts --package-lock=false eas-cli@27.5.0
+          echo "MOBILE_EAS_CLI_PATH=$RUNNER_TEMP/mobile-eas-cli/node_modules/eas-cli/bin/run" >> "$GITHUB_ENV"
+      - name: Build shared packages
+        if: steps.gate.outputs.run == 'true'
+        run: npm run mobile:build:packages
+      - name: Describe the build
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          subject="$(git log -1 --format=%s | tr -d '\r')"
+          echo "MOBILE_BUILD_MESSAGE=${subject} ($(git rev-parse --short HEAD))" >> "$GITHUB_ENV"
+      - name: Build and submit when the fingerprint is new
+        if: steps.gate.outputs.run == 'true'
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: node apps/mobile/scripts/testflight-build.cjs --execute

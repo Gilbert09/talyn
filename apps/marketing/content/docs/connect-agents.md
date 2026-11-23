@@ -17,9 +17,11 @@ You need a Claude Pro or Max subscription.
 4. Paste it into **Code from Anthropic**.
 5. Select **Finish sign-in**.
 
+In the web app, your browser can block the sign-in tab. If it does, select **Open the Claude sign-in page** to open it.
+
 The row shows **Connected**.
 
-If you want to pay per token instead of using a subscription, open **Use a Console API key instead** and paste an Anthropic Console API key. Usage on that key is billed by Anthropic per token.
+If you do not have a Claude subscription, or you want to pay per token, open **No Claude subscription? Use an Anthropic API key** and paste an Anthropic Console API key. Usage on that key is billed by Anthropic per token.
 
 ## Codex
 
@@ -41,6 +43,8 @@ You need a ChatGPT subscription.
 
 You can connect more than one account for each agent, for example a personal and a work Claude account. Talyn uses them in the order of the list. Use **Move up** and **Move down** to change the order.
 
+Talyn gives a new account a name such as **Claude 2**. After the account connects, you can type a different name or keep that one. To change the name later, select it.
+
 Each account row shows its usage. When one account reaches its limit, Talyn uses the next one. See [Usage limits and failover](/docs/troubleshooting#usage-limits-and-failover).
 
 ## Pick the agent and model
@@ -58,3 +62,5 @@ Select the unlink icon on the row. Runs that need that agent stop being possible
 ## When a sign-in stops working
 
 If Anthropic or OpenAI rejects the saved sign-in, the row shows **Reconnect needed**. See [Reconnect an agent](/docs/troubleshooting#reconnect-needed).
+
+Talyn shows a notice when an account needs to be signed in again. Failed turns that need sign-in show Reconnect beside Retry, which opens the agent settings.

@@ -82,6 +82,9 @@ const memory = (overrides: Record<string, unknown> = {}) => ({
   createdAt: '2026-10-01T10:00:00Z',
   updatedAt: '2026-10-01T10:00:00Z',
   forgottenAt: null,
+  forgottenReason: null,
+  useCount: 0,
+  lastUsedAt: null,
   body: 'npm run build',
   ...overrides,
 });
@@ -160,6 +163,16 @@ describe('memory_write', () => {
     expect(text).toMatch(outcome === 'created' ? /^Saved/ : /^Updated/);
   });
 
+  it('names the entries it forgot at the limit and adds a card for each', async () => {
+    const old = memory({ id: 'm9', name: 'old note', scope: 'workspace', repositoryId: null, useCount: 2 });
+    mockApi({ 'POST /api/v1/workbenches/memory': () => ({ entry: memory(), outcome: 'created', evicted: [old] }) });
+    const text = await tool('memory_write').handler(OWNER, writeArgs, SELF);
+    expect(text).toContain('the least-read entry:\n  m9  old note  (project, workspace, read 2 times)');
+    expect(announceMemoryChange).toHaveBeenCalledWith('s1', {
+      action: 'forgotten', memoryId: 'm9', name: 'old note', memoryType: 'project', scope: 'workspace',
+    });
+  });
+
   it('adds no card for a user token', async () => {
     mockApi({ 'POST /api/v1/workbenches/memory': () => ({ entry: memory(), outcome: 'created' }) });
     await tool('memory_write').handler(OWNER, { ...writeArgs, workspace_id: 'ws1' }, USER);
@@ -233,7 +246,7 @@ describe('memory_search and memory_list', () => {
     const { calls } = mockApi({ 'GET /api/v1/workbenches/memory': () => [memory()] });
     const text = await tool('memory_search').handler(OWNER, { ...args, query: 'build' }, ctx);
     expect(Object.fromEntries(calls[0].url.searchParams)).toEqual(expected);
-    expect(text).toBe('m1  build command  (project, repository r1)  How to build');
+    expect(text).toBe('m1  build command  (project, repository r1, never read)  How to build');
   });
 
   it('search requires a query', async () => {
@@ -278,7 +291,8 @@ describe('memory_read and memory_forget', () => {
     const read = tool('memory_read').handler(OWNER, { memory_id: 'm1', ...(ctx.session ? {} : { workspace_id: 'ws1' }) }, ctx);
     if (visible) expect(await read).toMatch(/\n\nnpm run build$/);
     else await expect(read).rejects.toThrow('Memory entry not found.');
-    if (visible && ctx.session) expect(recordMemoryUse).toHaveBeenCalledWith('m1', ctx.session.workbenchId, 'read');
+    // Every read counts, also from a user token; a review thread's reads do not.
+    if (visible && ctx !== REVIEW) expect(recordMemoryUse).toHaveBeenCalledWith('m1', ctx.session?.workbenchId ?? null, 'read');
     else expect(recordMemoryUse).not.toHaveBeenCalled();
   });
 
@@ -357,7 +371,7 @@ describe('memory_read and memory_forget by name', () => {
   it('reads by the name the index shows, in the scopes the session sees', async () => {
     const { calls } = mockNames([summary()], { m1: memory({ name: NAME }) });
     const text = await tool('memory_read').handler(OWNER, { memory_id: NAME }, SELF);
-    expect(text).toMatch(new RegExp(`^m1  ${NAME}  \\(project, repository r1\\)`));
+    expect(text).toMatch(new RegExp(`^m1  ${NAME}  \\(project, repository r1, never read\\)`));
     expect(text).toMatch(/\n\nnpm run build$/);
     expect(calls.map((c) => `${c.method} ${c.url.pathname}`)).toEqual([
       `GET /api/v1/workbenches/memory/${NAME}`,

@@ -93,6 +93,8 @@ it('uploads a pasted sandbox image and shows its chip', async () => {
   await waitFor(() => expect(screen.getByText('shot.png')).toBeInTheDocument());
   expect(upload).toHaveBeenCalledWith('wb-1', expect.any(Blob), 'shot.png');
   expect(upload.mock.calls[0][1].type).toBe('image/png');
+  const chip = screen.getByText('shot.png');
+  expect(chip.querySelector('img')).toHaveAttribute('src', 'data:image/png;base64,aGVsbG8=');
 });
 
 it('lets a surrounding drop zone attach images through attachRef', async () => {
@@ -122,7 +124,7 @@ it('shows the ready note without an upload or message change', async () => {
   const starting = { ...workbench, status: 'provisioning' as const };
   render(<Composer workbench={starting} chat={chat} ops={sandboxOps(starting)} todos={null} contextUsage={null} slashCommands={null} />);
   paste();
-  expect(screen.getByText('Images can be attached once the sandbox is ready.')).toBeInTheDocument();
+  expect(screen.getByText('Files can be attached once the sandbox is ready.')).toBeInTheDocument();
   expect(upload).not.toHaveBeenCalled();
   expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveValue('');
   expect(screen.getByRole('textbox', { name: 'Message the agent' })).toBeEnabled();

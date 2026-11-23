@@ -130,7 +130,7 @@ function LegacyUpgradeModal({
     if (upgradeReason === 'workflow_limit') {
       const wLimit = status?.workflowLimit ?? FREE_PLAN_WORKFLOW_LIMIT;
       return (
-        `The free plan keeps up to ${wLimit} workflows across all your workspaces — ` +
+        `The free plan keeps up to ${wLimit} automations across all your workspaces — ` +
         `you have ${status?.workflows ?? wLimit}. Upgrade for as many as you want, or ` +
         'delete one you no longer need.'
       );
@@ -238,7 +238,7 @@ function LegacyUpgradeModal({
                 slot
               </li>
               <li className="flex items-center gap-2">
-                <Check className="h-4 w-4" /> Unlimited workflows
+                <Check className="h-4 w-4" /> Unlimited automations
               </li>
               <li className="flex items-center gap-2">
                 <Check className="h-4 w-4" /> Unlimited loops

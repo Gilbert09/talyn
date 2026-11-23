@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from '../lib/api';
-import { isActiveSessionState, sessionPr, sessionState, spaceSessionState, type SessionStateKind } from '../lib/sessionState';
+import { isActiveSessionState, sessionPr, sessionState, spaceSessionState, withServerAttention, type SessionState, type SessionStateKind } from '../lib/sessionState';
 
 type Wb = Pick<Workbench, 'status' | 'sandboxState' | 'diffStat' | 'committedStats' | 'archivedAt'>;
 const WB: Wb = { status: 'ready', sandboxState: 'running', diffStat: null, archivedAt: null } as Wb;
@@ -24,6 +24,7 @@ describe('sessionState', () => {
     ['moving to a fresh sandbox, with the turn that asked for it', { status: 'moving' }, [chat('running')], {}, pr('open'), 'working'],
     ['working', {}, [chat('running')], {}, pr('open'), 'working'],
     ['a message waits for the sandbox', {}, [{ ...chat('idle'), queuedMessages: [{ id: 'q1', text: 'go', queuedAt: '2026-11-04T00:00:00Z' }] } as ReturnType<typeof chat>], {}, pr('open'), 'working'],
+    ['an archived session with a queued message is not working', { archivedAt: '2026-11-15T00:00:00Z' }, [{ ...chat('idle'), queuedMessages: [{ id: 'q1', text: 'go', queuedAt: '2026-11-04T00:00:00Z' }] } as ReturnType<typeof chat>], {}, pr('merged'), 'merged'],
     ['an empty queue is not work', {}, [{ ...chat('idle'), queuedMessages: [] } as ReturnType<typeof chat>], {}, null, 'idle'],
     ['waiting for an answer', {}, [chat('awaiting_input')], {}, pr('open'), 'needs_reply'],
     ['an unread reply', {}, [chat('idle')], { c1: true }, pr('open'), 'needs_reply'],
@@ -44,6 +45,8 @@ describe('sessionState', () => {
   describe('background work', () => {
     const job = (status: WorkbenchBackground['jobs'][number]['status']) => ({ status }) as WorkbenchBackground['jobs'][number];
     const wakeup = (status: WorkbenchBackground['wakeups'][number]['status']) => ({ status }) as WorkbenchBackground['wakeups'][number];
+    const ciWakeup = (status: WorkbenchBackground['wakeups'][number]['status']) =>
+      ({ status, ci: { pullRequestId: 'p1', headSha: 'a'.repeat(40) } }) as WorkbenchBackground['wakeups'][number];
     const bg = (jobs: ReturnType<typeof job>[], wakeups: ReturnType<typeof wakeup>[] = []) => ({ jobs, wakeups });
 
     it.each<[string, Partial<Wb>, ReturnType<typeof chat>[], Record<string, true>, ReturnType<typeof pr> | null, ReturnType<typeof bg> | undefined, SessionStateKind]>([
@@ -61,6 +64,15 @@ describe('sessionState', () => {
       ['an open PR wins over a scheduled wake-up', {}, [], {}, pr('open', { ciStatus: 'running' }), bg([], [wakeup('scheduled')]), 'pr_waiting'],
       ['a merged PR wins over a scheduled wake-up', {}, [], {}, pr('merged'), bg([], [wakeup('scheduled')]), 'merged'],
       ['a running job wins over a scheduled wake-up', {}, [], {}, null, bg([job('running')], [wakeup('scheduled')]), 'background_job'],
+      ['a CI wake-up on an open PR waits for CI', {}, [], {}, pr('open', { ciStatus: 'running' }), bg([], [ciWakeup('scheduled')]), 'waiting_ci'],
+      ['a CI wake-up wins over failing checks', {}, [], {}, pr('open', { ciStatus: 'failing_required' }), bg([], [ciWakeup('scheduled')]), 'waiting_ci'],
+      ['a CI wake-up wins over a draft PR', {}, [], {}, pr('open', { draft: true }), bg([], [ciWakeup('scheduled')]), 'waiting_ci'],
+      ['a merged PR wins over a CI wake-up', {}, [], {}, pr('merged'), bg([], [ciWakeup('scheduled')]), 'merged'],
+      ['a closed PR wins over a CI wake-up', {}, [], {}, pr('closed'), bg([], [ciWakeup('scheduled')]), 'closed'],
+      ['a running job wins over a CI wake-up', {}, [], {}, pr('open'), bg([job('running')], [ciWakeup('scheduled')]), 'background_job'],
+      ['a running chat wins over a CI wake-up', {}, [chat('running')], {}, pr('open'), bg([], [ciWakeup('scheduled')]), 'working'],
+      ['a fired CI wake-up leaves the PR state', {}, [], {}, pr('open'), bg([], [ciWakeup('fired')]), 'ready_to_merge'],
+      ['a CI wake-up with no PR is a wake-up', {}, [], {}, null, bg([], [ciWakeup('scheduled')]), 'wakeup'],
       ['a fired, cancelled or failed wake-up is not work', {}, [], {}, null, bg([], [wakeup('fired'), wakeup('cancelled'), wakeup('failed')]), 'idle'],
       ['no background payload', {}, [], {}, null, undefined, 'idle'],
     ])('%s', (_name, over, chats, unread, row, background, kind) => {
@@ -70,6 +82,8 @@ describe('sessionState', () => {
     it('labels the background states', () => {
       expect(sessionState(WB, [], {}, null, false, bg([job('running')])).label).toBe('Background job running');
       expect(sessionState(WB, [], {}, null, false, bg([], [wakeup('scheduled')])).label).toBe('Wake-up scheduled');
+      expect(sessionState(WB, [], {}, pr('open'), false, bg([], [ciWakeup('scheduled')])).label)
+        .toMatch(/^#\d+: waiting for CI, then the agent continues$/);
     });
   });
 
@@ -126,5 +140,35 @@ describe('spaceSessionState', () => {
     ['a closed pull request', { pullRequest: { number: 7, state: 'closed', url: 'https://github.com/a/b/pull/7' } }, 'closed'],
   ] as [string, Partial<typeof SPACE_SESSION>, SessionStateKind][])('%s', (_name, patch, kind) => {
     expect(spaceSessionState({ ...SPACE_SESSION, ...patch }).kind).toBe(kind);
+  });
+});
+
+describe('withServerAttention', () => {
+  const state = (kind: SessionStateKind, label: string = kind): SessionState => ({ kind, label });
+
+  it.each<[string, SessionState, Parameters<typeof withServerAttention>[1], number | null, SessionState]>([
+    ['no reason keeps the state', state('idle'), undefined, null, state('idle')],
+    ['a question on an idle row', state('idle'), 'reply', null, { kind: 'needs_reply', label: 'Waiting for your answer' }],
+    ['a question on an unread row', state('needs_reply', 'New reply'), 'reply', null, { kind: 'needs_reply', label: 'Waiting for your answer' }],
+    ['a question on an open PR row', state('pr_waiting'), 'reply', 5, { kind: 'needs_reply', label: 'Waiting for your answer' }],
+    ['a failure on an idle row', state('idle'), 'failed', null, { kind: 'failed', label: 'Failed: open it to see why' }],
+    ['a failure on a merged row', state('merged'), 'failed', 5, { kind: 'failed', label: 'Failed: open it to see why' }],
+    ['conflicts on an open PR row', state('pr_waiting'), 'conflict', 12, { kind: 'pr_attention', label: '#12 has conflicts' }],
+    ['conflicts with no PR number', state('pr_waiting'), 'conflict', null, { kind: 'pr_attention', label: 'The pull request has conflicts' }],
+    ['conflicts the row already shows', state('pr_attention', '#12 has conflicts'), 'conflict', 12, state('pr_attention', '#12 has conflicts')],
+    ['a failure the row already shows', state('failed', 'A chat failed'), 'reply', null, state('failed', 'A chat failed')],
+    ['live work wins over an old question', state('working'), 'reply', null, state('working')],
+    ['a starting box wins over old conflicts', state('starting'), 'conflict', 3, state('starting')],
+    ['a plan on an idle row', state('idle'), 'plan', null, { kind: 'needs_reply', label: 'A plan waits for your approval' }],
+    ['a plan on an open PR row', state('pr_waiting'), 'plan', 7, { kind: 'needs_reply', label: 'A plan waits for your approval' }],
+    ['live work wins over an old plan', state('working'), 'plan', null, state('working')],
+    ['a failure the row shows wins over a plan', state('failed', 'A chat failed'), 'plan', null, state('failed', 'A chat failed')],
+    ['an unknown reason keeps the row', state('pr_waiting', '#4 open'), 'later' as never, 4, state('pr_waiting', '#4 open')],
+  ])('%s', (_label, given, reason, prNumber, expected) => {
+    expect(withServerAttention(given, reason, prNumber)).toEqual(expected);
+  });
+
+  it.each(['reply', 'plan', 'failed', 'conflict'] as const)('puts an idle row flagged for %s in the active group', (reason) => {
+    expect(isActiveSessionState(withServerAttention(state('idle'), reason))).toBe(true);
   });
 });

@@ -9,7 +9,7 @@ Insights covers one workspace, and only its owner can see it. Days are in UTC.
 
 ## Pick a range
 
-Choose **Last 7 days**, **Last 30 days**, **This billing period** or **Custom**. A custom range can be up to 366 days.
+Choose **Today**, **Yesterday**, **Last 7 days**, **Last 30 days**, **This billing period** or **Custom**. Today and Yesterday are UTC days. A custom range can be up to 366 days.
 
 ## What it shows
 

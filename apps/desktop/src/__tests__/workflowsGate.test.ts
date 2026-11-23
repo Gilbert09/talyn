@@ -78,6 +78,7 @@ describe('the editor’s starting point', () => {
       conditions: { author: { kind: 'bot' } },
       actions: [{ type: 'watch_pr' }],
       maxRunsPerPrPerHour: 9,
+      integration: 'github',
     });
   });
 

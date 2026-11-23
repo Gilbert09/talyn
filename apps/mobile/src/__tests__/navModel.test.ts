@@ -1,7 +1,8 @@
-import type { Workbench } from '@talyn/shared';
+import type { Workbench, WorkbenchTranscriptMatch } from '@talyn/shared';
+import { Gesture } from 'react-native-gesture-handler';
 
-import { activeTarget, badgeText, drawerEntries, drawerWidth, matchesQuery, needsYou, needsYouCount, normalizeQuery, toggled,
-  type DrawerEntry, type DrawerInput } from '../features/nav/model';
+import { activeTarget, badgeText, configureDrawerSwipe, DRAWER_SWIPE_VERTICAL_SLOP, drawerEntries, drawerWidth, matchesQuery, needsYou,
+  needsYouCount, normalizeQuery, toggled, withTranscriptMatches, type DrawerEntry, type DrawerInput } from '../features/nav/model';
 import { chat, session, thread } from './workflowFixtures';
 
 const none = new Set<string>();
@@ -26,6 +27,22 @@ describe('needs you', () => {
     expect(needsYou(session(patch))).toBe(expected);
   });
 
+  it.each<[string, Partial<Workbench>, Record<string, 'plan' | 'reply' | 'failed' | 'conflict'>, boolean]>([
+    ['a plan on an idle session', {}, { 'session-one': 'plan' }, true],
+    ['a plan on another session', {}, { other: 'plan' }, false],
+    ['a reply reason, which mobile derives itself', {}, { 'session-one': 'reply' }, false],
+    ['a plan on a running session', { chats: [chat({ status: 'running' })] }, { 'session-one': 'plan' }, false],
+    ['a plan on an archived session', { archivedAt: '2026-11-09T00:00:00Z' }, { 'session-one': 'plan' }, false],
+    ['no reasons', {}, {}, false],
+  ])('with %s is %s', (_name, patch, reasons, expected) => {
+    expect(needsYou(session(patch), reasons)).toBe(expected);
+  });
+
+  it('counts a plan session and a plan thread', () => {
+    expect(needsYouCount([alpha, waiting], [thread()], { alpha: 'plan', 'thread-one': 'plan' })).toBe(3);
+    expect(needsYouCount([alpha], undefined, { alpha: 'plan' })).toBe(1);
+  });
+
   it('counts sessions and threads, and nothing unknown', () => {
     expect(needsYouCount(undefined, undefined)).toBe(0);
     expect(needsYouCount([waiting, alpha], [thread()])).toBe(1);
@@ -48,7 +65,20 @@ describe('drawer entries', () => {
   });
 
   it('says there are no sessions yet and keeps the Threads heading', () => {
-    expect(keys(drawerEntries(input({})))).toEqual(['heading:threads', 'heading:sessions', 'notice:sessions']);
+    expect(keys(drawerEntries(input({})))).toEqual(['heading:threads', 'heading:sessions', 'starters:sessions']);
+  });
+
+  it('lists a plan session under Needs you and marks its collapsed group', () => {
+    const entries = drawerEntries(input({ sessions: [alpha, beta], reasons: { alpha: 'plan' }, collapsedGroups: new Set(['org/alpha']) }));
+    expect(keys(entries).slice(0, 2)).toEqual(['heading:needs', 'needs:alpha']);
+    expect(entries.find((entry) => entry.key === 'group:org/alpha')).toMatchObject({ attention: true });
+    expect(entries.find((entry) => entry.key === 'group:org/beta')).toMatchObject({ attention: false });
+  });
+
+  it('does not list a plan session that is archived or filtered out by the search', () => {
+    expect(keys(drawerEntries(input({ sessions: [{ ...alpha, archivedAt: '2026-11-09T00:00:00Z' }], reasons: { alpha: 'plan' } }))))
+      .not.toContain('heading:needs');
+    expect(keys(drawerEntries(input({ sessions: [alpha], reasons: { alpha: 'plan' }, query: 'zzz' })))).not.toContain('needs:alpha');
   });
 
   it('orders Needs you, Threads with sessions, then repositories newest first', () => {
@@ -103,6 +133,34 @@ describe('drawer entries', () => {
   });
 });
 
+describe('transcript matches', () => {
+  const found = (item: Workbench): WorkbenchTranscriptMatch => ({ workbench: item, chatId: 'chat-one', seq: 1, role: 'user', snippet: `in ${item.id}` });
+  const old = session({ id: 'old', title: 'Old', archivedAt: '2026-11-09T00:00:00Z' });
+  const named = drawerEntries(input({ sessions: [alpha, beta], query: 'alpha' }));
+  const unmatched = drawerEntries(input({ sessions: [alpha, beta], query: 'zzz' }));
+
+  it.each<[string, DrawerEntry[], WorkbenchTranscriptMatch[], boolean, string[]]>([
+    ['adds matches below the name matches', named, [found(old)], false,
+      ['heading:sessions', 'group:org/alpha', 'session:alpha', 'heading:transcripts', 'transcript:old']],
+    ['leaves out a session the name search shows', named, [found(alpha), found(old)], false,
+      ['heading:sessions', 'group:org/alpha', 'session:alpha', 'heading:transcripts', 'transcript:old']],
+    ['lists a session once', unmatched, [found(old), found(old)], false, ['heading:transcripts', 'transcript:old']],
+    ['adds nothing when every match is shown', named, [found(alpha)], false, ['heading:sessions', 'group:org/alpha', 'session:alpha']],
+    ['keeps the no-match notice with no matches', unmatched, [], false, ['notice:search']],
+    ['says it searches when nothing else matches', unmatched, [], true, ['notice:transcripts']],
+    ['stays quiet while it searches below name matches', named, [], true, ['heading:sessions', 'group:org/alpha', 'session:alpha']],
+    ['shows matches in place of the no-match notice', unmatched, [found(beta)], false, ['heading:transcripts', 'transcript:beta']],
+  ])('%s', (_name, entries, matches, loading, expected) => {
+    expect(keys(withTranscriptMatches(entries, matches, loading))).toEqual(expected);
+  });
+
+  it('names the group and carries the match', () => {
+    const entries = withTranscriptMatches(unmatched, [found(old)], false);
+    expect(entries[0]).toEqual({ type: 'heading', key: 'heading:transcripts', section: 'transcripts', title: 'In transcripts' });
+    expect(entries[1]).toEqual({ type: 'transcript', key: 'transcript:old', match: found(old) });
+  });
+});
+
 describe('active target', () => {
   it.each<[string, string | string[] | undefined, string | null]>([
     ['/', undefined, 'home'],
@@ -114,7 +172,8 @@ describe('active target', () => {
     ['/pulls', 'unknown', 'pulls:mine'],
     ['/settings', undefined, 'settings'],
     ['/spaces/space-one', undefined, 'spaces'],
-    ['/automations', undefined, 'automations'],
+    ['/integrations', undefined, 'integrations'],
+    ['/integrations/schedule', undefined, 'integrations'],
     ['/usage', undefined, 'usage'],
     ['/agents', undefined, 'agents'],
     ['/insights', undefined, 'insights'],
@@ -133,6 +192,14 @@ describe('small helpers', () => {
 
   it.each([[320, 272], [400, 340], [430, 360], [1024, 360]])('drawer width on a %ipt screen is %ipt', (screen, expected) => {
     expect(drawerWidth(screen)).toBe(expected);
+  });
+
+  it('lets an edge swipe drift vertically before it cancels', () => {
+    const pan = Gesture.Pan().activeOffsetX([-5, 5]).failOffsetY([-5, 5]);
+    const config = configureDrawerSwipe(pan).config;
+    expect(config).toMatchObject({ failOffsetYStart: -DRAWER_SWIPE_VERTICAL_SLOP, failOffsetYEnd: DRAWER_SWIPE_VERTICAL_SLOP,
+      activeOffsetXStart: -5, activeOffsetXEnd: 5 });
+    expect(DRAWER_SWIPE_VERTICAL_SLOP).toBeGreaterThan(5);
   });
 
   it('toggles a key without changing the old set', () => {

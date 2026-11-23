@@ -1,30 +1,34 @@
 import { useEffect } from 'react';
-import { workbenchesOffered, type Workbench, type WorkbenchChat } from '@talyn/shared';
+import { workbenchesOffered, type Workbench } from '@talyn/shared';
 import { activeSpace, contextEntries, inPersonalList, isWorkbenchOwner, openSpaceSession, spacesOffered, switchContext } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
 import { useSessionBackgroundStore } from '../../stores/sessionBackground';
 import { MENU_COMMANDS } from '../../../main/menuCommands';
+import type { ZoomStep } from '../../../main/zoomSteps';
 import {
   FOCUS_COMPOSER_EVENT,
   OPEN_REPOSITORY_PICKER_EVENT,
   composerForTab,
   dispatchKeydown,
+  isComposer,
   isEmptyComposer,
   isInOverlay,
   registerShortcuts,
   runShortcut,
   type Shortcut,
 } from '../../lib/shortcuts';
+import { useSplitViewStore } from '../../stores/splitView';
+import { requestTranscriptFind } from '../../lib/transcriptFind';
 import { requestWorkbenchAction, type WorkbenchAction } from '../../lib/workbenchActions';
 import { useNavigationStore } from '../../stores/navigation';
-import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
+import { useWorkbenchStore } from '../../stores/workbenches';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { usePullRequestStore } from '../../stores/pullRequests';
-import { closeChatTab, createChatTab } from '../workbench/ChatTabs';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { groupSidebarWorkbenches, isArchived, sidebarSessionStates, visibleGroupItems } from '../workbench/workbenchSelectors';
 import { currentSpaceSidebarModel, spaceSidebarSessionIds } from './spaceSidebarModel';
 import { buildGoToShortcuts } from './goToShortcuts';
+import { useContextAttentionStore } from '../../lib/contextRail';
 
 // Keep the same context shortcut as the web app.
 export const CONTEXT_JUMP_KEYS = (n: number) => `mod+shift+${n}`;
@@ -46,6 +50,7 @@ export function orderedLiveWorkbenches(): Workbench[] {
     unread,
     unseen,
     backgrounds: useSessionBackgroundStore.getState().byWorkbench,
+    attention: useContextAttentionStore.getState().counts?.sessions,
   });
   const { sidebarOrder, collapsedSessionGroups } = useWorkspaceStore.getState();
   const openId = currentWorkbench()?.id ?? null;
@@ -60,12 +65,6 @@ export function currentWorkbench(): Workbench | null {
   const { route } = useNavigationStore.getState();
   if (route.view !== 'workbench') return null;
   return useWorkbenchStore.getState().workbenches[route.id] ?? null;
-}
-
-function currentChat(wb: Workbench): WorkbenchChat | null {
-  const store = useWorkbenchStore.getState();
-  const chats = visibleChats(store, wb.id);
-  return chats.find((c) => c.id === store.selectedChatByWorkbench[wb.id]) ?? chats[chats.length - 1] ?? null;
 }
 
 /**
@@ -112,6 +111,28 @@ const ownsCurrent = () => {
   return isWorkbenchOwner(wb, ws.workspaces, ws.currentWorkspaceId);
 };
 const inOwnWorkbench = () => inWorkbench() && ownsCurrent();
+
+const ZOOM_SHORTCUTS: Array<[string, ZoomStep]> = [
+  ['view.zoomIn', 'in'],
+  ['view.zoomOut', 'out'],
+  ['view.zoomReset', 'reset'],
+];
+
+/** The session whose transcript ⌘F searches: the open one, or the focused split view pane. */
+export function findTargetWorkbenchId(): string | null {
+  if (!offered()) return null;
+  const { route } = useNavigationStore.getState();
+  if (route.view === 'workbench') return route.id;
+  if (route.view === 'split') return useSplitViewStore.getState().focusedId;
+  return null;
+}
+
+/** Code views and the terminal keep ⌘F for their own find. */
+const FIND_KEEPS_MEANING = '.xterm, .monaco-editor, .cm-editor, diffs-container';
+const findAllowedIn = (target: EventTarget | null) => {
+  const el = target as Element | null;
+  return !el || typeof el.closest !== 'function' || el.closest(FIND_KEEPS_MEANING) === null;
+};
 
 type Def = Omit<Shortcut, 'keys' | 'label' | 'menu'> & { keys?: string; label?: string };
 
@@ -213,6 +234,15 @@ export function buildAppShortcuts(): Shortcut[] {
       allowInInput: true,
       run: () => useWorkspaceStore.getState().toggleSidebar(),
     }),
+    ...ZOOM_SHORTCUTS.map(([id, step]) =>
+      fromMenu({
+        id,
+        group: 'General',
+        allowInInput: true,
+        when: () => typeof window.electron?.zoom?.step === 'function',
+        run: () => void window.electron.zoom.step(step),
+      }),
+    ),
     fromMenu({
       id: 'nav.back',
       group: 'General',
@@ -318,36 +348,21 @@ export function buildAppShortcuts(): Shortcut[] {
     headerAction('workbench.merge', 'merge'),
     headerAction('workbench.archive', 'archive'),
     fromMenu({
-      id: 'chat.new',
-      group: 'Session',
-      allowInInput: true,
-      when: inOwnWorkbench,
-      run: () => {
-        const wb = currentWorkbench();
-        if (wb) void createChatTab(wb);
-      },
-    }),
-    fromMenu({
-      id: 'chat.close',
-      label: 'Close chat tab',
-      group: 'Session',
-      allowInInput: true,
-      when: () => {
-        const wb = currentWorkbench();
-        return wb !== null && ownsCurrent() && currentChat(wb) !== null;
-      },
-      run: () => {
-        const wb = currentWorkbench();
-        const chat = wb ? currentChat(wb) : null;
-        if (wb && chat) void closeChatTab(wb, chat);
-      },
-    }),
-    fromMenu({
       id: 'composer.focus',
       group: 'Session',
       allowInInput: true,
       when: inWorkbench,
       run: () => window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_EVENT)),
+    }),
+    fromMenu({
+      id: 'transcript.find',
+      group: 'Session',
+      allowInInput: findAllowedIn,
+      when: () => findTargetWorkbenchId() !== null && findAllowedIn(document.activeElement),
+      run: () => {
+        const id = findTargetWorkbenchId();
+        if (id) requestTranscriptFind(id);
+      },
     }),
     {
       id: 'composer.focus.tab',
@@ -358,6 +373,27 @@ export function buildAppShortcuts(): Shortcut[] {
       // `composerForTab` leaves Tab alone in fields, the terminal, code views and overlays.
       when: () => inWorkbench() && composerForTab() !== null,
       run: () => window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_EVENT)),
+    },
+    {
+      id: 'composer.focus.slash',
+      keys: '/',
+      label: 'Focus chat input',
+      group: 'Session',
+      hidden: true,
+      // On Home, '/' is 'repository.open'. In a field, '/' types a slash.
+      when: () => inWorkbench() && composerForTab() !== null,
+      run: () => window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_EVENT)),
+    },
+    {
+      id: 'composer.blur',
+      keys: 'escape',
+      label: 'Leave chat input',
+      group: 'General',
+      // The composer uses Esc first to close its @ list or clear a branch, and
+      // marks the key as used. A plain Esc then frees the keys for 'g p' and others.
+      allowInInput: isComposer,
+      when: () => isComposer(document.activeElement),
+      run: () => (document.activeElement as HTMLElement | null)?.blur(),
     },
     ...buildGoToShortcuts(),
   ];

@@ -169,6 +169,29 @@ describe('POST /tasks/:id/stop', () => {
     }
   );
 
+  it('stops a run paused for CI through the provider, like a running one', async () => {
+    const { provider, cancel, stopStreaming } = makeFakeProvider();
+    registerCloudProvider(provider);
+    await seedTask('waiting_ci', { posthogTaskId: 'ph-1', posthogRunId: 'run-1' });
+
+    const res = await fetch(`${url}/tasks/t1/stop`, { method: 'POST', headers });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Task };
+    expect(body.data.status).toBe('cancelled');
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(stopStreaming).toHaveBeenCalledWith('t1');
+  });
+
+  it('refuses a client PATCH to waiting_ci: only the poller parks a run', async () => {
+    await seedTask('in_progress', {});
+    const res = await fetch(`${url}/tasks/t1`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ status: 'waiting_ci' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it.each(['completed', 'failed', 'cancelled'])(
     'rejects stop with 400 when the task is %s',
     async (status) => {

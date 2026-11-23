@@ -19,10 +19,15 @@ vi.mock('../services/selfHosted/credentials.js', async (importOriginal) => ({
 import { FleetClient, FleetHttpError } from '../services/selfHosted/client.js';
 import {
   composePrivateRoutesPolicy,
+  deletePrivateConnector,
+  invalidatePrivateConnectorCache,
   listPrivatePeers,
   mapPrivateRoutesError,
   normalizePrivatePeers,
+  replacePrivateRoutes,
+  resetPrivateConnectorCache,
   sandboxPolicyForWorkspace,
+  startPrivateConnector,
   validatePrivateRoutes,
 } from '../services/selfHosted/privateRoutes.js';
 import { buildSandboxCreateBody } from '../services/selfHosted/sandboxRun.js';
@@ -40,6 +45,8 @@ describe('private routes', () => {
     mocks.enabled = true;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
+    resetPrivateConnectorCache();
   });
 
   it('validates and canonicalizes exact TCP destinations', () => {
@@ -281,5 +288,182 @@ describe('private routes', () => {
       headers: { 'content-type': 'application/json' },
     })));
     await expect(listPrivatePeers('workspace-1')).rejects.toMatchObject({ status, code, message });
+  });
+
+  describe('connector read retry and cache', () => {
+    const policy = { egress: { mode: 'open' as const } };
+    const throttled = (retryAfter?: string) => new Response(JSON.stringify({ error: 'slow down' }), {
+      status: 429,
+      headers: retryAfter ? { 'retry-after': retryAfter } : {},
+    });
+    const notFound = () => Response.json({ code: 'connector_not_found' }, { status: 404 });
+    const ok = (body: PrivateConnector = connector) => Response.json(body);
+
+    function queueFetch(...answers: Array<() => Response>) {
+      let index = 0;
+      const mock = vi.fn(async () => answers[Math.min(index++, answers.length - 1)]());
+      vi.stubGlobal('fetch', mock);
+      return mock;
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    });
+
+    it.each([
+      ['one throttle', [throttled], 1],
+      ['two throttles', [throttled, throttled], 2],
+    ])('retries after %s and then succeeds', async (_label, failures, retries) => {
+      const mock = queueFetch(...failures.map((f) => () => f()), () => ok());
+      const result = sandboxPolicyForWorkspace('workspace-1', policy);
+      await vi.advanceTimersByTimeAsync(retries * 1_000);
+      expect((await result).privateRoutes).toHaveLength(1);
+      expect(mock).toHaveBeenCalledTimes(retries + 1);
+    });
+
+    it('gives up after two retries and returns the 429', async () => {
+      const mock = queueFetch(() => throttled());
+      const result = sandboxPolicyForWorkspace('workspace-1', policy);
+      const assertion = expect(result).rejects.toMatchObject({ status: 429, code: 'rate_limited' });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+      expect(mock).toHaveBeenCalledTimes(3);
+    });
+
+    it.each([
+      ['no header', undefined, 1_000],
+      ['a short Retry-After', '2', 2_000],
+      ['a long Retry-After, capped at 5 s', '60', 5_000],
+    ])('waits for %s', async (_label, header, expectedWait) => {
+      const mock = queueFetch(() => throttled(header), () => ok());
+      const result = sandboxPolicyForWorkspace('workspace-1', policy);
+      await vi.advanceTimersByTimeAsync(expectedWait - 1);
+      expect(mock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await result).privateRoutes).toHaveLength(1);
+      expect(mock).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not retry a non-throttle error', async () => {
+      const mock = queueFetch(() => Response.json({ error: 'x' }, { status: 403 }));
+      await expect(sandboxPolicyForWorkspace('workspace-1', policy)).rejects.toMatchObject({ status: 403 });
+      expect(mock).toHaveBeenCalledTimes(1);
+    });
+
+    it('serves a second call within 60 s from the cache', async () => {
+      const mock = queueFetch(() => ok());
+      await sandboxPolicyForWorkspace('workspace-1', policy);
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect((await sandboxPolicyForWorkspace('workspace-1', policy)).privateRoutes).toHaveLength(1);
+      expect(mock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await sandboxPolicyForWorkspace('workspace-1', policy);
+      expect(mock).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps one entry per workspace', async () => {
+      const mock = queueFetch(() => ok(), () => ok({ ...connector, workspaceId: 'workspace-2' }));
+      await sandboxPolicyForWorkspace('workspace-1', policy);
+      await sandboxPolicyForWorkspace('workspace-2', policy);
+      await sandboxPolicyForWorkspace('workspace-1', policy);
+      expect(mock).toHaveBeenCalledTimes(2);
+    });
+
+    it('caches a missing connector', async () => {
+      const mock = queueFetch(notFound);
+      expect(await sandboxPolicyForWorkspace('workspace-1', policy)).toBe(policy);
+      expect(await sandboxPolicyForWorkspace('workspace-1', policy)).toBe(policy);
+      expect(mock).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['startPrivateConnector', () => startPrivateConnector('workspace-1')],
+      ['replacePrivateRoutes', () => replacePrivateRoutes('workspace-1', [{ host: 'db.corp', port: 5432 }])],
+      ['deletePrivateConnector', () => deletePrivateConnector('workspace-1')],
+      ['invalidatePrivateConnectorCache', async () => invalidatePrivateConnectorCache('workspace-1')],
+    ])('drops the cache on %s', async (_label, write) => {
+      const mock = queueFetch(notFound);
+      await sandboxPolicyForWorkspace('workspace-1', policy);
+      expect(mock).toHaveBeenCalledTimes(1);
+      vi.stubGlobal('fetch', mock.mockImplementation(async () => new Response(null, { status: 204 })));
+      mock.mockImplementation(async (_url, init) => {
+        const method = (init as RequestInit | undefined)?.method ?? 'GET';
+        return method === 'GET' ? ok() : method === 'DELETE' ? new Response(null, { status: 204 }) : ok();
+      });
+      await write();
+      const before = mock.mock.calls.length;
+      expect((await sandboxPolicyForWorkspace('workspace-1', policy)).privateRoutes).toHaveLength(1);
+      expect(mock.mock.calls.length).toBe(before + 1);
+    });
+
+    it('does not cache a read that raced with a write', async () => {
+      let release: (r: Response) => void = () => undefined;
+      const mock = vi.fn()
+        .mockImplementationOnce(() => new Promise<Response>((resolve) => { release = resolve; }))
+        .mockImplementation(async () => ok());
+      vi.stubGlobal('fetch', mock);
+      const pending = sandboxPolicyForWorkspace('workspace-1', policy);
+      await vi.advanceTimersByTimeAsync(0);
+      invalidatePrivateConnectorCache('workspace-1');
+      release(notFound());
+      await pending;
+      expect((await sandboxPolicyForWorkspace('workspace-1', policy)).privateRoutes).toHaveLength(1);
+    });
+
+    it.each([
+      ['a throttle', () => throttled()],
+      ['a 502', () => Response.json({ error: 'bad gateway' }, { status: 502 })],
+      ['a 503 capacity answer', () => Response.json({ error: 'full' }, { status: 503 })],
+    ])('uses a connector cached 2 minutes ago when the fleet answers %s', async (_label, failure) => {
+      queueFetch(() => ok());
+      await sandboxPolicyForWorkspace('workspace-1', policy);
+      await vi.advanceTimersByTimeAsync(120_000);
+      const mock = queueFetch(failure);
+      const result = sandboxPolicyForWorkspace('workspace-1', policy);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect((await result).privateRoutes).toHaveLength(1);
+      expect(mock).toHaveBeenCalled();
+      expect(console.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses a connector cached when the fleet is unreachable', async () => {
+      queueFetch(() => ok());
+      await sandboxPolicyForWorkspace('workspace-1', policy);
+      await vi.advanceTimersByTimeAsync(120_000);
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('fetch failed'); }));
+      expect((await sandboxPolicyForWorkspace('workspace-1', policy)).privateRoutes).toHaveLength(1);
+    });
+
+    it('does not use a connector cached more than 10 minutes ago', async () => {
+      queueFetch(() => ok());
+      await sandboxPolicyForWorkspace('workspace-1', policy);
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+      queueFetch(() => Response.json({ error: 'bad gateway' }, { status: 502 }));
+      await expect(sandboxPolicyForWorkspace('workspace-1', policy)).rejects.toMatchObject({ code: expect.any(String) });
+      expect(console.warn).not.toHaveBeenCalled();
+    });
+
+    it('does not use a cached connector for a 403', async () => {
+      queueFetch(() => ok());
+      await sandboxPolicyForWorkspace('workspace-1', policy);
+      await vi.advanceTimersByTimeAsync(120_000);
+      queueFetch(() => Response.json({ error: 'x' }, { status: 403 }));
+      await expect(sandboxPolicyForWorkspace('workspace-1', policy)).rejects.toMatchObject({ status: 403 });
+    });
+
+    it('refuses another workspace connector on every use, cached or not', async () => {
+      queueFetch(() => ok({ ...connector, workspaceId: 'other-workspace' }));
+      await expect(sandboxPolicyForWorkspace('workspace-1', policy)).rejects.toMatchObject({ code: 'workspace_mismatch' });
+      await expect(sandboxPolicyForWorkspace('workspace-1', policy)).rejects.toMatchObject({ code: 'workspace_mismatch' });
+    });
+
+    it('keeps the flag gate ahead of the cache', async () => {
+      const mock = queueFetch(() => ok());
+      await sandboxPolicyForWorkspace('workspace-1', policy);
+      mocks.enabled = false;
+      expect(await sandboxPolicyForWorkspace('workspace-1', policy)).toBe(policy);
+      expect(mock).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { CheckCircle2, Circle, CircleDot, ExternalLink, Loader2, XCircle } from 'lucide-react';
+import { useMemo, type ReactElement } from 'react';
+import { CheckCircle2, Circle, CircleDot, Clock, ExternalLink, Loader2, XCircle } from 'lucide-react';
 import type { SpaceSessionRow, SpaceTaskRow } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { isWorkbenchOwner, openSpaceSession } from '../../lib/spaces';
@@ -13,6 +13,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
 import { MemberAvatar, SessionViewers } from '../spaces/SpaceAvatars';
 import { moveToSpace } from '../spaces/MoveToSpace';
 import { SessionStateIcon } from '../workbench/WorkbenchBadges';
+import { SpaceSessionHoverCard } from '../workbench/SessionHoverCard';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { timeAgo } from '../workbench/new/RecentWorkbenches';
 import { spaceSessionState, type SessionState } from '../../lib/sessionState';
@@ -20,6 +21,9 @@ import { spaceGroupKeyPrefix } from '../workbench/workbenchSelectors';
 import { SessionsHeader, SidebarSessionGroups, WorkbenchRow } from './SidebarWorkbenchList';
 import { SidebarThreadSection } from './SidebarThreadList';
 import { useSpaceSidebarModel } from './spaceSidebarModel';
+import { SidebarNeedsYou, useNeedsYouItems } from './SidebarNeedsYou';
+
+const isLiveRow = (row: SpaceSessionRow) => !row.archivedAt && row.status !== 'archived';
 
 /**
  * The sidebar body in a space, laid out like Personal: my threads, then every
@@ -35,6 +39,29 @@ export function SpaceSidebar({ active }: { active: SpaceRef }) {
   const mine = useMemo(() => [...model.owned.values()], [model.owned]);
   const hidden = sessions.hiddenCount + tasks.hiddenCount;
   const open = (id: string) => void openSpaceSession(id);
+  const needsYou = useNeedsYouItems(sessions.items, isLiveRow);
+  const renderRow = (row: SpaceSessionRow, shortcut: number | null) => {
+    const workbench = model.owned.get(row.id);
+    return workbench ? (
+      <WorkbenchRow
+        key={row.id}
+        workbench={workbench}
+        shortcut={shortcut}
+        selected={row.id === openId}
+        onSelect={() => open(row.id)}
+        trailing={<SpaceRowPeople row={row} spaceId={spaceId} />}
+      />
+    ) : (
+      <SpaceSessionItem
+        key={row.id}
+        row={row}
+        selected={row.id === openId}
+        spaceId={spaceId}
+        shortcut={shortcut}
+        state={model.states.get(row.id)}
+      />
+    );
+  };
 
   return (
     <div className="space-y-2" data-attr="space-sidebar">
@@ -46,6 +73,7 @@ export function SpaceSidebar({ active }: { active: SpaceRef }) {
         <p className="px-3 py-2 text-xs text-destructive">{sessions.error}</p>
       ) : (
         <>
+          <SidebarNeedsYou items={needsYou} renderItem={(row) => renderRow(row, null)} />
           <SidebarThreadSection entries={model.threads} onOpen={open} spaceId={spaceId} />
           {model.groups.length === 0 ? (
             <div className="space-y-2 px-3 py-2 text-xs text-muted-foreground" data-attr="space-sidebar-empty">
@@ -62,28 +90,7 @@ export function SpaceSidebar({ active }: { active: SpaceRef }) {
                 states={model.states}
                 openId={openId}
                 keyPrefix={spaceGroupKeyPrefix(spaceId)}
-                renderItem={(row, shortcut) => {
-                  const workbench = model.owned.get(row.id);
-                  return workbench ? (
-                    <WorkbenchRow
-                      key={row.id}
-                      workbench={workbench}
-                      shortcut={shortcut}
-                      selected={row.id === openId}
-                      onSelect={() => open(row.id)}
-                      trailing={<SpaceRowPeople row={row} spaceId={spaceId} />}
-                    />
-                  ) : (
-                    <SpaceSessionItem
-                      key={row.id}
-                      row={row}
-                      selected={row.id === openId}
-                      spaceId={spaceId}
-                      shortcut={shortcut}
-                      state={model.states.get(row.id)}
-                    />
-                  );
-                }}
+                renderItem={renderRow}
               />
             </div>
           )}
@@ -155,7 +162,6 @@ export function SpaceSessionItem({
       }}
       data-attr="space-session-row"
       aria-current={selected ? 'page' : undefined}
-      title={`${state.label}\n${name}\n${row.repoFullName} · ${row.creator.githubLogin ?? 'A teammate'}${shortcut ? ` (${formatKeys(`mod+${shortcut}`)})` : ''}`}
       className={cn(
         'flex w-full items-center gap-2 rounded-md px-3 py-1 text-left text-[13px] transition-colors',
         selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60',
@@ -168,10 +174,15 @@ export function SpaceSessionItem({
       <SpaceRowPeople row={row} spaceId={spaceId} />
     </div>
   );
-  if (!owner) return item;
+  const card = (trigger: ReactElement) => (
+    <SpaceSessionHoverCard row={row} state={state} shortcut={shortcut ? formatKeys(`mod+${shortcut}`) : null}>
+      {trigger}
+    </SpaceSessionHoverCard>
+  );
+  if (!owner) return card(item);
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{item}</ContextMenuTrigger>
+      {card(<ContextMenuTrigger asChild>{item}</ContextMenuTrigger>)}
       <ContextMenuContent className="min-w-[10rem]">
         <ContextMenuItem onSelect={open}>Open</ContextMenuItem>
         <ContextMenuSeparator />
@@ -187,6 +198,7 @@ const TASK_ICON: Partial<Record<SpaceTaskRow['status'], typeof Circle>> = {
   completed: CheckCircle2,
   failed: XCircle,
   needs_human: CircleDot,
+  waiting_ci: Clock,
 };
 
 function TaskRow({ task }: { task: SpaceTaskRow }) {
@@ -195,7 +207,7 @@ function TaskRow({ task }: { task: SpaceTaskRow }) {
   return (
     <div
       className="flex w-full items-center gap-2 rounded-md px-3 py-1 text-[13px] text-foreground/90"
-      title={`${task.title}\n${task.status.replace('_', ' ')} · ${task.creator.githubLogin ?? 'A teammate'} · ${timeAgo(task.updatedAt)}`}
+      title={`${task.title}\n${task.status.replace(/_/g, ' ')} · ${task.creator.githubLogin ?? 'A teammate'} · ${timeAgo(task.updatedAt)}`}
       data-attr="space-task-row"
     >
       <Icon className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground', task.status === 'in_progress' && 'animate-spin')} />

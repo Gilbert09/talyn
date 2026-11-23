@@ -16,7 +16,8 @@ import {
 } from './checkCounts.js';
 import { noteIssueComment } from './externalQueueState.js';
 import { terminalOutcomeFromPayload, type WebhookDelivery } from './webhookPayload.js';
-import { evaluateWorkflowsForDelivery } from './workflows/engine.js';
+import { evaluateWorkflows, evaluateWorkflowsForDelivery } from './workflows/engine.js';
+import { githubIssuesWorkflowSource } from './workflows/sources/githubIssues.js';
 // Re-exported so the receiver, the tests and everything else keep importing the
 // delivery envelope and the terminal-state reader from here. They live in
 // webhookPayload.ts only to keep that module a leaf — see its header.
@@ -51,6 +52,10 @@ const WORKER_BATCH = 32;
 // Bound concurrent access checks and PR refreshes to protect the user's API budget.
 const SLOW_LANE_MAX = 6;
 
+// Bound concurrent fast deliveries. Each one can hold a pool connection, and a
+// full batch of 32 at once took most of the 20-connection pool.
+const FAST_LANE_MAX = 8;
+
 /**
  * How many slow deliveries may be OUTSTANDING before the read loop pauses.
  *
@@ -72,6 +77,8 @@ const SLOW_ADMISSION_MAX = 64;
 /** Repository events need a user access check, including incremental check updates. */
 export function isSlowEvent(eventType: string): boolean {
   return [
+    // An issue event can run issue rules, which write back to GitHub.
+    'issues',
     'pull_request',
     'pull_request_review',
     'pull_request_review_comment',
@@ -328,6 +335,18 @@ export async function processWebhookDelivery(
       err instanceof Error ? err.message : err,
     );
   });
+  // GitHub Issues rules, beside the PR rules and above the refresh gate for the
+  // same reasons. The source ignores everything but `issues` and an
+  // `issue_comment` on a plain issue.
+  if (delivery.eventType === 'issues' || delivery.eventType === 'issue_comment') {
+    await evaluateWorkflows(githubIssuesWorkflowSource, { delivery, targets }).catch((err: unknown) => {
+      console.warn(
+        `[webhookWorker] issue rule evaluation ${delivery.repoFullName} ` +
+          `${delivery.eventType}/${delivery.action ?? '-'}:`,
+        err instanceof Error ? err.message : err,
+      );
+    });
+  }
 
   if (!isRefreshEvent(delivery.eventType)) {
     whTrace(`  └ ${delivery.eventType}: not a refresh event — ignored`);
@@ -634,6 +653,7 @@ export class WebhookWorker {
   private conn: Redis | null = null;
   private running = false;
   private slowGate = new Semaphore(SLOW_LANE_MAX);
+  private fastGate = new Semaphore(FAST_LANE_MAX);
   /** Bounds how far ahead the read loop may run — see SLOW_ADMISSION_MAX. */
   private slowAdmission = new Semaphore(SLOW_ADMISSION_MAX);
   private claimCursor = '0-0';
@@ -718,8 +738,8 @@ export class WebhookWorker {
         // PR) is independent, so serial processing capped throughput at
         // 1/latency and let the firehose back up. handleEntry is self-contained
         // (its own try/catch + xack), so a failure in one never rejects the
-        // batch. Concurrency is bounded by WORKER_BATCH (the read COUNT), which
-        // keeps simultaneous GraphQL/DB load in check.
+        // batch. FAST_LANE_MAX bounds how many run at once, because each one
+        // can hold a pool connection.
         const batch = res
           .flatMap(([, entries]) => entries)
           .map(([id, fields]) => ({ id, delivery: parseDelivery(fields) }));
@@ -727,7 +747,7 @@ export class WebhookWorker {
         const replayed = claimed[1].length > 0;
         const fast = batch.filter((b) => laneFor(b.delivery?.eventType, replayed) === 'fast');
         const slow = batch.filter((b) => laneFor(b.delivery?.eventType, replayed) === 'slow');
-        await Promise.all(fast.map((b) => this.handleEntry(b.id, b.delivery, 'fast', replayed)));
+        await Promise.all(fast.map((b) => this.runFast(b.id, b.delivery, replayed)));
         for (const b of slow) {
           // Admission, not a lane slot. The loop is free to carry on reading —
           // and to keep draining the fast lane — while these wait their turn.
@@ -740,6 +760,19 @@ export class WebhookWorker {
           await new Promise((r) => setTimeout(r, 1_000));
         }
       }
+    }
+  }
+
+  private async runFast(
+    id: string,
+    delivery: WebhookDelivery | null,
+    replayed: boolean,
+  ): Promise<void> {
+    await this.fastGate.acquire();
+    try {
+      await this.handleEntry(id, delivery, 'fast', replayed);
+    } finally {
+      this.fastGate.release();
     }
   }
 

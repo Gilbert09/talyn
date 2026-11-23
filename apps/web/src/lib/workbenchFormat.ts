@@ -1,5 +1,7 @@
 import {
   createClaudeStreamParser,
+  isSubagentEvent,
+  messageSender,
   nextWorkbenchAction,
   prSummaryToNextActionPr,
   TALYN_SKILL_SUMMARIES,
@@ -10,6 +12,7 @@ import {
   type WorkbenchAttachment,
   type WorkbenchContextUsage,
   type WorkbenchEvent,
+  type WorkbenchMessageSender,
   type WorkbenchNextAction,
   type WorkbenchNextActionInput,
   type WorkbenchTodo,
@@ -69,6 +72,7 @@ export function messageAttachments(event: AgentEvent): Array<{ name: string; mim
  * such as a launched skill's SKILL.md: the Skill call draws that.
  */
 export function userMessageText(event: AgentEvent): string | null {
+  if (isSubagentEvent(event)) return null;
   if (event.type === 'talyn_user_message' && typeof event.text === 'string') return event.text;
   if (event.type !== 'user' || isInjectedUserMessage(event)) return null;
   const content = event.message?.content;
@@ -89,8 +93,11 @@ export interface TranscriptTurn {
   userText: string | null;
   userSeq: number | null;
   attachments: ReturnType<typeof messageAttachments>;
+  /** The thread that wrote the user's message. Null when a person wrote it. */
+  sender: WorkbenchMessageSender | null;
   /** The agent's events for the turn, user message excluded. */
   events: AgentEvent[];
+  subagentEvents?: AgentEvent[];
   /** When the user's message was stored. Null when unknown. */
   userAt: string | null;
   /** When the turn's newest agent event was stored. Null when unknown. */
@@ -102,18 +109,23 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
   const turns: TranscriptTurn[] = [];
   let current: TranscriptTurn | null = null;
   for (const e of events) {
+    if (isSubagentEvent(e.event)) {
+      if (current) (current.subagentEvents ??= []).push({ ...e.event, timestamp: e.event.timestamp ?? e.createdAt });
+      continue;
+    }
     const text = userMessageText(e.event);
     if (!current || current.turn !== e.turn || (text !== null && current.userText !== null)) {
-      current = { turn: e.turn, userText: null, userSeq: null, attachments: [], events: [], userAt: null, lastAt: null };
+      current = { turn: e.turn, userText: null, userSeq: null, attachments: [], sender: null, events: [], userAt: null, lastAt: null };
       turns.push(current);
     }
     if (text !== null && current.userText === null && current.events.length === 0) {
       current.userText = text;
       current.userSeq = e.seq;
       current.attachments = messageAttachments(e.event);
+      current.sender = messageSender((e.event as { talyn?: unknown }).talyn);
       current.userAt = e.createdAt ?? null;
     } else {
-      current.events.push(e.event);
+      current.events.push({ ...e.event, timestamp: e.event.timestamp ?? e.createdAt });
       if (e.createdAt) current.lastAt = e.createdAt;
     }
   }
@@ -133,6 +145,11 @@ export interface PendingUserMessage {
   afterSeq: number | null;
   /** When the send request finished. Absent while it is in flight. */
   settledAt?: number;
+  /**
+   * The message waits in the chat's queue, because a turn was running when it
+   * was sent. The send response corrects the guess.
+   */
+  queued?: boolean;
   /**
    * The send request failed, for example because the backend was down. The
    * message stays on screen with the error until the user sends it again or
@@ -155,8 +172,9 @@ export function sendFailureText(err: unknown): string {
 }
 
 /**
- * What the transcript does with a sent message:
+ * What the chat does with a sent message:
  * - `show`: draw it as the user's bubble, until its own event arrives.
+ * - `queue`: the composer shows it as queued, until the chat's queue has it.
  * - `hide`: the composer queue shows it.
  * - `done`: its event arrived, or it will not run. Forget it.
  *
@@ -165,19 +183,25 @@ export function sendFailureText(err: unknown): string {
  * The backend writes the message's event only when its turn starts, and later
  * still when it has inline images. Without this, a new session showed an empty
  * chat with "Working…" until the sandbox woke.
+ *
+ * A message sent while a turn runs goes to the queue. It does not show in the
+ * transcript while the send is in flight, or before the chat update lists it.
  */
 export function pendingMessageState(
   message: PendingUserMessage,
   ctx: { events: WorkbenchEvent[]; queued: readonly { text: string }[]; running: boolean; now: number },
-): 'show' | 'hide' | 'done' {
+): 'show' | 'queue' | 'hide' | 'done' {
   const text = message.text.trim();
   const echoed = ctx.events.some(
     (e) => (message.afterSeq === null || e.seq > message.afterSeq) && userMessageText(e.event)?.trim() === text,
   );
   if (echoed) return 'done';
-  if (message.failed || message.settledAt === undefined) return 'show';
+  if (message.failed) return 'show';
+  if (message.settledAt === undefined) return message.queued ? 'queue' : 'show';
   if (ctx.queued.some((q) => q.text.trim() === text)) return 'hide';
-  if (ctx.running || ctx.now - message.settledAt < PENDING_MESSAGE_GRACE_MS) return 'show';
+  const inGrace = ctx.now - message.settledAt < PENDING_MESSAGE_GRACE_MS;
+  if (message.queued && inGrace) return 'queue';
+  if (ctx.running || inGrace) return 'show';
   return 'done';
 }
 
@@ -208,8 +232,9 @@ export function chatInsights(events: WorkbenchEvent[]): ChatInsights {
   let init = -1;
   for (let i = events.length - 1; i >= 0 && (todo < 0 || assistant < 0 || result < 0 || init < 0); i--) {
     const ev = events[i].event;
+    if (isSubagentEvent(ev)) continue;
     if (ev.type === 'assistant') {
-      if (assistant < 0 && !ev.parent_tool_use_id && ev.message?.usage) assistant = i;
+      if (assistant < 0 && ev.message?.usage) assistant = i;
       if (todo < 0 && Array.isArray(ev.message?.content)) {
         const hasTodo = (ev.message?.content as Array<{ type?: unknown; name?: unknown }>).some(
           (b) => b?.type === 'tool_use' && b.name === 'TodoWrite'
@@ -264,9 +289,16 @@ export interface ChatTotals {
 /** One chat's spend, added up over every turn's result. */
 export function chatTotals(events: WorkbenchEvent[]): ChatTotals {
   const totals: ChatTotals = { turns: 0, costUsd: null, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
-  for (const { event } of events) {
-    if (event.type !== 'result') continue;
-    totals.turns += 1;
+  const results = new Map<string, WorkbenchEvent>();
+  for (const entry of events) {
+    const { event } = entry;
+    if (isSubagentEvent(event) || event.type !== 'result') continue;
+    const stamp = event.talyn as { kind?: string; attempt?: number } | undefined;
+    const key = stamp?.kind === 'process_result' ? `${entry.turn}:${stamp.attempt}` : `legacy:${entry.seq}`;
+    results.set(key, entry);
+  }
+  totals.turns = new Set([...results.values()].map((entry) => entry.turn)).size;
+  for (const { event } of results.values()) {
     if (typeof event.total_cost_usd === 'number') totals.costUsd = (totals.costUsd ?? 0) + event.total_cost_usd;
     const usage = (event.usage ?? {}) as {
       input_tokens?: number;

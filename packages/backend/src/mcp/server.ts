@@ -57,7 +57,7 @@ export function buildMcpServer(ownerId: string, ctx: McpCallContext = {}): Serve
       debugBus.recordEvent({
         service: 'mcp',
         action: tool.name,
-        summary: 'refused for a session token',
+        summary: ctx.session ? 'refused for a session token' : 'refused: needs a session token',
         ok: false,
       });
       return {
@@ -65,7 +65,9 @@ export function buildMcpServer(ownerId: string, ctx: McpCallContext = {}): Serve
         content: [
           {
             type: 'text' as const,
-            text: `${tool.name} is not available inside a session. Ask the person to do it in the Talyn app.`,
+            text: ctx.session
+              ? `${tool.name} is not available inside a session. Ask the person to do it in the Talyn app.`
+              : `${tool.name} works only for an agent in a Talyn session.`,
           },
         ],
       };

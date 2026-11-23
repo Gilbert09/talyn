@@ -71,6 +71,7 @@ const { resetChangesGithubForTests } = await import('../services/workbenches/cha
 const { GitHubRateLimitError } = await import('../services/githubRateGate.js');
 const { getChat, getWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
 const { startStaleGoldenMove } = await import('../services/workbenches/move.js');
+const { backfillMergeArchives } = await import('../services/workbenches/mergeBackfill.js');
 const recovery = await import('../services/workbenches/recovery.js');
 const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../services/workbenches/turns.js');
 const { resolveRunCredentials } = await import('../services/selfHosted/runCredentials.js');
@@ -470,6 +471,16 @@ describe('workbench routes', () => {
       expect(got.body.data.pr).toMatchObject({ number: 42, state: 'open', ciStatus: 'failure' });
     });
 
+    it('keeps the link to an older pull request through the merge backfill', async () => {
+      await testDb.db.insert(pullRequests).values({
+        id: 'pr-a', workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'acme', repo: 'app', number: 42, state: 'open',
+        lastSummary: { headBranch: 'feat/thing', baseBranch: 'develop', headSha: 'abc', createdAt: '2026-01-01T00:00:00Z' },
+      });
+      const wb = await createSandboxWorkbench({ fromPullRequestId: 'pr-a' });
+      await backfillMergeArchives();
+      expect(await getWorkbench(wb.id)).toMatchObject({ pullRequestId: 'pr-a', pullRequestLinkExplicit: true });
+    });
+
     it.each([
       [{ runtime: 'cloud' }, /runtime/],
       [{ agent: 'gemini' }, /agent/],
@@ -581,7 +592,7 @@ describe('workbench routes', () => {
       expect(turn.script).not.toContain('--resume');
       expect(turn.script.endsWith(`-- '- fix '\\''it'\\'''`)).toBe(true);
       expect(turn.req.cwd).toBe('/work/app');
-      expect(turn.req.env).toMatchObject({ IS_SANDBOX: '1', TALYN_WORKBENCH_NAME: wb.name, CONDUCTOR_PORT: '3000' });
+      expect(turn.req.env).toMatchObject({ IS_SANDBOX: '1', CLAUDE_CODE_MAX_RETRIES: '5', TALYN_WORKBENCH_NAME: wb.name, CONDUCTOR_PORT: '3000' });
       expect(turn.req.env?.TALYN_PID_FILE).toContain(turnMarker(chatId));
       // The credential push includes both vendors before the agent runs.
       const order = fleet.scripts.map((s) => (s.includes('git commit-tree') ? 'checkpoint' : isAgentTurn(s) ? 'agent' : ''));
@@ -675,7 +686,7 @@ describe('workbench routes', () => {
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'go' });
       await idle(chatId);
       expect((await getChat(chatId))?.status).toBe('error');
-      expect((await getChat(chatId))?.statusMessage).toMatch(/Claude subscription/);
+      expect((await getChat(chatId))?.statusMessage).toMatch(/no Claude account/);
       expect(fleet.scripts.some((s) => isAgentTurn(s))).toBe(false);
       // Never a push with the key left out, which the gateway would fill from its own custody.
       expect(fleet.credentialPushes).toEqual([]);
@@ -695,12 +706,14 @@ describe('workbench routes', () => {
   });
 
   describe('cancel', () => {
-    it('stops the agent by its marker, keeps the queue, and does not drain it', async () => {
+    it('stops the agent by its marker, keeps its session, and starts the queued message', async () => {
       let kill!: () => void;
-      let started = false;
+      const agentScripts: string[] = [];
       scriptedFleet((script) => {
         if (isAgentTurn(script)) {
-          started = true;
+          agentScripts.push(script);
+          // The queued message runs to the end.
+          if (agentScripts.length > 1) return null;
           // The agent answered before the cancel, so its session is kept for the next turn.
           return { stdout: claudeTurnLines('sess-9', 'x').slice(0, 2), hold: new Promise<void>((_r, reject) => (kill = () => reject(new Error('killed')))) };
         }
@@ -709,7 +722,7 @@ describe('workbench routes', () => {
       const wb = await createSandboxWorkbench();
       const chatId = await chatIdOf(wb.id);
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'long job' });
-      await vi.waitFor(() => expect(started).toBe(true));
+      await vi.waitFor(() => expect(agentScripts).toHaveLength(1));
       await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'later' });
 
       fleet.handler = ((prev) => async (script, req) => {
@@ -722,13 +735,17 @@ describe('workbench routes', () => {
       })(fleet.handler);
       const res = await call('POST', `/workbenches/chats/${chatId}/cancel`);
       expect(res.status).toBe(200);
+      // A person pressed Stop, so the message queued behind the turn starts, in the same session.
+      await vi.waitFor(() => expect(agentScripts).toHaveLength(2));
+      expect(agentScripts[1]).toContain('sess-9');
       await idle(chatId);
 
       const chat = await getChat(chatId);
-      expect(chat).toMatchObject({ status: 'idle', statusMessage: 'Cancelled', turnCount: 1, agentSessionId: 'sess-9' });
-      expect(chat?.queuedMessages.map((m) => m.text)).toEqual(['later']);
+      expect(chat).toMatchObject({ status: 'idle', turnCount: 2 });
+      expect(chat?.queuedMessages).toEqual([]);
       const page = await call('GET', `/workbenches/chats/${chatId}/events`);
-      expect(page.body.data.events.at(-1).event).toMatchObject({ type: 'result', subtype: 'cancelled' });
+      const firstTurn = (page.body.data.events as Loose[]).filter((e) => e.turn === 1);
+      expect(firstTurn.at(-1).event).toMatchObject({ type: 'result', subtype: 'cancelled' });
     });
 
     it('is a no-op on an idle chat', async () => {
@@ -858,6 +875,55 @@ describe('workbench routes', () => {
     ])('refuses the chat patch %j', async (patch) => {
       const wb = await createSandboxWorkbench();
       expect((await call('PATCH', `/workbenches/chats/${await chatIdOf(wb.id)}`, patch)).status).toBe(400);
+    });
+  });
+
+  describe('bulk archive', () => {
+    it('archives every session in one request and answers the archived rows', async () => {
+      const a = await createLocalWorkbench();
+      const b = await createLocalWorkbench();
+      const res = await call('POST', '/workbenches/archive', { ids: [a.id, b.id, a.id] });
+      expect(res.status).toBe(200);
+      expect(res.body.data.failed).toEqual([]);
+      expect(res.body.data.archived.map((w: Loose) => w.id).sort()).toEqual([a.id, b.id].sort());
+      expect(res.body.data.archived.every((w: Loose) => w.status === 'archived' && w.archivedAt)).toBe(true);
+      expect((await getWorkbench(a.id))?.archivedAt).not.toBeNull();
+      expect((await getWorkbench(b.id))?.archivedAt).not.toBeNull();
+    });
+
+    it('reports unknown and foreign ids as not found and still archives the others', async () => {
+      const mine = await createLocalWorkbench();
+      const theirs = await createLocalWorkbench();
+      const res = await call('POST', '/workbenches/archive', { ids: [mine.id, 'missing'] });
+      expect(res.body.data.archived.map((w: Loose) => w.id)).toEqual([mine.id]);
+      expect(res.body.data.failed).toEqual([{ id: 'missing', error: 'Session not found' }]);
+
+      const asB = await call('POST', '/workbenches/archive', { ids: [theirs.id] }, 'owner-b');
+      expect(asB.status).toBe(200);
+      expect(asB.body.data).toEqual({ archived: [], failed: [{ id: theirs.id, error: 'Session not found' }] });
+      expect((await getWorkbench(theirs.id))?.archivedAt).toBeNull();
+    });
+
+    it.each([
+      ['no body', undefined],
+      ['no ids', {}],
+      ['an empty list', { ids: [] }],
+      ['a string', { ids: 'wb-1' }],
+      ['a non-string id', { ids: ['wb-1', 7] }],
+      ['an empty id', { ids: [''] }],
+      ['too many ids', { ids: Array.from({ length: 201 }, (_, i) => `wb-${i}`) }],
+    ])('refuses %s with 400', async (_name, body) => {
+      expect((await call('POST', '/workbenches/archive', body)).status).toBe(400);
+    });
+
+    it('refuses with 403 when sessions are turned off', async () => {
+      const wb = await createLocalWorkbench();
+      vi.stubEnv('WORKBENCHES_ENABLED', 'false');
+      resetFeatureFlagsForTests();
+      const res = await call('POST', '/workbenches/archive', { ids: [wb.id] });
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('workbenches_unavailable');
+      expect((await getWorkbench(wb.id))?.archivedAt).toBeNull();
     });
   });
 
@@ -2325,6 +2391,39 @@ describe('workbench routes', () => {
 
       // The forward mode carries no paging fields, which is how an older client keeps working.
       expect((await call('GET', `/workbenches/chats/${chatId}/events?after=0`)).body.data).not.toHaveProperty('hasOlder');
+    });
+
+    it('skips replaced stream deltas in an older page, but not in the newest page', async () => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      const types = ['user', 'stream_event', 'stream_event', 'assistant', 'user', 'stream_event', 'stream_event', 'assistant'];
+      const events = types.map((type, i) => ({ chatId, seq: i + 1, turn: i < 4 ? 1 : 2, event: { seq: i + 1, type } }));
+      await call('POST', `/workbenches/chats/${chatId}/local-events`, { events });
+
+      const latest = (await call('GET', `/workbenches/chats/${chatId}/events?before=latest&limit=2`)).body.data;
+      expect(latest.events.map((e: Loose) => e.seq)).toEqual([5, 6, 7, 8]);
+
+      const older = (await call('GET', `/workbenches/chats/${chatId}/events?before=5&limit=2`)).body.data;
+      expect(older.events.map((e: Loose) => e.seq)).toEqual([1, 4]);
+      expect(older).toMatchObject({ cursor: 4, oldestSeq: 1, hasOlder: false });
+    });
+
+    it.each([
+      ['no ceiling extends to the turn start', '', [2, 3, 4, 5, 6]],
+      ['a ceiling equal to the limit cuts the turn', '&ceiling=2', [5, 6]],
+      ['a ceiling below the limit reads as the limit', '&ceiling=1', [5, 6]],
+      ['a ceiling inside the turn cuts at the ceiling', '&ceiling=3', [4, 5, 6]],
+      ['a ceiling past the turn start stops at the turn', '&ceiling=50', [2, 3, 4, 5, 6]],
+      ['an invalid ceiling is ignored', '&ceiling=abc', [2, 3, 4, 5, 6]],
+      ['a zero ceiling is ignored', '&ceiling=0', [2, 3, 4, 5, 6]],
+    ])('bounds a backward page: %s', async (_name, query, seqs) => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      const events = [1, 2, 3, 4, 5, 6].map((seq) => ({ chatId, seq, turn: seq === 1 ? 1 : 2, event: { seq, type: 'assistant' } }));
+      await call('POST', `/workbenches/chats/${chatId}/local-events`, { events });
+      const page = (await call('GET', `/workbenches/chats/${chatId}/events?before=latest&limit=2${query}`)).body.data;
+      expect(page.events.map((e: Loose) => e.seq)).toEqual(seqs);
+      expect(page).toMatchObject({ cursor: 6, oldestSeq: seqs[0], hasOlder: true });
     });
 
     it.each(['before=0', 'before=-1', 'before=1.5', 'before=newest', 'before=latest&after=2'])(

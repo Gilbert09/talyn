@@ -19,6 +19,13 @@ import {
 } from '../widgets/GetKeyLink';
 import { WorkspaceModelSelector } from './WorkspaceModelSelector';
 import { FleetAccountsList } from './FleetAccountsList';
+import {
+  PostHogCodeRetiredNotice,
+  usePostHogCodeOffered,
+  usePostHogCodeRetiringNotice,
+} from '../widgets/PostHogCodeRetirement';
+import { ipcErrorMessage } from '../../lib/ipcError';
+import { errorCode, isCodexSignInTimeout, useSignInAbandon } from '../../lib/signInFunnel';
 
 /**
  * The two provider connect cards (PostHog Code + Claude Code), shared by the
@@ -70,7 +77,7 @@ export function ProviderConnectCards() {
  * "render nothing", but conflating them is how a card flashes in and out on
  * every settings visit.
  */
-function SelfHostedFleetCard() {
+export function SelfHostedFleetCard() {
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);
@@ -210,8 +217,23 @@ export function FleetAgentRow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [claudeToken, setClaudeToken] = useState('');
+  const funnel = useSignInAbandon();
 
   const label = agent === 'claude' ? 'Claude subscription' : 'Codex (ChatGPT) subscription';
+
+  const reportFailure = useCallback(
+    (stage: 'start' | 'finish' | 'save', message: string, code: string | null = null) => {
+      funnel.end();
+      trackEvent('cloud_provider_connect_failed', {
+        provider: 'selfhosted',
+        agent,
+        stage,
+        error: message.slice(0, 200),
+        error_code: code,
+      });
+    },
+    [agent, funnel]
+  );
 
   /**
    * Refresh from the server rather than patching the store optimistically.
@@ -236,18 +258,21 @@ export function FleetAgentRow({
       setError(null);
       try {
         await api.cloudProviders.saveConfig('selfhosted', currentWorkspaceId, config);
+        funnel.end();
         trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent });
         setClaudeToken('');
         setEditing(false);
         await refresh();
         await onChanged?.();
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to save credentials');
+        const message = e instanceof Error ? e.message : 'Failed to save credentials';
+        setError(message);
+        if (!config.clearClaude && !config.clearCodex) reportFailure('save', message, errorCode(e));
       } finally {
         setBusy(false);
       }
     },
-    [agent, currentWorkspaceId, refresh, onChanged]
+    [agent, currentWorkspaceId, refresh, onChanged, reportFailure, funnel]
   );
 
   const disconnect = useCallback(async () => {
@@ -260,6 +285,8 @@ export function FleetAgentRow({
   const [claudeCode, setClaudeCode] = useState('');
 
   const signInToCodex = useCallback(async () => {
+    trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent: 'codex', method: 'codex_oauth' });
+    funnel.begin('codex', 'codex_oauth');
     setBusy(true);
     setError(null);
     try {
@@ -271,10 +298,13 @@ export function FleetAgentRow({
         ...(result.expiresIn ? { codexExpiresIn: String(result.expiresIn) } : {}),
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'ChatGPT sign-in failed');
+      const message = ipcErrorMessage(e, 'ChatGPT sign-in failed');
+      setError(message);
+      if (isCodexSignInTimeout(e)) funnel.abandon('timeout');
+      else reportFailure('start', message, errorCode(e));
       setBusy(false);
     }
-  }, [save]);
+  }, [save, reportFailure, funnel]);
 
   /**
    * Claude sign-in: open Anthropic's page, take the code back.
@@ -286,6 +316,8 @@ export function FleetAgentRow({
    */
   const startClaudeSignIn = useCallback(async () => {
     if (!currentWorkspaceId) return;
+    trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent: 'claude', method: 'claude_oauth' });
+    funnel.begin('claude', 'claude_oauth');
     setBusy(true);
     setError(null);
     try {
@@ -293,11 +325,13 @@ export function FleetAgentRow({
       void openExternal(url);
       setAwaitingClaudeCode(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not start the Claude sign-in');
+      const message = e instanceof Error ? e.message : 'Could not start the Claude sign-in';
+      setError(message);
+      reportFailure('start', message, errorCode(e));
     } finally {
       setBusy(false);
     }
-  }, [currentWorkspaceId]);
+  }, [currentWorkspaceId, reportFailure, funnel]);
 
   const finishClaudeSignIn = useCallback(async () => {
     if (!currentWorkspaceId) return;
@@ -307,6 +341,7 @@ export function FleetAgentRow({
       await api.cloudProviders.completeClaudeSignIn(currentWorkspaceId, claudeCode);
       setAwaitingClaudeCode(false);
       setClaudeCode('');
+      funnel.end();
       trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent: 'claude' });
       setEditing(false);
       // Re-read rather than guess: the card renders off `connectedAgents`,
@@ -314,11 +349,13 @@ export function FleetAgentRow({
       await refresh();
       await onChanged?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not finish the Claude sign-in');
+      const message = e instanceof Error ? e.message : 'Could not finish the Claude sign-in';
+      setError(message);
+      reportFailure('finish', message, errorCode(e));
     } finally {
       setBusy(false);
     }
-  }, [currentWorkspaceId, claudeCode, refresh, onChanged]);
+  }, [currentWorkspaceId, claudeCode, refresh, onChanged, reportFailure, funnel]);
 
   const showForm = editing || !connected;
 
@@ -398,7 +435,10 @@ export function FleetAgentRow({
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => setAwaitingClaudeCode(false)}
+                      onClick={() => {
+                        funnel.abandon('back');
+                        setAwaitingClaudeCode(false);
+                      }}
                       disabled={busy}
                     >
                       Back
@@ -410,8 +450,8 @@ export function FleetAgentRow({
               {/* The metered path stays. A workspace billing per token has no
                   subscription to sign in to, so removing this would strand it. */}
               <details className="pt-1">
-                <summary className="cursor-pointer text-xs text-muted-foreground">
-                  Use a Console API key instead
+                <summary className="cursor-pointer text-xs font-medium text-foreground hover:underline">
+                  No Claude subscription? Use an Anthropic API key
                 </summary>
                 <div className="mt-2 space-y-2">
                   <Input
@@ -429,7 +469,14 @@ export function FleetAgentRow({
                   />
                   <Button
                     size="sm"
-                    onClick={() => save({ claudeToken })}
+                    onClick={() => {
+                      trackEvent('cloud_provider_signin_started', {
+                        provider: 'selfhosted',
+                        agent: 'claude',
+                        method: 'claude_api_key',
+                      });
+                      void save({ claudeToken });
+                    }}
                     disabled={busy || !claudeToken.trim()}
                   >
                     {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Save & verify'}
@@ -459,6 +506,7 @@ export function FleetAgentRow({
               size="sm"
               variant="ghost"
               onClick={() => {
+                funnel.abandon('cancel');
                 setEditing(false);
                 setError(null);
               }}
@@ -495,7 +543,7 @@ export function cloudProviderOffered(
  * - **OAuth** — offered when the backend has `POSTHOG_OAUTH_*` configured. The
  *   user authorizes Talyn on PostHog and picks the project on PostHog's own
  *   consent screen, so no credential ever passes through this window and the
- *   grant is narrowed to one project + `task:read`/`task:write`. It's revocable
+ *   grant is narrowed to one project + `task:*` and `inbox:*`. It's revocable
  *   from PostHog's Connected Apps screen.
  * - **Personal API key** — now offered ONLY where OAuth is not configured
  *   (self-hosted, local dev), which SETUP §6b documents as the fall-back. It
@@ -526,6 +574,8 @@ export function PostHogCodeCard() {
   const [host, setHost] = useState('https://us.posthog.com');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const offered = usePostHogCodeOffered();
+  const retiring = usePostHogCodeRetiringNotice();
 
   // Seed the edit-form fields from the preloaded status. Deps are the scalar
   // values, so this won't clobber in-progress edits (status is stable while
@@ -617,6 +667,8 @@ export function PostHogCodeCard() {
       : 'Add a personal API key + project id to run tasks on PostHog Code’s cloud sandbox.';
   };
 
+  if (!offered) return null;
+
   return (
     <Card className="p-3">
       <div className="flex items-start gap-3">
@@ -643,13 +695,14 @@ export function PostHogCodeCard() {
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">{description()}</p>
+          {retiring && <PostHogCodeRetiredNotice className="mt-2" />}
 
           {/* Not connected, OAuth on the table: it is the ONLY path offered.
               The key form used to sit one click away here. It is gone wherever
               OAuth works, because a personal API key is a long-lived credential
               with the user's whole project behind it, pasted through this
               window, while the OAuth grant is narrowed to one project and
-              `task:read`/`task:write` and is revocable from PostHog's own
+              `task:*` (PostHog Code) plus `inbox:*` (PostHog Inbox rules) and is revocable from PostHog's own
               Connected Apps screen. Offering both made the weaker one a
               one-click default for anyone who did not know the difference.
               A deployment with no POSTHOG_OAUTH_* configured still gets the key

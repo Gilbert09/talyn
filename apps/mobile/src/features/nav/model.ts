@@ -1,14 +1,18 @@
-import type { Workbench } from '@talyn/shared';
+import type { ContextAttentionReason, Workbench, WorkbenchTranscriptMatch } from '@talyn/shared';
+import type { LegacyPanGesture } from 'react-native-gesture-handler';
 
-import { workbenchState, type SessionStateKind } from '../../lib/status';
+import { withPlanAttention, workbenchState, type SessionStateKind } from '../../lib/status';
 import type { PullsTab } from '../prs/lists';
 import { compareWorkbenches, groupByRepository, workbenchTitle } from '../../workflow/model';
 
 /** States that wait on the person: an answer, a permission or plan prompt, or a failure. */
 export const NEEDS_YOU: ReadonlySet<SessionStateKind> = new Set(['needs_reply', 'failed']);
 
-export function needsYou(item: Workbench): boolean {
-  return !item.archivedAt && NEEDS_YOU.has(workbenchState(item).kind);
+export type AttentionReasons = Readonly<Record<string, ContextAttentionReason>>;
+const NO_REASONS: AttentionReasons = {};
+
+export function needsYou(item: Workbench, reasons: AttentionReasons = NO_REASONS): boolean {
+  return !item.archivedAt && NEEDS_YOU.has(withPlanAttention(workbenchState(item), reasons[item.id]).kind);
 }
 
 /** Lower case and trimmed, so a search ignores case and stray spaces. */
@@ -26,13 +30,17 @@ export function matchesQuery(item: Workbench, query: string): boolean {
 /** The label of a group of sessions with no repository. */
 export const NO_REPOSITORY = 'No repository';
 
-export type DrawerSection = 'needs' | 'threads' | 'sessions';
+export type DrawerSection = 'needs' | 'threads' | 'sessions' | 'transcripts';
 export type DrawerEntry =
   | { type: 'heading'; key: string; section: DrawerSection; title: string }
   | { type: 'group'; key: string; repo: string; expanded: boolean; hidden: number; attention: boolean }
   | { type: 'thread'; key: string; item: Workbench; expanded: boolean; childCount: number; running: number }
   | { type: 'row'; key: string; item: Workbench; indent: boolean }
   | { type: 'notice'; key: string; text: string }
+  /** A session or thread whose transcript holds the search, with the text around the match. */
+  | { type: 'transcript'; key: string; match: WorkbenchTranscriptMatch }
+  /** What a session is, and jobs to start one with. Shown when there are no sessions at all. */
+  | { type: 'starters'; key: string }
   | { type: 'loading'; key: string };
 
 export interface DrawerInput {
@@ -41,6 +49,8 @@ export interface DrawerInput {
   query: string;
   collapsedGroups: ReadonlySet<string>;
   collapsedThreads: ReadonlySet<string>;
+  /** The server's reasons per session. Only `plan` is used. */
+  reasons?: AttentionReasons;
 }
 
 const running = (item: Workbench) => (item.chats ?? []).some((chat) => chat.status === 'running' || (chat.queuedMessages?.length ?? 0) > 0);
@@ -50,7 +60,7 @@ const running = (item: Workbench) => (item.chats ?? []).some((chat) => chat.stat
  * sidebar: Needs you, Threads with their sessions, then Sessions by repository.
  * A search keeps only the matches and opens every group and thread.
  */
-export function drawerEntries({ sessions, threads, query: raw, collapsedGroups, collapsedThreads }: DrawerInput): DrawerEntry[] {
+export function drawerEntries({ sessions, threads, query: raw, collapsedGroups, collapsedThreads, reasons = NO_REASONS }: DrawerInput): DrawerEntry[] {
   const query = normalizeQuery(raw);
   const searching = query.length > 0;
   if (sessions === undefined && threads === undefined) return [{ type: 'loading', key: 'loading' }];
@@ -58,7 +68,7 @@ export function drawerEntries({ sessions, threads, query: raw, collapsedGroups, 
   const allThreads = (threads ?? []).filter((item) => !item.archivedAt);
   const entries: DrawerEntry[] = [];
 
-  const waiting = [...allThreads, ...allSessions].filter((item) => needsYou(item) && matchesQuery(item, query)).sort(compareWorkbenches);
+  const waiting = [...allThreads, ...allSessions].filter((item) => needsYou(item, reasons) && matchesQuery(item, query)).sort(compareWorkbenches);
   if (waiting.length) {
     entries.push({ type: 'heading', key: 'heading:needs', section: 'needs', title: 'Needs you' });
     for (const item of waiting) entries.push({ type: 'row', key: `needs:${item.id}`, item, indent: false });
@@ -84,13 +94,13 @@ export function drawerEntries({ sessions, threads, query: raw, collapsedGroups, 
   if (matched.length || !searching) {
     entries.push({ type: 'heading', key: 'heading:sessions', section: 'sessions', title: 'Sessions' });
     if (sessions === undefined) entries.push({ type: 'loading', key: 'loading:sessions' });
-    else if (!matched.length) entries.push({ type: 'notice', key: 'notice:sessions', text: 'No sessions yet.' });
+    else if (!matched.length) entries.push({ type: 'starters', key: 'starters:sessions' });
   }
   for (const group of groupByRepository(matched)) {
     const repo = group.repo || NO_REPOSITORY;
     const expanded = searching || !collapsedGroups.has(repo);
     entries.push({ type: 'group', key: `group:${repo}`, repo, expanded,
-      hidden: expanded ? 0 : group.items.length, attention: !expanded && group.items.some(needsYou) });
+      hidden: expanded ? 0 : group.items.length, attention: !expanded && group.items.some((item) => needsYou(item, reasons)) });
     if (expanded) for (const item of group.items) entries.push({ type: 'row', key: `session:${item.id}`, item, indent: false });
   }
 
@@ -98,9 +108,34 @@ export function drawerEntries({ sessions, threads, query: raw, collapsedGroups, 
   return entries;
 }
 
+/** How long the transcript search waits after the last key before it asks the server. Same as web. */
+export const TRANSCRIPT_SEARCH_DEBOUNCE_MS = 250;
+
+/**
+ * The drawer's entries with the transcript matches below the name matches, like
+ * web's palette. A match the name search already shows is left out. While the
+ * server searches and nothing else matches, a quiet line says so.
+ */
+export function withTranscriptMatches(entries: DrawerEntry[], matches: readonly WorkbenchTranscriptMatch[], loading: boolean): DrawerEntry[] {
+  const shown = new Set(entries.flatMap((entry) => entry.type === 'row' || entry.type === 'thread' ? [entry.item.id] : []));
+  const named = shown.size > 0;
+  const extra: WorkbenchTranscriptMatch[] = [];
+  for (const match of matches) {
+    if (shown.has(match.workbench.id)) continue;
+    shown.add(match.workbench.id);
+    extra.push(match);
+  }
+  const rest = entries.filter((entry) => entry.key !== 'notice:search');
+  if (extra.length) {
+    return [...rest, { type: 'heading', key: 'heading:transcripts', section: 'transcripts', title: 'In transcripts' },
+      ...extra.map((match): DrawerEntry => ({ type: 'transcript', key: `transcript:${match.workbench.id}`, match }))];
+  }
+  return loading && !named ? [...rest, { type: 'notice', key: 'notice:transcripts', text: 'Searching transcripts…' }] : entries;
+}
+
 /** How many sessions and threads wait on the person. Drives the menu button's dot. */
-export function needsYouCount(sessions: Workbench[] | undefined, threads: Workbench[] | undefined): number {
-  return [...(threads ?? []), ...(sessions ?? [])].filter(needsYou).length;
+export function needsYouCount(sessions: Workbench[] | undefined, threads: Workbench[] | undefined, reasons: AttentionReasons = NO_REASONS): number {
+  return [...(threads ?? []), ...(sessions ?? [])].filter((item) => needsYou(item, reasons)).length;
 }
 
 /** A count for a badge: nothing for zero or unknown, and "99+" above 99. */
@@ -116,7 +151,7 @@ export function toggled(set: ReadonlySet<string>, key: string): Set<string> {
   return next;
 }
 
-export type DrawerTarget = 'home' | `pulls:${PullsTab}` | 'settings' | 'spaces' | 'automations' | 'usage' | 'agents' | 'insights' | 'history' | null;
+export type DrawerTarget = 'home' | `pulls:${PullsTab}` | 'settings' | 'spaces' | 'integrations' | 'usage' | 'agents' | 'insights' | 'history' | null;
 
 /** Which drawer entry the current route belongs to, so the drawer can mark it. */
 export function activeTarget(pathname: string, tab?: string | string[] | null): DrawerTarget {
@@ -127,7 +162,7 @@ export function activeTarget(pathname: string, tab?: string | string[] | null): 
     return value === 'reviews' || value === 'queue' ? `pulls:${value}` : 'pulls:mine';
   }
   const first = path.split('/')[1];
-  if (first === 'settings' || first === 'spaces' || first === 'automations' || first === 'usage' || first === 'agents' || first === 'insights'
+  if (first === 'settings' || first === 'spaces' || first === 'integrations' || first === 'usage' || first === 'agents' || first === 'insights'
     || first === 'history') return first;
   return null;
 }
@@ -135,4 +170,19 @@ export function activeTarget(pathname: string, tab?: string | string[] | null): 
 /** The narrowest of 85% of the screen and 360 points. */
 export function drawerWidth(screenWidth: number): number {
   return Math.round(Math.min(screenWidth * 0.85, 360));
+}
+
+/** The strip at the left edge of home where a swipe opens the drawer, in points. */
+export const DRAWER_SWIPE_EDGE = 64;
+/** A drag this far, or a quick flick, opens the drawer. Shorter, slow drags close it again. */
+export const DRAWER_SWIPE_MIN_DISTANCE = 40;
+/** Vertical drift that cancels the swipe before it moves 5 points across. */
+export const DRAWER_SWIPE_VERTICAL_SLOP = 20;
+
+/**
+ * The drawer library cancels the swipe after 5 points of vertical drift. A thumb swipe
+ * from the edge is rarely that straight, so many swipes did not open the drawer.
+ */
+export function configureDrawerSwipe(gesture: LegacyPanGesture): LegacyPanGesture {
+  return gesture.failOffsetY([-DRAWER_SWIPE_VERTICAL_SLOP, DRAWER_SWIPE_VERTICAL_SLOP]);
 }

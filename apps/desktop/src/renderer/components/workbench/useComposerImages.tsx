@@ -1,30 +1,115 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ImageIcon, ImagePlus, Loader2, X } from 'lucide-react';
-import { workbenchQueuesMessages, type WorkbenchAttachment, type WorkbenchStatus } from '@talyn/shared';
+import { FileText, Film, ImageIcon, Loader2, Paperclip, X } from 'lucide-react';
+import {
+  isWorkbenchTextContent,
+  isWorkbenchTextFile,
+  isWorkbenchVideoType,
+  workbenchQueuesMessages,
+  WORKBENCH_ATTACHMENT_EXTENSIONS,
+  WORKBENCH_IMAGE_TYPES,
+  WORKBENCH_MAX_TEXT_BYTES,
+  WORKBENCH_MAX_VIDEO_BYTES,
+  WORKBENCH_TEXT_EXTENSIONS,
+  WORKBENCH_TEXT_TYPE,
+  WORKBENCH_VIDEO_TYPES,
+  type WorkbenchAttachment,
+  type WorkbenchStatus,
+} from '@talyn/shared';
 import { downscaleImage } from '../../lib/imageDownscale';
-import { rememberAttachmentPreview } from '../../lib/attachmentPreviews';
+import { attachmentPreview, rememberAttachmentBlob, rememberAttachmentPreview } from '../../lib/attachmentPreviews';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 
 const LARGE_PNG_BYTES = 1.5 * 1024 * 1024;
-const IMAGE_TYPES = 'image/png,image/jpeg,image/webp,image/gif';
+const TEXT_TYPES = ['text/*', ...WORKBENCH_TEXT_EXTENSIONS.map((extension) => `.${extension}`)];
+const IMAGE_AND_TEXT_TYPES = [...WORKBENCH_IMAGE_TYPES, ...TEXT_TYPES].join(',');
+const ALL_TYPES = [...WORKBENCH_IMAGE_TYPES, ...WORKBENCH_VIDEO_TYPES, '.mov', '.m4v', ...TEXT_TYPES].join(',');
+const UNSUPPORTED_FILE = 'Only images, videos and text files can be attached.';
+
+/** A file the composer takes: a text file, an image (any type the browser decodes) or a video. */
+const isAttachable = (file: Pick<File, 'name' | 'type'>) =>
+  isWorkbenchTextFile(file) || file.type.startsWith('image/') || file.type.startsWith('video/') || videoUploadType(file) !== null;
+
+/**
+ * The upload type of a video file, or null when the session cannot take it.
+ * Some systems give `.mov` and `.m4v` files no type or a vendor type, so the extension decides then.
+ */
+export function videoUploadType(file: Pick<File, 'name' | 'type'>): string | null {
+  const declared = file.type.toLowerCase() === 'video/x-m4v' ? 'video/mp4' : file.type.toLowerCase();
+  if (isWorkbenchVideoType(declared)) return declared;
+  if (declared && declared !== 'application/octet-stream' && !declared.startsWith('video/')) return null;
+  const extension = file.name.slice(file.name.lastIndexOf('.') + 1).toLowerCase();
+  const byName = WORKBENCH_ATTACHMENT_EXTENSIONS[extension];
+  return byName && isWorkbenchVideoType(byName) ? byName : null;
+}
+
+const isVideoFile = (file: File) =>
+  file.type.startsWith('video/') || (!file.type.startsWith('image/') && videoUploadType(file) !== null);
+
+function blobBytes(blob: Blob): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.onerror = () => reject(new Error('Could not read the file.'));
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
+/** The file as base64, after checks that it is UTF-8 text within the limit. */
+export async function readTextAttachment(file: Blob): Promise<string> {
+  if (file.size > WORKBENCH_MAX_TEXT_BYTES) throw new Error('The file is larger than 1 MB.');
+  const bytes = new Uint8Array(await blobBytes(file));
+  if (!isWorkbenchTextContent(bytes)) throw new Error('The file is not UTF-8 text.');
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
 
 export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchOps, status?: WorkbenchStatus) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [attachments, setAttachments] = useState<WorkbenchAttachment[]>([]);
   const [pendingUploads, setPendingUploads] = useState(0);
+  const [failedUploads, setFailedUploads] = useState(0);
   const [imageNotReady, setImageNotReady] = useState(false);
 
   const attachFiles = async (files: File[]) => {
     if (files.length === 0) return;
     if (ops && (ops.unavailable || !ops.canAttach)) {
       if (runtime === 'sandbox' && status && workbenchQueuesMessages(status)) setImageNotReady(true);
-      else toast.error('Could not attach the image', ops.unavailable ?? 'Attachments are unavailable.');
+      else toast.error('Could not attach the file', ops.unavailable ?? 'Attachments are unavailable.');
       return;
     }
     setImageNotReady(false);
     setPendingUploads((count) => count + files.length);
     for (const file of files) {
+      if (isWorkbenchTextFile(file)) {
+        try {
+          await attachText(file);
+        } catch (err) {
+          setFailedUploads((count) => count + 1);
+          toast.error('Could not attach the file', err instanceof Error ? err.message : undefined);
+        } finally {
+          setPendingUploads((count) => count - 1);
+        }
+        continue;
+      }
+      if (!isAttachable(file)) {
+        setFailedUploads((count) => count + 1);
+        toast.error('Could not attach the file', UNSUPPORTED_FILE);
+        setPendingUploads((count) => count - 1);
+        continue;
+      }
+      if (isVideoFile(file)) {
+        try {
+          await attachVideo(file);
+        } catch (err) {
+          setFailedUploads((count) => count + 1);
+          toast.error('Could not attach the video', err instanceof Error ? err.message : undefined);
+        } finally {
+          setPendingUploads((count) => count - 1);
+        }
+        continue;
+      }
       try {
         let dataUrl = await downscaleImage(file, 1600);
         let mimeType = 'image/png';
@@ -39,6 +124,7 @@ export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchO
         if (attachment.path) rememberAttachmentPreview(attachment.path, dataUrl);
         setAttachments((current) => [...current, attachment]);
       } catch (err) {
+        setFailedUploads((count) => count + 1);
         toast.error('Could not attach the image', err instanceof Error ? err.message : undefined);
       } finally {
         setPendingUploads((count) => count - 1);
@@ -46,20 +132,72 @@ export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchO
     }
   };
 
+  // A video goes up as it is: no re-encoding, and never inline, because the
+  // JSON body of a message is capped far below a video's size.
+  const attachVideo = async (file: File) => {
+    const mimeType = videoUploadType(file);
+    if (!mimeType) throw new Error('Only MP4, MOV and WebM videos can be attached.');
+    if (!ops) throw new Error('Videos can be attached once the session has started.');
+    if (file.size === 0) throw new Error('The video is empty.');
+    if (file.size > WORKBENCH_MAX_VIDEO_BYTES) throw new Error('The video is larger than 50 MB.');
+    const name = file.name || 'video';
+    const attachment = await ops.attach({ name, mimeType, blob: file });
+    if (attachment.path) rememberAttachmentBlob(attachment.path, file);
+    setAttachments((current) => [...current, attachment]);
+  };
+
+  // A text file goes up as `text/plain` under its own name. The session gets
+  // the path, and the agent reads the file.
+  const attachText = async (file: File) => {
+    const dataBase64 = await readTextAttachment(file);
+    const name = file.name || 'pasted.txt';
+    const attachment = ops
+      ? await ops.attach({ name, mimeType: WORKBENCH_TEXT_TYPE, blob: file })
+      : { name, mimeType: WORKBENCH_TEXT_TYPE, dataBase64 };
+    setAttachments((current) => [...current, attachment]);
+  };
+
   const onPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const files = [...event.clipboardData.items]
-      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .filter((item) => item.kind === 'file')
       .map((item) => item.getAsFile())
-      .filter((file): file is File => file !== null);
+      .filter((file): file is File => file !== null && isAttachable(file));
     if (files.length === 0) return;
     event.preventDefault();
     void attachFiles(files);
   };
 
   return {
-    attachments, setAttachments, pendingUploads, imageNotReady, setImageNotReady,
+    attachments, setAttachments, pendingUploads, failedUploads, imageNotReady, setImageNotReady,
     fileInputRef, attachFiles, onPaste,
     clear: () => { setAttachments([]); setImageNotReady(false); },
+  };
+}
+
+/**
+ * Holds a send that the person asks for while files upload, and runs it when
+ * the last upload ends. A failed upload cancels the send, so a message never
+ * goes out without a file that the person attached.
+ */
+export function useSendAfterUploads(pendingUploads: number, failedUploads: number, send: () => void, resetKey: string) {
+  // The failure count when the send was held, or null when no send waits.
+  const [heldAt, setHeldAt] = useState<number | null>(null);
+  const sendRef = useRef(send);
+  sendRef.current = send;
+
+  useEffect(() => setHeldAt(null), [resetKey]);
+
+  useEffect(() => {
+    if (heldAt === null || pendingUploads > 0) return;
+    setHeldAt(null);
+    if (failedUploads > heldAt) toast.error('The message was not sent', 'A file did not upload. Your message is still in the composer.');
+    else sendRef.current();
+  }, [heldAt, pendingUploads, failedUploads]);
+
+  return {
+    held: heldAt !== null,
+    hold: () => setHeldAt((current) => current ?? failedUploads),
+    cancel: () => setHeldAt(null),
   };
 }
 
@@ -117,9 +255,9 @@ export function useImageDropZone(onFiles: (files: File[]) => void) {
       depth.current = 0;
       setDragging(false);
       const files = [...event.dataTransfer.files];
-      const images = files.filter((file) => file.type.startsWith('image/'));
-      if (images.length > 0) onFiles(images);
-      else if (files.length > 0) toast.error('Could not attach the file', 'Only images can be attached.');
+      const attachable = files.filter(isAttachable);
+      if (attachable.length > 0) onFiles(attachable);
+      else if (files.length > 0) toast.error('Could not attach the file', UNSUPPORTED_FILE);
     },
   };
 
@@ -134,47 +272,83 @@ export function ImageDropOverlay({ dragging, className }: { dragging: boolean; c
       className={`pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-2 border-dashed border-primary/60 bg-background/80 ${className ?? ''}`}
     >
       <span className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
-        <ImagePlus className="h-4 w-4" /> Drop images to attach
+        <Paperclip className="h-4 w-4" /> Drop images, videos or text files to attach
       </span>
     </div>
   );
 }
 
 export function ImageAttachmentChips({
-  attachments, pendingUploads, imageNotReady, onRemove,
+  attachments, pendingUploads, imageNotReady, onRemove, sendHeld = false,
 }: {
   attachments: WorkbenchAttachment[];
   pendingUploads: number;
   imageNotReady: boolean;
+  /** A send waits for the uploads to end. */
+  sendHeld?: boolean;
   onRemove: (index: number) => void;
 }) {
   if (attachments.length === 0 && pendingUploads === 0 && !imageNotReady) return null;
   return (
     <div className="flex flex-wrap gap-1 px-2 pt-2">
       {attachments.map((attachment, index) => (
-        <span key={`${attachment.path ?? attachment.name}-${index}`} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]">
-          <ImageIcon className="h-3 w-3" />
+        <span key={`${attachment.path ?? attachment.name}-${index}`} className="inline-flex items-center gap-1.5 rounded bg-muted py-1 pl-1 pr-1.5 text-[11px]">
+          <AttachmentThumbnail attachment={attachment} />
           {attachment.name}
           <button type="button" onClick={() => onRemove(index)} aria-label={`Remove ${attachment.name}`}>
             <X className="h-3 w-3" />
           </button>
         </span>
       ))}
-      {pendingUploads > 0 && <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]"><Loader2 className="h-3 w-3 animate-spin" /> Uploading image…</span>}
-      {imageNotReady && <span className="text-[11px] text-amber-700 dark:text-amber-400">Images can be attached once the sandbox is ready.</span>}
+      {pendingUploads > 0 && <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]"><Loader2 className="h-3 w-3 animate-spin" /> {sendHeld ? 'Uploading… The message sends after the upload.' : 'Uploading…'}</span>}
+      {imageNotReady && <span className="text-[11px] text-amber-700 dark:text-amber-400">Files can be attached once the sandbox is ready.</span>}
     </div>
   );
 }
 
-export function ImageAttachButton({ inputRef, onFiles }: { inputRef: React.RefObject<HTMLInputElement | null>; onFiles: (files: File[]) => void }) {
+function composerPreview(attachment: WorkbenchAttachment): string | null {
+  if (attachment.dataBase64) return `data:${attachment.mimeType};base64,${attachment.dataBase64}`;
+  return attachment.path ? attachmentPreview(attachment.path) : null;
+}
+
+function AttachmentThumbnail({ attachment }: { attachment: WorkbenchAttachment }) {
+  const [failed, setFailed] = useState(false);
+  if (attachment.mimeType === WORKBENCH_TEXT_TYPE) {
+    return (
+      <span className="flex h-8 w-8 items-center justify-center rounded-sm bg-background" aria-label="Text file">
+        <FileText className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  if (isWorkbenchVideoType(attachment.mimeType)) {
+    return (
+      <span className="flex h-8 w-8 items-center justify-center rounded-sm bg-background" aria-label="Video">
+        <Film className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  const source = attachment.mimeType.startsWith('image/') && !failed ? composerPreview(attachment) : null;
+  if (!source) {
+    return (
+      <span className="flex h-8 w-8 items-center justify-center rounded-sm bg-background">
+        <ImageIcon className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  return <img src={source} alt="" className="h-8 w-8 rounded-sm bg-background object-cover" onError={() => setFailed(true)} />;
+}
+
+/** `videos`: also offer videos. Only a started session can take one, so the new-session page leaves it off. */
+export function ImageAttachButton({ inputRef, onFiles, videos = false }: { inputRef: React.RefObject<HTMLInputElement | null>; onFiles: (files: File[]) => void; videos?: boolean }) {
+  const label = videos ? 'Attach images, videos or text files' : 'Attach images or text files';
   return (
     <>
-      <input ref={inputRef} type="file" accept={IMAGE_TYPES} multiple className="hidden" aria-label="Choose images" onChange={(event) => {
+      <input ref={inputRef} type="file" accept={videos ? ALL_TYPES : IMAGE_AND_TEXT_TYPES} multiple className="hidden" aria-label={videos ? 'Choose images, videos or text files' : 'Choose images or text files'} onChange={(event) => {
         onFiles([...(event.target.files ?? [])]);
         event.target.value = '';
       }} />
-      <button type="button" onClick={() => inputRef.current?.click()} className="rounded p-1 hover:bg-accent" aria-label="Attach images" title="Attach images">
-        <ImageIcon className="h-4 w-4" />
+      <button type="button" onClick={() => inputRef.current?.click()} className="rounded p-1 hover:bg-accent" aria-label={label} title={label}>
+        <Paperclip className="h-4 w-4" />
       </button>
     </>
   );

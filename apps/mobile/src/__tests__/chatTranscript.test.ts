@@ -99,6 +99,15 @@ describe('transcript rows', () => {
     expect(userMessageText({ type: 'assistant', message: { content: 'Agent' } } as AgentEvent)).toBeNull();
   });
 
+  it('ignores nested events before they can start a turn', () => {
+    const nestedUser = at({ type: 'user', parent_tool_use_id: 'agent-1', message: { content: [{ type: 'text', text: 'Research this' }] } }, 2);
+    const nestedAssistant = at({ type: 'assistant', parent_tool_use_id: 'agent-1', message: { content: [{ type: 'text', text: 'Nested answer' }] } }, 2);
+    expect(userMessageText(nestedUser.event)).toBeNull();
+    const rows = transcriptRows('chat-one', [user('Start'), nestedUser, nestedAssistant, assistant([{ type: 'text', text: 'Main answer' }])]);
+    expect(kinds(rows)).toEqual(['user', 'text']);
+    expect(rows.map((row) => row.kind === 'user' || row.kind === 'text' ? row.text : null)).toEqual(['Start', 'Main answer']);
+  });
+
   it('builds a user bubble, agent text, and a paired tool call', () => {
     const rows = transcriptRows('chat-one', [user('Fix it', 1, { createdAt: '2026-11-08T11:00:00Z' }),
       assistant([{ type: 'text', text: 'Looking' }, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }]),
@@ -156,6 +165,33 @@ describe('transcript rows', () => {
     expect(rows.find((row) => row.kind === 'text')).toMatchObject({ text: 'Here.' });
   });
 
+  const question = (turn = 1) => at({ type: 'talyn_question', id: `q${turn}`, questions: [{ question: 'Which database?', options: [{ label: 'Postgres' }, { label: 'SQLite' }] }] } as unknown as AgentEvent, turn);
+  const thread = { kind: 'thread', threadId: 't1', name: 'Storage plan' };
+
+  it.each([
+    ['the last turn', null, 'open', null],
+    ['a turn the person answered', {}, 'answered', null],
+    ['a turn the thread answered', { talyn: { kind: 'user_message', sender: thread } }, 'answered', thread],
+  ])('shows the question of %s', (_name, answer, state, answeredBy) => {
+    const events = [user('Add storage'),
+      assistant([{ type: 'tool_use', id: 'ask', name: 'mcp__talyn__talyn_ask_user', input: {} }]), toolResult('ask', 'Talyn shows your question.'), question()];
+    if (answer) events.push(at({ type: 'user', message: { content: [{ type: 'text', text: 'Postgres' }] }, talyn_user_message: true, ...answer } as unknown as AgentEvent, 2));
+    const rows = transcriptRows('chat-one', events);
+    expect(kinds(rows)).toEqual(answer ? ['user', 'question', 'user'] : ['user', 'question']);
+    expect(rows[1]).toMatchObject({ kind: 'question', state, answeredBy, question: { id: 'q1', questions: [{ question: 'Which database?' }] } });
+    expect(rowLabel(rows[1])).toBe(`${state === 'answered' ? 'Answered question' : 'Question'}: Which database?`);
+  });
+
+  it('keeps the thread as the sender of a user message', () => {
+    const rows = transcriptRows('chat-one', [
+      at({ type: 'user', message: { content: [{ type: 'text', text: 'Use Postgres' }] }, talyn: { kind: 'user_message', sender: thread } } as unknown as AgentEvent),
+      user('Thanks', 2),
+    ]);
+    expect(rows[0]).toMatchObject({ kind: 'user', sender: thread });
+    expect(rowLabel(rows[0])).toBe('From thread Storage plan: Use Postgres');
+    expect(rows[1]).not.toHaveProperty('sender');
+  });
+
   it('keeps pending permission requests as rows', () => {
     const rows = transcriptRows('chat-one', [at({ type: 'talyn_permission_request', requestId: 'r1', tool_name: 'Bash', tool_input: { command: 'rm -rf x' } } as unknown as AgentEvent)]);
     expect(rows[0]).toMatchObject({ kind: 'permission', status: 'pending', toolName: 'Bash' });
@@ -165,6 +201,24 @@ describe('transcript rows', () => {
     const rows = transcriptRows('chat-one', [at({ type: 'talyn_pr', ok: true, number: 132020, url: 'https://github.com/o/r/pull/132020' } as unknown as AgentEvent)]);
     expect(rows[0]).toMatchObject({ kind: 'system', subtype: 'talyn_pr', text: 'Opened pull request #132020', url: 'https://github.com/o/r/pull/132020',
       pullRequest: { number: 132020 } });
+  });
+
+  it.each([
+    ['a pull request retry', { kind: 'pr_retry', attempt: 1, error: 'GitHub rejected the push' }, 'Talyn could not open the pull request. The agent tries to fix the cause.'],
+    ['a wake-up', { kind: 'wakeup', wakeupId: 'w', reason: 'Check CI', createdBy: 'agent' }, 'Woke up: Check CI'],
+  ])('shows %s from Talyn as one short line', (_name, trigger, text) => {
+    const rows = transcriptRows('chat-one', [at({
+      type: 'user', message: { content: [{ type: 'text', text: 'The full message body' }] },
+      talyn: { kind: 'user_message', origin: 'talyn', trigger },
+    } as unknown as AgentEvent)]);
+    expect(rows).toEqual([expect.objectContaining({ kind: 'system', subtype: 'talyn_message', text })]);
+  });
+
+  it('keeps a Talyn message with no trigger as a bubble', () => {
+    const rows = transcriptRows('chat-one', [at({
+      type: 'user', message: { content: [{ type: 'text', text: 'Session finished' }] }, talyn: { kind: 'user_message', origin: 'talyn' },
+    } as unknown as AgentEvent)]);
+    expect(rows).toEqual([expect.objectContaining({ kind: 'user', text: 'Session finished' })]);
   });
 
   it('bounds long text', () => {

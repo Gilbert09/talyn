@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
+import { ApiError } from '@talyn/client';
 import type { BillingStatus } from '@talyn/shared';
 import { UpgradeModal } from '../components/modals/UpgradeModal';
 import { useWorkspaceStore } from '../stores/workspace';
@@ -16,6 +17,7 @@ const { billing, goToHostedPage } = vi.hoisted(() => ({
     checkout: vi.fn(),
     changePlan: vi.fn(),
     creditCheckout: vi.fn(),
+    usageResetCheckout: vi.fn(),
     portal: vi.fn(),
     orders: vi.fn(),
     invoice: vi.fn(),
@@ -46,6 +48,8 @@ function SettingsWithModal() {
   );
 }
 
+const planCard = (plan: string) => screen.getByTestId(`compare-plan-${plan}`);
+
 function show(status: BillingStatus) {
   useBillingStore.setState({ status, upgradeModalOpen: false, upgradeReason: null, upgradeNotice: null });
   billing.status.mockResolvedValue(status);
@@ -61,10 +65,10 @@ describe('BillingSettings', () => {
 
   it('captures plan page clicks with their locations', () => {
     show(usageStatus('pro'));
-    fireEvent.click(screen.getByRole('button', { name: 'Compare plans' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add credits', expanded: false }));
-    expect(trackEvent).toHaveBeenCalledWith('compare_plans_opened', { where: 'plan_page' });
+    fireEvent.click(within(planCard('team')).getByRole('button', { name: 'Explore Team' }));
     expect(trackEvent).toHaveBeenCalledWith('add_credits_clicked', { where: 'plan_page' });
+    expect(trackEvent).toHaveBeenCalledWith('team_offer_opened', { placement: 'plan_page' });
   });
 
   it('draws the old page on a backend without usage billing', () => {
@@ -82,7 +86,7 @@ describe('BillingSettings', () => {
     expect(screen.getByText('2.5 of 10 box-hours used')).toBeInTheDocument();
     expect(screen.getByText(/Resets /)).toBeInTheDocument();
     expect(screen.getByText('Boxes running now: 0 of 2')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Upgrade' })).toBeVisible();
+    expect(within(planCard('pro')).getByRole('button', { name: 'Upgrade to Pro: $40/mo' })).toBeVisible();
     expect(screen.queryByText('Credits')).toBeNull();
     expect(screen.queryByText('Auto top-up')).toBeNull();
     for (const size of ['medium', 'large', 'xlarge']) {
@@ -99,9 +103,9 @@ describe('BillingSettings', () => {
   it('sends Free to the Pro checkout for the chosen period', async () => {
     billing.checkout.mockResolvedValue({ url: 'https://polar.test/checkout' });
     show(usageStatus('free'));
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade' }));
-    fireEvent.click(screen.getByRole('button', { name: /Annual/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Pro: $400/yr' }));
+    const pro = planCard('pro');
+    fireEvent.click(within(pro).getByRole('button', { name: /Annual/ }));
+    fireEvent.click(within(pro).getByRole('button', { name: 'Upgrade to Pro: $400/yr' }));
     await waitFor(() => expect(goToHostedPage).toHaveBeenCalledWith('https://polar.test/checkout'));
     expect(billing.checkout).toHaveBeenCalledWith({ period: 'annual', plan: 'pro' });
   });
@@ -109,8 +113,7 @@ describe('BillingSettings', () => {
   it('shows a checkout refusal instead of leaving the page', async () => {
     billing.checkout.mockRejectedValue(new Error('Checkout is down.'));
     show(usageStatus('free'));
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Pro: $40/mo' }));
+    fireEvent.click(within(planCard('pro')).getByRole('button', { name: 'Upgrade to Pro: $40/mo' }));
     expect(await screen.findByText('Checkout is down.')).toBeInTheDocument();
     expect(goToHostedPage).not.toHaveBeenCalled();
   });
@@ -119,9 +122,8 @@ describe('BillingSettings', () => {
     billing.changePlan.mockResolvedValue({ ok: true });
     show(usageStatus('legacy_pro', { usedHours: 20 }));
     expect(screen.getByText(/Your current plan: 50 box-hours a month/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Move to Pro' }));
-    expect(screen.getByRole('heading', { level: 2, name: 'Move to Pro' })).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Move to Pro: $40/mo' }));
+    expect(within(planCard('legacy_pro')).getByText(/^Your plan/)).toBeVisible();
+    fireEvent.click(within(planCard('pro')).getByRole('button', { name: 'Move to Pro: $40/mo' }));
     await waitFor(() => expect(billing.changePlan).toHaveBeenCalledWith({ to: 'pro', period: 'monthly' }));
     expect(goToHostedPage).not.toHaveBeenCalled();
   });
@@ -156,7 +158,7 @@ describe('BillingSettings', () => {
     ];
     show(status);
     expect(screen.getByText('150 of 200 box-hours used')).toBeInTheDocument();
-    expect(document.querySelector('[data-attr="credit-balance"]')).toHaveTextContent('$42.00');
+    expect(document.querySelector('[data-attr="credit-balance"]')).toHaveTextContent('$42');
     expect(screen.getByText('$2.00 expires in the next 30 days.')).toBeInTheDocument();
     expect(screen.getByText('$40.00 of $105.00')).toBeInTheDocument();
     expect(screen.queryByText('+5% bonus: $105 of credits')).toBeNull();
@@ -182,9 +184,7 @@ describe('BillingSettings', () => {
     billing.changePlan.mockResolvedValue({ ok: true });
     show(usageStatus('pro', { maxOffered: true }, { period: 'monthly' }));
     expect(screen.getByRole('button', { name: 'Manage billing' })).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max' }));
-    expect(screen.getByRole('heading', { level: 2, name: 'Upgrade to Max' })).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max: $100/mo' }));
+    fireEvent.click(within(planCard('max')).getByRole('button', { name: 'Upgrade to Max: $100/mo' }));
     await waitFor(() => expect(billing.changePlan).toHaveBeenCalledWith({ to: 'max', period: 'monthly' }));
     expect(billing.checkout).not.toHaveBeenCalled();
   });
@@ -195,8 +195,9 @@ describe('BillingSettings', () => {
     expect(screen.getByTestId('max-via-portal-hint')).toHaveTextContent(
       'Max is monthly only. To move from annual Pro to Max, use Manage billing.'
     );
-    expect(screen.queryByRole('button', { name: 'Upgrade to Max' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Manage billing' }));
+    expect(screen.queryByRole('button', { name: /Upgrade to Max/ })).toBeNull();
+    expect(within(planCard('max')).getByTestId('max-via-portal')).toBeInTheDocument();
+    fireEvent.click(within(planCard('max')).getByRole('button', { name: 'Manage billing' }));
     await waitFor(() => expect(goToHostedPage).toHaveBeenCalledWith('https://polar.test/portal'));
     expect(billing.changePlan).not.toHaveBeenCalled();
   });
@@ -224,7 +225,8 @@ describe('BillingSettings', () => {
     expect(screen.getByTestId('max-to-pro-hint')).toHaveTextContent('To move to Pro, use Manage billing.');
     expect(document.querySelector('[data-attr="credit-balance"]')).not.toBeNull();
     expect(screen.queryByRole('button', { name: /Upgrade|Move to Pro/ })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Manage billing' }));
+    expect(within(planCard('max')).getByText('Your plan · Monthly')).toBeVisible();
+    fireEvent.click(within(planCard('pro')).getByRole('button', { name: 'Manage billing' }));
     await waitFor(() => expect(goToHostedPage).toHaveBeenCalledWith('https://polar.test/portal'));
     expect(billing.changePlan).not.toHaveBeenCalled();
   });
@@ -279,7 +281,7 @@ describe('BillingSettings', () => {
   it.each([
     [0, false, '100', '100% left'],
     [26, false, '87', '87% left'],
-    [199, false, '1', '1.0% left'],
+    [199, false, '1', '1% left'],
     [210, false, '0', '0% left'],
     [20, true, '0', '0% left'],
   ])('shows usage left for %s hours and exhausted=%s', (usedHours, exhausted, value, label) => {
@@ -289,11 +291,34 @@ describe('BillingSettings', () => {
     expect(screen.getByText(`${usedHours} of 200 box-hours used`)).toBeVisible();
   });
 
-  it.each(['free', 'legacy_pro', 'pro'] as const)('opens the existing modal to compare %s', (tier) => {
+  it.each([
+    ['free', ['free', 'pro', 'team']],
+    ['legacy_pro', ['free', 'legacy_pro', 'pro', 'team']],
+    ['pro', ['free', 'pro', 'team']],
+    ['max', ['free', 'pro', 'max', 'team']],
+  ] as const)('lays out every plan on the page for %s, with the current one marked', (tier, plans) => {
     show(usageStatus(tier));
-    fireEvent.click(screen.getByRole('button', { name: 'Compare plans' }));
-    expect(useBillingStore.getState().upgradeModalOpen).toBe(true);
-    expect(screen.getByRole('heading', { level: 2 })).toBeVisible();
+    const cards = within(screen.getByTestId('plan-cards')).getAllByTestId(/^compare-plan-/);
+    expect(cards.map((card) => card.dataset.testid)).toEqual(plans.map((plan) => `compare-plan-${plan}`));
+    expect(within(planCard(tier)).getByText(/^Your plan/)).toBeVisible();
+    for (const other of plans.filter((plan) => plan !== tier)) {
+      expect(within(planCard(other)).queryByText(/^Your plan/)).toBeNull();
+    }
+    expect(screen.queryByRole('button', { name: 'Compare plans' })).toBeNull();
+    expect(useBillingStore.getState().upgradeModalOpen).toBe(false);
+  });
+
+  it('shows Max on the page when it is offered', () => {
+    show(usageStatus('free', { maxOffered: true }));
+    expect(planCard('max')).toHaveTextContent('$100/mo');
+    expect(planCard('max')).toHaveTextContent('1,000 box-hours per month');
+    expect(within(planCard('max')).getByRole('button', { name: 'Upgrade to Max: $100/mo' })).toBeVisible();
+  });
+
+  it('marks the team plan for a team seat and offers no purchase', () => {
+    show(usageStatus('pro', { maxOffered: true, planSource: 'team' }));
+    expect(within(planCard('team')).getByText('Your plan')).toBeVisible();
+    expect(within(screen.getByTestId('plan-cards')).queryByRole('button', { name: /Upgrade|Move to Pro|Explore Team/ })).toBeNull();
   });
 
   it('opens team settings for a team seat', () => {
@@ -420,6 +445,56 @@ describe('BillingSettings', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Confirm switch' }));
       await waitFor(() => expect(screen.getByText('The plan change failed.')).toBeVisible());
       expect(trackEvent).toHaveBeenCalledWith('annual_switch_failed', { placement: 'plan_page', code: undefined });
+    });
+  });
+
+  describe('usage reset', () => {
+    const withReset = (resets?: number) => {
+      const status = usageStatus('pro', { usedHours: 50 });
+      status.usageReset = { tier: 'pro', priceMicros: 40_000_000, includedWsec: 200 * 3600 };
+      if (resets != null) status.usage = { ...status.usage!, resets };
+      return status;
+    };
+
+    it('hides the action when the status has no offer', () => {
+      show(usageStatus('pro', { usedHours: 50 }));
+      expect(document.querySelector('[data-attr="usage-reset-checkout"]')).toBeNull();
+    });
+
+    it('shows the price and the explanation', () => {
+      show(withReset());
+      expect(screen.getByRole('button', { name: 'Reset usage: $40' })).toBeVisible();
+      expect(screen.getByText(/get all 200 box-hours back now\. Your period still ends on .*Unused hours do not carry over/)).toBeVisible();
+      expect(screen.queryByTestId('usage-reset-count')).toBeNull();
+    });
+
+    it.each([
+      [1, 'Reset 1 time this period'],
+      [2, 'Reset 2 times this period'],
+    ])('notes %i resets this period', (resets, text) => {
+      show(withReset(resets));
+      expect(screen.getByText(text)).toBeVisible();
+    });
+
+    it('goes to the hosted checkout on click', async () => {
+      billing.usageResetCheckout.mockResolvedValue({ url: 'https://polar.test/reset' });
+      show(withReset());
+      fireEvent.click(screen.getByRole('button', { name: 'Reset usage: $40' }));
+      await waitFor(() => expect(goToHostedPage).toHaveBeenCalledWith('https://polar.test/reset'));
+      expect(trackEvent).toHaveBeenCalledWith('usage_reset_checkout_started', { tier: 'pro', placement: 'billing_settings' });
+    });
+
+    it.each([
+      ['usage_reset_requires_paid_plan', 402, 'A usage reset needs a paid plan.'],
+      ['nothing_to_reset', 409, 'You have not used any box-hours yet. There is nothing to reset.'],
+      ['usage_reset_unavailable', 404, 'Usage reset is not available for this account.'],
+    ])('shows text for %s', async (code, status, text) => {
+      billing.usageResetCheckout.mockRejectedValue(new ApiError('raw', status, code));
+      show(withReset());
+      fireEvent.click(screen.getByRole('button', { name: 'Reset usage: $40' }));
+      expect(await screen.findByText(text)).toBeVisible();
+      expect(goToHostedPage).not.toHaveBeenCalled();
+      expect(trackEvent).toHaveBeenCalledWith('usage_reset_checkout_failed', { stage: 'create_checkout', code, status });
     });
   });
 });

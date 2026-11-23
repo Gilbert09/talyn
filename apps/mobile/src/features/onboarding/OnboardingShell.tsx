@@ -1,11 +1,12 @@
 import { SymbolView } from 'expo-symbols';
 import type { PropsWithChildren, ReactNode } from 'react';
-import { Fragment } from 'react';
+import { Fragment, useEffect } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { BlinkingOwl } from '../../components/BootScreen';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { AppText } from '../../components/UI';
+import { trackEvent } from '../../lib/analytics';
 import { ONBOARDING_STEPS, stepIndex, type OnboardingStep } from '../../navigation/onboardingGate';
 import { fonts, sans, useTheme } from '../../theme/tokens';
 
@@ -13,6 +14,7 @@ export const STEP_TITLES: Record<OnboardingStep, string> = {
   github: 'Connect GitHub',
   repos: 'Choose where your agent will work.',
   agent: 'Connect your agent',
+  notifications: 'Turn on notifications',
 };
 
 /** Numbered dots: done steps are green with a check, the current one is outlined in the accent. */
@@ -44,6 +46,7 @@ export function ProgressDots({ step }: { step: OnboardingStep }) {
  */
 export function OnboardingShell({ step, footer, children }: PropsWithChildren<{ step: OnboardingStep; footer?: ReactNode }>) {
   const c = useTheme();
+  useEffect(() => { trackEvent('onboarding_step_viewed', { step }); }, [step]);
   return <ScreenContainer topInset>
     <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>

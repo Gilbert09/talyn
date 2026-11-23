@@ -22,6 +22,7 @@ import {
   capacityWaitDelayMs,
   createWorkbenchSandbox,
   NO_FREE_SANDBOX_MESSAGE,
+  PROVISION_BOOT_RETRIES,
   PROVISION_CAPACITY_WAIT,
   provisionClaimName,
   provisionWorkbench,
@@ -480,6 +481,99 @@ describe('a provision waits for a free sandbox', () => {
       expect(fleet.deleted).toEqual([]);
       expect(await failureEvents()).toEqual([]);
       expect(await claims()).toEqual([{ name: CLAIM, token: 'other-instance' }]);
+    });
+  });
+
+  describe('the box does not boot', () => {
+    const BOOT_ERROR = 'sandbox did not boot: stalled in configure after 0s (netns 3.787s, dns 0s, jailer 182ms, stage 15.611s done first): context canceled';
+    const failedRecord = { status: 'failed', phase: 'done', error: BOOT_ERROR } as const;
+    const bootRefusal = () => new FleetHttpError(BOOT_ERROR, 400, 'create_failed');
+    const DEFAULT_RETRIES = { ...PROVISION_BOOT_RETRIES };
+    afterEach(() => { Object.assign(PROVISION_BOOT_RETRIES, DEFAULT_RETRIES); });
+
+    type Answer = Pick<FleetSandbox, 'status' | 'phase' | 'error'> | Error;
+    /** Each create answers from `answers` in turn: a record, or an error to throw. Past the end, an idle box. */
+    const createAnswers = (...answers: Answer[]) => {
+      let attempt = 0;
+      return vi.spyOn(fleet, 'createSandbox').mockImplementation(async (input) => {
+        fleet.created.push(input);
+        const answer = answers[attempt++];
+        if (answer instanceof Error) throw answer;
+        return { sandbox: { id: input.id, ...(answer ?? { status: 'idle', phase: 'ready' }) } as FleetSandbox, host: 'host-1' };
+      });
+    };
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => (i === 0 ? BOX : runtime.sandboxIdFor(WB, i)));
+
+    it.each([
+      // The 2026-11-12 incident: Talyn gave up first, then the same id found the failed record.
+      ['a timeout, then the failed record', [busy('unreachable'), failedRecord], [BOX, BOX, runtime.sandboxIdFor(WB, 1)]],
+      ['the failed record from the create', [failedRecord], ids(2)],
+      ["the fleet's own boot refusal", [bootRefusal()], ids(2)],
+      ['two failures in a row', [failedRecord, bootRefusal()], ids(3)],
+    ] as const)('creates the box again on a new id after %s and ends ready', async (_name, answers, expectedIds) => {
+      const create = createAnswers(...answers);
+      await provisionWorkbench(WB);
+      expect(create.mock.calls.map(([input]) => input.id)).toEqual(expectedIds);
+      expect(create.mock.calls.every(([input]) => input.queueWhenFull === true)).toBe(true);
+      expect(await getWorkbench(WB)).toMatchObject({
+        status: 'ready', sandboxState: 'running', sandboxId: expectedIds[expectedIds.length - 1], statusMessage: null,
+      });
+      expect(await failureEvents()).toEqual([]);
+      expect(await claims()).toEqual([]);
+    });
+
+    it('fails with the boot reason, not as a lost box, once the retries run out', async () => {
+      const create = createAnswers(failedRecord, failedRecord, failedRecord, failedRecord);
+      await provisionWorkbench(WB);
+      expect(create.mock.calls.map(([input]) => input.id)).toEqual(ids(3));
+      const row = await getWorkbench(WB);
+      expect(row).toMatchObject({ status: 'error', sandboxId: runtime.sandboxIdFor(WB, 2) });
+      expect(row?.statusMessage).toBe(`The sandbox did not start: ${BOOT_ERROR}`);
+      expect(row?.statusMessage).not.toMatch(/lost/);
+      expect((await getChat('chat'))?.status).toBe('error');
+      expect(await claims()).toEqual([]);
+    });
+
+    it.each([0, 1, 3])('tries at most %i new ids', async (max) => {
+      PROVISION_BOOT_RETRIES.max = max;
+      const create = createAnswers(...Array.from({ length: max + 2 }, () => failedRecord));
+      await provisionWorkbench(WB);
+      expect(create).toHaveBeenCalledTimes(max + 1);
+      expect((await getWorkbench(WB))?.status).toBe('error');
+    });
+
+    it('records each move to a new id', async () => {
+      const recorded = vi.spyOn(runtime, 'recordWorkbenchEvent');
+      createAnswers(failedRecord, bootRefusal());
+      await provisionWorkbench(WB);
+      const moves = recorded.mock.calls.filter(([, action]) => action === 'sandbox_boot_failed');
+      expect(moves.map(([, , summary]) => summary)).toEqual([
+        `sandbox ${BOX} did not boot (${BOOT_ERROR}); creating ${runtime.sandboxIdFor(WB, 1)}`,
+        `sandbox ${runtime.sandboxIdFor(WB, 1)} did not boot (${BOOT_ERROR}); creating ${runtime.sandboxIdFor(WB, 2)}`,
+      ]);
+      expect(moves.every(([, , , ok]) => ok === false)).toBe(true);
+    });
+
+    it.each([
+      ['a 400 that is not a boot failure', new FleetHttpError('disk too large', 400, 'disk_too_large')],
+      ['a 409 that names a boot failure', new FleetHttpError(BOOT_ERROR, 409)],
+    ])('fails at once on %s', async (_name, err) => {
+      const create = createAnswers(err);
+      await provisionWorkbench(WB);
+      expect(create).toHaveBeenCalledTimes(1);
+      expect((await getWorkbench(WB))?.status).toBe('error');
+    });
+
+    it('stops without a failure write when the backend drains before the retry', async () => {
+      const create = createAnswers(failedRecord);
+      create.mockImplementationOnce(async (input) => {
+        beginWorkbenchDrain();
+        return { sandbox: { id: input.id, ...failedRecord } as FleetSandbox, host: 'host-1' };
+      });
+      await provisionWorkbench(WB);
+      expect(create).toHaveBeenCalledTimes(1);
+      expect((await getWorkbench(WB))?.status).toBe('provisioning');
+      expect(await failureEvents()).toEqual([]);
     });
   });
 

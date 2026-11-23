@@ -1,4 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { eq } from 'drizzle-orm';
+import { workspaces, workbenches, sessionMcpTokens } from '../db/schema.js';
+import { seedUser } from './helpers/testDb.js';
 import { createTestDb } from './helpers/testDb.js';
 
 describe('Drizzle migration', () => {
@@ -7,6 +12,32 @@ describe('Drizzle migration', () => {
   afterEach(async () => {
     await cleanup?.();
     cleanup = null;
+  });
+
+  it('backfills parent links and clears them when the parent is deleted', async () => {
+    const testDb = await createTestDb();
+    cleanup = testDb.cleanup;
+    await seedUser(testDb.db, { id: 'parent-owner' });
+    await testDb.db.insert(workspaces).values({ id: 'parent-ws', ownerId: 'parent-owner', name: 'Test' });
+    for (const id of ['parent', 'child', 'unrelated']) {
+      await testDb.db.insert(workbenches).values({
+        id, workspaceId: 'parent-ws', name: id, branch: id, baseBranch: 'main', repoFullName: 'acme/app', runtime: 'sandbox', agent: 'claude',
+      });
+    }
+    await testDb.db.insert(sessionMcpTokens).values({
+      id: 'child-token', workbenchId: 'child', ownerId: 'parent-owner', parentWorkbenchId: 'parent', tokenHash: 'hash', tokenCiphertext: {},
+    });
+    await testDb.pglite.exec('ALTER TABLE workbenches DROP COLUMN parent_workbench_id; ALTER TABLE workbenches DROP COLUMN notify_parent;');
+    const migration = readFileSync(path.resolve(__dirname, '../db/migrations/0145_session_parents.sql'), 'utf8');
+    for (const statement of migration.split('--> statement-breakpoint')) await testDb.pglite.exec(statement);
+    const rows = await testDb.db.select({ id: workbenches.id, parentId: workbenches.parentWorkbenchId, notify: workbenches.notifyParent }).from(workbenches);
+    expect(rows).toEqual(expect.arrayContaining([
+      { id: 'child', parentId: 'parent', notify: false }, { id: 'unrelated', parentId: null, notify: false },
+    ]));
+    const index = await testDb.pglite.query("SELECT indexname FROM pg_indexes WHERE indexname = 'idx_workbenches_parent'");
+    expect(index.rows).toHaveLength(1);
+    await testDb.db.delete(workbenches).where(eq(workbenches.id, 'parent'));
+    expect(await testDb.db.select({ parentId: workbenches.parentWorkbenchId }).from(workbenches).where(eq(workbenches.id, 'child'))).toEqual([{ parentId: null }]);
   });
 
   it('creates every expected table when applied to a fresh database', async () => {

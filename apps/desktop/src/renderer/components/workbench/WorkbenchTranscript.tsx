@@ -1,15 +1,20 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, History, Loader2, RotateCcw } from 'lucide-react';
-import { buildBlocks, findTurnPlan, isClaudeInterruptionEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchChat, type WorkbenchEvent, type WorkbenchQueuedMessage } from '@talyn/shared';
+import { agentOutageFrom, buildBlocks, findTurnPlan, findTurnQuestion, isClaudeInterruptionEvent, isSubagentEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type Workbench, type WorkbenchChat, type WorkbenchEvent, type WorkbenchMessageSender } from '@talyn/shared';
 import { AgentBlocks } from '../terminal/AgentConversation';
+import { usePendingMessages } from './usePendingMessages';
 import { renderMarkdownish } from '../../lib/markdown';
-import { chatTotals, compactCount, pendingMessageState, PENDING_MESSAGE_GRACE_MS, sendFailureText, splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
+import { chatTotals, compactCount, sendFailureText, splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { PlanCard, type PlanCardState } from './PlanCard';
+import { QuestionCard, type QuestionCardState } from './QuestionCard';
 import { MessageAttachments } from './MessageAttachments';
+import { TranscriptFindBar } from './TranscriptFindBar';
+import { TranscriptSelectionAction } from './TranscriptSelectionAction';
 import { RelativeTime } from '../RelativeTime';
 import { api } from '../../lib/api';
+import { useWorkspaceStore } from '../../stores/workspace';
 import { toast } from '../../stores/toast';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { useWorkbenchStore, type OutgoingWorkbenchMessage } from '../../stores/workbenches';
@@ -29,6 +34,7 @@ export function WorkbenchTranscript({
   emptyHint,
   older = NO_OLDER,
   canRetry = true,
+  workbench,
 }: {
   chat: WorkbenchChat;
   events: WorkbenchEvent[];
@@ -39,10 +45,13 @@ export function WorkbenchTranscript({
   /** Paging backwards: the transcript holds the newest events and loads older ones as it scrolls up. */
   older?: OlderHistory;
   canRetry?: boolean;
+  /** The session the chat belongs to. With it, selected text offers "New session from selection". */
+  workbench?: Workbench;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
-  const outgoing = usePendingMessages(chat, events, ops);
+  const { shown: outgoing } = usePendingMessages(chat, events, ops);
   const turns = useStableTurns(events);
   const firstSeq = events.length ? events[0].seq : null;
   const prevFirstSeqRef = useRef(firstSeq);
@@ -88,9 +97,12 @@ export function WorkbenchTranscript({
   const running = chat.status === 'running';
   const totals = useMemo(() => chatTotals(events), [events]);
   const plans = useMemo(() => turns.map((turn) => findTurnPlan(turn.events)), [turns]);
+  const questions = useMemo(() => turns.map((turn) => findTurnQuestion(turn.events)), [turns]);
 
   return (
-    <div className="flex h-full min-w-0 flex-col bg-background">
+    <div ref={containerRef} className="relative flex h-full min-w-0 flex-col bg-background">
+      <TranscriptFindBar workbenchId={chat.workbenchId} scrollRef={scrollRef} older={older} />
+      {workbench && <TranscriptSelectionAction workbench={workbench} scrollRef={scrollRef} containerRef={containerRef} />}
       <div
         ref={scrollRef}
         onScroll={onScroll}
@@ -118,6 +130,8 @@ export function WorkbenchTranscript({
               : turns[i + 1].userText === PLAN_APPROVED_MESSAGE
                 ? 'approved'
                 : 'past';
+            const question = questions[i];
+            const questionState: QuestionCardState = !last ? 'answered' : running || outgoing.length > 0 ? 'waiting' : 'open';
             return (
               <TurnView
                 key={`${chat.id}:${turn.turn}:${turn.userSeq ?? i}`}
@@ -127,12 +141,23 @@ export function WorkbenchTranscript({
                 live={last && running}
                 ops={ops}
                 retryResult={canRetry && !loading && !error && (chat.status === 'idle' || chat.status === 'error') && !chat.queuedMessages?.length && result?.kind === 'result' && result.isError && !turn.events.some((event) => event.type === 'result' && event.subtype === 'cancelled')
-                  ? { key: result.key, reason: result.summary.trim() || 'The agent stopped unexpectedly.' }
+                  ? { key: result.key, reason: result.summary.trim() || 'The agent stopped unexpectedly.', reconnect: result.reason === 'reauth' }
                   : undefined}
                 canRevert={!running && !ops.unavailable && turn.userText !== null}
                 plan={
                   plan ? (
                     <PlanCard plan={plan} state={planState} {...(last && planState === 'open' ? { chat, ops } : {})} />
+                  ) : null
+                }
+                question={
+                  question ? (
+                    <QuestionCard
+                      key={question.id}
+                      question={question}
+                      state={questionState}
+                      answeredBy={last ? null : turns[i + 1].sender}
+                      {...(questionState === 'open' ? { chat, ops } : {})}
+                    />
                   ) : null
                 }
               />
@@ -178,48 +203,6 @@ export interface OlderHistory {
 }
 
 const NO_OLDER: OlderHistory = { hasOlder: false, loading: false, error: null, load: () => undefined };
-const EMPTY_OUTGOING_MESSAGES: OutgoingWorkbenchMessage[] = [];
-const EMPTY_QUEUE: WorkbenchQueuedMessage[] = [];
-
-/**
- * The prompts the user sent that the transcript does not show yet. The
- * backend writes a prompt's event only when its turn starts, so a new
- * session's first message would otherwise vanish until the sandbox woke.
- * Prompts whose event arrived, or that will not run, are forgotten.
- */
-function usePendingMessages(chat: WorkbenchChat, events: WorkbenchEvent[], ops: WorkbenchOps): OutgoingWorkbenchMessage[] {
-  const outgoing = useWorkbenchStore((state) => state.outgoingMessages[chat.id] ?? EMPTY_OUTGOING_MESSAGES);
-  const localQueue = useWorkbenchStore((state) => state.localQueues[chat.id]);
-  const queued = (ops.runtime === 'local' ? localQueue : chat.queuedMessages) ?? EMPTY_QUEUE;
-  const running = chat.status === 'running';
-  const [now, setNow] = useState(() => Date.now());
-  const states = useMemo(
-    () => outgoing.map((message) => pendingMessageState(message, { events, queued, running, now })),
-    [outgoing, events, queued, running, now],
-  );
-
-  const done = outgoing.filter((_, i) => states[i] === 'done').map((message) => message.id).join('\n');
-  useEffect(() => {
-    if (done) useWorkbenchStore.getState().removeOutgoingMessages(chat.id, done.split('\n'));
-  }, [chat.id, done]);
-
-  // Look again when the grace of a sent message ends.
-  const expiry = running
-    ? null
-    : outgoing.reduce<number | null>((soonest, message, i) => {
-        if (states[i] !== 'show' || message.settledAt === undefined) return soonest;
-        const end = message.settledAt + PENDING_MESSAGE_GRACE_MS;
-        return soonest === null ? end : Math.min(soonest, end);
-      }, null);
-  useEffect(() => {
-    if (expiry === null) return undefined;
-    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, expiry - Date.now()) + 50);
-    return () => clearTimeout(timer);
-  }, [expiry]);
-
-  return useMemo(() => outgoing.filter((_, i) => states[i] === 'show'), [outgoing, states]);
-}
-
 /**
  * Under a message whose send failed: the reason, and Retry and Discard. The
  * message stays in the chat until one of them is used, so a short backend
@@ -233,8 +216,8 @@ function FailedMessageFooter({ chat, ops, message }: { chat: WorkbenchChat; ops:
     const { input } = failed;
     useWorkbenchStore.getState().resendOutgoingMessage(chat.id, message.id);
     try {
-      await ops.send(chat, input);
-      useWorkbenchStore.getState().settleOutgoingMessage(chat.id, message.id);
+      const res = await ops.send(chat, input);
+      useWorkbenchStore.getState().settleOutgoingMessage(chat.id, message.id, res.queued);
     } catch (err) {
       captureWorkbenchFailure('retry_message', err, chat.workbenchId);
       useWorkbenchStore.getState().failOutgoingMessage(chat.id, message.id, { error: sendFailureText(err), input });
@@ -298,6 +281,7 @@ function useStableTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
     const next = new Map<string, { size: number; last: number; turn: TranscriptTurn }>();
     let lastTurn: number | null = null;
     const displayEvents = events.map((entry) => {
+      if (isSubagentEvent(entry.event)) return entry;
       if (!isClaudeInterruptionEvent(entry.event)) {
         lastTurn = entry.turn;
         return entry;
@@ -312,13 +296,14 @@ function useStableTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
     });
     const out = splitTurns(displayEvents).map((turn, i) => {
       const key = `${turn.turn}:${turn.userSeq ?? i}`;
-      const last = turn.events.length ? turn.events[turn.events.length - 1].seq : -1;
+      const size = turn.events.length + (turn.subagentEvents?.length ?? 0);
+      const last = Math.max(turn.events.at(-1)?.seq ?? -1, turn.subagentEvents?.at(-1)?.seq ?? -1);
       const prev = cache.current.get(key);
       const kept =
-        prev && prev.size === turn.events.length && prev.last === last && prev.turn.userText === turn.userText && prev.turn.attachments.length === turn.attachments.length
+        prev && prev.size === size && prev.last === last && prev.turn.userText === turn.userText && prev.turn.attachments.length === turn.attachments.length && prev.turn.sender?.threadId === turn.sender?.threadId
           ? prev.turn
           : turn;
-      next.set(key, { size: turn.events.length, last, turn: kept });
+      next.set(key, { size, last, turn: kept });
       return kept;
     });
     cache.current = next;
@@ -360,6 +345,7 @@ const TurnView = React.memo(function TurnView({
   retryResult,
   canRevert,
   plan,
+  question,
 }: {
   chatId: string;
   chat: WorkbenchChat;
@@ -367,25 +353,28 @@ const TurnView = React.memo(function TurnView({
   /** The turn is still running, so its last event time keeps moving. */
   live: boolean;
   ops: WorkbenchOps;
-  retryResult?: { key: string; reason: string };
+  retryResult?: { key: string; reason: string; reconnect: boolean };
   canRevert: boolean;
   /** The turn's plan card, drawn after its blocks. */
   plan: React.ReactNode;
+  /** The turn's question card, drawn after its blocks. */
+  question: React.ReactNode;
 }) {
   return (
     <div className="space-y-3">
       {turn.userText !== null && (
-        <UserMessage chatId={chatId} turn={turn.turn} text={turn.userText} attachments={turn.attachments} ops={ops} canRevert={canRevert} at={turn.userAt} />
+        <UserMessage chatId={chatId} turn={turn.turn} text={turn.userText} attachments={turn.attachments} ops={ops} canRevert={canRevert} at={turn.userAt} sender={turn.sender} />
       )}
       {turn.events.length > 0 && (
         <AgentBlocks
-          events={turn.events}
+          events={turn.subagentEvents ? [...turn.events, ...turn.subagentEvents] : turn.events}
           scopeId={`${chatId}:${turn.turn}`}
           hideCompletedResults
-          retryResult={retryResult ? { key: retryResult.key, action: <RetryTurn chat={chat} ops={ops} reason={retryResult.reason} /> } : undefined}
+          retryResult={retryResult ? { key: retryResult.key, action: <RetryTurn chat={chat} ops={ops} reason={retryResult.reason} reconnect={retryResult.reconnect} /> } : undefined}
         />
       )}
       {plan}
+      {question}
       {!live && turn.events.length > 0 && turn.lastAt && (
         <RelativeTime iso={turn.lastAt} className="block text-[11px] text-muted-foreground" />
       )}
@@ -396,7 +385,8 @@ const TurnView = React.memo(function TurnView({
 /** The 30-minute wait for a sandbox ended. A plain retry would start another 30-minute wait. */
 export const SANDBOX_WAIT_BOUND_ERROR = /No sandbox became free in 30 minutes|The sandbox did not wake in 30 minutes/i;
 
-function RetryTurn({ chat, ops, reason }: { chat: WorkbenchChat; ops: WorkbenchOps; reason: string }) {
+function RetryTurn({ chat, ops, reason, reconnect }: { chat: WorkbenchChat; ops: WorkbenchOps; reason: string; reconnect: boolean }) {
+  const openSettings = useWorkspaceStore((s) => s.openSettings);
   const [sending, setSending] = useState(false);
   const send = async () => {
     if (sending) return;
@@ -411,7 +401,9 @@ function RetryTurn({ chat, ops, reason }: { chat: WorkbenchChat; ops: WorkbenchO
   };
   if (chat.resumeAt) return (
     <div className="mt-2 text-xs text-muted-foreground" data-attr="limit-resume">
-      <p>Waiting for usage. Resumes at {new Date(chat.resumeAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}.</p>
+      <p>{reconnect ? 'Waiting for the account to be signed in again. Checks again at'
+        : agentOutageFrom(chat.resumeReason) ? 'The model API is failing. The box is suspended until Talyn tries again at'
+          : 'Waiting for usage. Resumes at'} {new Date(chat.resumeAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}.</p>
       <button type="button" disabled={sending} onClick={() => void send()} className="mr-3 underline">Resume now</button>
       <button type="button" onClick={() => void api.workbenches.cancelResume(chat.id).catch(() => toast.error('Could not cancel the wait'))}
         className="underline">Cancel</button>
@@ -419,10 +411,13 @@ function RetryTurn({ chat, ops, reason }: { chat: WorkbenchChat; ops: WorkbenchO
   );
   if (SANDBOX_WAIT_BOUND_ERROR.test(reason)) return null;
   return (
-    <button type="button" data-attr="turn-retry" disabled={sending} onClick={() => void send()}
-      className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50">
-      {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />} Retry
-    </button>
+    <>
+      <button type="button" data-attr="turn-retry" disabled={sending} onClick={() => void send()}
+        className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50">
+        {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />} Retry
+      </button>
+      {reconnect && <button type="button" className="ml-2 text-xs underline" onClick={() => openSettings('integrations')}>Reconnect</button>}
+    </>
   );
 }
 
@@ -436,6 +431,7 @@ function UserMessage({
   at = null,
   sending = false,
   footer = null,
+  sender = null,
 }: {
   chatId: string;
   turn: number;
@@ -447,6 +443,8 @@ function UserMessage({
   at?: string | null;
   sending?: boolean;
   footer?: React.ReactNode;
+  /** The thread that wrote the message. */
+  sender?: WorkbenchMessageSender | null;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -467,6 +465,11 @@ function UserMessage({
   return (
     <div className="group flex justify-end">
       <div className="max-w-[85%] space-y-1">
+        {sender && (
+          <div className="text-right text-[11px] text-muted-foreground" data-attr="message-sender">
+            {sender.name ? `From thread ${sender.name}` : 'From the thread'}
+          </div>
+        )}
         <div className="rounded-lg bg-muted px-3 py-2 text-[13px] text-foreground [overflow-wrap:anywhere]">
           {renderMarkdownish(text, 'surface')}
           {attachments.length > 0 && <MessageAttachments attachments={attachments} ops={ops} />}

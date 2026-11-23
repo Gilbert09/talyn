@@ -10,7 +10,7 @@ import { ApiError, api } from './api';
 import { useNavigationStore } from '../stores/navigation';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { findSpace, useSpacesStore, type SpaceRef } from '../stores/spaces';
-import { useWorkspaceStore, type AppContext } from '../stores/workspace';
+import { contextsEqual, useWorkspaceStore, type AppContext } from '../stores/workspace';
 
 export function spacesOffered(features: Pick<Features, 'spaces'> | null | undefined): boolean {
   return features?.spaces === true;
@@ -37,11 +37,7 @@ export function contextEntries(workspaces: Workspace[], teams: SpacesTeam[] | nu
   ];
 }
 
-export function contextsEqual(a: AppContext, b: AppContext): boolean {
-  if (a.kind === 'personal' && b.kind === 'personal') return a.workspaceId === b.workspaceId;
-  if (a.kind === 'space' && b.kind === 'space') return a.spaceId === b.spaceId;
-  return false;
-}
+export { contextsEqual };
 
 export function switchContext(context: AppContext): void {
   const ws = useWorkspaceStore.getState();
@@ -49,8 +45,9 @@ export function switchContext(context: AppContext): void {
     ? ws.currentContext
     : { kind: 'personal', workspaceId: ws.currentWorkspaceId };
   if (contextsEqual(current, context)) return;
-  ws.setContext(context);
+  // Navigate first, so the history entry left behind keeps the old context.
   useNavigationStore.getState().navigate({ view: 'home' });
+  ws.setContext(context);
 }
 
 /**

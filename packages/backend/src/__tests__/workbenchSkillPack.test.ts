@@ -175,11 +175,15 @@ describe('session skill pack', () => {
       for (const tool of ['talyn_list_accounts', 'talyn_set_session_account', 'talyn_send_session_message']) expect(thread).toContain(tool);
       expect(thread).toContain('Do not wait and retry on the same account.');
       expect(TALYN_THREAD_NOTE).toContain('`talyn-thread`');
-      // Speed: the skill and the briefing give the same rules for waits, tests and a bigger box.
+      // Speed: the skill and the briefing give the same rules for waits, tests, background work and a bigger box.
       const speed = skillText('talyn-speed');
       for (const text of [speed, TALYN_BRIEFING]) {
         expect(text).toContain('talyn_resize_session');
-        expect(text).toContain('60 seconds or less');
+        expect(text).toContain('talyn_run_background');
+        expect(text).toContain('more than about 2 minutes');
+        expect(text).toContain('Claude Agent calls can use `run_in_background: true`.');
+        expect(text).toContain('turn stays open until');
+        expect(text).not.toMatch(/nohup <command>|sleep 45/);
         expect(text).toContain('cargo binstall');
         expect(text).toContain('Never `sleep` for minutes');
       }
@@ -193,7 +197,33 @@ describe('session skill pack', () => {
       expect(section).toContain('`talyn-speed`');
       expect(section).toContain('talyn_record_setup_step');
       expect(section).toContain('Never record secrets.');
-      expect(section.match(/\btalyn_[a-z0-9_]+\b/g)).toEqual(['talyn_resize_session', 'talyn_record_setup_step']);
+      expect(section.match(/\btalyn_[a-z0-9_]+\b/g)).toEqual(['talyn_run_background', 'talyn_resize_session', 'talyn_record_setup_step']);
+    });
+
+    it('the briefing sends long work to talyn_run_background, not the agent\'s own background tasks', () => {
+      const section = TALYN_BRIEFING.split('## Background work\n')[1]?.split('\n## ')[0] ?? '';
+      expect(section).not.toBe('');
+      expect(section).toContain('Then end your turn.');
+      for (const own of ['`run_in_background`', '`&`', '`nohup`']) expect(section).toContain(own);
+      const named = new Set(section.match(/\btalyn_[a-z0-9_]+\b/g));
+      expect(named).toEqual(new Set(['talyn_run_background', 'talyn_background_logs', 'talyn_list_background', 'talyn_create_session', 'talyn_list_thread_sessions', 'talyn_get_session_transcript']));
+      for (const tool of named) expect(toolsByName.has(tool)).toBe(true);
+      expect(toolsByName.get('talyn_run_background')!.description).toContain('more than about 2 minutes');
+    });
+
+    it('the briefing tells the agent to wait through Talyn, not its own tools', () => {
+      const section = TALYN_BRIEFING.split('## Waiting\n')[1]?.split('\n## ')[0] ?? '';
+      expect(section).not.toBe('');
+      expect(section).toContain('`until_ci: true`');
+      expect(section).toContain('`head_sha`');
+      expect(section).toContain('git rev-parse HEAD');
+      expect(section).toContain('end your turn');
+      expect(section).toContain('`delay_seconds`');
+      expect(section).toContain('`Monitor`');
+      expect(section).toContain('ToolSearch');
+      expect(new Set(section.match(/\btalyn_[a-z0-9_]+\b/g))).toEqual(new Set(['talyn_schedule_wakeup']));
+      const props = (toolsByName.get('talyn_schedule_wakeup')!.inputSchema as { properties: Record<string, unknown> }).properties;
+      for (const arg of ['until_ci', 'head_sha', 'delay_seconds']) expect(Object.keys(props)).toContain(arg);
     });
   });
 

@@ -23,6 +23,7 @@ import {
 import { readFailingChecks } from './failingChecks.js';
 import { getCloudProvider } from './cloudProviders/registry.js';
 import { fleetRefusalReason, workspaceMayUseFleet } from './cloudProviders/fleetAccess.js';
+import { withoutRetiredPostHogCode } from './posthogCodeRetirement.js';
 import { createCloudTask } from './taskCreate.js';
 import { findingsForMergeableRun } from './codeReview/promptFindings.js';
 import {
@@ -130,6 +131,10 @@ export async function resolveCloudEnv(workspaceId: string): Promise<ResolvedClou
  * is not on the fleet allow-list, and falling through is deliberate: a
  * workspace that cannot use the fleet should get its task run somewhere, not
  * fail.
+ *
+ * With the `posthogCodeRetired` flag on, PostHog Code is no longer a
+ * fall-back: it stays only as the workspace's chosen default or as its only
+ * connected provider.
  */
 export async function resolveCloudEnvChain(workspaceId: string): Promise<ResolvedCloudEnv[]> {
   const pinned = await defaultCloudProvider(workspaceId);
@@ -152,7 +157,7 @@ export async function resolveCloudEnvChain(workspaceId: string): Promise<Resolve
     const envId = await envIdForType(workspaceId, type);
     if (envId) chain.push({ envId, provider: type });
   }
-  return chain;
+  return withoutRetiredPostHogCode(workspaceId, chain, pinned);
 }
 
 /** Env-id-only convenience over {@link resolveCloudEnv}. */

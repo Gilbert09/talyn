@@ -1,6 +1,6 @@
 {
   "cli": {
-    "version": "27.5.0",
+    "version": ">= 27.5.0",
     "appVersionSource": "local",
     "requireCommit": true
   },
@@ -59,12 +59,16 @@
     "internal-beta": {
       "android": {
         "track": "internal",
-        "releaseStatus": "draft",
+        "releaseStatus": "completed",
         "changesNotSentForReview": true
       },
       "ios": {
-        "ascAppId": "$MOBILE_ASC_APP_ID",
-        "appleTeamId": "$MOBILE_APPLE_TEAM_ID"
+        "ascAppId": "6834161436",
+        "appleTeamId": "5KQY9SJDWG",
+        "groups": [
+          "Talyn internal",
+          "Talyn external"
+        ]
       }
     },
     "production": {
@@ -74,8 +78,12 @@
         "changesNotSentForReview": true
       },
       "ios": {
-        "ascAppId": "$MOBILE_ASC_APP_ID",
-        "appleTeamId": "$MOBILE_APPLE_TEAM_ID"
+        "ascAppId": "6834161436",
+        "appleTeamId": "5KQY9SJDWG",
+        "groups": [
+          "Talyn internal",
+          "Talyn external"
+        ]
       }
     }
   }

@@ -2,7 +2,7 @@ import { mobileNotificationMetrics } from './metrics.js';
 export { mobileNotificationMetrics, mobileNotificationMetricsSnapshot } from './metrics.js';
 import { randomUUID } from 'node:crypto';
 import { and, eq, gt, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
-import type { MobileNotificationPreferences } from '@talyn/shared';
+import type { MobileNotificationPreferencesInput } from '@talyn/shared';
 import { isMobileNotificationPayload } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import { mobileInstallations as installations, mobileNotificationOutbox as outbox,
@@ -12,11 +12,13 @@ import { notificationStillActionable, reconcileMobileNotificationEvents } from '
 import { destinationCurrentlyAccessible } from './store.js';
 import { ExpoPushProvider, mobileProviderAvailable, PushProviderError,
   type MobilePushProvider, type PushErrorClass, type PushMessage } from './provider.js';
+import { composeMobilePushText } from './text.js';
+import { deskPresence } from '../deskPresence.js';
 
 export const MAX_PUSH_ATTEMPTS = 6;
 export const MOBILE_INSTALLATION_MAX_AGE_MS = 30 * 86_400_000;
 export function retryDelayMs(attempt: number): number { return Math.min(3_600_000, 30_000 * 2 ** Math.max(0, attempt - 1)); }
-export function inMobileQuietHours(preference: MobileNotificationPreferences, now: Date): boolean {
+export function inMobileQuietHours(preference: MobileNotificationPreferencesInput, now: Date): boolean {
   if (!preference.quietHours.enabled) return false;
   const parts = new Intl.DateTimeFormat('en-GB', { timeZone: preference.timezone,
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now);
@@ -53,7 +55,25 @@ async function failed(row: OutboxRow, errorClass: PushErrorClass, now: Date): Pr
     notBefore: new Date(now.getTime() + retryDelayMs(row.attempts)) });
   mobileNotificationMetrics[permanent ? 'permanentFailure' : 'retry']++;
 }
-async function preflight(row: OutboxRow, now: Date): Promise<PushMessage | null> {
+/** One presence lookup per owner per dispatch, however many rows that owner has. */
+type DeskCache = Map<string, Promise<boolean>>;
+function atDesk(ownerId: string, cache: DeskCache): Promise<boolean> {
+  let answer = cache.get(ownerId);
+  if (!answer) {
+    // A presence store that cannot answer must not cost the person their push.
+    answer = deskPresence.inspect(ownerId).then((seen) => {
+      // One line per owner per dispatch pass, only when a push may go out: it says why the desk did not hold it.
+      if (!seen.atDesk) console.log(`[desk] push not held: user=${ownerId.slice(0, 8)} sockets=${seen.sockets} newestAgeMs=${seen.newestAgeMs ?? 'none'}`);
+      return seen.atDesk;
+    }, (err: unknown) => {
+      console.warn('[desk] presence lookup failed; sending the push:', err);
+      return false;
+    });
+    cache.set(ownerId, answer);
+  }
+  return answer;
+}
+async function preflight(row: OutboxRow, now: Date, desk: DeskCache): Promise<PushMessage | null> {
   const db = getPoolDbClient();
   const [device] = await db.select().from(installations).where(and(eq(installations.id, row.installationId),
     eq(installations.ownerId, row.ownerId), eq(installations.tokenFingerprint, row.tokenFingerprint), isNull(installations.disabledAt), gt(installations.lastSeenAt, new Date(now.getTime() - MOBILE_INSTALLATION_MAX_AGE_MS)))).limit(1);
@@ -65,6 +85,12 @@ async function preflight(row: OutboxRow, now: Date): Promise<PushMessage | null>
   if (!setting?.preferences.enabled || !setting.preferences.categories[row.category]) {
     await settle(row, { state: 'cancelled', lastErrorClass: 'preferences_disabled' }); return null;
   }
+  // Absent on rows saved before the field existed, which reads as on.
+  if (setting.preferences.onlyWhenAway !== false && await atDesk(row.ownerId, desk)) {
+    await settle(row, { state: 'cancelled', lastErrorClass: 'at_desk' });
+    mobileNotificationMetrics.atDesk++;
+    return null;
+  }
   if (inMobileQuietHours(setting.preferences, now)) {
     await settle(row, { state: 'pending', attempts: Math.max(0, row.attempts - 1), notBefore: new Date(now.getTime() + 900_000) }); return null;
   }
@@ -74,15 +100,17 @@ async function preflight(row: OutboxRow, now: Date): Promise<PushMessage | null>
   }
   const data = { schemaVersion: 1 as const, eventId: row.eventId, category: row.category, destination: row.destination };
   if (!isMobileNotificationPayload(data)) { await failed(row, 'permanent', now); return null; }
-  try { return { token: decryptString(device.tokenEnvelope), data, ttlSeconds: Math.max(1, Math.min(3600, Math.floor((row.expiresAt.getTime() - now.getTime()) / 1000))) }; }
+  const { title, body } = await composeMobilePushText(row.category, row.destination, db);
+  try { return { token: decryptString(device.tokenEnvelope), data, title, body, ttlSeconds: Math.max(1, Math.min(3600, Math.floor((row.expiresAt.getTime() - now.getTime()) / 1000))) }; }
   catch { await failed(row, 'permanent', now); return null; }
 }
 export async function dispatchMobileNotifications(provider: MobilePushProvider = new ExpoPushProvider(), now = new Date()): Promise<void> {
   if (!mobileProviderAvailable()) return;
   const claimed = await claimMobileNotifications(now);
   const ready: { row: OutboxRow; message: PushMessage }[] = [];
+  const desk: DeskCache = new Map();
   for (const row of claimed) {
-    const message = await preflight(row, now);
+    const message = await preflight(row, now, desk);
     if (message) ready.push({ row, message });
   }
   if (!ready.length) return;

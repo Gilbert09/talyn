@@ -1,9 +1,8 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { Archive, ChevronDown, ChevronRight, Copy, ExternalLink, Timer } from 'lucide-react';
-import { workbenchDisplayName, type Workbench } from '@talyn/shared';
+import { Archive, ChevronDown, ChevronRight, Columns2, Copy, ExternalLink, Timer } from 'lucide-react';
+import { splitViewOffered, workbenchDisplayName, type Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
-import { Button } from '../ui/button';
-import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
+import { SessionStarters } from './SessionStarters';
 import { openExternal } from '../../lib/openExternal';
 import { toast } from '../../stores/toast';
 import {
@@ -13,16 +12,19 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '../ui/context-menu';
+import { anyDialogOpen } from '../ui/dialog';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from '../workbench/archiveWorkbench';
 import { formatKeys } from '../../lib/shortcuts';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { isPrOnlyUnseen, useWorkbenchStore } from '../../stores/workbenches';
 import { useNavigationStore } from '../../stores/navigation';
 import { SessionStateIcon } from '../workbench/WorkbenchBadges';
+import { WorkbenchHoverCard } from '../workbench/SessionHoverCard';
 import { ThreadTag } from '../threads/ThreadChip';
 import { SlackSessionMark } from '../workbench/SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
-import { sessionPr, sessionState, type SessionState } from '../../lib/sessionState';
+import { sessionPr, sessionState, withServerAttention, type SessionState } from '../../lib/sessionState';
+import { useAttentionReason, useAttentionSessions } from '../../lib/contextRail';
 import {
   groupSidebarWorkbenches,
   isArchived,
@@ -39,37 +41,35 @@ import { spacesOffered } from '../../lib/spaces';
 import { moveToSpace } from '../spaces/MoveToSpace';
 import { isActiveBackground } from '../../lib/sessionBackground';
 import { useBackground, useSessionBackgroundStore } from '../../stores/sessionBackground';
+import { useSplitViewStore } from '../../stores/splitView';
+import { openInSplitView, sessionDragProps } from '../../lib/splitView';
 
 export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[] }) {
   const route = useNavigationStore((s) => s.route);
   const navigate = useNavigationStore((s) => s.navigate);
   const openId = route.view === 'workbench' ? route.id : null;
+  // In split view a row adds its session as a pane, and the rows in panes read as open.
+  const inSplit = route.view === 'split';
+  const splitPanes = useSplitViewStore((s) => s.panes);
+  const addPane = useSplitViewStore((s) => s.addPane);
   const sidebarOrder = useWorkspaceStore((s) => s.sidebarOrder);
   const rows = usePullRequestStore((s) => s.rows);
   const chats = useWorkbenchStore((s) => s.chats);
   const unread = useWorkbenchStore((s) => s.unread);
   const unseen = useWorkbenchStore((s) => s.unseen);
   const backgrounds = useSessionBackgroundStore((s) => s.byWorkbench);
+  const attention = useAttentionSessions();
   const live = useMemo(() => workbenches.filter((workbench) => !isArchived(workbench)), [workbenches]);
   const { activeIds, states } = useMemo(
-    () => sidebarSessionStates(live, { prRows: rows, chats, unread, unseen, backgrounds }),
-    [live, rows, chats, unread, unseen, backgrounds],
+    () => sidebarSessionStates(live, { prRows: rows, chats, unread, unseen, backgrounds, attention }),
+    [live, rows, chats, unread, unseen, backgrounds, attention],
   );
   const groups = useMemo(
     () => groupSidebarWorkbenches(live, activeIds, sidebarOrder === 'active_first'),
     [live, activeIds, sidebarOrder],
   );
 
-  if (groups.length === 0) {
-    return (
-      <div className="space-y-2 px-3 py-2 text-xs text-muted-foreground">
-        <p>No sessions yet.</p>
-        <Button variant="outline" size="sm" onClick={() => openNewWorkbench()}>
-          Start a session
-        </Button>
-      </div>
-    );
-  }
+  if (groups.length === 0) return <SessionStarters />;
 
   return (
     <div className="space-y-1" data-attr="sidebar-workbenches">
@@ -82,8 +82,8 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
             key={wb.id}
             workbench={wb}
             shortcut={shortcut}
-            selected={wb.id === openId}
-            onSelect={() => navigate({ view: 'workbench', id: wb.id })}
+            selected={inSplit ? splitPanes.includes(wb.id) : wb.id === openId}
+            onSelect={() => (inSplit ? addPane(wb.id, 'sidebar') : navigate({ view: 'workbench', id: wb.id }))}
           />
         )}
       />
@@ -210,7 +210,12 @@ export function WorkbenchRow({
   );
   const pullRequest = sessionPr(workbench, pr);
   const background = useBackground(workbench.id);
-  const state = sessionState(workbench, chats ?? [], unread, pullRequest, prOnlyUnseen, background);
+  const attention = useAttentionReason(workbench.id);
+  const state = withServerAttention(
+    sessionState(workbench, chats ?? [], unread, pullRequest, prOnlyUnseen, background),
+    attention,
+    pullRequest?.number,
+  );
   const isUnread = state.kind === 'needs_reply' || state.kind === 'pr_opened';
   const done = pullRequest?.state === 'merged' || pullRequest?.state === 'closed';
   const stats = workbench.uncommittedStats === undefined ? workbench.diffStat : workbench.uncommittedStats;
@@ -221,10 +226,11 @@ export function WorkbenchRow({
   const [archiving, setArchiving] = useState(false);
   const rename = useRenameSession(workbench);
   const spacesOn = useWorkspaceStore((s) => spacesOffered(s.features));
+  const splitOn = useWorkspaceStore((s) => splitViewOffered(s.features));
   const runningJob = background?.jobs.some((job) => job.status === 'running');
   const backgroundTitle = runningJob ? 'Background job running' : 'Wake-up scheduled';
   // The state icon already shows the job or wake-up when nothing more urgent wins.
-  const showBackgroundMark = isActiveBackground(background) && state.kind !== 'background_job' && state.kind !== 'wakeup';
+  const showBackgroundMark = isActiveBackground(background) && state.kind !== 'background_job' && state.kind !== 'wakeup' && state.kind !== 'waiting_ci';
 
   const copyBranch = () => {
     navigator.clipboard.writeText(workbench.branch).catch(() => toast.error('Could not copy to clipboard'));
@@ -243,12 +249,23 @@ export function WorkbenchRow({
   return (
     <>
       <ContextMenu>
+        <WorkbenchHoverCard
+          workbench={workbench}
+          state={state}
+          shortcut={shortcut ? formatKeys(`mod+alt+${shortcut}`) : null}
+        >
         <ContextMenuTrigger asChild>
           <div
             role="button"
             tabIndex={0}
-            onClick={() => {
-              if (!rename.editing) onSelect();
+            onClick={(event) => {
+              // ⌘- or Ctrl-click opens the session beside the others in split view.
+              if (splitOn && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                openInSplitView(workbench.id, 'sidebar_modifier_click');
+                return;
+              }
+              onSelect();
             }}
             onKeyDown={(event) => {
               if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
@@ -258,32 +275,27 @@ export function WorkbenchRow({
             }}
             data-attr="sidebar-workbench-row"
             aria-current={selected ? 'page' : undefined}
+            {...sessionDragProps(workbench.id, splitOn)}
             className={cn(
               'flex w-full items-center gap-2 rounded-md px-3 py-1 text-left text-[13px] transition-colors',
               selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60'
             )}
-            title={`${state.label}\n${workbenchDisplayName(workbench)} · ${workbench.branch}${shortcut ? ` (${formatKeys(`mod+alt+${shortcut}`)})` : ''}`}
           >
             <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
               <SessionStateIcon state={state} />
             </span>
-            {rename.editing ? rename.input : (
-              <span
-                className={cn(
-                  'min-w-[5rem] flex-1 truncate',
-                  isUnread ? 'font-semibold' : 'font-normal',
-                  done && !selected && 'opacity-60'
-                )}
-              >
-                {workbenchDisplayName(workbench)}
-              </span>
-            )}
+            <span
+              className={cn(
+                'min-w-[5rem] flex-1 truncate',
+                isUnread ? 'font-semibold' : 'font-normal',
+                done && !selected && 'opacity-60'
+              )}
+            >
+              {workbenchDisplayName(workbench)}
+            </span>
             {diff && !done && (
               // All or nothing: when the counts do not fit, they wrap to a hidden second line.
-              <span
-                className="flex h-4 min-w-0 shrink flex-wrap justify-end overflow-hidden font-mono text-[11px] leading-4 tabular-nums"
-                title={`+${diff.added} −${diff.removed}`}
-              >
+              <span className="flex h-4 min-w-0 shrink flex-wrap justify-end overflow-hidden font-mono text-[11px] leading-4 tabular-nums">
                 <span className="w-0" aria-hidden />
                 <span className="whitespace-nowrap">
                   <span className="text-success">+{compactCount(diff.added)}</span>{' '}
@@ -293,13 +305,24 @@ export function WorkbenchRow({
             )}
             <ThreadTag threadId={workbench.threadId} />
             <SlackSessionMark source={slackSourceOf(workbench)} />
-            {showBackgroundMark && <span title={backgroundTitle} aria-label={backgroundTitle}><Timer className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground', runningJob && 'text-emerald-500')} aria-hidden /></span>}
+            {showBackgroundMark && <span aria-label={backgroundTitle}><Timer className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground', runningJob && 'text-emerald-500')} aria-hidden /></span>}
             {trailing}
           </div>
         </ContextMenuTrigger>
-        <ContextMenuContent className="min-w-[10rem]">
+        </WorkbenchHoverCard>
+        <ContextMenuContent
+          className="min-w-[10rem]"
+          // A dialog opened from the menu keeps focus: the menu must not give it back to the row.
+          onCloseAutoFocus={(event) => { if (anyDialogOpen()) event.preventDefault(); }}
+        >
           <ContextMenuItem onSelect={onSelect}>Open</ContextMenuItem>
-          <ContextMenuItem onSelect={() => setTimeout(rename.start, 0)}>Rename</ContextMenuItem>
+          {splitOn && (
+            <ContextMenuItem data-attr="sidebar-open-in-split-view" onSelect={() => openInSplitView(workbench.id, 'sidebar_menu')}>
+              <Columns2 className="h-3.5 w-3.5" />
+              Open in split view
+            </ContextMenuItem>
+          )}
+          <ContextMenuItem onSelect={rename.openDialog}>Rename…</ContextMenuItem>
           {workbench.branch && (
             <ContextMenuItem onSelect={copyBranch}>
               <Copy className="h-3.5 w-3.5" />
@@ -343,6 +366,7 @@ export function WorkbenchRow({
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
+      {rename.dialog}
       <ArchiveWorkbenchDialog
         workbench={workbench}
         open={confirming}

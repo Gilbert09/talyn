@@ -19,6 +19,7 @@ export const PERIOD_COLUMNS = {
   usedWsec: usagePeriods.usedWsec,
   creditMicrosUsed: usagePeriods.creditMicrosUsed,
   uncoveredMicros: usagePeriods.uncoveredMicros,
+  resetUsedWsec: usagePeriods.resetUsedWsec,
   alert50At: usagePeriods.alert50At,
   alert80At: usagePeriods.alert80At,
   alert100At: usagePeriods.alert100At,

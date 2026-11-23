@@ -53,6 +53,8 @@ export function usageStatus(
     usedHours?: number;
     exhausted?: boolean;
     balanceMicros?: number;
+    /** The credit draw's start, as the backend sends it while the account draws on credit. */
+    drawStartMicros?: number;
     planSource?: BillingStatus['planSource'];
     /** Send Max prices. A Max holder always gets them. */
     maxOffered?: boolean;
@@ -86,6 +88,7 @@ export function usageStatus(
             balanceMicros: opts.balanceMicros ?? 0,
             expiringSoonMicros: 0,
             lots: [],
+            ...(opts.drawStartMicros !== undefined ? { drawStartMicros: opts.drawStartMicros } : {}),
           },
           autoTopup: {
             enabled: false,

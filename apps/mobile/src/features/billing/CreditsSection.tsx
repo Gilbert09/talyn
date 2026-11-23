@@ -1,5 +1,5 @@
 import { billing } from '@talyn/client/native';
-import { CREDIT_PACKS, CREDIT_PACK_IDS, formatUsd, type AutoTopupSettings, type BillingStatus, type CreditPackId } from '@talyn/shared';
+import { CREDIT_PACKS, CREDIT_PACK_IDS, formatCreditBalance, formatUsd, type AutoTopupSettings, type BillingStatus, type CreditPackId, type UsageResetOffer } from '@talyn/shared';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
@@ -8,7 +8,7 @@ import { errorMessage } from '../../lib/errors';
 import { radius, useTheme } from '../../theme/tokens';
 import { Fact } from '../more/Page';
 import type { PurchaseMode } from '../../config';
-import { creditLotLines, creditPackOptions, longDate, topupConfigFromDraft, topupDraftFrom, topupSummary, type TopupDraft } from './model';
+import { creditLotLines, creditPackOptions, longDate, topupConfigFromDraft, topupDraftFrom, topupSummary, usageResetCount, usageResetDetail, usageResetLabel, type TopupDraft } from './model';
 
 /** Balance, live lots and, when the app may sell, the three packs. Mirrors web `CreditsCard`. */
 export function CreditsSection({ status, mode, busyPack, disabled, onBuy }: {
@@ -19,7 +19,7 @@ export function CreditsSection({ status, mode, busyPack, disabled, onBuy }: {
   const lots = creditLotLines(status);
   const expiring = credits?.expiringSoonMicros ?? 0;
   return <Group title="Credits" footer="Credits pay for boxes after your included hours run out. They expire 12 months after you buy them.">
-    <Fact label="Balance" value={formatUsd(credits?.balanceMicros ?? 0)} divider={expiring > 0 || lots.length > 0 || mode === 'external'} />
+    <Fact label="Balance" value={formatCreditBalance(credits?.balanceMicros ?? 0)} divider={expiring > 0 || lots.length > 0 || mode === 'external'} />
     {expiring > 0 ? <Fact label="Expiring soon" tone="warning" value={`${formatUsd(expiring)} in the next 30 days`}
       divider={lots.length > 0 || mode === 'external'} /> : null}
     {lots.map((lot, index) => <Row key={lot.id} title={lot.amount} subtitle={lot.expires}
@@ -36,6 +36,17 @@ export function CreditsSection({ status, mode, busyPack, disabled, onBuy }: {
         </Pressable>)}
       </View>
     </View> : null}
+  </Group>;
+}
+
+/** Pay the plan price once to get this period's box-hours back. Shown only while the server offers it. */
+export function UsageResetSection({ offer, periodEnd, resets, busy, disabled, onReset }: {
+  offer: UsageResetOffer; periodEnd: string | null | undefined; resets: number | undefined; busy: boolean; disabled: boolean; onReset(): void;
+}) {
+  const count = usageResetCount(resets);
+  return <Group footer={usageResetDetail(offer, periodEnd)}>
+    <Row title={usageResetLabel(offer)} subtitle={count ?? undefined} divider={false} disabled={disabled}
+      trailing={busy ? <Spinner /> : undefined} chevron={!busy} onPress={onReset} accessibilityRole="button" />
   </Group>;
 }
 

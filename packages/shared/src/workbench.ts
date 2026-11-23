@@ -175,6 +175,8 @@ export interface Workbench {
   kind?: WorkbenchKind;
   /** The thread this session belongs to. Null for a thread and for a session outside a thread. */
   threadId?: string | null;
+  /** The session that started this session. */
+  parentId?: string | null;
   /** Null for a thread. */
   repositoryId: string | null;
   /** `owner/name`, denormalised so a list renders without a repository lookup. '' for a thread. */
@@ -265,8 +267,24 @@ export interface LoopSessionSource {
   runId: string;
 }
 
+/** A rule (a workflow) whose `start_session` action started a session. */
+export interface WorkflowSessionSource {
+  kind: 'workflow';
+  workflowId: string;
+  runId: string;
+  /**
+   * The rule's integration. `slack` means a Slack thread follows the session:
+   * the status reactions on the trigger message track it. Absent means GitHub.
+   */
+  integration?: 'github' | 'slack' | 'webhook' | 'linear' | 'github_issues' | 'posthog_inbox';
+}
+
 /** Where a session came from when the app composer did not start it. */
-export type WorkbenchSource = SlackSessionSource | LoopSessionSource | MemoryReviewSessionSource;
+export type WorkbenchSource =
+  | SlackSessionSource
+  | LoopSessionSource
+  | MemoryReviewSessionSource
+  | WorkflowSessionSource;
 
 /** The linked PR, narrowed to what the header's next-action button needs. */
 export interface WorkbenchPullRequestSummary {
@@ -276,6 +294,139 @@ export interface WorkbenchPullRequestSummary {
   mergeable: 'conflicting' | 'mergeable' | 'unknown';
   ciStatus: 'success' | 'failure' | 'pending' | 'none';
 }
+
+/** The image types a session upload accepts (`POST /workbenches/:id/attachments`). */
+export const WORKBENCH_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const;
+/** The video types a session upload accepts. The agent gets the file path, not the frames. */
+export const WORKBENCH_VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/webm'] as const;
+export const WORKBENCH_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+/**
+ * Larger than the image limit, but bounded: the backend holds the upload in
+ * memory and writes it into the sandbox in ~288 KB execs.
+ */
+export const WORKBENCH_MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+
+/** File extension → type, for the attachment types a session accepts. */
+export const WORKBENCH_ATTACHMENT_EXTENSIONS: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  mp4: 'video/mp4',
+  m4v: 'video/mp4',
+  mov: 'video/quicktime',
+  webm: 'video/webm',
+};
+
+/** Type → the extension a stored attachment gets, so its preview can be read back. */
+export const WORKBENCH_ATTACHMENT_FILE_EXTENSION: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+  'video/webm': 'webm',
+};
+
+/**
+ * `name` with an extension that agrees with `mimeType`. A name whose own
+ * extension already agrees keeps it, so `clip.m4v` stays `clip.m4v`.
+ */
+export function workbenchAttachmentFileName(name: string, mimeType: string): string {
+  const wanted = WORKBENCH_ATTACHMENT_FILE_EXTENSION[mimeType.toLowerCase()];
+  if (!wanted) return name;
+  const dot = name.lastIndexOf('.');
+  const own = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+  if (WORKBENCH_ATTACHMENT_EXTENSIONS[own] === mimeType.toLowerCase()) return name;
+  return `${dot > 0 ? name.slice(0, dot) : name}.${wanted}`;
+}
+
+/**
+ * The one type a text file goes up as. Clients upload every text file with it
+ * and keep the file's own name, so `notes.md` stays `notes.md`.
+ */
+export const WORKBENCH_TEXT_TYPE = 'text/plain';
+/** Small enough that a text file also fits inline in the new-session request. */
+export const WORKBENCH_MAX_TEXT_BYTES = 1024 * 1024;
+
+/** File extensions that the clients attach as text. */
+export const WORKBENCH_TEXT_EXTENSIONS: readonly string[] = [
+  'txt', 'text', 'md', 'markdown', 'mdx', 'rst', 'adoc', 'log', 'out', 'csv', 'tsv',
+  'json', 'jsonl', 'ndjson', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env', 'properties',
+  'xml', 'html', 'htm', 'css', 'scss', 'less', 'diff', 'patch', 'sql', 'graphql', 'gql', 'proto',
+  'js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'vue', 'svelte',
+  'py', 'rb', 'go', 'rs', 'java', 'kt', 'kts', 'swift', 'c', 'h', 'cc', 'cpp', 'hpp', 'cs', 'php',
+  'sh', 'bash', 'zsh', 'fish', 'ps1', 'lua', 'pl', 'r', 'scala', 'ex', 'exs', 'erl', 'hs', 'clj', 'dart',
+  'tf', 'hcl', 'gradle', 'dockerfile', 'makefile', 'gitignore', 'editorconfig', 'lock',
+];
+
+/** Declared types that are text, besides `text/*`. */
+const TEXT_APPLICATION_TYPES = [
+  'application/json', 'application/x-ndjson', 'application/xml', 'application/yaml', 'application/x-yaml',
+  'application/toml', 'application/sql', 'application/javascript', 'application/x-sh', 'application/x-httpd-php',
+];
+
+/**
+ * True when a picked file is a text file the session takes. The extension
+ * decides first, because systems label some code files with other types
+ * (`.ts` comes as `video/mp2t`).
+ */
+export function isWorkbenchTextFile(file: { name: string; type?: string | null }): boolean {
+  const name = file.name.toLowerCase();
+  const dot = name.lastIndexOf('.');
+  const extension = dot >= 0 ? name.slice(dot + 1) : name;
+  if (WORKBENCH_TEXT_EXTENSIONS.includes(extension)) return true;
+  const type = (file.type ?? '').split(';', 1)[0].trim().toLowerCase();
+  return type.startsWith('text/') || TEXT_APPLICATION_TYPES.includes(type);
+}
+
+/**
+ * True when the bytes are UTF-8 text: valid UTF-8 and no NUL byte. Written
+ * out by hand so that it runs the same in Node, browsers and React Native.
+ */
+export function isWorkbenchTextContent(bytes: Uint8Array): boolean {
+  let i = 0;
+  while (i < bytes.length) {
+    const byte = bytes[i];
+    if (byte === 0) return false;
+    if (byte < 0x80) {
+      i += 1;
+      continue;
+    }
+    let length: number;
+    let min: number;
+    if (byte >= 0xc2 && byte <= 0xdf) { length = 2; min = 0x80; }
+    else if (byte >= 0xe0 && byte <= 0xef) { length = 3; min = 0x800; }
+    else if (byte >= 0xf0 && byte <= 0xf4) { length = 4; min = 0x10000; }
+    else return false;
+    if (i + length > bytes.length) return false;
+    let code = byte & (0xff >> (length + 1));
+    for (let k = 1; k < length; k += 1) {
+      const next = bytes[i + k];
+      if ((next & 0xc0) !== 0x80) return false;
+      code = (code << 6) | (next & 0x3f);
+    }
+    if (code < min || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return false;
+    i += length;
+  }
+  return true;
+}
+
+export function isWorkbenchVideoType(mimeType: string): boolean {
+  return (WORKBENCH_VIDEO_TYPES as readonly string[]).includes(mimeType.toLowerCase());
+}
+
+/** The upload limit for one attachment of this type. */
+export function workbenchAttachmentMaxBytes(mimeType: string): number {
+  if (isWorkbenchVideoType(mimeType)) return WORKBENCH_MAX_VIDEO_BYTES;
+  return mimeType.toLowerCase() === WORKBENCH_TEXT_TYPE ? WORKBENCH_MAX_TEXT_BYTES : WORKBENCH_MAX_IMAGE_BYTES;
+}
+
+/** Added to the prompt when a video is attached: no agent can watch one directly. */
+export const WORKBENCH_VIDEO_PROMPT_NOTE =
+  'An agent cannot watch a video directly. To see a video, extract frames from it (for example with ffmpeg, when it is installed) and read them as images.';
 
 /** A file attached to a message. Exactly one of `dataBase64` / `path` is set. */
 export interface WorkbenchAttachment {
@@ -293,6 +444,13 @@ export interface WorkbenchAttachment {
  * A sandbox `exec` has no stdin, so there is no mid-turn steering: a message
  * sent during a turn is queued and drained, in order, when the turn ends.
  */
+/** An agent that wrote a message for the person: the session's thread. */
+export interface WorkbenchMessageSender {
+  kind: 'thread';
+  threadId: string;
+  name: string;
+}
+
 export interface WorkbenchQueuedMessage {
   id: string;
   text: string;
@@ -307,11 +465,18 @@ export interface WorkbenchQueuedMessage {
    */
   origin?: 'user' | 'talyn';
   /**
-   * Why Talyn wrote it: a wake-up, or a background job that exited. Set only
+   * Why Talyn wrote it: a wake-up, a background job that exited, or a pull
+   * request retry after a failure the agent can fix. Set only
    * with `origin: 'talyn'`. The transcript's user-message event carries it as
    * `talyn.trigger`, so the clients show the turn as a system row.
    */
   trigger?: WorkbenchMessageTrigger;
+  /**
+   * Set when the session's thread wrote the message with
+   * `talyn_send_session_message`, for example to answer a question. The
+   * transcript's user-message event carries it as `talyn.sender`.
+   */
+  sender?: WorkbenchMessageSender;
   queuedAt: string;
   /**
    * A teammate who prompted this session from a space, and pays for its turn
@@ -394,6 +559,20 @@ export interface WorkbenchEvent {
   /** When the backend stored the event (ISO 8601). Absent on older servers and on unsent local events. */
   createdAt?: string;
 }
+
+/** A session or thread whose transcript matches a search (`GET /workbenches/search`). */
+export interface WorkbenchTranscriptMatch {
+  workbench: Workbench;
+  chatId: string;
+  seq: number;
+  /** `user`: a message a person sent. `assistant`: the agent's text. */
+  role: 'user' | 'assistant';
+  /** The text around the first match, on one line. */
+  snippet: string;
+}
+
+/** The shortest search that `GET /workbenches/search` runs. A shorter one answers no matches. */
+export const TRANSCRIPT_SEARCH_MIN_LENGTH = 3;
 
 /** A hidden commit under `refs/talyn/checkpoints/<chatId>/<turn>`. See `workbenchGit.ts`. */
 export interface WorkbenchCheckpoint {
@@ -515,6 +694,8 @@ export interface CreateWorkbenchInput {
   repositoryId?: string;
   /** Put the new session in this thread (a thread of the same workspace). */
   threadId?: string;
+  parentId?: string;
+  notifyParent?: boolean;
   runtime: WorkbenchRuntimeKind;
   agent: WorkbenchAgent;
   internetAccess?: boolean;
@@ -594,6 +775,12 @@ export interface ConfirmWorkbenchBranchNameInput {
 export type ConfirmWorkbenchBranchNameResult =
   | { outcome: 'renamed'; workbench: Workbench }
   | { outcome: 'refused'; reason: 'name_taken' | 'row_changed' };
+
+/** POST /workbenches/archive: the sessions it archived, and each id it could not archive with the reason. */
+export interface ArchiveWorkbenchesResult {
+  archived: Workbench[];
+  failed: Array<{ id: string; error: string }>;
+}
 
 export interface UpdateWorkbenchInput {
   /** The local runtime reports a branch after checkout. */
@@ -1323,6 +1510,26 @@ export function nextWorkbenchAction(input: WorkbenchNextActionInput): WorkbenchN
   if (pr.mergeable === 'unknown' || pr.ciStatus === 'pending') return null;
   if (pr.ciStatus === 'success' || pr.ciStatus === 'none' || pr.ciStatus === undefined) return 'merge';
   return null;
+}
+
+/** A session's PR link can lag the PR by a poll. Same slack as the backend's `prClose.ts`. */
+const SESSION_OPENED_PR_SLACK_MS = 2 * 60_000;
+
+/**
+ * Whether a session header offers "Close pull request". Mirrors the backend's
+ * rule in `services/prClose.ts`: the PR is open, and the person opened it or
+ * this session opened it (the session started before the PR). A PR somebody
+ * else opened is never offered, because the backend refuses it.
+ */
+export function canCloseSessionPullRequest(
+  workbench: { createdAt: string },
+  pr: { state: string; authored?: boolean; summary?: { createdAt?: string } } | null | undefined
+): boolean {
+  if (!pr || pr.state !== 'open') return false;
+  if (pr.authored) return true;
+  const prCreated = Date.parse(pr.summary?.createdAt ?? '');
+  const started = Date.parse(workbench.createdAt);
+  return Number.isFinite(prCreated) && Number.isFinite(started) && started <= prCreated + SESSION_OPENED_PR_SLACK_MS;
 }
 
 // ============================================================================

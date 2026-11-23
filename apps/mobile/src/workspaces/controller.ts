@@ -44,7 +44,11 @@ export class WorkspaceController {
       const valid = choices.some((choice) => choice.id === selected) ? selected : null;
       if (selected && !valid) await this.write(() => this.preferences.removeItem(this.key(user)));
       if (generation !== this.generation) return;
-      this.publish({ status: 'ready', choices: choices.map(({ id, name }) => ({ id, name })), selected: valid });
+      // Most people have one workspace: choose it for them rather than show a chooser with one row.
+      const only = !valid && choices.length === 1 ? choices[0].id : null;
+      if (only) await this.write(() => this.preferences.setItem(this.key(user), only)).catch(() => { /* Chosen for this run; asked again next time. */ });
+      if (generation !== this.generation) return;
+      this.publish({ status: 'ready', choices: choices.map(({ id, name }) => ({ id, name })), selected: valid ?? only });
     } catch {
       if (generation === this.generation) this.publish({ status: 'error', choices: [], selected: null });
     }

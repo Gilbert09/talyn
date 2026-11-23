@@ -35,9 +35,9 @@
 
 import { Cron } from 'croner';
 import {
-  DEFAULT_FLEET_MODEL_ID,
   DEFAULT_POSTHOG_CODE_MODEL_ID,
   FLEET_MODELS,
+  defaultFleetModelForAgent,
   POSTHOG_CODE_MODELS,
   isStoredFleetModelId,
   isStoredPostHogCodeModelId,
@@ -63,10 +63,14 @@ export const LOOP_PROVIDER_LABELS: Record<LoopProvider, string> = {
   selfhosted: 'Talyn Fleet',
 };
 
-/** What each firing starts. Existing loops default to a cloud task. */
+/**
+ * What each firing starts. Every firing starts a session. `task` survives only
+ * on old run rows, from before automations stopped creating cloud tasks.
+ */
 export type LoopTarget = 'task' | 'session';
 
-export const LOOP_TARGETS = ['session', 'task'] as const;
+/** The targets a loop may be saved with. */
+export const LOOP_TARGETS = ['session'] as const;
 
 export const LOOP_TARGET_LABELS: Record<LoopTarget, string> = {
   session: 'Session',
@@ -208,7 +212,7 @@ export interface LoopDefinition {
   timezone: string;
   provider: LoopProvider;
   model: string;
-  /** Whether each firing starts a legacy cloud task or a reviewable session. */
+  /** Always `session`: each firing starts a reviewable session. */
   target: LoopTarget;
   concurrency: LoopConcurrency;
   /**
@@ -235,9 +239,9 @@ export interface LoopDefinition {
    * collapsing it into null would make that the one thing a loop could not ask
    * for. A list is exactly those.
    *
-   * A cloud task gets this selection at dispatch. Sessions inherit the
-   * workspace selection because their tools remain available for follow-up
-   * turns.
+   * Always null now. Every firing starts a session, and a session inherits
+   * the workspace selection because its tools stay available for follow-up
+   * turns. Only old loops that started cloud tasks used a selection.
    */
   mcpServerIds: string[] | null;
   /** Null only after the repository row was deleted; `repoFullName` survives. */
@@ -498,7 +502,7 @@ export function validateCron(expression: string, timezone = 'UTC'): CronCheck {
   if (fields === 6) {
     return {
       ok: false,
-      error: 'a loop schedule takes five fields (minute hour day month weekday) — seconds are not supported',
+      error: 'an automation schedule takes five fields (minute hour day month weekday). Seconds are not supported',
     };
   }
   if (fields !== 5) {
@@ -603,7 +607,7 @@ export function modelsForLoopProvider(
 }
 
 export function defaultModelForLoopProvider(provider: LoopProvider): string {
-  return provider === 'selfhosted' ? DEFAULT_FLEET_MODEL_ID : DEFAULT_POSTHOG_CODE_MODEL_ID;
+  return provider === 'selfhosted' ? defaultFleetModelForAgent('claude') : DEFAULT_POSTHOG_CODE_MODEL_ID;
 }
 
 /**
@@ -641,7 +645,7 @@ function validateProviderModel(provider: LoopProvider, model: string): void {
  * after a loop is saved.
  */
 export function validateLoop(raw: unknown): NormalizedLoop {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('loop must be an object');
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('automation must be an object');
   const l = raw as Record<string, unknown>;
 
   const name = typeof l.name === 'string' ? l.name.trim() : '';
@@ -655,7 +659,7 @@ export function validateLoop(raw: unknown): NormalizedLoop {
   }
 
   const prompt = typeof l.prompt === 'string' ? l.prompt.trim() : '';
-  if (!prompt) fail('a loop needs a prompt — it is the whole instruction the agent gets');
+  if (!prompt) fail('an automation needs a prompt. It is the whole instruction the agent gets');
 
   const timezone = typeof l.timezone === 'string' ? l.timezone.trim() : '';
   if (!timezone) fail('timezone must be an IANA zone name, such as Europe/London');
@@ -671,14 +675,20 @@ export function validateLoop(raw: unknown): NormalizedLoop {
   }
 
   const model = typeof l.model === 'string' ? l.model.trim() : '';
-  if (!model) fail('a loop needs a model');
+  if (!model) fail('an automation needs a model');
   validateProviderModel(provider, model);
 
-  const target = l.target === undefined ? 'task' : (l.target as LoopTarget);
-  if (!(LOOP_TARGETS as readonly string[]).includes(target)) {
-    fail('target must be task or session');
+  // A schedule starts sessions only. A cloud task is refused, not converted,
+  // so a caller that asks for one learns that it did not get one.
+  const target: LoopTarget = 'session';
+  if (l.target !== undefined && l.target !== 'session') {
+    fail(
+      l.target === 'task'
+        ? 'a schedule starts a session. Schedules cannot start cloud tasks'
+        : 'target must be session'
+    );
   }
-  if (target === 'session' && provider !== 'selfhosted') {
+  if (provider !== 'selfhosted') {
     fail('sessions run on Talyn Fleet — choose a Talyn Fleet agent');
   }
 
@@ -706,7 +716,7 @@ export function validateLoop(raw: unknown): NormalizedLoop {
   }
 
   const repositoryId = typeof l.repositoryId === 'string' ? l.repositoryId.trim() : '';
-  if (!repositoryId) fail('a loop must pick a repository — the agent has to have something to clone');
+  if (!repositoryId) fail('an automation must pick a repository. The agent needs a repository to clone');
 
   const repoFullName = typeof l.repoFullName === 'string' ? l.repoFullName.trim() : '';
   if (!/^[^/\s]+\/[^/\s]+$/.test(repoFullName)) {
@@ -763,9 +773,9 @@ export function emptyLoopInput(timezone = localTimezone()): LoopInput {
     prompt: '',
     cron: '0 9 * * *',
     timezone,
-    provider: 'posthog_code',
-    model: DEFAULT_POSTHOG_CODE_MODEL_ID,
-    target: 'task',
+    provider: 'selfhosted',
+    model: defaultFleetModelForAgent('claude'),
+    target: 'session',
     concurrency: DEFAULT_LOOP_CONCURRENCY,
     internetAccess: false,
     mcpServerIds: null,
@@ -803,6 +813,6 @@ export function loopInputProblem(input: LoopInput): string | null {
     validateLoop(input);
     return null;
   } catch (err) {
-    return err instanceof Error ? err.message : 'this loop is not valid';
+    return err instanceof Error ? err.message : 'this automation is not valid';
   }
 }

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Nav } from "@/components/layout/Nav";
 import { Footer } from "@/components/layout/Footer";
 import { Prose } from "@/components/ui/Prose";
+import { PageCta } from "@/components/layout/PageCta";
 import { JsonLd, articleSchema } from "@/components/seo/JsonLd";
 import { isBlogEnabled } from "@/lib/flags";
 import { listPosts, getPost, formatPostDate } from "@/lib/posts";
@@ -59,15 +60,29 @@ export default function BlogPostPage({ params }: Params) {
           ← All writing
         </a>
 
-        <h1 className="mt-4 font-display text-4xl font-semibold leading-tight tracking-tight text-ink">
+        <h1 className="mt-4 font-display text-4xl font-semibold leading-[1.1] tracking-tight text-ink [text-wrap:balance] sm:text-5xl">
           {post.title}
         </h1>
-        <p className="mt-2 text-sm text-ink-400">
-          <time dateTime={post.date}>{formatPostDate(post.date)}</time>
+        {/* The description doubles as the standfirst: one sentence that says
+            what the post argues, so a reader knows why to keep going. */}
+        <p className="mt-4 text-lg leading-relaxed text-ink-500 [text-wrap:pretty]">
+          {post.description}
+        </p>
+        <p className="mt-5 border-b border-line pb-6 text-sm text-ink-400">
+          {post.author} · <time dateTime={post.date}>{formatPostDate(post.date)}</time> ·{" "}
+          {post.readingMinutes} min read
           {post.draft && <span className="ml-2 text-clay-600">· draft</span>}
         </p>
 
-        <Prose as="article" className="mt-10" html={post.html} />
+        <Prose as="article" className="mt-8" html={post.html} />
+
+        <PageCta placement={`blog-${post.slug}`} />
+        <a
+          href="/blog"
+          className="mt-8 inline-block font-mono text-xs text-clay-600 transition-colors hover:text-clay"
+        >
+          ← More writing
+        </a>
       </main>
       <Footer />
       {/* A draft is `noindex` above; emitting schema for one would be telling

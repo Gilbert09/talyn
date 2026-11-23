@@ -113,7 +113,7 @@ function Section({
   );
 }
 
-function SessionRow({ session }: { session: Workbench }) {
+export function SessionRow({ session }: { session: Workbench }) {
   const navigate = useNavigationStore((s) => s.navigate);
   const chats = useWorkbenchStore((s) => s.chats[session.id]);
   const unread = useWorkbenchStore((s) => s.unread);

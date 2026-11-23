@@ -71,7 +71,9 @@ describe('leftPercent and formatLeftPercent', () => {
     [4.5, false, 95.5, '96% left'],
     [13.2, false, 86.8, '87% left'],
     [95.5, false, 4.5, '4.5% left'],
-    [99, false, 1, '1.0% left'],
+    [92, false, 8, '8% left'],
+    [90.04, false, 9.96, '10% left'],
+    [99, false, 1, '1% left'],
     [99.75, false, 0.25, 'Less than 1% left'],
     [100, false, 0, '0% left'],
     [120, false, 0, '0% left'],
@@ -83,8 +85,8 @@ describe('leftPercent and formatLeftPercent', () => {
 });
 
 describe('gaugeAction', () => {
-  const status = (tier: 'free' | 'pro' | 'max' | 'legacy_pro', usedHours: number, exhausted = false) =>
-    usageStatus(tier, { usedHours, exhausted }) as UsageBillingStatus;
+  const status = (tier: 'free' | 'pro' | 'max' | 'legacy_pro', usedHours: number, exhausted = false, balanceMicros = 0) =>
+    usageStatus(tier, { usedHours, exhausted, balanceMicros }) as UsageBillingStatus;
 
   it.each([
     ['free with hours left', status('free', 1), 'upgrade'],
@@ -101,6 +103,12 @@ describe('gaugeAction', () => {
     ['legacy with 20% left', status('legacy_pro', 40), 'upgrade'],
     ['legacy with 4% left', status('legacy_pro', 48), 'add_credits'],
     ['legacy exhausted', status('legacy_pro', 50, true), 'add_credits'],
+    ['pro with 4.5% left and credits', status('pro', 191, false, 100_000_000), null],
+    ['pro exhausted with credits', status('pro', 200, true, 100_000_000), null],
+    ['max exhausted with credits', status('max', 1000, true, 100_000_000), null],
+    ['legacy with 4% left and credits', status('legacy_pro', 48, false, 100_000_000), 'upgrade'],
+    ['legacy exhausted with credits', status('legacy_pro', 50, true, 100_000_000), 'upgrade'],
+    ['free exhausted with credits', status('free', 10, true, 100_000_000), 'upgrade'],
   ])('%s → %s', (_label, s, action) => {
     expect(gaugeAction(s)).toBe(action);
   });

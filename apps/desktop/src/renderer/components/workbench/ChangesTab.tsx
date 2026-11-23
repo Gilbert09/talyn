@@ -31,7 +31,7 @@ import { RECONNECTING_TEXT, readWithReconnect } from '../../lib/sandboxReconnect
 import { toast } from '../../stores/toast';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { Button } from '../ui/button';
-import { createChatTab } from './ChatTabs';
+import { createSessionChat } from './createSessionChat';
 import { StoredBanner } from './StoredBanner';
 
 /**
@@ -467,7 +467,7 @@ function CommentBar({
   const send = async () => {
     setSending(true);
     try {
-      const target = chat ?? (await createChatTab(workbench));
+      const target = chat ?? (await createSessionChat(workbench));
       if (!target) return;
       const res = await ops.send(target, { text: formatCommentsMessage(comments) });
       setComments([]);

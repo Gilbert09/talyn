@@ -55,7 +55,8 @@ export function useBillingLive(): void {
   useEffect(() => {
     const params = new URLSearchParams(search);
     if (params.get('checkout') !== 'success') return;
-    const kind = params.get('kind') === 'credits' ? 'credits' : 'plan';
+    const kindParam = params.get('kind');
+    const kind = kindParam === 'credits' || kindParam === 'reset' ? kindParam : 'plan';
     params.delete('checkout');
     params.delete('kind');
     const rest = params.toString();
@@ -63,7 +64,12 @@ export function useBillingLive(): void {
 
     const store = useBillingStore.getState();
     void store.refresh();
-    if (kind === 'credits') {
+    if (kind === 'reset') {
+      for (const delay of CREDIT_REFRESH_DELAYS_MS) {
+        window.setTimeout(() => void useBillingStore.getState().refresh(), delay);
+      }
+      toast.success('Usage reset', 'Your box-hours are back.');
+    } else if (kind === 'credits') {
       for (const delay of CREDIT_REFRESH_DELAYS_MS) {
         window.setTimeout(() => void useBillingStore.getState().refresh(), delay);
       }

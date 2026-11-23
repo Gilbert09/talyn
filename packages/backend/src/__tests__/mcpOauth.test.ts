@@ -129,16 +129,22 @@ describe('starting a sign-in', () => {
   };
 
   it.each([
-    ['http://localhost:5173', true, true, 'dcr'],
-    ['https://localhost:5173', true, true, 'dcr'],
-    ['http://localhost:5173', false, true, 'dcr'],
-    ['https://app.talyn.dev', true, true, 'cimd'],
-    ['https://app.talyn.dev', true, false, 'cimd'],
-    ['https://app.talyn.dev', false, true, 'dcr'],
-  ] as const)('selects registration for %s (metadata %s, registration %s)', async (origin, cimd, dcr, source) => {
+    ['http://localhost:5173', true, true, '', 'dcr'],
+    ['https://localhost:5173', true, true, '', 'dcr'],
+    ['http://localhost:5173', false, true, '', 'dcr'],
+    ['https://app.talyn.dev', true, true, '', 'cimd'],
+    ['https://app.talyn.dev', true, false, '', 'cimd'],
+    ['https://app.talyn.dev', false, true, '', 'dcr'],
+    // The static CIMD document registers no scopes, so a server that wants
+    // scopes gets a DCR client that names them (Expo: mcp:access).
+    ['https://app.talyn.dev', true, true, 'mcp:access', 'dcr'],
+    ['https://app.talyn.dev', true, true, 'read write', 'dcr'],
+    ['https://app.talyn.dev', true, false, 'mcp:access', 'cimd'],
+    ['https://app.talyn.dev', false, true, 'mcp:access', 'dcr'],
+  ] as const)('selects registration for %s (metadata %s, registration %s, scope "%s")', async (origin, cimd, dcr, scope, source) => {
     process.env.WEB_APP_URL = origin;
     vi.spyOn(discovery, 'discover').mockResolvedValue({
-      resource: { authorizationServers: ['https://auth.example.com'] },
+      resource: { authorizationServers: ['https://auth.example.com'], ...(scope ? { scope } : {}) },
       server: {
         issuer: 'https://auth.example.com',
         authorizationEndpoint: 'https://auth.example.com/authorize',
@@ -151,10 +157,13 @@ describe('starting a sign-in', () => {
     const started = await startMcpOAuth({ id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' }, null, new Date());
     expect(started.stored.clientSource).toBe(source);
     expect(new URL(started.authorizeUrl).searchParams.get('redirect_uri')).toBe(`${origin}/mcp/callback`);
+    expect(new URL(started.authorizeUrl).searchParams.get('scope')).toBe(scope || null);
     if (source === 'dcr') {
       expect(fetch).toHaveBeenCalledWith('https://auth.example.com/register', expect.objectContaining({
         body: expect.stringContaining(`${origin}/mcp/callback`),
       }));
+      const body = JSON.parse(vi.mocked(fetch).mock.calls[0]?.[1]?.body as string);
+      expect(body.scope).toBe(scope || undefined);
     } else {
       expect(fetch).not.toHaveBeenCalled();
     }
@@ -227,6 +236,51 @@ describe('starting a sign-in', () => {
     vi.stubGlobal('fetch', fetchSpy);
     await startMcpOAuth({ id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' }, stored, new Date());
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // A CIMD client stored by a sign-in that the server refused with
+  // invalid_scope must not be reused, or every retry fails the same way.
+  it.each([
+    [['mcp:access'], 'https://auth.example.com/register', true],
+    [[], 'https://auth.example.com/register', false],
+    [['mcp:access'], undefined, false],
+  ])('with scopes %j and registration %s, registers again: %s', async (scopes, registrationEndpoint, registers) => {
+    const discover = vi.spyOn(discovery, 'discover').mockResolvedValue({
+      resource: { authorizationServers: ['https://auth.example.com'], resource: 'https://mcp.example.com/mcp', scope: 'mcp:access' },
+      server: {
+        issuer: 'https://auth.example.com',
+        authorizationEndpoint: 'https://auth.example.com/authorize',
+        tokenEndpoint: 'https://auth.example.com/token',
+        clientIdMetadataDocumentSupported: true,
+        registrationEndpoint: 'https://auth.example.com/register',
+      },
+    });
+    stubFetch({ 'https://auth.example.com/register': { client_id: 'scoped-client' } });
+    const started = await startMcpOAuth(
+      { id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' },
+      { ...stored, scopes, ...(registrationEndpoint ? { registrationEndpoint } : {}) },
+      new Date()
+    );
+    expect(discover).toHaveBeenCalledTimes(registers ? 1 : 0);
+    expect(started.stored.clientSource).toBe(registers ? 'dcr' : 'cimd');
+    expect(new URL(started.authorizeUrl).searchParams.get('client_id'))
+      .toBe(registers ? 'scoped-client' : stored.clientId);
+  });
+  // The mobile app's return rides on the flow, so `/complete` can read it
+  // before the flow is cleared.
+  it.each([
+    ['talyn-mobile://', 'talyn-mobile://'],
+    [null, undefined],
+    [undefined, undefined],
+  ])('records the mobile return %s on the flow', async (mobileReturn, expected) => {
+    const started = await startMcpOAuth(
+      { id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' },
+      stored,
+      new Date(),
+      mobileReturn === undefined ? undefined : { mobileReturn }
+    );
+    expect(started.stored.flow?.mobileReturn).toBe(expected);
+    expect(started.stored.flow && 'mobileReturn' in started.stored.flow).toBe(expected !== undefined);
   });
 });
 

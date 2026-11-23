@@ -12,6 +12,21 @@ const profiles = {
 // The app starts every check itself (src/features/updates). Native code checks only to recover from a launch error.
 const CHECK_AUTOMATICALLY = 'ON_ERROR_RECOVERY';
 
+// PostHog error tracking symbol uploads: Hermes source maps for EAS updates and native builds, iOS dSYMs,
+// Android R8 mappings and NDK symbols. The project and host are public. The personal API key is a secret
+// (scopes `error tracking write` and `organization read`) and only ever comes from the environment.
+// With no key, every upload is skipped and the build or publish goes on.
+const POSTHOG_SYMBOL_UPLOADS = Object.freeze({ projectId: '459813', host: 'https://us.posthog.com', keyName: 'POSTHOG_CLI_API_KEY' });
+
+/** The `POSTHOG_CLI_*` values the PostHog CLI needs, or null when the key is not set. */
+function posthogUploadCredentials(env) {
+  const key = env[POSTHOG_SYMBOL_UPLOADS.keyName]?.trim();
+  if (!key) return null;
+  // A project key (phc_) cannot upload. Catch the paste early rather than as an opaque 401.
+  if (!/^phx_[A-Za-z0-9_-]+$/.test(key)) throw new Error(`${POSTHOG_SYMBOL_UPLOADS.keyName} must be a PostHog personal API key (phx_).`);
+  return { POSTHOG_CLI_API_KEY: key, POSTHOG_CLI_PROJECT_ID: POSTHOG_SYMBOL_UPLOADS.projectId, POSTHOG_CLI_HOST: POSTHOG_SYMBOL_UPLOADS.host };
+}
+
 function required(env, name) {
   const value = env[name];
   if (!value || value.trim() !== value) throw new Error(`Set ${name}.`);
@@ -28,7 +43,8 @@ function publicUrl(value, name) {
 }
 
 function readReleaseSettings(env, environment, projectId) {
-  const publicNames = ['EXPO_PUBLIC_API_ORIGIN', 'EXPO_PUBLIC_SUPABASE_URL', 'EXPO_PUBLIC_SUPABASE_KEY', 'EXPO_PUBLIC_AUTH_CALLBACK_URL', 'EXPO_PUBLIC_EAS_PROJECT_ID', 'EXPO_PUBLIC_PURCHASE_MODE'];
+  const publicNames = ['EXPO_PUBLIC_API_ORIGIN', 'EXPO_PUBLIC_SUPABASE_URL', 'EXPO_PUBLIC_SUPABASE_KEY', 'EXPO_PUBLIC_AUTH_CALLBACK_URL', 'EXPO_PUBLIC_EAS_PROJECT_ID', 'EXPO_PUBLIC_PURCHASE_MODE',
+    'EXPO_PUBLIC_TALYN_POSTHOG_KEY', 'EXPO_PUBLIC_TALYN_POSTHOG_HOST'];
   // Expo CLI sets this internal path before Metro reads the app configuration again.
   if (Object.keys(env).some((name) => name.startsWith('EXPO_PUBLIC_') && name !== 'EXPO_PUBLIC_PROJECT_ROOT' && !publicNames.includes(name))) throw new Error('Review unexpected public build variables.');
   const profile = env.EAS_BUILD_PROFILE ?? env.MOBILE_RELEASE_PROFILE ?? environment;
@@ -56,4 +72,4 @@ function readReleaseSettings(env, environment, projectId) {
   };
 }
 
-module.exports = { profiles, required, publicUrl, readReleaseSettings, CHECK_AUTOMATICALLY };
+module.exports = { profiles, required, publicUrl, readReleaseSettings, CHECK_AUTOMATICALLY, POSTHOG_SYMBOL_UPLOADS, posthogUploadCredentials };

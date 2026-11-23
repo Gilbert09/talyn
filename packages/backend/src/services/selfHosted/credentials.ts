@@ -115,6 +115,12 @@ interface SelfHostedIntegrationConfig {
     state: string;
     codeVerifierEnc: EncryptedEnvelope;
     expiresAt: string;
+    /** The account a reconnect writes to. */
+    accountId?: string;
+    /** Set when the sign-in adds a new account. */
+    newAccount?: boolean;
+    /** The name an older client chose before the sign-in. */
+    label?: string;
   };
   /** The workspace's own Claude credential — an OAuth token from a Claude
    *  subscription (`sk-ant-oat…`), or a Console API key (`sk-ant-api…`),
@@ -726,22 +732,26 @@ export async function storeSelfHostedCredentials(
  * "Reconnect" button, and dropping it from the list would tell the user they
  * never set it up.
  */
-export async function fleetAgentStatus(
-  workspaceId: string,
-): Promise<{ connectedAgents: ('claude' | 'codex')[]; reauthAgents: ('claude' | 'codex')[] }> {
+export interface FleetAgentStatus {
+  connectedAgents: ('claude' | 'codex')[];
+  reauthAgents: ('claude' | 'codex')[];
+  reauthAccounts?: { id: string; label: string; agent: 'claude' | 'codex' }[];
+}
+
+export async function fleetAgentStatus(workspaceId: string): Promise<FleetAgentStatus> {
   const accounts = await listFleetAccounts(workspaceId);
   const connectedAgents: ('claude' | 'codex')[] = [];
   const reauthAgents: ('claude' | 'codex')[] = [];
+  const reauthAccounts = accounts.filter((a) => a.reauthRequiredAt).map(({ id, label, agent }) => ({ id, label, agent }));
   for (const agent of Object.keys(FLEET_ACCOUNT_KINDS) as ('claude' | 'codex')[]) {
     const own = accounts.filter((a) => a.agent === agent);
     if (own.length === 0) continue;
     connectedAgents.push(agent);
-    // Only when EVERY account needs it. A workspace with one account still able
-    // to run has nothing it must do, so asking it to sign in again would be
-    // asking for something it does not need.
+    // Only when EVERY account needs it: this list refuses work. `reauthAccounts`
+    // names each account that needs sign-in, for the reconnect notice.
     if (own.every((a) => a.reauthRequiredAt)) reauthAgents.push(agent);
   }
-  return { connectedAgents, reauthAgents };
+  return { connectedAgents, reauthAgents, ...(reauthAccounts.length ? { reauthAccounts } : {}) };
 }
 
 /** Remove a workspace's fleet credentials: every account and the integration row. */

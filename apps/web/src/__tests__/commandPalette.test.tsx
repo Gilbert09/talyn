@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vite
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { Features, SpaceSessionRow, SpacesTeam, Workbench, WorkbenchChat } from '@talyn/shared';
+import type { Features, SpaceSessionRow, SpacesTeam, Workbench, WorkbenchChat, WorkbenchTranscriptMatch } from '@talyn/shared';
 import { api } from '../lib/api';
 import { CommandPalette } from '../components/CommandPalette';
 import { buildAppShortcuts, orderedLiveWorkbenches, orderedSidebarSessionIds } from '../components/layout/appShortcuts';
@@ -11,9 +11,17 @@ import { useWorkspaceStore } from '../stores/workspace';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useNavigationStore } from '../stores/navigation';
 import { useSpacesStore } from '../stores/spaces';
+import { OPEN_TRANSCRIPT_FIND_EVENT, takePendingTranscriptFind, type OpenTranscriptFindDetail } from '../lib/transcriptFind';
 
 vi.mock('../lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
-vi.mock('../lib/api', () => ({ api: { workbenches: { list: vi.fn(), restore: vi.fn(), get: vi.fn() }, pullRequests: {} } }));
+vi.mock('../lib/api', () => ({
+  api: {
+    workbenches: { list: vi.fn(), restore: vi.fn(), get: vi.fn(), searchTranscripts: vi.fn() },
+    workflows: { list: vi.fn(() => Promise.resolve([])) },
+    loops: { list: vi.fn(() => Promise.resolve([])) },
+    pullRequests: {},
+  },
+}));
 
 function wb(id: string, over: Partial<Workbench> = {}): Workbench {
   return {
@@ -41,6 +49,19 @@ function wb(id: string, over: Partial<Workbench> = {}): Workbench {
   } as Workbench;
 }
 
+/** The palette rows in screen order, by their id. */
+function rowIds(): string[] {
+  return screen.queryAllByRole('option').map((option) => option.getAttribute('data-value') ?? '');
+}
+
+function rowsOfKind(kind: string): HTMLElement[] {
+  return screen.queryAllByRole('option').filter((option) => option.querySelector('[data-palette-kind]')?.textContent === kind);
+}
+
+function search(term: string): void {
+  fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: term } });
+}
+
 beforeAll(() => {
   (global as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
     observe() {}
@@ -54,6 +75,7 @@ let unregister: () => void = () => {};
 
 beforeEach(() => {
   vi.mocked(api.workbenches.list).mockReset().mockResolvedValue([]);
+  vi.mocked(api.workbenches.searchTranscripts).mockReset().mockResolvedValue([]);
   vi.mocked(api.workbenches.restore).mockReset();
   useWorkspaceStore.setState({
     currentWorkspaceId: 'ws1',
@@ -143,8 +165,7 @@ describe('CommandPalette', () => {
     const input = screen.getByPlaceholderText(/Search sessions/);
     for (const term of ['report', 'fix/hidden', 'hidden/service']) {
       fireEvent.change(input, { target: { value: term } });
-      const group = await screen.findByText('Archived');
-      expect(within(group.closest('[cmdk-group]') as HTMLElement).getAllByRole('option')).toHaveLength(1);
+      await waitFor(() => expect(rowsOfKind('Archived')).toHaveLength(1));
     }
     expect(vi.mocked(api.workbenches.list)).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('other')).not.toBeInTheDocument();
@@ -156,8 +177,7 @@ describe('CommandPalette', () => {
     ));
     render(<CommandPalette />);
     fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'past-' } });
-    const group = await screen.findByText('Archived');
-    expect(within(group.closest('[cmdk-group]') as HTMLElement).getAllByRole('option')).toHaveLength(8);
+    await waitFor(() => expect(rowsOfKind('Archived')).toHaveLength(8));
   });
 
   it('opens an archived session without restoring it', async () => {
@@ -178,7 +198,7 @@ describe('CommandPalette', () => {
     render(<CommandPalette />);
     fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'gone' } });
     await waitFor(() => expect(vi.mocked(api.workbenches.list)).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText('Archived')).not.toBeInTheDocument();
+    expect(rowsOfKind('Archived')).toHaveLength(0);
     expect(screen.getByPlaceholderText(/Search sessions/)).toBeInTheDocument();
   });
 
@@ -203,8 +223,8 @@ describe('CommandPalette', () => {
     expect(screen.getByText('Review requests')).toBeInTheDocument();
     expect(screen.getByText('Merge queue')).toBeInTheDocument();
     expect(screen.getByText('Pull requests: Code review')).toBeInTheDocument();
-    expect(screen.getByText('Automations: Workflows')).toBeInTheDocument();
-    expect(screen.queryByText('Automations: Loops')).not.toBeInTheDocument();
+    expect(screen.getByText('Integrations: GitHub')).toBeInTheDocument();
+    expect(screen.queryByText('Integrations: Schedule')).not.toBeInTheDocument();
     expect(screen.getByText('Settings: Billing')).toBeInTheDocument();
   });
 
@@ -274,6 +294,162 @@ it('shows arrow navigation and keeps bracket aliases hidden', () => {
   ]);
 });
 
+describe('CommandPalette transcript search', () => {
+  const match = (workbench: Workbench, snippet: string): WorkbenchTranscriptMatch => ({
+    workbench, chatId: `chat-${workbench.id}`, seq: 4, role: 'user', snippet,
+  });
+
+  afterEach(() => {
+    takePendingTranscriptFind('deps');
+  });
+
+  it.each(['', 'py', '  py  '])('does not search transcripts for %j', async (term) => {
+    render(<CommandPalette />);
+    search(term);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(vi.mocked(api.workbenches.searchTranscripts)).not.toHaveBeenCalled();
+  });
+
+  it('searches once after typing stops and lists the matches with their snippet', async () => {
+    vi.mocked(api.workbenches.searchTranscripts).mockResolvedValue([
+      match(wb('deps', { name: 'Upgrade dependencies' }), 'Please upgrade pyarrow to 17'),
+    ]);
+    render(<CommandPalette />);
+    search('pya');
+    search('pyar');
+    search('pyarrow');
+    expect(screen.getByText('Searching transcripts…')).toBeInTheDocument();
+    await waitFor(() => expect(rowsOfKind('Transcript')).toHaveLength(1));
+    expect(vi.mocked(api.workbenches.searchTranscripts).mock.calls).toEqual([['ws1', 'pyarrow']]);
+    const row = rowsOfKind('Transcript')[0];
+    expect(within(row).getByText('Upgrade dependencies')).toBeInTheDocument();
+    expect(within(row).getByText('Please upgrade pyarrow to 17')).toBeInTheDocument();
+  });
+
+  it('opens a match, keeps an archived one archived, and finds the search in its transcript', async () => {
+    const archived = wb('deps', { name: 'Upgrade dependencies', status: 'archived', archivedAt: '2026-10-13T01:00:00Z' });
+    vi.mocked(api.workbenches.searchTranscripts).mockResolvedValue([match(archived, 'upgrade pyarrow to 17')]);
+    const requests: OpenTranscriptFindDetail[] = [];
+    const listener = (e: Event) => requests.push((e as CustomEvent<OpenTranscriptFindDetail>).detail);
+    window.addEventListener(OPEN_TRANSCRIPT_FIND_EVENT, listener);
+    try {
+      render(<CommandPalette />);
+      search('pyarrow upgrade');
+      await waitFor(() => expect(rowsOfKind('Transcript')).toHaveLength(1));
+      fireEvent.click(rowsOfKind('Transcript')[0]);
+    } finally {
+      window.removeEventListener(OPEN_TRANSCRIPT_FIND_EVENT, listener);
+    }
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'deps' });
+    expect(useNavigationStore.getState().paletteOpen).toBe(false);
+    expect(useWorkbenchStore.getState().workbenches.deps).toBeDefined();
+    expect(vi.mocked(api.workbenches.restore)).not.toHaveBeenCalled();
+    expect(requests).toEqual([{ workbenchId: 'deps', query: 'pyarrow' }]);
+    expect(takePendingTranscriptFind('deps')).toBe('pyarrow');
+  });
+
+  it('lists a session once when its name matches too', async () => {
+    vi.mocked(api.workbenches.searchTranscripts).mockResolvedValue([
+      match(wb('oslo'), 'oslo again'),
+      match(wb('deps', { name: 'Upgrade dependencies' }), 'oslo is mentioned'),
+    ]);
+    render(<CommandPalette />);
+    search('oslo');
+    await waitFor(() => expect(rowsOfKind('Transcript')).toHaveLength(1));
+    expect(rowIds()).toEqual(['session:oslo', 'transcript:deps']);
+  });
+
+  it('shows no transcript rows when the search fails', async () => {
+    vi.mocked(api.workbenches.searchTranscripts).mockRejectedValue(new Error('offline'));
+    render(<CommandPalette />);
+    search('pyarrow');
+    await waitFor(() => expect(screen.getByText('Nothing matches.')).toBeInTheDocument());
+    expect(rowsOfKind('Transcript')).toHaveLength(0);
+  });
+
+  it('does not search when sessions are not offered', async () => {
+    useWorkspaceStore.setState({ features: { workbenches: false } as Features });
+    render(<CommandPalette />);
+    search('pyarrow');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(vi.mocked(api.workbenches.searchTranscripts)).not.toHaveBeenCalled();
+  });
+});
+
+describe('CommandPalette search ranking', () => {
+  it('puts the best match first, whatever its type', () => {
+    useWorkbenchStore.getState().setWorkbenches('ws1', [wb('chart', { branch: 'feat/insights-chart' })]);
+    render(<CommandPalette />);
+    search('insights');
+    expect(rowIds()).toEqual(['go:insights', 'session:chart']);
+    expect(document.querySelectorAll('[cmdk-group-heading]')).toHaveLength(0);
+    expect(rowsOfKind('Navigate')).toHaveLength(1);
+    expect(rowsOfKind('Session')).toHaveLength(1);
+  });
+
+  it('ranks an exact label, then a prefix, a word, a substring, a keyword and a fuzzy match', () => {
+    useWorkbenchStore.getState().setWorkbenches('ws1', [
+      wb('fuzzy', { name: 'o-s-l-o', updatedAt: '2026-10-13T06:00:00Z' }),
+      wb('keyword', { name: 'keyword', repoFullName: 'acme/oslo', updatedAt: '2026-10-13T05:00:00Z' }),
+      wb('substring', { name: 'gosloop', updatedAt: '2026-10-13T04:00:00Z' }),
+      wb('word', { name: 'trip to oslo', updatedAt: '2026-10-13T03:00:00Z' }),
+      wb('prefix', { name: 'oslo trip', updatedAt: '2026-10-13T02:00:00Z' }),
+      wb('exact', { name: 'Oslo', updatedAt: '2026-10-13T01:00:00Z' }),
+    ]);
+    render(<CommandPalette />);
+    search('oslo');
+    expect(rowIds()).toEqual([
+      'session:exact',
+      'session:prefix',
+      'session:word',
+      'session:substring',
+      'session:keyword',
+      'session:fuzzy',
+    ]);
+  });
+
+  it('selects the best match, so Enter opens it', () => {
+    useWorkbenchStore.getState().setWorkbenches('ws1', [wb('lisbon', { branch: 'fix/billing' })]);
+    render(<CommandPalette />);
+    search('billing');
+    expect(rowIds()).toEqual(['go:settings:billing', 'session:lisbon']);
+    expect(screen.getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(screen.getByPlaceholderText(/Search sessions/), { key: 'Enter' });
+    expect(useNavigationStore.getState().route).toEqual({ view: 'settings', section: 'billing' });
+  });
+
+  it('matches words in any order', () => {
+    render(<CommandPalette />);
+    search('billing settings');
+    expect(rowIds()[0]).toBe('go:settings:billing');
+  });
+
+  it('shows the groups again when the search is cleared', () => {
+    render(<CommandPalette />);
+    search('oslo');
+    expect(document.querySelectorAll('[cmdk-group-heading]')).toHaveLength(0);
+    search('');
+    expect(screen.getByText('Sessions')).toBeInTheDocument();
+    expect(screen.getByText('Navigate')).toBeInTheDocument();
+    expect(rowsOfKind('Session')).toHaveLength(0);
+  });
+
+  it('says so when nothing matches, after the transcript search', async () => {
+    render(<CommandPalette />);
+    search('zzzzqqq');
+    expect(rowIds()).toEqual([]);
+    expect(screen.getByText('Searching transcripts…')).toBeInTheDocument();
+    expect(await screen.findByText('Nothing matches.')).toBeInTheDocument();
+  });
+
+  it('says so at once for a search too short for transcripts', () => {
+    render(<CommandPalette />);
+    search('zq');
+    expect(rowIds()).toEqual([]);
+    expect(screen.getByText('Nothing matches.')).toBeInTheDocument();
+  });
+});
+
 describe('go-to shortcuts', () => {
   const opts = { menuOwnsChords: false, mac: true };
   let clock = 0;
@@ -303,7 +479,7 @@ describe('go-to shortcuts', () => {
     ['c', { view: 'prs', tab: 'code_reviews' }],
     ['m', { view: 'prs', tab: 'merge_queue' }],
     ['t', { view: 'prs', tab: 'queue' }],
-    ['a', { view: 'automations', tab: 'workflows' }],
+    ['n', { view: 'integrations' }],
     ['i', { view: 'insights' }],
     ['y', { view: 'history' }],
   ])('G then %s opens %p', (letter, expected) => {
@@ -327,26 +503,10 @@ describe('go-to shortcuts', () => {
     expect(route()).toEqual({ view: 'settings', section: 'shortcuts' });
   });
 
-  it.each([
-    ['l', 'Loops is off', { workbenches: true, workflows: true }],
-    ['a', 'no automation is offered', { workbenches: true }],
-    ['y', 'sessions are off', {}],
-  ])('G then %s does nothing when %s', (letter, _label, features) => {
+  it.each([['y', 'sessions are off', {}]])('G then %s does nothing when %s', (letter, _label, features) => {
     useWorkspaceStore.setState({ features: features as Features });
     expect(go(letter)).toBe(false);
     expect(route()).toEqual({ view: 'home' });
-  });
-
-  it('G then L opens Loops when Loops is on', () => {
-    useWorkspaceStore.setState({ features: { workbenches: true, loops: true } as Features });
-    expect(go('l')).toBe(true);
-    expect(route()).toEqual({ view: 'automations', tab: 'loops' });
-  });
-
-  it('G then A opens the first automation offered', () => {
-    useWorkspaceStore.setState({ features: { workbenches: true, loops: true } as Features });
-    expect(go('a')).toBe(true);
-    expect(route()).toEqual({ view: 'automations', tab: 'loops' });
   });
 
   it('the palette shows the keys on its Navigate rows', () => {
@@ -404,6 +564,72 @@ describe('Tab focuses the chat input', () => {
     const e = tab({ shiftKey: true });
     expect(dispatchKeydown(e, opts)).toBe(false);
     expect(onFocus).not.toHaveBeenCalled();
+  });
+});
+
+describe('/ focuses the chat input', () => {
+  const opts = { menuOwnsChords: false, mac: true };
+  let composer: HTMLTextAreaElement;
+  const onFocus = vi.fn();
+
+  beforeEach(() => {
+    useNavigationStore.setState({ paletteOpen: false });
+    composer = document.createElement('textarea');
+    composer.setAttribute('data-session-composer', '');
+    document.body.appendChild(composer);
+    onFocus.mockReset();
+    window.addEventListener(FOCUS_COMPOSER_EVENT, onFocus);
+  });
+
+  afterEach(() => {
+    window.removeEventListener(FOCUS_COMPOSER_EVENT, onFocus);
+    composer.remove();
+  });
+
+  function slash(target?: HTMLElement): KeyboardEvent {
+    const e = new KeyboardEvent('keydown', { key: '/', code: 'Slash', bubbles: true, cancelable: true });
+    target?.dispatchEvent(e);
+    return e;
+  }
+
+  it('in a session, asks the composer for focus and does not type the slash', () => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' }));
+    const e = slash();
+    expect(dispatchKeydown(e, opts)).toBe(true);
+    expect(e.defaultPrevented).toBe(true);
+    expect(onFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it('outside a session, / does not focus the composer', () => {
+    const e = slash();
+    expect(dispatchKeydown(e, opts)).toBe(false);
+    expect(onFocus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the composer', () => composer],
+    ['another field', () => document.body.appendChild(document.createElement('input'))],
+  ])('typing in %s keeps the slash', (_name, target) => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' }));
+    const el = target();
+    el.focus();
+    const e = slash(el);
+    expect(dispatchKeydown(e, opts)).toBe(false);
+    expect(e.defaultPrevented).toBe(false);
+    expect(onFocus).not.toHaveBeenCalled();
+    if (el !== composer) el.remove();
+  });
+
+  it('an open dialog keeps the slash', () => {
+    act(() => useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' }));
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('data-state', 'open');
+    document.body.appendChild(dialog);
+    const e = slash();
+    expect(dispatchKeydown(e, opts)).toBe(false);
+    expect(onFocus).not.toHaveBeenCalled();
+    dialog.remove();
   });
 });
 

@@ -1,20 +1,22 @@
 ---
 title: Slack
-description: Start a session from a Slack message with an emoji reaction, a mention or a direct message. Talyn shows progress as reactions and never posts in your channels.
+navLabel: Slack sessions
+description: Start a session with an emoji reaction, mention, or direct message in Slack.
 ---
 
 Start a session from Slack. React to a message with your trigger emoji, mention `@Talyn`, or send Talyn a direct message. A session starts with the Slack thread as its brief.
 
-Talyn never posts in your channels. It shows a session's progress as reactions on the message that started it.
+Talyn shows session progress as reactions on the message that started it.
+Channel automations can reply in threads. See the [Slack integration guide](/docs/integrations-slack).
 
 ## Set it up
 
-1. In Talyn, open **Settings > Slack**.
+1. In Talyn, open **Integrations > Slack > Connection**.
 2. Select **Connect Slack** and install the Talyn app in your Slack workspace.
 3. Select **Link my Slack account** to connect your Slack identity to your Talyn account.
 4. Select **Add emoji** and pick one or more trigger emoji. Custom emoji from your Slack workspace work too.
 5. If you have more than one Talyn workspace, pick the one that gets the sessions.
-6. In each Slack channel where you want Talyn, run `/invite @talyn`.
+6. In each Slack channel where you want Talyn, run `/invite @Talyn`.
 
 With no trigger emoji, reactions do not start a session. Mentions and direct messages still do.
 
@@ -54,10 +56,19 @@ If no repository is a clear match, Talyn does not guess. It asks you to pick one
 
 The session links back to the Slack thread.
 
+## Reply in the thread
+
+A session that started from Slack can post in its own Slack thread as the Talyn bot. It cannot post in any other thread.
+The reply shows as Talyn, not as you. The agent uses the `talyn_slack_reply` tool for this.
+
+The bot needs the `chat:write` permission. If the app was installed before Talyn asked for it, reinstall the Slack app from **Integrations > Slack > Connection**. A session started in a Slack thread then replies as Talyn.
+
 ## Slack text is untrusted
 
 Anyone in a channel can write a message. Talyn keeps your instruction apart from the quoted Slack text, and tells the agent that the quoted text is untrusted.
 
 ## Disconnect
 
-Open **Settings > Slack** to **Unlink my account**, or to **Disconnect workspace**. Only the person who installed the app can disconnect the workspace. Talyn then forgets its Slack token. The app stays installed in Slack until you remove it there.
+Open **Integrations > Slack > Connection** to **Unlink my account** or **Disconnect workspace**.
+Only the person who installed the app can disconnect the workspace. Talyn then forgets its Slack token.
+The app stays installed in Slack until you remove it there.

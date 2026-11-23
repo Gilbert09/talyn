@@ -9,6 +9,7 @@ import { useApiConnection, useInitialDataLoad } from './hooks/useApi';
 import { useWorkspaceStore } from './stores/workspace';
 import { analyticsPanel, useNavigationStore } from './stores/navigation';
 import { Toaster } from './components/ui/toaster';
+import { TitleTooltipLayer } from './components/ui/title-tooltip';
 import { BlinkingOwl } from './components/widgets/BlinkingOwl';
 import {
   getAnalyticsOptOut,
@@ -316,6 +317,7 @@ export default function App() {
   return (
     <AuthProvider>
       <Analytics />
+      <TitleTooltipLayer />
       <Router>
         <Routes>
           <Route path="/" element={<AppBody />} />

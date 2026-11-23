@@ -6,10 +6,10 @@ so it can depend on `@talyn/client` and `@talyn/shared`.
 
 ## Status
 
-**Scaffold.** The frame is real — routing, browser PKCE auth, the shared
-transport, the CSP, the deploy pipeline — but the panels themselves are still
-being ported from `apps/desktop/src/renderer`. `routes/Shell.tsx` is the
-placeholder they replace.
+The full app: routing, browser PKCE auth, the shared transport, the CSP, the
+deploy pipeline, and the panels ported from `apps/desktop/src/renderer`
+(sessions, pull requests, integrations, settings, billing, spaces). A new
+feature lands here in the same change as the desktop and `apps/mobile`.
 
 ## Run it
 

@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
-import { workbenchDisplayName, type LocalWorktreeStatus, type Workbench, type WorkbenchLocalBridge } from '@talyn/shared';
+import {
+  workbenchDisplayName,
+  type ArchiveWorkbenchesResult,
+  type LocalWorktreeStatus,
+  type Workbench,
+  type WorkbenchLocalBridge,
+} from '@talyn/shared';
 import { stopCoderPreview } from '../../lib/coderPreview';
 import { bridgeErrorMessage, getDeviceId, getWorkbenchBridge } from '../../lib/workbenchBridge';
 import { stopLocalWorkbench } from '../../lib/localWorkbench';
@@ -34,22 +40,7 @@ export async function archiveWorkbench(id: string, leave: boolean, opts: Archive
   markDialogArchive(id, true);
   try {
     const wb = await api.workbenches.archive(id);
-    trackEvent('session_archived', { workbench_id: id, kind: wb.kind ?? 'session', runtime: wb.runtime });
-    useWorkbenchStore.getState().upsertWorkbench(wb);
-    // An archived sandbox loses its box. A local session's agent and dev server run here, so stop them.
-    if (ownsLocalWorktree(wb)) {
-      await stopLocalWorkbench(id).catch((err) => {
-        captureWorkbenchFailure('stop_local_session', err, id);
-        toast.error('Could not stop the session on this computer', bridgeErrorMessage(err, ''));
-      });
-      await removeLocalWorktree(wb, opts.discardChanges === true);
-    }
-    stopCoderPreview(id);
-    await getWorkbenchBridge()?.preview?.stop(id).catch((err) => {
-      captureWorkbenchFailure('stop_preview', err, id);
-      toast.error('Could not stop the preview');
-    });
-    if (leave) useWorkbenchStore.getState().selectWorkbench(null);
+    await finishArchive(wb, leave, opts.discardChanges === true);
     return true;
   } catch (err) {
     captureWorkbenchFailure('archive_session', err, id);
@@ -60,26 +51,67 @@ export async function archiveWorkbench(id: string, leave: boolean, opts: Archive
   }
 }
 
-const BULK_ARCHIVE_CONCURRENCY = 4;
+/** The client side of an archive: store the row, then stop what runs here for the session. */
+async function finishArchive(wb: Workbench, leave: boolean, discardChanges: boolean): Promise<void> {
+  trackEvent('session_archived', { workbench_id: wb.id, kind: wb.kind ?? 'session', runtime: wb.runtime });
+  useWorkbenchStore.getState().upsertWorkbench(wb);
+  // An archived sandbox loses its box. A local session's agent and dev server run here, so stop them.
+  if (ownsLocalWorktree(wb)) {
+    await stopLocalWorkbench(wb.id).catch((err) => {
+      captureWorkbenchFailure('stop_local_session', err, wb.id);
+      toast.error('Could not stop the session on this computer', bridgeErrorMessage(err, ''));
+    });
+    await removeLocalWorktree(wb, discardChanges);
+  }
+  stopCoderPreview(wb.id);
+  await getWorkbenchBridge()?.preview?.stop(wb.id).catch((err) => {
+    captureWorkbenchFailure('stop_preview', err, wb.id);
+    toast.error('Could not stop the preview');
+  });
+  if (leave) useWorkbenchStore.getState().selectWorkbench(null);
+}
+
+const LOCAL_CLEANUP_CONCURRENCY = 4;
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /**
- * Archive many sessions, a few at a time. A local worktree with uncommitted
+ * Archive many sessions with one request. A local worktree with uncommitted
  * changes stays on disk. `openId` is the open session, which clears the
  * selection when it is archived. Returns how many sessions were archived.
  */
 export async function archiveWorkbenches(ids: string[], openId: string | null): Promise<number> {
-  let archived = 0;
-  let next = 0;
-  const worker = async () => {
-    while (next < ids.length) {
-      const id = ids[next++];
-      if (await archiveWorkbench(id, id === openId)) archived += 1;
+  if (ids.length === 0) return 0;
+  for (const id of ids) markDialogArchive(id, true);
+  try {
+    let result: ArchiveWorkbenchesResult;
+    try {
+      result = await api.workbenches.archiveMany(ids);
+    } catch (err) {
+      captureWorkbenchFailure('archive_sessions', err);
+      toast.error('Could not archive the sessions', err instanceof Error ? err.message : undefined);
+      trackEvent('sessions_archived_bulk', { requested: ids.length, archived: 0 });
+      return 0;
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(BULK_ARCHIVE_CONCURRENCY, ids.length) }, worker));
-  trackEvent('sessions_archived_bulk', { requested: ids.length, archived });
-  if (archived > 0) toast.success(`Archived ${archived} ${archived === 1 ? 'session' : 'sessions'}`);
-  return archived;
+    // The server archived these. Clean up here a few at a time: each one can remove a worktree.
+    let next = 0;
+    const worker = async () => {
+      while (next < result.archived.length) {
+        const wb = result.archived[next++];
+        await finishArchive(wb, wb.id === openId, false);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(LOCAL_CLEANUP_CONCURRENCY, result.archived.length) }, worker));
+    const archived = result.archived.length;
+    trackEvent('sessions_archived_bulk', { requested: ids.length, archived });
+    if (archived > 0) toast.success(`Archived ${plural(archived, 'session', 'sessions')}`);
+    if (result.failed.length > 0) {
+      toast.error(`Could not archive ${plural(result.failed.length, 'session', 'sessions')}`, result.failed[0].error);
+    }
+    return archived;
+  } finally {
+    for (const id of ids) markDialogArchive(id, false);
+  }
 }
 
 /**
@@ -170,8 +202,6 @@ export function useWorktreeCheck(workbench: LocalFields, open: boolean): Worktre
 }
 
 const SHOWN_FILES = 5;
-
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 function WorktreeNote({ check, localPath }: { check: WorktreeCheck; localPath: string }) {
   if (check.state === 'none') {

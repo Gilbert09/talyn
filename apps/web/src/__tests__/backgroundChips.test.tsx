@@ -15,7 +15,7 @@ import { BackgroundChips } from '../components/workbench/BackgroundChips';
 const wakeup: WorkbenchWakeup = {
   id: 'wake-1', workbenchId: 'wb-1', chatId: 'chat-1', wakeAt: '2026-11-08T10:12:00Z',
   reason: 'Check build status', status: 'scheduled', failureDetail: null, createdBy: 'user',
-  sourceJobId: null, createdAt: '2026-11-08T10:00:00Z', firedAt: null,
+  sourceJobId: null, ci: null, createdAt: '2026-11-08T10:00:00Z', firedAt: null,
 };
 
 function job(overrides: Partial<WorkbenchBackgroundJob> = {}): WorkbenchBackgroundJob {
@@ -51,6 +51,14 @@ describe('wake-ups', () => {
     expect(screen.getByTestId('wakeup-chip')).toHaveTextContent('Wakes in 12 min');
     act(() => { vi.advanceTimersByTime(60_000); });
     expect(screen.getByTestId('wakeup-chip')).toHaveTextContent('Wakes in 11 min');
+  });
+
+  it('says a CI wake-up waits for CI, and its latest time in the title', () => {
+    setBackground([], [{ ...wakeup, ci: { pullRequestId: 'pr-1', headSha: 'abcdef1234567890abcdef1234567890abcdef12' } }]);
+    render(<BackgroundChips workbenchId="wb-1" chatId="chat-1" canOpen />);
+    const chip = screen.getByTestId('wakeup-chip');
+    expect(chip).toHaveTextContent('Waits for CI on abcdef1: Check build status');
+    expect(chip).toHaveAttribute('title', 'Waits for CI on abcdef1. Wakes in 12 min at the latest: Check build status');
   });
 
   it('cancels a wake-up in the current chat', () => {

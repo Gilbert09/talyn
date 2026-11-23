@@ -42,26 +42,9 @@ A whole suite of a large repository can run longer than one command may run. Do 
 
 ## 4. Wait on long commands
 
-A command stops after about 10 minutes. Your own background shells (`&`, `nohup`) also stop when your turn ends.
+A command stops after about 10 minutes. Do not use Bash `run_in_background`, `&` or `nohup`. Use `talyn_run_background` for long commands.
 
-For a wait of a few minutes inside this turn, run the command in the background and check it:
-
-```bash
-nohup <command> > /tmp/run.log 2>&1 &
-echo $! > /tmp/run.pid
-```
-
-Then check it with short waits:
-
-```bash
-sleep 45; tail -n 20 /tmp/run.log; kill -0 "$(cat /tmp/run.pid)" 2>/dev/null && echo running || echo done
-```
-
-- Wait 60 seconds or less in each check.
-- Never `sleep` for minutes. A long sleep wastes the turn and shows nothing to the person.
-- Between checks, do other useful work: read code, write the next change, prepare the pull request text.
-
-For work that must outlive this turn, use Talyn's tools if you have them:
+Start each command that can take more than about 2 minutes with Talyn's tool, then end your turn:
 
 ```
 talyn_run_background
@@ -70,18 +53,29 @@ talyn_run_background
   chat_id: <the TALYN_CHAT_ID environment variable>
 ```
 
-- The job keeps running after your turn ends. Talyn starts a new turn in your chat when it exits, with the exit code and the last 40 lines of output. End your turn after you start it.
+- The job keeps running after your turn ends. Talyn starts a new turn in your chat when it exits, with the exit code and the last 40 lines of output.
+- Let the job print to its own output. Do not redirect it to a file or pipe it through `tail` or `head`. The person watches that output live in the Background tab, and `talyn_background_logs` reads all of it.
+- To run several long commands at the same time, start each one as its own job.
 - `keep_awake_seconds` (default 3600) keeps the sandbox awake while the job runs. That time is billed box time. Use 0 to let the sandbox sleep; the job then pauses with the sandbox.
 - Read output with `talyn_background_logs`, list jobs with `talyn_list_background`, stop one with `talyn_stop_background`.
 - A move or resize of the session stops every job.
 
-To look at something later (a deploy, a CI run), schedule a wake-up and end your turn:
+Rules for your agent's own tools:
+- Claude Agent calls can use `run_in_background: true`. Start several independent subagents in parallel.
+- Use a sub-session (`talyn_create_session`) for long or separate work that needs its own branch or pull request.
+- The turn stays open until these subagents finish. The box stays awake during this time.
+- If your agent moves a slow command to the background by itself, stop that task. Then start the command again with `talyn_run_background`.
+- Never `sleep` for minutes, and do not poll a log in a loop. A long wait wastes the turn and shows nothing to the person.
+
+To look at something later (a deploy, a long job), schedule a wake-up and end your turn:
 
 ```
 talyn_schedule_wakeup
   delay_seconds: 1200
   reason: Check that the deploy finished and the smoke tests pass.
 ```
+
+To wait for CI on this session's pull request, do not guess a time. Set `until_ci: true` and `head_sha` (from `git rev-parse HEAD`) after you push. Talyn wakes you when the checks finish. If the call fails, schedule a timed wake-up instead.
 
 Start Docker and database services only when a test needs them. Stop them when you are done.
 

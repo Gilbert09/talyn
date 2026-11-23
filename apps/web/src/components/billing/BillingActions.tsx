@@ -6,16 +6,18 @@ import {
   PLAN_LIMITS,
   PLAN_PRICES,
   PLAN_TIER_LABELS,
+  formatBoxHoursLabel,
   formatUsd,
   tierSoldAnnually,
   type BillingPricing,
   type CreditPackId,
   type SellableTier,
+  type UsageResetOffer,
 } from '@talyn/shared';
 import { api, ApiError } from '../../lib/api';
 import { trackEvent } from '../../lib/analytics';
 import { trackBillingFailure } from '../../stores/billing';
-import { goToHostedPage, maxNeedsPortal, maxPricesOf } from '../../lib/usageBilling';
+import { formatLongDate, goToHostedPage, maxNeedsPortal, maxPricesOf } from '../../lib/usageBilling';
 import { useBillingStore } from '../../stores/billing';
 import { toast } from '../../stores/toast';
 import { cn } from '../../lib/utils';
@@ -104,39 +106,119 @@ export function CreditPackButtons({ placement, className }: { placement: string;
   );
 }
 
-function PeriodOption({
-  label,
-  price,
-  hint,
-  selected,
-  onSelect,
-  disabled,
+const USAGE_RESET_ERRORS: Record<string, string> = {
+  usage_reset_requires_paid_plan: 'A usage reset needs a paid plan.',
+  nothing_to_reset: 'You have not used any box-hours yet. There is nothing to reset.',
+  usage_reset_unavailable: 'Usage reset is not available for this account.',
+};
+
+/**
+ * "Reset usage": pay the plan's monthly price once to get the full allowance
+ * back now. Renders nothing unless the status carries a reset offer.
+ */
+export function UsageResetAction({
+  offer,
+  periodEnd,
+  resets,
+  placement,
+  className,
 }: {
-  label: string;
-  price: string;
-  hint?: string;
-  selected: boolean;
-  onSelect: () => void;
-  disabled?: boolean;
+  offer: UsageResetOffer | undefined;
+  periodEnd: string;
+  resets?: number;
+  placement: string;
+  className?: string;
 }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!offer) return null;
+
+  const buy = async () => {
+    setBusy(true);
+    setError(null);
+    trackEvent('usage_reset_checkout_started', { tier: offer.tier, placement });
+    try {
+      const { url } = await api.billing.usageResetCheckout();
+      goToHostedPage(url);
+    } catch (err) {
+      trackBillingFailure('usage_reset_checkout_failed', 'create_checkout', err);
+      const code = err instanceof ApiError ? err.code : undefined;
+      setError((code && USAGE_RESET_ERRORS[code]) || errorText(err, 'Could not start the checkout.'));
+      setBusy(false);
+    }
+  };
+
   return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      onClick={onSelect}
-      disabled={disabled}
-      className={cn(
-        'rounded-md border p-3 text-left transition-colors',
-        selected ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/40',
-        disabled && 'opacity-60'
+    <div className={cn('space-y-2', className)} data-testid="usage-reset">
+      <Button variant="outline" size="sm" data-attr="usage-reset-checkout" disabled={busy} onClick={() => void buy()} className="gap-2">
+        {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+        Reset usage: {formatUsd(offer.priceMicros, 0)}
+      </Button>
+      <p className="text-xs text-muted-foreground">
+        Pay your plan&apos;s monthly price once to get all {formatBoxHoursLabel(offer.includedWsec)} back now. Your
+        period still ends on {formatLongDate(periodEnd)}. Unused hours do not carry over.
+      </p>
+      {resets != null && resets > 0 && (
+        <p className="text-xs text-muted-foreground" data-testid="usage-reset-count">
+          Reset {resets} {resets === 1 ? 'time' : 'times'} this period
+        </p>
       )}
-    >
-      <div className="text-sm font-medium">{label}</div>
-      <div className="text-lg font-semibold">{price}</div>
-      {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
-    </button>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+    </div>
   );
 }
+
+/**
+ * Monthly or annual billing, as a segmented toggle. It must not look like the
+ * plan cards, or a reader counts the two periods as two more plans.
+ */
+export function BillingPeriodToggle({
+  period,
+  onChange,
+  disabled,
+  className,
+}: {
+  period: Period;
+  onChange: (period: Period) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Billing period"
+      data-testid="billing-period-toggle"
+      className={cn('inline-flex rounded-md border bg-muted/50 p-0.5', disabled && 'opacity-60', className)}
+    >
+      {PERIOD_OPTIONS.map((option) => {
+        const selected = period === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onChange(option.value)}
+            disabled={disabled}
+            className={cn(
+              'flex items-center gap-1.5 rounded px-3 py-1 text-sm transition-colors',
+              selected ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {option.label}
+            {option.hint && (
+              <span className="rounded-full bg-primary/10 px-1.5 py-px text-xs font-medium text-primary">{option.hint}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const PERIOD_OPTIONS: { value: Period; label: string; hint?: string }[] = [
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'annual', label: 'Annual', hint: '2 months free' },
+];
 
 /**
  * Pick monthly or annual Pro, or monthly Max, then buy it (Free) or move to it
@@ -223,23 +305,7 @@ export function PlanForm({
   return (
     <div className="space-y-3">
       {prices.annual != null && (
-        <div className="grid grid-cols-2 gap-2">
-          <PeriodOption
-            label="Monthly"
-            price={`${prices.monthly}/mo`}
-            selected={period === 'monthly'}
-            onSelect={() => setPeriod('monthly')}
-            disabled={busy}
-          />
-          <PeriodOption
-            label="Annual"
-            price={`${prices.annual}/yr`}
-            hint="2 months free"
-            selected={period === 'annual'}
-            onSelect={() => setPeriod('annual')}
-            disabled={busy}
-          />
-        </div>
+        <BillingPeriodToggle period={period} onChange={setPeriod} disabled={busy} />
       )}
       <Button onClick={() => void submit()} disabled={busy} className="w-full gap-2" data-attr={`${plan}-${mode}`}>
         {busy && <Loader2 className="h-4 w-4 animate-spin" />}

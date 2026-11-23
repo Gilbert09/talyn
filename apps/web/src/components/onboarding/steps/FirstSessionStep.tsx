@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { defaultFleetModelForAgent, PLAN_LIMITS, storedFleetModelForAgent } from '@talyn/shared';
+import { defaultFleetModelForAgent, PLAN_LIMITS, storedFleetModelForAgent, type WorkbenchAgent } from '@talyn/shared';
 import { readSessionDefaults } from '../../../lib/sessionDefaults';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { Button } from '../../ui/button';
@@ -8,7 +8,7 @@ import { useCreateWorkbench } from '../../workbench/new/useCreateWorkbench';
 import { defaultRepositoryId, writeLastRepository } from '../../workbench/new/lastRepository';
 
 interface FirstSessionStepProps {
-  onCreated: () => void;
+  onCreated: (created: { runtime: 'sandbox'; agent: WorkbenchAgent }) => void;
   onSkip: () => void;
   onBusyChange: (busy: boolean) => void;
 }
@@ -48,7 +48,7 @@ export function FirstSessionStep({ onCreated, onSkip, onBusyChange }: FirstSessi
       });
       if (session) {
         writeLastRepository(currentWorkspaceId, repo.id);
-        onCreated();
+        onCreated({ runtime: 'sandbox', agent });
       }
     } finally {
       submitting.current = false;

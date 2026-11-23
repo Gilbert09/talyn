@@ -168,6 +168,9 @@ function StatusPill({ status }: { status: string }) {
     // thing that needs attention is the PR, not the run.
     case 'needs_human':
       return <Pill tone="warn">needs human</Pill>;
+    // Active, with its box asleep until the PR's checks settle.
+    case 'waiting_ci':
+      return <Pill tone="muted">waiting for CI</Pill>;
     case 'cancelled':
       return <Pill tone="warn">cancelled</Pill>;
     default:

@@ -167,6 +167,17 @@
   animation: owl-caret 1s steps(1) infinite;
 }
 
+/* Find in transcript (lib/transcriptFind.ts). */
+::highlight(transcript-find) {
+  background-color: hsl(45 100% 60% / 0.4);
+  color: inherit;
+}
+
+::highlight(transcript-find-current) {
+  background-color: hsl(30 100% 55% / 0.85);
+  color: hsl(0 0% 5%);
+}
+
 .owl-glow {
   filter: drop-shadow(0 0 14px hsl(var(--primary) / 0.35));
 }

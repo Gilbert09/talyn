@@ -13,9 +13,9 @@ export const site = {
   domain: "talyn.dev",
   /** Canonical origin. The apex 308-redirects to www at the Vercel level. */
   url: "https://www.talyn.dev",
-  tagline: "Give every task its own agent.",
+  tagline: "Keep your coding agents working, even when you aren't.",
   description:
-    "Run Claude Code and Codex in parallel cloud sandboxes, on the subscription you already pay for. Each session gets its own branch, diff, terminal and a path to a merged pull request.",
+    "Run Claude Code and Codex in parallel cloud sandboxes, on the subscription you already pay for. Each session gets a branch, a diff and a path to a merged PR.",
   githubUrl: "https://github.com/Gilbert09/talyn",
   /** The browser app: same product, nothing to install. */
   appUrl: "https://app.talyn.dev",
@@ -23,6 +23,11 @@ export const site = {
   supportUrl: "https://github.com/Gilbert09/talyn/issues",
   /** The public API docs, in the docs section. */
   apiDocsUrl: "/docs/api",
+  /**
+   * When the home, pricing, download and about pages last changed, as the
+   * sitemap's lastmod. Move it when one of those pages changes.
+   */
+  updated: "2026-11-19",
 };
 
 /**
@@ -44,13 +49,10 @@ export interface NavItem {
 }
 
 /**
- * Five entries. The desktop bar has a logo and three buttons to fit beside
- * them, and "Download for Windows" is wide, so keep the labels to one word.
- * Sessions and threads lead because the relaunch leads with them.
+ * Kept short on purpose (2026-11-12): the Features menu already lists
+ * sessions, threads and the rest, and a short bar is easier to scan.
  */
 export const nav: NavItem[] = [
-  { label: "Sessions", href: "features/sessions" },
-  { label: "Threads", href: "features/threads" },
   { label: "Features", href: "features", group: "features" },
   { label: "Pricing", href: "pricing" },
   { label: "Docs", href: "docs" },
@@ -63,177 +65,101 @@ export const nav: NavItem[] = [
  */
 export const hero = {
   badge: "Public beta",
-  titleLead: "Give every task",
-  titleAccent: "its own agent.",
-  sub: "Each session is a branch with its own agent, diff and terminal in the cloud. Run as many as you like on the Claude or ChatGPT plan you already have.",
+  /**
+   * Shown in place of the badge while it is set. Conductor announced on
+   * 2026-11-04 that it is joining Meta, and Conductor Cloud shuts down on
+   * 2026-11-20, so its users are looking for somewhere to go this month.
+   * Set to null once that has passed (early 2027, when local Conductor winds
+   * down, at the latest).
+   */
+  announcement: {
+    label: "Conductor Cloud closes Nov 20. See how to move",
+    href: "/compare/conductor",
+  } as { label: string; href: string } | null,
+  // Leads with the cloud benefit: the agents run on our machines, not yours.
+  // That is what a local tool cannot say, and the subhead then answers the two
+  // FAQ questions visitors open most (which agents, where the work happens).
+  // Active voice, addressed to the reader (marketer feedback, 2026-11-11).
+  titleLead: "Keep your coding agents working",
+  /**
+   * The accent line is typed out, one ending after another, under the fixed
+   * lead. The first is the headline: it is what the server renders, what
+   * search engines and screen readers get, and where the rotation stops after
+   * one pass. Every entry must finish the lead as a sentence, and fit on one
+   * line on a phone: the line is as tall as its longest entry, so a long one
+   * leaves a gap under the shorter ones.
+   */
+  titleAccents: [
+    "even when you aren't.",
+    "with the laptop closed.",
+    "in parallel, in the cloud.",
+    "until the PR is merged.",
+  ],
+  sub: "Run Claude Code and Codex in parallel cloud sandboxes, on the plan you already pay for. Come back to a diff, or to a pull request that is already green.",
   primaryCta: "Download for {platform}",
-  webCta: "Open in browser",
+  webCta: "Get started free",
   // "For GitHub" stays: a GitLab user should find out in eight seconds, not
   // after an install.
-  microtrust: "For GitHub. macOS, Windows and Linux, or in your browser.",
-};
-
-/** How a session works. Carries the `#how` anchor older links point at. */
-export const sessions = {
-  kicker: "Sessions",
-  title: "From prompt to pull request.",
-  sub: "Describe the task. Talyn makes the branch, starts the sandbox and hands it to your agent.",
-  steps: [
-    {
-      title: "Describe it",
-      body: "Type what you want done. Talyn names the session and its branch from your words.",
-    },
-    {
-      title: "Let it work",
-      body: "The agent reads, edits and runs commands in its own sandbox. Send more messages while it works and they wait their turn.",
-    },
-    {
-      title: "Check it",
-      body: "Read the diff, browse the files, open a terminal or start your app with a run script. Roll the files back to any earlier message.",
-    },
-    {
-      title: "Ship it",
-      body: "One button opens the pull request. The same button then fixes checks, resolves conflicts and merges.",
-    },
-  ],
-  link: "How sessions work",
-};
-
-/** The sandbox facts: parallel, fast, free when asleep, safe. */
-export const sandboxes = {
-  kicker: "Sandboxes",
-  title: "Run sessions side by side.",
-  sub: "Every session gets its own sandbox. Start the next task while the last one runs.",
-  items: [
-    {
-      title: "Ready in seconds",
-      body: "Talyn builds an image of your repository with its setup already done. A new session starts from that image, not from a clean machine.",
-    },
-    {
-      title: "Asleep costs nothing",
-      body: "A sandbox that sits idle for 10 minutes goes to sleep, and a sleeping sandbox is free. Your next message wakes it.",
-    },
-    {
-      title: "Read it without waking it",
-      body: "Talyn keeps a copy of each session's changes and files. You can review a sleeping session without starting its sandbox.",
-    },
-    {
-      title: "Your setup, every time",
-      body: "Add setup steps and your dotfiles once. Talyn builds them into the image, and suggests steps it sees your sessions repeat.",
-    },
-    {
-      title: "Work is saved as you go",
-      body: "After every turn, Talyn saves the work you have not pushed. If a sandbox is lost, the next one restores it.",
-    },
-    {
-      title: "Sessions remember",
-      body: "Agents save short notes as they learn your codebase. The next session reads them, so you explain things once.",
-    },
-  ],
-};
-
-/** Threads: one conversation that runs sessions across repositories. */
-export const threads = {
-  kicker: "Threads",
-  title: "One conversation, many repositories.",
-  sub: "Give a thread a goal. It starts a session on every repository that needs a change.",
-  bullets: [
-    "It hears when a session finishes, opens a pull request or needs an answer.",
-    "Open any of its sessions to read the diff or step in.",
-    "It stops when its sessions stop making progress, and waits for you.",
-  ],
-  link: "How threads work",
-};
-
-/** PRs on autopilot: the GitHub panel, fix runs, the merge queue, review. */
-export const pullRequests = {
-  kicker: "Pull requests",
-  title: "Your pull requests, kept green.",
-  sub: "Every PR you own and every review you owe, blocked ones first. One click sends the fix.",
-  items: [
-    {
-      title: "Fix it in one click",
-      body: "Failing checks, a merge conflict or a review comment. The agent pushes the fix to the same branch.",
-      href: "/features/fix-pull-requests",
-    },
-    {
-      title: "A merge queue that fixes",
-      body: "Queue a ready pull request and Talyn merges it when it is green. If it falls behind or breaks first, an agent fixes it.",
-      href: "/features/merge-queue",
-    },
-    {
-      title: "Code review in the app",
-      body: "Several reviewers read the change, then a check drops what it cannot back up. Findings reach GitHub only if you post them.",
-      href: "/features/code-review",
-    },
-  ],
-};
-
-/** Automation: loops, workflows, Slack, MCP servers, skills, the API. */
-export const automation = {
-  kicker: "Automation",
-  title: "Work that starts without you.",
-  sub: "Set it up once. It runs in the cloud, even with the app closed.",
-  items: [
-    {
-      title: "Loops",
-      body: "Run a prompt on a schedule. Every weekday at 9, every Monday, or any cron expression.",
-      href: "/features/loops",
-    },
-    {
-      title: "Workflows",
-      body: "Rules for pull request events. When checks fail on a dependency bump, send an agent. When a PR is approved and green, queue it.",
-      href: "/features/workflows",
-    },
-    {
-      title: "Slack",
-      body: "React with your emoji, mention Talyn or send it a message, and a session starts. Its status shows as reactions on your message.",
-      href: "/features/slack",
-    },
-    {
-      title: "MCP servers",
-      body: "Connect Linear, Sentry or your own server. The agent uses the tools, and the keys stay outside the sandbox.",
-      href: "/features/mcp-servers",
-    },
-    {
-      title: "Skills",
-      body: "Run your SKILL.md playbooks on any pull request: a security pass, a review checklist, a changelog.",
-      href: "/features/skills",
-    },
-    {
-      title: "Public API",
-      body: "Start sessions, send messages and read the results from your own scripts with a personal access token.",
-      href: site.apiDocsUrl,
-    },
-  ],
+  // Carries the price too: "What does it cost?" is a top FAQ question, and
+  // half of visitors never scroll past the hero.
+  microtrust: "Free with 10 box-hours a month, and unlimited local worktree sessions. For GitHub, on macOS, Windows, Linux or your browser.",
 };
 
 /**
- * Headed by the AGENTS, not by our provider names. What a reader recognises
- * is Claude and ChatGPT; "Talyn Fleet" is the one name on the page they have
- * no reason to know. The fleet is stated once, in `note`, as a description.
+ * The three reasons to use Talyn, directly under the hero. Competitors each
+ * claim one or two of these (Codex and Devin: laptop closed; T3 Code and
+ * Sculptor: your own plan; Devin: to the merged PR). None claims all three.
  */
-export const providers = {
-  kicker: "Agents",
-  title: "Bring your Claude or ChatGPT plan.",
-  sub: "Claude Code or Codex, on the plan you already pay for. Talyn charges for sandboxes, not tokens.",
-  items: [
-    {
-      name: "Claude Code",
-      mark: "claude" as const,
-      meta: "On your Claude Pro or Max plan",
-      body: "Sign in with Claude and every session uses that subscription. No API key and no metered credits.",
-    },
-    {
-      name: "Codex",
-      mark: "codex" as const,
-      meta: "On your ChatGPT Plus or Pro plan",
-      body: "Sign in with ChatGPT and sessions run Codex on your plan. Connect both and pick per session.",
-    },
-  ],
-  note: "Each sandbox is a Firecracker microVM on our own hardware. Your credentials are added from outside it, so no token is ever inside the machine that runs your code. PR fixes and loops can also run on PostHog Code.",
-  link: "How the sandbox and your credentials work",
-};
+export const reasons: Array<{ icon: "cloud" | "key" | "merge"; title: string; body: string }> = [
+  {
+    icon: "cloud",
+    title: "Runs in the cloud, not on your laptop",
+    body: "Every task gets its own sandbox. Close the laptop and the agents keep working. A sleeping sandbox costs nothing.",
+  },
+  {
+    icon: "key",
+    title: "On the Claude or ChatGPT plan you have",
+    body: "Claude Code and Codex sign in with your own subscription. We charge for sandboxes, never for tokens.",
+  },
+  {
+    icon: "merge",
+    title: "Finishes at a merged pull request",
+    body: "It opens the PR, then fixes failing checks, conflicts and review comments until it is green.",
+  },
+];
+
+/** The home page body, one row per promise. Details live behind each link. */
+export const showcase = [
+  {
+    id: "parallel",
+    title: "Run as many as you need.",
+    body: "Each session has its own branch and sandbox, so agents never touch each other's files. Give a thread a goal and it starts a session on every repository that needs one.",
+    link: "How sessions work",
+    href: "/features/sessions",
+  },
+  {
+    id: "pull-requests",
+    title: "Every task ends in a merged PR.",
+    body: "Talyn opens the pull request and keeps it green. Failing checks, a merge conflict or a review comment each get a fix on the same branch. Queue it and it merges when it is ready.",
+    link: "How pull requests work",
+    href: "/features/fix-pull-requests",
+  },
+  {
+    id: "integrations",
+    title: "Work that starts without you.",
+    body: "Connect GitHub, Slack or a schedule, and add automations. A failing check, a Slack message or 9 a.m. on a weekday starts the session for you.",
+    link: "See integrations",
+    href: "/docs/integrations",
+  },
+] as const;
+
+/** The questions kept on the home page: the ones visitors open before they download. */
+export const homeFaqQuestions = [
+  "Is my code safe?",
+  "Will it merge something without me asking?",
+  "How is a session different from Claude Code on my laptop?",
+  "Does it work with GitLab or Bitbucket?",
+];
 
 /** The /features hub's "why" grid. */
 export const why = {
@@ -262,7 +188,7 @@ export const why = {
     },
     {
       title: "Runs with the app closed",
-      body: "Loops run on a schedule and workflows run on pull request events, with the app closed.",
+      body: "Scheduled automations run at a time you set and GitHub automations run on pull request events, with the app closed.",
     },
   ],
 };
@@ -276,6 +202,8 @@ export const pricing = {
   annualBadge: "2 months free",
   boxHour:
     "A box-hour is one standard box running for one hour. Smaller boxes use less of your allowance and bigger boxes use more. Billing is per running second, and a sleeping box costs nothing.",
+  local:
+    "Local sessions are free on every plan, with no limit. In the desktop app, a session can run in a git worktree on your own machine, with your own tools and your own Claude Code or Codex. It uses no box, so it uses no box-hours and does not count toward the boxes running at once.",
   tiers: [
     {
       name: "Free",
@@ -284,15 +212,15 @@ export const pricing = {
       priceAnnualTotal: "$0",
       period: "forever",
       periodAnnualNote: null,
-      blurb: "The whole app, with a small monthly allowance.",
+      blurb: "The whole app, 10 box-hours a month, and no card to start.",
       features: [
+        "Unlimited local sessions in git worktrees, in the desktop app",
         "10 box-hours a month",
         "Small and standard boxes",
         "Up to 2 boxes running at once",
         "Sessions, threads and the whole PR dashboard",
-        "Skills, the merge queue, workflows, loops and code review",
+        "Skills, the merge queue, automations and code review",
         "Keep a PR mergeable on any PR you flag by hand",
-        "Mobile app (coming soon)",
       ],
       cta: "Download for {platform}",
       highlighted: false,
@@ -304,7 +232,7 @@ export const pricing = {
       priceAnnualTotal: "$400",
       period: "/month",
       periodAnnualNote: "billed annually ($400/yr)",
-      blurb: "For the weeks when everything ships at once.",
+      blurb: "200 box-hours, up to 100 boxes at once, and auto-keep on every new PR.",
       features: [
         "Everything in Free",
         "200 box-hours a month",
@@ -312,11 +240,32 @@ export const pricing = {
         "Up to 100 boxes running at once",
         "Auto-keep on every new PR, and auto-review on every new PR",
         "Credits with auto top-up, for anything above your allowance",
-        "Mobile app (coming soon)",
         "Cancel any time, in the app",
       ],
-      cta: "Download & upgrade in-app",
+      cta: "Download, then upgrade in the app",
       highlighted: true,
+    },
+    {
+      name: "Max",
+      priceMonthly: "$100",
+      // Max is sold monthly only, so the annual toggle shows the monthly
+      // price with a note rather than an annual one.
+      priceAnnual: "$100",
+      priceAnnualTotal: null,
+      period: "/month",
+      periodAnnualNote: "billed monthly only",
+      blurb: "1,000 box-hours a month. A box-hour costs half what it does on Pro.",
+      features: [
+        "Everything in Pro",
+        "1,000 box-hours a month",
+        "Every box size",
+        "Up to 100 boxes running at once",
+        "Credits with auto top-up, for anything above your allowance",
+        "Billed monthly",
+        "Cancel any time, in the app",
+      ],
+      cta: "Download, then upgrade in the app",
+      highlighted: false,
     },
   ],
   sizesTitle: "Pay as you go, above your plan",
@@ -330,7 +279,7 @@ export const pricing = {
     { name: "XLarge", vcpu: 8, ram: 16, perHour: "$0.55", weight: "2.5 box-hours" },
   ],
   sizesNote:
-    "Free accounts can use small and standard boxes. Pro and Team can use every size. Your included hours are used first, then your credits.",
+    "Free accounts can use small and standard boxes. Pro, Max and Team can use every size. Your included hours are used first, then your credits.",
   creditsTitle: "Credits",
   creditPacks: [
     { amount: "$25", bonus: null },
@@ -341,7 +290,7 @@ export const pricing = {
     "Credits last 12 months from the day you buy them.",
     "Turn on auto top-up and pick the balance that triggers it and the amount to add.",
     "Set a monthly limit on auto top-ups, so a busy month cannot surprise you.",
-    "Credits are on Pro and Team plans.",
+    "Credits are on Pro, Max and Team plans.",
   ],
   comingSoon: "The mobile app is coming soon, and it is included on every plan.",
 };
@@ -394,11 +343,15 @@ export const pricingFaq = [
   },
   {
     q: "What happens when my hours run out?",
-    a: "Work that is already running finishes. Nothing new starts until you add credits or your hours reset at the start of the next month. Runs that Talyn starts for you, such as loops and merge queue fixes, wait with a notice in the app and start once there is room. Talyn never stops a run part way through.",
+    a: "Work that is already running finishes. Nothing new starts until you add credits or your hours reset at the start of the next month. Runs that Talyn starts for you, such as scheduled automations and merge queue fixes, wait with a notice in the app and start once there is room. Talyn never stops a run part way through.",
+  },
+  {
+    q: "Do local sessions cost anything?",
+    a: "No. A local session runs in a git worktree on your own machine, in the desktop app. It uses no box, so it uses no box-hours and does not count toward the boxes running at once. Local sessions are free and unlimited on every plan, including Free. You still get the diff, the pull request, the checks and the merge queue in Talyn.",
   },
   {
     q: "Do idle boxes cost anything?",
-    a: "No. A box that has been idle for 10 minutes goes to sleep, and a sleeping box is free. You only pay for the seconds a box is awake and running.",
+    a: "No. A box that has been idle for 3 minutes goes to sleep, and a sleeping box is free. You only pay for the seconds a box is awake and running.",
   },
   {
     q: "Do I pay for Claude or ChatGPT as well?",
@@ -422,11 +375,11 @@ export const pricingFaq = [
   },
   {
     q: "Can it merge something without me asking?",
-    a: "Only on pull requests you flagged. Auto-keep and the merge queue are opt-in per pull request on every plan, so nothing you have not flagged is ever merged, rebased or pushed to. The one setting that changes that is the workspace default that flags every new pull request you open. It is part of Pro and it is off unless you switch it on. Everything still goes through GitHub's own merge API, so your branch protection applies exactly as you set it up.",
+    a: "Only on pull requests you flagged. Auto-keep and the merge queue are opt-in per pull request on every plan, so nothing you have not flagged is ever merged, rebased or pushed to. The one setting that changes that is the workspace default that flags every new pull request you open. It is part of Pro and Max, and it is off unless you switch it on. Everything still goes through GitHub's own merge API, so your branch protection applies exactly as you set it up.",
   },
   {
     q: "Can I cancel, and do I get a refund?",
-    a: "Cancel any time from Settings → Billing in the app. You keep Pro until the end of the period you have paid for and then drop back to the free plan, which keeps working. Payments are not refundable. Talyn is in public beta, and the free plan exists so you can find out whether it works for you before paying anything.",
+    a: "Cancel any time from Settings → Billing in the app. You keep your paid plan until the end of the period you have paid for and then drop back to the free plan, which keeps working. Payments are not refundable. Talyn is in public beta, and the free plan exists so you can find out whether it works for you before paying anything.",
   },
 ];
 
@@ -441,16 +394,20 @@ export const faq = [
     a: "An app for running coding agents in the cloud. Each session is a branch with its own agent, sandbox, diff and terminal, and it ends in a pull request. Talyn also watches your open pull requests and sends an agent to fix the ones that break.",
   },
   {
+    q: "Is my code safe?",
+    a: "The Talyn GitHub App sees only the repositories you pick. Each session runs in its own microVM, and a proxy outside it adds your agent sign-in and MCP keys, so no credential is inside the machine. Stored tokens are encrypted, and Talyn deletes a sandbox when you archive its session. The source is public, so you can check all of this.",
+  },
+  {
     q: "How is a session different from Claude Code on my laptop?",
     a: "The agent runs in a cloud sandbox, not on your machine. You can run several at once, close the laptop, and open the same session later in the browser. Each session has its own branch, so two agents never edit the same files. On the desktop app you can also run a session in a local git worktree, or move a Claude Code conversation from your computer into a sandbox and carry on.",
   },
   {
     q: "Which agents does it use?",
-    a: "Claude Code on your Claude Pro or Max plan, and Codex on your ChatGPT Plus or Pro plan. You sign in with the account; there is no API key. Connect both and pick per session. PR fixes and loops can also run on PostHog Code.",
+    a: "Claude Code on your Claude Pro or Max plan, and Codex on your ChatGPT Plus or Pro plan. You sign in with the account; there is no API key. Connect both and pick per session.",
   },
   {
     q: "Where does my code run?",
-    a: "On Talyn Fleet: one Firecracker microVM per session, on our own hardware. Your GitHub and agent credentials are added by a proxy outside the machine, so no token is ever inside it. A sandbox sleeps after 10 minutes without work. Talyn saves your unpushed work after every turn, so a lost sandbox can be restored.",
+    a: "In a cloud sandbox on our own hardware: one Firecracker microVM per session. Your GitHub and agent credentials are added by a proxy outside the machine, so no token is ever inside it. A sandbox sleeps after 3 minutes without work. Talyn saves your unpushed work after every turn, so a lost sandbox can be restored.",
   },
   {
     q: "Does it work with GitLab or Bitbucket?",
@@ -458,11 +415,11 @@ export const faq = [
   },
   {
     q: "Will it merge something without me asking?",
-    a: "Only pull requests you flagged. Keeping a pull request mergeable and adding it to the merge queue are both opt-in, one pull request at a time. The one setting that widens that is the workspace default that flags every new pull request you open. It is part of Pro and it is off unless you turn it on. Everything goes through GitHub's merge API, so your branch protection applies as you set it up.",
+    a: "Only pull requests you flagged. Keeping a pull request mergeable and adding it to the merge queue are both opt-in, one pull request at a time. The one setting that widens that is the workspace default that flags every new pull request you open. It is part of Pro and Max, and it is off unless you turn it on. Everything goes through GitHub's merge API, so your branch protection applies as you set it up.",
   },
   {
     q: "What does it cost?",
-    a: "Free includes 10 box-hours a month. Pro is $40 a month ($400 a year) and includes 200 box-hours, every box size and up to 100 boxes at once. A box is the sandbox a session or an agent run uses, and it counts only while it is awake. The model runs on your own Claude or ChatGPT plan, so you pay us for the machines, not the model.",
+    a: "Free includes 10 box-hours a month. Pro is $40 a month ($400 a year) and includes 200 box-hours, every box size and up to 100 boxes at once. Max is $100 a month for 1,000 box-hours. A box is the sandbox a session or an agent run uses, and it counts only while it is awake. The model runs on your own Claude or ChatGPT plan, so you pay us for the machines, not the model. Local sessions in the desktop app run in a git worktree on your machine, and they are free and unlimited on every plan.",
   },
   {
     q: "What platforms are supported?",
@@ -479,7 +436,7 @@ export const finalCta = {
 
 export const footer = {
   blurb: "Coding agents in cloud sandboxes, one session per task, from the first prompt to the merged pull request.",
-  madeBy: "Made by night owls who were tired of babysitting CI.",
+  madeBy: "Made by a night owl who wanted the agents to work the night shift.",
   columns: [
     {
       title: "Product",
@@ -509,6 +466,7 @@ export const footer = {
       links: [
         { label: "Privacy", href: "/privacy" },
         { label: "Terms", href: "/terms" },
+        { label: "Delete account", href: "/delete-account" },
       ],
     },
   ],

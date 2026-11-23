@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq, gte, isNull } from 'drizzle-orm';
 import {
   CONCURRENT_BOX_LIMIT_ERROR_CODE,
   PLAN_LIMITS,
@@ -13,9 +13,12 @@ import {
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import {
   autoTopupSettings,
+  creditLedger,
+  creditLots,
   tasks as tasksTable,
   usageIntervals,
   usagePeriods,
+  usageResets,
   users as usersTable,
   workspaces as workspacesTable,
 } from '../db/schema.js';
@@ -33,7 +36,7 @@ import {
   withBoxGate,
 } from '../services/billing/entitlements.js';
 import { ensurePeriod } from '../services/billing/usage/periods.js';
-import { grantCreditLot } from '../services/billing/usage/credits.js';
+import { burnCredits, grantCreditLot } from '../services/billing/usage/credits.js';
 import * as websocketModule from '../services/websocket.js';
 import type { Database } from '../db/client.js';
 
@@ -446,5 +449,114 @@ describe('buildBillingStatus', () => {
       lastFailure: 'card_declined',
       lastFailureAt: failedAt.toISOString(),
     });
+  });
+});
+
+describe('buildBillingStatus: the credit draw start', () => {
+  const period = () => usagePeriodFor({ now: new Date() });
+  const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000);
+
+  async function setUsed(fraction: number): Promise<void> {
+    await ensurePeriod(TEST_USER_ID, 'pro', period());
+    await db
+      .update(usagePeriods)
+      .set({ usedWsec: Math.round(includedWeightedSeconds('pro') * fraction) })
+      .where(eq(usagePeriods.ownerId, TEST_USER_ID));
+  }
+
+  /** A lot of `micros`, with its ledger row at `at`. */
+  async function addLot(micros: number, at: Date): Promise<void> {
+    const { lotId } = await grantCreditLot({ ownerId: TEST_USER_ID, micros, source: 'purchase', purchasedAt: at });
+    await db.update(creditLedger).set({ createdAt: at }).where(eq(creditLedger.lotId, lotId));
+  }
+
+  /** Burn `micros` and date its ledger rows `at`. */
+  async function burn(micros: number, at: Date): Promise<void> {
+    await burnCredits(TEST_USER_ID, micros, new Date(), { periodStart: period().start });
+    await db
+      .update(creditLedger)
+      .set({ createdAt: at })
+      .where(and(eq(creditLedger.reason, 'burn'), isNull(creditLedger.intervalId), gte(creditLedger.createdAt, minutesAgo(0.5))));
+  }
+
+  beforeEach(async () => {
+    await db.update(usersTable).set({ planOverride: 'pro' }).where(eq(usersTable.id, TEST_USER_ID));
+  });
+
+  it('is not sent while the included hours last', async () => {
+    await setUsed(0.5);
+    await addLot(25_000_000, minutesAgo(60));
+    await burn(5_000_000, minutesAgo(30));
+    const status = await buildBillingStatus(TEST_USER_ID);
+    expect(status.credits?.balanceMicros).toBe(20_000_000);
+    expect(status.credits?.drawStartMicros).toBeUndefined();
+  });
+
+  it('is the balance plus what was burned since the hours ran out', async () => {
+    await setUsed(1);
+    await addLot(100_000_000, new Date(period().start.getTime() - 86_400_000));
+    await burn(6_160_000, minutesAgo(30));
+    await burn(10_000_000, minutesAgo(10));
+    const credits = (await buildBillingStatus(TEST_USER_ID)).credits;
+    expect(credits?.balanceMicros).toBe(83_840_000);
+    expect(credits?.drawStartMicros).toBe(100_000_000);
+  });
+
+  it('a top-up restarts the draw at the new total', async () => {
+    await setUsed(1.2);
+    await addLot(50_000_000, minutesAgo(120));
+    await burn(40_000_000, minutesAgo(90));
+    await addLot(25_000_000, minutesAgo(60));
+    await burn(5_000_000, minutesAgo(30));
+    const credits = (await buildBillingStatus(TEST_USER_ID)).credits;
+    expect(credits?.balanceMicros).toBe(30_000_000);
+    expect(credits?.drawStartMicros).toBe(35_000_000);
+  });
+
+  it('a usage reset restarts the draw', async () => {
+    await setUsed(1);
+    await addLot(50_000_000, minutesAgo(120));
+    await burn(20_000_000, minutesAgo(90));
+    await db.insert(usageResets).values({
+      id: 'reset-1',
+      ownerId: TEST_USER_ID,
+      polarOrderId: 'order-reset-1',
+      tier: 'pro',
+      periodStart: period().start,
+      createdAt: minutesAgo(60),
+    });
+    await burn(10_000_000, minutesAgo(30));
+    const credits = (await buildBillingStatus(TEST_USER_ID)).credits;
+    expect(credits?.balanceMicros).toBe(20_000_000);
+    expect(credits?.drawStartMicros).toBe(30_000_000);
+  });
+
+  it('ignores a refunded reset and another owner', async () => {
+    await setUsed(1);
+    await addLot(50_000_000, minutesAgo(120));
+    await burn(20_000_000, minutesAgo(90));
+    await db.insert(usageResets).values({
+      id: 'reset-refunded',
+      ownerId: TEST_USER_ID,
+      polarOrderId: 'order-reset-refunded',
+      tier: 'pro',
+      periodStart: period().start,
+      refundedAt: minutesAgo(50),
+      createdAt: minutesAgo(60),
+    });
+    await db.insert(creditLots).values({
+      id: 'other-lot',
+      ownerId: OTHER_USER_ID,
+      totalMicros: 10_000_000,
+      remainingMicros: 10_000_000,
+      source: 'purchase',
+      purchasedAt: minutesAgo(10),
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+    await db.insert(creditLedger).values({ ownerId: OTHER_USER_ID, lotId: 'other-lot', deltaMicros: 10_000_000, reason: 'purchase', createdAt: minutesAgo(10) });
+    await db.insert(creditLedger).values({ ownerId: OTHER_USER_ID, deltaMicros: -3_000_000, reason: 'burn', createdAt: minutesAgo(5) });
+    const credits = (await buildBillingStatus(TEST_USER_ID)).credits;
+    expect(credits?.balanceMicros).toBe(30_000_000);
+    expect(credits?.drawStartMicros).toBe(50_000_000);
   });
 });

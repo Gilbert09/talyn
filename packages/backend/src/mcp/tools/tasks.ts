@@ -1,10 +1,9 @@
-import type { CreateTaskRequest, Task, TaskType } from '@talyn/shared';
+import type { Task } from '@talyn/shared';
 import { callApi } from '../api.js';
 import {
   str,
   requireId,
   trim,
-  deriveTitle,
   resolveWorkspace,
   taskLine,
   pageLimit,
@@ -13,65 +12,6 @@ import {
 import type { McpToolDefinition } from './index.js';
 
 export const TASKS: McpToolDefinition[] = [
-  {
-    name: 'talyn_create_task',
-    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-    description:
-      'Create a freeform cloud coding task on a repository (optionally linked to an existing PR). The agent runs on the workspace provider and opens a PR.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace_id: { type: 'string', description: 'Defaults to your only workspace.' },
-        repository_id: { type: 'string', description: 'Talyn repository id to target (required).' },
-        prompt: { type: 'string', description: 'What the agent should build.' },
-        title: { type: 'string', description: 'Auto-derived from the prompt if omitted.' },
-        description: { type: 'string' },
-        type: {
-          type: 'string',
-          enum: ['code_writing', 'pr_response', 'pr_review'],
-          description: 'Default code_writing.',
-        },
-        priority: {
-          type: 'string',
-          enum: ['low', 'medium', 'high', 'urgent'],
-          description: 'Default medium.',
-        },
-        model: { type: 'string' },
-        skill: {
-          type: 'object',
-          description: 'Skill reference only. Include the skill instructions in prompt.',
-          properties: {
-            key: { type: 'string' },
-            name: { type: 'string' },
-            source: { type: 'string', enum: ['repo', 'local', 'platform'] },
-            repositoryId: { type: 'string' },
-            platformSkillId: { type: 'string' },
-          },
-          required: ['key', 'name', 'source'],
-        },
-        pull_request_id: { type: 'string', description: 'Optionally link to an existing PR row.' },
-      },
-      required: ['repository_id', 'prompt'],
-    },
-    handler: async (ownerId, args) => {
-      const ws = await resolveWorkspace(ownerId, args);
-      const prompt = requireId(args, 'prompt');
-      const body: CreateTaskRequest = {
-        workspaceId: ws,
-        type: (str(args.type) as TaskType | undefined) ?? 'code_writing',
-        title: str(args.title) ?? deriveTitle(prompt),
-        description: str(args.description) ?? '',
-        prompt,
-        priority: (str(args.priority) as CreateTaskRequest['priority']) ?? 'medium',
-        repositoryId: requireId(args, 'repository_id'),
-        pullRequestId: str(args.pull_request_id),
-        model: str(args.model),
-        skill: args.skill as CreateTaskRequest['skill'],
-      };
-      const task = await callApi<Task>(ownerId, 'POST', '/tasks', body);
-      return `Created ${task.type} task ${task.id}: "${task.title}" (${task.status}).`;
-    },
-  },
   {
     name: 'talyn_list_tasks',
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },

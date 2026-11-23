@@ -4,6 +4,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { ShortcutsSettings, shortcutRows } from '../components/settings/sections/ShortcutsSettings';
 import { buildAppShortcuts } from '../components/layout/appShortcuts';
+import { isSequence } from '../lib/shortcuts';
 
 afterEach(cleanup);
 
@@ -35,19 +36,19 @@ describe("Settings → Shortcuts go-to", () => {
       ['Go to Code review', 'G then C'],
       ['Go to Merge queue', 'G then M'],
       ['Go to Tasks', 'G then T'],
-      ['Go to Automations', 'G then A'],
-      ['Go to Loops', 'G then L'],
+      ['Go to Integrations', 'G then N'],
       ['Go to Insights', 'G then I'],
       ['Go to Settings', 'G then S'],
     ]);
     const session = groups.find((g) => g.group === 'Session');
     expect(session?.rows).toContainEqual({ id: 'composer.focus.tab', label: 'Focus chat input', keys: 'Tab' });
+    expect(session?.rows).toContainEqual({ id: 'composer.focus.slash', label: 'Focus chat input', keys: '/' });
     const general = groups.find((g) => g.group === 'General');
     expect(general?.rows.map((r) => r.label)).toContain('Show keyboard shortcuts');
   });
 
   it('every go-to sequence has its own keys', () => {
-    const keys = buildAppShortcuts().map((s) => s.keys);
+    const keys = buildAppShortcuts().filter((s) => isSequence(s.keys)).map((s) => s.keys);
     expect(new Set(keys).size).toBe(keys.length);
   });
 
@@ -58,6 +59,6 @@ describe("Settings → Shortcuts go-to", () => {
     expect(within(row).getByText('G')).toBeInTheDocument();
     expect(within(row).getByText('then')).toBeInTheDocument();
     expect(within(row).getByText('R')).toBeInTheDocument();
-    expect(screen.getByText('Focus chat input')).toBeInTheDocument();
+    expect(screen.getAllByText('Focus chat input')).toHaveLength(2);
   });
 });

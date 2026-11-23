@@ -39,8 +39,7 @@ vi.mock('../components/panels/github/stacks', () => ({ buildCopyListPayload: vi.
 vi.mock('../lib/workbenchOps', () => ({ opsFor: () => ({ unavailable: null, runAction }) }));
 vi.mock('../lib/workbenchData', () => ({ loadWorkbench }));
 vi.mock('../stores/workbenches', () => ({
-  useWorkbenchStore: { getState: () => ({ workbenches: state.workspaces, selectedChatByWorkbench: {} }) },
-  visibleChats: () => [],
+  useWorkbenchStore: { getState: () => ({ workbenches: state.workspaces, chats: {}, selectedChatByWorkbench: {} }) },
 }));
 vi.mock('../lib/workbenchNavigation', () => ({ navigateToWorkbench: navigate }));
 

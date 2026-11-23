@@ -1,3 +1,4 @@
+import type { Request, RequestHandler, Response } from 'express';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
@@ -21,6 +22,9 @@ import {
 
 const fetchWithTimeout = vi.hoisted(() => vi.fn());
 vi.mock('../services/httpTimeout.js', () => ({ fetchWithTimeout }));
+vi.mock('../services/cloudProviders/fleetAccess.js', async (original) => ({
+  ...(await original<typeof import('../services/cloudProviders/fleetAccess.js')>()), workspaceMayUseFleet: async () => true,
+}));
 
 const accounts = await import('../services/selfHosted/accounts.js');
 const { getSelfHostedCredentials, fleetAgentStatus, removeSelfHostedCredentials } = await import(
@@ -89,14 +93,45 @@ describe('fleet accounts', () => {
 
   describe('the store', () => {
     it.each([
-      ['claude_oauth', 'claude', 'Claude subscription'],
-      ['anthropic_key', 'claude', 'Anthropic API key'],
-      ['codex_oauth', 'codex', 'ChatGPT subscription'],
-      ['openai_key', 'codex', 'OpenAI API key'],
+      ['claude_oauth', 'claude', 'Claude'],
+      ['anthropic_key', 'claude', 'Claude'],
+      ['codex_oauth', 'codex', 'Codex'],
+      ['openai_key', 'codex', 'Codex'],
     ] as const)('adds a %s account to the %s agent with a default label', async (kind, agent, label) => {
       const account = await add(kind, 'v');
       expect(account).toMatchObject({ agent, kind, label, priority: 1, reauthRequiredAt: null });
       expect(account).not.toHaveProperty('credential');
+    });
+
+    it.each([
+      ['claude', [], 'Claude'],
+      ['claude', ['Work'], 'Claude 2'],
+      ['claude', ['Claude', 'Claude 2'], 'Claude 3'],
+      ['claude', ['Claude subscription'], 'Claude 2'],
+      ['claude', ['Work', 'claude 2'], 'Claude 3'],
+      ['claude', ['Claude 2', 'Claude 3'], 'Claude 4'],
+      ['codex', [], 'Codex'],
+      ['codex', ['Codex'], 'Codex 2'],
+      ['codex', ['Personal', 'Codex 3'], 'Codex 4'],
+    ] as const)('names a new %s account after %j as %s', (agent, existing, expected) => {
+      expect(accounts.nextAccountLabel(agent, existing)).toBe(expected);
+    });
+
+    it('names unnamed accounts by how many the agent already has', async () => {
+      await add('claude_oauth', 'a');
+      await add('claude_oauth', 'b', 'Work');
+      await add('claude_oauth', 'c');
+      await add('codex_oauth', 'd');
+      await add('claude_oauth', 'e', '   ');
+      const list = await accounts.listFleetAccounts(WS);
+      expect(list.map((a) => a.label)).toEqual(['Claude', 'Work', 'Claude 3', 'Claude 4', 'Codex']);
+    });
+
+    it('keeps the old default names on the single-credential path', async () => {
+      expect((await accounts.upsertPrimaryFleetAccount(WS, 'claude_oauth', credentialFor('claude_oauth', 'a'))).label)
+        .toBe('Claude subscription');
+      expect((await accounts.upsertPrimaryFleetAccount(WS, 'openai_key', credentialFor('openai_key', 'b'))).label)
+        .toBe('OpenAI API key');
     });
 
     it('appends each new account at the end of its own agent', async () => {
@@ -106,10 +141,10 @@ describe('fleet accounts', () => {
       await add('claude_oauth', 'd');
       const list = await accounts.listFleetAccounts(WS);
       expect(list.map((a) => [a.agent, a.priority, a.label])).toEqual([
-        ['claude', 1, 'Claude subscription'],
+        ['claude', 1, 'Claude'],
         ['claude', 2, 'Team key'],
-        ['claude', 3, 'Claude subscription'],
-        ['codex', 1, 'OpenAI API key'],
+        ['claude', 3, 'Claude 3'],
+        ['codex', 1, 'Codex'],
       ]);
       expect((await accounts.listFleetAccounts(WS, 'codex')).map((a) => a.kind)).toEqual(['openai_key']);
     });
@@ -387,6 +422,33 @@ describe('fleet accounts', () => {
   });
 
   describe('agent status', () => {
+    it('includes affected account names and ids in GET /cloud-providers', async () => {
+      const { cloudProviderRoutes } = await import('../routes/cloudProviders.js');
+      const { registerCloudProvider } = await import('../services/cloudProviders/registry.js');
+      const { selfHostedProvider } = await import('../services/cloudProviders/selfhosted/provider.js');
+      registerCloudProvider(selfHostedProvider);
+      const stale = await add('claude_oauth', 'first', 'Personal');
+      const second = await add('claude_oauth', 'second', 'Work');
+      await add('anthropic_key', 'working', 'Backup');
+      await accounts.setFleetAccountReauth(stale.id);
+      await accounts.setFleetAccountReauth(second.id);
+      const route = cloudProviderRoutes().stack.find((layer) => layer.route?.path === '/' && layer.route.methods.get)!.route;
+      const json = vi.fn();
+      const res = { json, status: vi.fn().mockReturnThis() };
+      await (route.stack[0].handle as RequestHandler)({ query: { workspaceId: WS }, user: { id: TEST_USER_ID } } as unknown as Request,
+        res as unknown as Response, vi.fn());
+      expect(res.status).not.toHaveBeenCalled();
+      const response = json.mock.calls[0][0];
+      expect(response.data.find((p: { type: string }) => p.type === 'selfhosted')).toMatchObject({
+        connected: true, connectedAgents: ['claude'], reauthAgents: [],
+        reauthAccounts: [
+          { id: stale.id, label: 'Personal', agent: 'claude' },
+          { id: second.id, label: 'Work', agent: 'claude' },
+        ],
+      });
+      expect(JSON.stringify(response)).not.toContain('keyEnc');
+    });
+
     it.each([
       ['no accounts', [], { connectedAgents: [], reauthAgents: [] }],
       ['one live account', [['claude_oauth', false]], { connectedAgents: ['claude'], reauthAgents: [] }],
@@ -406,7 +468,11 @@ describe('fleet accounts', () => {
         const a = await add(kind, 'v');
         if (dead) await accounts.setFleetAccountReauth(a.id);
       }
-      expect(await fleetAgentStatus(WS)).toEqual(expected);
+      const status = await fleetAgentStatus(WS);
+      expect(status).toMatchObject(expected);
+      const stored = await accounts.listFleetAccounts(WS);
+      const reconnect = stored.filter((a) => a.reauthRequiredAt).map(({ id, label, agent }) => ({ id, label, agent }));
+      expect(status.reauthAccounts ?? []).toEqual(reconnect);
     });
   });
 

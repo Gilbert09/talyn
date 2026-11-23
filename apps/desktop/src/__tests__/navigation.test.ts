@@ -66,11 +66,11 @@ describe('navigation store', () => {
     const s = () => nav.useNavigationStore.getState();
     s().navigate({ view: 'prs', tab: 'reviews' });
     s().navigate({ view: 'history' });
-    expect(s().backStack).toEqual([{ view: 'home' }, { view: 'prs', tab: 'reviews' }]);
+    expect(s().backStack.map((e) => e.route)).toEqual([{ view: 'home' }, { view: 'prs', tab: 'reviews' }]);
 
     s().back();
     expect(s().route).toEqual({ view: 'prs', tab: 'reviews' });
-    expect(s().forwardStack).toEqual([{ view: 'history' }]);
+    expect(s().forwardStack.map((e) => e.route)).toEqual([{ view: 'history' }]);
     s().back();
     expect(s().route).toEqual({ view: 'home' });
     s().back();
@@ -106,7 +106,7 @@ describe('navigation store', () => {
     s().navigate({ view: 'history' });
     s().navigate({ view: 'prs', tab: 'my_prs' }, { replace: true });
     expect(s().route).toEqual({ view: 'prs', tab: 'my_prs' });
-    expect(s().backStack).toEqual([{ view: 'home' }]);
+    expect(s().backStack.map((e) => e.route)).toEqual([{ view: 'home' }]);
   });
 
   it('caps the back stack', () => {
@@ -120,10 +120,10 @@ describe('navigation store', () => {
 
   it('persists the route', () => {
     const { nav } = load();
-    nav.useNavigationStore.getState().navigate({ view: 'automations', tab: 'loops' });
+    nav.useNavigationStore.getState().navigate({ view: 'integrations', kind: 'schedule' });
     expect(JSON.parse(localStorage.getItem('talyn-last-route') ?? 'null')).toEqual({
-      view: 'automations',
-      tab: 'loops',
+      view: 'integrations',
+      kind: 'schedule',
     });
   });
 
@@ -131,6 +131,7 @@ describe('navigation store', () => {
     ['garbage', 'not json'],
     ['an unknown view', { view: 'inbox' }],
     ['a bad tab', { view: 'prs', tab: 'nope' }],
+    ['an unknown integration', { view: 'integrations', kind: 'nope' }],
     ['a bad settings section', { view: 'settings', section: 'nope' }],
     ['a workbench with no id', { view: 'workbench', id: '' }],
   ])('falls back to home for %s', (_label, persisted) => {
@@ -206,7 +207,7 @@ describe('navigation store', () => {
       seedWorkbenches(wbs, [wb('a'), wb('b')]);
       wbs.useWorkbenchStore.getState().selectWorkbench('b');
       expect(nav.useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'b' });
-      expect(nav.useNavigationStore.getState().backStack).toEqual([{ view: 'home' }]);
+      expect(nav.useNavigationStore.getState().backStack.map((e) => e.route)).toEqual([{ view: 'home' }]);
     });
 
     it('selectWorkbench(null) on a workbench route goes home without a history entry', () => {
@@ -215,7 +216,7 @@ describe('navigation store', () => {
       nav.useNavigationStore.getState().navigate({ view: 'workbench', id: 'a' });
       wbs.useWorkbenchStore.getState().selectWorkbench(null);
       expect(nav.useNavigationStore.getState().route).toEqual({ view: 'home' });
-      expect(nav.useNavigationStore.getState().backStack).toEqual([{ view: 'home' }]);
+      expect(nav.useNavigationStore.getState().backStack.map((e) => e.route)).toEqual([{ view: 'home' }]);
     });
 
     it('a workspace switch does not bounce home before the new list loads', () => {
@@ -238,8 +239,7 @@ describe('navigation store', () => {
       ['code_reviews', { view: 'prs', tab: 'code_reviews' }],
       ['merge_queue', { view: 'prs', tab: 'merge_queue' }],
       ['queue', { view: 'prs', tab: 'queue' }],
-      ['workflows', { view: 'automations', tab: 'workflows' }],
-      ['loops', { view: 'automations', tab: 'loops' }],
+      ['integrations', { view: 'integrations' }],
       ['settings', { view: 'settings', section: 'workspace' }],
       ['workbenches', { view: 'home' }],
     ])('setActivePanel(%s) navigates to %p and derives the panel back', (panel, route) => {
@@ -300,7 +300,7 @@ describe('navigation store', () => {
     [{ view: 'home' }, 'home'],
     [{ view: 'workbench', id: 'a' }, 'workbench'],
     [{ view: 'prs', tab: 'reviews' }, 'reviews'],
-    [{ view: 'automations', tab: 'loops' }, 'loops'],
+    [{ view: 'integrations', kind: 'schedule' }, 'integrations'],
     [{ view: 'settings', section: 'about' }, 'settings'],
   ])('analyticsPanel(%p) is %s', (route, expected) => {
     const { nav } = load();

@@ -15,6 +15,15 @@
 export type PRFilterLabelMatch = 'any' | 'all';
 
 /**
+ * The review state a filter asks for. `approved` is a PR whose review decision
+ * is APPROVED. `not_approved` is every other PR: review required, changes
+ * requested, or no review decision at all.
+ */
+export type PRFilterApproval = 'approved' | 'not_approved';
+
+export const PR_FILTER_APPROVALS: readonly PRFilterApproval[] = ['approved', 'not_approved'];
+
+/**
  * What a saved filter tests. Every field is optional; an absent (or empty)
  * field places no constraint at all. A filter with no constraints matches
  * every PR — {@link prFilterIsEmpty} spots that so the UI can refuse to save
@@ -38,6 +47,12 @@ export interface PRFilterCriteria {
   titleContains?: string;
   /** GitHub logins. Matches if the PR's author is ANY of them. */
   authors?: string[];
+  /**
+   * Approved or not approved. Reads the same effective review decision as the
+   * table's review badge, so a repo with no required reviews still counts an
+   * approval.
+   */
+  approval?: PRFilterApproval;
 }
 
 /** A named, saved filter as persisted in `workspace.settings.prFilters`. */
@@ -67,6 +82,8 @@ export interface PRFilterTarget {
     title?: string;
     author?: string;
     labels?: string[];
+    reviewDecision?: string | null;
+    effectiveReviewDecision?: string | null;
   };
 }
 
@@ -88,7 +105,8 @@ export function prFilterIsEmpty(criteria: PRFilterCriteria): boolean {
     normalizeList(criteria.labels).length === 0 &&
     normalizeList(criteria.excludeLabels).length === 0 &&
     normalizeList(criteria.authors).length === 0 &&
-    (criteria.titleContains ?? '').trim().length === 0
+    (criteria.titleContains ?? '').trim().length === 0 &&
+    !criteria.approval
   );
 }
 
@@ -109,6 +127,12 @@ export function prMatchesFilter(row: PRFilterTarget, criteria: PRFilterCriteria)
   const title = (criteria.titleContains ?? '').trim().toLowerCase();
   if (title) {
     if (!(row.summary.title ?? '').toLowerCase().includes(title)) return false;
+  }
+
+  if (criteria.approval) {
+    const decision = row.summary.effectiveReviewDecision ?? row.summary.reviewDecision ?? null;
+    const approved = decision === 'APPROVED';
+    if (approved !== (criteria.approval === 'approved')) return false;
   }
 
   const wanted = normalizeList(criteria.labels);
@@ -172,7 +196,7 @@ export function validatePRFilters(raw: unknown): PRFilterDefinition[] {
       throw new Error(`${at}.criteria must be an object`);
     }
     const c = f.criteria as Record<string, unknown>;
-    const known = ['repos', 'labels', 'labelMatch', 'excludeLabels', 'titleContains', 'authors'];
+    const known = ['repos', 'labels', 'labelMatch', 'excludeLabels', 'titleContains', 'authors', 'approval'];
     const unknown = Object.keys(c).filter((k) => !known.includes(k));
     if (unknown.length > 0) {
       throw new Error(`Unknown ${at}.criteria key "${unknown[0]}"`);
@@ -194,6 +218,12 @@ export function validatePRFilters(raw: unknown): PRFilterDefinition[] {
       throw new Error(`${at}.criteria.titleContains must be a string`);
     }
     const titleContains = (c.titleContains as string | undefined)?.trim() || undefined;
+    if (
+      c.approval !== undefined &&
+      !PR_FILTER_APPROVALS.includes(c.approval as PRFilterApproval)
+    ) {
+      throw new Error(`${at}.criteria.approval must be "approved" or "not_approved"`);
+    }
     const criteria: PRFilterCriteria = {
       repos: stringList('repos'),
       labels: stringList('labels'),
@@ -201,6 +231,7 @@ export function validatePRFilters(raw: unknown): PRFilterDefinition[] {
       excludeLabels: stringList('excludeLabels'),
       titleContains,
       authors: stringList('authors'),
+      approval: c.approval as PRFilterApproval | undefined,
     };
     // Drop the absent keys so the stored jsonb stays the shape it reads as.
     for (const k of Object.keys(criteria) as Array<keyof PRFilterCriteria>) {

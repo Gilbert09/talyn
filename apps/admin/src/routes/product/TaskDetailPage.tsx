@@ -66,7 +66,7 @@ export function TaskDetailPage() {
                   : 'muted'
             }
           >
-            {data.status}
+            {data.status === 'waiting_ci' ? 'waiting for CI' : data.status}
           </Pill>
           <span>{data.type}</span>
           {data.ownerEmail && <span>{data.ownerEmail}</span>}

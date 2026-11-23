@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, FolderOpen, Github, Plus, RefreshCw, X } from 'lucide-react';
 import { SANDBOX_SIZES, type RepositoryPreviewResponse, type RepositorySandboxSizeResponse, type RepositorySetup, type WorkbenchConfig } from '@talyn/shared';
-import { api, GitHubRepo } from '../../../lib/api';
+import { api, GitHubRepo, loadAllRepos, mergeRepos } from '../../../lib/api';
+import { queuedRowRequest } from '../../../lib/rowRequestQueue';
 import { cn } from '../../../lib/utils';
 import { isOwnerCovered, parseRepoInput } from '../../../lib/githubInstall';
 import { autoDetectCheckouts } from '../../../lib/checkoutDetection';
@@ -70,11 +71,20 @@ export function RepositoriesSettings() {
   // Fetch the full repo set from GitHub (user + all orgs) and cache it.
   // This is the expensive call, so it only runs on a cache miss/stale or
   // an explicit refresh — never on every picker open.
+  const repoLoadRun = useRef(0);
   const refreshRepos = useCallback(async () => {
     if (!currentWorkspaceId) return;
+    // A newer load or a workspace change stops this one.
+    const run = ++repoLoadRun.current;
+    const cancelled = () => repoLoadRun.current !== run;
     setReposLoading(true);
     try {
-      const repos = await api.github.listAllRepos(currentWorkspaceId);
+      // Show each page as it arrives. A large org can take many pages.
+      const repos = await loadAllRepos(currentWorkspaceId, {
+        isCancelled: cancelled,
+        onProgress: (partial) => setAvailableRepos((prev) => mergeRepos(prev, partial)),
+      });
+      if (cancelled()) return;
       const now = Date.now();
       setAvailableRepos(repos);
       setReposFetchedAt(now);
@@ -82,8 +92,11 @@ export function RepositoriesSettings() {
     } catch (_e) {
       // Keep whatever the cache gave us.
     } finally {
-      setReposLoading(false);
+      if (!cancelled()) setReposLoading(false);
     }
+  }, [currentWorkspaceId]);
+  useEffect(() => () => {
+    repoLoadRun.current++;
   }, [currentWorkspaceId]);
 
   // Load watched repos + GitHub status. Repos hydrate from the
@@ -105,10 +118,8 @@ export function RepositoriesSettings() {
       if (!status.connected) return;
 
       const cached = readRepoCache(currentWorkspaceId);
-      if (cached) {
-        setAvailableRepos(cached.repos);
-        setReposFetchedAt(cached.fetchedAt);
-      }
+      setAvailableRepos(cached?.repos ?? []);
+      setReposFetchedAt(cached?.fetchedAt ?? null);
       if (!cached || Date.now() - cached.fetchedAt > REPO_CACHE_TTL_MS) {
         void refreshRepos();
       }
@@ -269,7 +280,11 @@ export function RepositoriesSettings() {
                 Your repos + every org you belong to. For any other repo, type its
                 owner/name or paste its URL.{' '}
                 {reposLoading
-                  ? 'Refreshing…'
+                  ? reposFetchedAt
+                    ? 'Refreshing…'
+                    : availableRepos.length > 0
+                      ? `Loading more… ${availableRepos.length} found so far.`
+                      : ''
                   : reposFetchedAt
                     ? `Updated ${formatAge(reposFetchedAt)}.`
                     : ''}
@@ -334,7 +349,9 @@ export function RepositoriesSettings() {
               ) : typedRepoAddable ? null : (
                 <p className="text-[13px] text-muted-foreground p-2">
                   {repoSearch
-                    ? 'No matching repositories. Try Refresh, or type owner/name to add any repo.'
+                    ? reposLoading
+                      ? 'No matching repositories yet. Still loading…'
+                      : 'No matching repositories. Try Refresh, or type owner/name to add any repo.'
                     : 'No repositories found. Try Refresh.'}
                 </p>
               )}
@@ -551,9 +568,9 @@ function RepoRow({
   const previewsEnabled = useWorkspaceStore((s) => s.features?.workbenches === true);
   useEffect(() => {
     let active = true;
-    void api.repositories.sandboxSize.get(repo.id).then((value) => { if (active) setSize(value); }).catch(() => undefined);
-    if (previewsEnabled) void api.repositories.preview.get(repo.id).then((value) => { if (active) setPreview(value); }).catch(() => undefined);
-    if (previewsEnabled) void api.repositories.setup.get(repo.id).then((value) => { if (active) setSetup(value); }).catch(() => undefined);
+    void queuedRowRequest(() => api.repositories.sandboxSize.get(repo.id)).then((value) => { if (active) setSize(value); }).catch(() => undefined);
+    if (previewsEnabled) void queuedRowRequest(() => api.repositories.preview.get(repo.id)).then((value) => { if (active) setPreview(value); }).catch(() => undefined);
+    if (previewsEnabled) void queuedRowRequest(() => api.repositories.setup.get(repo.id)).then((value) => { if (active) setSetup(value); }).catch(() => undefined);
     return () => { active = false; };
   }, [repo.id, previewsEnabled]);
 

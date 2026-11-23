@@ -26,6 +26,7 @@ import { postHogCodeStreamer } from '../services/posthogCode/streamer.js';
 import {
   assertUser,
   handleAccessError,
+  refuseTaskFromOutsideApp,
   requireEnvironmentAccess,
   requireTaskAccess,
   requireWorkspaceAccess,
@@ -236,6 +237,7 @@ export function taskRoutes(): Router {
 
   // Create task — queued immediately for the cloud scheduler to dispatch.
   router.post('/', async (req, res) => {
+    if (refuseTaskFromOutsideApp(req, res)) return;
     const body = req.body as CreateTaskRequest;
     try {
       await requireWorkspaceAccess(req, body.workspaceId);
@@ -319,6 +321,11 @@ export function taskRoutes(): Router {
         success: false,
         error: `status must be one of: ${TASK_STATUSES.join(', ')}`,
       });
+    }
+    // Only the fleet poller parks a run: a parked task without its park state
+    // could never be woken.
+    if (body.status === 'waiting_ci') {
+      return res.status(400).json({ success: false, error: 'status waiting_ci is set by Talyn only' });
     }
 
     // Only dispatch settings are public. Remote handles and PR links belong to the server.
@@ -447,7 +454,7 @@ export function taskRoutes(): Router {
       .update(tasksTable)
       .set({ status: 'queued', result: null, completedAt: null, updatedAt: new Date() })
       .where(eq(tasksTable.id, req.params.id));
-    void taskQueueService.processQueue();
+    taskQueueService.runProcessQueue();
 
     const rows = await db
       .select(taskColumnsNoTranscript)
@@ -529,7 +536,8 @@ export function taskRoutes(): Router {
       }
       task = (await readTask())!;
     }
-    if (task.status !== 'in_progress') {
+    // A run paused for CI is still running work: stopping it deletes its box.
+    if (task.status !== 'in_progress' && task.status !== 'waiting_ci') {
       return res.status(400).json({ success: false, error: 'Task is not running' });
     }
 

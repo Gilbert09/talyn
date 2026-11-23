@@ -134,15 +134,15 @@ describe('fleetInstant', () => {
   });
 });
 
-describe('the 10-minute idle timeout', () => {
-  it('is 600 seconds', () => {
-    expect(TALYN_SANDBOX_IDLE_TTL_SEC).toBe(600);
+describe('the 3-minute idle timeout', () => {
+  it('is 180 seconds', () => {
+    expect(TALYN_SANDBOX_IDLE_TTL_SEC).toBe(180);
   });
 
   it.each<[string, Error, boolean]>([
     [
       'the tenant ceiling',
-      new FleetThrottleError('an idle timeout of 600s was asked for and this account allows at most 300s; ask for that or less, or omit idleTtlSec to take the default'),
+      new FleetThrottleError('an idle timeout of 180s was asked for and this account allows at most 120s; ask for that or less, or omit idleTtlSec to take the default'),
       true,
     ],
     ['the resource code', new FleetThrottleError('tenant_idle_ttl'), true],
@@ -169,7 +169,7 @@ describe('the 10-minute idle timeout', () => {
       mcpServerIds: null,
       ...extra,
     });
-    expect(built.ok && built.body.idleTtlSec).toBe(600);
+    expect(built.ok && built.body.idleTtlSec).toBe(180);
   });
 
   it('is dropped once when the tenant ceiling is lower, and the create goes on', async () => {
@@ -178,9 +178,9 @@ describe('the 10-minute idle timeout', () => {
       .mockRejectedValueOnce(new FleetThrottleError('tenant_idle_ttl: allows at most 300s'))
       .mockResolvedValue({ sandbox: { id: 'box' } });
     const client = { createSandbox } as unknown as InstanceType<typeof FleetClient>;
-    await createSandboxRetryingUncertain(client, { id: 'box', workspaceId: 'ws', idleTtlSec: 600 });
+    await createSandboxRetryingUncertain(client, { id: 'box', workspaceId: 'ws', idleTtlSec: 180 });
     expect(createSandbox).toHaveBeenCalledTimes(2);
-    expect(createSandbox.mock.calls[0][0]).toMatchObject({ idleTtlSec: 600 });
+    expect(createSandbox.mock.calls[0][0]).toMatchObject({ idleTtlSec: 180 });
     expect(createSandbox.mock.calls[1][0]).not.toHaveProperty('idleTtlSec');
   });
 
@@ -192,10 +192,10 @@ describe('the 10-minute idle timeout', () => {
         .mockRejectedValueOnce(new FleetDispatchUncertainError('lost'))
         .mockResolvedValue({ sandbox: { id: 'box' } });
       const client = { createSandbox } as unknown as InstanceType<typeof FleetClient>;
-      const done = createSandboxRetryingUncertain(client, { id: 'box', workspaceId: 'ws', idleTtlSec: 600 });
+      const done = createSandboxRetryingUncertain(client, { id: 'box', workspaceId: 'ws', idleTtlSec: 180 });
       await vi.runAllTimersAsync();
       await done;
-      expect(createSandbox.mock.calls.map((c) => c[0].idleTtlSec)).toEqual([600, 600]);
+      expect(createSandbox.mock.calls.map((c) => c[0].idleTtlSec)).toEqual([180, 180]);
     } finally {
       vi.useRealTimers();
     }
@@ -207,7 +207,7 @@ describe('the 10-minute idle timeout', () => {
   ])('does not drop it for %s', async (_label, err) => {
     const createSandbox = vi.fn().mockRejectedValue(err);
     const client = { createSandbox } as unknown as InstanceType<typeof FleetClient>;
-    await expect(createSandboxRetryingUncertain(client, { id: 'box', workspaceId: 'ws', idleTtlSec: 600 })).rejects.toBe(err);
+    await expect(createSandboxRetryingUncertain(client, { id: 'box', workspaceId: 'ws', idleTtlSec: 180 })).rejects.toBe(err);
     expect(createSandbox).toHaveBeenCalledTimes(1);
   });
 
@@ -217,7 +217,7 @@ describe('the 10-minute idle timeout', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://fleet.test/v1/sandboxes/box/resume');
-    expect(JSON.parse(String(init.body))).toEqual({ idleTtlSec: 600 });
+    expect(JSON.parse(String(init.body))).toEqual({ idleTtlSec: 180 });
   });
 
   it('resumes with no idle timeout when the tenant ceiling is lower', async () => {
@@ -228,7 +228,7 @@ describe('the 10-minute idle timeout', () => {
       )
       .mockResolvedValue(new Response('{}', { status: 200 }));
     await new FleetClient('https://fleet.test', 'token').resumeSandbox('box');
-    expect(fetchSpy.mock.calls.map(([, init]) => JSON.parse(String((init as RequestInit).body)))).toEqual([{ idleTtlSec: 600 }, {}]);
+    expect(fetchSpy.mock.calls.map(([, init]) => JSON.parse(String((init as RequestInit).body)))).toEqual([{ idleTtlSec: 180 }, {}]);
   });
 });
 

@@ -8,12 +8,13 @@ import { AppState, StyleSheet, View } from 'react-native';
 import { useMobileRuntime, useWorkspace } from '../../../auth/AuthProvider';
 import { PickerSheet } from '../../../components/PickerSheet';
 import { AppText, Button, Disclosure, Divider, Field, Group, Input, Pill, Row, SectionHeader, Spinner } from '../../../components/UI';
+import { trackEvent } from '../../../lib/analytics';
 import { mono } from '../../../theme/tokens';
 import { useResource } from '../../../workflow/hooks';
 import { webUrl } from '../../more/Page';
 import { useRemote } from '../../more/useRemote';
 import { ApiKeyForm } from './ApiKeyForm';
-import { accountErrorMessage, AGENT_SHORT, agentState, apiKeyLabel, CODEX_SETTINGS_PATH, CODEX_STEPS, connectTarget, FLEET_AGENTS,
+import { accountErrorMessage, errorCode, errorText, AGENT_SHORT, agentState, CODEX_SETTINGS_PATH, CODEX_STEPS, connectTarget, FLEET_AGENTS,
   looksLikeClaudeCode, REAUTH_DETAIL, type ConnectTarget } from './model';
 
 export interface ConnectAgentPanelProps {
@@ -27,6 +28,10 @@ export interface ConnectAgentPanelProps {
   add?: boolean;
   /** The workspace to connect. Defaults to the selected one. */
   workspaceId?: string;
+  /** Called when the person picks an agent from the list. */
+  onChoose?(agent: FleetAgent): void;
+  /** Called when a new account is added, before the person names it. */
+  onAdded?(): void;
 }
 
 const DETAIL: Record<FleetAgent, string> = { claude: 'Use your Claude Pro or Max subscription.', codex: 'Use your ChatGPT subscription.' };
@@ -44,7 +49,7 @@ export async function loadFleetAccounts(workspaceId: string): Promise<FleetAccou
  * computer, so the panel says how and offers an API key. Embeddable, for
  * onboarding; `ConnectAgentSheet` wraps it for everywhere else.
  */
-export function ConnectAgentPanel({ agent, onConnected, accountId, add = false, workspaceId }: ConnectAgentPanelProps) {
+export function ConnectAgentPanel({ agent, onConnected, accountId, add = false, workspaceId, onChoose, onAdded }: ConnectAgentPanelProps) {
   const { workflow } = useMobileRuntime();
   const selected = useWorkspace().selected ?? '';
   const ws = workspaceId ?? selected;
@@ -53,13 +58,21 @@ export function ConnectAgentPanel({ agent, onConnected, accountId, add = false, 
   const accounts = useRemote<FleetAccountsResponse | null>(ws ? `fleet-accounts:${ws}` : null, () => loadFleetAccounts(ws));
   const providers = useResource<CloudProviderInfo[]>('providers');
   const fleet = ws === selected ? providers.data?.find((provider) => provider.type === 'selfhosted') : undefined;
+  // A new account the server just named. The panel asks for a better name before it finishes.
+  const [naming, setNaming] = useState<{ id: string; label?: string } | null>(null);
 
-  const connected = useCallback(async () => {
+  const connected = useCallback(async (added?: { id: string; label?: string }) => {
     await accounts.refresh();
     // The composer and the agent lists read these, so they change without a restart.
     await Promise.allSettled([workflow.load('providers'), workflow.load('readiness'), workflow.load('workspace')]);
-    onConnected();
-  }, [accounts, workflow, onConnected]);
+    if (added) { setNaming(added); onAdded?.(); }
+    else onConnected();
+  }, [accounts, workflow, onConnected, onAdded]);
+
+  if (naming) {
+    const label = accounts.data?.accounts.find((account) => account.id === naming.id)?.label ?? naming.label ?? AGENT_SHORT[chosen ?? 'claude'];
+    return <NameAccount accountId={naming.id} initial={label} onDone={onConnected} />;
+  }
 
   if (!chosen) {
     return <View style={styles.stack}>
@@ -68,7 +81,7 @@ export function ConnectAgentPanel({ agent, onConnected, accountId, add = false, 
         {FLEET_AGENTS.map((item, index) => {
           const state = agentState(item, accounts.data, fleet);
           return <Row key={item} title={AGENT_SHORT[item]} subtitle={DETAIL[item]} chevron divider={index < FLEET_AGENTS.length - 1}
-            accessibilityLabel={`${AGENT_SHORT[item]}: ${state.label}`} onPress={() => setChoice(item)}
+            accessibilityLabel={`${AGENT_SHORT[item]}: ${state.label}`} onPress={() => { onChoose?.(item); setChoice(item); }}
             trailing={state.connected ? <Pill label={state.label} tone={state.tone} /> : undefined} />;
         })}
       </Group>
@@ -90,24 +103,54 @@ export function ConnectAgentPanel({ agent, onConnected, accountId, add = false, 
     </View> : null}
     {reconnecting ? <AppText variant="meta" tone="muted">{REAUTH_DETAIL[chosen]}</AppText> : null}
     {chosen === 'claude'
-      ? <ClaudeSignIn workspaceId={ws} target={target} reconnecting={reconnecting} onConnected={connected} />
+      ? <ClaudeSignIn workspaceId={ws} target={target} reconnecting={reconnecting} onConnected={(id) => connected(id ? { id } : undefined)} />
       : <CodexOnComputer connected={state.connected && !state.reauth} onCheck={async () => {
         await accounts.refresh();
         await Promise.allSettled([workflow.load('providers'), workflow.load('readiness')]);
       }} onConnected={onConnected} />}
     {chosen === 'claude'
       ? <Disclosure title="Use an API key instead">
-        <ApiKeyForm agent="claude" workspaceId={ws} label={apiKeyLabel(accounts.data, 'claude')} onAdded={() => { void connected(); }} />
+        <ApiKeyForm agent="claude" workspaceId={ws} onAdded={(added) => { void connected(added.id ? { id: added.id, label: added.label } : undefined); }} />
       </Disclosure>
       : <>
         <Divider />
         <SectionHeader title="Or use an API key" />
-        <ApiKeyForm agent="codex" workspaceId={ws} label={apiKeyLabel(accounts.data, 'codex')} onAdded={() => { void connected(); }} />
+        <ApiKeyForm agent="codex" workspaceId={ws} onAdded={(added) => { void connected(added.id ? { id: added.id, label: added.label } : undefined); }} />
       </>}
   </View>;
 }
 
-const targetOptions = (target: ConnectTarget) => target && ('accountId' in target ? { accountId: target.accountId } : { label: target.label });
+/** Name an account right after it connects. Skip keeps the name the server gave it. */
+function NameAccount({ accountId, initial, onDone }: { accountId: string; initial: string; onDone(): void }) {
+  const [value, setValue] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const save = async () => {
+    const label = value.trim();
+    if (!label) { setError('Enter an account name.'); return; }
+    if (label === initial) { onDone(); return; }
+    setBusy(true); setError(null);
+    try {
+      await cloudProviders.fleetAccounts.rename(accountId, label);
+      onDone();
+    } catch (failure) {
+      setError(accountErrorMessage(failure, 'Could not rename the account.'));
+      setBusy(false);
+    }
+  };
+  return <View style={styles.stack}>
+    <AppText variant="meta" tone="muted">Connected. Give this account a name, or keep this one.</AppText>
+    <Field label="Account name">
+      <Input accessibilityLabel="Account name" value={value} onChangeText={(next) => { setValue(next); setError(null); }}
+        autoFocus selectTextOnFocus editable={!busy} returnKeyType="done" onSubmitEditing={() => { void save(); }} />
+    </Field>
+    {error ? <AppText accessibilityRole="alert" variant="meta" tone="destructive">{error}</AppText> : null}
+    <View style={styles.actions}>
+      <Button size="sm" title="Save" loading={busy} disabled={busy || !value.trim()} onPress={() => { void save(); }} />
+      <Button size="sm" variant="quiet" title="Skip" disabled={busy} onPress={onDone} />
+    </View>
+  </View>;
+}
 
 /**
  * Two steps with a browser trip between them. The PKCE verifier stays on the
@@ -115,7 +158,7 @@ const targetOptions = (target: ConnectTarget) => target && ('accountId' in targe
  * grant that cannot run a model; its sentence is shown as it is.
  */
 function ClaudeSignIn({ workspaceId, target, reconnecting, onConnected }: {
-  workspaceId: string; target: ConnectTarget; reconnecting: boolean; onConnected(): Promise<void>;
+  workspaceId: string; target: ConnectTarget; reconnecting: boolean; onConnected(addedId?: string): Promise<void>;
 }) {
   const [step, setStep] = useState<'start' | 'code'>('start');
   const [url, setUrl] = useState<string | null>(null);
@@ -125,7 +168,17 @@ function ClaudeSignIn({ workspaceId, target, reconnecting, onConnected }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
+  // The sign-in in flight, until it connects, fails or is abandoned.
+  const pending = useRef<number | null>(null);
+  const abandon = useCallback((via: 'back' | 'closed') => {
+    if (pending.current === null) return;
+    const elapsed = Date.now() - pending.current;
+    pending.current = null;
+    trackEvent('cloud_provider_signin_abandoned', {
+      provider: 'selfhosted', agent: 'claude', method: 'claude_oauth', via, elapsed_ms: elapsed,
+    });
+  }, []);
+  useEffect(() => () => { mounted.current = false; abandon('closed'); }, [abandon]);
 
   const prefill = useCallback(async () => {
     try {
@@ -154,12 +207,16 @@ function ClaudeSignIn({ workspaceId, target, reconnecting, onConnected }: {
 
   const start = async () => {
     setBusy(true); setError(null);
+    trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent: 'claude', method: 'claude_oauth' });
+    pending.current = Date.now();
     try {
-      const result = await cloudProviders.startClaudeSignIn(workspaceId, targetOptions(target));
+      const result = await cloudProviders.startClaudeSignIn(workspaceId, target);
       setUrl(result.url); setStarted(target); setStep('code');
       setBusy(false);
       await open(result.url);
     } catch (failure) {
+      pending.current = null;
+      trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent: 'claude', stage: 'start', error: errorText(failure), error_code: errorCode(failure) });
       if (mounted.current) setError(accountErrorMessage(failure, 'Could not start the Claude sign-in.'));
     } finally { if (mounted.current) setBusy(false); }
   };
@@ -167,10 +224,14 @@ function ClaudeSignIn({ workspaceId, target, reconnecting, onConnected }: {
   const finish = async () => {
     setBusy(true); setError(null);
     try {
-      await cloudProviders.completeClaudeSignIn(workspaceId, code.trim(), targetOptions(started));
+      const result = await cloudProviders.completeClaudeSignIn(workspaceId, code.trim(), started);
+      pending.current = null;
+      trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent: 'claude' });
       setCode('');
-      await onConnected();
+      await onConnected(started && 'newAccount' in started ? result.accountId : undefined);
     } catch (failure) {
+      pending.current = null;
+      trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent: 'claude', stage: 'finish', error: errorText(failure), error_code: errorCode(failure) });
       if (mounted.current) setError(accountErrorMessage(failure, 'Could not finish the Claude sign-in.'));
     } finally { if (mounted.current) setBusy(false); }
   };
@@ -207,7 +268,7 @@ function ClaudeSignIn({ workspaceId, target, reconnecting, onConnected }: {
     <View style={styles.actions}>
       {url ? <Button size="sm" variant="quiet" title="Open the sign-in page again" disabled={busy}
         onPress={() => { void open(url).catch(() => setError('Could not open the sign-in page.')); }} /> : null}
-      <Button size="sm" variant="quiet" title="Back" disabled={busy} onPress={() => { setStep('start'); setCode(''); setError(null); }} />
+      <Button size="sm" variant="quiet" title="Back" disabled={busy} onPress={() => { abandon('back'); setStep('start'); setCode(''); setError(null); }} />
     </View>
   </View>;
 }
@@ -247,8 +308,9 @@ export function ConnectAgentSheet({ visible, onClose, onConnected, title, ...pan
 }) {
   const heading = title ?? (panel.agent ? `${panel.accountId ? 'Reconnect' : 'Connect'} ${AGENT_SHORT[panel.agent]}` : 'Connect an agent');
   const done = useCallback(() => { onConnected?.(); onClose(); }, [onConnected, onClose]);
+  // Refresh when the account is added too, so closing the sheet at the name step still shows it.
   return <PickerSheet visible={visible} title={heading} onClose={onClose} sections={[]}
-    empty={visible ? <View style={styles.sheetBody}><ConnectAgentPanel {...panel} onConnected={done} /></View> : null} />;
+    empty={visible ? <View style={styles.sheetBody}><ConnectAgentPanel {...panel} onConnected={done} onAdded={onConnected} /></View> : null} />;
 }
 
 const styles = StyleSheet.create({

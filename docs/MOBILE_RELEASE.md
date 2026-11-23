@@ -1,7 +1,6 @@
 # Mobile release operations
 
 Phase 5 supplies release tooling. It does not approve launch or prove store acceptance.
-Merge [#128](https://github.com/Gilbert09/talyn/pull/128), then [#129](https://github.com/Gilbert09/talyn/pull/129), then this release change.
 Earlier work: [#116](https://github.com/Gilbert09/talyn/pull/116), [#119](https://github.com/Gilbert09/talyn/pull/119),
 [#121](https://github.com/Gilbert09/talyn/pull/121), and [#126](https://github.com/Gilbert09/talyn/pull/126).
 
@@ -54,7 +53,7 @@ Both store profiles require this value. Non-store builds default to 1.
 EAS uses `appVersionSource: local`; every profile disables `autoIncrement`.
 Do not reuse a store number or allow concurrent version reservations. CI serializes release jobs.
 
-EAS CLI is pinned to 27.5.0 in `release/toolchain.json`, `eas.json`, and the release workflow.
+EAS CLI is pinned to 27.5.0 in `release/toolchain.json` and the mobile workflows. `eas.json` sets `>= 27.5.0`, not an exact version. EAS build workers run their own newer eas-cli for the embedded bundle upload, and that CLI stops when `eas.json` does not allow its version.
 CI installs it outside the app. Doctor rejects a local EAS CLI dependency.
 Expo owns the supported native dependency versions.
 Recheck store SDK and builder requirements at each release freeze.
@@ -68,6 +67,8 @@ Configure these public values in the protected GitHub environment and matching E
 - `EXPO_PUBLIC_API_ORIGIN`, `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_KEY`.
 - `EXPO_PUBLIC_AUTH_CALLBACK_URL`. `EXPO_PUBLIC_EAS_PROJECT_ID` is optional: the config defaults to the Talyn project
   `@talyn-app/talyn-mobile` (`69499768-c478-44c0-8588-355c674515df`). Set it only for a fork.
+- `EXPO_PUBLIC_TALYN_POSTHOG_KEY` and, optionally, `EXPO_PUBLIC_TALYN_POSTHOG_HOST` (default `https://us.i.posthog.com`).
+  With no key, the app sends no analytics, replay, or exceptions.
 - `TALYN_MOBILE_IOS_BUNDLE_ID`, `TALYN_MOBILE_ANDROID_PACKAGE`, `TALYN_MOBILE_SCHEME`.
 - `TALYN_MOBILE_SUPPORT_URL`, `TALYN_MOBILE_PRIVACY_URL`, `TALYN_MOBILE_DELETION_URL`.
 - `eas.json` owns `MOBILE_UPDATES_ENABLED` per profile. Do not set it in an EAS environment.
@@ -91,7 +92,7 @@ Configuration tests use inert fixtures. They do not verify domain ownership or p
 ## Protected release workflow and credentials
 
 The workflow is `.github/workflows/mobile-release.yml`. It accepts only manual dispatch on `main`.
-It rejects source commits outside `origin/main`. This stacked PR cannot release before its parents merge.
+It rejects source commits outside `origin/main`.
 Create `mobile-preview` and `mobile-production` GitHub environments before enabling the workflow.
 Restrict both environments to `main`. Require reviewers. Disable self-approval and administrative bypass where available.
 Set environment variable `MOBILE_RELEASE_APPROVED=true` only after these rules exist.
@@ -104,6 +105,15 @@ Add the Mobile checks to required branch protection. These GitHub settings are e
 Use EAS-managed iOS distribution, provisioning, APNs, Android upload, and submission credentials.
 Use Play App Signing. Confirm custody, least privilege, recovery access, two-factor authentication, and rotation owners.
 Provision credentials through the approved EAS dashboard before non-interactive builds.
+
+### iOS share extension
+
+"Share to Talyn" adds a second iOS target, `ShareExtension`, with the bundle ID `<app bundle ID>.share-extension` (`apps/mobile/plugins/withShareIntent.cjs`).
+The app and the extension share the app group `group.<app bundle ID>`.
+A non-interactive build cannot create the extension's provisioning profile or register the app group.
+Before the first iOS build of each profile that has the extension, run `eas credentials -p ios` or one interactive `eas build -p ios --profile <profile>` with an Apple account.
+EAS then registers the app group, enables it on both identifiers, and makes the extension's distribution profile.
+Until then, the TestFlight workflow's iOS build stops at the credentials step. Android needs no new credentials.
 For iOS submission, reserve the app in App Store Connect and configure the approved ASC app and Apple team IDs.
 The submit profiles resolve those IDs from environment variables. No Apple password enters CI.
 For Android, assign the service account to the correct EAS app and Play application with minimum release permissions.
@@ -116,6 +126,7 @@ Protected GitHub secret names:
 | `EXPO_TOKEN` | Restricted Expo account or robot access. Available only to the approved operation step and the automatic publish steps. |
 | `MOBILE_RELEASE_EVIDENCE_JSON` | Candidate-specific approval references. Required for store operations. |
 | `MOBILE_STORE_METADATA_JSON` | Approved complete metadata snapshot. Required for submission; contains review instructions without credentials. |
+| `POSTHOG_CLI_API_KEY` | Optional. PostHog personal API key that uploads source maps after a manual `update`. See "PostHog error tracking symbols". |
 
 Hosted credentials remain in EAS. If the organization later chooses CI-managed submission credentials, use reviewed file secrets.
 Suggested names are `EXPO_ASC_API_KEY_P8`, `EXPO_ASC_KEY_ID`, `EXPO_ASC_ISSUER_ID`, and `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`.
@@ -175,6 +186,15 @@ npm run mobile:release:plan -- build production android --dry-run
 
 `--execute` rejects local shells, pull requests, push jobs, wrong refs, dirty source, missing secrets, and absent approvals.
 Do not bypass the wrapper with a direct publication command.
+Exception, 2026-11-23 (Tom's call: "release the apps on the app stores ... do whatever you need"): the first store release,
+version 0.1.0 build 11 on both platforms, was built with `eas build --profile production --auto-submit-with-profile production`
+from a clean checkout of `main` (6512b64c69), not through the protected workflow. The device, link, push, deletion and rollback
+evidence was not recorded first. Later production releases use the workflow.
+
+Exception, 2026-11-13 (Tom's call): iOS build 1 (EAS 03e81edc) went to TestFlight with a direct `eas submit`. The submit gates
+need device, link and push evidence, and for iOS that evidence only exists after a TestFlight install. Later submissions use
+the workflow. `eas.json` holds the App Store Connect app ID (6834161436) and team ID (5KQY9SJDWG) as literals: EAS does not
+expand environment variables in `eas.json`, so the earlier `$MOBILE_ASC_APP_ID` placeholders failed every iOS submit.
 In GitHub Actions, choose **Mobile release → Run workflow** on `main`.
 Select one action, profile, and platform. Supply the approved full source SHA and reserved build number.
 For submit, update, or rollback, supply the exact platform runtime. Submission also needs the inspected EAS build ID.
@@ -267,14 +287,25 @@ Use the inventory in [MOBILE_STORE_ASSETS.md](MOBILE_STORE_ASSETS.md).
 Supply support and deletion pages. Confirm provider deletion, retention, backups, and paying-admin escalation.
 Provide disposable review access through App Store Connect or Play Console's restricted review fields.
 Keep passwords and OAuth codes out of metadata files and automated flows.
+Store review sign-in: press and hold the Talyn owl on the sign-in screen for 2 seconds to open an email and password form. Only the review account has a password. The backend refuses accounts without a GitHub identity.
 
 Submit the inspected beta build ID through the protected workflow.
 The wrapper verifies hosted platform, profile, identity, commit, version, build, runtime, and channel before submission.
-Android submission creates a draft on the internal track. A store owner must review and release that draft.
+Android submission to the internal track releases the build to internal testers at once (`releaseStatus: completed`, Tom's call,
+2026-11-17). EAS uploads with the `talyn-eas-submit@talyn-514510.iam.gserviceaccount.com` service account key
+(1Password: "Talyn Play submit key"), which has release rights for Talyn only. A production submission stays a draft.
 iOS submission uploads to App Store Connect. It does not release the app to the public.
-Automatic TestFlight group setup is disabled. Assign approved internal testers in App Store Connect.
-Confirm processing, export compliance, tester access, and TestFlight expiry dates.
-External TestFlight testers can require beta review. Record the review result before distribution.
+iOS submission adds the build to the TestFlight groups "Talyn internal" and "Talyn external" (`groups` in the
+`eas.json` submit profiles; Tom's call, 2026-11-16). Adding a build to an external group does not ask for
+Beta App Review, so App Store Connect shows it as "Ready to Submit". `.github/workflows/mobile-testflight-review.yml`
+runs every 30 minutes. It sends the newest build to Beta App Review when that build is ready and in an external group
+(`apps/mobile/scripts/testflight-review.cjs`). It never submits an older build, because a newer build replaces it.
+When the build has no "What to Test" text, the script adds a default text first. The workflow uses the
+App Store Connect API key in the `mobile-updates` environment secrets `MOBILE_ASC_KEY_ID`, `MOBILE_ASC_ISSUER_ID`
+and `MOBILE_ASC_PRIVATE_KEY` (1Password: "Talyn App Store Connect API key"). `MOBILE_TESTFLIGHT_AUTO=0` stops it.
+Testers in the external group get the build after Apple approves it. Manage the people in each group in App Store Connect.
+The app declares `ITSAppUsesNonExemptEncryption: false`, so App Store Connect does not ask the export compliance question.
+Confirm processing, tester access, and TestFlight expiry dates.
 Google personal accounts can require a closed test before production access. Confirm the current Console requirements.
 Play internal testing alone does not satisfy every production-access requirement.
 
@@ -292,6 +323,7 @@ The workflow uses these settings:
 | Name | Kind | Use |
 | --- | --- | --- |
 | `EXPO_TOKEN` | Secret | Expo robot token. When it is absent, the run skips with a notice and does not fail. |
+| `POSTHOG_CLI_API_KEY` | Secret | Optional. Uploads each update's Hermes source maps to PostHog. When it is absent, the upload skips with a notice and the run does not fail. |
 | `MOBILE_UPDATES_AUTO` | Variable | Kill switch. `0` stops every automatic publish. Absent or any other value lets it run. |
 The internal-beta leg also needs the repository variable `MOBILE_UPDATES_INTERNAL_BETA=1`. Leave it unset until the production identity (bundle IDs, scheme and HTTPS callback) is approved and set in the EAS `production` environment, because internal-beta builds read that environment.
 
@@ -312,10 +344,126 @@ The script keeps the wrapper's other checks and adds its own:
    The message is the commit subject and short SHA. No runtime override is passed. The fingerprint policy chooses the runtime.
 6. It warns when no finished build on the channel runs the new runtime.
    That means the push changed native configuration. The update reaches no installed app until a new binary ships.
+7. It uploads the Hermes source maps of the update to PostHog (see "PostHog error tracking symbols").
+   A failed upload is a warning. It does not fail the run, because the update is already live.
 
 A change that needs a new native build must not ship as an update. That includes a native module, a config plugin,
 and the native fields in `app.config.ts`. The change gives a new fingerprint, so its update reaches no current binary.
 Build and distribute a new binary for it.
+
+## Automatic TestFlight and Play builds for internal-beta
+
+`.github/workflows/mobile-testflight.yml` runs after each push to `main` that changes the same paths as the update workflow.
+It builds the iOS and Android `internal-beta` profiles. `production` builds stay on the protected release workflow.
+Tom's call (2026-11-16): native changes on `main` go to TestFlight with no manual dispatch or approval record.
+Android was added on 2026-11-17, because no Android binary was built after build 1 (2026-11-12).
+
+`apps/mobile/scripts/testflight-build.cjs` does each run:
+
+1. It runs only in CI, on `main`, from a clean checkout of the pushed commit.
+2. For each platform, it generates the native fingerprint of the `internal-beta` profile with `eas fingerprint:generate`.
+3. For each platform, it looks for an `internal-beta` build with that runtime that is new, queued, in progress, or finished.
+   If one exists, that platform needs no build. The update workflow sends the change to that binary.
+   If no platform needs a build, it stops.
+4. It reserves the next build number, one for the run. Both platforms use it. The number is one more than the highest of `MOBILE_BUILD_NUMBER` in the
+   EAS `production` environment and the last 50 store builds on both platforms. It writes that number to
+   `MOBILE_BUILD_NUMBER` in the EAS `production` environment, because the EAS builder reads the number from there.
+5. For each platform that needs a build, it queues
+   `eas build --profile internal-beta --platform <platform> --auto-submit-with-profile internal-beta --no-wait`.
+   EAS submits the finished iOS binary to App Store Connect. It submits the Android binary to the Play internal
+   track as a draft. A store owner must release that draft in Play Console. The runner does not wait for the build queue.
+6. It checks that EAS queued one `internal-beta` build of that platform for the pushed commit with the reserved number.
+   A failure on one platform does not stop the other platform. The run fails after both are tried.
+
+The workflow shares the `mobile-release` concurrency group with the protected release workflow.
+Thus only one run at a time reserves a build number.
+It uses the `mobile-updates` environment and its `EXPO_TOKEN`. The robot needs permission to write EAS environment variables.
+Before any EAS call, the script reads the EAS `production` environment and gives its public values to the EAS CLI.
+It also sets `MOBILE_RELEASE_PROFILE=internal-beta`. EAS evaluates `app.config.ts` locally before it reads the EAS environment.
+Without these values, the production config fails, or the fingerprint uses the wrong channel.
+Set the repository variable `MOBILE_TESTFLIGHT_AUTO=0` to stop it.
+**Actions → Mobile TestFlight → Run workflow** checks `main` again. Select **force** to build when the fingerprint is not new.
+Select **platform** to check only iOS or only Android.
+Android submission needs the Google Play service account key in EAS submission credentials.
+The first Play upload may need a manual Console upload before API submission works.
+EAS adds each build to both TestFlight groups, and the app answers export compliance in its `Info.plist`.
+See **TestFlight and Play preparation**.
+
+## PostHog error tracking symbols
+
+PostHog shows a readable stack trace only when it has the symbols for the exact code that crashed.
+The app uses PostHog's own tools for this, and nothing else:
+
+- `metro.config.js` uses `getPostHogExpoConfig` from `posthog-react-native/metro`. It puts a chunk ID in each bundle and its source map.
+- `apps/mobile/plugins/withPostHogSymbolUploads.cjs` applies the official `posthog-react-native/expo` config plugin
+  with `uploadNativeSymbols: true`. Gradle and Xcode then upload the Hermes source maps, iOS dSYMs,
+  Android R8 mappings and Android NDK `.so` symbols during a release build.
+  It also sets `skipOnConflict: true`. Two builds of the same native code give the same dSYM UUID with different bytes.
+  PostHog refuses the second dSYM. Without the flag, that stops the Xcode build. With it, PostHog keeps the first dSYM.
+- `apps/mobile/scripts/posthog-symbols.cjs` runs `posthog-cli hermes upload` on the `dist/` folder after each `eas update`.
+  `publish-update.cjs` (automatic) and `release.cjs` (manual `update`) call it after the publish.
+- `posthog-cli` is pinned in `apps/mobile/release/toolchain.json` (`posthogCli`). The two workflows must use the same version. `check-release.cjs` checks this.
+- The PostHog project (`459813`) and host (`https://us.posthog.com`) are in `POSTHOG_SYMBOL_UPLOADS` in `apps/mobile/release/policy.cjs`.
+  Do not write them in a second place.
+
+| Symbols | Uploaded by | Key from |
+| --- | --- | --- |
+| Hermes source maps of an OTA update | `publish-update.cjs` or `release.cjs`, after the publish | GitHub secret `POSTHOG_CLI_API_KEY` |
+| Hermes source maps of a binary, iOS dSYMs, Android R8 mapping and NDK symbols | Gradle and Xcode, during the EAS build | EAS secret `POSTHOG_CLI_API_KEY` |
+
+### The secret
+
+There is one secret, `POSTHOG_CLI_API_KEY`: a PostHog **personal** API key (`phx_`), not the `phc_` project key.
+Give it the scopes `error tracking write` and `organization read`, and limit it to project `459813`.
+Tom creates it:
+
+1. In PostHog, open Settings > Personal API keys. Create the key with the two scopes above.
+2. Save it first in 1Password, in the `Private` vault of the `my.1password.com` account.
+3. On `Gilbert09/talyn`, add the GitHub Actions secret `POSTHOG_CLI_API_KEY` to the environments
+   `mobile-updates` (automatic updates), `mobile-preview` and `mobile-production` (manual release).
+   Do not add it at repository level.
+4. In EAS, add `POSTHOG_CLI_API_KEY` with the visibility **Secret** to the EAS environments `preview` and `production`:
+   `eas env:create --name POSTHOG_CLI_API_KEY --environment preview --visibility secret` (then again for `production`).
+   EAS builds run on Expo's machines. They cannot read GitHub secrets.
+5. In PostHog error tracking settings, make sure "Enable exception autocapture" is on. Native crash capture needs it.
+
+### Without the key
+
+Every path keeps working with no key:
+
+- A publish prints a notice and goes on. The update has minified stack traces in PostHog.
+- An EAS build leaves the config plugin out. The `eas-build-post-install` hook prints that the upload is skipped. The build has no upload steps.
+- A development client never uploads.
+- A key that does not start with `phx_` stops an EAS build at once. On a publish it is a warning.
+- A failed upload after a publish is a warning, never a failure, because the update is already live.
+
+The key goes only to the PostHog CLI. The scripts remove it from the environment of every `eas` command.
+On an EAS build, prebuild writes the key, project and host to `apps/mobile/.expo/posthog-cli.env` (mode 0600) for the CLI.
+The CLI reads all three values from one source. The EAS environment has only the key, so the file supplies all three.
+`.gitignore` and `.easignore` both exclude `.expo/`.
+The hook installs `@posthog/cli` globally on the EAS machine. Its install script downloads the pinned binary from PostHog.
+
+### Releases and the native fingerprint
+
+The uploads use the CLI's `event` release mode. A source map is matched by its chunk ID, not by a release.
+Each exception gets its release from the `$app_namespace`, `$app_version` and `$app_build` that the SDK sends.
+The update upload passes the bundle identifier (iOS) or package (Android) and the app version. It passes no build number,
+because one update can reach more than one build.
+
+The upload steps do not change the native fingerprint, so a build with the key takes updates published without it.
+The app config loads `plugins/withPostHogSymbolUploads.cjs`, so a change to that file gives a new fingerprint.
+Put CI and EAS upload logic in `scripts/posthog-symbols.cjs`, which the config does not load.
+
+To try an upload from a local release build, install the CLI (`npm install -g @posthog/cli@<posthogCli>`)
+and export `POSTHOG_CLI_API_KEY` before `expo prebuild`. Without the key, local builds have no upload steps.
+
+### Native crash capture
+
+Preview and production builds set `nativeCrashes` and `androidNdkCrashes` in `src/lib/analytics.ts`.
+`@posthog/react-native-plugin` captures iOS crashes, Android JVM crashes, and Android NDK crashes on Android 12 (API 31) and later.
+An NDK crash is sent on the next launch, so its app version and identity describe that launch.
+Native crashes do not go through `before_send`. The Settings opt-out still stops them: the SDK sends the opt-out to the native side.
+This change and the config plugin change the native fingerprint. Ship a new binary to get native crash capture and native symbols.
 
 The app checks for an update at cold start and when it returns to the foreground, at most every 15 minutes.
 It downloads the update in the background and shows **Update ready** with **Restart**. It never restarts by itself.
@@ -411,8 +559,12 @@ Complete [MOBILE_RELEASE_CHECKLIST.md](MOBILE_RELEASE_CHECKLIST.md) on the exact
 Use [mobile E2E instructions](../apps/mobile/e2e/README.md). Deterministic tests cannot prove operating system integration.
 Require zero known critical security defects and zero unresolved auth or data-loss defects.
 Agree on beta baselines for crashes, sign-in success, API failures, duplicate sends, and push receipt failures.
-Record numeric thresholds and owners before rollout. No new analytics, tracking, advertising, or replay SDK is added.
-Use approved existing backend signals and voluntary tester reports. Redact private content and device tokens.
+Record numeric thresholds and owners before rollout. No tracking or advertising SDK is added.
+PostHog gives product analytics, masked session replay, and error tracking (Tom's call, 2026-11-10, which reverses the MVP rule).
+Use PostHog, approved backend signals, and voluntary tester reports. Redact private content and device tokens.
+Apple tracking stays false: PostHog here is first-party analytics with no cross-app tracking, so there is no ATT prompt.
+Before store submission, the App Store privacy answers and Play Data safety must declare analytics, diagnostics, and the user ID.
+People can turn analytics and replay off in Settings > Account.
 
 Start with internal testers. Expand to approved external beta audiences after review.
 For initial public release, choose countries and manual publication carefully.

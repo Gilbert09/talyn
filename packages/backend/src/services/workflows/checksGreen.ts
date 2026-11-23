@@ -1,7 +1,7 @@
 import { domainEvents, type DomainPrChecksEvent } from '../events.js';
 import { targetsForRepo } from '../webhookIndex.js';
 import { evaluateWorkflowsForDelivery } from './engine.js';
-import { CHECKS_GREEN_EVENT } from './facts.js';
+import { CHECKS_GREEN_EVENT } from './sources/github.js';
 import type { CheckBreakdown } from '../githubGraphql.js';
 import type { WebhookDelivery } from '../webhookPayload.js';
 

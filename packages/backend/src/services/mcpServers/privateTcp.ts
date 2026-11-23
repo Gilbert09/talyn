@@ -6,7 +6,12 @@ import { Agent } from 'undici';
 import WebSocket, { createWebSocketStream } from 'ws';
 import { fleetGatewayToken, fleetPinnedEndpoint } from '../selfHosted/credentials.js';
 
-const DIAL_TIMEOUT_MS = 5_000;
+// YAS resolves the name and opens the TCP connection through the customer's
+// tailnet before it answers the upgrade, and it allows that dial 30 seconds.
+// A first connection through a Tailscale relay can take several seconds, so a
+// shorter limit here cut working dials off. The request's own deadline still
+// applies on top (15 seconds for setup checks).
+const DIAL_TIMEOUT_MS = 30_000;
 
 interface GatewayFailure {
   phase: 'gateway_response' | 'gateway_upgrade';

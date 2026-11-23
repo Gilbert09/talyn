@@ -166,7 +166,7 @@ export async function afterRetry(taskId: string, workspaceId: string): Promise<v
     return next;
   });
   emitTaskStatus(workspaceId, taskId, 'queued');
-  void taskQueueService.processQueue();
+  taskQueueService.runProcessQueue();
 }
 
 /**

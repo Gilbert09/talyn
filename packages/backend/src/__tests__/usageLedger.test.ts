@@ -116,7 +116,7 @@ describe('usage ledger', () => {
 
     it('closes only once; a close with nothing open is a no-op', async () => {
       await open('box-1');
-      expect(await markIntervalClosed('box-1', at(60), 'terminal')).toEqual({ ownerId: OWNER });
+      expect(await markIntervalClosed('box-1', at(60), 'terminal')).toEqual({ ownerId: OWNER, endedAt: at(60) });
       expect(await markIntervalClosed('box-1', at(90), 'sweep')).toBeNull();
       expect(await markIntervalClosed('never-opened', at(90), 'sweep')).toBeNull();
       const [row] = await db.select().from(usageIntervals);

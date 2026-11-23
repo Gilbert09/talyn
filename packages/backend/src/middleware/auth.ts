@@ -29,6 +29,12 @@ export interface AuthUser {
   isAdmin: boolean;
   /** Verified token expiry in milliseconds. Internal callers have no JWT. */
   expiresAt?: number;
+  /**
+   * True for a call from Talyn's MCP server acting for the user, not the app.
+   * Set only behind the internal secret. Routes that only the app may use
+   * read this.
+   */
+  viaMcp?: boolean;
 }
 
 declare global {
@@ -110,6 +116,19 @@ interface VerifiedIdentity {
   email: string;
   githubUsername?: string;
   expiresAt: number;
+  /** Supabase's `app_metadata.providers`: set by Supabase's server, never by the user. */
+  providers?: unknown;
+}
+
+/**
+ * Talyn accounts come from GitHub sign-in. Supabase email sign-in is on only so the store review account
+ * (a GitHub user given a password) can sign in on a device where GitHub asks for an emailed code. Anybody
+ * can create an email account through the public Supabase key, so an account whose providers do not
+ * include GitHub is refused: it would skip the limit that GitHub sign-in puts on free accounts.
+ * A token with no provider list (not one Supabase issues) is left to the other checks.
+ */
+export function hasGithubIdentity(providers: unknown): boolean {
+  return !Array.isArray(providers) || providers.includes('github');
 }
 
 /** Local path: verify signature + claims against the cached JWKS and read the
@@ -124,8 +143,10 @@ async function verifyJwtLocally(token: string): Promise<VerifiedIdentity | null>
     });
     if (!payload.sub) return null;
     const meta = (payload.user_metadata ?? {}) as Record<string, unknown>;
+    const appMeta = (payload.app_metadata ?? {}) as Record<string, unknown>;
     return {
       id: payload.sub,
+      providers: appMeta.providers,
       expiresAt: payload.exp! * 1000,
       email: (payload.email as string | undefined) ?? '',
       githubUsername:
@@ -168,6 +189,7 @@ async function verifyViaSupabase(token: string): Promise<VerifiedIdentity | null
     if (typeof exp !== 'number' || !Number.isFinite(exp) || exp * 1000 <= Date.now()) return null;
     return {
       id: data.user.id,
+      providers: (data.user.app_metadata as Record<string, unknown> | undefined)?.providers,
       expiresAt: exp * 1000,
       email: data.user.email ?? '',
       githubUsername:
@@ -203,6 +225,7 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
       ? await verifyViaSupabase(token)
       : await verifyJwtLocally(token);
   if (!identity) return null;
+  if (!hasGithubIdentity(identity.providers)) return null;
 
   const { email, githubUsername } = identity;
 
@@ -344,10 +367,12 @@ const INTERNAL_SECRET = randomBytes(48).toString('hex');
 
 /** Backend-internal consumer — WS proxy handler — calls this to get the
  *  two headers it needs to dispatch an authenticated localhost request. */
-export function internalProxyHeaders(userId: string): Record<string, string> {
+export function internalProxyHeaders(userId: string, opts: { mcp?: boolean } = {}): Record<string, string> {
   return {
     'x-fastowl-internal-user': userId,
     'x-fastowl-internal-token': INTERNAL_SECRET,
+    // Read only after the secret matches, so no outside caller can set it.
+    ...(opts.mcp ? { 'x-fastowl-internal-via': 'mcp' } : {}),
   };
 }
 
@@ -394,7 +419,22 @@ async function checkInternalAuth(req: Request): Promise<AuthUser | null> {
     // The daemon proxy impersonates a user for data access but never gets the
     // operator-only debug surface.
     isAdmin: false,
+    ...(req.headers['x-fastowl-internal-via'] === 'mcp' ? { viaMcp: true } : {}),
   };
+}
+
+/**
+ * Only the app creates cloud tasks. A call from outside it (the MCP server)
+ * gets a 403 and is told to start a session; answers true when it refused.
+ */
+export function refuseTaskFromOutsideApp(req: Request, res: Response): boolean {
+  if (!req.user?.viaMcp) return false;
+  res.status(403).json({
+    success: false,
+    error: 'Only the Talyn app can start a cloud task. Start a session instead (talyn_create_session).',
+    code: 'tasks_app_only',
+  });
+  return true;
 }
 
 /**
@@ -488,18 +528,11 @@ export async function requireWorkspaceAccess(
   const userId = assertUser(req).id;
   const db = getDbClient();
   const rows = await db
-    .select({ id: workspacesTable.id })
-    .from(workspacesTable)
-    .where(eq(workspacesTable.id, workspaceId))
-    .limit(1);
-  if (!rows[0]) throw new AccessError('workspace not found');
-
-  const ownerRows = await db
     .select({ ownerId: workspacesTable.ownerId })
     .from(workspacesTable)
     .where(eq(workspacesTable.id, workspaceId))
     .limit(1);
-  if (ownerRows[0]?.ownerId !== userId) {
+  if (!rows[0] || rows[0].ownerId !== userId) {
     throw new AccessError('workspace not found');
   }
 }

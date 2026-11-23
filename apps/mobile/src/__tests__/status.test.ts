@@ -1,6 +1,7 @@
-import type { WorkbenchPullRequestSummary } from '@talyn/shared';
+import type { ContextAttentionReason, WorkbenchPullRequestSummary } from '@talyn/shared';
 
-import { prNumberTone, prReview, prRowStatus, prStatus, sessionPr, sessionState, workbenchState } from '../lib/status';
+import { PLAN_LABEL, prNumberTone, prReview, prRowStatus, prStatus, sessionPr, sessionState, withPlanAttention, workbenchState,
+  type SessionState, type SessionStateKind } from '../lib/status';
 import { chat, pr, session } from './workflowFixtures';
 
 const checks = (patch: Partial<{ total: number; passed: number; failed: number; inProgress: number; skipped: number }> = {}) =>
@@ -17,6 +18,7 @@ describe('session state', () => {
     ['a creating sandbox', session({ sandboxState: 'creating' }), 'starting'],
     ['a running chat', session({ chats: [chat({ status: 'running' })] }), 'working'],
     ['a queued message', session({ chats: [chat({ queuedMessages: [{ id: 'q', text: 'x', queuedAt: '2026-11-08T10:00:00Z' }] as never })] }), 'working'],
+    ['an archived session with a queued message', session({ archivedAt: '2026-11-15T00:00:00Z', chats: [chat({ queuedMessages: [{ id: 'q', text: 'x', queuedAt: '2026-11-08T10:00:00Z' }] as never })] }), 'idle'],
     ['a question for the user', session({ chats: [chat({ status: 'awaiting_input' })] }), 'needs_reply'],
     ['a merged PR', session({ pr: linked({ state: 'merged' }) }), 'merged'],
     ['a closed PR', session({ pr: linked({ state: 'closed' }) }), 'closed'],
@@ -60,8 +62,8 @@ describe('PR status pill', () => {
     ['blocked on review, review shown', { state: 'open' as const, blockingReason: 'blocked' as const, checks: checks(), includeReview: true }, 'Review', 'warning'],
     ['approved but protected', { state: 'open' as const, blockingReason: 'blocked' as const, checks: checks(), includeReview: true, reviewDecision: 'APPROVED' as const }, 'Protected', 'warning'],
     ['changes requested, review shown', { state: 'open' as const, blockingReason: 'changes_requested' as const, checks: checks(), includeReview: true }, 'Changes requested', 'warning'],
-    ['a queue testing it', { state: 'open' as const, blockingReason: 'mergeable' as const, checks: checks(), externalQueueState: 'testing' as const }, 'Queue: testing', 'information'],
-    ['a queue that refused it', { state: 'open' as const, blockingReason: 'mergeable' as const, checks: checks(), externalQueueState: 'rejected' as const }, 'Queue: refused', 'destructive'],
+    ['a queue testing it', { state: 'open' as const, blockingReason: 'mergeable' as const, checks: checks(), externalQueueState: 'testing' as const }, 'Testing in merge queue', 'information'],
+    ['a queue that refused it', { state: 'open' as const, blockingReason: 'mergeable' as const, checks: checks(), externalQueueState: 'rejected' as const }, 'Refused by merge queue', 'destructive'],
     ['a queue holding it with its own reason', { state: 'open' as const, blockingReason: 'merge_conflicts' as const, checks: checks(), externalQueueState: 'not_ready' as const }, 'Conflicts', 'destructive'],
   ])('reads %s', (_name, input, label, tone) => expect(prStatus(input)).toMatchObject({ label, tone }));
   it('merges mergeability and merge state into one answer for a row', () => {
@@ -78,4 +80,20 @@ describe('PR review pill and number', () => {
   ] as const)('maps %s on an %s PR', (decision, state, label) => expect(prReview(decision, state)?.label ?? null).toBe(label));
   it.each([['merged', false, 'merged'], ['closed', false, 'destructive'], ['open', true, 'muted'], ['open', false, 'success']] as const)(
     'tints a %s PR (draft %s) %s', (state, draft, tone) => expect(prNumberTone(state, draft)).toBe(tone));
+});
+
+describe('plan attention', () => {
+  const state = (kind: SessionStateKind, label = kind): SessionState => ({ kind, label });
+  it.each<[string, SessionState, ContextAttentionReason | null | undefined, SessionStateKind, string]>([
+    ['idle with a plan', state('idle'), 'plan', 'needs_reply', PLAN_LABEL],
+    ['an open PR with a plan', state('pr_waiting'), 'plan', 'needs_reply', PLAN_LABEL],
+    ['working with a plan', state('working'), 'plan', 'working', 'working'],
+    ['starting with a plan', state('starting'), 'plan', 'starting', 'starting'],
+    ['failed with a plan', state('failed'), 'plan', 'failed', 'failed'],
+    ['idle with no reason', state('idle'), undefined, 'idle', 'idle'],
+    ['idle with a null reason', state('idle'), null, 'idle', 'idle'],
+    ['idle with another reason', state('idle'), 'reply', 'idle', 'idle'],
+  ])('%s', (_name, input, reason, kind, label) => {
+    expect(withPlanAttention(input, reason)).toEqual({ kind, label });
+  });
 });

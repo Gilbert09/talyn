@@ -89,7 +89,7 @@ export function NotificationSettings({ controller, offline }: { controller: Noti
   const device = deviceTimezone();
   const childDisabled = disabled || !draft?.enabled;
   return <View style={styles.content}>
-    <Group title="Notifications" footer="Alerts use generic text. Private content stays in Talyn. Every workflow works without notifications.">
+    <Group title="Notifications" footer="Alerts show the session or pull request name and a short summary. Every automation works without notifications.">
       <View style={styles.block}>
         <Status message={messages[snapshot.state]} loading={snapshot.state === 'loading'} tone={snapshot.state === 'ready' ? 'success' : ['denied', 'unavailable', 'failed'].includes(snapshot.state) ? 'warning' : 'information'} />
         {snapshot.state === 'denied' ? <Button variant="secondary" size="sm" title="Open device notification settings" onPress={() => { void Linking.openSettings().catch(() => {}); }} /> : null}
@@ -105,6 +105,10 @@ export function NotificationSettings({ controller, offline }: { controller: Noti
         {MOBILE_NOTIFICATION_CATEGORIES.map((category, index) => <Toggle key={category} label={notificationLabels[category]} value={draft.categories[category]}
           disabled={childDisabled} last={index === MOBILE_NOTIFICATION_CATEGORIES.length - 1}
           change={(value) => change({ ...draft, categories: { ...draft.categories, [category]: value } })} />)}
+      </Group>
+      <Group title="Delivery" footer="Talyn on your computer shows the alert instead while you are using it.">
+        <Toggle label="Only when I'm away from my computer" value={draft.onlyWhenAway} disabled={childDisabled} last
+          change={(onlyWhenAway) => change({ ...draft, onlyWhenAway })} />
       </Group>
       <Group title="Quiet hours" footer={`Times use ${draft.timezone}.`}>
         <Toggle label="Quiet hours" value={draft.quietHours.enabled} disabled={childDisabled}

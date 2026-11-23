@@ -1,5 +1,5 @@
 import { and, eq, inArray, ne } from 'drizzle-orm';
-import { getPoolDbClient } from '../db/client.js';
+import { getPoolDbClient, runWithoutScope } from '../db/client.js';
 import { repositories as repositoriesTable, pullRequests as pullRequestsTable } from '../db/schema.js';
 import { githubService, GitHubAuthorizationUnavailableError } from './github.js';
 
@@ -86,7 +86,18 @@ async function mapBounded<T>(items: T[], limit: number, task: (item: T) => Promi
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
 }
 
-async function build(): Promise<void> {
+/**
+ * The index covers every owner, so it is built on the pool. Request handlers
+ * call `refreshWebhookIndex` without waiting. Inside their owner scope,
+ * `canAccessRepository` read other owners' credentials under the caller's RLS,
+ * and after the request ended it read them through a closed transaction. Those
+ * reads hung for hours (2026-11-12).
+ */
+function build(): Promise<void> {
+  return runWithoutScope(buildIndex);
+}
+
+async function buildIndex(): Promise<void> {
   const db = getPoolDbClient();
   const rows = await db
     .select({

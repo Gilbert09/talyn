@@ -5,7 +5,7 @@ import {
   type TaskResult,
   type TaskStatus,
 } from '@talyn/shared';
-import { getDbClient } from '../db/client.js';
+import { getDbClient, runWithoutScope } from '../db/client.js';
 import { workspaces as workspacesTable } from '../db/schema.js';
 import { debugBus } from './debugBus.js';
 
@@ -129,7 +129,9 @@ export function captureWorkspaceEvent(
   properties: Record<string, unknown> = {},
 ): void {
   if (!isServerAnalyticsConfigured()) return;
-  void getWorkspaceOwnerId(workspaceId)
+  // Off the request scope: this settles after the response, when the
+  // request transaction has ended.
+  void runWithoutScope(() => getWorkspaceOwnerId(workspaceId))
     .then((ownerId) => {
       if (!ownerId) return;
       return captureServerEvent(ownerId, event, {
@@ -141,6 +143,23 @@ export function captureWorkspaceEvent(
       const msg = err instanceof Error ? err.message : 'unknown error';
       console.warn(`[analytics] capture "${event}" failed:`, msg);
     });
+}
+
+/**
+ * `cloud_provider_connected` for a connection the clients cannot see finish.
+ * PostHog Code OAuth ends in a browser redirect, so the app never learns the
+ * outcome. The API-key path still fires from the client, so the two never
+ * overlap. Property names match the client event.
+ */
+export function captureCloudProviderConnected(
+  workspaceId: string,
+  provider: string,
+  agent?: string,
+): void {
+  captureWorkspaceEvent(workspaceId, 'cloud_provider_connected', {
+    provider,
+    ...(agent ? { agent } : {}),
+  });
 }
 
 /**

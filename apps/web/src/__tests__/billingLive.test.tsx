@@ -71,6 +71,15 @@ describe('useBillingLive', () => {
     expect(toasts[0]).toMatchObject({ variant: 'success', title: 'Payment received', description });
   });
 
+  it('handles the return from a usage reset checkout', () => {
+    mount('/settings/billing?checkout=success&kind=reset&tab=x');
+    expect(seenUrl).toBe('/settings/billing?tab=x');
+    expect(status).toHaveBeenCalled();
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({ variant: 'success', title: 'Usage reset', description: 'Your box-hours are back.' });
+  });
+
   it('does nothing without a checkout return', () => {
     mount('/settings/billing');
     expect(status).not.toHaveBeenCalled();

@@ -272,7 +272,10 @@ describe('shared/releaseNotes — commit filtering', () => {
   it('maps a commit scope to the clients it can possibly affect', () => {
     expect(surfacesForScope('desktop')).toEqual(['desktop']);
     expect(surfacesForScope('web')).toEqual(['web']);
-    // A backend or shared change reaches both, and so does a bare commit.
+    // A mobile change is for the mobile app only, never the desktop or web modal.
+    expect(surfacesForScope('mobile')).toEqual(['mobile']);
+    // A backend or shared change reaches desktop and web, and so does a bare
+    // commit. Mobile is never a default.
     expect(surfacesForScope('merge-queue')).toEqual(['desktop', 'web']);
     expect(surfacesForScope(null)).toEqual(['desktop', 'web']);
   });
@@ -357,6 +360,26 @@ describe('shared/releaseNotes — planWhatsNew', () => {
     });
     expect(plan.show.map((e) => e.version)).toEqual(['0.2.61']);
     expect(plan.show[0].highlights.map((h) => h.title)).toEqual(['Desktop only']);
+  });
+
+  it.each(['desktop', 'web'] as const)('never shows a mobile-only highlight on %s', (surface) => {
+    const plan = planWhatsNew({
+      ...base,
+      surface,
+      currentVersion: null,
+      cursors: { '': '0.2.60' },
+      entries: [
+        entry('0.2.62', [highlight({ title: 'Mobile only', surfaces: ['mobile'] })]),
+        entry('0.2.61', [
+          highlight({ title: 'Mobile only too', surfaces: ['mobile'] }),
+          highlight({ title: 'Everywhere', surfaces: ['desktop', 'web', 'mobile'] }),
+        ]),
+      ],
+    });
+    expect(plan.show.map((e) => e.version)).toEqual(['0.2.61']);
+    expect(plan.show[0].highlights.map((h) => h.title)).toEqual(['Everywhere']);
+    // The mobile-only release is still read, so it is not re-checked forever.
+    expect(plan.cursors['']).toBe('0.2.62');
   });
 
   it('records a release whose highlights were all for the other client', () => {
@@ -527,6 +550,24 @@ describe('shared/releaseNotes — highlightsForSurface', () => {
     expect(filtered[0].highlights.map((h) => h.title)).toEqual(['Both', 'Desktop only']);
   });
 
+  it.each([
+    ['mobile', ['Mobile only', 'Everywhere']],
+    ['desktop', ['Desktop and web', 'Everywhere']],
+    ['web', ['Desktop and web', 'Everywhere']],
+  ] as const)('splits mobile highlights from desktop and web on %s', (surface, titles) => {
+    const filtered = highlightsForSurface(
+      [
+        entry('0.2.61', [
+          highlight({ title: 'Mobile only', surfaces: ['mobile'] }),
+          highlight({ title: 'Desktop and web', surfaces: ['desktop', 'web'] }),
+          highlight({ title: 'Everywhere', surfaces: ['desktop', 'web', 'mobile'] }),
+        ]),
+      ],
+      surface
+    );
+    expect(filtered[0].highlights.map((h) => h.title)).toEqual(titles);
+  });
+
   it('leaves the input untouched', () => {
     const input = [entry('0.2.61', [highlight({ surfaces: ['web'] })])];
     highlightsForSurface(input, 'desktop');
@@ -576,6 +617,14 @@ describe('services/releaseNotes — parseHighlights', () => {
     });
   });
 
+  it.each([
+    [['mobile']],
+    [['desktop', 'web', 'mobile']],
+  ] as const)('accepts the mobile surface: %j', (surfaces) => {
+    const res = parseHighlights([{ title: 'x', description: 'y.', kind: 'fix', surfaces }]);
+    expect(res.ok && res.value[0].surfaces).toEqual(surfaces);
+  });
+
   it('accepts an empty list — a quiet nightly is a normal outcome', () => {
     expect(parseHighlights([])).toEqual({ ok: true, value: [] });
   });
@@ -612,7 +661,8 @@ describe('services/releaseNotes — parseHighlights', () => {
       [{ title: 'x', description: '', kind: 'fix', surfaces: ['web'] }],
       [{ title: 'x', description: 'y', kind: 'refactor', surfaces: ['web'] }],
       [{ title: 'x', description: 'y', kind: 'fix', surfaces: [] }],
-      [{ title: 'x', description: 'y', kind: 'fix', surfaces: ['mobile'] }],
+      [{ title: 'x', description: 'y', kind: 'fix', surfaces: ['ios'] }],
+      [{ title: 'x', description: 'y', kind: 'fix', surfaces: ['mobile', 'tv'] }],
       [{ title: 'x', description: 'y', kind: 'fix' }],
       ['not an object'],
       'not an array',

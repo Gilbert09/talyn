@@ -4,6 +4,9 @@ import {
   mobileBillingBounceUrl,
   mobileBillingReturnUrl,
   mobileGitHubReturnUrl,
+  mobileMcpReturnUrl,
+  mobilePostHogReturnUrl,
+  mobileSlackReturnUrl,
   mobileReturnSchemes,
   parseReturnTo,
   publicApiOrigin,
@@ -151,6 +154,43 @@ describe('app return URLs', () => {
     expect(mobileBillingReturnUrl('talyn-mobile-preview://', kind, result)).toBe(
       `talyn-mobile-preview://billing/return?kind=${kind}&result=${result}`
     );
+  });
+  it.each<[Parameters<typeof mobileSlackReturnUrl>[1], string]>([
+    [{ ok: true, flow: 'install' }, 'talyn-mobile://slack/callback?slack=installed'],
+    [{ ok: true, flow: 'link' }, 'talyn-mobile://slack/callback?slack=linked'],
+    [
+      { ok: false, message: 'The Slack sign-in was cancelled.' },
+      'talyn-mobile://slack/callback?slack=error&message=The+Slack+sign-in+was+cancelled.',
+    ],
+    [{ ok: false, message: 'a&b=c?d#e' }, 'talyn-mobile://slack/callback?slack=error&message=a%26b%3Dc%3Fd%23e'],
+    [{ ok: false, message: '   ' }, 'talyn-mobile://slack/callback?slack=error'],
+  ])('Slack %o', (outcome, expected) => {
+    expect(mobileSlackReturnUrl('talyn-mobile://', outcome)).toBe(expected);
+  });
+
+  it.each<[Parameters<typeof mobilePostHogReturnUrl>[1], string]>([
+    [{ ok: true }, 'talyn-mobile-development://posthog/callback?posthog=connected'],
+    [
+      { ok: false, message: 'access_denied' },
+      'talyn-mobile-development://posthog/callback?posthog=error&message=access_denied',
+    ],
+    [{ ok: false, message: 'Missing code or state.' }, 'talyn-mobile-development://posthog/callback?posthog=error&message=Missing+code+or+state.'],
+    [{ ok: false, message: '' }, 'talyn-mobile-development://posthog/callback?posthog=error'],
+  ])('PostHog %o', (outcome, expected) => {
+    expect(mobilePostHogReturnUrl('talyn-mobile-development://', outcome)).toBe(expected);
+  });
+
+  it.each([
+    [true, 'talyn-mobile://mcp/callback?mcp=connected'],
+    [false, 'talyn-mobile://mcp/callback?mcp=error'],
+  ])('MCP ok=%s', (ok, expected) => {
+    expect(mobileMcpReturnUrl('talyn-mobile://', { ok })).toBe(expected);
+  });
+
+  it('a message cannot add a parameter or a path', () => {
+    const url = new URL(mobileSlackReturnUrl('talyn-mobile://', { ok: false, message: 'x&slack=installed/../evil' }));
+    expect(url.searchParams.getAll('slack')).toEqual(['error']);
+    expect(url.searchParams.get('message')).toBe('x&slack=installed/../evil');
   });
 });
 

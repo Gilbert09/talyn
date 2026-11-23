@@ -13,6 +13,7 @@ import {
   type SlackUserLinkView,
 } from '@talyn/shared';
 import { api } from '../../lib/api';
+import { startSlackInstall } from '../../lib/slackInstall';
 import { captureAnalyticsException, trackEvent } from '../../lib/analytics';
 import { toast } from '../../stores/toast';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -679,7 +680,7 @@ export function SlackSettings() {
 
   const [banner, setBanner] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // The callback sends us back to /settings?slack=installed|linked|error&message=…
+  // The callback sends us back to /integrations/slack?slack=installed|linked|error&message=…
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const result = params.get('slack');
@@ -705,11 +706,13 @@ export function SlackSettings() {
   async function start(kind: 'install' | 'link') {
     setBusy(kind);
     try {
-      const input = currentWorkspaceId ? { workspaceId: currentWorkspaceId } : {};
-      const { authorizeUrl } =
-        kind === 'install' ? await api.slack.install(input) : await api.slack.link(input);
-      // A full-page redirect: the callback returns to /settings?slack=… in this tab.
-      window.location.assign(authorizeUrl);
+      if (kind === 'install') {
+        await startSlackInstall(currentWorkspaceId);
+      } else {
+        const input = currentWorkspaceId ? { workspaceId: currentWorkspaceId } : {};
+        const { authorizeUrl } = await api.slack.link(input);
+        window.location.assign(authorizeUrl);
+      }
     } catch (e) {
       captureAnalyticsException(e, { flow: 'slack_connect' });
       if (errorCode(e) === SLACK_NOT_CONFIGURED_CODE) {

@@ -15,12 +15,26 @@ import {
   startAuthorization,
 } from '../services/posthogCode/oauth.js';
 import { isPostHogOAuthEnabled } from '../services/posthogCode/oauthConfig.js';
+import type { PostHogOAuthKind } from '../services/posthogOAuth/core.js';
+import { completeInboxAuthorization } from '../services/posthogInbox/oauth.js';
+import { clearInboxPollerBackoff } from '../services/posthogInbox/poller.js';
 import {
   ensureCloudEnvironment,
   notifyProviderConnected,
 } from '../services/cloudProviders/environment.js';
+import { captureCloudProviderConnected, captureWorkspaceEvent } from '../services/analytics.js';
+import {
+  refusesNewPostHogCodeConnection,
+  sendPostHogCodeRetired,
+} from '../services/posthogCodeRetirement.js';
 import { renderCallbackPage } from '../services/callbackPage.js';
 import { getWebAppUrl, webAppUrl } from '../services/webApp.js';
+import {
+  invalidReturnToBody,
+  mobilePostHogReturnUrl,
+  parseReturnTo,
+  validMobileReturn,
+} from '../services/mobileReturn.js';
 import type { ApiResponse } from '@talyn/shared';
 
 /** Mirrors `PostHogCodeStatus` in @talyn/client (the shape both front ends read). */
@@ -47,7 +61,7 @@ interface PostHogCodeStatusPayload {
  * from the callback, so it only ever selects between "render a page" and
  * "redirect to the WEB_APP_URL constant" — never a caller-supplied destination.
  */
-function originClient(req: Request): 'web' | 'desktop' {
+export function originClient(req: Request): 'web' | 'desktop' {
   const webApp = getWebAppUrl();
   return webApp && req.headers.origin === webApp ? 'web' : 'desktop';
 }
@@ -71,6 +85,9 @@ export function posthogPublicRoutes(): Router {
 
   router.get('/oauth/callback', oauthRateLimit, async (req, res) => {
     const { code, state, error, error_description } = req.query as Record<string, string | undefined>;
+    // Set once the state row is read. Validated again here, so a value that
+    // has left the allowlist since the flow started is never a redirect target.
+    let mobileReturn: string | null = null;
 
     /**
      * End the flow the way the client that started it needs. `client` comes from
@@ -78,47 +95,95 @@ export function posthogPublicRoutes(): Router {
      * Origin sniff, which for a browser redirect means "desktop" — the safe
      * default, since it renders a page rather than redirecting anywhere.
      */
+    // Which connection the flow is for, from the state row. Before a row is
+    // read it is PostHog Code, the ending older flows have always had.
+    let kind: PostHogOAuthKind = 'posthog_code';
     const finish = (
       client: 'web' | 'desktop',
       opts: { ok: boolean; message: string; status?: number }
     ) => {
+      if (mobileReturn) {
+        return res.redirect(
+          302,
+          mobilePostHogReturnUrl(mobileReturn, opts.ok ? { ok: true } : { ok: false, message: opts.message })
+        );
+      }
       if (client === 'web') {
-        const target = webAppUrl('/settings', {
-          posthog: opts.ok ? 'connected' : 'error',
-          ...(opts.ok ? {} : { message: opts.message }),
-        });
+        const target =
+          kind === 'posthog_inbox'
+            ? webAppUrl('/integrations/posthog_inbox', {
+                posthog_inbox: opts.ok ? 'connected' : 'error',
+                ...(opts.ok ? {} : { message: opts.message }),
+              })
+            : webAppUrl('/settings', {
+                posthog: opts.ok ? 'connected' : 'error',
+                ...(opts.ok ? {} : { message: opts.message }),
+              });
         if (target) return res.redirect(302, target);
       }
       return res
         .status(opts.status ?? 200)
         .type('html')
-        .send(renderCallbackPage({ ok: opts.ok, product: 'PostHog', message: opts.message }));
+        .send(
+          renderCallbackPage({
+            ok: opts.ok,
+            product: kind === 'posthog_inbox' ? 'PostHog Inbox' : 'PostHog',
+            message: opts.message,
+          })
+        );
     };
 
+    // Single-use: the lookup deletes the row, so a replayed callback (or a second
+    // tab) finds nothing and the code can only be spent once. Consumed on an
+    // error too, so a cancelled flow cannot be finished later and a mobile flow
+    // still learns where to send the person back. Web and desktop still choose
+    // their ending from the Origin sniff on these early errors, as before.
+    const pending = state ? await consumeState(state) : null;
+    mobileReturn = validMobileReturn(pending?.mobileReturn);
+    if (pending?.kind) kind = pending.kind;
+    // The Inbox flow ends early errors (a cancelled consent) for the client the
+    // state row names. PostHog Code keeps its Origin sniff.
+    const earlyClient = kind === 'posthog_inbox' && pending ? pending.client : originClient(req);
+
     if (error) {
-      return finish(originClient(req), {
+      return finish(earlyClient, {
         ok: false,
         status: 400,
         message: error_description || error || 'PostHog returned an error.',
       });
     }
     if (!code || !state) {
-      return finish(originClient(req), {
+      return finish(earlyClient, {
         ok: false,
         status: 400,
         message: 'Missing code or state.',
       });
     }
 
-    // Single-use: the lookup deletes the row, so a replayed callback (or a second
-    // tab) finds nothing and the code can only be spent once.
-    const pending = await consumeState(state);
     if (!pending) {
-      return finish(originClient(req), {
+      return finish(earlyClient, {
         ok: false,
         status: 400,
         message: 'That connection attempt has expired — start again from Talyn.',
       });
+    }
+
+    if (kind === 'posthog_inbox') {
+      // The PostHog Inbox's own connection. It is not a cloud provider: no
+      // environment marker, no provider notice.
+      try {
+        const result = await completeInboxAuthorization({ code, state: pending });
+        await clearInboxPollerBackoff(result.workspaceId);
+        captureWorkspaceEvent(result.workspaceId, 'posthog_inbox_connected', { authMethod: 'oauth' });
+        return finish(pending.client, {
+          ok: true,
+          message: `Talyn can now read the PostHog Inbox of project ${result.projectId}.`,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[posthog-inbox:oauth] callback failed:', message);
+        return finish(pending.client, { ok: false, status: 400, message });
+      }
     }
 
     try {
@@ -132,6 +197,8 @@ export function posthogPublicRoutes(): Router {
         type: 'posthog_code',
         detail: `PostHog project ${result.projectId}, via OAuth.`,
       });
+      // The browser redirect hides this outcome from every client.
+      captureCloudProviderConnected(result.workspaceId, 'posthog_code');
       return finish(pending.client, {
         ok: true,
         message: `Talyn can now run cloud tasks in PostHog project ${result.projectId}.`,
@@ -209,14 +276,18 @@ export function posthogRoutes(): Router {
    * touches the client, and no PostHog credential ever reaches a renderer.
    */
   router.post('/oauth/start', async (req, res) => {
-    const { workspaceId, host, projectId } = req.body as {
+    const { workspaceId, host, projectId, returnTo: rawReturnTo } = req.body as {
       workspaceId?: string;
       host?: string;
       projectId?: string;
+      /** The mobile app's URL base: the callback then ends with a 302 to `${returnTo}posthog/callback?...`. */
+      returnTo?: unknown;
     };
     if (!workspaceId) {
       return res.status(400).json({ success: false, error: 'workspaceId is required' });
     }
+    const returnTo = parseReturnTo(rawReturnTo);
+    if (!returnTo.ok) return res.status(400).json(invalidReturnToBody());
     if (!isPostHogOAuthEnabled()) {
       return res.status(400).json({
         success: false,
@@ -227,6 +298,9 @@ export function posthogRoutes(): Router {
       await requireWorkspaceAccess(req, workspaceId);
     } catch (err) {
       return handleAccessError(err, res);
+    }
+    if (await refusesNewPostHogCodeConnection(assertUser(req), workspaceId)) {
+      return sendPostHogCodeRetired(res);
     }
 
     let resolvedHost: string;
@@ -243,6 +317,7 @@ export function posthogRoutes(): Router {
       // Only ever a pre-selection on PostHog's own consent screen, and only
       // honoured there if the user actually has access to it.
       projectIdHint: projectId,
+      mobileReturn: returnTo.returnTo,
     });
     res.json({ success: true, data: { authorizeUrl } } as ApiResponse<{ authorizeUrl: string }>);
   });
@@ -264,6 +339,9 @@ export function posthogRoutes(): Router {
       await requireWorkspaceAccess(req, workspaceId);
     } catch (err) {
       return handleAccessError(err, res);
+    }
+    if (await refusesNewPostHogCodeConnection(assertUser(req), workspaceId)) {
+      return sendPostHogCodeRetired(res);
     }
 
     // Validate before persisting so a bad key never gets stored.

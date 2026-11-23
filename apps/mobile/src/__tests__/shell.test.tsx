@@ -1,4 +1,4 @@
-import { act, fireEvent, renderRouter, screen, testRouter } from 'expo-router/testing-library';
+import { act, fireEvent, renderRouter, screen, testRouter, within } from 'expo-router/testing-library';
 
 import { router } from 'expo-router';
 import { Alert, BackHandler } from 'react-native';
@@ -30,6 +30,7 @@ import WorkspacesScreen from '../../app/workspaces';
 let mockAuth: AuthSnapshot = { status: 'signedIn', user: { id: 'alice', email: 'alice@example.com' }, issue: null };
 let mockNetwork = 'online';
 const mockSignIn = jest.fn();
+const mockPasswordSignIn = jest.fn();
 const mockSignOut = jest.fn();
 const mockDelete = jest.fn(async () => 'blocked');
 const mockWorkspace: { status: string; choices: { id: string; name: string }[]; selected: string | null } = {
@@ -45,7 +46,7 @@ jest.mock('../auth/AuthProvider', () => ({
   useWorkspace: () => mockWorkspace,
   useMobileRuntime: () => ({
     workflow: mockWorkflow.store, lifecycle: mockWorkflow.lifecycle,
-    auth: { signIn: mockSignIn, signOut: mockSignOut, cancelSignIn: jest.fn(), restore: jest.fn() },
+    auth: { signIn: mockSignIn, signInWithPassword: mockPasswordSignIn, signOut: mockSignOut, cancelSignIn: jest.fn(), restore: jest.fn() },
     account: { deleteAccount: mockDelete }, workspace: { getSnapshot: () => mockWorkspace, load: jest.fn(), select: mockSelectWorkspace },
     context: mockContext,
   }),
@@ -81,6 +82,18 @@ const routes = {
   'attention/[id]': PullRequestScreen,
 };
 
+/**
+ * A session or thread title sits in the native header, which Jest does not
+ * draw. The composer under it shows the detail screen opened.
+ */
+/** The open drawer. Home lists recent work too, so drawer rows are looked up inside it. */
+const inDrawer = () => within(screen.getByTestId('navigation-drawer'));
+
+async function expectOpened(label: string) {
+  if (label === 'Review current work') expect(await screen.findByRole('header', { name: label })).toBeVisible();
+  else expect(await screen.findByLabelText('Message')).toBeVisible();
+}
+
 describe('native shell', () => {
   it('opens home at startup', async () => {
     await renderRouter(routes, { initialUrl: '/' });
@@ -88,6 +101,10 @@ describe('native shell', () => {
     expect(await screen.findByText('What do you want to build?')).toBeVisible();
     expect(screen.getByRole('header', { name: 'One' })).toBeVisible();
     expect(screen.queryByTestId('navigation-drawer')).toBeNull();
+    // Recent work sits under the composer, one tap from each session.
+    expect(await screen.findByLabelText('Recent sessions')).toBeVisible();
+    await fireEvent.press(screen.getByRole('link', { name: /^Current work\./ }));
+    expect(screen).toHavePathname('/sessions/session-one');
   });
 
   it('goes home from an unknown route', async () => {
@@ -104,9 +121,9 @@ describe('native shell', () => {
     await renderRouter(routes, { initialUrl: url });
     expect(screen).toHavePathname('/home');
     expect(await screen.findByTestId('navigation-drawer')).toBeVisible();
-    await fireEvent.press(await screen.findByRole('link', { name: new RegExp(label) }));
+    await fireEvent.press(await inDrawer().findByRole('link', { name: new RegExp(label) }));
     expect(screen).toHavePathname(destination);
-    expect(await screen.findByRole('header', { name: label })).toBeVisible();
+    await expectOpened(label);
     // Leaving home closed the drawer, so Back shows home itself.
     await testRouter.back('/home');
     expect(screen.queryByTestId('navigation-drawer')).toBeNull();
@@ -127,13 +144,17 @@ describe('native shell', () => {
     expect(screen.getByRole('button', { name: 'New session', selected: true })).toBeVisible();
     for (const name of ['Threads', 'Sessions']) expect(screen.getByRole('header', { name })).toBeVisible();
     expect(screen.getByRole('button', { name: 'example/project', expanded: true })).toBeVisible();
-    for (const name of ['Pull requests', 'Merge queue', 'Insights', 'Agents', 'History']) expect(screen.getByRole('button', { name })).toBeVisible();
+    for (const name of [/^Pull requests/, /^Review requests/, /^Merge queue/, 'Search', 'More pages and Settings']) {
+      expect(screen.getByRole('button', { name })).toBeVisible();
+    }
     await fireEvent.press(screen.getByRole('button', { name: /^Review requests/ }));
     expect(screen).toHavePathname('/pulls');
     expect(screen).toHaveSearchParams({ tab: 'reviews' });
     await testRouter.back('/home');
     await fireEvent.press(await screen.findByRole('button', { name: 'Open menu' }));
-    await fireEvent.press(screen.getByRole('button', { name: 'Settings' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'More pages and Settings' }));
+    for (const label of ['Insights', 'Agents', 'History']) expect(await screen.findByText(label)).toBeVisible();
+    await fireEvent.press(screen.getByText('Settings'));
     expect(screen).toHavePathname('/settings');
     expect(await screen.findByText('Signed in with GitHub')).toBeVisible();
   });
@@ -166,14 +187,16 @@ describe('native shell', () => {
 
   it('searches the drawer lists and clears the search', async () => {
     await renderRouter(routes, { initialUrl: '/sessions' });
-    expect(await screen.findByRole('link', { name: /Current work/ })).toBeVisible();
+    expect(await screen.findByTestId('navigation-drawer')).toBeVisible();
+    expect(await inDrawer().findByRole('link', { name: /Current work/ })).toBeVisible();
+    await fireEvent.press(inDrawer().getByRole('button', { name: 'Search' }));
     await fireEvent.changeText(screen.getByLabelText('Search sessions and threads'), 'planning');
-    expect(screen.queryByRole('link', { name: /Current work/ })).toBeNull();
-    expect(screen.getByRole('link', { name: /Planning work/ })).toBeVisible();
+    expect(inDrawer().queryByRole('link', { name: /Current work/ })).toBeNull();
+    expect(inDrawer().getByRole('link', { name: /Planning work/ })).toBeVisible();
     await fireEvent.changeText(screen.getByLabelText('Search sessions and threads'), 'nothing like this');
-    expect(screen.getByText('No sessions or threads match.')).toBeVisible();
+    expect(await screen.findByText('No sessions or threads match.')).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Clear search' }));
-    expect(screen.getByRole('link', { name: /Current work/ })).toBeVisible();
+    expect(inDrawer().getByRole('link', { name: /Current work/ })).toBeVisible();
   });
 
   it('collapses a repository group and a thread', async () => {
@@ -181,11 +204,12 @@ describe('native shell', () => {
       session(), session({ id: 'child-one', title: 'Child work', threadId: 'thread-one' }), thread()]);
     await renderRouter(routes, { initialUrl: '/sessions' });
     // Under its thread and under its repository, like web.
-    expect(await screen.findAllByRole('link', { name: /Child work/ })).toHaveLength(2);
+    expect(await screen.findByTestId('navigation-drawer')).toBeVisible();
+    expect(await inDrawer().findAllByRole('link', { name: /Child work/ })).toHaveLength(2);
     await fireEvent.press(screen.getByRole('button', { name: 'Hide sessions of Planning work' }));
-    expect(screen.getAllByRole('link', { name: /Child work/ })).toHaveLength(1);
+    expect(inDrawer().getAllByRole('link', { name: /Child work/ })).toHaveLength(1);
     await fireEvent.press(screen.getByRole('button', { name: 'example/project' }));
-    expect(screen.queryByRole('link', { name: /Current work/ })).toBeNull();
+    expect(inDrawer().queryByRole('link', { name: /Current work/ })).toBeNull();
     expect(screen.getByRole('button', { name: 'example/project', expanded: false })).toBeVisible();
   });
 
@@ -196,7 +220,7 @@ describe('native shell', () => {
     expect(await screen.findByTestId('menu-attention-dot')).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Open menu' }));
     expect(screen.getByRole('header', { name: 'Needs you' })).toBeVisible();
-    expect(screen.getAllByRole('link', { name: /Current work/ })).toHaveLength(2);
+    expect(inDrawer().getAllByRole('link', { name: /Current work/ })).toHaveLength(2);
   });
 
   it('restores a cold session link after authentication', async () => {
@@ -206,7 +230,7 @@ describe('native shell', () => {
     expect(screen.getByRole('header', { name: 'Talyn' })).toBeVisible();
     mockAuth = { status: 'signedIn', user: { id: 'alice' }, issue: null };
     await act(async () => router.replace('/'));
-    expect(await screen.findByRole('header', { name: 'Current work' })).toBeVisible();
+    await expectOpened('Current work');
     expect(screen).toHavePathname('/sessions/session-one');
   });
 
@@ -224,19 +248,21 @@ describe('native shell', () => {
     expect(mockWorkflow.api.workbenches.get).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Select workspace One', selected: false })).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'Select workspace One' }));
-    expect(await screen.findByRole('header', { name: 'Current work' })).toBeVisible();
+    await expectOpened('Current work');
     expect(screen).toHavePathname('/sessions/session-one');
+  });
+
+  it('keeps the chooser open when it was opened on purpose', async () => {
+    await renderRouter(routes, { initialUrl: '/workspaces' });
+    expect(screen.getByRole('header', { name: 'Choose a workspace' })).toBeVisible();
+    expect(screen).toHavePathname('/workspaces');
   });
 
   it('shows account details and accessible account actions', async () => {
     await renderRouter(routes, { initialUrl: '/settings' });
     expect(screen.getByText('Signed in with GitHub')).toBeVisible();
     expect(screen.getByText('alice@example.com')).toBeVisible();
-    expect(screen.queryByText('Account ID: alice')).toBeNull();
-    await fireEvent.press(screen.getByRole('button', { name: 'Show account ID' }));
-    expect(screen.getByText('Account ID: alice')).toBeVisible();
-    await fireEvent.press(screen.getByRole('button', { name: 'Hide account ID' }));
-    expect(screen.queryByText('Account ID: alice')).toBeNull();
+    expect(screen.queryByText(/Account ID/)).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Sign out' }));
     expect(mockSignOut).toHaveBeenCalledTimes(1);
   });
@@ -248,7 +274,7 @@ describe('native shell', () => {
   ])('opens the detail URL %s', async (url, label) => {
     await renderRouter(routes, { initialUrl: url });
     expect(screen).toHavePathname(url);
-    expect(await screen.findByRole('header', { name: label })).toBeVisible();
+    await expectOpened(label);
   });
 });
 
@@ -260,6 +286,27 @@ describe('auth route gates and accessible states', () => {
     expect(screen.queryByText('alice@example.com')).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Sign in with GitHub' }));
     expect(mockSignIn).toHaveBeenCalledTimes(1);
+  });
+  it('opens the review sign-in only on a long press of the owl', async () => {
+    mockAuth = { status: 'signedOut', user: null, issue: null };
+    await renderRouter(routes, { initialUrl: '/sign-in' });
+    expect(screen.queryByText('Review sign-in')).toBeNull();
+    await fireEvent.press(screen.getByLabelText('Talyn logo'));
+    expect(screen.queryByText('Review sign-in')).toBeNull();
+    await fireEvent(screen.getByLabelText('Talyn logo'), 'longPress');
+    expect(screen.getByText('Review sign-in')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeDisabled();
+    await fireEvent.changeText(screen.getByLabelText('Email'), '  reviewer@example.com ');
+    await fireEvent.changeText(screen.getByLabelText('Password'), ' pass word ');
+    await fireEvent.press(screen.getByRole('button', { name: 'Sign in' }));
+    expect(mockPasswordSignIn).toHaveBeenCalledWith('reviewer@example.com', ' pass word ');
+  });
+  it('closes the review sign-in on Cancel', async () => {
+    mockAuth = { status: 'signedOut', user: null, issue: null };
+    await renderRouter(routes, { initialUrl: '/sign-in' });
+    await fireEvent(screen.getByLabelText('Talyn logo'), 'longPress');
+    await fireEvent.press(screen.getAllByRole('button', { name: 'Cancel' })[0]!);
+    expect(screen.queryByText('Review sign-in')).toBeNull();
   });
   it('gates the shell until restoration finishes', async () => {
     mockAuth = { status: 'restoring', user: null, issue: null };

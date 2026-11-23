@@ -1,6 +1,8 @@
 import { ExternalLink } from 'lucide-react';
 import type { WorkflowActionOutcome, WorkflowRun, WorkflowRunStatus } from '@talyn/shared';
 import {
+  isIssueWorkflowIntegration,
+  posthogClaimText,
   WORKFLOW_ACTION_LABELS,
   WORKFLOW_EVENT_LABELS,
   WORKFLOW_RUN_STATUS_LABELS,
@@ -9,6 +11,8 @@ import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { useWorkflowRuns } from './useWorkflows';
 import { useWorkspaceStore } from '../../../stores/workspace';
+import { useWorkbenchStore } from '../../../stores/workbenches';
+import { useNavigationStore } from '../../../stores/navigation';
 
 /**
  * One workflow's history.
@@ -61,13 +65,19 @@ const PARKED_CODES: ReadonlySet<string> = new Set(['usage_exhausted', 'box_limit
 function OutcomeLine({ outcome }: { outcome: WorkflowActionOutcome }) {
   const label = WORKFLOW_ACTION_LABELS[outcome.type] ?? outcome.type;
   const parked = !outcome.ok && outcome.code !== undefined && PARKED_CODES.has(outcome.code);
+  const detail = String(outcome.code) === 'slack_scope_missing'
+    ? 'Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.'
+    // Older runs stored the session id here; the button below links the session instead.
+    : outcome.type === 'start_session' && outcome.ok
+      ? 'started a session'
+      : outcome.detail ?? outcome.error ?? '';
   return (
     <div className="flex items-baseline gap-2 text-xs">
       <span className={outcome.ok ? 'text-green-500' : parked ? 'text-amber-500' : 'text-red-500'}>
         {outcome.ok ? '+' : parked ? '…' : 'x'}
       </span>
       <span className="font-medium">{label}</span>
-      <span className="text-muted-foreground">{outcome.detail ?? outcome.error ?? ''}</span>
+      <span className="text-muted-foreground">{detail}</span>
     </div>
   );
 }
@@ -82,6 +92,8 @@ export function WorkflowRunsList({
   const { runs, loading, error, loadMore, hasMore } = useWorkflowRuns(workflowId, liveRuns);
   const setActivePanel = useWorkspaceStore((s) => s.setActivePanel);
   const selectTask = useWorkspaceStore((s) => s.selectTask);
+  // Only live sessions are in the store; an archived one has nothing to open.
+  const liveSessions = useWorkbenchStore((s) => s.workbenches);
 
   if (error) {
     return <p className="px-3 py-2 text-[13px] text-red-500">{error}</p>;
@@ -92,7 +104,7 @@ export function WorkflowRunsList({
   if (runs.length === 0) {
     return (
       <p className="px-3 py-2 text-[13px] text-muted-foreground">
-        This workflow has not run yet. It fires on the next matching pull request event.
+        This automation has not run yet. It fires on the next matching event.
       </p>
     );
   }
@@ -121,7 +133,16 @@ export function WorkflowRunsList({
               </a>
             ) : (
               <span className="font-medium">
-                {run.repoFullName}#{run.prNumber}
+                {run.subjectLabel || (run.integration === 'slack'
+                  ? 'Slack message'
+                  : run.integration === 'webhook'
+                    ? 'Webhook request'
+                    : isIssueWorkflowIntegration(run.integration) ? 'Issue' : run.integration === 'posthog_inbox' ? 'PostHog report' : `${run.repoFullName}#${run.prNumber}`)}
+              </span>
+            )}
+            {run.trigger === 'manual' && (
+              <span className="text-xs text-muted-foreground" data-testid="workflow-run-trigger">
+                {run.triggeredBy ? `Started by ${run.triggeredBy}` : 'Started by hand'}
               </span>
             )}
             <span className="ml-auto text-xs text-muted-foreground">
@@ -132,6 +153,9 @@ export function WorkflowRunsList({
           {run.prTitle && (
             <p className="truncate text-xs text-muted-foreground">{run.prTitle}</p>
           )}
+          {run.error && <p className="text-xs text-red-500">{run.error === 'slack_scope_missing'
+            ? 'Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.'
+            : run.error}</p>}
 
           <div className="space-y-0.5">
             {run.actions.map((outcome, i) => (
@@ -143,10 +167,45 @@ export function WorkflowRunsList({
               "Failed — rate limited" and never changes is the bug this replaced. */}
           {run.status === 'pending_retry' && (
             <p className="text-xs text-muted-foreground">
-              GitHub is rate-limiting this account. Talyn will try again
+              {run.integration === 'posthog_inbox'
+                ? 'PostHog did not take the claim on the report.'
+                : 'GitHub is rate-limiting this account.'}{' '}
+              Talyn will try again
               {run.retryAfter ? ` ${until(run.retryAfter)}` : ' shortly'}
               {run.attempts > 1 ? ` (attempt ${run.attempts + 1})` : ''}.
             </p>
+          )}
+
+          {/* A PostHog Inbox run: where Talyn's claim on the report stands in PostHog. */}
+          {run.posthogClaim && (
+            <p
+              className={`text-xs ${run.posthogClaim.pending || run.posthogClaim.state === 'lost' ? 'text-amber-500' : 'text-muted-foreground'}`}
+              data-testid="posthog-claim"
+            >
+              {posthogClaimText(run.posthogClaim)}
+              {run.posthogClaim.prUrl && (
+                <>
+                  {' '}
+                  <a href={run.posthogClaim.prUrl} target="_blank" rel="noreferrer" className="hover:underline">
+                    {run.posthogClaim.prUrl.replace(/^https:\/\/github\.com\//, '')}
+                  </a>
+                </>
+              )}
+            </p>
+          )}
+
+          {run.workbenchId && liveSessions[run.workbenchId] && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => {
+                const workbenchId = run.workbenchId;
+                if (workbenchId) useNavigationStore.getState().navigate({ view: 'workbench', id: workbenchId });
+              }}
+            >
+              Open the session it started
+            </Button>
           )}
 
           {run.taskId && (

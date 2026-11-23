@@ -244,8 +244,6 @@ describe('menu commands (web key table)', () => {
 
   it.each([
     ['workbench.new', 'mod+shift+o'],
-    ['chat.new', 'mod+alt+t'],
-    ['chat.close', 'mod+alt+w'],
     ['composer.focus', 'mod+shift+l'],
     ['workbench.createPr', 'mod+alt+p'],
     ['workbench.fixChecks', 'mod+alt+x'],

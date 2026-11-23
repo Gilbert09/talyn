@@ -62,6 +62,8 @@ export const WORKBENCH_COLUMNS = {
   repoFullName: workbenchesTable.repoFullName,
   kind: workbenchesTable.kind,
   threadId: workbenchesTable.threadId,
+  parentWorkbenchId: workbenchesTable.parentWorkbenchId,
+  notifyParent: workbenchesTable.notifyParent,
   name: workbenchesTable.name,
   title: workbenchesTable.title,
   branch: workbenchesTable.branch,
@@ -86,6 +88,7 @@ export const WORKBENCH_COLUMNS = {
   startProgress: workbenchesTable.startProgress,
   pullRequestId: workbenchesTable.pullRequestId,
   pullRequestLinkedAt: workbenchesTable.pullRequestLinkedAt,
+  pullRequestLinkExplicit: workbenchesTable.pullRequestLinkExplicit,
   pushedHeadShas: workbenchesTable.pushedHeadShas,
   allocatedBranch: workbenchesTable.allocatedBranch,
   settings: workbenchesTable.settings,
@@ -141,9 +144,10 @@ export type ChatRow = Pick<typeof chatsTable.$inferSelect, keyof typeof CHAT_COL
 /** The start timeline and the last wake are for the Sandbox panel only: they stay out of every list and broadcast. */
 function publicSettings(settings: WorkbenchRow['settings'] | null): Workbench['settings'] {
   if (!settings) return {};
-  if (!BOX_START_SETTINGS_KEYS.some((key) => key in settings)) return settings;
+  if (!BOX_START_SETTINGS_KEYS.some((key) => key in settings) && !('parentWakeTurns' in settings)) return settings;
   const out = { ...settings } as Record<string, unknown>;
   for (const key of BOX_START_SETTINGS_KEYS) delete out[key];
+  delete out.parentWakeTurns;
   return out as Workbench['settings'];
 }
 
@@ -153,6 +157,7 @@ export function rowToWorkbench(row: WorkbenchRow): Workbench {
     workspaceId: row.workspaceId,
     kind: row.kind === 'thread' ? 'thread' : 'session',
     threadId: row.threadId ?? null,
+    parentId: row.parentWorkbenchId ?? null,
     repositoryId: row.repositoryId,
     repoFullName: row.repoFullName,
     name: row.name,
@@ -263,6 +268,12 @@ export async function threadSessions(threadId: string): Promise<WorkbenchRow[]> 
     .select(WORKBENCH_COLUMNS)
     .from(workbenchesTable)
     .where(eq(workbenchesTable.threadId, threadId))
+    .orderBy(desc(workbenchesTable.createdAt));
+}
+
+export async function childSessions(parentId: string): Promise<WorkbenchRow[]> {
+  return db().select(WORKBENCH_COLUMNS).from(workbenchesTable)
+    .where(eq(workbenchesTable.parentWorkbenchId, parentId))
     .orderBy(desc(workbenchesTable.createdAt));
 }
 
@@ -1374,7 +1385,7 @@ export async function finishTurn(
       FROM pre
     )
     UPDATE workbench_chats c SET
-      limit_count = CASE WHEN ${opts.finalStatus === 'idle' && !opts.statusMessage} THEN 0 ELSE c.limit_count END,
+      limit_count = CASE WHEN ${(opts.finalStatus === 'idle' || opts.finalStatus === 'awaiting_input') && !opts.statusMessage} THEN 0 ELSE c.limit_count END,
       resume_at = NULL,
       resume_reason = NULL,
       agent_backup_pending = true,
@@ -1414,21 +1425,25 @@ export async function finishTurn(
  * Give a turn back to the queue before it ran anything: its message goes to
  * the head of the queue, the turn number is returned, and the chat is idle.
  * For a turn that found its workbench moving, and for a turn that waits for a
- * free sandbox (the message then carries `capacityWait`). Null when the chat
- * was not running.
+ * free sandbox (the message then carries `capacityWait`). Set `drain` to false
+ * when a billing refusal requires the person to retry. Null when the chat was not running.
  */
-export async function requeueTurn(chatId: string, message: WorkbenchQueuedMessage, turn?: number): Promise<ChatRow | null> {
+export async function requeueTurn(
+  chatId: string,
+  message: WorkbenchQueuedMessage,
+  opts: { turn?: number; drain?: boolean } = {},
+): Promise<ChatRow | null> {
   const result = await db().execute(sql`
     UPDATE workbench_chats c SET
       queued_messages = ${stringifyJsonbSafe([message])}::jsonb || c.queued_messages,
       status = 'idle',
       turn_message = NULL,
-      drain_pending = true,
+      drain_pending = ${opts.drain ?? true},
       status_message = NULL,
       turn_count = GREATEST(c.turn_count - 1, 0),
       updated_at = now()
     WHERE c.id = ${chatId} AND c.status = 'running' AND c.turn_owner = ${TURN_OWNER}
-      AND (${turn ?? null}::int IS NULL OR c.turn_count = ${turn ?? null})
+      AND (${opts.turn ?? null}::int IS NULL OR c.turn_count = ${opts.turn ?? null})
     RETURNING ${RETURNING_CHAT}
   `);
   const row = rowsOf<RawChatRow>(result)[0];
@@ -1830,6 +1845,118 @@ export async function listOlderEvents(
   return { events, cursor: events.length ? events[events.length - 1].seq : 0, oldestSeq, hasOlder };
 }
 
+export interface VisibleScan {
+  /** Rows one read takes. */
+  chunk: number;
+  /** The most rows one page reads, kept or not. */
+  max: number;
+}
+const VISIBLE_SCAN: VisibleScan = { chunk: 2000, max: 20_000 };
+
+type ScannedRow = { seq: number; turn: number; event: Record<string, unknown>; createdAt: Date };
+
+/** Deltas and assistant messages match by turn and by subagent (`parent_tool_use_id`). */
+function streamKey(turn: number, event: Record<string, unknown>): string {
+  return `${turn}\u0000${typeof event.parent_tool_use_id === 'string' ? event.parent_tool_use_id : ''}`;
+}
+
+/**
+ * The older page (`seq < before`) without the `stream_event` deltas that a
+ * later `assistant` event of the same turn replaces. The transcript drops
+ * those deltas when that event arrives, so they draw nothing. One long turn
+ * can store thousands of them; `listOlderEvents` counts them, so its pages
+ * can show only one or two rows.
+ *
+ * The page holds `limit` kept events, widened to the start of the oldest
+ * turn, as in `listOlderEvents`. It holds at most `ceiling` events and reads
+ * at most `scan.max` rows. Its oldest row is always kept, so
+ * `oldestSeq` is also the seq of its first event.
+ *
+ * Only for older pages. The newest page stays complete: its deltas can be
+ * the live tail, and clients follow its seqs forward.
+ */
+export async function listOlderVisibleEvents(
+  chatId: string,
+  before: number,
+  limit: number,
+  ceiling: number,
+  scan: VisibleScan = VISIBLE_SCAN,
+): Promise<OlderEventsPage> {
+  // Newest first while reading. Each assistant marks the deltas below it in its turn.
+  const kept: ScannedRow[] = [];
+  const replaced = new Set<string>();
+  let lowest: ScannedRow | null = null;
+  let boundaryTurn: number | null = null;
+  let scanned = 0;
+  let below = before;
+  let done = false;
+
+  while (!done) {
+    const rows = await db()
+      .select({ seq: eventsTable.seq, turn: eventsTable.turn, event: eventsTable.event, createdAt: eventsTable.createdAt })
+      .from(eventsTable)
+      .where(and(eq(eventsTable.chatId, chatId), lt(eventsTable.seq, below)))
+      .orderBy(desc(eventsTable.seq))
+      .limit(scan.chunk);
+    if (!rows.length) break;
+    if (!lowest) {
+      // The newest turn of this page can continue above `before`, in a page the client holds.
+      // Look only a short way up: the assistant event usually follows its deltas closely.
+      const top = rows[0];
+      const [later] = await db()
+        .select({ seq: eventsTable.seq })
+        .from(eventsTable)
+        .where(
+          and(
+            eq(eventsTable.chatId, chatId),
+            eq(eventsTable.turn, top.turn),
+            gte(eventsTable.seq, before),
+            lt(eventsTable.seq, before + scan.chunk),
+            sql`${eventsTable.event}->>'type' = 'assistant'`,
+            sql`${eventsTable.event}->>'parent_tool_use_id' is null`,
+          ),
+        )
+        .limit(1);
+      if (later) replaced.add(`${top.turn}\u0000`);
+    }
+    for (const row of rows) {
+      if (boundaryTurn !== null && row.turn !== boundaryTurn) {
+        done = true;
+        break;
+      }
+      scanned++;
+      lowest = row;
+      const type = row.event.type;
+      const key = streamKey(row.turn, row.event);
+      if (!(type === 'stream_event' && replaced.has(key))) kept.push(row);
+      if (type === 'assistant') replaced.add(key);
+      if (kept.length >= ceiling || scanned >= scan.max) {
+        done = true;
+        break;
+      }
+      if (boundaryTurn === null && kept.length >= limit) boundaryTurn = row.turn;
+    }
+    if (rows.length < scan.chunk) done = true;
+    below = rows[rows.length - 1].seq;
+  }
+
+  if (!lowest) return { events: [], cursor: 0, oldestSeq: null, hasOlder: false };
+  if (kept[kept.length - 1] !== lowest) kept.push(lowest);
+  const [older] = await db()
+    .select({ seq: eventsTable.seq })
+    .from(eventsTable)
+    .where(and(eq(eventsTable.chatId, chatId), lt(eventsTable.seq, lowest.seq)))
+    .limit(1);
+  const events = kept.reverse().map((r) => ({
+    chatId,
+    seq: r.seq,
+    turn: r.turn,
+    event: { ...r.event, seq: r.seq } as AgentEvent,
+    createdAt: r.createdAt.toISOString(),
+  }));
+  return { events, cursor: events[events.length - 1].seq, oldestSeq: lowest.seq, hasOlder: Boolean(older) };
+}
+
 // ============================================================================
 // Checkpoints
 // ============================================================================
@@ -2172,6 +2299,14 @@ export async function payerBlockedSiblings(workbenchId: string, exceptChatId: st
   ));
 }
 
+/** The newest `type` event of one turn, or null. */
+export async function latestTurnEvent(chatId: string, turn: number, type: string): Promise<Record<string, unknown> | null> {
+  const [row] = await db().select({ event: eventsTable.event }).from(eventsTable)
+    .where(and(eq(eventsTable.chatId, chatId), eq(eventsTable.turn, turn), sql`${eventsTable.event}->>'type' = ${type}`))
+    .orderBy(desc(eventsTable.seq)).limit(1);
+  return row ? (row.event as Record<string, unknown>) : null;
+}
+
 export async function hasTurnEvent(chatId: string, turn: number, type: string, onlyErrors = false): Promise<boolean> {
   const rows = await db().select({ seq: eventsTable.seq }).from(eventsTable)
     .where(and(eq(eventsTable.chatId, chatId), eq(eventsTable.turn, turn), type === 'user_message' ? sql`${eventsTable.event}->'talyn'->>'kind' = ${type}` : sql`${eventsTable.event}->>'type' = ${type}`,
@@ -2226,4 +2361,26 @@ export async function releaseArchive(row: WorkbenchRow): Promise<void> {
   await db().update(workbenchesTable).set({ archiveLeaseUntil: null }).where(and(
     eq(workbenchesTable.id, row.id), eq(workbenchesTable.archivePendingAt, row.archivePendingAt!),
   ));
+}
+
+/** Read only a count. The transcript stays in the database. */
+export async function openSubagentCount(chatId: string, turn: number): Promise<number> {
+  const result = await db().execute(sql`
+    WITH turn_events AS (
+      SELECT seq, event FROM workbench_events WHERE chat_id = ${chatId} AND turn = ${turn}
+    ), parts AS (
+      SELECT seq, event->>'type' AS type, part
+      FROM turn_events,
+        LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(event->'message'->'content') = 'array'
+          THEN event->'message'->'content' ELSE '[]'::jsonb END) AS part
+    )
+    SELECT count(DISTINCT call.part->>'id')::int AS count FROM parts AS call
+    WHERE call.type = 'assistant' AND call.part->>'type' = 'tool_use'
+      AND regexp_replace(lower(call.part->>'name'), '[^a-z0-9]', '', 'g') IN ('agent', 'task', 'subagent', 'dispatchagent')
+      AND NOT EXISTS (SELECT 1 FROM parts AS result
+        WHERE result.type = 'user' AND result.part->>'type' = 'tool_result'
+          AND result.part->>'tool_use_id' = call.part->>'id' AND result.seq > call.seq)
+      AND NOT EXISTS (SELECT 1 FROM turn_events WHERE event->>'subtype' = 'subagents_stopped')
+  `);
+  return rowsOf<{ count: number }>(result)[0]?.count ?? 0;
 }

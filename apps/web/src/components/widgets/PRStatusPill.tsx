@@ -86,7 +86,7 @@ interface PRStatusPillProps {
   /**
    * The PR's labels. An external merge queue (trunk.io) publishes a submitted
    * PR's state as labels, and once it holds the PR that state is what the
-   * reader actually wants — "Queue: testing" beats "Ready" on a PR nobody but
+   * reader actually wants — "Testing in merge queue" beats "Ready" on a PR nobody but
    * the queue can merge. Ranked below merged/closed, above every open verdict.
    *
    * Only the FALLBACK channel: trunk applies these labels in some repo
@@ -218,7 +218,7 @@ function terminalVariant(state?: PRState): PillVariant | null {
 /**
  * An external merge queue (trunk.io) holding the PR outranks every open-state
  * verdict: on a branch only that system can merge, "Ready" is misleading and
- * "Queue: testing" is the answer. An ejected PR (failed/cancelled) reads red or
+ * "Testing in merge queue" is the answer. An ejected PR (failed/cancelled) reads red or
  * amber so it stands out — it's back in the author's court.
  */
 function externalQueueVariant(
@@ -236,11 +236,21 @@ function externalQueueVariant(
   if (ext.state === 'not_submitted') return null;
   const provider = externalQueueProviderLabel(ext.provider);
   const state = externalQueueStateLabel(ext.state);
-  const base = { label: `Queue: ${state.toLowerCase()}`, tone: 'blue' as const };
+  const queueLabels: Partial<Record<ExternalQueueState, string>> = {
+    queued: 'In merge queue',
+    testing: 'Testing in merge queue',
+    passed: 'Passed merge queue',
+    not_ready: 'Not ready for merge queue',
+    pending_failure: 'Merge queue failure pending',
+    failed: 'Failed in merge queue',
+    rejected: 'Refused by merge queue',
+    cancelled: 'Removed from merge queue',
+  };
+  const base = { label: queueLabels[ext.state] ?? `Merge queue: ${state.toLowerCase()}`, tone: 'blue' as const };
   switch (ext.state) {
     case 'rejected':
       return {
-        variant: { ...base, label: 'Queue: refused', icon: XCircle, tone: 'red' },
+        variant: { ...base, icon: XCircle, tone: 'red' },
         title: `${provider}'s merge queue says it cannot merge this PR (${ext.evidence}).`,
       };
     case 'pending_failure':
@@ -269,7 +279,7 @@ function externalQueueVariant(
       // once all branch protection rules pass". On a repo like posthog that
       // covers the entire ~40-minute CI run, so it is the ordinary state of
       // every submitted PR — and overriding "1/201 running" with an amber
-      // "Queue: not ready" turned every ordinary wait into something that read
+      // "Not ready for merge queue" turned every ordinary wait into something that read
       // like it needed a human, on seven PRs at once.
       //
       // So when the PR itself explains the wait, let it: those verdicts ARE

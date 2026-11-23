@@ -2,54 +2,50 @@ import { captureAnalyticsException } from '../../../lib/analytics';
 import { useCallback, useMemo, useState } from 'react';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import type {
-  CodeReviewPreset,
   WorkflowAction,
   WorkflowActionType,
-  WorkflowActorMatch,
-  WorkflowCheckConclusion,
-  WorkflowConditionSpec,
   WorkflowConditions,
   WorkflowInput,
-  WorkflowReviewState,
+  WorkflowIntegration,
   WorkflowSuggestions,
   WorkflowTriggerEvent,
   WorkflowWithStats,
 } from '@talyn/shared';
 import {
   availableWorkflowConditions,
-  CODE_REVIEW_PRESET_LABELS,
-  CODE_REVIEW_PRESETS,
   emptyWorkflowAction,
   emptyWorkflowConditionValue,
   emptyWorkflowInput,
-  MAX_WORKFLOW_NAME_LENGTH,
+  isIssueWorkflowIntegration,
   pruneWorkflowConditions,
   WORKFLOW_ACTION_LABELS,
-  WORKFLOW_ACTION_TYPES,
   WORKFLOW_CONDITION_SPECS,
   WORKFLOW_EVENT_LABELS,
   WORKFLOW_EVENTS_REQUIRING_TRACKED_PR,
-  WORKFLOW_TRIGGER_EVENTS,
   workflowConditionSpec,
   workflowInputProblem,
   workflowToInput,
+  workflowVocabulary,
+  workflowIntegrationOf,
+  WEBHOOK_WORKFLOW_CONDITION_SPECS,
+  posthogInboxPreviewInput,
+  POSTHOG_INBOX_DEFAULT_PROMPT,
 } from '@talyn/shared';
 import { Button } from '../../ui/button';
-import { PageHeader } from '../../ui/page-header';
-import { Input } from '../../ui/input';
-import { Select } from '../../ui/select';
-import { Textarea } from '../../ui/textarea';
 import { cn } from '../../../lib/utils';
+import { DropdownButton, EditorRow, Section, WorkflowEnabledButton, WorkflowNameField, WorkflowRunCapField } from './workflowFields';
+import { GithubActionInput, GithubConditionInput } from './githubFields';
+import { SlackActionInput, SlackConditions, SlackReplyNotice, StartSessionInput, useSlackRuleSettings } from './slackFields';
+import { WebhookPayloadConditions, WebhookUrlSection, withoutEmptyPayloadTests } from './webhookFields';
+import { IssueActionInput, IssueConditions, IssueWriteBackFields, pruneIssueConditions, useLinearRuleData } from './issueFields';
 import {
-  ActorField,
-  ChoiceSet,
-  DropdownButton,
-  EditorRow,
-  PeopleField,
-  Section,
-  TextField,
-  TokenField,
-} from './workflowFields';
+  PostHogInboxConditions,
+  PostHogInboxConnectionNotice,
+  PostHogInboxDailyCapField,
+  PostHogInboxPreview,
+  usePostHogInboxStatus,
+} from './posthogInboxFields';
+import { PostHogInboxBacklog } from './posthogInboxBacklog';
 
 /**
  * The workflow editor, as a page.
@@ -67,6 +63,7 @@ import {
  */
 
 interface Props {
+  integration: WorkflowIntegration;
   /** The workflow being edited, or null for a new one. */
   editing: WorkflowWithStats | null;
   suggestions: WorkflowSuggestions | null;
@@ -84,282 +81,6 @@ interface Props {
   onSave: (input: WorkflowInput) => Promise<void>;
 }
 
-const REVIEW_STATE_OPTIONS: ReadonlyArray<{ value: WorkflowReviewState; label: string }> = [
-  { value: 'approved', label: 'Approved' },
-  { value: 'changes_requested', label: 'Changes requested' },
-  { value: 'commented', label: 'Commented' },
-];
-
-const CHECK_OPTIONS: ReadonlyArray<{ value: WorkflowCheckConclusion; label: string }> = [
-  { value: 'success', label: 'Passed' },
-  { value: 'failure', label: 'Failed' },
-];
-
-/** The widget for one condition, chosen by its spec's `input`. */
-function ConditionInput({
-  spec,
-  conditions,
-  setConditions,
-  suggestions,
-  onNeedSuggestions,
-}: {
-  spec: WorkflowConditionSpec;
-  conditions: WorkflowConditions;
-  setConditions: (next: WorkflowConditions) => void;
-  suggestions: WorkflowSuggestions | null;
-  onNeedSuggestions: () => void;
-}) {
-  const set = (value: unknown) => setConditions({ ...conditions, [spec.key]: value });
-
-  switch (spec.input) {
-    case 'repos':
-      return (
-        <TokenField
-          values={conditions.repos ?? []}
-          suggestions={suggestions?.repos ?? []}
-          placeholder="owner/repo"
-          onChange={set}
-        />
-      );
-    case 'branches':
-      return (
-        <TokenField
-          values={conditions.baseBranches ?? []}
-          suggestions={suggestions?.branches ?? []}
-          placeholder="main"
-          onChange={set}
-        />
-      );
-    case 'labels':
-      return (
-        <TokenField
-          values={(conditions[spec.key] as string[] | undefined) ?? []}
-          suggestions={suggestions?.labels ?? []}
-          placeholder="needs-review"
-          onNeedSuggestions={onNeedSuggestions}
-          onChange={set}
-        />
-      );
-    case 'label':
-      return (
-        <TokenField
-          // One label, but the same chip widget — so the suggestion list is the
-          // same one the multi-label fields use.
-          values={conditions.labelName ? [conditions.labelName] : []}
-          suggestions={suggestions?.labels ?? []}
-          placeholder="needs-review"
-          onNeedSuggestions={onNeedSuggestions}
-          onChange={(next) => set(next[next.length - 1] ?? '')}
-        />
-      );
-    case 'text':
-      return (
-        <TextField
-          value={(conditions[spec.key] as string | undefined) ?? ''}
-          placeholder={spec.key === 'titleContains' ? 'fix:' : 'please rebase'}
-          onChange={set}
-        />
-      );
-    case 'actor':
-      return (
-        <ActorField
-          value={conditions[spec.key] as WorkflowActorMatch | undefined}
-          suggestions={suggestions}
-          onNeedSuggestions={onNeedSuggestions}
-          onChange={set}
-        />
-      );
-    case 'draft':
-      return (
-        <Select
-          value={conditions.draft === undefined ? '' : String(conditions.draft)}
-          onChange={(e) => set(e.target.value === '' ? undefined : e.target.value === 'true')}
-        >
-          <option value="false">Not a draft</option>
-          <option value="true">Drafts only</option>
-        </Select>
-      );
-    case 'baseIsDefault':
-      return (
-        <Select
-          value={conditions.baseIsDefault === undefined ? '' : String(conditions.baseIsDefault)}
-          onChange={(e) => set(e.target.value === '' ? undefined : e.target.value === 'true')}
-        >
-          <option value="false">No — stacked on another branch</option>
-          <option value="true">Yes — targets the default branch</option>
-        </Select>
-      );
-    case 'reviewStates':
-      return (
-        <ChoiceSet
-          options={REVIEW_STATE_OPTIONS}
-          selected={conditions.reviewStates ?? []}
-          onChange={set}
-        />
-      );
-    case 'checkConclusions':
-      return (
-        <ChoiceSet
-          options={CHECK_OPTIONS}
-          selected={conditions.checkConclusions ?? []}
-          onChange={set}
-        />
-      );
-  }
-}
-
-/** The widget for one action, chosen by its type. */
-function ActionInput({
-  action,
-  onChange,
-  suggestions,
-  onNeedSuggestions,
-}: {
-  action: WorkflowAction;
-  onChange: (next: WorkflowAction) => void;
-  suggestions: WorkflowSuggestions | null;
-  onNeedSuggestions: () => void;
-}) {
-  switch (action.type) {
-    case 'add_labels':
-    case 'remove_labels':
-      return (
-        <TokenField
-          values={action.labels}
-          suggestions={suggestions?.labels ?? []}
-          placeholder="needs-review"
-          onNeedSuggestions={onNeedSuggestions}
-          onChange={(labels) => onChange({ ...action, labels })}
-        />
-      );
-    case 'request_reviewers':
-      return (
-        <PeopleField
-          logins={action.users ?? []}
-          teams={action.teams ?? []}
-          suggestions={suggestions}
-          onNeedSuggestions={onNeedSuggestions}
-          onChange={({ logins, teams }) =>
-            onChange({ ...action, users: logins, teams })
-          }
-        />
-      );
-    case 'assign':
-      return (
-        <PeopleField
-          logins={action.users}
-          teams={[]}
-          includeTeams={false}
-          suggestions={suggestions}
-          onNeedSuggestions={onNeedSuggestions}
-          hint="GitHub ignores anyone who is not a collaborator, without erroring, so Talyn checks what came back and reports the difference."
-          onChange={({ logins }) => onChange({ ...action, users: logins })}
-        />
-      );
-    case 'comment':
-      return (
-        <div className="space-y-1">
-          <Textarea
-            rows={3}
-            value={action.body}
-            placeholder="Thanks {{pr.author}} - this targets {{pr.baseBranch}}."
-            onChange={(e) => onChange({ ...action, body: e.target.value })}
-          />
-          <p className="text-xs text-muted-foreground">
-            Filled in: {'{{pr.number}}'}, {'{{pr.title}}'}, {'{{pr.url}}'}, {'{{pr.author}}'},{' '}
-            {'{{pr.baseBranch}}'}, {'{{pr.headBranch}}'}, {'{{repo}}'}, {'{{actor}}'},{' '}
-            {'{{event}}'}.
-          </p>
-        </div>
-      );
-    case 'run_skill':
-      return (
-        <div className="space-y-1">
-          <Input
-            value={action.skillKey}
-            placeholder="repo:owner/repo:my-skill"
-            onChange={(e) => onChange({ ...action, skillKey: e.target.value })}
-          />
-          <p className="text-xs text-muted-foreground">
-            A repo skill (<code>repo:owner/repo:name</code>) or one saved to the workspace (
-            <code>platform:id</code>). A skill on your own machine cannot be used, because
-            workflows run on the server.
-          </p>
-        </div>
-      );
-    case 'run_prompt':
-      return (
-        <div className="space-y-1">
-          <Textarea
-            rows={4}
-            value={action.prompt}
-            placeholder="Review this PR for missing tests and leave your findings as review comments."
-            onChange={(e) => onChange({ ...action, prompt: e.target.value })}
-          />
-          <p className="text-xs text-muted-foreground">
-            The PR is named for the agent already. Write only the instruction.
-          </p>
-        </div>
-      );
-    case 'enqueue_merge_queue':
-      return (
-        <div className="space-y-1">
-          <Select
-            value={action.method ?? ''}
-            onChange={(e) =>
-              onChange({
-                ...action,
-                method: (e.target.value || undefined) as
-                  | 'squash'
-                  | 'merge'
-                  | 'rebase'
-                  | undefined,
-              })
-            }
-          >
-            <option value="">Whatever the PR is set to</option>
-            <option value="squash">Squash</option>
-            <option value="merge">Merge commit</option>
-            <option value="rebase">Rebase</option>
-          </Select>
-          <p className="text-xs text-muted-foreground">
-            Goes through Talyn&apos;s merge queue rather than merging directly, so it still works
-            on a branch governed by trunk or a ruleset, and it waits for checks.
-          </p>
-        </div>
-      );
-    case 'run_code_review':
-      return (
-        <div className="space-y-1">
-          <Select
-            value={action.preset ?? ''}
-            onChange={(e) =>
-              onChange({
-                ...action,
-                preset: (e.target.value || undefined) as CodeReviewPreset | undefined,
-              })
-            }
-          >
-            {/* Empty is the default and stays the default: a workflow written
-                before a team settles on a depth keeps following that setting
-                rather than pinning whatever happened to be current. */}
-            <option value="">Whatever the workspace is set to</option>
-            {CODE_REVIEW_PRESETS.map((preset) => (
-              <option key={preset} value={preset}>
-                {CODE_REVIEW_PRESET_LABELS[preset]}
-              </option>
-            ))}
-          </Select>
-          <p className="text-xs text-muted-foreground">
-            Findings appear in Talyn.
-          </p>
-        </div>
-      );
-    case 'watch_pr':
-      return null;
-  }
-}
-
 /** One line describing what an action does, for its row heading. */
 const ACTION_HINTS: Record<WorkflowActionType, string> = {
   add_labels: 'Additive — GitHub keeps the labels already on the PR.',
@@ -367,24 +88,74 @@ const ACTION_HINTS: Record<WorkflowActionType, string> = {
   request_reviewers: 'The PR author is dropped automatically; asking them would fail the whole call.',
   assign: 'Assignees must be collaborators on the repository.',
   comment: 'Posted as Talyn on the PR conversation.',
-  run_skill: 'Starts a cloud task. Counts against your plan, and never runs twice on one PR.',
-  run_prompt: 'Starts a cloud task. Counts against your plan, and never runs twice on one PR.',
+  approve_pr: 'Approves as your GitHub account. GitHub does not let you approve your own PR.',
+  run_skill: 'Starts a session on the PR with this skill. It never runs twice on one PR.',
+  // Old actions. Rules never offer them: they start sessions now.
+  run_prompt: 'Starts a session on the PR with this prompt.',
   watch_pr: 'Adds the PR to My PRs, exactly as pasting its URL does.',
   enqueue_merge_queue: 'Waits for checks and handles a gated base branch.',
   run_code_review:
     'Reviews the PR and puts the findings in Talyn. Does not use a task slot; the free plan runs one review at a time.',
+  // Not offered by this editor yet. The Slack and session editors come later.
+  start_session: 'Starts a session with this prompt.',
+  slack_reply: 'Replies in the thread of the Slack message.',
+  slack_react: 'Adds a reaction to the Slack message.',
+  start_task: 'Starts a session on the repository with this prompt.',
+  issue_comment: 'Talyn posts this comment on the issue.',
+  issue_set_status: 'Talyn moves the issue to this status.',
 };
 
+const BACK_LABELS: Record<WorkflowIntegration, string> = {
+  github: 'Automations',
+  slack: 'Slack automations',
+  webhook: 'Webhook automations',
+  linear: 'Linear automations',
+  github_issues: 'GitHub Issues automations',
+  posthog_inbox: 'PostHog Inbox automations',
+};
+
+const TRIGGER_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
+  github: 'Any one of these events on a pull request in the repositories this workspace watches.',
+  slack: 'When a message appears in a selected channel.',
+  webhook: 'When a request arrives at the URL of this automation.',
+  linear: 'Any one of these events on an issue in the Linear workspace you pick below.',
+  github_issues: 'Any one of these events on an issue in the repositories this workspace watches.',
+  posthog_inbox: 'When a PostHog self-driving report in your PostHog project is ready for work.',
+};
+
+const NO_ACTIONS: Record<WorkflowIntegration, string> = {
+  github: 'Nothing yet. Add at least one action — labelling, asking for a review, commenting, running a skill, or sending the PR to the merge queue.',
+  slack: 'Add an action for matching messages.',
+  webhook: 'Add an action. It can start a session or a task.',
+  linear: 'Add an action. It can start a session or a task, comment on the issue, or change its status.',
+  github_issues: 'Add an action. It can start a session or a task, comment on the issue, or change its status.',
+  posthog_inbox: 'Add an action. It starts a session on the report\'s repository.',
+};
+
+/** A new action row. A PostHog Inbox session starts with a prompt that points at the report. */
+function newWorkflowAction(type: WorkflowActionType, integration: WorkflowIntegration): WorkflowAction {
+  const action = emptyWorkflowAction(type);
+  return action.type === 'start_session' && integration === 'posthog_inbox'
+    ? { ...action, prompt: POSTHOG_INBOX_DEFAULT_PROMPT }
+    : action;
+}
+
 export function WorkflowEditorPage({
+  integration,
   editing,
   suggestions,
   onNeedGithubSuggestions,
   onCancel,
   onSave,
 }: Props) {
-  const [input, setInput] = useState<WorkflowInput>(() =>
-    editing ? workflowToInput(editing) : emptyWorkflowInput()
-  );
+  const [input, setInput] = useState<WorkflowInput>(() => {
+    if (editing) return workflowToInput(editing);
+    const blank = emptyWorkflowInput(integration);
+    // An issue or PostHog Inbox rule starts a session by default.
+    return isIssueWorkflowIntegration(integration) || integration === 'posthog_inbox'
+      ? { ...blank, actions: [newWorkflowAction('start_session', integration)] }
+      : blank;
+  });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -399,14 +170,39 @@ export function WorkflowEditorPage({
    */
   const [attempted, setAttempted] = useState(false);
 
+  const kind = workflowIntegrationOf(input);
+  const vocabulary = workflowVocabulary(kind);
   const conditions = input.conditions ?? {};
-  const problem = useMemo(() => workflowInputProblem(input), [input]);
+  const slackSettings = useSlackRuleSettings(conditions.slackTeamId, kind === 'slack');
+  const canReply = slackSettings.install?.canReply !== false;
+  const linear = useLinearRuleData(conditions.connectionId, kind === 'linear');
+  const inboxStatus = usePostHogInboxStatus(kind === 'posthog_inbox');
+  // Issue and PostHog Inbox rules start one piece of work per subject.
+  const oneStartAction = isIssueWorkflowIntegration(kind) || kind === 'posthog_inbox';
+  // The trigger of a webhook or PostHog Inbox rule is fixed.
+  const fixedTrigger = kind === 'webhook' || kind === 'posthog_inbox';
+  const hasStartAction = input.actions.some((a) => a.type === 'start_session');
+  // Empty payload tests are dropped, not refused: an added row that was never filled in means nothing.
+  const prepared = useMemo(() => (kind === 'webhook' ? withoutEmptyPayloadTests(input) : input), [kind, input]);
+  const problem = useMemo(() => workflowInputProblem(prepared), [prepared]);
+  // "Run selected" in the backlog uses the saved rule, so the backlog says when the editor differs.
+  const savedInput = useMemo(() => (editing ? JSON.stringify(workflowToInput(editing)) : null), [editing]);
+  const unsavedChanges = savedInput !== null && savedInput !== JSON.stringify(input);
+  // The preview reads only the conditions, so it runs before the rule has a
+  // name or a prompt. The dry-run route validates the same stand-in rule.
+  const previewProblem = useMemo(
+    () => (kind === 'posthog_inbox' ? workflowInputProblem(posthogInboxPreviewInput(input.conditions)) : null),
+    [kind, input.conditions]
+  );
 
   // The scope every GitHub-backed field asks within: the repositories this
   // workflow names. Empty means the workflow is unscoped, which the backend
   // answers from a bounded sample and flags `partial` — there is no honest way
   // to offer "the labels" of eighty repositories in one dropdown.
-  const scopedRepos = useMemo(() => conditions.repos ?? [], [conditions.repos]);
+  const scopedRepos = useMemo(
+    () => (kind === 'posthog_inbox' ? conditions.repositories : conditions.repos) ?? [],
+    [kind, conditions.repos, conditions.repositories]
+  );
   const needSuggestions = useCallback(
     () => onNeedGithubSuggestions(scopedRepos),
     [onNeedGithubSuggestions, scopedRepos]
@@ -416,8 +212,8 @@ export function WorkflowEditorPage({
   // so "Add condition" never offers a duplicate, and never offers a condition the
   // current trigger cannot carry.
   const addableConditions = useMemo(
-    () => availableWorkflowConditions(input.events, conditions),
-    [input.events, conditions]
+    () => kind === 'github' ? availableWorkflowConditions(input.events, conditions) : [],
+    [kind, input.events, conditions]
   );
   const activeConditionKeys = useMemo(
     () =>
@@ -425,8 +221,8 @@ export function WorkflowEditorPage({
     [conditions]
   );
   const addableEvents = useMemo(
-    () => WORKFLOW_TRIGGER_EVENTS.filter((e) => !input.events.includes(e)),
-    [input.events]
+    () => vocabulary.events.map((item) => item.event).filter((e) => !input.events.includes(e)),
+    [input.events, vocabulary]
   );
 
   const setConditions = (next: WorkflowConditions) => setInput((p) => ({ ...p, conditions: next }));
@@ -447,7 +243,10 @@ export function WorkflowEditorPage({
       // Pruning here is what stops the save 400ing about a condition whose
       // trigger is no longer selected — and the condition row disappears with it,
       // so the page never shows a rule that cannot apply.
-      return { ...p, events, conditions: pruneWorkflowConditions(p.conditions ?? {}, events) };
+      const pruned = kind === 'github'
+        ? pruneWorkflowConditions(p.conditions ?? {}, events)
+        : isIssueWorkflowIntegration(kind) ? pruneIssueConditions(kind, p.conditions ?? {}, events) : p.conditions;
+      return { ...p, events, conditions: pruned };
     });
 
   const save = async () => {
@@ -461,10 +260,14 @@ export function WorkflowEditorPage({
     setSaving(true);
     setSaveError(null);
     try {
-      await onSave(input);
+      // A GitHub or PostHog Inbox session runs on the subject's own repository.
+      await onSave(kind === 'github' || kind === 'posthog_inbox'
+        ? { ...prepared, actions: prepared.actions.map((action) => action.type === 'start_session'
+          ? { ...action, repositoryId: null } : action) }
+        : prepared);
     } catch (err) {
       captureAnalyticsException(err, { flow: 'workflow_save' });
-      setSaveError(err instanceof Error ? err.message : 'Could not save this workflow');
+      setSaveError(err instanceof Error ? err.message : 'Could not save this automation');
     } finally {
       setSaving(false);
     }
@@ -472,62 +275,48 @@ export function WorkflowEditorPage({
 
   return (
     <div className="flex h-full flex-col">
-      <PageHeader
-        variant="toolbar"
-        title={<span className="truncate">{input.name.trim() || (editing ? 'Workflow' : 'New workflow')}</span>}
-        icon={
-          <Button variant="ghost" size="sm" onClick={onCancel} data-attr="workflow-editor-back">
-            <ArrowLeft className="mr-1 h-3.5 w-3.5" />
-            Workflows
-          </Button>
-        }
-        actions={
-          <>
-            {/* Only when editing. A workflow you are creating is on — nobody composes
-                a rule in order to leave it switched off, and the list row has the
-                toggle for the moment that changes. */}
-            {editing && (
-              <Button
-                variant={input.enabled === false ? 'outline' : 'secondary'}
-                size="sm"
-                onClick={() => setInput((p) => ({ ...p, enabled: p.enabled === false }))}
-              >
-                {input.enabled === false ? 'Off' : 'On'}
-              </Button>
-            )}
-            <Button size="sm" onClick={save} disabled={saving} data-attr="workflow-save">
-              {saving ? 'Saving...' : editing ? 'Save' : 'Create'}
-            </Button>
-          </>
-        }
-      />
+      <header className="flex items-center gap-3 border-b px-6 py-4">
+        <Button variant="ghost" size="sm" onClick={onCancel} data-attr="workflow-editor-back">
+          <ArrowLeft className="mr-1 h-4 w-4" />
+          {BACK_LABELS[kind]}
+        </Button>
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-lg font-semibold">
+            {input.name.trim() || (editing ? 'Automation' : 'New automation')}
+          </h1>
+        </div>
+        {/* Only when editing. A workflow you are creating is on — nobody composes
+            a rule in order to leave it switched off, and the list row has the
+            toggle for the moment that changes. */}
+        {editing && <WorkflowEnabledButton enabled={input.enabled !== false} onChange={(enabled) => setInput((p) => ({ ...p, enabled }))} />}
+        <Button onClick={save} disabled={saving} data-attr="workflow-save">
+          {saving ? 'Saving...' : editing ? 'Save' : 'Create'}
+        </Button>
+      </header>
 
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto max-w-3xl space-y-4 px-4 py-4">
+        <div className="mx-auto max-w-3xl space-y-4 p-6">
           {(saveError ?? (attempted ? problem : null)) && (
-            <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-500">
+            <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-500">
               {saveError ?? problem}
             </p>
           )}
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium" htmlFor="workflow-name">
-              Name
-            </label>
-            <Input
-              id="workflow-name"
-                            value={input.name}
-              maxLength={MAX_WORKFLOW_NAME_LENGTH}
-              placeholder="Label new PRs from bots"
-              onChange={(e) => setInput((p) => ({ ...p, name: e.target.value }))}
-            />
-          </div>
+          <WorkflowNameField value={input.name} integration={kind} onChange={(name) => setInput((p) => ({ ...p, name }))} />
+
+          {kind === 'webhook' && editing && (
+            <div className="rounded-lg border">
+              <WebhookUrlSection ruleId={editing.id} />
+            </div>
+          )}
+
+          {kind === 'posthog_inbox' && <PostHogInboxConnectionNotice {...inboxStatus} />}
 
           {/* ---- WHEN ---- */}
           <Section
             title="When this happens"
-            description="Any one of these events on a pull request in the repositories this workspace watches."
-            action={
+            description={TRIGGER_DESCRIPTIONS[kind]}
+            action={fixedTrigger ? undefined :
               <DropdownButton
                 label="Add trigger"
                 options={addableEvents.map((e) => ({
@@ -543,8 +332,8 @@ export function WorkflowEditorPage({
             }
           >
             {input.events.length === 0 ? (
-              <p className="text-xs text-muted-foreground">
-                Pick at least one trigger — a workflow with none can never run.
+              <p className="text-sm text-muted-foreground">
+                Pick at least one trigger — an automation with none can never run.
               </p>
             ) : (
               <>
@@ -558,18 +347,18 @@ export function WorkflowEditorPage({
                     <span
                       key={e}
                       className={cn(
-                        'inline-flex items-center gap-2 rounded-md border bg-muted/60 py-1 pl-2.5 pr-1 text-[13px] font-medium',
+                        'inline-flex items-center gap-2 rounded-md border bg-muted/60 py-1.5 pl-3 pr-1.5 text-sm font-medium',
                         WORKFLOW_EVENTS_REQUIRING_TRACKED_PR.includes(e) && 'border-dashed'
                       )}
                     >
                       {WORKFLOW_EVENT_LABELS[e]}
-                      <button
+                      {!fixedTrigger && <button
                         className="rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
                         onClick={() => removeEvent(e)}
                         aria-label={`Remove ${WORKFLOW_EVENT_LABELS[e]}`}
                       >
                         <X className="h-3.5 w-3.5" />
-                      </button>
+                      </button>}
                     </span>
                   ))}
                 </div>
@@ -591,9 +380,42 @@ export function WorkflowEditorPage({
           </Section>
 
           {/* ---- IF ---- */}
+          {kind === 'slack' ? (
+            <Section title="Only if" description="Choose a Slack workspace and its channels.">
+              <SlackConditions conditions={conditions} onChange={setConditions} settings={slackSettings} />
+            </Section>
+          ) : kind === 'webhook' ? (
+            <Section title="Only if" description={WEBHOOK_WORKFLOW_CONDITION_SPECS[0]!.hint}>
+              <WebhookPayloadConditions conditions={conditions} onChange={setConditions} />
+            </Section>
+          ) : kind === 'posthog_inbox' ? (
+            <Section
+              title="Only if"
+              description="Every condition has to hold. Talyn never acts on a report PostHog suppressed, a report that is not ready, or a report somebody already handles."
+            >
+              <PostHogInboxConditions
+                conditions={conditions}
+                setConditions={setConditions}
+                suggestions={suggestions}
+                onNeedSuggestions={needSuggestions}
+              />
+            </Section>
+          ) : isIssueWorkflowIntegration(kind) ? (
+            <Section title="Only if" description="Every condition has to hold.">
+              <IssueConditions
+                integration={kind}
+                conditions={conditions}
+                events={input.events}
+                setConditions={setConditions}
+                linear={linear}
+                suggestions={suggestions}
+                onNeedSuggestions={needSuggestions}
+              />
+            </Section>
+          ) : (
           <Section
             title="Only if"
-            description="Every condition has to hold. Add none and the workflow runs on every PR the trigger fires for."
+            description="Every condition has to hold. Add none and the automation runs on every PR the trigger fires for."
             action={
               <DropdownButton
                 label="Add condition"
@@ -615,7 +437,7 @@ export function WorkflowEditorPage({
             }
           >
             {activeConditionKeys.length === 0 ? (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-sm text-muted-foreground">
                 No conditions. This runs on every pull request the trigger fires for, including
                 ones you did not open.
               </p>
@@ -629,7 +451,7 @@ export function WorkflowEditorPage({
                     hint={spec.hint}
                     onRemove={() => removeCondition(key)}
                   >
-                    <ConditionInput
+                    <GithubConditionInput
                       spec={spec}
                       conditions={conditions}
                       setConditions={setConditions}
@@ -640,7 +462,7 @@ export function WorkflowEditorPage({
                 );
               })
             )}
-            {suggestions?.partial && (
+            {kind === 'github' && suggestions?.partial && (
               <p className="text-xs text-muted-foreground">
                 {scopedRepos.length === 0
                   ? 'Showing labels from some of this workspace’s repositories. Add a repository condition to see exactly its labels — or type any value.'
@@ -648,6 +470,7 @@ export function WorkflowEditorPage({
               </p>
             )}
           </Section>
+          )}
 
           {/* ---- THEN ---- */}
           <Section
@@ -656,24 +479,26 @@ export function WorkflowEditorPage({
             action={
               <DropdownButton
                 label="Add action"
-                options={WORKFLOW_ACTION_TYPES.map((t) => ({
+                options={vocabulary.actions.map(({ type: t }) => ({
                   value: t,
                   label: WORKFLOW_ACTION_LABELS[t],
                   hint: ACTION_HINTS[t],
+                  disabled: (t === 'slack_reply' && !canReply)
+                    || (oneStartAction && hasStartAction && t === 'start_session'),
                 }))}
                 onPick={(type) =>
                   setInput((p) => ({
                     ...p,
-                    actions: [...p.actions, emptyWorkflowAction(type as WorkflowActionType)],
+                    actions: [...p.actions, newWorkflowAction(type as WorkflowActionType, kind)],
                   }))
                 }
               />
             }
           >
+            {kind === 'slack' && !canReply && <SlackReplyNotice />}
             {input.actions.length === 0 ? (
-              <p className="text-xs text-muted-foreground">
-                Nothing yet. Add at least one action — labelling, asking for a review, commenting,
-                running a skill, or sending the PR to the merge queue.
+              <p className="text-sm text-muted-foreground">
+                {NO_ACTIONS[kind]}
               </p>
             ) : (
               input.actions.map((action, i) => (
@@ -685,64 +510,56 @@ export function WorkflowEditorPage({
                     setInput((p) => ({ ...p, actions: p.actions.filter((_, j) => j !== i) }))
                   }
                 >
-                  <ActionInput
-                    action={action}
-                    suggestions={suggestions}
-                    onNeedSuggestions={needSuggestions}
-                    onChange={(next) =>
-                      setInput((p) => ({
-                        ...p,
-                        actions: p.actions.map((a, j) => (j === i ? next : a)),
-                      }))
-                    }
-                  />
+                  {action.type === 'start_session' ? (
+                    <div className="space-y-3">
+                      <StartSessionInput action={action} integration={kind} onChange={(next) => setInput((p) => ({ ...p, actions: p.actions.map((a, j) => j === i ? next : a) }))} />
+                      {isIssueWorkflowIntegration(kind) && (
+                        <IssueWriteBackFields action={action} integration={kind} onChange={(next) => setInput((p) => ({ ...p, actions: p.actions.map((a, j) => j === i ? next : a) }))} />
+                      )}
+                    </div>
+                  ) : action.type === 'issue_comment' || action.type === 'issue_set_status' ? (
+                    isIssueWorkflowIntegration(kind) && (
+                      <IssueActionInput action={action} integration={kind} linear={linear} onChange={(next) => setInput((p) => ({ ...p, actions: p.actions.map((a, j) => j === i ? next : a) }))} />
+                    )
+                  ) : action.type === 'slack_reply' || action.type === 'slack_react' ? (
+                    <SlackActionInput action={action} onChange={(next) => setInput((p) => ({ ...p, actions: p.actions.map((a, j) => j === i ? next : a) }))} />
+                  ) : (
+                    <GithubActionInput action={action} suggestions={suggestions} onNeedSuggestions={needSuggestions} onChange={(next) => setInput((p) => ({ ...p, actions: p.actions.map((a, j) => j === i ? next : a) }))} />
+                  )}
                 </EditorRow>
               ))
             )}
           </Section>
 
+          {kind === 'posthog_inbox' && <PostHogInboxPreview input={prepared} problem={previewProblem} />}
+          {kind === 'posthog_inbox' && (
+            <PostHogInboxBacklog workflow={editing} conditions={conditions} unsavedChanges={unsavedChanges} />
+          )}
+
           {/* ---- Advanced ---- */}
           <div>
             <Button variant="ghost" size="sm" onClick={() => setShowAdvanced((v) => !v)}>
               <Plus
-                className={cn('mr-1 h-3.5 w-3.5 transition-transform', showAdvanced && 'rotate-45')}
+                className={cn('mr-1 h-4 w-4 transition-transform', showAdvanced && 'rotate-45')}
               />
               Advanced
             </Button>
-            {showAdvanced && (
-              <div className="mt-2 rounded-lg border bg-card p-3">
-                <label className="text-xs font-medium text-muted-foreground">
-                  Stop after this many runs on one PR per hour
-                </label>
-                <Input
-                  type="number"
-                  min={1}
-                  className="mt-1 max-w-32"
-                  value={input.maxRunsPerPrPerHour ?? 5}
-                  onChange={(e) =>
-                    setInput((p) => ({ ...p, maxRunsPerPrPerHour: Number(e.target.value) }))
-                  }
-                />
-                <p className="mt-1 text-xs text-muted-foreground">
-                  A loop breaker. Talyn already ignores its own actions; this bounds an echo from
-                  somebody else reacting to them.
-                </p>
-              </div>
-            )}
+            {showAdvanced && <WorkflowRunCapField value={input.maxRunsPerPrPerHour ?? 5} integration={kind} onChange={(maxRunsPerPrPerHour) => setInput((p) => ({ ...p, maxRunsPerPrPerHour }))} />}
+            {showAdvanced && kind === 'posthog_inbox' && <PostHogInboxDailyCapField value={input.maxRunsPerDay} onChange={(maxRunsPerDay) => setInput((p) => ({ ...p, maxRunsPerDay }))} />}
           </div>
 
           {/* The same action as the header's, where you finish reading. The header
               copy is for a long form you have scrolled up in; this one is for the
               end of the sentence you just wrote. */}
-          <div className="flex items-center justify-end gap-3 border-t pt-3">
+          <div className="flex items-center justify-end gap-3 border-t pt-4">
             {attempted && problem && (
               <p className="flex-1 text-xs text-red-500">{problem}</p>
             )}
-            <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
+            <Button variant="ghost" onClick={onCancel} disabled={saving}>
               Cancel
             </Button>
-            <Button size="sm" onClick={save} disabled={saving} data-attr="workflow-save-inline">
-              {saving ? 'Saving...' : editing ? 'Save changes' : 'Create workflow'}
+            <Button onClick={save} disabled={saving} data-attr="workflow-save-inline">
+              {saving ? 'Saving...' : editing ? 'Save changes' : 'Create automation'}
             </Button>
           </div>
         </div>

@@ -51,6 +51,15 @@ describe('buildTurnUsageRows: Claude', () => {
     expect(small).toMatchObject({ isPrimary: false, costEstimateMicros: 10_000, durationMs: null, agentSteps: null, firstReplyMs: null });
   });
 
+  it('counts only the last cumulative result per process attempt', () => {
+    const [row] = buildTurnUsageRows(claudeChat, facts([
+      result({ seq: 1, attempt: 0, usage: { input_tokens: 10 }, costUsd: 0.1, durationMs: 1000, numTurns: 1 }),
+      result({ seq: 2, attempt: 0, usage: { input_tokens: 30 }, costUsd: 0.3, durationMs: 3000, numTurns: 3 }),
+      result({ seq: 3, attempt: 1, usage: { input_tokens: 5 }, costUsd: 0.05, durationMs: 500, numTurns: 1 }),
+    ]));
+    expect(row).toMatchObject({ inputTokens: 35, costEstimateMicros: 350000, durationMs: 3500, agentSteps: 4 });
+  });
+
   it('adds up two runs of one turn (a relaunch spent tokens twice)', () => {
     const run = (seq: number, cost: number) => result({
       seq, modelUsage: { m: { inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 30, cacheCreationInputTokens: 40, costUSD: cost } },
@@ -266,12 +275,14 @@ describe('parseInsightsRange', () => {
   const period = { start: new Date('2026-10-20T08:00:00.000Z'), end: new Date('2026-11-20T08:00:00.000Z') };
   it.each<[string, Record<string, unknown>, { from: string; to: string; preset: string } | { error: RegExp }]>([
     ['default: last 30 days', {}, { from: '2026-10-05T12:00:00.000Z', to: now.toISOString(), preset: '30d' }],
+    ['today: midnight to now', { range: 'today' }, { from: '2026-11-04T00:00:00.000Z', to: now.toISOString(), preset: 'today' }],
+    ['yesterday: the whole UTC day before', { range: 'yesterday' }, { from: '2026-11-03T00:00:00.000Z', to: '2026-11-04T00:00:00.000Z', preset: 'yesterday' }],
     ['7d', { range: '7d' }, { from: '2026-10-28T12:00:00.000Z', to: now.toISOString(), preset: '7d' }],
     ['30d', { range: '30d' }, { from: '2026-10-05T12:00:00.000Z', to: now.toISOString(), preset: '30d' }],
     ['period: start to now', { range: 'period' }, { from: period.start.toISOString(), to: now.toISOString(), preset: 'period' }],
     ['custom', { from: '2026-09-01T00:00:00Z', to: '2026-09-08T00:00:00Z' }, { from: '2026-09-01T00:00:00.000Z', to: '2026-09-08T00:00:00.000Z', preset: 'custom' }],
     ['custom named explicitly', { range: 'custom', from: '2026-09-01T00:00:00Z', to: '2026-09-02T00:00:00Z' }, { from: '2026-09-01T00:00:00.000Z', to: '2026-09-02T00:00:00.000Z', preset: 'custom' }],
-    ['unknown preset', { range: '90d' }, { error: /7d, 30d or period/ }],
+    ['unknown preset', { range: '90d' }, { error: /today, yesterday, 7d, 30d or period/ }],
     ['only from', { from: '2026-09-01T00:00:00Z' }, { error: /both from and to/ }],
     ['bad date', { from: 'yesterday', to: '2026-09-01T00:00:00Z' }, { error: /ISO dates/ }],
     ['from after to', { from: '2026-09-02T00:00:00Z', to: '2026-09-01T00:00:00Z' }, { error: /before to/ }],
@@ -290,6 +301,16 @@ describe('parseInsightsRange', () => {
   it('uses the calendar month when there is no period', () => {
     const out = parseInsightsRange({ range: 'period' }, now, null);
     expect('error' in out ? out : out.from.toISOString()).toBe('2026-11-01T00:00:00.000Z');
+  });
+
+  it.each<[string, string, string, { from: string; to: string }]>([
+    ['today at exactly midnight is never empty', 'today', '2026-11-04T00:00:00.000Z', { from: '2026-11-04T00:00:00.000Z', to: '2026-11-04T00:00:00.001Z' }],
+    ['yesterday over a month boundary', 'yesterday', '2026-11-01T09:30:00.000Z', { from: '2026-10-31T00:00:00.000Z', to: '2026-11-01T00:00:00.000Z' }],
+    ['yesterday over a year boundary', 'yesterday', '2027-01-01T00:00:00.000Z', { from: '2026-12-31T00:00:00.000Z', to: '2027-01-01T00:00:00.000Z' }],
+    ['today just before midnight', 'today', '2026-11-04T23:59:59.999Z', { from: '2026-11-04T00:00:00.000Z', to: '2026-11-04T23:59:59.999Z' }],
+  ])('%s', (_label, range, instant, expected) => {
+    const out = parseInsightsRange({ range }, new Date(instant), period);
+    expect('error' in out ? out : { from: out.from.toISOString(), to: out.to.toISOString() }).toEqual(expected);
   });
 
   it('stops a past period at its end', () => {

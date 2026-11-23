@@ -635,4 +635,38 @@ describe('createCloudTask — reusing a task for the same PR', () => {
     // merge queue — the same failure as keeping a stale `loop` link.
     expect((second.metadata as Record<string, unknown>).source).toBeUndefined();
   });
+  describe('the ci-park stamp', () => {
+    const saved = process.env.CI_PARK_ENABLED;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.CI_PARK_ENABLED;
+      else process.env.CI_PARK_ENABLED = saved;
+    });
+
+    it.each<[string, string | undefined, 'pr_response' | 'code_writing', string, boolean, boolean]>([
+      ['a fleet fix run with the flag on', 'true', 'pr_response', 'selfhosted', true, true],
+      ['the flag off (its fallback)', undefined, 'pr_response', 'selfhosted', true, false],
+      ['the flag switched off', 'false', 'pr_response', 'selfhosted', true, false],
+      ['a PostHog Code run', 'true', 'pr_response', 'posthog_code', true, false],
+      ['a code_writing task', 'true', 'code_writing', 'selfhosted', true, false],
+      ['a fix run with no PR', 'true', 'pr_response', 'selfhosted', false, false],
+    ])('%s: stamped %s', async (_label, flag, type, provider, withPr, stamped) => {
+      if (flag === undefined) delete process.env.CI_PARK_ENABLED;
+      else process.env.CI_PARK_ENABLED = flag;
+      const envId = await envFor(provider);
+      const pullRequestId = withPr ? 'pr1' : undefined;
+      const row = await createCloudTask({
+        workspaceId: 'ws1',
+        type,
+        title: 't',
+        description: 'd',
+        prompt: 'fix it',
+        repositoryId: 'repo1',
+        assignedEnvironmentId: envId,
+        ...(pullRequestId ? { pullRequestId } : {}),
+      });
+      expect(((row.metadata ?? {}) as Record<string, unknown>).ciPark === true).toBe(stamped);
+      // The stored prompt never changes: the rule is added at fleet dispatch.
+      expect(row.prompt).toBe('fix it');
+    });
+  });
 });

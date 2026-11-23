@@ -61,6 +61,7 @@ import {
   kindForCommitType,
   FEATURE_FLAGS,
   GATED_FEATURE_KEYS,
+  RELEASE_SURFACES,
 } from '@talyn/shared';
 
 /**
@@ -160,7 +161,7 @@ async function fetchCommitSubjects() {
 // 2. Turn the survivors into highlights
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT_HEAD = `You write the "What's new" notes for Talyn, a desktop and web app for managing GitHub pull requests with cloud coding agents.
+const SYSTEM_PROMPT_HEAD = `You write the "What's new" notes for Talyn, a desktop, web and mobile app for managing GitHub pull requests with cloud coding agents.
 
 You are given the commits from one release. Turn them into the short list a Talyn user would want to read after an update.
 
@@ -176,7 +177,8 @@ For each highlight:
 - title: under 60 characters, sentence case, no trailing period. Name the thing, not the change ("Watch a PR you did not write", not "Added PR watching").
 - description: exactly one sentence, written for someone using the app. Say what they can now do or what now works. No commit-speak, no file paths, no PR or issue numbers, no function or table names, no mention of commits or releases.
 - kind: "feature" for something new, "fix" for something repaired, "improvement" for something that got faster or better without being new.
-- surfaces: which clients it applies to. A commit scoped (desktop) is desktop only, (web) is web only, everything else is both. Backend changes are almost always both.`;
+- surfaces: which clients it applies to. A commit scoped (desktop) is desktop only, (web) is web only, (mobile) is mobile only, and everything else is desktop and web. Backend changes are almost always desktop and web.
+- Keep the mobile app's notes apart. Never put a change to the mobile app on "desktop" or "web", and never merge a mobile commit into the same highlight as a desktop or web commit. Add "mobile" to a desktop or web change only when the mobile app clearly shows that change too.`;
 
 /**
  * What the model is told about gating, which depends on which group it is
@@ -228,7 +230,7 @@ function systemPrompt(gate) {
  */
 const OUTPUT_CONTRACT = `Reply with a single JSON object and nothing else. No prose before or after it, no markdown code fences.
 
-{"highlights": [{"title": string, "description": string, "kind": "feature" | "fix" | "improvement", "surfaces": ("desktop" | "web")[], "requiresFeature": string | null}]}
+{"highlights": [{"title": string, "description": string, "kind": "feature" | "fix" | "improvement", "surfaces": ("desktop" | "web" | "mobile")[], "requiresFeature": string | null}]}
 
 When nothing in the release is worth telling a user about, reply {"highlights": []}.`;
 
@@ -434,7 +436,7 @@ function normalize(raw, gate = null) {
       .trim()
       .replace(/\.$/, '');
     const description = String(h?.description ?? '').trim();
-    const surfaces = [...new Set(h?.surfaces ?? [])].filter((s) => s === 'desktop' || s === 'web');
+    const surfaces = [...new Set(h?.surfaces ?? [])].filter((s) => RELEASE_SURFACES.includes(s));
     if (!title || !description || surfaces.length === 0) continue;
     if (!['feature', 'fix', 'improvement'].includes(h?.kind)) continue;
 

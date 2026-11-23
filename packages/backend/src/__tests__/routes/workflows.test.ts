@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
+import { randomBytes } from 'node:crypto';
 import type { Features } from '@talyn/shared';
 import type { WorkflowWithStats } from '@talyn/shared';
 import { workflowRoutes } from '../../routes/workflows.js';
@@ -11,8 +12,17 @@ import { wrapAsyncRoutes } from '../../middleware/asyncHandler.js';
 import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
-import { workspaces as workspacesTable } from '../../db/schema.js';
+import { eq } from 'drizzle-orm';
+import {
+  slackInstallations,
+  slackUserLinks,
+  spaces as spacesTable,
+  teamMembers as teamMembersTable,
+  teams as teamsTable,
+  workspaces as workspacesTable,
+} from '../../db/schema.js';
 import { _resetWorkflowStore } from '../../services/workflows/store.js';
+import { encryptString } from '../../services/tokenCrypto.js';
 
 /**
  * The workflows API.
@@ -28,6 +38,7 @@ import { _resetWorkflowStore } from '../../services/workflows/store.js';
  */
 
 const OTHER_USER_ID = 'user-other';
+const priorTokenKey = process.env.TALYN_TOKEN_KEY;
 const headers = {
   ...internalProxyHeaders(TEST_USER_ID),
   'content-type': 'application/json',
@@ -67,6 +78,7 @@ describe('workflow routes', () => {
   let close: () => Promise<void>;
 
   beforeEach(async () => {
+    process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
     ({ db, cleanup } = await createTestDb());
     await seedUser(db, { id: TEST_USER_ID, email: 'tom@example.test' });
     await seedUser(db, { id: OTHER_USER_ID, email: 'other@example.test' });
@@ -80,6 +92,8 @@ describe('workflow routes', () => {
   });
 
   afterEach(async () => {
+    if (priorTokenKey === undefined) delete process.env.TALYN_TOKEN_KEY;
+    else process.env.TALYN_TOKEN_KEY = priorTokenKey;
     delete process.env.WORKFLOWS_ENABLED;
     _resetWorkflowStore();
     await close();
@@ -111,6 +125,62 @@ describe('workflow routes', () => {
     expect(del.status).toBe(200);
     const after = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine`, { headers });
     expect(((await after.json()) as { data: unknown[] }).data).toEqual([]);
+  });
+
+  describe('a session action with a space', () => {
+    const sessionIn = (spaceId: string) => ({
+      actions: [{ type: 'start_session', repositoryId: null, prompt: 'Look at this PR', spaceId }],
+    });
+    const save = (method: 'POST' | 'PATCH', path: string, payload: Record<string, unknown>) =>
+      fetch(`${url}/api/v1/workflows${path}`, { method, headers, body: JSON.stringify(payload) });
+
+    beforeEach(async () => {
+      process.env.SPACES_ENABLED = 'true';
+      await db.insert(teamsTable).values([{ id: 'team-1', name: 'Acme' }, { id: 'team-2', name: 'Other' }]);
+      await db.insert(teamMembersTable).values([
+        { id: 'm-1', teamId: 'team-1', githubUserId: 100, userId: TEST_USER_ID, githubLogin: 'tom', role: 'owner' },
+      ]);
+      await db.insert(spacesTable).values([
+        { id: 'space-1', teamId: 'team-1', name: 'Web' },
+        { id: 'space-old', teamId: 'team-1', name: 'Old', archivedAt: new Date() },
+        { id: 'space-2', teamId: 'team-2', name: 'Not mine' },
+      ]);
+    });
+
+    afterEach(() => {
+      delete process.env.SPACES_ENABLED;
+    });
+
+    it('saves a space the caller is in', async () => {
+      const made = await create(sessionIn('space-1'));
+      expect(made.actions).toEqual([
+        { type: 'start_session', repositoryId: null, prompt: 'Look at this PR', spaceId: 'space-1' },
+      ]);
+    });
+
+    it.each([
+      ['a space of another team', 'true', 'space-2', 'The space was not found, or you are not in its team.'],
+      ['a space that does not exist', 'true', 'space-gone', 'The space was not found, or you are not in its team.'],
+      ['an archived space', 'true', 'space-old', 'The space is archived.'],
+      ['any space while Spaces is off', 'false', 'space-1', 'Spaces are not available for this account.'],
+    ])('refuses %s', async (_label, flag, spaceId, error) => {
+      process.env.SPACES_ENABLED = flag;
+      const res = await save('POST', '', body(sessionIn(spaceId)));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ success: false, error, code: 'space_unavailable' });
+    });
+
+    it('lets a rule keep a space the caller left, and refuses a new one', async () => {
+      const made = await create(sessionIn('space-1'));
+      await db.delete(teamMembersTable).where(eq(teamMembersTable.id, 'm-1'));
+
+      const off = await save('PATCH', `/${made.id}`, { enabled: false });
+      expect(off.status).toBe(200);
+
+      const moved = await save('PATCH', `/${made.id}`, sessionIn('space-2'));
+      expect(moved.status).toBe(400);
+      expect(((await moved.json()) as { code: string }).code).toBe('space_unavailable');
+    });
   });
 
   it('PATCH replaces the whole workflow', async () => {
@@ -228,13 +298,21 @@ describe('workflow routes', () => {
         reviewRankingCandidate: false,
         reviewRankingExport: false,
         teams: false,
+        posthogCodeRetired: true,
         spaces: false,
         workbenches: false,
         trunkMergeEta: false,
         codeReview: true,
+        sessionSubagents: true,
         previewLinks: false,
         publicApi: false,
         privateRoutes: false,
+        splitView: true,
+        slackChannelRules: false,
+        webhookRules: false,
+        issueRules: false,
+        posthogInboxRules: false,
+        onboardingLocalAgent: false,
       });
     });
 
@@ -257,13 +335,21 @@ describe('workflow routes', () => {
         reviewRankingCandidate: false,
         reviewRankingExport: false,
         teams: false,
+        posthogCodeRetired: true,
         spaces: false,
         workbenches: false,
         trunkMergeEta: false,
         codeReview: true,
+        sessionSubagents: true,
         previewLinks: false,
         publicApi: false,
         privateRoutes: false,
+        splitView: true,
+        slackChannelRules: false,
+        webhookRules: false,
+        issueRules: false,
+        posthogInboxRules: false,
+        onboardingLocalAgent: false,
       });
     });
   });
@@ -280,5 +366,210 @@ describe('workflow routes', () => {
       const res = await fetch(`${url}/api/v1/workflows/${made.id}/runs?limit=100000`, { headers });
       expect(res.status).toBe(200);
     });
+  });
+
+  describe('integrations', () => {
+    const slackBody = (over: Record<string, unknown> = {}) =>
+      body({
+        integration: 'slack',
+        name: 'Bugs channel',
+        events: ['slack_message'],
+        conditions: { slackTeamId: 'T1', channels: ['C1'] },
+        actions: [{ type: 'slack_react', emoji: 'eyes' }],
+        ...over,
+      });
+
+    async function post(payload: Record<string, unknown>) {
+      return fetch(`${url}/api/v1/workflows`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+    }
+
+    async function seedInstall(teamId = 'T1', installedByUserId = TEST_USER_ID) {
+      await db.insert(slackInstallations).values({
+        teamId,
+        teamName: `Team ${teamId}`,
+        appId: 'A1',
+        botUserId: 'UBOT',
+        accessTokenEnc: encryptString('xoxb-secret'),
+        installedByUserId,
+      });
+    }
+
+    afterEach(() => {
+      delete process.env.SLACK_CHANNEL_RULES_ENABLED;
+    });
+
+    it('creates a GitHub rule when the body names no integration', async () => {
+      const made = await create();
+      expect(made.integration).toBe('github');
+    });
+
+    it('refuses a Slack rule with 403 while the flag is off', async () => {
+      const res = await post(slackBody());
+      expect(res.status).toBe(403);
+      const json = (await res.json()) as { code?: string; error?: string };
+      expect(json.code).toBe('slack_rules_unavailable');
+      expect(json.error).toMatch(/slack-channel-rules/);
+    });
+
+    it('says the switch was pulled when the env override is false', async () => {
+      process.env.SLACK_CHANNEL_RULES_ENABLED = 'false';
+      const res = await post(slackBody());
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error?: string }).error).toMatch(
+        /SLACK_CHANNEL_RULES_ENABLED=false/
+      );
+    });
+
+    it('creates a Slack rule when the flag is on, and returns its integration', async () => {
+      process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+      await seedInstall();
+      const res = await post(slackBody());
+      expect(res.status).toBe(200);
+      const made = ((await res.json()) as { data: WorkflowWithStats }).data;
+      expect(made).toMatchObject({
+        integration: 'slack',
+        events: ['slack_message'],
+        conditions: { slackTeamId: 'T1', channels: ['C1'] },
+      });
+    });
+
+    it.each([
+      { name: 'owner installed the team', installedBy: TEST_USER_ID, linkedBy: null, status: 200 },
+      { name: 'owner linked in the team', installedBy: null, linkedBy: TEST_USER_ID, status: 200 },
+      { name: 'nobody reaches the team', installedBy: null, linkedBy: null, status: 400 },
+      { name: 'another user installed the team', installedBy: OTHER_USER_ID, linkedBy: null, status: 400 },
+    ])('checks Slack team access when $name', async ({ installedBy, linkedBy, status }) => {
+      process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+      if (installedBy) await seedInstall('T1', installedBy);
+      if (linkedBy) {
+        await db.insert(slackUserLinks).values({
+          id: 'link-1',
+          teamId: 'T1',
+          slackUserId: 'U1',
+          userId: linkedBy,
+        });
+      }
+
+      const res = await post(slackBody());
+      expect(res.status).toBe(status);
+      const json = (await res.json()) as { success: boolean; data?: WorkflowWithStats; error?: string; code?: string };
+      if (status === 200) {
+        expect(json.data?.integration).toBe('slack');
+      } else {
+        expect(json).toEqual({
+          success: false,
+          error:
+            'Talyn is not installed in that Slack workspace for this account. Install Slack or link your Slack account first.',
+          code: 'slack_team_unavailable',
+        });
+      }
+    });
+
+    it('refuses a PATCH that changes the Slack team to an unreachable team', async () => {
+      process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+      await seedInstall();
+      const made = ((await (await post(slackBody())).json()) as { data: WorkflowWithStats }).data;
+
+      const res = await fetch(`${url}/api/v1/workflows/${made.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ conditions: { slackTeamId: 'T2', channels: ['C1'] } }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        success: false,
+        error:
+          'Talyn is not installed in that Slack workspace for this account. Install Slack or link your Slack account first.',
+        code: 'slack_team_unavailable',
+      });
+
+      const listed = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine`, { headers });
+      const rows = ((await listed.json()) as { data: WorkflowWithStats[] }).data;
+      expect(rows[0].conditions.slackTeamId).toBe('T1');
+    });
+
+    it('validates before it gates, so a bad Slack rule is a 400 either way', async () => {
+      const res = await post(slackBody({ conditions: { slackTeamId: 'T1' } }));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error?: string }).error).toMatch(/at least one channel/);
+    });
+
+    it.each([
+      ['github', ['github']],
+      ['slack', ['slack']],
+      [undefined, ['github', 'slack']],
+    ] as const)('lists by ?integration=%s', async (integration, expected) => {
+      process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+      await create();
+      await seedInstall();
+      expect((await post(slackBody())).status).toBe(200);
+      const qs = integration ? `&integration=${integration}` : '';
+      const res = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine${qs}`, { headers });
+      const listed = ((await res.json()) as { data: WorkflowWithStats[] }).data;
+      expect(listed.map((w) => w.integration).sort()).toEqual([...expected]);
+    });
+
+    it('refuses an unknown ?integration with 400', async () => {
+      const res = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine&integration=jira`, {
+        headers,
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('refuses ?integration=slack with 403 while the flag is off', async () => {
+      const res = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine&integration=slack`, {
+        headers,
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it('refuses to move a rule to another integration', async () => {
+      process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+      const made = await create();
+      const res = await fetch(`${url}/api/v1/workflows/${made.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(slackBody()),
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error?: string }).error).toMatch(/another integration/);
+    });
+
+    it('keeps a GitHub rule editable whatever the Slack flag says', async () => {
+      const made = await create();
+      const res = await fetch(`${url}/api/v1/workflows/${made.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ name: 'Renamed' }),
+      });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { data: WorkflowWithStats }).data).toMatchObject({
+        name: 'Renamed',
+        integration: 'github',
+      });
+    });
+
+    it.each(['PATCH', 'DELETE', 'RUNS'] as const)(
+      'refuses %s on a Slack rule once the flag is off again',
+      async (verb) => {
+        process.env.SLACK_CHANNEL_RULES_ENABLED = 'true';
+        await seedInstall();
+        const made = ((await (await post(slackBody())).json()) as { data: WorkflowWithStats }).data;
+        process.env.SLACK_CHANNEL_RULES_ENABLED = 'false';
+        const res =
+          verb === 'RUNS'
+            ? await fetch(`${url}/api/v1/workflows/${made.id}/runs`, { headers })
+            : await fetch(`${url}/api/v1/workflows/${made.id}`, {
+                method: verb,
+                headers,
+                ...(verb === 'PATCH' ? { body: JSON.stringify({ name: 'x' }) } : {}),
+              });
+        expect(res.status).toBe(403);
+      }
+    );
   });
 });

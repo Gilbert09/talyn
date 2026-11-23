@@ -81,8 +81,25 @@ The message names one session. Other sessions may also have changed.
 2. For each session that changed, read its new events with `talyn_get_session_transcript`.
 3. Read its pull request diff with `talyn_get_pull_request_diff`, or its changes with `talyn_get_session_diff`.
 4. Check the work against the brief and the acceptance commands.
-5. If a session went wrong or asked a question, answer it with `talyn_send_session_message`.
+5. If a session went wrong, tell it what to change with `talyn_send_session_message`.
 6. Start the sessions that were waiting for this one.
+
+### When a session asks a question
+
+A session asks with `talyn_ask_user`, and then waits. Talyn wakes you with
+its questions and their options. The person sees the same questions in the
+session and can also answer them.
+
+1. Find the answer in the plan, in the brief, in what the person told you, or
+   in the code. Do not invent a requirement that the person did not give.
+2. If you know the answer, send it with `talyn_send_session_message`. Repeat
+   each question and give its answer, for example `Which database?\n→ Postgres`.
+   Talyn shows the message in the session as sent by this thread.
+3. If you do not know the answer, ask the person with `talyn_ask_user`. Name
+   the session, and copy its questions and options. When the person answers,
+   send the answer to the session.
+4. If the session already started a new turn, the person answered it. Do not
+   send a second answer.
 
 When a session stopped on a rate limit or a "usage limit" error, the code is not at fault:
 

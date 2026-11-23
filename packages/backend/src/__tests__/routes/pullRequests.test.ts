@@ -106,6 +106,10 @@ async function insertPR(
   return id;
 }
 
+const ATTACHMENT = 'https://github.com/user-attachments/assets/27ad58e7-b0e3-4c9f-9f22-156ac33515ed';
+const SIGNED =
+  'https://private-user-images.githubusercontent.com/1/2-27ad58e7-b0e3-4c9f-9f22-156ac33515ed.png?jwt=a.b.c';
+
 function fakeSummary(over: Partial<PRSummary> = {}): PRSummary {
   return {
     owner: 'acme',
@@ -332,6 +336,61 @@ describe('routes/pullRequests', () => {
       expect(body.data.row.id).toBe(id);
       expect(body.data.fresh?.recentReviews?.[0]?.id).toBe('r1');
       expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it('signs attachment images in the fresh body but persists the raw body', async () => {
+      const raw = `Before\n\n<img width="10" src="${ATTACHMENT}" />`;
+      const id = await insertPR(db, { headBranch: 'feature/x', number: 42 });
+      vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([
+        { branch: 'feature/x', pr: fakeSummary({ body: raw, title: 'Renamed' }) },
+      ]);
+      const htmlSpy = vi
+        .spyOn(graphqlModule, 'fetchPRBodyHtml')
+        .mockResolvedValue(`<img src="${SIGNED}">`);
+      const res = await fetch(`${serverUrl}/pull-requests/${id}`, { headers: authMine });
+      expect(res.status).toBe(200);
+      const payload = (await res.json()) as { data: { fresh: PRSummary | null } };
+      expect(payload.data.fresh?.body).toBe(`Before\n\n<img width="10" src="${SIGNED}" />`);
+      expect(htmlSpy).toHaveBeenCalledWith({
+        workspaceId: 'ws-mine',
+        owner: 'acme',
+        repo: 'widgets',
+        number: 42,
+      });
+      const [persisted] = await db
+        .select({ body: pullRequestsTable.body })
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, id));
+      expect(persisted.body).toBe(raw);
+    });
+
+    it.each([
+      ['has no attachment image', 'Plain prose', false],
+      ['links an attachment without showing it', `Video: ${ATTACHMENT}`, false],
+    ])('does not fetch the body HTML when the body %s', async (_label, body) => {
+      const id = await insertPR(db, { headBranch: 'feature/x' });
+      vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([
+        { branch: 'feature/x', pr: fakeSummary({ body }) },
+      ]);
+      const htmlSpy = vi.spyOn(graphqlModule, 'fetchPRBodyHtml');
+      const res = await fetch(`${serverUrl}/pull-requests/${id}`, { headers: authMine });
+      const payload = (await res.json()) as { data: { fresh: PRSummary | null } };
+      expect(payload.data.fresh?.body).toBe(body);
+      expect(htmlSpy).not.toHaveBeenCalled();
+    });
+
+    it('answers the raw body when signing fails', async () => {
+      const raw = `![shot](${ATTACHMENT})`;
+      const id = await insertPR(db, { headBranch: 'feature/x' });
+      vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([
+        { branch: 'feature/x', pr: fakeSummary({ body: raw }) },
+      ]);
+      vi.spyOn(graphqlModule, 'fetchPRBodyHtml').mockRejectedValue(new Error('rate limit'));
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const res = await fetch(`${serverUrl}/pull-requests/${id}`, { headers: authMine });
+      expect(res.status).toBe(200);
+      const payload = (await res.json()) as { data: { fresh: PRSummary | null } };
+      expect(payload.data.fresh?.body).toBe(raw);
     });
 
     it('still returns the cached row when the GraphQL fetch fails', async () => {
@@ -596,18 +655,50 @@ describe('routes/pullRequests', () => {
       expect(payload.data.body).toBe(cached);
     });
 
-    it('never calls GitHub — that is the whole point of the split', async () => {
+    it('never calls GitHub for a body with no attachment image', async () => {
       const id = await insertPR(db);
       await db
         .update(pullRequestsTable)
         .set({ body: 'Cached prose' })
         .where(eq(pullRequestsTable.id, id));
       const spy = vi.spyOn(graphqlModule, 'batchPullRequests');
+      const htmlSpy = vi.spyOn(graphqlModule, 'fetchPRBodyHtml');
       const res = await fetch(`${serverUrl}/pull-requests/${id}/description`, {
         headers: authMine,
       });
       expect(res.status).toBe(200);
       expect(spy).not.toHaveBeenCalled();
+      expect(htmlSpy).not.toHaveBeenCalled();
+    });
+
+    it('signs attachment images, which a merged PR has no other way to get', async () => {
+      const id = await insertPR(db);
+      await db
+        .update(pullRequestsTable)
+        .set({ body: `![shot](${ATTACHMENT})`, state: 'merged' })
+        .where(eq(pullRequestsTable.id, id));
+      vi.spyOn(graphqlModule, 'fetchPRBodyHtml').mockResolvedValue(`<img src="${SIGNED}">`);
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/description`, {
+        headers: authMine,
+      });
+      const payload = (await res.json()) as { data: { body: string | null } };
+      expect(payload.data.body).toBe(`![shot](${SIGNED})`);
+    });
+
+    it('answers the cached body when signing fails', async () => {
+      const id = await insertPR(db);
+      await db
+        .update(pullRequestsTable)
+        .set({ body: `![shot](${ATTACHMENT})` })
+        .where(eq(pullRequestsTable.id, id));
+      vi.spyOn(graphqlModule, 'fetchPRBodyHtml').mockRejectedValue(new Error('token revoked'));
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/description`, {
+        headers: authMine,
+      });
+      expect(res.status).toBe(200);
+      const payload = (await res.json()) as { data: { body: string | null } };
+      expect(payload.data.body).toBe(`![shot](${ATTACHMENT})`);
     });
 
     it('answers null for a row no poll has refreshed since the column shipped', async () => {

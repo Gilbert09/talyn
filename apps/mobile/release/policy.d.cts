@@ -12,3 +12,9 @@ export function readReleaseSettings(env: Record<string, string | undefined>, env
   runtimeVersion: ExpoConfig['runtimeVersion'];
   updates: ExpoConfig['updates'];
 };
+export const POSTHOG_SYMBOL_UPLOADS: Readonly<{ projectId: string; host: string; keyName: 'POSTHOG_CLI_API_KEY' }>;
+export function posthogUploadCredentials(env: Record<string, string | undefined>): {
+  POSTHOG_CLI_API_KEY: string;
+  POSTHOG_CLI_PROJECT_ID: string;
+  POSTHOG_CLI_HOST: string;
+} | null;

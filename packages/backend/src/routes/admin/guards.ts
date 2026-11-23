@@ -106,10 +106,9 @@ export function adminReason(req: Request): string {
 /**
  * Refuse a mutation whose target is the caller.
  *
- * Blocks two things at once: the quiet self-comp, and the "operator demotes
- * self, nobody can get back in" foot-gun. If you genuinely need to comp your
- * own account, that is what psql is for — and the fact that it leaves shell
- * history instead of a silent API call is the feature, not the inconvenience.
+ * Used on the operator flag only: the "operator demotes self, nobody can get
+ * back in" foot-gun. A comp or a credit grant to yourself is allowed, because
+ * its audit row with a required reason means it is not silent.
  */
 export function notSelf(req: Request, targetUserId: string): void {
   if (req.user?.id && req.user.id === targetUserId) {

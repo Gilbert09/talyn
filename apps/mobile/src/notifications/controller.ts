@@ -1,6 +1,7 @@
 import {
   isMobileNotificationPayload,
   isMobileNotificationResolution,
+  normalizeMobileNotificationPreferences,
   type MobileInstallation,
   type MobileNotificationDestination,
   type MobileNotificationPayload,
@@ -89,7 +90,8 @@ export class NotificationController {
       try {
         const result = await this.api.getPreferences(scope.workspace);
         if (!this.current(generation)) return;
-        this.publish({ preferences: result.preferences, providerAvailable: result.providerAvailable });
+        // A backend from before onlyWhenAway sends no value; it reads as on.
+        this.publish({ preferences: normalizeMobileNotificationPreferences(result.preferences), providerAvailable: result.providerAvailable });
         await this.register(false, generation);
       } catch { if (this.current(generation)) this.publish({ state: 'failed' }); }
     });
@@ -125,7 +127,8 @@ export class NotificationController {
       try {
         const result = await this.api.updatePreferences(preferences);
         if (!this.current(generation)) return;
-        this.publish({ preferences: result.preferences, providerAvailable: result.providerAvailable });
+        // A backend from before onlyWhenAway sends no value; it reads as on.
+        this.publish({ preferences: normalizeMobileNotificationPreferences(result.preferences), providerAvailable: result.providerAvailable });
         await this.register(requestPermission, generation);
       } catch { if (this.current(generation)) this.publish({ state: 'failed' }); }
     });

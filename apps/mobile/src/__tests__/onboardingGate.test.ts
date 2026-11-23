@@ -1,6 +1,6 @@
 import type { WorkbenchReadiness } from '@talyn/shared';
 
-import { agentReady, onboardingGate, stepIndex, type OnboardingGateInput } from '../navigation/onboardingGate';
+import { agentReady, agentStepSkippable, onboardingGate, stepIndex, type OnboardingGateInput } from '../navigation/onboardingGate';
 import type { LoadState } from '../workflow/model';
 
 const ready = (agents: Partial<Record<'claude' | 'codex', boolean>> = { claude: true, codex: false }, ok = true): WorkbenchReadiness => ({
@@ -29,6 +29,7 @@ describe('onboarding gate', () => {
     ['GitHub has no integrations object', { workspace: loaded({ integrations: null }) }, 'github'],
     ['GitHub was disconnected mid-setup', { workspace: noGithub, repositories: loaded([]) }, 'github'],
     ['a returning account with GitHub and nothing else', { inProgress: false, repositories: loaded([]), readiness: loaded(ready({})) }, 'done'],
+    ['the agent step was skipped with no agent ready', { inProgress: false, readiness: loaded(ready({})) }, 'done'],
     ['the device progress is still loading', { inProgress: undefined }, 'loading'],
     ['repositories are loading', { repositories: state('loading') }, 'loading'],
     ['repositories failed to load', { repositories: state('error') }, 'repos'],
@@ -48,5 +49,12 @@ describe('onboarding gate', () => {
     ['an agent on a sandbox that is down', ready({ claude: true }, false), false],
   ])('agentReady with %s', (_name, readiness, expected) => expect(agentReady(readiness)).toBe(expected));
 
-  it.each([['github', 0], ['repos', 1], ['agent', 2]] as const)('puts %s at position %i', (step, index) => expect(stepIndex(step)).toBe(index));
+  it.each([
+    ['nothing loaded', undefined, false],
+    ['no agent connected on a working sandbox', ready({}), false],
+    ['an agent connected', ready({ claude: true }), false],
+    ['a sandbox that is down', ready({}, false), true],
+  ])('agentStepSkippable with %s', (_name, readiness, expected) => expect(agentStepSkippable(readiness)).toBe(expected));
+
+  it.each([['github', 0], ['repos', 1], ['agent', 2], ['notifications', 3]] as const)('puts %s at position %i', (step, index) => expect(stepIndex(step)).toBe(index));
 });

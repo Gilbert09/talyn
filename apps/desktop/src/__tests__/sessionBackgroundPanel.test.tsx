@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { WorkbenchBackgroundJob, WorkbenchWakeup } from '@talyn/shared';
 
 jest.mock('../renderer/lib/api', () => ({ api: { workbenches: { keepBackgroundJobAwake: jest.fn(), stopBackgroundJob: jest.fn(), cancelWakeup: jest.fn(), backgroundJobLogs: jest.fn() } } }));
@@ -17,7 +17,7 @@ const job: WorkbenchBackgroundJob = {
 };
 const wakeup: WorkbenchWakeup = {
   id: 'wake-1', workbenchId: 'wb-1', chatId: 'chat-1', wakeAt: '2026-11-08T11:00:00Z', reason: 'Check the build',
-  status: 'scheduled', failureDetail: null, createdBy: 'agent', sourceJobId: null,
+  status: 'scheduled', failureDetail: null, createdBy: 'agent', sourceJobId: null, ci: null,
   createdAt: '2026-11-08T09:00:00Z', firedAt: null,
 };
 
@@ -52,4 +52,19 @@ it('shows empty states', () => {
   render(<BackgroundTab workbenchId="wb-1" />);
   expect(screen.getByText('No background jobs yet.')).toBeInTheDocument();
   expect(screen.getByText('No wake-ups yet.')).toBeInTheDocument();
+});
+
+it.each([
+  ['a running job with no output', 'running', [], 'No output yet.'],
+  ['an ended job with no output', 'exited', [], 'The job printed no output.'],
+  ['a job with output', 'running', ['line 1', 'line 2'], 'line 1\nline 2'],
+] as const)('shows the log of %s', async (_name, status, lines, expected) => {
+  const shown = { ...job, status, exitCode: status === 'exited' ? 0 : null, endedAt: status === 'exited' ? '2026-11-08T09:30:00Z' : null };
+  useSessionBackgroundStore.getState().applyBackground({ workbenchId: 'wb-1', jobs: [shown], wakeups: [] });
+  jest.mocked(api.workbenches.backgroundJobLogs).mockResolvedValue({ jobId: 'job-1', status, exitCode: shown.exitCode, lines: [...lines], asleep: false });
+  render(<BackgroundTab workbenchId="wb-1" />);
+  fireEvent.click(screen.getByRole('button', { name: /Build/ }));
+  await act(async () => { await Promise.resolve(); });
+  expect(api.workbenches.backgroundJobLogs).toHaveBeenCalledWith('wb-1', 'job-1', { tail: 200 });
+  expect(document.querySelector('pre')?.textContent).toBe(expected);
 });

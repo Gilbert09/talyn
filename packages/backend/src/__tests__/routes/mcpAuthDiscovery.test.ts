@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   complete: vi.fn(),
   validateState: vi.fn(),
   privateEnabled: vi.fn(), connector: vi.fn(), create: vi.fn(), list: vi.fn(), update: vi.fn(),
-  probe: vi.fn(), dispatch: vi.fn(), record: vi.fn(), account: vi.fn(),
+  probe: vi.fn(), dispatch: vi.fn(), record: vi.fn(), account: vi.fn(), start: vi.fn(),
 }));
 vi.mock('../../middleware/auth.js', () => ({
   assertUser: () => ({ id: 'user-1' }),
@@ -38,6 +38,8 @@ vi.mock('../../services/mcpServers/oauth.js', () => ({
   validateMcpOAuthState: mocks.validateState,
   completeMcpOAuth: mocks.complete,
   readMcpAccount: mocks.account,
+  startMcpOAuth: mocks.start,
+  McpOAuthUnavailableError: class McpOAuthUnavailableError extends Error {},
 }));
 
 vi.mock('../../db/client.js', () => ({ getDbClient: () => ({}) }));
@@ -177,6 +179,132 @@ describe('OAuth callback failures', () => {
   });
 });
 
+
+describe('MCP OAuth mobile return', () => {
+  const SERVER = { id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp', authKind: 'bearer' };
+  const FLOW = { id: 'flow-1', stateHash: 'h', expiresAt: '2099-01-01T00:00:00.000Z' };
+  beforeEach(() => {
+    vi.unstubAllEnvs();
+    mocks.get.mockResolvedValue(SERVER);
+    mocks.read.mockResolvedValue(null);
+    mocks.start.mockImplementation(async (_server: unknown, _stored: unknown, _now: Date, opts: { mobileReturn?: string | null } = {}) => ({
+      stored: { status: 'pending', flow: { ...FLOW, ...(opts.mobileReturn ? { mobileReturn: opts.mobileReturn } : {}) } },
+      authorizeUrl: 'https://auth.example.com/authorize',
+      flowId: 'flow-1',
+      expiresAt: FLOW.expiresAt,
+      scopes: [],
+    }));
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  describe('POST /:id/connect', () => {
+    it.each(['talyn-mobile://', 'talyn-mobile-preview://', 'talyn-mobile-development://'])(
+      'stores the allowlisted returnTo %s on the flow',
+      async (returnTo) => {
+        const response = await post('srv-1/connect', { returnTo });
+        expect(response.status).toBe(200);
+        expect(mocks.start).toHaveBeenCalledWith(SERVER, null, expect.any(Date), { mobileReturn: returnTo });
+        expect(mocks.write).toHaveBeenCalledWith('srv-1', {
+          status: 'pending',
+          flow: { ...FLOW, mobileReturn: returnTo },
+        });
+      }
+    );
+
+    it.each([{}, { returnTo: null }])('stores no return for %j', async (body) => {
+      expect((await post('srv-1/connect', body)).status).toBe(200);
+      expect(mocks.start).toHaveBeenCalledWith(SERVER, null, expect.any(Date), { mobileReturn: null });
+      expect(mocks.write).toHaveBeenCalledWith('srv-1', { status: 'pending', flow: FLOW });
+    });
+
+    it.each([
+      'TALYN-MOBILE://',
+      'talyn-mobile:///',
+      'talyn-mobile://evil',
+      'https://evil.com',
+      'javascript:',
+      ' talyn-mobile://',
+      '',
+      42,
+    ])('refuses returnTo %j with 400 invalid_return_to before starting a flow', async (returnTo) => {
+      const response = await post('srv-1/connect', { returnTo });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ success: false, code: 'invalid_return_to' });
+      expect(mocks.start).not.toHaveBeenCalled();
+      expect(mocks.write).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /complete', () => {
+    const withReturn = (mobileReturn: string) => ({ status: 'pending', flow: { ...FLOW, mobileReturn } });
+
+    it('answers the app link on success', async () => {
+      mocks.read.mockResolvedValue(withReturn('talyn-mobile://'));
+      mocks.complete.mockResolvedValue({ status: 'connected', lastCompletedFlowId: 'flow-1' });
+      const response = await post('complete', { state: 'srv-1.state', code: 'valid-code' });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        success: true,
+        data: { appReturnUrl: 'talyn-mobile://mcp/callback?mcp=connected' },
+      });
+    });
+
+    it('answers the error link on a denial, and still clears the flow', async () => {
+      mocks.read.mockResolvedValue(withReturn('talyn-mobile-preview://'));
+      const response = await post('complete', { state: 'srv-1.state', error: 'access_denied' });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        success: true,
+        data: { appReturnUrl: 'talyn-mobile-preview://mcp/callback?mcp=error' },
+      });
+      expect(mocks.write).toHaveBeenCalledWith('srv-1', expect.objectContaining({ detail: 'access_denied', flow: undefined }));
+    });
+
+    it('puts the error link in the 409 body of a failed exchange', async () => {
+      mocks.read.mockResolvedValue(withReturn('talyn-mobile://'));
+      mocks.complete.mockRejectedValue(new Error('invalid_grant'));
+      const response = await post('complete', { state: 'srv-1.state', code: 'bad-code' });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        success: false,
+        error: 'invalid_grant',
+        appReturnUrl: 'talyn-mobile://mcp/callback?mcp=error',
+      });
+      expect(mocks.write).toHaveBeenCalledWith('srv-1', expect.objectContaining({ detail: 'invalid_grant', flow: undefined }));
+    });
+
+    it('answers no app link for a flow without a return', async () => {
+      mocks.read.mockResolvedValue({ status: 'pending', flow: FLOW });
+      mocks.complete.mockRejectedValue(new Error('invalid_grant'));
+      const failed = await post('complete', { state: 'srv-1.state', code: 'bad-code' });
+      expect(await failed.json()).toEqual({ success: false, error: 'invalid_grant' });
+      const denied = await post('complete', { state: 'srv-1.state', error: 'access_denied' });
+      expect(await denied.json()).toEqual({ success: true, data: null });
+    });
+
+    it.each([
+      ['a return that has left the allowlist', 'talyn-mobile-preview://', 'talyn-mobile://'],
+      ['a return that was never valid', 'https://evil.com', undefined],
+      ['a return with a path', 'talyn-mobile://evil', undefined],
+    ])('answers no app link for %s', async (_label, stored, allowlist) => {
+      if (allowlist) vi.stubEnv('MOBILE_RETURN_SCHEMES', allowlist);
+      mocks.read.mockResolvedValue(withReturn(stored));
+      mocks.complete.mockResolvedValue({ status: 'connected' });
+      const response = await post('complete', { state: 'srv-1.state', code: 'valid-code' });
+      expect(await response.json()).toEqual({ success: true, data: null });
+    });
+
+    it('answers no app link when the state does not match the flow', async () => {
+      mocks.read.mockResolvedValue(withReturn('talyn-mobile://'));
+      mocks.validateState.mockImplementation(() => {
+        throw new Error('Invalid state');
+      });
+      const response = await post('complete', { state: 'forged', code: 'c' });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ success: false, error: 'Invalid state' });
+    });
+  });
+});
 
 describe('workspace private setup routes', () => {
   const saved = { id: 'srv-1', workspaceId: 'stored-workspace', name: 'private', url: 'https://mcp.local/mcp', authKind: 'none' };

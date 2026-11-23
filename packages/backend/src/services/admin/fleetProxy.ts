@@ -3,6 +3,7 @@ import {
   ADMIN_FLEET_UNREACHABLE,
   ADMIN_HOST_NOT_DIALABLE,
   ADMIN_HOST_OFFLINE,
+  type AdminFleetCapacity,
   type AdminFleetHost,
   type AdminFleetLiveErrorCode,
   type AdminHostBoxCounts,
@@ -15,7 +16,7 @@ import {
   fleetGatewayToken,
   fleetPinnedEndpoint,
 } from '../selfHosted/credentials.js';
-import { getFleetHost, listFleetHosts, type FleetHostView } from '../fleetHosts.js';
+import { getFleetHost, isControlTunnelEndpoint, listFleetHosts, type FleetHostView } from '../fleetHosts.js';
 
 /**
  * How the operator console reaches fleetd.
@@ -73,6 +74,15 @@ export class HostOfflineError extends Error {
   }
 }
 
+export class HostControlTunnelError extends Error {
+  readonly status = 409;
+  readonly code = ADMIN_HOST_NOT_DIALABLE;
+  constructor(name: string) {
+    super(`${name} is reachable only through the yas control plane.`);
+    this.name = 'HostControlTunnelError';
+  }
+}
+
 export class FleetNotConfiguredError extends Error {
   readonly status = 503;
   readonly code = ADMIN_FLEET_NOT_CONFIGURED;
@@ -89,6 +99,7 @@ export function handleFleetProxyError(err: unknown, res: {
   if (
     err instanceof HostUnknownError ||
     err instanceof HostNotDialableError ||
+    err instanceof HostControlTunnelError ||
     err instanceof HostOfflineError ||
     err instanceof FleetNotConfiguredError
   ) {
@@ -115,13 +126,13 @@ export async function fleetClientForHost(
   name: string,
   opts: { timeoutMs?: number; allowOffline?: boolean } = {}
 ): Promise<{ client: FleetClient; host: FleetHostView }> {
-  const token = fleetApiToken();
-  if (!token) throw new FleetNotConfiguredError();
-
   const host = await getFleetHost(name);
   if (!host) throw new HostUnknownError(name);
   if (!host.apiEndpoint) throw new HostNotDialableError(name);
+  if (isControlTunnelEndpoint(host.apiEndpoint)) throw new HostControlTunnelError(name);
   if (!host.online && !opts.allowOffline) throw new HostOfflineError(name, host.reportedAt);
+  const token = fleetApiToken();
+  if (!token) throw new FleetNotConfiguredError();
 
   return {
     client: new FleetClient(host.apiEndpoint, token, {
@@ -157,7 +168,7 @@ export async function probe<T>(
 
 function describe(err: unknown): { error: string; code: AdminFleetLiveErrorCode } {
   if (err instanceof HostOfflineError) return { error: err.message, code: ADMIN_HOST_OFFLINE };
-  if (err instanceof HostNotDialableError) {
+  if (err instanceof HostNotDialableError || err instanceof HostControlTunnelError) {
     return { error: err.message, code: ADMIN_HOST_NOT_DIALABLE };
   }
   if (err instanceof FleetNotConfiguredError) {
@@ -372,8 +383,21 @@ export function toAdminHost(host: FleetHostView): AdminFleetHost {
     online: host.online,
     dispatchable: host.dispatchable,
     live: null,
+    liveSource: null,
     liveError: null,
     liveErrorCode: null,
+  };
+}
+
+/** Capacity from the last report. A stale report cannot accept new work. */
+export function hostCapacityFromReport(host: FleetHostView): AdminFleetCapacity {
+  return {
+    draining: host.draining,
+    runsLive: host.runsLive,
+    runsMax: host.runsMax,
+    memReservedMib: host.memReservedMib,
+    memBudgetMib: host.memBudgetMib,
+    accepting: host.online && !host.draining && (host.runsMax === 0 || host.runsLive < host.runsMax),
   };
 }
 
@@ -395,6 +419,10 @@ export async function listAdminFleetHosts(opts: { live?: boolean } = {}): Promis
   return Promise.all(
     hosts.map(async (host) => {
       const base = toAdminHost(host);
+      if (isControlTunnelEndpoint(host.apiEndpoint)) {
+        return { ...base, live: hostCapacityFromReport(host), liveSource: 'report' as const };
+      }
+      base.liveSource = 'probe';
       // Offline hosts are not dialled at all — probe() refuses them, and the
       // registry row already carries the last thing they said. Capacity and
       // stats together: capacity is what decides `accepting`, stats carries

@@ -59,9 +59,9 @@ async function slackLinksOf(ownerId: string): Promise<Array<{ teamId: string; sl
  * DM the owner in Slack when they have linked an account. Best effort: a
  * failure is recorded on the debug bus and never thrown.
  *
- * Posting a DM needs the bot's `chat:write` scope. The install does not ask for
- * it today (Talyn only reacts), so until it does Slack answers `missing_scope`
- * and the in-app alert is the one that lands.
+ * Posting a DM needs the bot's `chat:write` scope. An install from before
+ * Talyn asked for it answers `missing_scope` until the team installs the app
+ * again, and the in-app alert is the one that lands.
  */
 export async function sendSlackDm(ownerId: string, text: string): Promise<void> {
   let links: Array<{ teamId: string; slackUserId: string }>;

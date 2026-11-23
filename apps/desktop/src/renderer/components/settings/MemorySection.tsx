@@ -5,6 +5,7 @@ import {
   MEMORY_REVIEW_CADENCE_LABELS,
   memoryLimitMessage,
   memoryReviewCadenceOf,
+  memoryUseLabel,
   type MemoryReviewCadence,
   type MemoryReviewRun,
   type MemoryEntry,
@@ -280,6 +281,19 @@ function MemoryRow({
         <MemorySourceLabel source={entry.source} />
         <span aria-hidden>·</span>
         <span title={new Date(entry.updatedAt).toLocaleString()}>Updated {ago(entry.updatedAt)}</span>
+        <span aria-hidden>·</span>
+        <span
+          data-testid="memory-uses"
+          title={entry.lastUsedAt ? `Last read ${new Date(entry.lastUsedAt).toLocaleString()}` : undefined}
+        >
+          {memoryUseLabel(entry.useCount)}
+        </span>
+        {forgotten && entry.forgottenReason === 'evicted' ? (
+          <>
+            <span aria-hidden>·</span>
+            <span title={memoryLimitMessage()}>Forgotten to make room</span>
+          </>
+        ) : null}
       </div>
       {expanded ? (
         <pre
@@ -316,6 +330,8 @@ export function MemorySection() {
   const [bodies, setBodies] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [justForgotten, setJustForgotten] = useState<Set<string>>(new Set());
+  // Bumped to load the list again, after Talyn forgot entries to make room.
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     const timer = setTimeout(() => setSearch(query.trim()), SEARCH_DELAY_MS);
@@ -339,7 +355,7 @@ export function MemorySection() {
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, search, showForgotten]);
+  }, [workspaceId, search, showForgotten, reload]);
 
   const groups = useMemo<Group[]>(() => {
     const workspace: Group = { key: 'workspace', label: 'Workspace', mono: false, entries: [] };
@@ -365,7 +381,7 @@ export function MemorySection() {
   const replace = (entry: MemoryEntrySummary) =>
     setEntries((list) => (list ?? []).map((e) => (e.id === entry.id ? entry : e)));
 
-  const onSaved = (entry: MemoryEntry, outcome: 'created' | 'updated') => {
+  const onSaved = (entry: MemoryEntry, outcome: 'created' | 'updated', evicted: MemoryEntrySummary[]) => {
     const { body, ...summary } = entry;
     setBodies((b) => ({ ...b, [entry.id]: body }));
     setEntries((list) => {
@@ -373,6 +389,10 @@ export function MemorySection() {
       return current.some((e) => e.id === entry.id) ? current.map((e) => (e.id === entry.id ? summary : e)) : [...current, summary];
     });
     if (outcome === 'created') setLiveCount((n) => (n === null ? n : n + 1));
+    if (evicted.length > 0) {
+      toast.info(`Memory is full, so Talyn forgot the least-read ${evicted.length === 1 ? `entry "${evicted[0].name}"` : `${evicted.length} entries`}`);
+      setReload((n) => n + 1);
+    }
   };
 
   const toggle = (id: string) => {
@@ -416,6 +436,8 @@ export function MemorySection() {
         return next;
       });
       setLiveCount((n) => (n === null ? n : n + 1));
+      // At the limit, the restore made Talyn forget another entry.
+      if (liveCount !== null && liveCount >= MAX_LIVE_MEMORIES_PER_WORKSPACE) setReload((n) => n + 1);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not restore this memory');
     } finally {
@@ -433,7 +455,7 @@ export function MemorySection() {
         <Button
           variant="outline"
           size="sm"
-          disabled={entries === null || adding || full}
+          disabled={entries === null || adding}
           title={full ? memoryLimitMessage() : undefined}
           onClick={() => setAdding(true)}
         >
@@ -457,7 +479,11 @@ export function MemorySection() {
           Show forgotten
         </label>
         {liveCount !== null ? (
-          <span data-testid="memory-count" className={cn('text-xs', full ? 'text-destructive' : 'text-muted-foreground')}>
+          <span
+            data-testid="memory-count"
+            title={full ? memoryLimitMessage() : undefined}
+            className="text-xs text-muted-foreground"
+          >
             {liveCount} of {MAX_LIVE_MEMORIES_PER_WORKSPACE}
           </span>
         ) : null}

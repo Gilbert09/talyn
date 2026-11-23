@@ -8,7 +8,16 @@ import {
   users as usersTable,
 } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
-import { CREDIT_PACKS, formatUsd, isTierUpgrade, type CreditPackId } from '@talyn/shared';
+import {
+  CREDIT_PACKS,
+  formatBoxHours,
+  formatUsd,
+  isTierUpgrade,
+  PLAN_TIER_LABELS,
+  usageResetPriceMicros,
+  type CreditPackId,
+  type UsageResetTier,
+} from '@talyn/shared';
 import { emitSubscriptionUpdated } from '../websocket.js';
 import { settleCreditOrder } from './autoTopup.js';
 import { billingEnabled, buildBillingStatus } from './entitlements.js';
@@ -20,8 +29,10 @@ import {
   subscriptionProductLabel,
   teamIdFromCustomerExternalId,
   teamProductTier,
+  usageResetTierForProduct,
 } from './polar.js';
 import { grantCreditLot, reverseCreditLot } from './usage/credits.js';
+import { applyUsageReset, markUsageResetRefunded } from './usage/resets.js';
 import { seatAllAdmins, teamAudienceUserIds } from './teams.js';
 import { notifyTodiex, type TodiexLevel } from '../todiex.js';
 import {
@@ -48,6 +59,9 @@ import {
  *   checkout, not a reorder.
  * - Unmappable events (no user for the customer) are recorded + 200'd:
  *   Polar's retries can never make an unknown user appear.
+ * - Usage resets: `order.paid` for a reset product sets the current period's
+ *   used box-hours back to zero (`applyUsageReset`, unique on the order id).
+ *   `order.refunded` records the refund and leaves the hours to an operator.
  * - Orders: `order.paid` for a credit-pack product grants the pack's credits
  *   (unique on the order id, so the finalize response of an auto top-up and
  *   this webhook grant once between them). `order.refunded` takes back what
@@ -508,6 +522,26 @@ function orderDate(order: PolarOrder): Date | undefined {
 export interface OrderApplyResult extends ApplyResult {
   pack?: CreditPackId;
   source?: 'purchase' | 'auto_topup';
+  /** Set for a usage-reset order: the tier it paid for. */
+  resetTier?: UsageResetTier;
+  /** A reset `order.paid` that applied: the box-hours it cleared. */
+  resetUsedBeforeWsec?: number;
+  /** A reset `order.refunded`: the reset had been applied (the hours stay). */
+  resetWasApplied?: boolean;
+}
+
+/** `order.paid` / `order.refunded` for a usage-reset product. */
+async function applyUsageResetOrderEvent(eventType: string, order: PolarOrder, resetTier: UsageResetTier): Promise<OrderApplyResult> {
+  const userId = await resolveOrderUserId(order);
+  if (!userId) return { applied: false, reason: 'no_user', resetTier };
+  if (eventType === 'order.paid') {
+    const reset = await applyUsageReset({ ownerId: userId, polarOrderId: order.id, tier: resetTier });
+    return reset.applied
+      ? { applied: true, userId, resetTier, resetUsedBeforeWsec: reset.usedBeforeWsec ?? 0 }
+      : { applied: false, reason: 'already_granted', userId, resetTier };
+  }
+  const resetWasApplied = await markUsageResetRefunded({ ownerId: userId, polarOrderId: order.id, tier: resetTier });
+  return { applied: true, userId, resetTier, resetWasApplied };
 }
 
 /**
@@ -516,6 +550,8 @@ export interface OrderApplyResult extends ApplyResult {
  * tests.
  */
 export async function applyOrderEvent(eventType: string, order: PolarOrder): Promise<OrderApplyResult> {
+  const resetTier = usageResetTierForProduct(order.productId);
+  if (resetTier) return applyUsageResetOrderEvent(eventType, order, resetTier);
   const pack = creditPackForProduct(order.productId);
   if (!pack) return { applied: false, reason: 'ignored_type' };
   const userId = await resolveOrderUserId(order);
@@ -549,6 +585,39 @@ export async function applyOrderEvent(eventType: string, order: PolarOrder): Pro
   // id makes the late grant a no-op. A no-op itself when a lot exists.
   await grantCreditLot({ ownerId: userId, micros: 0, source: 'refund_reversal', polarOrderId: order.id });
   return { applied: true, userId, pack, source };
+}
+
+/** The phone notification for a usage-reset order. Best effort, after the 200. */
+function notifyUsageResetOrder(eventType: string, order: PolarOrder, result: OrderApplyResult, eventId: string, occurredAt: Date): void {
+  if (!result.userId || !result.resetTier) return;
+  const paid = eventType === 'order.paid';
+  if (paid && !result.applied) return;
+  const userId = result.userId;
+  const tier = result.resetTier;
+  const title = paid ? 'Talyn usage reset bought' : 'Talyn usage reset refunded: box-hours left as they are, adjust by hand';
+  const message = paid
+    ? `${PLAN_TIER_LABELS[tier]} reset for ${formatUsd(usageResetPriceMicros(tier))}; cleared ${formatBoxHours(result.resetUsedBeforeWsec ?? 0)} box-hours.`
+    : `${PLAN_TIER_LABELS[tier]} reset refunded${result.resetWasApplied ? ' after it was applied' : ' before it was applied'}.`;
+  notifyTodiex(async () => {
+    const stored = await describeUser(userId);
+    const person = { ...stored, email: stored.email ?? order.customer?.email ?? null };
+    const who = personLabel(person);
+    return {
+      kind: paid ? 'usage.reset' : 'usage.reset_refunded',
+      level: paid ? 'success' : 'warn',
+      title: who ? `${title} — ${who}` : title,
+      message,
+      metadata: compactMetadata({
+        ...personMetadata(person),
+        tier,
+        price: formatSubscriptionPrice(order.totalAmount, order.currency),
+        order_id: order.id,
+        polar_event_type: eventType,
+      }),
+      dedupeKey: `polar:${eventId}`,
+      occurredAt: occurredAt.toISOString(),
+    };
+  });
 }
 
 /** The phone notification for a credit order. Best effort, after the 200. */
@@ -803,6 +872,7 @@ export async function handlePolarWebhook(req: Request, res: Response): Promise<v
       throw err;
     }
     notifyCreditOrder(event.type, order, result, eventId, occurredAt);
+    notifyUsageResetOrder(event.type, order, result, eventId, occurredAt);
   }
 
   await db

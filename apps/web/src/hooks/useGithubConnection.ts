@@ -19,7 +19,11 @@ const UNHEALTHY_RECHECK_MS = 30_000;
  * returns to Talyn after authorizing in their browser. Shared by the
  * Settings integrations card and the onboarding GitHub step.
  */
-export function useGithubConnection(workspaceId: string | null) {
+export function useGithubConnection(
+  workspaceId: string | null,
+  options: { pollMs?: number } = {}
+) {
+  const { pollMs } = options;
   const [status, setStatus] = useState<GitHubStatus | null>(null);
   const [user, setUser] = useState<GitHubUser | null>(null);
   const [health, setHealth] = useState<BackendHealth>(null);
@@ -71,6 +75,14 @@ export function useGithubConnection(workspaceId: string | null) {
       document.removeEventListener('visibilitychange', onFocus);
     };
   }, [refresh]);
+
+  // Optional: keep checking until connected, for a flow that returns from a browser.
+  const connected = Boolean(status?.connected);
+  useEffect(() => {
+    if (!pollMs || connected) return;
+    const timer = setInterval(() => void refresh(), pollMs);
+    return () => clearInterval(timer);
+  }, [pollMs, connected, refresh]);
 
   // "Retrying automatically" has to be true: focus alone never fires for
   // someone looking at the window the whole time.

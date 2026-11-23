@@ -2,7 +2,7 @@ import {
   CREDIT_PACKS, CREDIT_PACK_IDS, INVALID_RETURN_TO_CODE, MICROS_PER_DOLLAR, PLAN_LIMITS, PLAN_PRICES, PLAN_TIER_LABELS, SANDBOX_SIZES,
   BILLING_PERIOD_LABELS, formatBoxHoursLabel, formatPlanPeriodLine, formatUsd, isSellableTier, sellableTierPrices,
   tierSoldAnnually, validateAutoTopupConfig,
-  type AutoTopupConfig, type BillingPricing, type BillingStatus, type CreditPackId, type PlanTier, type SellableTier,
+  type AutoTopupConfig, type BillingPricing, type BillingStatus, type CreditPackId, type PlanTier, type SellableTier, type UsageResetOffer,
 } from '@talyn/shared';
 
 import type { PurchaseMode } from '../../config';
@@ -273,7 +273,7 @@ export interface BillingErrorCopy {
 }
 
 /** A billing refusal as the sentence web shows, and whether the portal is the fix. */
-export function billingErrorCopy(error: unknown, context: { plan?: SellableTier; action: 'checkout' | 'change' | 'credits' | 'portal' }): BillingErrorCopy {
+export function billingErrorCopy(error: unknown, context: { plan?: SellableTier; action: 'checkout' | 'change' | 'credits' | 'reset' | 'portal' }): BillingErrorCopy {
   const { code, message } = (error && typeof error === 'object' ? error : {}) as { code?: unknown; message?: unknown };
   const label = context.plan ? PLAN_TIER_LABELS[context.plan] : 'a plan';
   switch (code) {
@@ -291,6 +291,12 @@ export function billingErrorCopy(error: unknown, context: { plan?: SellableTier;
       return { message: 'Max is monthly only. To move from annual Pro to Max, use Manage subscription.', portal: true };
     case 'credits_require_paid_plan':
       return { message: `The Free plan does not include credits. ${PRO_PITCH}`, portal: false };
+    case 'usage_reset_requires_paid_plan':
+      return { message: 'A usage reset needs a paid plan.', portal: false };
+    case 'nothing_to_reset':
+      return { message: 'You have not used any box-hours yet. There is nothing to reset.', portal: false };
+    case 'usage_reset_unavailable':
+      return { message: 'Usage reset is not available for this account.', portal: false };
   }
   const fallback = context.action === 'change' ? 'Could not change the plan.'
     : context.action === 'portal' ? 'Could not open the billing portal.' : 'Could not start the checkout.';
@@ -409,4 +415,26 @@ export function orderAmount(amount: number, currency: string): string {
   const code = currency.toUpperCase();
   if (code === 'USD') return formatUsd(amount * 10_000);
   return `${(amount / 100).toFixed(2)} ${code}`;
+}
+
+// ---------------------------------------------------------------------------
+// Usage reset
+// ---------------------------------------------------------------------------
+
+/** The action label, such as "Reset usage: $40". */
+export function usageResetLabel(offer: UsageResetOffer): string {
+  return `Reset usage: ${formatUsd(offer.priceMicros, 0)}`;
+}
+
+/** What the reset does, in one line. */
+export function usageResetDetail(offer: UsageResetOffer, periodEnd: string | null | undefined): string {
+  const ends = longDate(periodEnd);
+  return `Pay your plan's monthly price once to get all ${formatBoxHoursLabel(offer.includedWsec)} back now. `
+    + `Your period still ends${ends ? ` on ${ends}` : ''}. Unused hours do not carry over.`;
+}
+
+/** "Reset 1 time this period", or null when there was none. */
+export function usageResetCount(resets: number | undefined): string | null {
+  if (!resets || resets < 1) return null;
+  return `Reset ${resets} ${resets === 1 ? 'time' : 'times'} this period`;
 }

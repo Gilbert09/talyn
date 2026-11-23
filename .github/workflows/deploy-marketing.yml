@@ -82,6 +82,10 @@ jobs:
         run: vercel build --prod --token="$VERCEL_TOKEN"
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          # The blog is live (2026-11-11). Set here because this value is in
+          # the repository history; `vercel build` keeps a variable that is
+          # already in its environment. Posts with `draft: true` stay hidden.
+          BLOG_ENABLED: "1"
 
       - name: Deploy to production
         # One archive, not one upload per file: the free plan allows 5,000 file

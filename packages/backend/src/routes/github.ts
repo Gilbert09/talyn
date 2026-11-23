@@ -336,31 +336,43 @@ async function completeAppConnection(
  * query) and we verify the caller owns that workspace before touching the
  * stored integration tokens.
  */
+/**
+ * The optional `page` query of the repo-list routes. `undefined` means "every
+ * page"; `null` means the value is not a page from 1 to 20 (the same cap the
+ * all-pages walk uses).
+ */
+export function parseRepoPage(value: unknown): number | undefined | null {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) return null;
+  const page = Number(value);
+  return page >= 1 && page <= 20 ? page : null;
+}
+
+// Helper: pull workspaceId from body or query, verify ownership, or 4xx.
+async function gateWorkspace(
+  req: import('express').Request,
+  res: import('express').Response,
+  source: 'body' | 'query' = 'query'
+): Promise<string | null> {
+  const workspaceId =
+    source === 'body'
+      ? (req.body?.workspaceId as string | undefined)
+      : (req.query.workspaceId as string | undefined);
+  if (!workspaceId) {
+    res.status(400).json({ success: false, error: 'workspaceId is required' });
+    return null;
+  }
+  try {
+    await requireWorkspaceAccess(req, workspaceId);
+  } catch (err) {
+    handleAccessError(err, res);
+    return null;
+  }
+  return workspaceId;
+}
+
 export function githubRoutes(): Router {
   const router = Router();
-
-  // Helper: pull workspaceId from body or query, verify ownership, or 4xx.
-  async function gateWorkspace(
-    req: import('express').Request,
-    res: import('express').Response,
-    source: 'body' | 'query' = 'query'
-  ): Promise<string | null> {
-    const workspaceId =
-      source === 'body'
-        ? (req.body?.workspaceId as string | undefined)
-        : (req.query.workspaceId as string | undefined);
-    if (!workspaceId) {
-      res.status(400).json({ success: false, error: 'workspaceId is required' });
-      return null;
-    }
-    try {
-      await requireWorkspaceAccess(req, workspaceId);
-    } catch (err) {
-      handleAccessError(err, res);
-      return null;
-    }
-    return workspaceId;
-  }
 
   router.get('/status', async (req, res) => {
     const configured = githubService.isConfigured();
@@ -447,6 +459,20 @@ export function githubRoutes(): Router {
     res.json({ success: true } as ApiResponse<void>);
   });
 
+  return router;
+}
+
+/**
+ * The reads that wait on GitHub. Mounted BEFORE ownerScope, so no owner
+ * transaction is open while GitHub answers: the apps call `/user`,
+ * `/installations` and `/coverage` on boot and on every focus. Each handler
+ * proves the workspace with `gateWorkspace`, and the only rows the service then
+ * reads (the workspace's GitHub integration, its repositories) are keyed by
+ * that workspace.
+ */
+export function githubReadRoutes(): Router {
+  const router = Router();
+
   router.get('/user', async (req, res) => {
     const workspaceId = await gateWorkspace(req, res);
     if (!workspaceId) return;
@@ -486,11 +512,18 @@ export function githubRoutes(): Router {
     }
   });
 
+  // `?page=N` returns one page of 100, so a client can show repos as they
+  // arrive. Without it, every page is returned at once.
   router.get('/repos', async (req, res) => {
+    const page = parseRepoPage(req.query.page);
+    if (page === null) {
+      res.status(400).json({ success: false, error: 'page must be a whole number from 1 to 20' });
+      return;
+    }
     const workspaceId = await gateWorkspace(req, res);
     if (!workspaceId) return;
     try {
-      const repos = await githubService.listRepositories(workspaceId);
+      const repos = await githubService.listRepositories(workspaceId, page);
       res.json({ success: true, data: repos });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -528,11 +561,17 @@ export function githubRoutes(): Router {
 
   // Repos in a specific org. Lets the user watch repos in orgs they
   // belong to (e.g. public org repos) that don't surface in /user/repos.
+  // Takes the same optional `?page=N` as /repos.
   router.get('/orgs/:org/repos', async (req, res) => {
+    const page = parseRepoPage(req.query.page);
+    if (page === null) {
+      res.status(400).json({ success: false, error: 'page must be a whole number from 1 to 20' });
+      return;
+    }
     const workspaceId = await gateWorkspace(req, res);
     if (!workspaceId) return;
     try {
-      const repos = await githubService.listOrgRepositories(workspaceId, req.params.org);
+      const repos = await githubService.listOrgRepositories(workspaceId, req.params.org, page);
       res.json({ success: true, data: repos });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';

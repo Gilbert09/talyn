@@ -12,7 +12,7 @@ import { decryptString } from '../services/tokenCrypto.js';
 import { enqueueMobileNotification, heartbeatMobileInstallation, readMobilePreferences, registerMobileInstallation,
   removeMobileInstallation, resolveMobileNotification, saveMobilePreferences } from '../services/mobileNotifications/store.js';
 import { claimMobileNotifications, dispatchMobileNotifications, processMobileNotificationReceipts, sweepMobileNotificationStorage } from '../services/mobileNotifications/worker.js';
-import { PushProviderError } from '../services/mobileNotifications/provider.js';
+import { PushProviderError, type MobilePushProvider } from '../services/mobileNotifications/provider.js';
 import { installationInput, preferencesInput } from '../services/mobileNotifications/validation.js';
 import { internalProxyHeaders, requireAuth } from '../middleware/auth.js';
 import { mobileNotificationRoutes } from '../routes/mobileNotifications.js';
@@ -146,6 +146,14 @@ describe('durable outbox', () => {
     const send = vi.fn(async () => []); await dispatchMobileNotifications({ send, receipts: async () => [] });
     expect(send).not.toHaveBeenCalled(); expect((await fixture.db.select().from(outbox))[0].attempts).toBe(0);
     vi.stubEnv('TALYN_MOBILE_PUSH_ENABLED', 'true');
+  });
+  it('sends the composed alert text with the unchanged data payload', async () => {
+    const { eventId } = await setupNotification();
+    const send = vi.fn<MobilePushProvider['send']>(async () => [{ status: 'ok', ticketId: randomUUID() }]);
+    await dispatchMobileNotifications({ send, receipts: async () => [] });
+    expect(send.mock.calls[0][0][0]).toMatchObject({ title: 'Done: Fixture', body: 'The agent finished.',
+      data: { schemaVersion: 1, eventId, category: 'session_update', destination } });
+    expect(Object.keys(send.mock.calls[0][0][0].data).sort()).toEqual(['category', 'destination', 'eventId', 'schemaVersion']);
   });
   it('bounds repeated temporary failures', async () => {
     await setupNotification();

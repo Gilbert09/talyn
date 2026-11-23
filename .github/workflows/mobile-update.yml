@@ -5,6 +5,8 @@ name: Mobile update
 # Mobile release workflow. Set the repository variable MOBILE_UPDATES_AUTO to 0 to stop this workflow.
 # Updates are unsigned by decision (2026-11-09): EAS code signing needs a paid EAS plan. EAS serves them
 # over HTTPS, and only holders of EXPO_TOKEN or Expo project access can publish.
+# After each publish, the Hermes source maps go to PostHog error tracking when the POSTHOG_CLI_API_KEY
+# secret is set. Without it the maps are skipped with a notice and the run stays green.
 on:
   push:
     branches: [main]
@@ -49,6 +51,18 @@ jobs:
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
+      - name: Check for the PostHog upload key
+        id: posthog
+        if: steps.gate.outputs.run == 'true'
+        env:
+          POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
+        run: |
+          if [ -z "$POSTHOG_CLI_API_KEY" ]; then
+            echo "::notice::POSTHOG_CLI_API_KEY is not set, so source maps are not uploaded to PostHog."
+            echo "upload=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "upload=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Check out the pushed commit
         if: steps.gate.outputs.run == 'true'
         uses: actions/checkout@v4
@@ -66,6 +80,12 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/mobile-eas-cli" --no-save --ignore-scripts --package-lock=false eas-cli@27.5.0
           echo "MOBILE_EAS_CLI_PATH=$RUNNER_TEMP/mobile-eas-cli/node_modules/eas-cli/bin/run" >> "$GITHUB_ENV"
+      # The npm package downloads the pinned CLI binary in its install script, so scripts run here.
+      - name: Install the pinned PostHog CLI outside the app
+        if: steps.gate.outputs.run == 'true' && steps.posthog.outputs.upload == 'true'
+        run: |
+          npm install --prefix "$RUNNER_TEMP/posthog-cli" --no-save --package-lock=false --no-audit --no-fund @posthog/cli@0.18.12
+          echo "POSTHOG_CLI_PATH=$RUNNER_TEMP/posthog-cli/node_modules/@posthog/cli/run-posthog-cli.js" >> "$GITHUB_ENV"
       - name: Build shared packages
         if: steps.gate.outputs.run == 'true'
         run: npm run mobile:build:packages
@@ -79,6 +99,7 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
         run: node apps/mobile/scripts/publish-update.cjs preview --execute
       # Internal-beta uses the production EAS environment, which needs the approved production identity
       # (bundle IDs, scheme, HTTPS callback). Set MOBILE_UPDATES_INTERNAL_BETA=1 once that exists.
@@ -86,4 +107,5 @@ jobs:
         if: steps.gate.outputs.run == 'true' && vars.MOBILE_UPDATES_INTERNAL_BETA == '1'
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
         run: node apps/mobile/scripts/publish-update.cjs internal-beta --execute

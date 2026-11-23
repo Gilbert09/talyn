@@ -252,6 +252,18 @@ describe('useCreateWorkbench: the first prompt in the new chat', () => {
     expect(held()).toEqual([]);
   });
 
+  it.each([
+    ['empty', ''],
+    ['whitespace', '  \n '],
+  ])('sends images with an %s prompt and shows them in the new chat', async (_label, prompt) => {
+    mockApi.create.mockResolvedValue(workbench());
+    mockApi.sendMessage.mockResolvedValue({ queued: true });
+    await run(spec({ prompt, attachments: [image] }));
+    expect(mockApi.create.mock.calls[0][0]).toMatchObject({ prompt: undefined, namingText: undefined });
+    expect(mockApi.sendMessage).toHaveBeenCalledWith('c1', expect.objectContaining({ text: '', attachments: [image] }));
+    expect(held()).toEqual([expect.objectContaining({ text: '', attachments: [image], settledAt: expect.any(Number) })]);
+  });
+
   it('adds nothing when the row came back without a chat', async () => {
     mockApi.create.mockResolvedValue(workbench({ chats: [] }));
     await run(spec());
@@ -289,5 +301,59 @@ describe('useCreateWorkbench: the first prompt in the new chat', () => {
         failed: { error: 'Server error', input: expect.objectContaining({ attachments: [image] }) },
       }),
     ]);
+  });
+});
+
+describe('useCreateWorkbench: the session opens without waiting', () => {
+  it('exposes the spec while the create is in flight, then clears it', async () => {
+    let finish: (wb: Workbench) => void = () => undefined;
+    mockApi.create.mockReturnValue(new Promise<Workbench>((resolve) => { finish = resolve; }));
+    const { result } = renderHook(() => useCreateWorkbench());
+    const input = spec();
+    let done: Promise<Workbench | null> = Promise.resolve(null);
+    act(() => {
+      done = result.current.create(input);
+    });
+    expect(result.current.pending).toBe(input);
+    expect(result.current.busy).toBe(true);
+    expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
+
+    await act(async () => {
+      finish(workbench());
+      await done;
+    });
+    expect(result.current.pending).toBeNull();
+    expect(result.current.busy).toBe(false);
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'wb1' });
+  });
+
+  it('clears the spec when the create fails', async () => {
+    mockApi.create.mockRejectedValue(new Error('No boxes left.'));
+    const { result } = await run(spec());
+    expect(result.current.pending).toBeNull();
+    expect(result.current.error).toBe('No boxes left.');
+  });
+
+  it('opens the session before plan mode and effort are saved, and keeps the saved chat', async () => {
+    let saved: (chat: WorkbenchChat) => void = () => undefined;
+    mockApi.create.mockResolvedValue(workbench());
+    mockApi.updateChat.mockReturnValue(new Promise<WorkbenchChat>((resolve) => { saved = resolve; }));
+    const { created } = await run(spec({ planMode: true, effort: 'max' }));
+
+    expect(created?.id).toBe('wb1');
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'wb1' });
+    expect(mockApi.updateChat).toHaveBeenCalledWith('c1', { planMode: true, effort: 'max' });
+
+    await act(async () => {
+      saved(chat('c1', { planMode: true, effort: 'max' }));
+      await Promise.resolve();
+    });
+    expect(useWorkbenchStore.getState().chats.wb1?.find((c) => c.id === 'c1')).toMatchObject({ planMode: true, effort: 'max' });
+  });
+
+  it('does not change the chat settings of a thread', async () => {
+    mockApi.create.mockResolvedValue(workbench({ kind: 'thread' }));
+    await run(spec({ kind: 'thread', planMode: true }));
+    expect(mockApi.updateChat).not.toHaveBeenCalled();
   });
 });

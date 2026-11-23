@@ -2,7 +2,10 @@
 
 Push delivery uses Expo Push Service through a backend provider interface.
 Direct APNs and FCM providers are outside this phase.
-Keep push disabled until privacy and device checks are complete.
+Push is ON in production since 2026-11-12 (Tom's call): `TALYN_MOBILE_PUSH_ENABLED=true`, and the allowlist is
+`dev.talyn.mobile.preview@preview,dev.talyn.mobile.development@development,dev.talyn.mobile@production`.
+Android registration was checked on a Pixel. iOS waits for the Apple push key (Apple Developer account in EAS).
+To stop all dispatch, set `TALYN_MOBILE_PUSH_ENABLED` to anything but `true`.
 The app remains usable when push is disabled, delayed, duplicated, or absent.
 
 ## Deployment configuration
@@ -24,6 +27,27 @@ The public EAS project ID identifies the native project. It is not a credential.
 Use separate app identities and environments for development, preview, and production.
 Reject incomplete production configuration before building the app.
 Missing backend enablement, encryption key, or app allowlist disables dispatch.
+
+## Android credentials (FCM)
+
+Expo sends Android alerts through Firebase Cloud Messaging. The Firebase project is `talyn-514510` (set up 2026-11-12).
+It has one Android app for each package: `dev.talyn.mobile`, `dev.talyn.mobile.preview` and `dev.talyn.mobile.development`.
+
+- **FCM V1 service account key.** It is stored in EAS (account `talyn-app`) and assigned to all three packages.
+  The original is the 1Password item "Talyn FCM V1 service account key (Firebase talyn-514510)" in the `Private` vault.
+  Expo uses it to send. The app and the backend never read it.
+- **`google-services.json`.** It is the EAS text variable `TALYN_MOBILE_GOOGLE_SERVICES_JSON` (base64, sensitive) in the
+  development, preview and production environments. The original is the 1Password item
+  "Talyn mobile google-services.json (Firebase talyn-514510)". `app.config.ts` decodes it into `.expo/google-services.json`
+  and sets `android.googleServicesFile`. Without the variable, a build has no Firebase config and cannot get a push token.
+  It is a text variable and not an EAS file variable, because `eas update` does not receive the contents of a file
+  variable. The fingerprint hashes the file contents, so a build and an update must see the same file.
+  Never commit the file: GitHub secret scanning flags the API key in it.
+- A local build needs the variable too, for example
+  `export TALYN_MOBILE_GOOGLE_SERVICES_JSON="$(op document get <item> | base64 | tr -d '\n')"`.
+- Adding, changing or removing the variable changes the fingerprint. Installed binaries then need a new build.
+
+iOS needs no Firebase. Expo sends iOS alerts through APNs with the Apple push key from the Apple Developer account.
 
 ## Worker schedule and limits
 
@@ -48,7 +72,7 @@ Disabled installation records are removed after another 30 days.
 
 Operators can read counters at `GET /api/v1/admin/mobile-notifications/metrics`.
 The existing admin guard protects this route.
-Counters cover queued rows, tickets, retries, expiry, permanent errors, receipts, latency totals, and active installations.
+Counters cover queued rows, tickets, retries, expiry, permanent errors, receipts, latency totals, active installations, and pushes skipped at the desk (`atDesk`).
 Counters are local to each process and reset on restart. They contain no account or destination labels.
 Use deployment monitoring to collect snapshots when historical rates are needed.
 
@@ -66,7 +90,7 @@ The native client owns request transport.
 | `PATCH /mobile/installations/:installationId` | Refresh authorized installation metadata and last-seen time. |
 | `DELETE /mobile/installations/:installationId` | Disable one installation. Repeated removal is safe. |
 | `GET /mobile/notification-preferences?workspaceId=…` | Read preferences for an accessible workspace. |
-| `PUT /mobile/notification-preferences` | Replace the caller's version 1 workspace preferences. |
+| `PUT /mobile/notification-preferences` | Replace the caller's version 1 workspace preferences. `onlyWhenAway` is optional; when it is absent, the stored value stays. |
 | `GET /mobile/notifications/:eventId` | Resolve an unexpired event with current owner, workspace, and entity checks. |
 
 Mobile writes share the existing limiter with 30 requests per minute for each authenticated user.
@@ -87,12 +111,26 @@ Account deletion removes installation records and related notification data.
 Dispatch rechecks access before each attempt.
 Workspace access loss prevents delivery and event resolution.
 
-Only generic alerts leave the backend.
-Payload fields are `schemaVersion`, `eventId`, `category`, and `destination`.
+Alert text uses the same words as the desktop notification (Tom's call, 2026-11-12).
+This replaces the earlier rule that only generic alerts leave the backend.
+`services/mobileNotifications/text.ts` makes the title and body when the worker sends the alert.
+A session alert has the session name and status, for example "Done: Fix login".
+Its body is a short summary of the latest turn: the PR it opened, the agent's question, the error, or the last reply.
+The session text comes from `notificationText` in `packages/shared`. Desktop and web use the same function.
+A PR alert has the repository, the PR number, and the PR title, for example "posthog/posthog#12 Fix login".
+A merge queue block has its blocked reason. A human gate has the gate name.
+The title is 80 characters or fewer. The body is 178 characters or fewer.
+If the worker cannot make the text, it sends the generic text for the category.
+This text goes through Expo, Google FCM, and Apple APNs.
+Android channels use private lock-screen visibility, so a locked Android device hides the text.
+On iOS, the system "Show Previews" setting controls the lock-screen text.
+
+The data payload does not change. Its fields are `schemaVersion`, `eventId`, `category`, and `destination`.
 Destinations contain an internal kind, workspace ID, and entity ID.
-No prompt, transcript, code, repository name, PR title, or CI log enters the payload.
+The app uses only the data payload to open the destination.
+No prompt, transcript, code, or CI log enters the data payload.
 Tokens do not enter route responses, logs, metric labels, or audit records.
-Sensitive preview settings are reserved. They do not enable private alert text.
+The sensitive preview setting is not used. Every alert has the text above.
 
 ## Delivery semantics
 
@@ -122,6 +160,52 @@ Category switches and the workspace global switch apply before delivery.
 Expired events cannot cause navigation.
 Product screens retain their normal authoritative refresh behavior.
 
+## Away-only delivery
+
+A push goes to the phone only when the person is away from their computer (Tom's call, 2026-11-12).
+While Talyn on the computer is in use, the desktop notification or the open app shows the alert.
+No feature flag controls this. The `onlyWhenAway` preference controls it for each workspace.
+
+The desktop app and the web app send a WebSocket message `{ "type": "desk_presence", "state": "active" | "away" }`.
+The message has no other fields. It has no idle time, no app name, and no window title.
+The vocabulary and the times are in `packages/shared/src/deskPresence.ts`.
+The 30-second beat and the change rules are in `packages/client/src/deskPresence.ts`.
+
+- **Desktop**: the main process reads system input, not only input in Talyn (`apps/desktop/src/main/deskPresence.ts`).
+  The state is `active` when `powerMonitor.getSystemIdleState(180)` is `active`, the screen is unlocked, and the computer is awake.
+  If Electron reports `unknown`, the desktop uses `getSystemIdleTime()` less than 180 seconds.
+  `lock-screen`, `unlock-screen`, `suspend`, and `resume` tell the renderer to check at once.
+- **Web**: the state is `active` when the tab is visible and the page had pointer or keyboard input in the last three minutes.
+  The web does not use the Idle Detection API, so it shows no permission prompt.
+  Input in a different app reads as idle in the browser.
+- **Mobile**: the phone never sends desk presence.
+
+While the state is `active`, the client sends `active` immediately and then every 30 seconds.
+When the state changes to `away` (idle for three minutes, a lock, sleep, or a hidden tab), the client sends `away` one time.
+Then it sends nothing until the state is `active` again. The first input after idle sends `active` immediately.
+The socket sends the latest state again after a reconnect.
+
+The backend keeps one record for each authenticated socket (`services/deskPresence.ts`).
+The user ID comes from the socket's authentication. The backend ignores IDs in the message body.
+A person is at the desk while any of their sockets sent `active` in the last 3 minutes. The limit was 60 seconds until 2026-11-12, but a hidden desktop window's timers run only about once a minute, so the record lapsed between beats.
+`away` and a closed socket remove the record immediately.
+When the beats stop (sleep, quit, or network loss), the record expires after 60 seconds.
+With `REDIS_URL`, the records are in one Redis hash for each user, so all replicas give the same answer.
+A Lua script writes the field and the key expiry together. Without Redis, the records are in process memory.
+The WebSocket debug trace records a change of state only, not each beat.
+
+The dispatch preflight checks presence after the workspace and category switches.
+If `onlyWhenAway` is on and the person is at the desk, the row becomes `cancelled` with `lastErrorClass: 'at_desk'`.
+The push is skipped, not delayed. A dispatch pass does one presence lookup for each owner.
+If the presence lookup fails, the push is sent.
+
+`onlyWhenAway` defaults to `true`. No migration is necessary, because the preferences column is jsonb.
+A stored row without the field reads as `true`.
+App builds from before this change send preferences without the field.
+For such a PUT, the backend keeps the stored value, so an older app cannot turn a stored `false` back to `true`.
+The mobile app reads a missing field from an older backend as `true`.
+The mobile setting is **Only when I'm away from my computer** in the workspace notification settings.
+
 ## Removal and device checks
 
 Online logout removes or disables the installation before local credentials are cleared.
@@ -143,8 +227,11 @@ Exports and test doubles do not establish these results.
 - Privacy and security owners must approve Expo as a processor before activation.
 - Review the Expo service terms, subprocessors, transfer terms, retention, and incident process.
 - Record the approved field inventory, including device tokens and opaque account-linked event identifiers.
+- Record that alert text contains session names, agent summaries, questions and errors, and PR references and titles.
+  Expo, FCM, and APNs process this text. Disclose it as user content in the store privacy answers.
 - Update Apple App Privacy disclosures and required privacy manifests for the final native binary.
 - Update Google Play Data safety and the privacy policy for push processing and deletion.
 - Confirm retention, backup removal, and deletion support procedures with backend and privacy owners.
-- Confirm that no tracking, advertising identifier, ATT prompt, analytics, or replay SDK was added.
+- Confirm that no tracking, advertising identifier, or ATT prompt was added.
+  PostHog analytics and masked session replay are allowed (Tom's call, 2026-11-10). Confirm that no push token or payload reaches them.
 - Complete phase 5 beta, signing, release, and store submission procedures separately.

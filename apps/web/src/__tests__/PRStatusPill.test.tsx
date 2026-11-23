@@ -109,7 +109,7 @@ describe('PRStatusPill', () => {
   // Trunk reports `not_ready` for the whole CI run — it is waiting on the PR's
   // own branch protection — so it must not hide what the PR is actually doing.
   describe("an external queue that is waiting on the PR's own checks", () => {
-    it('keeps the running pill rather than an amber "Queue: not ready"', () => {
+    it('keeps the running pill rather than an amber "Not ready for merge queue"', () => {
       render(
         <PRStatusPill
           blockingReason="blocked"
@@ -119,7 +119,7 @@ describe('PRStatusPill', () => {
         />
       );
       expect(screen.getByText('33/201 running')).toBeTruthy();
-      expect(screen.queryByText('Queue: not ready')).toBeNull();
+      expect(screen.queryByText('Not ready for merge queue')).toBeNull();
     });
 
     it('keeps the failing pill — that IS the branch protection trunk waits on', () => {
@@ -132,7 +132,7 @@ describe('PRStatusPill', () => {
         />
       );
       expect(screen.getByText('6/201 failing')).toBeTruthy();
-      expect(screen.queryByText('Queue: not ready')).toBeNull();
+      expect(screen.queryByText('Not ready for merge queue')).toBeNull();
     });
 
     it('still shows the queue when the PR itself has nothing left to report', () => {
@@ -144,7 +144,7 @@ describe('PRStatusPill', () => {
           externalQueueState="not_ready"
         />
       );
-      expect(screen.getByText('Queue: not ready')).toBeTruthy();
+      expect(screen.getByText('Not ready for merge queue')).toBeTruthy();
       expect(screen.queryByText('Ready')).toBeNull();
     });
 
@@ -157,7 +157,7 @@ describe('PRStatusPill', () => {
           externalQueueState="testing"
         />
       );
-      expect(screen.getByText('Queue: testing')).toBeTruthy();
+      expect(screen.getByText('Testing in merge queue')).toBeTruthy();
     });
   });
 
@@ -172,7 +172,7 @@ describe('PRStatusPill', () => {
         externalQueueState="pending_failure"
       />
     );
-    expect(screen.getByText('Queue: pending failure')).toBeTruthy();
+    expect(screen.getByText('Merge queue failure pending')).toBeTruthy();
     expect(screen.getByRole('button').className).toContain('amber-500');
   });
 });

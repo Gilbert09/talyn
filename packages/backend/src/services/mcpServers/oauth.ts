@@ -121,6 +121,9 @@ export interface StoredMcpOAuth {
     verifier?: string;
     verifierEnc?: EncryptedEnvelope;
     expiresAt: string;
+    /** The mobile app's allowlisted URL base when the app started this flow.
+     *  `/complete` validates it again and answers the deep link to open. */
+    mobileReturn?: string;
   };
 }
 
@@ -169,12 +172,15 @@ function sha256(s: string): Buffer {
 /**
  * Register this client with an authorization server that wants DCR.
  *
- * Only reached when CIMD is unsupported. The response's `client_id` is what
- * every later leg uses; a `client_secret` is stored encrypted, though most MCP
- * servers register a public client and return none.
+ * Reached when CIMD is unsupported or cannot carry the scopes the server wants.
+ * The response's `client_id` is what every later leg uses; a `client_secret` is
+ * stored encrypted, though most MCP servers register a public client and return
+ * none. The scopes are registered because some servers refuse to authorize a
+ * scope the client did not register.
  */
 async function registerClient(
   server: AuthServerMetadata,
+  scopes: string[],
   signal: AbortSignal,
   context?: McpRequestContext
 ): Promise<{ clientId: string; clientSecret?: string }> {
@@ -197,6 +203,7 @@ async function registerClient(
       token_endpoint_auth_method: 'none',
       // Named so a native-client rule does not apply to a hosted redirect.
       application_type: 'web',
+      ...(scopes.length > 0 ? { scope: scopes.join(' ') } : {}),
     }),
   }, context).catch((error) => { throw new McpDiscoveryError(fetchFailureReason(error)); });
   if (!resp.ok) {
@@ -211,6 +218,20 @@ async function registerClient(
     clientId: doc.client_id,
     ...(typeof doc.client_secret === 'string' ? { clientSecret: doc.client_secret } : {}),
   };
+}
+
+/**
+ * The CIMD document is one static file for every server, and it registers no
+ * scopes. A server that checks requested scopes against registered ones (for
+ * example Expo) refuses it with `invalid_scope`. When the server wants scopes
+ * and offers DCR, register a client that names them.
+ */
+function needsScopedClient(
+  clientSource: StoredMcpOAuth['clientSource'],
+  scopes: string[],
+  registrationEndpoint: string | undefined
+): boolean {
+  return clientSource === 'cimd' && scopes.length > 0 && !!registrationEndpoint;
 }
 
 export interface StartedFlow {
@@ -236,7 +257,8 @@ export interface StartedFlow {
 export async function startMcpOAuth(
   server: Pick<McpServerDefinition, 'id' | 'url' | 'workspaceId'>,
   existing: StoredMcpOAuth | null,
-  now: Date
+  now: Date,
+  opts: { mobileReturn?: string | null } = {}
 ): Promise<StartedFlow> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new DOMException('The MCP request timed out.', 'TimeoutError')), EXCHANGE_TIMEOUT_MS);
@@ -250,7 +272,8 @@ export async function startMcpOAuth(
     let clientSecret: string | undefined;
     let clientSource = existing?.clientSource;
 
-    if (existing?.authorizationEndpoint && existing.tokenEndpoint && clientId) {
+    if (existing?.authorizationEndpoint && existing.tokenEndpoint && clientId &&
+        !needsScopedClient(existing.clientSource, scopes, existing.registrationEndpoint)) {
       meta = {
         issuer: existing.issuer ?? '',
         authorizationEndpoint: existing.authorizationEndpoint,
@@ -277,12 +300,13 @@ export async function startMcpOAuth(
           throw new McpOAuthUnavailableError('Slack sign-in is not configured for this Talyn deployment. An administrator must register a Slack app and configure its client credentials.');
         }
         clientSource = 'byo';
-      } else if (meta.clientIdMetadataDocumentSupported && !(localCallback && meta.registrationEndpoint)) {
+      } else if (meta.clientIdMetadataDocumentSupported && !(localCallback && meta.registrationEndpoint) &&
+          !needsScopedClient('cimd', scopes, meta.registrationEndpoint)) {
         // The forward-compatible path: one hosted document, nothing registered.
         clientId = mcpClientMetadataUrl();
         clientSource = 'cimd';
       } else {
-        const registered = await registerClient(meta, controller.signal, { workspaceId: server.workspaceId, purpose: 'registration' });
+        const registered = await registerClient(meta, scopes, controller.signal, { workspaceId: server.workspaceId, purpose: 'registration' });
         clientId = registered.clientId;
         clientSecret = registered.clientSecret;
         clientSource = 'dcr';
@@ -328,7 +352,13 @@ export async function startMcpOAuth(
         ...(clientSource ? { clientSource } : {}),
         scopes,
         resource,
-        flow: { id: flowId, stateHash: base64url(sha256(state)), verifierEnc: encryptString(verifier), expiresAt },
+        flow: {
+          id: flowId,
+          stateHash: base64url(sha256(state)),
+          verifierEnc: encryptString(verifier),
+          expiresAt,
+          ...(opts.mobileReturn ? { mobileReturn: opts.mobileReturn } : {}),
+        },
       },
       authorizeUrl: authorize.toString(),
       flowId,

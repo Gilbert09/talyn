@@ -23,7 +23,7 @@
  * {@link weightedSecondsDelta} and {@link consumeBudget}). The sum of the steps
  * then equals the conversion of the total, whatever the step size.
  */
-import type { SandboxSize } from './sandboxSize.js';
+import { SANDBOX_SIZES, type SandboxSize } from './sandboxSize.js';
 
 /** Integer micro-dollars: USD × 1,000,000. */
 export type Micros = number;
@@ -293,6 +293,24 @@ export const SIZE_PRICE_MICROS_PER_HOUR: Record<SandboxSize, Micros> = mapSizes(
   (size) => (BOX_HOUR_PRICE_MICROS * SIZE_WEIGHT_HUNDREDTHS[size]) / 100,
 );
 
+/** The sizes a measured box can bill at, lightest first. `small` is never a measured size: it differs from `standard` in CPU only. */
+const MEASURED_SIZES: readonly SandboxSize[] = ['standard', 'medium', 'large', 'xlarge'];
+
+/**
+ * The size a running box bills at: the smallest size whose memory holds what
+ * the box uses now, never above the size it booted at. An unknown figure bills
+ * the booted size. A `small` box always bills `small`.
+ */
+export function billedSizeFor(booted: SandboxSize, memUsedMib: number | null | undefined): SandboxSize {
+  if (typeof memUsedMib !== 'number' || !Number.isFinite(memUsedMib) || memUsedMib <= 0) return booted;
+  const fits = MEASURED_SIZES.find((size) => SANDBOX_SIZES[size].memMib >= memUsedMib) ?? 'xlarge';
+  return SIZE_WEIGHT_HUNDREDTHS[fits] < SIZE_WEIGHT_HUNDREDTHS[booted] ? fits : booted;
+}
+
+/** The line every app shows next to the size prices. It states {@link billedSizeFor} in plain words. */
+export const MEASURED_BILLING_NOTE =
+  'A box is billed for the memory it uses, up to its size. A box that uses 4 GB or less is billed at the Standard rate, and a Small box always at the Small rate.';
+
 /** The size unattended runs (reviews, loops, merge-queue fixes, auto-keep, workflows) use. */
 export const UNATTENDED_SANDBOX_SIZE: SandboxSize = 'small';
 
@@ -475,6 +493,37 @@ export function crossedUsageThresholds(usedBeforeWsec: number, usedAfterWsec: nu
     const line = (includedWsec * pct) / 100;
     return usedBeforeWsec < line && usedAfterWsec >= line;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Usage reset
+// ---------------------------------------------------------------------------
+
+/**
+ * The tiers that can buy a usage reset: every paid tier. A reset is a one-time
+ * payment of the tier's monthly price that sets the current period's used
+ * box-hours back to zero and the included hours to the full allowance of the
+ * tier paid for. The period end does not move, and included hours that were
+ * left are not added on top.
+ */
+export const USAGE_RESET_TIERS = ['pro', 'max', 'legacy_pro'] as const satisfies readonly PaidTier[];
+export type UsageResetTier = (typeof USAGE_RESET_TIERS)[number];
+
+export function isUsageResetTier(value: unknown): value is UsageResetTier {
+  return typeof value === 'string' && (USAGE_RESET_TIERS as readonly string[]).includes(value);
+}
+
+/** What a reset costs: the tier's monthly list price, also for an annual subscriber. */
+export function usageResetPriceMicros(tier: UsageResetTier): Micros {
+  return PLAN_PRICES[tier].monthlyMicros;
+}
+
+/** `BillingStatus.usageReset`: present only when this account can buy a reset now. */
+export interface UsageResetOffer {
+  tier: UsageResetTier;
+  priceMicros: Micros;
+  /** The included weighted seconds the period holds after the reset (the tier's full allowance). */
+  includedWsec: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -668,6 +717,8 @@ export interface UsageSummary {
   percent: number;
   /** Included hours and credits are both spent; new boxes are refused. */
   exhausted: boolean;
+  /** Usage resets bought in this period. Absent on a backend without resets. */
+  resets?: number;
 }
 
 /** Credit balance, in `BillingStatus.credits` and `GET /billing/credits`. */
@@ -675,6 +726,35 @@ export interface CreditSummary {
   balanceMicros: Micros;
   expiringSoonMicros: Micros;
   lots: CreditLot[];
+  /**
+   * The balance when the current credit draw started: when this period's
+   * included hours ran out, or the latest top-up or usage reset after that.
+   * Sent only while the account draws on credit. See {@link creditDrawOf}.
+   */
+  drawStartMicros?: Micros;
+}
+
+/** The credit the account spends now that its included hours are used up. */
+export interface CreditDraw {
+  balanceMicros: Micros;
+  /** 100% of the credit bar. Never less than the balance. */
+  startMicros: Micros;
+  /** The share of `startMicros` left, 0..100. */
+  leftPercent: number;
+}
+
+/**
+ * The credit draw, or null while the included hours last (or when there is
+ * no credit to draw). A backend without `drawStartMicros` reads as a full bar.
+ */
+export function creditDrawOf(
+  usage: Pick<UsageSummary, 'usedWsec' | 'includedWsec' | 'exhausted'>,
+  credits: Pick<CreditSummary, 'balanceMicros' | 'drawStartMicros'> | null | undefined
+): CreditDraw | null {
+  const balance = credits?.balanceMicros ?? 0;
+  if (usage.exhausted || balance <= 0 || usage.usedWsec < usage.includedWsec) return null;
+  const start = Math.max(balance, credits?.drawStartMicros ?? 0);
+  return { balanceMicros: balance, startMicros: start, leftPercent: Math.min(100, (balance * 100) / start) };
 }
 
 export interface ConcurrentBoxUsage {
@@ -755,6 +835,28 @@ export function formatUsd(micros: Micros, fractionDigits = 2): string {
   return digits ? `${sign}$${wholeText}.${String(frac).padStart(digits, '0')}` : `${sign}$${wholeText}`;
 }
 
+/** A credit balance: "$100" when it has no cents, else "$98.37". */
+export function formatCreditBalance(micros: Micros): string {
+  return formatUsd(micros).replace(/\.00$/, '');
+}
+
+/** "Using credits · $93.84 left": the gauge's headline while it draws on credit. */
+export function creditDrawHeadline(draw: Pick<CreditDraw, 'balanceMicros'>): string {
+  return `Using credits · ${formatCreditBalance(draw.balanceMicros)} left`;
+}
+
+/** "Included hours used up. Using credits: $93.84 of $120 left". */
+export function creditDrawDetail(draw: Pick<CreditDraw, 'balanceMicros' | 'startMicros'>): string {
+  return `Included hours used up. Using credits: ${formatCreditBalance(draw.balanceMicros)} of ${formatCreditBalance(draw.startMicros)} left`;
+}
+
+/** Below this share of the credit bar, the gauge shows it as low. */
+export const CREDIT_DRAW_LOW_LEFT_PCT = 20;
+
+export function isCreditDrawLow(draw: Pick<CreditDraw, 'leftPercent'>): boolean {
+  return draw.leftPercent < CREDIT_DRAW_LOW_LEFT_PCT;
+}
+
 /** "$0.22/h", "$0.275/h": two decimals, or three when the price needs them. */
 export function formatPricePerHour(micros: Micros): string {
   const needsThree = Math.round(micros / 1000) % 10 !== 0;
@@ -773,6 +875,20 @@ export function formatBoxHours(wsec: number): string {
   const tenths = Math.floor((Math.max(0, wsec) * 10) / BOX_HOUR_SECONDS);
   const whole = Math.floor(tenths / 10).toLocaleString('en-US');
   return tenths % 10 === 0 ? whole : `${whole}.${tenths % 10}`;
+}
+
+/**
+ * Box-hours to three decimals, floored, for the operator console: "0.016",
+ * "2.905", "1,000". An amount above zero and below 0.001 shows as "<0.001",
+ * so a short run never reads as free.
+ */
+export function formatBoxHoursPrecise(wsec: number): string {
+  const safe = Math.max(0, wsec);
+  const thousandths = Math.floor((safe * 1000) / BOX_HOUR_SECONDS);
+  if (thousandths === 0) return safe > 0 ? '<0.001' : '0';
+  const whole = Math.floor(thousandths / 1000).toLocaleString('en-US');
+  const fraction = String(thousandths % 1000).padStart(3, '0').replace(/0+$/, '');
+  return fraction ? `${whole}.${fraction}` : whole;
 }
 
 /** "1 box-hour", "2.5 box-hours". */

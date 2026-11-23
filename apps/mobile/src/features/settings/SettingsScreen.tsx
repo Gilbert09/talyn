@@ -12,11 +12,11 @@ import { useFeatures } from '../../lib/features';
 import { NotificationSettings } from '../../notifications/Settings';
 import { radius, setThemePreference, useTheme, useThemePreference } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
-import { WebRow } from '../more/Page';
 import { AboutUpdates } from '../updates/AboutUpdates';
 import { useBillingStatus } from '../usage/data';
 import { appInfo, DOCS_URL, WEB_APP_URL } from './about';
-import { APPEARANCE_OPTIONS, billingLine, githubStateLabel, githubStateOf, webSettingsLinks } from './model';
+import { AnalyticsSetting } from './AnalyticsSetting';
+import { APPEARANCE_OPTIONS, billingLine, githubStateLabel, githubStateOf, settingsEditorLinks } from './model';
 import { SessionSettings } from './SessionSettings';
 
 export function SettingsScreen() {
@@ -30,7 +30,6 @@ export function SettingsScreen() {
   const offline = useNetwork() === 'offline';
   const theme = useThemePreference();
   const sheet = useActionSheet();
-  const [showId, setShowId] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const info = appInfo();
@@ -49,14 +48,12 @@ export function SettingsScreen() {
         });
       } },
     ]);
-  const webLinks = webSettingsLinks(features);
+  const editors = selected ? settingsEditorLinks(features) : [];
   return <ScreenContainer>
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <Group title="Account">
         <Row title={auth.user?.email ?? 'GitHub account'} subtitle="Signed in with GitHub" />
-        <Row title={showId ? 'Hide account ID' : 'Show account ID'} onPress={() => setShowId(!showId)}>
-          {showId ? <AppText selectable variant="meta" tone="muted">Account ID: {auth.user?.id}</AppText> : null}
-        </Row>
+        <AnalyticsSetting divider />
         <Row title="Sign out" disabled={deleting} divider={false} onPress={() => { void (signOut ? signOut() : controller.signOut()); }} />
       </Group>
       <Group title="Workspace">
@@ -66,7 +63,7 @@ export function SettingsScreen() {
         {selected ? <>
           <Row title="Repositories" subtitle="Watched repositories and box sizes" chevron href="/repositories" />
           <Row title="GitHub" subtitle={github === 'connected' ? 'Manage the GitHub App and its access' : 'Connect GitHub to watch repositories'}
-            chevron href={github === 'connected' ? '/repositories' : '/onboarding/github'}
+            chevron href="/integrations/github"
             trailing={github === 'unknown' ? undefined : <AppText variant="meta" tone={github === 'connected' ? 'success' : 'warning'}>{githubStateLabel(github)}</AppText>}
             accessibilityLabel={`GitHub. ${githubStateLabel(github) || 'Status unknown'}.`} />
           <Row title="Agents" subtitle="Connect Claude or Codex" chevron href="/agents" divider={false} />
@@ -76,6 +73,10 @@ export function SettingsScreen() {
         <Row title="Plan and billing" subtitle={plan ?? 'Plan, box-hours and credits'} chevron href="/billing" divider={false} />
       </Group>
       {current ? <SessionSettings workspace={current} offline={offline} openSheet={sheet.open} refresh={workspace.refresh} /> : null}
+      {editors.length ? <Group title="Agents and tools">
+        {editors.map((link, index) => <Row key={link.key} title={link.title} subtitle={link.subtitle} href={link.href} chevron
+          divider={index < editors.length - 1} />)}
+      </Group> : null}
       <Group title="Appearance" footer="Applies to this device.">
         <View style={styles.block}>
           <Segmented options={APPEARANCE_OPTIONS} value={theme} onChange={(value) => setThemePreference(value)} accessibilityLabel="Theme" />
@@ -83,13 +84,10 @@ export function SettingsScreen() {
       </Group>
       {auth.issue === 'outage' ? <Status message="Sign-in is temporarily unavailable. Your account is still signed in." /> : null}
       {notifications ? <NotificationSettings controller={notifications} offline={offline} /> : null}
-      {webLinks.length ? <Group title="More on the web" footer="These settings open in Talyn on the web.">
-        {webLinks.map((link, index) => <WebRow key={link.key} title={link.title} subtitle={link.subtitle} path={link.path}
-          divider={index < webLinks.length - 1} />)}
-      </Group> : null}
       <Group title="About">
         <Row title="Version" trailing={<AppText variant="meta" tone="muted" selectable>{info.build ? `${info.version} (${info.build})` : info.version}</AppText>} />
         <AboutUpdates info={info} />
+        <Row title="What's new" subtitle="Recent changes to the mobile app" chevron href="/settings/whatsNew" />
         <Row title="Open Talyn on the web" chevron onPress={() => openExternal(WEB_APP_URL)} />
         <Row title="Help and documentation" chevron divider={false} onPress={() => openExternal(DOCS_URL)} />
       </Group>

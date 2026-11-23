@@ -1,4 +1,5 @@
 import { useRouter } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
 import { SymbolView } from 'expo-symbols';
 
 import { Button, EmptyState, Group, Row } from '../src/components/UI';
@@ -15,6 +16,19 @@ export default function WorkspacesScreen() {
   const offline = useNetwork() === 'offline';
   const router = useRouter();
   const colors = useShellColors();
+  // Sent here because no workspace was chosen: once one is (a single workspace is chosen for the person, or a
+  // retry succeeds), carry on. Opened on purpose from Settings, a workspace is already chosen and the page stays.
+  const [arrivedWithout] = useState(() => !state.selected);
+  // One navigation, whichever comes first: a pending link must not be used by the tap and then go Home on the effect.
+  const continued = useRef(false);
+  const carryOn = () => {
+    if (continued.current) return;
+    continued.current = true;
+    router.replace(consumeIntent() ?? HOME);
+  };
+  useEffect(() => {
+    if (arrivedWithout && state.status === 'ready' && state.selected) carryOn();
+  });
   return <ShellScreen title="Choose a workspace" description="Keep your sessions and conversations in one place.">
     {(state.status === 'loading' || state.status === 'idle') && !state.choices.length ? <Status message="Loading workspaces" loading /> : null}
     {offline ? <Status message="You are offline. Connect to the internet to check workspace access." /> : null}
@@ -27,7 +41,7 @@ export default function WorkspacesScreen() {
         trailing={state.selected === choice.id ? <SymbolView name={{ ios: 'checkmark', android: 'check' }} size={16} tintColor={colors.primaryAction} /> : undefined}
         accessibilityLabel={`Select workspace ${choice.name}`}
         disabled={offline} onPress={() => { void workspace.select(choice.id).then(() => {
-          if (workspace.getSnapshot().selected === choice.id) router.replace(consumeIntent() ?? HOME);
+          if (workspace.getSnapshot().selected === choice.id) carryOn();
         }); }} />)}
     </Group> : null}
     <Group title="Account">

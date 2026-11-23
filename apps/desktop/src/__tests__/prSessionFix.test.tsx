@@ -58,7 +58,6 @@ jest.mock('../renderer/lib/workbenchData', () => ({
 }));
 jest.mock('../renderer/stores/workbenches', () => ({
   useWorkbenchStore: { getState: () => workbenchState },
-  visibleChats: (state: { chats: Record<string, unknown[]> }, id: string) => state.chats[id] ?? [],
 }));
 jest.mock('../renderer/stores/navigation', () => ({
   useNavigationStore: { getState: () => ({ navigate }) },

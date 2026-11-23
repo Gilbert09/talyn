@@ -1,13 +1,8 @@
 import { Nav } from "@/components/layout/Nav";
 import { Footer } from "@/components/layout/Footer";
 import { Hero } from "@/components/sections/Hero";
-import { Proof } from "@/components/sections/Proof";
-import { SessionSteps } from "@/components/sections/SessionSteps";
-import { Sandboxes } from "@/components/sections/Sandboxes";
-import { Threads } from "@/components/sections/Threads";
-import { PullRequests } from "@/components/sections/PullRequests";
-import { Automation } from "@/components/sections/Automation";
-import { Providers } from "@/components/sections/Providers";
+import { Reasons } from "@/components/sections/Reasons";
+import { Showcase } from "@/components/sections/Showcase";
 import { PricingBand } from "@/components/sections/PricingBand";
 import { Faq } from "@/components/sections/Faq";
 import { FinalCta } from "@/components/sections/FinalCta";
@@ -20,9 +15,10 @@ export const metadata: Metadata = {
 };
 
 /**
- * The relaunch home page (November 2026), built around sessions and threads.
- * Order: what a session is, why many of them work, threads, then the PR work
- * that made Talyn's name, automation, the subscription, price, and the close.
+ * The home page, simplified on 2026-11-12. The median visitor leaves after
+ * about 24 seconds without scrolling, so the page says why in the hero and the
+ * three reasons under it, then gives one row per promise. Every detail lives
+ * on a feature page or in the docs.
  */
 export default function Home() {
   return (
@@ -30,18 +26,12 @@ export default function Home() {
       <Nav />
       <main>
         <Hero />
-        {/* Checkable facts, straight after the claim they back. */}
-        <Proof />
-        <SessionSteps />
-        <Sandboxes />
-        <Threads />
-        <PullRequests />
-        <Automation />
-        <Providers />
+        <Reasons />
+        <Showcase />
         <PricingBand />
+        <Faq />
         {/* Carries the #download anchor. */}
         <FinalCta />
-        <Faq />
       </main>
       <Footer />
       {/* FAQPage schema is emitted by <Faq /> itself, from the same array it

@@ -11,11 +11,16 @@ import {
   railEntries,
   railEntryAttention,
   railInitials,
-  useAttentionSeen,
+  moveWorkspace,
+  useAttentionRefresh,
+  useAttentionSessions,
+  useContextAttentionStore,
 } from '../lib/contextRail';
+import { SidebarNeedsYou, useNeedsYouItems } from '../components/layout/SidebarNeedsYou';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useSpacesStore } from '../stores/spaces';
 import { useNavigationStore } from '../stores/navigation';
+import { useToastStore } from '../stores/toast';
 
 vi.mock('../lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn(), captureAnalyticsException: vi.fn() }));
@@ -60,6 +65,7 @@ function setup(opts: { workspaces: Workspace[]; spaces?: boolean; teams?: Spaces
 
 beforeEach(() => {
   localStorage.clear();
+  useContextAttentionStore.setState({ counts: null });
   attention = vi.spyOn(api.workspaces, 'attention');
 });
 
@@ -102,6 +108,32 @@ describe('railEntryAttention', () => {
     ['no counts yet', w1, null, 0],
   ] as const)('%s', (_label, entry, c, expected) => {
     expect(railEntryAttention(entry, c)).toBe(expected);
+  });
+
+  describe('a workspace with sessions in spaces', () => {
+    // ws1: 1 Personal session, 2 in s1, 1 in s3 (a space with no tile here).
+    const spaced = {
+      workspaces: { ws1: 4, ws2: 1 },
+      spaces: { s1: 3, s3: 1 },
+      workspaceSpaces: { ws1: { s1: 2, s3: 1 }, ws2: { s1: 1 } },
+    };
+    const withSpaces = railEntries([ws('ws1', 'Mine'), ws('ws2', 'Side')], [TEAM], true);
+    const noSpaces = railEntries([ws('ws1', 'Mine'), ws('ws2', 'Side')], [TEAM], false);
+    const [m, side] = withSpaces;
+    it.each([
+      ['leaves out the sessions of spaces with a tile', m, spaced, withSpaces, 2],
+      ['answers 0 when every session is in a space with a tile', side, spaced, withSpaces, 0],
+      ['counts every session when no space has a tile', m, spaced, noSpaces, 4],
+      ['counts every session from an older server', m, { workspaces: { ws1: 4 }, spaces: { s1: 3 } }, withSpaces, 4],
+      ['counts every session with no entries passed', m, spaced, [], 4],
+      ['never goes below 0', m, { ...spaced, workspaces: { ws1: 1 } }, withSpaces, 0],
+    ] as const)('%s', (_label, entry, c, entries, expected) => {
+      expect(railEntryAttention(entry, c, entries)).toBe(expected);
+    });
+
+    it('leaves a space tile unchanged', () => {
+      expect(railEntryAttention(withSpaces[2], spaced, withSpaces)).toBe(3);
+    });
   });
 });
 
@@ -154,6 +186,18 @@ describe('ContextRail', () => {
     expect(open).toHaveAttribute('aria-current', 'true');
     expect(open).toHaveTextContent('5');
     expect(screen.getAllByText((_, el) => el?.getAttribute('data-attr') === 'context-rail-badge')).toHaveLength(3);
+  });
+
+  it('counts a session in a space on the space tile only', async () => {
+    setup({
+      workspaces: [ws('ws1', 'Mine')],
+      teams: [TEAM],
+      spaces: true,
+      counts: { workspaces: { ws1: 2 }, spaces: { s1: 1 }, workspaceSpaces: { ws1: { s1: 1 } } },
+    });
+    render(<ContextRail />);
+    expect(await screen.findByRole('button', { name: 'Mine, 1 item needs you' })).toHaveTextContent('1');
+    expect(screen.getByRole('button', { name: 'Web (Acme), 1 item needs you' })).toBeInTheDocument();
   });
 
   it('switches to a space and asks again for the counts', async () => {
@@ -209,6 +253,167 @@ describe('ContextRail', () => {
   });
 });
 
+describe('moveWorkspace', () => {
+  const list = [ws('a', 'A'), ws('b', 'B'), ws('c', 'C'), ws('d', 'D')];
+  const ids = (l: Workspace[]) => l.map((w) => w.id);
+
+  it.each([
+    ['a', 'c', ['b', 'c', 'a', 'd']],
+    ['d', 'a', ['d', 'a', 'b', 'c']],
+    ['b', 'd', ['a', 'c', 'd', 'b']],
+    ['c', 'b', ['a', 'c', 'b', 'd']],
+  ])('moves %s onto %s', (from, to, expected) => {
+    expect(ids(moveWorkspace(list, from, to))).toEqual(expected);
+    expect(ids(list)).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it.each([
+    ['a', 'a'],
+    ['x', 'a'],
+    ['a', 'x'],
+  ])('keeps the same list for %s onto %s', (from, to) => {
+    expect(moveWorkspace(list, from, to)).toBe(list);
+  });
+});
+
+describe('ContextRail drag to reorder', () => {
+  let reorder: MockInstance<typeof api.workspaces.reorder>;
+  const dataTransfer = () => ({ setData: vi.fn(), getData: vi.fn(), effectAllowed: '', dropEffect: '' });
+  const slots = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLElement>('[data-attr="context-rail-workspace-slot"]'));
+  const order = () => useWorkspaceStore.getState().workspaces.map((w) => w.id);
+  const drag = (from: HTMLElement, to: HTMLElement) => {
+    fireEvent.dragStart(from, { dataTransfer: dataTransfer() });
+    fireEvent.dragOver(to, { dataTransfer: dataTransfer() });
+  };
+
+  beforeEach(() => {
+    reorder = vi.spyOn(api.workspaces, 'reorder');
+    useToastStore.setState({ toasts: [] });
+  });
+
+  it('moves a workspace onto another and saves the new order', async () => {
+    reorder.mockResolvedValue(null);
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side'), ws('ws3', 'Third')] });
+    const { container } = render(<ContextRail />);
+    await flush();
+    const [first, , third] = slots(container);
+    drag(first, third);
+    fireEvent.drop(third, { dataTransfer: dataTransfer() });
+    expect(order()).toEqual(['ws2', 'ws3', 'ws1']);
+    expect(reorder).toHaveBeenCalledWith(['ws2', 'ws3', 'ws1']);
+    await flush();
+    expect(screen.getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Side', 'Third', 'Mine']);
+    expect(container.querySelector('[data-attr="context-rail-drop-line"]')).toBeNull();
+  });
+
+  it('shows where the tile lands while it is dragged', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side'), ws('ws3', 'Third')] });
+    const { container } = render(<ContextRail />);
+    await flush();
+    const [first, second, third] = slots(container);
+    drag(third, first);
+    expect(first.querySelector('[data-attr="context-rail-drop-line"]')).toHaveClass('-top-[5px]');
+    fireEvent.dragOver(second, { dataTransfer: dataTransfer() });
+    expect(first.querySelector('[data-attr="context-rail-drop-line"]')).toBeNull();
+    expect(second.querySelector('[data-attr="context-rail-drop-line"]')).toHaveClass('-top-[5px]');
+    fireEvent.dragEnd(third);
+    expect(container.querySelector('[data-attr="context-rail-drop-line"]')).toBeNull();
+    expect(reorder).not.toHaveBeenCalled();
+    expect(order()).toEqual(['ws1', 'ws2', 'ws3']);
+  });
+
+  it('puts the old order back and says so when the save fails', async () => {
+    reorder.mockRejectedValue(new Error('offline'));
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')] });
+    const { container } = render(<ContextRail />);
+    await flush();
+    const [first, second] = slots(container);
+    drag(first, second);
+    fireEvent.drop(second, { dataTransfer: dataTransfer() });
+    await waitFor(() => expect(order()).toEqual(['ws1', 'ws2']));
+    expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual(['Could not save the workspace order']);
+  });
+
+  it('does nothing when a tile is dropped on itself', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')] });
+    const { container } = render(<ContextRail />);
+    await flush();
+    const [first] = slots(container);
+    drag(first, first);
+    expect(first.querySelector('[data-attr="context-rail-drop-line"]')).toBeNull();
+    fireEvent.drop(first, { dataTransfer: dataTransfer() });
+    expect(reorder).not.toHaveBeenCalled();
+  });
+
+  it('lets only workspace tiles move, and not a lone workspace', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine')], teams: [TEAM], spaces: true });
+    const { container } = render(<ContextRail />);
+    await flush();
+    expect(container.querySelectorAll('[draggable="true"]')).toHaveLength(0);
+  });
+
+  it('lets workspace tiles move but not space tiles', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')], teams: [TEAM], spaces: true });
+    const { container } = render(<ContextRail />);
+    await flush();
+    expect(container.querySelectorAll('[draggable="true"]')).toHaveLength(2);
+    expect(slots(container).every((slot) => slot.getAttribute('draggable') === 'true')).toBe(true);
+  });
+});
+
+describe('the sessions the rail counts', () => {
+  const counts = { workspaces: { ws1: 2 }, spaces: { s1: 1 }, sessions: { a: 'reply', b: 'conflict' } } as const;
+
+  it('shares the counted sessions with the sidebar', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')], counts });
+    const sessions = renderHook(() => useAttentionSessions());
+    expect(sessions.result.current).toEqual({});
+    render(<ContextRail />);
+    await waitFor(() => expect(sessions.result.current).toEqual({ a: 'reply', b: 'conflict' }));
+  });
+
+  it('answers no sessions from an older server that does not send them', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')], counts: { workspaces: { ws1: 1 }, spaces: {} } });
+    render(<ContextRail />);
+    expect(await screen.findByRole('button', { name: 'Mine, 1 item needs you' })).toBeInTheDocument();
+    const sessions = renderHook(() => useAttentionSessions());
+    expect(sessions.result.current).toEqual({});
+  });
+
+  it('forgets the counted sessions when the rail hides', async () => {
+    useContextAttentionStore.setState({ counts });
+    setup({ workspaces: [ws('ws1', 'Mine')] });
+    render(<ContextRail />);
+    const sessions = renderHook(() => useAttentionSessions());
+    await waitFor(() => expect(sessions.result.current).toEqual({}));
+  });
+
+  it('picks the counted live items, in the list order', () => {
+    useContextAttentionStore.setState({ counts });
+    const list = [{ id: 'c' }, { id: 'b' }, { id: 'a' }, { id: 'gone' }];
+    const live = (item: { id: string }) => item.id !== 'gone';
+    const { result } = renderHook(() => useNeedsYouItems(list, live));
+    expect(result.current.map((item) => item.id)).toEqual(['b', 'a']);
+  });
+
+  it('leaves out a counted item that is not live', () => {
+    useContextAttentionStore.setState({ counts: { ...counts, sessions: { a: 'failed' } } });
+    const { result } = renderHook(() => useNeedsYouItems([{ id: 'a' }], () => false));
+    expect(result.current).toEqual([]);
+  });
+
+  it('shows a "Needs you" section with a count, and nothing when no item waits', () => {
+    const { rerender } = render(
+      <SidebarNeedsYou items={[{ id: 'a' }, { id: 'b' }]} renderItem={(item) => <div key={item.id}>row {item.id}</div>} />,
+    );
+    const group = screen.getByRole('group', { name: 'Needs you' });
+    expect(group).toHaveTextContent('Needs you2row arow b');
+    rerender(<SidebarNeedsYou items={[]} renderItem={() => null} />);
+    expect(screen.queryByRole('group', { name: 'Needs you' })).not.toBeInTheDocument();
+  });
+});
+
 describe('clientAttentionKey', () => {
   const wb = { kind: 'session' as const, status: 'ready' as const, sandboxState: 'running' as const, archivedAt: null };
   const chat = (id: string, status: string) => ({ id, status, queuedMessages: [] }) as never;
@@ -221,51 +426,39 @@ describe('clientAttentionKey', () => {
     ['a conflicting PR', [wb, [], { state: 'open', summary: { mergeable: 'CONFLICTING' } }], 'conflict::'],
     ['a mergeable PR', [wb, [], { state: 'open', summary: { mergeable: 'MERGEABLE' } }], null],
     ['a thread with no kind set', [{ ...wb, kind: undefined }, [chat('c1', 'awaiting_input')], null], 'reply:c1@0'],
+    ['a running turn, so the key changes when it ends', [wb, [chat('c1', 'running')], null], 'busy'],
+    ['a failure next to a running turn', [wb, [chat('c1', 'error'), chat('c2', 'running')], null], 'chat_error:c1@0'],
   ])('%s', (_label, args, expected) => {
     expect(clientAttentionKey(...args)).toBe(expected);
   });
 });
 
-describe('useAttentionSeen', () => {
-  let seen: MockInstance<typeof api.workbenches.attentionSeen>;
+describe('useAttentionRefresh', () => {
+  it('does not ask the rail again on open, so the session stays in Needs you', async () => {
+    setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')], counts: { workspaces: { ws1: 1 }, spaces: {} } });
+    render(<ContextRail />);
+    expect(await screen.findByRole('button', { name: 'Mine, 1 item needs you' })).toBeInTheDocument();
+    expect(attention).toHaveBeenCalledTimes(1);
 
-  beforeEach(() => {
-    seen = vi.spyOn(api.workbenches, 'attentionSeen').mockResolvedValue({ acknowledged: true });
+    const { rerender } = renderHook(({ key }) => useAttentionRefresh(key), { initialProps: { key: 'conflict::' as string | null } });
+    rerender({ key: 'conflict::' });
+
+    expect(attention).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Mine, 1 item needs you' })).toBeInTheDocument();
   });
 
-  it('marks the session seen on open and asks the rail again, so its badge clears', async () => {
+  it('asks the rail again when the alert is resolved while the session is open', async () => {
     setup({ workspaces: [ws('ws1', 'Mine'), ws('ws2', 'Side')], counts: { workspaces: { ws1: 1 }, spaces: {} } });
     render(<ContextRail />);
     expect(await screen.findByRole('button', { name: 'Mine, 1 item needs you' })).toBeInTheDocument();
     attention.mockResolvedValue({ workspaces: {}, spaces: {} });
 
-    renderHook(() => useAttentionSeen('wb1', 'conflict::'));
+    const { rerender } = renderHook(({ key }) => useAttentionRefresh(key), {
+      initialProps: { key: 'reply:c1@0' as string | null },
+    });
+    rerender({ key: 'busy' });
 
-    await waitFor(() => expect(seen).toHaveBeenCalledWith('wb1'));
     expect(await screen.findByRole('button', { name: 'Mine' })).toBeInTheDocument();
     expect(attention).toHaveBeenCalledTimes(2);
-  });
-
-  it('marks again when the alert changes while the session is open, not on a plain re-render', async () => {
-    const { rerender } = renderHook(({ key }) => useAttentionSeen('wb1', key), {
-      initialProps: { key: null as string | null },
-    });
-    await waitFor(() => expect(seen).toHaveBeenCalledTimes(1));
-    rerender({ key: null });
-    rerender({ key: 'reply:c1@0' });
-    await waitFor(() => expect(seen).toHaveBeenCalledTimes(2));
-  });
-
-  it('marks again when the window comes back with an alert showing', async () => {
-    renderHook(() => useAttentionSeen('wb1', 'error'));
-    await waitFor(() => expect(seen).toHaveBeenCalledTimes(1));
-    window.dispatchEvent(new Event('focus'));
-    await waitFor(() => expect(seen).toHaveBeenCalledTimes(2));
-  });
-
-  it('keeps quiet about a failed mark', async () => {
-    seen.mockRejectedValue(new Error('forbidden'));
-    renderHook(() => useAttentionSeen('wb1', 'error'));
-    await waitFor(() => expect(seen).toHaveBeenCalledTimes(1));
   });
 });

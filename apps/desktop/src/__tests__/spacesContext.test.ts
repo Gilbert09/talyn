@@ -307,6 +307,71 @@ describe('followSessionContext', () => {
   });
 });
 
+describe('back and forward restore the context', () => {
+  beforeEach(() => {
+    useNavigationStore.setState({ route: { view: 'home' }, backStack: [], forwardStack: [] });
+  });
+
+  const openFromPrs = (from: AppContext, session: { workspaceId: string; spaceId: string | null }) => {
+    useWorkspaceStore.setState({ currentContext: from });
+    useNavigationStore.getState().navigate({ view: 'prs', tab: 'my_prs' });
+    useNavigationStore.getState().navigate({ view: 'workbench', id: 'linked' });
+    followSessionContext(session);
+  };
+
+  it.each<[string, AppContext, { workspaceId: string; spaceId: string | null }, AppContext]>([
+    ['Personal, session in a space', { kind: 'personal', workspaceId: 'ws1' }, { workspaceId: 'ws-ana', spaceId: 's3' }, { kind: 'space', spaceId: 's3' }],
+    ['a space, session in another space', { kind: 'space', spaceId: 's1' }, { workspaceId: 'ws1', spaceId: 's2' }, { kind: 'space', spaceId: 's2' }],
+    ['a space, session in Personal', { kind: 'space', spaceId: 's1' }, { workspaceId: 'ws1', spaceId: null }, { kind: 'personal', workspaceId: 'ws1' }],
+    ['Personal, session in my other workspace', { kind: 'personal', workspaceId: 'ws1' }, { workspaceId: 'ws2', spaceId: null }, { kind: 'personal', workspaceId: 'ws2' }],
+  ])('from the PR list in %s', (_name, from, session, followed) => {
+    openFromPrs(from, session);
+    expect(useWorkspaceStore.getState().currentContext).toEqual(followed);
+
+    useNavigationStore.getState().back();
+    expect(useNavigationStore.getState().route).toEqual({ view: 'prs', tab: 'my_prs' });
+    expect(useWorkspaceStore.getState().currentContext).toEqual(from);
+
+    useNavigationStore.getState().forward();
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'linked' });
+    expect(useWorkspaceStore.getState().currentContext).toEqual(followed);
+  });
+
+  it('goes back past a context switch to the old context', () => {
+    useNavigationStore.getState().navigate({ view: 'prs', tab: 'reviews' });
+    switchContext({ kind: 'space', spaceId: 's2' });
+    useNavigationStore.getState().back();
+    expect(useNavigationStore.getState().route).toEqual({ view: 'prs', tab: 'reviews' });
+    expect(useWorkspaceStore.getState().currentContext).toEqual({ kind: 'personal', workspaceId: 'ws1' });
+  });
+
+  it('keeps the context for entries in the same context', () => {
+    useNavigationStore.getState().navigate({ view: 'prs', tab: 'my_prs' });
+    useNavigationStore.getState().navigate({ view: 'prs', tab: 'reviews' });
+    const changes: AppContext[] = [];
+    const off = useWorkspaceStore.subscribe((s, prev) => {
+      if (s.currentContext !== prev.currentContext) changes.push(s.currentContext);
+    });
+    useNavigationStore.getState().back();
+    useNavigationStore.getState().forward();
+    off();
+    expect(changes).toEqual([]);
+  });
+
+  it.each<[string, AppContext, () => void]>([
+    ['Spaces is off', { kind: 'space', spaceId: 's1' }, () => useWorkspaceStore.setState({ features: { spaces: false } as never })],
+    ['the space is gone', { kind: 'space', spaceId: 's1' }, () => useSpacesStore.setState({ teams: [team('t2', ['s3'])] })],
+    ['my teams have not loaded', { kind: 'space', spaceId: 's1' }, () => useSpacesStore.setState({ teams: null })],
+    ['the workspace is gone', { kind: 'personal', workspaceId: 'ws2' }, () => useWorkspaceStore.setState({ workspaces: [workspace('ws1')] })],
+  ])('stays when %s', (_name, from, arrange) => {
+    openFromPrs(from, { workspaceId: 'ws-ana', spaceId: 's3' });
+    arrange();
+    useNavigationStore.getState().back();
+    expect(useNavigationStore.getState().route).toEqual({ view: 'prs', tab: 'my_prs' });
+    expect(useWorkspaceStore.getState().currentContext).toEqual({ kind: 'space', spaceId: 's3' });
+  });
+});
+
 describe('workbench store extras', () => {
   it('holds a teammate session, takes its updates, and keeps it across a re-list', () => {
     const store = useWorkbenchStore.getState();

@@ -37,6 +37,9 @@ const ENV = {
   POLAR_PRODUCT_ID_TEAM_ANNUAL: 'prod-team-a',
   POLAR_PRODUCT_ID_TEAM_PRO_MONTHLY: 'prod-team-pro-m',
   POLAR_PRODUCT_ID_TEAM_PRO_ANNUAL: 'prod-team-pro-a',
+  POLAR_PRODUCT_ID_RESET_PRO: 'prod-reset-pro',
+  POLAR_PRODUCT_ID_RESET_MAX: 'prod-reset-max',
+  POLAR_PRODUCT_ID_RESET_LEGACY_PRO: 'prod-reset-legacy',
 } as const;
 const TOUCHED = [
   ...Object.keys(ENV),
@@ -320,6 +323,37 @@ describe('request shapes', () => {
         metadata: { kind: 'credit_pack', pack },
       })
     );
+  });
+
+  it.each([
+    ['pro', 'prod-reset-pro'],
+    ['max', 'prod-reset-max'],
+    ['legacy_pro', 'prod-reset-legacy'],
+  ] as const)('usage reset checkout for %s: one product, no discount codes, the web return', async (tier, product) => {
+    process.env.WEB_APP_URL = 'https://app.talyn.test';
+    resetWebAppUrlCacheForTests();
+    await polar.createUsageResetCheckoutUrl('user-1', tier);
+    expect(sdk.checkoutsCreate).toHaveBeenCalledWith({
+      products: [product],
+      externalCustomerId: 'user-1',
+      allowDiscountCodes: false,
+      metadata: { kind: 'usage_reset', tier },
+      successUrl: 'https://app.talyn.test/settings/billing?checkout=success&kind=reset',
+      returnUrl: 'https://app.talyn.test/settings/billing',
+    });
+  });
+
+  it('usage reset checkout returns to the mobile app through the bounce route', async () => {
+    process.env.TALYN_PUBLIC_API_URL = 'https://api.talyn.test';
+    await polar.createUsageResetCheckoutUrl('user-1', 'pro', 'talyn-mobile://');
+    const req = sdk.checkoutsCreate.mock.calls[0][0] as { successUrl: string; returnUrl: string };
+    expect(req.successUrl).toMatch(/^https:\/\/api\.talyn\.test\/.*kind=reset.*result=success/);
+    expect(req.returnUrl).toMatch(/kind=reset.*result=cancel/);
+  });
+
+  it('usage reset checkout throws when the tier has no reset product', async () => {
+    delete process.env.POLAR_PRODUCT_ID_RESET_MAX;
+    await expect(polar.createUsageResetCheckoutUrl('user-1', 'max')).rejects.toThrow(/Max usage reset/);
   });
 
   it('change plan moves the subscription to the product, invoicing the prorated difference now', async () => {

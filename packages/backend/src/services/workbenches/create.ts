@@ -1,3 +1,4 @@
+import { workspaceFlagSubject, workspaceHasFeature } from '../featureFlags.js';
 import { validateAgentModel } from './credentialPolicy.js';
 import { v4 as uuid } from 'uuid';
 import { and, eq, sql } from 'drizzle-orm';
@@ -105,7 +106,25 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
   if (body.kind !== undefined && !WORKBENCH_KINDS.includes(body.kind)) {
     throw refuse(400, `kind must be one of: ${WORKBENCH_KINDS.join(', ')}`);
   }
-  if (body.kind === 'thread') return createThread(body, workspaceId, actor, sentAt);
+  let parentId: string | null = null;
+  if (body.parentId !== undefined) {
+    const parent = typeof body.parentId === 'string' ? await getWorkbench(body.parentId) : null;
+    const subject = parent ? await workspaceFlagSubject(parent.workspaceId) : null;
+    if (!parent || parent.archivedAt || subject?.distinctId !== actor.id) {
+      throw refuse(400, 'The parent session is not available.');
+    }
+    parentId = parent.id;
+  }
+  if (body.notifyParent !== undefined && typeof body.notifyParent !== 'boolean') {
+    throw refuse(400, 'notifyParent must be a boolean.');
+  }
+  if (body.notifyParent && (!parentId || !(await workspaceHasFeature('sessionSubagents', workspaceId)).enabled)) {
+    throw refuse(400, 'Parent notifications are not available.');
+  }
+  if (body.kind === 'thread') {
+    if (parentId) throw refuse(400, 'A child must be a session.');
+    return createThread(body, workspaceId, actor, sentAt);
+  }
   if (body.fromSessionId !== undefined) throw refuse(400, 'fromSessionId is only for a thread.');
   const thread = body.threadId === undefined ? null : await requireThread(body.threadId, workspaceId);
   const threadId = thread?.id ?? null;
@@ -220,10 +239,13 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
         sandboxId: body.runtime === 'sandbox' ? sandboxIdFor(id) : null,
         sandboxState: body.runtime === 'sandbox' ? 'creating' : 'none',
         threadId,
+        parentWorkbenchId: parentId,
+        notifyParent: body.notifyParent ?? false,
         // A local worktree exists by the time the desktop asks for the row.
         status: body.runtime === 'sandbox' ? 'provisioning' : 'ready',
         statusMessage: body.runtime === 'sandbox' ? 'Creating the sandbox' : null,
         pullRequestId,
+        pullRequestLinkExplicit: pullRequestId !== null,
         settings: {
           ...(body.internetAccess === undefined ? {} : { internetAccess: body.internetAccess }),
           ...(body.autoCreatePr === undefined ? {} : { autoCreatePr: body.autoCreatePr }),

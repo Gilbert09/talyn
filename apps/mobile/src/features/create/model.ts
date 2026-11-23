@@ -50,14 +50,76 @@ export function modelsFor(agent: WorkbenchAgent) {
   return FLEET_MODELS.filter((model) => model.provider === (agent === 'codex' ? 'openai' : 'anthropic'));
 }
 
-// The last repository chosen per workspace, for this app run.
+interface RepositoryStorage { getItem(key: string): Promise<string | null>; setItem(key: string, value: string): Promise<void> }
+/** The device key for the last repository a person started in a workspace or space. */
+export const lastRepositoryKey = (user: string, place: string) => `talyn.new-work-repo.${encodeURIComponent(user)}.${encodeURIComponent(place)}`;
+
+function repositoryStorage(): RepositoryStorage | null {
+  try {
+    // Loaded on first use, so tests without the native module still run.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const module = require('@react-native-async-storage/async-storage') as { default?: RepositoryStorage };
+    return module.default ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// The last repository started, by `lastRepositoryKey`. The device keeps it between app runs; this map is the run's copy.
 const lastRepository = new Map<string, string>();
-export function rememberRepository(workspaceId: string, repositoryId: string) { lastRepository.set(workspaceId, repositoryId); }
+export function rememberRepository(key: string, repositoryId: string) {
+  lastRepository.set(key, repositoryId);
+  void repositoryStorage()?.setItem(key, repositoryId).catch(() => {});
+}
+/** The saved last repository for `key`, read from the device once per app run. */
+export async function loadLastRepository(key: string): Promise<string | null> {
+  const known = lastRepository.get(key);
+  if (known) return known;
+  const saved = await repositoryStorage()?.getItem(key).catch(() => null);
+  // A start during the read wins over the older saved value.
+  if (saved && !lastRepository.has(key)) lastRepository.set(key, saved);
+  return lastRepository.get(key) ?? null;
+}
+/** Forget the run's copy. For tests. */
+export function forgetLastRepositories() { lastRepository.clear(); }
 /** The last repository when it is still watched, else the first one. */
 export function defaultRepositoryId(workspaceId: string, repositories: ReadonlyArray<Pick<WatchedRepo, 'id'>>): string {
   const last = lastRepository.get(workspaceId);
   if (last && repositories.some((repo) => repo.id === last)) return last;
   return repositories[0]?.id ?? '';
+}
+
+/** An open pull request a session starts from: it checks out the pull request's branch. Like web's "Create from…". */
+export interface NewWorkPullRequest {
+  id: string;
+  repositoryId: string;
+  number: number;
+  title: string;
+  headBranch: string;
+  baseBranch: string;
+}
+
+interface SourceRow {
+  id: string; repositoryId: string; number: number; state: string; authored?: boolean;
+  summary: { title?: string; headBranch?: string; baseBranch?: string };
+}
+
+export function pullRequestSource(row: SourceRow): NewWorkPullRequest {
+  return { id: row.id, repositoryId: row.repositoryId, number: row.number, title: row.summary.title ?? '',
+    headBranch: row.summary.headBranch ?? '', baseBranch: row.summary.baseBranch ?? '' };
+}
+
+/** The repository's open pull requests to start from, own first, then newest. Like web's "Create from…" list. */
+export function pullRequestChoices<T extends SourceRow>(repository: Pick<WatchedRepo, 'id'> | null, rows: readonly T[] = []): T[] {
+  if (!repository) return [];
+  return rows.filter((row) => row.state === 'open' && row.repositoryId === repository.id)
+    .sort((a, b) => Number(Boolean(b.authored)) - Number(Boolean(a.authored)) || b.number - a.number);
+}
+
+/** The pull request the session starts from, when it belongs to the chosen repository. */
+export function activePullRequest(pullRequest: NewWorkPullRequest | null | undefined,
+  repository: Pick<WatchedRepo, 'id'> | null | undefined): NewWorkPullRequest | null {
+  return pullRequest && repository && pullRequest.repositoryId === repository.id ? pullRequest : null;
 }
 
 export interface NewWorkForm {
@@ -68,33 +130,44 @@ export interface NewWorkForm {
   model: string;
   baseBranch: string;
   internetAccess: boolean;
+  /** Start from this pull request's branch instead of a new branch. */
+  pullRequest?: NewWorkPullRequest | null;
 }
 
 /**
  * Why Start is off, or null when it can start. Same order as web: the
  * repository, then the sandbox, then the agent. The prompt and the connection
- * come last because they are the person's to fix.
+ * come last because they are the person's to fix. Images alone are a prompt.
  */
-export function blockedReason(form: NewWorkForm, sandbox: Sandbox | null | undefined, offline: boolean): string | null {
+export function blockedReason(form: NewWorkForm, sandbox: Sandbox | null | undefined, offline: boolean, images = 0): string | null {
   if (form.mode === 'session' && !form.repository) return 'Choose a repository.';
   const sandboxOk = sandboxChoice(sandbox);
   if (!sandboxOk.available) return sandboxOk.reason ?? 'Cloud sessions are unavailable';
   const agentOk = agentChoice(sandbox, form.agent);
   if (!agentOk.available) return agentOk.reason ?? `${AGENT_NAMES[form.agent]} is not connected`;
   if (offline) return 'You are offline.';
-  if (!form.prompt.trim()) return form.mode === 'thread' ? 'Describe what you want to get done.' : 'Describe a task.';
+  if (!form.prompt.trim() && images === 0) return form.mode === 'thread' ? 'Describe what you want to get done.' : 'Describe a task.';
   return null;
 }
 
-/** The create request, like web `createWorkbench` without attachments. */
-export function createInput(form: NewWorkForm, workspaceId: string): CreateWorkbenchInput {
-  const prompt = form.prompt.trim() || undefined;
+/**
+ * The create request, like web `createWorkbench`. With images, the first
+ * message goes after the create, so the create has no prompt. The text still
+ * names the session, its branch and its chat.
+ */
+export function createInput(form: NewWorkForm, workspaceId: string, withImages = false): CreateWorkbenchInput {
+  const text = form.prompt.trim() || undefined;
+  const prompt = withImages ? undefined : text;
+  const namingText = withImages ? text : undefined;
   if (form.mode === 'thread') {
-    return { workspaceId, kind: 'thread', runtime: 'sandbox', agent: form.agent, model: form.model, prompt, internetAccess: form.internetAccess };
+    return { workspaceId, kind: 'thread', runtime: 'sandbox', agent: form.agent, model: form.model, prompt, namingText, internetAccess: form.internetAccess };
   }
   if (!form.repository) throw new Error('Choose a repository.');
+  const pr = activePullRequest(form.pullRequest, form.repository);
   return { workspaceId, repositoryId: form.repository.id, runtime: 'sandbox', agent: form.agent, model: form.model,
-    baseBranch: form.baseBranch.trim() || undefined, prompt, internetAccess: form.internetAccess, autoCreatePr: true };
+    baseBranch: form.baseBranch.trim() || pr?.baseBranch || undefined,
+    ...(pr ? { branch: pr.headBranch || undefined, fromPullRequestId: pr.id } : {}),
+    prompt, namingText, internetAccess: form.internetAccess, autoCreatePr: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -121,11 +194,10 @@ export type ComposerChip = 'mode' | 'repository' | 'branch' | 'internet' | 'mode
 
 /**
  * The context row above the composer, and the controls inside it. A thread
- * has no repository, so its context row keeps only internet access. A space
- * session takes no base branch, like web.
+ * has no repository, so its context row keeps only internet access.
  */
-export function composerChips(mode: NewWorkMode, repository: unknown, inSpace = false): { context: ComposerChip[]; card: ComposerChip[] } {
-  const context: ComposerChip[] = mode === 'thread' ? ['internet'] : repository && !inSpace ? ['repository', 'branch', 'internet'] : ['repository', 'internet'];
+export function composerChips(mode: NewWorkMode, repository: unknown): { context: ComposerChip[]; card: ComposerChip[] } {
+  const context: ComposerChip[] = mode === 'thread' ? ['internet'] : repository ? ['repository', 'branch', 'internet'] : ['repository', 'internet'];
   return { context, card: ['mode', 'model'] };
 }
 
@@ -135,6 +207,8 @@ export interface ChipState {
   /** True while the repository list is still loading. */
   repositoriesLoading?: boolean;
   branch: string;
+  /** Set when the session starts from a pull request. The branch chip names it. */
+  pullRequest?: Pick<NewWorkPullRequest, 'number' | 'title'> | null;
   internetAccess: boolean;
   agent: WorkbenchAgent;
   model: string;
@@ -150,7 +224,12 @@ export function chipLabel(chip: ComposerChip, state: ChipState): { text: string;
       const text = state.repositoriesLoading ? 'Loading' : 'Repository';
       return { text, accessibilityLabel: state.repositoriesLoading ? 'Repositories are loading' : 'Repository: none. Choose a repository' };
     }
-    case 'branch': return { text: state.branch, accessibilityLabel: `Base branch: ${state.branch}. Change base branch` };
+    case 'branch': {
+      const pr = state.pullRequest;
+      if (pr) return { text: `#${pr.number}`,
+        accessibilityLabel: `Starts from pull request ${pr.number}${pr.title ? `, ${pr.title}` : ''}. Change what to start from` };
+      return { text: state.branch, accessibilityLabel: `Base branch: ${state.branch}. Change what to start from` };
+    }
     case 'internet': return { text: state.internetAccess ? 'Internet on' : 'Internet off', accessibilityLabel: 'Internet access' };
     case 'model': {
       const label = labelForModel(state.model, state.agent);

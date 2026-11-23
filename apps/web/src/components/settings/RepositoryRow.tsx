@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ChevronDown, Github } from 'lucide-react';
 import { SANDBOX_SIZES, type RepositoryPreviewResponse, type RepositorySandboxSizeResponse, type RepositorySetup } from '@talyn/shared';
 import { api } from '../../lib/api';
+import { queuedRowRequest } from '../../lib/rowRequestQueue';
 import { cn } from '../../lib/utils';
 import { useWorkspaceStore, type WatchedRepo } from '../../stores/workspace';
 import { Button } from '../ui/button';
@@ -26,9 +27,9 @@ export function WebRepoRow({ repo, open, onToggle, disabled, hasInstructions, on
   const previewsEnabled = useWorkspaceStore((s) => s.features?.workbenches === true);
   useEffect(() => {
     let active = true;
-    void api.repositories.sandboxSize.get(repo.id).then((next) => { if (active) setSize(next); }).catch(() => undefined);
-    if (previewsEnabled) void api.repositories.preview.get(repo.id).then((next) => { if (active) setPreview(next); }).catch(() => undefined);
-    if (previewsEnabled) void api.repositories.setup.get(repo.id).then((next) => { if (active) setSetup(next); }).catch(() => undefined);
+    void queuedRowRequest(() => api.repositories.sandboxSize.get(repo.id)).then((next) => { if (active) setSize(next); }).catch(() => undefined);
+    if (previewsEnabled) void queuedRowRequest(() => api.repositories.preview.get(repo.id)).then((next) => { if (active) setPreview(next); }).catch(() => undefined);
+    if (previewsEnabled) void queuedRowRequest(() => api.repositories.setup.get(repo.id)).then((next) => { if (active) setSetup(next); }).catch(() => undefined);
     return () => { active = false; };
   }, [repo.id, previewsEnabled]);
 

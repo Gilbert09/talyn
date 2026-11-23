@@ -4,6 +4,7 @@ import { and, asc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { FleetAgent } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { fleetAccounts, integrations as integrationsTable } from '../../db/schema.js';
+import { wakeCredentialResumes } from '../workbenches/limitResumeState.js';
 import type { EncryptedEnvelope } from '../tokenCrypto.js';
 import type { ClaudeOAuthCredential } from './claudeOauth.js';
 import type { CodexOAuthCredential, ExhaustedQuotaRecord } from './credentials.js';
@@ -46,7 +47,7 @@ export function isFleetAccountKind(value: unknown): value is FleetAccountKind {
   );
 }
 
-/** The label an account gets when nobody named it. The migration uses the same words. */
+/** The label of an account the single-credential path makes. The migration uses the same words. */
 export function defaultAccountLabel(kind: FleetAccountKind): string {
   switch (kind) {
     case 'claude_oauth':
@@ -475,9 +476,20 @@ export function pickAccount<T extends FleetAccount>(
 // Writes
 // ---------------------------------------------------------------------------
 
-function cleanLabel(label: string | undefined, kind: FleetAccountKind): string {
-  const trimmed = label?.trim();
-  return trimmed ? trimmed : defaultAccountLabel(kind);
+const AGENT_NAMES: Record<FleetAgent, string> = { claude: 'Claude', codex: 'Codex' };
+
+/**
+ * The name a new account gets when the user gave none: "Claude" for the first,
+ * then "Claude 2", "Claude 3". A number already in use is skipped. The sign-in
+ * gives us no email or plan to name it by, so the user names it after connect.
+ */
+export function nextAccountLabel(agent: FleetAgent, existing: readonly string[]): string {
+  const taken = new Set(existing.map((label) => label.trim().toLowerCase()));
+  const base = AGENT_NAMES[agent];
+  for (let n = Math.max(1, existing.length + 1); ; n++) {
+    const candidate = n === 1 ? base : `${base} ${n}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
 }
 
 /** Add an account at the END of its agent's priority order. */
@@ -488,6 +500,14 @@ export async function addFleetAccount(
   // Adopt first, so a legacy key waiting on the row lands ahead of the new one.
   await prepareWorkspace(workspaceId);
   const agent = agentForKind(input.kind);
+  let label = input.label?.trim();
+  if (!label) {
+    const existing = await getDbClient()
+      .select({ label: fleetAccounts.label })
+      .from(fleetAccounts)
+      .where(and(eq(fleetAccounts.workspaceId, workspaceId), eq(fleetAccounts.agent, agent)));
+    label = nextAccountLabel(agent, existing.map((row) => row.label));
+  }
   const now = new Date();
   const rows = await getDbClient()
     .insert(fleetAccounts)
@@ -496,7 +516,7 @@ export async function addFleetAccount(
       workspaceId,
       agent,
       kind: input.kind,
-      label: cleanLabel(input.label, input.kind),
+      label,
       // One statement, so two concurrent adds cannot read the same maximum
       // before either writes. Ties would still order by created_at.
       priority: sql`(SELECT COALESCE(MAX("priority"), 0) + 1 FROM "fleet_accounts" WHERE "workspace_id" = ${workspaceId} AND "agent" = ${agent})`,
@@ -506,6 +526,7 @@ export async function addFleetAccount(
     })
     .returning(FLEET_ACCOUNT_STATUS_COLUMNS);
   await mirrorLegacyKeys(workspaceId, agent);
+  await wakeCredentialResumes(workspaceId, agent);
   return toAccount(rows[0]!);
 }
 
@@ -536,10 +557,11 @@ export async function upsertPrimaryFleetAccount(
       .where(eq(fleetAccounts.id, sameKind.id))
       .returning(FLEET_ACCOUNT_STATUS_COLUMNS);
     await mirrorLegacyKeys(workspaceId, agent);
+    await wakeCredentialResumes(workspaceId, agent);
     return toAccount(rows[0]!);
   }
   if (kind === 'anthropic_key' || kind === 'openai_key' || own.length === 0) {
-    return addFleetAccount(workspaceId, { kind, credential });
+    return addFleetAccount(workspaceId, { kind, credential, label: defaultAccountLabel(kind) });
   }
   // A sign-in with no account of its kind: shift the others down, then take 1.
   const db = getDbClient();
@@ -563,6 +585,7 @@ export async function upsertPrimaryFleetAccount(
     })
     .returning(FLEET_ACCOUNT_STATUS_COLUMNS);
   await mirrorLegacyKeys(workspaceId, agent);
+  await wakeCredentialResumes(workspaceId, agent);
   return toAccount(rows[0]!);
 }
 
@@ -580,6 +603,7 @@ export async function updateFleetAccountCredential(
     .where(eq(fleetAccounts.id, accountId))
     .returning(TOUCHED_COLUMNS);
   await mirrorTouched(rows);
+  for (const row of rows) await wakeCredentialResumes(row.workspaceId, row.agent as FleetAgent);
 }
 
 /** Rename an account. False when the workspace has no such account. */

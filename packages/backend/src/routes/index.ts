@@ -3,11 +3,12 @@ import { mobileNotificationRoutes } from './mobileNotifications.js';
 import { workspaceRoutes } from './workspaces.js';
 import { environmentRoutes } from './environments.js';
 import { taskRoutes } from './tasks.js';
-import { githubRoutes, githubPublicRoutes } from './github.js';
+import { githubReadRoutes, githubRoutes, githubPublicRoutes } from './github.js';
 import { posthogRoutes, posthogPublicRoutes } from './posthog.js';
-import { cloudProviderRoutes } from './cloudProviders.js';
+import { posthogInboxRoutes } from './posthogInbox.js';
+import { cloudProviderReadRoutes, cloudProviderRoutes } from './cloudProviders.js';
 import { repositoryRoutes } from './repositories.js';
-import { skillRoutes } from './skills.js';
+import { skillDiscoveryRoutes, skillRoutes } from './skills.js';
 import { pullRequestRoutes } from './pullRequests.js';
 import { debugRoutes } from './debug.js';
 import { developerRoutes } from './developer.js';
@@ -16,6 +17,7 @@ import { adminRoutes } from './admin/index.js';
 import { userRoutes } from './users.js';
 import { featureRoutes } from './features.js';
 import { systemRoutes } from './system.js';
+import { modelRoutes } from './models.js';
 import { loopRoutes } from './loops.js';
 import { workbenchRoutes } from './workbenches.js';
 import { spaceRoutes } from './spaces.js';
@@ -25,9 +27,11 @@ import { workbenchBackgroundRoutes } from './workbenchBackground.js';
 import { codeReviewRoutes } from './codeReviews.js';
 import { mcpServerRoutes, mcpOAuthCallbackRoutes } from './mcpServers.js';
 import { workflowRoutes } from './workflows.js';
+import { workflowWebhookRoutes } from './workflowWebhooks.js';
 import { trunkPullRequestRoutes, trunkRoutes } from './trunk.js';
 import { billingPublicRoutes, billingRoutes } from './billing.js';
 import { slackPublicRoutes, slackRoutes } from './slack.js';
+import { linearPublicRoutes, linearRoutes } from './linear.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
 import { apiTokenRoutes } from './apiTokens.js';
 import { releaseNotesPublicRoutes, releaseNotesRoutes } from './releaseNotes.js';
@@ -129,6 +133,8 @@ export function setupRoutes(app: Express): void {
   // Slack's OAuth redirect (install and "Sign in with Slack" share it). A
   // browser hop with no session; the single-use state row authenticates it.
   app.use(`${api}/slack`, mount(slackPublicRoutes()));
+  // Linear's OAuth redirect. The same shape as Slack's.
+  app.use(`${api}/linear`, mount(linearPublicRoutes()));
 
   // Everything below is authenticated. The middleware populates req.user
   // and refuses requests without a valid Supabase JWT.
@@ -212,6 +218,10 @@ export function setupRoutes(app: Express): void {
   // req.user.id itself. See routes/slack.ts.
   app.use(`${api}/slack`, mount(slackRoutes()));
 
+  // Linear connections. Pre-ownerScope like Slack: `inbound_connections` is
+  // backend-pool only, and each handler checks workspace access itself.
+  app.use(`${api}/linear`, mount(linearRoutes()));
+
   // Which allow-listed features this account may see. Pre-ownerScope: the
   // answer is about the caller, not about any workspace's rows, so there is
   // nothing for RLS to filter. See routes/features.ts — and note that hiding a
@@ -222,6 +232,10 @@ export function setupRoutes(app: Express): void {
   // for the same reason as `/features`, and more so: the answer is global and
   // comes from memory. See routes/system.ts.
   app.use(`${api}/system`, mount(systemRoutes()));
+
+  // The agent model catalogue the apps offer. Pre-ownerScope like `/system`:
+  // the answer is global and comes from memory. See routes/models.ts.
+  app.use(`${api}/models`, mount(modelRoutes()));
 
   // The "What's new" feed. Pre-ownerScope because the content is global —
   // what shipped in 0.2.61 is the same fact for every user, `release_notes`
@@ -247,6 +261,25 @@ export function setupRoutes(app: Express): void {
   // pool and the handler checks that the caller owns the workspace. See
   // routes/insights.ts.
   app.use(`${api}/insights`, mount(insightsRoutes()));
+
+  // Skill discovery (`GET /skills`, `GET /skills/repo/content`). Pre-ownerScope
+  // for the billing reason: discovery waits on GitHub, and the apps call it for
+  // every watched repository when a workspace opens. On 2026-11-17 four of these
+  // held owner transactions for 24 minutes. The platform-skill routes stay
+  // below ownerScope. See routes/skills.ts.
+  app.use(`${api}/skills`, mount(skillDiscoveryRoutes()));
+
+  // The GitHub reads (`/github/user`, `/installations`, `/coverage`, the repo
+  // and branch lists). Pre-ownerScope for the same reason: each one is a wait
+  // on GitHub, and the apps call the first three on boot and on every focus.
+  // `/status`, `/disconnect` and `/app/install-url` stay below ownerScope.
+  // See routes/github.ts.
+  app.use(`${api}/github`, mount(githubReadRoutes()));
+
+  // The fleet account list, which waits on the vendors' usage APIs. Settings
+  // polls it every 60 s. The other cloud-provider routes stay below ownerScope.
+  // See routes/cloudProviders.ts.
+  app.use(`${api}/cloud-providers`, mount(cloudProviderReadRoutes()));
 
   // Workbenches — a branch with an agent chat, a diff, a terminal and scripts.
   // Pre-ownerScope for the billing reason, and more so: most handlers wait on
@@ -283,6 +316,8 @@ export function setupRoutes(app: Express): void {
   // desktop Settings card.
   app.use(`${api}/cloud-providers`, mount(cloudProviderRoutes()));
   app.use(`${api}/posthog`, mount(posthogRoutes()));
+  // The PostHog Inbox's own PostHog connection. Not a cloud provider.
+  app.use(`${api}/posthog-inbox`, mount(posthogInboxRoutes()));
   app.use(`${api}/repositories`, mount(repositoryRoutes()));
   // Trunk merge ETAs. The PR route shares the prefix and is mounted first.
   app.use(`${api}/pull-requests`, mount(trunkPullRequestRoutes()));
@@ -292,6 +327,9 @@ export function setupRoutes(app: Express): void {
   // Workflows — user-defined PR automation. Below ownerScope like every other
   // workspace-scoped router; each handler also gates on the allow-list.
   app.use(`${api}/workflows`, mount(workflowRoutes()));
+  // A webhook rule's URL and its stored requests. Its own paths under
+  // `/:id/`, gated on the `webhookRules` flag for the caller.
+  app.use(`${api}/workflows`, mount(workflowWebhookRoutes()));
   // Loops — recurring prompts on a cron schedule. Same shape as workflows:
   // below ownerScope, and every handler gates on the flag independently of
   // whether the client drew the tab.

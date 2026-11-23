@@ -1,7 +1,7 @@
 import type { BillingStatus, Features, WorkspaceSettings } from '@talyn/shared';
 
 import {
-  billingLine, branchPrefixLine, githubStateLabel, githubStateOf, idleDayChoices, idleDaysLabel, sessionSettingsOf, webSettingsLinks,
+  billingLine, branchPrefixLine, githubStateLabel, githubStateOf, idleDayChoices, idleDaysLabel, sessionSettingsOf, settingsEditorLinks,
 } from '../features/settings/model';
 import {
   getThemePreference, hydrateThemePreference, isThemePreference, resolveScheme, setThemePreference, subscribeThemePreference,
@@ -46,13 +46,14 @@ describe('connections and plan lines', () => {
     [{ billingEnabled: false }, 'No plan limits'],
     [{ billingEnabled: true }, null],
     [{ billingEnabled: true, tier: 'pro', usage }, 'Pro · 45% left'],
+    [{ billingEnabled: true, tier: 'pro', usage: { ...usage, usedWsec: 720_000, percent: 100 }, credits: { balanceMicros: 93_840_000, expiringSoonMicros: 0, lots: [], drawStartMicros: 120_000_000 } }, 'Pro · Using credits · $93.84 left'],
   ])('plan line for %j', (status, line) => {
     expect(billingLine(status as BillingStatus | undefined)).toBe(line);
   });
 });
 
-describe('web settings links', () => {
-  const keys = (features: Partial<Features> | null) => webSettingsLinks(features).map((link) => link.key);
+describe('settings editor links', () => {
+  const keys = (features: Partial<Features> | null) => settingsEditorLinks(features).map((link) => link.key);
   it.each([
     [null, ['integrations', 'skills', 'instructions', 'review']],
     [{ workbenches: true }, ['sandbox', 'slack', 'integrations', 'skills', 'instructions', 'memory', 'review']],
@@ -62,8 +63,17 @@ describe('web settings links', () => {
   ])('follows the flags %j', (features, expected) => {
     expect(keys(features)).toEqual(expected);
   });
-  it('points every link at a web path', () => {
-    for (const link of webSettingsLinks({ workbenches: true, privateRoutes: true, mcpServers: true, publicApi: true })) expect(link.path).toMatch(/^\//);
+  it('opens integration entries in their pages and other editors under settings', () => {
+    for (const link of settingsEditorLinks({ workbenches: true, privateRoutes: true, mcpServers: true, publicApi: true })) {
+      expect(link.href).toMatch(['integrations', 'private', 'slack'].includes(link.key) ? /^\/integrations(\/[a-z]+)?$/ : /^\/settings\/[a-zA-Z]+$/);
+    }
+  });
+  it.each([
+    ['integrations', '/integrations'],
+    ['slack', '/integrations/slack'],
+    ['private', '/integrations/tailscale'],
+  ])('opens %s at %s', (key, href) => {
+    expect(settingsEditorLinks({ workbenches: true, privateRoutes: true }).find((link) => link.key === key)?.href).toBe(href);
   });
 });
 

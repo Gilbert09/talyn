@@ -1,3 +1,4 @@
+import { useWorkspaceStore } from '../stores/workspace';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
@@ -8,6 +9,7 @@ import type { WorkbenchOps } from '../lib/workbenchOps';
 import { toast } from '../stores/toast';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { PENDING_MESSAGE_GRACE_MS } from '../lib/workbenchFormat';
+import { requestTranscriptFind } from '../lib/transcriptFind';
 
 vi.mock('../lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 
@@ -238,6 +240,19 @@ it.each(['[Request interrupted by user]', '[Request interrupted by user for tool
   },
 );
 
+it('keeps an interruption in the main turn after a nested event', () => {
+  const nested = userEvent(2, 2);
+  nested.event.parent_tool_use_id = 'agent-1';
+  const marker = '[Request interrupted by user]';
+  const interrupted: WorkbenchEvent = {
+    chatId: 'c1', seq: 3, turn: 3,
+    event: { seq: 3, type: 'user', message: { content: [{ type: 'text', text: marker }] } } as AgentEvent,
+  };
+  render(<WorkbenchTranscript chat={chat} events={[userEvent(1, 1), nested, interrupted]} loading={false} error={null} ops={ops} />);
+  expect(screen.queryByText('message 2')).not.toBeInTheDocument();
+  expect(screen.getByText('Interrupted').closest('.space-y-3')).toContainElement(screen.getByText('message 1'));
+});
+
 it('shows an interruption system block as a quiet note without its subtype', () => {
   const events: WorkbenchEvent[] = [userEvent(1, 1), {
     chatId: 'c1', seq: 2, turn: 1,
@@ -287,6 +302,14 @@ it.each(['No sandbox became free in 30 minutes', 'The sandbox did not wake in 30
 it.each(['API 429', 'The sandbox stopped', 'No sandbox was found'])('keeps Retry for another error: %s', (message) => {
   render(<WorkbenchTranscript chat={chat} events={[userEvent(1, 1), errorResult(2, 1, message)]} loading={false} error={null} ops={ops} />);
   expect(retryButton()).toBeInTheDocument();
+});
+
+it('names an API outage as the reason for the wait', () => {
+  const waiting = { ...chat, status: 'error', resumeAt: '2026-11-06T13:10:00Z',
+    resumeReason: 'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}' } as WorkbenchChat;
+  render(<WorkbenchTranscript chat={waiting} events={[userEvent(1, 1), errorResult(2, 1)]} loading={false} error={null} ops={ops} />);
+  expect(screen.getByText(/The model API is failing. The box is suspended until Talyn tries again at/)).toBeInTheDocument();
+  expect(screen.queryByText(/Waiting for usage/)).not.toBeInTheDocument();
 });
 
 it('shows the wait and lets the user resume now', async () => {
@@ -607,4 +630,59 @@ describe('message times', () => {
     );
     expect(container.querySelector('time')).toBeNull();
   });
+});
+
+describe('WorkbenchTranscript find', () => {
+  const view = (events: WorkbenchEvent[], o: OlderHistory) => (
+    <WorkbenchTranscript chat={chat} events={events} loading={false} error={null} ops={ops} older={o} />
+  );
+  const input = () => screen.getByRole('textbox', { name: 'Find in transcript' });
+
+  it('opens the find bar for its session, focuses the input and searches the messages', () => {
+    render(view(turns(1, 3), older({ hasOlder: false })));
+    expect(screen.queryByRole('search')).toBeNull();
+    act(() => requestTranscriptFind('wb1'));
+    expect(input()).toHaveFocus();
+    fireEvent.change(input(), { target: { value: 'MESSAGE' } });
+    expect(screen.getByText('1 of 3')).toBeInTheDocument();
+  });
+
+  it('searches the earlier pages as they land and keeps the current match', async () => {
+    const o = older();
+    const { rerender } = render(view(turns(10, 3), o));
+    act(() => requestTranscriptFind('wb1'));
+    fireEvent.change(input(), { target: { value: 'MESSAGE' } });
+    expect(o.load).toHaveBeenCalled();
+    expect(screen.getByText('searching earlier')).toBeInTheDocument();
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    expect(screen.getByText('2 of 3')).toBeInTheDocument();
+    rerender(view(turns(1, 12), { ...o, hasOlder: false }));
+    await waitFor(() => expect(screen.getByText('11 of 12')).toBeInTheDocument());
+    expect(screen.queryByText('searching earlier')).toBeNull();
+  });
+});
+
+it.each(['reauth', 'limited'])('offers Reconnect only for a reauth turn: %s', (reason) => {
+  const events: WorkbenchEvent[] = [userEvent(1, 1), {
+    chatId: 'c1', seq: 2, turn: 1,
+    event: { seq: 2, type: 'result', is_error: true, reason, result: 'Personal needs to be signed in again.' } as AgentEvent,
+  }];
+  setup(events, older({ hasOlder: false }));
+  expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+  if (reason === 'reauth') {
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+    expect(useWorkspaceStore.getState().settingsSection).toBe('integrations');
+  } else expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
+});
+
+
+it('shows the reconnect wait and cancel control', () => {
+  const waiting = { ...chat, status: 'error', resumeAt: '2026-11-16T17:00:00Z',
+    resumeReason: 'Personal needs to be signed in again.' } as WorkbenchChat;
+  const result = errorResult(2, 1, waiting.resumeReason!);
+  result.event = { ...result.event, reason: 'reauth' } as AgentEvent;
+  render(<WorkbenchTranscript chat={waiting} events={[userEvent(1, 1), result]} loading={false} error={null} ops={ops} />);
+  expect(screen.getByText(/Waiting for the account to be signed in again. Checks again at/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  expect(screen.queryByText(/Waiting for usage/)).not.toBeInTheDocument();
 });

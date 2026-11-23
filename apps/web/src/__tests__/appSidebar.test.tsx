@@ -292,24 +292,45 @@ describe('AppSidebar', () => {
     expect(useNavigationStore.getState().route).toEqual({ view: 'prs', tab: 'my_prs' });
   });
 
-  it.each([
-    [{ workbenches: true }, false],
-    [{ workbenches: true, workflows: true }, true],
-    [{ workbenches: true, loops: true }, true],
-    // MCP servers is in Settings, so it alone does not offer Automations.
-    [{ workbenches: true, mcpServers: true }, false],
-    [null, false],
-  ])('Automations appears only when something is offered (%p → %s)', (features, shown) => {
-    setFeatures(features as Partial<Features> | null);
+  it.each([[{ workbenches: true }], [{ workbenches: true, loops: true }], [null]])(
+    'Integrations is always in the sidebar (%p)',
+    (features) => {
+      setFeatures(features as Partial<Features> | null);
+      render(<AppSidebar />);
+      expect(screen.getByText('Integrations')).toBeInTheDocument();
+      expect(screen.queryByText('Automations')).not.toBeInTheDocument();
+    }
+  );
+
+  it('Integrations opens the catalog', () => {
+    setFeatures({ workbenches: true, loops: true });
     render(<AppSidebar />);
-    expect(screen.queryByText('Automations') !== null).toBe(shown);
+    fireEvent.click(screen.getByText('Integrations'));
+    expect(useNavigationStore.getState().route).toEqual({ view: 'integrations' });
   });
 
-  it('Automations opens the first offered tab', () => {
-    setFeatures({ workbenches: true, loops: true, mcpServers: true });
+  it('Integrations shows a mark for each offered app, none for built-in Schedule, and none when collapsed', () => {
+    // GitHub and PostHog Code are always offered, Slack rides workbenches; Tailscale and Trunk stay gated off.
+    setFeatures({ workbenches: true, loops: true });
     render(<AppSidebar />);
-    fireEvent.click(screen.getByText('Automations'));
-    expect(useNavigationStore.getState().route).toEqual({ view: 'automations', tab: 'loops' });
+    const strip = document.querySelector('[data-attr="nav-integrations-logos"]');
+    expect(strip).not.toBeNull();
+    expect(strip!.querySelectorAll(':scope > svg')).toHaveLength(3);
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+    expect(document.querySelector('[data-attr="nav-integrations-logos"]')).toBeNull();
+  });
+
+  it('Integrations shows the PostHog mark one time when PostHog Code and PostHog Inbox are both offered', () => {
+    const markCount = (features: Partial<Features>) => {
+      setFeatures(features);
+      const { unmount } = render(<AppSidebar />);
+      const count = document.querySelectorAll('[data-attr="nav-integrations-logos"] > svg').length;
+      unmount();
+      return count;
+    };
+    const withoutInbox = markCount({ workbenches: true, workflows: true });
+    expect(withoutInbox).toBeGreaterThan(0);
+    expect(markCount({ workbenches: true, workflows: true, posthogInboxRules: true })).toBe(withoutInbox);
   });
 
   it.each([null, { workbenches: false }])('hides sessions when features are %p', (features) => {

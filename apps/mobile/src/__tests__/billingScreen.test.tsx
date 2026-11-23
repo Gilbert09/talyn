@@ -12,6 +12,7 @@ let mockMode: 'external' | 'none' = 'external';
 const mockRefresh = jest.fn(async () => {});
 const mockCheckout = jest.fn(async (_plan: string, _period: string) => ({ url: 'https://polar.example/checkout' }));
 const mockCreditCheckout = jest.fn(async (_pack: string) => ({ url: 'https://polar.example/credits' }));
+const mockUsageReset = jest.fn(async () => ({ url: 'https://polar.example/reset' }));
 const mockPortal = jest.fn(async () => ({ url: 'https://polar.example/portal' }));
 const mockHosted = jest.fn(async (_url: string, _status: unknown) => 'dismissed' as 'dismissed' | 'returned');
 const mockChangePlan = jest.fn(async (_body: unknown) => ({ ok: true }));
@@ -26,6 +27,7 @@ jest.mock('../features/billing/data', () => ({
   requestCheckout: (plan: string, period: string) => mockCheckout(plan, period),
   requestCreditCheckout: (pack: string) => mockCreditCheckout(pack),
   requestPortal: () => mockPortal(),
+  requestUsageResetCheckout: () => mockUsageReset(),
   runHostedFlow: (url: string, held: unknown) => mockHosted(url, held),
 }));
 jest.mock('@talyn/client/native', () => ({
@@ -105,9 +107,47 @@ describe('plan and billing screen', () => {
   it('sells credit packs on a paid plan', async () => {
     mockStatus = proStatus();
     await draw(<BillingScreen />);
-    expect(screen.getByText('$12.00')).toBeVisible();
+    expect(screen.getByText('$12')).toBeVisible();
     await act(async () => { fireEvent.press(screen.getByRole('button', { name: /Buy \$100 of credits/ })); });
     expect(mockCreditCheckout).toHaveBeenCalledWith('100');
+  });
+
+  it('turns the gauge into a credit bar once the included hours are used up', async () => {
+    mockStatus = proStatus({
+      usage: { ...usage, includedWsec: 720_000, usedWsec: 800_000, percent: 100 },
+      credits: { balanceMicros: 75e6, expiringSoonMicros: 0, lots: [], drawStartMicros: 100e6 },
+    });
+    await draw(<BillingScreen />);
+    expect(screen.getByText('Using credits · $75 left')).toBeVisible();
+    expect(screen.getByText('Included hours used up. Using credits: $75 of $100 left')).toBeVisible();
+    expect(screen.getByLabelText('Credit left')).toHaveProp('accessibilityValue', { min: 0, max: 100, now: 75 });
+  });
+
+  it('hides the usage reset without an offer', async () => {
+    mockStatus = proStatus();
+    await draw(<BillingScreen />);
+    expect(screen.queryByText(/Reset usage/)).toBeNull();
+    expect(screen.queryByText(/times? this period/)).toBeNull();
+  });
+
+  it('shows the usage reset price and opens the checkout', async () => {
+    mockStatus = proStatus({ usageReset: { tier: 'pro', priceMicros: 40e6, includedWsec: 720_000 }, usage: { ...usage, includedWsec: 720_000, resets: 2 } });
+    await draw(<BillingScreen />);
+    expect(screen.getByText(/Pay your plan's monthly price once to get all 200 box-hours back now. Your period still ends on 1 December 2026/)).toBeVisible();
+    expect(screen.getByText('Reset 2 times this period')).toBeVisible();
+    await act(async () => { fireEvent.press(screen.getByText('Reset usage: $40')); });
+    expect(mockUsageReset).toHaveBeenCalled();
+    expect(mockHosted).toHaveBeenCalledWith('https://polar.example/reset', mockStatus);
+  });
+
+  it('says it when the usage reset is refused', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    mockStatus = proStatus({ usageReset: { tier: 'pro', priceMicros: 40e6, includedWsec: 720_000 } });
+    mockUsageReset.mockRejectedValueOnce(Object.assign(new Error('nope'), { status: 409, code: 'nothing_to_reset' }));
+    await draw(<BillingScreen />);
+    await act(async () => { fireEvent.press(screen.getByText('Reset usage: $40')); });
+    expect(alert.mock.calls[0][1]).toBe('You have not used any box-hours yet. There is nothing to reset.');
+    alert.mockRestore();
   });
 
   it('shows the plan read-only with no purchase links in purchase mode none', async () => {
@@ -115,7 +155,7 @@ describe('plan and billing screen', () => {
     mockStatus = proStatus();
     await draw(<BillingScreen reason="usage_exhausted" />);
     expect(screen.getByLabelText('Pro plan, your plan')).toBeVisible();
-    expect(screen.getByText('$12.00')).toBeVisible();
+    expect(screen.getByText('$12')).toBeVisible();
     expect(screen.queryByRole('button', { name: /Upgrade|Move to|Switch to annual|Buy \$/ })).toBeNull();
     expect(screen.queryByText('Manage subscription')).toBeNull();
     expect(screen.queryByRole('tablist', { name: 'Billing period' })).toBeNull();

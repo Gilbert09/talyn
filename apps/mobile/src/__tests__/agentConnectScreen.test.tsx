@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 import * as Clipboard from 'expo-clipboard';
 import * as WebBrowser from 'expo-web-browser';
 
+import { trackEvent } from '../lib/analytics';
 import { ConnectAgentPanel } from '../features/agents/connect/ConnectAgentSheet';
 import { fixture } from './workflowFixtures';
 
@@ -12,12 +13,17 @@ const mockStart = jest.fn();
 const mockComplete = jest.fn();
 const mockList = jest.fn();
 const mockAdd = jest.fn();
+const mockRename = jest.fn();
 jest.mock('@talyn/client/native', () => ({
   ...jest.requireActual('@talyn/client/native'),
   cloudProviders: {
     startClaudeSignIn: (...args: unknown[]) => mockStart(...args),
     completeClaudeSignIn: (...args: unknown[]) => mockComplete(...args),
-    fleetAccounts: { list: (...args: unknown[]) => mockList(...args), add: (...args: unknown[]) => mockAdd(...args) },
+    fleetAccounts: {
+      list: (...args: unknown[]) => mockList(...args),
+      add: (...args: unknown[]) => mockAdd(...args),
+      rename: (...args: unknown[]) => mockRename(...args),
+    },
   },
 }));
 jest.mock('../auth/AuthProvider', () => ({
@@ -27,6 +33,7 @@ jest.mock('../auth/AuthProvider', () => ({
 jest.mock('../workflow/hooks', () => ({
   useResource: () => ({ status: 'ready', data: [{ type: 'selfhosted', connectedAgents: [], reauthAgents: [] }], refresh: jest.fn() }),
 }));
+jest.mock('../lib/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('expo-web-browser', () => ({ openBrowserAsync: jest.fn(async () => ({ type: 'dismiss' })) }));
 jest.mock('expo-clipboard', () => ({
   hasStringAsync: jest.fn(async () => true), getStringAsync: jest.fn(async () => ''), setStringAsync: jest.fn(async () => true),
@@ -38,6 +45,7 @@ const clipboard = Clipboard as jest.Mocked<typeof Clipboard>;
 const browser = WebBrowser as jest.Mocked<typeof WebBrowser>;
 
 beforeEach(() => {
+  (trackEvent as jest.Mock).mockClear();
   mockList.mockResolvedValue(accounts());
   mockStart.mockResolvedValue({ url: 'https://claude.com/cai/oauth/authorize?x=1' });
   mockComplete.mockResolvedValue({ connected: true });
@@ -57,11 +65,11 @@ describe('Claude sign-in', () => {
     const onConnected = jest.fn();
     await render(<ConnectAgentPanel agent="claude" onConnected={onConnected} />);
     await startSignIn();
-    expect(mockStart).toHaveBeenCalledWith('one', { label: 'Claude 1' });
+    expect(mockStart).toHaveBeenCalledWith('one', { newAccount: true });
     expect(browser.openBrowserAsync).toHaveBeenCalledWith('https://claude.com/cai/oauth/authorize?x=1');
     await waitFor(() => expect(screen.getByLabelText('Code from Anthropic').props.value).toBe(CODE));
     await act(async () => { fireEvent.press(screen.getByLabelText('Finish sign-in')); });
-    expect(mockComplete).toHaveBeenCalledWith('one', CODE, { label: 'Claude 1' });
+    expect(mockComplete).toHaveBeenCalledWith('one', CODE, { newAccount: true });
     await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(1));
     expect(mockLoad.mock.calls.map(([entity]) => entity)).toEqual(expect.arrayContaining(['providers', 'readiness']));
   });
@@ -117,8 +125,92 @@ describe('Claude sign-in', () => {
     expect(mockAdd).not.toHaveBeenCalled();
     await act(async () => { fireEvent.changeText(screen.getByLabelText('Anthropic API key'), ' sk-ant-api03-good '); });
     await act(async () => { fireEvent.press(screen.getByLabelText('Add key')); });
-    expect(mockAdd).toHaveBeenCalledWith('one', 'claude', 'anthropic_key', 'sk-ant-api03-good', 'Claude 1');
+    expect(mockAdd).toHaveBeenCalledWith('one', 'claude', 'anthropic_key', 'sk-ant-api03-good');
     await waitFor(() => expect(onConnected).toHaveBeenCalled());
+  });
+});
+
+describe('naming a new account', () => {
+  const added = (label: string) => ({ id: 'new', agent: 'claude' as const, kind: 'claude_oauth' as const, label, priority: 1,
+    needsReauth: false, held: null, usage: null, over: false });
+
+  async function connectBySignIn(onConnected: jest.Mock) {
+    mockComplete.mockResolvedValue({ connected: true, accountId: 'new' });
+    await render(<ConnectAgentPanel agent="claude" onConnected={onConnected} />);
+    await startSignIn();
+    mockList.mockResolvedValue(accounts([added('Claude 2')]));
+    await act(async () => { fireEvent.changeText(screen.getByLabelText('Code from Anthropic'), CODE); });
+    await act(async () => { fireEvent.press(screen.getByLabelText('Finish sign-in')); });
+    return screen.findByLabelText('Account name');
+  }
+
+  it('asks for a name after the sign-in, prefilled with the server’s name, and saves a new one', async () => {
+    const onConnected = jest.fn();
+    const onAdded = jest.fn();
+    mockComplete.mockResolvedValue({ connected: true, accountId: 'new' });
+    await render(<ConnectAgentPanel agent="claude" onConnected={onConnected} onAdded={onAdded} />);
+    await startSignIn();
+    mockList.mockResolvedValue(accounts([added('Claude 2')]));
+    await act(async () => { fireEvent.changeText(screen.getByLabelText('Code from Anthropic'), CODE); });
+    await act(async () => { fireEvent.press(screen.getByLabelText('Finish sign-in')); });
+    const field = await screen.findByLabelText('Account name');
+    expect(field.props.value).toBe('Claude 2');
+    expect(field.props.autoFocus).toBe(true);
+    expect(screen.getByText('Connected. Give this account a name, or keep this one.')).toBeTruthy();
+    expect(onAdded).toHaveBeenCalledTimes(1);
+    expect(onConnected).not.toHaveBeenCalled();
+    mockRename.mockResolvedValue(undefined);
+    await act(async () => { fireEvent.changeText(field, '  Work  '); });
+    await act(async () => { fireEvent.press(screen.getByLabelText('Save')); });
+    expect(mockRename).toHaveBeenCalledWith('new', 'Work');
+    expect(onConnected).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['Skip', async () => { fireEvent.press(screen.getByLabelText('Skip')); }],
+    ['Save with the same name', async () => { fireEvent.press(screen.getByLabelText('Save')); }],
+  ])('keeps the server’s name on %s', async (_name, press) => {
+    const onConnected = jest.fn();
+    await connectBySignIn(onConnected);
+    await act(press);
+    expect(mockRename).not.toHaveBeenCalled();
+    expect(onConnected).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an empty name and shows a failed rename', async () => {
+    const onConnected = jest.fn();
+    const field = await connectBySignIn(onConnected);
+    await act(async () => { fireEvent.changeText(field, '   '); });
+    expect(screen.getByLabelText('Save').props.accessibilityState.disabled).toBe(true);
+    await act(async () => { fireEvent(field, 'submitEditing'); });
+    expect(screen.getByText('Enter an account name.')).toBeTruthy();
+    mockRename.mockRejectedValue(new Error('An account needs a name.'));
+    await act(async () => { fireEvent.changeText(field, 'Work'); });
+    await act(async () => { fireEvent.press(screen.getByLabelText('Save')); });
+    expect(await screen.findByText('An account needs a name.')).toBeTruthy();
+    expect(onConnected).not.toHaveBeenCalled();
+  });
+
+  it('asks for a name after an API key', async () => {
+    mockAdd.mockResolvedValue({ ...added('Claude'), kind: 'anthropic_key' });
+    await render(<ConnectAgentPanel agent="claude" onConnected={jest.fn()} />);
+    await screen.findByText('Sign in with Claude');
+    await act(async () => { fireEvent.press(screen.getByLabelText('Use an API key instead')); });
+    await act(async () => { fireEvent.changeText(screen.getByLabelText('Anthropic API key'), 'sk-ant-api03-good'); });
+    await act(async () => { fireEvent.press(screen.getByLabelText('Add key')); });
+    expect((await screen.findByLabelText('Account name')).props.value).toBe('Claude');
+  });
+
+  it('asks for no name after a reconnect', async () => {
+    mockList.mockResolvedValue(accounts([{ ...added('Work'), id: 'acc-1', needsReauth: true }]));
+    mockComplete.mockResolvedValue({ connected: true, accountId: 'acc-1' });
+    const onConnected = jest.fn();
+    await render(<ConnectAgentPanel agent="claude" onConnected={onConnected} />);
+    await act(async () => { fireEvent.press(await screen.findByLabelText('Sign in to Claude again')); });
+    await act(async () => { fireEvent.changeText(await screen.findByLabelText('Code from Anthropic'), CODE); });
+    await act(async () => { fireEvent.press(screen.getByLabelText('Finish sign-in')); });
+    await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(1));
+    expect(screen.queryByLabelText('Account name')).toBeNull();
   });
 });
 
@@ -138,5 +230,65 @@ describe('Codex', () => {
     expect(await screen.findByText('Finish on your computer')).toBeTruthy();
     await act(async () => { fireEvent.press(screen.getByLabelText('Choose a different agent')); });
     expect(screen.getByLabelText('Claude: Not connected')).toBeTruthy();
+  });
+});
+
+describe('Claude sign-in analytics', () => {
+  const abandoned = () => (trackEvent as jest.Mock).mock.calls.filter(([name]) => name === 'cloud_provider_signin_abandoned');
+
+  it('fires abandoned once with via back', async () => {
+    const view = await render(<ConnectAgentPanel agent="claude" onConnected={jest.fn()} />);
+    await startSignIn();
+    await act(async () => { fireEvent.press(screen.getByLabelText('Back')); });
+    await view.unmount();
+    expect(abandoned()).toHaveLength(1);
+    expect(abandoned()[0][1]).toEqual({
+      provider: 'selfhosted', agent: 'claude', method: 'claude_oauth', via: 'back', elapsed_ms: expect.any(Number),
+    });
+  });
+
+  it('fires via closed when unmounted while awaiting the code', async () => {
+    const view = await render(<ConnectAgentPanel agent="claude" onConnected={jest.fn()} />);
+    await startSignIn();
+    await view.unmount();
+    expect(abandoned()).toHaveLength(1);
+    expect(abandoned()[0][1]).toMatchObject({ via: 'closed' });
+  });
+
+  it('does not fire after connected', async () => {
+    const onConnected = jest.fn();
+    const view = await render(<ConnectAgentPanel agent="claude" onConnected={onConnected} />);
+    await startSignIn();
+    await act(async () => { fireEvent.changeText(screen.getByLabelText('Code from Anthropic'), CODE); });
+    await act(async () => { fireEvent.press(screen.getByLabelText('Finish sign-in')); });
+    await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(1));
+    await view.unmount();
+    expect(abandoned()).toHaveLength(0);
+  });
+
+  it('sends the error code on a failed finish and does not fire', async () => {
+    mockComplete.mockRejectedValue(Object.assign(new Error('That sign-in expired. Start it again.'), { code: 'signin_expired' }));
+    const view = await render(<ConnectAgentPanel agent="claude" onConnected={jest.fn()} />);
+    await startSignIn();
+    await act(async () => { fireEvent.changeText(screen.getByLabelText('Code from Anthropic'), CODE); });
+    await act(async () => { fireEvent.press(screen.getByLabelText('Finish sign-in')); });
+    await screen.findByText('That sign-in expired. Start it again.');
+    await view.unmount();
+    expect(trackEvent).toHaveBeenCalledWith('cloud_provider_connect_failed', expect.objectContaining({
+      stage: 'finish', error_code: 'signin_expired',
+    }));
+    expect(abandoned()).toHaveLength(0);
+  });
+
+  it('has a null error code for a plain error', async () => {
+    mockStart.mockRejectedValue(new Error('offline'));
+    await render(<ConnectAgentPanel agent="claude" onConnected={jest.fn()} />);
+    await screen.findByText('Sign in with Claude');
+    await act(async () => { fireEvent.press(screen.getByLabelText('Sign in with Claude')); });
+    await screen.findByText('offline');
+    expect(trackEvent).toHaveBeenCalledWith('cloud_provider_connect_failed', {
+      provider: 'selfhosted', agent: 'claude', stage: 'start', error: 'offline', error_code: null,
+    });
+    expect(abandoned()).toHaveLength(0);
   });
 });

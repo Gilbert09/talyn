@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
+  captureCloudProviderConnected,
   captureServerEvent,
   captureWorkspaceEvent,
   isServerAnalyticsConfigured,
@@ -125,5 +126,20 @@ describe('server analytics', () => {
     await expect(
       captureServerEvent('user-1', 'task_completed'),
     ).resolves.toBeUndefined();
+  });
+  it.each([
+    ['posthog_code', undefined, { provider: 'posthog_code' }],
+    ['selfhosted', 'codex', { provider: 'selfhosted', agent: 'codex' }],
+  ])('captureCloudProviderConnected sends the client event shape: %s', async (provider, agent, expected) => {
+    process.env.TALYN_POSTHOG_KEY = 'phc_test';
+    captureCloudProviderConnected('ws1', provider, agent);
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.event).toBe('cloud_provider_connected');
+    expect(body.distinct_id).toBe(TEST_USER_ID);
+    expect(body.properties).toMatchObject({ workspace_id: 'ws1', ...expected });
+    if (!agent) expect(body.properties).not.toHaveProperty('agent');
   });
 });

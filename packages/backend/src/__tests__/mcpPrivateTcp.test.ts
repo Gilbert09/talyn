@@ -210,11 +210,12 @@ describe('opaque YAS TCP transport', () => {
     await expect(mcpFetch(url, { signal: AbortSignal.timeout(300) }, context)).rejects.toThrow();
     expect(bodies).toHaveLength(1);
   });
-  it('bounds the private connection phase', async () => {
+  it('bounds the private connection phase by the request deadline', async () => {
     stall = true;
     const started = Date.now();
-    await expect(mcpFetch(url, {}, context)).rejects.toThrow();
-    expect(Date.now() - started).toBeLessThan(6000);
+    await expect(mcpFetch(url, { signal: AbortSignal.timeout(1_000) }, context))
+      .rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(Date.now() - started).toBeLessThan(3000);
     expect(bodies).toHaveLength(1);
   });
   it.each([[403, undefined, 'destination_denied'], [404, undefined, 'route_missing'], [409, undefined, 'connector_not_connected'], [503, 'standby_owner', 'standby_owner'], [503, 'private_routes_unavailable', 'private_routes_unavailable'], [429, 'private_tunnel_limit', 'private_tunnel_limit']] as const)('maps a YAS %s denial without retries', async (status, code, expected) => {

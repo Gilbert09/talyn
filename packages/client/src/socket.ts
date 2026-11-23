@@ -1,4 +1,4 @@
-import type { WSEvent, WSClientMessage, SpacePresenceMember, SpacePresenceMessage } from '@talyn/shared';
+import type { WSEvent, WSClientMessage, SpacePresenceMember, SpacePresenceMessage, DeskPresenceState } from '@talyn/shared';
 import { getConfig, getRuntime, getWebSocketUrl, onConfigChange, type ApiClientConfig } from './config.js';
 import { canRun, resolveRuntime, type ClientSocket, type ClientState } from './runtime.js';
 
@@ -63,12 +63,16 @@ export class WebSocketClient {
   private presenceTimer: (() => void) | null = null;
   private spacePresence = new Map<string, SpacePresenceMessage>();
   private subscribedSpaces = new Set<string>();
+  /** The last desk presence reported, re-sent after a reconnect. Null = never reported. */
+  private deskPresence: DeskPresenceState | null = null;
   private subscribedWorkspaces: Set<string> = new Set();
   /** Sent with every subscribe. The server holds back events a client did not opt in to. */
   private capabilities: string[] = [];
-  // Admin Debug-panel owner filter, re-sent on (re)connect so the server keeps
-  // streaming only the selected account's events. undefined = all.
+  // Admin Debug-panel owner filter, re-sent on (re)connect while the panel is
+  // open. The server streams debug events only to a client that sent one.
+  // undefined = all accounts.
   private debugFilter: string | undefined;
+  private debugStreaming = false;
   private authenticated = false;
   private shouldReconnect = false;
   private connectGeneration = 0;
@@ -192,8 +196,9 @@ export class WebSocketClient {
               this.send({ type: 'subscribe_space', spaceId });
             }
             for (const presence of this.spacePresence.values()) this.send(presence);
-            if (this.debugFilter !== undefined) {
-              this.send({ type: 'debug:filter', owner: this.debugFilter });
+            if (this.deskPresence) this.send({ type: 'desk_presence', state: this.deskPresence } satisfies WSClientMessage);
+            if (this.debugStreaming) {
+              this.send({ type: 'debug:filter', owner: this.debugFilter ?? null });
             }
           }
           this.emit(data.type, data.payload);
@@ -268,6 +273,7 @@ export class WebSocketClient {
     this.unbindLifecycle = null;
     this.lifecycleBinding = null;
     this.spacePresence.clear();
+    this.deskPresence = null;
     this.reconnectAttempts = 0;
     this.retryNotBefore = 0;
     this.stopConnection();
@@ -281,6 +287,7 @@ export class WebSocketClient {
     this.subscribedSpaces.clear();
     this.capabilities = [];
     this.debugFilter = undefined;
+    this.debugStreaming = false;
     this.disconnect();
     this.unbindConfig?.();
     this.unbindConfig = null;
@@ -331,6 +338,17 @@ export class WebSocketClient {
   }
 
   /**
+   * Tell the server whether the person is using this computer. The caller
+   * repeats `active` while it holds; the server forgets it after a minute
+   * without one. Safe while disconnected: the latest state goes out on the
+   * next accepted connection.
+   */
+  setDeskPresence(state: DeskPresenceState): void {
+    this.deskPresence = state;
+    if (this.authenticated) this.send({ type: 'desk_presence', state } satisfies WSClientMessage);
+  }
+
+  /**
    * What this client can show, for example `threads`. Without `threads` the
    * server sends no thread rows. Call before `subscribe`; a later call takes
    * effect on the next subscribe or reconnect.
@@ -351,15 +369,26 @@ export class WebSocketClient {
   }
 
   /**
-   * Admin Debug panel: tell the server which account's debug events to stream
-   * to this client (account id, 'system', 'all', or undefined for all). The
-   * server only fans matching events to us, so a single-user filter doesn't
-   * pull everyone's traffic over the wire.
+   * Admin Debug panel: start the live debug stream to this client, for one
+   * account (account id, 'system', 'all', or undefined for all). The server
+   * only fans matching events to us, so a single-user filter doesn't pull
+   * everyone's traffic over the wire.
    */
   setDebugFilter(owner: string | undefined): void {
     this.debugFilter = owner;
+    this.debugStreaming = true;
     if (this.ws?.readyState === 1) {
       this.send({ type: 'debug:filter', owner: owner ?? null });
+    }
+  }
+
+  /** Admin Debug panel closed: stop the live debug stream to this client. */
+  stopDebugStream(): void {
+    if (!this.debugStreaming) return;
+    this.debugFilter = undefined;
+    this.debugStreaming = false;
+    if (this.ws?.readyState === 1) {
+      this.send({ type: 'debug:unsubscribe' });
     }
   }
 

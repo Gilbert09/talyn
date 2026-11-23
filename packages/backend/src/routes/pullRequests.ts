@@ -18,10 +18,13 @@ import { startPrMergeableRun } from '../services/prCloudFix.js';
 import { rowToTask } from '../services/taskSerialize.js';
 import {
   batchPullRequests,
+  fetchPRBodyHtml,
   fetchPRReviewDetail,
   type PRSummary,
 } from '../services/githubGraphql.js';
+import { hasAttachmentImages, signAttachmentImages } from '../services/githubAttachments.js';
 import {
+  GitHubApiError,
   githubService,
   GitHubNotConnectedError,
   MergeNotPermittedForAppError,
@@ -34,7 +37,7 @@ import {
   setActiveView,
   type ActiveView,
 } from '../services/prFocus.js';
-import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { assertUser, handleAccessError, refuseTaskFromOutsideApp, requireWorkspaceAccess } from '../middleware/auth.js';
 import { isFeatureEnabled } from '../services/featureFlags.js';
 import { scoreReviewRows } from '../services/reviewPriority/score.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
@@ -102,7 +105,8 @@ import type { ApiResponse, PRPriorityVerdict, PRStackInfo } from '@talyn/shared'
 /**
  * Routes for the PR/CI surface. Mostly read-only — the one write path is
  * merge (gated in the UI to mergeable PRs and behind an explicit
- * confirm). Review/comment composition still deep-links to github.com.
+ * confirm). Approve / request changes go through `/:id/review`; inline review
+ * comments still deep-link to github.com.
  *
  *   GET   /pull-requests                  list workspace PRs
  *   GET   /pull-requests/:id              full detail (always fresh GraphQL)
@@ -113,10 +117,14 @@ import type { ApiResponse, PRPriorityVerdict, PRStackInfo } from '@talyn/shared'
  *   POST  /pull-requests/:id/merge-queue/resubmit  re-submit a parked entry
  *   POST  /pull-requests/:id/focus        mark focused (adaptive-poll TTL)
  *   POST  /pull-requests/:id/merge        merge the PR (merge|squash|rebase)
+ *   POST  /pull-requests/:id/review       approve or request changes as the user
  *   POST  /pull-requests/close            close the caller's own PR, comment first
  *   POST  /pull-requests/watch            track an arbitrary PR by URL
  *   POST  /pull-requests/:id/watch        start/stop tracking a row we hold
  */
+
+/** GitHub refuses a review body longer than this. */
+export const MAX_REVIEW_BODY_CHARS = 65_536;
 
 /**
  * The four columns the GraphQL/REST detail fetches (`/files`, `/reviews`)
@@ -259,6 +267,34 @@ export function parsePrRef(
   const number = Number(m[3]);
   if (!Number.isInteger(number) || number <= 0) return null;
   return { owner: m[1], repo: m[2].replace(/\.git$/, ''), number };
+}
+
+/**
+ * The description with its GitHub attachment images pointed at signed URLs, so
+ * the apps can show them for a private repository (see `githubAttachments.ts`).
+ * Any failure answers the body unchanged: the images then fall back to the
+ * github.com URL, which still works for a public repository on desktop.
+ */
+async function signedBody(
+  pr: { workspaceId: string; owner: string; repo: string; number: number },
+  body: string
+): Promise<string> {
+  if (!hasAttachmentImages(body)) return body;
+  try {
+    const html = await fetchPRBodyHtml({
+      workspaceId: pr.workspaceId,
+      owner: pr.owner,
+      repo: pr.repo,
+      number: pr.number,
+    });
+    return signAttachmentImages(body, html);
+  } catch (err) {
+    console.warn(
+      `[pull-requests] attachment signing failed for ${pr.owner}/${pr.repo}#${pr.number}:`,
+      err
+    );
+    return body;
+  }
 }
 
 export function pullRequestRoutes(): Router {
@@ -707,7 +743,9 @@ export function pullRequestRoutes(): Router {
       success: true,
       data: {
         row: await publicPrRow(outRow, db),
-        fresh,
+        // Signed only in the response: `fresh` above is what gets persisted
+        // and compared, and a signed URL expires in minutes.
+        fresh: fresh ? { ...fresh, body: await signedBody(row, fresh.body) } : null,
       },
     });
   });
@@ -731,7 +769,13 @@ export function pullRequestRoutes(): Router {
   router.get('/:id/description', async (req, res) => {
     const db = getDbClient();
     const rows = await db
-      .select({ workspaceId: pullRequestsTable.workspaceId, body: pullRequestsTable.body })
+      .select({
+        workspaceId: pullRequestsTable.workspaceId,
+        owner: pullRequestsTable.owner,
+        repo: pullRequestsTable.repo,
+        number: pullRequestsTable.number,
+        body: pullRequestsTable.body,
+      })
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, req.params.id))
       .limit(1);
@@ -744,7 +788,11 @@ export function pullRequestRoutes(): Router {
     } catch (err) {
       return handleAccessError(err, res);
     }
-    return res.json({ success: true, data: { body: row.body } });
+    // A merged or closed PR gets no live body from `GET /:id`, so this is the
+    // only text its panel shows. It pays for a GitHub call only when the
+    // description has an attachment image.
+    const body = row.body === null ? null : await signedBody(row, row.body);
+    return res.json({ success: true, data: { body } });
   });
 
   // File-by-file diff for a PR. Returns each changed file's status,
@@ -861,6 +909,7 @@ export function pullRequestRoutes(): Router {
   // FastOwl's canonical buildMergeablePrompt and the workspace's configured
   // provider. Body is optional `{ model? }`. Returns the created task.
   router.post('/:id/fix', async (req, res) => {
+    if (refuseTaskFromOutsideApp(req, res)) return;
     const db = getDbClient();
     const rows = await db
       .select(DETAIL_COLUMNS)
@@ -1376,6 +1425,7 @@ export function pullRequestRoutes(): Router {
 
   /** Fix the ticked findings: one run, one push, one optional comment. */
   router.post('/:id/code-review/fix', async (req, res) => {
+    if (refuseTaskFromOutsideApp(req, res)) return;
     const workspaceId = await reviewGate(req, res);
     if (!workspaceId) return;
     const review = await getReviewForPr(req.params.id);
@@ -1836,6 +1886,148 @@ export function pullRequestRoutes(): Router {
       }
       res.status(400).json({ success: false, error: message });
     }
+  });
+
+  // Approve or request changes on a PR that asked for the user's review.
+  // Body: `{ event: 'approve' | 'request_changes', body? }`. The review goes
+  // out on the workspace's user token (`apiRequest` never uses the App's
+  // installation token), so GitHub records it as the person's own review.
+  // `request_changes` needs a comment: GitHub refuses one without a body.
+  router.post('/:id/review', async (req, res) => {
+    const input = (req.body ?? {}) as { event?: unknown; body?: unknown };
+    const event = input.event;
+    if (event !== 'approve' && event !== 'request_changes') {
+      return res.status(400).json({
+        success: false,
+        code: 'invalid_event',
+        error: "event must be 'approve' or 'request_changes'.",
+      });
+    }
+    if (input.body !== undefined && input.body !== null && typeof input.body !== 'string') {
+      return res
+        .status(400)
+        .json({ success: false, code: 'invalid_body', error: 'body must be text.' });
+    }
+    const text = typeof input.body === 'string' ? input.body.trim() : '';
+    if (event === 'request_changes' && !text) {
+      return res.status(400).json({
+        success: false,
+        code: 'body_required',
+        error: 'Add a comment that says what to change. GitHub needs one to request changes.',
+      });
+    }
+    if (text.length > MAX_REVIEW_BODY_CHARS) {
+      return res.status(400).json({
+        success: false,
+        code: 'body_too_long',
+        error: `The comment has ${text.length} characters. GitHub accepts at most ${MAX_REVIEW_BODY_CHARS}.`,
+      });
+    }
+
+    const db = getDbClient();
+    const [row] = await db
+      .select({
+        ...PR_LOOKUP_COLUMNS,
+        id: pullRequestsTable.id,
+        repositoryId: pullRequestsTable.repositoryId,
+        state: pullRequestsTable.state,
+        authored: pullRequestsTable.authored,
+      })
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, req.params.id))
+      .limit(1);
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Pull request not found' });
+    }
+    try {
+      await requireWorkspaceAccess(req, row.workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    if (row.state !== 'open') {
+      return res.status(409).json({
+        success: false,
+        code: 'pr_not_open',
+        error: `#${row.number} is ${row.state}. You can only review an open pull request.`,
+      });
+    }
+    if (row.authored) {
+      return res.status(409).json({
+        success: false,
+        code: 'own_pull_request',
+        error: 'GitHub does not let you approve or request changes on your own pull request.',
+      });
+    }
+
+    let review: Awaited<ReturnType<typeof githubService.createPRReview>>;
+    try {
+      review = await githubService.createPRReview(
+        row.workspaceId,
+        row.owner,
+        row.repo,
+        row.number,
+        {
+          event: event === 'approve' ? 'APPROVE' : 'REQUEST_CHANGES',
+          ...(text ? { body: text } : {}),
+        }
+      );
+    } catch (err) {
+      if (err instanceof GitHubNotConnectedError) {
+        return res.status(409).json({
+          success: false,
+          code: 'github_not_connected',
+          error: 'GitHub is not connected for this workspace. Connect it in Settings.',
+        });
+      }
+      if (err instanceof GitHubRateLimitError) {
+        if (err.retryAfterMs) res.setHeader('Retry-After', String(Math.ceil(err.retryAfterMs / 1000)));
+        return res.status(503).json({
+          success: false,
+          code: 'rate_limited',
+          error: 'GitHub is rate limiting Talyn. The review was not sent. Try again in a few minutes.',
+        });
+      }
+      if (err instanceof GitHubApiError && [403, 404, 422].includes(err.status)) {
+        return res.status(err.status).json({ success: false, error: err.message });
+      }
+      const message = err instanceof Error ? err.message : 'Review failed';
+      return res.status(502).json({ success: false, error: message });
+    }
+
+    captureWorkspaceEvent(row.workspaceId, 'pr_review_submitted', {
+      repo: `${row.owner}/${row.repo}`,
+      pr_number: row.number,
+      event,
+      has_body: text.length > 0,
+    });
+
+    // The same per-PR refresh a review webhook fires. It re-derives
+    // `reviewRequested` from GitHub (the request is gone once you review) and
+    // broadcasts the row, so every client moves the PR out of its review list.
+    // The review is already on GitHub, so a failed refresh must not fail this.
+    try {
+      await prMonitorService.refreshPr(row.workspaceId, row.owner, row.repo, row.number, {
+        repositoryId: row.repositoryId,
+      });
+    } catch (err) {
+      console.warn(
+        `[pull-requests] refresh after review failed for ${row.id}:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+    const [fresh] = await db
+      .select(DETAIL_COLUMNS)
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, row.id))
+      .limit(1);
+
+    return res.json({
+      success: true,
+      data: {
+        review: { id: review.id, state: review.state, url: review.html_url },
+        row: fresh ? await publicPrRow(fresh, db) : null,
+      },
+    });
   });
 
   // Close a PR as the connected GitHub user, with an optional comment first.

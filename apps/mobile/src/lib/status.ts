@@ -2,6 +2,7 @@ import {
   externalQueueStatusFromLabels,
   nextWorkbenchAction,
   prSummaryToNextActionPr,
+  type ContextAttentionReason,
   type ExternalQueueState,
   type Workbench,
   type WorkbenchChat,
@@ -18,6 +19,7 @@ export type StatusTone = 'success' | 'warning' | 'destructive' | 'information' |
 
 export type SessionStateKind = 'failed' | 'starting' | 'working' | 'needs_reply' | 'background_job' | 'pr_opened' | 'pr_attention'
   | 'ready_to_merge' | 'pr_waiting' | 'draft' | 'merged' | 'closed' | 'unshipped' | 'wakeup' | 'idle';
+export const PLAN_LABEL = 'A plan waits for your approval';
 export interface SessionState { kind: SessionStateKind; label: string }
 
 export interface SessionPr {
@@ -49,7 +51,10 @@ export function sessionState(workbench: StateWorkbench, chats: StateChat[], pr: 
   if (chats.some((chat) => chat.status === 'error')) return { kind: 'failed', label: 'A chat failed' };
   if (workbench.status === 'provisioning' || workbench.sandboxState === 'creating') return { kind: 'starting', label: 'Starting' };
   if (chats.some((chat) => chat.status === 'running')) return { kind: 'working', label: 'Working' };
-  if (chats.some((chat) => (chat.queuedMessages?.length ?? 0) > 0)) return { kind: 'working', label: 'A message waits for the sandbox' };
+  // An archived session has no box: its queued message waits for a restore.
+  if (!workbench.archivedAt && chats.some((chat) => (chat.queuedMessages?.length ?? 0) > 0)) {
+    return { kind: 'working', label: 'A message waits for the sandbox' };
+  }
   if (chats.some((chat) => chat.status === 'awaiting_input')) return { kind: 'needs_reply', label: 'Waiting for your answer' };
   if (pr && !workbench.archivedAt && workbench.kind !== 'thread') {
     if (pr.state === 'merged') return { kind: 'merged', label: `Done: #${pr.number} merged` };
@@ -70,6 +75,12 @@ export function sessionState(workbench: StateWorkbench, chats: StateChat[], pr: 
   return { kind: 'idle', label: 'Idle' };
 }
 
+/** The server marks a session `plan` when its latest reply holds a plan that waits for approval. Work and failure win. */
+export function withPlanAttention(state: SessionState, reason: ContextAttentionReason | null | undefined): SessionState {
+  if (reason !== 'plan' || state.kind === 'working' || state.kind === 'starting' || state.kind === 'failed') return state;
+  return { kind: 'needs_reply', label: PLAN_LABEL };
+}
+
 export function workbenchState(item: Workbench, row?: PRRow | null): SessionState {
   return sessionState(item, item.chats ?? [], sessionPr(item, row));
 }
@@ -79,7 +90,7 @@ export function workbenchState(item: Workbench, row?: PRRow | null): SessionStat
 // the PR list draws it: review has its own pill.
 // ---------------------------------------------------------------------------
 
-export type PrIcon = 'check' | 'warning' | 'failed' | 'spinner' | 'merged' | 'closed' | 'review' | 'unknown' | 'protected' | 'clock' | 'behind' | 'person';
+export type PrIcon = 'check' | 'warning' | 'failed' | 'spinner' | 'merged' | 'closed' | 'review' | 'unknown' | 'protected' | 'clock' | 'behind' | 'person' | 'queue';
 export interface PrPillVariant { icon: PrIcon; label: string; tone: StatusTone }
 
 export interface PrStatusInput {
@@ -145,19 +156,19 @@ function externalVariant(input: PrStatusInput, checks: PRChecks): PrPillVariant 
   const state = input.externalQueueState ?? externalQueueStatusFromLabels(input.labels)?.state;
   if (!state || state === 'not_submitted') return null;
   switch (state) {
-    case 'rejected': return { icon: 'closed', label: 'Queue: refused', tone: 'destructive' };
-    case 'failed': return { icon: 'closed', label: 'Queue: failed', tone: 'destructive' };
-    case 'pending_failure': return { icon: 'clock', label: 'Queue: failure pending', tone: 'warning' };
-    case 'cancelled': return { icon: 'warning', label: 'Queue: cancelled', tone: 'warning' };
+    case 'rejected': return { icon: 'closed', label: 'Refused by merge queue', tone: 'destructive' };
+    case 'failed': return { icon: 'closed', label: 'Failed in merge queue', tone: 'destructive' };
+    case 'pending_failure': return { icon: 'clock', label: 'Merge queue failure pending', tone: 'warning' };
+    case 'cancelled': return { icon: 'warning', label: 'Removed from merge queue', tone: 'warning' };
     case 'merged': return { icon: 'merged', label: 'Merged', tone: 'merged' };
-    case 'passed': return { icon: 'check', label: 'Queue: passed', tone: 'success' };
+    case 'passed': return { icon: 'check', label: 'Passed merge queue', tone: 'success' };
     case 'not_ready': {
       const reason = input.blockingReason;
       const prSaysWhy = checks.inProgress > 0 || checks.failed > 0 || reason === 'merge_conflicts' || reason === 'changes_requested' || reason === 'needs_human';
-      return prSaysWhy ? null : { icon: 'clock', label: 'Queue: not ready', tone: 'warning' };
+      return prSaysWhy ? null : { icon: 'clock', label: 'Not ready for merge queue', tone: 'warning' };
     }
-    case 'testing': return { icon: 'spinner', label: 'Queue: testing', tone: 'information' };
-    default: return { icon: 'clock', label: 'Queue: queued', tone: 'information' };
+    case 'testing': return { icon: 'spinner', label: 'Testing in merge queue', tone: 'information' };
+    default: return { icon: 'queue', label: 'In merge queue', tone: 'information' };
   }
 }
 

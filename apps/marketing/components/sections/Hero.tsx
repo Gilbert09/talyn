@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import { ArrowRight } from "lucide-react";
 import { DownloadButton, isMobileDevice } from "@/components/ui/DownloadButton";
 import { WebAppButton } from "@/components/ui/WebAppButton";
 import { PlatformNote } from "@/components/ui/PlatformNote";
 import { Badge } from "@/components/ui/badge";
 import { GridBackground } from "@/components/ui/GridBackground";
-import { ScreenshotPlaceholder } from "@/components/ui/ScreenshotPlaceholder";
+import { AppFrame } from "@/components/ui/AppFrame";
+import { SessionDemo } from "@/components/mocks/SessionDemo";
+import { TypedRotator } from "@/components/ui/TypedRotator";
 import { hero } from "@/lib/content";
 import { cn } from "@/lib/utils";
 
@@ -29,23 +32,38 @@ export function Hero() {
 
       <div className="container relative">
         <motion.div
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
+          // Visible from the first paint: the headline is the page's largest
+          // text, so hiding it until the script loads delayed LCP. It still
+          // settles up into place.
+          initial={{ y: 12 }}
+          animate={{ y: 0 }}
           transition={{ duration: 0.7, ease: [0.21, 0.47, 0.32, 0.98] }}
-          className="mx-auto max-w-3xl text-center"
+          className="mx-auto max-w-5xl text-center"
         >
           <div className="mb-6 flex justify-center">
-            <Badge dot>{hero.badge}</Badge>
+            {hero.announcement ? (
+              <a
+                href={hero.announcement.href}
+                className="transition-opacity hover:opacity-80"
+              >
+                <Badge dot>
+                  {hero.announcement.label}
+                  <ArrowRight className="h-3 w-3" />
+                </Badge>
+              </a>
+            ) : (
+              <Badge dot>{hero.badge}</Badge>
+            )}
           </div>
 
           {/* Each part on its own line so a free-flowing wrap cannot break
               the phrase in an odd place at laptop widths. */}
-          <h1 className="font-display text-5xl font-semibold leading-[1.04] tracking-tight text-ink sm:text-7xl">
-            <span className="block">{hero.titleLead}</span>
-            <span className="block text-clay">{hero.titleAccent}</span>
+          <h1 className="font-display text-4xl font-semibold leading-[1.06] tracking-tight text-ink [text-wrap:balance] sm:text-5xl lg:text-6xl">
+            <span className="block">{hero.titleLead}</span>{" "}
+            <TypedRotator phrases={hero.titleAccents} className="text-clay" />
           </h1>
 
-          <p className="mx-auto mt-5 max-w-2xl text-lg leading-relaxed text-ink-500">
+          <p className="mx-auto mt-5 max-w-2xl text-lg leading-relaxed text-ink-500 [text-wrap:pretty]">
             {hero.sub}
           </p>
 
@@ -100,7 +118,15 @@ export function Hero() {
           transition={{ duration: 0.9, delay: 0.15, ease: [0.21, 0.47, 0.32, 0.98] }}
           className="relative mx-auto mt-10 max-w-6xl"
         >
-          <ScreenshotPlaceholder shot="session" title="Talyn · Add CSV export" />
+          {/* Plays a session from prompt to merged pull request. */}
+          <AppFrame title="Talyn · Add CSV export">
+            <SessionDemo />
+          </AppFrame>
+          {/* Ties the film to the headline's promise at the point where half
+              of visitors decide to leave. */}
+          <p className="mt-3 text-center text-xs text-ink-400">
+            Sped up. Close the app at any step and the sandbox keeps working.
+          </p>
         </motion.div>
       </div>
     </section>

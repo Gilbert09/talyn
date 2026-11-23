@@ -14,12 +14,14 @@ describe('loop run tenant isolation', () => {
   let testDb: Awaited<ReturnType<typeof createTestDb>>;
   const loop = {
     id: 'loop-a', workspaceId: 'ws-a', name: 'A', prompt: 'Test', enabled: false,
-    cron: '0 9 * * *', timezone: 'UTC', provider: 'posthog_code',
-    model: 'claude-opus-5', repoFullName: 'a/a', consecutiveFailures: 2,
+    cron: '0 9 * * *', timezone: 'UTC', provider: 'selfhosted', target: 'session',
+    model: 'claude-sonnet-5-5', repoFullName: 'a/a', consecutiveFailures: 2,
   };
+  // An old run from before automations stopped creating cloud tasks: it still
+  // settles through the task path.
   const run = {
     id: 'run-a', loopId: 'loop-a', workspaceId: 'ws-a', scheduledFor: new Date(0),
-    repoFullName: 'a/a', provider: 'posthog_code', model: 'claude-opus-5', status: 'queued',
+    repoFullName: 'a/a', provider: 'posthog_code', model: 'claude-opus-5', target: 'task', status: 'queued',
     dispatchedAt: new Date(0),
   };
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
+  Bell,
   FileText,
   Brain,
   Users,
@@ -14,7 +15,6 @@ import {
   Check,
   AlertCircle,
   ChevronDown,
-  MessageSquare,
   Loader2,
   Unlink,
   RefreshCw,
@@ -38,31 +38,30 @@ import {
   SquareTerminal,
   Keyboard,
   Box,
-  Network,
   Search,
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
-import { SlackSettings } from './SlackSettings';
 import { InstructionsSettings } from './InstructionsSettings';
 import { RepositoryInstructionsSection } from '../settings/RepositoryInstructionsSection';
 import { MemorySection } from '../settings/MemorySection';
 import { SandboxSetupSettings } from '../settings/sections/SandboxSetupSettings';
-import { PrivateRoutesSettings } from '../settings/sections/PrivateRoutesSettings';
 import { SettingsPage } from '../ui/settings';
 import { ApiTokensSettings } from '../settings/sections/ApiTokensSettings';
 import { DeveloperInternals } from './DeveloperInternals';
 import { TeamSettings } from './TeamBilling';
 import { TeamsSettings } from '../settings/sections/TeamsSettings';
 import { BillingSettings } from '../settings/sections/BillingSettings';
-import { TrunkSettingsCard } from './TrunkSettingsCard';
 import { BuildInfo } from './BuildInfo';
-import { highlightsForSurface, privateRoutesOffered } from '@talyn/shared';
-import { ApiError, api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
+import { highlightsForSurface, posthogCodeRetired } from '@talyn/shared';
+import { errorCode, useSignInAbandon } from '../../lib/signInFunnel';
+import { ApiError, api, GitHubRepo, getMcpEndpoint, loadAllRepos, mergeRepos } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
 import { setLogoutReason } from '../../lib/logoutReason';
+import { useFleetModelCatalog } from '../../lib/fleetModelCatalog';
 import { downscaleImage } from '../../lib/imageDownscale';
 import { cn } from '../../lib/utils';
+import { formatKeys } from '../../lib/shortcuts';
 import { FleetAgentMark } from '../../lib/providerMeta';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { Button } from '../ui/button';
@@ -80,11 +79,16 @@ import {
   POSTHOG_KEY_SCOPE_NOTE,
 } from '../widgets/GetKeyLink';
 import { GithubInstallStatus } from '../widgets/GithubInstallStatus';
+import {
+  PostHogCodeRetiredNotice,
+  usePostHogCodeOffered,
+  usePostHogCodeRetiringNotice,
+} from '../widgets/PostHogCodeRetirement';
 import { useGithubInstallations } from '../../hooks/useGithubInstallations';
 import { useIsDevBuild } from '../../hooks/useIsDevBuild';
 import { isOwnerCovered, parseRepoInput } from '../../lib/githubInstall';
 import { WebRepoRow } from '../settings/RepositoryRow';
-import { openExternal } from '../../lib/openExternal';
+import { openExternal, prepareSignInWindow } from '../../lib/openExternal';
 import { openGithubAppFlow } from '../../lib/githubInstall';
 import { APP_VERSION } from '../../lib/env';
 import type {
@@ -95,10 +99,9 @@ import type {
 } from '@talyn/shared';
 import { FleetAccountsList } from '../settings/FleetAccountsList';
 import { SessionsSettings } from '../settings/sections/SessionsSettings';
+import { NotificationsSettings } from '../settings/sections/NotificationsSettings';
 import { ShortcutsSettings } from '../settings/sections/ShortcutsSettings';
 import {
-  DEFAULT_FLEET_MODEL_ID,
-  FLEET_MODELS,
   POSTHOG_CODE_MODELS,
   DEFAULT_POSTHOG_CODE_MODEL_ID,
   defaultFleetModelForAgent,
@@ -110,11 +113,7 @@ import {
 } from '@talyn/shared';
 import { useWorkspaceStore, type SettingsSection, type Theme } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
-import {
-  useWorkspaceActions,
-  getMergeBlockedNotifyEnabled,
-  setMergeBlockedNotifyEnabled,
-} from '../../hooks/useApi';
+import { useWorkspaceActions } from '../../hooks/useApi';
 import { useAuth } from '../auth/AuthProvider';
 import {
   trackEvent,
@@ -130,17 +129,16 @@ import {
 } from '../../lib/repoCache';
 
 const SETTINGS_SEARCH_TERMS: Record<SettingsSection, string> = {
-  sessions: 'defaults runtime agent model reasoning effort plan mode internet access notifications archive idle branch prefix sidebar order usage limits',
+  sessions: 'defaults runtime agent model reasoning effort plan mode internet access archive idle branch prefix sidebar order usage limits',
   shortcuts: 'keyboard hotkeys keys navigation',
   workspace: 'name logo repositories GitHub delete code review',
   sandboxSetup: 'dotfiles setup steps install commands branch repository',
-  privateRoutes: 'Tailscale tailnet connector destinations hostname IP TCP port devices',
   integrations: 'GitHub Anthropic Claude Codex PostHog providers API keys connect',
-  slack: 'workspace bot emoji invite sessions channel',
   skills: 'SKILL.md local repository workspace tools',
   instructions: 'AGENTS.md CLAUDE.md prompts templates plan implement review fix repository files',
   memory: 'notes session remember forget review clean up cleanup schedule overlap contradict',
   codeReview: 'automatic reviews depth reviewers attention findings fixes inline comments summary',
+  notifications: 'alerts browser phone mobile push agent finishes merge queue blocked quiet hours timezone away',
   account: 'email sign out privacy analytics usage data session replays',
   billing: 'plan usage box hours limits upgrade invoices orders payment auto top-up balance',
   teams: 'members roles invite spaces home workspace seats',
@@ -160,26 +158,15 @@ export function SettingsPanel() {
   const billingStatus = useBillingStore((s) => s.status);
   const [search, setSearch] = useState('');
 
-  // Slack's callback lands on /settings?slack=…; show the Slack section so the
-  // result is visible.
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).has('slack')) setActiveSection('slack');
-  }, [setActiveSection]);
 
   const sections = [
     { id: 'workspace' as const, icon: FolderKanban, label: 'Workspace' },
     ...(features?.workbenches === true
       ? [{ id: 'sandboxSetup' as const, icon: Box, label: 'Sandbox setup' }]
       : []),
-    ...(privateRoutesOffered(features)
-      ? [{ id: 'privateRoutes' as const, icon: Network, label: 'Private routes' }]
-      : []),
     { id: 'sessions' as const, icon: SquareTerminal, label: 'Sessions' },
     { id: 'shortcuts' as const, icon: Keyboard, label: 'Shortcuts' },
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
-    ...(features?.workbenches === true
-      ? [{ id: 'slack' as const, icon: MessageSquare, label: 'Slack' }]
-      : []),
     { id: 'skills' as const, icon: Wand2, label: 'Skills' },
     { id: 'instructions' as const, icon: FileText, label: 'Instructions' },
     ...(features?.workbenches === true
@@ -188,6 +175,7 @@ export function SettingsPanel() {
     { id: 'codeReview' as const, icon: ScanSearch, label: 'Code review' },
 
     { id: 'account' as const, icon: User, label: 'Account' },
+    { id: 'notifications' as const, icon: Bell, label: 'Notifications' },
     { id: 'billing' as const, icon: CreditCard, label: 'Billing' },
     // Drawn for anyone the flag offers teams to, and for anyone already on a
     // team whatever the flag says: a seated member must always be able to
@@ -270,11 +258,9 @@ export function SettingsPanel() {
           <div className="p-6 max-w-2xl">
             {activeSection === 'workspace' && <WorkspaceSettings />}
             {activeSection === 'sandboxSetup' && features?.workbenches === true && <SandboxSetupSettings />}
-            {activeSection === 'privateRoutes' && privateRoutesOffered(features) && <PrivateRoutesSettings />}
             {activeSection === 'sessions' && <SessionsSettings />}
             {activeSection === 'shortcuts' && <ShortcutsSettings />}
             {activeSection === 'integrations' && <IntegrationsSettings />}
-            {activeSection === 'slack' && <SlackSettings />}
             {activeSection === 'skills' && <SkillsSettings />}
             {activeSection === 'instructions' && (
               <div className="space-y-6">
@@ -291,6 +277,7 @@ export function SettingsPanel() {
               </SettingsPage>
             )}
             {activeSection === 'account' && <AccountSettings />}
+            {activeSection === 'notifications' && <NotificationsSettings />}
             {activeSection === 'billing' && <BillingSettings />}
             {activeSection === 'teams' && (features?.spaces === true ? <TeamsSettings /> : <TeamSettings />)}
             {activeSection === 'appearance' && <AppearanceSettings />}
@@ -433,11 +420,20 @@ function WorkspaceSettings() {
   // Fetch the full repo set from GitHub (user + all orgs) and cache it.
   // This is the expensive call, so it only runs on a cache miss/stale or
   // an explicit refresh — never on every picker open.
+  const repoLoadRun = useRef(0);
   const refreshRepos = useCallback(async () => {
     if (!currentWorkspaceId) return;
+    // A newer load or a workspace change stops this one.
+    const run = ++repoLoadRun.current;
+    const cancelled = () => repoLoadRun.current !== run;
     setReposLoading(true);
     try {
-      const repos = await api.github.listAllRepos(currentWorkspaceId);
+      // Show each page as it arrives. A large org can take many pages.
+      const repos = await loadAllRepos(currentWorkspaceId, {
+        isCancelled: cancelled,
+        onProgress: (partial) => setAvailableRepos((prev) => mergeRepos(prev, partial)),
+      });
+      if (cancelled()) return;
       const now = Date.now();
       setAvailableRepos(repos);
       setReposFetchedAt(now);
@@ -445,8 +441,11 @@ function WorkspaceSettings() {
     } catch (_e) {
       // Keep whatever the cache gave us.
     } finally {
-      setReposLoading(false);
+      if (!cancelled()) setReposLoading(false);
     }
+  }, [currentWorkspaceId]);
+  useEffect(() => () => {
+    repoLoadRun.current++;
   }, [currentWorkspaceId]);
 
   // Load watched repos + GitHub status. Repos hydrate from the
@@ -468,10 +467,8 @@ function WorkspaceSettings() {
       if (!status.connected) return;
 
       const cached = readRepoCache(currentWorkspaceId);
-      if (cached) {
-        setAvailableRepos(cached.repos);
-        setReposFetchedAt(cached.fetchedAt);
-      }
+      setAvailableRepos(cached?.repos ?? []);
+      setReposFetchedAt(cached?.fetchedAt ?? null);
       if (!cached || Date.now() - cached.fetchedAt > REPO_CACHE_TTL_MS) {
         void refreshRepos();
       }
@@ -697,7 +694,11 @@ function WorkspaceSettings() {
                   Your repos + every org you belong to. For any other repo, type its
                   owner/name or paste its URL.{' '}
                   {reposLoading
-                    ? 'Refreshing…'
+                    ? reposFetchedAt
+                      ? 'Refreshing…'
+                      : availableRepos.length > 0
+                        ? `Loading more… ${availableRepos.length} found so far.`
+                        : ''
                     : reposFetchedAt
                       ? `Updated ${formatAge(reposFetchedAt)}.`
                       : ''}
@@ -763,7 +764,9 @@ function WorkspaceSettings() {
                 ) : typedRepoAddable ? null : (
                   <p className="text-sm text-muted-foreground p-2">
                     {repoSearch
-                      ? 'No matching repositories. Try Refresh, or type owner/name to add any repo.'
+                      ? reposLoading
+                        ? 'No matching repositories yet. Still loading…'
+                        : 'No matching repositories. Try Refresh, or type owner/name to add any repo.'
                       : 'No repositories found. Try Refresh.'}
                   </p>
                 )}
@@ -861,7 +864,8 @@ function WorkspaceSettings() {
   );
 }
 
-function IntegrationsSettings() {
+/** The GitHub App card: connect, disconnect and the installations list. Shown on the GitHub integration page. */
+export function GithubConnectionCard() {
   // GitHub status + user are preloaded into the store at startup
   // (useSystemStatus) and kept fresh there on window focus, so this panel
   // renders the connection state instantly instead of fetching on open. We
@@ -945,14 +949,7 @@ function IntegrationsSettings() {
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-medium mb-1">Integrations</h3>
-        <p className="text-sm text-muted-foreground">
-          Connect external services to enhance your workflow
-        </p>
-      </div>
-
+    <div className="space-y-4">
       {error && (
         <div className="p-3 rounded-md bg-red-500/10 border border-red-500/20 text-red-400 text-sm flex items-center gap-2">
           <AlertCircle className="w-4 h-4" />
@@ -1035,22 +1032,28 @@ function IntegrationsSettings() {
             </div>
           )}
         </Card>
-
-        {/* Trunk merge ETAs. Draws nothing unless the feature is on. */}
-        <TrunkSettingsCard />
       </div>
+    </div>
+  );
+}
+
+/** Settings → Integrations: the cloud agents Talyn Fleet runs. */
+function IntegrationsSettings() {
+  return (
+    <div className="space-y-6">
+      <h3 className="text-lg font-medium">Integrations</h3>
 
       {/* Cloud providers — the vendors that run the agent loop and open PRs. */}
       <div className="space-y-3">
         <div>
-          <h4 className="text-sm font-semibold">Cloud providers</h4>
+          <h4 className="text-sm font-semibold">Cloud agents</h4>
           <p className="text-sm text-muted-foreground">
-            Vendors that run your tasks and open PRs. Connect one or more, then choose which
-            provider new tasks use by default.
+            Connect your Claude or Codex subscription for Talyn Fleet, then choose which provider
+            new tasks use by default.
           </p>
         </div>
 
-        <ProviderConnectCards />
+        <SelfHostedFleetCard />
 
         <CloudProviderDefaultSelector />
       </div>
@@ -1226,6 +1229,7 @@ export function ProviderConnectCards() {
  * every settings visit.
  */
 function SelfHostedFleetCard() {
+  const modelCatalog = useFleetModelCatalog();
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);
@@ -1324,8 +1328,8 @@ function SelfHostedFleetCard() {
             providerType="selfhosted"
             title="Model"
             description="Which model fleet runs use, and therefore which agent runs them — the model carries its vendor. Sonnet 5 handles the mechanical work (rebases, conflicts, re-running CI) at a fraction of Opus's cost."
-            models={FLEET_MODELS}
-            defaultId={DEFAULT_FLEET_MODEL_ID}
+            models={modelCatalog.models}
+            defaultId={modelCatalog.defaults.claude}
             settingKey="fleetModel"
           />
         </div>
@@ -1359,9 +1363,26 @@ export function FleetAgentRow({
   const [claudeToken, setClaudeToken] = useState('');
   const [awaitingClaudeCode, setAwaitingClaudeCode] = useState(false);
   const [claudeCode, setClaudeCode] = useState('');
+  // Set only when the browser blocked the sign-in tab, so the user can open it by hand.
+  const [blockedClaudeUrl, setBlockedClaudeUrl] = useState<string | null>(null);
   const [pasted, setPasted] = useState('');
+  const funnel = useSignInAbandon();
 
   const label = agent === 'claude' ? 'Claude subscription' : 'Codex (ChatGPT) subscription';
+
+  const reportFailure = useCallback(
+    (stage: 'start' | 'finish' | 'save' | 'parse', message: string, code: string | null = null) => {
+      funnel.end();
+      trackEvent('cloud_provider_connect_failed', {
+        provider: 'selfhosted',
+        agent,
+        stage,
+        error: message.slice(0, 200),
+        error_code: code,
+      });
+    },
+    [agent, funnel]
+  );
 
   /**
    * Refresh from the server rather than patching the store optimistically.
@@ -1386,18 +1407,21 @@ export function FleetAgentRow({
       setError(null);
       try {
         await api.cloudProviders.saveConfig('selfhosted', currentWorkspaceId, config);
+        funnel.end();
         trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent });
         setClaudeToken('');
         setPasted('');
         setEditing(false);
         await refresh();
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to save credentials');
+        const message = e instanceof Error ? e.message : 'Failed to save credentials';
+        setError(message);
+        if (!config.clearClaude && !config.clearCodex) reportFailure('save', message, errorCode(e));
       } finally {
         setBusy(false);
       }
     },
-    [agent, currentWorkspaceId, refresh]
+    [agent, currentWorkspaceId, refresh, reportFailure, funnel]
   );
 
   const disconnect = useCallback(async () => {
@@ -1415,16 +1439,22 @@ export function FleetAgentRow({
    * to swap them.
    */
   const savePasted = useCallback(async () => {
+    trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent: 'codex', method: 'codex_paste' });
+    funnel.begin('codex', 'codex_paste');
+    const fail = (message: string) => {
+      setError(message);
+      reportFailure('parse', message);
+    };
     let parsed: { tokens?: { access_token?: string; refresh_token?: string; account_id?: string } };
     try {
       parsed = JSON.parse(pasted);
     } catch {
-      setError('That is not valid JSON. Paste the whole contents of ~/.codex/auth.json.');
+      fail('That is not valid JSON. Paste the whole contents of ~/.codex/auth.json.');
       return;
     }
-    const tokens = parsed.tokens ?? (parsed as unknown as { access_token?: string; refresh_token?: string; account_id?: string });
-    if (!tokens.access_token || !tokens.refresh_token) {
-      setError('That JSON has no access_token / refresh_token pair. Run `codex login` first.');
+    const tokens = parsed?.tokens ?? (parsed as unknown as { access_token?: string; refresh_token?: string; account_id?: string } | null);
+    if (!tokens?.access_token || !tokens.refresh_token) {
+      fail('That JSON has no access_token / refresh_token pair. Run `codex login` first.');
       return;
     }
     await save({
@@ -1432,7 +1462,7 @@ export function FleetAgentRow({
       codexRefreshToken: tokens.refresh_token,
       ...(tokens.account_id ? { codexAccountId: tokens.account_id } : {}),
     });
-  }, [pasted, save]);
+  }, [pasted, save, reportFailure, funnel]);
 
   /**
    * Claude sign-in: open Anthropic's page, take the code back.
@@ -1444,18 +1474,27 @@ export function FleetAgentRow({
    */
   const startClaudeSignIn = useCallback(async () => {
     if (!currentWorkspaceId) return;
+    // Reserve the tab before the await. Safari and Firefox block a popup opened after it.
+    const browser = prepareSignInWindow();
+    trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent: 'claude', method: 'claude_oauth' });
+    funnel.begin('claude', 'claude_oauth');
     setBusy(true);
     setError(null);
+    setBlockedClaudeUrl(null);
     try {
       const { url } = await api.cloudProviders.startClaudeSignIn(currentWorkspaceId);
-      void openExternal(url);
+      const opened = await browser.open(url);
+      if (!opened) setBlockedClaudeUrl(url);
       setAwaitingClaudeCode(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not start the Claude sign-in');
+      browser.close();
+      const message = e instanceof Error ? e.message : 'Could not start the Claude sign-in';
+      setError(message);
+      reportFailure('start', message, errorCode(e));
     } finally {
       setBusy(false);
     }
-  }, [currentWorkspaceId]);
+  }, [currentWorkspaceId, reportFailure, funnel]);
 
   const finishClaudeSignIn = useCallback(async () => {
     if (!currentWorkspaceId) return;
@@ -1465,17 +1504,21 @@ export function FleetAgentRow({
       await api.cloudProviders.completeClaudeSignIn(currentWorkspaceId, claudeCode);
       setAwaitingClaudeCode(false);
       setClaudeCode('');
+      setBlockedClaudeUrl(null);
+      funnel.end();
       trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent: 'claude' });
       setEditing(false);
       // Re-read rather than guess: the card renders off `connectedAgents`,
       // which only the backend can compute.
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not finish the Claude sign-in');
+      const message = e instanceof Error ? e.message : 'Could not finish the Claude sign-in';
+      setError(message);
+      reportFailure('finish', message, errorCode(e));
     } finally {
       setBusy(false);
     }
-  }, [currentWorkspaceId, claudeCode, refresh]);
+  }, [currentWorkspaceId, claudeCode, refresh, reportFailure, funnel]);
 
   const showForm = editing || !connected;
 
@@ -1538,6 +1581,19 @@ export function FleetAgentRow({
                   <p className="text-xs text-muted-foreground">
                     Approve the request in your browser, then paste the code Anthropic shows you.
                   </p>
+                  {blockedClaudeUrl && (
+                    <p className="text-xs text-muted-foreground">
+                      Your browser blocked the sign-in tab.{' '}
+                      <a
+                        href={blockedClaudeUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium text-foreground underline underline-offset-2"
+                      >
+                        Open the Claude sign-in page
+                      </a>
+                    </p>
+                  )}
                   <Input
                     label="Code from Anthropic"
                     value={claudeCode}
@@ -1555,7 +1611,11 @@ export function FleetAgentRow({
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => setAwaitingClaudeCode(false)}
+                      onClick={() => {
+                        funnel.abandon('back');
+                        setAwaitingClaudeCode(false);
+                        setBlockedClaudeUrl(null);
+                      }}
                       disabled={busy}
                     >
                       Back
@@ -1567,8 +1627,8 @@ export function FleetAgentRow({
               {/* The metered path stays. A workspace billing per token has no
                   subscription to sign in to, so removing this would strand it. */}
               <details className="pt-1">
-                <summary className="cursor-pointer text-xs text-muted-foreground">
-                  Use a Console API key instead
+                <summary className="cursor-pointer text-xs font-medium text-foreground hover:underline">
+                  No Claude subscription? Use an Anthropic API key
                 </summary>
                 <div className="mt-2 space-y-2">
                   <Input
@@ -1586,7 +1646,14 @@ export function FleetAgentRow({
                   />
                   <Button
                     size="sm"
-                    onClick={() => save({ claudeToken })}
+                    onClick={() => {
+                      trackEvent('cloud_provider_signin_started', {
+                        provider: 'selfhosted',
+                        agent: 'claude',
+                        method: 'claude_api_key',
+                      });
+                      void save({ claudeToken });
+                    }}
                     disabled={busy || !claudeToken.trim()}
                   >
                     {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save & verify'}
@@ -1623,6 +1690,7 @@ export function FleetAgentRow({
               size="sm"
               variant="ghost"
               onClick={() => {
+                funnel.abandon('cancel');
                 setEditing(false);
                 setError(null);
               }}
@@ -1881,6 +1949,8 @@ export function CloudProviderDefaultSelector() {
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const connected = (cloudProviders ?? []).filter((p) => p.connected);
   const [saving, setSaving] = useState(false);
+  const retired = useWorkspaceStore((s) => posthogCodeRetired(s.features));
+  const autoCopy = retired ? 'Auto prefers Talyn Fleet.' : 'Auto prefers Talyn Fleet, then PostHog Code.';
 
   const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
   const settings = workspace?.settings;
@@ -1957,7 +2027,7 @@ export function CloudProviderDefaultSelector() {
         <div className="flex-1 min-w-0">
           <h4 className="font-medium">Default for new tasks</h4>
           <p className="text-sm text-muted-foreground mt-1">
-            Which agent new tasks run on. Auto prefers Talyn Fleet, then PostHog Code.
+            Which agent new tasks run on. {autoCopy}
             “Ask every time” shows a picker on the Task button when more than one is connected.
           </p>
         </div>
@@ -2002,7 +2072,7 @@ export function cloudProviderOffered(
  * - **OAuth** — offered when the backend has `POSTHOG_OAUTH_*` configured. The
  *   user authorizes Talyn on PostHog and picks the project on PostHog's own
  *   consent screen, so no credential ever passes through this window and the
- *   grant is narrowed to one project + `task:read`/`task:write`. It's revocable
+ *   grant is narrowed to one project + `task:*` and `inbox:*`. It's revocable
  *   from PostHog's Connected Apps screen.
  * - **Personal API key** — now offered ONLY where OAuth is not configured
  *   (self-hosted, local dev), which SETUP §6b documents as the fall-back. It
@@ -2033,6 +2103,8 @@ export function PostHogCodeCard() {
   const [host, setHost] = useState('https://us.posthog.com');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const offered = usePostHogCodeOffered();
+  const retiring = usePostHogCodeRetiringNotice();
 
   // Seed the edit-form fields from the preloaded status. Deps are the scalar
   // values, so this won't clobber in-progress edits (status is stable while
@@ -2143,6 +2215,8 @@ export function PostHogCodeCard() {
       : 'Add a personal API key + project id to run tasks on PostHog Code’s cloud sandbox.';
   };
 
+  if (!offered) return null;
+
   return (
     <Card className="p-4">
       <div className="flex items-start gap-4">
@@ -2169,13 +2243,14 @@ export function PostHogCodeCard() {
             )}
           </div>
           <p className="text-sm text-muted-foreground mt-1">{description()}</p>
+          {retiring && <PostHogCodeRetiredNotice className="mt-2" />}
 
           {/* Not connected, OAuth on the table: it is the ONLY path offered.
               The key form used to sit one click away here. It is gone wherever
               OAuth works, because a personal API key is a long-lived credential
               with the user's whole project behind it, pasted through this
               window, while the OAuth grant is narrowed to one project and
-              `task:read`/`task:write` and is revocable from PostHog's own
+              `task:*` (PostHog Code) plus `inbox:*` (PostHog Inbox rules) and is revocable from PostHog's own
               Connected Apps screen. Offering both made the weaker one a
               one-click default for anyone who did not know the difference.
               A deployment with no POSTHOG_OAUTH_* configured still gets the key
@@ -2330,24 +2405,6 @@ export function PostHogCodeCard() {
 
 function AppearanceSettings() {
   const { theme, setTheme } = useWorkspaceStore();
-  const [notifyBlocked, setNotifyBlocked] = useState(getMergeBlockedNotifyEnabled());
-  const [notifyPermission, setNotifyPermission] = useState<NotificationPermission>(
-    typeof Notification !== 'undefined' ? Notification.permission : 'denied'
-  );
-
-  const toggleNotifyBlocked = async (next: boolean) => {
-    setMergeBlockedNotifyEnabled(next);
-    setNotifyBlocked(next);
-    // Request OS permission eagerly on enable so the first real block doesn't
-    // race the browser permission prompt.
-    if (next && typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      try {
-        setNotifyPermission(await Notification.requestPermission());
-      } catch {
-        // ignore
-      }
-    }
-  };
 
   const themeOptions: { value: Theme; label: string; icon: typeof Sun; description: string }[] = [
     {
@@ -2411,32 +2468,12 @@ function AppearanceSettings() {
       </Card>
 
       <Card className="p-4">
-        <h4 className="font-medium mb-3">Notifications</h4>
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={notifyBlocked}
-            onChange={(e) => void toggleNotifyBlocked(e.target.checked)}
-            className="mt-1"
-          />
-          <div className="flex-1">
-            <div className="font-medium text-sm">
-              Notify me when a merge-queue PR is blocked
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Shows a desktop notification and an in-app alert when a PR in the merge
-              queue gives up after its retry budget and needs manual intervention.
-              Click the notification to jump to it.
-            </p>
-            {notifyPermission === 'denied' && (
-              <p className="text-xs text-yellow-500 mt-1">
-                Desktop notifications are blocked at the OS level — grant Talyn
-                permission in your system settings to receive them. (The in-app alert
-                still shows.)
-              </p>
-            )}
-          </div>
-        </label>
+        <h4 className="font-medium mb-1">Zoom</h4>
+        <p className="text-sm text-muted-foreground">
+          Use your browser's zoom to make everything bigger or smaller, the session
+          transcript included: {formatKeys('mod+=')} zooms in, {formatKeys('mod+-')} zooms
+          out and {formatKeys('mod+0')} resets. Your browser remembers the size for Talyn.
+        </p>
       </Card>
     </div>
   );

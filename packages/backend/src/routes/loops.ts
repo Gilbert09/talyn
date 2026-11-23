@@ -98,7 +98,7 @@ export function loopRoutes(): Router {
     if (!(await workspaceMayUseLoops(workspaceId))) {
       res.status(403).json({
         success: false,
-        error: `Loops are not available: ${loopsRefusalReason()}.`,
+        error: `Automations are not available: ${loopsRefusalReason()}.`,
         code: 'loops_unavailable',
       });
       return false;
@@ -141,8 +141,8 @@ export function loopRoutes(): Router {
     if (loop.mcpServerIds !== null && loop.provider !== 'selfhosted') {
       return 'MCP servers are only available on Talyn Fleet.';
     }
-    if (loop.target === 'session' && loop.mcpServerIds !== null) {
-      return 'A session uses the workspace MCP servers. Per-loop MCP selection is only available for cloud tasks.';
+    if (loop.mcpServerIds !== null) {
+      return 'A schedule starts a session, and a session uses the workspace MCP servers. A schedule cannot choose its own.';
     }
     if (loop.internetAccess && loop.provider !== 'selfhosted') {
       return 'Internet access is a Talyn Fleet capability — PostHog Code runs cannot be given it.';
@@ -161,18 +161,17 @@ export function loopRoutes(): Router {
         const label = agent === 'codex' ? 'Codex' : 'Claude';
         return `Talyn Fleet has no ${label} subscription connected to this workspace.`;
       }
-      if (loop.target === 'session') {
-        const owner = await getDbClient()
-          .select({ id: usersTable.id, email: usersTable.email })
-          .from(workspacesTable)
-          .innerJoin(usersTable, eq(usersTable.id, workspacesTable.ownerId))
-          .where(eq(workspacesTable.id, workspaceId))
-          .limit(1);
-        if (!owner[0]) return 'The workspace owner no longer exists.';
-        const readiness = await workbenchReadiness(workspaceId, owner[0]);
-        const reason = readiness.sandbox.reasons[0];
-        if (reason) return reason.message;
-      }
+      // Every loop starts a session, so the owner must be able to run one.
+      const owner = await getDbClient()
+        .select({ id: usersTable.id, email: usersTable.email })
+        .from(workspacesTable)
+        .innerJoin(usersTable, eq(usersTable.id, workspacesTable.ownerId))
+        .where(eq(workspacesTable.id, workspaceId))
+        .limit(1);
+      if (!owner[0]) return 'The workspace owner no longer exists.';
+      const readiness = await workbenchReadiness(workspaceId, owner[0]);
+      const reason = readiness.sandbox.reasons[0];
+      if (reason) return reason.message;
     }
     return null;
   }
@@ -208,7 +207,7 @@ export function loopRoutes(): Router {
       // rather than flattening every bad shape to "invalid loop".
       return res.status(400).json({
         success: false,
-        error: err instanceof Error ? err.message : 'invalid loop',
+        error: err instanceof Error ? err.message : 'invalid automation',
       });
     }
     const problem = await checkTarget(workspaceId, normalized);
@@ -223,7 +222,7 @@ export function loopRoutes(): Router {
 
   router.patch('/:id', async (req, res) => {
     const existing = await getLoop(req.params.id);
-    if (!existing) return res.status(404).json({ success: false, error: 'Loop not found' });
+    if (!existing) return res.status(404).json({ success: false, error: 'Automation not found' });
     if (!(await gate(req, res, existing.workspaceId))) return;
 
     // A whole-loop replace, not a field merge. The provider and the model
@@ -236,14 +235,14 @@ export function loopRoutes(): Router {
     } catch (err) {
       return res.status(400).json({
         success: false,
-        error: err instanceof Error ? err.message : 'invalid loop',
+        error: err instanceof Error ? err.message : 'invalid automation',
       });
     }
     const problem = await checkTarget(existing.workspaceId, normalized);
     if (problem) return res.status(400).json({ success: false, error: problem });
 
     const data = await updateLoop(existing.id, normalized);
-    if (!data) return res.status(404).json({ success: false, error: 'Loop not found' });
+    if (!data) return res.status(404).json({ success: false, error: 'Automation not found' });
 
     captureWorkspaceEvent(existing.workspaceId, 'loop_updated', loopShape(existing.id, normalized));
     // Its own event: switching a loop OFF is the strongest signal that
@@ -260,7 +259,7 @@ export function loopRoutes(): Router {
 
   router.delete('/:id', async (req, res) => {
     const existing = await getLoop(req.params.id);
-    if (!existing) return res.status(404).json({ success: false, error: 'Loop not found' });
+    if (!existing) return res.status(404).json({ success: false, error: 'Automation not found' });
     if (!(await gate(req, res, existing.workspaceId))) return;
     await deleteLoop(existing.id);
     captureWorkspaceEvent(existing.workspaceId, 'loop_deleted', {
@@ -277,7 +276,7 @@ export function loopRoutes(): Router {
   /** One loop's run history, newest first. `cursor` is the last row's createdAt. */
   router.get('/:id/runs', async (req, res) => {
     const existing = await getLoop(req.params.id);
-    if (!existing) return res.status(404).json({ success: false, error: 'Loop not found' });
+    if (!existing) return res.status(404).json({ success: false, error: 'Automation not found' });
     if (!(await gate(req, res, existing.workspaceId))) return;
     const raw = Number(req.query.limit);
     const limit = Number.isFinite(raw) && raw > 0 ? Math.min(raw, MAX_RUN_PAGE) : DEFAULT_RUN_PAGE;
@@ -301,7 +300,7 @@ export function loopRoutes(): Router {
    */
   router.post('/:id/run', async (req, res) => {
     const existing = await getLoop(req.params.id);
-    if (!existing) return res.status(404).json({ success: false, error: 'Loop not found' });
+    if (!existing) return res.status(404).json({ success: false, error: 'Automation not found' });
     if (!(await gate(req, res, existing.workspaceId))) return;
 
     // `scheduledFor` is NOW, and that is what keeps a manual run from colliding

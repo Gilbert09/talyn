@@ -40,6 +40,8 @@ function runStateFor(status: Task['status']): { label: string; dot: string; live
       return { label: 'Failed', dot: 'bg-red-500', live: false };
     case 'needs_human':
       return { label: 'Needs you', dot: 'bg-amber-500', live: false };
+    case 'waiting_ci':
+      return { label: 'Waiting for CI', dot: 'bg-sky-400', live: true };
     case 'cancelled':
       return { label: 'Stopped', dot: 'bg-zinc-500', live: false };
     default:
@@ -184,9 +186,9 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
             </Button>
           )}
           {/* Abort only makes sense while the cloud run is alive
-              (task.status === 'in_progress'); afterwards the task is
+              (in progress, or paused for CI); afterwards the task is
               already terminal and /stop would 400. */}
-          {task.status === 'in_progress' && (
+          {(task.status === 'in_progress' || task.status === 'waiting_ci') && (
             <Button
               variant="ghost"
               size="sm"

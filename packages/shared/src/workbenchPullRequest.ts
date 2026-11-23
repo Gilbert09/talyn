@@ -109,10 +109,13 @@ export function buildCreatePrTurnInstructions(input: {
   branch: string;
   baseBranch: string;
   extra?: string | null;
+  /** Set on an automatic retry: why Talyn could not open the pull request after the last turn. */
+  retryError?: string | null;
 }): string {
   const base = input.baseBranch;
   const branch = input.branch;
-  const lines = [
+  const retryError = input.retryError?.trim();
+  const lines = retryError ? buildPrRetryLines(branch, base, retryError) : [
     `The person pressed Create PR in Talyn. Prepare the pull request for the work on this branch (\`${branch}\`), to be merged into \`${base}\`.`,
     '',
     'Talyn opens this pull request, not you. When this turn ends, Talyn commits any uncommitted changes,',
@@ -143,6 +146,55 @@ export function buildCreatePrTurnInstructions(input: {
   const extra = input.extra?.trim();
   if (extra) lines.push('', 'Extra instructions for this pull request:', '', extra);
   return lines.join('\n');
+}
+
+/**
+ * The most automatic retries after one failed pull request. Each retry is a
+ * full agent turn, so a cause the agent cannot fix stops here and waits for
+ * the person.
+ */
+export const PR_RETRY_MAX = 2;
+
+/** The visible text of the turn that asks the agent to fix a failed pull request. */
+export function pullRequestRetryMessage(error: string): string {
+  return [
+    'Talyn could not open the pull request:',
+    '',
+    error.trim(),
+    '',
+    `Fix the cause, then end your reply with a new \`\`\`${PR_BLOCK_FENCE} block. Talyn then tries again.`,
+  ].join('\n');
+}
+
+/**
+ * The instructions of an automatic retry. The agent may commit here (a merge
+ * of the remote branch is a commit), but it still must not push or open the
+ * pull request.
+ */
+function buildPrRetryLines(branch: string, base: string, error: string): string[] {
+  return [
+    `Talyn tried to push \`${branch}\` and open its pull request into \`${base}\` after your last reply. It failed:`,
+    '',
+    ...error.split('\n').map((line) => `    ${line}`),
+    '',
+    'Fix the cause in this turn. When this turn ends, Talyn commits any uncommitted changes,',
+    `pushes \`${branch}\` (signed, when the repository requires it) and opens the pull request from your reply.`,
+    '',
+    "In this turn, these instructions override the repository's own pull-request instructions.",
+    '',
+    'Rules for this turn:',
+    `- Stay on branch \`${branch}\`. Do not create, rename or switch branches.`,
+    `- If the remote branch has commits that this branch does not have, run \`git fetch origin ${branch}\`,`,
+    `  then \`git merge origin/${branch}\`. Resolve every conflict and commit the merge.`,
+    '  Do not rebase and do not reset: the remote commits must stay in the history.',
+    '- If a commit failed, find the cause and fix it. Then commit the changes yourself.',
+    '- Do not push or open the pull request.',
+    '- Do not run `gh`, `fleet-publish` or `git push`, and do not call the GitHub API.',
+    `- If you cannot fix the cause, say why and do not write the \`\`\`${PR_BLOCK_FENCE} block. The person decides.`,
+    '',
+    'When the cause is fixed, reply with one or two sentences on what you did, then prepare the final reply:',
+    ...prBlockInstructions(),
+  ];
 }
 
 // ============================================================================
@@ -307,10 +359,11 @@ export function workingTreeStatus(): GitStep {
  * runtime runs it with `execFile` (no shell), and the sandbox's script quotes
  * it with `shellQuote`, so no message can run as a command.
  *
- * `skipHooks` is for the sandbox: its commit shell lacks the agent's tool PATH,
- * so a hook such as husky's `pnpm lint-staged` fails with "not found", and the
- * agent has already run the checks that CI runs again. A user's own machine
- * keeps its hooks.
+ * `skipHooks` is for Talyn's own commits, in the sandbox and in a local
+ * session alike. The sandbox's commit shell lacks the agent's tool PATH, and a
+ * local session's worktree has no installed dependencies, so a hook such as
+ * husky's `pnpm lint-staged` fails with "not found" or ENOENT. The agent has
+ * already run the checks, and CI runs them again.
  */
 export function commitAllSteps(message: string, opts: { skipHooks?: boolean } = {}): GitStep[] {
   return [
@@ -337,8 +390,13 @@ export function parseCommitsAhead(stdout: string): number | null {
 }
 
 /** Push the current branch and track it. Never prompts: a missing credential fails at once. */
+/**
+ * Talyn's own push skips the repository's pre-push hooks, as its commit skips the commit hooks. A hook can
+ * refuse for a reason that does not apply to this push (PostHog's refuses a branch in the Trunk merge queue),
+ * and it needs tools the sandbox may not have.
+ */
 export function pushHeadStep(): GitStep {
-  return { argv: ['git', 'push', '-u', 'origin', 'HEAD'], env: { GIT_TERMINAL_PROMPT: '0' } };
+  return { argv: ['git', 'push', '--no-verify', '-u', 'origin', 'HEAD'], env: { GIT_TERMINAL_PROMPT: '0' } };
 }
 
 /**
@@ -474,22 +532,34 @@ export function gitStderrTail(stderr: string, lines = 4): string {
  * their own credentials. A change to a workflow file also needs the Workflows
  * permission (or the `workflow` scope for an OAuth token).
  */
-export function describePushFailure(input: { stderr: string; runtime: 'sandbox' | 'local'; repoFullName: string }): string {
-  const detail = gitStderrTail(input.stderr);
-  const refused = /\b403\b|permission to .* denied|write access to repository not granted|access denied|denied to/i.test(
-    input.stderr,
-  );
-  const workflowRefused = /refusing to allow an? .+ to create or update workflow/i.test(input.stderr);
+export type PushFailureKind = 'workflow_refused' | 'refused' | 'behind' | 'other';
+
+/**
+ * Why `git push` failed. Only `behind` is a cause the agent can fix itself (it
+ * merges the remote branch). A refusal needs a person to grant access.
+ */
+export function classifyPushFailure(stderr: string): PushFailureKind {
+  if (/refusing to allow an? .+ to create or update workflow/i.test(stderr)) return 'workflow_refused';
+  if (/\b403\b|permission to .* denied|write access to repository not granted|access denied|denied to/i.test(stderr)) return 'refused';
+  if (/\[rejected\]|non-fast-forward|fetch first/i.test(stderr)) return 'behind';
+  return 'other';
+}
+
+export function describePushFailure(input: { stderr: string; stdout?: string; runtime: 'sandbox' | 'local'; repoFullName: string }): string {
+  // A hook explains a refusal on stdout; git then prints only "failed to push some refs" on stderr.
+  const output = [input.stdout ?? '', input.stderr].filter((part) => part.trim()).join('\n');
+  const detail = gitStderrTail(output);
+  const kind = classifyPushFailure(output);
   let head: string;
-  if (workflowRefused && input.runtime === 'sandbox') {
+  if (kind === 'workflow_refused' && input.runtime === 'sandbox') {
     head = `GitHub refused the push because the branch changes a file in .github/workflows. The Talyn GitHub App needs Workflows: Read & write on ${input.repoFullName}. Grant it, or remove the workflow change from the branch.`;
-  } else if (workflowRefused) {
+  } else if (kind === 'workflow_refused') {
     head = `GitHub refused the push because the branch changes a file in .github/workflows. Your git credentials need the workflow scope on ${input.repoFullName}.`;
-  } else if (refused && input.runtime === 'sandbox') {
+  } else if (kind === 'refused' && input.runtime === 'sandbox') {
     head = `GitHub refused the push. The Talyn GitHub App needs Contents: Read & write on ${input.repoFullName}.`;
-  } else if (refused) {
+  } else if (kind === 'refused') {
     head = `GitHub refused the push. Check that your git credentials can write to ${input.repoFullName}.`;
-  } else if (/\[rejected\]|non-fast-forward|fetch first/i.test(input.stderr)) {
+  } else if (kind === 'behind') {
     head = 'GitHub rejected the push: the remote branch has commits this branch does not have. Pull or merge them first.';
   } else {
     head = 'Could not push the branch.';

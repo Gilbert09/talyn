@@ -27,6 +27,7 @@ import type {
   WorkbenchSettings,
   WorkbenchStartProgress,
   WorkbenchSource,
+  MemoryForgottenReason,
   MemorySource,
   SlackRepoCandidate,
   SlackSessionSource,
@@ -261,7 +262,7 @@ export const teamMembers = pgTable(
 );
 
 /**
- * Team invites by email (migration 0127). The row waits for the person to
+ * Team invites by email (migration 0147). The row waits for the person to
  * open the emailed link and accept with their GitHub sign-in; accepting adds
  * their `team_members` row. Only a hash of the link token is stored.
  */
@@ -356,6 +357,8 @@ export const usageIntervals = pgTable(
     endReason: text('end_reason'), // EndReason
     billedThrough: timestamp('billed_through', { withTimezone: true }).notNull(),
     billedWsec: bigint('billed_wsec', { mode: 'number' }).notNull().default(0),
+    /** The highest memory the box used in this interval (MiB), raised by the usage sweep. Null: no reading yet. */
+    peakMemUsedMib: integer('peak_mem_used_mib'),
     /** A teammate who prompted the session and pays for this interval. `ownerId` is then that teammate. */
     payerUserId: text('payer_user_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -384,6 +387,9 @@ export const usagePeriods = pgTable(
     // Overage the credits could not cover (a turn or task that finished after
     // the budget ran out). Recorded, not billed.
     uncoveredMicros: bigint('uncovered_micros', { mode: 'number' }).notNull().default(0),
+    // Weighted seconds that usage resets moved out of used_wsec this period.
+    // used_wsec + reset_used_wsec is everything the period ran.
+    resetUsedWsec: bigint('reset_used_wsec', { mode: 'number' }).notNull().default(0),
     alert50At: timestamp('alert_50_at', { withTimezone: true }),
     alert80At: timestamp('alert_80_at', { withTimezone: true }),
     alert100At: timestamp('alert_100_at', { withTimezone: true }),
@@ -392,6 +398,30 @@ export const usagePeriods = pgTable(
   },
   (t) => ({
     pk: primaryKey({ name: 'usage_periods_pkey', columns: [t.ownerId, t.periodStart] }),
+  })
+);
+
+/**
+ * One paid usage reset (a one-time Polar order). Unique on the order id, so a
+ * redelivered `order.paid` resets once. A refund that arrives first leaves a
+ * row with `period_start` NULL, so the late `order.paid` does nothing.
+ */
+export const usageResets = pgTable(
+  'usage_resets',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id').notNull(),
+    polarOrderId: text('polar_order_id').notNull(),
+    tier: text('tier').notNull(), // UsageResetTier the order paid for
+    periodStart: timestamp('period_start', { withTimezone: true }),
+    usedBeforeWsec: bigint('used_before_wsec', { mode: 'number' }).notNull().default(0),
+    includedWsec: bigint('included_wsec', { mode: 'number' }).notNull().default(0),
+    refundedAt: timestamp('refunded_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    polarOrderUq: uniqueIndex('uq_usage_resets_polar_order').on(t.polarOrderId),
+    ownerPeriodIdx: index('idx_usage_resets_owner_period').on(t.ownerId, t.periodStart),
   })
 );
 
@@ -510,6 +540,9 @@ export const workspaces = pgTable(
     description: text('description'),
     logo: jsonb('logo'),
     settings: jsonb('settings').notNull().default({}),
+    // The owner's order for the workspace list (the context rail). Null sorts
+    // last, by name, so a new workspace needs no position.
+    position: integer('position'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -621,6 +654,12 @@ export const posthogOauthStates = pgTable(
     host: text('host').notNull(),
     /** 'web' | 'desktop' — chooses how the flow ends, recorded server-side. */
     client: text('client').notNull().default('desktop'),
+    /** The mobile app's allowlisted URL base, or null (migration 0127). */
+    mobileReturn: text('mobile_return'),
+    /** 'posthog_code' | 'posthog_inbox' — which connection the flow writes.
+     *  Both flows share the callback URL; each refuses the other's state
+     *  (migration 0138). */
+    kind: text('kind').notNull().default('posthog_code'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   },
@@ -1554,6 +1593,8 @@ export const workflows = pgTable(
     workspaceId: text('workspace_id')
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** `WorkflowIntegration`: 'github' | 'slack'. Every rule before 0130 is GitHub. */
+    integration: text('integration').notNull().default('github'),
     name: text('name').notNull(),
     enabled: boolean('enabled').notNull().default(true),
     /** `WorkflowTriggerEvent[]`. */
@@ -1564,11 +1605,22 @@ export const workflows = pgTable(
     actions: jsonb('actions').notNull(),
     /** The loop breaker — see DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR. */
     maxRunsPerPrPerHour: integer('max_runs_per_pr_per_hour').notNull().default(5),
+    /** Most runs in 24 hours. Null means no daily cap (migration 0134). */
+    maxRunsPerDay: integer('max_runs_per_day'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     workspaceIdx: index('idx_workflows_workspace').on(t.workspaceId),
+    // How a Slack event finds its rules. Partial, so the lookup never reads a
+    // GitHub rule. See migration 0130.
+    slackTeamIdx: index('idx_workflows_slack_team')
+      .on(sql`(${t.conditions} ->> 'slackTeamId')`)
+      .where(sql`${t.integration} = 'slack' AND ${t.enabled}`),
+    // How the PostHog Inbox poller finds the workspaces to poll. See migration 0134.
+    posthogInboxIdx: index('idx_workflows_posthog_inbox')
+      .on(t.workspaceId)
+      .where(sql`${t.integration} = 'posthog_inbox' AND ${t.enabled}`),
   })
 );
 
@@ -1580,14 +1632,25 @@ export const workflowRuns = pgTable(
       .notNull()
       .references(() => workflows.id, { onDelete: 'cascade' }),
     workspaceId: text('workspace_id').notNull(),
+    /** `WorkflowIntegration` of the rule that ran. */
+    integration: text('integration').notNull().default('github'),
+    /**
+     * What the run acted on: `pr:<owner/repo>#<number>` or
+     * `slack:<team>:<channel>`. The rate cap counts runs per key. Null only on
+     * rows the 0130 backfill could not key.
+     */
+    subjectKey: text('subject_key'),
+    /** The subject as a person reads it: `owner/repo#12` or `#eng-bugs`. */
+    subjectLabel: text('subject_label'),
     /** Nullable: a repo can be removed from the workspace after a run. */
     repositoryId: text('repository_id').references(() => repositories.id, {
       onDelete: 'set null',
     }),
     /** The PR, DENORMALISED — a workflow fires on PRs with no row at all, and
-     *  un-watching a PR deletes the row it had. The history must outlive both. */
-    repoFullName: text('repo_full_name').notNull(),
-    prNumber: integer('pr_number').notNull(),
+     *  un-watching a PR deletes the row it had. The history must outlive both.
+     *  Null on a Slack run. */
+    repoFullName: text('repo_full_name'),
+    prNumber: integer('pr_number'),
     prTitle: text('pr_title').notNull().default(''),
     prUrl: text('pr_url').notNull().default(''),
     prAuthor: text('pr_author').notNull().default(''),
@@ -1595,6 +1658,8 @@ export const workflowRuns = pgTable(
       onDelete: 'set null',
     }),
     taskId: text('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    /** The session a `start_session` action started. */
+    workbenchId: text('workbench_id').references(() => workbenches.id, { onDelete: 'set null' }),
     /** `WorkflowTriggerEvent`. */
     event: text('event').notNull(),
     /** GitHub's `X-GitHub-Delivery`. Unique per workflow — the idempotency key
@@ -1616,13 +1681,18 @@ export const workflowRuns = pgTable(
     /** How many times the actions have been attempted. Starts at 1. */
     attempts: integer('attempts').notNull().default(1),
     /**
-     * `WorkflowEventFacts` — what the run was acting on.
+     * `WorkflowFacts` — what the run was acting on.
      *
      * Kept so a retry is faithful: a `comment` action interpolates the PR's
      * branches, and the webhook payload is long gone by the time the gate clears.
      * Null on rows written before retries existed.
      */
     facts: jsonb('facts'),
+    /** `WorkflowRunTrigger`: 'event' or 'manual' ("Run selected", migration 0141). */
+    triggerSource: text('trigger_source').notNull().default('event'),
+    /** A manual run: the user who started it, and their name or email then. */
+    triggeredByUserId: text('triggered_by_user_id'),
+    triggeredByLabel: text('triggered_by_label'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
@@ -1634,6 +1704,8 @@ export const workflowRuns = pgTable(
       t.prNumber,
       t.createdAt
     ),
+    // The rate cap, per subject. See migration 0130.
+    subjectAtIdx: index('idx_workflow_runs_subject_at').on(t.workflowId, t.subjectKey, t.createdAt),
   })
 );
 
@@ -1671,8 +1743,8 @@ export const loops = pgTable(
     /** `LoopProvider` — the pinned provider. Never failed over; see dispatch.ts. */
     provider: text('provider').notNull(),
     model: text('model').notNull(),
-    /** `LoopTarget`: existing rows start cloud tasks; new rows may start sessions. */
-    target: text('target').notNull().default('task'),
+    /** `LoopTarget`: always `session`. Loops stopped starting cloud tasks (migration `0144`). */
+    target: text('target').notNull().default('session'),
     /** `LoopConcurrency` — what a firing does when the last run is still going. */
     concurrency: text('concurrency').notNull().default('skip'),
     /**
@@ -1816,8 +1888,8 @@ export const loopRuns = pgTable(
     /** Copied at fire time, so editing the loop cannot rewrite its history. */
     provider: text('provider').notNull(),
     model: text('model').notNull(),
-    /** `LoopTarget`, copied at fire time. */
-    target: text('target').notNull().default('task'),
+    /** `LoopTarget`, copied at fire time. Old runs can say `task`. */
+    target: text('target').notNull().default('session'),
     taskId: text('task_id').references(() => tasks.id, { onDelete: 'set null' }),
     /** The reviewable session this firing started, when `target = 'session'`. */
     workbenchId: text('workbench_id').references(() => workbenches.id, { onDelete: 'set null' }),
@@ -2324,6 +2396,8 @@ export const workbenches = pgTable(
     kind: text('kind').notNull().default('session'),
     /** The thread this session belongs to. Null for a thread and for a session outside a thread. */
     threadId: text('thread_id').references((): AnyPgColumn => workbenches.id, { onDelete: 'set null' }),
+    parentWorkbenchId: text('parent_workbench_id').references((): AnyPgColumn => workbenches.id, { onDelete: 'set null' }),
+    notifyParent: boolean('notify_parent').notNull().default(false),
     name: text('name').notNull(),
     /** The display title (model-written or a person's). Null: show `name`. Never renames the branch. */
     title: text('title'),
@@ -2357,6 +2431,8 @@ export const workbenches = pgTable(
       onDelete: 'set null',
     }),
     pullRequestLinkedAt: timestamp('pull_request_linked_at', { withTimezone: true }),
+    /** The link was chosen (a session started from the PR, or a manual link), not found by branch (migration 0135). */
+    pullRequestLinkExplicit: boolean('pull_request_link_explicit').notNull().default(false),
     pushedHeadShas: text('pushed_head_shas').array().notNull().default([]),
     allocatedBranch: boolean('allocated_branch').notNull().default(false),
     /** When the one post-first-turn branch rename was decided (renamed or kept). Null: not yet. */
@@ -2387,9 +2463,9 @@ export const workbenches = pgTable(
     /** The space this session is in (migration 0116). Null: Personal. */
     spaceId: text('space_id').references((): AnyPgColumn => spaces.id, { onDelete: 'set null' }),
     /**
-     * The `sessionAttentionKey` the owner saw when they last opened the session
-     * (migration 0126). The context rail does not count the session while its
-     * key is the same. Null: never seen.
+     * Unused. It held the `sessionAttentionKey` the owner saw when they last
+     * opened the session (migration 0126). A session now counts on the
+     * context rail until its alert is resolved, whether or not it was opened.
      */
     attentionAck: text('attention_ack'),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
@@ -2412,6 +2488,7 @@ export const workbenches = pgTable(
     pullRequestIdx: index('idx_workbenches_pull_request')
       .on(t.pullRequestId)
       .where(sql`${t.archivedAt} IS NULL`),
+    parentIdx: index('idx_workbenches_parent').on(t.parentWorkbenchId).where(sql`${t.parentWorkbenchId} IS NOT NULL`),
     threadIdx: index('idx_workbenches_thread')
       .on(t.threadId)
       .where(sql`${t.threadId} IS NOT NULL`),
@@ -2564,6 +2641,40 @@ export const workbenchEvents = pgTable(
   },
   (t) => ({
     pk: primaryKey({ name: 'workbench_events_pkey', columns: [t.chatId, t.seq] }),
+  })
+);
+
+const tsvector = customType<{ data: string }>({ dataType: () => 'tsvector' });
+
+/**
+ * The searchable text of a transcript (migration 0142): one row for each user
+ * or assistant event with text blocks. A trigger on `workbench_events` writes
+ * it; `transcriptSearch.ts` backfills older chats and reads it.
+ */
+export const workbenchSearchText = pgTable(
+  'workbench_search_text',
+  {
+    chatId: text('chat_id')
+      .notNull()
+      .references(() => workbenchChats.id, { onDelete: 'cascade' }),
+    seq: bigint('seq', { mode: 'number' }).notNull(),
+    workbenchId: text('workbench_id')
+      .notNull()
+      .references(() => workbenches.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').notNull(),
+    /** `user` or `assistant`. */
+    role: text('role').notNull(),
+    body: text('body').notNull(),
+    tsv: tsvector('tsv').generatedAlwaysAs(
+      sql`to_tsvector('simple'::regconfig, "body") || to_tsvector('simple'::regconfig, regexp_replace("body", '[^[:alnum:]]+', ' ', 'g'))`
+    ),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ name: 'workbench_search_text_pkey', columns: [t.chatId, t.seq] }),
+    tsvIdx: index('idx_workbench_search_text_tsv').using('gin', t.tsv),
+    workspaceIdx: index('idx_workbench_search_text_workspace').on(t.workspaceId, t.createdAt),
+    workbenchIdx: index('idx_workbench_search_text_workbench').on(t.workbenchId),
   })
 );
 
@@ -2930,6 +3041,8 @@ export const slackOauthStates = pgTable(
     workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
     codeVerifierEnc: jsonb('code_verifier_enc').$type<EncryptedEnvelope>().notNull(),
     client: text('client').notNull().default('desktop'),
+    /** The mobile app's allowlisted URL base, or null (migration 0127). */
+    mobileReturn: text('mobile_return'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   },
@@ -3100,6 +3213,12 @@ export const workspaceMemories = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     forgottenAt: timestamp('forgotten_at', { withTimezone: true }),
+    /** `MemoryForgottenReason` (migration 0143): `evicted` when Talyn forgot it at the cap. */
+    forgottenReason: text('forgotten_reason').$type<MemoryForgottenReason>(),
+    /** How many times `talyn_memory_read` returned the entry (migration 0143). */
+    useCount: integer('use_count').notNull().default(0),
+    /** The last read. Null: nobody read it. */
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
   },
   (t) => ({
     liveNameUq: uniqueIndex('uq_workspace_memories_live_name')
@@ -3239,7 +3358,8 @@ export const workbenchBackgroundJobs = pgTable(
 
 /**
  * Session wake-ups (migration 0119). A turn Talyn sends into a chat at
- * `wakeAt`, claimed by the sweep with `status = 'scheduled'`. `prompt` holds a
+ * `wakeAt`, claimed by the sweep with `status = 'scheduled'`. A CI wake-up
+ * (`ci_pull_request_id` set) fires sooner when its checks settle. `prompt` holds a
  * job exit's message with its log tail; null means the text comes from
  * `reason`. Backend-pool-only.
  */
@@ -3265,11 +3385,20 @@ export const workbenchWakeups = pgTable(
     payerUserId: text('payer_user_id'),
     payerWorkspaceId: text('payer_workspace_id'),
     sourceJobId: text('source_job_id').references(() => workbenchBackgroundJobs.id, { onDelete: 'set null' }),
+    /** A CI wake-up (migration 0129): the pull request it waits on. Null on a timed one. */
+    ciPullRequestId: text('ci_pull_request_id'),
+    /** The commit whose checks it waits for. */
+    ciHeadSha: text('ci_head_sha'),
+    /** The PR row's head when it was scheduled. Until the push webhook lands, it can name the commit before. */
+    ciPrHeadAtSchedule: text('ci_pr_head_at_schedule'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     firedAt: timestamp('fired_at', { withTimezone: true }),
   },
   (t) => ({
     dueIdx: index('idx_workbench_wakeups_due').on(t.wakeAt).where(sql`${t.status} = 'scheduled'`),
+    ciIdx: index('idx_workbench_wakeups_ci')
+      .on(t.ciPullRequestId)
+      .where(sql`${t.status} = 'scheduled' AND ${t.ciPullRequestId} IS NOT NULL`),
     workbenchIdx: index('idx_workbench_wakeups_workbench').on(t.workbenchId, t.createdAt),
     sourceJobUq: uniqueIndex('uq_workbench_wakeups_source_job').on(t.sourceJobId).where(sql`${t.sourceJobId} IS NOT NULL`),
   })
@@ -3355,7 +3484,8 @@ export const mobileInstallations = pgTable('mobile_installations', {
 export const mobileNotificationPreferences = pgTable('mobile_notification_preferences', {
   ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
-  preferences: jsonb('preferences').$type<import('@talyn/shared').MobileNotificationPreferences>().notNull(),
+  // Rows saved before `onlyWhenAway` existed lack it; read through normalizeMobileNotificationPreferences.
+  preferences: jsonb('preferences').$type<import('@talyn/shared').MobileNotificationPreferencesInput>().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ pk: primaryKey({ columns: [t.ownerId, t.workspaceId] }) }));
 
@@ -3412,3 +3542,200 @@ export const mobileNotificationSourceEvents = pgTable('mobile_notification_sourc
   owner: index('idx_mobile_notification_source_events_owner').on(t.ownerId, t.workspaceId),
   dedup: uniqueIndex('uq_mobile_notification_source_events_dedup').on(t.ownerId, t.deduplicationKey),
 }));
+
+/**
+ * Inbound connections (migration 0131): one source of requests to Talyn. The
+ * generic webhook has one per rule (`ruleId`) and keeps only the sha256 of its
+ * URL token (`tokenHash`). `secretEnc` is the HMAC signing secret. Later
+ * vendors set `externalAccountId` and the write-back credential.
+ * Backend-pool-only.
+ */
+export const inboundConnections = pgTable(
+  'inbound_connections',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** `InboundKind`: 'webhook', 'linear' or 'posthog_inbox' today; 'jira' | 'sentry' | 'posthog_errors' later. */
+    kind: text('kind').notNull(),
+    externalAccountId: text('external_account_id'),
+    tokenHash: text('token_hash'),
+    secretEnc: jsonb('secret_enc').$type<EncryptedEnvelope>(),
+    credentialEnc: jsonb('credential_enc').$type<EncryptedEnvelope>(),
+    credentialMeta: jsonb('credential_meta').$type<Record<string, unknown>>().notNull().default({}),
+    ruleId: text('rule_id').references(() => workflows.id, { onDelete: 'cascade' }),
+    createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    rotatedAt: timestamp('rotated_at', { withTimezone: true }),
+    /** kind 'posthog_inbox' only: the PostHog webhook destination Talyn created (migration 0140), or null. */
+    posthogDestinationId: text('posthog_destination_id'),
+    /** When PostHog last took the URL and the secret. */
+    posthogDestinationSyncedAt: timestamp('posthog_destination_synced_at', { withTimezone: true }),
+    /** Set when Talyn changed the URL but could not update the destination: it is out of date. */
+    posthogDestinationError: text('posthog_destination_error'),
+  },
+  (t) => ({
+    accountUq: uniqueIndex('uq_inbound_connections_account').on(t.workspaceId, t.kind, t.externalAccountId),
+    ruleUq: uniqueIndex('uq_inbound_connections_rule').on(t.ruleId).where(sql`${t.ruleId} IS NOT NULL`),
+  })
+);
+
+/**
+ * Inbound deliveries (migration 0131): each request, stored before it is
+ * processed. UNIQUE (connection_id, delivery_id) is the idempotency. Deleted
+ * 7 days after it arrived. Backend-pool-only.
+ */
+export const inboundDeliveries = pgTable(
+  'inbound_deliveries',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => inboundConnections.id, { onDelete: 'cascade' }),
+    deliveryId: text('delivery_id').notNull(),
+    eventType: text('event_type').notNull(),
+    payload: jsonb('payload'),
+    headers: jsonb('headers').$type<Record<string, string>>().notNull().default({}),
+    payloadBytes: integer('payload_bytes').notNull().default(0),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    processedAt: timestamp('processed_at', { withTimezone: true }),
+    attempts: integer('attempts').notNull().default(0),
+    /** 'handled' | 'ignored' | 'failed', null while waiting. */
+    outcome: text('outcome'),
+    error: text('error'),
+    /** The delivery row this one replays. */
+    replayOf: text('replay_of'),
+  },
+  (t) => ({
+    deliveryUq: uniqueIndex('uq_inbound_deliveries_delivery').on(t.connectionId, t.deliveryId),
+    connectionReceivedIdx: index('idx_inbound_deliveries_connection_received').on(t.connectionId, t.receivedAt),
+    pendingIdx: index('idx_inbound_deliveries_pending').on(t.receivedAt).where(sql`${t.processedAt} IS NULL`),
+    receivedIdx: index('idx_inbound_deliveries_received').on(t.receivedAt),
+  })
+);
+
+/**
+ * The work an issue rule started on one issue (migration 0132). The partial
+ * UNIQUE on active rows is what refuses a second start on the same issue.
+ * Backend-pool-only.
+ */
+export const externalIssueLinks = pgTable(
+  'external_issue_links',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** `IssueWorkflowIntegration`: 'linear' | 'github_issues'. */
+    integration: text('integration').notNull(),
+    connectionId: text('connection_id').references(() => inboundConnections.id, { onDelete: 'set null' }),
+    workflowId: text('workflow_id').references(() => workflows.id, { onDelete: 'set null' }),
+    runId: text('run_id'),
+    externalId: text('external_id').notNull(),
+    externalKey: text('external_key').notNull(),
+    externalUrl: text('external_url').notNull().default(''),
+    /** The issue facts, for the merge write-back. */
+    facts: jsonb('facts'),
+    taskId: text('task_id').references((): AnyPgColumn => tasks.id, { onDelete: 'set null' }),
+    workbenchId: text('workbench_id').references((): AnyPgColumn => workbenches.id, { onDelete: 'set null' }),
+    pullRequestId: text('pull_request_id').references((): AnyPgColumn => pullRequests.id, { onDelete: 'set null' }),
+    ourCommentIds: jsonb('our_comment_ids').$type<string[]>().notNull().default([]),
+    /** 'active' | 'done' | 'failed'. */
+    status: text('status').notNull().default('active'),
+    statusReason: text('status_reason'),
+    /**
+     * PostHog Inbox only (migration 0139): Talyn's claim on the report in
+     * PostHog. `posthogClaimState` is a `PostHogClaimState`, NULL on a link
+     * that made no PostHog claim. `posthogClaimNextCheckAt` is when the claim
+     * sweep looks again; NULL means nothing is owed.
+     */
+    posthogClaimId: text('posthog_claim_id'),
+    posthogClaimState: text('posthog_claim_state'),
+    posthogClaimPrUrl: text('posthog_claim_pr_url'),
+    posthogClaimReason: text('posthog_claim_reason'),
+    posthogClaimNextCheckAt: timestamp('posthog_claim_next_check_at', { withTimezone: true }),
+    posthogClaimAttempts: integer('posthog_claim_attempts').notNull().default(0),
+    posthogClaimError: text('posthog_claim_error'),
+    posthogClaimUpdatedAt: timestamp('posthog_claim_updated_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    settledAt: timestamp('settled_at', { withTimezone: true }),
+  },
+  (t) => ({
+    posthogClaimDueIdx: index('idx_external_issue_links_posthog_claim_due')
+      .on(t.posthogClaimNextCheckAt)
+      .where(sql`${t.posthogClaimNextCheckAt} IS NOT NULL`),
+    posthogRunIdx: index('idx_external_issue_links_posthog_run')
+      .on(t.runId)
+      .where(sql`${t.integration} = 'posthog_inbox'`),
+    activeUq: uniqueIndex('uq_external_issue_links_active')
+      .on(t.workspaceId, t.integration, t.externalId)
+      .where(sql`${t.status} = 'active'`),
+    issueIdx: index('idx_external_issue_links_issue').on(t.integration, t.externalId),
+    taskIdx: index('idx_external_issue_links_task').on(t.taskId).where(sql`${t.taskId} IS NOT NULL`),
+    workbenchIdx: index('idx_external_issue_links_workbench')
+      .on(t.workbenchId)
+      .where(sql`${t.workbenchId} IS NOT NULL`),
+    pullRequestIdx: index('idx_external_issue_links_pull_request')
+      .on(t.pullRequestId)
+      .where(sql`${t.pullRequestId} IS NOT NULL`),
+  })
+);
+
+/**
+ * The PostHog Inbox poller's state, one row per PostHog connection
+ * (migration 0134). `next_poll_at` + `lease_until` are the cross-replica
+ * claim; `cursor_updated_at` is PostHog's own timestamp text. Backend-pool-only.
+ */
+export const posthogInboxPollers = pgTable(
+  'posthog_inbox_pollers',
+  {
+    integrationId: text('integration_id')
+      .primaryKey()
+      .references(() => integrations.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    cursorUpdatedAt: text('cursor_updated_at'),
+    cursorReportIds: jsonb('cursor_report_ids').$type<string[]>().notNull().default([]),
+    nextPollAt: timestamp('next_poll_at', { withTimezone: true }).notNull().defaultNow(),
+    leaseUntil: timestamp('lease_until', { withTimezone: true }),
+    lastPolledAt: timestamp('last_polled_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    lastErrorStatus: integer('last_error_status'),
+    /** The newest push whose report Talyn read (migration 0137). Slows the poll to a reconcile for 24 h. */
+    lastPushAt: timestamp('last_push_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    nextPollIdx: index('idx_posthog_inbox_pollers_next_poll').on(t.nextPollAt),
+    workspaceIdx: index('idx_posthog_inbox_pollers_workspace').on(t.workspaceId),
+  })
+);
+
+/** One pending OAuth sign-in for an inbound vendor (migration 0132). Single use. */
+export const inboundOauthStates = pgTable(
+  'inbound_oauth_states',
+  {
+    stateHash: text('state_hash').primaryKey(),
+    kind: text('kind').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    codeVerifierEnc: jsonb('code_verifier_enc').$type<EncryptedEnvelope>().notNull(),
+    client: text('client').notNull().default('desktop'),
+    mobileReturn: text('mobile_return'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    expiresIdx: index('idx_inbound_oauth_states_expires').on(t.expiresAt),
+  })
+);

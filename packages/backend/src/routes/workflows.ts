@@ -1,9 +1,20 @@
 import { Router, type Request, type Response } from 'express';
-import type { ApiResponse } from '@talyn/shared';
-import { validateWorkflow } from '@talyn/shared';
+import type { ApiResponse, CreatedWorkflow, WorkflowConditions, WorkflowDefinition, WorkflowIntegration } from '@talyn/shared';
+import {
+  ISSUE_RULES_UNAVAILABLE_CODE,
+  POSTHOG_INBOX_RULES_UNAVAILABLE_CODE,
+  isIssueWorkflowIntegration,
+  MAX_POSTHOG_INBOX_RUN_REPORTS,
+  posthogInboxBacklogDays,
+  posthogInboxPreviewInput,
+  isWorkflowIntegration,
+  validateWorkflow,
+  WORKFLOW_INTEGRATIONS,
+  workflowIntegrationOf,
+} from '@talyn/shared';
 import type { NormalizedWorkflow } from '@talyn/shared';
 import { captureWorkspaceEvent } from '../services/analytics.js';
-import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import {
   countWorkflows,
   createWorkflow,
@@ -14,10 +25,31 @@ import {
   updateWorkflow,
 } from '../services/workflows/store.js';
 import {
+  slackRulesRefusalReason,
+  userMayUseIssueRules,
+  userMayUsePostHogInboxRules,
+  userMayUseWebhookRules,
+  workspaceMayUseSlackRules,
   workspaceMayUseWorkflows,
   workflowsRefusalReason,
 } from '../services/workflowsAccess.js';
+import { createWebhookRule, deleteConnectionsForRule } from '../services/inbound/store.js';
+import { webhookUrl } from '../services/inbound/url.js';
+import { getLinearConnection } from '../services/linear/store.js';
 import { workflowSuggestions } from '../services/workflows/suggestions.js';
+import { ruleSpaceIds, ruleSpaceRefusal } from '../services/workflows/ruleSpace.js';
+import { ownerReachesSlackTeam } from '../services/workflows/sources/slack.js';
+import { getPostHogInboxConnection } from '../services/posthogInbox/connection.js';
+import { posthogInboxDryRun, posthogInboxStatus } from '../services/posthogInbox/preview.js';
+import {
+  manualRunRefusal,
+  parseRunReportIds,
+  posthogInboxBacklog,
+  posthogInboxBacklogCount,
+  runPostHogInboxReports,
+} from '../services/posthogInbox/backlog.js';
+import { registerPostHogInboxPushRoutes } from './posthogInboxPush.js';
+import { PostHogCodeApiError } from '../services/posthogCode/client.js';
 
 /**
  * Workflows — user-defined PR automation.
@@ -59,10 +91,13 @@ const MAX_RUN_PAGE = 200;
  */
 function workflowShape(
   id: string,
-  workflow: Pick<NormalizedWorkflow, 'events' | 'conditions' | 'actions' | 'enabled'>
+  workflow: Pick<NormalizedWorkflow, 'events' | 'conditions' | 'actions' | 'enabled'> & {
+    integration?: WorkflowIntegration;
+  }
 ): Record<string, unknown> {
   return {
     workflow_id: id,
+    integration: workflowIntegrationOf(workflow),
     enabled: workflow.enabled,
     trigger_count: workflow.events.length,
     events: workflow.events,
@@ -71,6 +106,31 @@ function workflowShape(
     action_types: workflow.actions.map((a) => a.type),
     action_count: workflow.actions.length,
   };
+}
+
+/** PURE: JSON with sorted object keys, so two equal condition sets compare equal. */
+export function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** A PostHog error as the Inbox routes answer it. */
+function posthogInboxReadFailure(res: Response, err: unknown): void {
+  const status = err instanceof PostHogCodeApiError ? err.status : null;
+  res.status(502).json({
+    success: false,
+    error:
+      status === 401 || status === 403
+        ? 'PostHog refused to show the Inbox. Connect PostHog again to grant the Inbox permission.'
+        : 'Talyn could not read the PostHog Inbox. Try again in a minute.',
+    code: status === 401 || status === 403 ? 'posthog_inbox_forbidden' : 'posthog_inbox_unreachable',
+  });
 }
 
 export function workflowRoutes(): Router {
@@ -97,7 +157,7 @@ export function workflowRoutes(): Router {
     if (!(await workspaceMayUseWorkflows(workspaceId))) {
       res.status(403).json({
         success: false,
-        error: `Workflows are not available: ${workflowsRefusalReason()}.`,
+        error: `Automations are not available: ${workflowsRefusalReason()}.`,
         code: 'workflows_unavailable',
       });
       return false;
@@ -105,10 +165,156 @@ export function workflowRoutes(): Router {
     return true;
   }
 
+  /**
+   * The second gate, for a Slack rule only: the `slackChannelRules` flag, asked
+   * for the workspace owner like the workflows gate above. GitHub rules pass
+   * straight through, so this never changes what a GitHub rule can do.
+   */
+  async function integrationGate(
+    req: Request,
+    res: Response,
+    workspaceId: string,
+    integration: WorkflowIntegration
+  ): Promise<boolean> {
+    if (integration === 'webhook') return webhookGate(req, res);
+    if (isIssueWorkflowIntegration(integration)) return issueGate(req, res);
+    if (integration === 'posthog_inbox') return posthogInboxGate(req, res);
+    if (integration !== 'slack') return true;
+    if (await workspaceMayUseSlackRules(workspaceId)) return true;
+    res.status(403).json({
+      success: false,
+      error: `Slack automations are not available: ${slackRulesRefusalReason()}.`,
+      code: 'slack_rules_unavailable',
+    });
+    return false;
+  }
+
+  /**
+   * Webhook rules: the `webhookRules` flag, asked for the CALLER. A 404, like
+   * every webhook route when the flag is off, so the feature stays invisible.
+   */
+  async function webhookGate(req: Request, res: Response): Promise<boolean> {
+    const user = assertUser(req);
+    if (await userMayUseWebhookRules({ distinctId: user.id, email: user.email })) return true;
+    res.status(404).json({
+      success: false,
+      error: 'Webhook automations are not available for this account.',
+      code: 'webhook_rules_unavailable',
+    });
+    return false;
+  }
+
+  /**
+   * Issue rules (Linear, GitHub Issues): the `issueRules` flag, asked for the
+   * CALLER. A 404, like the webhook gate, so the feature stays invisible.
+   */
+  async function issueGate(req: Request, res: Response): Promise<boolean> {
+    const user = assertUser(req);
+    if (await userMayUseIssueRules({ distinctId: user.id, email: user.email })) return true;
+    res.status(404).json({
+      success: false,
+      error: 'Issue automations are not available for this account.',
+      code: ISSUE_RULES_UNAVAILABLE_CODE,
+    });
+    return false;
+  }
+
+  /**
+   * PostHog Inbox rules: the `posthogInboxRules` flag, asked for the CALLER.
+   * A 404, like the other gated integrations, so the feature stays invisible.
+   */
+  async function posthogInboxGate(req: Request, res: Response): Promise<boolean> {
+    const user = assertUser(req);
+    if (await userMayUsePostHogInboxRules({ distinctId: user.id, email: user.email })) return true;
+    res.status(404).json({
+      success: false,
+      error: 'PostHog Inbox automations are not available for this account.',
+      code: POSTHOG_INBOX_RULES_UNAVAILABLE_CODE,
+    });
+    return false;
+  }
+
+  /** A Linear rule must name a Linear connection of its own workspace. */
+  async function linearConnectionGate(
+    res: Response,
+    workspaceId: string,
+    workflow: NormalizedWorkflow
+  ): Promise<boolean> {
+    if (workflow.integration !== 'linear') return true;
+    const connection = await getLinearConnection(workflow.conditions.connectionId ?? '');
+    if (connection && connection.workspaceId === workspaceId) return true;
+    res.status(400).json({
+      success: false,
+      error: 'That Linear workspace is not connected to this Talyn workspace. Connect Linear first.',
+      code: 'linear_connection_unavailable',
+    });
+    return false;
+  }
+
+  /**
+   * A space that a session action names must be one the caller can start a
+   * session in. Only spaces that are NEW to the rule are checked, so a rule
+   * whose space went away can still be renamed or switched off. Its runs then
+   * start in Personal.
+   */
+  async function spaceGate(
+    req: Request,
+    res: Response,
+    workflow: NormalizedWorkflow,
+    existing: Pick<WorkflowDefinition, 'actions'> | null
+  ): Promise<boolean> {
+    const known = new Set(existing ? ruleSpaceIds(existing.actions) : []);
+    const added = ruleSpaceIds(workflow.actions).filter((id) => !known.has(id));
+    if (added.length === 0) return true;
+    const user = assertUser(req);
+    for (const spaceId of added) {
+      const refusal = await ruleSpaceRefusal({ id: user.id, email: user.email ?? null }, spaceId);
+      if (refusal) {
+        res.status(400).json({ success: false, error: refusal, code: 'space_unavailable' });
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async function slackTeamGate(
+    req: Request,
+    res: Response,
+    workflow: NormalizedWorkflow
+  ): Promise<boolean> {
+    if (workflow.integration !== 'slack') return true;
+    if (await ownerReachesSlackTeam(assertUser(req).id, workflow.conditions.slackTeamId ?? '')) {
+      return true;
+    }
+    res.status(400).json({
+      success: false,
+      error:
+        'Talyn is not installed in that Slack workspace for this account. Install Slack or link your Slack account first.',
+      code: 'slack_team_unavailable',
+    });
+    return false;
+  }
+
+  /**
+   * `GET /?integration=github|slack` lists one integration's rules. Absent lists
+   * every rule, which is what a client older than integrations expects.
+   */
   router.get('/', async (req, res) => {
     const workspaceId = req.query.workspaceId as string;
     if (!(await gate(req, res, workspaceId))) return;
-    const data = await listWorkflows(workspaceId);
+    let integration: WorkflowIntegration | undefined;
+    if (req.query.integration !== undefined) {
+      const asked: unknown = req.query.integration;
+      if (!isWorkflowIntegration(asked)) {
+        return res.status(400).json({
+          success: false,
+          error: `integration must be one of ${WORKFLOW_INTEGRATIONS.join(', ')}`,
+        });
+      }
+      integration = asked;
+      if (!(await integrationGate(req, res, workspaceId, integration))) return;
+    }
+    const data = await listWorkflows(workspaceId, integration ? { integration } : {});
     res.json({ success: true, data } as ApiResponse<typeof data>);
   });
 
@@ -166,6 +372,162 @@ export function workflowRoutes(): Router {
     res.json({ success: true, data } as ApiResponse<typeof data>);
   });
 
+  /**
+   * Whether Talyn can read the workspace's PostHog Inbox, for the editor's
+   * notice. Never holds a credential. Mounted ABOVE `/:id`.
+   */
+  router.get('/posthog-inbox/status', async (req, res) => {
+    const workspaceId = req.query.workspaceId as string;
+    if (!(await gate(req, res, workspaceId))) return;
+    if (!(await posthogInboxGate(req, res))) return;
+    const data = await posthogInboxStatus(workspaceId);
+    res.json({ success: true, data } as ApiResponse<typeof data>);
+  });
+
+  /**
+   * The reports a PostHog Inbox rule would act on now, from its UNSAVED
+   * definition. Only the conditions are read, so a rule without a name or a
+   * prompt yet can be previewed. Starts nothing and writes nothing.
+   */
+  router.post('/posthog-inbox/dry-run', async (req, res) => {
+    const body = (req.body ?? {}) as { workspaceId?: string; workflow?: { conditions?: unknown } };
+    const workspaceId = body.workspaceId ?? '';
+    if (!(await gate(req, res, workspaceId))) return;
+    if (!(await posthogInboxGate(req, res))) return;
+    let normalized: NormalizedWorkflow;
+    try {
+      normalized = validateWorkflow(
+        posthogInboxPreviewInput((body.workflow?.conditions ?? {}) as NormalizedWorkflow['conditions'])
+      );
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err instanceof Error ? err.message : 'invalid automation' });
+    }
+    const connection = await getPostHogInboxConnection(workspaceId, 'read');
+    if (!connection) {
+      return res.status(409).json({
+        success: false,
+        error: 'Talyn cannot read this workspace\'s PostHog Inbox. Connect PostHog on the PostHog Inbox page.',
+        code: 'posthog_inbox_unavailable',
+      });
+    }
+    try {
+      const data = await posthogInboxDryRun(connection, normalized);
+      res.json({ success: true, data } as ApiResponse<typeof data>);
+    } catch (err) {
+      posthogInboxReadFailure(res, err);
+    }
+  });
+
+  /**
+   * The rule, conditions and connection of a backlog request, or null after
+   * an error answer. `workflowId` is the saved rule (its dedupe state, daily
+   * cap and whether rows can be run); `workflow.conditions` are the editor's
+   * unsaved conditions. One of the two is needed.
+   */
+  async function backlogRequest(req: Request, res: Response) {
+    const body = (req.body ?? {}) as {
+      workspaceId?: string;
+      workflowId?: string;
+      workflow?: { conditions?: unknown };
+      days?: unknown;
+    };
+    const workspaceId = body.workspaceId ?? '';
+    if (!(await gate(req, res, workspaceId))) return null;
+    if (!(await posthogInboxGate(req, res))) return null;
+    let saved: WorkflowDefinition | null = null;
+    if (body.workflowId) {
+      saved = await getWorkflow(body.workflowId);
+      if (!saved || saved.workspaceId !== workspaceId) {
+        res.status(404).json({ success: false, error: 'Automation not found' });
+        return null;
+      }
+      if (workflowIntegrationOf(saved) !== 'posthog_inbox') {
+        res.status(400).json({ success: false, error: 'Only a PostHog Inbox automation has a backlog.' });
+        return null;
+      }
+    }
+    const asked = body.workflow?.conditions;
+    if (asked === undefined && !saved) {
+      res.status(400).json({ success: false, error: 'workflowId or workflow.conditions is required' });
+      return null;
+    }
+    let conditions: WorkflowConditions;
+    let savedConditions: WorkflowConditions | null = null;
+    try {
+      if (saved) savedConditions = validateWorkflow(posthogInboxPreviewInput(saved.conditions)).conditions;
+      conditions =
+        asked === undefined
+          ? (savedConditions as WorkflowConditions)
+          : validateWorkflow(posthogInboxPreviewInput(asked as WorkflowConditions)).conditions;
+    } catch (err) {
+      res.status(400).json({ success: false, error: err instanceof Error ? err.message : 'invalid automation' });
+      return null;
+    }
+    const connection = await getPostHogInboxConnection(workspaceId, 'read');
+    if (!connection) {
+      res.status(409).json({
+        success: false,
+        error: "Talyn cannot read this workspace's PostHog Inbox. Connect PostHog on the PostHog Inbox page.",
+        code: 'posthog_inbox_unavailable',
+      });
+      return null;
+    }
+    return {
+      connection,
+      conditions,
+      saved,
+      unsavedChanges: savedConditions !== null && stableJson(savedConditions) !== stableJson(conditions),
+      days: posthogInboxBacklogDays(body.days),
+    };
+  }
+
+  /**
+   * One page of a PostHog Inbox rule's backlog: older reports that match it,
+   * newest first, with Talyn's state for each. Reads only.
+   */
+  router.post('/posthog-inbox/backlog', async (req, res) => {
+    const request = await backlogRequest(req, res);
+    if (!request) return;
+    const offset = Number((req.body as { offset?: unknown } | undefined)?.offset ?? 0);
+    if (!Number.isInteger(offset) || offset < 0) {
+      return res.status(400).json({ success: false, error: 'offset must be a whole number of 0 or more' });
+    }
+    try {
+      const data = await posthogInboxBacklog(request.connection, {
+        conditions: request.conditions,
+        workflow: request.saved,
+        unsavedChanges: request.unsavedChanges,
+        days: request.days,
+        offset,
+      });
+      res.json({ success: true, data } as ApiResponse<typeof data>);
+    } catch (err) {
+      posthogInboxReadFailure(res, err);
+    }
+  });
+
+  /**
+   * How many reports in the range match a PostHog Inbox rule, by state, after
+   * Talyn's matcher. Same body as the backlog, without `offset`. Reads only.
+   */
+  router.post('/posthog-inbox/backlog/count', async (req, res) => {
+    const request = await backlogRequest(req, res);
+    if (!request) return;
+    try {
+      const data = await posthogInboxBacklogCount(request.connection, {
+        conditions: request.conditions,
+        workflow: request.saved,
+        days: request.days,
+      });
+      res.json({ success: true, data } as ApiResponse<typeof data>);
+    } catch (err) {
+      posthogInboxReadFailure(res, err);
+    }
+  });
+
+  // The PostHog Inbox push: its webhook URL and requests. Above `/:id`.
+  registerPostHogInboxPushRoutes(router, { gate, posthogInboxGate });
+
   router.post('/', async (req, res) => {
     const workspaceId = (req.body as { workspaceId?: string } | undefined)?.workspaceId ?? '';
     if (!(await gate(req, res, workspaceId))) return;
@@ -177,12 +539,31 @@ export function workflowRoutes(): Router {
       // rather than flattening every bad shape to "invalid workflow".
       return res.status(400).json({
         success: false,
-        error: err instanceof Error ? err.message : 'invalid workflow',
+        error: err instanceof Error ? err.message : 'invalid automation',
       });
     }
+    if (!(await integrationGate(req, res, workspaceId, normalized.integration))) return;
+    if (!(await slackTeamGate(req, res, normalized))) return;
+    if (!(await linearConnectionGate(res, workspaceId, normalized))) return;
+    if (!(await spaceGate(req, res, normalized, null))) return;
     // No plan caps how many workflows an owner keeps. A run a workflow starts
     // is gated where its task is created.
-    const data = await createWorkflow(workspaceId, normalized);
+    let data: CreatedWorkflow;
+    if (normalized.integration === 'webhook') {
+      // The rule and its URL are written together. The URL and the signing
+      // secret are in this answer only: Talyn keeps a hash of the token.
+      const created = await createWebhookRule(workspaceId, normalized, assertUser(req).id);
+      data = {
+        ...created.workflow,
+        webhook: {
+          connectionId: created.connectionId,
+          url: webhookUrl(req, created.connectionId, created.secrets.token),
+          signingSecret: created.secrets.signingSecret,
+        },
+      };
+    } else {
+      data = await createWorkflow(workspaceId, normalized);
+    }
     // Server-side, not from the client: `workflow_ran` can tell us how often
     // workflows FIRE but not how many people build one, and a user whose three
     // workflows never match is indistinguishable from a user who built none.
@@ -195,9 +576,21 @@ export function workflowRoutes(): Router {
   router.patch('/:id', async (req, res) => {
     const existing = await getWorkflow(req.params.id);
     if (!existing) {
-      return res.status(404).json({ success: false, error: 'Workflow not found' });
+      return res.status(404).json({ success: false, error: 'Automation not found' });
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
+    const integration = workflowIntegrationOf(existing);
+    if (!(await integrationGate(req, res, existing.workspaceId, integration))) return;
+
+    // A rule never moves to another integration: its events, conditions and
+    // actions all belong to the one it was made for. Make a new rule instead.
+    const askedIntegration = (req.body as { integration?: unknown } | undefined)?.integration;
+    if (askedIntegration !== undefined && askedIntegration !== integration) {
+      return res.status(400).json({
+        success: false,
+        error: 'An automation cannot move to another integration. Create a new automation there instead.',
+      });
+    }
 
     // A PATCH here is a whole-workflow replace, not a field merge. The trigger,
     // the conditions and the actions validate against each other — a condition
@@ -205,15 +598,18 @@ export function workflowRoutes(): Router {
     // combination the validator would have refused as a whole.
     let normalized;
     try {
-      normalized = validateWorkflow({ ...existing, ...(req.body as object) });
+      normalized = validateWorkflow({ ...existing, ...(req.body as object), integration });
     } catch (err) {
       return res.status(400).json({
         success: false,
-        error: err instanceof Error ? err.message : 'invalid workflow',
+        error: err instanceof Error ? err.message : 'invalid automation',
       });
     }
+    if (!(await slackTeamGate(req, res, normalized))) return;
+    if (!(await linearConnectionGate(res, existing.workspaceId, normalized))) return;
+    if (!(await spaceGate(req, res, normalized, existing))) return;
     const data = await updateWorkflow(existing.id, existing.workspaceId, normalized);
-    if (!data) return res.status(404).json({ success: false, error: 'Workflow not found' });
+    if (!data) return res.status(404).json({ success: false, error: 'Automation not found' });
 
     captureWorkspaceEvent(
       existing.workspaceId,
@@ -235,9 +631,13 @@ export function workflowRoutes(): Router {
   router.delete('/:id', async (req, res) => {
     const existing = await getWorkflow(req.params.id);
     if (!existing) {
-      return res.status(404).json({ success: false, error: 'Workflow not found' });
+      return res.status(404).json({ success: false, error: 'Automation not found' });
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
+    if (!(await integrationGate(req, res, existing.workspaceId, workflowIntegrationOf(existing)))) return;
+    // The URL goes with the rule. Explicit, on the pool, because the
+    // connection table has no grant for the request's scoped role.
+    if (workflowIntegrationOf(existing) === 'webhook') await deleteConnectionsForRule(existing.id);
     await deleteWorkflow(existing.id, existing.workspaceId);
     captureWorkspaceEvent(existing.workspaceId, 'workflow_deleted', {
       ...workflowShape(existing.id, existing),
@@ -248,13 +648,69 @@ export function workflowRoutes(): Router {
     res.json({ success: true, data: null } as ApiResponse<null>);
   });
 
+  /**
+   * "Run selected": start a saved, enabled PostHog Inbox rule on these
+   * reports (at most {@link MAX_POSTHOG_INBOX_RUN_REPORTS}). Each one is read
+   * again and checked again, then goes through the same claim and session
+   * path as a poll. The runs count toward the daily cap and record who
+   * started them. The answer says what happened to each report.
+   */
+  router.post('/:id/posthog-inbox/run', async (req, res) => {
+    const existing = await getWorkflow(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Automation not found' });
+    }
+    if (!(await gate(req, res, existing.workspaceId))) return;
+    if (workflowIntegrationOf(existing) !== 'posthog_inbox') {
+      return res.status(400).json({ success: false, error: 'Only a PostHog Inbox automation can run reports.' });
+    }
+    if (!(await posthogInboxGate(req, res))) return;
+    const reportIds = parseRunReportIds((req.body as { reportIds?: unknown } | undefined)?.reportIds);
+    if (!reportIds || reportIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'reportIds must be a list of report ids.' });
+    }
+    if (reportIds.length > MAX_POSTHOG_INBOX_RUN_REPORTS) {
+      return res.status(400).json({
+        success: false,
+        error: `Select at most ${MAX_POSTHOG_INBOX_RUN_REPORTS} reports at a time.`,
+        code: 'too_many_reports',
+      });
+    }
+    const refusal = manualRunRefusal(existing);
+    if (refusal) {
+      return res.status(409).json({ success: false, error: refusal, code: 'workflow_not_runnable' });
+    }
+    const connection = await getPostHogInboxConnection(existing.workspaceId);
+    if (!connection) {
+      return res.status(409).json({
+        success: false,
+        error:
+          'Talyn cannot claim reports with this PostHog connection. Connect PostHog again with the inbox:write and task:write permissions.',
+        code: 'posthog_inbox_unavailable',
+      });
+    }
+    const user = assertUser(req);
+    const data = await runPostHogInboxReports(connection, existing, reportIds, {
+      userId: user.id,
+      label: user.githubUsername || user.email || null,
+    });
+    captureWorkspaceEvent(existing.workspaceId, 'workflow_manual_run', {
+      ...workflowShape(existing.id, existing),
+      requested: data.requested,
+      started: data.started,
+      outcomes: [...new Set(data.results.map((r) => r.outcome))].sort(),
+    });
+    res.json({ success: true, data } as ApiResponse<typeof data>);
+  });
+
   /** One workflow's run history, newest first. `cursor` is the last row's createdAt. */
   router.get('/:id/runs', async (req, res) => {
     const existing = await getWorkflow(req.params.id);
     if (!existing) {
-      return res.status(404).json({ success: false, error: 'Workflow not found' });
+      return res.status(404).json({ success: false, error: 'Automation not found' });
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
+    if (!(await integrationGate(req, res, existing.workspaceId, workflowIntegrationOf(existing)))) return;
     const asked = Number(req.query.limit);
     const limit = Number.isInteger(asked) && asked > 0 ? Math.min(asked, MAX_RUN_PAGE) : DEFAULT_RUN_PAGE;
     const data = await listWorkflowRuns(existing.id, {

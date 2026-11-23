@@ -10,7 +10,9 @@ export interface SlackCall {
   token: string | null;
 }
 
-export type SlackHandler = (form: Record<string, string>) => Record<string, unknown> | Promise<Record<string, unknown>>;
+export type SlackHandler = (
+  form: Record<string, string>
+) => Record<string, unknown> | Response | Promise<Record<string, unknown> | Response>;
 
 export class FakeSlack {
   calls: SlackCall[] = [];
@@ -29,7 +31,9 @@ export class FakeSlack {
       this.calls.push({ method, form, token: auth ? auth.replace(/^Bearer /, '') : null });
       const handler = this.handlers[method];
       const body = handler ? await handler(form) : { ok: true };
-      return Response.json(body);
+      // A handler can answer with a whole Response, for a status or a header
+      // (a 429 with Retry-After).
+      return body instanceof Response ? body : Response.json(body);
     }) as typeof fetch;
     return this;
   }

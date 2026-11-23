@@ -13,6 +13,13 @@ import { fleetGatewayToken, fleetPinnedEndpoint } from './credentials.js';
 
 const MAX_PRIVATE_ROUTES = 128;
 const MAX_PRIVATE_PEERS = 1_000;
+const READ_RETRIES = 2;
+const DEFAULT_RETRY_WAIT_MS = 1_000;
+const MAX_RETRY_WAIT_MS = 5_000;
+const MAX_TOTAL_RETRY_WAIT_MS = 10_000;
+const CONNECTOR_CACHE_TTL_MS = 60_000;
+const CONNECTOR_STALE_MAX_MS = 10 * 60_000;
+const CONNECTOR_CACHE_MAX_ENTRIES = 4_000;
 const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 export class PrivateRoutesServiceError extends Error {
@@ -47,9 +54,12 @@ export async function workspaceMayUsePrivateRoutes(workspaceId: string): Promise
 export async function startPrivateConnector(workspaceId: string): Promise<PrivateConnector> {
   try {
     evictPrivateConnections(workspaceId);
+    invalidatePrivateConnectorCache(workspaceId);
     return await client().startPrivateConnector(workspaceId);
   } catch (error) {
     throw mapPrivateRoutesError(error);
+  } finally {
+    invalidatePrivateConnectorCache(workspaceId);
   }
 }
 
@@ -102,18 +112,24 @@ export async function replacePrivateRoutes(
 ): Promise<PrivateConnector> {
   try {
     evictPrivateConnections(workspaceId);
+    invalidatePrivateConnectorCache(workspaceId);
     return await client().replacePrivateRoutes(workspaceId, routes);
   } catch (error) {
     throw mapPrivateRoutesError(error);
+  } finally {
+    invalidatePrivateConnectorCache(workspaceId);
   }
 }
 
 export async function deletePrivateConnector(workspaceId: string): Promise<void> {
   try {
     evictPrivateConnections(workspaceId);
+    invalidatePrivateConnectorCache(workspaceId);
     await client().deletePrivateConnector(workspaceId);
   } catch (error) {
     throw mapPrivateRoutesError(error);
+  } finally {
+    invalidatePrivateConnectorCache(workspaceId);
   }
 }
 
@@ -192,6 +208,94 @@ export function composePrivateRoutesPolicy(
   };
 }
 
+interface CachedConnector {
+  connector: PrivateConnector | null;
+  at: number;
+}
+
+const connectorCache = new Map<string, CachedConnector>();
+let connectorWriteEpoch = 0;
+
+/** Drop the cached connector for a workspace. Call it on every write. */
+export function invalidatePrivateConnectorCache(workspaceId: string): void {
+  connectorWriteEpoch += 1;
+  connectorCache.delete(workspaceId);
+}
+
+export function resetPrivateConnectorCache(): void {
+  connectorWriteEpoch += 1;
+  connectorCache.clear();
+}
+
+function rememberConnector(workspaceId: string, connector: PrivateConnector | null, now: number): void {
+  connectorCache.delete(workspaceId);
+  if (connectorCache.size >= CONNECTOR_CACHE_MAX_ENTRIES) {
+    for (const [key, entry] of connectorCache) {
+      if (now - entry.at >= CONNECTOR_STALE_MAX_MS) connectorCache.delete(key);
+    }
+    while (connectorCache.size >= CONNECTOR_CACHE_MAX_ENTRIES) {
+      const oldest = connectorCache.keys().next().value;
+      if (oldest === undefined) break;
+      connectorCache.delete(oldest);
+    }
+  }
+  connectorCache.set(workspaceId, { connector, at: now });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Retry a throttled read. Never use this for a write. */
+async function readConnectorWithRetry(workspaceId: string): Promise<PrivateConnector> {
+  let waited = 0;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await client().getPrivateConnector(workspaceId);
+    } catch (error) {
+      if (!(error instanceof FleetThrottleError) || attempt >= READ_RETRIES) throw error;
+      const wait = Math.min(error.retryAfterMs ?? DEFAULT_RETRY_WAIT_MS, MAX_RETRY_WAIT_MS);
+      if (waited + wait > MAX_TOTAL_RETRY_WAIT_MS) throw error;
+      waited += wait;
+      await sleep(wait);
+    }
+  }
+}
+
+/** Throttle, capacity, 5xx and network errors say nothing about the connector itself. */
+function isTransientReadError(error: unknown): boolean {
+  if (error instanceof PrivateRoutesServiceError) return false;
+  if (error instanceof FleetHttpError) return error.status >= 500;
+  return true;
+}
+
+/** Read the connector for a policy. Answers null when the workspace has none. */
+async function connectorForPolicy(workspaceId: string): Promise<PrivateConnector | null> {
+  const now = Date.now();
+  const cached = connectorCache.get(workspaceId);
+  if (cached && now - cached.at < CONNECTOR_CACHE_TTL_MS) return cached.connector;
+
+  const epoch = connectorWriteEpoch;
+  let connector: PrivateConnector | null;
+  try {
+    connector = await readConnectorWithRetry(workspaceId);
+  } catch (error) {
+    if (error instanceof FleetHttpError && error.status === 404) {
+      connector = null;
+    } else {
+      if (cached && isTransientReadError(error) && Date.now() - cached.at <= CONNECTOR_STALE_MAX_MS) {
+        console.warn(
+          `[privateRoutes] Fleet read failed for workspace ${workspaceId}. Using a connector cached ${Math.round((Date.now() - cached.at) / 1000)}s ago.`,
+        );
+        return cached.connector;
+      }
+      throw error;
+    }
+  }
+  if (epoch === connectorWriteEpoch) rememberConnector(workspaceId, connector, Date.now());
+  return connector;
+}
+
 /** The one policy path used by tasks, sessions, moves, and warm boxes. */
 export async function sandboxPolicyForWorkspace(
   workspaceId: string,
@@ -199,7 +303,8 @@ export async function sandboxPolicyForWorkspace(
 ): Promise<FleetSandboxPolicy> {
   if (!(await workspaceMayUsePrivateRoutes(workspaceId))) return policy;
   try {
-    const connector = await getPrivateConnector(workspaceId);
+    const connector = await connectorForPolicy(workspaceId);
+    if (!connector) return policy;
     if (connector.workspaceId !== workspaceId) {
       throw new PrivateRoutesServiceError('The private connector belongs to another workspace.', 503, 'workspace_mismatch');
     }

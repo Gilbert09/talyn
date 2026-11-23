@@ -38,7 +38,6 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   // Its own rules for a session: only the session's repository, never the
   // session's own PR, and only the owner's PRs or PRs a session opened.
   'talyn_close_pull_request',
-  'talyn_fix_pull_request',
   // Tracking only adds a PR to the watching list, and the tool refuses
   // add_repository for a session. Untracking stays out: it undoes what a
   // person chose to watch.
@@ -53,10 +52,8 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_get_code_review_finding',
   'talyn_start_code_review',
   'talyn_cancel_code_review',
-  'talyn_fix_code_review_findings',
   'talyn_dismiss_code_review_finding',
   // Tasks
-  'talyn_create_task',
   'talyn_list_tasks',
   'talyn_get_task',
   'talyn_stop_task',
@@ -75,6 +72,9 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_resize_session',
   // A restart is a move to a box of the same size: the same guards as a resize.
   'talyn_restart_session',
+  // The person's own "Continue as thread". The tool limits it to the calling
+  // session at spawn depth 0, so a thread never escapes the depth limit.
+  'talyn_continue_as_thread',
   'talyn_get_session_transcript',
   'talyn_cancel_session_turn',
   'talyn_get_session_changes',
@@ -119,11 +119,21 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_get_workflow',
   'talyn_get_workflow_vocabulary',
   'talyn_list_workflow_runs',
+  'talyn_list_posthog_inbox_backlog',
   'talyn_list_loops',
   'talyn_get_loop',
   'talyn_list_loop_runs',
+  // Slack channel list: a read of which channels the bot is in.
+  'talyn_list_slack_channels',
+  // A session may reply as the bot in its own Slack thread.
+  'talyn_slack_reply',
+  // Its own question to the person, in its own transcript.
+  'talyn_ask_user',
 ]);
 
+/** Tools that act on the calling session itself: a person's own token has no session, so it does not get them. */
+export const SESSION_ONLY_TOOLS: ReadonlySet<string> = new Set(['talyn_ask_user']);
+
 export function toolAllowedForCaller(name: string, session: unknown): boolean {
-  return !session || SESSION_TOKEN_TOOLS.has(name);
+  return session ? SESSION_TOKEN_TOOLS.has(name) : !SESSION_ONLY_TOOLS.has(name);
 }

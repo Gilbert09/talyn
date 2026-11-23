@@ -352,6 +352,35 @@ describe('websocket service', () => {
     await closeClient(client);
   });
 
+  it.each([
+    ['completed', true],
+    ['queued', false],
+    ['in_progress', false],
+    ['failed', false],
+    ['needs_human', false],
+  ])('task:status for %s carries completedAt only when completed', async (status, hasTime) => {
+    const client = await authed(serverUrl, 'token-mine');
+    await client.waitFor('connection:status');
+    client.ws.send(JSON.stringify({ type: 'subscribe', workspaceId: 'ws-mine' }));
+    await new Promise((r) => setTimeout(r, 100));
+
+    const before = Date.now();
+    emitTaskStatus('ws-mine', 't1', status);
+    const msg = (await client.waitFor('task:status')) as {
+      payload: { completedAt?: string | null };
+    };
+    // The key is always present, so a client can clear a reused task's old
+    // completion time instead of keeping it.
+    expect('completedAt' in msg.payload).toBe(true);
+    if (hasTime) {
+      expect(Date.parse(msg.payload.completedAt as string)).toBeGreaterThanOrEqual(before - 1000);
+    } else {
+      expect(msg.payload.completedAt).toBeNull();
+    }
+
+    await closeClient(client);
+  });
+
   it('emitEnvironmentCreated reaches only the owning user (no cross-tenant leak)', async () => {
     const mine = await authed(serverUrl, 'token-mine');
     const theirs = await authed(serverUrl, 'token-theirs');
@@ -423,18 +452,48 @@ describe('websocket service', () => {
     }
     const settle = () => new Promise((r) => setTimeout(r, 120));
 
-    it('streams debug:event to an admin client', async () => {
+    it('streams debug:event to an admin client that opted in', async () => {
       const admin = await authed(serverUrl, 'token-admin');
       await admin.waitFor('connection:status');
+      admin.ws.send(JSON.stringify({ type: 'debug:filter', owner: null }));
+      await settle();
       debugBus.recordEvent({ service: 'test', action: 'x', summary: 'hello-admin' });
       await settle();
       expect(debugEvents(admin, (p) => p.summary === 'hello-admin')).toHaveLength(1);
       await closeClient(admin);
     });
 
-    it('withholds debug:event from a non-admin client', async () => {
+    it('withholds debug:event from an admin client that never opted in', async () => {
+      // Every DB query is a debug event. An open app with no Debug panel must
+      // not pay egress for that stream.
+      const admin = await authed(serverUrl, 'token-admin');
+      await admin.waitFor('connection:status');
+      debugBus.recordEvent({ service: 'test', action: 'x', summary: 'not-watching' });
+      await settle();
+      expect(debugEvents(admin, () => true)).toHaveLength(0);
+      await closeClient(admin);
+    });
+
+    it('stops the admin stream after debug:unsubscribe', async () => {
+      const admin = await authed(serverUrl, 'token-admin');
+      await admin.waitFor('connection:status');
+      admin.ws.send(JSON.stringify({ type: 'debug:filter', owner: 'all' }));
+      await settle();
+      debugBus.recordEvent({ service: 'test', action: 'x', summary: 'before-stop' });
+      admin.ws.send(JSON.stringify({ type: 'debug:unsubscribe' }));
+      await settle();
+      debugBus.recordEvent({ service: 'test', action: 'x', summary: 'after-stop' });
+      await settle();
+      expect(debugEvents(admin, (p) => p.summary === 'before-stop')).toHaveLength(1);
+      expect(debugEvents(admin, (p) => p.summary === 'after-stop')).toHaveLength(0);
+      await closeClient(admin);
+    });
+
+    it('withholds debug:event from a non-admin client, even one that asks for it', async () => {
       const user = await authed(serverUrl, 'token-mine');
       await user.waitFor('connection:status');
+      user.ws.send(JSON.stringify({ type: 'debug:filter', owner: 'all' }));
+      await settle();
       debugBus.recordEvent({ service: 'test', action: 'x', summary: 'secret' });
       await settle();
       // A non-admin must receive NO debug events at all — not even its own

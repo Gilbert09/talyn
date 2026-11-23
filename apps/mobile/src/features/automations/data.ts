@@ -1,5 +1,5 @@
 import { loops, workflows } from '@talyn/client/native';
-import type { LoopRun, LoopWithStats, WorkflowRun, WorkflowWithStats } from '@talyn/shared';
+import type { LoopRun, LoopWithStats, WorkflowIntegration, WorkflowRun, WorkflowWithStats } from '@talyn/shared';
 import { useState } from 'react';
 
 import { useWorkspace } from '../../auth/AuthProvider';
@@ -10,10 +10,10 @@ import { loopToggleInput, withEnabled, workflowToggleInput, type AutomationKind 
 export type AutomationItem = WorkflowWithStats | LoopWithStats;
 export const RUN_PAGE = 25;
 
-export function useWorkflowList(enabled = true) {
+export function useWorkflowList(integration: WorkflowIntegration, enabled = true) {
   const workspace = useWorkspace().selected;
-  return useRemote<WorkflowWithStats[]>(enabled && workspace ? `workflows:${workspace}` : null,
-    () => workflows.list(workspace ?? ''), { intervalMs: 60_000 });
+  return useRemote<WorkflowWithStats[]>(enabled && workspace ? `workflows:${workspace}:${integration}` : null,
+    () => workflows.list(workspace ?? '', integration), { intervalMs: 60_000 });
 }
 export function useLoopList(enabled = true) {
   const workspace = useWorkspace().selected;
@@ -39,7 +39,7 @@ export function useToggle<T extends AutomationItem>(kind: AutomationKind, list: 
     } catch (error) {
       list.mutate((items) => withEnabled(items, item.id, item.enabled));
       void list.refresh();
-      showActionError(enabled ? `Could not turn on the ${kind}` : `Could not turn off the ${kind}`, error);
+      showActionError(enabled ? 'Could not turn on the automation' : 'Could not turn off the automation', error);
     } finally {
       setBusy((prev) => { const next = { ...prev }; delete next[item.id]; return next; });
     }

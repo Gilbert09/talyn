@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Loader2, Moon, RefreshCw } from 'lucide-react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { api } from '../../lib/api';
@@ -11,7 +11,6 @@ import { emptyChatEvents, useWorkbenchStore } from '../../stores/workbenches';
 import { maybeHandleBillingLimit, useBillingStore } from '../../stores/billing';
 import { BoxRefusalAction, sessionRefusalText } from '../billing/BoxRefusalAction';
 import { Button } from '../ui/button';
-import { ChatTabs } from './ChatTabs';
 import { Composer } from './Composer';
 import { GitPanel } from './GitPanel';
 import { WorkPanel } from './WorkPanel';
@@ -19,6 +18,8 @@ import { isThread } from '../../lib/threads';
 import { WorkbenchHeader } from './WorkbenchHeader';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
 import { WorkbenchTranscript } from './WorkbenchTranscript';
+import { SubagentTabOpener, SubagentTranscript } from '../terminal/AgentConversation';
+import { SubagentTabBar, useSubagentTabs } from './SubagentTabs';
 import { trackEvent } from '../../lib/analytics';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { isStarting, StartingHint } from './WorkbenchStarting';
@@ -27,7 +28,7 @@ import { useRepoPaths } from './new/useRepoPaths';
 import { getDeviceId } from '../../lib/workbenchBridge';
 import { checkoutFor, takeOverLocalWorkbench } from '../../lib/localTakeover';
 import { useWorkbenchBackgroundLoad } from '../../hooks/useSessionBackground';
-import { clientAttentionKey, useAttentionSeen } from '../../lib/contextRail';
+import { clientAttentionKey, useAttentionRefresh } from '../../lib/contextRail';
 import { sessionPr } from '../../lib/sessionState';
 import { ImageDropOverlay, useImageDropZone } from './useComposerImages';
 
@@ -49,8 +50,7 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   const prDetailId = useWorkbenchStore((s) => s.prDetailId);
   const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
   const storeChats = useWorkbenchStore((s) => s.chats[workbench.id]);
-  useAttentionSeen(
-    workbench.id,
+  useAttentionRefresh(
     clientAttentionKey(workbench, storeChats ?? workbench.chats ?? [], sessionPr(workbench, pr)),
   );
 
@@ -84,7 +84,6 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
       <WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={viewOps} />
       <div className="flex min-h-0 min-w-0 flex-1" data-attr="workbench-columns">
         <div className="flex min-w-0 flex-1 flex-col">
-          <ChatTabs workbench={workbench} selected={chat} />
           {foreign && reason && (
             <Banner tone="muted" icon={<AlertTriangle className="h-3.5 w-3.5" />} text={reason}
               action={!checkout && repoPaths.ready ? (
@@ -113,7 +112,19 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   );
 }
 
-function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: WorkbenchChat | null; ops: WorkbenchOps }) {
+/** The transcript and the composer of one chat. Split view shows one per pane. */
+export function ChatView({
+  workbench,
+  chat,
+  ops,
+  autoFocus = true,
+}: {
+  workbench: Workbench;
+  chat: WorkbenchChat | null;
+  ops: WorkbenchOps;
+  /** Passed to the composer: only one composer on screen should take focus. */
+  autoFocus?: boolean;
+}) {
   const state = useWorkbenchStore((s) => (chat ? s.chatEvents[chat.id] : undefined)) ?? emptyChatEvents;
   const markRead = useWorkbenchStore((s) => s.markRead);
 
@@ -137,39 +148,51 @@ function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: Workbe
   // The whole chat column takes image drops, not only the composer strip.
   const attachRef = useRef<((files: File[]) => void) | null>(null);
   const { dragging, dropProps } = useImageDropZone((files) => attachRef.current?.(files));
+  const subagents = useSubagentTabs(chat?.id ?? null, state.events);
+  const showingSubagent = subagents.current !== null;
+  const agentEvents = useMemo(() => (showingSubagent ? state.events.map((entry) => entry.event) : []), [showingSubagent, state.events]);
+  const openSubagentTab = useWorkbenchStore((s) => s.openSubagentTab);
+  const chatId = chat?.id;
+  const openTab = useCallback((toolId: string) => { if (chatId) openSubagentTab(chatId, toolId); }, [chatId, openSubagentTab]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col" data-attr="workbench-chat-drop-zone" {...dropProps}>
       <ImageDropOverlay dragging={dragging} />
+      {chat && subagents.tabs.length > 0 && <SubagentTabBar chatId={chat.id} tabs={subagents.tabs} current={subagents.current} />}
       <div className="min-h-0 flex-1">
-        {chat ? (
-          <WorkbenchTranscript
-            chat={chat}
-            events={state.events}
-            loading={state.loading}
-            error={state.error}
-            ops={ops}
-            canRetry={queued === 0 && workbench.status !== 'error' && workbench.sandboxState !== 'error'}
-            emptyHint={startingHint}
-            older={{
-              hasOlder: state.hasOlder,
-              loading: state.loadingOlder,
-              error: state.olderError,
-              load: () => loadOlderEvents(chat.id),
-            }}
-          />
+        {chat && subagents.current ? (
+          <SubagentTranscript block={subagents.current.block} events={agentEvents} />
+        ) : chat ? (
+          <SubagentTabOpener.Provider value={openTab}>
+            <WorkbenchTranscript
+              workbench={workbench}
+              chat={chat}
+              events={state.events}
+              loading={state.loading}
+              error={state.error}
+              ops={ops}
+              canRetry={queued === 0 && workbench.status !== 'error' && workbench.sandboxState !== 'error'}
+              emptyHint={startingHint}
+              older={{
+                hasOlder: state.hasOlder,
+                loading: state.loadingOlder,
+                error: state.olderError,
+                load: () => loadOlderEvents(chat.id),
+              }}
+            />
+          </SubagentTabOpener.Provider>
         ) : (
           <div className="flex h-full items-center justify-center bg-background px-6 text-center text-xs text-muted-foreground">
             {startingHint ?? 'No chat yet. Send a message to start one.'}
           </div>
         )}
       </div>
-      <Composer workbench={workbench} chat={chat} ops={ops} todos={insights.todos} contextUsage={insights.contextUsage} slashCommands={insights.slashCommands} attachRef={attachRef} />
+      <Composer workbench={workbench} chat={chat} ops={ops} todos={insights.todos} contextUsage={insights.contextUsage} slashCommands={insights.slashCommands} attachRef={attachRef} autoFocus={autoFocus} />
     </div>
   );
 }
 
-function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: WorkbenchOps }) {
+export function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: WorkbenchOps }) {
   const owner = useIsWorkbenchOwner(workbench);
   const setTerminalTab = useWorkbenchStore((s) => s.setTerminalTab);
   const hasSetupOutput = useWorkbenchStore((s) => (s.scriptOutput[workbench.id]?.setup?.total ?? 0) > 0);
@@ -262,7 +285,7 @@ function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Workbench
   return null;
 }
 
-function Banner({
+export function Banner({
   tone,
   icon,
   text,

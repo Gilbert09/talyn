@@ -5,6 +5,7 @@ import {
   isStoredFleetModelId,
   fleetAgentForModel,
   parseAutoKeepMergeableLabels,
+  posthogCodeRetired,
   type FleetAgent,
   type Workspace,
 } from '@talyn/shared';
@@ -12,7 +13,6 @@ import { api } from '../../../lib/api';
 import { toast } from '../../../stores/toast';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { useWorkspaceStore } from '../../../stores/workspace';
-import { getMergeBlockedNotifyEnabled, setMergeBlockedNotifyEnabled } from '../../../hooks/useApi';
 import { Input } from '../../ui/input';
 import {
   SettingRow,
@@ -32,9 +32,6 @@ export function PullRequestsSettings() {
       </SettingsSection>
       <SettingsSection title="Tasks">
         <CloudProviderDefaultSelector />
-      </SettingsSection>
-      <SettingsSection title="Notifications">
-        <MergeBlockedNotifyToggle />
       </SettingsSection>
     </SettingsPage>
   );
@@ -272,6 +269,8 @@ export function CloudProviderDefaultSelector() {
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const connected = (cloudProviders ?? []).filter((p) => p.connected);
   const [saving, setSaving] = useState(false);
+  const retired = useWorkspaceStore((s) => posthogCodeRetired(s.features));
+  const autoCopy = retired ? 'Auto prefers Talyn Fleet.' : 'Auto prefers Talyn Fleet, then PostHog Code.';
 
   const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
   const settings = workspace?.settings;
@@ -345,7 +344,7 @@ export function CloudProviderDefaultSelector() {
       label="Default for new tasks"
       description={
         <>
-          Which agent new tasks run on. Auto prefers Talyn Fleet, then PostHog Code.
+          Which agent new tasks run on. {autoCopy}
           “Ask every time” shows a picker on the Task button when more than one is connected.
         </>
       }
@@ -364,49 +363,5 @@ export function CloudProviderDefaultSelector() {
         <option value="ask">Ask every time</option>
       </SettingsSelect>
     </SettingRow>
-  );
-}
-
-/** Per device, in localStorage; `notifyMergeQueueBlocked` in useApi reads it. */
-function MergeBlockedNotifyToggle() {
-  const [notifyBlocked, setNotifyBlocked] = useState(getMergeBlockedNotifyEnabled());
-  const [notifyPermission, setNotifyPermission] = useState<NotificationPermission>(
-    typeof Notification !== 'undefined' ? Notification.permission : 'denied'
-  );
-
-  const toggleNotifyBlocked = async (next: boolean) => {
-    setMergeBlockedNotifyEnabled(next);
-    setNotifyBlocked(next);
-    // Request OS permission eagerly on enable so the first real block doesn't
-    // race the browser permission prompt.
-    if (next && typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      try {
-        setNotifyPermission(await Notification.requestPermission());
-      } catch {
-        // ignore
-      }
-    }
-  };
-
-  return (
-    <SettingToggle
-      checked={notifyBlocked}
-      onChange={(next) => void toggleNotifyBlocked(next)}
-      label="Notify me when a merge-queue PR is blocked"
-      description={
-        <>
-          Shows a desktop notification and an in-app alert when a PR in the merge
-          queue gives up after its retry budget and needs manual intervention.
-          Click the notification to jump to it.
-          {notifyPermission === 'denied' && (
-            <span className="mt-1 block text-yellow-500">
-              Desktop notifications are blocked at the OS level — grant Talyn
-              permission in your system settings to receive them. (The in-app alert
-              still shows.)
-            </span>
-          )}
-        </>
-      }
-    />
   );
 }

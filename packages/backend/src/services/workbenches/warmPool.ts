@@ -72,12 +72,13 @@ export const WARM_POOL_POLLER = 'workbench-warm-pool';
 export const WARM_POOL = {
   sweepMs: 60_000,
   /**
-   * The fleet suspends a box after 10 idle minutes (`TALYN_SANDBOX_IDLE_TTL_SEC`,
-   * every plan's ceiling), and an exec resets that clock. A suspended warm box
-   * would wake in ~1-5 s and, after the tiered-storage window, move to the
-   * bucket and wake in minutes. Every 4 minutes leaves two missed sweeps of slack.
+   * The fleet suspends a box after 3 idle minutes (`TALYN_SANDBOX_IDLE_TTL_SEC`),
+   * and an exec resets that clock. A suspended warm box would wake in ~1-5 s
+   * and, after the tiered-storage window, move to the bucket and wake in
+   * minutes. Under one sweep, so every sweep touches the box and one missed
+   * sweep still leaves a minute of slack.
    */
-  keepAliveMs: 4 * 60_000,
+  keepAliveMs: 50_000,
   /** How often a ready box is compared with the current create inputs and the default branch. */
   checkMs: 10 * 60_000,
   /** Replaced at this age whatever the checks say: its fetch, its image and its credentials all age. */
@@ -165,11 +166,11 @@ function boxRow(box: Pick<WarmBox, 'id' | 'workspaceId' | 'repositoryId' | 'agen
   const now = new Date();
   return {
     id: box.id, workspaceId: box.workspaceId, repositoryId: box.repositoryId, repoFullName: slug, kind: 'session',
-    threadId: null, name: 'warm-pool', title: null, branch: box.baseBranch, baseBranch: box.baseBranch, runtime: 'sandbox',
+    threadId: null, parentWorkbenchId: null, notifyParent: false, name: 'warm-pool', title: null, branch: box.baseBranch, baseBranch: box.baseBranch, runtime: 'sandbox',
     agent: box.agent, model: null, deviceId: null, localPath: null, sandboxId: box.sandboxId, sandboxGeneration: box.sandboxId,
     sandboxState: 'running', memoryRestorePending: null, archivePendingAt: null, archiveRetryAt: null, restoreRequestedAt: null,
     archiveLeaseUntil: null, archiveFailures: 0, fleetHost: box.fleetHost, status: 'provisioning', statusMessage: null, startProgress: null,
-    pullRequestId: null, pullRequestLinkedAt: null, pushedHeadShas: [], allocatedBranch: false,
+    pullRequestId: null, pullRequestLinkedAt: null, pullRequestLinkExplicit: false, pushedHeadShas: [], allocatedBranch: false,
     settings: { internetAccess: box.internetAccess, sandboxSize: box.size as SandboxSize }, source: null, diffStat: null,
     workCheckpointSha: null, workCheckpointAt: null, workCheckpointBytes: null, workCheckedAt: null, workUnpushedCommits: null,
     workSaveFailures: 0, workSaveFailedAt: null, workSaveError: null, changesAt: null, changesEtag: null, spaceId: null, archivedAt: null,

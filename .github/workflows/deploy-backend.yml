@@ -10,6 +10,7 @@ on:
       - 'packages/backend/**'
       - 'packages/shared/**'
       - 'Dockerfile'
+      - 'docker-entrypoint.sh'
       - 'railway.toml'
       - '.dockerignore'
       - '.github/workflows/deploy-backend.yml'

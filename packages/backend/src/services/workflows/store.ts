@@ -5,14 +5,17 @@ import type {
   WorkflowActionOutcome,
   WorkflowCounts,
   WorkflowDefinition,
+  WorkflowIntegration,
   WorkflowRun,
   WorkflowRunStatus,
   WorkflowStats,
   WorkflowTriggerEvent,
   WorkflowWithStats,
 } from '@talyn/shared';
+import { workflowActionAsSession, workflowIntegrationOf } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { workflowRuns as runsTable, workflows as workflowsTable } from '../../db/schema.js';
+import { posthogClaimsForRuns } from '../inbound/issueLinks.js';
 
 /**
  * Reads and writes for the two workflow tables.
@@ -37,12 +40,17 @@ function rowToWorkflow(row: WorkflowRow): WorkflowDefinition {
   return {
     id: row.id,
     workspaceId: row.workspaceId,
+    integration: workflowIntegrationOf({ integration: row.integration as WorkflowIntegration }),
     name: row.name,
     enabled: row.enabled,
     events: (row.events ?? []) as WorkflowTriggerEvent[],
     conditions: (row.conditions ?? {}) as WorkflowDefinition['conditions'],
-    actions: (row.actions ?? []) as WorkflowDefinition['actions'],
+    // A rule saved before automations stopped starting cloud tasks reads its
+    // old task action as the session that replaces it.
+    actions: ((row.actions ?? []) as WorkflowDefinition['actions']).map(workflowActionAsSession),
     maxRunsPerPrPerHour: row.maxRunsPerPrPerHour,
+    // Only when set, so a rule without a daily cap reads as it always has.
+    ...(row.maxRunsPerDay !== null && row.maxRunsPerDay !== undefined ? { maxRunsPerDay: row.maxRunsPerDay } : {}),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -53,9 +61,15 @@ export function rowToWorkflowRun(row: RunRow): WorkflowRun {
     id: row.id,
     workflowId: row.workflowId,
     workspaceId: row.workspaceId,
+    integration: workflowIntegrationOf({ integration: row.integration as WorkflowIntegration }),
+    subjectKey: row.subjectKey,
+    subjectLabel: row.subjectLabel,
+    workbenchId: row.workbenchId,
     repositoryId: row.repositoryId,
-    repoFullName: row.repoFullName,
-    prNumber: row.prNumber,
+    // A Slack run has no pull request. The API keeps these as a string and a
+    // number, so a client that only knows PR runs still renders.
+    repoFullName: row.repoFullName ?? '',
+    prNumber: row.prNumber ?? 0,
     prTitle: row.prTitle,
     prUrl: row.prUrl,
     prAuthor: row.prAuthor,
@@ -68,6 +82,8 @@ export function rowToWorkflowRun(row: RunRow): WorkflowRun {
     retryAfter: row.retryAfter ? row.retryAfter.toISOString() : null,
     attempts: row.attempts,
     createdAt: row.createdAt.toISOString(),
+    trigger: row.triggerSource === 'manual' ? 'manual' : 'event',
+    triggeredBy: row.triggeredByLabel ?? null,
   };
 }
 
@@ -122,11 +138,21 @@ export async function enabledWorkflowsFor(
 
 // ---- CRUD ----------------------------------------------------------------
 
-export async function listWorkflows(workspaceId: string): Promise<WorkflowWithStats[]> {
+export async function listWorkflows(
+  workspaceId: string,
+  opts: { integration?: WorkflowIntegration } = {}
+): Promise<WorkflowWithStats[]> {
   const rows = await getDbClient()
     .select()
     .from(workflowsTable)
-    .where(eq(workflowsTable.workspaceId, workspaceId))
+    .where(
+      opts.integration
+        ? and(
+            eq(workflowsTable.workspaceId, workspaceId),
+            eq(workflowsTable.integration, opts.integration)
+          )
+        : eq(workflowsTable.workspaceId, workspaceId)
+    )
     .orderBy(desc(workflowsTable.createdAt));
   const defs = rows.map(rowToWorkflow);
   const stats = await statsFor(defs.map((d) => d.id));
@@ -176,12 +202,14 @@ export async function createWorkflow(
   const row = {
     id: uuid(),
     workspaceId,
+    integration: input.integration,
     name: input.name,
     enabled: input.enabled,
     events: input.events,
     conditions: input.conditions,
     actions: input.actions,
     maxRunsPerPrPerHour: input.maxRunsPerPrPerHour,
+    maxRunsPerDay: input.maxRunsPerDay ?? null,
     createdAt: now,
     updatedAt: now,
   };
@@ -195,6 +223,8 @@ export async function updateWorkflow(
   workspaceId: string,
   input: NormalizedWorkflow
 ): Promise<WorkflowWithStats | null> {
+  // `integration` is not written: a rule never moves to another integration.
+  // The route refuses that change before it gets here.
   await getDbClient()
     .update(workflowsTable)
     .set({
@@ -204,6 +234,7 @@ export async function updateWorkflow(
       conditions: input.conditions,
       actions: input.actions,
       maxRunsPerPrPerHour: input.maxRunsPerPrPerHour,
+      maxRunsPerDay: input.maxRunsPerDay ?? null,
       updatedAt: new Date(),
     })
     .where(eq(workflowsTable.id, id));
@@ -308,5 +339,24 @@ export async function listWorkflowRuns(
     )
     .orderBy(desc(runsTable.createdAt))
     .limit(opts.limit);
-  return rows.map(rowToWorkflowRun);
+  return withPostHogClaims(rows.map(rowToWorkflowRun));
+}
+
+/**
+ * Add Talyn's PostHog claim to the PostHog Inbox runs among these. One read
+ * for the page, and none when no run is a PostHog Inbox run.
+ */
+export async function withPostHogClaims(runs: WorkflowRun[]): Promise<WorkflowRun[]> {
+  const ids = runs.filter((r) => r.integration === 'posthog_inbox').map((r) => r.id);
+  if (ids.length === 0) return runs;
+  const claims = await posthogClaimsForRuns(ids);
+  return runs.map((r) => (claims.has(r.id) ? { ...r, posthogClaim: claims.get(r.id)! } : r));
+}
+
+/** One run, with its PostHog claim when it has one. */
+export async function getWorkflowRunWithClaim(runId: string): Promise<WorkflowRun | null> {
+  const rows = await getDbClient().select().from(runsTable).where(eq(runsTable.id, runId)).limit(1);
+  if (!rows[0]) return null;
+  const [run] = await withPostHogClaims([rowToWorkflowRun(rows[0])]);
+  return run ?? null;
 }

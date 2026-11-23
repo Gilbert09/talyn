@@ -213,6 +213,14 @@ export function isEmptyComposer(target: EventTarget | null): boolean {
   return target instanceof HTMLTextAreaElement && target.hasAttribute('data-session-composer') && target.value === '';
 }
 
+/** The session composer or the new-session composer on Home and in a space. */
+export function isComposer(target: EventTarget | null): target is HTMLTextAreaElement {
+  return (
+    target instanceof HTMLTextAreaElement &&
+    (target.hasAttribute('data-session-composer') || target.hasAttribute('data-new-workbench-composer'))
+  );
+}
+
 /** Dialogs, menus, lists, popovers and the command palette. */
 const OVERLAY =
   '[role="dialog"], [role="alertdialog"], [role="menu"], [role="menubar"], [role="listbox"], [cmdk-root], ' +

@@ -46,9 +46,22 @@ export class WorkbenchError extends Error {
     message: string,
     readonly status: number,
     readonly code: string,
+    readonly details?: { reason: 'reauth' | 'limited' | 'missing' | 'unavailable'; accountIds: string[] },
   ) {
     super(message);
     this.name = 'WorkbenchError';
+  }
+}
+
+/**
+ * A failure the agent can fix in the box: the remote branch has commits the
+ * box lacks, a commit failed, or the title is too long. After a turn, Talyn
+ * gives it back to the agent instead of ending there.
+ */
+export class AgentFixablePullRequestError extends WorkbenchError {
+  constructor(message: string, status: number, code: string) {
+    super(message, status, code);
+    this.name = 'AgentFixablePullRequestError';
   }
 }
 

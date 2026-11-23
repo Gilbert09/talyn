@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, Laptop, Loader2, RefreshCw, X } from 'lucide-react';
 import type { WorkbenchLocalReadiness } from '@talyn/shared';
 import { getWorkbenchBridge } from '../../../lib/workbenchBridge';
@@ -13,18 +13,25 @@ const AGENTS = [
  * The "Run locally" path: which agent CLIs this machine already has. Renders
  * nothing when the desktop bridge is absent (older main process, tests).
  * `recheck` adds a button that skips main's 30 s readiness cache, for after
- * an install.
+ * an install. `onReadiness` hears each answer, so a parent can follow a re-check.
  */
-export function LocalAgentStatus({ recheck = false }: { recheck?: boolean } = {}) {
+export function LocalAgentStatus({
+  recheck = false,
+  onReadiness,
+}: { recheck?: boolean; onReadiness?: (local: WorkbenchLocalReadiness) => void } = {}) {
   const [local, setLocal] = useState<WorkbenchLocalReadiness | null>(null);
   const [checking, setChecking] = useState(false);
   const bridge = getWorkbenchBridge();
+  const onReadinessRef = useRef(onReadiness);
+  onReadinessRef.current = onReadiness;
 
   const runRecheck = async () => {
     if (!bridge) return;
     setChecking(true);
     try {
-      setLocal(await bridge.readiness(true));
+      const next = await bridge.readiness(true);
+      setLocal(next);
+      onReadinessRef.current?.(next);
     } catch {
       // Keep the last answer.
     } finally {
@@ -38,7 +45,9 @@ export function LocalAgentStatus({ recheck = false }: { recheck?: boolean } = {}
     bridge
       .readiness()
       .then((r) => {
-        if (!cancelled) setLocal(r);
+        if (cancelled) return;
+        setLocal(r);
+        onReadinessRef.current?.(r);
       })
       .catch(() => {});
     return () => {

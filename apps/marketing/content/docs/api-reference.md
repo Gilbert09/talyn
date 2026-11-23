@@ -1593,7 +1593,7 @@ POST /v1/memories
 
 Scope: `memory:write`.
 
-Creates an entry. When a live entry with the same scope, target and name exists (the name is not case-sensitive), that entry is updated instead and the answer is 200. A workspace holds at most 500 live entries.
+Creates an entry. When a live entry with the same scope, target and name exists (the name is not case-sensitive), that entry is updated instead and the answer is 200. A workspace holds at most 500 live entries. A new entry over the limit makes Talyn forget the entry that sessions read the least, with `forgotten_reason: "evicted"`.
 
 | Body field | Type | Description |
 | --- | --- | --- |
@@ -1673,7 +1673,7 @@ POST /v1/memories/{id}/restore
 
 Scope: `memory:write`.
 
-Refused with 409 `memory_name_taken` when a live entry took its name, and with 409 `memory_limit_reached` at the limit.
+Refused with 409 `memory_name_taken` when a live entry took its name. At the limit, Talyn forgets the entry that sessions read the least.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
@@ -1927,6 +1927,7 @@ Returns `200`: Every event type an endpoint can receive.
 | `kind` | `session` \| `thread` |  |
 | `space_id` | string |  |
 | `thread_id` | string | The thread this session belongs to, if any. |
+| `parent_id` | string or null | The session that started this session, if any. |
 | `repository_id` | string | Null for a thread. |
 | `repository_full_name` | string |  |
 | `name` | string |  |
@@ -2137,6 +2138,9 @@ All the fields of [MergeQueueState](#mergequeuestate), plus:
 | `bytes` | integer |  |
 | `source` | object |  |
 | `forgotten_at` | string | Set when the entry was forgotten. Restore it to use it again. |
+| `forgotten_reason` | `evicted` | `evicted`: Talyn forgot the entry to make room at the limit of 500 live entries. Null otherwise. |
+| `use_count` | integer | How many times a session read the entry with `talyn_memory_read`. |
+| `last_used_at` | string | The last read. Null when nobody read the entry. |
 | `created_at` | string |  |
 | `updated_at` | string |  |
 

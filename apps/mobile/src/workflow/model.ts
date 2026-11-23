@@ -1,15 +1,25 @@
 import type { Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 import type { PRRow, WorkbenchEventsPage } from '@talyn/client/native';
 
+import { eventSize, slimEvent } from './slim';
+
 export const SCHEMA_VERSION = 1;
-export const EVENT_LIMIT = 1200;
-export const EVENT_BYTES = 2_000_000;
-export const PAGE_SIZE = 200;
+/**
+ * Events per page, as on desktop and web. Most stored events are `stream_event` token deltas,
+ * which draw nothing once their message lands. A long turn can hold thousands of them, so a
+ * smaller page shows only a few rows and needs many requests to reach the start of the turn.
+ */
+export const PAGE_SIZE = 500;
+/** The most events one backward page may hold while it reaches back to the start of a turn. The server maximum. */
+export const PAGE_CEILING = 2_000;
 export const ROW_TEXT_LIMIT = 16000;
 export interface Scope { environment: string; user: string; workspace: string }
-/** `attention` holds every open PR of the workspace, as web's one PR store; the three PR pages filter it. */
-export type Entity = 'sessions' | 'threads' | 'attention' | 'workbench' | 'children' | 'readiness' | 'pr' | 'timeline' | 'transcript'
-  | 'features' | 'repositories' | 'providers' | 'workspace' | 'environments' | 'codeReview';
+/**
+ * `attention` holds every open PR of the workspace, as web's one PR store; the three PR pages filter it.
+ * `contextAttention` holds the server's reason for each session that waits on the person, as `{ [id]: reason }`.
+ */
+export type Entity = 'sessions' | 'threads' | 'attention' | 'contextAttention' | 'workbench' | 'children' | 'readiness' | 'pr' | 'timeline' | 'transcript'
+  | 'features' | 'repositories' | 'providers' | 'workspace' | 'environments' | 'codeReview' | 'prDescription' | 'prFiles' | 'prReviews';
 export const cacheKey = (scope: Scope, entity: Entity, id = '') =>
   JSON.stringify(['mobile', SCHEMA_VERSION, scope.environment, scope.user, scope.workspace, entity, id]);
 export const sameScope = (a: Scope | null, b: Scope | null) => a === b || Boolean(a && b &&
@@ -54,39 +64,145 @@ export function explicitSendFailure(error: unknown) {
   return status !== undefined && status >= 400 && status < 500 && status !== 408;
 }
 
+/**
+ * Transcript window. Events are slimmed when they arrive (`slim.ts`), and the window is
+ * budgeted on the slimmed size, so a multi-hour session normally fits whole.
+ *
+ * When a cap applies, events go from the side away from the reader. The newest events are
+ * never dropped: reading older history stops at the budget (`limited`) instead.
+ */
+export const EVENT_LIMIT = 12_000;
+/** Estimated bytes of slimmed events (`eventSize`). */
+export const EVENT_BYTES = 24_000_000;
+/** While the reader is in older history, live events may grow the window this much past the budget before the oldest go. */
+export const READING_SLACK = 1.5;
+/** A jump to the newest message releases older events past this count, keeping `RELEASE_KEEP`. They load again on scroll. */
+export const RELEASE_AT = 2 * PAGE_CEILING;
+/** One full newest page, so a jump to the newest message holds what opening the session holds. */
+export const RELEASE_KEEP = PAGE_CEILING;
+
 export interface Transcript {
+  /** Oldest first, each one slimmed. */
   events: WorkbenchEvent[];
+  /** Estimated bytes of `events`. Kept as events come and go, never recounted. */
+  bytes: number;
+  /** The highest seq with every seq before it held, from the history boundary. */
   cursor: number;
   oldest: number | null;
+  /** Older events exist on the server that this window does not hold. */
   hasOlder: boolean;
   gap: boolean;
-  trimmed: boolean;
+  /** A REST page set the history boundary. Socket events alone do not. */
+  anchored: boolean;
+  /** The window is full while the reader is in older history, so no older page can load. A jump to the newest message clears it. */
+  limited: boolean;
+  /** The last older page failed. Loading stops until the reader asks again. */
+  olderFailed: boolean;
 }
-export const emptyTranscript = (): Transcript => ({ events: [], cursor: 0, oldest: null, hasOlder: false, gap: false, trimmed: false });
-export function mergeEvents(chatId: string, current: Transcript, incoming: WorkbenchEvent[], mode: 'live' | 'rest' | 'older' = 'live', page?: WorkbenchEventsPage): Transcript {
-  const bySeq = new Map(current.events.map((item) => [item.seq, item]));
-  for (const item of incoming) {
-    if (item.chatId === chatId && Number.isSafeInteger(item.seq) && item.seq > 0) bySeq.set(item.seq, item);
+export const emptyTranscript = (): Transcript => ({ events: [], bytes: 0, cursor: 0, oldest: null, hasOlder: false, gap: false,
+  anchored: false, limited: false, olderFailed: false });
+export type MergeMode = 'live' | 'rest' | 'older';
+/** Where the reader is. Decides which side of the window gives way. */
+export type Reading = 'newest' | 'older';
+
+const sum = (events: WorkbenchEvent[], from = 0, to = events.length) => {
+  let total = 0;
+  for (let index = from; index < to; index++) total += eventSize(events[index]);
+  return total;
+};
+/** The first index whose seq is above `seq`. */
+function firstAbove(events: WorkbenchEvent[], seq: number) {
+  let low = 0; let high = events.length;
+  while (low < high) { const mid = (low + high) >> 1; if (events[mid].seq > seq) high = mid; else low = mid + 1; }
+  return low;
+}
+/** Two sorted runs as one, `fresh` winning on an equal seq. `held` itself when `fresh` adds or changes nothing. */
+function mergeSorted(held: WorkbenchEvent[], fresh: WorkbenchEvent[]) {
+  const out: WorkbenchEvent[] = [];
+  let a = 0; let b = 0; let changed = false;
+  while (a < held.length || b < fresh.length) {
+    if (b >= fresh.length || (a < held.length && held[a].seq < fresh[b].seq)) out.push(held[a++]);
+    else {
+      if (a < held.length && held[a].seq === fresh[b].seq) { if (held[a] !== fresh[b]) changed = true; a++; } else changed = true;
+      out.push(fresh[b++]);
+    }
   }
-  let events = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+  return changed ? out : held;
+}
+/** Valid events of this chat, slimmed, sorted and unique by seq (the last copy wins). */
+function incomingEvents(chatId: string, incoming: WorkbenchEvent[]) {
+  const valid: WorkbenchEvent[] = [];
+  let sorted = true;
+  for (const item of incoming) {
+    if (item?.chatId !== chatId || !Number.isSafeInteger(item.seq) || item.seq <= 0) continue;
+    const slim = slimEvent(item);
+    const last = valid[valid.length - 1];
+    if (last && slim.seq <= last.seq) sorted = false;
+    valid.push(slim);
+  }
+  if (sorted) return valid;
+  const bySeq = new Map(valid.map((item) => [item.seq, item]));
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+}
+/** True when the window has no room for another event of its average size. */
+export const windowFull = (t: Transcript) => t.events.length >= EVENT_LIMIT ||
+  t.bytes + (t.events.length ? t.bytes / t.events.length : 0) > EVENT_BYTES;
+
+/**
+ * Merge events into the window. Idempotent: merging held events again changes nothing.
+ * Appending live events and prepending an older page cost the size of the new events only.
+ */
+export function mergeEvents(chatId: string, current: Transcript, incoming: WorkbenchEvent[], mode: MergeMode = 'live',
+  page?: WorkbenchEventsPage, reading: Reading = 'newest'): Transcript {
+  const fresh = incomingEvents(chatId, incoming);
+  const held = current.events;
+  let events: WorkbenchEvent[];
+  let bytes = current.bytes;
+  if (!fresh.length) events = held;
+  else if (!held.length) { events = fresh; bytes = sum(fresh); }
+  else if (fresh[0].seq > held[held.length - 1].seq) { events = held.concat(fresh); bytes += sum(fresh); }
+  else if (fresh[fresh.length - 1].seq < held[0].seq) { events = fresh.concat(held); bytes += sum(fresh); }
+  else { events = mergeSorted(held, fresh); if (events !== held) bytes = sum(events); }
+
   let cursor = current.cursor;
   // The first backward page establishes an intentional history boundary.
-  if (!current.events.length && mode === 'rest' && page?.oldestSeq != null) cursor = page.oldestSeq - 1;
-  for (const item of events) if (item.seq === cursor + 1) cursor = item.seq;
-  const gap = events.some((item) => item.seq > cursor);
-  let bytes = 0;
-  const retained: WorkbenchEvent[] = [];
-  const ordered = mode === 'older' ? events : [...events].reverse();
-  for (const item of ordered) {
-    const size = JSON.stringify(item).length * 2;
-    if (retained.length >= EVENT_LIMIT || bytes + size > EVENT_BYTES) break;
-    retained.push(item); bytes += size;
+  if (!held.length && mode === 'rest' && page?.oldestSeq != null) cursor = page.oldestSeq - 1;
+  for (let index = firstAbove(events, cursor); index < events.length && events[index].seq === cursor + 1; index++) cursor = events[index].seq;
+
+  let hasOlder = current.hasOlder;
+  if (mode === 'older' || (mode === 'rest' && !current.anchored)) hasOlder = page?.hasOlder === true;
+  let limited = current.limited;
+  let drop = 0;
+  if (mode === 'older') {
+    // The newest events stay. The page gives way, oldest first, and never the events already held.
+    const added = held.length ? firstAbove(events, held[0].seq - 1) : events.length;
+    let count = events.length; let size = bytes;
+    while (drop < added && (count > EVENT_LIMIT || size > EVENT_BYTES)) { size -= eventSize(events[drop]); count--; drop++; }
+    if (drop) limited = true;
+  } else {
+    const slack = reading === 'older' ? READING_SLACK : 1;
+    if (events.length > EVENT_LIMIT * slack || bytes > EVENT_BYTES * slack) {
+      let count = events.length; let size = bytes;
+      // Down to the plain budget, so the window does not trim on every live event.
+      while (count > 1 && (count > EVENT_LIMIT || size > EVENT_BYTES)) { size -= eventSize(events[drop]); count--; drop++; }
+      limited = false;
+    }
   }
-  const trimmed = retained.length < events.length;
-  events = mode === 'older' ? retained : retained.reverse();
-  return { events, cursor, oldest: events[0]?.seq ?? null, gap,
-    hasOlder: mode === 'older' || !current.events.length ? page?.hasOlder === true || trimmed : current.hasOlder || trimmed,
-    trimmed: current.trimmed || trimmed };
+  if (drop) { bytes -= sum(events, 0, drop); events = events.slice(drop); hasOlder = true; }
+  const unchanged = events === held && cursor === current.cursor && hasOlder === current.hasOlder && limited === current.limited &&
+    (mode === 'live' || current.anchored) && !(mode === 'older' && current.olderFailed);
+  if (unchanged) return current;
+  return { events, bytes, cursor, oldest: events[0]?.seq ?? null, gap: events.length > 0 && events[events.length - 1].seq > cursor, hasOlder,
+    anchored: current.anchored || mode !== 'live', limited, olderFailed: mode === 'older' ? false : current.olderFailed };
+}
+
+/** Release older events after the reader returns to the newest message. They load again when the reader scrolls up. */
+export function releaseOlder(current: Transcript): Transcript {
+  if (current.events.length <= RELEASE_AT && !current.limited) return current;
+  const drop = Math.max(0, current.events.length - RELEASE_KEEP);
+  const events = current.events.slice(drop);
+  return { ...current, events, bytes: current.bytes - sum(current.events, 0, drop), oldest: events[0]?.seq ?? null,
+    hasOlder: current.hasOlder || drop > 0, limited: false, olderFailed: false };
 }
 
 const labels: Record<string, string> = {
@@ -100,7 +216,7 @@ const labels: Record<string, string> = {
   testing: 'Testing', passed: 'Passed', pending_failure: 'Failure pending', failed: 'Failed', ejected: 'Ejected', cancelled: 'Cancelled', rejected: 'Rejected', not_submitted: 'Not submitted', not_ready: 'Not ready',
   allowed: 'Allowed', denied: 'Denied', auto_allowed: 'Allowed automatically',
   passing: 'Passing', failing: 'Failing', pending: 'Pending', none: 'No checks',
-  queued: 'Queued', awaiting_ci: 'Waiting for CI', awaiting_review: 'Waiting for review',
+  queued: 'Queued', awaiting_ci: 'Waiting for CI', waiting_ci: 'Waiting for CI', awaiting_review: 'Waiting for review',
   automerge_armed: 'Auto-merge armed', awaiting_external: 'Waiting for external queue', awaiting_stack: 'Waiting for stack',
   fixing: 'Fixing', merging: 'Merging', blocked: 'Blocked', blocked_manual: 'Human action needed', removed: 'Removed',
 };

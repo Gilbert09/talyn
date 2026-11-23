@@ -7,10 +7,11 @@ import {
   bumpSkillUsage,
   clearRepoSkillCache,
   CONTENT_CONCURRENCY,
+  setSlotDeadlineMsForTests,
 } from '../services/skills.js';
 import { githubService } from '../services/github.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
-import type { Database } from '../db/client.js';
+import { getScopedDb, runInScopedDb, type Database } from '../db/client.js';
 import {
   workspaces as workspacesTable,
   repositories as repositoriesTable,
@@ -416,6 +417,95 @@ describe('skills service', () => {
         expect(mockResolved).not.toHaveBeenCalled();
       },
     );
+  });
+
+  // 2026-11-17: discovery's GitHub reads looked up their token in the request's
+  // owner transaction. Reads still running when the response ended never
+  // settled, kept their slots, and every later discovery waited forever.
+  describe('discovery and the owner scope', () => {
+    afterEach(() => setSlotDeadlineMsForTests());
+
+    function manySkills(count: number) {
+      const names = Array.from({ length: count }, (_, i) => `skill-${i}`);
+      mockResolved.mockResolvedValue({ path: '.claude/skills', entries: names.map((n) => rootEntry(n)) });
+      mockTree.mockResolvedValue({
+        truncated: false,
+        entries: names.map((n, i) => blob(`${n}/SKILL.md`, `sha-${i}`)),
+      });
+      return names;
+    }
+
+    it.each([
+      ['directory listing', () => mockResolved],
+      ['tree read', () => mockTree],
+      ['content read', () => mockContent],
+    ] as const)('runs the %s with no owner scope when the caller has one', async (_label, pick) => {
+      mockTreePath();
+      const scopes: Array<Database | undefined> = [];
+      const mock = pick() as unknown as ReturnType<typeof vi.fn>;
+      const original = mock.getMockImplementation();
+      mock.mockImplementation(async (...args: unknown[]) => {
+        scopes.push(getScopedDb());
+        return original?.(...args);
+      });
+      // The test DB stands in for the request transaction.
+      const result = await runInScopedDb(db, () => listRepoSkills('ws1', 'repo1'));
+      expect(result.status).toBe('ok');
+      expect(scopes.length).toBeGreaterThan(0);
+      expect(scopes.every((scope) => scope === undefined)).toBe(true);
+    });
+
+    it.each([
+      { label: 'share one discovery', second: {}, discoveries: 1 },
+      { label: 'run a refresh on its own', second: { refresh: true }, discoveries: 2 },
+    ])('concurrent callers $label', async ({ second, discoveries }) => {
+      mockTreePath();
+      const [a, b] = await Promise.all([
+        listRepoSkills('ws1', 'repo1'),
+        listRepoSkills('ws1', 'repo1', second),
+      ]);
+      expect(mockResolved).toHaveBeenCalledTimes(discoveries);
+      expect(a.skills.map((s) => s.name)).toEqual(['reviewer']);
+      expect(b.skills.map((s) => s.name)).toEqual(['reviewer']);
+    });
+
+    it('starts a new discovery once the shared one has failed', async () => {
+      mockTreePath();
+      mockResolved.mockRejectedValueOnce(new Error('GitHub said no'));
+      const failed = await listRepoSkills('ws1', 'repo1');
+      expect(failed).toMatchObject({ status: 'error', error: 'GitHub said no' });
+      const next = await listRepoSkills('ws1', 'repo1');
+      expect(next.status).toBe('ok');
+      expect(mockResolved).toHaveBeenCalledTimes(2);
+    });
+
+    it('takes back the slots of reads that never settle', async () => {
+      setSlotDeadlineMsForTests(20);
+      const names = manySkills(CONTENT_CONCURRENCY + 2);
+      mockContent.mockImplementation(() => new Promise(() => {}));
+
+      const stuck = await listRepoSkills('ws1', 'repo1');
+      expect(stuck.status).toBe('error');
+      expect(stuck.error).toMatch(/did not finish/);
+
+      // Every slot is free again, so the next discovery completes.
+      mockContent.mockImplementation(async () => ({ content: SKILL_MD, size: SKILL_MD.length }));
+      const next = await listRepoSkills('ws1', 'repo1', { refresh: true });
+      expect(next.status).toBe('ok');
+      expect(next.skills).toHaveLength(names.length);
+    });
+
+    it('does not time out a slow read that settles inside the deadline', async () => {
+      setSlotDeadlineMsForTests(500);
+      manySkills(3);
+      mockContent.mockImplementation(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        return { content: SKILL_MD, size: SKILL_MD.length };
+      });
+      const result = await listRepoSkills('ws1', 'repo1');
+      expect(result.status).toBe('ok');
+      expect(result.skills).toHaveLength(3);
+    });
   });
 
   describe('getRepoSkillContent', () => {

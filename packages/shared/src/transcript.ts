@@ -21,6 +21,7 @@ import { adoptedPullRequestMessage, parseAutoPrDetails } from './workbenchPullRe
 import { memoryChangeText, parseMemoryChangeEvent, type MemoryChangeEvent } from './workbenchMemory.js';
 import { messageTrigger, type WorkbenchMessageTrigger } from './workbenchBackground.js';
 import { isTalynOriginMessage, parseThreadSessionEvent, threadSessionEventText, type ThreadSessionEvent } from './workbenchThread.js';
+import { isAskUserToolName } from './workbenchQuestion.js';
 
 const INTERRUPTED_MESSAGES = new Set([
   '[Request interrupted by user]',
@@ -33,13 +34,22 @@ export function isClaudeInterruptionText(text: string): boolean {
 }
 
 export function isClaudeInterruptionEvent(event: AgentEvent): boolean {
-  if (event.type !== 'user') return false;
+  if (isSubagentEvent(event) || event.type !== 'user') return false;
   const content = (event.message as { content?: unknown })?.content;
   if (typeof content === 'string') return isClaudeInterruptionText(content);
   return Array.isArray(content) && content.length > 0 &&
     content.every((block) => block?.type === 'text' && typeof block.text === 'string') &&
     isClaudeInterruptionText(content.map((block) => block.text).join('\n'));
 }
+
+/**
+ * Shown when Claude's `result` arrives while a tool call has no result yet. Claude
+ * Code ends its run that way when the agent leaves its own background tasks
+ * (subagents, background shells) running: the open call stops, and the next
+ * turn's resume marks it interrupted.
+ */
+export const TURN_ENDED_WITH_OPEN_TOOL_NOTE =
+  "The agent ended its turn before a tool call finished. That call and the agent's background tasks stopped.";
 
 export function isClaudeRejectedToolResult(content: unknown, isError: boolean): boolean {
   if (!isError) return false;
@@ -57,10 +67,29 @@ export function isClaudeRejectedToolResult(content: unknown, isError: boolean): 
 // prompt, etc.). `buildBlocks` collapses a flat event list into this shape.
 // ---------------------------------------------------------------------------
 
+export interface SubagentProgress {
+  steps: number;
+  current?: string;
+  children?: GroupedBlock[];
+  task?: SubagentTaskDetails;
+  startedAt?: number;
+  endedAt?: number;
+}
+
+export interface SubagentTaskDetails {
+  status?: 'running' | 'completed' | 'failed' | 'stopped';
+  activity?: string;
+  tokens?: number;
+  tools?: number;
+  durationMs?: number;
+  startedAt?: number;
+  endedAt?: number;
+}
+
 export type Block =
   | { kind: 'text'; key: string; text: string }
   | { kind: 'thinking'; key: string; text: string }
-  | { kind: 'tool_use'; key: string; toolId: string; name: string; input: unknown }
+  | { kind: 'tool_use'; key: string; toolId: string; name: string; input: unknown; subagent?: SubagentProgress }
   | {
       kind: 'tool_result';
       key: string;
@@ -101,6 +130,7 @@ export type Block =
       kind: 'result';
       key: string;
       summary: string;
+      reason?: 'reauth' | 'limited' | 'missing' | 'unavailable';
       costUsd?: number;
       inputTokens?: number;
       outputTokens?: number;
@@ -127,16 +157,100 @@ export const SESSION_NOTE_SUBTYPES: ReadonlySet<string> = new Set([
   'local_turn_interrupted',
   'sandbox_capacity_wait',
   'agent_session_reset',
+  'subagents_stopped',
 ]);
 
+/** A subagent's current step: the verb and a short subject, e.g. "read contracts.py". */
+function subagentStepLabel({ label, detail, isCommand }: ToolDescription): string {
+  const line = detail.split('\n')[0].trim();
+  if (!line) return label;
+  const subject = isCommand || !line.includes('/') ? line : line.split('/').filter(Boolean).pop() ?? line;
+  return `${label} ${subject.length > 60 ? `${subject.slice(0, 59)}…` : subject}`;
+}
+
+export function isSubagentEvent(event: { parent_tool_use_id?: unknown }): boolean {
+  return Boolean(event.parent_tool_use_id);
+}
+
+function eventTime(value: unknown): number | undefined {
+  const time = typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : NaN;
+  return Number.isFinite(time) ? time : undefined;
+}
+
+function taskDetails(events: AgentEvent[]): Map<string, SubagentTaskDetails> {
+  const tasks = new Map<string, SubagentTaskDetails>();
+  const calls = new Map<string, string>();
+  for (const event of events) {
+    if (event.type === 'system' && typeof event.task_id === 'string' && typeof event.tool_use_id === 'string') {
+      calls.set(event.task_id, event.tool_use_id);
+    }
+  }
+  for (const event of events) {
+    if (event.type === 'system' && event.subtype === 'subagents_stopped') {
+      for (const task of tasks.values()) if (task.status === 'running') task.status = 'stopped';
+      continue;
+    }
+    if (event.type !== 'system' || !['task_started', 'task_progress', 'task_updated', 'task_notification'].includes(event.subtype ?? '')) continue;
+    const id = typeof event.tool_use_id === 'string' ? event.tool_use_id : calls.get(String(event.task_id ?? ''));
+    if (!id) continue;
+    const task = tasks.get(id) ?? {};
+    const patch = event.patch && typeof event.patch === 'object' ? event.patch as Record<string, unknown> : {};
+    const usage = (event.usage ?? patch.usage) as Record<string, unknown> | undefined;
+    if (event.subtype === 'task_progress' && typeof event.description === 'string') task.activity = event.description;
+    else if (!task.activity && typeof event.last_tool_name === 'string') task.activity = event.last_tool_name;
+    for (const [source, target] of [['total_tokens', 'tokens'], ['tool_uses', 'tools'], ['duration_ms', 'durationMs']] as const) {
+      const value = usage?.[source];
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) task[target] = value;
+    }
+    if (event.subtype === 'task_started') {
+      task.startedAt = eventTime(event.timestamp) ?? task.startedAt;
+      task.status = 'running';
+    }
+    if (['completed', 'failed', 'stopped'].includes(String(patch.status ?? event.status))) {
+      task.status = (patch.status ?? event.status) as 'completed' | 'failed' | 'stopped';
+      task.endedAt = eventTime(patch.end_time) ?? eventTime(event.timestamp) ?? task.endedAt;
+    }
+    tasks.set(id, task);
+  }
+  return tasks;
+}
+
 export function buildBlocks(events: AgentEvent[]): Block[] {
+  const children = new Map<string, AgentEvent[]>();
+  for (const event of events) {
+    if (!isSubagentEvent(event)) continue;
+    const id = String(event.parent_tool_use_id);
+    const list = children.get(id) ?? [];
+    list.push({ ...event, parent_tool_use_id: null });
+    children.set(id, list);
+  }
+  return buildTranscriptBlocks(events, children, taskDetails(events), new Set());
+}
+
+function buildTranscriptBlocks(
+  events: AgentEvent[], children: Map<string, AgentEvent[]>, tasks: Map<string, SubagentTaskDetails>, ancestors: Set<string>,
+): Block[] {
   const blocks: Block[] = [];
+  const processKey = (event: AgentEvent): string | null => {
+    const stamp = event.talyn as { kind?: string; turn?: number; attempt?: number } | undefined;
+    return stamp?.kind === 'process_result' ? `${stamp.turn}:${stamp.attempt}` : null;
+  };
+  const lastResults = new Map<string, AgentEvent>();
+  for (const event of events) {
+    const key = processKey(event);
+    if (key && event.type === 'result' && !isSubagentEvent(event)) lastResults.set(key, event);
+  }
   let interruptionOpen = false;
   const interrupt = (key: string) => {
     if (!interruptionOpen) blocks.push({ kind: 'system', key, text: 'Interrupted', subtype: 'talyn_interruption' });
     interruptionOpen = true;
   };
   const permissionByRequestId = new Map<string, number>(); // requestId → blocks index
+  // Tool calls with no result yet, for TURN_ENDED_WITH_OPEN_TOOL_NOTE. Codex output is converted
+  // by Talyn and its runs have no background tasks, so a Codex run never gets the note.
+  const openToolIds = new Set<string>();
+  let codexRun = false;
+  const askUserCalls = new Map<string, Block>(); // talyn_ask_user calls waiting for their result
   // Pair tool_result → tool_use by tool_use_id so the collapsed result
   // row can say "Read 40 lines from <file>" instead of dumping bytes.
   const toolUseById = new Map<string, { name: string; input: unknown }>();
@@ -155,8 +269,13 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
   let streamingMsgId: string | undefined;
 
   for (const event of events) {
+    if (isSubagentEvent(event)) continue;
     const seqKey = String(event.seq);
     if (event.type !== 'user' && !(event.type === 'system' && event.subtype === 'talyn_interruption')) interruptionOpen = false;
+    if (event.type === 'system' && event.subtype === 'init') {
+      codexRun = (event as { agent?: unknown }).agent === 'codex';
+      openToolIds.clear();
+    }
 
     if (event.type === 'talyn_permission_request') {
       const reqId = String((event as { requestId?: unknown }).requestId ?? '');
@@ -242,14 +361,14 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
           const id = String(b.id ?? '');
           const name = String(b.name ?? 'unknown');
           const inp = b.input ?? {};
-          if (id) toolUseById.set(id, { name, input: inp });
-          blocks.push({
-            kind: 'tool_use',
-            key: `${seqKey}.${i}`,
-            toolId: id,
-            name,
-            input: inp,
-          });
+          if (id) {
+            toolUseById.set(id, { name, input: inp });
+            openToolIds.add(id);
+          }
+          const block: Block = { kind: 'tool_use', key: `${seqKey}.${i}`, toolId: id, name, input: inp };
+          // The question card shows a question. The call shows only when it fails.
+          if (id && isAskUserToolName(name)) askUserCalls.set(id, block);
+          else blocks.push(block);
         }
       }
       continue;
@@ -286,8 +405,18 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
         };
         if (b.type === 'tool_result') {
           const toolId = String(b.tool_use_id ?? '');
+          openToolIds.delete(toolId);
           const paired = toolId ? toolUseById.get(toolId) : undefined;
           const stopped = isClaudeRejectedToolResult(b.content, b.is_error === true);
+          const askCall = askUserCalls.get(toolId);
+          if (askCall) {
+            askUserCalls.delete(toolId);
+            if (b.is_error !== true) {
+              interruptionOpen = false;
+              continue;
+            }
+            blocks.push(askCall);
+          }
           blocks.push({
             kind: 'tool_result',
             key: `${seqKey}.${i}`,
@@ -308,11 +437,20 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
     }
 
     if (event.type === 'result') {
+      const key = processKey(event);
+      const finalResult = !key || event === lastResults.get(key);
+      const activeTasks = [...tasks.values()].some((task) => task.status === 'running');
+      if (finalResult && !activeTasks && !event.is_error && !codexRun && openToolIds.size > 0) {
+        blocks.push({ kind: 'system', key: `${seqKey}.open`, text: TURN_ENDED_WITH_OPEN_TOOL_NOTE });
+      }
+      if (finalResult && !activeTasks) openToolIds.clear();
       const usage = (event.usage as { input_tokens?: number; output_tokens?: number }) ?? {};
       blocks.push({
         kind: 'result',
         key: seqKey,
         summary: String(event.result ?? ''),
+        ...(['reauth', 'limited', 'missing', 'unavailable'].includes(String(event.reason))
+          ? { reason: event.reason as 'reauth' | 'limited' | 'missing' | 'unavailable' } : {}),
         costUsd: event.total_cost_usd,
         inputTokens: usage.input_tokens,
         outputTokens: usage.output_tokens,
@@ -463,6 +601,31 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
     });
   }
 
+  for (const block of blocks) {
+    if (block.kind === 'tool_use' && describeTool(block.name, block.input).label === 'agent') {
+      const nested = children.get(block.toolId) ?? [];
+      const progress: SubagentProgress = { steps: 0 };
+      for (const event of nested) {
+        const content = event.type === 'assistant' ? event.message?.content : undefined;
+        if (!Array.isArray(content)) continue;
+        for (const part of content) {
+          if (part?.type !== 'tool_use') continue;
+          progress.steps++;
+          progress.current = subagentStepLabel(describeTool(String(part.name ?? 'unknown'), part.input));
+        }
+      }
+      if (nested.length && !ancestors.has(block.toolId)) {
+        progress.children = groupToolRuns(mergeToolBlocks(buildTranscriptBlocks(nested, children, tasks, new Set([...ancestors, block.toolId]))));
+      }
+      progress.task = tasks.get(block.toolId);
+      const call = events.find((event) => String(event.seq) === block.key.split('.')[0]);
+      progress.startedAt = eventTime(call?.timestamp);
+      const result = events.find((event) => event.type === 'user' && Array.isArray(event.message?.content) &&
+        event.message.content.some((part) => part?.type === 'tool_result' && part.tool_use_id === block.toolId));
+      progress.endedAt = eventTime(result?.timestamp);
+      block.subagent = progress;
+    }
+  }
   return blocks;
 }
 
@@ -1031,6 +1194,7 @@ export interface ToolBlock {
   toolId: string;
   name: string;
   input: unknown;
+  subagent?: SubagentProgress;
   /** Absent while the call is still in flight. */
   output?: unknown;
   /** Only meaningful once `output` has landed. */
@@ -1038,6 +1202,53 @@ export interface ToolBlock {
   stopped: boolean;
   /** False until the result arrives — lets a renderer show a spinner. */
   settled: boolean;
+}
+
+export interface SubagentCardModel {
+  type: string;
+  title: string;
+  brief: string;
+  steps: number;
+  current?: string;
+  stepsLabel: string;
+  running: boolean;
+  failed: boolean;
+  result: string | null;
+  children: GroupedBlock[];
+  detailsLabel?: string;
+}
+
+export function subagentCardModel(block: ToolBlock, details = false, now = Date.now()): SubagentCardModel | null {
+  if (describeTool(block.name, block.input).label !== 'agent') return null;
+  const input = block.input && typeof block.input === 'object' ? block.input as Record<string, unknown> : {};
+  const brief = typeof input.prompt === 'string' ? input.prompt : '';
+  const type = typeof input.subagent_type === 'string' && input.subagent_type.trim() ? input.subagent_type.trim() : 'Subagent';
+  const title = typeof input.description === 'string' && input.description.trim()
+    ? input.description.trim() : brief.trim().split('\n')[0].trim();
+  const { steps, current } = block.subagent ?? { steps: 0 };
+  const task = details ? block.subagent?.task : undefined;
+  const running = task?.status ? task.status === 'running' : !block.settled;
+  const failed = task?.status === 'failed' || task?.status === 'stopped' || (block.settled && block.isError);
+  const count = plural(steps, 'step');
+  let stepsLabel = running
+    ? steps === 0 ? 'Starting…' : `${count}${current ? ` · ${current}` : ''}`
+    : `${failed ? 'Failed' : 'Finished'} · ${count}`;
+  if (task) {
+    const taskCount = task.tools === undefined ? plural(steps, 'step') : plural(task.tools, 'tool');
+    stepsLabel = running ? `${taskCount}${task.activity || current ? ` · ${task.activity || current}` : ''}`
+      : `${failed ? 'Failed' : 'Finished'} · ${taskCount}`;
+  }
+  const startedAt = task?.startedAt ?? block.subagent?.startedAt;
+  const endedAt = task?.endedAt ?? block.subagent?.endedAt;
+  const duration = task?.durationMs ?? (startedAt !== undefined && (running || endedAt !== undefined)
+    ? Math.max(0, (endedAt ?? now) - startedAt) : undefined);
+  const detailsLabel = details ? [
+    task?.tokens === undefined ? '' : `${task.tokens.toLocaleString('en-US')} tokens`,
+    duration === undefined ? '' : `${Math.floor(duration / 1000)}s`,
+  ].filter(Boolean).join(' · ') : undefined;
+  return { type, title, brief, steps, current, stepsLabel, running, failed,
+    children: details ? block.subagent?.children ?? [] : [], detailsLabel,
+    result: block.output == null ? null : formatToolOutput(block.output).text };
 }
 
 export type MergedBlock = Exclude<Block, { kind: 'tool_use' } | { kind: 'tool_result' }> | ToolBlock;
@@ -1062,6 +1273,7 @@ export function mergeToolBlocks(blocks: Block[]): MergedBlock[] {
         toolId: block.toolId,
         name: block.name,
         input: block.input,
+        ...(block.subagent && describeTool(block.name, block.input).label === 'agent' ? { subagent: block.subagent } : {}),
         isError: false,
         stopped: false,
         settled: false,
@@ -1112,7 +1324,7 @@ export function mergedBlockSignature(block: MergedBlock): string {
   if (block.kind === 'tool') {
     const len =
       typeof block.output === 'string' ? block.output.length : block.output ? 1 : 0;
-    return `${block.key}:${block.settled ? 1 : 0}:${block.isError ? 1 : 0}:${block.stopped ? 1 : 0}:${len}`;
+    return `${block.key}:${block.settled ? 1 : 0}:${block.isError ? 1 : 0}:${block.stopped ? 1 : 0}:${len}:${block.subagent?.steps ?? 0}:${block.subagent?.current ?? ''}:${JSON.stringify(block.subagent?.task)}:${block.subagent?.startedAt ?? ''}:${block.subagent?.endedAt ?? ''}:${block.subagent?.children?.map(groupedBlockSignature).join(',') ?? ''}`;
   }
   return blockSignature(block);
 }
@@ -1375,6 +1587,11 @@ export function groupToolRuns(blocks: MergedBlock[]): GroupedBlock[] {
   for (const block of blocks) {
     if (block.kind === 'tool') {
       if (isHiddenTool(block.name)) continue;
+      if (describeTool(block.name, block.input).label === 'agent') {
+        flush();
+        out.push(block);
+        continue;
+      }
       children.push(...pending);
       pending = [];
       run.push(block);
@@ -1405,4 +1622,81 @@ export function groupedBlockSignature(block: GroupedBlock): string {
     return `${block.key}:${block.children.map((c) => (c.kind === 'tool' ? mergedBlockSignature(c) : c.key)).join(',')}`;
   }
   return mergedBlockSignature(block);
+}
+
+export function isSubagentTool(name: string): boolean {
+  return describeTool(name, {}).label === 'agent';
+}
+
+/** Count open Agent calls in the events of one live turn. */
+export function runningSubagentCount(events: AgentEvent[]): number {
+  const open = new Set<string>();
+  for (const event of events) {
+    if (event.type === 'system' && event.subtype === 'subagents_stopped') { open.clear(); continue; }
+    const content = event.message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (event.type === 'assistant' && part?.type === 'tool_use' && typeof part.id === 'string' && isSubagentTool(String(part.name ?? ''))) open.add(part.id);
+      if (event.type === 'user' && part?.type === 'tool_result') open.delete(String(part.tool_use_id));
+    }
+  }
+  let stopped = -1;
+  events.forEach((event, index) => { if (event.type === 'system' && event.subtype === 'subagents_stopped') stopped = index; });
+  for (const [id, task] of taskDetails(events.slice(stopped + 1))) {
+    if (task.status === 'running') open.add(id);
+    else if (task.status) open.delete(id);
+  }
+  return open.size;
+}
+
+/** A subagent that the transcript shows in its own tab. */
+export interface SubagentTab {
+  toolId: string;
+  /** The chat turn that started the subagent. */
+  turn: number;
+  block: ToolBlock;
+}
+
+/**
+ * The subagents for the transcript's tabs: each Agent call of the latest turn
+ * that started one, plus `keep` (a subagent that the person opened from an
+ * older card). Builds blocks only for those turns.
+ */
+export function subagentTabs(
+  entries: readonly { turn: number; event: AgentEvent; createdAt?: string }[],
+  keep?: string | null,
+): SubagentTab[] {
+  const turnOf = new Map<string, number>();
+  for (const { turn, event } of entries) {
+    const content = event.message?.content;
+    if (event.type !== 'assistant' || isSubagentEvent(event) || !Array.isArray(content)) continue;
+    for (const part of content) {
+      if (part?.type === 'tool_use' && typeof part.id === 'string' && isSubagentTool(String(part.name ?? ''))) turnOf.set(part.id, turn);
+    }
+  }
+  if (!turnOf.size) return [];
+  const latest = Math.max(...turnOf.values());
+  const keepTurn = keep ? turnOf.get(keep) : undefined;
+  const turns = [...new Set(keepTurn === undefined ? [latest] : [keepTurn, latest])].sort((a, b) => a - b);
+  const tabs: SubagentTab[] = [];
+  for (const turn of turns) {
+    const events = entries.filter((entry) => entry.turn === turn).map(({ event, createdAt }) =>
+      isSubagentEvent(event) ? { ...event, timestamp: event.timestamp ?? createdAt } : event);
+    for (const block of mergeToolBlocks(buildBlocks(events))) {
+      if (block.kind !== 'tool' || turnOf.get(block.toolId) !== turn) continue;
+      if (turn === latest || block.toolId === keep) tabs.push({ toolId: block.toolId, turn, block });
+    }
+  }
+  return tabs;
+}
+
+/**
+ * The tab that the "subagents running" chip opens: the next running subagent
+ * after `current`, back to the first after the last. Null when none runs.
+ */
+export function nextRunningSubagentTab(tabs: readonly SubagentTab[], current: string | null, now = Date.now()): string | null {
+  const running = tabs.filter((tab) => subagentCardModel(tab.block, true, now)?.running);
+  if (!running.length) return null;
+  const index = running.findIndex((tab) => tab.toolId === current);
+  return running[(index + 1) % running.length].toolId;
 }

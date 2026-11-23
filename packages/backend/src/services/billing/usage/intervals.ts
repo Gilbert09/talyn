@@ -4,8 +4,12 @@ import { SIZE_WEIGHT, type SandboxSize, type UsageSubjectKind } from '@talyn/sha
 import { getPoolDbClient } from '../../../db/client.js';
 import { usageIntervals } from '../../../db/schema.js';
 
-/** Why an interval closed. */
-export type EndReason = 'terminal' | 'suspended' | 'deleted' | 'vanished' | 'exhausted' | 'sweep' | 'payer_change';
+/**
+ * Why an interval closed. `resize` means the box still runs: the sweep closed
+ * the interval because the box's measured size changed, and opened the next
+ * one at the same instant.
+ */
+export type EndReason = 'terminal' | 'suspended' | 'deleted' | 'vanished' | 'exhausted' | 'sweep' | 'payer_change' | 'resize';
 
 export interface OpenIntervalInput {
   ownerId: string;
@@ -18,6 +22,8 @@ export interface OpenIntervalInput {
   startedAt?: Date;
   /** A teammate who pays for this box (Teams and Spaces). `ownerId` is then that teammate. */
   payerUserId?: string | null;
+  /** The box's memory reading at open (MiB), when the caller has one. Starts the interval's peak. */
+  memUsedMib?: number | null;
 }
 
 /** What the charge step reads. No column here is large. */
@@ -56,30 +62,73 @@ export async function insertOpenInterval(input: OpenIntervalInput): Promise<bool
       startedAt,
       billedThrough: startedAt,
       payerUserId: input.payerUserId ?? null,
+      peakMemUsedMib: peakMib(input.memUsedMib),
     })
     .onConflictDoNothing({ target: usageIntervals.sandboxId, where: sql`${usageIntervals.endedAt} IS NULL` })
     .returning({ id: usageIntervals.id });
   return rows.length > 0;
 }
 
+/** A memory reading as a whole MiB, or null when it is not a usable figure. */
+export function peakMib(memUsedMib: number | null | undefined): number | null {
+  return typeof memUsedMib === 'number' && Number.isFinite(memUsedMib) && memUsedMib > 0 ? Math.ceil(memUsedMib) : null;
+}
+
 /**
- * Close the box's open interval at `endedAt`. Returns the owner when a row
- * closed, null when none was open.
+ * Raise each open interval's peak memory to this reading when it is higher.
+ * One statement for the whole tick. A closed interval keeps its peak.
+ */
+export async function raiseIntervalPeaks(readings: ReadonlyArray<{ id: string; memUsedMib: number }>): Promise<number> {
+  const rows = readings.flatMap((r) => {
+    const mib = peakMib(r.memUsedMib);
+    return mib === null ? [] : [sql`(${r.id}::text, ${mib}::integer)`];
+  });
+  if (rows.length === 0) return 0;
+  const updated = await db().execute(sql`
+    UPDATE usage_intervals AS u
+    SET peak_mem_used_mib = GREATEST(COALESCE(u.peak_mem_used_mib, 0), r.mib)
+    FROM (VALUES ${sql.join(rows, sql`, `)}) AS r(id, mib)
+    WHERE u.id = r.id AND u.ended_at IS NULL
+      AND (u.peak_mem_used_mib IS NULL OR u.peak_mem_used_mib < r.mib)
+    RETURNING u.id
+  `);
+  const list = Array.isArray(updated) ? updated : ((updated as { rows?: unknown[] }).rows ?? []);
+  return list.length;
+}
+
+/**
+ * Close the box's open interval at `endedAt`. Returns the owner and the end
+ * actually written when a row closed, null when none was open.
  *
  * The end never falls before what the meter already billed (the CAS cursor),
  * so a late close (a sweep that saw a suspend after a charge) cannot leave an
  * interval billed past its own end. The bound is passed as an ISO string: a
  * Date in a raw `sql` fragment reaches postgres-js unencoded and throws.
+ *
+ * `intervalId` closes only that interval. A caller that read the interval
+ * earlier uses it, so a hook that replaced the interval meanwhile (a payer
+ * change) does not get its new interval closed.
  */
-export async function markIntervalClosed(sandboxId: string, endedAt: Date, reason: EndReason): Promise<{ ownerId: string } | null> {
+export async function markIntervalClosed(
+  sandboxId: string,
+  endedAt: Date,
+  reason: EndReason,
+  intervalId?: string,
+): Promise<{ ownerId: string; endedAt: Date | null } | null> {
   const rows = await db()
     .update(usageIntervals)
     .set({
       endedAt: sql`GREATEST(${endedAt.toISOString()}::timestamptz, ${usageIntervals.billedThrough})`,
       endReason: reason,
     })
-    .where(and(eq(usageIntervals.sandboxId, sandboxId), isNull(usageIntervals.endedAt)))
-    .returning({ ownerId: usageIntervals.ownerId });
+    .where(
+      and(
+        eq(usageIntervals.sandboxId, sandboxId),
+        isNull(usageIntervals.endedAt),
+        intervalId ? eq(usageIntervals.id, intervalId) : undefined,
+      ),
+    )
+    .returning({ ownerId: usageIntervals.ownerId, endedAt: usageIntervals.endedAt });
   return rows[0] ?? null;
 }
 

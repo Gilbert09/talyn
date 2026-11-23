@@ -10,6 +10,8 @@ import {
   createCodexStreamParser,
   checkpointCreateSteps,
   checkpointRef,
+  isWorkbenchVideoType,
+  WORKBENCH_VIDEO_PROMPT_NOTE,
   type ClaudePermissionMode,
   type WorkbenchLocalBridge,
 } from '@talyn/shared';
@@ -222,10 +224,10 @@ export class AgentProcesses {
       files.push(`${JSON.stringify(attachment.name)}: ${JSON.stringify(file)}`);
       if (attachment.mimeType.startsWith('image/')) images.push(file);
     }
+    const hasVideo = (input.attachments ?? []).some((attachment) => isWorkbenchVideoType(attachment.mimeType));
+    const attached = `Attached files:\n${files.join('\n')}${hasVideo ? `\n\n${WORKBENCH_VIDEO_PROMPT_NOTE}` : ''}`;
     return {
-      prompt: files.length
-        ? `${input.prompt}\n\nAttached files:\n${files.join('\n')}`
-        : input.prompt,
+      prompt: !files.length ? input.prompt : input.prompt.trim() ? `${input.prompt}\n\n${attached}` : attached,
       images,
     };
   }

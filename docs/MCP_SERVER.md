@@ -93,11 +93,11 @@ owner-scoped RLS as the desktop app — no separate permission surface.
 
 ## Tools
 
-The hosted server has 102 tools. Account feature flags control 52 of them (see
+The hosted server has 105 tools. Account feature flags control 54 of them (see
 [Feature-gated tools](#feature-gated-tools)). A session token sees fewer tools (see
 [Inside a session sandbox](#inside-a-session-sandbox)).
 Every tool declares annotations for reads and actions.
-Tools return text. Only workflow and loop definitions return JSON.
+Tools return text. Only automation definitions return JSON.
 
 If you have one workspace, tools use it by default. Otherwise, pass `workspace_id`.
 Use `talyn_list_workspaces` to find workspace ids.
@@ -136,7 +136,6 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_set_auto_keep_mergeable` | Enable or disable automatic cloud fixes. |
 | `talyn_merge_pull_request` | Merge a PR now with `merge`, `squash` or `rebase`. When the repository uses a GitHub merge queue, Talyn submits the PR to that queue. |
 | `talyn_close_pull_request` | Close a PR as you, with an optional comment first. Pass `pull_request_id`, or `repository` and `number`. Talyn closes only your own PRs (the GitHub author is the connected user) or PRs a Talyn session opened. A merged PR is refused. An already closed PR is a no-op, and Talyn does not post the comment. Talyn posts the comment only when the close is allowed. If the close then fails, the error says that the comment is on the PR. From a session token, the PR must be in the session's repository, and the session's own PR is refused. |
-| `talyn_fix_pull_request` | Start the standard cloud task to make a PR ready to merge. |
 
 ### Merge queue
 
@@ -155,14 +154,14 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_start_code_review` | Start a `quick`, `standard`, or `deep` review. Optionally reset the prior cycle. |
 | `talyn_cancel_code_review` | Cancel a running review. |
 | `talyn_get_code_review_finding` | Read the full body, suggestion, anchor, and verdict reason. |
-| `talyn_fix_code_review_findings` | Start a cloud task for selected finding ids. |
 | `talyn_dismiss_code_review_finding` | Dismiss a finding with a fixed reason. Use `undo` to restore it. |
 
 ### Tasks
 
+MCP calls cannot create tasks. To work on a PR, use `talyn_create_session` with `pull_request_id`. The routes `POST /tasks`, `POST /pull-requests/:id/fix` and `POST /pull-requests/:id/code-review/fix` answer 403 `tasks_app_only` to MCP calls. Tools for existing tasks stay.
+
 | Tool | What it does |
 | --- | --- |
-| `talyn_create_task` | Create cloud work. Optionally link a PR and supply a structured `skill` reference. |
 | `talyn_list_tasks` | List tasks with comma-separated statuses. Use `limit` and the returned `before` cursor. |
 | `talyn_get_task` | Read results, human requests, quota failover, and an optional transcript. |
 | `talyn_stop_task` | Cancel a running task. |
@@ -179,31 +178,35 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_update_skill` | Update the supplied platform skill fields. |
 | `talyn_delete_skill` | Delete a platform skill. |
 
-### Workflows
+### Integration automations
 
 | Tool | What it does |
 | --- | --- |
-| `talyn_list_workflows` | List definitions and run statistics. |
-| `talyn_get_workflow` | Read the editable definition as JSON. |
-| `talyn_get_workflow_vocabulary` | Read allowed events, conditions, and action fields. Get label, user, and branch suggestions. |
-| `talyn_create_workflow` | Create a definition from the `workflow` object. |
-| `talyn_update_workflow` | Merge supplied fields over the current definition before saving. |
-| `talyn_set_workflow_enabled` | Enable or disable a workflow while preserving its definition. |
-| `talyn_delete_workflow` | Delete a workflow and its history. |
-| `talyn_list_workflow_runs` | Read run history with `limit` and `cursor`. |
+| `talyn_list_workflows` | List automations and run statistics. Pass `integration` as `github`, `slack`, `webhook`, `linear`, `github_issues` or `posthog_inbox` to filter the list. Each row includes its integration. |
+| `talyn_get_workflow` | Read the editable automation as JSON, including `integration`. |
+| `talyn_get_workflow_vocabulary` | Pass optional `integration` as `github`, `slack`, `webhook`, `linear`, `github_issues` or `posthog_inbox`. The default is `github`. Read events, conditions, and actions. The `webhook` vocabulary includes the `start_session` action and payload tests. The `posthog_inbox` vocabulary lists the priorities, actionability values and the daily cap. |
+| `talyn_create_workflow` | Create an automation from `workflow`. Set `workflow.integration` to `github`, `slack`, `webhook`, `linear`, `github_issues` or `posthog_inbox`. A Linear rule needs `conditions.connectionId`. Issue automations need the `issue-rules` feature. PostHog Inbox automations need the `posthog-inbox-rules` feature. `workflow.maxRunsPerDay` sets a daily cap (PostHog Inbox defaults to 10). The result includes the integration. Creating a webhook automation also answers with its URL and signing secret. Talyn shows them once. |
+| `talyn_update_workflow` | Merge supplied fields over the current automation. The result includes its integration. An automation cannot change integration. |
+| `talyn_set_workflow_enabled` | Enable or disable an automation while keeping its definition. |
+| `talyn_delete_workflow` | Delete an automation and its history. |
+| `talyn_list_workflow_runs` | Read automation runs with `limit` and `cursor`. |
+| `talyn_list_posthog_inbox_backlog` | Read the backlog of a PostHog Inbox rule: older reports that match it. Pass `workflow_id`, and optional `days` (7, 30, 90 or `all`), `offset` and `count` (also count every matching report in the range, by state, up to 1000 reports read). It only reads. Session tokens can use it. |
+| `talyn_run_posthog_inbox_reports` | Start work on reports from the backlog. Pass `workflow_id` and `report_ids` (20 at most). Each report starts a session. The daily cap applies. A manual run needs an enabled rule. Session tokens cannot use it. |
+| `talyn_list_slack_channels` | Pass `{teamId}` to list channels the bot joined. Invite it with `/invite @Talyn` first. |
+| `talyn_slack_reply` | Reply as the Talyn bot in the Slack thread that started a session. Pass `text`. A user token must also pass `session_id`. |
 
-### Loops
+### Schedule integration
 
 | Tool | What it does |
 | --- | --- |
-| `talyn_list_loops` | List recurring work and next run times. |
-| `talyn_get_loop` | Read the editable definition and next run time as JSON. |
-| `talyn_create_loop` | Create recurring work. Set `target` to `session` for a sandbox session, or `task` for a cloud task. Talyn gets the repository name from `repository_id`. |
-| `talyn_update_loop` | Merge supplied fields over the current definition before saving. |
-| `talyn_set_loop_enabled` | Enable or disable a loop while preserving its definition. |
-| `talyn_delete_loop` | Delete a loop and its history. |
-| `talyn_list_loop_runs` | Read run history with `limit` and `cursor`. |
-| `talyn_run_loop_now` | Start a run now, through the normal session or task checks. |
+| `talyn_list_loops` | List scheduled automations and their next run times. |
+| `talyn_get_loop` | Read a scheduled automation and its next run time as JSON. |
+| `talyn_create_loop` | Create a scheduled automation. Every run starts a session. `target: task` and `mcpServerIds` are refused. Get the repository name from `repository_id`. |
+| `talyn_update_loop` | Merge supplied fields over the current scheduled automation. |
+| `talyn_set_loop_enabled` | Enable or disable a scheduled automation while keeping its definition. |
+| `talyn_delete_loop` | Delete a scheduled automation and its history. |
+| `talyn_list_loop_runs` | Read scheduled automation runs with `limit` and `cursor`. |
+| `talyn_run_loop_now` | Start a scheduled automation run now. Normal session or task checks apply. |
 
 ### Sessions
 
@@ -215,23 +218,25 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | `talyn_list_sessions` | List sessions in a workspace. Use `include_archived` to show archived ones. |
 | `talyn_get_session` | Read status, runtime, repository, branch, pull request, and chats with ids. |
 | `talyn_session_sandbox_status` | Read the state of a session's sandbox in plain words: starting, running, idle (with the time it goes to sleep), asleep, asleep in storage, waking, moving, lost or failed. It also shows the fleet host and size, what runs now, when the work was last saved, what is not pushed, failed saves and the last problem. Read-only. The fleet's record is cached for 10 seconds; when the fleet does not answer, that part is unknown. From a session token: the session itself, or a session in its thread. |
-| `talyn_run_background` | Start a shell command in the session's sandbox that outlives the turn. Talyn starts a new turn in the chat when it exits (`notify_on_exit`, default on). `keep_awake_seconds` (default 3600, at most a day) keeps the box awake while it runs, as billed box time. From a session token: the session itself only. |
+| `talyn_run_background` | Start a shell command in the session's sandbox that outlives the turn. The briefing tells agents to use it for each command that can take more than about 2 minutes, in place of their own background tasks. Talyn starts a new turn in the chat when it exits (`notify_on_exit`, default on). `keep_awake_seconds` (default 3600, at most a day) keeps the box awake while it runs, as billed box time. From a session token: the session itself only. |
 | `talyn_list_background` | List the session's background jobs: running ones, then recent ended ones. Read-only. |
 | `talyn_background_logs` | Read the last lines of a job's output (default 200, at most 2000). Records the exit if the job has exited. |
 | `talyn_stop_background` | Stop a job: INT, TERM, then KILL to its process group. |
-| `talyn_schedule_wakeup` | Ask Talyn to start a new turn in the chat later (`delay_seconds` or `at`, in the future, no upper bound). |
+| `talyn_schedule_wakeup` | Ask Talyn to start a new turn in the chat later (`delay_seconds` or `at`, in the future, no upper bound). With `until_ci` (and `head_sha`), the turn starts when CI on the session's pull request settles, its head moves or it merges or closes; the time is then optional and is the latest (default 3 hours). `until_ci` is behind the `session-ci-wait` flag (on for every account). |
 | `talyn_list_wakeups` | List the session's wake-ups: scheduled, then recent fired, cancelled or failed ones. Read-only. |
 | `talyn_cancel_wakeup` | Cancel a scheduled wake-up. |
 | `talyn_record_setup_step` | Add a setup step to the repository of the session. Record only a step that every session on the repository needs. Talyn refuses a step that holds a secret, pipes a downloaded script into a shell, sends data out or pushes code. The new step is `suggested`: it runs on new boxes only when a person accepts it or when enough recent sessions need it. From a session token: the session itself, or a session in its thread. |
 | `talyn_create_session` | Start a sandbox session on a new branch, an existing branch, or a pull request. A `prompt` is the first message. With `space_id`, the session starts in a team space, and Talyn refuses `pull_request_id` and `auto_create_pr`. From a session in a space, with no `space_id`, the new session starts in the same space. Talyn uses Personal and says why when `pull_request_id` is given, `workspace_id` is not the home workspace of the team, the repository is not in the space, or the space is archived or the owner left its team. In an inherited space, `auto_create_pr: true` is accepted (it is the default there), and `auto_create_pr: false` is refused. `space_id: "personal"` starts in Personal. Spaces are not yet available to all accounts. |
-| `talyn_list_thread_sessions` | List the sessions of a thread, newest first: status, repository, branch, chat status and pull request. From a thread, `thread_id` is the thread itself by default. Read-only. |
-| `talyn_send_session_message` | Send a message to a chat. With only `session_id`, it uses the first open chat. If a turn runs, the message waits in the queue. |
+| `talyn_list_thread_sessions` | List thread members or the children of a normal session, with status and pull request. `thread_id` defaults to the caller. Read-only. |
+| `talyn_send_session_message` | Send a message to a chat. With only `session_id`, it uses the first open chat. If a turn runs, the message waits in the queue. From a thread's token to a session of that thread, the session shows the message as sent by the thread. |
+| `talyn_ask_user` | Ask the person 1 to 4 `questions`, each with `options` (none, or 2 to 6, each a `label` and an optional `description`), an optional `header` and `multi_select`. Talyn writes the questions in the calling turn's transcript. The turn then ends as `awaiting_input`: the person gets a notification, the apps show the questions as a card with the options, and a session in a thread wakes the thread with the questions. The next message in the chat is the answer. The agent must end its turn after the call. Only for a session token: a user token does not see this tool. |
 | `talyn_list_accounts` | List the workspace's Claude and Codex subscriptions, in the order Talyn tries them: label, usage, and if the account is usable now. It also shows the account of a session, or of each session in a thread. It never shows secrets. Read-only. |
 | `talyn_set_session_account` | Choose the Claude or Codex account that a session uses from its next turn. Use an account id from `talyn_list_accounts`, for the session's agent. A running turn does not stop. When the chosen account is rate limited at turn start, Talyn still moves to another account. From a session token: the session itself, or a session in its thread. |
 | `talyn_get_session_transcript` | Read a chat as text. Output is capped. Pass the returned `cursor` for the next page. |
 | `talyn_cancel_session_turn` | Stop the running turn of a chat. |
 | `talyn_resize_session` | Move a session to a sandbox of another `size` after its running turn. `continue_with` sends a message that starts the next turn on the new sandbox. `remember_for_repository` also sets the repository's size. From a session token: the session itself, or a session in its thread. |
 | `talyn_restart_session` | Restart a session on a fresh sandbox of the same size after its running turn. The new sandbox gets the workspace's current MCP servers, so a server connected after the session started becomes available. `continue_with` sends a message that starts the next turn on the new sandbox. From a session token: the session itself, or a session in its thread. |
+| `talyn_continue_as_thread` | Turn a session into a thread (`POST /workbenches/:id/thread`). The thread starts with a recap of the session's conversation and the optional `prompt`, and the session joins it. From a session token: only the session itself, at spawn depth 0, and not when it is a thread or in a thread already. |
 | `talyn_session_timing` | Show where a session's turns spent their time: tests, installs, builds, Docker and services, waits, git, file reads, other tool calls and model time. It also lists the slowest calls. Read-only. From a session token: the session itself, or a session in its thread. |
 | `talyn_get_session_changes` | List changed files with line counts. |
 | `talyn_get_session_diff` | Read the unified diff, or one file with `path`. Large diffs are cut. A sleeping sandbox answers from the copy that Talyn stored, or from GitHub when all the work is pushed. Pass `live` to wake the sandbox and read it now. |
@@ -251,6 +256,8 @@ From a thread, an entry applies to the thread unless `scope` is `workspace`.
 A session sees workspace entries, its repository's entries and its thread's entries.
 A write or forget from a session adds a `talyn_memory` card to its transcript.
 When `settings.sessionMemory` is `false`, every memory tool refuses.
+Each `talyn_memory_read` adds one to the entry's `use_count` (migration `0143`). The reads of a memory review thread do not count.
+A workspace holds at most 500 live entries. When a write or a restore goes over the limit, Talyn forgets the entry with the fewest reads, then the one with the oldest last read or change, and sets `forgotten_reason` to `evicted`. An entry saved, changed or restored in the last 7 days goes last, because it had no time to get reads. A session's write names the forgotten entries in its result and adds a card for each.
 
 A memory review thread (source `memory_review`) sees every entry of its workspace.
 It writes a repository entry with `repository_id` and a thread entry with `thread_id`.
@@ -283,19 +290,15 @@ The table `memory_review_runs` (migration `0123`) keeps one row for each review.
 
 | Tool | What it does |
 | --- | --- |
-| `talyn_get_billing_status` | Read the plan and usage against task, queue, workflow, and loop limits. |
-| `talyn_list_cloud_providers` | Read connected providers, connected agents, required sign-ins, and the default provider. |
+| `talyn_get_billing_status` | Read the plan and usage against task, queue, integration automation, and scheduled automation limits. |
+| `talyn_list_cloud_providers` | Read connected providers, connected agents, required sign-ins with account names and IDs, and the default provider. |
 | `talyn_whats_new` | Read the latest release. Pass a version in `since` to read newer releases. |
 
-A task's `skill` reference contains `key`, `name`, and `source`.
-It can also contain `repositoryId` or `platformSkillId`.
-Include the skill instructions in `prompt`; the reference records which skill the task uses.
-
-Loop creation uses the desktop defaults, except that the timezone defaults to `UTC`.
-These defaults include target `task`, PostHog Code, its default model, daily runs at 09:00, and concurrency `skip`.
-With target `session` and no provider, the provider is Talyn Fleet (`selfhosted`) with its default model.
-Internet access defaults to off. `mcpServerIds: null` uses the workspace's connected servers.
-Pass loop fields directly or in a `loop` object. Set the model when you change the provider.
+Scheduled automation creation uses the desktop defaults. The timezone defaults to `UTC`.
+These defaults include target `session`, Talyn Fleet (`selfhosted`) with its default model, daily runs at 09:00, and concurrency `skip`.
+Every run starts a session. Only Talyn Fleet is valid. Migration `0144_automations_start_sessions` turned off PostHog Code schedules.
+Internet access defaults to off. A scheduled automation cannot choose MCP servers. `mcpServerIds` must be `null`, and the session uses the workspace's MCP servers.
+Pass scheduled automation fields directly or in a `loop` object. Set the model when you change the provider.
 
 For MCP connections, `authKind` accepts `oauth` or `none`.
 The tool maps `oauth` to the API's `bearer` value. Then use `talyn_connect_mcp_server` to start sign-in.
@@ -304,7 +307,8 @@ API-key servers must be added in the Talyn app, so the key never passes through 
 ### Feature-gated tools
 
 Tool listing checks `/features` once per request.
-The flags `workflows`, `loops`, `mcpServers`, `workbenches`, and `spaces` control their tool groups.
+The flags `workflows`, `loops`, `mcpServers`, `workbenches`, `spaces`, and `slackChannelRules` control their tool groups.
+The `slackChannelRules` flag controls `talyn_list_slack_channels`. `talyn_slack_reply` has no flag.
 The `workbenches` flag controls the session, workspace memory and Setup list tools.
 The background job and wake-up tools have no flag. The code review tools are always listed.
 A false flag hides the group. If the feature request fails, all tools remain listed.
@@ -322,7 +326,7 @@ The `spaces` flag controls one tool. Spaces are not yet available to all account
 Every cloud session's sandbox gets this server as the MCP server named
 `talyn`, authenticated as the session's owner. A session agent can archive its
 own session, start another session, add a pull request to the merge queue, and
-so on. Cloud tasks do not get it.
+so on. Cloud tasks do not get it. Automations and MCP calls never create tasks.
 
 **The credential.** Each session has one `talyn_mcs_` token in
 `session_mcp_tokens` (migration `0093`, backend-pool only). The hash is what
@@ -343,8 +347,8 @@ https on a public host. Without one (local development), sessions have no
 **What it may call.** An allowlist in `mcp/sessionScope.ts`, checked by the
 server on every list and every call. The agent reads untrusted text, so these
 are refused: MCP server tools, account tools, repository add and remove,
-`talyn_revert_setup_step`, `talyn_list_spaces`, and every skill, workflow and
-loop change. Their reads are allowed. Sessions, background jobs and wake-ups,
+`talyn_revert_setup_step`, `talyn_list_spaces`, and every skill or automation change.
+Their reads are allowed. Sessions, background jobs and wake-ups,
 the merge queue, pull requests, code review, tasks and workspace memory are
 allowed. `talyn_record_setup_step` and `talyn_list_setup_steps` are allowed. A new tool is
 refused until somebody adds it. `talyn_track_pull_request` is allowed, but it
@@ -362,6 +366,9 @@ is refused, because it undoes what a person chose to watch.
   `talyn_session_timing` and `talyn_session_sandbox_status` work on the session
   itself, or on a session in its thread.
 - The background job and wake-up tools work on the session itself only.
+- `talyn_continue_as_thread` works on the session itself only. It refuses a
+  session that another session started: the new thread starts at depth 0, so it
+  would escape the spawn-depth limit.
 - `talyn_close_pull_request` refuses the session's own pull request, and any
   pull request outside the session's repository. A thread has no repository,
   so it cannot close pull requests.
@@ -398,3 +405,15 @@ Backend, under `packages/backend/src/`:
   box, and its tool allowlist.
 
 Desktop: `components/settings/sections/McpSettings.tsx` → `MCPServerSettings` and `LocalAgentsCard`; `main/localAgentKit.ts` and `main/localSkillPack.ts` for the one-click install.
+
+### Child sessions
+
+`talyn_create_session` accepts `notify_parent: true` from a session agent.
+The child records its parent before its first turn starts.
+The default is false. The parent gets cards when the child finishes a turn, opens a PR, or merges a PR.
+Only an opted-in child's turn end wakes a normal parent. Multiple waiting notifications share one wake.
+`talyn_list_thread_sessions` lists the caller's children when the caller is a normal session.
+Its optional `thread_id` can name a parent session. Thread callers still get their thread members.
+A parent can read timing and sandbox state, resize, and restart its own children.
+These additions require `session-subagents`, evaluated for the workspace owner.
+Each child spends box-hours and counts against the concurrent box limit.

@@ -438,6 +438,12 @@ describe('workspace subjects', () => {
 });
 
 describe('featuresForUser', () => {
+  it.each([true, false])('returns the subagent flag from PostHog: %s', async (enabled) => {
+    process.env.TALYN_POSTHOG_KEY = 'phc_test';
+    answer = (key) => key === 'session-subagents' ? enabled : undefined;
+    expect((await featuresForUser(SUBJECT)).sessionSubagents).toBe(enabled);
+  });
+
   it.each([
     [false, false, false], [false, false, true],
     [false, true, false], [false, true, true],
@@ -475,17 +481,25 @@ describe('featuresForUser', () => {
     // to DRAW, which is a question about the person at the screen — every route
     // gates again on the workspace owner.
     expect(Object.keys(features).sort()).toEqual([
+      'issueRules',
       'loops',
       'mcpServers',
+      'onboardingLocalAgent',
+      'posthogCodeRetired',
+      'posthogInboxRules',
       'privateRoutes',
       'publicApi',
       'reviewPriority',
       'reviewPriorityMode',
       'reviewRankingCandidate',
       'reviewRankingExport',
+      'sessionSubagents',
+      'slackChannelRules',
       'spaces',
+      'splitView',
       'teams',
       'trunkMergeEta',
+      'webhookRules',
       'workbenches',
       'workflows',
     ]);
@@ -494,6 +508,7 @@ describe('featuresForUser', () => {
   it('reflects the kill switch, so the UI stops drawing what the routes refuse', async () => {
     process.env.WORKFLOWS_ENABLED = 'false';
     expect(await featuresForUser(SUBJECT)).toEqual({
+      sessionSubagents: true,
       workflows: false,
       loops: false,
       mcpServers: false,
@@ -503,10 +518,17 @@ describe('featuresForUser', () => {
       reviewRankingCandidate: false,
       reviewRankingExport: false,
       teams: false,
+      posthogCodeRetired: true,
       spaces: false,
       workbenches: false,
       trunkMergeEta: false,
       publicApi: false,
+      splitView: true,
+      slackChannelRules: false,
+      webhookRules: false,
+      issueRules: false,
+      posthogInboxRules: false,
+      onboardingLocalAgent: false,
     });
   });
 
@@ -516,8 +538,10 @@ describe('featuresForUser', () => {
     // because it creates paid cloud tasks on a timer with nobody watching, and
     // MCP servers stay OFF because that page stores third-party credentials —
     // collapsing these to one default would silently flip two of them.
-    // Teams stays OFF because it offers a checkout.
+    // Teams stays OFF because it offers a checkout. posthogCodeRetired stays
+    // ON, so an outage never offers a retired provider again.
     expect(await featuresForUser(SUBJECT)).toEqual({
+      sessionSubagents: true,
       workflows: true,
       loops: false,
       mcpServers: false,
@@ -527,10 +551,17 @@ describe('featuresForUser', () => {
       reviewRankingCandidate: false,
       reviewRankingExport: false,
       teams: false,
+      posthogCodeRetired: true,
       spaces: false,
       workbenches: false,
       trunkMergeEta: false,
       publicApi: false,
+      splitView: true,
+      slackChannelRules: false,
+      webhookRules: false,
+      issueRules: false,
+      posthogInboxRules: false,
+      onboardingLocalAgent: false,
     });
   });
 

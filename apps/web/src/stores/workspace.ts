@@ -41,7 +41,7 @@ import type {
  * rather than a free string: these values are read as a breakdown in the
  * connect funnel, and a typo there is a silently separate bucket.
  */
-export type ConnectAgentSource = 'task_button' | 'pr_detail_banner' | 'unknown';
+export type ConnectAgentSource = 'task_button' | 'pr_detail_banner' | 'banner' | 'unknown';
 
 export type PendingCloudTask =
   | { kind: 'fix'; row: PRRow; providerType?: string; model?: string }
@@ -90,13 +90,12 @@ export type SettingsSection =
   | 'shortcuts'
   | 'workspace'
   | 'sandboxSetup'
-  | 'privateRoutes'
   | 'integrations'
-  | 'slack'
   | 'skills'
   | 'instructions'
   | 'memory'
   | 'codeReview'
+  | 'notifications'
   | 'account'
   | 'billing'
   | 'teams'
@@ -212,6 +211,12 @@ function persistWorkspaceId(id: string | null) {
  * code that reads it keeps working.
  */
 export type AppContext = { kind: 'personal'; workspaceId: string | null } | { kind: 'space'; spaceId: string };
+
+export function contextsEqual(a: AppContext, b: AppContext): boolean {
+  if (a.kind === 'personal' && b.kind === 'personal') return a.workspaceId === b.workspaceId;
+  if (a.kind === 'space' && b.kind === 'space') return a.spaceId === b.spaceId;
+  return false;
+}
 
 export const CONTEXT_PREF_KEY = 'talyn-current-context';
 

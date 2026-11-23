@@ -7,6 +7,7 @@ import { TriggerRow } from '../renderer/components/workbench/TriggerRow';
 
 const wakeup: WorkbenchMessageTrigger = { kind: 'wakeup', wakeupId: 'w1', reason: 'Check the build', createdBy: 'user' };
 const jobExit: WorkbenchMessageTrigger = { kind: 'job_exit', wakeupId: 'w2', reason: 'Finished', jobId: 'j1', jobName: 'build', exitCode: 3 };
+const prRetry: WorkbenchMessageTrigger = { kind: 'pr_retry', attempt: 1, error: 'GitHub rejected the push: fetch first' };
 const event = (text: string, trigger?: WorkbenchMessageTrigger): AgentEvent => ({
   seq: 1,
   type: 'user',
@@ -31,6 +32,16 @@ describe('TriggerRow', () => {
     expect(screen.getByText('last log line')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Hide output' }));
     expect(screen.queryByText('last log line')).not.toBeInTheDocument();
+  });
+
+  it('shows a pull request retry and expands its error, not the message body', () => {
+    render(<TriggerRow trigger={prRetry} text="Talyn could not open the pull request: long body" />);
+    expect(screen.getByText('Talyn could not open the pull request. The agent tries to fix the cause.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show error' }));
+    expect(screen.getByText('GitHub rejected the push: fetch first')).toBeInTheDocument();
+    expect(screen.queryByText(/long body/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide error' }));
+    expect(screen.queryByText('GitHub rejected the push: fetch first')).not.toBeInTheDocument();
   });
 
   it('uses the trigger row for history with a trigger', () => {

@@ -1,18 +1,19 @@
 import { cloudProviders } from '@talyn/client/native';
-import type { FleetAgent } from '@talyn/shared';
+import type { FleetAccountView, FleetAgent } from '@talyn/shared';
 import { useState } from 'react';
 import { View } from 'react-native';
 
 import { AppText, Button, Field, Input } from '../../../components/UI';
-import { accountErrorMessage, API_KEY_KIND, API_KEY_LABEL, API_KEY_PLACEHOLDER, apiKeyError, SUBSCRIPTION } from './model';
+import { trackEvent } from '../../../lib/analytics';
+import { accountErrorMessage, errorText, API_KEY_KIND, API_KEY_LABEL, API_KEY_PLACEHOLDER, apiKeyError, SUBSCRIPTION } from './model';
 
 /**
  * Add an agent account from an API key, like web's "Paste an API key". The
  * key lives only in this field's state: it is cleared on success and never
- * logged or shown again.
+ * logged or shown again. The server names the account.
  */
-export function ApiKeyForm({ agent, workspaceId, label, onAdded, disabled = false }: {
-  agent: FleetAgent; workspaceId: string; label?: string; onAdded(): void; disabled?: boolean;
+export function ApiKeyForm({ agent, workspaceId, onAdded, disabled = false }: {
+  agent: FleetAgent; workspaceId: string; onAdded(account: FleetAccountView): void; disabled?: boolean;
 }) {
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
@@ -21,11 +22,14 @@ export function ApiKeyForm({ agent, workspaceId, label, onAdded, disabled = fals
     const invalid = apiKeyError(agent, key);
     if (invalid) { setError(invalid); return; }
     setBusy(true); setError(null);
+    trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent, method: `${agent}_api_key` });
     try {
-      await cloudProviders.fleetAccounts.add(workspaceId, agent, API_KEY_KIND[agent], key.trim(), label);
+      const added = await cloudProviders.fleetAccounts.add(workspaceId, agent, API_KEY_KIND[agent], key.trim());
+      trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent });
       setKey('');
-      onAdded();
+      onAdded(added);
     } catch (failure) {
+      trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent, stage: 'save', error: errorText(failure) });
       setError(accountErrorMessage(failure, 'Could not add the key.'));
     } finally { setBusy(false); }
   };

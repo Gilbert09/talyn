@@ -7,6 +7,7 @@ import { Reveal } from "@/components/ui/Reveal";
 import { GlowCard } from "@/components/ui/GlowCard";
 import { Badge } from "@/components/ui/badge";
 import { DownloadButton } from "@/components/ui/DownloadButton";
+import { WebAppButton } from "@/components/ui/WebAppButton";
 import { capture } from "@/lib/analytics";
 import { pricing } from "@/lib/content";
 import { cn } from "@/lib/utils";
@@ -58,7 +59,9 @@ function PeriodToggle({
 }
 
 export function Pricing() {
-  const [period, setPeriod] = useState<Period>("annual");
+  // Monthly first: the home page says "$40 a month", and opening on the
+  // annual "$33.33" sent visitors toggling back and forth to reconcile them.
+  const [period, setPeriod] = useState<Period>("monthly");
 
   return (
     <section id="pricing" className="border-t border-line py-24">
@@ -66,11 +69,14 @@ export function Pricing() {
         <SectionHeading kicker={pricing.kicker} title={pricing.title} sub={pricing.sub} />
         <PeriodToggle period={period} onChange={setPeriod} />
 
-        <div className="mx-auto mt-10 grid max-w-3xl gap-4 md:grid-cols-2">
+        <div className="mx-auto mt-10 grid max-w-5xl gap-4 md:grid-cols-2 lg:grid-cols-3">
           {pricing.tiers.map((tier, i) => (
-            <Reveal key={tier.name} delay={i * 0.06}>
+            <Reveal key={tier.name} delay={i * 0.06} className="h-full">
               <GlowCard
                 tone={tier.highlighted ? "clay" : "plain"}
+                // The inner wrapper fills the card, so `mt-auto` can push the
+                // buttons to the bottom and they line up across the row.
+                innerClassName="flex flex-1 flex-col"
                 className={cn(
                   "flex h-full flex-col p-7",
                   tier.highlighted && "border-clay/40 ring-1 ring-clay/20"
@@ -117,6 +123,14 @@ export function Pricing() {
                   >
                     {tier.cta}
                   </DownloadButton>
+                  <WebAppButton
+                    size="sm"
+                    variant="ghost"
+                    className="mt-2 w-full"
+                    placement={`pricing-${tier.name.toLowerCase()}-${period}`}
+                  >
+                    or open it in your browser
+                  </WebAppButton>
                 </div>
               </GlowCard>
             </Reveal>
@@ -125,6 +139,7 @@ export function Pricing() {
 
         <Reveal className="mx-auto mt-8 max-w-2xl text-center">
           <p className="text-sm leading-relaxed text-ink-500">{pricing.boxHour}</p>
+          <p className="mt-3 text-sm leading-relaxed text-ink-500">{pricing.local}</p>
           <p className="mt-3 text-sm leading-relaxed text-ink-500">{pricing.comingSoon}</p>
           <p className="mt-4 text-xs leading-relaxed text-ink-400">{pricing.footnote}</p>
         </Reveal>

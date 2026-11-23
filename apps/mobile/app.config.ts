@@ -1,7 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
-import type { AppEnvironment, MobileConfig, PurchaseMode } from './src/config';
+import type { AnalyticsConfig, AppEnvironment, MobileConfig, PurchaseMode } from './src/config';
 import { readReleaseSettings } from './release/policy.cjs';
+import { withPostHogSymbolUploads } from './plugins/withPostHogSymbolUploads.cjs';
 
 type PublicEnvironment = Record<string, string | undefined>;
 
@@ -36,6 +40,9 @@ export function readMobileConfig(env: PublicEnvironment, environment: AppEnviron
   return {
     environment, apiOrigin: origin(api, environment === 'development'),
     supabaseUrl: origin(supabase, environment === 'development'), supabaseKey: publicSupabaseKey(key), callbackUrl: callback,
+    // An HTTPS return works only after iOS (webcredentials) or Android (App Links) verifies the domain, and production
+    // sign-in never got past that. The OS hands a scheme return only to the auth session, and PKCE guards the code.
+    signInCallbackUrl: url.protocol === 'https:' ? `${scheme}://auth/callback` : callback,
     purchaseMode: readPurchaseMode(env),
   };
 }
@@ -46,6 +53,18 @@ export function readPurchaseMode(env: PublicEnvironment): PurchaseMode {
   if (!value) return 'external';
   if (value === 'external' || value === 'none') return value;
   throw new Error('EXPO_PUBLIC_PURCHASE_MODE must be external or none.');
+}
+
+/**
+ * PostHog from `EXPO_PUBLIC_TALYN_POSTHOG_KEY` and `EXPO_PUBLIC_TALYN_POSTHOG_HOST`.
+ * No key means analytics is off: the app sends nothing. The host defaults to PostHog US.
+ */
+export function readAnalyticsConfig(env: PublicEnvironment): AnalyticsConfig | null {
+  const key = env.EXPO_PUBLIC_TALYN_POSTHOG_KEY?.trim();
+  if (!key) return null;
+  if (!/^phc_[A-Za-z0-9_-]+$/.test(key)) throw new Error('EXPO_PUBLIC_TALYN_POSTHOG_KEY must be a PostHog project key (phc_).');
+  const host = env.EXPO_PUBLIC_TALYN_POSTHOG_HOST?.trim() || 'https://us.i.posthog.com';
+  return { key, host: origin(host, false) };
 }
 
 type Environment = 'development' | 'preview' | 'production';
@@ -80,6 +99,29 @@ export function getAppIdentity(env: IdentityEnvironment) {
   };
 }
 
+/**
+ * Firebase's Android config for push (FCM). `TALYN_MOBILE_GOOGLE_SERVICES_JSON` holds the file as base64: a sensitive
+ * EAS text variable, because `eas update` does not receive the contents of an EAS file variable. The fingerprint hashes
+ * the file's contents, so a build and an update that decode the same value get the same runtime. Absent means no push.
+ */
+export function writeGoogleServicesFile(env: Record<string, string | undefined>, androidPackage: string, dir: string): string | undefined {
+  const encoded = env.TALYN_MOBILE_GOOGLE_SERVICES_JSON?.trim();
+  if (!encoded) return undefined;
+  const contents = Buffer.from(encoded, 'base64').toString('utf8');
+  let packages: string[];
+  try {
+    const parsed = JSON.parse(contents) as { client?: { client_info?: { android_client_info?: { package_name?: string } } }[] };
+    packages = (parsed.client ?? []).map((client) => client.client_info?.android_client_info?.package_name ?? '');
+  } catch {
+    throw new Error('TALYN_MOBILE_GOOGLE_SERVICES_JSON must be the base64 of google-services.json.');
+  }
+  if (!packages.includes(androidPackage)) throw new Error(`google-services.json has no Android app for ${androidPackage}.`);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'google-services.json');
+  fs.writeFileSync(file, contents, { mode: 0o600 });
+  return file;
+}
+
 /** The Expo account that owns the EAS project. */
 export const EAS_OWNER = 'talyn-app';
 /** `@talyn-app/talyn-mobile`. A public identifier, not a credential. */
@@ -101,8 +143,11 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   const release = readReleaseSettings(process.env, identity.environment, projectId);
   const mobile = readMobileConfig(process.env, identity.environment, identity.scheme);
   const httpsCallback = mobile?.callbackUrl.startsWith('https:') ? new URL(mobile.callbackUrl) : null;
+  // `.expo` is ignored by git and by EAS uploads.
+  const googleServicesFile = writeGoogleServicesFile(process.env, identity.androidPackage, path.join(__dirname, '.expo'));
 
-  return {
+  // PostHog source map and native symbol uploads, on when the build has POSTHOG_CLI_API_KEY (plugins/withPostHogSymbolUploads.cjs).
+  return withPostHogSymbolUploads({
     ...config,
     name: identity.name,
     owner: EAS_OWNER,
@@ -116,17 +161,28 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     userInterfaceStyle: 'automatic',
     ios: {
       bundleIdentifier: identity.iosBundleIdentifier,
-      supportsTablet: true,
+      supportsTablet: false,
       buildNumber: release.build,
       privacyManifests: {
         NSPrivacyTracking: false,
         NSPrivacyTrackingDomains: [],
       },
-      infoPlist: { NSAppTransportSecurity: { NSAllowsArbitraryLoads: false, NSAllowsLocalNetworking: identity.environment === 'development' } },
-      ...(httpsCallback ? { associatedDomains: [`applinks:${httpsCallback.hostname}`] } : {}),
+      // Talyn uses only HTTPS and the OS's own encryption, which is exempt. This answers TestFlight's export
+      // compliance question for every build, so nobody has to answer it by hand.
+      infoPlist: { ITSAppUsesNonExemptEncryption: false, NSAppTransportSecurity: { NSAllowsArbitraryLoads: false, NSAllowsLocalNetworking: identity.environment === 'development' } },
+      // iOS 17.4+ sign-in hands the HTTPS callback to ASWebAuthenticationSession, which needs `webcredentials`, not only `applinks`.
+      ...(httpsCallback ? { associatedDomains: [`applinks:${httpsCallback.hostname}`, `webcredentials:${httpsCallback.hostname}`] } : {}),
     },
     android: {
       package: identity.androidPackage,
+      // Android 8+ masks launcher icons, and Android 16 also shows this icon on notifications. A plain square icon is
+      // shrunk onto a white circle; the adaptive layers fill the shape. Sources: assets/adaptive-*.svg.
+      adaptiveIcon: {
+        foregroundImage: './assets/adaptive-foreground.png',
+        backgroundImage: './assets/adaptive-background.png',
+        monochromeImage: './assets/adaptive-monochrome.png',
+      },
+      ...(googleServicesFile ? { googleServicesFile } : {}),
       versionCode: Number(release.build),
       permissions: ['android.permission.INTERNET', 'android.permission.ACCESS_NETWORK_STATE', 'android.permission.VIBRATE', 'android.permission.POST_NOTIFICATIONS'],
       blockedPermissions: [
@@ -144,8 +200,13 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     plugins: ['expo-router', 'expo-dev-client', 'expo-secure-store', ['expo-navigation-bar', { enforceContrast: false }], ['expo-splash-screen', { image: './assets/splash-owl.png', imageWidth: 120, resizeMode: 'contain', backgroundColor: '#fcfbf8', dark: { image: './assets/splash-owl-dark.png', backgroundColor: '#211d18' } }], ['expo-image-picker', { photosPermission: 'Talyn uses your photos when you attach an image to a message.', cameraPermission: 'Talyn uses the camera when you take a photo to attach to a message.', microphonePermission: false }], ['expo-notifications', {
       mode: release.profile === 'development' ? 'development' : 'production', enableBackgroundRemoteNotifications: false,
-    }]],
+      // Android draws the small icon as a white silhouette; without one it uses the opaque app icon, a white square.
+      icon: './assets/notification-icon.png', color: '#a94d2e',
+    }],
+    // "Share to Talyn" from other apps' share sheets: an iOS share extension and an Android SEND filter.
+    './plugins/withShareIntent.cjs'],
     experiments: { typedRoutes: true },
-    extra: { release: { profile: release.profile, urls: release.urls }, appEnvironment: identity.environment, mobile, eas: { projectId } },
-  };
+    extra: { release: { profile: release.profile, urls: release.urls }, appEnvironment: identity.environment, mobile,
+      analytics: readAnalyticsConfig(process.env), eas: { projectId } },
+  }, { profile: release.profile });
 };

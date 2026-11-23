@@ -16,6 +16,16 @@ export const pullRequestRoute = (id: string) => ({
 }) satisfies Href;
 
 export type NewWorkMode = 'session' | 'thread';
-export const newWorkRoute = (mode: NewWorkMode) => ({
-  pathname: '/new', params: { mode },
+/**
+ * The new-work composer. `repository` picks the repository by id or full
+ * name; `pullRequest` starts the session from that open pull request, in its
+ * repository; `prompt` replaces the draft.
+ */
+export const newWorkRoute = (mode: NewWorkMode, target: { repository?: string; pullRequest?: string; prompt?: string } = {}) => ({
+  pathname: '/new', params: {
+    mode,
+    ...(target.repository ? { repository: target.repository } : {}),
+    ...(target.pullRequest ? { pullRequest: target.pullRequest } : {}),
+    ...(target.prompt ? { prompt: target.prompt } : {}),
+  },
 }) satisfies Href;

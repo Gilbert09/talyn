@@ -61,8 +61,8 @@ const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 const { githubService } = await import('../services/github.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 const { setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
-const { getChat, getWorkbench, listChats, listEvents, updateWorkbench } = await import('../services/workbenches/store.js');
-const { TURN_HELD_NOTE } = await import('../services/workbenches/turns.js');
+const { getChat, getWorkbench, listChats, listEvents, payerBlockedSiblings, queuedIdleChats, updateWorkbench } = await import('../services/workbenches/store.js');
+const { sweepOrphanedTurns, TURN_HELD_NOTE } = await import('../services/workbenches/turns.js');
 const { resetBoxDeferralsForTests } = await import('../services/billing/boxDeferral.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -316,12 +316,36 @@ describe('the box gate on sessions', () => {
       // …and the next one did not start: still queued, and the chat says why.
       expect(chat?.status).toBe('idle');
       expect(chat?.queuedMessages.map((m) => m.text)).toEqual(['two']);
-      const events = (await listEvents(chatId, 0, 500)).events.map((e: Loose) => e.event);
-      const note = events.find((e: Loose) => e.type === 'system' && e.subtype === 'usage_exhausted');
-      expect(note?.text).toContain(TURN_HELD_NOTE);
-      // Nothing restarted it on its own.
-      await new Promise((r) => setTimeout(r, 100));
+      const heldNotes = async () => (await listEvents(chatId, 0, 500)).events
+        .filter((e) => e.event.type === 'system' && e.event.subtype === 'usage_exhausted');
+      await vi.waitFor(async () => {
+        const notes = await heldNotes();
+        expect(notes).toHaveLength(1);
+        expect(notes[0].event.text).toContain(TURN_HELD_NOTE);
+      });
+
+      // Neither the queue sweep nor another chat's completed turn can retry it.
+      expect(await queuedIdleChats()).toEqual([]);
+      expect(await payerBlockedSiblings(wb.id, 'another-chat')).toEqual([]);
+      const budgetChecks = getBudget.mock.calls.length;
+      for (let i = 0; i < 3; i++) await sweepOrphanedTurns();
+      expect(getBudget).toHaveBeenCalledTimes(budgetChecks);
+      expect(await heldNotes()).toHaveLength(1);
+      expect((await getChat(chatId))?.queuedMessages.map((m) => m.text)).toEqual(['two']);
       expect(releases).toHaveLength(1);
+
+      // Once credit is available, a new message retries the held message first.
+      getBudget.mockResolvedValue(budget(false));
+      expect((await post('three')).body.data).toEqual({ queued: true });
+      await vi.waitFor(() => expect(releases).toHaveLength(2));
+      expect((await getChat(chatId))?.queuedMessages.map((m) => m.text)).toEqual(['three']);
+      releases[1]();
+      await vi.waitFor(() => expect(releases).toHaveLength(3));
+      releases[2]();
+      await idle(chatId);
+      expect((await getChat(chatId))?.turnCount).toBe(3);
+      expect((await getChat(chatId))?.queuedMessages).toEqual([]);
+      expect(await heldNotes()).toHaveLength(1);
     });
   });
 

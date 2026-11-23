@@ -1,13 +1,14 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { FleetAgent } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
-import { workbenchChats, workspaces } from '../../db/schema.js';
+import { workbenchChats } from '../../db/schema.js';
 import { fleetAgentStatus } from '../selfHosted/credentials.js';
-import { setFleetAccountExhausted } from '../selfHosted/accounts.js';
+import { listFleetAccounts, setFleetAccountExhausted } from '../selfHosted/accounts.js';
 import {
   agentLabel, exhaustedAgentFrom, heldBackAgents, noteExhaustedAgent,
   probeAfter, rateLimitedAgentFrom, resetInstantFrom,
 } from '../selfHosted/exhaustedQuota.js';
+import { credentialResumeReason } from './limitResumeState.js';
 import { deferralRetryAt } from '../billing/boxDeferral.js';
 import { existingBoxRefusal } from './boxGate.js';
 import { sandboxAgents } from './credentialPolicy.js';
@@ -17,6 +18,9 @@ import { workbenchFleetAccountId } from './sandboxRuntime.js';
 import { appendEvents, CHAT_COLUMNS, getChat, getWorkbench, rowToChat, type ChatRow } from './store.js';
 import { sendMessage } from './turns.js';
 import { turnPayerFor } from '../teams/payer.js';
+import { autoResumeEnabled, handleChatOutage, outageAgentFrom } from './outageResume.js';
+
+export const MAX_CREDENTIAL_RETRIES = 8;
 
 export function chatLimitAgent(chat: Pick<ChatRow, 'agent'>, text: string): FleetAgent | null {
   const agent = exhaustedAgentFrom(text) ?? rateLimitedAgentFrom(text);
@@ -39,12 +43,6 @@ export async function cancelLimitResume(chatId: string): Promise<void> {
   if (row) emitWorkbenchChat(row.workspaceId, rowToChat(row));
 }
 
-async function enabled(workspaceId: string): Promise<boolean> {
-  const [row] = await getDbClient().select({ settings: workspaces.settings }).from(workspaces)
-    .where(eq(workspaces.id, workspaceId));
-  return Boolean(row) && (row.settings as { autoResumeOnLimit?: boolean } | null)?.autoResumeOnLimit !== false;
-}
-
 /**
  * Record a new refusal once. A sweep only reads the existing holds.
  *
@@ -54,13 +52,18 @@ async function enabled(workspaceId: string): Promise<boolean> {
  * payer of the turn that stopped, since no turn has started after it.
  */
 export async function handleChatLimit(chat: ChatRow, text: string, retry = false): Promise<void> {
-  const agent = retry && (exhaustedAgentFrom(text) || rateLimitedAgentFrom(text))
+  const credentialReason = await credentialResumeReason(chat);
+  if (credentialReason === 'missing' || credentialReason === 'unavailable') return;
+  if (credentialReason && !retry && chat.limitCount >= MAX_CREDENTIAL_RETRIES) return;
+  // An API outage waits on its own ladder, with the box suspended.
+  if (!credentialReason && outageAgentFrom(text)) return handleChatOutage(chat, text, retry);
+  const agent = credentialReason && (chat.agent === 'claude' || chat.agent === 'codex') ? chat.agent : retry && (exhaustedAgentFrom(text) || rateLimitedAgentFrom(text))
     ? chat.agent as FleetAgent : chatLimitAgent(chat, text);
   const payer = chat.payerUserId && chat.payerWorkspaceId
     ? { userId: chat.payerUserId, workspaceId: chat.payerWorkspaceId }
     : null;
   const workspaceId = payer?.workspaceId ?? chat.workspaceId;
-  if (!agent || !(await enabled(workspaceId))) return;
+  if (!agent || !(await autoResumeEnabled(workspaceId))) return;
   const wb = await getWorkbench(chat.workbenchId);
   if (!wb || wb.archivedAt || wb.archivePendingAt || wb.runtime !== 'sandbox' || chat.closedAt) return;
   const db = getDbClient();
@@ -77,9 +80,9 @@ export async function handleChatLimit(chat: ChatRow, text: string, retry = false
     if (!claimed) return;
     current = claimed;
     const accountId = workbenchFleetAccountId(wb, agent, payer?.userId);
-    if (exhaustedAgentFrom(text)) {
+    if (!credentialReason && exhaustedAgentFrom(text)) {
       await noteExhaustedAgent(workspaceId, agent, text, accountId);
-    } else {
+    } else if (!credentialReason) {
       const resetsAt = resetInstantFrom(text, now);
       await setFleetAccountExhausted(accountId ? { accountId } : { workspaceId, agent }, {
         at: now.toISOString(), kind: 'rate_limit', detail: text.slice(0, 500), ...(resetsAt ? { resetsAt } : {}),
@@ -89,7 +92,7 @@ export async function handleChatLimit(chat: ChatRow, text: string, retry = false
   const [status, holds] = await Promise.all([fleetAgentStatus(workspaceId), heldBackAgents(workspaceId, now)]);
   const possible = sandboxAgents(wb).filter((a) => status.connectedAgents.includes(a) && !status.reauthAgents.includes(a));
   const other = agent === 'claude' ? 'codex' : 'claude';
-  const candidates: FleetAgent[] = retry ? [agent, other] : [other];
+  const candidates: FleetAgent[] = credentialReason ? (retry ? [agent] : []) : retry ? [agent, other] : [other];
   const chosen = candidates.find((a) => possible.includes(a) && !holds[a]);
   const refusal = chosen && wb.status === 'ready' ? await existingBoxRefusal(wb, true, payer) : null;
   if (chosen && wb.status === 'ready' && !refusal) {
@@ -109,6 +112,42 @@ export async function handleChatLimit(chat: ChatRow, text: string, retry = false
       resumeVersion: current.resumeVersion,
       ...(payer ? { payer: await turnPayerFor(payer.userId, payer.workspaceId) } : {}),
     });
+    return;
+  }
+  if (credentialReason) {
+    if (retry && current.limitCount >= MAX_CREDENTIAL_RETRIES) return;
+    const count = current.limitCount + (retry ? 1 : 0);
+    // Credential selection also loads the turn runtime. Load it after session initialization.
+    const { accountOverVerdict, fleetSwitchSettings } = await import('../selfHosted/accountSelection.js');
+    const { accountReset } = await import('./credentialFailure.js');
+    const [accounts, settings] = await Promise.all([listFleetAccounts(workspaceId, agent), fleetSwitchSettings(workspaceId)]);
+    const threshold = settings.useFullQuotaWhenAllOver ? 100 : settings.threshold;
+    const resets = accounts.filter((a) => !a.reauthRequiredAt)
+      .map((a) => accountReset(a, threshold, chat.model ?? undefined, now))
+      .filter((at): at is number => at !== null);
+    const probes = accounts.filter((a) => !a.reauthRequiredAt && a.quotaExhausted)
+      .map((a) => probeAfter(a.quotaExhausted!)).filter((at) => at > now.getTime());
+    const delay = limitRetryDelay(credentialReason === 'reauth' ? Math.max(count, 4) : count);
+    const reconnected = !retry && credentialReason === 'reauth' && accounts.some((a) =>
+      !accountOverVerdict(a, threshold, chat.model ?? undefined, now).reason);
+    const fallback = new Date(credentialReason === 'reauth'
+      ? (reconnected ? now.getTime() : Math.min(now.getTime() + delay, ...resets))
+      : resets.length ? Math.min(...resets)
+        : Math.max(now.getTime() + delay, probes.length ? Math.min(...probes) : 0));
+    const at = refusal ? deferralRetryAt(refusal, now.getTime()) : fallback;
+    const labels = accounts.filter((a) => a.reauthRequiredAt).map((a) => a.label);
+    const label = labels.length ? new Intl.ListFormat('en', { style: 'long', type: 'conjunction' }).format(labels) : agentLabel(agent);
+    const time = (at ?? fallback).toISOString().replace('T', ' ').slice(0, 16);
+    const message = credentialReason === 'reauth'
+      ? `Waiting for ${label} to be signed in again. Checks again at ${time} UTC.`
+      : `Waiting for ${agentLabel(agent)} usage. Resumes at ${time} UTC.`;
+    const [waiting] = await db.update(workbenchChats).set({
+      resumeAt: at, resumeReason: text, limitCount: count, statusMessage: refusal?.message ?? message,
+    }).where(and(eq(workbenchChats.id, chat.id), eq(workbenchChats.status, 'error'),
+      eq(workbenchChats.turnCount, chat.turnCount), eq(workbenchChats.resumeVersion, current.resumeVersion),
+      retry ? isNull(workbenchChats.resumeAt) : eq(workbenchChats.resumeAt, current.resumeAt!),
+      sql`jsonb_array_length(${workbenchChats.queuedMessages}) = 0`)).returning(CHAT_COLUMNS);
+    if (waiting) emitWorkbenchChat(chat.workspaceId, rowToChat(waiting));
     return;
   }
   const resets = possible.map((a) => holds[a]?.resetsAt).filter((at): at is string => Boolean(at))

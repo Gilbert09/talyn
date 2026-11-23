@@ -8,7 +8,40 @@ interface DialogProps {
   children: React.ReactNode;
 }
 
+let openDialogs = 0;
+const dialogListeners = new Set<() => void>();
+
+function subscribeDialogs(listener: () => void) {
+  dialogListeners.add(listener);
+  return () => {
+    dialogListeners.delete(listener);
+  };
+}
+
+/** True while any dialog is open. Hover cards stay closed under a dialog. */
+export function anyDialogOpen(): boolean {
+  return openDialogs > 0;
+}
+
+export function useAnyDialogOpen(): boolean {
+  return React.useSyncExternalStore(subscribeDialogs, anyDialogOpen);
+}
+
+function useOpenDialogCount(open: boolean) {
+  // A layout effect, so the count changes before a menu gives focus back to its trigger.
+  React.useLayoutEffect(() => {
+    if (!open) return undefined;
+    openDialogs += 1;
+    dialogListeners.forEach((listener) => listener());
+    return () => {
+      openDialogs -= 1;
+      dialogListeners.forEach((listener) => listener());
+    };
+  }, [open]);
+}
+
 export function Dialog({ open, onOpenChange, children }: DialogProps) {
+  useOpenDialogCount(open);
   if (!open) return null;
 
   return (

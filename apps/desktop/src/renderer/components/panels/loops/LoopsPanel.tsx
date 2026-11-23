@@ -1,20 +1,24 @@
-import { useState } from 'react';
-import { ChevronDown, ChevronRight, Pencil, Play, Plus, Repeat, Trash2 } from 'lucide-react';
-import type { LoopInput, LoopWithStats } from '@talyn/shared';
+import { useEffect, useState } from 'react';
+import { ChevronDown, ChevronRight, Loader2, Pencil, Play, Plus, Repeat, Trash2 } from 'lucide-react';
+import type { LoopInput, LoopRun, LoopWithStats } from '@talyn/shared';
 import {
   describeSchedule,
   presetForCron,
   LOOP_DISABLED_REASON_LABELS,
+  LOOP_RUN_FAILURE_LABELS,
   LOOP_RUN_STATUS_LABELS,
   LOOP_TARGET_LABELS,
 } from '@talyn/shared';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { ConfirmDialog } from '../../ui/confirm-dialog';
-import { toast } from '../../../stores/toast';
+import { toast, type ToastAction } from '../../../stores/toast';
+import { useNavigationStore } from '../../../stores/navigation';
+import { useWorkspaceStore } from '../../../stores/workspace';
 import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
 import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
+import { takeAutomationTarget, useAutomationFocus } from '../../../lib/automationFocus';
 import { FeedbackButton } from '../workflows/FeedbackButton';
 import { useLoops } from './useLoops';
 import { LoopEditorPage } from './LoopEditorPage';
@@ -75,6 +79,7 @@ function LoopRow({
   onDelete,
   onSetEnabled,
   onRunNow,
+  starting,
   liveRuns,
 }: {
   loop: LoopWithStats;
@@ -84,6 +89,8 @@ function LoopRow({
   onDelete: () => void;
   onSetEnabled: (enabled: boolean) => void;
   onRunNow: () => void;
+  /** A run-now request is in flight. The server answers only once the session or task exists. */
+  starting: boolean;
   liveRuns: ReturnType<typeof useLoops>['liveRuns'];
 }) {
   const { stats } = loop;
@@ -146,8 +153,15 @@ function LoopRow({
           >
             {loop.enabled ? 'On' : 'Off'}
           </Button>
-          <Button variant="ghost" size="sm" onClick={onRunNow} title="Run now">
-            <Play className="h-3.5 w-3.5" />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onRunNow}
+            disabled={starting}
+            title={starting ? 'Starting a run' : 'Run now'}
+            data-attr="loop-run-now"
+          >
+            {starting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
           </Button>
           <Button variant="ghost" size="sm" onClick={onEdit} title="Edit">
             <Pencil className="h-3.5 w-3.5" />
@@ -160,6 +174,12 @@ function LoopRow({
 
       {expanded && (
         <div className="border-t">
+          {starting && (
+            <p className="flex items-center gap-2 border-b px-3 py-2 text-[13px] text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Starting a run&hellip;
+            </p>
+          )}
           <LoopRunsList loopId={loop.id} liveRuns={liveRuns[loop.id]} />
         </div>
       )}
@@ -175,6 +195,10 @@ export function LoopsPanel() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<LoopWithStats | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [starting, setStarting] = useState<ReadonlySet<string>>(() => new Set());
+  const navigate = useNavigationStore((s) => s.navigate);
+  const selectTask = useWorkspaceStore((s) => s.selectTask);
+  const setActivePanel = useWorkspaceStore((s) => s.setActivePanel);
 
   /**
    * The one loop event the server cannot see.
@@ -187,6 +211,13 @@ export function LoopsPanel() {
     trackEvent('loop_editor_opened', { mode: loop ? 'edit' : 'create' });
     setView({ mode: 'edit', loop });
   };
+
+  // The command palette asked for one of these loops: open its editor once the list is here.
+  const focus = useAutomationFocus((s) => s.target);
+  useEffect(() => {
+    const loop = takeAutomationTarget('loop', 'schedule', loops);
+    if (loop) openEditor(loop);
+  }, [focus, loops]);
 
   /**
    * Start a new loop — unless the free plan has no slot left, in which case
@@ -222,7 +253,7 @@ export function LoopsPanel() {
     if (view.mode === 'edit' && view.loop) {
       await update(view.loop.id, input);
       trackEvent('loop_saved', { new: false, schedule_kind: presetForCron(input.cron).kind, internet_access: Boolean(input.internetAccess) });
-      toast.success('Loop saved');
+      toast.success('Automation saved');
     } else {
       try {
         await create(input);
@@ -237,7 +268,7 @@ export function LoopsPanel() {
         throw err;
       }
       trackEvent('loop_saved', { new: true, schedule_kind: presetForCron(input.cron).kind, internet_access: Boolean(input.internetAccess) });
-      toast.success('Loop created');
+      toast.success('Automation created');
       // Keep the owner-wide count current, so the NEXT click is pre-empted
       // rather than round-tripping to the same refusal.
       void useBillingStore.getState().refresh();
@@ -274,7 +305,7 @@ export function LoopsPanel() {
       // error beside it rather than dropping the user back with no explanation.
       setPendingDelete(null);
       trackEvent('loop_deleted');
-      toast.success('Loop deleted');
+      toast.success('Automation deleted');
       // A deleted row gives its free-plan slot back — re-read the count so
       // the create button stops pre-empting on a limit the user is no longer at.
       void useBillingStore.getState().refresh();
@@ -286,17 +317,62 @@ export function LoopsPanel() {
     }
   };
 
+  /** A button on the toast that goes to what the run started. */
+  const openRunAction = (run: LoopRun): ToastAction | undefined => {
+    const sessionId = run.sessionId;
+    if (sessionId) return { label: 'Open session', onClick: () => navigate({ view: 'workbench', id: sessionId }) };
+    const taskId = run.taskId;
+    if (taskId) {
+      return {
+        label: 'Open task',
+        onClick: () => {
+          selectTask(taskId);
+          setActivePanel('queue');
+        },
+      };
+    }
+    return undefined;
+  };
+
+  /**
+   * Run now.
+   *
+   * The request returns only after the session or task exists, which takes some
+   * seconds. So the row shows that it is starting at once, and the toast at the
+   * end says what the run did — "started" for a run that was refused is wrong.
+   */
   const doRunNow = async (loop: LoopWithStats) => {
+    if (starting.has(loop.id)) return;
+    setStarting((prev) => new Set(prev).add(loop.id));
+    setExpandedId(loop.id);
     try {
-      await runNow(loop.id);
-      // Deliberately not "started": a run-now can legitimately end as
-      // "waiting for a task slot", and the history is where the answer is.
+      const run = await runNow(loop.id);
       trackEvent('loop_run_now');
-      setExpandedId(loop.id);
-      toast.info('Run requested', 'Watch the history for what it did.');
+      const reason = run?.failureCode ? LOOP_RUN_FAILURE_LABELS[run.failureCode] : run?.error ?? undefined;
+      if (!run) {
+        toast.info('Run requested', 'Watch the history for what it did.');
+      } else if (run.status === 'failed') {
+        toast.error('The run did not start', reason);
+      } else if (run.status === 'waiting_slot') {
+        toast.info('The run is waiting to start', reason);
+      } else if (run.status === 'skipped') {
+        toast.info('The run was skipped', reason);
+      } else {
+        toast.success(
+          `Started ${loop.name}`,
+          run.target === 'session' ? 'A new session is working on it.' : 'A new task is working on it.',
+          openRunAction(run)
+        );
+      }
     } catch (err) {
       captureAnalyticsException(err, { flow: 'loop_run_now' });
       toast.error('Could not run that', err instanceof Error ? err.message : undefined);
+    } finally {
+      setStarting((prev) => {
+        const next = new Set(prev);
+        next.delete(loop.id);
+        return next;
+      });
     }
   };
 
@@ -304,13 +380,12 @@ export function LoopsPanel() {
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b px-4 py-1">
         <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-          Run a prompt on a schedule. Start a reviewable session or a cloud task on the agent
-          you pick.
+          An automation runs on a schedule and starts a session or a task.
         </p>
         <FeedbackButton surface="loops" />
         <Button size="sm" onClick={openNew} data-attr="loop-new">
           <Plus className="mr-1 h-3.5 w-3.5" />
-          New loop
+          New automation
         </Button>
       </div>
 
@@ -320,19 +395,19 @@ export function LoopsPanel() {
         {/* `null` is loading, `[]` is genuinely none. Rendering the empty state
             for both would flash "no loops" at somebody who has ten. */}
         {loops === null ? (
-          <p className="text-[13px] text-muted-foreground">Loading loops...</p>
+          <p className="text-[13px] text-muted-foreground">Loading automations...</p>
         ) : loops.length === 0 ? (
           <div className="mx-auto max-w-lg py-10 text-center">
             <Repeat className="mx-auto mb-3 h-6 w-6 text-muted-foreground" />
-            <h2 className="text-[13px] font-medium">No loops yet</h2>
+            <h2 className="text-[13px] font-medium">No automations yet</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              A loop runs the same prompt on a repository on a schedule — sweep yesterday&rsquo;s
+              An automation runs the same prompt on a repository on a schedule — sweep yesterday&rsquo;s
               failing checks every morning, keep dependencies current every Monday, or draft the
               release notes every Friday at five.
             </p>
             <Button className="mt-4" onClick={openNew}>
               <Plus className="mr-1 h-3.5 w-3.5" />
-              Create your first loop
+              Create an automation
             </Button>
           </div>
         ) : (
@@ -347,6 +422,7 @@ export function LoopsPanel() {
                 onEdit={() => openEditor(loop)}
                 onDelete={() => setPendingDelete(loop)}
                 onRunNow={() => void doRunNow(loop)}
+                starting={starting.has(loop.id)}
                 onSetEnabled={(enabled) => {
                   void setEnabled(loop, enabled)
                     .then(() => trackEvent(enabled ? 'loop_enabled' : 'loop_disabled'))

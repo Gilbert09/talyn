@@ -24,21 +24,24 @@ Every agent run happens in a sandbox, which Talyn calls a box. Usage is counted 
 
 For example, a ten-minute run on a Standard box uses a sixth of a box-hour.
 
-Sessions, threads, fix runs, code reviews, skills, workflow actions and loops all run on boxes. Local sessions in the desktop app run on your computer and use no box-hours.
+A box is billed for the memory it uses, up to its size. Talyn checks the memory once a minute. A box that uses 4 GB or less is billed at the Standard rate, and a Small box always at the Small rate. For example, a Large box that uses 2 GB is billed as Standard. When a box uses more memory, the higher rate starts at once. When it uses less, the lower rate starts after five minutes.
+
+Sessions, threads, fix runs, code reviews, skills and automations all run on boxes. Local sessions in the desktop app run in a git worktree on your computer. They use no box-hours and do not count toward the boxes running at once, so they are free and unlimited on every plan.
 
 ## Plans
 
-| | Free | Pro |
-| --- | --- | --- |
-| Price | $0 | $40 a month, or $400 a year |
-| Box-hours each month | 10 | 200 |
-| Boxes running at once | 2 | 100 |
-| Box sizes | Small and Standard | All sizes |
-| Credits and auto top-up | No | Yes |
-| Keep every new PR green automatically | No | Yes |
-| Review every new PR automatically | No | Yes |
+| | Free | Pro | Max |
+| --- | --- | --- | --- |
+| Price | $0 | $40 a month, or $400 a year | $100 a month (monthly only) |
+| Box-hours each month | 10 | 200 | 1,000 |
+| Local sessions (desktop app) | Unlimited, free | Unlimited, free | Unlimited, free |
+| Boxes running at once | 2 | 100 | 100 |
+| Box sizes | Small and Standard | All sizes | All sizes |
+| Credits and auto top-up | No | Yes | Yes |
+| Keep every new PR green automatically | No | Yes | Yes |
+| Review every new PR automatically | No | Yes | Yes |
 
-Everything else is on both plans: sessions, threads, the PR dashboard, fixing pull requests, keeping a pull request green when you turn it on for that pull request, the merge queue, code review, skills, workflows, loops, Slack and MCP servers.
+Everything else is on every plan: sessions, threads, the PR dashboard, fixing pull requests, keeping a pull request green when you turn it on for that pull request, the merge queue, code review, skills, automations, Slack and MCP servers.
 
 Box-hours and running boxes are counted for your account, across every workspace you own.
 
@@ -57,6 +60,8 @@ To see the details, open **Settings > Plan and usage** in the desktop app, or **
 
 Talyn warns you when you have used 50%, 80% and 100% of your box-hours.
 
+When your included box-hours run out and you use credits, the gauge shows a credit bar. It starts at 100% of your credits and counts down. A top-up or a usage reset starts a new bar.
+
 ### The monthly period
 
 On the free plan, box-hours reset at the start of each calendar month, in UTC. On Pro, they reset each month on the day your subscription renews. An annual Pro plan also resets monthly. Box-hours you do not use do not roll over.
@@ -67,7 +72,7 @@ When your box-hours are used up:
 
 - Work that is already running finishes.
 - New boxes do not start, and the page says **Out of hours: new boxes are paused. Running turns finish.**
-- Work that Talyn starts for you, such as loops, workflow actions, merge queue fixes and automatic reviews, waits with a notice in the app. It starts when your hours reset or when you add credits.
+- Work that Talyn starts for you, such as automation runs, merge queue fixes and automatic reviews, waits with a notice in the app. It starts when your hours reset or when you add credits.
 
 On Free, you can wait for the next month or upgrade to Pro. On Pro, add credits or turn on auto top-up to keep going.
 
@@ -104,14 +109,26 @@ Turn on **Buy credits automatically when the balance is low** to buy a pack when
 
 If an automatic charge fails, the page says so and offers **Buy credits**.
 
-## Upgrade to Pro
+## Reset your usage
+
+On a paid plan, you can pay once to set this period's used box-hours back to zero. The price is your plan's monthly price.
 
 1. Open the plan page.
-2. Select **Upgrade**.
-3. Choose **Monthly** ($40 a month) or **Annual** ($400 a year).
+2. Select **Reset usage**.
+3. Pay on the checkout page.
+
+You get all of your plan's box-hours back at once. Your period still ends on the same day, and unused hours do not carry over. If you refund the payment, Talyn does not take the hours back on its own. You see the button only when your plan offers a reset.
+
+## Upgrade to Pro or Max
+
+1. Open the plan page.
+2. Select **Upgrade to Pro** or **Upgrade to Max**.
+3. For Pro, choose **Monthly** ($40 a month) or **Annual** ($400 a year). Max is $100 a month and has no annual option.
 4. Pay on the checkout page.
 
-The annual plan costs the same as 10 months, so you get 2 months free. If you pay monthly, you can switch to annual from the plan page. You pay the prorated difference at once.
+The annual Pro plan costs the same as 10 months, so you get 2 months free. If you pay monthly, you can switch to annual from the plan page. You pay the prorated difference at once.
+
+If you are on monthly Pro, select **Upgrade to Max** on the plan page. The change is immediate. You pay the prorated difference, and for the rest of this month you get the share of Max's extra box-hours that matches the part of the month that is left. If you pay for Pro annually, use **Manage billing** to move to Max.
 
 ## Manage or cancel
 
@@ -122,7 +139,7 @@ Select **Manage billing** on the plan page. It opens the billing portal, where y
 - Switch from annual to monthly.
 - Cancel.
 
-When you cancel, you keep Pro until the end of the period you paid for. Then your account moves to the free plan, which keeps working.
+When you cancel, you keep your paid plan until the end of the period you paid for. Then your account moves to the free plan, which keeps working.
 
 If a payment fails, you keep your plan while the payment is retried. Update your payment method in the portal. If the retries run out, the plan drops to Free.
 

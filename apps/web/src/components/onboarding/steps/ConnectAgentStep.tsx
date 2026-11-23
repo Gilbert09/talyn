@@ -1,8 +1,9 @@
-import { Fragment, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, Check } from 'lucide-react';
 import { POSTHOG_LOGO } from '../../../assets/providers/logos';
 import { useAgentConnections } from '../../../hooks/useAgentConnections';
 import { FleetAgentMark } from '../../../lib/providerMeta';
+import { trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import {
@@ -11,10 +12,13 @@ import {
   PostHogCodeCard,
 } from '../../panels/SettingsPanel';
 import { Card } from '../../ui/card';
+import { usePostHogCodeOffered } from '../../widgets/PostHogCodeRetirement';
 
 type AgentChoice = 'claude' | 'codex' | 'posthog';
 
-/** Connect a subscription or PostHog Code before starting a session. */
+const DESKTOP_DOWNLOAD_URL = 'https://talyn.dev/download';
+
+/** Connect a subscription (or PostHog Code, where it is still offered) before starting a session. */
 export function ConnectAgentStep() {
   // The cards read the store, and nothing else fills it during onboarding:
   // `useSystemStatus` mounts in `MainLayout`, which renders only once the
@@ -24,6 +28,22 @@ export function ConnectAgentStep() {
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const posthogConnected = useWorkspaceStore((s) => s.posthogStatus?.connected === true);
   const [choice, setChoice] = useState<AgentChoice | null>(null);
+  const posthogOffered = usePostHogCodeOffered();
+  const localOffered = useWorkspaceStore((s) => s.features?.onboardingLocalAgent === true);
+  const desktopHintShown = localOffered && cloudProviders !== null && choice === null;
+  const desktopHintViewed = useRef(false);
+
+  useEffect(() => {
+    if (!desktopHintShown || desktopHintViewed.current) return;
+    desktopHintViewed.current = true;
+    trackEvent('onboarding_desktop_app_suggested_viewed');
+  }, [desktopHintShown]);
+
+  // Until the provider list arrives the fleet is unknown, so draw nothing
+  // rather than flash PostHog Code at a workspace that turns out to have the fleet.
+  if (cloudProviders === null) {
+    return <p className="text-[13px] text-muted-foreground">Checking your agents...</p>;
+  }
 
   const fleet = (cloudProviders ?? []).find((p) => p.type === 'selfhosted');
   const fleetOffered = cloudProviderOffered(cloudProviders, 'selfhosted');
@@ -63,42 +83,53 @@ export function ConnectAgentStep() {
           {
             id: 'claude' as const,
             name: 'Claude',
-            detail: 'Use your Claude Pro or Max subscription.',
+            detail: 'Use your Claude Pro or Max subscription, or an Anthropic API key.',
             connected: connectedAgents.includes('claude'),
             icon: <FleetAgentMark agent="claude" className="w-5 h-5" />,
           },
           {
             id: 'codex' as const,
             name: 'Codex',
-            detail: 'Use your ChatGPT subscription.',
+            detail: 'Use your ChatGPT subscription. Needs the Codex CLI on your computer, or use the desktop app.',
             connected: connectedAgents.includes('codex'),
             icon: <FleetAgentMark agent="codex" className="w-5 h-5" />,
           },
         ]
       : []),
-    {
-      id: 'posthog',
-      name: 'PostHog Code',
-      detail: 'Use your PostHog account.',
-      connected: posthogConnected,
-      icon: <img src={POSTHOG_LOGO} alt="" className="w-5 h-5 object-contain" />,
-    },
+    // PostHog Code is offered here only when the fleet is not. A session runs on
+    // the fleet, so a fleet workspace that picked PostHog Code here could never
+    // continue. It stays in Settings for everyone.
+    ...(fleetOffered || !posthogOffered
+      ? []
+      : [
+          {
+            id: 'posthog' as const,
+            name: 'PostHog Code',
+            detail: 'Use your PostHog account.',
+            connected: posthogConnected,
+            icon: <img src={POSTHOG_LOGO} alt="" className="w-5 h-5 object-contain" />,
+          },
+        ]),
   ];
 
   return (
     <div className="space-y-4">
       <p className="text-[13px] text-muted-foreground">
-        Use your Claude or ChatGPT subscription
+        {fleetOffered
+          ? 'Use your Claude or ChatGPT subscription'
+          : posthogOffered
+            ? 'Connect PostHog Code to run your sessions.'
+            : 'Sessions run on Claude or Codex. Neither is available for this workspace yet, so skip this step for now.'}
       </p>
       <div className="space-y-2">
         {options.map((option) => (
-          <Fragment key={option.id}>
-            {option.id === 'posthog' && (
-              <h3 className="pt-2 text-xs font-medium text-muted-foreground">Other options</h3>
-            )}
-            <button
+          <button
+              key={option.id}
               type="button"
-              onClick={() => setChoice(option.id)}
+              onClick={() => {
+                trackEvent('onboarding_agent_option_selected', { agent: option.id });
+                setChoice(option.id);
+              }}
               className={cn(
                 'w-full flex items-center gap-3 rounded-lg border p-4 text-left transition-colors',
                 'hover:border-primary/60 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
@@ -118,9 +149,23 @@ export function ConnectAgentStep() {
                 </span>
               )}
             </button>
-          </Fragment>
         ))}
       </div>
+      {desktopHintShown && (
+        <p className="text-[13px] text-muted-foreground">
+          Already use Claude Code or Codex on your computer? The desktop app runs sessions on your computer with no
+          sign-in.{' '}
+          <a
+            href={DESKTOP_DOWNLOAD_URL}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => trackEvent('onboarding_desktop_app_suggested_clicked')}
+            className="font-medium text-foreground underline underline-offset-4 hover:no-underline"
+          >
+            Get the desktop app
+          </a>
+        </p>
+      )}
     </div>
   );
 }

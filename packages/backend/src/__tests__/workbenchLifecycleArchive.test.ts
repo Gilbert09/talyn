@@ -4,11 +4,12 @@ import { memoryWorkObjectStore, setWorkObjectStoreForTests } from '../services/w
 import { sql } from 'drizzle-orm';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { FakeFleet, isWorkSaveScript } from './helpers/fakeFleet.js';
-import { repositories, workspaces } from '../db/schema.js';
+import { repositories, workbenchBackgroundJobs, workbenchChats, workbenchWakeups, workspaces } from '../db/schema.js';
 import { FleetHibernationLostError, FleetRunNotFoundError } from '../services/selfHosted/client.js';
 import { debugBus } from '../services/debugBus.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
 import { archiveWorkbench, deleteWorkbench, processArchive, restoreWorkbench, settleArchivesForTests, sweepPendingArchives } from '../services/workbenches/lifecycle.js';
+import { getJob, getWakeup } from '../services/workbenches/backgroundStore.js';
 import { claimArchive, finishArchive, getWorkbench, insertWorkbench, markArchive, renewArchive, updateWorkbench } from '../services/workbenches/store.js';
 
 vi.mock('../services/websocket.js', async (original) => ({
@@ -131,6 +132,20 @@ describe('durable session archives', () => {
     expect(archived).toMatchObject({ status: 'archived', archivedAt: expect.any(Date), archivePendingAt: expect.any(Date) });
     expect(fleet.scripts).toEqual([]);
     expect(fleet.deleted).toEqual([]);
+  });
+
+  it('ends running background jobs and scheduled wake-ups when the archive is asked for', async () => {
+    await testDb.db.insert(workbenchChats).values({ id: 'chat', workbenchId: WB, workspaceId: 'ws', title: 'Chat', agent: 'claude' });
+    await testDb.db.insert(workbenchBackgroundJobs).values({
+      id: 'job', workbenchId: WB, chatId: 'chat', workspaceId: 'ws', sandboxId: 'box', name: 'server',
+      command: 'python3 -m http.server', cwd: '/work/repo', durableKey: 'bg-job', marker: 'talyn-bg-job',
+    });
+    await testDb.db.insert(workbenchWakeups).values({
+      id: 'wake', workbenchId: WB, chatId: 'chat', workspaceId: 'ws', wakeAt: new Date(Date.now() + 3_600_000), reason: 'Check',
+    });
+    await archiveWorkbench(WB);
+    expect(await getJob('job')).toMatchObject({ status: 'lost', detail: 'The session was archived, and its sandbox with it.' });
+    expect(await getWakeup('wake')).toMatchObject({ status: 'cancelled' });
   });
 
   it('saves, deletes, then clears the durable marker', async () => {

@@ -1,4 +1,4 @@
-import { vi, describe, it, expect, beforeAll, afterEach, type Mock } from 'vitest';
+import { vi, describe, it, expect, beforeAll, beforeEach, afterEach, type Mock } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -13,6 +13,7 @@ import { usePullRequestStore } from '../stores/pullRequests';
 import { captureAnalyticsException, trackEvent } from '../lib/analytics';
 
 const merge = vi.fn();
+const closePr = vi.fn();
 const setMergeQueue = vi.fn();
 const archive = vi.fn();
 const restore = vi.fn();
@@ -25,6 +26,7 @@ vi.mock('../lib/api', () => ({
   api: {
     pullRequests: {
       merge: (...a: unknown[]) => merge(...a),
+      close: (...a: unknown[]) => closePr(...a),
       setMergeQueue: (...a: unknown[]) => setMergeQueue(...a),
     },
     workbenches: {
@@ -541,6 +543,62 @@ describe('WorkbenchHeader action cycle', () => {
 });
 
 
+describe('WorkbenchHeader close PR', () => {
+  const openMenu = () =>
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
+  const mine = (patch: Partial<PRRow> = {}, state: PRRow['state'] = 'open') =>
+    ({ ...prRow({}, state), authored: true, ...patch }) as PRRow;
+
+  it.each<[string, Workbench, PRRow, boolean]>([
+    ['an open PR the person opened', WB, mine(), true],
+    ['an open PR this session opened', WB, { ...prRow({ createdAt: '2026-10-13T02:00:00Z' }), authored: false } as PRRow, true],
+    ['a PR somebody else opened before the session', WB, { ...prRow({ createdAt: '2026-10-01T00:00:00Z' }), authored: false } as PRRow, false],
+    ['a PR with no author or open date', WB, prRow({}), false],
+    ['a merged PR', WB, mine({}, 'merged'), false],
+    ['a closed PR', WB, mine({}, 'closed'), false],
+  ])('offers Close pull request for %s: %p', (_name, workbench, pr, shown) => {
+    render(<WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={ops()} />);
+    openMenu();
+    const item = screen.queryByRole('menuitem', { name: 'Close pull request' });
+    if (shown) expect(item).toBeInTheDocument();
+    else expect(item).toBeNull();
+  });
+
+  it('confirms in a dialog, then closes through the PR close API', async () => {
+    closePr.mockResolvedValue({ alreadyClosed: false });
+    render(<WorkbenchHeader workbench={WB} pr={mine()} chat={chat} ops={ops()} />);
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Close pull request' }));
+    expect(closePr).not.toHaveBeenCalled();
+    expect(screen.getByText('Close #42?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close pull request' }));
+    await waitFor(() => expect(closePr).toHaveBeenCalledWith('pr1'));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Closed #42'));
+    expect(trackEvent).toHaveBeenCalledWith('pull_request_closed', { workbench_id: 'wb1', already_closed: false });
+  });
+
+  it('cancel closes nothing', () => {
+    render(<WorkbenchHeader workbench={WB} pr={mine()} chat={chat} ops={ops()} />);
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Close pull request' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(closePr).not.toHaveBeenCalled();
+    expect(screen.queryByText('Close #42?')).toBeNull();
+  });
+
+  it('shows the refusal when the close fails', async () => {
+    closePr.mockRejectedValue(new Error('#42 is merged. A merged pull request cannot be closed.'));
+    render(<WorkbenchHeader workbench={WB} pr={mine()} chat={chat} ops={ops()} />);
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Close pull request' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close pull request' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not close #42', '#42 is merged. A merged pull request cannot be closed.'),
+    );
+    expect(screen.getByText('Close #42?')).toBeInTheDocument();
+  });
+});
+
 describe('WorkbenchHeader merge queue', () => {
   it.each([
     [false, 'button'],
@@ -610,6 +668,67 @@ describe('WorkbenchHeader merge queue', () => {
       }
     }
   );
+});
+
+describe('WorkbenchHeader PR link copy', () => {
+  const URL = 'https://github.com/acme/app/pull/42';
+  const writeText = vi.fn(async () => {});
+  const write = vi.fn(async () => {});
+  const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+
+  beforeEach(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText, write } });
+  });
+  afterEach(() => {
+    if (original) Object.defineProperty(navigator, 'clipboard', original);
+    else delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+    delete (globalThis as unknown as { ClipboardItem?: unknown }).ClipboardItem;
+  });
+
+  const openMenu = () => {
+    render(<WorkbenchHeader workbench={WB} pr={prRow({})} chat={chat} ops={ops()} />);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Copy the link to #42' }), { key: 'Enter' });
+  };
+
+  it('offers the plain link and the Markdown link', () => {
+    openMenu();
+    expect(screen.getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['Copy link', 'Copy as Markdown link']);
+  });
+
+  it.each([
+    ['Copy link', URL],
+    ['Copy as Markdown link', `[Add a thing](${URL})`],
+  ])('%s writes the right text', async (item, expected) => {
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: item }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(expected));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copy the link to #42' })).toHaveAttribute('title', 'Copied!'));
+  });
+
+  it('copies the Markdown link as rich HTML too, where the browser allows it', async () => {
+    class FakeClipboardItem {
+      constructor(public items: Record<string, Blob>) {}
+    }
+    (globalThis as unknown as { ClipboardItem: unknown }).ClipboardItem = FakeClipboardItem;
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy as Markdown link' }));
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+    const [item] = (write.mock.calls[0] as unknown as [FakeClipboardItem[]])[0];
+    expect(Object.keys(item.items)).toEqual(['text/html', 'text/plain']);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it('says so when the clipboard refuses', async () => {
+    writeText.mockRejectedValueOnce(new Error('denied'));
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy link' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not copy to clipboard'));
+  });
+
+  it.each(['merged', 'closed'] as const)('has no copy button for a %s PR', (state) => {
+    render(<WorkbenchHeader workbench={WB} pr={prRow({}, state)} chat={chat} ops={ops()} />);
+    expect(screen.queryByRole('button', { name: 'Copy the link to #42' })).not.toBeInTheDocument();
+  });
 });
 
 describe('WorkbenchHeader last message', () => {

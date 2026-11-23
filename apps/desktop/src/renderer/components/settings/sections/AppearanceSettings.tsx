@@ -1,7 +1,84 @@
-import { Monitor, Moon, Sun } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Minus, Monitor, Moon, Plus, Sun } from 'lucide-react';
+import {
+  DEFAULT_ZOOM_FACTOR,
+  MAX_ZOOM_FACTOR,
+  MIN_ZOOM_FACTOR,
+  formatZoomPercent,
+  type ZoomStep,
+} from '../../../../main/zoomSteps';
+import { formatKeys } from '../../../lib/shortcuts';
 import { cn } from '../../../lib/utils';
 import { useWorkspaceStore, type Theme } from '../../../stores/workspace';
-import { SettingsPage, SettingsSection } from '../../ui/settings';
+import { Button } from '../../ui/button';
+import { SettingRow, SettingsPage, SettingsSection } from '../../ui/settings';
+
+/** The window zoom, kept in step with the menu and the keyboard. */
+function useWindowZoom(): { factor: number | null; step: (step: ZoomStep) => void } {
+  const [factor, setFactor] = useState<number | null>(null);
+  useEffect(() => {
+    const zoom = window.electron?.zoom;
+    if (!zoom) return undefined;
+    let live = true;
+    void zoom.get().then((f) => {
+      if (live) setFactor(f);
+    });
+    const unsubscribe = zoom.onChange(setFactor);
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, []);
+  const step = (s: ZoomStep) => {
+    void window.electron?.zoom?.step(s).then(setFactor);
+  };
+  return { factor, step };
+}
+
+function ZoomSection() {
+  const { factor, step } = useWindowZoom();
+  if (factor === null) return null;
+  return (
+    <SettingsSection title="Zoom">
+      <SettingRow
+        label="Size"
+        description={`Make everything bigger or smaller, the session transcript included. ${formatKeys('mod+=')} zooms in, ${formatKeys('mod+-')} zooms out and ${formatKeys('mod+0')} resets.`}
+      >
+        <Button
+          variant="outline"
+          size="icon"
+          className="h-7 w-7"
+          aria-label="Zoom out"
+          disabled={factor <= MIN_ZOOM_FACTOR}
+          onClick={() => step('out')}
+        >
+          <Minus className="h-3.5 w-3.5" />
+        </Button>
+        <span className="w-12 text-center tabular-nums" aria-live="polite">
+          {formatZoomPercent(factor)}
+        </span>
+        <Button
+          variant="outline"
+          size="icon"
+          className="h-7 w-7"
+          aria-label="Zoom in"
+          disabled={factor >= MAX_ZOOM_FACTOR}
+          onClick={() => step('in')}
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={factor === DEFAULT_ZOOM_FACTOR}
+          onClick={() => step('reset')}
+        >
+          Reset
+        </Button>
+      </SettingRow>
+    </SettingsSection>
+  );
+}
 
 export function AppearanceSettings() {
   const { theme, setTheme } = useWorkspaceStore();
@@ -60,6 +137,7 @@ export function AppearanceSettings() {
           </p>
         </div>
       </SettingsSection>
+      <ZoomSection />
     </SettingsPage>
   );
 }

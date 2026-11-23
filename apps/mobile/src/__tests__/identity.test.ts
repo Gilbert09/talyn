@@ -1,4 +1,8 @@
-import appConfig, { getAppIdentity, readMobileConfig } from '../../app.config';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import appConfig, { getAppIdentity, readMobileConfig, writeGoogleServicesFile } from '../../app.config';
 
 describe('app identity', () => {
   it.each([
@@ -56,6 +60,17 @@ describe('public mobile configuration', () => {
     expect(readMobileConfig(publicValues, 'production', 'talyn-mobile')?.callbackUrl).toBe(publicValues.EXPO_PUBLIC_AUTH_CALLBACK_URL);
   });
   it.each([
+    ['production', 'talyn-mobile', 'https://mobile.example.com/callback', 'talyn-mobile://auth/callback'],
+    ['production', 'talyn-custom', 'https://mobile.example.com/callback', 'talyn-custom://auth/callback'],
+    ['preview', 'talyn-mobile-preview', 'https://mobile.example.com/callback', 'talyn-mobile-preview://auth/callback'],
+    ['preview', 'talyn-mobile-preview', 'talyn-mobile-preview://auth/callback', 'talyn-mobile-preview://auth/callback'],
+    ['development', 'talyn-mobile-development', 'talyn-mobile-development://auth/callback', 'talyn-mobile-development://auth/callback'],
+  ] as const)('returns %s sign-in through the %s scheme for callback %s', (environment, scheme, callback, expected) => {
+    const config = readMobileConfig({ ...publicValues, EXPO_PUBLIC_AUTH_CALLBACK_URL: callback }, environment, scheme);
+    expect(config?.callbackUrl).toBe(callback);
+    expect(config?.signInCallbackUrl).toBe(expected);
+  });
+  it.each([
     'talyn-mobile://auth/callback', 'http://mobile.example.com/callback',
     'https://mobile.example.com/other', 'https://user@mobile.example.com/callback',
     'https://mobile.example.com/callback?code=bad', 'https://mobile.example.com/callback#bad',
@@ -82,25 +97,63 @@ it('requires explicit production identity', () => {
 
 describe('push configuration', () => {
   const previous = process.env;
+  // The release job exports its own profile, build number and identity; each case states its own.
+  const base = Object.fromEntries(Object.entries(previous)
+    .filter(([name]) => !/^(APP_ENV|EAS_BUILD_PROFILE|MOBILE_|TALYN_MOBILE_|EXPO_PUBLIC_)/.test(name))) as NodeJS.ProcessEnv;
   afterEach(() => { process.env = previous; });
   const build = () => appConfig({ config: {} } as Parameters<typeof appConfig>[0]);
   it.each(['production', 'preview', 'development'])('uses the Talyn EAS project for %s when none is set', (environment) => {
-    process.env = { ...previous, ...publicValues, APP_ENV: environment };
+    process.env = { ...base, ...publicValues, APP_ENV: environment };
     delete process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
     const result = build();
     expect(result.owner).toBe('talyn-app');
     expect(result.extra?.eas?.projectId).toBe('69499768-c478-44c0-8588-355c674515df');
   });
   it.each(['not-a-uuid', '69499768c47844c08588355c674515df'])('rejects the malformed project ID %s', (projectId) => {
-    process.env = { ...previous, ...publicValues, APP_ENV: 'production', EXPO_PUBLIC_EAS_PROJECT_ID: projectId };
+    process.env = { ...base, ...publicValues, APP_ENV: 'production', EXPO_PUBLIC_EAS_PROJECT_ID: projectId };
     expect(build).toThrow('valid public EAS project ID');
   });
   it('exports the public project and only alert capabilities', () => {
     const projectId = '10000000-0000-4000-8000-000000000001';
-    process.env = { ...previous, ...publicValues, APP_ENV: 'production', EXPO_PUBLIC_EAS_PROJECT_ID: projectId };
+    process.env = { ...base, ...publicValues, APP_ENV: 'production', EXPO_PUBLIC_EAS_PROJECT_ID: projectId };
     const result = build();
     expect(result.extra?.eas?.projectId).toBe(projectId);
     expect(result.android?.blockedPermissions).toContain('android.permission.RECEIVE_BOOT_COMPLETED');
-    expect(result.plugins).toContainEqual(['expo-notifications', { mode: 'production', enableBackgroundRemoteNotifications: false }]);
+    expect(result.android?.adaptiveIcon).toEqual({ foregroundImage: './assets/adaptive-foreground.png',
+      backgroundImage: './assets/adaptive-background.png', monochromeImage: './assets/adaptive-monochrome.png' });
+    expect(result.plugins).toContainEqual(['expo-notifications', {
+      mode: 'production', enableBackgroundRemoteNotifications: false, icon: './assets/notification-icon.png', color: '#a94d2e',
+    }]);
+  });
+});
+
+describe('google-services.json', () => {
+  const file = (packages: string[]) => Buffer.from(JSON.stringify({
+    project_info: { project_id: 'fixture' },
+    client: packages.map((name) => ({ client_info: { android_client_info: { package_name: name } } })),
+  })).toString('base64');
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'google-services-')); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it.each([undefined, '', '  '])('writes nothing when the value is %p', (value) => {
+    expect(writeGoogleServicesFile({ TALYN_MOBILE_GOOGLE_SERVICES_JSON: value }, 'dev.talyn.mobile', dir)).toBeUndefined();
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it('writes the decoded file for a listed package', () => {
+    const encoded = file(['dev.talyn.mobile', 'dev.talyn.mobile.preview']);
+    const written = writeGoogleServicesFile({ TALYN_MOBILE_GOOGLE_SERVICES_JSON: encoded }, 'dev.talyn.mobile.preview', dir);
+    expect(written).toBe(path.join(dir, 'google-services.json'));
+    expect(fs.readFileSync(written!, 'utf8')).toBe(Buffer.from(encoded, 'base64').toString('utf8'));
+  });
+
+  it('refuses a file without the build package', () => {
+    expect(() => writeGoogleServicesFile({ TALYN_MOBILE_GOOGLE_SERVICES_JSON: file(['dev.talyn.mobile']) }, 'dev.talyn.mobile.preview', dir))
+      .toThrow('no Android app for dev.talyn.mobile.preview');
+  });
+
+  it.each([Buffer.from('not json').toString('base64'), '%%%'])('refuses a value that is not the encoded file', (value) => {
+    expect(() => writeGoogleServicesFile({ TALYN_MOBILE_GOOGLE_SERVICES_JSON: value }, 'dev.talyn.mobile', dir)).toThrow('must be the base64');
   });
 });

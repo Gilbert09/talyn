@@ -1683,6 +1683,28 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
       const d = decide(entry(), readyForSubmit(), running('not-a-date'));
       expect(kinds(d)).not.toContain('submit_external');
     });
+
+    // A run paused for CI (`waiting_ci`) is silent on purpose for the whole CI
+    // run, ~40 minutes on PostHog/posthog. Reading that as a dead run would
+    // submit under a run that resumes to push.
+    it.each([
+      ['11 minutes', '2026-07-16T11:49:00.000Z'],
+      ['two hours', '2026-07-16T10:00:00.000Z'],
+    ])('keeps waiting on a run paused for CI, silent for %s', (_label, lastActivityAt) => {
+      const d = decide(
+        entry(),
+        readyForSubmit(),
+        ctx({
+          externalGate: 'confirmed',
+          fixTaskState: 'waiting',
+          fixTaskStartedAt: '2026-07-16T09:00:00.000Z',
+          fixTaskLastActivityAt: lastActivityAt,
+        })
+      );
+      expect(kinds(d)).not.toContain('submit_external');
+      expect(kinds(d)).not.toContain('fire_fix_run');
+      expect(d.verdict).toBe('advance');
+    });
   });
 
   describe('the whole-repo BLOCKED state a gate creates', () => {

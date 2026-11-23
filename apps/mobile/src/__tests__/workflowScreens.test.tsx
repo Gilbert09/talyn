@@ -1,11 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { Alert, I18nManager, Linking } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { NativeText, safeExternalUrl, StateNotice } from '../components/Workflow';
 import { AttentionScreen } from '../features/prs/AttentionScreen';
 import { PullRequestDetailScreen } from '../features/prs/PullRequestDetailScreen';
 import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
 import { WorkbenchListScreen } from '../features/sessions/WorkbenchListScreen';
+import type { Transcript } from '../workflow/model';
 import { chat, deferred, event, fixture, pr, session } from './workflowFixtures';
 
 jest.setTimeout(15000);
@@ -18,7 +20,10 @@ jest.mock('expo-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
   useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => true }),
   // The header's right button renders in place, so tests can press it.
-  Stack: { Screen: ({ options }: { options?: { headerRight?: () => React.ReactNode } }) => options?.headerRight?.() ?? null },
+  Stack: { Screen: ({ options }: { options?: { headerTitle?: () => React.ReactNode; headerRight?: () => React.ReactNode } }) => {
+    const React_ = jest.requireActual('react'); const { View } = jest.requireActual('react-native');
+    return React_.createElement(View, null, options?.headerTitle?.(), options?.headerRight?.());
+  } },
 }));
 jest.mock('../auth/AuthProvider', () => ({
   useMobileRuntime: () => ({ workflow: mockActive.store }), useNetwork: () => mockNetwork,
@@ -66,14 +71,16 @@ describe('native lists and useful states', () => {
     await render(<StateNotice resource={resource} offline={false} refresh={jest.fn()} />);
     expect(screen.toJSON()).toBeNull();
   });
-  it('keeps PR lists read-only with one status and a separate review pill', async () => {
+  it('keeps PR lists read-only with one status and a separate review fact', async () => {
     mockActive.api.pullRequests.list.mockResolvedValueOnce([pr({ authored: true, summary: { ...pr().summary, ciStatus: undefined } })]);
-    await render(<AttentionScreen />);
+    // Queueable rows swipe, and a gesture needs the root view the app wraps every screen in.
+    await render(<AttentionScreen />, { wrapper: GestureHandlerRootView });
     expect(await screen.findByRole('link', { name: /Status: Unknown\. Review: Needs approval\./ })).toBeVisible();
     expect(screen.getByText('#42')).toBeVisible();
     expect(screen.queryByText(/Review: Review required/)).toBeNull();
-    expect(screen.queryByRole('button', { name: /merge|approve|queue/i })).toBeNull();
-    expect(screen.getByText('Waiting for review')).toBeVisible();
+    // Filter chips are buttons too; no row action may merge, approve or queue.
+    expect(screen.queryByRole('button', { name: /^(merge|approve|add to merge queue|queue)$/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /^Ready to merge/ })).toBeVisible();
   });
   it('virtualizes a performance fixture with ten thousand sessions', async () => {
     mockActive.api.workbenches.list.mockResolvedValueOnce(Array.from({ length: 10000 }, (_, index) => session({ id: `session-${index}`, title: `Work ${index}` })));
@@ -87,11 +94,12 @@ describe('detail and composer accessibility', () => {
   it('shows the transcript, state, and related PR without a readiness line when ready', async () => {
     await render(<WorkbenchDetailScreen kind="session" />);
     expect(await screen.findByText('Agent response 1')).toBeVisible();
-    expect(screen.getByRole('header', { name: 'Current work' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'Open related pull request' })).toBeVisible();
+    expect(screen.getByRole('header', { name: /^Current work\./ })).toBeVisible();
+    expect(await screen.findByRole('button', { name: /^Pull request 42\b.*Open the pull request\.$/ })).toBeVisible();
     expect(screen.queryByText(/Readiness/)).toBeNull(); expect(screen.getByLabelText('Message')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
-    expect(screen.getByText('Codex · GPT-6.1 Terra · High effort')).toBeVisible();
+    // The model line lives in the header's Details sheet. The chat starts with the transcript.
+    expect(screen.queryByText('Codex · GPT-6.1 Terra · High effort')).toBeNull();
     expect(screen.queryByText(/Model:|Time unavailable/)).toBeNull();
   });
   it.each([
@@ -127,7 +135,7 @@ describe('detail and composer accessibility', () => {
     await render(<WorkbenchDetailScreen kind="session" />); await screen.findByText('Agent response 1');
     await fireEvent.changeText(screen.getByLabelText('Message'), 'Keep this draft'); mockNetwork = 'offline';
     await act(async () => mockActive.network({ reachability: 'offline' }));
-    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled(); expect(screen.getByDisplayValue('Keep this draft')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled(); expect(screen.getByLabelText('Message')).toHaveTextContent('Keep this draft');
   });
   it('handles a supported human gate through text and leaves permissions read-only', async () => {
     mockActive.api.workbenches.get.mockResolvedValueOnce(session({ chats: [chat({ status: 'awaiting_input' })] }));
@@ -144,27 +152,28 @@ describe('detail and composer accessibility', () => {
     await fireEvent.press(await screen.findByRole('button', { name: 'Related sessions (1)' }));
     expect(mockActive.store.local('thread-chat').following).toBe(false);
     expect(await screen.findByRole('link', { name: /^Current work\./ })).toBeVisible();
-    expect(screen.getByRole('header', { name: 'Planning work' })).toBeVisible();
+    expect(screen.getByRole('header', { name: /^Planning work\./ })).toBeVisible();
     expect(await screen.findByLabelText('Message')).toBeVisible();
   });
-  it('retains chat selection and drafts across detail navigation', async () => {
+  it('shows the newest chat and keeps its draft across detail navigation', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat(), chat({ id: 'chat-two', title: 'Second conversation' })] }));
-    const view = await render(<WorkbenchDetailScreen kind="session" />); await screen.findByText('Agent response 1');
-    await fireEvent.press(screen.getByRole('tab', { name: 'Second conversation · Idle' }));
-    await fireEvent.changeText(screen.getByLabelText('Message'), 'Second draft');
+    const view = await render(<WorkbenchDetailScreen kind="session" />);
+    expect(screen.queryByRole('tab')).toBeNull();
+    await fireEvent.changeText(await screen.findByLabelText('Message'), 'Second draft');
     expect(mockActive.store.local('selected:session-one').selectedChat).toBe('chat-two');
     await view.unmount(); await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await screen.findByRole('tab', { name: 'Second conversation · Idle · Selected' })).toBeVisible();
-    expect(screen.getByDisplayValue('Second draft')).toBeVisible();
+    expect(await screen.findByLabelText('Message')).toHaveTextContent('Second draft');
   });
-  it('shows a reviewer PR detail with one merge line and only the website link', async () => {
+  it('shows a reviewer PR detail with one merge line, a review action and the website link', async () => {
     mockParams = { id: 'pr-one' }; await render(<PullRequestDetailScreen />);
     expect(await screen.findByRole('header', { name: 'Review current work' })).toBeVisible();
     expect(screen.queryByText(/Mergeability|Merge state|Read only|on the web/)).toBeNull();
     expect(screen.getByText('GitHub has not said yet if this can merge.')).toBeVisible();
-    expect(screen.getByLabelText('Status: Unknown')).toBeVisible();
+    expect(screen.getByText('Your review is requested')).toBeVisible();
     expect(screen.getByText('Live detail from GitHub is unavailable. Showing the last saved state.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Open pull request website' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Request changes' })).toBeVisible();
     expect(screen.queryByRole('button', { name: /^Merge$|Fix with agent/ })).toBeNull();
   });
   it('hides cached PR content until current authorization succeeds', async () => {
@@ -189,10 +198,13 @@ describe('detail and composer accessibility', () => {
     expect(mockActive.api.workbenches.sendMessage).toHaveBeenCalledTimes(2);
     expect(await screen.findByText('Sent')).toBeVisible();
   });
-  it('renders only a bounded number of transcript rows', async () => {
+  it('holds a whole long session but renders only a bounded number of rows', async () => {
     mockActive.api.workbenches.events.mockResolvedValueOnce({ events: Array.from({ length: 10000 }, (_, index) => event(index + 1)), cursor: 10000, oldestSeq: 1, hasOlder: false });
-    await render(<WorkbenchDetailScreen kind="session" />); await screen.findByText(/History is limited/);
+    await render(<WorkbenchDetailScreen kind="session" />); await screen.findByText('Agent response 10000');
     expect(screen.getAllByText(/^Agent response /).length).toBeLessThan(50);
+    // Every event fits in the window, so nothing says history is limited.
+    expect(mockActive.store.read<Transcript>('transcript', 'chat-one').data?.events).toHaveLength(10000);
+    expect(screen.queryByText(/History is limited/)).toBeNull();
   });
 });
 

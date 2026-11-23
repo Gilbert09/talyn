@@ -121,6 +121,7 @@ export const Session = z
     kind: z.enum(SESSION_KINDS),
     space_id: Id.nullable(),
     thread_id: Id.nullable().openapi({ description: 'The thread this session belongs to, if any.' }),
+    parent_id: Id.nullable().openapi({ description: 'The session that started this session, if any.' }),
     repository_id: Id.nullable().openapi({ description: 'Null for a thread.' }),
     repository_full_name: z.string().nullable(),
     name: z.string(),

@@ -9,6 +9,7 @@ import {
 } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
+import { useFleetModelCatalog } from '../../../lib/fleetModelCatalog';
 import { useOnReconnect } from '../../../hooks/useOnReconnect';
 
 /**
@@ -29,7 +30,8 @@ export interface UseLoops {
   update: (id: string, input: LoopInput) => Promise<void>;
   remove: (id: string) => Promise<void>;
   setEnabled: (loop: LoopWithStats, enabled: boolean) => Promise<void>;
-  runNow: (id: string) => Promise<void>;
+  /** Resolves with the run the server made, so the caller can say what happened to it. */
+  runNow: (id: string) => Promise<LoopRun | null>;
   /** The newest runs seen this session, keyed by loop — fed by the WS event. */
   liveRuns: Record<string, LoopRun[]>;
   /** The agents this workspace can run a loop on. Empty until providers load. */
@@ -81,10 +83,11 @@ export function useLoops(): UseLoops {
    * fleet flag's audience. So the fleet part of this editor sits behind the
    * fleet flag without a second check here, and the backend gates again anyway.
    */
+  const modelCatalog = useFleetModelCatalog();
   const agents = useMemo(() => {
     const settings = workspaces.find((w) => w.id === workspaceId)?.settings;
     return cloudAgentChoices(cloudProviders ?? [], settings);
-  }, [cloudProviders, workspaces, workspaceId]);
+  }, [cloudProviders, workspaces, workspaceId, modelCatalog]);
 
   // A run transition changes both the history and the derived stats, and the
   // stats are aggregated server-side — so the event splices the run in locally
@@ -155,6 +158,7 @@ export function useLoops(): UseLoops {
         setLiveRuns((prev) => ({ ...prev, [id]: [run, ...(prev[id] ?? [])].slice(0, 50) }));
       }
       load();
+      return run ?? null;
     },
     [load]
   );

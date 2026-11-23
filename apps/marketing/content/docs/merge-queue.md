@@ -26,7 +26,7 @@ For each pull request, Talyn:
 2. Updates the branch with GitHub's **Update branch** when it falls behind and there is no conflict.
 3. Re-runs failed checks.
 4. Sends an agent to fix a conflict or a failing check.
-5. Merges the pull request, with a squash merge.
+5. Merges the pull request. The default is a squash merge.
 
 When a repository uses GitHub's own merge queue, Talyn hands the pull request to it instead of merging around it.
 

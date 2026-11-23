@@ -28,7 +28,7 @@ vi.mock('../pages/HomePage', () => ({ HomePage: () => <div>Home</div> }));
 vi.mock('../pages/HistoryView', () => ({ HistoryView: () => <div>History</div> }));
 vi.mock('../pages/WorkbenchPage', () => ({ WorkbenchPage: ({ id }: { id: string }) => <div>Session {id}</div> }));
 vi.mock('../pages/PullRequestsView', () => ({ PullRequestsView: () => <div>Pull requests</div> }));
-vi.mock('../pages/AutomationsView', () => ({ AutomationsView: () => <div>Automations</div> }));
+vi.mock('../pages/IntegrationsView', () => ({ IntegrationsView: () => <div>Integrations</div> }));
 vi.mock('../components/panels/SettingsPanel', () => ({ SettingsPanel: () => <div>Settings</div> }));
 
 beforeEach(() => {

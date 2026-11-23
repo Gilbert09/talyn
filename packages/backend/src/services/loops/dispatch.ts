@@ -12,23 +12,19 @@ import { deferralRetryAt } from '../billing/boxDeferral.js';
 import { getCloudProvider } from '../cloudProviders/registry.js';
 import { fleetRefusalReason, workspaceMayUseFleet } from '../cloudProviders/fleetAccess.js';
 import { fleetAgentStatus } from '../selfHosted/credentials.js';
-import { envIdForType } from '../prCloudFix.js';
-import { createCloudTask } from '../taskCreate.js';
 import { captureWorkspaceEvent } from '../analytics.js';
 import { workspaceMayUseLoops } from '../loopsAccess.js';
 import { createWorkbench } from '../workbenches/create.js';
 import { WorkbenchError } from '../workbenches/errors.js';
 import {
-  markDispatched,
   markSessionDispatched,
   providerOf,
   settleRun,
-  targetOf,
   type DueLoop,
 } from './runs.js';
 
 /**
- * One claimed firing → one cloud task or sandbox session.
+ * One claimed firing → one sandbox session.
  *
  * Shared by the scheduler and the "Run now" route, so a manual run and a
  * scheduled one are the same code path: a manual run that behaved differently
@@ -78,13 +74,13 @@ async function refuse(
 async function resolveTarget(
   loop: DueLoop,
   runId: string
-): Promise<{ envId?: string; model: string } | DispatchOutcome> {
+): Promise<{ model: string } | DispatchOutcome> {
   if (!(await workspaceMayUseLoops(loop.workspaceId))) {
     return refuse(
       runId,
       'failed',
       'loops_not_allowed',
-      'This workspace is no longer in the audience for Loops.'
+      'Scheduled automations are no longer available in this workspace.'
     );
   }
 
@@ -107,47 +103,37 @@ async function resolveTarget(
     );
   }
 
-  if (provider === 'selfhosted') {
-    if (!(await workspaceMayUseFleet(loop.workspaceId))) {
-      return refuse(runId, 'failed', 'fleet_not_allowed', `Talyn Fleet is unavailable: ${fleetRefusalReason()}.`);
-    }
-    // The model carries the vendor, so the agent to check is the one the model
-    // implies. Offering a run on a subscription the workspace has disconnected
-    // would fail at the gateway with a much less legible error.
-    const agent = fleetAgentForModel(loop.model);
-    const { connectedAgents } = await fleetAgentStatus(loop.workspaceId);
-    if (!connectedAgents.includes(agent)) {
-      return refuse(
-        runId,
-        'failed',
-        'agent_not_connected',
-        `Talyn Fleet has no ${agent === 'codex' ? 'Codex' : 'Claude'} subscription connected.`
-      );
-    }
+  // Every firing starts a session, and a session runs on Talyn Fleet. A loop
+  // saved for PostHog Code started cloud tasks, which automations no longer do.
+  if (provider !== 'selfhosted') {
+    return refuse(
+      runId,
+      'failed',
+      'environment_missing',
+      'A schedule starts a session on Talyn Fleet. Edit the schedule and choose a Talyn Fleet agent.'
+    );
+  }
+  if (!(await workspaceMayUseFleet(loop.workspaceId))) {
+    return refuse(runId, 'failed', 'fleet_not_allowed', `Talyn Fleet is unavailable: ${fleetRefusalReason()}.`);
+  }
+  // The model carries the vendor, so the agent to check is the one the model
+  // implies. Offering a run on a subscription the workspace has disconnected
+  // would fail at the gateway with a much less legible error.
+  const agent = fleetAgentForModel(loop.model);
+  const { connectedAgents } = await fleetAgentStatus(loop.workspaceId);
+  if (!connectedAgents.includes(agent)) {
+    return refuse(
+      runId,
+      'failed',
+      'agent_not_connected',
+      `Talyn Fleet has no ${agent === 'codex' ? 'Codex' : 'Claude'} subscription connected.`
+    );
   }
 
   // A stored fleet id can be retired out from under a loop (OpenAI withdraws
   // models from the ChatGPT sign-in path on its own schedule), and dispatching
   // at a dead id is a 400 every firing until somebody edits the loop.
-  const model = provider === 'selfhosted' ? resolveFleetModel(loop.model) : loop.model;
-  if (targetOf(loop) === 'session') return { model };
-
-  const envId = await envIdForType(loop.workspaceId, provider);
-  if (!envId) {
-    return refuse(
-      runId,
-      'failed',
-      'environment_missing',
-      `No ${provider} credentials are connected to this workspace.`
-    );
-  }
-  return { envId, model };
-}
-
-/** The title a loop's task carries — the loop's name, plus which firing it is. */
-function titleFor(loop: DueLoop, scheduledFor: Date): string {
-  const when = scheduledFor.toISOString().slice(0, 16).replace('T', ' ');
-  return `${loop.name} — ${when}`;
+  return { model: resolveFleetModel(loop.model) };
 }
 
 async function workspaceOwner(workspaceId: string): Promise<{ id: string; email: string } | null> {
@@ -172,64 +158,42 @@ function failureForSessionError(err: WorkbenchError): LoopRunFailureCode {
 }
 
 /**
- * Create the task or session for a claimed run.
+ * Create the session for a claimed run.
  *
- * The run stays `queued` on success: the task row is inserted as `queued` too,
- * and `task:status` is what moves the run to `running`. Writing `running` here
- * would claim the agent had started before the dispatcher had even seen it.
+ * Old runs that started a cloud task still settle through the task path in
+ * the scheduler; no new run starts one.
  */
 export async function dispatchRun(
   loop: DueLoop,
   runId: string,
-  scheduledFor: Date
+  _scheduledFor: Date
 ): Promise<DispatchOutcome> {
   const target = await resolveTarget(loop, runId);
   if ('ok' in target) return target;
 
   try {
-    if (targetOf(loop) === 'session') {
-      const owner = await workspaceOwner(loop.workspaceId);
-      if (!owner) return refuse(runId, 'failed', 'dispatch_failed', 'The workspace owner no longer exists.');
-      const session = await createWorkbench(
-        {
-          workspaceId: loop.workspaceId,
-          repositoryId: loop.repositoryId as string,
-          runtime: 'sandbox',
-          agent: fleetAgentForModel(target.model),
-          model: target.model,
-          prompt: loop.prompt,
-          namingText: loop.name,
-          internetAccess: loop.internetAccess,
-          autoCreatePr: true,
-          source: { kind: 'loop', loopId: loop.id, runId },
-        },
-        owner
-      );
-      const chatId = session.chats?.[0]?.id;
-      if (!chatId) throw new Error('The session was created without a chat.');
-      await markSessionDispatched(runId, session.id, chatId);
-      return { ok: true, sessionId: session.id };
-    }
-
-    const task = await createCloudTask({
-      workspaceId: loop.workspaceId,
-      type: 'code_writing',
-      source: 'loop',
-      title: titleFor(loop, scheduledFor),
-      description: `Loop: ${loop.name}`,
-      prompt: loop.prompt,
-      repositoryId: loop.repositoryId as string,
-      assignedEnvironmentId: target.envId as string,
-      model: target.model,
-      // The loop's own switch. The fleet turns it into an egress policy; every
-      // other provider ignores it, which is why the editor only offers it on a
-      // fleet loop.
-      internetAccess: loop.internetAccess,
-      mcpServerIds: loop.mcpServerIds,
-      loop: { loopId: loop.id, runId, scheduledFor: scheduledFor.toISOString() },
-    });
-    await markDispatched(runId, task.id);
-    return { ok: true, taskId: task.id };
+    // Every firing starts a session. An automation never creates a cloud task.
+    const owner = await workspaceOwner(loop.workspaceId);
+    if (!owner) return refuse(runId, 'failed', 'dispatch_failed', 'The workspace owner no longer exists.');
+    const session = await createWorkbench(
+      {
+        workspaceId: loop.workspaceId,
+        repositoryId: loop.repositoryId as string,
+        runtime: 'sandbox',
+        agent: fleetAgentForModel(target.model),
+        model: target.model,
+        prompt: loop.prompt,
+        namingText: loop.name,
+        internetAccess: loop.internetAccess,
+        autoCreatePr: true,
+        source: { kind: 'loop', loopId: loop.id, runId },
+      },
+      owner
+    );
+    const chatId = session.chats?.[0]?.id;
+    if (!chatId) throw new Error('The session was created without a chat.');
+    await markSessionDispatched(runId, session.id, chatId);
+    return { ok: true, sessionId: session.id };
   } catch (err) {
     if (isBoxGateError(err)) {
       // No request to answer with a 402 and no modal to open: this is the

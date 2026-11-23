@@ -69,7 +69,7 @@ export function UserDetailPage() {
       refreshing={loading}
       actions={
         <div className="flex items-center gap-2">
-          {canComp && !isSelf && (
+          {canComp && (
             <button
               onClick={() =>
                 comp.start(
@@ -108,12 +108,12 @@ export function UserDetailPage() {
     >
       {/* The self-mutation guard lives on the server. Saying so here — and
           hiding the buttons — saves an operator the confusing 403 they would
-          otherwise get on their own account. */}
+          otherwise get on their own account. A comp or a credit grant is
+          allowed: it is audited with its reason like any other. */}
       {isSelf && (
         <div className="mb-4 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
-          This is your own account. Comping yourself and changing your own operator flag are
-          refused by the server — use <code className="font-mono">psql</code> if you genuinely
-          need to, so it leaves a trace somewhere other than here.
+          This is your own account. You can comp it or grant it credits, and the audit log
+          records both. The server refuses changes to your own operator flag.
         </div>
       )}
 
@@ -163,7 +163,7 @@ export function UserDetailPage() {
         </dl>
       </section>
 
-      <BillingCard userId={data.id} email={data.email} canMutate={canComp && !isSelf} />
+      <BillingCard userId={data.id} email={data.email} canMutate={canComp} />
 
       <section className="mt-6">
         <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">

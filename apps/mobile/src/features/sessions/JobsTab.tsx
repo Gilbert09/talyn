@@ -8,7 +8,7 @@ import { AppText, Button, Dot, SectionLabel, toneColor } from '../../components/
 import { errorMessage, showActionError } from '../../lib/errors';
 import { relativeTimeLabel, useNow } from '../../lib/time';
 import { mono, useTheme } from '../../theme/tokens';
-import { formatCountdown, formatRunTime, jobStatus, keepAwakeLabel, sortWakeups } from './background';
+import { emptyLogText, formatRunTime, jobStatus, keepAwakeLabel, sortWakeups, wakeupWhen } from './background';
 import { useJobLogs, type Load } from './data';
 
 function JobLogs({ workbenchId, job }: { workbenchId: string; job: WorkbenchBackgroundJob }) {
@@ -23,12 +23,13 @@ function JobLogs({ workbenchId, job }: { workbenchId: string; job: WorkbenchBack
       <View style={{ alignSelf: 'flex-start' }}><Button variant="quiet" size="sm" title="Wake and load logs" disabled={offline} onPress={() => setLive(true)} /></View>
     </View>;
   }
-  const text = logs.data ? logs.data.lines.join('\n') : logs.status === 'loading' ? 'Loading logs' : '';
+  const text = logs.data ? logs.data.lines.join('\n') : '';
+  const placeholder = logs.data ? emptyLogText(job.status === 'running') : logs.status === 'loading' ? 'Loading logs' : 'No output yet.';
   return <View style={{ gap: 4 }}>
     <ScrollView ref={scroller} style={[styles.logs, { backgroundColor: c.surface }]} nestedScrollEnabled
       onContentSizeChange={() => scroller.current?.scrollToEnd({ animated: false })}>
-      <Text selectable accessibilityLabel={`Output of ${job.name}`} style={[styles.logText, { color: logs.data ? c.text : c.muted }]}>
-        {text || 'No output yet.'}</Text>
+      <Text selectable accessibilityLabel={`Output of ${job.name}`} style={[styles.logText, { color: text ? c.text : c.muted }]}>
+        {text || placeholder}</Text>
     </ScrollView>
     {logs.status === 'error' || logs.status === 'unauthorized' ? <AppText accessibilityRole="alert" variant="meta" tone="destructive">
       {errorMessage(logs.error, 'Could not load logs.')}</AppText> : null}
@@ -82,7 +83,7 @@ function WakeupRow({ wakeup, now, divider }: { wakeup: WorkbenchWakeup; now: num
   const scheduled = wakeup.status === 'scheduled';
   return <View style={[styles.wakeup, { borderBottomColor: divider ? c.border : 'transparent' }]}>
     <AppText variant="meta" tone={scheduled ? 'default' : 'muted'}>{wakeup.reason}</AppText>
-    <AppText variant="caption" tone="muted">{[scheduled ? formatCountdown(wakeup.wakeAt, now) : wakeup.status[0].toUpperCase() + wakeup.status.slice(1),
+    <AppText variant="caption" tone="muted">{[...(scheduled ? wakeupWhen(wakeup, now) : [wakeup.status[0].toUpperCase() + wakeup.status.slice(1)]),
       wakeup.createdBy === 'user' ? 'Set by you' : 'Set by the agent'].join(' · ')}</AppText>
     {wakeup.status === 'failed' && wakeup.failureDetail ? <AppText variant="caption" tone="destructive">{wakeup.failureDetail}</AppText> : null}
   </View>;

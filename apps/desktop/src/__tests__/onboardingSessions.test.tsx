@@ -1,23 +1,26 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { defaultFleetModelForAgent, PLAN_LIMITS, type Workbench } from '@talyn/shared';
-import { api, type CloudProviderInfo } from '../renderer/lib/api';
+import { defaultFleetModelForAgent, PLAN_LIMITS, SESSION_STARTER_PROMPTS, type Workbench } from '@talyn/shared';
+import { api, loadAllRepos, type CloudProviderInfo, type PRRow } from '../renderer/lib/api';
 import { captureAnalyticsException, trackEvent } from '../renderer/lib/analytics';
 import { OnboardingWizard } from '../renderer/components/onboarding/OnboardingWizard';
 import { SidebarWorkbenchList } from '../renderer/components/layout/SidebarWorkbenchList';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { useNavigationStore } from '../renderer/stores/navigation';
+import { usePullRequestStore } from '../renderer/stores/pullRequests';
+import { createLocalWorkbench } from '../renderer/lib/localWorkbench';
 
 jest.mock('../renderer/lib/api', () => ({
+  loadAllRepos: jest.fn(),
+  mergeRepos: jest.fn(),
   ApiError: class ApiError extends Error {},
   ApiNetworkError: class ApiNetworkError extends Error {},
   api: {
     github: {
       getStatus: jest.fn(),
       getUser: jest.fn().mockResolvedValue({ login: 'octocat' }),
-      listAllRepos: jest.fn(),
       listInstallations: jest.fn().mockResolvedValue([]),
     },
     repositories: { add: jest.fn(), remove: jest.fn().mockResolvedValue(undefined) },
@@ -60,7 +63,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   localStorage.clear();
   jest.mocked(api.github.getStatus).mockResolvedValue({ configured: true, connected: true } as never);
-  jest.mocked(api.github.listAllRepos).mockResolvedValue([
+  jest.mocked(loadAllRepos).mockResolvedValue([
     { id: 1, owner: { login: 'acme' }, name: 'app', full_name: 'acme/app' },
     { id: 3, owner: { login: 'acme' }, name: 'unwatched', full_name: 'acme/unwatched' },
   ] as never);
@@ -162,14 +165,13 @@ it('requires a prompt and a repository that is still watched', async () => {
   expect(api.workbenches.create).not.toHaveBeenCalled();
 });
 
-it('keeps the subscription cards in order and puts PostHog Code under Other options', async () => {
+it('offers only the subscription cards, in order, where the fleet is offered', async () => {
   await toAgent();
   expect(screen.getByText('Use your Claude or ChatGPT subscription')).toBeInTheDocument();
   const choices = screen.getAllByRole('button').filter((button) => /^(Claude|Codex|PostHog Code)/.test(button.textContent ?? ''));
-  expect(choices.map((button) => button.textContent?.split('Use')[0])).toEqual(['Claude', 'Codex', 'PostHog Code']);
-  const other = screen.getByRole('heading', { name: 'Other options' });
-  expect(choices[1].compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(other.compareDocumentPosition(choices[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(choices.map((button) => button.textContent?.split('Use')[0])).toEqual(['Claude', 'Codex']);
+  expect(screen.queryByRole('heading', { name: 'Other options' })).not.toBeInTheDocument();
+  expect(screen.getByText('Connect Claude or ChatGPT to start sessions, or skip for now.')).toBeInTheDocument();
 });
 
 it.each(['claude', 'codex'] as const)('creates and opens a real session through the API with %s', async (agent) => {
@@ -195,9 +197,9 @@ it.each(['claude', 'codex'] as const)('creates and opens a real session through 
   expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: session.id });
   expect(useWorkbenchStore.getState().workbenches[session.id]).toEqual(session);
   expect(useWorkspaceStore.getState().justOnboarded).toBe(true);
-  expect(trackEvent).toHaveBeenCalledWith('first_session_created', { from: 'onboarding' });
+  expect(trackEvent).toHaveBeenCalledWith('first_session_created', { from: 'onboarding', runtime: 'sandbox', agent });
   expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', {
-    github_connected: true, repos_watched: 2, agent_connected: true, signup_source: 'reddit',
+    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, agent_mode: 'cloud', signup_source: 'reddit',
   });
   for (const step of ['github', 'repos', 'agent', 'first_session']) {
     expect(trackEvent).toHaveBeenCalledWith('onboarding_step_viewed', { step });
@@ -250,14 +252,126 @@ it('skips the first session, completes onboarding, and opens Home', async () => 
   expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
   expect(trackEvent).toHaveBeenCalledWith('onboarding_first_session_skipped');
   expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', {
-    github_connected: true, repos_watched: 2, agent_connected: true, signup_source: null,
+    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, agent_mode: 'cloud', signup_source: null,
+  });
+});
+
+describe('a first session on this computer', () => {
+  const localSession: Workbench = { ...session, id: 'session-local', runtime: 'local', localPath: '/wt/app' };
+  let bridge: {
+    readiness: jest.Mock;
+    pickRepoFolder: jest.Mock;
+    repoPaths: { get: jest.Mock; set: jest.Mock; remove: jest.Mock };
+  };
+
+  beforeEach(() => {
+    bridge = {
+      readiness: jest.fn().mockResolvedValue({
+        claude: { ok: false }, codex: { ok: true, path: '/bin/codex' }, pty: { ok: true }, git: { ok: true },
+      }),
+      pickRepoFolder: jest.fn(),
+      repoPaths: { get: jest.fn().mockResolvedValue({}), set: jest.fn(), remove: jest.fn() },
+    };
+    (window as unknown as { electron?: unknown }).electron = { workbench: bridge };
+    jest.mocked(createLocalWorkbench).mockResolvedValue(localSession);
+    useWorkspaceStore.setState({ features: { onboardingLocalAgent: true } as never });
+  });
+
+  afterEach(() => {
+    cleanup();
+    delete (window as unknown as { electron?: unknown }).electron;
+    useWorkspaceStore.setState({ features: null });
+  });
+
+  async function toLocalSession() {
+    await toAgent();
+    fireEvent.click(screen.getByRole('button', { name: /Claude Code or Codex on this computer/ }));
+    await screen.findByText('Your sessions will use Codex on this computer.');
+    await waitFor(() => expect(next()).toBeEnabled());
+    fireEvent.click(next());
+    // The checkout map loads after the step mounts.
+    await act(async () => {});
+    expect(screen.getByRole('heading', { name: 'Start your first session' })).toBeInTheDocument();
+  }
+
+  it('asks for the checkout folder, then creates a local session there', async () => {
+    bridge.pickRepoFolder.mockResolvedValue('/src/app');
+    bridge.repoPaths.get.mockResolvedValueOnce({}).mockResolvedValue({ 'acme/app': '/src/app' });
+    await toLocalSession();
+    expect(screen.getByText('The session runs on this computer, in a new git worktree of your checkout.')).toBeInTheDocument();
+    expect(screen.queryByText(/box-hours/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/sandbox image/)).not.toBeInTheDocument();
+    enterPrompt();
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Choose folder/ }));
+    expect(bridge.pickRepoFolder).toHaveBeenCalledWith('acme/app');
+    expect(await screen.findByText('/src/app')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+
+    await waitFor(() => expect(useWorkspaceStore.getState().onboardingComplete).toBe(true));
+    expect(api.workbenches.create).not.toHaveBeenCalled();
+    expect(createLocalWorkbench).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: 'ws1', repositoryId: 'r1', repoFullName: 'acme/app', agent: 'codex',
+      model: defaultFleetModelForAgent('codex'), repoPath: '/src/app', prompt: 'Fix the private issue',
+    }));
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_local_agent_chosen', { agent: 'codex' });
+    expect(trackEvent).toHaveBeenCalledWith('first_session_created', { from: 'onboarding', runtime: 'local', agent: 'codex' });
+    expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', expect.objectContaining({
+      agent_connected: false, agent_skipped: false, agent_mode: 'local',
+    }));
+  });
+
+  it('uses a known checkout without asking', async () => {
+    bridge.repoPaths.get.mockResolvedValue({ 'Acme/App': '/src/app' });
+    await toLocalSession();
+    expect(await screen.findByText('/src/app')).toBeInTheDocument();
+    enterPrompt();
+    fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+    await waitFor(() => expect(createLocalWorkbench).toHaveBeenCalledWith(expect.objectContaining({ repoPath: '/src/app' })));
+  });
+
+  it('shows why a folder was refused and keeps Start disabled', async () => {
+    bridge.pickRepoFolder.mockRejectedValue(new Error('That folder is not a git checkout.'));
+    await toLocalSession();
+    enterPrompt();
+    fireEvent.click(screen.getByRole('button', { name: /Choose folder/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('That folder is not a git checkout.');
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeDisabled();
+    expect(createLocalWorkbench).not.toHaveBeenCalled();
   });
 });
 
 it('opens the normal new-session UI from the sidebar empty state', () => {
+  usePullRequestStore.setState({ rows: [] });
   render(<SidebarWorkbenchList workbenches={[]} />);
-  expect(screen.getByText('No sessions yet.')).toBeInTheDocument();
+  expect(screen.getByText('Hand work to an agent')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Start a session' }));
   expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
   expect(useWorkbenchStore.getState().newWorkbench).toEqual({ seq: 1, prefill: null });
+});
+
+it('offers general starters when no pull request needs work', () => {
+  usePullRequestStore.setState({ rows: [] });
+  render(<SidebarWorkbenchList workbenches={[]} />);
+  fireEvent.click(screen.getByRole('button', { name: /Explain a repository/ }));
+  expect(useWorkbenchStore.getState().newWorkbench.prefill).toEqual({ prompt: SESSION_STARTER_PROMPTS.explain });
+  expect(trackEvent).toHaveBeenCalledWith('session_starter_clicked', { kind: 'explain', from_pull_request: false });
+});
+
+it('starts a session on a pull request with failing checks from the sidebar', () => {
+  const row = {
+    id: 'pr-1', workspaceId: 'ws1', repositoryId: 'r1', owner: 'acme', repo: 'app', number: 42, state: 'open',
+    authored: true, reviewRequested: false,
+    summary: { title: 'Add billing', headBranch: 'tom/billing', baseBranch: 'main', blockingReason: 'checks_failed' },
+  } as unknown as PRRow;
+  usePullRequestStore.setState({ rows: [row] });
+  render(<SidebarWorkbenchList workbenches={[]} />);
+  expect(screen.getByText('#42 Add billing')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /Fix the failing checks/ }));
+  expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
+  expect(useWorkbenchStore.getState().newWorkbench.prefill).toEqual({
+    repositoryId: 'r1', fromPullRequestId: 'pr-1', baseBranch: 'main', branch: 'tom/billing',
+    prompt: SESSION_STARTER_PROMPTS.fix_checks,
+  });
 });

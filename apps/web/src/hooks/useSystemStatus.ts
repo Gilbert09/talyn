@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from 'react';
 import { api } from '../lib/api';
+import { refreshFleetModelCatalog } from '../lib/fleetModelCatalog';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useGithubConnection } from './useGithubConnection';
 import { useGithubInstallations } from './useGithubInstallations';
@@ -72,11 +73,15 @@ export function useSystemStatus(): void {
   // workspace switch does not re-fetch them. Left at their last known value on a
   // transient failure: blanking them would pull a nav item out from under a
   // click.
+  //
+  // The agent model catalogue (`GET /models`) is global too, and it changes on
+  // a backend deploy with no in-process signal, so it rides the same triggers.
   const refreshFeatures = useCallback(() => {
     api.features
       .get()
       .then(setFeatures)
       .catch(() => {});
+    void refreshFleetModelCatalog();
   }, [setFeatures]);
 
   useEffect(() => {

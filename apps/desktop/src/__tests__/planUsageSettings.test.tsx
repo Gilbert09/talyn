@@ -17,6 +17,8 @@ const orders = jest.fn();
 const checkout = jest.fn();
 const changePlan = jest.fn();
 const creditCheckout = jest.fn();
+const usageResetCheckout = jest.fn();
+const openExternal = jest.fn();
 const portal = jest.fn();
 const autoTopupUpdate = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
@@ -27,13 +29,14 @@ jest.mock('../renderer/lib/api', () => ({
       checkout: (...a: unknown[]) => checkout(...a),
       changePlan: (...a: unknown[]) => changePlan(...a),
       creditCheckout: (...a: unknown[]) => creditCheckout(...a),
+      usageResetCheckout: (...a: unknown[]) => usageResetCheckout(...a),
       portal: (...a: unknown[]) => portal(...a),
       autoTopup: { update: (...a: unknown[]) => autoTopupUpdate(...a) },
     },
   },
   ApiError: class ApiError extends Error {},
 }));
-jest.mock('../renderer/lib/openExternal', () => ({ openExternal: jest.fn() }));
+jest.mock('../renderer/lib/openExternal', () => ({ openExternal: (...a: unknown[]) => openExternal(...a) }));
 jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn(), captureAnalyticsException: jest.fn() }));
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 jest.mock('../renderer/stores/toast', () => ({ toast: { error: jest.fn(), success: jest.fn(), info: jest.fn() } }));
@@ -49,6 +52,8 @@ function SettingsWithModal() {
   );
 }
 
+const planCard = (plan: string) => screen.getByTestId(`compare-plan-${plan}`);
+
 function show(status: ReturnType<typeof usageStatus>) {
   useBillingStore.setState({ status, upgradeModalOpen: false, upgradeReason: null, upgradeNotice: null });
   statusFetch.mockResolvedValue(status);
@@ -57,7 +62,7 @@ function show(status: ReturnType<typeof usageStatus>) {
 
 describe('BillingSettings with usage billing', () => {
   beforeEach(() => {
-    [statusFetch, orders, checkout, changePlan, creditCheckout, portal, autoTopupUpdate].forEach((m) => m.mockReset());
+    [statusFetch, orders, checkout, changePlan, creditCheckout, usageResetCheckout, openExternal, portal, autoTopupUpdate].forEach((m) => m.mockReset());
     // Order history has its own tests; left pending here so it never re-renders mid-test.
     orders.mockReturnValue(new Promise(() => undefined));
     useWorkspaceStore.setState({ features: null } as never);
@@ -70,10 +75,10 @@ describe('BillingSettings with usage billing', () => {
 
   it('captures plan page clicks with their locations', () => {
     show(usageStatus('pro'));
-    fireEvent.click(screen.getByRole('button', { name: 'Compare plans' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add credits', expanded: false }));
-    expect(trackEvent).toHaveBeenCalledWith('compare_plans_opened', { where: 'plan_page' });
+    fireEvent.click(within(planCard('team')).getByRole('button', { name: 'Explore Team' }));
     expect(trackEvent).toHaveBeenCalledWith('add_credits_clicked', { where: 'plan_page' });
+    expect(trackEvent).toHaveBeenCalledWith('team_offer_opened', { placement: 'plan_page' });
   });
 
   it('keeps the old page on an older backend', async () => {
@@ -104,16 +109,17 @@ describe('BillingSettings with usage billing', () => {
     expect(screen.queryByTestId('credits-card')).toBeNull();
     expect(screen.queryByTestId('auto-topup')).toBeNull();
     expect(screen.getByText(/mobile app is coming soon/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade' }));
+    expect(within(planCard('free')).getByText('Your plan')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: /Annual/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Pro: $400/yr' }));
+    fireEvent.click(within(planCard('pro')).getByRole('button', { name: 'Upgrade to Pro' }));
     await waitFor(() => expect(checkout).toHaveBeenCalledWith({ period: 'annual', plan: 'pro' }));
+    expect(trackEvent).toHaveBeenCalledWith('checkout_started', { period: 'annual', plan: 'pro', placement: 'plan_page' });
   });
 
   it('shows Free credits it still holds, without packs to buy', () => {
     show(usageStatus('free', { balanceMicros: 3_000_000 }));
     expect(screen.queryByTestId('credits-card')).toBeNull();
-    expect(screen.getByText('$3.00')).not.toBeVisible();
+    expect(screen.getByText('$3')).not.toBeVisible();
     expect(screen.queryByTestId('credit-packs')).toBeNull();
   });
 
@@ -129,14 +135,11 @@ describe('BillingSettings with usage billing', () => {
     show(usageStatus('legacy_pro', { usedHours: 20 }));
     expect(screen.getByTestId('plan-card')).toHaveTextContent('Legacy Pro');
     expect(screen.getByTestId('plan-card')).toHaveTextContent('$15/month');
-    fireEvent.click(screen.getByRole('button', { name: 'Move to Pro' }));
-    const move = screen.getByTestId('legacy-changes');
-    expect(move).toHaveTextContent('50 box-hours a month becomes 200 box-hours');
+    expect(planCard('legacy_pro')).toHaveTextContent('50 box-hours per month');
+    expect(planCard('pro')).toHaveTextContent('200 box-hours per month');
     fireEvent.click(screen.getByRole('button', { name: /Annual/ }));
-    expect(move).toHaveTextContent('$15 a month becomes $400 a year');
     fireEvent.click(screen.getByRole('button', { name: /Monthly/ }));
-    expect(move).toHaveTextContent('$15 a month becomes $40 a month');
-    fireEvent.click(screen.getAllByRole('button', { name: 'Move to Pro' })[1]);
+    fireEvent.click(within(planCard('pro')).getByRole('button', { name: 'Move to Pro' }));
     await waitFor(() => expect(changePlan).toHaveBeenCalledWith({ to: 'pro', period: 'monthly' }));
     expect(screen.queryByTestId('credit-packs')).toBeNull();
     expect(screen.queryByTestId('auto-topup')).toBeNull();
@@ -152,9 +155,8 @@ describe('BillingSettings with usage billing', () => {
     changePlan.mockResolvedValue({ ok: true });
     show(usageStatus('pro', { maxOffered: true, overrides: { period: 'monthly' } }));
     expect(within(screen.getByTestId('plan-card')).getByRole('button', { name: 'Manage billing' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max' }));
-    expect(screen.getByTestId('max-changes')).toHaveTextContent('200 box-hours a month becomes 1,000 box-hours');
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to Max: $100/mo' }));
+    expect(planCard('max')).toHaveTextContent('1,000 box-hours per month');
+    fireEvent.click(within(planCard('max')).getByRole('button', { name: 'Upgrade to Max' }));
     await waitFor(() => expect(changePlan).toHaveBeenCalledWith({ to: 'max', period: 'monthly' }));
     expect(checkout).not.toHaveBeenCalled();
   });
@@ -230,7 +232,7 @@ describe('BillingSettings with usage billing', () => {
     expect(screen.queryByTestId('move-to-pro')).toBeNull();
     expect(screen.getByTestId('usage-card')).toHaveTextContent('37.5 of 200 box-hours');
     const credits = screen.getByTestId('credits-card');
-    expect(credits).toHaveTextContent('$30.00');
+    expect(credits).toHaveTextContent('$30');
     expect(credits).toHaveTextContent('$5.00 expires in the next 30 days.');
     const lots = screen.getByTestId('credit-lots');
     expect(lots).toHaveTextContent('$5.00 of $25.00 · Purchase');
@@ -302,7 +304,7 @@ describe('BillingSettings with usage billing', () => {
   it.each([
     [0, false, '100', '100% left'],
     [26, false, '87', '87% left'],
-    [199, false, '1', '1.0% left'],
+    [199, false, '1', '1% left'],
     [210, false, '0', '0% left'],
     [20, true, '0', '0% left'],
   ])('shows usage left for %s hours and exhausted=%s', (usedHours, exhausted, value, label) => {
@@ -312,11 +314,35 @@ describe('BillingSettings with usage billing', () => {
     expect(screen.getByText(`${usedHours} of 200 box-hours used`)).toBeVisible();
   });
 
-  it.each(['free', 'legacy_pro', 'pro'] as const)('opens the existing modal to compare %s', (tier) => {
+  it.each([
+    ['free', ['free', 'pro', 'team']],
+    ['legacy_pro', ['free', 'legacy_pro', 'pro', 'team']],
+    ['pro', ['free', 'pro', 'team']],
+    ['max', ['free', 'pro', 'max', 'team']],
+  ] as const)('lays out every plan on the page for %s, with the current one marked', (tier, plans) => {
     show(usageStatus(tier));
-    fireEvent.click(screen.getByRole('button', { name: 'Compare plans' }));
-    expect(useBillingStore.getState().upgradeModalOpen).toBe(true);
-    expect(screen.getByRole('heading', { level: 2 })).toBeVisible();
+    const cards = within(screen.getByTestId('plan-cards')).getAllByTestId(/^compare-plan-/);
+    expect(cards.map((card) => card.dataset.testid)).toEqual(plans.map((plan) => `compare-plan-${plan}`));
+    expect(within(planCard(tier)).getByText(/^Your plan/)).toBeVisible();
+    for (const other of plans.filter((plan) => plan !== tier)) {
+      expect(within(planCard(other)).queryByText(/^Your plan/)).toBeNull();
+    }
+    expect(screen.queryByRole('button', { name: 'Compare plans' })).toBeNull();
+    expect(useBillingStore.getState().upgradeModalOpen).toBe(false);
+  });
+
+  it('shows Max on the page and sells it to Free', async () => {
+    checkout.mockResolvedValue({ url: 'u' });
+    show(usageStatus('free', { maxOffered: true }));
+    expect(planCard('max')).toHaveTextContent('$100/mo');
+    fireEvent.click(within(planCard('max')).getByRole('button', { name: 'Upgrade to Max' }));
+    await waitFor(() => expect(checkout).toHaveBeenCalledWith({ period: 'monthly', plan: 'max' }));
+  });
+
+  it('marks the team plan for a team seat and offers no purchase', () => {
+    show(usageStatus('pro', { maxOffered: true, overrides: { planSource: 'team' } }));
+    expect(within(planCard('team')).getByText('Your plan')).toBeVisible();
+    expect(within(screen.getByTestId('plan-cards')).queryByRole('button', { name: /Upgrade|Move to Pro|Explore Team/ })).toBeNull();
   });
 
   it.each([
@@ -492,6 +518,57 @@ describe('BillingSettings with usage billing', () => {
       await waitFor(() => expect(screen.getByText('The plan change failed.')).toBeVisible());
       expect(trackEvent).toHaveBeenCalledWith('annual_switch_failed', { placement: 'plan_page', code: undefined });
       expect(captureAnalyticsException).toHaveBeenCalled();
+    });
+  });
+
+  describe('usage reset', () => {
+    const resettable = (resets?: number) => {
+      const status = usageStatus('pro', { usedHours: 50 });
+      status.usageReset = { tier: 'pro', priceMicros: 40_000_000, includedWsec: 200 * 3600 };
+      if (resets != null) status.usage = { ...status.usage!, resets };
+      return status;
+    };
+
+    it('hides the action when the status has no offer', () => {
+      show(usageStatus('pro', { usedHours: 50 }));
+      expect(document.querySelector('[data-attr="usage-reset-checkout"]')).toBeNull();
+    });
+
+    it('shows the price and the explanation', () => {
+      show(resettable());
+      expect(screen.getByRole('button', { name: 'Reset usage: $40' })).toBeInTheDocument();
+      expect(screen.getByText(/get all 200 box-hours back now\. Your period still ends on .*Unused hours do not carry over/)).toBeInTheDocument();
+      expect(screen.queryByTestId('usage-reset-count')).toBeNull();
+    });
+
+    it.each([
+      [1, 'Reset 1 time this period'],
+      [2, 'Reset 2 times this period'],
+    ])('notes %i resets this period', (resets, text) => {
+      show(resettable(resets));
+      expect(screen.getByText(text)).toBeInTheDocument();
+    });
+
+    it('opens the hosted checkout on click', async () => {
+      usageResetCheckout.mockResolvedValue({ url: 'https://polar.test/reset' });
+      show(resettable());
+      fireEvent.click(screen.getByRole('button', { name: 'Reset usage: $40' }));
+      await waitFor(() => expect(openExternal).toHaveBeenCalledWith('https://polar.test/reset'));
+      expect(usageResetCheckout).toHaveBeenCalledTimes(1);
+      expect(trackEvent).toHaveBeenCalledWith('usage_reset_checkout_started', { tier: 'pro', placement: 'settings' });
+    });
+
+    it.each([
+      ['usage_reset_requires_paid_plan', 'A usage reset needs a paid plan.'],
+      ['nothing_to_reset', 'You have not used any box-hours yet. There is nothing to reset.'],
+      ['usage_reset_unavailable', 'Usage reset is not available for this account.'],
+    ])('shows text for %s', async (code, text) => {
+      usageResetCheckout.mockRejectedValue(Object.assign(new Error('raw'), { code }));
+      show(resettable());
+      fireEvent.click(screen.getByRole('button', { name: 'Reset usage: $40' }));
+      expect(await screen.findByText(text)).toBeInTheDocument();
+      expect(openExternal).not.toHaveBeenCalled();
+      expect(trackEvent).toHaveBeenCalledWith('usage_reset_checkout_failed', expect.objectContaining({ stage: 'create_checkout', code }));
     });
   });
 });

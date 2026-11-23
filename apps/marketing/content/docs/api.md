@@ -181,7 +181,7 @@ Limits count requests per token over a sliding one-minute window.
 | --- | --- |
 | All requests | 600 |
 | Requests that start something (sessions, chats, messages and other actions) | 60 |
-| Requests that call GitHub (open or merge a pull request) | 30 |
+| Requests that call GitHub (refresh, open or merge a pull request, post code review findings) | 30 |
 | Open streams at the same time | 20 |
 
 Every response has `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` headers. `RateLimit-Reset` is in seconds. When two limits apply, the headers show the tighter one.

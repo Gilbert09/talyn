@@ -2,10 +2,14 @@ import type { WorkbenchReadiness, WorkspaceIntegrations } from '@talyn/shared';
 
 import type { LoadState } from '../workflow/model';
 
-export type OnboardingStep = 'github' | 'repos' | 'agent';
+/**
+ * `notifications` is optional and comes last. The gate never opens it: a
+ * restart after the agent step goes home, and Settings can turn alerts on.
+ */
+export type OnboardingStep = 'github' | 'repos' | 'agent' | 'notifications';
 export type OnboardingGate = 'loading' | OnboardingStep | 'done';
 
-export const ONBOARDING_STEPS: readonly OnboardingStep[] = ['github', 'repos', 'agent'];
+export const ONBOARDING_STEPS: readonly OnboardingStep[] = ['github', 'repos', 'agent', 'notifications'];
 
 interface Loaded<T> { status: LoadState; data?: T }
 
@@ -25,6 +29,15 @@ export function agentReady(readiness: WorkbenchReadiness | undefined): boolean {
   const sandbox = readiness?.sandbox;
   if (!sandbox?.ok) return false;
   return Object.values(sandbox.agents ?? {}).some((agent) => agent?.ok);
+}
+
+/**
+ * Connecting Claude or Codex is required. The one way out is a sandbox the
+ * workspace cannot use at all (the fleet is not offered): no connection the
+ * person makes can fix that, so the step must not trap them.
+ */
+export function agentStepSkippable(readiness: WorkbenchReadiness | undefined): boolean {
+  return readiness?.sandbox.ok === false;
 }
 
 /**

@@ -9,11 +9,13 @@ import { AppText, Button, Dot, EmptyState, Group, Pill, PromptSheet, Row, toneCo
 import { StateNotice } from '../../components/Workflow';
 import { showActionError } from '../../lib/errors';
 import { agentLabel } from '../../lib/models';
+import { useFeatures } from '../../lib/features';
 import { useNow } from '../../lib/time';
 import { useTheme } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
 import { Fact, Loading, Page, WebRow } from '../more/Page';
 import { useRemote } from '../more/useRemote';
+import { automaticDefaultCopy, integrationsLinkTitle } from '../integrations/posthogRetirement';
 import { ConnectAgentSheet, loadFleetAccounts } from './connect/ConnectAgentSheet';
 import { accountActions, agentAccounts, agentState, FLEET_AGENTS, movedOrder, type AccountAction } from './connect/model';
 import { accountBadge, accountKindLabel, accountUsageText, defaultFleetModel, defaultOptions, defaultPatch, defaultProviderLabel,
@@ -31,6 +33,7 @@ export function AgentsScreen() {
   const workspaceId = useWorkspace().selected;
   const providers = useResource<CloudProviderInfo[]>('providers');
   const workspace = useResource<Workspace>('workspace');
+  const features = useFeatures();
   const fleet = providers.data?.find((provider) => provider.type === 'selfhosted');
   // Only a workspace the fleet is offered to has accounts; null means an older backend.
   const accounts = useRemote<FleetAccountsResponse | null>(fleet && workspaceId ? `fleet-accounts:${workspaceId}` : null,
@@ -75,7 +78,7 @@ export function AgentsScreen() {
   const options = defaultOptions(providers.data ?? []);
   const current = defaultValue(workspace.data?.settings);
   const currentLabel = options.find((option) => option.value === current)?.label ?? defaultProviderLabel(workspace.data?.settings, providers.data ?? []);
-  const chooseDefault = () => menu.open({ title: 'New work goes to', message: 'Automatic prefers Talyn Fleet, then PostHog Code.',
+  const chooseDefault = () => menu.open({ title: 'New work goes to', message: automaticDefaultCopy(features),
     actions: options.map((option) => ({ label: option.label, selected: option.value === current, onPress: () => {
       if (option.value === current || !workspaceId) return;
       void run('default', 'Could not change the default', async () => {
@@ -102,8 +105,9 @@ export function AgentsScreen() {
           trailing={<AppText variant="meta" tone="muted" numberOfLines={2} style={{ maxWidth: '55%', textAlign: 'right' }}>{currentLabel}</AppText>} />
         {fleetModel ? <Fact label="Talyn Fleet model" value={fleetModel} divider={false} /> : null}
       </Group> : null}
-      <Group footer="Connect PostHog Code and change the Talyn Fleet model in Talyn on the web.">
-        <WebRow title="Manage on the web" path="/settings/integrations" />
+      <Group footer="Change the Talyn Fleet model in Talyn on the web.">
+        <Row title={integrationsLinkTitle(features, providers.data ?? [])} subtitle="Connect keys and sign in" chevron href="/integrations" divider />
+        <WebRow title="Talyn Fleet model" path="/settings/integrations" />
       </Group>
     </Page>
     {menu.sheet}

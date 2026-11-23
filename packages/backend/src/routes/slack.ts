@@ -7,6 +7,7 @@ import {
   validateSlackTriggerEmojis,
   type ApiResponse,
   type SlackAuthorizeResponse,
+  type SlackChannelsResponse,
   type SlackEmojiResponse,
   type SlackForgetInstallationResponse,
   type SlackPendingRequest,
@@ -20,9 +21,16 @@ import { users as usersTable } from '../db/schema.js';
 import { AccessError, assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { renderCallbackPage } from '../services/callbackPage.js';
 import { getWebAppUrl, webAppUrl } from '../services/webApp.js';
+import {
+  invalidReturnToBody,
+  mobileSlackReturnUrl,
+  parseReturnTo,
+  validMobileReturn,
+} from '../services/mobileReturn.js';
 import { slackRefusalReason, userMayUseSlack } from '../services/slack/access.js';
-import { SlackApiError } from '../services/slack/api.js';
+import { isSlackRateLimited, SlackApiError } from '../services/slack/api.js';
 import { getSlackAppConfig } from '../services/slack/config.js';
+import { listTeamChannels } from '../services/slack/channels.js';
 import { listTeamEmoji } from '../services/slack/emoji.js';
 import {
   completeSlackInstall,
@@ -49,12 +57,13 @@ import { fleetErrorAsRefusal } from '../services/workbenches/errors.js';
  * Slack sessions, behind the `workbenches` flag.
  *
  *   GET    /slack                          installs I can see + my links
- *   POST   /slack/install   { workspaceId? }   → { authorizeUrl }
- *   POST   /slack/link      { workspaceId? }   → { authorizeUrl }
+ *   POST   /slack/install   { workspaceId?, returnTo? }   → { authorizeUrl }
+ *   POST   /slack/link      { workspaceId?, returnTo? }   → { authorizeUrl }
  *   PATCH  /slack/links/:id { triggerEmojis?, workspaceId? }
  *   DELETE /slack/links/:id
  *   DELETE /slack/installations/:teamId    installer only
  *   GET    /slack/teams/:teamId/emoji      the team's custom emoji (installer or linked)
+ *   GET    /slack/teams/:teamId/channels   channels the bot is in (installer or linked)
  *   GET    /slack/pending                  my Slack requests waiting for a repository
  *   POST   /slack/pending/:id/start { repositoryId }  owner only → Workbench
  *   GET    /slack/oauth/callback           public; Slack's browser redirect
@@ -96,14 +105,26 @@ export function slackPublicRoutes(): Router {
 
   router.get('/oauth/callback', oauthRateLimit, async (req, res) => {
     const { code, state, error } = req.query as Record<string, string | undefined>;
+    // Set once the state row is read. Validated again here, so a value that
+    // has left the allowlist since the flow started is never a redirect target.
+    let mobileReturn: string | null = null;
 
     const finish = (
       client: 'web' | 'desktop',
       opts: { ok: boolean; message: string; status?: number; flow?: SlackFlow }
     ) => {
+      if (mobileReturn) {
+        return res.redirect(
+          302,
+          mobileSlackReturnUrl(
+            mobileReturn,
+            opts.ok ? { ok: true, flow: opts.flow ?? 'link' } : { ok: false, message: opts.message }
+          )
+        );
+      }
       if (client === 'web') {
         const outcome = !opts.ok ? 'error' : opts.flow === 'install' ? 'installed' : 'linked';
-        const target = webAppUrl('/settings', {
+        const target = webAppUrl('/integrations/slack', {
           slack: outcome,
           ...(opts.ok ? {} : { message: opts.message }),
         });
@@ -117,6 +138,7 @@ export function slackPublicRoutes(): Router {
 
     // Consumed even on an error, so a cancelled flow cannot be finished later.
     const pending = state ? await consumeSlackState(state) : null;
+    mobileReturn = validMobileReturn(pending?.mobileReturn);
     const client = pending?.client ?? originClient(req);
     if (error) {
       const message = error === 'access_denied' ? 'The Slack sign-in was cancelled.' : `Slack returned an error: ${error}.`;
@@ -203,8 +225,12 @@ export function slackRoutes(): Router {
     res.json({ success: true, data } as ApiResponse<SlackStatus>);
   });
 
+  // An optional `returnTo` (the mobile app's allowlisted URL base) makes the
+  // callback finish with a 302 to `${returnTo}slack/callback?...`.
   const start = (flow: SlackFlow) => async (req: Request, res: Response) => {
     if (await refuseUnlessEnabled(req, res)) return;
+    const returnTo = parseReturnTo((req.body as { returnTo?: unknown } | undefined)?.returnTo);
+    if (!returnTo.ok) return res.status(400).json(invalidReturnToBody());
     if (!getSlackAppConfig()) {
       return res.status(503).json({
         success: false,
@@ -220,6 +246,7 @@ export function slackRoutes(): Router {
       userId: assertUser(req).id,
       workspaceId,
       client: originClient(req),
+      mobileReturn: returnTo.returnTo,
     });
     res.json({ success: true, data: { authorizeUrl } } as ApiResponse<SlackAuthorizeResponse>);
   };
@@ -278,6 +305,30 @@ export function slackRoutes(): Router {
     } catch (err) {
       if (!(err instanceof SlackApiError)) throw err;
       res.status(502).json({ success: false, error: `Slack refused the emoji list (${err.code}).` });
+    }
+  });
+
+  // The channel picker of the Slack rule editor. Only channels the bot is a
+  // member of: Slack sends no message events for the others.
+  router.get('/teams/:teamId/channels', async (req, res) => {
+    if (await refuseUnlessEnabled(req, res)) return;
+    const teamId = req.params.teamId;
+    // 404 for a team the caller has nothing to do with, so team ids do not leak.
+    if (!(await userHasTeam(assertUser(req).id, teamId))) {
+      return handleAccessError(new AccessError('team not found'), res);
+    }
+    try {
+      const data = await listTeamChannels(teamId);
+      res.json({ success: true, data } as ApiResponse<SlackChannelsResponse>);
+    } catch (err) {
+      if (!(err instanceof SlackApiError)) throw err;
+      const { code } = err;
+      if (isSlackRateLimited(err)) {
+        const wait = err.retryAfterMs ? ` Try again in ${Math.ceil(err.retryAfterMs / 1000)} seconds.` : ' Try again in a minute.';
+        res.status(502).json({ success: false, error: `Slack is rate-limiting the channel list.${wait}` });
+        return;
+      }
+      res.status(502).json({ success: false, error: `Slack refused the channel list (${code}).` });
     }
   });
 

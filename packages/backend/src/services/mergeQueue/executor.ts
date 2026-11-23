@@ -470,7 +470,13 @@ async function buildBaseContext(
         }
       : {
           fixTaskState:
-            ourFix === null ? 'none' : ACTIVE_STATUSES.has(ourFix.status) ? 'active' : 'terminal',
+            ourFix === null
+              ? 'none'
+              : ourFix.status === 'waiting_ci'
+                ? 'waiting'
+                : ACTIVE_STATUSES.has(ourFix.status)
+                  ? 'active'
+                  : 'terminal',
           fixTaskStartedAt: ourFix?.startedAt.toISOString() ?? null,
           fixTaskLastActivityAt: ourFix?.lastActivityAt.toISOString() ?? null,
           fixTaskNeedsHumanReason:

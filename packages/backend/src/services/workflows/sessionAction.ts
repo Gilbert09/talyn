@@ -1,0 +1,524 @@
+import { eq } from 'drizzle-orm';
+import type { WorkflowAction, WorkflowSessionSource } from '@talyn/shared';
+import { fleetAgentForModel } from '@talyn/shared';
+import { getPoolDbClient } from '../../db/client.js';
+import { users as usersTable } from '../../db/schema.js';
+import { isBoxGateError } from '../billing/entitlements.js';
+import { debugBus } from '../debugBus.js';
+import type { PRSummary } from '../githubGraphql.js';
+import { activePrTaskId } from '../prCloudFix.js';
+import {
+  authorOf,
+  boundThread,
+  buildSlackPrompt,
+  fetchThread,
+  namesFor,
+  slackMessageText,
+  slackToPlainText,
+  slackTsToTime,
+  type QuotedMessage,
+  type SlackMessage,
+} from '../slack/context.js';
+import { recordRepoUse, resolveRepository } from '../slack/repoResolver.js';
+import { slackSessionDefaults } from '../slack/sessionDefaults.js';
+import { moveStatusToMessage, scheduleSlackStatus, setThreadStatus } from '../slack/statusReactions.js';
+import {
+  beginThread,
+  claimTriggerMessage,
+  markThreadFailed,
+  markThreadStarted,
+} from '../slack/threads.js';
+import { sessionLaunchUrl } from '../webApp.js';
+import { createWorkbench } from '../workbenches/create.js';
+import { userFacingError, WorkbenchError } from '../workbenches/errors.js';
+import { liveWorkbenchForPr } from '../workbenches/prSessions.js';
+import type { ReadinessUser } from '../workbenches/readiness.js';
+import { boxRefused, no, ok, type OneResult } from './actionResult.js';
+import { ruleSpaceRefusal } from './ruleSpace.js';
+import {
+  isGithubContext,
+  isIssueContext,
+  type GithubActionContext,
+  type IssueActionContext,
+  type PostHogInboxActionContext,
+  type SlackActionContext,
+  type WebhookActionContext,
+  type WorkflowActionContext,
+} from './actions.js';
+import { inboundRulePrompt, repositoryName } from './inboundActions.js';
+import { claimIssueForStart, finishIssueStart, issueRepository, issueRulePrompt, noRepository } from './issueActions.js';
+import { posthogInboxRulePrompt } from './posthogInboxActions.js';
+import { posthogBackoffMs } from '../posthogInbox/backoff.js';
+import {
+  claimBlockedUntil,
+  claimGate,
+  claimReportForStart,
+  syncPostHogClaim,
+  type ClaimFailure,
+} from '../posthogInbox/claims.js';
+import { getPostHogInboxConnection } from '../posthogInbox/connection.js';
+
+/**
+ * The `start_session` action: a rule starts a session, as the workspace owner.
+ *
+ * The same create path as the app, Slack and Loops (`createWorkbench`), so a
+ * rule's session gets the same readiness refusal, plan gate, branch naming and
+ * first message. The owner is the actor, because a rule run has no caller: a
+ * webhook or a Slack message is not a Talyn user.
+ *
+ * A box refusal parks the run (`pending_retry`), and the retry sweep tries
+ * again when the refusal says it clears. Anything else that refuses is final.
+ */
+
+type StartSessionAction = Extract<WorkflowAction, { type: 'start_session' }>;
+
+/** What a GitHub rule's PR cache gives. Structural, so this module imports no class. */
+export interface PrRowSource {
+  get(): Promise<{ id: string; summary: PRSummary } | null>;
+}
+
+export async function startSession(
+  action: StartSessionAction,
+  ctx: WorkflowActionContext,
+  prRow: PrRowSource | null
+): Promise<OneResult> {
+  if (ctx.integration === 'slack') return startSlackSession(action, ctx);
+  if (ctx.integration === 'webhook') return startWebhookSession(action, ctx);
+  if (isIssueContext(ctx)) return startIssueSession(action, ctx);
+  if (ctx.integration === 'posthog_inbox') return startPostHogInboxSession(action, ctx);
+  if (!isGithubContext(ctx) || !prRow) return { outcome: no('start_session', 'error', 'A GitHub automation ran without its pull request.') };
+  return startGithubSession(action, ctx, prRow);
+}
+
+async function ownerActor(ownerId: string): Promise<ReadinessUser> {
+  const rows = await getPoolDbClient()
+    .select({ email: usersTable.email })
+    .from(usersTable)
+    .where(eq(usersTable.id, ownerId))
+    .limit(1);
+  return { id: ownerId, email: rows[0]?.email ?? null };
+}
+
+interface SessionRequest {
+  repositoryId: string;
+  prompt: string;
+  namingText: string;
+  source: WorkflowSessionSource;
+  fromPullRequestId?: string;
+  /** The PR the run is recorded against, for the history link. */
+  pullRequestId?: string | null;
+}
+
+type Created = { ok: true; workbenchId: string; detail: string } | { ok: false; result: OneResult };
+
+async function createRuleSession(
+  action: StartSessionAction,
+  ctx: WorkflowActionContext,
+  req: SessionRequest
+): Promise<Created> {
+  const pullRequestId = req.pullRequestId ?? null;
+  try {
+    const actor = await ownerActor(ctx.ownerId);
+    // The model carries the agent. With no model on the rule, the workspace's
+    // own default, as a Slack trigger does.
+    const { agent, model } = action.model
+      ? { agent: fleetAgentForModel(action.model), model: action.model }
+      : await slackSessionDefaults(ctx.workspaceId, actor);
+    // A space the owner can no longer use does not stop the work: the session
+    // starts in Personal, which only the owner sees, and the run says why.
+    const spaceRefusal = action.spaceId ? await ruleSpaceRefusal(actor, action.spaceId) : null;
+    const spaceId = action.spaceId && !spaceRefusal ? action.spaceId : null;
+    const wb = await createWorkbench(
+      {
+        workspaceId: ctx.workspaceId,
+        repositoryId: req.repositoryId,
+        runtime: 'sandbox',
+        agent,
+        model,
+        prompt: req.prompt,
+        namingText: req.namingText,
+        internetAccess: action.internetAccess === true,
+        autoCreatePr: true,
+        ...(req.fromPullRequestId ? { fromPullRequestId: req.fromPullRequestId } : {}),
+        source: req.source,
+        spaceId,
+      },
+      actor
+    );
+    const detail = spaceRefusal
+      ? `started a session in Personal, not in the chosen space: ${spaceRefusal}`
+      : 'started a session';
+    return { ok: true, workbenchId: wb.id, detail };
+  } catch (err) {
+    if (isBoxGateError(err)) {
+      return { ok: false, result: boxRefused('start_session', err, pullRequestId, ctx) };
+    }
+    const code = err instanceof WorkbenchError ? 'session_unavailable' : 'error';
+    return {
+      ok: false,
+      result: { outcome: no('start_session', code, userFacingError(err)), pullRequestId },
+    };
+  }
+}
+
+function started(created: { workbenchId: string; detail: string }, pullRequestId: string | null = null): OneResult {
+  return {
+    outcome: ok('start_session', created.detail),
+    workbenchId: created.workbenchId,
+    sessionUrl: sessionLaunchUrl(created.workbenchId),
+    pullRequestId,
+  };
+}
+
+// ---- GitHub ---------------------------------------------------------------
+
+/**
+ * On the pull request's own repository. On the PR's branch while the PR is
+ * open, so the session works on the change itself; a closed PR's branch may be
+ * gone, so the session then starts from the default branch.
+ *
+ * Never beside a run or a live session on the same PR: both would push to the
+ * one branch.
+ */
+export async function startGithubSession(
+  action: StartSessionAction,
+  ctx: GithubActionContext,
+  prRow: PrRowSource,
+  /** A prompt Talyn built, such as a skill's. It already names the PR. */
+  builtPrompt?: string
+): Promise<OneResult> {
+  const resolved = await prRow.get();
+  const open = resolved && resolved.summary.state === 'open' ? resolved : null;
+  if (open) {
+    if (await activePrTaskId(ctx.workspaceId, open.id)) {
+      return {
+        outcome: no('start_session', 'task_already_running', 'a run is already working this PR'),
+        pullRequestId: open.id,
+      };
+    }
+    const session = await liveWorkbenchForPr(ctx.workspaceId, open.id);
+    if (session) {
+      return {
+        outcome: no(
+          'start_session',
+          'session_active',
+          `The session "${session.name}" is already working on this pull request.`
+        ),
+        pullRequestId: open.id,
+      };
+    }
+  }
+
+  const ref = `${ctx.owner}/${ctx.repo}#${ctx.facts.number}`;
+  const created = await createRuleSession(action, ctx, {
+    repositoryId: ctx.repositoryId,
+    prompt: builtPrompt ?? `You are working on pull request ${ref} (${ctx.facts.url}).\n\n${action.prompt}`,
+    namingText: action.prompt,
+    source: { kind: 'workflow', workflowId: ctx.workflowId, runId: ctx.runId, integration: 'github' },
+    ...(open ? { fromPullRequestId: open.id } : {}),
+    pullRequestId: resolved?.id ?? null,
+  });
+  if (!created.ok) return created.result;
+  return started(created, resolved?.id ?? null);
+}
+
+// ---- Webhook --------------------------------------------------------------
+
+/**
+ * From a webhook request. On the rule's own repository: a webhook carries
+ * nothing Talyn can choose a repository from, so the validator requires one.
+ * The rule's prompt comes first, and the request body follows, quoted and
+ * marked UNTRUSTED (`buildInboundPrompt`).
+ */
+async function startWebhookSession(action: StartSessionAction, ctx: WebhookActionContext): Promise<OneResult> {
+  const repoName = action.repositoryId ? await repositoryName(ctx.workspaceId, action.repositoryId) : null;
+  if (!action.repositoryId || !repoName) {
+    return {
+      outcome: no(
+        'start_session',
+        'repository_unresolved',
+        'The automation has no repository in this workspace. Choose a repository on the automation.'
+      ),
+    };
+  }
+  const created = await createRuleSession(action, ctx, {
+    repositoryId: action.repositoryId,
+    prompt: inboundRulePrompt(action.prompt, ctx, repoName),
+    namingText: action.prompt,
+    source: { kind: 'workflow', workflowId: ctx.workflowId, runId: ctx.runId, integration: 'webhook' },
+  });
+  if (!created.ok) return created.result;
+  return started(created);
+}
+
+// ---- Issues ---------------------------------------------------------------
+
+/**
+ * From a Linear or GitHub issue. On the rule's repository, or the issue's own
+ * on GitHub Issues. The issue is claimed BEFORE the create, so a second event
+ * on it cannot start a second session; the session is attached to the claim
+ * after, so the merge write-back can find it.
+ */
+async function startIssueSession(action: StartSessionAction, ctx: IssueActionContext): Promise<OneResult> {
+  const repo = await issueRepository(action, ctx);
+  if (!repo) return noRepository('start_session');
+  const claim = await claimIssueForStart('start_session', ctx);
+  if (!claim.ok) return claim.result;
+  const created = await createRuleSession(action, ctx, {
+    repositoryId: repo.id,
+    prompt: await issueRulePrompt(action.prompt, ctx, repo.name),
+    namingText: [ctx.facts.identifier, ctx.facts.title, action.prompt].filter(Boolean).join(' '),
+    source: { kind: 'workflow', workflowId: ctx.workflowId, runId: ctx.runId, integration: ctx.integration },
+  });
+  const result = created.ok ? started(created) : created.result;
+  await finishIssueStart(claim.link, result);
+  return result;
+}
+
+// ---- PostHog Inbox --------------------------------------------------------
+
+/**
+ * From a PostHog Inbox report. Always on the report's own repository, which
+ * the adapter matched to a repository connected to the workspace.
+ *
+ * Two claims come BEFORE the create. Talyn's own (`external_issue_links`) stops
+ * a later change to the same report from starting a second session here. The
+ * claim in PostHog (`claims.ts`) tells every other agent the report is taken;
+ * a 409 means somebody else holds it, and the run is skipped. No claim, no
+ * session.
+ */
+async function startPostHogInboxSession(
+  action: StartSessionAction,
+  ctx: PostHogInboxActionContext
+): Promise<OneResult> {
+  const repositoryId = ctx.repositoryId ?? ctx.facts.workspaceRepositoryId ?? null;
+  const repoName = repositoryId ? await repositoryName(ctx.workspaceId, repositoryId) : null;
+  if (!repositoryId || !repoName) {
+    return {
+      outcome: no(
+        'start_session',
+        'repository_unresolved',
+        `The report's repository (${ctx.facts.repository ?? 'none'}) is not connected to this workspace. Add it to Talyn first.`
+      ),
+    };
+  }
+  // A session never starts without a claim in PostHog, so the connection
+  // must be able to make one (`inbox:write` and `task:write`).
+  const connection = await getPostHogInboxConnection(ctx.workspaceId);
+  if (!connection || connection.id !== ctx.facts.connectionId) {
+    return {
+      outcome: no(
+        'start_session',
+        'posthog_claim_unavailable',
+        'Talyn cannot claim reports with this PostHog connection, so it started no session. ' +
+          'Connect PostHog again with the inbox:write and task:write permissions.'
+      ),
+    };
+  }
+  // PostHog refused a recent claim on this connection: wait, as the poller does.
+  const gate = claimGate(connection.id);
+  if (gate) return claimFailureResult(gate.failure, gate.until);
+
+  const claim = await claimIssueForStart('start_session', ctx);
+  if (!claim.ok) return claim.result;
+  const posthogClaim = await claimReportForStart(connection, claim.link, ctx.facts.reportId);
+  if (!posthogClaim.ok) {
+    const result = claimFailureResult(posthogClaim.failure, claimBlockedUntil(connection.id));
+    await finishIssueStart(claim.link, result);
+    return result;
+  }
+
+  const created = await createRuleSession(action, ctx, {
+    repositoryId,
+    prompt: posthogInboxRulePrompt(action.prompt, ctx, repoName),
+    namingText: [ctx.facts.title, action.prompt].filter(Boolean).join(' '),
+    source: { kind: 'workflow', workflowId: ctx.workflowId, runId: ctx.runId, integration: 'posthog_inbox' },
+  });
+  const result = created.ok ? started(created) : created.result;
+  await finishIssueStart(claim.link, result);
+  // The session did not start and will not be retried: release the claim now.
+  // The claim sweep does the same if this fails.
+  if (!result.outcome.ok && !result.retryAt) await syncPostHogClaim(claim.link.id);
+  return result;
+}
+
+/** A claim PostHog did not take, as the start's outcome. Parked unless it never clears. */
+export function claimFailureResult(failure: ClaimFailure, gateUntil: number, now = Date.now()): OneResult {
+  const retryAt = new Date(Math.max(gateUntil, now + posthogBackoffMs(failure.status, failure.retryAfterMs)));
+  switch (failure.kind) {
+    case 'conflict':
+      return {
+        outcome: no(
+          'start_session',
+          'report_claimed_elsewhere',
+          'Another person or agent claimed this report in PostHog first, so Talyn started no session.'
+        ),
+      };
+    case 'unauthorized':
+      return {
+        outcome: no(
+          'start_session',
+          'posthog_unauthorized',
+          `PostHog refused the claim${failure.status ? ` (${failure.status})` : ''}. ` +
+            'Connect PostHog again with the inbox:write and task:write permissions. Talyn tries again later.'
+        ),
+        retryAt,
+      };
+    case 'rate_limited':
+      return {
+        outcome: no(
+          'start_session',
+          'rate_gated',
+          `PostHog is rate-limiting claims for another ${Math.max(1, Math.round((retryAt.getTime() - now) / 1000))}s.`
+        ),
+        retryAt,
+      };
+    case 'unavailable':
+      return {
+        outcome: no(
+          'start_session',
+          'posthog_unavailable',
+          `PostHog did not take the claim (${failure.status ?? 'no answer'}). Talyn tries again later.`
+        ),
+        retryAt,
+      };
+    case 'invalid':
+      return { outcome: no('start_session', 'error', `PostHog refused the claim: ${failure.message}`) };
+  }
+}
+
+// ---- Slack ----------------------------------------------------------------
+
+function quote(m: SlackMessage, names: Map<string, string>): QuotedMessage {
+  return { author: authorOf(m, names), at: slackTsToTime(m.ts), text: slackToPlainText(slackMessageText(m), names).trim() };
+}
+
+/**
+ * From a Slack message. The rule's prompt comes first, as the instruction;
+ * the message and its thread follow, quoted and marked UNTRUSTED
+ * (`buildSlackPrompt`), because anybody in the channel wrote them.
+ *
+ * The repository is the rule's, or Talyn chooses it from the message with the
+ * resolver the personal triggers use. When the resolver cannot choose, the run
+ * fails with `repository_unresolved`. There is no pending request: nobody is
+ * waiting in Talyn to pick one.
+ *
+ * The trigger message is registered on `slack_threads` before the create, so
+ * the status reactions follow the session, and so a second rule or a personal
+ * trigger in the same thread cannot start a second session there.
+ */
+async function startSlackSession(action: StartSessionAction, ctx: SlackActionContext): Promise<OneResult> {
+  const { facts } = ctx;
+  const threadTs = facts.threadTs ?? facts.ts;
+
+  // The thread as Slack has it now. Unreadable (the bot left, a scope is
+  // missing) still leaves the message itself, which the event carried.
+  let messages: SlackMessage[] = [];
+  try {
+    messages = (await fetchThread(facts.teamId, facts.channelId, facts.ts)).messages;
+  } catch (err) {
+    debugBus.recordEvent({
+      service: 'workflows',
+      action: 'slack_thread_unreadable',
+      summary: `${facts.teamId}/${facts.channelId}`,
+      ok: false,
+      error: err,
+      workspaceId: ctx.workspaceId,
+    });
+  }
+  let trigger = messages.find((m) => m.ts === facts.ts);
+  if (!trigger) {
+    // A legacy integration has no user, only the bot id the facts carry.
+    const botOnly = facts.userId.startsWith('B');
+    trigger = { ts: facts.ts, text: facts.text, ...(botOnly ? { bot_id: facts.userId } : { user: facts.userId }) };
+    messages = [...messages, trigger];
+  }
+  const names = await namesFor(facts.teamId, messages);
+  const request = quote(trigger, names);
+  const others = boundThread(messages.filter((m) => m.ts !== facts.ts).map((m) => quote(m, names)));
+  const prompt = buildSlackPrompt({
+    instruction: action.prompt,
+    request,
+    requestedBy: request.author,
+    channelName: facts.channelName ?? null,
+    thread: others.kept,
+    omitted: others.omitted,
+    permalink: facts.permalink ?? null,
+  });
+
+  let repositoryId = action.repositoryId;
+  let reason = 'picked';
+  let detail = 'Set on the automation.';
+  if (!repositoryId) {
+    const { resolution } = await resolveRepository({
+      workspaceId: ctx.workspaceId,
+      userId: ctx.ownerId,
+      teamId: facts.teamId,
+      channelId: facts.channelId,
+      request: [action.prompt, request.text].filter(Boolean).join('\n'),
+      thread: others.kept.map((m) => m.text),
+    });
+    if (resolution.kind === 'ambiguous') {
+      return {
+        outcome: no(
+          'start_session',
+          'repository_unresolved',
+          `Talyn could not tell which repository this message is about (${resolution.detail}). ` +
+            'Choose a repository on the automation.'
+        ),
+      };
+    }
+    repositoryId = resolution.repositoryId;
+    reason = resolution.reason;
+    detail = resolution.detail;
+  }
+
+  // The run id is the claim's token: stable across this run's retries, and
+  // different for any other rule or trigger on the same message.
+  const claimed = await claimTriggerMessage({
+    teamId: facts.teamId,
+    channelId: facts.channelId,
+    messageTs: facts.ts,
+    eventId: `workflow:${ctx.runId}`,
+  });
+  if (!claimed) {
+    return { outcome: no('start_session', 'session_active', 'A session already started from this Slack message.') };
+  }
+  const begun = await beginThread({
+    teamId: facts.teamId,
+    channelId: facts.channelId,
+    threadTs,
+    userId: ctx.ownerId,
+    workspaceId: ctx.workspaceId,
+    triggerMessageTs: facts.ts,
+  });
+  if (!begun) {
+    return { outcome: no('start_session', 'session_active', 'A session is already working in this Slack thread.') };
+  }
+  const row = await moveStatusToMessage(begun, facts.ts);
+  await setThreadStatus(row, 'starting');
+
+  const created = await createRuleSession(action, ctx, {
+    repositoryId,
+    prompt,
+    namingText: [action.prompt, request.text].filter(Boolean).join('\n'),
+    source: { kind: 'workflow', workflowId: ctx.workflowId, runId: ctx.runId, integration: 'slack' },
+  });
+  if (!created.ok) {
+    // Failed, so the retry of a parked run (or a later trigger) can take the
+    // thread over. A parked run keeps its "starting" reaction: it is owed.
+    await markThreadFailed(row.id, created.result.outcome.error ?? 'The session did not start.').catch(() => undefined);
+    if (!created.result.retryAt) await setThreadStatus(row, 'failed');
+    return created.result;
+  }
+
+  await markThreadStarted(row.id, { workbenchId: created.workbenchId, repoReason: reason, repoReasonDetail: detail });
+  await recordRepoUse({
+    teamId: facts.teamId,
+    channelId: facts.channelId,
+    repositoryId,
+    corrected: false,
+  }).catch(() => undefined);
+  scheduleSlackStatus(created.workbenchId);
+  return started(created);
+}

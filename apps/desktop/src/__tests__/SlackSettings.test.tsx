@@ -64,6 +64,7 @@ const INSTALLATION = {
   botName: 'talyn',
   installedByMe: true,
   needsReinstall: false,
+  canReply: true,
   installedAt: '2026-10-01T00:00:00Z',
 };
 const LINK = {

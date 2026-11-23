@@ -6,6 +6,7 @@ import type {
   WorkbenchWakeupCreatedBy,
 } from '@talyn/shared';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { replyInSessionThread, SlackSessionReplyError } from '../services/slack/sessionReply.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import {
   backgroundOf,
@@ -17,6 +18,7 @@ import {
   stopBackgroundJob,
 } from '../services/workbenches/background.js';
 import { fleetErrorAsRefusal, WorkbenchError } from '../services/workbenches/errors.js';
+import { sessionOriginOf } from '../services/workbenches/origin.js';
 import { chooseReadSource } from '../services/workbenches/sandboxReadSource.js';
 import { getWorkbench, type WorkbenchRow } from '../services/workbenches/store.js';
 
@@ -78,6 +80,37 @@ export function workbenchBackgroundRoutes(): Router {
     const row = await gated(req, res);
     if (!row) return;
     ok(res, await backgroundOf(row.id));
+  });
+
+  /** The rule or loop that started the session, with the event it acted on. Null for other sessions. */
+  router.get('/:id/origin', async (req, res) => {
+    const row = await gated(req, res);
+    if (!row) return;
+    ok(res, await sessionOriginOf(row.workspaceId, row.source));
+  });
+
+  router.post('/:id/slack-reply', async (req, res) => {
+    const row = await gated(req, res);
+    if (!row) return;
+    const text = (req.body as { text?: unknown } | undefined)?.text;
+    if (typeof text !== 'string') {
+      bad(res, 400, 'text must contain a message.', 'invalid_text');
+      return;
+    }
+    try {
+      ok(res, await replyInSessionThread(row.id, text));
+    } catch (err) {
+      if (err instanceof SlackSessionReplyError) {
+        res.status(err.status).json({
+          success: false,
+          error: err.message,
+          code: err.code,
+          ...(err.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: err.retryAfterSeconds }),
+        });
+        return;
+      }
+      throw err;
+    }
   });
 
   router.post('/:id/background/jobs', async (req, res) => {

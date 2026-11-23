@@ -15,6 +15,7 @@ import './lib/apiClient';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { initAnalytics } from './lib/analytics';
+import { hydrateFleetModelCatalog } from './lib/fleetModelCatalog';
 
 import { installNavigation, useNavigationStore } from './stores/navigation';
 import { setWorkbenchNavigator } from './lib/workbenchNavigation';
@@ -25,6 +26,9 @@ setWorkbenchNavigator((id) => useNavigationStore.getState().navigate({ view: 'wo
 // Before first render, so session replay and autocapture cover the whole
 // session. No-op unless VITE_TALYN_POSTHOG_KEY was set at build time.
 initAnalytics();
+
+// The last agent model catalogue the backend sent, so pickers show it at once.
+hydrateFleetModelCatalog();
 
 const container = document.getElementById('root') as HTMLElement;
 createRoot(container).render(

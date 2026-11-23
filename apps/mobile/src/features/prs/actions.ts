@@ -1,5 +1,5 @@
 import type { CloudProviderInfo, MergeQueuePublic, PRCheckContext, PRRow, PRSummaryShape } from '@talyn/client/native';
-import { buildMergeablePrompt, cloudAgentChoices, fixBlockedReason, mergeBlockerReason, promptTemplateFor, queueBlockNeedsHuman,
+import { buildMergeablePrompt, canWorkOnPr, cloudAgentChoices, fixBlockedReason, mergeBlockerReason, promptTemplateFor, queueBlockNeedsHuman,
   TASK_STATUS_TERMINAL, type CloudAgentChoice, type CloudProviderType, type Environment, type FixBlockedReason,
   type TaskStatus, type Workspace } from '@talyn/shared';
 
@@ -17,7 +17,7 @@ export function canResubmit(entry: MergeQueuePublic | null | undefined): boolean
 export const queueBlocked = (entry: MergeQueuePublic | null | undefined) => entry?.status === 'blocked' || entry?.status === 'blocked_manual';
 
 export interface PrActionSet {
-  /** Write actions are for PRs you opened, as on web. A reviewer only gets the link. */
+  /** Write actions are for PRs you opened or watch, as on web. A reviewer only gets the link. */
   owner: boolean;
   merge: boolean;
   fix: boolean;
@@ -30,7 +30,7 @@ export interface PrActionSet {
 }
 
 export function prActions(row: PRRow, options: { posthogConnected: boolean; taskRunning?: boolean }): PrActionSet {
-  const owner = row.authored;
+  const owner = canWorkOnPr(row);
   const open = row.state === 'open';
   const write = owner && open;
   const queued = row.mergeQueued || Boolean(row.mergeQueue);
@@ -144,13 +144,22 @@ export function sessionFromConflict(error: unknown): { id: string; name: string 
 
 export type FixOutcome = { kind: 'session'; id: string; name: string } | { kind: 'task' } | { kind: 'no_agent' } | { kind: 'blocked'; reason: FixBlockedReason };
 
-/** True when the PR's linked run has not finished. A failed lookup counts as finished: the server checks again. */
-export async function linkedTaskRunning(store: WorkflowStore, row: Pick<PRRow, 'taskId'>): Promise<boolean> {
-  if (!row.taskId) return false;
+/**
+ * Whether the PR's linked run has not finished, and whether it is paused for CI
+ * (`waiting_ci`, still running). A failed lookup counts as finished: the server
+ * checks again.
+ */
+export async function linkedTaskState(store: WorkflowStore, row: Pick<PRRow, 'taskId'>): Promise<{ running: boolean; waitingCi: boolean }> {
+  if (!row.taskId) return { running: false, waitingCi: false };
   try {
     const task = await store.api.tasks.get(row.taskId);
-    return !TASK_STATUS_TERMINAL[task.status as TaskStatus];
-  } catch { return false; }
+    return { running: !TASK_STATUS_TERMINAL[task.status as TaskStatus], waitingCi: task.status === 'waiting_ci' };
+  } catch { return { running: false, waitingCi: false }; }
+}
+
+/** True when the PR's linked run has not finished. */
+export async function linkedTaskRunning(store: WorkflowStore, row: Pick<PRRow, 'taskId'>): Promise<boolean> {
+  return (await linkedTaskState(store, row)).running;
 }
 
 /**

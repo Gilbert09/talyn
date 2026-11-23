@@ -7,7 +7,8 @@ import appConfig from '../../app.config';
 
 const { readReleaseSettings, profiles } = require('../../release/policy.cjs');
 const { releasePlan, assertExecution, assertRuntime, assertBuild, assertChannel } = require('../../scripts/release.cjs');
-const { checkMetadata, checkUnsignedUpdates, checkUpdateWorkflow } = require('../../scripts/check-release.cjs');
+const { checkMetadata, checkUnsignedUpdates, checkUpdateWorkflow, checkTestflightWorkflow } = require('../../scripts/check-release.cjs');
+const testflight = require('../../scripts/testflight-build.cjs');
 const { autoUpdatePlan, assertAutoExecution, parseDotenv, publishEnvironment, assertUpdateConfig, redact } = require('../../scripts/publish-update.cjs');
 const yaml = require('js-yaml');
 const metadata = require('../../release/store-metadata.json');
@@ -36,8 +37,12 @@ describe('release configuration boundaries', () => {
     expect(result.ios?.buildNumber).toBe('42'); expect(result.android?.versionCode).toBe(42);
     expect(result.updates?.enabled).toBe(false);
     expect(result.extra?.release.profile).toBe(profile);
-    expect(result.plugins).toContainEqual(['expo-notifications', { mode: profile === 'development' ? 'development' : 'production', enableBackgroundRemoteNotifications: false }]);
+    expect(result.plugins).toContainEqual(['expo-notifications', {
+      mode: profile === 'development' ? 'development' : 'production', enableBackgroundRemoteNotifications: false,
+      icon: './assets/notification-icon.png', color: '#a94d2e',
+    }]);
     expect(result.android?.intentFilters?.[0].data).toContainEqual({ scheme: 'https', host: 'mobile.fixture.dev', pathPrefix: '/sessions/' });
+    expect(result.ios?.associatedDomains).toEqual(['applinks:mobile.fixture.dev', 'webcredentials:mobile.fixture.dev']);
   });
   it.each(['MOBILE_BUILD_NUMBER', 'TALYN_MOBILE_SUPPORT_URL', 'TALYN_MOBILE_PRIVACY_URL', 'TALYN_MOBILE_DELETION_URL'])('blocks a store build without %s', (key) => {
     expect(() => readReleaseSettings({ ...fixture, [key]: undefined }, 'production', fixture.EXPO_PUBLIC_EAS_PROJECT_ID)).toThrow();
@@ -94,6 +99,18 @@ describe('release configuration boundaries', () => {
       expect(eas.build[name].env.MOBILE_UPDATES_ENABLED).toBe(policy.updates ? '1' : '0');
     }
     expect(Object.keys(profiles).filter((name) => profiles[name].autoUpdate)).toEqual(['preview', 'internal-beta']);
+  });
+  // EAS build workers run their own newer eas-cli for the embedded bundle upload. An exact pin in eas.json stops it.
+  it.each([
+    ['the pinned CLI', '27.5.0', true],
+    ['a newer CLI on the EAS build worker', '27.10.0', true],
+    ['the next major CLI', '28.0.0', true],
+    ['an older CLI', '27.4.9', false],
+  ])('lets eas.json accept %s (%s)', (_name, version, allowed) => {
+    const eas = require('../../eas.json');
+    const { easCli } = require('../../release/toolchain.json');
+    expect(eas.cli.version).toBe(`>= ${easCli}`);
+    expect(require('semver').satisfies(version, eas.cli.version)).toBe(allowed);
   });
   it('keeps store templates incomplete until owner approval', () => {
     expect(() => checkMetadata(metadata)).not.toThrow(); expect(() => checkMetadata(metadata, true)).toThrow();
@@ -308,5 +325,150 @@ describe('automatic update publication', () => {
   it('keeps signed URLs and long tokens out of logs', () => {
     const text = redact(`GET https://storage.fixture.dev/a.js?X-Amz-Signature=abc failed with ${'t'.repeat(48)}`);
     expect(text).toBe('GET [signed URL removed] failed with [long value removed]');
+  });
+});
+
+describe('automatic TestFlight workflow', () => {
+  const text = fs.readFileSync(path.resolve(__dirname, '../../../../.github/workflows/mobile-testflight.yml'), 'utf8');
+  it('passes as committed', () => { expect(() => checkTestflightWorkflow(text, yaml)).not.toThrow(); });
+  it.each<[string, string, string]>([
+    ['the fork guard', "github.repository == 'Gilbert09/talyn' && ", ''],
+    ['the kill switch', " && (vars.MOBILE_TESTFLIGHT_AUTO || '1') != '0'", ''],
+    ['a kill switch that skips when unset', "(vars.MOBILE_TESTFLIGHT_AUTO || '1') != '0'", "vars.MOBILE_TESTFLIGHT_AUTO != '0' && (vars.MOBILE_TESTFLIGHT_AUTO || '1') != '0'"],
+    ['the shared release queue', 'group: mobile-release', 'group: mobile-testflight'],
+    ['ordered builds', 'cancel-in-progress: false', 'cancel-in-progress: true'],
+    ['the guarded script', 'node apps/mobile/scripts/testflight-build.cjs --execute', 'npx eas build --profile internal-beta'],
+    ['the pinned EAS CLI', 'eas-cli@27.5.0', 'eas-cli@latest'],
+    ['a PR trigger', '  workflow_dispatch:', '  pull_request:\n  workflow_dispatch:'],
+    ['no npm cache', "node-version: '22.23.4'", "node-version: '22.23.4'\n          cache: npm"],
+  ])('rejects a workflow without %s', (_name, from, to) => {
+    expect(text.includes(from)).toBe(true);
+    expect(() => checkTestflightWorkflow(text.replace(from, to), yaml)).toThrow();
+  });
+});
+
+describe('automatic TestFlight build', () => {
+  const sha = 'e'.repeat(40);
+  const ciEnv = { CI: 'true', GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'push', GITHUB_SHA: sha, EXPO_TOKEN: 'fixture', MOBILE_EAS_CLI_PATH: '/fixture/eas' };
+  const git = (args: string[]) => args[0] === 'rev-parse' ? sha : '';
+
+  it.each(['push', 'workflow_dispatch'])('allows %s on main', (event) => {
+    expect(testflight.assertTestflightExecution({ ...ciEnv, GITHUB_EVENT_NAME: event }, git)).toBe(true);
+  });
+  it.each<[string, Record<string, string | undefined>]>([
+    ['outside CI', { CI: undefined }],
+    ['another branch', { GITHUB_REF: 'refs/heads/feature' }],
+    ['a pull request', { GITHUB_EVENT_NAME: 'pull_request' }],
+    ['a pull_request_target run', { GITHUB_EVENT_NAME: 'pull_request_target' }],
+    ['the kill switch', { MOBILE_TESTFLIGHT_AUTO: '0' }],
+    ['no Expo token', { EXPO_TOKEN: undefined }],
+    ['no EAS CLI', { MOBILE_EAS_CLI_PATH: undefined }],
+    ['a malformed commit', { GITHUB_SHA: 'main' }],
+  ])('blocks execution for %s', (_name, patch) => {
+    expect(() => testflight.assertTestflightExecution({ ...ciEnv, ...patch }, git)).toThrow();
+  });
+  it.each<[string, (args: string[]) => string]>([
+    ['a different commit', (args) => args[0] === 'rev-parse' ? 'd'.repeat(40) : ''],
+    ['a dirty checkout', (args) => args[0] === 'rev-parse' ? sha : ' M apps/mobile/app.config.ts'],
+  ])('blocks execution from %s', (_name, gitFake) => {
+    expect(() => testflight.assertTestflightExecution(ciEnv, gitFake)).toThrow('clean checkout');
+  });
+
+  it('leaves profile selection to eas.json and the EAS environment', () => {
+    const env = testflight.neutralEnvironment({ PATH: '/bin', APP_ENV: 'development', MOBILE_RELEASE_PROFILE: 'preview', EAS_BUILD_PROFILE: 'preview',
+      MOBILE_UPDATES_ENABLED: '0', MOBILE_BUILD_NUMBER: '7' });
+    expect(env).toEqual({ PATH: '/bin', EXPO_NO_DOTENV: '1' });
+  });
+  it('gives EAS the pulled public values and the internal-beta profile, because EAS evaluates the config locally first', () => {
+    const pulled = { TALYN_MOBILE_IOS_BUNDLE_ID: 'dev.talyn.mobile', EXPO_PUBLIC_API_ORIGIN: 'https://api.talyn.dev', MOBILE_BUILD_NUMBER: '7',
+      EXPO_PUBLIC_TALYN_POSTHOG_KEY: 'phc_fixture', SOME_TOKEN: 'secret' };
+    const env = testflight.easEnvironment({ PATH: '/bin', APP_ENV: 'development', MOBILE_RELEASE_PROFILE: 'preview', EAS_BUILD_PROFILE: 'preview',
+      MOBILE_BUILD_NUMBER: '3' }, pulled);
+    expect(env).toEqual({ PATH: '/bin', EXPO_NO_DOTENV: '1', TALYN_MOBILE_IOS_BUNDLE_ID: 'dev.talyn.mobile', EXPO_PUBLIC_API_ORIGIN: 'https://api.talyn.dev',
+      EXPO_PUBLIC_TALYN_POSTHOG_KEY: 'phc_fixture', APP_ENV: 'production', MOBILE_RELEASE_PROFILE: 'internal-beta', MOBILE_UPDATES_ENABLED: '1',
+      MOBILE_BUILD_NUMBER: '1' });
+  });
+  it('refuses an EAS environment that sets the update switch', () => {
+    expect(() => testflight.easEnvironment({ PATH: '/bin' }, { MOBILE_UPDATES_ENABLED: '0' })).toThrow('eas.json owns the switch');
+  });
+  it('checks both stores', () => {
+    expect(testflight.PLATFORMS).toEqual(['ios', 'android']);
+  });
+  it.each(['ios', 'android'])('builds only the %s internal-beta profile and lets EAS submit it', (platform) => {
+    const args = testflight.buildArgs(platform, 'fix: fixture (eeeeeee)');
+    expect(args).toEqual(['build', '--profile', 'internal-beta', '--platform', platform, '--auto-submit-with-profile', 'internal-beta',
+      '--message', 'fix: fixture (eeeeeee)', '--no-wait', '--non-interactive', '--json']);
+    expect(testflight.fingerprintArgs(platform)).toEqual(expect.arrayContaining(['--build-profile', 'internal-beta', '--platform', platform]));
+    expect(testflight.existingBuildArgs(platform, 'a'.repeat(40))).toEqual(expect.arrayContaining(['--platform', platform, '--build-profile', 'internal-beta',
+      '--runtime-version', 'a'.repeat(40)]));
+  });
+  it.each<[string | undefined, string[]]>([
+    [undefined, ['ios', 'android']],
+    ['', ['ios', 'android']],
+    ['all', ['ios', 'android']],
+    ['ios', ['ios']],
+    ['android', ['android']],
+  ])('selects platforms for %p', (value, expected) => {
+    expect(testflight.selectedPlatforms(value)).toEqual(expected);
+  });
+  it.each(['web', 'IOS', 'ios,android', ' all'])('refuses the platform selection %p', (value) => {
+    expect(() => testflight.selectedPlatforms(value)).toThrow('MOBILE_TESTFLIGHT_PLATFORMS');
+  });
+
+  it.each<[string, string[], boolean]>([
+    ['no build', [], false],
+    ['only failed or cancelled builds', ['ERRORED', 'CANCELED'], false],
+    ['a finished build', ['ERRORED', 'FINISHED'], true],
+    ['a queued build', ['IN_QUEUE'], true],
+    ['a running build', ['IN_PROGRESS'], true],
+    ['a new build', ['NEW'], true],
+  ])('treats a fingerprint with %s as covered: %s', (_name, statuses, covered) => {
+    const builds = statuses.map((status, index) => ({ id: `build-${index}`, status }));
+    expect(testflight.coveringBuild(builds) !== null).toBe(covered);
+  });
+
+  it.each<[string, string | undefined, { buildProfile: string; appBuildVersion: string | null }[], string]>([
+    ['the first reservation', undefined, [], '1'],
+    ['a reservation above every build', '9', [{ buildProfile: 'internal-beta', appBuildVersion: '4' }], '10'],
+    ['a build above the reservation', '1', [{ buildProfile: 'internal-beta', appBuildVersion: '1' }, { buildProfile: 'production', appBuildVersion: '6' }], '7'],
+    ['non-store builds', '2', [{ buildProfile: 'preview', appBuildVersion: '50' }, { buildProfile: 'development', appBuildVersion: '60' }], '3'],
+    ['unreadable values', 'abc', [{ buildProfile: 'internal-beta', appBuildVersion: null }, { buildProfile: 'internal-beta', appBuildVersion: '1.2' }], '1'],
+  ])('reserves the next build number after %s', (_name, current, builds, expected) => {
+    expect(testflight.nextBuildNumber(current, builds)).toBe(expected);
+  });
+  it('refuses a build number past the store limit', () => {
+    expect(() => testflight.nextBuildNumber('999999999', [])).toThrow('store limit');
+  });
+
+  const queued = { id: 'build-1', platform: 'IOS', buildProfile: 'internal-beta', gitCommitHash: sha, appBuildVersion: '12', updateChannel: { name: 'internal-beta' } };
+  it.each<[string, typeof queued]>([
+    ['ios', queued],
+    ['android', { ...queued, platform: 'ANDROID' }],
+  ])('accepts the %s build it queued', (platform, build) => {
+    expect(testflight.assertQueuedBuild([build], { platform, sha, buildNumber: '12' })).toBe(build);
+  });
+  it('refuses an iOS build when it queued Android', () => {
+    expect(() => testflight.assertQueuedBuild([queued], { platform: 'android', sha, buildNumber: '12' })).toThrow();
+  });
+  it.each<[string, unknown]>([
+    ['no build', []],
+    ['two builds', [queued, { ...queued, platform: 'ANDROID' }]],
+    ['an Android build', [{ ...queued, platform: 'ANDROID' }]],
+    ['another profile', [{ ...queued, buildProfile: 'production' }]],
+    ['another commit', [{ ...queued, gitCommitHash: 'f'.repeat(40) }]],
+    ['another build number', [{ ...queued, appBuildVersion: '11' }]],
+    ['another channel', [{ ...queued, updateChannel: { name: 'production' } }]],
+  ])('refuses %s', (_name, builds) => {
+    expect(() => testflight.assertQueuedBuild(builds, { platform: 'ios', sha, buildNumber: '12' })).toThrow();
+  });
+});
+
+describe('apple app site association', () => {
+  const file = path.join(__dirname, '../../../web/public/.well-known/apple-app-site-association');
+  const association = JSON.parse(fs.readFileSync(file, 'utf8'));
+  it('lets every universal link app use the HTTPS sign-in callback', () => {
+    const linked = association.applinks.details.flatMap((detail: { appIDs: string[] }) => detail.appIDs);
+    expect(linked.length).toBeGreaterThan(0);
+    expect(association.webcredentials.apps).toEqual(linked);
   });
 });

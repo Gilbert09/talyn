@@ -144,7 +144,6 @@ A resource that the token cannot reach gives the same `404` as a resource that d
 | 409 | `thread_resize` | A thread runs only the agent and cannot be resized. | Resize one of its sessions. |
 | 409 | `memory_forgotten` | The memory entry is forgotten. | Restore it first. |
 | 409 | `memory_name_taken` | A live entry in the same scope has the name. | Choose another name, or forget the other entry. |
-| 409 | `memory_limit_reached` | The workspace has 500 live memory entries. | Forget some entries. |
 | 409 | `not_learned` | A dismiss was sent for your own setup step. | Remove the step from the list with `PUT /repositories/{id}/setup`. |
 | 409 | `space_unavailable` | The space cannot take a new session now. The message has the reason. This code can also come with `403`. | Read the message. |
 | 409 | `sandbox_gone` | The sandbox of the session does not exist any more. | Retry. Talyn starts a new sandbox. |

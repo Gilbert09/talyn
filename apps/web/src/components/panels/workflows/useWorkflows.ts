@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  CreatedWorkflow,
   WorkflowInput,
+  WorkflowIntegration,
   WorkflowRun,
   WorkflowSuggestions,
   WorkflowWithStats,
@@ -23,7 +25,8 @@ export interface UseWorkflows {
   workflows: WorkflowWithStats[] | null;
   error: string | null;
   reload: () => void;
-  create: (input: WorkflowInput) => Promise<void>;
+  /** Answers the new rule. A webhook rule's answer carries its URL and secret, once. */
+  create: (input: WorkflowInput) => Promise<CreatedWorkflow | undefined>;
   update: (id: string, input: WorkflowInput) => Promise<void>;
   remove: (id: string) => Promise<void>;
   setEnabled: (workflow: WorkflowWithStats, enabled: boolean) => Promise<void>;
@@ -52,7 +55,7 @@ export interface UseWorkflows {
   loadGithubSuggestions: (repos: string[]) => void;
 }
 
-export function useWorkflows(): UseWorkflows {
+export function useWorkflows(integration: WorkflowIntegration = 'github'): UseWorkflows {
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const [workflows, setWorkflows] = useState<WorkflowWithStats[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +69,8 @@ export function useWorkflows(): UseWorkflows {
   // Guards a response from a workspace the user has already switched away from.
   const workspaceRef = useRef(workspaceId);
   workspaceRef.current = workspaceId;
+  const integrationRef = useRef(integration);
+  integrationRef.current = integration;
 
   const load = useCallback(() => {
     if (!workspaceId) {
@@ -73,18 +78,18 @@ export function useWorkflows(): UseWorkflows {
       return;
     }
     api.workflows
-      .list(workspaceId)
+      .list(workspaceId, integration)
       .then((rows) => {
-        if (workspaceRef.current !== workspaceId) return;
+        if (workspaceRef.current !== workspaceId || integrationRef.current !== integration) return;
         setWorkflows(rows);
         setError(null);
       })
       .catch((err: unknown) => {
-        if (workspaceRef.current !== workspaceId) return;
+        if (workspaceRef.current !== workspaceId || integrationRef.current !== integration) return;
         setWorkflows([]);
-        setError(err instanceof Error ? err.message : 'Could not load workflows');
+        setError(err instanceof Error ? err.message : 'Could not load automations');
       });
-  }, [workspaceId]);
+  }, [workspaceId, integration]);
 
   useEffect(() => {
     setWorkflows(null);
@@ -170,11 +175,14 @@ export function useWorkflows(): UseWorkflows {
 
   const create = useCallback(
     async (input: WorkflowInput) => {
-      if (!workspaceId) return;
-      const made = await api.workflows.create(workspaceId, input);
-      setWorkflows((prev) => [made, ...(prev ?? [])]);
+      if (!workspaceId) return undefined;
+      const made = await api.workflows.create(workspaceId, { ...input, integration });
+      // The list keeps the rule only. The URL and secret go to the caller once.
+      const { webhook: _webhook, ...row } = made;
+      setWorkflows((prev) => [row, ...(prev ?? [])]);
+      return made;
     },
-    [workspaceId]
+    [workspaceId, integration]
   );
 
   const update = useCallback(async (id: string, input: WorkflowInput) => {
@@ -202,6 +210,7 @@ export function useWorkflows(): UseWorkflows {
       );
       try {
         const next = await api.workflows.update(workflow.id, {
+          integration: workflow.integration ?? 'github',
           name: workflow.name,
           enabled,
           events: workflow.events,

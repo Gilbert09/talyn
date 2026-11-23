@@ -317,3 +317,49 @@ it('follows new output only while scrolled to the bottom', async () => {
   act(() => useWorkbenchStore.getState().markScriptStarted(WB.id, 'run'));
   expect(scroll.scrollTop).toBe(300);
 });
+
+describe('terminal dock when the fleet cannot answer', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('reads the config again quietly, with no toast, when the answer is the fallback', async () => {
+    readConfig
+      .mockResolvedValueOnce({ ...configured, source: 'none', run: [], setup: undefined, unavailable: true })
+      .mockResolvedValue(configured);
+    useWorkbenchStore.setState({ terminalOpen: true, terminalTab: 'setup' });
+    await renderDock();
+    expect(readConfig).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(readConfig).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(readConfig).toHaveBeenCalledTimes(2);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('stays quiet and retries on a 503 fleet_unavailable, then stops after three retries', async () => {
+    readConfig.mockRejectedValue(Object.assign(new Error('The sandbox runners are all busy.'), { status: 503, code: 'fleet_unavailable' }));
+    await renderDock();
+    for (const ms of [5_000, 15_000, 30_000, 60_000]) {
+      await act(async () => {
+        vi.advanceTimersByTime(ms);
+      });
+    }
+    expect(readConfig).toHaveBeenCalledTimes(4);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('still toasts other failures', async () => {
+    readConfig.mockRejectedValue(new Error('boom'));
+    await renderDock();
+    expect(toast.error).toHaveBeenCalledWith('Could not read the repository config', 'boom');
+    expect(readConfig).toHaveBeenCalledTimes(1);
+  });
+});

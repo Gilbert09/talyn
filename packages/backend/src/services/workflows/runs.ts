@@ -2,13 +2,14 @@ import { v4 as uuid } from 'uuid';
 import { and, desc, eq, gt, lte, ne, sql } from 'drizzle-orm';
 import type {
   WorkflowActionOutcome,
-  WorkflowEventFacts,
+  WorkflowFacts,
   WorkflowRun,
   WorkflowRunStatus,
 } from '@talyn/shared';
+import { factsIntegration, isGithubFacts, isWebhookFacts, workflowSubjectOf } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { workflowRuns as runsTable } from '../../db/schema.js';
-import { rowToWorkflowRun } from './store.js';
+import { rowToWorkflowRun, withPostHogClaims } from './store.js';
 
 /**
  * The run row's lifecycle, and the rate cap that reads it.
@@ -37,25 +38,54 @@ export interface ClaimInput {
   workflowId: string;
   workspaceId: string;
   repositoryId: string | null;
-  facts: WorkflowEventFacts;
+  facts: WorkflowFacts;
   deliveryId: string;
   pullRequestId?: string | null;
+  /** A manual run ("Run selected"): who started it. Absent means an event started it. */
+  manual?: { userId: string; label: string | null };
 }
 
-export async function claimRun(input: ClaimInput): Promise<ClaimResult> {
-  const { facts } = input;
-  const row = {
-    id: uuid(),
-    workflowId: input.workflowId,
-    workspaceId: input.workspaceId,
-    repositoryId: input.repositoryId,
+/**
+ * The PR snapshot columns. A Slack or webhook run has no pull request: the
+ * repository and number are NULL, and the text columns keep their '' default.
+ */
+function prSnapshot(facts: WorkflowFacts) {
+  if (!isGithubFacts(facts)) {
+    return { repoFullName: null, prNumber: null, prTitle: '', prUrl: '', prAuthor: '' };
+  }
+  return {
     repoFullName: facts.repoFullName,
     prNumber: facts.number,
     prTitle: facts.title,
     prUrl: facts.url,
     prAuthor: facts.author.login,
+  };
+}
+
+/**
+ * The facts as the run row stores them. A webhook's body is dropped: it can be
+ * up to 1 MB and is already in `inbound_deliveries`, where a retry reads it
+ * again by `deliveryRowId`. The run history never ships it.
+ */
+export function storedFacts(facts: WorkflowFacts): WorkflowFacts {
+  return isWebhookFacts(facts) ? { ...facts, payload: null, headers: {} } : facts;
+}
+
+export async function claimRun(input: ClaimInput): Promise<ClaimResult> {
+  const { facts } = input;
+  const subject = workflowSubjectOf(facts);
+  const row = {
+    id: uuid(),
+    workflowId: input.workflowId,
+    workspaceId: input.workspaceId,
+    integration: factsIntegration(facts),
+    subjectKey: subject.key,
+    subjectLabel: subject.label,
+    repositoryId: input.repositoryId,
+    ...prSnapshot(facts),
     pullRequestId: input.pullRequestId ?? null,
     taskId: null,
+    workbenchId: null,
     event: facts.event,
     deliveryId: input.deliveryId,
     status: 'running' as WorkflowRunStatus,
@@ -65,7 +95,10 @@ export async function claimRun(input: ClaimInput): Promise<ClaimResult> {
     attempts: 1,
     // Kept so a retry is faithful — see the column's note. The webhook payload
     // is gone by the time a rate-limit gate clears.
-    facts,
+    facts: storedFacts(facts),
+    triggerSource: input.manual ? 'manual' : 'event',
+    triggeredByUserId: input.manual?.userId ?? null,
+    triggeredByLabel: input.manual?.label ?? null,
     createdAt: new Date(),
   };
 
@@ -95,6 +128,8 @@ export interface SettleInput {
   taskId?: string | null;
   pullRequestId?: string | null;
   error?: string | null;
+  /** The session a `start_session` action started. A best-effort link, like the task. */
+  workbenchId?: string | null;
   /** When a `pending_retry` run becomes due. Cleared on any other status. */
   retryAfter?: Date | null;
   /** Set when re-running, so the sweep can bound how many times it tries. */
@@ -128,24 +163,34 @@ export async function settleRun(runId: string, input: SettleInput): Promise<Work
     })
     .where(eq(runsTable.id, runId));
 
-  const links: { taskId?: string | null; pullRequestId?: string | null } = {};
+  const links: { taskId?: string | null; pullRequestId?: string | null; workbenchId?: string | null } =
+    {};
   if (input.taskId !== undefined) links.taskId = input.taskId;
   if (input.pullRequestId !== undefined) links.pullRequestId = input.pullRequestId;
-  if (Object.keys(links).length > 0) {
-    await db
-      .update(runsTable)
-      .set(links)
-      .where(eq(runsTable.id, runId))
-      .catch((err: unknown) => {
-        console.warn(
-          `[workflows] could not link run ${runId} to its task/PR (the row is gone?):`,
-          err instanceof Error ? err.message : err
-        );
-      });
+  if (input.workbenchId !== undefined) links.workbenchId = input.workbenchId;
+  const entries = Object.entries(links);
+  if (entries.length > 0) {
+    const write = (set: typeof links) => db.update(runsTable).set(set).where(eq(runsTable.id, runId));
+    try {
+      await write(links);
+    } catch {
+      // One link's row is gone. Attach the others one at a time, so a PR row
+      // un-watched mid-run does not cost the run its session link too.
+      for (const [key, value] of entries) {
+        await write({ [key]: value } as typeof links).catch((err: unknown) => {
+          console.warn(
+            `[workflows] could not link run ${runId} to its ${key} (the row is gone?):`,
+            err instanceof Error ? err.message : err
+          );
+        });
+      }
+    }
   }
 
   const rows = await db.select().from(runsTable).where(eq(runsTable.id, runId)).limit(1);
-  return rows[0] ? rowToWorkflowRun(rows[0]) : null;
+  if (!rows[0]) return null;
+  const run = rowToWorkflowRun(rows[0]);
+  return run.integration === 'posthog_inbox' ? ((await withPostHogClaims([run]))[0] ?? run) : run;
 }
 
 /**
@@ -159,9 +204,17 @@ export async function settleRun(runId: string, input: SettleInput): Promise<Work
  */
 export const MAX_RETRY_ATTEMPTS = 5;
 
+/**
+ * Failure codes that mean the run deliberately did nothing, so it records as
+ * `skipped` like a rate-cap refusal and does not count toward the caps.
+ * `report_claimed_elsewhere`: somebody else claimed the PostHog report first.
+ */
+const SKIP_CODES: ReadonlySet<string> = new Set(['report_claimed_elsewhere']);
+
 /** Derive the run status from the actions that ran. */
 export function statusFromOutcomes(outcomes: WorkflowActionOutcome[]): WorkflowRunStatus {
   if (outcomes.length === 0) return 'skipped';
+  if (outcomes.every((o) => !o.ok && SKIP_CODES.has(o.code ?? ''))) return 'skipped';
   const failed = outcomes.filter((o) => !o.ok).length;
   if (failed === 0) return 'succeeded';
   return failed === outcomes.length ? 'failed' : 'partial';
@@ -187,7 +240,15 @@ export function statusFromOutcomes(outcomes: WorkflowActionOutcome[]): WorkflowR
  *  - `task_already_running` resolves, but by the time it does the PR event that
  *    triggered the workflow is old news.
  */
-const RETRYABLE_CODES: ReadonlySet<string> = new Set(['rate_gated', 'usage_exhausted', 'box_limit_reached']);
+const RETRYABLE_CODES: ReadonlySet<string> = new Set([
+  'rate_gated',
+  'usage_exhausted',
+  'box_limit_reached',
+  // A PostHog claim that PostHog did not take: a 5xx or no answer, or a 401
+  // or 403. Each carries its retry time from the poller's backoff.
+  'posthog_unavailable',
+  'posthog_unauthorized',
+]);
 
 /** Whether an outcome is one the sweep should have another go at. */
 export function isRetryable(outcome: WorkflowActionOutcome): boolean {
@@ -243,7 +304,9 @@ export type RateVerdict =
   | { allowed: false; announce: false };
 
 /**
- * Whether this workflow may run on this PR again right now.
+ * Whether this workflow may run on this subject again right now. The subject is
+ * a pull request for a GitHub rule and a channel for a Slack rule — see
+ * `workflowSubjectOf`.
  *
  * Counted from `workflow_runs` rather than an in-process window, so it survives
  * a restart and is shared by every replica. `skipped` rows are excluded from the
@@ -252,20 +315,12 @@ export type RateVerdict =
  */
 export async function checkRateCap(opts: {
   workflowId: string;
-  repoFullName: string;
-  prNumber: number;
+  subjectKey: string;
   cap: number;
   windowMs?: number;
 }): Promise<RateVerdict> {
-  const windowMs = opts.windowMs ?? 60 * 60 * 1000;
-  const since = new Date(Date.now() - windowMs);
   const db = getDbClient();
-  const scope = and(
-    eq(runsTable.workflowId, opts.workflowId),
-    eq(runsTable.repoFullName, opts.repoFullName),
-    eq(runsTable.prNumber, opts.prNumber),
-    gt(runsTable.createdAt, since)
-  );
+  const scope = rateCapScope(opts);
 
   const counted = await db
     .select({ n: sql<number>`count(*)::int` })
@@ -284,6 +339,47 @@ export async function checkRateCap(opts: {
   return { allowed: false, announce: latest[0]?.status !== 'skipped' };
 }
 
+/**
+ * The rate cap's WHERE clause. Exported so a test can assert it keys on
+ * `subject_key`, which is what `idx_workflow_runs_subject_at` covers.
+ */
+/**
+ * The per-rule DAILY cap: how many runs one rule made in the last 24 hours,
+ * over every subject. `skipped` rows are not counted, as for the hourly cap.
+ *
+ * A budget, not a loop breaker: a PostHog Inbox rule can match a new report
+ * every few minutes, and each run starts a session that bills box-hours.
+ * Announced once per window, like the hourly cap: when the newest run of the
+ * rule in the window is already a refusal, the user has been told.
+ */
+export async function checkDailyCap(opts: { workflowId: string; cap: number; now?: Date }): Promise<RateVerdict> {
+  const db = getDbClient();
+  const since = new Date((opts.now ?? new Date()).getTime() - 24 * 60 * 60 * 1000);
+  const scope = and(eq(runsTable.workflowId, opts.workflowId), gt(runsTable.createdAt, since));
+  const counted = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(runsTable)
+    .where(and(scope, ne(runsTable.status, 'skipped')));
+  if (Number(counted[0]?.n ?? 0) < opts.cap) return { allowed: true };
+  const latest = await db
+    .select({ status: runsTable.status })
+    .from(runsTable)
+    .where(scope)
+    .orderBy(desc(runsTable.createdAt))
+    .limit(1);
+  return { allowed: false, announce: latest[0]?.status !== 'skipped' };
+}
+
+export function rateCapScope(opts: { workflowId: string; subjectKey: string; windowMs?: number }) {
+  const windowMs = opts.windowMs ?? 60 * 60 * 1000;
+  const since = new Date(Date.now() - windowMs);
+  return and(
+    eq(runsTable.workflowId, opts.workflowId),
+    eq(runsTable.subjectKey, opts.subjectKey),
+    gt(runsTable.createdAt, since)
+  );
+}
+
 
 // ---- The retry sweep's queries -------------------------------------------
 
@@ -292,14 +388,17 @@ export interface DueRetry {
   id: string;
   workflowId: string;
   workspaceId: string;
+  integration: string;
   repositoryId: string | null;
-  repoFullName: string;
-  prNumber: number;
+  repoFullName: string | null;
+  prNumber: number | null;
   prTitle: string;
   prUrl: string;
   prAuthor: string;
   pullRequestId: string | null;
   taskId: string | null;
+  /** The session an earlier attempt started, so a retried reply can link it. */
+  workbenchId: string | null;
   event: string;
   actions: WorkflowActionOutcome[];
   attempts: number;
@@ -321,6 +420,7 @@ export async function dueRetries(limit: number, now = new Date()): Promise<DueRe
       id: runsTable.id,
       workflowId: runsTable.workflowId,
       workspaceId: runsTable.workspaceId,
+      integration: runsTable.integration,
       repositoryId: runsTable.repositoryId,
       repoFullName: runsTable.repoFullName,
       prNumber: runsTable.prNumber,
@@ -329,6 +429,7 @@ export async function dueRetries(limit: number, now = new Date()): Promise<DueRe
       prAuthor: runsTable.prAuthor,
       pullRequestId: runsTable.pullRequestId,
       taskId: runsTable.taskId,
+      workbenchId: runsTable.workbenchId,
       event: runsTable.event,
       actions: runsTable.actions,
       attempts: runsTable.attempts,

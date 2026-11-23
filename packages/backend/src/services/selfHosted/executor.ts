@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import {
   readCloudTaskMeta,
+  withAwaitCiRule,
   type CloudTaskMetadata,
   type Environment,
   type Task,
@@ -77,13 +78,17 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
   }
 
   const size = await taskSandboxSize(task);
+  const prompt = task.prompt?.trim() || task.description?.trim() || task.title;
+  // Stamped at creation (`ci-park` flag). The rule goes on here, never on the
+  // stored prompt, so a failover to PostHog Code sends the prompt unchanged.
+  const ciPark = ciParkFromTask(task);
   const dispatched = await dispatchSandboxRun({
     runId: fleetRunIdForTask(task.id, fleetRunAttempt(task)),
     size,
     workspaceId: task.workspaceId,
     repositoryId: task.repositoryId,
     taskType: task.type === 'pr_response' ? 'pr_response' : 'code_writing',
-    prompt: task.prompt?.trim() || task.description?.trim() || task.title,
+    prompt: ciPark ? withAwaitCiRule(prompt) : prompt,
     // Loops dispatch through here too. The index is read-only: a task run has no memory tools.
     systemPrompt: await withMemoryIndex(TASK_SYSTEM_PROMPT, {
       workspaceId: task.workspaceId,
@@ -104,6 +109,8 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
     // Accounts a failover already tried on this task: the next run of it must
     // not land on one of them while another account is free.
     avoidAccountIds: triedAccountIds(task),
+    // A parkable run keeps its box between turns.
+    ...(ciPark ? { ephemeral: false } : {}),
     // No budget. Talyn has never sent the fleet a turn, spend or time cap on a
     // task run, and adding one here would be a tightening nobody asked for —
     // the caps belong to callers that can justify a number.
@@ -259,6 +266,11 @@ function modelFromTask(task: Task): string | undefined {
  */
 function internetAccessFromTask(task: Task): boolean {
   return (task.metadata as Record<string, unknown> | null)?.internetAccess === true;
+}
+
+/** Whether this run may park while CI runs. Strictly `true`, like {@link internetAccessFromTask}. */
+export function ciParkFromTask(task: { metadata?: Record<string, unknown> | null }): boolean {
+  return (task.metadata as Record<string, unknown> | null)?.ciPark === true;
 }
 
 function modelFromEnv(env: Environment): string | undefined {

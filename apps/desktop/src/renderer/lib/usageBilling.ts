@@ -4,9 +4,11 @@ import {
   PLAN_PRICES,
   SIZE_REQUIRES_PRO_ERROR_CODE,
   USAGE_EXHAUSTED_ERROR_CODE,
+  isCreditDrawLow,
   sellableTierPrices,
   type BillingPricing,
   type BillingStatus,
+  type CreditDraw,
   type PlanTier,
   type SandboxSize,
   type UsageAlertThreshold,
@@ -76,7 +78,7 @@ export function leftPercent(percent: number, exhausted: boolean): number {
 export function formatLeftPercent(percent: number, exhausted: boolean): string {
   const left = leftPercent(percent, exhausted);
   if (left > 0 && left < 1) return 'Less than 1% left';
-  return `${left.toFixed(left < 10 && left > 0 ? 1 : 0)}% left`;
+  return `${Number(left.toFixed(left < 10 && left > 0 ? 1 : 0))}% left`;
 }
 
 export const GAUGE_BAR_CLASS: Record<GaugeTone, string> = {
@@ -93,6 +95,28 @@ export const GAUGE_TEXT_CLASS: Record<GaugeTone, string> = {
   danger: 'text-destructive',
 };
 
+/** The credit bar has its own colour, so it never reads as included hours. */
+export type CreditTone = 'normal' | 'low';
+
+export function creditDrawTone(draw: CreditDraw): CreditTone {
+  return isCreditDrawLow(draw) ? 'low' : 'normal';
+}
+
+export const CREDIT_BAR_CLASS: Record<CreditTone, string> = {
+  normal: 'bg-sky-500',
+  low: 'bg-orange-500',
+};
+
+export const CREDIT_TEXT_CLASS: Record<CreditTone, string> = {
+  normal: 'text-sky-600 dark:text-sky-400',
+  low: 'text-orange-600 dark:text-orange-400',
+};
+
+export const CREDIT_RING_STROKE: Record<CreditTone, string> = {
+  normal: 'stroke-sky-500',
+  low: 'stroke-orange-500',
+};
+
 /** The gauge's one action. */
 export type GaugeAction = 'upgrade' | 'add_credits';
 
@@ -102,14 +126,16 @@ export const ADD_CREDITS_BELOW_LEFT_PCT = 5;
 /**
  * The card's button, or null for none. Free cannot buy credits, so it always
  * gets "Upgrade". A paid plan gets "Add credits" only when less than
- * ADD_CREDITS_BELOW_LEFT_PCT of its hours is left, or none is. Otherwise Pro
- * and Max get no button and Legacy Pro gets "Upgrade".
+ * ADD_CREDITS_BELOW_LEFT_PCT of its hours is left, or none is, and it has no
+ * credits left. Otherwise Pro and Max get no button and Legacy Pro gets
+ * "Upgrade".
  */
 export function gaugeAction(status: UsageBillingStatus): GaugeAction | null {
   if (status.tier === 'free') return 'upgrade';
   const { includedWsec, usedWsec, exhausted } = status.usage;
   const low = exhausted || 100 * (includedWsec - usedWsec) < ADD_CREDITS_BELOW_LEFT_PCT * includedWsec;
-  if (low) return 'add_credits';
+  const hasCredits = (status.credits?.balanceMicros ?? 0) > 0;
+  if (low && !hasCredits) return 'add_credits';
   return status.tier === 'legacy_pro' ? 'upgrade' : null;
 }
 

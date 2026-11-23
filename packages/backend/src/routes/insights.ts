@@ -17,7 +17,7 @@ import { parseInsightsRange } from '../services/insights/range.js';
 /**
  * Insights: one workspace's usage analytics, one section per request.
  *
- *   GET /insights/:section?workspaceId=&range=7d|30d|period
+ *   GET /insights/:section?workspaceId=&range=today|yesterday|7d|30d|period
  *   GET /insights/:section?workspaceId=&from=&to=
  *
  * `section` is compute | agents | output | speed | top. Mounted PRE-ownerScope,

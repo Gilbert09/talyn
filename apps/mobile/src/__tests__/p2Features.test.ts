@@ -2,6 +2,7 @@ import type {
   BillingStatus, FleetAccountView, InsightsAgentsResponse, InsightsComputeResponse, InsightsOutputResponse, InsightsSpeedResponse,
   LoopRunStatus, LoopWithStats, SpacePresenceMember, SpaceSessionRow, SpacesTeam, Workbench, WorkflowRunStatus, WorkflowWithStats,
 } from '@talyn/shared';
+import { formatCreditBalance } from '@talyn/shared';
 
 import {
   accountBadge, accountKindLabel, accountUsageText, accountsFor, defaultFleetModel, defaultProviderLabel, formatTimeAt, providerRows, summaryWindow,
@@ -11,14 +12,14 @@ import {
   workflowRunText, workflowSummary, workflowToggleInput,
 } from '../features/automations/model';
 import { dayShares, insightTiles, repositoryBars } from '../features/insights/model';
-import { NAV_ITEMS, automationTabs, visibleNavItems } from '../features/more/navItems';
+import { NAV_ITEMS, visibleNavItems } from '../features/more/navItems';
 import { MIN_REFRESH_MS, refreshInterval } from '../features/more/useRemote';
 import { moveToSpaceAction } from '../features/spaces/actions';
 import {
   activeLogins, canMoveToSpace, findSpace, groupSpaceSessions, hiddenText, moveChoices, openTarget, placeLabel, presenceSentence,
   spaceInitials, spaceSessionState, viewersOf,
 } from '../features/spaces/model';
-import { formatLeftPercent, gaugeLevel, leftPercent, shortDate, usageLines, usageViewOf } from '../features/usage/model';
+import { creditDrawToneOf, formatLeftPercent, gaugeLevel, leftPercent, shortDate, usageLines, usageViewOf } from '../features/usage/model';
 
 const mockMoveSession = jest.fn();
 jest.mock('@talyn/client/native', () => ({
@@ -83,16 +84,16 @@ describe('navigation entries', () => {
     visibleNavItems(features, status).map((item) => item.key);
 
   it.each([
-    ['features still loading', null, null, ['insights', 'agents']],
-    ['nothing offered', {}, null, ['insights', 'agents']],
-    ['spaces only', { spaces: true }, null, ['spaces', 'insights', 'agents']],
-    ['spaces false', { spaces: false }, null, ['insights', 'agents']],
-    ['workflows only', { workflows: true }, null, ['automations', 'insights', 'agents']],
-    ['loops only', { loops: true }, null, ['automations', 'insights', 'agents']],
-    ['usage billing on', {}, billing(), ['insights', 'usage', 'agents']],
-    ['billing disabled', {}, billing({ billingEnabled: false }), ['insights', 'agents']],
-    ['backend without usage', {}, billing({ tier: undefined, usage: undefined }), ['insights', 'agents']],
-    ['everything', { spaces: true, workflows: true, loops: true }, billing(), ['spaces', 'automations', 'insights', 'usage', 'agents']],
+    ['features still loading', null, null, ['integrations', 'insights', 'agents']],
+    ['nothing offered', {}, null, ['integrations', 'insights', 'agents']],
+    ['spaces only', { spaces: true }, null, ['spaces', 'integrations', 'insights', 'agents']],
+    ['spaces false', { spaces: false }, null, ['integrations', 'insights', 'agents']],
+    ['workflows only', { workflows: true }, null, ['integrations', 'insights', 'agents']],
+    ['loops only', { loops: true }, null, ['integrations', 'insights', 'agents']],
+    ['usage billing on', {}, billing(), ['integrations', 'insights', 'usage', 'agents']],
+    ['billing disabled', {}, billing({ billingEnabled: false }), ['integrations', 'insights', 'agents']],
+    ['backend without usage', {}, billing({ tier: undefined, usage: undefined }), ['integrations', 'insights', 'agents']],
+    ['everything', { spaces: true, workflows: true, loops: true }, billing(), ['spaces', 'integrations', 'insights', 'usage', 'agents']],
   ])('%s', (_name, features, status, expected) => {
     expect(keys(features as never, status)).toEqual(expected);
   });
@@ -105,15 +106,6 @@ describe('navigation entries', () => {
     }
   });
 
-  it.each([
-    [null, []],
-    [{ workflows: true }, ['workflows']],
-    [{ loops: true }, ['loops']],
-    [{ workflows: true, loops: true }, ['workflows', 'loops']],
-    [{ workflows: false, loops: false }, []],
-  ])('offers automation tabs for %j', (features, expected) => {
-    expect(automationTabs(features as never)).toEqual(expected);
-  });
 });
 
 describe('refresh interval', () => {
@@ -138,7 +130,7 @@ describe('usage', () => {
   });
 
   it.each([
-    [25, false, 75, '75% left'], [95, false, 5, '5.0% left'], [99.5, false, 0.5, 'Less than 1% left'], [100, false, 0, '0% left'],
+    [25, false, 75, '75% left'], [95, false, 5, '5% left'], [99.5, false, 0.5, 'Less than 1% left'], [100, false, 0, '0% left'],
     [120, false, 0, '0% left'], [10, true, 0, '0% left'],
   ])('left at %s%% used', (percent, exhausted, left, text) => {
     expect(leftPercent(percent, exhausted)).toBe(left);
@@ -158,8 +150,42 @@ describe('usage', () => {
     expect(lines).toEqual({
       plan: 'Pro', left: '75% left', used: '50 of 200 box-hours used', reset: 'Resets 30 Nov', exhausted: null,
       boxes: '3 of 100 running', credits: '$12.50', expiring: '$2.00 expires in the next 30 days', autoTopup: 'On, below $5',
-      autoTopupProblem: 'The last top-up failed: Card declined', team: null,
+      autoTopupProblem: 'The last top-up failed: Card declined', team: null, credit: null,
     });
+  });
+
+  it.each([
+    ['at the start of the draw', 200, 25_000_000, 25_000_000, 100, '$25 of $25'],
+    ['part way through', 230, 75_000_000, 100_000_000, 75, '$75 of $100'],
+    ['after a top-up', 240, 125_000_000, 125_000_000, 100, '$125 of $125'],
+    ['an old backend without a start', 200, 10_000_000, undefined, 100, '$10 of $10'],
+  ] as const)('describes the credit draw %s', (_name, usedHours, balanceMicros, drawStartMicros, leftPct, detail) => {
+    const lines = usageLines(usageViewOf(billing({
+      usage: usage({ usedWsec: usedHours * 3600, percent: 100 }),
+      credits: { balanceMicros, expiringSoonMicros: 0, lots: [], ...(drawStartMicros ? { drawStartMicros } : {}) },
+    }))!);
+    expect(lines.credit?.leftPercent).toBe(leftPct);
+    expect(lines.left).toBe(`Using credits · ${formatCreditBalance(balanceMicros)} left`);
+    expect(lines.used).toBe(`Included hours used up. Using credits: ${detail} left`);
+  });
+
+  it.each([
+    ['hours left', 199, 10_000_000, false],
+    ['no credit', 200, 0, false],
+    ['credit and hours both spent', 200, 10_000_000, true],
+  ] as const)('draws no credit bar with %s', (_name, usedHours, balanceMicros, exhausted) => {
+    const lines = usageLines(usageViewOf(billing({
+      usage: usage({ usedWsec: usedHours * 3600, percent: 100, exhausted }),
+      credits: { balanceMicros, expiringSoonMicros: 0, lots: [], drawStartMicros: 50_000_000 },
+    }))!);
+    expect(lines.credit).toBeNull();
+  });
+
+  it.each([
+    [{ leftPercent: 50 }, 'information'],
+    [{ leftPercent: 19 }, 'warning'],
+  ] as const)('colours the credit bar for %j as %s', (draw, tone) => {
+    expect(creditDrawToneOf({ balanceMicros: 1, startMicros: 1, ...draw })).toBe(tone);
   });
 
   it.each([
@@ -244,6 +270,10 @@ describe('automations', () => {
     [workflow(), 'When pr opened → add labels'],
     [workflow({ events: ['pr_opened', 'pr_reopened', 'pr_merged'] }), 'When pr opened + 2 more → add labels'],
     [workflow({ actions: [] }), 'When pr opened'],
+    [workflow({ integration: 'slack', events: ['slack_message'], conditions: { channels: ['C123'] },
+      actions: [{ type: 'start_session', repositoryId: null, prompt: 'Help' }] }), 'In #C123, start a session'],
+    [workflow({ integration: 'slack', events: ['slack_message'], conditions: { channels: ['#general', 'C123'] },
+      actions: [{ type: 'slack_reply', text: 'Hello' }] }), 'In #general or #C123, reply in the thread'],
   ])('workflow summary %#', (value, text) => { expect(workflowSummary(value)).toBe(text); });
 
   it('describes a loop schedule and repository', () => {
@@ -284,8 +314,13 @@ describe('automations', () => {
 
   it('sends the whole workflow with only enabled changed', () => {
     const value = workflow();
-    expect(workflowToggleInput(value, false)).toEqual({ name: value.name, enabled: false, events: value.events,
+    expect(workflowToggleInput(value, false)).toEqual({ integration: value.integration, name: value.name, enabled: false, events: value.events,
       conditions: value.conditions, actions: value.actions, maxRunsPerPrPerHour: 5 });
+  });
+
+  it('keeps Slack rules in Slack when toggled', () => {
+    const value = workflow({ integration: 'slack' });
+    expect(workflowToggleInput(value, false).integration).toBe('slack');
   });
 
   it('sends the whole loop with only enabled changed', () => {
@@ -304,6 +339,23 @@ describe('automations', () => {
     ['no title', { prNumber: 7, prTitle: '', repoFullName: 'acme/app', event: 'pr_opened', actions: [], error: null }, { title: 'Pull request #7', detail: 'acme/app · PR opened' }],
     ['failed action', { prNumber: 7, prTitle: 'Fix', repoFullName: 'acme/app', event: 'pr_opened', actions: [{ type: 'add_labels', ok: false, error: 'No access' }], error: null },
       { title: 'Fix', detail: 'Add labels: No access' }],
+    ['Slack message', { integration: 'slack', subjectLabel: '#general', prNumber: 0, prTitle: '', repoFullName: '',
+      event: 'slack_message', actions: [], error: null }, { title: '#general', detail: 'New message in a channel' }],
+    ['Slack scope missing', { integration: 'slack', subjectLabel: '#general', prNumber: 0, prTitle: '', repoFullName: '',
+      event: 'slack_message', actions: [{ type: 'slack_reply', ok: false, code: 'slack_scope_missing', error: 'raw' }], error: null },
+      { title: '#general', detail: 'Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.' }],
+    ['PostHog report, claimed', { integration: 'posthog_inbox', subjectLabel: 'Checkout crashes', prNumber: 0, prTitle: '', repoFullName: '', event: 'report_ready', actions: [{ type: 'start_session', ok: true }], error: null,
+      posthogClaim: { state: 'claimed', prUrl: null, reason: null, pending: false, error: null, updatedAt: null } },
+      { title: 'Checkout crashes', detail: 'Claimed the report in PostHog.' }],
+    ['PostHog report, PR attached', { integration: 'posthog_inbox', subjectLabel: 'Checkout crashes', prNumber: 0, prTitle: '', repoFullName: '', event: 'report_ready', actions: [{ type: 'start_session', ok: true }], error: null,
+      posthogClaim: { state: 'pr_attached', prUrl: 'https://github.com/acme/app/pull/3', reason: null, pending: false, error: null, updatedAt: null } },
+      { title: 'Checkout crashes', detail: 'Attached the pull request to the claim in PostHog.' }],
+    ['PostHog report, released', { integration: 'posthog_inbox', subjectLabel: 'Checkout crashes', prNumber: 0, prTitle: '', repoFullName: '', event: 'report_ready', actions: [{ type: 'start_session', ok: true }], error: null,
+      posthogClaim: { state: 'released', prUrl: null, reason: 'the agent stopped without a fix: wrong diagnosis', pending: false, error: null, updatedAt: null } },
+      { title: 'Checkout crashes', detail: 'Released the claim in PostHog: the agent stopped without a fix: wrong diagnosis.' }],
+    ['PostHog report, lost the race', { integration: 'posthog_inbox', subjectLabel: '', prNumber: 0, prTitle: '', repoFullName: '', event: 'report_ready',
+      actions: [{ type: 'start_session', ok: false, code: 'report_claimed_elsewhere', error: 'Another person or agent claimed this report in PostHog first, so Talyn started no session.' }], error: null },
+      { title: 'PostHog report', detail: 'Start a session: Another person or agent claimed this report in PostHog first, so Talyn started no session.' }],
   ])('workflow run text: %s', (_name, run, expected) => {
     const text = workflowRunText(run as never);
     expect(text.title).toBe(expected.title);

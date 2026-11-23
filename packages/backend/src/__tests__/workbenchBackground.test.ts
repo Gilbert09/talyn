@@ -28,7 +28,7 @@ import {
   getJob,
   getWakeup,
 } from '../services/workbenches/backgroundStore.js';
-import { checkJob, markJobsLostAfterMove, sweepBackground } from '../services/workbenches/backgroundSweep.js';
+import { checkJob, endBackgroundOnArchive, markJobsLostAfterMove, sweepBackground } from '../services/workbenches/backgroundSweep.js';
 import { getWorkbench } from '../services/workbenches/store.js';
 import { WorkbenchError } from '../services/workbenches/errors.js';
 import { sendMessage } from '../services/workbenches/turns.js';
@@ -354,6 +354,49 @@ describe('background jobs', () => {
     await act();
     expect(await getJob('job')).toMatchObject({ status: 'lost' });
     if (moved) expect(await getJob('new-box-job')).toMatchObject({ status: 'running' });
+  });
+
+  it('ends the jobs of an archived session even when 50 idle jobs are ahead of them', async () => {
+    const past = new Date(Date.now() - HOUR);
+    await testDb.db.insert(workbenches).values({
+      id: 'wb-idle', workspaceId: 'ws', repoFullName: 'acme/web', branch: 'c', baseBranch: 'main', name: 'Idle',
+      runtime: 'sandbox', agent: 'claude', status: 'ready', sandboxId: 'box-idle', sandboxState: 'running',
+    });
+    await testDb.db.insert(workbenchChats).values({
+      id: 'chat-idle', workbenchId: 'wb-idle', workspaceId: 'ws', title: 'Chat', agent: 'claude', status: 'idle',
+    });
+    for (let i = 0; i < 60; i++) {
+      await insertJob({ id: `idle-${i}`, workbenchId: 'wb-idle', chatId: 'chat-idle', sandboxId: 'box-idle',
+        durableKey: `bg-idle-${i}`, marker: `m-idle-${i}`, keepAwakeUntil: null, lastCheckedAt: null });
+    }
+    await insertJob({ keepAwakeUntil: null, lastCheckedAt: past });
+    await testDb.db.update(workbenches).set({ archivedAt: new Date(), status: 'archived' }).where(eq(workbenches.id, 'wb'));
+    await sweepBackground();
+    expect(await getJob('job')).toMatchObject({ status: 'lost', detail: 'The session was archived, and its sandbox with it.' });
+    expect(runCapture).not.toHaveBeenCalled();
+  });
+
+  it('moves a job it did not probe to the back of the queue', async () => {
+    await insertJob({ keepAwakeUntil: null, lastCheckedAt: null });
+    await sweepBackground();
+    expect(runCapture).not.toHaveBeenCalled();
+    expect(await getJob('job')).toMatchObject({ status: 'running', lastCheckedAt: expect.any(Date) });
+  });
+
+  it('ends the background of one archived session, and leaves the others', async () => {
+    await testDb.db.insert(workbenches).values({
+      id: 'wb-2', workspaceId: 'ws', repoFullName: 'acme/web', branch: 'c', baseBranch: 'main', name: 'Other',
+      runtime: 'sandbox', agent: 'claude', status: 'archived', archivedAt: new Date(), sandboxId: 'box-2', sandboxState: 'running',
+    });
+    await testDb.db.insert(workbenchChats).values({ id: 'chat-2', workbenchId: 'wb-2', workspaceId: 'ws', title: 'Chat', agent: 'claude' });
+    await insertJob();
+    await insertJob({ id: 'other', workbenchId: 'wb-2', chatId: 'chat-2', sandboxId: 'box-2', durableKey: 'bg-2', marker: 'm-2' });
+    await insertWakeup({ wakeAt: new Date(Date.now() + HOUR) });
+    await testDb.db.update(workbenches).set({ archivedAt: new Date(), status: 'archived' }).where(eq(workbenches.id, 'wb'));
+    await endBackgroundOnArchive('wb', 'ws');
+    expect(await getJob('job')).toMatchObject({ status: 'lost' });
+    expect(await getWakeup('wake')).toMatchObject({ status: 'cancelled' });
+    expect(await getJob('other')).toMatchObject({ status: 'running' });
   });
 
   it('stops a job by its process group', async () => {

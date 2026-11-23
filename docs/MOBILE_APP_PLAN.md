@@ -61,8 +61,8 @@ and [#126](https://github.com/Gilbert09/talyn/pull/126).
   Leases allow crash recovery. Temporary failures use bounded retries.
   Expo tickets and receipts have separate processing. A ticket does not prove delivery.
   Permanent token errors disable the installation.
-- Alerts contain generic text. Data contains only the schema version, opaque event ID, category, and internal destination.
-  Sensitive previews remain reserved. Enabling that preference does not add private text.
+- Alerts use desktop-style text: the session name and a short summary, or the PR reference and title (Tom's call, 2026-11-12).
+  Data contains only the schema version, opaque event ID, category, and internal destination.
   Logs, audit events, and metric labels contain no tokens or private content.
 - Settings explains notification value before the operating system prompt.
   Permission requests require an explicit action. Denial leaves product workflows available.
@@ -712,7 +712,7 @@ If safe resend becomes required, add server-supported message identifiers in a s
 It routes delivery through APNs and FCM. A push ticket is not proof of device delivery. [E15]
 Keep a provider interface so direct APNs/FCM can replace the relay later.
 Do not put repository text, prompts, diffs, tokens, or CI logs in a push payload.
-Default alert text should be generic, such as “A session needs your attention.”
+Alert text mirrors the desktop notification (decision of 2026-11-12, see `docs/MOBILE_PUSH_NOTIFICATIONS.md`). Generic text, such as “A session needs your attention.”, is the fallback.
 Payload data should contain an opaque event ID and a validated internal destination.
 
 Proposed event categories:
@@ -770,12 +770,15 @@ Keep internal preview capabilities, terminal execution, and downloaded code outs
 Certificate pinning is an open risk decision. MASVS does not mean every app must use identical pinning controls. [O01]
 
 Choose one native crash reporter after reviewing SDK data, processors, retention, and regional requirements.
-Disable session replay and automatic view content capture for MVP.
-Allow only explicit analytics events with reviewed fields.
+**Revised 2026-11-10 (Tom's call):** the app now uses PostHog for product analytics, session replay, and error tracking, like web.
+This replaces the MVP rule that disabled session replay and automatic view content capture.
+Replay is not masked: it shows text, inputs, images, and sandboxed views. It records no console logs or network requests.
+Touch autocapture reads component names and test IDs only. Explicit events reuse the web names and reviewed fields.
+Settings > Account has an opt-out. Apple tracking stays false, so there is no ATT prompt.
 Exclude prompts, transcript text, code, auth URLs, tokens, push tokens, and raw request query strings.
 Pseudonymous identifiers can still be personal data. Disclose them accurately. [A05] [G06] [G20]
 
-Keep diagnostics and product analytics choices separate.
+One opt-out covers diagnostics and product analytics, as on web (Tom's call, 2026-11-10).
 Offer appropriate consent and opt-out controls. Confirm legal bases with the privacy owner.
 Audit automatic IP, device, breadcrumb, network, and identity capture before enabling an SDK.
 Upload source maps in CI with restricted credentials.

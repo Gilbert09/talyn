@@ -66,9 +66,10 @@ import {
   isDiskFullText,
   isGuestUnreachableBeforeStart,
 } from './execFailures.js';
+import { missingSessionCredential } from './credentialFailure.js';
 import { WorkbenchError } from './errors.js';
 import { assertSandboxAgent } from './credentialPolicy.js';
-import { recoverLostSandbox, withLostRecovery } from './recovery.js';
+import { isHibernationLost, recoverLostSandbox, withLostRecovery } from './recovery.js';
 import { meterWorkbenchAwakeBySandboxId } from './usageMeter.js';
 import { noteRepoSetupRead, withBoxSetup } from './setupLayers.js';
 import { recordSandboxWake } from './boxStart.js';
@@ -320,8 +321,10 @@ export function resumeOnce(
  * credentials before the boot, which was 3.6-4.3 s of a 5.4 s wake. A box in
  * object storage is left to `withWake`, whose resume carries them too.
  *
- * Never throws: on any failure the exec that follows wakes the box the old
- * way, and reports a lost box as it always did.
+ * On most failures it does not throw: the exec that follows wakes the box the
+ * old way. A hibernated copy the fleet cannot restore is different. A second
+ * resume fetches and rebuilds the same broken copy again, which took up to 5
+ * minutes. So Talyn replaces the box now and throws the lost-box error.
  */
 export async function wakeWithCredentials(row: WorkbenchRow): Promise<void> {
   if (!row.sandboxId) return;
@@ -332,6 +335,11 @@ export async function wakeWithCredentials(row: WorkbenchRow): Promise<void> {
     if (sandbox.suspendUploaded && !sandbox.suspendDir) return;
     await resumeOnce(client, row.sandboxId, 'host', () => resumeCredentialsFor(row));
   } catch (err) {
+    if (isHibernationLost(err)) {
+      await recoverLostSandbox(row, err).catch((error) =>
+        console.warn(`[workbench] recovering the lost sandbox ${row.sandboxId} failed:`, error));
+      throw err;
+    }
     console.warn(`[workbench] waking ${row.sandboxId} with its credentials failed; the next exec wakes it:`, err);
   }
 }
@@ -1236,7 +1244,7 @@ export async function refreshSandboxCredentials(
   assertSandboxAgent(row, agent);
   const { creds, credentials, model, payer } = await sandboxCredentialSet(row, { ...opts, payer: opts.payer ?? null });
   const credential = credentials[agent];
-  if (!credential?.token) throw missingSessionCredential(agent, payer);
+  if (!credential?.token) throw await missingSessionCredential(payer?.workspaceId ?? row.workspaceId, agent, { payer: Boolean(payer), model });
   const recorded = workbenchFleetAccountId(row, agent, payer?.userId);
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   await withLostRecovery(row, () => client.setSandboxCredentials(sandboxId, creds));
@@ -1277,19 +1285,13 @@ export async function workbenchAgentCredentials(
     avoidAccountIds: [...unavailable, ...(agent === selectedAgent ? opts.avoidAccountIds ?? [] : [])],
   });
   const [claude, codex] = await Promise.all([resolve('claude'), resolve('codex')]);
-  if (!claude?.token && !codex?.token) throw missingSessionCredential(undefined, payer);
+  if (!claude?.token && !codex?.token) {
+    throw await missingSessionCredential(workspaceId, selectedAgent, {
+      payer: Boolean(payer),
+      model: opts.model ?? (selectedAgent === row.agent ? row.model ?? undefined : undefined),
+    });
+  }
   return { claude, codex };
-}
-
-function missingSessionCredential(agent?: FleetAgent, payer?: TurnPayerRef | null): WorkbenchError {
-  const label = agent === 'codex' ? 'Codex (ChatGPT)' : agent === 'claude' ? 'Claude' : 'Claude or Codex';
-  return new WorkbenchError(
-    payer
-      ? `Your workspace has no usable ${label} subscription. Connect it in Settings → Talyn Fleet to prompt this session.`
-      : `This workspace has no usable ${label} subscription. Connect it in Settings → Talyn Fleet.`,
-    409,
-    'credentials_unavailable',
-  );
 }
 
 /**

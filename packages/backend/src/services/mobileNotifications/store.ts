@@ -2,9 +2,9 @@ import { mobileNotificationMetrics } from './metrics.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { and, eq, isNull, gt, sql } from 'drizzle-orm';
 import {
-  defaultMobileNotificationPreferences, isMobileNotificationPayload,
+  defaultMobileNotificationPreferences, isMobileNotificationPayload, normalizeMobileNotificationPreferences,
   type MobileInstallation, type MobileInstallationHeartbeatInput, type MobileNotificationCategory,
-  type MobileNotificationDestination, type MobileNotificationPreferences, type MobileNotificationPreferencesResult,
+  type MobileNotificationDestination, type MobileNotificationPreferencesInput, type MobileNotificationPreferencesResult,
   type RegisterMobileInstallationInput,
 } from '@talyn/shared';
 import { getPoolDbClient, type Database } from '../../db/client.js';
@@ -93,17 +93,27 @@ export async function readMobilePreferences(ownerId: string, workspaceId: string
   const db = getPoolDbClient();
   await requireWorkspace(ownerId, workspaceId, db);
   const [row] = await db.select().from(preferences).where(and(eq(preferences.ownerId, ownerId), eq(preferences.workspaceId, workspaceId))).limit(1);
-  return { preferences: row?.preferences ?? defaultMobileNotificationPreferences(workspaceId), providerAvailable: mobileProviderAvailable() };
+  return {
+    preferences: row ? normalizeMobileNotificationPreferences(row.preferences) : defaultMobileNotificationPreferences(workspaceId),
+    providerAvailable: mobileProviderAvailable(),
+  };
 }
-export async function saveMobilePreferences(ownerId: string, input: MobileNotificationPreferences): Promise<MobileNotificationPreferencesResult> {
-  await getPoolDbClient().transaction(async (transaction) => {
+export async function saveMobilePreferences(ownerId: string, input: MobileNotificationPreferencesInput): Promise<MobileNotificationPreferencesResult> {
+  const saved = await getPoolDbClient().transaction(async (transaction) => {
     const db = transaction as unknown as Database;
     await requireWorkspace(ownerId, input.workspaceId, db);
-    await db.insert(preferences).values({ ownerId, workspaceId: input.workspaceId, preferences: input })
-      .onConflictDoUpdate({ target: [preferences.ownerId, preferences.workspaceId], set: { preferences: input, updatedAt: new Date() } });
+    // An older app build sends no onlyWhenAway; keep what is stored rather than reset it.
+    const [current] = input.onlyWhenAway === undefined
+      ? await db.select({ preferences: preferences.preferences }).from(preferences)
+        .where(and(eq(preferences.ownerId, ownerId), eq(preferences.workspaceId, input.workspaceId))).for('update').limit(1)
+      : [];
+    const next = normalizeMobileNotificationPreferences(input, current?.preferences);
+    await db.insert(preferences).values({ ownerId, workspaceId: input.workspaceId, preferences: next })
+      .onConflictDoUpdate({ target: [preferences.ownerId, preferences.workspaceId], set: { preferences: next, updatedAt: new Date() } });
     await db.insert(audit).values({ id: randomUUID(), ownerId, action: 'preferences_changed' });
+    return next;
   });
-  return { preferences: input, providerAvailable: mobileProviderAvailable() };
+  return { preferences: saved, providerAvailable: mobileProviderAvailable() };
 }
 export interface EnqueueMobileNotificationInput {
   eventId?: string; ownerId: string; workspaceId: string; category: MobileNotificationCategory;

@@ -102,28 +102,6 @@ export const CODEREVIEW = [
     }
   ),
   defineTool(
-    'fix_code_review_findings',
-    'Start a cloud task to fix the selected findings.',
-    { ...prSchema, finding_ids: { type: 'array', items: textSchema, minItems: 1 } },
-    ['pull_request_id', 'finding_ids'],
-    { openWorldHint: true },
-    async (ownerId, args) => {
-      if (
-        !Array.isArray(args.finding_ids) ||
-        !args.finding_ids.length ||
-        args.finding_ids.some((id) => !str(id))
-      )
-        throw new Error('finding_ids must contain finding ids.');
-      const data = await callApi<{ taskId: string; review: CodeReviewPublic }>(
-        ownerId,
-        'POST',
-        `${base(args)}/fix`,
-        { findingIds: args.finding_ids }
-      );
-      return `${data.taskId} fix task started.\n${reviewLine(data.review)}`;
-    }
-  ),
-  defineTool(
     'dismiss_code_review_finding',
     'Dismiss a finding with a reason. Set undo to restore it.',
     {

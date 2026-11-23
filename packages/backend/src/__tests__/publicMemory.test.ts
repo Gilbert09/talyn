@@ -79,6 +79,9 @@ describe('/v1 memories', () => {
         bytes: 35,
         source: { kind: 'user', session_id: null },
         forgotten_at: null,
+        forgotten_reason: null,
+        use_count: 0,
+        last_used_at: null,
         created_at: expect.any(String),
         updated_at: expect.any(String),
       });

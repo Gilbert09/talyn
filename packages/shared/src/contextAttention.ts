@@ -6,13 +6,30 @@ import type { WorkbenchChatStatus, WorkbenchKind, WorkbenchSandboxState, Workben
  * `GET /workspaces/attention` answers it.
  *
  * The keys are ids. A workspace or a space with nothing waiting is left out.
- * A session in a space counts for its space and its workspace. The workspace
- * tile is the desktop launcher, so its count covers Personal and every space.
+ * A session in a space counts for its space and its workspace.
  */
 export interface ContextAttentionCounts {
+  /** Every session that waits on me in the workspace, in Personal and in its spaces. */
   workspaces: Record<string, number>;
   spaces: Record<string, number>;
+  /**
+   * The space part of `workspaces`: per workspace, the count of each space.
+   * The rail takes away the spaces that have their own tile, so the
+   * workspace tile counts the rows of its Personal sidebar. A space session
+   * shows in Personal when its space has no tile (Spaces off, or the space
+   * is gone), so it stays in the count. An older server leaves it out.
+   */
+  workspaceSpaces?: Record<string, Record<string, number>>;
+  /**
+   * The sessions that the counts count, by id, with what each waits on me
+   * for. The sidebar marks these rows, so a badge always points at a row.
+   * An older server leaves it out.
+   */
+  sessions?: Record<string, ContextAttentionReason>;
 }
+
+/** What a counted session waits on me for. */
+export type ContextAttentionReason = 'failed' | 'reply' | 'plan' | 'conflict';
 
 export interface AttentionSessionInput {
   kind: WorkbenchKind | string;
@@ -22,8 +39,11 @@ export interface AttentionSessionInput {
   /**
    * The open chats only. A closed tab is not shown, so it cannot need you.
    * `id` and `turnCount` name the alert in {@link sessionAttentionKey}.
+   * `planPending` is true when the agent's latest reply holds a plan that
+   * waits for "Approve and build" (a ```talyn-plan block after the last
+   * message from a person).
    */
-  chats: { id?: string; status: WorkbenchChatStatus | string; queued: number; turnCount?: number }[];
+  chats: { id?: string; status: WorkbenchChatStatus | string; queued: number; turnCount?: number; planPending?: boolean }[];
   /**
    * The linked pull request. `mergeable` is GitHub's word ('CONFLICTING', 'MERGEABLE', 'UNKNOWN').
    * `id` and `headSha` name the alert in {@link sessionAttentionKey}.
@@ -33,8 +53,8 @@ export interface AttentionSessionInput {
 
 /**
  * True when a session waits on me. It is the server's half of the sidebar's
- * `sessionState`: a failure, a question for me, or a pull request with
- * conflicts. The sidebar also counts an unread reply, but read state is kept
+ * `sessionState`: a failure, a question for me, a plan that waits for my
+ * approval, or a pull request with conflicts. The sidebar also counts an unread reply, but read state is kept
  * only in the open app, so the server cannot know it.
  *
  * Live work wins over a question, as in the sidebar: a session with a running
@@ -46,11 +66,9 @@ export function sessionNeedsAttention(session: AttentionSessionInput): boolean {
 
 /**
  * A name for what the session waits on me for, or null when it waits on
- * nothing. When I open the session, the server keeps this key
- * (`workbenches.attention_ack`), and the rail stops counting the session while
- * the key stays the same. A new alert has a new key, so it counts again: a
- * question in a later turn has a new turn count, and conflicts after a push
- * have a new head.
+ * nothing. Opening the session does not clear it: the session counts until
+ * the key goes null. A new alert has a new key: a question in a later turn
+ * has a new turn count, and conflicts after a push have a new head.
  */
 export function sessionAttentionKey(session: AttentionSessionInput): string | null {
   if (session.archivedAt) return null;
@@ -62,11 +80,23 @@ export function sessionAttentionKey(session: AttentionSessionInput): string | nu
   if (session.chats.some((c) => c.status === 'running' || c.queued > 0)) return null;
   const asking = session.chats.filter((c) => c.status === 'awaiting_input');
   if (asking.length > 0) return chatKey('reply', asking);
+  const planning = session.chats.filter((c) => c.planPending && c.status === 'idle');
+  if (planning.length > 0) return chatKey('plan', planning);
   if (session.kind === 'thread') return null;
   if (session.pr?.state === 'open' && session.pr.mergeable === 'CONFLICTING') {
     return `conflict:${session.pr.id ?? ''}:${session.pr.headSha ?? ''}`;
   }
   return null;
+}
+
+/** The reason in a {@link sessionAttentionKey}, or null for no key. */
+export function attentionReason(key: string | null): ContextAttentionReason | null {
+  if (key === null) return null;
+  const head = key.split(':', 1)[0];
+  if (head === 'reply') return 'reply';
+  if (head === 'plan') return 'plan';
+  if (head === 'conflict') return 'conflict';
+  return 'failed';
 }
 
 function chatKey(reason: string, chats: AttentionSessionInput['chats']): string {
@@ -81,14 +111,18 @@ function bump(map: Record<string, number>, key: string): void {
   map[key] = (map[key] ?? 0) + 1;
 }
 
-/** The counts for a list of sessions that need me, by workspace and by space. */
+/** The counts for a list of sessions that need me, by workspace and by space, and each session's reason. */
 export function countContextAttention(
-  sessions: { workspaceId: string; spaceId: string | null }[],
-): ContextAttentionCounts {
-  const out: ContextAttentionCounts = { workspaces: {}, spaces: {} };
+  sessions: { id: string; workspaceId: string; spaceId: string | null; reason: ContextAttentionReason }[],
+): Required<ContextAttentionCounts> {
+  const out: Required<ContextAttentionCounts> = { workspaces: {}, spaces: {}, workspaceSpaces: {}, sessions: {} };
   for (const s of sessions) {
     bump(out.workspaces, s.workspaceId);
-    if (s.spaceId) bump(out.spaces, s.spaceId);
+    if (s.spaceId) {
+      bump(out.spaces, s.spaceId);
+      bump((out.workspaceSpaces[s.workspaceId] ??= {}), s.spaceId);
+    }
+    out.sessions[s.id] = s.reason;
   }
   return out;
 }

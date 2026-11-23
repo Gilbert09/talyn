@@ -504,6 +504,15 @@
             "maxLength": 200,
             "description": "The thread this session belongs to, if any."
           },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "The session that started this session, if any."
+          },
           "repository_id": {
             "type": [
               "string",
@@ -656,6 +665,7 @@
           "kind",
           "space_id",
           "thread_id",
+          "parent_id",
           "repository_id",
           "repository_full_name",
           "name",
@@ -872,6 +882,15 @@
             "maxLength": 200,
             "description": "The thread this session belongs to, if any."
           },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "The session that started this session, if any."
+          },
           "repository_id": {
             "type": [
               "string",
@@ -1025,6 +1044,7 @@
           "kind",
           "space_id",
           "thread_id",
+          "parent_id",
           "repository_id",
           "repository_full_name",
           "name",
@@ -4673,6 +4693,29 @@
             "description": "Set when the entry was forgotten. Restore it to use it again.",
             "example": "2026-11-02T09:30:00.000Z"
           },
+          "forgotten_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "evicted"
+            ],
+            "description": "`evicted`: Talyn forgot the entry to make room at the limit of 500 live entries. Null otherwise."
+          },
+          "use_count": {
+            "type": "integer",
+            "description": "How many times a session read the entry with `talyn_memory_read`."
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The last read. Null when nobody read the entry.",
+            "example": "2026-11-02T09:30:00.000Z"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -4697,6 +4740,9 @@
           "bytes",
           "source",
           "forgotten_at",
+          "forgotten_reason",
+          "use_count",
+          "last_used_at",
           "created_at",
           "updated_at"
         ]
@@ -18235,7 +18281,7 @@
       "post": {
         "operationId": "createMemory",
         "summary": "Save a memory entry",
-        "description": "Creates an entry. When a live entry with the same scope, target and name exists (the name is not case-sensitive), that entry is updated instead and the answer is 200. A workspace holds at most 500 live entries.\n\nScope: `memory:write`.",
+        "description": "Creates an entry. When a live entry with the same scope, target and name exists (the name is not case-sensitive), that entry is updated instead and the answer is 200. A workspace holds at most 500 live entries. A new entry over the limit makes Talyn forget the entry that sessions read the least, with `forgotten_reason: \"evicted\"`.\n\nScope: `memory:write`.",
         "tags": [
           "Memory"
         ],
@@ -18861,7 +18907,7 @@
       "post": {
         "operationId": "restoreMemory",
         "summary": "Restore a forgotten entry",
-        "description": "Refused with 409 `memory_name_taken` when a live entry took its name, and with 409 `memory_limit_reached` at the limit.\n\nScope: `memory:write`.",
+        "description": "Refused with 409 `memory_name_taken` when a live entry took its name. At the limit, Talyn forgets the entry that sessions read the least.\n\nScope: `memory:write`.",
         "tags": [
           "Memory"
         ],

@@ -156,6 +156,17 @@ describe('spaceSidebarModel', () => {
     expect(model.groups[0].active === true).toBe(active);
   });
 
+  it.each<[string, 'reply' | 'conflict', Partial<SpaceSidebarInput>, string, string]>([
+    ['a space row with a question', 'reply', {}, 'needs_reply', 'Waiting for your answer'],
+    ['a space row whose PR has conflicts', 'conflict', {}, 'pr_attention', '#7 has conflicts'],
+    ['a loaded row whose chats are not loaded', 'reply', { workbenches: { a: wb('a') } }, 'needs_reply', 'Waiting for your answer'],
+  ])('shows what the rail counts on %s', (_name, reason, patch, kind, label) => {
+    const pullRequest = reason === 'conflict' ? { number: 7, state: 'open', url: 'u' } : null;
+    const model = spaceSidebarModel(input({ rows: [mine('a', { pullRequest })], attention: { a: reason }, ...patch }));
+    expect(model.states.get('a')).toEqual({ kind, label });
+    expect(model.groups[0].active).toBe(true);
+  });
+
   it('leaves out a loaded session that the store has archived', () => {
     const model = spaceSidebarModel(input({ rows: [mine('a')], workbenches: { a: wb('a', { archivedAt: '2026-11-02T00:00:00Z' }) } }));
     expect(model.groups).toEqual([]);
@@ -294,7 +305,7 @@ describe('SpaceSidebar', () => {
     setRows([mine('a')]);
     render(<SpaceSidebar active={ACTIVE} />);
     fireEvent.contextMenu(screen.getByText('a'));
-    for (const name of ['Open', 'Rename', 'Copy branch name', 'Copy session ID', 'Open pull request', 'Move to space…', 'Move to Personal', 'Archive…']) {
+    for (const name of ['Open', 'Rename…', 'Copy branch name', 'Copy session ID', 'Open pull request', 'Move to space…', 'Move to Personal', 'Archive…']) {
       expect(await screen.findByRole('menuitem', { name })).toBeInTheDocument();
     }
   });

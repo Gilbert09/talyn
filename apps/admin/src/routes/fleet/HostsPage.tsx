@@ -145,7 +145,10 @@ export function HostsPage() {
       header: 'Live',
       cell: (h) =>
         h.live ? (
-          <Pill tone={h.live.accepting ? 'good' : 'warn'}>
+          <Pill
+            tone={h.live.accepting ? 'good' : 'warn'}
+            title={h.liveSource === 'report' ? "from the host's last report (control-tunnel host)" : undefined}
+          >
             {h.live.accepting ? 'accepting' : 'not accepting'}
           </Pill>
         ) : (

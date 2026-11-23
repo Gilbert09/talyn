@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { workbenchesOffered } from '@talyn/shared';
+import { splitViewOffered, workbenchesOffered } from '@talyn/shared';
 import { useActiveSpace, loadExtraWorkbench, spacesOffered } from '../../lib/spaces';
 import { useFollowSessionContext, useSpaceLive, useSpacesBoot } from '../../hooks/useSpaces';
 import { useSpacesStore } from '../../stores/spaces';
@@ -9,6 +9,7 @@ import { SpaceHomePage } from '../spaces/SpaceHomePage';
 import { AppSidebar } from './AppSidebar';
 import { ContextRail } from './ContextRail';
 import { SystemStatusBanner } from './SystemStatusBanner';
+import { ConnectAgentBanner } from './ConnectAgentBanner';
 import { useAppShortcuts } from './appShortcuts';
 import { SettingsPanel } from '../panels/SettingsPanel';
 import { CommandPalette } from '../CommandPalette';
@@ -21,9 +22,10 @@ import { AddRepositoryModal } from '../modals/AddRepositoryModal';
 import { HomePage } from '../../pages/HomePage';
 import { HistoryView } from '../../pages/HistoryView';
 import { PullRequestsView } from '../../pages/PullRequestsView';
-import { AutomationsView } from '../../pages/AutomationsView';
+import { IntegrationsView } from '../../pages/IntegrationsView';
 import { InsightsView } from '../../pages/InsightsView';
 import { WorkbenchPage } from '../../pages/WorkbenchPage';
+import { SplitView } from '../workbench/SplitView';
 import { loadWorkbenches } from '../../lib/workbenchData';
 import { getLocalController } from '../../lib/localWorkbench';
 import { useCodeReviewIntro } from '../../hooks/useCodeReviewIntro';
@@ -81,6 +83,7 @@ export function AppShell() {
         {/* The banner sits in the main column, so the sidebar reaches the window top where the traffic lights are. */}
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <SystemStatusBanner />
+          <ConnectAgentBanner />
           <div className="min-h-0 flex-1 overflow-hidden">
             <RoutedView />
           </div>
@@ -111,8 +114,9 @@ export function AppShell() {
 /** The main column's content for the current route. */
 export function RoutedView() {
   const route = useNavigationStore((s) => s.route);
+  const features = useWorkspaceStore((s) => s.features);
   const space = useActiveSpace();
-  if (space && (route.view === 'home' || route.view === 'prs' || route.view === 'automations' || route.view === 'insights')) {
+  if (space && (route.view === 'home' || route.view === 'prs' || route.view === 'integrations' || route.view === 'insights')) {
     return <SpaceHomePage active={space} />;
   }
   switch (route.view) {
@@ -122,10 +126,13 @@ export function RoutedView() {
       return <WorkbenchPage id={route.id} />;
     case 'history':
       return <HistoryView />;
+    case 'split':
+      if (splitViewOffered(features)) return <SplitView />;
+      return features === null ? null : <HomePage />;
     case 'prs':
       return <PullRequestsView tab={route.tab} />;
-    case 'automations':
-      return <AutomationsView tab={route.tab} />;
+    case 'integrations':
+      return <IntegrationsView kind={route.kind ?? null} />;
     case 'insights':
       return <InsightsView />;
     case 'settings':

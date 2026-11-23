@@ -1,5 +1,5 @@
 import { eq, sql } from 'drizzle-orm';
-import { SLACK_STATUS_REACTIONS, type SlackStatusState, type Workbench, type WorkbenchChat } from '@talyn/shared';
+import { SLACK_STATUS_REACTIONS, type SlackStatusState, type Workbench, type WorkbenchChat, type WorkbenchSource } from '@talyn/shared';
 import { getPoolDbClient, runWithoutScope } from '../../db/client.js';
 import { workbenches } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
@@ -55,10 +55,18 @@ async function react(teamId: string, method: 'reactions.add' | 'reactions.remove
   }
 }
 
+/**
+ * Add one reaction as the bot. `already_reacted` counts as done. Throws
+ * Slack's refusal, for a caller that records it (a rule's `slack_react`).
+ */
+export async function addReaction(teamId: string, channel: string, ts: string, name: string): Promise<void> {
+  await react(teamId, 'reactions.add', channel, ts, name);
+}
+
 /** Add one reaction outside any thread record (an unlinked mention). Never throws. */
 export async function reactOnce(teamId: string, channel: string, ts: string, name: string): Promise<void> {
   try {
-    await react(teamId, 'reactions.add', channel, ts, name);
+    await addReaction(teamId, channel, ts, name);
   } catch (err) {
     debugBus.recordEvent({ service: 'slack_events', action: 'reaction_failed', ok: false, summary: `${name} on ${channel}`, error: err });
   }
@@ -151,6 +159,15 @@ export async function moveStatusToMessage(thread: SlackThreadRow, messageTs: str
 // ---------------------------------------------------------------------------
 
 /**
+ * Whether a session's source has a Slack thread to follow: a personal
+ * trigger, or a Slack rule's `start_session`.
+ */
+export function sourceFollowsSlackThread(source: WorkbenchSource | null | undefined): boolean {
+  if (!source) return false;
+  return source.kind === 'slack' || (source.kind === 'workflow' && source.integration === 'slack');
+}
+
+/**
  * Whether a session came from Slack. `source` is set at creation and never
  * changes, so an answer is good for the life of the process. Bounded; the
  * oldest answer goes first.
@@ -171,7 +188,10 @@ async function isFromSlack(workbenchId: string): Promise<boolean> {
   const known = fromSlack.get(workbenchId);
   if (known !== undefined) return known;
   const rows = await getPoolDbClient()
-    .select({ slack: sql<boolean>`(${workbenches.source} ->> 'kind') = 'slack'` })
+    .select({
+      slack: sql<boolean>`((${workbenches.source} ->> 'kind') = 'slack'
+        OR ((${workbenches.source} ->> 'kind') = 'workflow' AND (${workbenches.source} ->> 'integration') = 'slack'))`,
+    })
     .from(workbenches)
     .where(eq(workbenches.id, workbenchId))
     .limit(1);
@@ -212,7 +232,7 @@ export function registerSlackStatusReactions(): void {
   if (unregister) return;
   unregister = onWorkbenchEmit({
     workbench: (wb) => {
-      const slack = wb.source?.kind === 'slack';
+      const slack = sourceFollowsSlackThread(wb.source);
       remember(wb.id, slack);
       if (slack) scheduleSlackStatus(wb.id);
     },

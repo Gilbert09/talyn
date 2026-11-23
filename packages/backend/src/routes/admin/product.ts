@@ -142,7 +142,7 @@ export function adminProductRoutes(): Router {
   // Mutations
   //
   // Each is guarded in the same order, and the order matters: exists →
-  // not-self → deploy-permits → confirm. Checking `confirm` before the target
+  // not-self (where it applies) → deploy-permits → confirm. Checking `confirm` before the target
   // exists would let someone probe for accounts by watching which error came
   // back.
   // --------------------------------------------------------------------
@@ -176,7 +176,8 @@ export function adminProductRoutes(): Router {
         res.status(404).json({ success: false, error: 'User not found' });
         return;
       }
-      notSelf(req, req.params.id);
+      // No notSelf: an operator may comp their own account. The audit row
+      // records it with its reason, so it is not silent.
       requireConfirm(req, email);
 
       const result = await withTransactionalAudit(

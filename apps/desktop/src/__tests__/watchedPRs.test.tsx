@@ -352,6 +352,38 @@ describe('the watch toggle in the PR row', () => {
   });
 });
 
+describe('owner actions on a watched PR in Reviews', () => {
+  function renderReviewRow(over: Partial<PRRow>) {
+    render(
+      <PRTable
+        rows={[tableRow({ state: 'open', authored: false, reviewRequested: true, ...over })]}
+        variant="review"
+        viewerLogin="octocat"
+        selectedId={null}
+        onSelect={fn()}
+        onOpenTask={fn()}
+        onMerge={fn()}
+        onSetMergeQueue={fn()}
+        onSetWatching={fn(async () => {})}
+        onStopTask={fn()}
+        onCreatePostHogTask={fn()}
+        taskStatusById={new Map()}
+      />
+    );
+  }
+  const queueBtn = () => document.querySelector('[data-attr="pr-row-merge-queue-toggle"]');
+  const fixBtn = () => document.querySelector('[data-attr="pr-row-fix-with-posthog"]');
+
+  it.each([
+    ['watched', true, true],
+    ['not watched', false, false],
+  ])('%s: queue and fix shown is %s', (_label, watching, shown) => {
+    renderReviewRow({ watching });
+    expect(Boolean(queueBtn())).toBe(shown);
+    expect(Boolean(fixBtn())).toBe(shown);
+  });
+});
+
 describe('the polling badge in the PR row', () => {
   function renderRow(owner: string) {
     render(

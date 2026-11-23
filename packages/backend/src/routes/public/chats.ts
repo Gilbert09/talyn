@@ -79,7 +79,7 @@ export const chatRoutes: PublicRoute[] = [
     async handler({ params, token }) {
       const chat = await authorizedChat(token, params.id);
       refuseLocalRuntime(await authorizedSession(token, chat.workbenchId));
-      await cancelTurn(chat.id);
+      await cancelTurn(chat.id, { startQueue: true });
       const [row] = await getChatQuery(chat.id);
       if (!row) throw notFound('chat');
       return { status: 200, body: toPublicChat(row) };

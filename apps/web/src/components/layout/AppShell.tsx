@@ -1,9 +1,10 @@
 import { Suspense, useEffect } from 'react';
-import { mcpServersOffered, workbenchesOffered } from '@talyn/shared';
+import { mcpServersOffered, splitViewOffered, workbenchesOffered } from '@talyn/shared';
 import { useRouteUrlSync } from '../../hooks/useRouteUrlSync';
 import { AppSidebar } from './AppSidebar';
 import { ContextRail } from './ContextRail';
 import { SystemStatusBanner } from './SystemStatusBanner';
+import { ConnectAgentBanner } from './ConnectAgentBanner';
 import { useAppShortcuts } from './appShortcuts';
 import { CreateWorkspaceModal } from '../modals/CreateWorkspaceModal';
 import { UpgradeModal } from '../modals/UpgradeModal';
@@ -14,7 +15,7 @@ import { AddRepositoryModal } from '../modals/AddRepositoryModal';
 import { HomePage } from '../../pages/HomePage';
 import { HistoryView } from '../../pages/HistoryView';
 import { PullRequestsView } from '../../pages/PullRequestsView';
-import { AutomationsView } from '../../pages/AutomationsView';
+import { IntegrationsView } from '../../pages/IntegrationsView';
 import { loadWorkbenches } from '../../lib/workbenchData';
 import { useCodeReviewIntro } from '../../hooks/useCodeReviewIntro';
 import { useSystemStatus } from '../../hooks/useSystemStatus';
@@ -64,6 +65,7 @@ export function AppShell() {
         <AppSidebar />
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <SystemStatusBanner />
+          <ConnectAgentBanner />
           <div className="min-h-0 flex-1 overflow-hidden">
             <Suspense fallback={null}>
               <RoutedView />
@@ -109,7 +111,7 @@ export function RoutedView() {
   )
     return null;
   // A space shows its own feed where Personal shows pages that belong only to Personal.
-  if (space && (route.view === 'home' || route.view === 'prs' || route.view === 'automations' || route.view === 'mcp_servers' || route.view === 'insights')) {
+  if (space && (route.view === 'home' || route.view === 'prs' || route.view === 'integrations' || route.view === 'mcp_servers' || route.view === 'insights')) {
     return <SpaceHomePage active={space} />;
   }
   switch (route.view) {
@@ -119,10 +121,13 @@ export function RoutedView() {
       return <WorkbenchPage id={route.id} />;
     case 'history':
       return <HistoryView />;
+    case 'split':
+      if (splitViewOffered(features)) return <SplitView />;
+      return features === null ? null : <HomePage />;
     case 'prs':
       return <PullRequestsView tab={route.tab} />;
-    case 'automations':
-      return <AutomationsView tab={route.tab} />;
+    case 'integrations':
+      return <IntegrationsView kind={route.kind ?? null} />;
     case 'mcp_servers':
       return mcpServersOffered(features) ? <McpServersPanel /> : null;
     case 'insights':
@@ -165,6 +170,8 @@ function useWorkbenchList(): void {
 const CommandPalette = lazyWithReload(() => import('../CommandPalette').then((m) => ({ default: m.CommandPalette })));
 
 const WorkbenchPage = lazyWithReload(() => import('../../pages/WorkbenchPage').then((m) => ({ default: m.WorkbenchPage })));
+
+const SplitView = lazyWithReload(() => import('../workbench/SplitView').then((m) => ({ default: m.SplitView })));
 
 const SettingsPanel = lazyWithReload(() => import('../panels/SettingsPanel').then((m) => ({ default: m.SettingsPanel })));
 

@@ -19,8 +19,11 @@ export function isInsightsSection(value: unknown): value is InsightsSection {
   return typeof value === 'string' && (INSIGHTS_SECTIONS as readonly string[]).includes(value);
 }
 
-/** The presets the range picker offers. `period` is the owner's current usage period. */
-export const INSIGHTS_RANGE_PRESETS = ['7d', '30d', 'period'] as const;
+/**
+ * The presets the range picker offers. `today` and `yesterday` are UTC days.
+ * `period` is the owner's current usage period.
+ */
+export const INSIGHTS_RANGE_PRESETS = ['today', 'yesterday', '7d', '30d', 'period'] as const;
 export type InsightsRangePreset = (typeof INSIGHTS_RANGE_PRESETS)[number];
 
 export function isInsightsRangePreset(value: unknown): value is InsightsRangePreset {
@@ -28,6 +31,8 @@ export function isInsightsRangePreset(value: unknown): value is InsightsRangePre
 }
 
 export const INSIGHTS_RANGE_LABELS: Record<InsightsRangePreset | 'custom', string> = {
+  today: 'Today',
+  yesterday: 'Yesterday',
   '7d': 'Last 7 days',
   '30d': 'Last 30 days',
   period: 'This billing period',

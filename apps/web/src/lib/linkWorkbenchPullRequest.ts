@@ -1,4 +1,4 @@
-import type { LinkWorkbenchPullRequestResult, Workbench } from '@talyn/shared';
+import { parsePullRequestUrl, type LinkWorkbenchPullRequestResult, type Workbench } from '@talyn/shared';
 
 interface LinkApi {
   linkPullRequest(id: string, number: number): Promise<LinkWorkbenchPullRequestResult>;
@@ -22,15 +22,9 @@ export function parsePullRequestNumber(value: string, repoFullName: string): num
   const text = value.trim();
   let number = /^#?\d+$/.test(text) ? Number(text.replace(/^#/, '')) : NaN;
   if (!Number.isFinite(number)) {
-    try {
-      const url = new URL(text);
-      const match = /^\/([^/]+\/[^/]+)\/pull\/(\d+)\/?$/.exec(url.pathname);
-      if (url.protocol !== 'https:' || url.host !== 'github.com' || url.username || url.password || !match) return null;
-      if (match[1].toLowerCase() !== repoFullName.toLowerCase()) return null;
-      number = Number(match[2]);
-    } catch {
-      return null;
-    }
+    const url = parsePullRequestUrl(text);
+    if (!url || `${url.owner}/${url.repo}`.toLowerCase() !== repoFullName.toLowerCase()) return null;
+    number = url.number;
   }
   return Number.isSafeInteger(number) && number > 0 ? number : null;
 }

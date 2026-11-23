@@ -39,9 +39,13 @@ type MockProps = { filters?: boolean };
 
 /* ---------- sidebar (mirrors layout/AppSidebar) ---------- */
 
-type SessionRow = { name: string; repo: string; state: "running" | "idle" | "pr" | "asleep" };
+export type SessionRow = {
+  name: string;
+  repo: string;
+  state: "running" | "idle" | "pr" | "merged" | "asleep";
+};
 
-const SIDEBAR_SESSIONS: SessionRow[] = [
+export const SIDEBAR_SESSIONS: SessionRow[] = [
   { name: "Add CSV export", repo: "web", state: "running" },
   { name: "Rate limit webhooks", repo: "api", state: "pr" },
   { name: "Fix flaky login test", repo: "web", state: "idle" },
@@ -54,6 +58,8 @@ function SessionStateIcon({ state }: { state: SessionRow["state"] }) {
       return <Loader2 className="h-3 w-3 shrink-0 animate-spin text-status-blue" />;
     case "pr":
       return <GitPullRequest className="h-3 w-3 shrink-0 text-status-green" />;
+    case "merged":
+      return <GitMerge className="h-3 w-3 shrink-0 text-status-purple" />;
     case "asleep":
       return <Moon className="h-3 w-3 shrink-0 text-ink-400" />;
     default:
@@ -70,12 +76,14 @@ function NavRow({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
   );
 }
 
-function AppSidebar({
+export function AppSidebar({
   active,
   thread = "Usage billing rollout",
+  rows = SIDEBAR_SESSIONS,
 }: {
   active: string;
   thread?: string;
+  rows?: SessionRow[];
 }) {
   return (
     <div className="hidden w-48 shrink-0 flex-col border-r border-line bg-paper-100 lg:flex">
@@ -107,7 +115,7 @@ function AppSidebar({
         <p className="px-2 pb-1 pt-3 text-[9px] font-medium uppercase tracking-wide text-ink-400">
           Sessions
         </p>
-        {SIDEBAR_SESSIONS.map((s) => (
+        {rows.map((s) => (
           <div
             key={s.name}
             className={cn(
@@ -133,7 +141,7 @@ function AppSidebar({
 
 /* ---------- shared bits ---------- */
 
-function UserBubble({ children }: { children: React.ReactNode }) {
+export function UserBubble({ children }: { children: React.ReactNode }) {
   return (
     <div className="ml-auto max-w-[85%] rounded-xl rounded-br-sm bg-paper-200 px-3 py-2 text-[11.5px] leading-relaxed text-ink">
       {children}
@@ -141,11 +149,11 @@ function UserBubble({ children }: { children: React.ReactNode }) {
   );
 }
 
-function AgentText({ children }: { children: React.ReactNode }) {
+export function AgentText({ children }: { children: React.ReactNode }) {
   return <p className="text-[11.5px] leading-relaxed text-ink-700">{children}</p>;
 }
 
-function ToolRow({ verb, target, running }: { verb: string; target: string; running?: boolean }) {
+export function ToolRow({ verb, target, running }: { verb: string; target: string; running?: boolean }) {
   return (
     <div className="flex items-center gap-2 rounded-md border border-line bg-paper-50 px-2 py-1 font-mono text-[10px] text-ink-500">
       {running ? (
@@ -178,13 +186,13 @@ function Composer({ placeholder, agent }: { placeholder: string; agent: string }
 
 /* ---------- session ---------- */
 
-const CHANGED_FILES = [
+export const CHANGED_FILES = [
   { path: "app/reports/export.ts", add: 64, del: 0 },
   { path: "app/reports/ReportsPage.tsx", add: 12, del: 3 },
   { path: "app/reports/export.test.ts", add: 41, del: 0 },
 ];
 
-const DIFF_LINES: Array<{ k: "ctx" | "add" | "del"; t: string }> = [
+export const DIFF_LINES: Array<{ k: "ctx" | "add" | "del"; t: string }> = [
   { k: "ctx", t: "export function ReportsPage() {" },
   { k: "del", t: "  return <Table rows={rows} />;" },
   { k: "add", t: "  return (" },
@@ -196,8 +204,8 @@ const DIFF_LINES: Array<{ k: "ctx" | "add" | "del"; t: string }> = [
   { k: "ctx", t: "}" },
 ];
 
-const PANEL_TABS = ["All files", "Changes", "Pull request", "Sandbox"];
-const DOCK_TABS = ["Setup", "Run", "Terminal"];
+export const PANEL_TABS = ["All files", "Changes", "Pull request", "Sandbox"];
+export const DOCK_TABS = ["Setup", "Run", "Terminal"];
 
 export function MockSession({ filters = true }: MockProps) {
   return (

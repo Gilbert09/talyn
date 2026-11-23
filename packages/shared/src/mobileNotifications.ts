@@ -55,7 +55,15 @@ export interface MobileNotificationPreferences {
   quietHours: MobileQuietHours;
   timezone: string;
   sensitivePreview: boolean;
+  /**
+   * Skip a push while the person uses Talyn on a computer (see deskPresence.ts).
+   * Rows saved before this field existed, and app builds that do not send it,
+   * read as true.
+   */
+  onlyWhenAway: boolean;
 }
+/** What a PUT may carry: an older app build sends no `onlyWhenAway`. */
+export type MobileNotificationPreferencesInput = Omit<MobileNotificationPreferences, 'onlyWhenAway'> & { onlyWhenAway?: boolean };
 export interface MobileNotificationPreferencesResult {
   preferences: MobileNotificationPreferences;
   providerAvailable: boolean;
@@ -71,8 +79,22 @@ export function defaultMobileNotificationPreferences(workspaceId: string): Mobil
     schemaVersion: 1, workspaceId, enabled: false,
     categories: { session_update: true, pr_review: true, ci_failure: true, merge_ready: true, human_gate: true },
     quietHours: { enabled: false, start: '22:00', end: '08:00' },
-    timezone: 'UTC', sensitivePreview: false,
+    timezone: 'UTC', sensitivePreview: false, onlyWhenAway: true,
   };
+}
+
+/**
+ * Fill `onlyWhenAway` when it is absent. A missing field keeps the stored value,
+ * so an older app build that saves its other settings cannot turn a stored
+ * `false` back on. With nothing stored, it is true.
+ */
+export function normalizeMobileNotificationPreferences(
+  value: MobileNotificationPreferencesInput,
+  stored?: { onlyWhenAway?: boolean } | null,
+): MobileNotificationPreferences {
+  const onlyWhenAway = typeof value.onlyWhenAway === 'boolean' ? value.onlyWhenAway
+    : typeof stored?.onlyWhenAway === 'boolean' ? stored.onlyWhenAway : true;
+  return { ...value, onlyWhenAway };
 }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

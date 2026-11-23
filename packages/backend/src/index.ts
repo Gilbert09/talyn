@@ -24,6 +24,9 @@ import { prReconcileSweep } from './services/prReconcileSweep.js';
 import { handleGithubWebhook } from './routes/webhooks.js';
 import { handlePolarWebhook } from './services/billing/webhook.js';
 import { handleSlackWebhook, slackEventSweep } from './services/slack/events.js';
+import { mountInboundWebhooks } from './services/inbound/receiver.js';
+import { inboundDeliverySweep, initInboundDeliverySweep } from './services/inbound/sweep.js';
+import { initIssueMergeListener } from './services/inbound/onMerge.js';
 import { registerSlackStatusReactions } from './services/slack/statusReactions.js';
 import { startApiWebhooks, stopApiWebhooks } from './services/apiWebhooks/register.js';
 import { initDatabase } from './db/index.js';
@@ -42,6 +45,8 @@ import { registerCloudProvider } from './services/cloudProviders/registry.js';
 import { workflowsKillSwitchPulled } from './services/workflowsAccess.js';
 import { loopsKillSwitchPulled } from './services/loopsAccess.js';
 import { initWorkflowRetrySweep } from './services/workflows/retrySweep.js';
+import { initPostHogInboxPoller } from './services/posthogInbox/poller.js';
+import { initPostHogClaimSweep } from './services/posthogInbox/claims.js';
 import { initChecksGreenTrigger } from './services/workflows/checksGreen.js';
 import { initLoopScheduler, loopScheduler } from './services/loops/scheduler.js';
 import { initCodeReviewTriggers } from './services/codeReview/triggers.js';
@@ -66,11 +71,13 @@ import {
 import { postHogCodeProvider } from './services/cloudProviders/posthog/provider.js';
 import { selfHostedProvider } from './services/cloudProviders/selfhosted/provider.js';
 import { cloudTaskPoller } from './services/cloudProviders/poller.js';
+import { ciParkSweep } from './services/ciPark.js';
 import { prAutoMergeWatcher } from './services/prAutoMergeWatcher.js';
 import { initMergeQueueTriggers } from './services/mergeQueue/triggers.js';
 import { mergeQueueReconciler } from './services/mergeQueue/reconciler.js';
 import { loadExternalQueueSubmitRoutes } from './services/externalQueueSubmitRoute.js';
 import { dbWatchdog } from './services/dbWatchdog.js';
+import { dbInflightReporter } from './services/dbInflightReporter.js';
 import { githubHealthMonitor } from './services/githubHealthMonitor.js';
 
 const PORT = process.env.PORT || 4747;
@@ -176,6 +183,13 @@ async function main() {
     // can never be created. The per-account flag is checked when a run is
     // re-evaluated, not here — a sweep with nothing to do costs nothing.
     initWorkflowRetrySweep();
+    // PostHog Inbox rules: polls each PostHog connection that has an enabled
+    // rule. One indexed read a minute when no workspace has one; the flag is
+    // asked per connection, per poll.
+    initPostHogInboxPoller();
+    // PostHog Inbox claims: attaches a session's pull request to its claim and
+    // releases a claim whose work ended without one. One indexed read a minute.
+    initPostHogClaimSweep();
     // Raises `pr_checks_passed` off the recomputed check counts — the only
     // place "every check is green" is known. Gated with the engine for the same
     // reason the sweep is: no listener for runs that cannot be created.
@@ -245,6 +259,9 @@ async function main() {
   await githubService.init();
   await prMonitorService.init();
   cloudTaskPoller.init();
+  // Wakes fleet fix runs paused for CI. Armed always: only a run stamped by the
+  // `ci-park` flag can park, and a tick with nothing parked reads one index.
+  ciParkSweep.init();
   prAutoMergeWatcher.init();
   // The merge queue: an event-driven pipeline (triggers) with a 60s reconciler
   // as the backstop for anything no event reached.
@@ -272,6 +289,9 @@ async function main() {
   // policy restarts us — Railway does NOT healthcheck running deploys, so
   // without this the Jul 6 incident state persists until a human restarts it.
   dbWatchdog.init();
+  // Logs the queries and transactions that hold the pool for over 30s, so a
+  // pool that fills names its holders (2026-11-10).
+  dbInflightReporter.init();
 
   // GitHub outage detector: reads GitHub's status page once a minute and
   // watches the share of our own GitHub calls that fail. Feeds the in-app
@@ -282,6 +302,12 @@ async function main() {
   // processed ones after 7 days. Cheap when Slack is not in use: one indexed
   // SELECT a minute that finds nothing.
   slackEventSweep.init();
+  // Inbound webhooks: retries deliveries a crash left unprocessed and deletes
+  // deliveries after 7 days. One indexed SELECT a minute when nothing waits.
+  initInboundDeliverySweep();
+  // Issue rules: the merge write-back. One indexed read per merged or closed
+  // pull request, and it finds nothing when no issue link is active.
+  initIssueMergeListener();
   // Public API idempotency keys expire after 24 hours; one range delete an hour.
   startIdempotencySweep();
   // Slack sessions show their state as a reaction on the triggering message.
@@ -383,6 +409,11 @@ async function main() {
       });
     }
   );
+
+  // Inbound webhooks (a rule's own URL). Raw body for the optional HMAC,
+  // pre-json, no auth: the URL token IS the auth. Verifies, stores, answers
+  // 200; processing is after the response (services/inbound/receiver.ts).
+  mountInboundWebhooks(app);
 
   // 2mb (vs the 100kb default) leaves comfortable room for inline
   // workspace-logo image uploads; the per-logo cap in the workspaces route is
@@ -514,8 +545,10 @@ async function main() {
     draining = true; // /health now answers 503 so the LB stops routing here
     console.log('Shutting down...');
     dbWatchdog.shutdown();
+    dbInflightReporter.shutdown();
     githubHealthMonitor.shutdown();
     cloudTaskPoller.shutdown();
+    ciParkSweep.stop();
     usageMeter.stop();
     prAutoMergeWatcher.shutdown();
     mergeQueueReconciler.shutdown();
@@ -537,6 +570,7 @@ async function main() {
 codeReviewPoller.stop();
 codeReviewReconciler.stop();
     slackEventSweep.stop();
+    inboundDeliverySweep.stop();
     stopApiWebhooks();
     stopMobileNotifications();
     // posthog-node batches the `$feature_flag_called` events that make a flag's

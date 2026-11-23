@@ -15,3 +15,13 @@ export function consumeIntent(): Href | null { const path = pending; pending = n
 export function clearIntent() { pending = null; }
 export function peekIntent() { return pending; }
 export function completeIntent(path: string) { if (pending === path) pending = null; }
+
+// A link or text shared into Talyn from another app (src/features/share). It waits like a product link, so it
+// survives sign-in and the workspace choice, and the new-session page clears it once it shows the text.
+const SHARE_PATH = '/new?mode=session&prompt=';
+/** The route the iOS share extension's link opens (`app/+native-intent.tsx`). It waits there for the shared item. */
+export const SHARE_ROUTE = '/share';
+export function shareIntentPath(prompt: string): string { return `${SHARE_PATH}${encodeURIComponent(prompt)}`; }
+export function rememberShare(prompt: string): string { pending = shareIntentPath(prompt); return pending; }
+export function pendingShare(): string | null { return pending?.startsWith(SHARE_PATH) ? pending : null; }
+export function completeShare() { if (pending?.startsWith(SHARE_PATH)) pending = null; }

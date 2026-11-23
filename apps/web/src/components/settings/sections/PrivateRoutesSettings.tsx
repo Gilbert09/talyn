@@ -273,7 +273,7 @@ export function PrivateRoutesSettings() {
         {connector ? (
           <SettingRow
             label="Disconnect"
-            description="Talyn reports success only after YAS removes the connector."
+            description="Talyn reports success only after the connector is removed."
           >
             <Button size="sm" variant="destructive" onClick={() => void disconnect()} disabled={busy}>
               Disconnect

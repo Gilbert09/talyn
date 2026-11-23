@@ -1,7 +1,7 @@
 import { workbenches } from '@talyn/client/native';
 import { PLAN_APPROVED_MESSAGE, type SendWorkbenchMessageInput } from '@talyn/shared';
 
-import { uploadImage } from './attachmentUpload';
+import { uploadAttachment } from './attachmentUpload';
 
 /**
  * Chat actions the workflow store does not own, with the same client calls as
@@ -10,10 +10,11 @@ import { uploadImage } from './attachmentUpload';
  * Callers refresh the store afterwards.
  */
 export const chatActions = {
+  cancelResume: (chatId: string) => workbenches.cancelResume(chatId),
   stop: (chatId: string) => workbenches.cancel(chatId),
   /** A message with images. The store's own send carries text only. */
   send: (chatId: string, input: SendWorkbenchMessageInput) => workbenches.sendMessage(chatId, input),
-  uploadImage,
+  uploadAttachment,
   async approvePlan(chatId: string) {
     const result = await workbenches.sendMessage(chatId, { text: PLAN_APPROVED_MESSAGE, planMode: false });
     // The build turn already runs without plan mode. This is for the turns after it.
@@ -21,4 +22,6 @@ export const chatActions = {
     return result;
   },
   setPlanMode: (chatId: string, planMode: boolean) => workbenches.updateChat(chatId, { planMode }),
+  /** The question card's answer: the chat's next message. */
+  answerQuestion: (chatId: string, text: string) => workbenches.sendMessage(chatId, { text }),
 };

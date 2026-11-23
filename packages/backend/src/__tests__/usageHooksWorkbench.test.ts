@@ -207,7 +207,7 @@ describe('the meter on a session box', () => {
       const after = await row();
       expect(after.status).toBe('ready');
       expect(after.settings?.boxSize).toBe(size);
-      expect(fleet.created[0]).toMatchObject({ memMib: SANDBOX_SIZES[size].memMib, milliVcpu: SANDBOX_SIZES[size].milliVcpu, idleTtlSec: 600 });
+      expect(fleet.created[0]).toMatchObject({ memMib: SANDBOX_SIZES[size].memMib, milliVcpu: SANDBOX_SIZES[size].milliVcpu, idleTtlSec: 180 });
       expect(opens()).toEqual([workbenchInterval(after.sandboxId!, size)]);
       expect(closes()).toEqual([]);
     });

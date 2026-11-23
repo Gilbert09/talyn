@@ -24,11 +24,10 @@ import { useWorkbenchStore } from '../stores/workbenches';
  */
 export type WorkbenchPromptActionKind = Exclude<WorkbenchPromptAction, 'rename_branch'>;
 
-export interface PastedFile {
-  name: string;
-  mimeType: string;
-  dataBase64: string;
-}
+/** A file to attach. An image comes as `dataBase64`; a video comes as its `blob`, which is too large to encode twice. */
+export type PastedFile =
+  | { name: string; mimeType: string; dataBase64: string; blob?: undefined }
+  | { name: string; mimeType: string; blob: Blob; dataBase64?: undefined };
 
 export interface WorkbenchOps {
   readonly runtime: Workbench['runtime'];
@@ -41,7 +40,7 @@ export interface WorkbenchOps {
   readonly readUnavailable: string | null;
   /** Whether a queued message can be taken back. */
   readonly canRemoveQueued: boolean;
-  /** Whether pasted images can be attached. */
+  /** Whether pasted images and videos can be attached. */
   readonly canAttach: boolean;
   send(chat: WorkbenchChat, input: SendWorkbenchMessageInput): Promise<{ queued: boolean }>;
   cancel(chatId: string): Promise<void>;
@@ -92,6 +91,12 @@ export function needsWake(err: unknown): boolean {
   return err instanceof Error && (err as { code?: unknown }).code === 'snapshot_unavailable';
 }
 
+/** True when the fleet could not answer now (full or out of reach). The read can try again shortly. */
+export function fleetUnavailable(err: unknown): boolean {
+  const { status, code } = (err ?? {}) as { status?: unknown; code?: unknown };
+  return status === 503 && (code === 'fleet_unavailable' || code === 'sandbox_waking');
+}
+
 export function sandboxOps(workbench: Workbench): WorkbenchOps {
   const id = workbench.id;
   const unavailable = sandboxUnavailableReason(workbench);
@@ -132,7 +137,8 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
     },
     attach: (file) => api.workbenches.uploadAttachment(
       id,
-      new Blob([Uint8Array.from(atob(file.dataBase64), (char) => char.charCodeAt(0))], { type: file.mimeType }),
+      // `slice` relabels the bytes without copying them: a `.mov` file can arrive with no type.
+      file.blob ? file.blob.slice(0, file.blob.size, file.mimeType) : new Blob([Uint8Array.from(atob(file.dataBase64), (char) => char.charCodeAt(0))], { type: file.mimeType }),
       file.name
     ),
     attachmentBlob: (path) => api.workbenches.attachmentBlob(id, path),

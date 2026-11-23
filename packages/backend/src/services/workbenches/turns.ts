@@ -1,4 +1,5 @@
 import { cancelLimitResume, chatLimitAgent, handleChatLimit } from './limitResume.js';
+import { autoResumeEnabled, chatOutageAgent } from './outageResume.js';
 import { assertSandboxAgent, validateAgentModel } from './credentialPolicy.js';
 import { archiveIdleSession } from './autoArchive.js';
 import { suspendWorkbenchIfExhausted } from '../billing/usage/index.js';
@@ -12,10 +13,14 @@ import {
   buildCodexArgv,
   checkpointCreateSteps,
   checkpointRestoreSteps,
+  CLAUDE_OUTAGE_RETRY_ENV,
   CLAUDE_SANDBOX_ENV,
   createAgentStreamParser,
   parseAutoPrDetails,
   parsePrDetails,
+  pullRequestRetryMessage,
+  PR_RETRY_MAX,
+  resolveFleetModel,
   workbenchTurnPrompt,
   shellQuote,
   toShellScript,
@@ -23,6 +28,11 @@ import {
   DEFAULT_WORKBENCH_EFFORT,
   WORKBENCH_EFFORTS,
   WORKBENCH_MESSAGE_INTENTS,
+  WORKBENCH_MAX_TEXT_BYTES,
+  WORKBENCH_TEXT_TYPE,
+  WORKBENCH_VIDEO_PROMPT_NOTE,
+  isWorkbenchTextContent,
+  isWorkbenchVideoType,
   type AgentEventDraft,
   type AgentStreamParser,
   type SendWorkbenchMessageInput,
@@ -33,6 +43,8 @@ import {
   type WorkbenchStatus,
   type WorkbenchTurnPayer,
   type WorkbenchMessageTrigger,
+  type WorkbenchMessageSender,
+  QUESTION_EVENT_TYPE,
 } from '@talyn/shared';
 import { payerRef, turnGitIdentityEnv } from '../teams/payer.js';
 import { debugBus, describeError } from '../debugBus.js';
@@ -100,6 +112,7 @@ import { followBranchRename, nameBranchBeforePullRequest, startBranchNaming, typ
 import {
   abandonCapacityWait,
   appendEvents,
+  openSubagentCount,
   busyPayerLogin,
   claimOrEnqueue,
   earlierOtherPayerTurn,
@@ -158,10 +171,31 @@ interface LiveTurn {
   turn: number;
   controller: AbortController;
   cancelRequested: boolean;
+  /**
+   * Aborted when a stop could not reach the box. The follower stops reading a
+   * log it may not reach for a long time, and the turn ends as stopped.
+   */
+  stopFollowing: AbortController;
+}
+
+function newLiveTurn(turn: number): LiveTurn {
+  return { turn, controller: new AbortController(), cancelRequested: false, stopFollowing: new AbortController() };
+}
+
+/** The signal a follower reads: this instance detaches, or a stop gave up on the box. */
+function followSignal(live: LiveTurn): AbortSignal {
+  return AbortSignal.any([live.controller.signal, live.stopFollowing.signal]);
 }
 
 /** chatId → the turn this process is following. */
 const liveTurns = new Map<string, LiveTurn>();
+
+/**
+ * chatId → the turn a person stopped here, with the queue to start after it.
+ * The follower reads it when that turn ends. Archive, close and an agent
+ * switch also stop turns, but they never start the queue.
+ */
+const queueAfterCancel = new Map<string, number>();
 
 /**
  * chatId → turn loops alive in this process. Wider than `liveTurns`, which is
@@ -247,14 +281,16 @@ export function isTurnLiveHere(chatId: string): boolean {
 
 export function normaliseMessage(input: SendWorkbenchMessageInput): WorkbenchQueuedMessage {
   const text = typeof input?.text === 'string' ? input.text : '';
-  if (!text.trim()) throw new WorkbenchError('A message needs some text.', 400, 'empty_message');
+  const attachments = Array.isArray(input?.attachments) ? input.attachments.map(normaliseAttachment) : undefined;
+  if (!text.trim() && !attachments?.length) {
+    throw new WorkbenchError('A message needs some text or an attachment.', 400, 'empty_message');
+  }
   if (input.effort !== undefined && !WORKBENCH_EFFORTS.includes(input.effort)) {
     throw new WorkbenchError(`Unknown effort "${String(input.effort)}".`, 400, 'bad_effort');
   }
   if (input.intent !== undefined && !WORKBENCH_MESSAGE_INTENTS.includes(input.intent)) {
     throw new WorkbenchError(`Unknown intent "${String(input.intent)}".`, 400, 'bad_intent');
   }
-  const attachments = Array.isArray(input.attachments) ? input.attachments.map(normaliseAttachment) : undefined;
   return {
     id: uuid(),
     text,
@@ -274,9 +310,19 @@ function normaliseAttachment(a: WorkbenchAttachment): WorkbenchAttachment {
   if (!name || hasData === hasPath) {
     throw new WorkbenchError('An attachment needs a name and exactly one of dataBase64 or path.', 400, 'bad_attachment');
   }
+  const mimeType = typeof a.mimeType === 'string' ? a.mimeType : 'application/octet-stream';
+  if (hasData && mimeType.toLowerCase() === WORKBENCH_TEXT_TYPE) {
+    const bytes = Buffer.from(a.dataBase64 as string, 'base64');
+    if (bytes.length > WORKBENCH_MAX_TEXT_BYTES) {
+      throw new WorkbenchError(`${name} is larger than 1 MB.`, 413, 'attachment_too_large');
+    }
+    if (!isWorkbenchTextContent(bytes)) {
+      throw new WorkbenchError(`${name} is not a UTF-8 text file.`, 415, 'bad_attachment');
+    }
+  }
   return {
     name,
-    mimeType: typeof a.mimeType === 'string' ? a.mimeType : 'application/octet-stream',
+    mimeType,
     ...(hasData ? { dataBase64: a.dataBase64 } : { path: a.path }),
   };
 }
@@ -294,7 +340,14 @@ function normaliseAttachment(a: WorkbenchAttachment): WorkbenchAttachment {
 export async function sendMessage(
   chatId: string,
   input: SendWorkbenchMessageInput,
-  opts: { origin?: 'talyn'; sentAt?: string; resumeVersion?: number; payer?: WorkbenchTurnPayer; trigger?: WorkbenchMessageTrigger } = {},
+  opts: {
+    origin?: 'talyn';
+    sentAt?: string;
+    resumeVersion?: number;
+    payer?: WorkbenchTurnPayer;
+    trigger?: WorkbenchMessageTrigger;
+    sender?: WorkbenchMessageSender;
+  } = {},
 ): Promise<{ queued: boolean; waitingFor?: string }> {
   const receivedAt = opts.sentAt ?? new Date().toISOString();
   const chat = await getChat(chatId);
@@ -313,6 +366,7 @@ export async function sendMessage(
   if (opts.origin === 'talyn') message.origin = 'talyn';
   if (opts.origin === 'talyn' && opts.trigger) message.trigger = opts.trigger;
   if (opts.payer) message.payer = opts.payer;
+  if (opts.sender && opts.origin !== 'talyn') message.sender = opts.sender;
   const payer = payerRef(message.payer);
   // A person's message that would start a turn now asks the plan first, so
   // the route can answer 402 and the composer keeps the text. A message
@@ -422,6 +476,8 @@ async function runTurnLoopBody(
       await releaseLease(chatId, heldTurn, 'the turn follower failed', error);
       return;
     } finally { clearInterval(heartbeat); }
+    const startQueue = queueAfterCancel.get(chatId) === heldTurn;
+    if (startQueue) queueAfterCancel.delete(chatId);
     // Before the lease checks: nothing ran, and a requeue that this instance still owns keeps the message safe across a deploy.
     if (outcome.capacityWait) {
       await requeueForSandbox(chatId, next.message, heldTurn, outcome.capacityWait);
@@ -449,10 +505,11 @@ async function runTurnLoopBody(
     else if (outcome.agentSaysDiskFull && !outcome.cancelled && (await diskFullConfirmed(chatId))) {
       await recoverTurnFromDiskFull(chatId);
     }
+    await appendSubagentsStoppedNote(chatId, heldTurn, TURN_OWNER);
     const fin = await finishTurn(chatId, {
-      finalStatus: outcome.status,
+      finalStatus: await turnEndStatus(chatId, heldTurn, outcome),
       statusMessage: outcome.statusMessage,
-      drain: !outcome.cancelled,
+      drain: !outcome.cancelled || startQueue,
       owner: TURN_OWNER,
       turn: heldTurn,
     });
@@ -479,12 +536,27 @@ async function runTurnLoopBody(
       if (wb?.status === 'ready') await startQueuedIfIdle(chatId);
     }
     if (fin && !fin.started && !outcome.cancelled && outcome.status === 'error' &&
-        outcome.statusMessage && chatLimitAgent(fin.chat, outcome.statusMessage)) {
+        outcome.statusMessage && (outcome.credentialsUnavailable || chatLimitAgent(fin.chat, outcome.statusMessage) || chatOutageAgent(fin.chat, outcome.statusMessage))) {
       await handleChatLimit(fin.chat, outcome.statusMessage).catch((err) => {
         console.warn(`[workbench] resuming chat ${chatId} failed:`, err);
       });
     }
     next = fin?.started ?? null;
+  }
+}
+
+/**
+ * A turn in which the agent asked the person a question (`talyn_ask_user`)
+ * ends waiting for the answer, not idle. A failed or stopped turn keeps its
+ * status: the person must see the failure first.
+ */
+async function turnEndStatus(chatId: string, turn: number, outcome: TurnOutcome): Promise<WorkbenchChatStatus> {
+  if (outcome.status !== 'idle' || outcome.cancelled) return outcome.status;
+  try {
+    return (await hasTurnEvent(chatId, turn, QUESTION_EVENT_TYPE)) ? 'awaiting_input' : outcome.status;
+  } catch (err) {
+    console.warn(`[workbench] reading chat ${chatId} turn ${turn} for a question failed:`, err);
+    return outcome.status;
   }
 }
 
@@ -525,10 +597,11 @@ async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): P
     // The thread hears about a new pull request in the `session_finished` wake below, not in a second one.
     const linked = await linkPullRequest(wb, { notifyThread: false });
     if (linked.pullRequestId !== wb.pullRequestId) await emitWorkbenchUpdated(await publicWorkbench(linked));
-    if (linked.threadId) {
+    if (linked.threadId || linked.parentWorkbenchId) {
       if (linked.pullRequestId && linked.pullRequestId !== wb.pullRequestId) await notifyThread(linked, 'pr_opened', { wake: false });
       // A queued message already started the next turn: the thread hears when that one ends.
-      if (chat.status !== 'running') await notifyThread(linked, 'session_finished', { status: chat.status });
+      if (chat.status === 'awaiting_input') await notifyThread(linked, 'needs_input', { status: chat.status, chatId: chat.id, turn: chat.turnCount });
+      else if (chat.status !== 'running') await notifyThread(linked, 'session_finished', { status: chat.status, chatId: chat.id, turn: chat.turnCount });
     }
     // The turn may have fixed the PR, so the merge queue and auto-keep look again.
     if (linked.pullRequestId) notifyPrSessionChanged(linked.workspaceId, linked.pullRequestId, 'session:turn_end');
@@ -559,6 +632,7 @@ interface TurnOutcome {
   cancelled: boolean;
   /** The turn failed because the box's disk is full. */
   diskFull?: boolean;
+  credentialsUnavailable?: boolean;
   /**
    * The agent failed and its own output says the disk is full. That text is
    * not proof (an agent can talk about disks), so the box's free space is
@@ -675,14 +749,15 @@ class EventBatcher {
 /**
  * The model a turn runs on. Undefined: the agent's own default. The session's
  * model applies only to a chat on the session's agent, so a Codex chat in a
- * Claude session never runs a Claude model.
+ * Claude session never runs a Claude model. A retired id runs as the model
+ * that replaces it.
  */
 export function turnModelFor(
   message: Pick<WorkbenchQueuedMessage, 'model'>,
   chat: { agent: string; model: string | null },
   wb: { agent: string; model: string | null },
 ): string | undefined {
-  return message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model ?? undefined : undefined);
+  return resolveFleetModel(message.model ?? chat.model ?? (chat.agent === wb.agent ? wb.model ?? undefined : undefined));
 }
 
 /**
@@ -706,6 +781,8 @@ export function userMessageEvent(
       ...(message.origin === 'talyn' ? { origin: 'talyn' } : {}),
       // A wake-up or a job exit: the clients show the turn as a system row.
       ...(message.origin === 'talyn' && message.trigger ? { trigger: message.trigger } : {}),
+      // The session's thread wrote it, for example an answer to the agent's question.
+      ...(message.sender ? { sender: message.sender } : {}),
       // Who prompted, for a teammate's turn. The payer's workspace stays on the backend.
       ...(message.payer
         ? { payer: { userId: message.payer.userId, githubLogin: message.payer.githubLogin, avatarUrl: message.payer.avatarUrl } }
@@ -757,7 +834,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     const refusal = await existingBoxRefusal(early, message.origin === 'talyn', payer);
     if (refusal) return holdTurn(chatId, message, refusal);
   }
-  const live: LiveTurn = { turn, controller: new AbortController(), cancelRequested: false };
+  const live = newLiveTurn(turn);
   liveTurns.set(chatId, live);
   const events = new EventBatcher(chat.workspaceId, chatId, turn);
   let needsUserMessage = !(await hasTurnEvent(chatId, turn, 'user_message'));
@@ -851,8 +928,11 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
       agent === 'claude'
         ? claudeCoAuthoredBySetting(payer?.workspaceId ?? wb.workspaceId)
         : Promise.resolve(undefined),
+      agent === 'claude'
+        ? autoResumeEnabled(payer?.workspaceId ?? wb.workspaceId).catch(() => false)
+        : Promise.resolve(false),
     ] as const;
-    const [refreshed, , { talynTools, talynSkills, memory }, attached, claudeCoAuthoredBy] = await Promise.all(jobs).catch(async (err: unknown) => {
+    const [refreshed, , { talynTools, talynSkills, memory }, attached, claudeCoAuthoredBy, outageResume] = await Promise.all(jobs).catch(async (err: unknown) => {
       // Finish every write before recovery, a retry, or another turn can start.
       await Promise.allSettled(jobs);
       if (needsUserMessage) {
@@ -863,13 +943,14 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     });
     if (refreshed.note) events.add(accountSwitchEvent(refreshed.note));
     if (live.cancelRequested) return cancelledOutcome(events);
-    startTitleGeneration(wb, message.text);
+    startTitleGeneration(wb, message.text, { agent });
 
     const planMode = message.planMode ?? chat.planMode;
     const model = turnModel;
     const effort = message.effort ?? (chat.effort as WorkbenchQueuedMessage['effort']) ?? DEFAULT_WORKBENCH_EFFORT;
     let resumeSessionId = chat.agentSessionId ?? undefined;
-    const text = promptWith(message.text, agent === 'codex' ? attached.other : attached.all);
+    // Codex gets images with -i. An image-only message still names them, so the prompt is not empty.
+    const text = promptWith(message.text, agent === 'codex' && message.text.trim() ? attached.other : attached.all);
     // The transcript keeps `message.text`; the hidden instructions reach the agent only.
     let recap = await recoveryRecap(chatId, turn);
     const buildArgv = () => {
@@ -879,7 +960,12 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         text,
         planMode,
         intent: message.intent,
-        createPr: { branch: wb.branch, baseBranch: wb.baseBranch, extra: wb.settings?.prompts?.create_pr },
+        createPr: {
+          branch: wb.branch,
+          baseBranch: wb.baseBranch,
+          extra: wb.settings?.prompts?.create_pr,
+          retryError: message.trigger?.kind === 'pr_retry' ? message.trigger.error : null,
+        },
         internetAccess: wb.settings?.internetAccess,
         // A thread has no branch to open a pull request from.
         autoCreatePr: isThread(wb) ? false : wb.settings?.autoCreatePr,
@@ -906,7 +992,9 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     };
     let argv = buildArgv();
     const env = {
-      ...sandboxScriptEnv(wb), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}), ...gitIdentity, TALYN_TURN_QUEUED_AT: message.queuedAt,
+      ...sandboxScriptEnv(wb), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}),
+      // Talyn retries the turn on a suspended box, so Claude Code need not retry long on an awake one.
+      ...(outageResume ? CLAUDE_OUTAGE_RETRY_ENV : {}), ...gitIdentity, TALYN_TURN_QUEUED_AT: message.queuedAt,
       // The chat Talyn's background and wake-up tools act on.
       TALYN_CHAT_ID: chatId,
     };
@@ -955,7 +1043,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         continue;
       }
       const stopAccountWatch = startAccountWatch(wb, model, (note) => events.add(accountSwitchEvent(note)), agent, payer);
-      const stream = followTurnOutput(wb, chat, turn, attempt, parser, 0, live.controller.signal, () => {
+      const stream = followTurnOutput(wb, chat, turn, attempt, parser, 0, followSignal(live), () => {
         noteRecapStarted();
         if (parser.result) { sawResult = true; attemptSawResult = true; }
       }).finally(stopAccountWatch);
@@ -1037,10 +1125,15 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     // as plain words and not as the fleet's raw refusal.
     const why = userFacingError(err);
     console.warn(`[workbench] turn ${turn} of chat ${chatId} failed:`, err);
-    events.add(errorResultEvent('error_during_execution', `Talyn could not run this turn: ${why}`));
+    events.add({
+      ...errorResultEvent('error_during_execution', `Talyn could not run this turn: ${why}`),
+      ...(err instanceof WorkbenchError && err.details ? { code: err.code, ...err.details } : {}),
+    });
     await events.flush();
     const diskFull = isDiskFullError(err);
-    return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false, ...(diskFull ? { diskFull } : {}) };
+    return { status: 'error', statusMessage: why.slice(0, 500), cancelled: false,
+      credentialsUnavailable: err instanceof WorkbenchError && err.code === 'credentials_unavailable',
+      ...(diskFull ? { diskFull } : {}) };
   } finally {
     await recapWrite;
     liveTurns.delete(chatId);
@@ -1098,7 +1191,7 @@ async function waitForOtherPayer(chatId: string, message: WorkbenchQueuedMessage
 
 /** Give the turn back to the queue because the plan refused its box, and say why in the chat. */
 async function holdTurn(chatId: string, message: WorkbenchQueuedMessage, refusal: BoxGateError): Promise<TurnOutcome> {
-  const requeued = await requeueTurn(chatId, message);
+  const requeued = await requeueTurn(chatId, message, { drain: false });
   if (requeued) {
     const stored = await appendEvents(chatId, [
       {
@@ -1191,7 +1284,7 @@ async function capacityWaitOutcome(
  */
 async function requeueForSandbox(chatId: string, message: WorkbenchQueuedMessage, turn: number, wait: WorkbenchCapacityWait): Promise<void> {
   adoptFailures.delete(chatId);
-  const requeued = await requeueTurn(chatId, { ...message, capacityWait: wait }, turn);
+  const requeued = await requeueTurn(chatId, { ...message, capacityWait: wait }, { turn });
   if (!requeued) {
     await releaseLease(chatId, turn, 'the chat moved on before its wait for a sandbox was recorded');
     return;
@@ -1237,7 +1330,9 @@ export async function endCapacityWait(chatId: string, messageId?: string): Promi
 function promptWith(text: string, files: Array<{ path: string; mimeType: string }>): string {
   if (files.length === 0) return text;
   const list = files.map((f) => `- ${f.path} (${f.mimeType})`).join('\n');
-  return `${text}\n\nAttached files:\n${list}`;
+  const note = files.some((f) => isWorkbenchVideoType(f.mimeType)) ? `\n\n${WORKBENCH_VIDEO_PROMPT_NOTE}` : '';
+  const attached = `Attached files:\n${list}${note}`;
+  return text.trim() ? `${text}\n\n${attached}` : attached;
 }
 
 /**
@@ -1421,13 +1516,32 @@ export async function restoreCheckpoint(chatId: string, turn: number): Promise<v
 // Cancel and the boot sweep
 // ============================================================================
 
+/** A note only. A failure here must never stop the turn from finishing. */
+async function appendSubagentsStoppedNote(chatId: string, turn: number, owner?: string): Promise<void> {
+  try {
+    const count = await openSubagentCount(chatId, turn);
+    if (count === 0) return;
+    const stored = await appendEvents(chatId, [{ turn, event: {
+      type: 'system', subtype: 'subagents_stopped',
+      text: `${count} ${count === 1 ? 'subagent was' : 'subagents were'} still running when the turn ended. These subagents stopped.`,
+    } }], owner ? { owner, turn } : undefined);
+    const chat = await getChat(chatId);
+    if (chat && stored.length) emitWorkbenchEvents(chat.workspaceId, chatId, stored);
+  } catch (err) {
+    console.warn('[turns] could not record stopped subagents', { chatId, turn, err });
+  }
+}
+
 /**
  * Stop the running turn. The kill goes to the sandbox by marker, so it works
  * whether or not this process is the one following the turn. When nothing
  * here is following it, the chat is settled here as well — otherwise the
  * follower's own ending settles it.
+ *
+ * `startQueue`: a person pressed Stop, so the messages they queued behind
+ * the turn start after it. Without it the queue waits for the next message.
  */
-export async function cancelTurn(chatId: string): Promise<void> {
+export async function cancelTurn(chatId: string, opts: { startQueue?: boolean } = {}): Promise<void> {
   await cancelLimitResume(chatId);
   const chat = await getChat(chatId);
   if (!chat) throw new WorkbenchError('Chat not found', 404, 'not_found');
@@ -1435,30 +1549,90 @@ export async function cancelTurn(chatId: string): Promise<void> {
   if (!wb) throw new WorkbenchError('Session not found', 404, 'not_found');
   if (wb.runtime === 'local') throw localRuntimeError();
   const live = liveTurns.get(chatId);
-  if (live) live.cancelRequested = true;
+  if (live) {
+    live.cancelRequested = true;
+    if (opts.startQueue) queueAfterCancel.set(chatId, live.turn);
+  }
   if (chat.status !== 'running' && !live) {
     // Between two tries of a wait for a free sandbox nothing runs: the wait itself stops.
-    await endCapacityWait(chatId);
+    const ended = await endCapacityWait(chatId);
+    if (ended && opts.startQueue && ended.queuedMessages.length > 0 && !ended.closedAt) await startQueuedIfIdle(chatId);
     return;
   }
   const lease = await getTurnLease(chatId);
   if (lease && lease.turn !== chat.turnCount) return;
   if (wb.sandboxId) {
-    const marker = lease?.heartbeat ? await durableMarker(wb, turnLogKey(chatId, lease.turn, lease.attempt),
-      turnMarker(chatId, lease.turn, lease.attempt), turnMarker(chatId)) : turnMarker(chatId);
-    await killMarker(wb, marker);
+    // Stop always stops: a box that cannot be reached (no free runner, still
+    // waking) does not keep the turn running. The turn ends here, and the
+    // agent in the box is stopped once the box answers.
+    try {
+      await killTurnAgent(wb, chatId, lease);
+    } catch (err) {
+      noteTurn('turn_stop_unreached', chatId, chat.turnCount, 'the agent in the box could not be stopped; the turn ends anyway', err);
+      live?.stopFollowing.abort();
+      killTurnAgentLater(wb.id, chatId, lease);
+    }
   }
   if (!live) {
-    const fin = await finishTurn(chatId, { finalStatus: 'idle', statusMessage: 'Cancelled', drain: false, turn: chat.turnCount });
+    const fin = await finishTurn(chatId, {
+      finalStatus: 'idle', statusMessage: 'Cancelled', drain: opts.startQueue ?? false, turn: chat.turnCount,
+    });
     if (fin) {
+      await appendSubagentsStoppedNote(chatId, chat.turnCount);
       emitWorkbenchChat(fin.chat.workspaceId, rowToChat(fin.chat));
       sendWebhookSignal({ kind: 'turn_completed', workspaceId: fin.chat.workspaceId, chatId, turn: chat.turnCount, finalStatus: 'idle' });
+      if (fin.started) {
+        sendWebhookSignal({ kind: 'turn_started', workspaceId: fin.chat.workspaceId, chatId, turn: fin.started.turn });
+        launchTurnLoop(chatId, fin.started);
+      }
       await archiveIdleSession(fin.chat.workbenchId);
       await suspendIfOutOfBudget(fin.chat.workbenchId);
       if (wb.sandboxId) await removeTurnLogs(wb, chatId, chat.turnCount);
       await startPayerBlockedSiblings(fin.chat.workbenchId, chatId);
     }
   }
+}
+
+/** Kill the agent process of the leased turn's attempt (or the legacy marker). */
+async function killTurnAgent(wb: WorkbenchRow, chatId: string, lease: TurnLease | null): Promise<void> {
+  const marker = lease?.heartbeat ? await durableMarker(wb, turnLogKey(chatId, lease.turn, lease.attempt),
+    turnMarker(chatId, lease.turn, lease.attempt), turnMarker(chatId)) : turnMarker(chatId);
+  await killMarker(wb, marker);
+}
+
+/** The waits before each retry of a kill that could not reach the box: about 30 minutes in all. */
+const DEFAULT_STOP_RETRY_MS: readonly number[] = [15_000, 60_000, 4 * 60_000, 10 * 60_000, 15 * 60_000];
+let stopRetryMs = DEFAULT_STOP_RETRY_MS;
+
+/** Tests shorten the waits. */
+export function setStopRetryDelaysForTests(delays: readonly number[] | null): void {
+  stopRetryMs = delays ?? DEFAULT_STOP_RETRY_MS;
+}
+
+/**
+ * A stopped turn whose box did not answer the kill: try again in the
+ * background, so the agent does not wake with the box and keep working.
+ */
+function killTurnAgentLater(workbenchId: string, chatId: string, lease: TurnLease | null, attempt = 0): void {
+  const delay = stopRetryMs[attempt];
+  if (delay === undefined) {
+    noteTurn('turn_stop_gave_up', chatId, lease?.turn ?? 0, `the agent in the box could not be stopped after ${attempt} retries`, new Error('the box did not answer'));
+    return;
+  }
+  const timer = setTimeout(() => {
+    void runWithoutScope(async () => {
+      const wb = await getWorkbench(workbenchId);
+      if (!wb?.sandboxId || wb.runtime === 'local') return;
+      try {
+        await killTurnAgent(wb, chatId, lease);
+        noteTurn('turn_stop_reached', chatId, lease?.turn ?? 0, `the agent in the box was stopped on retry ${attempt + 1}`);
+      } catch (err) {
+        if (err instanceof FleetRunNotFoundError) return;
+        killTurnAgentLater(workbenchId, chatId, lease, attempt + 1);
+      }
+    }).catch((err: unknown) => console.warn(`[workbench] retrying the stop of chat ${chatId} failed:`, err));
+  }, delay);
+  timer.unref?.();
 }
 
 /** Abort every follower this process holds for a workbench (archive, delete). */
@@ -1511,9 +1685,43 @@ async function finishSuccessfulAgent(
   let fresh = (await getWorkbench(wb.id)) ?? wb;
   if (message.intent === 'rename_branch') fresh = (await followBranchRename(fresh)) ?? fresh;
   if (message.intent === 'create_pr' || (wb.settings?.autoCreatePr !== false &&
-      (await getChat(chatId))?.status !== 'awaiting_input' && !fresh.pullRequestId && parseAutoPrDetails(text).ok)) {
-    events.add(await openPullRequestFromTurn(await nameBeforePush(fresh, chatId, message, text), text));
+      (await getChat(chatId))?.status !== 'awaiting_input' && !fresh.pullRequestId && parseAutoPrDetails(text).ok &&
+      !(await hasTurnEvent(chatId, live.turn, QUESTION_EVENT_TYPE)))) {
+    const opened = await openPullRequestFromTurn(await nameBeforePush(fresh, chatId, message, text), text);
+    events.add(opened.event);
     await events.flush();
+    if (opened.fixableError) await queuePullRequestRetry(chatId, message, opened.fixableError);
+  }
+}
+
+/**
+ * The push or the commit failed for a reason the agent can fix (the remote
+ * branch moved, a commit failed): queue a turn that gives the agent the error
+ * and runs the pull request again when it ends. At most `PR_RETRY_MAX` in a
+ * row. Not when the person already queued a message: theirs says what is next.
+ */
+const PR_RETRY_ERROR_MAX_CHARS = 2000;
+
+async function queuePullRequestRetry(chatId: string, message: WorkbenchQueuedMessage, error: string): Promise<void> {
+  const attempt = (message.trigger?.kind === 'pr_retry' ? message.trigger.attempt : 0) + 1;
+  if (attempt > PR_RETRY_MAX) return;
+  try {
+    const chat = await getChat(chatId);
+    if (!chat || chat.queuedMessages.length > 0) return;
+    const detail = error.slice(0, PR_RETRY_ERROR_MAX_CHARS);
+    await sendMessage(chatId, {
+      text: pullRequestRetryMessage(detail),
+      intent: 'create_pr',
+      planMode: false,
+      ...(message.model ? { model: message.model } : {}),
+      ...(message.effort ? { effort: message.effort } : {}),
+    }, {
+      origin: 'talyn',
+      trigger: { kind: 'pr_retry', attempt, error: detail },
+      ...(message.payer ? { payer: message.payer } : {}),
+    });
+  } catch (err) {
+    console.warn(`[workbench] queueing a pull request retry for chat ${chatId} failed:`, err);
   }
 }
 
@@ -1532,7 +1740,7 @@ async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean)
   const chat = await getChat(chatId);
   const wb = chat ? await getWorkbench(chat.workbenchId) : null;
   if (!chat || !wb) return handoffOutcome('the chat or its session is gone');
-  const live: LiveTurn = { turn: lease.turn, controller: new AbortController(), cancelRequested: false };
+  const live = newLiveTurn(lease.turn);
   liveTurns.set(chatId, live);
   const events = new EventBatcher(chat.workspaceId, chatId, lease.turn);
   const parser = createAgentStreamParser(chat.agent === 'codex' ? 'codex' : 'claude', lease.parser);
@@ -1573,9 +1781,9 @@ async function resumeTurn(chatId: string, lease: TurnLease, legacyTurn: boolean)
     if (!lease.parser && lease.offset > 0) {
       await followDurableExec(wb, key, turnMarker(chatId, lease.turn, lease.attempt), 0, async (record) => {
         if (record.stream === 'stdout') parser.push(record.line);
-      }, live.controller.signal, lease.offset, turnMarker(chatId));
+      }, followSignal(live), lease.offset, turnMarker(chatId));
     }
-    const outcome = await followTurnOutput(wb, chat, lease.turn, lease.attempt, parser, lease.offset, live.controller.signal,
+    const outcome = await followTurnOutput(wb, chat, lease.turn, lease.attempt, parser, lease.offset, followSignal(live),
       () => adoptFailures.delete(chatId));
     if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome('the follower was stopped');
     if (live.cancelRequested) return cancelledOutcome(events, Boolean(parser.result));
@@ -1702,6 +1910,9 @@ async function followTurnOutput(
         }
         const parsed = record.stream === 'stdout' ? parser.push(record.line) : [];
         return parsed.map((draft) => {
+          if (draft.type === 'result' && !draft.parent_tool_use_id) {
+            return { ...draft, talyn: { kind: 'process_result', turn, attempt } };
+          }
           if (draft.type !== 'system' || draft.subtype !== 'init' || !record.timing) return draft;
           const { queuedAt, spawnedAt, at } = record.timing;
           if (![queuedAt, spawnedAt, at].every(Number.isFinite) || spawnedAt < queuedAt || at < spawnedAt) return draft;

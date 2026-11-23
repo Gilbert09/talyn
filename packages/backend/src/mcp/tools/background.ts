@@ -52,16 +52,18 @@ function jobLine(job: WorkbenchBackgroundJob): string {
 }
 
 function wakeupLine(w: WorkbenchWakeup): string {
-  const when = w.status === 'scheduled' ? `at ${w.wakeAt}` : `${w.status}${w.firedAt ? ` ${w.firedAt}` : ''}`;
+  const when = w.status === 'scheduled'
+    ? w.ci ? `when CI on ${w.ci.headSha.slice(0, 12)} settles, at the latest ${w.wakeAt}` : `at ${w.wakeAt}`
+    : `${w.status}${w.firedAt ? ` ${w.firedAt}` : ''}`;
   return `${w.id}  [${when}]  by ${w.createdBy}  ${w.reason}${w.failureDetail ? `  (${w.failureDetail})` : ''}`;
 }
 
 export const BACKGROUND = [
   defineTool(
     'run_background',
-    `Start a shell command in this session's sandbox that keeps running after your turn ends. Use it for work longer than one command may run (about 10 minutes): a long test suite, a build, a data job, a server you need later. Your own background shells (\`&\`, \`nohup\`) stop when your turn ends; this does not. Talyn starts a new turn in your chat when the job exits (notify_on_exit), with the exit code and the last 40 lines of output, so end your turn after you start it. While keep_awake_seconds runs, Talyn checks the job every 30 seconds and the sandbox stays awake. That awake time is billed box time, paid by whoever pays for this turn. With keep_awake_seconds 0 the sandbox may sleep; the job freezes with it and continues when the sandbox wakes. A move or resize of the session stops the job (status lost).`,
+    `Start a shell command in this session's sandbox that keeps running after your turn ends. Use it for each command that can take more than about 2 minutes: a test suite, a build, a type check, an install, a data job, a server you need later. Your agent's own background tasks (\`run_in_background\`, \`&\`, \`nohup\`) stop when your turn ends, together with any tool call that runs then; this does not. Talyn starts a new turn in your chat when the job exits (notify_on_exit), with the exit code and the last 40 lines of output, so end your turn after you start it. Let the command print to its own output: do not redirect it to a file or pipe it through \`tail\` or \`head\`. The person watches that output live in the Background tab, and you read more of it with talyn_background_logs. While keep_awake_seconds runs, Talyn checks the job every 30 seconds and the sandbox stays awake. That awake time is billed box time, paid by whoever pays for this turn. With keep_awake_seconds 0 the sandbox may sleep; the job freezes with it and continues when the sandbox wakes. A move or resize of the session stops the job (status lost).`,
     {
-      command: { type: 'string', description: 'The shell command. It runs with bash in cwd. Put a long script in a file and run the file.' },
+      command: { type: 'string', description: 'The shell command. It runs with bash in cwd. Put a long script in a file and run the file. Do not redirect its output to a file or pipe it through tail: Talyn records the output and shows it live.' },
       name: { type: 'string', description: 'A short name for the job. Default: the start of the command.' },
       cwd: { type: 'string', description: 'The directory. Absolute, or relative to the repository. Default: the repository.' },
       keep_awake_seconds: {
@@ -145,11 +147,13 @@ export const BACKGROUND = [
   ),
   defineTool(
     'schedule_wakeup',
-    'Ask Talyn to start a new turn in your chat later, for example to check a deploy, a CI run or a long job in 20 minutes. Give exactly one of delay_seconds and at. The time must be in the future. When it is due, Talyn sends "Wake-up you scheduled at <time>: <reason>" as a new turn; if the chat is busy, it waits in the queue. End your turn after you schedule it. You can schedule several. The wake-up wakes a sleeping sandbox, which is billed box time.',
+    'Ask Talyn to start a new turn in your chat later, for example to check a deploy or a long job in 20 minutes. Give exactly one of delay_seconds and at. The time must be in the future. When it is due, Talyn sends "Wake-up you scheduled at <time>: <reason>" as a new turn; if the chat is busy, it waits in the queue. End your turn after you schedule it. You can schedule several. The wake-up wakes a sleeping sandbox, which is billed box time.\n\nTo wait for CI on this session\'s pull request, set until_ci: true after you push, with head_sha from `git rev-parse HEAD`. Do not guess how long CI takes. Talyn sends the turn when every check on that commit has finished, and says which required checks failed. It also sends it when somebody else pushes, or when the pull request merges or closes. delay_seconds or at is then optional: it is the latest time (default 3 hours), after which you read CI yourself. A new CI wake-up replaces the earlier ones in the chat. It needs an open pull request linked to this session. If the workspace does not have it, the call fails: schedule a timed wake-up instead.',
     {
-      delay_seconds: { type: 'integer', minimum: 1, description: 'Seconds from now.' },
-      at: { type: 'string', description: 'An ISO time, for example 2026-11-08T15:30:00Z.' },
+      delay_seconds: { type: 'integer', minimum: 1, description: 'Seconds from now. With until_ci: the latest time.' },
+      at: { type: 'string', description: 'An ISO time, for example 2026-11-08T15:30:00Z. With until_ci: the latest time.' },
       reason: { type: 'string', description: 'What to do when you wake up. It opens the wake-up turn.' },
+      until_ci: { type: 'boolean', description: "Wake when CI on the session's pull request finishes, instead of at a time." },
+      head_sha: { type: 'string', description: 'With until_ci: the full commit id you pushed (`git rev-parse HEAD`). Default: the head Talyn knows for the pull request.' },
       ...chatSchema,
       ...sessionSchema,
     },
@@ -162,7 +166,12 @@ export const BACKGROUND = [
       if (delay !== undefined) body.delaySeconds = delay;
       if (str(args.at)) body.at = str(args.at);
       if (str(args.chat_id)) body.chatId = str(args.chat_id);
+      if (bool(args, 'until_ci', false)) body.untilCi = true;
+      if (str(args.head_sha)) body.headSha = str(args.head_sha);
       const wakeup = await callApi<WorkbenchWakeup>(ownerId, 'POST', `${base(sessionId)}/wakeups`, body);
+      if (wakeup.ci) {
+        return `Scheduled CI wake-up ${wakeup.id}: Talyn wakes you when CI on ${wakeup.ci.headSha.slice(0, 12)} finishes, at the latest ${wakeup.wakeAt}. End your turn now. Cancel it with talyn_cancel_wakeup.`;
+      }
       return `Scheduled wake-up ${wakeup.id} for ${wakeup.wakeAt}. Cancel it with talyn_cancel_wakeup.`;
     }
   ),

@@ -37,16 +37,19 @@ import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { composerDraftKey, useWorkbenchStore } from '../../stores/workbenches';
-import { createChatTab } from './ChatTabs';
+import { createSessionChat } from './createSessionChat';
 import { useSlashCommandFileDescriptions } from './useSlashCommandFileDescriptions';
 import { ComposerPopover, applyTrigger, findTrigger, type ComposerMentionSource, type ComposerTrigger } from './ComposerPopover';
 import { isThread, threadMentions } from '../../lib/threads';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useThreadChildren } from './workbenchSelectors';
 import { AgentPicker, ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
-import { ImageAttachButton, ImageAttachmentChips, useComposerImages } from './useComposerImages';
+import { ImageAttachButton, ImageAttachmentChips, useComposerImages, useSendAfterUploads } from './useComposerImages';
 import { BackgroundChips } from './BackgroundChips';
+import { SandboxAgentNotice } from './SandboxAgentNotice';
 import { WakeLaterPopover } from './WakeLaterPopover';
+import { usePendingMessages } from './usePendingMessages';
+import { MarkdownTextarea } from './MarkdownTextarea';
 
 
 export function Composer({
@@ -57,6 +60,7 @@ export function Composer({
   contextUsage,
   slashCommands,
   attachRef,
+  autoFocus = true,
 }: {
   workbench: Workbench;
   chat: WorkbenchChat | null;
@@ -66,6 +70,11 @@ export function Composer({
   slashCommands: string[] | null;
   /** Set by the composer so a drop zone around it can attach images. */
   attachRef?: React.MutableRefObject<((files: File[]) => void) | null>;
+  /**
+   * Take focus on open and answer ⌘L. Split view shows several composers and
+   * passes true only to the focused pane's, so they do not fight over the caret.
+   */
+  autoFocus?: boolean;
 }) {
   const draftKey = composerDraftKey(workbench.id, chat);
   const draft = useWorkbenchStore((s) => s.drafts[draftKey] ?? '');
@@ -75,7 +84,7 @@ export function Composer({
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
   const images = useComposerImages(ops.runtime, ops, workbench.status);
-  const { attachments, setAttachments, pendingUploads, imageNotReady, setImageNotReady, fileInputRef, attachFiles, onPaste } = images;
+  const { attachments, setAttachments, pendingUploads, failedUploads, imageNotReady, setImageNotReady, fileInputRef, attachFiles, onPaste } = images;
   useEffect(() => {
     if (attachRef) attachRef.current = (files) => void attachFiles(files);
   });
@@ -99,6 +108,8 @@ export function Composer({
   const planMode = chat?.planMode ?? false;
   const running = chat?.status === 'running';
   const queue = ops.runtime === 'local' ? (localQueue ?? []) : (chat?.queuedMessages ?? []);
+  const chatEvents = useWorkbenchStore((s) => (chat ? s.chatEvents[chat.id]?.events : undefined));
+  const { queuing } = usePendingMessages(chat, chatEvents, ops);
   const waitText = sandboxWaitText(workbench);
   // Only the owner can change chat settings or wake the sandbox while typing.
   const owner = useIsWorkbenchOwner(workbench);
@@ -122,15 +133,16 @@ export function Composer({
   }, [draft]);
 
   useEffect(() => {
-    textareaRef.current?.focus();
+    if (autoFocus) textareaRef.current?.focus();
   }, [draftKey]);
 
   // ⌘L (lib/shortcuts.ts) asks the open composer for focus.
   useEffect(() => {
+    if (!autoFocus) return undefined;
     const onFocusRequest = () => textareaRef.current?.focus();
     window.addEventListener(FOCUS_COMPOSER_EVENT, onFocusRequest);
     return () => window.removeEventListener(FOCUS_COMPOSER_EVENT, onFocusRequest);
-  }, []);
+  }, [autoFocus]);
 
   const loadPaths = () => {
     if (thread || paths || pathsLoading || ops.unavailable) return;
@@ -244,7 +256,13 @@ export function Composer({
 
   const send = async () => {
     const text = draft.trim();
-    if ((!text && attachments.length === 0) || sending || pendingUploads > 0 || sendBlocked) return;
+    if (sending || sendBlocked) return;
+    // A file still uploads: hold the message and send it when the upload ends.
+    if (pendingUploads > 0) {
+      heldSend.hold();
+      return;
+    }
+    if (!text && attachments.length === 0) return;
     if (!owner && !chat) return;
     setSending(true);
     setRefusal(null);
@@ -258,17 +276,19 @@ export function Composer({
       effort,
     };
     try {
-      const target = chat ?? (await createChatTab(workbench));
+      const target = chat ?? (await createSessionChat(workbench));
       if (!target) return;
       outgoingChatId = target.id;
-      outgoingId = useWorkbenchStore.getState().addOutgoingMessage(target.id, { text, attachments: attachments.slice() });
+      // A running turn or a waiting queue means this message waits too: show it as queued, not in the transcript.
+      const queues = target.status === 'running' || (target === chat && queue.length > 0);
+      outgoingId = useWorkbenchStore.getState().addOutgoingMessage(target.id, { text, attachments: attachments.slice(), queued: queues });
       setDraft(draftKey, '');
       setAttachments([]);
       setImageNotReady(false);
       setTrigger(null);
       const res = await ops.send(target, input);
-      useWorkbenchStore.getState().settleOutgoingMessage(target.id, outgoingId);
-      trackEvent('session_message_sent', { queued: res.queued, plan_mode: planMode, model_id: model, attachments_count: attachments.length });
+      useWorkbenchStore.getState().settleOutgoingMessage(target.id, outgoingId, res.queued);
+      trackEvent('session_message_sent', { queued: res.queued, plan_mode: planMode, model_id: model, attachments_count: attachments.length, runtime: workbench.runtime });
       if (res.queued && workbench.status !== 'moving') {
         toast.info(
           'Queued',
@@ -298,6 +318,8 @@ export function Composer({
       setSending(false);
     }
   };
+
+  const heldSend = useSendAfterUploads(pendingUploads, failedUploads, () => void send(), draftKey);
 
   const stop = async () => {
     if (!chat) return;
@@ -349,8 +371,9 @@ export function Composer({
 
   return (
     <div className="border-t bg-background px-3 pb-3 pt-2">
+      <SandboxAgentNotice key={workbench.sandboxId} workbench={workbench} owner={owner} />
       <BackgroundChips workbenchId={workbench.id} chatId={chat?.id ?? null} canOpen={owner} />
-      {queue.length > 0 && (
+      {(queue.length > 0 || queuing.length > 0) && (
         <ul className="mb-2 space-y-1">
           {queue.map((m, index) => m.capacityWait ? (
             <CapacityWaitLine key={m.id} message={m} wait={m.capacityWait} chatId={chat?.id} ops={ops} />
@@ -375,6 +398,16 @@ export function Composer({
                   <X className="h-3 w-3" />
                 </button>
               )}
+            </li>
+          ))}
+          {queuing.map((m) => (
+            <li
+              key={m.id}
+              data-attr="workbench-queuing-message"
+              className="flex items-center gap-2 rounded border border-dashed px-2 py-1 text-xs text-muted-foreground"
+            >
+              <span className="shrink-0 text-[10px] uppercase tracking-wide">Queued</span>
+              <span className="min-w-0 flex-1 truncate">{m.text}</span>
             </li>
           ))}
         </ul>
@@ -405,8 +438,8 @@ export function Composer({
             onPickLink={pickLink}
           />
         )}
-        <ImageAttachmentChips attachments={attachments} pendingUploads={pendingUploads} imageNotReady={imageNotReady} onRemove={(index) => setAttachments((current) => current.filter((_, i) => i !== index))} />
-        <textarea
+        <ImageAttachmentChips attachments={attachments} pendingUploads={pendingUploads} imageNotReady={imageNotReady} sendHeld={heldSend.held} onRemove={(index) => setAttachments((current) => current.filter((_, i) => i !== index))} />
+        <MarkdownTextarea
           data-session-composer
           ref={textareaRef}
           value={draft}
@@ -426,11 +459,12 @@ export function Composer({
             ops.unavailable ??
             (running ? 'The agent is working. A message now is queued for when it finishes.' : 'Ask the agent… (@ for files, / for commands)')
           }
-          className="block max-h-[33vh] w-full resize-none bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+          textClassName="px-3 py-2 text-sm"
+          className="block max-h-[33vh] w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
           aria-label="Message the agent"
         />
         <div className="flex items-center gap-1 px-2 pb-1.5">
-          <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} />
+          <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} videos />
           <AgentPicker value={agent} onChange={(next) => void patchChat({ agent: next, model: fleetModelForAgentSwitch(model, next) })} disabled={!owner || !chat || Boolean(ops.unavailable) || ops.runtime === 'local'} />
           <ModelPicker agent={agent} value={model} onChange={(m) => void patchChat({ model: m })} disabled={!owner || !chat || Boolean(ops.unavailable)} />
           <EffortPicker value={effort} onChange={(v) => void patchChat({ effort: v })} disabled={!owner || !chat || Boolean(ops.unavailable)} />
@@ -453,13 +487,13 @@ export function Composer({
           ) : null}
           <button
             type="button"
-            onClick={() => void send()}
-            disabled={sending || pendingUploads > 0 || sendBlocked || (!draft.trim() && attachments.length === 0)}
+            onClick={() => (heldSend.held ? heldSend.cancel() : void send())}
+            disabled={sending || sendBlocked || (!draft.trim() && attachments.length === 0 && pendingUploads === 0)}
             className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
-            title={running ? 'Queue (Enter)' : 'Send (Enter)'}
-            aria-label={running ? 'Queue the message' : 'Send the message'}
+            title={heldSend.held ? 'Sends after the upload. Click to cancel.' : running ? 'Queue (Enter)' : 'Send (Enter)'}
+            aria-label={heldSend.held ? 'Cancel the waiting message' : running ? 'Queue the message' : 'Send the message'}
           >
-            {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+            {sending || heldSend.held ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
           </button>
         </div>
       </div>

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
+import type { ContextAttentionReason, Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
 import { api, type PRRow } from '../../lib/api';
 import { usePullRequestStore } from '../../stores/pullRequests';
-import { isPrOnlyUnseen, useWorkbenchStore, visibleChats, type UnseenUpdates } from '../../stores/workbenches';
-import { isActiveSessionState, sessionPr, sessionState, type SessionState } from '../../lib/sessionState';
+import { isPrOnlyUnseen, useWorkbenchStore, type UnseenUpdates } from '../../stores/workbenches';
+import { isActiveSessionState, sessionPr, sessionState, withServerAttention, type SessionState } from '../../lib/sessionState';
 import { opsFor, sandboxUnavailableReason, type WorkbenchOps } from '../../lib/workbenchOps';
 import { isThread, liveThreads, threadChildren } from '../../lib/threads';
 import { newestSessions } from '../../lib/sessionOrder';
@@ -80,6 +80,8 @@ export interface SidebarStateSources {
   unread: Record<string, true>;
   unseen: Record<string, UnseenUpdates | undefined>;
   backgrounds: Record<string, WorkbenchBackground | undefined>;
+  /** The sessions that the context rail counts (`useAttentionSessions`). */
+  attention?: Readonly<Record<string, ContextAttentionReason>>;
 }
 
 /**
@@ -97,13 +99,17 @@ export function sidebarSessionStates(
   for (const workbench of workbenches) {
     const pr = workbench.pullRequestId ? rowById.get(workbench.pullRequestId) : undefined;
     const resolvedPr = sessionPr(workbench, pr);
-    const state = sessionState(
-      workbench,
-      sources.chats[workbench.id] ?? workbench.chats ?? [],
-      sources.unread,
-      resolvedPr,
-      isPrOnlyUnseen(sources.unseen[workbench.id]),
-      sources.backgrounds[workbench.id],
+    const state = withServerAttention(
+      sessionState(
+        workbench,
+        sources.chats[workbench.id] ?? workbench.chats ?? [],
+        sources.unread,
+        resolvedPr,
+        isPrOnlyUnseen(sources.unseen[workbench.id]),
+        sources.backgrounds[workbench.id],
+      ),
+      sources.attention?.[workbench.id],
+      resolvedPr?.number,
     );
     states.set(workbench.id, state);
     if (isActiveSessionState(state) || (!resolvedPr && Boolean(workbench.pullRequestId))) activeIds.add(workbench.id);
@@ -155,15 +161,14 @@ export function useSelectedWorkbench(): Workbench | null {
   return useWorkbenchStore((s) => (s.selectedWorkbenchId ? (s.workbenches[s.selectedWorkbenchId] ?? null) : null));
 }
 
-/** The open chat tab: the remembered one, else the newest visible chat. */
+/** The chat on screen: the remembered one, else the newest chat. */
 export function useSelectedChat(workbenchId: string): WorkbenchChat | null {
-  const chats = useWorkbenchStore((s) => s.chats);
-  const hidden = useWorkbenchStore((s) => s.hiddenChatIds);
+  const chats = useWorkbenchStore((s) => s.chats[workbenchId]);
   const selectedId = useWorkbenchStore((s) => s.selectedChatByWorkbench[workbenchId]);
   return useMemo(() => {
-    const visible = visibleChats({ chats, hiddenChatIds: hidden }, workbenchId);
-    return visible.find((c) => c.id === selectedId) ?? visible[visible.length - 1] ?? null;
-  }, [chats, hidden, selectedId, workbenchId]);
+    const list = chats ?? [];
+    return list.find((c) => c.id === selectedId) ?? list[list.length - 1] ?? null;
+  }, [chats, selectedId]);
 }
 
 export function useWorkbenchOps(workbench: Workbench): WorkbenchOps {

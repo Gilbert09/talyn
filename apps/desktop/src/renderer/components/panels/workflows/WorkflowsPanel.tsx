@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Pencil, Plus, Trash2, Workflow } from 'lucide-react';
-import type { WorkflowInput, WorkflowWithStats } from '@talyn/shared';
+import type { WebhookSecretReveal, WorkflowInput, WorkflowIntegration, WorkflowWithStats } from '@talyn/shared';
 import {
   describeWorkflowActions,
   describeWorkflowTrigger,
@@ -8,6 +8,7 @@ import {
 } from '@talyn/shared';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
+import { Tabs, TabsList, TabsTrigger } from '../../ui/tabs';
 import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { toast } from '../../../stores/toast';
 import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
@@ -15,8 +16,12 @@ import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
 import { FeedbackButton } from './FeedbackButton';
 import { useWorkflows } from './useWorkflows';
+import { takeAutomationTarget, useAutomationFocus } from '../../../lib/automationFocus';
 import { WorkflowEditorPage } from './WorkflowEditorPage';
 import { WorkflowRunsList } from './WorkflowRunsList';
+import { WebhookDeliveriesList } from './WebhookDeliveriesList';
+import { WebhookSecretDialog, WebhookUrlSection } from './webhookFields';
+import { PostHogInboxBacklog } from './posthogInboxBacklog';
 
 /**
  * Workflows — user-defined PR automation.
@@ -131,14 +136,103 @@ function WorkflowRow({
 
       {expanded && (
         <div className="border-t">
-          <WorkflowRunsList workflowId={workflow.id} liveRuns={liveRuns[workflow.id]} />
+          {workflow.integration === 'webhook' ? (
+            <WebhookRuleDetails workflow={workflow} liveRuns={liveRuns} />
+          ) : workflow.integration === 'posthog_inbox' ? (
+            <PostHogInboxRuleDetails workflow={workflow} liveRuns={liveRuns} />
+          ) : (
+            <WorkflowRunsList workflowId={workflow.id} liveRuns={liveRuns[workflow.id]} />
+          )}
         </div>
       )}
     </div>
   );
 }
 
-export function WorkflowsPanel() {
+/** A PostHog Inbox rule's runs, or its backlog of older reports. */
+function PostHogInboxRuleDetails({
+  workflow,
+  liveRuns,
+}: {
+  workflow: WorkflowWithStats;
+  liveRuns: ReturnType<typeof useWorkflows>['liveRuns'];
+}) {
+  const [tab, setTab] = useState<'runs' | 'backlog'>('runs');
+  return (
+    <div>
+      <div className="px-4 pt-2">
+        <Tabs value={tab} onValueChange={(next) => setTab(next as 'runs' | 'backlog')}>
+          <TabsList aria-label="PostHog Inbox automation">
+            <TabsTrigger value="runs" data-attr="posthog-inbox-tab-runs">Runs</TabsTrigger>
+            <TabsTrigger value="backlog" data-attr="posthog-inbox-tab-backlog">Backlog</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+      {tab === 'runs' ? (
+        <WorkflowRunsList workflowId={workflow.id} liveRuns={liveRuns[workflow.id]} />
+      ) : (
+        <div className="p-3">
+          <PostHogInboxBacklog workflow={workflow} autoLoad showHeader={false} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A webhook rule's URL, then its runs and the requests it received. */
+function WebhookRuleDetails({
+  workflow,
+  liveRuns,
+}: {
+  workflow: WorkflowWithStats;
+  liveRuns: ReturnType<typeof useWorkflows>['liveRuns'];
+}) {
+  const [tab, setTab] = useState<'runs' | 'deliveries'>('deliveries');
+  return (
+    <div>
+      <WebhookUrlSection ruleId={workflow.id} />
+      <div className="border-t px-4 pt-2">
+        <Tabs value={tab} onValueChange={(next) => setTab(next as 'runs' | 'deliveries')}>
+          <TabsList aria-label="Webhook history">
+            <TabsTrigger value="deliveries" data-attr="webhook-tab-deliveries">Deliveries</TabsTrigger>
+            <TabsTrigger value="runs" data-attr="webhook-tab-runs">Runs</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+      {tab === 'deliveries' ? (
+        <WebhookDeliveriesList ruleId={workflow.id} />
+      ) : (
+        <WorkflowRunsList workflowId={workflow.id} liveRuns={liveRuns[workflow.id]} />
+      )}
+    </div>
+  );
+}
+
+const PANEL_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
+  github:
+    'Automate what happens on a pull request. Fires on every PR in the repositories this workspace watches, including ones you did not open.',
+  slack: 'Run actions when a message appears in a selected Slack channel.',
+  webhook: 'Each automation gets its own URL. A request to the URL starts a session or a task.',
+  linear:
+    'Start a session or a task when an issue in Linear matches. Talyn comments on the issue and moves it to done when the fix merges.',
+  github_issues:
+    'Start a session or a task when an issue in a watched repository matches. Talyn comments on the issue and closes it when the fix merges.',
+  posthog_inbox:
+    'Start a session when a PostHog self-driving report is ready for work. The session works on the report\'s repository and opens a pull request.',
+};
+
+const EMPTY_DESCRIPTIONS: Record<WorkflowIntegration, string> = {
+  github:
+    'An automation watches pull request events and can label, comment, request reviewers, start a session and more.',
+  slack: 'An automation watches Slack messages and can start a session, reply or react.',
+  webhook:
+    'An automation gets a URL. Another system sends a request to it, and Talyn starts a session or a task.',
+  linear: 'An automation watches Linear issues and can start a session or a task, comment, or change the status.',
+  github_issues: 'An automation watches GitHub issues and can start a session or a task, comment, or change the status.',
+  posthog_inbox: 'An automation watches your PostHog Inbox and starts a session for each report that matches.',
+};
+
+export function WorkflowsPanel({ integration = 'github' }: { integration?: WorkflowIntegration }) {
   const {
     workflows,
     error,
@@ -149,7 +243,7 @@ export function WorkflowsPanel() {
     liveRuns,
     suggestions,
     loadGithubSuggestions,
-  } = useWorkflows();
+  } = useWorkflows(integration);
   /**
    * The editor is a PAGE, not a modal — but not a route either.
    *
@@ -166,6 +260,20 @@ export function WorkflowsPanel() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<WorkflowWithStats | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [reveal, setReveal] = useState<WebhookSecretReveal | null>(null);
+
+  useEffect(() => {
+    setView({ mode: 'list' });
+    setExpandedId(null);
+    setPendingDelete(null);
+  }, [integration]);
+
+  // The command palette asked for one of these rules: open its editor once the list is here.
+  const focus = useAutomationFocus((s) => s.target);
+  useEffect(() => {
+    const workflow = takeAutomationTarget('workflow', integration, workflows);
+    if (workflow) openEditor(workflow);
+  }, [focus, integration, workflows]);
 
   /**
    * The one workflow event the server cannot see.
@@ -215,10 +323,11 @@ export function WorkflowsPanel() {
     if (view.mode === 'edit' && view.workflow) {
       await update(view.workflow.id, input);
       trackEvent('workflow_saved', { new: false, actions_count: input.actions.length, events_count: input.events.length });
-      toast.success('Workflow saved');
+      toast.success('Automation saved');
     } else {
+      let created: WebhookSecretReveal | null;
       try {
-        await create(input);
+        created = await create(input);
       } catch (err) {
         // A free plan that filled its last slot elsewhere (another window, another
         // workspace) only finds out here. The modal explains it, so swallow the
@@ -230,10 +339,11 @@ export function WorkflowsPanel() {
         throw err;
       }
       trackEvent('workflow_saved', { new: true, actions_count: input.actions.length, events_count: input.events.length });
-      toast.success('Workflow created');
+      toast.success('Automation created');
       // Keep the owner-wide count current, so the NEXT click is pre-empted
       // rather than round-tripping to the same refusal.
       void useBillingStore.getState().refresh();
+      if (created) setReveal(created);
     }
     setView({ mode: 'list' });
   };
@@ -241,6 +351,7 @@ export function WorkflowsPanel() {
   if (view.mode === 'edit') {
     return (
       <WorkflowEditorPage
+        integration={view.workflow?.integration ?? integration}
         editing={view.workflow}
         suggestions={suggestions}
         onNeedGithubSuggestions={loadGithubSuggestions}
@@ -268,7 +379,7 @@ export function WorkflowsPanel() {
       // error beside it rather than dropping the user back with no explanation.
       setPendingDelete(null);
       trackEvent('workflow_deleted');
-      toast.success('Workflow deleted');
+      toast.success('Automation deleted');
       // A deleted row gives its free-plan slot back — re-read the count so
       // the create button stops pre-empting on a limit the user is no longer at.
       void useBillingStore.getState().refresh();
@@ -284,13 +395,12 @@ export function WorkflowsPanel() {
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b px-4 py-1">
         <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-          Automate what happens on a pull request. Fires on every PR in the repositories this
-          workspace watches, including ones you did not open.
+          {PANEL_DESCRIPTIONS[integration]}
         </p>
         <FeedbackButton surface="workflows" />
         <Button size="sm" onClick={openNew} data-attr="workflow-new">
           <Plus className="mr-1 h-3.5 w-3.5" />
-          New workflow
+          New automation
         </Button>
       </div>
 
@@ -300,18 +410,17 @@ export function WorkflowsPanel() {
         {/* `null` is loading, `[]` is genuinely none. Rendering the empty state
             for both would flash "no workflows" at somebody who has ten. */}
         {workflows === null ? (
-          <p className="text-[13px] text-muted-foreground">Loading workflows...</p>
+          <p className="text-[13px] text-muted-foreground">Loading automations...</p>
         ) : workflows.length === 0 ? (
           <div className="mx-auto max-w-lg py-10 text-center">
             <Workflow className="mx-auto mb-3 h-6 w-6 text-muted-foreground" />
-            <h2 className="text-[13px] font-medium">No workflows yet</h2>
+            <h2 className="text-[13px] font-medium">No automations yet</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              A workflow watches for something on a pull request and then acts: label it, pull in a
-              reviewer, comment, add it to My PRs, run a skill, or send it to the merge queue.
+              {EMPTY_DESCRIPTIONS[integration]}
             </p>
             <Button className="mt-4" onClick={openNew}>
               <Plus className="mr-1 h-3.5 w-3.5" />
-              Create your first workflow
+              Create an automation
             </Button>
           </div>
         ) : (
@@ -344,7 +453,7 @@ export function WorkflowsPanel() {
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="Delete this workflow?"
+        title="Delete this automation?"
         description={
           <>
             Deleting <span className="font-medium text-foreground">{pendingDelete?.name}</span> 
@@ -356,6 +465,8 @@ export function WorkflowsPanel() {
         onConfirm={() => void doDelete()}
         onCancel={() => setPendingDelete(null)}
       />
+
+      {reveal && <WebhookSecretDialog reveal={reveal} onClose={() => setReveal(null)} />}
 
     </div>
   );

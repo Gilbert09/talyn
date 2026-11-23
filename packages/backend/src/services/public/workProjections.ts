@@ -256,6 +256,9 @@ export const PUBLIC_MEMORY_COLUMNS = {
   createdAt: memoriesTable.createdAt,
   updatedAt: memoriesTable.updatedAt,
   forgottenAt: memoriesTable.forgottenAt,
+  forgottenReason: memoriesTable.forgottenReason,
+  useCount: memoriesTable.useCount,
+  lastUsedAt: memoriesTable.lastUsedAt,
   cursorTime: cursorTimeColumn(memoriesTable.createdAt),
 } as const;
 
@@ -274,6 +277,9 @@ export interface PublicMemoryRow {
   createdAt: Date;
   updatedAt: Date;
   forgottenAt: Date | null;
+  forgottenReason: string | null;
+  useCount: number;
+  lastUsedAt: Date | null;
   body?: string | null;
 }
 
@@ -293,6 +299,9 @@ export function toPublicMemory(row: PublicMemoryRow) {
     bytes: row.bytes,
     source: { kind, session_id: kind === 'session' ? (row.sourceSessionId ?? null) : null },
     forgotten_at: iso(row.forgottenAt),
+    forgotten_reason: row.forgottenReason === 'evicted' ? ('evicted' as const) : null,
+    use_count: row.useCount,
+    last_used_at: iso(row.lastUsedAt),
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
   };

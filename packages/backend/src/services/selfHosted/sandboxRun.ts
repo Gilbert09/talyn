@@ -160,6 +160,12 @@ export interface SandboxRunSpec {
    * cannot hold falls back to standard once, as a session's box does.
    */
   size?: SandboxSize;
+  /**
+   * Absent or true: the host retires the box when its initial task ends. A fix
+   * run that may park while CI runs (`ci-park`) sends false, so the box goes
+   * idle instead and Talyn can suspend it and give it the next prompt.
+   */
+  ephemeral?: boolean;
 }
 
 export interface SandboxRunHandle {
@@ -596,7 +602,7 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
       repositoryId: spec.repositoryId,
       // Ephemeral is what a run was: the host stops and retires the sandbox
       // the moment its initial task reaches a terminal state.
-      ephemeral: true,
+      ephemeral: spec.ephemeral ?? true,
       task: {
         taskType: spec.taskType,
         prompt: spec.prompt,

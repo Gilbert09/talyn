@@ -25,6 +25,7 @@ import {
   requireRepositoryAccess,
   assertUser,
   internalProxyHeaders,
+  refuseTaskFromOutsideApp,
   setJwtKeySourceForTesting,
   verifyTokenAndGetUser,
 } from '../middleware/auth.js';
@@ -133,6 +134,10 @@ async function makeProbeServer(): Promise<{ url: string; close: () => Promise<vo
   app.get('/probe', requireAuth, (req, res) => {
     res.json({ userId: req.user?.id });
   });
+  app.post('/task-probe', requireAuth, (req, res) => {
+    if (refuseTaskFromOutsideApp(req, res)) return;
+    res.json({ created: true });
+  });
   const server: Server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   const addr = server.address() as AddressInfo;
@@ -227,6 +232,62 @@ describe('requireAuth (JWT + internal-proxy)', () => {
     });
     expect(res.status).toBe(401);
   });
+
+  it('refuses a task from the MCP server, and points at a session', async () => {
+    const res = await fetch(`${serverUrl}/task-probe`, {
+      method: 'POST',
+      headers: internalProxyHeaders(TEST_USER_ID, { mcp: true }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('tasks_app_only');
+    expect(body.error).toMatch(/Start a session instead/);
+  });
+
+  it('lets other internal callers create a task', async () => {
+    const res = await fetch(`${serverUrl}/task-probe`, {
+      method: 'POST',
+      headers: internalProxyHeaders(TEST_USER_ID),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('ignores the MCP mark without the internal secret', async () => {
+    const res = await fetch(`${serverUrl}/task-probe`, {
+      method: 'POST',
+      headers: { 'x-fastowl-internal-via': 'mcp' },
+    });
+    // No secret means no internal auth at all, so the bearer path refuses it.
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('refuseTaskFromOutsideApp', () => {
+  function fakeRes() {
+    const res = { statusCode: 0, body: undefined as unknown };
+    return Object.assign(res, {
+      status(code: number) {
+        res.statusCode = code;
+        return this;
+      },
+      json(body: unknown) {
+        res.body = body;
+        return this;
+      },
+    });
+  }
+
+  it.each([
+    ['an app user', { id: 'u1', email: 'a@b.c', isAdmin: false }, false],
+    ['an app admin', { id: 'u1', email: 'a@b.c', isAdmin: true }, false],
+    ['no user', undefined, false],
+    ['the MCP server', { id: 'u1', email: 'a@b.c', isAdmin: false, viaMcp: true }, true],
+  ])('answers for %s', (_name, user, refused) => {
+    const res = fakeRes();
+    const out = refuseTaskFromOutsideApp({ user } as never, res as never);
+    expect(out).toBe(refused);
+    expect(res.statusCode).toBe(refused ? 403 : 0);
+  });
 });
 
 // ---- Supabase JWT verification: local (ES256/JWKS) + legacy (HS256) paths ----
@@ -255,12 +316,14 @@ describe('requireAuth (Supabase JWT verification)', () => {
       audience?: string;
       sub?: string;
       expired?: boolean;
+      providers?: string[];
     } = {}
   ) {
     const nowSec = Math.floor(Date.now() / 1000);
     return new SignJWT({
       email: 'jwt@test',
       user_metadata: { user_name: 'jwt-gh-user' },
+      ...(overrides.providers ? { app_metadata: { provider: overrides.providers[0], providers: overrides.providers } } : {}),
     })
       .setProtectedHeader({ alg: 'ES256', kid: 'test-key' })
       .setIssuer(overrides.issuer ?? `${TEST_SUPABASE_URL}/auth/v1`)
@@ -324,6 +387,24 @@ describe('requireAuth (Supabase JWT verification)', () => {
     const res = await probe(await signEs256(privateKey));
     expect(res.status).toBe(200);
     expect((await res.json()).userId).toBe(JWT_USER_ID);
+  });
+
+  it.each([
+    ['a GitHub account', ['github'], 200],
+    ['a GitHub account that also has a password (the store review account)', ['github', 'email'], 200],
+    ['an email-only account', ['email'], 401],
+    ['an account with no providers', [], 401],
+  ])('accepts or refuses %s by its Supabase providers', async (_name, providers, status) => {
+    const res = await probe(await signEs256(privateKey, { providers }));
+    expect(res.status).toBe(status);
+  });
+
+  it('refuses an email-only account on the legacy HS256 path too', async () => {
+    stubSupabaseGetUser(async () => ({
+      data: { user: { id: JWT_USER_ID, email: 'legacy@test', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: {} } },
+      error: null,
+    }));
+    expect(await verifyTokenAndGetUser(await signHs256())).toBeNull();
   });
 
   it('retains the verified ES256 expiry', async () => {
@@ -519,6 +600,18 @@ describe('ownership helpers', () => {
     await expect(
       requireWorkspaceAccess(makeReq(TEST_USER_ID), 'missing')
     ).rejects.toThrow(AccessError);
+  });
+
+  it.each([
+    ['ws-mine', null],
+    ['ws-theirs', 'workspace not found'],
+    ['missing', 'workspace not found'],
+  ])('requireWorkspaceAccess(%s) runs one query', async (workspaceId, error) => {
+    const select = vi.spyOn(db, 'select');
+    const result = requireWorkspaceAccess(makeReq(TEST_USER_ID), workspaceId);
+    if (error) await expect(result).rejects.toThrow(error);
+    else await expect(result).resolves.toBeUndefined();
+    expect(select).toHaveBeenCalledTimes(1);
   });
 
   it('requireEnvironmentAccess uses the env.ownerId column directly', async () => {

@@ -2,23 +2,25 @@ import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { defaultFleetModelForAgent, PLAN_LIMITS, type Workbench } from '@talyn/shared';
-import { api, type CloudProviderInfo } from '../lib/api';
+import { defaultFleetModelForAgent, PLAN_LIMITS, SESSION_STARTER_PROMPTS, type Workbench } from '@talyn/shared';
+import { api, loadAllRepos, type CloudProviderInfo, type PRRow } from '../lib/api';
 import { captureAnalyticsException, trackEvent } from '../lib/analytics';
 import { OnboardingWizard } from '../components/onboarding/OnboardingWizard';
 import { SidebarWorkbenchList } from '../components/layout/SidebarWorkbenchList';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { useNavigationStore } from '../stores/navigation';
+import { usePullRequestStore } from '../stores/pullRequests';
 
 vi.mock('../lib/api', () => ({
+  loadAllRepos: vi.fn(),
+  mergeRepos: vi.fn(),
   ApiError: class ApiError extends Error {},
   ApiNetworkError: class ApiNetworkError extends Error {},
   api: {
     github: {
       getStatus: vi.fn(),
       getUser: vi.fn().mockResolvedValue({ login: 'octocat' }),
-      listAllRepos: vi.fn(),
       listInstallations: vi.fn().mockResolvedValue([]),
     },
     repositories: { add: vi.fn(), remove: vi.fn().mockResolvedValue(undefined) },
@@ -60,7 +62,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   vi.mocked(api.github.getStatus).mockResolvedValue({ configured: true, connected: true } as never);
-  vi.mocked(api.github.listAllRepos).mockResolvedValue([
+  vi.mocked(loadAllRepos).mockResolvedValue([
     { id: 1, owner: { login: 'acme' }, name: 'app', full_name: 'acme/app' },
     { id: 3, owner: { login: 'acme' }, name: 'unwatched', full_name: 'acme/unwatched' },
   ] as never);
@@ -162,14 +164,13 @@ it('requires a prompt and a repository that is still watched', async () => {
   expect(api.workbenches.create).not.toHaveBeenCalled();
 });
 
-it('keeps the subscription cards in order and puts PostHog Code under Other options', async () => {
+it('offers only the subscription cards, in order, where the fleet is offered', async () => {
   await toAgent();
   expect(screen.getByText('Use your Claude or ChatGPT subscription')).toBeInTheDocument();
   const choices = screen.getAllByRole('button').filter((button) => /^(Claude|Codex|PostHog Code)/.test(button.textContent ?? ''));
-  expect(choices.map((button) => button.textContent?.split('Use')[0])).toEqual(['Claude', 'Codex', 'PostHog Code']);
-  const other = screen.getByRole('heading', { name: 'Other options' });
-  expect(choices[1].compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(other.compareDocumentPosition(choices[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(choices.map((button) => button.textContent?.split('Use')[0])).toEqual(['Claude', 'Codex']);
+  expect(screen.queryByRole('heading', { name: 'Other options' })).not.toBeInTheDocument();
+  expect(screen.getByText('Connect Claude or ChatGPT to start sessions, or skip for now.')).toBeInTheDocument();
 });
 
 it.each(['claude', 'codex'] as const)('creates and opens a real session through the API with %s', async (agent) => {
@@ -195,9 +196,9 @@ it.each(['claude', 'codex'] as const)('creates and opens a real session through 
   expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: session.id });
   expect(useWorkbenchStore.getState().workbenches[session.id]).toEqual(session);
   expect(useWorkspaceStore.getState().justOnboarded).toBe(true);
-  expect(trackEvent).toHaveBeenCalledWith('first_session_created', { from: 'onboarding' });
+  expect(trackEvent).toHaveBeenCalledWith('first_session_created', { from: 'onboarding', runtime: 'sandbox', agent });
   expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', {
-    github_connected: true, repos_watched: 2, agent_connected: true, signup_source: 'reddit',
+    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, agent_mode: 'cloud', signup_source: 'reddit',
   });
   for (const step of ['github', 'repos', 'agent', 'first_session']) {
     expect(trackEvent).toHaveBeenCalledWith('onboarding_step_viewed', { step });
@@ -250,14 +251,40 @@ it('skips the first session, completes onboarding, and opens Home', async () => 
   expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
   expect(trackEvent).toHaveBeenCalledWith('onboarding_first_session_skipped');
   expect(trackEvent).toHaveBeenCalledWith('onboarding_completed', {
-    github_connected: true, repos_watched: 2, agent_connected: true, signup_source: null,
+    github_connected: true, repos_watched: 2, agent_connected: true, agent_skipped: false, agent_mode: 'cloud', signup_source: null,
   });
 });
 
 it('opens the normal new-session UI from the sidebar empty state', () => {
+  usePullRequestStore.setState({ rows: [] });
   render(<SidebarWorkbenchList workbenches={[]} />);
-  expect(screen.getByText('No sessions yet.')).toBeInTheDocument();
+  expect(screen.getByText('Hand work to an agent')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Start a session' }));
   expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
   expect(useWorkbenchStore.getState().newWorkbench).toEqual({ seq: 1, prefill: null });
+});
+
+it('offers general starters when no pull request needs work', () => {
+  usePullRequestStore.setState({ rows: [] });
+  render(<SidebarWorkbenchList workbenches={[]} />);
+  fireEvent.click(screen.getByRole('button', { name: /Explain a repository/ }));
+  expect(useWorkbenchStore.getState().newWorkbench.prefill).toEqual({ prompt: SESSION_STARTER_PROMPTS.explain });
+  expect(trackEvent).toHaveBeenCalledWith('session_starter_clicked', { kind: 'explain', from_pull_request: false });
+});
+
+it('starts a session on a pull request with failing checks from the sidebar', () => {
+  const row = {
+    id: 'pr-1', workspaceId: 'ws1', repositoryId: 'r1', owner: 'acme', repo: 'app', number: 42, state: 'open',
+    authored: true, reviewRequested: false,
+    summary: { title: 'Add billing', headBranch: 'tom/billing', baseBranch: 'main', blockingReason: 'checks_failed' },
+  } as unknown as PRRow;
+  usePullRequestStore.setState({ rows: [row] });
+  render(<SidebarWorkbenchList workbenches={[]} />);
+  expect(screen.getByText('#42 Add billing')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /Fix the failing checks/ }));
+  expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
+  expect(useWorkbenchStore.getState().newWorkbench.prefill).toEqual({
+    repositoryId: 'r1', fromPullRequestId: 'pr-1', baseBranch: 'main', branch: 'tom/billing',
+    prompt: SESSION_STARTER_PROMPTS.fix_checks,
+  });
 });

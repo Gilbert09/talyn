@@ -11,6 +11,8 @@ import type {
   LocalAgentKitStatus,
 } from './localAgentKit';
 import { MENU_COMMAND_CHANNEL } from './menuCommands';
+import { ZOOM_CHANGED_CHANNEL, ZOOM_GET_CHANNEL, ZOOM_STEP_CHANNEL, type ZoomStep } from './zoomSteps';
+import { DESK_PRESENCE_CHANNEL, DESK_PRESENCE_CHANGED_CHANNEL, type DeskState } from './deskPresenceChannels';
 
 /** A SKILL.md found under ~/.claude/skills/<dirName>/. */
 export interface LocalMcpFinding {
@@ -143,6 +145,19 @@ const electronHandler = {
   onMenuCommand(cb: (id: string) => void): () => void {
     return subscribe<string>(MENU_COMMAND_CHANNEL, cb);
   },
+  /** Window zoom (⌘= / ⌘- / ⌘0), saved across restarts. */
+  zoom: {
+    get(): Promise<number> {
+      return ipcRenderer.invoke(ZOOM_GET_CHANNEL);
+    },
+    step(step: ZoomStep): Promise<number> {
+      return ipcRenderer.invoke(ZOOM_STEP_CHANNEL, step);
+    },
+    /** Fires with the new factor after any change, the menu and keys included. */
+    onChange(cb: (factor: number) => void): () => void {
+      return subscribe<number>(ZOOM_CHANGED_CHANNEL, cb);
+    },
+  },
   reviewRanking: {
     export(data: string): Promise<ReviewRankingExportResult> {
       return ipcRenderer.invoke('review-ranking:export', data);
@@ -217,6 +232,16 @@ const electronHandler = {
     /** Switch update channel; triggers an immediate re-check when packaged. */
     setChannel(channel: UpdateChannel): Promise<UpdateChannel> {
       return ipcRenderer.invoke('updater:set-channel', channel);
+    },
+  },
+  deskPresence: {
+    /** `active` while the person uses this computer, else `away`. Nothing more crosses. */
+    getState(): Promise<DeskState> {
+      return ipcRenderer.invoke(DESK_PRESENCE_CHANNEL);
+    },
+    /** Fires on screen lock, unlock, sleep and wake. Returns an unsubscribe fn. */
+    onChange(cb: () => void): () => void {
+      return subscribe<void>(DESK_PRESENCE_CHANGED_CHANNEL, () => cb());
     },
   },
   app: {

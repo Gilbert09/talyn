@@ -10,6 +10,7 @@ import {
   type SkillSummary,
 } from '@talyn/shared';
 import { useWorkspaceStore } from '../../../stores/workspace';
+import { useFleetModelCatalog } from '../../../lib/fleetModelCatalog';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useTaskActions } from '../../../hooks/useApi';
 import { reloadPullRequests } from '../../../hooks/usePullRequestSync';
@@ -79,9 +80,10 @@ export function useGitHubActions() {
   // this `useMemo` (this file and the web fork's), which is how a menu ends up
   // answering differently on each client. See `@talyn/shared`'s cloudAgents.ts
   // for the two rules it encodes.
+  const modelCatalog = useFleetModelCatalog();
   const taskProviders = useMemo(
     () => cloudAgentChoices(connectedProviders, workspaceSettings),
-    [connectedProviders, workspaceSettings]
+    [connectedProviders, workspaceSettings, modelCatalog]
   );
   const taskAsk = defaultCloudProvider === 'ask' && taskProviders.length > 1;
   const openIntegrations = useCallback(() => openSettings('integrations'), [openSettings]);

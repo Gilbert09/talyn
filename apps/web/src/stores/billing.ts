@@ -79,7 +79,7 @@ function pendingCreditCheckout(): { pack: CreditPackId; ids: string[] } | null {
   }
 }
 
-export function trackBillingFailure(event: 'checkout_failed' | 'plan_change_failed' | 'credit_checkout_failed' | 'team_checkout_failed', stage: 'create_checkout' | 'portal' | 'return', err: unknown): void {
+export function trackBillingFailure(event: 'checkout_failed' | 'plan_change_failed' | 'credit_checkout_failed' | 'usage_reset_checkout_failed' | 'team_checkout_failed', stage: 'create_checkout' | 'portal' | 'return', err: unknown): void {
   const error = err && typeof err === 'object' ? err as { code?: unknown; status?: unknown } : null;
   const code = typeof error?.code === 'string' && /^[a-z0-9_]{1,64}$/.test(error.code) ? error.code : undefined;
   const status = typeof error?.status === 'number' ? error.status : undefined;

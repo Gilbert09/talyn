@@ -9,7 +9,7 @@ import {
   type PostHogCodeRuntimeAdapter,
   type WorkflowTriggerEvent,
 } from '@talyn/shared';
-import { getDbClient } from '../db/client.js';
+import { getDbClient, runWithoutScope } from '../db/client.js';
 import {
   tasks as tasksTable,
   environments as environmentsTable,
@@ -22,6 +22,7 @@ import { runBoxGate } from './billing/boxDeferral.js';
 import { isUnattendedTask, taskSandboxSize } from './selfHosted/taskSize.js';
 import { attachTaskToPullRequestRow } from './prCache.js';
 import { bumpSkillUsage } from './skills.js';
+import { workspaceHasFeature } from './featureFlags.js';
 import { rowToTask } from './taskSerialize.js';
 import { emitTaskCreated, emitTaskUpdate } from './websocket.js';
 
@@ -342,11 +343,13 @@ async function buildTaskMetadata(
   if (input.codeReview) metadata.codeReview = input.codeReview;
   if (input.source) metadata.source = input.source;
   if (input.internetAccess) metadata.internetAccess = true;
+  if (await ciParkApplies(input)) metadata.ciPark = true;
   if (input.skill) {
     metadata.skill = input.skill;
     // Best-effort usage bump for the picker's "frequently used" ordering —
     // never blocks or fails task creation.
-    void bumpSkillUsage(input.workspaceId, input.skill.key).catch((err) => {
+    // Off the request scope, because it can settle after the request ends.
+    void runWithoutScope(() => bumpSkillUsage(input.workspaceId, input.skill!.key)).catch((err) => {
       console.warn('[taskCreate] failed to bump skill usage:', err);
     });
   }
@@ -374,6 +377,19 @@ async function buildTaskMetadata(
     }
   }
   return metadata;
+}
+
+/**
+ * Whether this run may park while CI runs (the `ci-park` flag). Asked once,
+ * here, and stamped on the task: a run keeps the posture it started with, and
+ * the executor and the poller read only the stamp. Only a fix run on Talyn
+ * Fleet can park, because only the fleet can suspend a box and give it the
+ * next prompt in the same checkout.
+ */
+async function ciParkApplies(input: CreateCloudTaskInput): Promise<boolean> {
+  if (input.type !== 'pr_response' || !input.pullRequestId) return false;
+  if ((await providerTypeFor(input.assignedEnvironmentId)) !== 'selfhosted') return false;
+  return (await workspaceHasFeature('ciPark', input.workspaceId)).enabled;
 }
 
 /**

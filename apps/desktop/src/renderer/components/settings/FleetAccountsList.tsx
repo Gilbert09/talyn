@@ -2,11 +2,14 @@ import { useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, RefreshCw, Trash2 } from 'lucide-react';
 import type { FleetAccountView, FleetAgent } from '@talyn/shared';
 import { ApiError, api } from '../../lib/api';
+import { trackEvent } from '../../lib/analytics';
 import { openExternal } from '../../lib/openExternal';
 import { FleetAgentMark } from '../../lib/providerMeta';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
+import { ipcErrorMessage } from '../../lib/ipcError';
+import { errorCode, isCodexSignInTimeout, useSignInAbandon, type SignInAbandon } from '../../lib/signInFunnel';
 
 type Account = FleetAccountView;
 
@@ -14,7 +17,36 @@ function errorMessage(error: unknown): string {
   if (error instanceof ApiError && error.code === 'multi_account_disabled') {
     return 'Adding more accounts is turned off for this workspace.';
   }
-  return error instanceof Error ? error.message : 'Could not update the account';
+  return ipcErrorMessage(error, 'Could not update the account');
+}
+
+type ConnectMethod = 'claude_oauth' | 'codex_paste' | 'codex_oauth' | 'claude_api_key' | 'codex_api_key';
+type ConnectStage = 'start' | 'finish' | 'save' | 'parse';
+
+function trackStarted(agent: FleetAgent, method: ConnectMethod, funnel: SignInAbandon) {
+  trackEvent('cloud_provider_signin_started', { provider: 'selfhosted', agent, method });
+  funnel.begin(agent, method);
+}
+
+function trackConnected(agent: FleetAgent, funnel: SignInAbandon) {
+  funnel.end();
+  trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent });
+}
+
+// Report a failed connect attempt, then rethrow so `run` still shows the error.
+async function trackFailure<T>(agent: FleetAgent, stage: ConnectStage, funnel: SignInAbandon, action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (e) {
+    // A timeout means the user never finished in the browser: abandonment, not failure.
+    if (agent === 'codex' && stage === 'start' && isCodexSignInTimeout(e)) {
+      funnel.abandon('timeout');
+    } else {
+      funnel.end();
+      trackEvent('cloud_provider_connect_failed', { provider: 'selfhosted', agent, stage, error: errorMessage(e).slice(0, 200), error_code: errorCode(e) });
+    }
+    throw e;
+  }
 }
 
 function formatTimeAt(iso: string, action: string, now = new Date()): string {
@@ -86,7 +118,7 @@ function codexConfig(result: Awaited<ReturnType<typeof window.electron.codex.sig
 }
 
 export function FleetAccountRow({
-  account, active, switchAtPercent, index, ids, workspaceId, onChanged,
+  account, active, switchAtPercent, index, ids, workspaceId, onChanged, naming = false, onNamed,
 }: {
   account: Account;
   active: boolean;
@@ -95,11 +127,15 @@ export function FleetAccountRow({
   ids: string[];
   workspaceId: string;
   onChanged: () => Promise<void>;
+  /** The account was just connected: open its name field. */
+  naming?: boolean;
+  onNamed?: () => void;
 }) {
-  const [renaming, setRenaming] = useState(false);
+  const [renaming, setRenaming] = useState(naming);
   const [label, setLabel] = useState(account.label);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [busy, setBusy] = useState(false);
+  const funnel = useSignInAbandon();
   const [error, setError] = useState<string | null>(null);
   const [codeStep, setCodeStep] = useState(false);
   const [code, setCode] = useState('');
@@ -136,25 +172,39 @@ export function FleetAccountRow({
     }
     if (trimmed === account.label) {
       setRenaming(false);
+      onNamed?.();
       return;
     }
     void run(async () => {
       await api.cloudProviders.fleetAccounts.rename(account.id, trimmed);
       setRenaming(false);
+      onNamed?.();
     });
+  };
+
+  const cancelRename = () => {
+    setRenaming(false);
+    setLabel(account.label);
+    setError(null);
+    onNamed?.();
   };
 
   const reconnect = async () => {
     if (account.kind === 'claude_oauth') {
       await run(async () => {
-        const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { accountId: account.id });
-        await openExternal(url);
+        trackStarted(account.agent, 'claude_oauth', funnel);
+        await trackFailure(account.agent, 'start', funnel, async () => {
+          const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { accountId: account.id });
+          await openExternal(url);
+        });
         setCodeStep(true);
       });
     } else if (account.kind === 'codex_oauth') {
       await run(async () => {
-        const result = await window.electron.codex.signIn();
-        await api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(result), { codexFleetAccountId: account.id });
+        trackStarted(account.agent, 'codex_oauth', funnel);
+        const result = await trackFailure(account.agent, 'start', funnel, () => window.electron.codex.signIn());
+        await trackFailure(account.agent, 'save', funnel, () => api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(result), { codexFleetAccountId: account.id }));
+        trackConnected(account.agent, funnel);
       });
     }
   };
@@ -171,8 +221,10 @@ export function FleetAccountRow({
             onChange={(e) => setLabel(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') saveLabel();
-              if (e.key === 'Escape') { setRenaming(false); setLabel(account.label); }
+              if (e.key === 'Escape') cancelRename();
             }}
+            onFocus={(e) => { if (naming) e.currentTarget.select(); }}
+            autoFocus
             disabled={busy}
           />
         ) : (
@@ -194,6 +246,11 @@ export function FleetAccountRow({
           <Button size="icon" variant="ghost" className="h-6 w-6" title="Remove" aria-label={`Remove ${account.label}`} disabled={busy} onClick={() => setConfirmRemove(true)}><Trash2 className="h-3.5 w-3.5" /></Button>
         </div>
       </div>
+      {renaming && <div className="flex flex-wrap items-center gap-2 text-xs">
+        {naming && <span className="text-muted-foreground">Connected. Give this account a name, or keep this one.</span>}
+        <Button size="sm" className="h-6" disabled={busy || !label.trim()} onClick={saveLabel}>Save</Button>
+        <Button size="sm" variant="ghost" className="h-6" disabled={busy} onClick={cancelRename}>{naming ? 'Skip' : 'Cancel'}</Button>
+      </div>}
       <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
         <span className="min-w-0 truncate">
           {account.kind === 'anthropic_key' || account.kind === 'openai_key' ? 'No usage data for API keys'
@@ -209,7 +266,7 @@ export function FleetAccountRow({
       {usageExpanded && <div className="space-y-2 pt-1">{windows.map((window) => <UsageWindowRow key={window.key} window={window} switchAtPercent={switchAtPercent} />)}</div>}
       {codeStep && <div className="flex gap-2">
         <Input aria-label={`Code for ${account.label}`} value={code} onChange={(e) => setCode(e.target.value)} />
-        <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await api.cloudProviders.completeClaudeSignIn(workspaceId, code, { accountId: account.id }); setCodeStep(false); setCode(''); })}>Finish sign-in</Button>
+        <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await trackFailure(account.agent, 'finish', funnel, () => api.cloudProviders.completeClaudeSignIn(workspaceId, code, { accountId: account.id })); trackConnected(account.agent, funnel); setCodeStep(false); setCode(''); })}>Finish sign-in</Button>
       </div>}
       {confirmRemove && <div className="flex items-center gap-2 text-xs">
         <span>Remove {account.label}?</span>
@@ -233,14 +290,14 @@ export function FleetAccountsList({ agent, workspaceId, accounts, activeId, swit
   const ids = ordered.map((account) => account.id);
   const agentLabel = agent === 'claude' ? 'Claude' : 'Codex';
   const [adding, setAdding] = useState(false);
-  const [label, setLabel] = useState('');
+  const [namingId, setNamingId] = useState<string | null>(null);
   const [method, setMethod] = useState<'sign_in' | 'key' | null>(null);
   const [key, setKey] = useState('');
   const [code, setCode] = useState('');
   const [codeStep, setCodeStep] = useState(false);
   const [busy, setBusy] = useState(false);
+  const funnel = useSignInAbandon();
   const [error, setError] = useState<string | null>(null);
-  const chosenLabel = label.trim();
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -254,7 +311,9 @@ export function FleetAccountsList({ agent, workspaceId, accounts, activeId, swit
     }
   };
 
-  const done = async () => {
+  // The server names a new account. Its row then asks for a better name.
+  const done = async (accountId?: string) => {
+    if (accountId) setNamingId(accountId);
     await onChanged();
     setAdding(false);
     setMethod(null);
@@ -268,13 +327,18 @@ export function FleetAccountsList({ agent, workspaceId, accounts, activeId, swit
     void run(async () => {
       try {
         if (agent === 'claude') {
-          const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { label: chosenLabel });
-          await openExternal(url);
+          trackStarted(agent, 'claude_oauth', funnel);
+          await trackFailure(agent, 'start', funnel, async () => {
+            const { url } = await api.cloudProviders.startClaudeSignIn(workspaceId, { newAccount: true });
+            await openExternal(url);
+          });
           setCodeStep(true);
         } else {
-          const result = await window.electron.codex.signIn();
-          await api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(result), { codexLabel: chosenLabel });
-          await done();
+          trackStarted(agent, 'codex_oauth', funnel);
+          const result = await trackFailure(agent, 'start', funnel, () => window.electron.codex.signIn());
+          const saved = await trackFailure(agent, 'save', funnel, () => api.cloudProviders.saveConfig('selfhosted', workspaceId, codexConfig(result), { codexNewAccount: true }));
+          trackConnected(agent, funnel);
+          await done(saved.accountId);
         }
       } catch (e) {
         setMethod(null);
@@ -285,24 +349,23 @@ export function FleetAccountsList({ agent, workspaceId, accounts, activeId, swit
 
   return <div className="space-y-2">
     <div className="flex items-center gap-2"><FleetAgentMark agent={agent} className="h-4 w-4 rounded-[3px]" /><span className="text-[13px] font-medium">{agentLabel}</span></div>
-    {ordered.map((account, index) => <FleetAccountRow key={account.id} account={account} active={activeId === account.id} switchAtPercent={switchAtPercent} index={index} ids={ids} workspaceId={workspaceId} onChanged={onChanged} />)}
+    {ordered.map((account, index) => <FleetAccountRow key={account.id} account={account} active={activeId === account.id} switchAtPercent={switchAtPercent} index={index} ids={ids} workspaceId={workspaceId} onChanged={onChanged} naming={namingId === account.id} onNamed={() => setNamingId(null)} />)}
     {ordered.length === 0 && <p className="text-xs text-muted-foreground">Not connected</p>}
-    {!adding ? <Button size="sm" variant="outline" onClick={() => { setLabel(`${agentLabel} ${accounts.length + 1}`); setAdding(true); }}>{ordered.length === 0 ? `Connect ${agentLabel}` : `Add another ${agentLabel} account`}</Button> : (
+    {!adding ? <Button size="sm" variant="outline" onClick={() => { setNamingId(null); setAdding(true); }}>{ordered.length === 0 ? `Connect ${agentLabel}` : `Add another ${agentLabel} account`}</Button> : (
       <div className="rounded-md border p-2.5 space-y-2">
-        <Input label="Account name" aria-label="Account name" value={label} onChange={(e) => setLabel(e.target.value)} disabled={busy} />
         {!method && <div className="flex gap-2">
-          <Button size="sm" disabled={busy || !chosenLabel} onClick={startSignIn}>Sign in</Button>
-          <Button size="sm" variant="outline" disabled={busy || !chosenLabel} onClick={() => setMethod('key')}>Paste an API key</Button>
+          <Button size="sm" disabled={busy} onClick={startSignIn}>Sign in</Button>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => setMethod('key')}>Paste an API key</Button>
         </div>}
         {method === 'key' && <div className="space-y-2">
           <Input label={`${agentLabel} API key`} aria-label={`${agentLabel} API key`} type="password" value={key} onChange={(e) => setKey(e.target.value)} disabled={busy} />
-          <Button size="sm" disabled={busy || !chosenLabel || !key.trim()} onClick={() => void run(async () => { await api.cloudProviders.fleetAccounts.add(workspaceId, agent, agent === 'claude' ? 'anthropic_key' : 'openai_key', key.trim(), chosenLabel); await done(); })}>Add account</Button>
+          <Button size="sm" disabled={busy || !key.trim()} onClick={() => void run(async () => { trackStarted(agent, agent === 'claude' ? 'claude_api_key' : 'codex_api_key', funnel); const added = await trackFailure(agent, 'save', funnel, () => api.cloudProviders.fleetAccounts.add(workspaceId, agent, agent === 'claude' ? 'anthropic_key' : 'openai_key', key.trim())); trackConnected(agent, funnel); await done(added.id); })}>Add account</Button>
         </div>}
         {method === 'sign_in' && agent === 'claude' && codeStep && <div className="space-y-2">
           <Input label="Code from Anthropic" aria-label="Code from Anthropic" value={code} onChange={(e) => setCode(e.target.value)} disabled={busy} />
-          <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { await api.cloudProviders.completeClaudeSignIn(workspaceId, code, { label: chosenLabel }); await done(); })}>Finish sign-in</Button>
+          <Button size="sm" disabled={busy || !code.trim()} onClick={() => void run(async () => { const result = await trackFailure(agent, 'finish', funnel, () => api.cloudProviders.completeClaudeSignIn(workspaceId, code, { newAccount: true })); trackConnected(agent, funnel); await done(result.accountId); })}>Finish sign-in</Button>
         </div>}
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setAdding(false); setMethod(null); setCodeStep(false); setError(null); }}>Cancel</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => { funnel.abandon('cancel'); setAdding(false); setMethod(null); setCodeStep(false); setError(null); }}>Cancel</Button>
         {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
       </div>
     )}

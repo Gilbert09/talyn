@@ -13,6 +13,7 @@ interface CloudProviderInfo {
   connected: boolean;
   connectedAgents?: FleetAgent[];
   reauthAgents?: FleetAgent[];
+  reauthAccounts?: { id: string; label: string; agent: string }[];
 }
 
 export const ACCOUNT = [
@@ -49,7 +50,7 @@ export const ACCOUNT = [
       return [
         ...providers.map(
           (provider) =>
-            `${provider.type}  connected: ${provider.connected}  agents: ${provider.connectedAgents?.join(', ') || 'none'}  reauth needed: ${provider.reauthAgents?.join(', ') || 'none'}`
+            `${provider.type}  connected: ${provider.connected}  agents: ${provider.connectedAgents?.join(', ') || 'none'}  reauth needed: ${provider.reauthAgents?.join(', ') || 'none'}${provider.reauthAccounts?.length ? `  reconnect accounts: ${provider.reauthAccounts.map((a) => `${a.label} (${a.id})`).join(', ')}` : ''}`
         ),
         `default provider: ${workspace.settings?.defaultCloudProvider ?? 'auto'}`,
       ].join('\n');

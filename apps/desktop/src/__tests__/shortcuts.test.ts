@@ -247,7 +247,7 @@ describe('menu commands', () => {
 
   it('owns the chords Electron would otherwise take', () => {
     const keys = MENU_COMMANDS.map((c) => c.keys);
-    for (const chord of ['mod+w', 'mod+n', 'mod+k', 'mod+,', 'mod+b', 'mod+j', 'mod+t', 'mod+l', 'mod+left', 'mod+right']) {
+    for (const chord of ['mod+n', 'mod+k', 'mod+,', 'mod+b', 'mod+j', 'mod+l', 'mod+left', 'mod+right']) {
       expect(keys).toContain(chord);
     }
     for (let i = 1; i <= 9; i += 1) expect(keys).toContain(`mod+${i}`);

@@ -64,7 +64,9 @@ describe('leftPercent and formatLeftPercent', () => {
     [4.5, false, 95.5, '96% left'],
     [13.2, false, 86.8, '87% left'],
     [95.5, false, 4.5, '4.5% left'],
-    [99, false, 1, '1.0% left'],
+    [92, false, 8, '8% left'],
+    [90.04, false, 9.96, '10% left'],
+    [99, false, 1, '1% left'],
     [99.75, false, 0.25, 'Less than 1% left'],
     [100, false, 0, '0% left'],
     [120, false, 0, '0% left'],
@@ -95,6 +97,19 @@ describe('gaugeAction', () => {
     const view = usageBillingOf(usageStatus(tier, { usedHours, exhausted }))!;
     expect(gaugeAction(view)).toBe(action);
   });
+
+  it.each([
+    ['pro', 191, false, null],
+    ['pro', 200, true, null],
+    ['max', 951, false, null],
+    ['max', 1000, true, null],
+    ['legacy_pro', 48, false, 'upgrade'],
+    ['legacy_pro', 50, true, 'upgrade'],
+    ['free', 10, true, 'upgrade'],
+  ] as const)('%s with %i hours used, exhausted=%s and credits left offers %s', (tier, usedHours, exhausted, action) => {
+    const view = usageBillingOf(usageStatus(tier, { usedHours, exhausted, balanceMicros: 100_000_000 }))!;
+    expect(gaugeAction(view)).toBe(action);
+  });
 });
 
 describe('gaugeSummary', () => {
@@ -116,6 +131,32 @@ describe('gaugeSummary', () => {
     expect(summary.usageText).toBe('0% left (10 of 10 box-hours used)');
     expect(summary.creditsText).toBeNull();
     expect(summary.exhaustedText).toBe('Out of hours: new boxes paused');
+  });
+});
+
+describe('gaugeSummary while drawing on credit', () => {
+  it.each([
+    ['at the start of the draw', 200, 25_000_000, 25_000_000, 100, 'Using credits · $25 left', '$25 of $25'],
+    ['part way through', 230, 93_840_000, 120_000_000, 78.2, 'Using credits · $93.84 left', '$93.84 of $120'],
+    ['an old backend without a start', 200, 10_000_000, undefined, 100, 'Using credits · $10 left', '$10 of $10'],
+  ] as const)('%s', (_label, usedHours, balanceMicros, drawStartMicros, leftPct, leftText, detail) => {
+    const view = usageBillingOf(usageStatus('pro', { usedHours, balanceMicros, drawStartMicros }))!;
+    const summary = gaugeSummary(view);
+    expect(summary.credit?.leftPercent).toBe(leftPct);
+    expect(summary.leftText).toBe(leftText);
+    expect(summary.usageText).toBe(`Included hours used up. Using credits: ${detail} left`);
+    expect(summary.creditsText).toBeNull();
+    expect(summary.exhaustedText).toBeNull();
+    expect(summary.resetText).toMatch(/^Resets /);
+  });
+
+  it.each([
+    ['hours left', 199, 10_000_000, false],
+    ['no credit', 200, 0, false],
+    ['credit and hours both spent', 200, 10_000_000, true],
+  ] as const)('no credit bar with %s', (_label, usedHours, balanceMicros, exhausted) => {
+    const view = usageBillingOf(usageStatus('pro', { usedHours, balanceMicros, exhausted, drawStartMicros: 50_000_000 }))!;
+    expect(gaugeSummary(view).credit).toBeNull();
   });
 });
 

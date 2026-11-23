@@ -56,11 +56,13 @@ import type {
   CodeReviewPreset,
   CodeReviewPublic,
   Features,
+  FleetModelCatalog,
   GithubHealth,
   MergeEtaAnswer,
   TrunkIntegrationStatus,
   SlackAuthorizeResponse,
   SlackEmojiResponse,
+  SlackChannelsResponse,
   SlackForgetInstallationResponse,
   SlackPendingRequest,
   SlackStartInput,
@@ -79,10 +81,29 @@ import type {
   FleetAccountsResponse,
   FleetAgent,
   WorkflowCounts,
+  PostHogInboxBacklogCount,
+  PostHogInboxBacklogDays,
+  PostHogInboxBacklogPage,
+  PostHogInboxDryRun,
+  PostHogInboxPushRemoval,
+  PostHogInboxRunResponse,
+  PostHogInboxPushReveal,
+  PostHogInboxPushSetupResult,
+  PostHogInboxPushState,
+  PostHogInboxStatus,
   WorkflowInput,
+  WorkflowIntegration,
   WorkflowRun,
   WorkflowSuggestions,
   WorkflowWithStats,
+  CreatedWorkflow,
+  WebhookConnectionSummary,
+  WebhookSecretReveal,
+  LinearAuthorizeResponse,
+  LinearEditorOptions,
+  LinearStatus,
+  InboundDelivery,
+  InboundDeliverySummary,
   Workspace,
   Environment,
   Task,
@@ -105,6 +126,7 @@ import type {
   CheckoutSessionResponse,
   CreateCheckoutRequest,
   CreditCheckoutRequest,
+  UsageResetCheckoutRequest,
   PortalSessionRequest,
   CreditSummary,
   UpdateAutoTopupRequest,
@@ -172,6 +194,7 @@ import type {
   ContinueWorkbenchAsThreadInput,
   CreateWorkbenchInput,
   WorkbenchKind,
+  WorkbenchTranscriptMatch,
   PutWorkbenchInstructionFileInput,
   WorkbenchInstructionFile,
   ListMemoryQuery,
@@ -209,6 +232,7 @@ import { wsClient } from './socket.js';
 export { ApiError, ApiNetworkError, ClientInactiveError } from './http.js';
 export { mobileNotifications };
 export { WebSocketClient, wsClient } from './socket.js';
+export { startDeskPresenceHeartbeat, type DeskActivitySource, type DeskPresenceTimers } from './deskPresence.js';
 export type * from './runtime.js';
 
 export {
@@ -273,6 +297,8 @@ export const workspaces = {
   update: (id: string, data: Partial<Workspace>) =>
     request<Workspace>('PATCH', `/workspaces/${id}`, data),
   delete: (id: string) => request<void>('DELETE', `/workspaces/${id}`),
+  /** Save my order for the workspace list. The list endpoint answers in this order. */
+  reorder: (workspaceIds: string[]) => request<null>('PUT', '/workspaces/order', { workspaceIds }),
   /** The context rail's badges: what waits on me in each of my workspaces and spaces. */
   attention: () => request<ContextAttentionCounts>('GET', '/workspaces/attention'),
   /** Settings → Sandbox setup: the dotfiles and the steps every repository's image gets. */
@@ -495,7 +521,104 @@ export const github = {
       'GET',
       `/github/orgs/${encodeURIComponent(org)}/repos?workspaceId=${workspaceId}`
     ),
+  /** One page (up to 100) of `listRepos`. `page` starts at 1. */
+  listReposPage: (workspaceId: string, page: number) =>
+    request<GitHubRepo[]>('GET', `/github/repos?workspaceId=${workspaceId}&page=${page}`),
+  /** One page (up to 100) of `listOrgRepos`. `page` starts at 1. */
+  listOrgReposPage: (workspaceId: string, org: string, page: number) =>
+    request<GitHubRepo[]>(
+      'GET',
+      `/github/orgs/${encodeURIComponent(org)}/repos?workspaceId=${workspaceId}&page=${page}`
+    ),
 };
+
+/** GitHub's largest page. A shorter page is the last one. */
+const REPO_PAGE_SIZE = 100;
+/** The same page cap the backend's all-pages walk uses. */
+const REPO_MAX_PAGES = 20;
+/** Orgs read at the same time, next to the user's own list. */
+const ORG_REPO_CONCURRENCY = 4;
+
+export interface LoadAllReposOptions {
+  /** Called with the merged list after each page that adds repositories. */
+  onProgress?: (repos: GitHubRepo[]) => void;
+  /** When this returns true, no new page is requested and no progress is sent. */
+  isCancelled?: () => boolean;
+}
+
+/**
+ * Every repository the user can see: their own list plus every org's list,
+ * deduplicated by full name, like `listAllRepos`. Pages are read one at a
+ * time and the orgs in parallel, so `onProgress` can show the first
+ * repositories while large orgs still load. Each source is best effort. The
+ * promise rejects only when no source answered.
+ */
+export async function loadAllRepos(
+  workspaceId: string,
+  { onProgress, isCancelled = () => false }: LoadAllReposOptions = {}
+): Promise<GitHubRepo[]> {
+  const byFullName = new Map<string, GitHubRepo>();
+  let answered = false;
+  let firstError: unknown;
+  const fail = (err: unknown) => {
+    if (firstError === undefined) firstError = err;
+  };
+
+  const walk = async (pageOf: (page: number) => Promise<GitHubRepo[]>) => {
+    for (let page = 1; page <= REPO_MAX_PAGES; page++) {
+      if (isCancelled()) return;
+      let batch: GitHubRepo[];
+      try {
+        batch = await pageOf(page);
+      } catch (err) {
+        fail(err);
+        return;
+      }
+      answered = true;
+      for (const repo of batch) byFullName.set(repo.full_name, repo);
+      if (batch.length > 0 && !isCancelled()) onProgress?.(Array.from(byFullName.values()));
+      if (batch.length < REPO_PAGE_SIZE) return;
+    }
+  };
+
+  const walkOrgs = async () => {
+    let orgs: string[];
+    try {
+      orgs = (await github.listOrgs(workspaceId)).map((org) => org.login);
+    } catch (err) {
+      fail(err);
+      return;
+    }
+    let next = 0;
+    const worker = async () => {
+      while (next < orgs.length) {
+        const org = orgs[next++];
+        await walk((page) => github.listOrgReposPage(workspaceId, org, page));
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(ORG_REPO_CONCURRENCY, orgs.length) }, worker)
+    );
+  };
+
+  await Promise.all([
+    walk((page) => github.listReposPage(workspaceId, page)),
+    walkOrgs(),
+  ]);
+  if (!answered && firstError !== undefined) throw firstError;
+  return Array.from(byFullName.values());
+}
+
+/**
+ * `base` plus every repository in `extra` that `base` does not hold. A screen
+ * that refreshes a cached list shows this while the new list loads, so no row
+ * disappears and then comes back.
+ */
+export function mergeRepos(base: readonly GitHubRepo[], extra: readonly GitHubRepo[]): GitHubRepo[] {
+  const seen = new Set(base.map((repo) => repo.full_name));
+  const added = extra.filter((repo) => !seen.has(repo.full_name));
+  return added.length === 0 ? (base as GitHubRepo[]) : [...base, ...added];
+}
 
 // PostHog Code (cloud tasks) integration — per-workspace credentials.
 export interface PostHogCodeStatus {
@@ -512,6 +635,8 @@ export interface PostHogCodeStatus {
   /** Whether the backend is configured to offer the OAuth flow at all. False on
    *  a deployment without POSTHOG_OAUTH_* set — self-hosted, or local dev. */
   oauthAvailable?: boolean;
+  /** The stored host is no longer allowed. The row still exists. */
+  hostNotAllowed?: boolean;
 }
 
 export const posthog = {
@@ -522,7 +647,7 @@ export const posthog = {
    * app opens it (system browser on desktop, same tab on web); the backend
    * callback finishes the exchange, so no token ever reaches the client.
    */
-  startOAuth: (workspaceId: string, opts?: { host?: string; projectId?: string }) =>
+  startOAuth: (workspaceId: string, opts?: { host?: string; projectId?: string; returnTo?: string }) =>
     request<{ authorizeUrl: string }>('POST', '/posthog/oauth/start', {
       workspaceId,
       ...opts,
@@ -538,6 +663,23 @@ export const posthog = {
     }),
   disconnect: (workspaceId: string) =>
     request<void>('DELETE', `/posthog/config?workspaceId=${workspaceId}`),
+};
+
+// PostHog Inbox — its own PostHog connection, separate from PostHog Code. The
+// status is `workflows.posthogInboxStatus`. Not a cloud provider.
+export const posthogInbox = {
+  /**
+   * Start the OAuth flow for the Inbox. Returns the PostHog authorize URL to
+   * open. The callback sends the web app to `/integrations/posthog_inbox`.
+   */
+  startOAuth: (workspaceId: string, opts?: { host?: string; projectId?: string }) =>
+    request<{ authorizeUrl: string }>('POST', '/posthog-inbox/oauth/start', { workspaceId, ...opts }),
+  /** Save a personal API key for the Inbox. PostHog checks it first. */
+  saveConfig: (workspaceId: string, config: { apiKey: string; projectId: string; host?: string }) =>
+    request<PostHogInboxStatus>('PUT', '/posthog-inbox/config', { workspaceId, ...config }),
+  /** Remove the Inbox's own connection. A PostHog Code connection stays. */
+  disconnect: (workspaceId: string) =>
+    request<PostHogInboxStatus>('DELETE', `/posthog-inbox/config?workspaceId=${encodeURIComponent(workspaceId)}`),
 };
 
 // Cloud task providers — the registered providers + their per-workspace
@@ -562,14 +704,31 @@ export interface CloudProviderInfo {
   connectedAgents?: string[];
   /** Connected agents whose sign-in was rejected and needs redoing. */
   reauthAgents?: string[];
+  /** Accounts that need sign-in, without credentials. */
+  reauthAccounts?: { id: string; label: string; agent: string }[];
+}
+
+/**
+ * Which account a Claude sign-in writes: an existing one to reconnect, a new
+ * one (`newAccount`, named by the server, or `label` from older clients), or
+ * with none of them the older single sign-in.
+ */
+export interface ClaudeSignInTarget {
+  accountId?: string;
+  newAccount?: boolean;
+  label?: string;
 }
 
 export const cloudProviders = {
   list: (workspaceId: string) =>
     request<CloudProviderInfo[]>('GET', `/cloud-providers?workspaceId=${workspaceId}`),
   /** Validate + store credentials for a provider, then auto-provision its env. */
-  saveConfig: (type: string, workspaceId: string, config: Record<string, string>, options?: { codexFleetAccountId?: string; codexLabel?: string }) =>
-    request<{ connected: boolean }>('PUT', `/cloud-providers/${type}/config`, {
+  /**
+   * `codexNewAccount` adds a Codex account that the server names. The answer
+   * carries the id of the account a Codex sign-in added or reconnected.
+   */
+  saveConfig: (type: string, workspaceId: string, config: Record<string, string>, options?: { codexFleetAccountId?: string; codexLabel?: string; codexNewAccount?: boolean }) =>
+    request<{ connected: boolean; accountId?: string }>('PUT', `/cloud-providers/${type}/config`, {
       workspaceId,
       ...config,
       ...options,
@@ -583,15 +742,18 @@ export const cloudProviders = {
    * Works on BOTH front ends, unlike the Codex flow: Anthropic redirects to a
    * page it hosts rather than to a loopback, so nothing has to listen on a port.
    */
-  startClaudeSignIn: (workspaceId: string, options?: { accountId?: string; label?: string }) =>
+  startClaudeSignIn: (workspaceId: string, options?: ClaudeSignInTarget) =>
     request<{ url: string }>('POST', '/cloud-providers/selfhosted/claude/authorize', {
       workspaceId,
       ...options,
     }),
 
-  /** Finish it with the code copied off Anthropic's page (`code#state`). */
-  completeClaudeSignIn: (workspaceId: string, code: string, options?: { accountId?: string; label?: string }) =>
-    request<{ connected: boolean }>('POST', '/cloud-providers/selfhosted/claude/complete', {
+  /**
+   * Finish it with the code copied off Anthropic's page (`code#state`). The
+   * answer carries the id of the account it added or reconnected.
+   */
+  completeClaudeSignIn: (workspaceId: string, code: string, options?: ClaudeSignInTarget) =>
+    request<{ connected: boolean; accountId?: string }>('POST', '/cloud-providers/selfhosted/claude/complete', {
       workspaceId,
       code,
       ...options,
@@ -1461,7 +1623,39 @@ export const pullRequests = {
       via?: 'auto_merge' | 'label';
       alreadyTerminal?: boolean;
     }>('POST', `/pull-requests/${id}/merge`, { method }),
+  /**
+   * Close the PR on GitHub without merging, as the connected GitHub user, with
+   * an optional comment first. The backend closes only the person's own PRs
+   * (or PRs a Talyn session opened) and refuses a merged PR (409
+   * `pull_request_merged`). `alreadyClosed` means GitHub had it closed.
+   */
+  close: (id: string, comment?: string) =>
+    request<{
+      owner: string;
+      repo: string;
+      number: number;
+      url: string;
+      pullRequestId: string | null;
+      alreadyClosed: boolean;
+      commentPosted: boolean;
+    }>('POST', '/pull-requests/close', { pullRequestId: id, ...(comment?.trim() ? { comment: comment.trim() } : {}) }),
+  /**
+   * Approve or request changes, as the connected GitHub user. `body` is
+   * optional for `approve` and required for `request_changes` (400
+   * `body_required`). 409 `pr_not_open` / `own_pull_request` when GitHub would
+   * refuse; a GitHub 403/404/422 keeps its status and message. `row` is the
+   * refreshed PR row (null only if it vanished meanwhile).
+   */
+  submitReview: (id: string, input: { event: PRReviewEvent; body?: string }) =>
+    request<PRReviewSubmitResult>('POST', `/pull-requests/${id}/review`, input),
 };
+
+export type PRReviewEvent = 'approve' | 'request_changes';
+
+export interface PRReviewSubmitResult {
+  review: { id: number; state: string; url: string };
+  row: PRRow | null;
+}
 
 export const repositories = {
   files: (id: string) => request<{ paths: string[] }>('GET', `/repositories/${enc(id)}/files`),
@@ -1631,6 +1825,14 @@ export const billing = {
   /** One-time credit pack checkout. 402 `credits_require_paid_plan` on Free. `returnTo` (mobile) returns to `${returnTo}billing/return?kind=credits&result=…`. */
   creditCheckout: (data: CreditCheckoutRequest) =>
     request<CheckoutSessionResponse>('POST', '/billing/credits/checkout', data),
+  /**
+   * Usage reset checkout: the plan's monthly price for a full allowance in the
+   * current period. 402 `usage_reset_requires_paid_plan` on Free, 409
+   * `nothing_to_reset`, 404 `usage_reset_unavailable` when the tier has no
+   * reset product. `returnTo` (mobile) returns to `${returnTo}billing/return?kind=reset&result=…`.
+   */
+  usageResetCheckout: (data: UsageResetCheckoutRequest = {}) =>
+    request<CheckoutSessionResponse>('POST', '/billing/usage-reset/checkout', data),
   autoTopup: {
     get: () => request<AutoTopupSettings>('GET', '/billing/auto-topup'),
     /** Saving also clears a recorded charge failure (the "try again"). */
@@ -1841,6 +2043,40 @@ export interface AdminComputeUsage {
   };
 }
 
+export interface AdminComputeDailyPoint {
+  /** UTC day of the bucket, `YYYY-MM-DD`. */
+  day: string;
+  /** Bucket start, ISO timestamp. */
+  start: string;
+  /** Box-hours: wall-clock hours times the size weight. */
+  hours: number;
+  wall_hours: number;
+  boxes_started: number;
+}
+
+export interface AdminComputeDaily {
+  start: string;
+  end: string;
+  /** `hour` for the today and yesterday ranges, else `day`. */
+  bucket: 'day' | 'hour';
+  user_id: string | null;
+  user_email: string | null;
+  days: AdminComputeDailyPoint[];
+  totals: {
+    hours: number;
+    wall_hours: number;
+    boxes_started: number;
+    peak_day: string | null;
+    /** Start of the peak bucket, ISO timestamp. */
+    peak_start: string | null;
+    peak_hours: number;
+  };
+  by_kind: { key: string; hours: number }[];
+  by_size: { key: string; hours: number }[];
+  /** Every account with usage in the range, most hours first. Ignores the user filter. */
+  users: { user_id: string; email: string | null; hours: number }[];
+}
+
 export const admin = {
   /**
    * Whether the caller is an operator, and what this deploy lets them do.
@@ -1903,6 +2139,9 @@ export const admin = {
   usageSummary: () => request<AdminUsageSummary>('GET', '/admin/billing/summary'),
   computeUsage: (params?: { sort?: string; order?: 'asc' | 'desc'; limit?: number; q?: string }) =>
     request<AdminComputeUsage>('GET', `/admin/usage/compute${adminQuery({ ...params })}`),
+  /** Box-hours per UTC day, or per UTC hour for `range` today or yesterday, for every account or one. */
+  computeDaily: (params?: { days?: number; range?: 'today' | 'yesterday'; userId?: string }) =>
+    request<AdminComputeDaily>('GET', `/admin/usage/compute/daily${adminQuery({ ...params })}`),
   workspaces: {
     list: (params?: { q?: string; ownerId?: string; limit?: number; before?: string }) =>
       request<AdminPage<AdminWorkspaceSummary>>(
@@ -2029,6 +2268,9 @@ export const slack = {
   /** The team's custom emoji (installer or linked). `needsScope` means the app must be reinstalled. */
   listEmoji: (teamId: string) =>
     request<SlackEmojiResponse>('GET', `/slack/teams/${encodeURIComponent(teamId)}/emoji`),
+  /** Channels the bot is a member of, for a channel rule. `needsScope` means the app must be reinstalled. */
+  listChannels: (teamId: string) =>
+    request<SlackChannelsResponse>('GET', `/slack/teams/${encodeURIComponent(teamId)}/channels`),
   /** Installer only. Forgets the bot token; the app stays installed in Slack. */
   forgetInstallation: (teamId: string) =>
     request<SlackForgetInstallationResponse>(
@@ -2051,6 +2293,36 @@ export const slack = {
 };
 
 // ============================================================================
+// Linear — the issue tracker integration. Behind `features.issueRules`; every
+// route answers 404 `code: 'issue_rules_unavailable'` when the flag is off,
+// and `connect` 503s `code: 'linear_not_configured'` with no Linear app.
+// ============================================================================
+
+export const linear = {
+  /** The workspace's Linear connections, and whether this deployment has a Linear app. */
+  getStatus: (workspaceId: string) =>
+    request<LinearStatus>('GET', `/linear?workspaceId=${encodeURIComponent(workspaceId)}`),
+  /**
+   * Start connecting a Linear workspace. Open `authorizeUrl` in a browser;
+   * re-read `getStatus` after. `returnTo` is the mobile app's return base.
+   */
+  connect: (input: { workspaceId: string; returnTo?: string }) =>
+    request<LinearAuthorizeResponse>('POST', '/linear/connect', input),
+  /** Disconnect. Talyn revokes its token, and the workspace's Linear rules stop matching. */
+  disconnect: (workspaceId: string, connectionId: string) =>
+    request<void>(
+      'DELETE',
+      `/linear/connections/${encodeURIComponent(connectionId)}?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+  /** Teams, labels, states and projects, for the rule editor. `partial` when Linear could not be read. */
+  options: (workspaceId: string, connectionId: string) =>
+    request<LinearEditorOptions>(
+      'GET',
+      `/linear/connections/${encodeURIComponent(connectionId)}/options?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+};
+
+// ============================================================================
 // Features (allow-listed capabilities)
 // ============================================================================
 
@@ -2063,6 +2335,19 @@ export const features = {
    * surface enforces its own gate; this only decides what to draw.
    */
   get: () => request<Features>('GET', '/features'),
+};
+
+// ============================================================================
+// Agent models
+// ============================================================================
+
+export const models = {
+  /**
+   * The agent models to offer, and each agent's default. Pass the answer to
+   * `setFleetModelCatalog` from `@talyn/shared`, which checks it. The backend
+   * owns this list, so a new model reaches the apps with no app release.
+   */
+  get: () => request<FleetModelCatalog>('GET', '/models'),
 };
 
 // ============================================================================
@@ -2114,8 +2399,16 @@ export const codeReviews = {
 };
 
 export const workflows = {
-  list: (workspaceId: string) =>
-    request<WorkflowWithStats[]>('GET', `/workflows?workspaceId=${encodeURIComponent(workspaceId)}`),
+  /**
+   * The workspace's rules. Pass `integration` for one integration's rules
+   * only; absent lists every rule.
+   */
+  list: (workspaceId: string, integration?: WorkflowIntegration) =>
+    request<WorkflowWithStats[]>(
+      'GET',
+      `/workflows?workspaceId=${encodeURIComponent(workspaceId)}` +
+        (integration ? `&integration=${encodeURIComponent(integration)}` : '')
+    ),
 
   /**
    * Just the counters, for the sidebar's nav badge.
@@ -2154,8 +2447,12 @@ export const workflows = {
     return request<WorkflowSuggestions>('GET', `/workflows/suggestions?${qs.toString()}`);
   },
 
+  /**
+   * A webhook rule's answer carries `webhook`: its URL and signing secret.
+   * They are shown this once. Talyn keeps only a hash of the URL token.
+   */
   create: (workspaceId: string, input: WorkflowInput) =>
-    request<WorkflowWithStats>('POST', '/workflows', { workspaceId, ...input }),
+    request<CreatedWorkflow>('POST', '/workflows', { workspaceId, ...input }),
 
   /**
    * Whole-workflow replace, not a field merge — the trigger, the conditions and
@@ -2178,6 +2475,137 @@ export const workflows = {
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request<WorkflowRun[]>('GET', `/workflows/${id}/runs${suffix}`);
   },
+
+  /** A webhook rule's URL, without its token. */
+  webhook: (id: string) => request<WebhookConnectionSummary>('GET', `/workflows/${id}/webhook`),
+
+  /**
+   * Replace a webhook rule's URL token and signing secret. The old URL stops
+   * working at once. The new ones are shown this once.
+   */
+  rotateWebhook: (id: string) =>
+    request<WebhookSecretReveal>('POST', `/workflows/${id}/webhook/rotate`),
+
+  /** A webhook rule's stored requests, newest first, without their bodies. */
+  deliveries: (id: string, opts: { limit?: number; cursor?: string | null } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.limit) qs.set('limit', String(opts.limit));
+    if (opts.cursor) qs.set('cursor', opts.cursor);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<InboundDeliverySummary[]>('GET', `/workflows/${id}/deliveries${suffix}`);
+  },
+
+  /** One stored request with its body and the headers Talyn kept. */
+  delivery: (id: string, deliveryId: string) =>
+    request<InboundDelivery>('GET', `/workflows/${id}/deliveries/${encodeURIComponent(deliveryId)}`),
+
+  /** Run a stored request through the rule again, as a new delivery. */
+  replayDelivery: (id: string, deliveryId: string) =>
+    request<InboundDeliverySummary>(
+      'POST',
+      `/workflows/${id}/deliveries/${encodeURIComponent(deliveryId)}/replay`
+    ),
+
+  /**
+   * Whether Talyn can read the workspace's PostHog Inbox, for the PostHog
+   * Inbox editor. `access: 'reconnect'` means the PostHog connection must be
+   * made again to grant the Inbox permissions.
+   */
+  posthogInboxStatus: (workspaceId: string) =>
+    request<PostHogInboxStatus>(
+      'GET',
+      `/workflows/posthog-inbox/status?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+
+  /**
+   * The PostHog reports a rule would act on now, from its unsaved definition.
+   * Starts nothing.
+   */
+  posthogInboxDryRun: (workspaceId: string, input: WorkflowInput) =>
+    request<PostHogInboxDryRun>('POST', '/workflows/posthog-inbox/dry-run', { workspaceId, workflow: input }),
+  /**
+   * One page of a PostHog Inbox rule's backlog: older reports that match it.
+   * Pass `workflowId` for a saved rule, `conditions` for the editor's unsaved
+   * ones, or both. Reads only.
+   */
+  posthogInboxBacklog: (
+    workspaceId: string,
+    opts: { workflowId?: string | null; conditions?: WorkflowInput['conditions']; days?: PostHogInboxBacklogDays; offset?: number }
+  ) =>
+    request<PostHogInboxBacklogPage>('POST', '/workflows/posthog-inbox/backlog', {
+      workspaceId,
+      ...(opts.workflowId ? { workflowId: opts.workflowId } : {}),
+      ...(opts.conditions !== undefined ? { workflow: { conditions: opts.conditions } } : {}),
+      ...(opts.days !== undefined ? { days: opts.days } : {}),
+      ...(opts.offset !== undefined ? { offset: opts.offset } : {}),
+    }),
+  /**
+   * How many reports in the range match a PostHog Inbox rule, by state. Same
+   * options as {@link posthogInboxBacklog}, without the offset. Reads only.
+   */
+  posthogInboxBacklogCount: (
+    workspaceId: string,
+    opts: { workflowId?: string | null; conditions?: WorkflowInput['conditions']; days?: PostHogInboxBacklogDays }
+  ) =>
+    request<PostHogInboxBacklogCount>('POST', '/workflows/posthog-inbox/backlog/count', {
+      workspaceId,
+      ...(opts.workflowId ? { workflowId: opts.workflowId } : {}),
+      ...(opts.conditions !== undefined ? { workflow: { conditions: opts.conditions } } : {}),
+      ...(opts.days !== undefined ? { days: opts.days } : {}),
+    }),
+  /** "Run selected": start a saved, enabled PostHog Inbox rule on these reports (at most 20). */
+  runPostHogInboxReports: (workflowId: string, reportIds: string[]) =>
+    request<PostHogInboxRunResponse>('POST', `/workflows/${encodeURIComponent(workflowId)}/posthog-inbox/run`, { reportIds }),
+
+  /** The PostHog Inbox webhook URL of the workspace's PostHog project, without its token, or null. */
+  posthogInboxWebhook: (workspaceId: string) =>
+    request<PostHogInboxPushState>('GET', `/workflows/posthog-inbox/webhook?workspaceId=${encodeURIComponent(workspaceId)}`),
+
+  /**
+   * Make or replace the PostHog Inbox webhook URL. The old URL stops working
+   * at once. The URL and the secret are shown this once.
+   */
+  rotatePostHogInboxWebhook: (workspaceId: string, requireSecret: boolean) =>
+    request<PostHogInboxPushReveal>('POST', '/workflows/posthog-inbox/webhook/rotate', { workspaceId, requireSecret }),
+
+  /**
+   * "Set up push in PostHog": make or rotate the webhook URL and create or
+   * update Talyn's PostHog destination. Never returns the URL token or the
+   * secret. A grant without the hog function scopes answers
+   * `posthog_inbox_push_scopes_missing` and changes nothing.
+   */
+  setUpPostHogInboxPush: (workspaceId: string) =>
+    request<PostHogInboxPushSetupResult>('POST', '/workflows/posthog-inbox/webhook/setup', { workspaceId }),
+
+  /**
+   * Remove the PostHog Inbox webhook URL. The poller goes back to every 3
+   * minutes. Talyn's PostHog destination is deleted too, best effort.
+   */
+  removePostHogInboxWebhook: (workspaceId: string) =>
+    request<PostHogInboxPushRemoval>('DELETE', `/workflows/posthog-inbox/webhook?workspaceId=${encodeURIComponent(workspaceId)}`),
+
+  /** The requests PostHog sent to the webhook URL, newest first, without their bodies. */
+  posthogInboxDeliveries: (workspaceId: string, opts: { limit?: number; cursor?: string | null } = {}) => {
+    const qs = new URLSearchParams({ workspaceId });
+    if (opts.limit) qs.set('limit', String(opts.limit));
+    if (opts.cursor) qs.set('cursor', opts.cursor);
+    return request<InboundDeliverySummary[]>('GET', `/workflows/posthog-inbox/deliveries?${qs.toString()}`);
+  },
+
+  /** One request PostHog sent, with its body and the headers Talyn kept. */
+  posthogInboxDelivery: (workspaceId: string, deliveryId: string) =>
+    request<InboundDelivery>(
+      'GET',
+      `/workflows/posthog-inbox/deliveries/${encodeURIComponent(deliveryId)}?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+
+  /** Read a pushed report again, as a new delivery. A report version already acted on does not run again. */
+  replayPostHogInboxDelivery: (workspaceId: string, deliveryId: string) =>
+    request<InboundDeliverySummary>(
+      'POST',
+      `/workflows/posthog-inbox/deliveries/${encodeURIComponent(deliveryId)}/replay`,
+      { workspaceId }
+    ),
 };
 
 // ============================================================================
@@ -2291,10 +2719,15 @@ export const mcpServers = {
   discoverAuth: (workspaceId: string, url: string) =>
     request<McpAuthDiscovery>('POST', '/mcp-servers/discover-auth', { workspaceId, url }),
 
-  startSignIn: (id: string) =>
+  /**
+   * `returnTo` is the mobile app's URL base: the web callback page then sends
+   * the browser to `${returnTo}mcp/callback?mcp=connected|error`.
+   */
+  startSignIn: (id: string, opts?: { returnTo?: string }) =>
     request<{ flowId: string; authorizeUrl: string; expiresAt: string; scopes: string[] }>(
       'POST',
-      `/mcp-servers/${id}/connect`
+      `/mcp-servers/${id}/connect`,
+      opts?.returnTo ? { returnTo: opts.returnTo } : undefined
     ),
 
   /** The poll a client runs while somebody is at the consent screen. */
@@ -2306,10 +2739,11 @@ export const mcpServers = {
 
   /**
    * Finish a sign-in from the callback page, which holds nothing but these two
-   * values — the state is what names the server.
+   * values — the state is what names the server. `appReturnUrl` is set when
+   * the mobile app started the flow: the page then sends the browser there.
    */
   complete: (state: string, code: string, error?: string) =>
-    request<null>('POST', '/mcp-servers/complete', { state, code, error }),
+    request<{ appReturnUrl?: string } | null>('POST', '/mcp-servers/complete', { state, code, error }),
 
   /** Hand back the grant, keeping the endpoints so a reconnect is cheap. */
   disconnect: (id: string) =>
@@ -2331,6 +2765,9 @@ export const workbenches = {
     if (opts.kinds?.length) qs.set('kinds', opts.kinds.join(','));
     return request<Workbench[]>('GET', `/workbenches?${qs.toString()}`);
   },
+  /** Sessions and threads whose transcripts match `q`, archived ones too. Best for a search of 3 or more characters. */
+  searchTranscripts: (workspaceId: string, q: string) =>
+    request<WorkbenchTranscriptMatch[]>('GET', `/workbenches/search?${new URLSearchParams({ workspaceId, q }).toString()}`),
   /** The sessions of a thread, newest first, archived ones too. */
   threadSessions: (threadId: string) => request<Workbench[]>('GET', `/workbenches/${enc(threadId)}/sessions`),
   /** Continue a session as a thread. Answers the new thread. */
@@ -2341,13 +2778,13 @@ export const workbenches = {
   update: (id: string, patch: UpdateWorkbenchInput) =>
     request<Workbench>('PATCH', `/workbenches/${enc(id)}`, patch),
   archive: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/archive`),
+  /** Archive many sessions in one request. An id that fails goes into `failed`; the others still archive. */
+  archiveMany: (ids: string[]) =>
+    request<import('@talyn/shared').ArchiveWorkbenchesResult>('POST', '/workbenches/archive', { ids }),
   restore: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/restore`),
-  /** I opened the session: its current alert stops counting on the context rail. */
-  attentionSeen: (id: string) =>
-    request<{ acknowledged: boolean }>('POST', `/workbenches/${enc(id)}/attention/seen`),
   /** Start waking the session's box before the first turn. Never waits for the box. */
   wake: (id: string) =>
-    request<{ status: 'skipped' | 'moving' | 'resuming' | 'awake' }>('POST', `/workbenches/${enc(id)}/wake`),
+    request<{ status: 'skipped' | 'moving' | 'resuming' | 'awake' | 'unavailable' }>('POST', `/workbenches/${enc(id)}/wake`),
   /** Provision again after a failed start. */
   retry: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/retry`),
   /** Where the session's turns spent their time, by category, with the slowest calls. */
@@ -2434,12 +2871,15 @@ export const workbenches = {
    * aligned to whole turns; pass the returned `oldestSeq` back as `before`.
    * A backend older than `before` ignores it and answers the forward page from
    * the start, without `hasOlder`.
+   * `ceiling` (with `before` only): the most events one page may hold while it
+   * extends to the start of a turn. A long turn is cut there instead.
    */
-  events: (chatId: string, opts: { after?: number; before?: number | 'latest'; limit?: number } = {}) => {
+  events: (chatId: string, opts: { after?: number; before?: number | 'latest'; limit?: number; ceiling?: number } = {}) => {
     const qs = new URLSearchParams();
     if (opts.after !== undefined) qs.set('after', String(opts.after));
     if (opts.before !== undefined) qs.set('before', String(opts.before));
     if (opts.limit) qs.set('limit', String(opts.limit));
+    if (opts.ceiling && opts.before !== undefined) qs.set('ceiling', String(opts.ceiling));
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request<WorkbenchEventsPage>(
       'GET',
@@ -2492,6 +2932,10 @@ export const workbenches = {
     request<WorkbenchCheckpoint[]>('GET', `/workbenches/chats/${enc(chatId)}/checkpoints`),
   restoreCheckpoint: (chatId: string, turn: number) =>
     request<void>('POST', `/workbenches/chats/${enc(chatId)}/checkpoints/${turn}/restore`),
+
+  /** The rule or loop that started the session, with the event it acted on. Null for other sessions. */
+  origin: (id: string) =>
+    request<import('@talyn/shared').SessionOrigin | null>('GET', `/workbenches/${enc(id)}/origin`),
 
   // ---- Background jobs and wake-ups ----
   // Live updates arrive as `workbench:background` WS events carrying the
@@ -2674,11 +3118,13 @@ export const api = {
   tasks,
   github,
   posthog,
+  posthogInbox,
   cloudProviders,
   repositories,
   pullRequests,
   trunk,
   slack,
+  linear,
   skills,
   mcpTokens,
   apiTokens,
@@ -2688,6 +3134,7 @@ export const api = {
   releaseNotes,
   users,
   features,
+  models,
   system,
   workflows,
   loops,

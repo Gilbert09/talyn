@@ -81,7 +81,7 @@ function usageBase(now: string, lastWeek: string, q: string): SQL {
       GROUP BY w.owner_id
     ), current_period AS (
       SELECT DISTINCT ON (owner_id) owner_id, tier, period_start, period_end,
-        used_wsec, included_wsec, credit_micros_used
+        used_wsec + reset_used_wsec AS used_wsec, included_wsec, credit_micros_used
       FROM usage_periods
       WHERE period_start <= ${now}::timestamptz AND period_end > ${now}::timestamptz
       ORDER BY owner_id, period_start DESC
@@ -107,8 +107,191 @@ function usageBase(now: string, lastWeek: string, q: string): SQL {
   `;
 }
 
+export interface ComputeDailyPoint {
+  /** UTC day of the bucket, `YYYY-MM-DD`. */
+  day: string;
+  /** Bucket start, ISO timestamp. */
+  start: string;
+  /** Box-hours: wall-clock hours times the size weight, as billing counts them. */
+  hours: number;
+  wall_hours: number;
+  boxes_started: number;
+}
+
+export interface ComputeBreakdown {
+  key: string;
+  hours: number;
+}
+
+export interface ComputeUserHours {
+  user_id: string;
+  email: string | null;
+  hours: number;
+}
+
+export type ComputeRange = number | 'today' | 'yesterday';
+export type ComputeBucket = 'day' | 'hour';
+
+export interface ComputeDailyStats {
+  start: string;
+  end: string;
+  /** `hour` for the today and yesterday ranges, else `day`. */
+  bucket: ComputeBucket;
+  user_id: string | null;
+  user_email: string | null;
+  days: ComputeDailyPoint[];
+  totals: {
+    hours: number;
+    wall_hours: number;
+    boxes_started: number;
+    peak_day: string | null;
+    /** Start of the peak bucket, ISO timestamp. */
+    peak_start: string | null;
+    peak_hours: number;
+  };
+  by_kind: ComputeBreakdown[];
+  by_size: ComputeBreakdown[];
+  /** Every account with usage in the range, most hours first. Ignores the user filter. */
+  users: ComputeUserHours[];
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const MAX_DAYS = 180;
+const MAX_USERS = 500;
+
+function dailyParams(query: Record<string, unknown>) {
+  const rawDays = value(query.days, 'days');
+  if (rawDays !== undefined && (!/^[1-9]\d*$/.test(rawDays) || Number(rawDays) > MAX_DAYS)) {
+    throw new AdminGuardError(400, 'invalid_days', `Days must be between 1 and ${MAX_DAYS}.`);
+  }
+  const range = value(query.range, 'range');
+  if (range !== undefined && range !== 'today' && range !== 'yesterday') {
+    throw new AdminGuardError(400, 'invalid_range', 'Range must be today or yesterday.');
+  }
+  const userId = value(query.userId, 'userId')?.trim() || null;
+  const parsed: ComputeRange = range === 'today' || range === 'yesterday' ? range : rawDays ? Number(rawDays) : 30;
+  return { range: parsed, userId };
+}
+
+/** Bucket bounds in ms. The last bucket is the one that holds `end`, or for yesterday the 23:00 hour. */
+function rangeWindow(now: Date, range: ComputeRange) {
+  const nowMs = now.getTime();
+  const todayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  if (range === 'yesterday') {
+    return { start: todayStart - DAY_MS, end: todayStart, lastBucket: todayStart - HOUR_MS, bucket: 'hour' as const };
+  }
+  const [start, size] = range === 'today' ? [todayStart, HOUR_MS] : [todayStart - (range - 1) * DAY_MS, DAY_MS];
+  const lastBucket = start + Math.floor((nowMs - start) / size) * size;
+  return { start, end: nowMs, lastBucket, bucket: range === 'today' ? 'hour' as const : 'day' as const };
+}
+
+// Seconds of each interval that fall inside [lo, hi) and before `cap`, with an open interval running to `cap`.
+function overlapSeconds(lo: SQL, hi: SQL, cap: string): SQL {
+  return sql`GREATEST(EXTRACT(EPOCH FROM
+    LEAST(COALESCE(i.ended_at, ${cap}::timestamptz), ${cap}::timestamptz, ${hi})
+    - GREATEST(i.started_at, ${lo})), 0)`;
+}
+
+function sortBreakdown(totals: Map<string, number>): ComputeBreakdown[] {
+  return [...totals].map(([key, hours]) => ({ key, hours })).sort((a, b) => b.hours - a.hours || a.key.localeCompare(b.key));
+}
+
+export async function computeDailyStats(now: Date, range: ComputeRange, userId: string | null): Promise<ComputeDailyStats> {
+  const bounds = rangeWindow(now, range);
+  const bucketMs = bounds.bucket === 'hour' ? HOUR_MS : DAY_MS;
+  const start = new Date(bounds.start).toISOString();
+  const lastBucket = new Date(bounds.lastBucket).toISOString();
+  const endIso = new Date(bounds.end).toISOString();
+  const db = getPoolDbClient();
+  const inRange = sql`i.started_at < ${endIso}::timestamptz
+    AND (i.ended_at IS NULL OR i.ended_at > ${start}::timestamptz)`;
+  const owner = userId ? sql`AND i.owner_id = ${userId}` : sql``;
+  // 24 hours, not 1 day: a timestamptz plus '1 day' follows the session time zone across DST.
+  const step = bounds.bucket === 'hour' ? sql`interval '1 hour'` : sql`interval '24 hours'`;
+  const dayEnd = sql`d.day_start + ${step}`;
+  const overlap = overlapSeconds(sql`d.day_start`, dayEnd, endIso);
+
+  const [dailyResult, usersResult, emailResult] = await Promise.all([
+    db.execute(sql`
+      WITH days AS (
+        SELECT generate_series(${start}::timestamptz, ${lastBucket}::timestamptz, ${step}) AS day_start
+      )
+      SELECT d.day_start, i.subject_kind, i.size,
+        SUM(${overlap}) AS wall_sec,
+        SUM(${overlap} * i.weight::numeric) AS weighted_sec,
+        COUNT(*) FILTER (WHERE i.started_at >= d.day_start) AS started
+      FROM days d
+      JOIN usage_intervals i ON i.started_at < ${dayEnd}
+        AND (i.ended_at IS NULL OR i.ended_at > d.day_start)
+      WHERE ${inRange} ${owner}
+      GROUP BY d.day_start, i.subject_kind, i.size
+    `),
+    db.execute(sql`
+      SELECT i.owner_id, u.email,
+        SUM(${overlapSeconds(sql`${start}::timestamptz`, sql`${endIso}::timestamptz`, endIso)} * i.weight::numeric) AS weighted_sec
+      FROM usage_intervals i LEFT JOIN users u ON u.id = i.owner_id
+      WHERE ${inRange}
+      GROUP BY i.owner_id, u.email
+      ORDER BY weighted_sec DESC, i.owner_id ASC
+      LIMIT ${MAX_USERS}
+    `),
+    userId ? db.execute(sql`SELECT email FROM users WHERE id = ${userId}`) : Promise.resolve(null),
+  ]);
+
+  const points = new Map<string, ComputeDailyPoint>();
+  for (let t = bounds.start; t <= bounds.lastBucket; t += bucketMs) {
+    const bucketStart = new Date(t).toISOString();
+    points.set(bucketStart, { day: bucketStart.slice(0, 10), start: bucketStart, hours: 0, wall_hours: 0, boxes_started: 0 });
+  }
+  const byKind = new Map<string, number>();
+  const bySize = new Map<string, number>();
+  for (const row of rows(dailyResult)) {
+    const point = points.get(new Date(row.day_start as string).toISOString());
+    if (!point) continue;
+    const hours = Number(row.weighted_sec) / 3600;
+    point.hours += hours;
+    point.wall_hours += Number(row.wall_sec) / 3600;
+    point.boxes_started += Number(row.started);
+    byKind.set(String(row.subject_kind), (byKind.get(String(row.subject_kind)) ?? 0) + hours);
+    bySize.set(String(row.size), (bySize.get(String(row.size)) ?? 0) + hours);
+  }
+
+  const series = [...points.values()];
+  const peak = series.reduce<ComputeDailyPoint | null>((best, point) => (point.hours > (best?.hours ?? 0) ? point : best), null);
+  const emailRow = emailResult ? rows(emailResult)[0] : undefined;
+  return {
+    start,
+    end: endIso,
+    bucket: bounds.bucket,
+    user_id: userId,
+    user_email: emailRow?.email == null ? null : String(emailRow.email),
+    days: series,
+    totals: {
+      hours: series.reduce((sum, point) => sum + point.hours, 0),
+      wall_hours: series.reduce((sum, point) => sum + point.wall_hours, 0),
+      boxes_started: series.reduce((sum, point) => sum + point.boxes_started, 0),
+      peak_day: peak?.day ?? null,
+      peak_start: peak?.start ?? null,
+      peak_hours: peak?.hours ?? 0,
+    },
+    by_kind: sortBreakdown(byKind),
+    by_size: sortBreakdown(bySize),
+    users: rows(usersResult).map((row) => ({
+      user_id: String(row.owner_id),
+      email: row.email == null ? null : String(row.email),
+      hours: Number(row.weighted_sec) / 3600,
+    })),
+  };
+}
+
 export function adminComputeUsageRoutes(): Router {
   const router = Router();
+  router.get('/compute/daily', withGuards(async (req, res) => {
+    const { range, userId } = dailyParams(req.query);
+    const data = await computeDailyStats(new Date(), range, userId);
+    res.json({ success: true, data } as ApiResponse<ComputeDailyStats>);
+  }));
   router.get('/compute', withGuards(async (req, res) => {
     const { sort, order, limit, q } = queryParams(req.query);
     const now = new Date();

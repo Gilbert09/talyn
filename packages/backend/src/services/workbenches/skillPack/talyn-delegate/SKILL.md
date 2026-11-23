@@ -1,100 +1,62 @@
 ---
 name: talyn-delegate
-description: Use when a large task in a Talyn session splits into independent parts that can run at the same time, for example the same change in several packages or a refactor plus separate test work. Explains when to split work into child sessions, how to brief each one, the limits, how to monitor them and how to merge the results. Do not use it for small or tightly coupled work.
+description: Use when you must choose between subagents and child sessions. Start separate work, follow children, and understand the box cost.
 ---
 
-# Delegate work to child sessions
+# Delegate work
 
-A child session is a separate Talyn session with its own sandbox and branch.
-It runs at the same time as you. It cannot see this conversation.
+## Choose the kind of work
 
-## Decide first
+Use a subagent for read-only searches, reviews, or independent work on the same branch.
+This work must finish within the current turn.
+Give each agent separate files when several agents change code.
+Claude Agent calls can use `run_in_background: true`.
+The turn stays open until these subagents finish.
 
-Delegate only when all of these are true:
-- The work splits into parts that do not touch the same files.
-- Each part can be tested alone.
-- Each part takes more than about 20 minutes of agent work.
-- You can describe each part completely in one message.
+Use a sub-session when work needs its own branch and pull request, another repository, or time beyond this turn.
+Each sub-session has its own box.
+It spends box-hours and counts against the concurrent box limit.
+Sessions can nest at most 2 levels below the session that a person started.
+The box gate applies to every child.
 
-Do not delegate when:
-- The task is small. Do it yourself. A child costs a sandbox and a quota slot.
-- The parts depend on each other step by step.
-- The work is in another repository only. Use the talyn-multi-repo skill for that.
+## Start a child
 
-## Limits
-
-- Sessions nest at most 2 levels below the one a person started.
-- When `talyn_create_session` refuses for depth, do that part yourself, or tell the person.
-
-## 1. Plan the split
-
-Write the plan in your reply before you start children:
-- the parts, with the files each one owns,
-- which part you keep,
-- how the results come together (separate pull requests, or one branch).
-
-Prefer separate pull requests. Each child gets its own branch.
-
-## 2. Brief each child
-
-Each brief must be complete:
-
-```
-Goal: <one sentence for this part only>
-Context: <the larger task, and why this part exists>
-Scope: <the files and directories this part may change>
-Out of scope: <files other parts own; do not touch them>
-Details: <names, interfaces and versions that must match the other parts>
-Acceptance: <the commands to run and what must pass>
-Finish: the work ends in a pull request. Mention <your PR URL or this session> in its description.
-```
-
-## 3. Start the children
-
-Get the repository id from `talyn_list_repositories`. Then, for each part:
+Get the repository id with `talyn_list_repositories`.
+Give the child its goal, context, file scope, checks, and expected pull request.
+It cannot see this conversation.
 
 ```
 talyn_create_session
   repository_id: <id>
-  agent: <the same agent as this session>
-  prompt: <the brief>
-  auto_create_pr: true
+  agent: claude
+  prompt: <complete brief>
+  notify_parent: true
 ```
 
-Write down each child id. It is the first token of the output.
+Use `notify_parent: true` when you need a wake after the child's turn ends.
+The default is false: cards appear without a wake.
+Parent cards, wakes, child lists, and child controls require the `session-subagents` flag.
+Thread notifications keep their existing behavior.
+Children inherit the parent's team space when the repository is available there.
+The tool reports any fallback to Personal.
 
-When this session is in a team space, each child starts in the same space. The output says which space.
+## Follow the children
 
-## 4. Monitor
+Use `talyn_list_thread_sessions` without arguments to list your children and their status.
+It lists thread members when the caller is a thread.
+Read work with `talyn_get_session_transcript` and keep its cursor for the next read.
+Send instructions or answers with `talyn_send_session_message`.
+Use `talyn_get_session_changes` and `talyn_get_session_diff` to check the changes.
+Do your own work while children run, or end your turn and wait for the requested wake.
+Do not poll with repeated sleeps.
 
-- Do your own part while the children work.
-- Check each child every 2 to 5 minutes with `talyn_get_session` and its `session_id`.
-- Use one `sleep 120` between rounds. Do not loop on short sleeps.
-- When a chat is `idle`, `awaiting_input` or `error`, read the new events with `talyn_get_session_transcript`.
-  Pass the `cursor` from your previous read.
-- Answer a child's question with `talyn_send_session_message`.
-- To see what a child changed, use `talyn_get_session_changes` and `talyn_get_session_diff`.
+Cancel unwanted work with `talyn_cancel_session_turn`.
+Check each diff and its tests before you accept the result.
+Report each child's session id, pull request, status, and remaining work.
 
-## 5. Cancel a child
+## Handle limits and failures
 
-Cancel when a child goes the wrong way, or when its part is no longer needed:
-
-```
-talyn_cancel_session_turn
-  session_id: <child id>
-```
-
-Then either send a corrected instruction with `talyn_send_session_message`, or archive it with `talyn_archive_session`.
-Archive only children that you started, and only when their work is not needed.
-
-## 6. Merge the results
-
-- Read each child's diff before you accept it.
-- Check that the parts agree on the shared names and interfaces.
-- If the parts must land in order, say so in each pull request description.
-- Add pull requests to the merge queue only when the person asked. See the talyn-ship-pr skill.
-
-## 7. Report
-
-Give one line per child: the part, the session id, the pull request URL, and its state.
-Say what is left, and who must act.
+If creation fails, read the refusal before you retry.
+A depth limit means that you must keep the work here or ask the person to start it.
+A box limit means that another box must stop before a new box can start.
+If a child needs input, answer its question or ask the person for the missing decision.

@@ -1,8 +1,10 @@
 # Workbenches — a sandbox-native Conductor inside Talyn
 
-> Status: **exploration on branch `tom/workbenches`**. Not on `main`, not deployed.
-> Fleet: `tom/workbench-endpoints` and the Claude Code 2.1.296 image are deployed on YAS `main`.
-> `tom/bare-box-repo` is not.
+> Status: **released to every account** with usage billing (`workbenches` flag, `availability: 'general'`).
+> It runs on `main` for desktop, web and mobile. This file started as the exploration notes and
+> keeps the 2026-10 dated sections as history; `CLAUDE.md` is the current summary.
+> Fleet: `tom/workbench-endpoints` is merged into YAS `main`. `tom/bare-box-repo` is not (checked
+> 2026-11-14).
 >
 > **Name.** Users see "session" (from 2026-10-14). The code, routes, tables, IPC channels and
 > these docs keep "workbench".
@@ -80,11 +82,16 @@ per-sandbox `idleTtlSec`.
 - `workbenches` — `id, workspace_id, repository_id, name (city), branch, base_branch,
   runtime ('sandbox'|'local'), agent ('claude'|'codex'), device_id, local_path, sandbox_id,
   sandbox_state, status, pull_request_id, settings jsonb, archived_at, created_at, updated_at`.
-- `workbench_chats` — `id, workbench_id, title, agent, model, effort, plan_mode,
+- `workbench_chats` — a session shows only its newest chat since 2026-11-11 (`63f88126e0` removed the chat tabs; the table is unchanged). `id, workbench_id, title, agent, model, effort, plan_mode,
   agent_session_id, status ('idle'|'running'|'awaiting_input'|'error'), queued_messages jsonb,
   created_at, updated_at`.
 - `workbench_events` — APPEND-ONLY `(chat_id, seq)` unique, `turn int, event jsonb, created_at`.
   Never a growing jsonb column on a row (the transcript disk-IO lesson). Paged by `seq`.
+- `workbench_search_text` (migration 0142) — the searchable text of the transcripts (⌘K, `GET /workbenches/search`).
+  One row for each `user` or `assistant` event with text blocks (`workbench_search_body()`), with a generated
+  `tsv` and a GIN index. An `AFTER INSERT` trigger on `workbench_events` writes it, so every append path feeds it.
+  Chats from before 0142 come from the `transcript-search-backfill` job (night window, cursor in
+  `usage_insights_backfill`). Stream deltas, tool calls, tool output and thinking are not in it.
 - `workbench_checkpoints` — `chat_id, turn, ref, sha, created_at`.
 
 ## Your instruction files in sandboxes (migration `0077_workbench_instruction_files.sql`)
@@ -123,10 +130,11 @@ workspace that never stored a file for the agent pays no exec.
 
 ## Gate
 
-`workbenches` PostHog flag, `fallback: false`, `availability: 'gated'`, env override
-`WORKBENCHES_ENABLED` (so it can run locally with no PostHog project). Every route and the
-terminal WS bridge gate server-side. Billing gates: deliberately out of scope for the
-exploration (follow-up).
+`workbenches` PostHog flag, `fallback: false` (a session box is long-lived fleet hardware that bills
+box-hours), `availability: 'general'` (released), env override `WORKBENCHES_ENABLED` (so it can run
+locally with no PostHog project, and break glass). Every route and the terminal WS bridge gate
+server-side. Every box start goes through the usage-billing box gate (`services/workbenches/boxGate.ts`,
+`assertNewWorkbenchBox`).
 
 ## Previews: run a session's app and open it (2026-10-24)
 
@@ -211,12 +219,11 @@ can start if the project name comes from the directory name.
 
 ## Follow-ups / known gaps
 
-- Web app (`apps/web`) and mobile.
-- Billing: a workbench turn spends the user's own subscription; decide whether sandboxes count
-  against the plan.
 - Codex-in-sandbox verification.
-- Deploy the YAS branch endpoints; until then diff/files run through `exec` (and their frames
-  land in the events ring) and the terminal goes over ssh-stream.
+- Web app and mobile now have sessions (`apps/web/src/components/workbench/`, `apps/mobile/src/features/sessions/`).
+  Billing is the box gate: a turn spends the user's own subscription, and the box spends box-hours.
+- The YAS endpoints (`/diff`, `/files`, `/pty`, ports) are deployed. Talyn still falls back to
+  `exec` and ssh-stream on a 404.
 
 ## State of the build (2026-10-14)
 
@@ -226,10 +233,10 @@ inside it.
 | Part | Where |
 |---|---|
 | Shell | `layout/AppShell.tsx`, `AppSidebar.tsx`, `stores/navigation.ts` (route union), `lib/shortcuts.ts` + `layout/appShortcuts.ts`, `CommandPalette.tsx` (⌘K) |
-| Menu chords | `main/menuCommands.ts`: the Electron menu owns ⌘N, ⌘W, ⌘T and the rest, and sends `menu:command` to the renderer. Close Window is ⌘⇧W. |
+| Menu chords | `main/menuCommands.ts`: the Electron menu owns ⌘N, ⌘K and the rest, and sends `menu:command` to the renderer. Close Window is ⌘⇧W. |
 | Home | `pages/NewWorkbenchPage.tsx`: one composer. Enter creates the workbench and starts it. Names come from the task (`workbenchNameFromTask`). |
 | Workbench | `WorkbenchView.tsx`, `WorkbenchHeader.tsx` (one action button: Create PR → Resolve conflicts → Fix checks → Merge → Archive), `GitPanel.tsx` (All files / Changes / Checks, terminal dock) |
-| Other pages | `pages/HistoryView.tsx`, `PullRequestsView.tsx` (the five PR panels), `AutomationsView.tsx` (Workflows, Loops, MCP servers) |
+| Other pages | `pages/HistoryView.tsx`, `PullRequestsView.tsx` (the five PR panels), `IntegrationsView.tsx` (connections, rules, runs) |
 | Readiness | `GET /workbenches/readiness` + Electron `workbench:readiness`, merged by `lib/readiness.ts`. A choice that cannot run is disabled with its reason, and create refuses before it inserts a row. |
 | Failure handling | One provisioning failure path (status and sandbox state `error`, a readable reason, queued messages cleared). `POST /workbenches/:id/retry`. |
 
@@ -370,8 +377,9 @@ Code: `services/workbenches/workCheckpoint.ts`, `workCheckpointScripts.ts`, `wor
 
 ### Known gaps
 
-- The boot sweep that stops orphaned turns assumes ONE backend replica. A deploy overlap
-  would stop a live replica's turns. Fix this before any production use.
+- Turns hold a lease with a heartbeat (`turnLeases`, `claimTurnLease` in `turns.ts`), and
+  `sweepOrphanedTurns` adopts only a stale lease, so a deploy overlap no longer stops a live
+  replica's turns. This replaced the old single-replica boot sweep.
 - The preview proxy needs a Bearer token, so an iframe cannot load it directly. The
   desktop forward adds the token; the web app waits for hosted preview URLs.
 - `stream_event` deltas are stored without pruning.
@@ -380,8 +388,7 @@ Code: `services/workbenches/workCheckpoint.ts`, `workCheckpointScripts.ts`, `wor
 - Fix checks for a local workbench sends the plain prompt without the check list. No failing
   log excerpts are included for either runtime.
 - `stores/workspace.ts` keeps `setActivePanel` / `openSettings` as adapters over the route store.
-- `apps/web` has none of this; it is a separate fork.
-- No billing gates. Not verified on a real fleet: Codex in a sandbox, and a saved-work round
+- Not verified on a real fleet: Codex in a sandbox, and a saved-work round
   trip through real Supabase Storage.
 - The new fleet routes `/pty` and `/ports` need guests booted from a newly baked golden. The
   golden was baked again on 2026-10-14 for Claude Code 2.1.296. This is not checked yet.

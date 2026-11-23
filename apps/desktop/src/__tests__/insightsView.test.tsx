@@ -374,7 +374,7 @@ describe('agent cost copy', () => {
 });
 
 describe('range picker', () => {
-  it.each<['7d' | 'period']>([['7d'], ['period']])('refetches every section for %s', async (preset) => {
+  it.each<['today' | 'yesterday' | '7d' | 'period']>([['today'], ['yesterday'], ['7d'], ['period']])('refetches every section for %s', async (preset) => {
     const { container } = await renderPage();
     mockGet.mockClear();
     fireEvent.change(rangeSelect(container), { target: { value: preset } });

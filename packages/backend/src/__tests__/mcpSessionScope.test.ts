@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Features } from '@talyn/shared';
 import { buildMcpServer, listToolsFor } from '../mcp/server.js';
-import { SESSION_TOKEN_TOOLS } from '../mcp/sessionScope.js';
+import { SESSION_ONLY_TOOLS, SESSION_TOKEN_TOOLS } from '../mcp/sessionScope.js';
 import { TOOLS, type McpCallContext, type McpToolDefinition } from '../mcp/tools/index.js';
 import {
   chatWorkbenchId,
@@ -19,6 +19,12 @@ vi.mock('../services/sessionMcpToken.js', async (original) => ({
 
 vi.mock('../services/workbenches/threads.js', () => ({ announceSessionSpawn: vi.fn(async () => undefined) }));
 const { announceSessionSpawn } = await import('../services/workbenches/threads.js');
+
+vi.mock('../services/featureFlags.js', async (original) => ({
+  ...(await original<typeof import('../services/featureFlags.js')>()),
+  workspaceHasFeature: vi.fn(async () => ({ enabled: true, source: 'fallback' })),
+}));
+const { workspaceHasFeature } = await import('../services/featureFlags.js');
 
 const OWNER = 'user-test';
 const SELF: McpCallContext = { session: { tokenId: 'token-1', workbenchId: 's1', depth: 0 } };
@@ -108,6 +114,8 @@ const EXCLUDED = [
   'talyn_add_repository', 'talyn_remove_repository', 'talyn_revert_setup_step',
   'talyn_create_skill', 'talyn_update_skill', 'talyn_delete_skill',
   'talyn_create_workflow', 'talyn_update_workflow', 'talyn_set_workflow_enabled', 'talyn_delete_workflow',
+  // Starts sessions on PostHog reports and claims them in PostHog
+  'talyn_run_posthog_inbox_reports',
   'talyn_create_loop', 'talyn_update_loop', 'talyn_set_loop_enabled', 'talyn_delete_loop', 'talyn_run_loop_now',
 ];
 
@@ -129,16 +137,27 @@ describe('session token tool scope', () => {
   it.each([
     'talyn_archive_session', 'talyn_retry_session', 'talyn_create_session', 'talyn_list_sessions', 'talyn_set_merge_queue',
     'talyn_get_merge_queue_timeline', 'talyn_set_merge_queue_stack', 'talyn_list_pull_requests',
-    'talyn_create_task', 'talyn_list_loops', 'talyn_get_workflow', 'talyn_get_skill', 'talyn_list_repositories',
+    'talyn_list_tasks', 'talyn_list_loops', 'talyn_get_workflow', 'talyn_get_skill', 'talyn_list_repositories',
     'talyn_memory_write', 'talyn_memory_search', 'talyn_memory_read', 'talyn_memory_forget', 'talyn_memory_list',
-    'talyn_list_setup_steps', 'talyn_close_pull_request', 'talyn_track_pull_request',
+    'talyn_list_setup_steps', 'talyn_close_pull_request', 'talyn_track_pull_request', 'talyn_list_slack_channels',
+    'talyn_slack_reply', 'talyn_list_posthog_inbox_backlog', 'talyn_ask_user',
   ])('allows %s', (name) => {
     expect(SESSION_TOKEN_TOOLS.has(name)).toBe(true);
   });
 
-  it('lists only allowed tools for a session token, and every tool for a user token', () => {
+  it('lists only allowed tools for a session token, and every other tool for a user token', () => {
     expect(listToolsFor(features, SELF).map((t) => t.name).sort()).toEqual([...SESSION_TOKEN_TOOLS].sort());
-    expect(listToolsFor(features).map((t) => t.name)).toEqual(TOOLS.map((t) => t.name));
+    expect(listToolsFor(features).map((t) => t.name)).toEqual(TOOLS.map((t) => t.name).filter((n) => !SESSION_ONLY_TOOLS.has(n)));
+  });
+
+  it('keeps session-only tools in the session allow-list', () => {
+    for (const name of SESSION_ONLY_TOOLS) expect(SESSION_TOKEN_TOOLS.has(name)).toBe(true);
+  });
+
+  it('refuses talyn_ask_user for a user token: it has no session to ask from', async () => {
+    const result = await callTool({}, 'talyn_ask_user', { questions: [{ question: 'Which one?' }] });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe('talyn_ask_user works only for an agent in a Talyn session.');
   });
 
   it('ListTools on a session server hides excluded tools', async () => {
@@ -166,6 +185,18 @@ describe('session token tool scope', () => {
     const { calls } = mockApi({ 'GET /api/v1/workbenches': () => [session()] });
     const result = await callTool(SELF, 'talyn_list_sessions', { workspace_id: 'ws1' });
     expect(result.isError).toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  it('posts a Slack reply for the calling session only', async () => {
+    const { calls } = mockApi({ 'POST /api/v1/workbenches/s1/slack-reply': () => ({ ts: '123.456' }) });
+    const result = await callTool(SELF, 'talyn_slack_reply', { text: 'Hello' });
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain('123.456');
+    expect(calls).toEqual([expect.objectContaining({ method: 'POST', body: { text: 'Hello' } })]);
+
+    const refused = await callTool(SELF, 'talyn_slack_reply', { text: 'Hello', session_id: 's2' });
+    expect(refused.isError).toBe(true);
     expect(calls).toHaveLength(1);
   });
 
@@ -381,7 +412,7 @@ describe('sessions started by a session in a space', () => {
     }, SELF);
     expect(created(calls)).toEqual([{
       path: `/api/v1/spaces/${SPACE}/sessions`,
-      body: { repoFullName: 'Acme/Web', agent: 'claude', prompt: 'Second PR', branch: 'tom/two', internetAccess: true },
+      body: { parentId: 's1', repoFullName: 'Acme/Web', agent: 'claude', prompt: 'Second PR', branch: 'tom/two', internetAccess: true },
     }]);
     expect(result).toContain(`team space "Warehouse" (${SPACE})`);
     expect(recordSessionSpawn).toHaveBeenCalledWith('child', SELF.session);
@@ -396,7 +427,7 @@ describe('sessions started by a session in a space', () => {
     vi.mocked(reserveSessionCreate).mockResolvedValue({ threadId: null, spaceId: SPACE });
     const { calls } = mockApi(spaceRoutes());
     await tool('create_session').handler(OWNER, { agent: 'claude', ...extra }, SELF);
-    expect(created(calls)).toEqual([{ path: `/api/v1/spaces/${SPACE}/sessions`, body: { repoFullName: 'Acme/Web', agent: 'claude' } }]);
+    expect(created(calls)).toEqual([{ path: `/api/v1/spaces/${SPACE}/sessions`, body: { parentId: 's1', repoFullName: 'Acme/Web', agent: 'claude' } }]);
   });
 
   it('lets an explicit space_id win over the parent space', async () => {
@@ -405,7 +436,7 @@ describe('sessions started by a session in a space', () => {
       'POST /api/v1/spaces/space-2/sessions': () => ({ workbench: session({ id: 'child' }), workspaceId: 'ws1', addedRepository: false }),
     });
     await tool('create_session').handler(OWNER, { space_id: 'space-2', repository_full_name: 'acme/web', agent: 'claude' }, SELF);
-    expect(created(calls)).toEqual([{ path: '/api/v1/spaces/space-2/sessions', body: { repoFullName: 'acme/web', agent: 'claude' } }]);
+    expect(created(calls)).toEqual([{ path: '/api/v1/spaces/space-2/sessions', body: { parentId: 's1', repoFullName: 'acme/web', agent: 'claude' } }]);
   });
 
   it('starts in Personal when space_id is "personal"', async () => {
@@ -495,5 +526,35 @@ describe('sessions started by a session in a space', () => {
     const spaceArg = (t.inputSchema.properties as Record<string, { description: string }>).space_id;
     expect(spaceArg.description).toContain('Pass "personal" to start in Personal');
     expect(spaceArg.description).toContain('Default from a session in a space: that space');
+  });
+});
+
+
+describe('parent session scope', () => {
+  it.each([
+    ['session_timing', 'GET', 'timing', { workbenchId: 'child', turns: 0 }],
+    ['resize_session', 'PUT', 'sandbox-size', { outcome: 'unchanged', size: 'standard' }],
+    ['restart_session', 'POST', 'restart', { outcome: 'restarting' }],
+  ] as const)('allows a parent to call %s on its child', async (name, method, path, response) => {
+    mockApi({
+      'GET /api/v1/workbenches/child': () => session({ id: 'child', parentId: 's1' }),
+      [`${method} /api/v1/workbenches/child/${path}`]: () => response,
+    });
+    await expect(tool(name).handler(OWNER, { session_id: 'child', size: 'standard' }, SELF)).resolves.toBeTypeOf('string');
+    expect(workspaceHasFeature).toHaveBeenCalledWith('sessionSubagents', 'ws1');
+  });
+
+  it.each([['other', true], ['s1', false]] as const)('refuses parent %s with flag %s', async (parentId, enabled) => {
+    vi.mocked(workspaceHasFeature).mockResolvedValueOnce({ enabled, source: 'fallback' });
+    mockApi({ 'GET /api/v1/workbenches/child': () => session({ id: 'child', parentId }) });
+    await expect(tool('session_timing').handler(OWNER, { session_id: 'child' }, SELF)).rejects.toThrow('A session can');
+    vi.mocked(workspaceHasFeature).mockReset().mockResolvedValue({ enabled: true, source: 'fallback' });
+  });
+
+  it('passes the parent and opt-in through creation', async () => {
+    vi.mocked(reserveSessionCreate).mockResolvedValue({ parentId: 's1', threadId: null, spaceId: null });
+    const { calls } = mockApi({ 'POST /api/v1/workbenches': () => session({ id: 'child' }) });
+    await tool('create_session').handler(OWNER, { workspace_id: 'ws1', repository_id: 'r1', agent: 'claude', notify_parent: true }, SELF);
+    expect(calls[0].body).toMatchObject({ parentId: 's1', notifyParent: true });
   });
 });

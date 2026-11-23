@@ -26,7 +26,7 @@ import {
   workspaceMetadata,
 } from './todiexContext.js';
 import { emitTaskStatus } from './websocket.js';
-import { getDbClient, type Database } from '../db/client.js';
+import { getDbClient, runWithoutScope, type Database } from '../db/client.js';
 import {
   tasks as tasksTable,
   environments as environmentsTable,
@@ -152,10 +152,12 @@ class TaskQueueService extends EventEmitter {
   }
 
   /** Run a processQueue without logging the "DB client reset" noise
-   *  that floats in from afterEach in tests. Anything else still logs. */
-  private runProcessQueue(): void {
+   *  that floats in from afterEach in tests. Anything else still logs.
+   *  It runs on the pool, never in a request's owner scope: the queue serves
+   *  every workspace, and it outlives the request that kicked it. */
+  runProcessQueue(): void {
     if (this.shuttingDown) return;
-    this.processQueue().catch((err) => {
+    runWithoutScope(() => this.processQueue()).catch((err) => {
       if (this.shuttingDown) return;
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('DATABASE_URL is not set')) return;

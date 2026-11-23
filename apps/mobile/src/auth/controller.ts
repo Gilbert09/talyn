@@ -9,22 +9,31 @@ export interface AuthGateway {
   refreshSession(): Promise<AuthResult>;
   signInWithOAuth(options: { provider: 'github'; options: { redirectTo: string; skipBrowserRedirect: true } }): Promise<{ data: { url: string | null }; error: unknown }>;
   exchangeCodeForSession(code: string): Promise<AuthResult>;
+  signInWithPassword(credentials: { email: string; password: string }): Promise<AuthResult>;
   signOut(options: { scope: 'local' }): Promise<{ error: unknown }>;
   startAutoRefresh(): void | Promise<void>;
   stopAutoRefresh(): void | Promise<void>;
 }
 export interface AuthBrowser {
-  open(url: string, callback: string): Promise<{ type: string; url?: string }>;
+  open(url: string, callback: string): Promise<{ type: string; url?: string; error?: string | null }>;
   dismiss(): void;
 }
 export type AuthStatus = 'restoring' | 'signedOut' | 'signingIn' | 'signedIn' | 'locked';
 export interface AuthSnapshot {
   status: AuthStatus;
-  user: Pick<User, 'id' | 'email'> | null;
+  /** `githubLogin` is the GitHub username, when the session carries it. */
+  user: (Pick<User, 'id' | 'email'> & { githubLogin?: string }) | null;
   issue: SignInError['kind'] | 'outage' | null;
+  /** What the browser or OS reported when sign-in failed, for analytics. */
+  detail?: string;
   notice?: 'deleted';
 }
 type Attempt = { callback: string; startedAt: number; phase: 'awaiting' | 'exchanging' };
+
+function snapshotUser(user: User): NonNullable<AuthSnapshot['user']> {
+  const login = (user.user_metadata as { user_name?: unknown } | undefined)?.user_name;
+  return { id: user.id, email: user.email, ...(typeof login === 'string' && login ? { githubLogin: login } : {}) };
+}
 
 export function isRefreshRejection(error: unknown): boolean {
   const value = error as { name?: string; code?: string; status?: number } | null;
@@ -70,7 +79,7 @@ export class AuthController {
     }
     this.session = session;
     this.setActive(this.active);
-    this.publish({ status: session ? 'signedIn' : 'signedOut', user: session ? { id: session.user.id, email: session.user.email } : null, issue: null });
+    this.publish({ status: session ? 'signedIn' : 'signedOut', user: session ? snapshotUser(session.user) : null, issue: null });
   }
 
   private async pending(): Promise<Attempt | null> {
@@ -139,7 +148,7 @@ export class AuthController {
       if (!this.valid(epoch)) return;
       if (response.type === 'success' && response.url) await this.handleCallback(response.url);
       else if (this.exchange) await this.exchange;
-      else if (!this.session) throw new SignInError('cancelled');
+      else if (!this.session) throw new SignInError('cancelled', response.error ? `${response.type}: ${response.error}` : response.type);
     } catch (error) {
       // A warm link can finish before the browser reports dismissal.
       if (this.exchange) await this.exchange;
@@ -150,6 +159,30 @@ export class AuthController {
       if (timer) clearTimeout(timer);
       this.cancelBrowser = null;
       this.browser.dismiss();
+    }
+  }
+
+  /** Store review only: the backend refuses any account without a GitHub identity. */
+  signInWithPassword = (email: string, password: string): Promise<void> => {
+    if (this.login) return this.login;
+    if (this.exchange) return this.exchange;
+    if (this.cleanup || this.disposed || this.session) return Promise.resolve();
+    this.blocked = false;
+    const epoch = ++this.epoch;
+    this.publish({ status: 'signingIn', user: null, issue: null });
+    this.login = this.runPasswordSignIn(email, password, epoch).finally(() => { this.login = null; });
+    return this.login;
+  };
+  private async runPasswordSignIn(email: string, password: string, epoch: number) {
+    try {
+      await this.clearAttempt();
+      if (!this.valid(epoch)) return;
+      const result = await this.auth.signInWithPassword({ email, password });
+      if (!this.valid(epoch)) return;
+      if (result.error || !result.data.session) throw new SignInError('credentials');
+      await this.accept(result.data.session, epoch);
+    } catch (error) {
+      if (this.valid(epoch) && !this.session) await this.fail(error);
     }
   }
 
@@ -188,7 +221,8 @@ export class AuthController {
   private async fail(error: unknown) {
     try {
       await this.clearAttempt();
-      this.publish({ status: 'signedOut', user: null, issue: error instanceof SignInError ? error.kind : 'failed' });
+      const detail = (error instanceof SignInError ? error.detail : error instanceof Error ? error.message : undefined)?.slice(0, 200);
+      this.publish({ status: 'signedOut', user: null, issue: error instanceof SignInError ? error.kind : 'failed', ...(detail ? { detail } : {}) });
     } catch { this.publish({ status: 'locked', user: null, issue: 'storage' }); }
   }
 

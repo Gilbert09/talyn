@@ -56,11 +56,11 @@ export function turnFactsSql(chatIds: readonly string[], turn?: number): SQL {
         CASE WHEN e.event ->> 'type' = 'user' AND e.event -> 'talyn' ->> 'kind' = 'user_message'
           AND e.event -> 'talyn' -> 'model' IS NOT NULL
           THEN COALESCE(e.event -> 'talyn' ->> 'model', '') END AS turn_model,
-        CASE WHEN e.event ->> 'type' = 'result' THEN jsonb_build_object(
+        CASE WHEN e.event ->> 'type' = 'result' AND COALESCE(e.event ->> 'parent_tool_use_id', '') = '' THEN jsonb_build_object(
           'seq', e.seq, 'at', e.created_at, 'sessionId', e.event -> 'session_id',
           'usage', e.event -> 'usage', 'modelUsage', e.event -> 'modelUsage',
           'cost', e.event -> 'total_cost_usd', 'durationMs', e.event -> 'duration_ms',
-          'numTurns', e.event -> 'num_turns', 'isError', e.event -> 'is_error', 'subtype', e.event -> 'subtype'
+          'numTurns', e.event -> 'num_turns', 'attempt', e.event -> 'talyn' -> 'attempt', 'isError', e.event -> 'is_error', 'subtype', e.event -> 'subtype'
         ) END AS result
       FROM workbench_events e
       WHERE e.chat_id IN (${ids})${turnFilter}

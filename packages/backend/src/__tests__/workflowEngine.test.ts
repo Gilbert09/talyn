@@ -7,7 +7,7 @@ import type { Database } from '../db/client.js';
 import {
   pullRequests as pullRequestsTable,
   repositories as repositoriesTable,
-  tasks as tasksTable,
+  skills as skillsTable,
   workflowRuns as runsTable,
   workspaces as workspacesTable,
 } from '../db/schema.js';
@@ -26,6 +26,35 @@ import * as reviewCycle from '../services/codeReview/cycle.js';
 import { boxDeferral } from '../services/billing/boxDeferral.js';
 import { ConcurrentBoxLimitError, SizeRequiresProError, UsageExhaustedError } from '../services/billing/entitlements.js';
 import * as analytics from '../services/analytics.js';
+import type { CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
+
+// The session create is stubbed: it records the input and inserts a real row,
+// because `workflow_runs.workbench_id` links to it behind a foreign key.
+const createdSessions: CreateWorkbenchServiceInput[] = [];
+let nextCreateError: Error | null = null;
+vi.mock('../services/workbenches/create.js', () => ({
+  createWorkbench: async (input: CreateWorkbenchServiceInput) => {
+    if (nextCreateError) throw nextCreateError;
+    createdSessions.push(input);
+    const { insertWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
+    const id = `wb-${createdSessions.length}`;
+    const row = await insertWorkbench({
+      id,
+      workspaceId: input.workspaceId,
+      repositoryId: input.repositoryId,
+      repoFullName: 'acme/widget',
+      name: id,
+      branch: id,
+      baseBranch: 'main',
+      runtime: 'sandbox',
+      agent: input.agent,
+      model: input.model ?? null,
+      status: 'provisioning',
+      source: input.source ?? null,
+    });
+    return rowToWorkbench(row);
+  },
+}));
 
 /**
  * The engine end to end, against a real Postgres.
@@ -315,7 +344,9 @@ describe('workflow engine', () => {
     });
   });
 
-  describe('a run that starts a task', () => {
+  describe('a run that starts work on the PR', () => {
+    const MODEL = 'claude-sonnet-5-5';
+
     beforeEach(async () => {
       // Real rows, because `workflow_runs` links to both behind foreign keys.
       await db.insert(pullRequestsTable).values({
@@ -328,13 +359,12 @@ describe('workflow engine', () => {
         state: 'open',
         lastSummary: {},
       });
-      await db.insert(tasksTable).values({
-        id: 'task-1',
+      await db.insert(skillsTable).values({
+        id: 'skill-1',
         workspaceId: WORKSPACE,
-        type: 'pr_response',
-        title: 'x',
-        description: 'x',
-        status: 'queued',
+        name: 'tidy',
+        description: 'Tidy the code',
+        content: 'Remove dead code.',
       });
       vi.spyOn(prCache, 'getOrFetchPRSummary').mockResolvedValue({
         rowId: 'pr-row-1',
@@ -348,67 +378,106 @@ describe('workflow engine', () => {
           url: 'https://github.com/acme/widget/pull/42',
           headBranch: 'alice/widget',
           baseBranch: 'main',
+          state: 'open',
         } as never,
       });
       vi.spyOn(prCloudFix, 'activePrTaskId').mockResolvedValue(null);
-      vi.spyOn(prCloudFix, 'resolveCloudEnv').mockResolvedValue({
-        envId: 'env-1',
-        provider: 'selfhosted',
-      });
+      vi.spyOn(prSessions, 'liveWorkbenchForPr').mockResolvedValue(null);
+      createdSessions.length = 0;
+      nextCreateError = null;
     });
 
-    it('links the task to the workflow and the run, in both directions', async () => {
-      const create = vi
-        .spyOn(taskCreate, 'createCloudTask')
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .mockResolvedValue({ id: 'task-1' } as any);
-      const wf = await addWorkflow({
-        actions: [{ type: 'run_prompt', prompt: 'Review this' }],
+    /** A rule saved before automations stopped starting tasks. */
+    async function addStoredRule(action: unknown) {
+      return createWorkflow(WORKSPACE, {
+        ...validateWorkflow({ name: 'Old rule', events: ['pr_opened'], actions: [{ type: 'watch_pr' }] }),
+        actions: [action as never],
       });
+    }
 
-      await evaluateWorkflowsForDelivery(delivery(), [target]);
-
-      const [run] = await db.select().from(runsTable).where(eq(runsTable.workflowId, wf.id));
-      expect(run?.taskId).toBe('task-1');
-      expect(run?.pullRequestId).toBe('pr-row-1');
-      expect(create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'pr_response',
-          pullRequestId: 'pr-row-1',
-          workflow: { workflowId: wf.id, runId: run?.id, event: 'pr_opened' },
-        })
-      );
-    });
-
-    it('stands down when a run is already working the PR', async () => {
-      vi.spyOn(prCloudFix, 'activePrTaskId').mockResolvedValue('task-already');
+    it('runs a skill in a session on the PR, never a task', async () => {
       const create = vi.spyOn(taskCreate, 'createCloudTask');
-      await addWorkflow({ actions: [{ type: 'run_prompt', prompt: 'Review this' }] });
+      const wf = await addWorkflow({ actions: [{ type: 'run_skill', skillKey: 'platform:skill-1', model: MODEL }] });
 
       await evaluateWorkflowsForDelivery(delivery(), [target]);
 
       expect(create).not.toHaveBeenCalled();
+      expect(createdSessions).toHaveLength(1);
+      const input = createdSessions[0];
+      expect(input).toMatchObject({
+        workspaceId: WORKSPACE,
+        repositoryId: REPO_ID,
+        runtime: 'sandbox',
+        model: MODEL,
+        fromPullRequestId: 'pr-row-1',
+        source: { kind: 'workflow', workflowId: wf.id, integration: 'github' },
+      });
+      expect(input.prompt).toContain('Remove dead code.');
+      expect(input.prompt).toContain('acme/widget#42');
+      const [run] = await db.select().from(runsTable).where(eq(runsTable.workflowId, wf.id));
+      expect(run?.status).toBe('succeeded');
+      expect(run?.taskId).toBeNull();
+      expect(run?.workbenchId).toBe('wb-1');
+      expect(run?.pullRequestId).toBe('pr-row-1');
+      expect((run?.actions as Array<{ type: string; ok: boolean }>)[0]).toMatchObject({ type: 'run_skill', ok: true });
+    });
+
+    it.each([
+      ['run_prompt', { type: 'run_prompt', prompt: 'Review this', model: MODEL }, 'Review this'],
+      ['run_skill', { type: 'run_skill', skillKey: 'platform:skill-1', model: MODEL }, 'Remove dead code.'],
+    ] as const)('starts a session for a stored %s rule', async (_name, action, promptText) => {
+      const create = vi.spyOn(taskCreate, 'createCloudTask');
+      await addStoredRule(action);
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      expect(create).not.toHaveBeenCalled();
+      expect(createdSessions).toHaveLength(1);
+      expect(createdSessions[0].prompt).toContain(promptText);
+      expect(createdSessions[0].fromPullRequestId).toBe('pr-row-1');
+      const [run] = await db.select().from(runsTable);
+      expect(run?.status).toBe('succeeded');
+      expect(run?.taskId).toBeNull();
+    });
+
+    it('reads a stored run_prompt rule as start_session', async () => {
+      const wf = await addStoredRule({ type: 'run_prompt', prompt: 'Review this', model: MODEL });
+      const [listed] = await listWorkflows(WORKSPACE);
+      expect(listed.id).toBe(wf.id);
+      expect(listed.actions).toEqual([{ type: 'start_session', repositoryId: null, prompt: 'Review this', model: MODEL }]);
+    });
+
+    it.each([
+      ['start_session', { type: 'start_session', repositoryId: null, prompt: 'Review this', model: MODEL }],
+      ['run_skill', { type: 'run_skill', skillKey: 'platform:skill-1', model: MODEL }],
+    ] as const)('%s stands down when a run is already working the PR', async (_name, action) => {
+      vi.spyOn(prCloudFix, 'activePrTaskId').mockResolvedValue('task-already');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await addWorkflow({ actions: [action as any] });
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      expect(createdSessions).toHaveLength(0);
       const [run] = await db.select().from(runsTable);
       expect(run?.status).toBe('failed');
       expect((run?.actions as Array<{ code?: string }>)[0]?.code).toBe('task_already_running');
     });
 
     it.each([
-      ['run_prompt', { type: 'run_prompt', prompt: 'Review this' }],
-      ['run_skill', { type: 'run_skill', skillKey: 'platform:1' }],
+      ['start_session', { type: 'start_session', repositoryId: null, prompt: 'Review this', model: MODEL }],
+      ['run_skill', { type: 'run_skill', skillKey: 'platform:skill-1', model: MODEL }],
     ] as const)('%s stands down beside a live session, saying why', async (_name, action) => {
       vi.spyOn(prSessions, 'liveWorkbenchForPr').mockResolvedValue({
-        id: 'wb-1',
+        id: 'wb-live',
         name: 'paris',
         status: 'ready',
       });
-      const create = vi.spyOn(taskCreate, 'createCloudTask');
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await addWorkflow({ actions: [action as any] });
 
       await evaluateWorkflowsForDelivery(delivery(), [target]);
 
-      expect(create).not.toHaveBeenCalled();
+      expect(createdSessions).toHaveLength(0);
       const [run] = await db.select().from(runsTable);
       const outcome = (run?.actions as Array<{ code?: string; error?: string }>)[0];
       expect(outcome?.code).toBe('session_active');
@@ -438,25 +507,6 @@ describe('workflow engine', () => {
       expect(run?.retryAfter === null).toBe(status === 'failed');
     });
 
-    it('keeps the outcome when the task it links to has vanished', async () => {
-      // A task deleted mid-run (or a PR un-watched, which deletes its row) must
-      // not cost the run its record: the outcome is the history, the link is a
-      // convenience. One combined UPDATE would fail the FK and leave the run
-      // stuck at `running` forever.
-      vi.spyOn(taskCreate, 'createCloudTask').mockResolvedValue({
-        id: 'task-that-never-existed',
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any);
-      await addWorkflow({ actions: [{ type: 'run_prompt', prompt: 'Review this' }] });
-
-      await evaluateWorkflowsForDelivery(delivery(), [target]);
-
-      const [run] = await db.select().from(runsTable);
-      expect(run?.status).toBe('succeeded');
-      expect(run?.taskId).toBeNull();
-      expect((run?.actions as Array<{ ok: boolean }>)[0]?.ok).toBe(true);
-    });
-
     const PERIOD_END = new Date(Date.now() + 7 * 86_400_000);
     it.each([
       // A full box cap and used-up hours both clear on their own: the action
@@ -465,9 +515,9 @@ describe('workflow engine', () => {
       ['exhausted', new UsageExhaustedError({ tier: 'free', periodEnd: PERIOD_END }), 'usage_exhausted', 'pending_retry', 15 * 60_000],
       // A size the plan cannot start does not clear by waiting.
       ['size', new SizeRequiresProError({ tier: 'free', size: 'large' }), 'size_requires_pro', 'failed', null],
-    ] as const)('records a %s refusal rather than throwing', async (_label, err, code, status, retryInMs) => {
-      vi.spyOn(taskCreate, 'createCloudTask').mockRejectedValue(err);
-      await addWorkflow({ actions: [{ type: 'run_prompt', prompt: 'Review this' }] });
+    ] as const)('records a %s refusal of a skill session rather than throwing', async (_label, err, code, status, retryInMs) => {
+      nextCreateError = err;
+      await addWorkflow({ actions: [{ type: 'run_skill', skillKey: 'platform:skill-1', model: MODEL }] });
 
       const before = Date.now();
       await evaluateWorkflowsForDelivery(delivery(), [target]);
@@ -475,7 +525,8 @@ describe('workflow engine', () => {
       const [run] = await db.select().from(runsTable);
       expect(run?.status).toBe(status);
       expect(run?.taskId).toBeNull();
-      const outcome = (run?.actions as Array<{ code?: string; error?: string }>)[0];
+      const outcome = (run?.actions as Array<{ type?: string; code?: string; error?: string }>)[0];
+      expect(outcome?.type).toBe('run_skill');
       expect(outcome?.code).toBe(code);
       expect(outcome?.error).toBe(err.message);
       if (retryInMs === null) {
@@ -617,6 +668,92 @@ describe('workflow engine', () => {
       await evaluateWorkflowsForDelivery(delivery(), [target]);
       const [run] = await db.select().from(runsTable);
       expect(run?.status).toBe('failed');
+    });
+  });
+
+  describe('approve_pr', () => {
+    const outcome = async () => {
+      const [run] = await db.select().from(runsTable);
+      return (run?.actions as Array<{ type: string; ok: boolean; detail?: string; error?: string }>)[0];
+    };
+
+    it('approves with the rendered review body', async () => {
+      vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('tom');
+      vi.spyOn(githubService, 'getPRReviews').mockResolvedValue([]);
+      const review = vi.spyOn(githubService, 'createPRReview').mockResolvedValue({} as never);
+      await addWorkflow({ actions: [{ type: 'approve_pr', body: 'LGTM {{pr.author}}' }] });
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      expect(review).toHaveBeenCalledWith(WORKSPACE, 'acme', 'widget', 42, {
+        event: 'APPROVE',
+        body: 'LGTM alice',
+      });
+      expect(await outcome()).toMatchObject({ type: 'approve_pr', ok: true, detail: 'approved' });
+    });
+
+    it('sends no body when the rule has none', async () => {
+      vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('tom');
+      vi.spyOn(githubService, 'getPRReviews').mockResolvedValue([]);
+      const review = vi.spyOn(githubService, 'createPRReview').mockResolvedValue({} as never);
+      await addWorkflow({ actions: [{ type: 'approve_pr' }] });
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      expect(review).toHaveBeenCalledWith(WORKSPACE, 'acme', 'widget', 42, { event: 'APPROVE' });
+    });
+
+    it('refuses to approve the connected user’s own PR', async () => {
+      vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('Alice');
+      const review = vi.spyOn(githubService, 'createPRReview').mockResolvedValue({} as never);
+      await addWorkflow({ actions: [{ type: 'approve_pr' }] });
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      expect(review).not.toHaveBeenCalled();
+      expect(await outcome()).toMatchObject({ type: 'approve_pr', ok: false });
+    });
+
+    it.each([
+      { name: 'an approval still stands', states: ['APPROVED', 'COMMENTED'], approves: false },
+      { name: 'the approval was dismissed', states: ['APPROVED', 'DISMISSED'], approves: true },
+      { name: 'the last verdict asked for changes', states: ['APPROVED', 'CHANGES_REQUESTED'], approves: true },
+      { name: 'only someone else approved', states: [], approves: true },
+    ])('approves again only when needed: $name', async ({ states, approves }) => {
+      vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('tom');
+      vi.spyOn(githubService, 'getPRReviews').mockResolvedValue([
+        { id: 1, user: { login: 'carol', avatar_url: '' }, body: '', state: 'APPROVED', submitted_at: '', html_url: '' },
+        ...states.map((state, i) => ({
+          id: i + 2,
+          user: { login: 'Tom', avatar_url: '' },
+          body: '',
+          state: state as 'APPROVED',
+          submitted_at: '',
+          html_url: '',
+        })),
+      ]);
+      const review = vi.spyOn(githubService, 'createPRReview').mockResolvedValue({} as never);
+      await addWorkflow({ actions: [{ type: 'approve_pr' }] });
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      expect(review).toHaveBeenCalledTimes(approves ? 1 : 0);
+      expect(await outcome()).toMatchObject({
+        type: 'approve_pr',
+        ok: true,
+        detail: approves ? 'approved' : 'already approved',
+      });
+    });
+
+    it('records a GitHub refusal as a failure', async () => {
+      vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('tom');
+      vi.spyOn(githubService, 'getPRReviews').mockResolvedValue([]);
+      vi.spyOn(githubService, 'createPRReview').mockRejectedValue(new Error('GitHub API error 422'));
+      await addWorkflow({ actions: [{ type: 'approve_pr' }] });
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      expect(await outcome()).toMatchObject({ type: 'approve_pr', ok: false, error: 'GitHub API error 422' });
     });
   });
 

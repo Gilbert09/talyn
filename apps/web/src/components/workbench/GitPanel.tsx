@@ -124,7 +124,7 @@ export function GitPanel({
         aria-valuenow={width}
       />
       <div
-        className="flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b px-1.5"
+        className="flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b px-1.5 [scrollbar-width:none]"
         role="tablist"
         aria-label="Session panels"
       >

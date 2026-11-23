@@ -10,7 +10,12 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { Filter, Pencil, Plus, Trash2 } from 'lucide-react';
-import type { PRFilterCriteria, PRFilterDefinition, Workspace } from '@talyn/shared';
+import type {
+  PRFilterApproval,
+  PRFilterCriteria,
+  PRFilterDefinition,
+  Workspace,
+} from '@talyn/shared';
 import {
   MAX_PR_FILTER_NAME_LENGTH,
   prFilterIsEmpty,
@@ -184,6 +189,7 @@ export function describeCriteria(c: PRFilterCriteria): string {
   if (c.excludeLabels?.length) parts.push(`without: ${c.excludeLabels.join(', ')}`);
   if (c.titleContains) parts.push(`title contains "${c.titleContains}"`);
   if (c.authors?.length) parts.push(`author: ${c.authors.join(', ')}`);
+  if (c.approval) parts.push(c.approval === 'approved' ? 'approved' : 'not approved');
   return parts.length > 0 ? parts.join(' · ') : 'no criteria';
 }
 
@@ -232,6 +238,7 @@ export function PRFilterModal({
   const [excludeLabels, setExcludeLabels] = useState('');
   const [titleContains, setTitleContains] = useState('');
   const [authors, setAuthors] = useState('');
+  const [approval, setApproval] = useState<PRFilterApproval | ''>('');
 
   // Reload the form whenever the dialog opens (or switches which filter it is
   // editing) — the component stays mounted between openings.
@@ -244,6 +251,7 @@ export function PRFilterModal({
     setExcludeLabels((editing?.criteria.excludeLabels ?? []).join(', '));
     setTitleContains(editing?.criteria.titleContains ?? '');
     setAuthors((editing?.criteria.authors ?? []).join(', '));
+    setApproval(editing?.criteria.approval ?? '');
   }, [open, editing]);
 
   // Suggestions come from what's actually on this page's PRs — the workspace
@@ -273,8 +281,9 @@ export function PRFilterModal({
     if (titleContains.trim()) c.titleContains = titleContains.trim();
     const who = parseList(authors);
     if (who.length > 0) c.authors = who;
+    if (approval) c.approval = approval;
     return c;
-  }, [repos, labels, labelMatch, excludeLabels, titleContains, authors]);
+  }, [repos, labels, labelMatch, excludeLabels, titleContains, authors, approval]);
 
   const matchCount = useMemo(
     () => (prFilterIsEmpty(criteria) ? rows.length : rows.filter((r) => prMatchesFilter(r, criteria)).length),
@@ -404,6 +413,28 @@ export function PRFilterModal({
               placeholder="octocat"
               list="talyn-pr-filter-authors"
             />
+          </Field>
+
+          <Field
+            label="Review"
+            hint="Approved uses the same review state as the badge in the PR list."
+          >
+            <select
+              aria-label="Review"
+              value={approval}
+              onChange={(e) =>
+                setApproval(
+                  e.target.value === 'approved' || e.target.value === 'not_approved'
+                    ? e.target.value
+                    : ''
+                )
+              }
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="">Any review state</option>
+              <option value="approved">Approved</option>
+              <option value="not_approved">Not approved</option>
+            </select>
           </Field>
 
           <datalist id="talyn-pr-filter-labels">

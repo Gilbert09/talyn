@@ -4,12 +4,15 @@ import {
   FLEET_MODELS,
   WORKBENCH_EFFORTS,
   defaultFleetModelForAgent,
+  resolveFleetModel,
   type WorkbenchAgent,
   type WorkbenchContextUsage,
   type WorkbenchEffort,
   type WorkbenchTodo,
 } from '@talyn/shared';
 import { cn } from '../../lib/utils';
+import { FleetAgentMark } from '../../lib/providerMeta';
+import { useFleetModelCatalog } from '../../lib/fleetModelCatalog';
 import { formatTokens } from '../../lib/workbenchFormat';
 
 /** The models the workbench's agent can run: the fleet catalogue, filtered by vendor. */
@@ -28,10 +31,19 @@ export function defaultModelFor(agent: WorkbenchAgent): string {
 const selectClass =
   'h-6 appearance-none rounded border border-transparent bg-transparent bg-none py-0 pl-1 pr-5 text-[11px] leading-tight text-muted-foreground hover:border-input hover:text-foreground focus:border-input focus:outline-none disabled:opacity-50';
 
-function PickerSelect({ children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+function PickerSelect({
+  children,
+  leading,
+  ...props
+}: React.SelectHTMLAttributes<HTMLSelectElement> & { leading?: React.ReactNode }) {
   return (
     <span className="relative inline-flex items-center">
-      <select {...props} className={selectClass}>
+      {leading && (
+        <span className={cn('pointer-events-none absolute left-1 inline-flex', props.disabled && 'opacity-50')}>
+          {leading}
+        </span>
+      )}
+      <select {...props} className={cn(selectClass, Boolean(leading) && 'pl-5')}>
         {children}
       </select>
       <ChevronDown className="pointer-events-none absolute right-1 h-3 w-3 text-muted-foreground" />
@@ -55,6 +67,7 @@ export function AgentPicker({
       disabled={disabled}
       title="Agent"
       aria-label="Agent"
+      leading={<FleetAgentMark agent={value} className="h-3.5 w-3.5" />}
     >
       <option value="claude">Claude</option>
       <option value="codex">Codex</option>
@@ -78,8 +91,12 @@ export function ModelPicker({
   /** Agents the workspace has not connected. Their models show, but cannot be picked. */
   unconnected?: WorkbenchAgent[];
 }) {
+  // Subscribes, so the list renders again when the backend's catalogue arrives.
+  useFleetModelCatalog();
   const models = modelsForAgent(agent);
-  const known = models.some((m) => m.id === value);
+  // A retired id (for example gpt-5.6-sol) shows as the model that replaces it.
+  const shown = resolveFleetModel(value);
+  const known = models.some((m) => m.id === shown);
   const locked = unconnected.filter((a) => a !== agent);
   const options = models.map((m) => (
     <option key={m.id} value={m.id}>
@@ -88,13 +105,13 @@ export function ModelPicker({
   ));
   return (
     <PickerSelect
-      value={value}
+      value={shown}
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
       title="Model"
       aria-label="Model"
     >
-      {!known && <option value={value}>{value}</option>}
+      {!known && <option value={shown}>{shown}</option>}
       {locked.length === 0 ? (
         options
       ) : (

@@ -214,7 +214,7 @@ curl -s https://api.talyn.dev/v1/memories \
 
 `POST /memories` answers `201` for a new entry. When a live entry in the same scope has the same name, Talyn updates that entry and answers `200`.
 
-`DELETE /memories/{id}` forgets the entry. Sessions stop seeing it, but it stays with `forgotten_at` set. `POST /memories/{id}/restore` brings it back. A workspace holds at most 500 live entries.
+`DELETE /memories/{id}` forgets the entry. Sessions stop seeing it, but it stays with `forgotten_at` set. `POST /memories/{id}/restore` brings it back. A workspace holds at most 500 live entries. When a create or a restore goes over the limit, Talyn forgets the live entry with the fewest reads (`use_count`), then the one with the oldest last read. An entry saved, changed or restored in the last 7 days goes last. The forgotten entry gets `forgotten_reason: "evicted"`, and you can restore it.
 
 Lists are newest first and use [cursors](pagination.md). Bodies are in a list only with `include_body=true`. Forgotten entries are in a list only with `include_forgotten=true`. Use `q` to search the name, the description and the body.
 
@@ -303,3 +303,10 @@ if (changes.files.length > 0) {
   console.log(pr.existing ? "Linked" : "Opened", pr.url);
 }
 ```
+
+## Parent session
+
+Session responses include `parent_id`, the id of the session that started them.
+It is null for sessions without a parent.
+Deleting the parent clears this link. Existing children keep their own session and box.
+The MCP creation tool sets this link. The public creation endpoint does not accept it.

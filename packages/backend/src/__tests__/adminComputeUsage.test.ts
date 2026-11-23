@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Request, Response } from 'express';
 import { adminRoutes } from '../routes/admin/index.js';
-import type { ComputeUsageRow, ComputeUsageTotals } from '../routes/admin/computeUsage.js';
+import { computeDailyStats, type ComputeUsageRow, type ComputeUsageTotals } from '../routes/admin/computeUsage.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import { adminAuditLog, usageIntervals, usagePeriods, users, workbenches, workspaces } from '../db/schema.js';
@@ -58,15 +58,15 @@ afterEach(async () => {
   await cleanup();
 });
 
-function get(query = '', who = 'admin'): Promise<{
+function get(query = '', who = 'admin', path = '/usage/compute'): Promise<{
   status: number;
   body: { data: { items: ComputeUsageRow[]; totals: ComputeUsageTotals } };
 }> {
   return new Promise((resolve, reject) => {
     const req = {
       method: 'GET',
-      url: '/usage/compute',
-      originalUrl: `/api/v1/admin/usage/compute${query}`,
+      url: path,
+      originalUrl: `/api/v1/admin${path}${query}`,
       headers: {},
       query: Object.fromEntries(new URLSearchParams(query)),
       user: who === 'member'
@@ -143,5 +143,154 @@ describe('compute usage', () => {
 
   it.each(['?sort=email', '?sort=toString', '?order=up', '?limit=501', '?limit=0'])('rejects invalid parameters: %s', async (query) => {
     expect((await get(query)).status).toBe(400);
+  });
+});
+
+describe('daily compute hours', () => {
+  // Far before the shared fixtures, which sit near the real clock, so only these intervals count.
+  const NOW = new Date('2020-01-10T12:00:00.000Z');
+  const at = (iso: string) => new Date(`2020-01-${iso}Z`);
+
+  beforeEach(async () => {
+    const interval = (id: string, ownerId: string, subjectKind: string, size: string, weight: string, startedAt: Date, endedAt: Date | null) => ({
+      id, ownerId, subjectKind, subjectId: id, sandboxId: `box-${id}`, size, weight,
+      startedAt, endedAt, billedThrough: startedAt, billedWsec: 0,
+    });
+    await db.insert(usageIntervals).values([
+      // Crosses midnight: two hours on each day.
+      interval('x1', ALICE, 'workbench', 'small', '1.00', at('08T22:00:00'), at('09T02:00:00')),
+      // Still open: runs to NOW, at double weight.
+      interval('x2', ALICE, 'task', 'large', '2.00', at('10T10:00:00'), null),
+      // Started before the range: only the hour inside it counts, and it is not a box started.
+      interval('x3', BOB, 'workbench', 'small', '1.00', at('07T23:00:00'), at('08T01:00:00')),
+      interval('x4', BOB, 'workbench', 'small', '1.00', at('10T13:00:00'), at('10T14:00:00')),
+      interval('x5', BOB, 'workbench', 'small', '1.00', at('01T10:00:00'), at('01T11:00:00')),
+    ]);
+  });
+
+  it('splits hours across UTC days for every account', async () => {
+    const stats = await computeDailyStats(NOW, 3, null);
+    expect(stats.start).toBe('2020-01-08T00:00:00.000Z');
+    expect(stats.end).toBe(NOW.toISOString());
+    expect(stats.user_id).toBeNull();
+    expect(stats.user_email).toBeNull();
+    expect(stats.days).toEqual([
+      { day: '2020-01-08', start: '2020-01-08T00:00:00.000Z', hours: 3, wall_hours: 3, boxes_started: 1 },
+      { day: '2020-01-09', start: '2020-01-09T00:00:00.000Z', hours: 2, wall_hours: 2, boxes_started: 0 },
+      { day: '2020-01-10', start: '2020-01-10T00:00:00.000Z', hours: 4, wall_hours: 2, boxes_started: 1 },
+    ]);
+    expect(stats.bucket).toBe('day');
+    expect(stats.totals).toEqual({
+      hours: 9, wall_hours: 7, boxes_started: 2,
+      peak_day: '2020-01-10', peak_start: '2020-01-10T00:00:00.000Z', peak_hours: 4,
+    });
+    expect(stats.by_kind).toEqual([{ key: 'workbench', hours: 5 }, { key: 'task', hours: 4 }]);
+    expect(stats.by_size).toEqual([{ key: 'small', hours: 5 }, { key: 'large', hours: 4 }]);
+    expect(stats.users).toEqual([
+      { user_id: ALICE, email: 'Alice@example.test', hours: 8 },
+      { user_id: BOB, email: 'bob@example.test', hours: 1 },
+    ]);
+  });
+
+  it('filters to one account but still lists every account', async () => {
+    const stats = await computeDailyStats(NOW, 3, ALICE);
+    expect(stats.user_id).toBe(ALICE);
+    expect(stats.user_email).toBe('Alice@example.test');
+    expect(stats.days.map((point) => point.hours)).toEqual([2, 2, 4]);
+    expect(stats.totals).toMatchObject({ hours: 8, wall_hours: 6, boxes_started: 2 });
+    expect(stats.by_kind).toEqual([{ key: 'task', hours: 4 }, { key: 'workbench', hours: 4 }]);
+    expect(stats.users.map((row) => row.user_id)).toEqual([ALICE, BOB]);
+  });
+
+  it.each([
+    ['an account with no usage', 'unused', 'unused@example.test'],
+    ['an unknown account', 'nobody', null],
+  ])('returns zero days for %s', async (_label, userId, email) => {
+    const stats = await computeDailyStats(NOW, 2, userId);
+    expect(stats.user_email).toBe(email);
+    expect(stats.days).toEqual([
+      { day: '2020-01-09', start: '2020-01-09T00:00:00.000Z', hours: 0, wall_hours: 0, boxes_started: 0 },
+      { day: '2020-01-10', start: '2020-01-10T00:00:00.000Z', hours: 0, wall_hours: 0, boxes_started: 0 },
+    ]);
+    expect(stats.totals).toEqual({ hours: 0, wall_hours: 0, boxes_started: 0, peak_day: null, peak_start: null, peak_hours: 0 });
+    expect(stats.by_kind).toEqual([]);
+  });
+
+  it('returns one day for a one-day range', async () => {
+    const stats = await computeDailyStats(NOW, 1, null);
+    expect(stats.days).toEqual([{ day: '2020-01-10', start: '2020-01-10T00:00:00.000Z', hours: 4, wall_hours: 2, boxes_started: 1 }]);
+    expect(stats.users).toEqual([{ user_id: ALICE, email: 'Alice@example.test', hours: 4 }]);
+  });
+
+  const nonZero = (stats: { days: { start: string; hours: number; wall_hours: number; boxes_started: number }[] }) =>
+    stats.days.filter((point) => point.hours > 0).map(({ start, hours, wall_hours, boxes_started }) => ({ start, hours, wall_hours, boxes_started }));
+
+  it('splits today into UTC hours up to now', async () => {
+    const stats = await computeDailyStats(NOW, 'today', null);
+    expect(stats.bucket).toBe('hour');
+    expect(stats.start).toBe('2020-01-10T00:00:00.000Z');
+    expect(stats.end).toBe(NOW.toISOString());
+    // 00:00 to 12:00 inclusive: the current hour is the last bucket.
+    expect(stats.days).toHaveLength(13);
+    expect(stats.days.at(-1)?.start).toBe('2020-01-10T12:00:00.000Z');
+    expect(nonZero(stats)).toEqual([
+      { start: '2020-01-10T10:00:00.000Z', hours: 2, wall_hours: 1, boxes_started: 1 },
+      { start: '2020-01-10T11:00:00.000Z', hours: 2, wall_hours: 1, boxes_started: 0 },
+    ]);
+    expect(stats.totals).toMatchObject({ hours: 4, peak_day: '2020-01-10', peak_start: '2020-01-10T10:00:00.000Z', peak_hours: 2 });
+    // x4 starts at 13:00, after NOW.
+    expect(stats.users).toEqual([{ user_id: ALICE, email: 'Alice@example.test', hours: 4 }]);
+  });
+
+  it('splits yesterday into 24 UTC hours and ignores today', async () => {
+    const stats = await computeDailyStats(NOW, 'yesterday', null);
+    expect(stats.bucket).toBe('hour');
+    expect(stats.start).toBe('2020-01-09T00:00:00.000Z');
+    expect(stats.end).toBe('2020-01-10T00:00:00.000Z');
+    expect(stats.days).toHaveLength(24);
+    expect(stats.days[0].start).toBe('2020-01-09T00:00:00.000Z');
+    expect(stats.days.at(-1)?.start).toBe('2020-01-09T23:00:00.000Z');
+    // x1 started the day before, so it counts no box started.
+    expect(nonZero(stats)).toEqual([
+      { start: '2020-01-09T00:00:00.000Z', hours: 1, wall_hours: 1, boxes_started: 0 },
+      { start: '2020-01-09T01:00:00.000Z', hours: 1, wall_hours: 1, boxes_started: 0 },
+    ]);
+    expect(stats.totals).toMatchObject({ hours: 2, boxes_started: 0 });
+    expect(stats.users).toEqual([{ user_id: ALICE, email: 'Alice@example.test', hours: 2 }]);
+  });
+
+  it('counts an open interval in yesterday only up to midnight', async () => {
+    await db.insert(usageIntervals).values({
+      id: 'x6', ownerId: BOB, subjectKind: 'task', subjectId: 'x6', sandboxId: 'box-x6', size: 'small', weight: '1.00',
+      startedAt: at('09T22:30:00'), endedAt: null, billedThrough: at('09T22:30:00'), billedWsec: 0,
+    });
+    const stats = await computeDailyStats(NOW, 'yesterday', BOB);
+    expect(nonZero(stats)).toEqual([
+      { start: '2020-01-09T22:00:00.000Z', hours: 0.5, wall_hours: 0.5, boxes_started: 1 },
+      { start: '2020-01-09T23:00:00.000Z', hours: 1, wall_hours: 1, boxes_started: 0 },
+    ]);
+    expect(stats.users.find((row) => row.user_id === BOB)?.hours).toBe(1.5);
+  });
+
+  it.each(['today', 'yesterday'])('serves hourly buckets for range=%s', async (range) => {
+    const { status, body } = await get(`?range=${range}`, 'admin', '/usage/compute/daily');
+    expect(status).toBe(200);
+    expect((body.data as unknown as { bucket: string }).bucket).toBe('hour');
+  });
+
+  it('serves 30 days by default and accepts a user filter', async () => {
+    const { status, body } = await get(`?userId=${ALICE}`, 'admin', '/usage/compute/daily');
+    expect(status).toBe(200);
+    const data = body.data as unknown as { days: unknown[]; user_id: string };
+    expect(data.days).toHaveLength(30);
+    expect(data.user_id).toBe(ALICE);
+  });
+
+  it('refuses a non-admin', async () => {
+    expect((await get('', 'member', '/usage/compute/daily')).status).toBe(403);
+  });
+
+  it.each(['?days=0', '?days=181', '?days=7d', '?days=-1', '?range=week', '?range='])('rejects an invalid days or range: %s', async (query) => {
+    expect((await get(query, 'admin', '/usage/compute/daily')).status).toBe(400);
   });
 });

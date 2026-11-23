@@ -66,7 +66,7 @@ export function useSpacePresence(spaceId: string | null): SpacePresenceMember[] 
 /**
  * Refresh a space's lists when a socket event names one of its sessions or
  * tasks, at most once every 30 seconds, so a busy space does not refetch on
- * every frame. Pull to refresh is always immediate.
+ * every frame.
  */
 export function useSpaceEvents(ids: ReadonlySet<string>, spaceId: string | null, refresh: () => void) {
   const latest = useRef({ ids, refresh });

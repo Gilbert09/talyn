@@ -1,3 +1,6 @@
+import { useWorkspaceStore } from '../../stores/workspace';
+import { useNow } from '../../hooks/useSessionBackground';
+import type { SubagentCardModel, ToolBlock } from '@talyn/shared';
 import React, {
   useCallback,
   useLayoutEffect,
@@ -5,9 +8,9 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { ChevronDown, ChevronRight, GitPullRequest, PauseCircle, Shield } from 'lucide-react';
+import { Bot, Loader2, ChevronDown, ChevronRight, GitPullRequest, PanelTop, PauseCircle, Shield } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { renderMarkdownish } from '../../lib/markdown';
+import { PROSE_MEASURE, renderMarkdownish } from '../../lib/markdown';
 import { skillInstructionsByToolId } from '../../lib/skillInstructions';
 import { MemoryChangeCard } from '../memory/MemoryChangeCard';
 import { BoxRefusalAction } from '../billing/BoxRefusalAction';
@@ -28,6 +31,7 @@ import {
   mergeToolBlocks,
   stripAutoPrBlock,
   stripPlanBlocks,
+  subagentCardModel,
 } from '@talyn/shared';
 
 interface AgentConversationProps {
@@ -221,7 +225,9 @@ function BlockViewImpl({
       return <TextBlock text={block.text} />;
     case 'thinking':
       return <ThinkingBlock text={block.text} />;
-    case 'tool':
+    case 'tool': {
+      const subagent = subagentCardModel(block);
+      if (subagent) return <SubagentCard block={block} skills={skills} envName={envName} />;
       return (
         <ToolBlockView
           name={block.name}
@@ -233,6 +239,7 @@ function BlockViewImpl({
           skillInstructions={skills.get(block.toolId)}
         />
       );
+    }
     case 'tool_group':
       return (
         <ToolGroupView
@@ -283,12 +290,11 @@ function TextBlock({ text }: { text: string }) {
   const shown = stripPlanBlocks(stripAutoPrBlock(text));
   if (!shown) return null;
   return (
-    // Paragraph spacing is renderMarkdownish's own (`my-1 leading-relaxed` on
-    // its `p`), so this sets size and colour only. Overriding it from here
-    // would be two single-class rules at equal specificity fighting over
-    // stylesheet order.
-    <div className="text-[13px] text-foreground min-w-0 [overflow-wrap:anywhere]">
-      {shown ? renderMarkdownish(shown, 'surface') : null}
+    // Block spacing is the `prose` variant's own, so this sets size, colour and
+    // line length only. Overriding spacing from here would be two single-class
+    // rules at equal specificity fighting over stylesheet order.
+    <div className={cn('text-[13px] text-foreground min-w-0 [overflow-wrap:anywhere]', PROSE_MEASURE)}>
+      {renderMarkdownish(shown, 'prose')}
     </div>
   );
 }
@@ -335,6 +341,104 @@ function ThinkingBlock({ text, compact = false }: { text: string; compact?: bool
  *
  * Errors get more room: the failing part is the reason anyone is reading.
  */
+/**
+ * Opens a subagent's tab in the chat transcript. Null where there are no tabs:
+ * task transcripts, and the subagents that a subagent starts.
+ */
+export const SubagentTabOpener = React.createContext<((toolId: string) => void) | null>(null);
+
+function SubagentCard({ block, skills, envName }: { block: ToolBlock; skills: Map<string, string>; envName?: string }) {
+  const enabled = useWorkspaceStore((s) => s.features?.sessionSubagents === true);
+  const now = useNow(enabled && !block.settled ? 1000 : null);
+  const model = subagentCardModel(block, enabled, now)!;
+  const [open, setOpen] = useState(false);
+  const openTab = React.useContext(SubagentTabOpener);
+  return (
+    <div className="min-w-0 rounded-md border border-border bg-muted/20 text-[13px]">
+      <div className="flex items-start">
+        <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}
+          className="flex min-w-0 flex-1 items-start gap-2 p-3 text-left">
+          <Bot aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <SubagentHeading model={model} />
+          {open ? <ChevronDown aria-hidden className="h-3 w-3 shrink-0" /> : <ChevronRight aria-hidden className="h-3 w-3 shrink-0" />}
+        </button>
+        {enabled && openTab && (
+          <button type="button" data-testid="subagent-open-tab" onClick={() => openTab(block.toolId)}
+            aria-label={`Open ${model.title} in a tab`} title="Open in a tab"
+            className="m-2 inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground">
+            <PanelTop aria-hidden className="h-3 w-3" /> Open
+          </button>
+        )}
+      </div>
+      {open && <div className="border-t border-border p-3">
+        <SubagentDetails model={model} skills={skills} envName={envName} />
+      </div>}
+    </div>
+  );
+}
+
+function SubagentHeading({ model }: { model: SubagentCardModel }) {
+  return (
+    <span className="min-w-0 flex-1 space-y-1">
+      <span className="block text-xs text-muted-foreground">Subagent · {model.type}</span>
+      <span className="block font-medium text-foreground [overflow-wrap:anywhere]">{model.title}</span>
+      <span className={cn('flex items-center gap-1.5 text-xs', model.failed ? 'text-destructive' : 'text-muted-foreground')}>
+        {model.running && <Loader2 aria-hidden className="h-3 w-3 shrink-0 animate-spin" />}
+        {model.stepsLabel}
+        {model.detailsLabel && <span>{model.detailsLabel}</span>}
+      </span>
+    </span>
+  );
+}
+
+/** The brief, the steps and the result of a subagent. Its own subagents get no tabs. */
+function SubagentDetails({ model, skills, envName }: { model: SubagentCardModel; skills: Map<string, string>; envName?: string }) {
+  return (
+    <SubagentTabOpener.Provider value={null}>
+      <div className="space-y-3 [overflow-wrap:anywhere]">
+        <section className="text-muted-foreground">
+          <h4 className="mb-1 text-xs font-medium">Brief from the agent</h4>
+          {renderMarkdownish(model.brief, 'surface')}
+        </section>
+        {model.children.length > 0 && <section className="space-y-2">
+          <h4 className="text-xs font-medium text-muted-foreground">Steps</h4>
+          {model.children.map((child) => <BlockView key={child.key} block={child} skills={skills} envName={envName} />)}
+        </section>}
+        <section className="text-foreground">
+          <h4 className="mb-1 text-xs font-medium text-muted-foreground">Result</h4>
+          {model.result !== null
+            ? renderMarkdownish(model.result, 'surface')
+            : model.running && <span className="text-xs text-muted-foreground">Still working…</span>}
+        </section>
+      </div>
+    </SubagentTabOpener.Provider>
+  );
+}
+
+/** A subagent's own transcript, shown in its tab. Follows new steps while the view is at the bottom. */
+export function SubagentTranscript({ block, events }: { block: ToolBlock; events: AgentEvent[] }) {
+  const now = useNow(block.settled ? null : 1000);
+  const model = subagentCardModel(block, true, now)!;
+  const skills = useMemo(() => skillInstructionsByToolId(events), [events]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(model.running);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [block.toolId, model.steps, model.children.length, model.result]);
+  return (
+    <div ref={scrollRef} data-testid="subagent-transcript"
+      onScroll={(e) => { const el = e.currentTarget; atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 200; }}
+      className="h-full min-w-0 overflow-auto px-4 py-4 text-sm text-foreground">
+      <div className="mb-3 flex items-start gap-2 text-[13px]">
+        <Bot aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        <SubagentHeading model={model} />
+      </div>
+      <SubagentDetails model={model} skills={skills} />
+    </div>
+  );
+}
+
 const PREVIEW_LINES = 6;
 const PREVIEW_CHARS = 500;
 const PREVIEW_LINES_ERROR = 14;

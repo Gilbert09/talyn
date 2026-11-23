@@ -183,6 +183,7 @@ describe('native lifecycle and reachability', () => {
     client.subscribe('old-workspace');
     client.subscribeSpace('old-space');
     client.sendPresence('old-space', 'old-session', 'active');
+    client.setDeskPresence('active');
     client.setCapabilities(['threads']);
     client.setDebugFilter('old-owner');
     const old = await connect();
@@ -215,6 +216,34 @@ describe('native lifecycle and reachability', () => {
 });
 
 describe('protocol and scheduling', () => {
+  it('sends desk presence only once accepted and re-sends the latest state after a reconnect', async () => {
+    client.setDeskPresence('active');
+    const first = await connect();
+    expect(first.sent).toEqual([{ type: 'auth', token: 'token' }]);
+    first.accept();
+    expect(first.sent.slice(1)).toEqual([{ type: 'desk_presence', state: 'active' }]);
+    client.setDeskPresence('away');
+    expect(first.sent.at(-1)).toEqual({ type: 'desk_presence', state: 'away' });
+    first.reject(1006);
+    client.setDeskPresence('active');
+    await vi.advanceTimersByTimeAsync(1000);
+    const next = sockets[1];
+    next.open();
+    next.accept();
+    expect(next.sent.filter((frame) => frame.type === 'desk_presence')).toEqual([{ type: 'desk_presence', state: 'active' }]);
+  });
+
+  it('does not send desk presence before it is reported, and forgets it on disconnect', async () => {
+    const first = await connect();
+    first.accept();
+    expect(first.sent.some((frame) => frame.type === 'desk_presence')).toBe(false);
+    client.setDeskPresence('active');
+    client.disconnect();
+    const next = await connect();
+    next.accept();
+    expect(next.sent.some((frame) => frame.type === 'desk_presence')).toBe(false);
+  });
+
   it('authenticates first and restores subscriptions, capabilities, presence, and filters after acceptance', async () => {
     client.setCapabilities(['threads']);
     client.subscribe('workspace');
@@ -241,6 +270,30 @@ describe('protocol and scheduling', () => {
     expect(next.sent.slice(1)).toEqual(restored);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(next.sent.at(-1)).toEqual(restored[2]);
+  });
+
+  it('restores an all-accounts debug stream, and sends no debug frame once it stops', async () => {
+    client.setDebugFilter(undefined);
+    const first = await connect();
+    first.accept();
+    expect(first.sent.filter((frame) => frame.type.startsWith('debug:'))).toEqual([{ type: 'debug:filter', owner: null }]);
+    client.stopDebugStream();
+    expect(first.sent.at(-1)).toEqual({ type: 'debug:unsubscribe' });
+    client.stopDebugStream();
+    expect(first.sent.filter((frame) => frame.type === 'debug:unsubscribe')).toHaveLength(1);
+    first.reject(1006);
+    await vi.advanceTimersByTimeAsync(1000);
+    const next = sockets[1];
+    next.open();
+    next.accept();
+    expect(next.sent.some((frame) => frame.type.startsWith('debug:'))).toBe(false);
+  });
+
+  it('sends no debug frame when the debug stream was never started', async () => {
+    const first = await connect();
+    first.accept();
+    client.stopDebugStream();
+    expect(first.sent.some((frame) => frame.type.startsWith('debug:'))).toBe(false);
   });
 
   it.each([null, 'throw', 'constructor'] as const)(

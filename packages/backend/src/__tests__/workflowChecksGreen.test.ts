@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { checksAreGreen, checksGreenDelivery } from '../services/workflows/checksGreen.js';
-import { workflowFactsFromDelivery, CHECKS_GREEN_EVENT } from '../services/workflows/facts.js';
+import { workflowFactsFromDelivery, CHECKS_GREEN_EVENT } from '../services/workflows/sources/github.js';
 import type { DomainPrChecksEvent } from '../services/events.js';
 
 /**

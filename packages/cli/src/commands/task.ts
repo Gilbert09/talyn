@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import type { CreateTaskRequest, Task, TaskPriority, TaskType } from '@talyn/shared';
+import type { Task } from '@talyn/shared';
 import { request } from '../client.js';
 
 function envDefaults() {
@@ -12,64 +12,7 @@ function envDefaults() {
 export function registerTaskCommands(program: Command): void {
   const task = program
     .command('task')
-    .description('Create and inspect Talyn tasks');
-
-  task
-    .command('create')
-    .description('Create a new task')
-    .option('--workspace <id>', 'Workspace id (default: $TALYN_WORKSPACE_ID)')
-    .option(
-      '--type <type>',
-      'Task type: code_writing | pr_response | pr_review | manual',
-      'code_writing'
-    )
-    .option('--title <title>', 'Task title (auto-generated if omitted)')
-    .option('--description <desc>', 'Task description', '')
-    .option('--prompt <prompt>', 'Prompt for Claude agent (required for agent tasks)')
-    .option('--priority <priority>', 'Priority: low | medium | high | urgent', 'medium')
-    .option('--repository <id>', 'Repository id to target')
-    .option('--env <id>', 'Preferred environment id')
-    .option('--json', 'Emit machine-readable JSON on stdout')
-    .action(async (opts) => {
-      const { workspaceId: fallbackWs } = envDefaults();
-      const workspaceId = opts.workspace || fallbackWs;
-      if (!workspaceId) {
-        console.error('error: --workspace is required (or set $TALYN_WORKSPACE_ID)');
-        process.exit(2);
-      }
-
-      const type = opts.type as TaskType;
-      if (!['code_writing', 'pr_response', 'pr_review', 'manual'].includes(type)) {
-        console.error(`error: invalid --type "${type}"`);
-        process.exit(2);
-      }
-
-      const body: CreateTaskRequest = {
-        workspaceId,
-        type,
-        title: opts.title || deriveTitle(opts.prompt, type),
-        description: opts.description,
-        prompt: opts.prompt,
-        priority: opts.priority as TaskPriority,
-        repositoryId: opts.repository,
-        assignedEnvironmentId: opts.env,
-      };
-
-      try {
-        const created = await request<Task>('POST', '/tasks', body);
-        if (opts.json) {
-          process.stdout.write(JSON.stringify(created) + '\n');
-        } else {
-          console.log(`✓ Created task ${created.id}`);
-          console.log(`  title:  ${created.title}`);
-          console.log(`  type:   ${created.type}`);
-          console.log(`  status: ${created.status}`);
-        }
-      } catch (err) {
-        console.error(`error: ${(err as Error).message}`);
-        process.exit(1);
-      }
-    });
+    .description('Inspect Talyn tasks. Only the Talyn app creates tasks.');
 
   task
     .command('list')
@@ -101,13 +44,4 @@ export function registerTaskCommands(program: Command): void {
         process.exit(1);
       }
     });
-
-}
-
-function deriveTitle(prompt: string | undefined, type: TaskType): string {
-  if (prompt) {
-    const firstLine = prompt.split('\n')[0].trim();
-    return firstLine.slice(0, 80);
-  }
-  return `New ${type.replace('_', ' ')} task`;
 }

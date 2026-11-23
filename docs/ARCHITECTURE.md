@@ -25,10 +25,12 @@ For the proposed native mobile client, see [`MOBILE_APP_PLAN.md`](./MOBILE_APP_P
 └──────────────────────────────────────────────────────────────────┘
         │                      │                        │
   GitHub App             Cloud providers          Supabase Postgres
-  (webhooks in,          (PostHog Code,           + Supabase Auth
-  REST/GraphQL out)      Anthropic Managed        (RLS), Redis
-                         Agents)
+  (webhooks in,          (Talyn Fleet,            + Supabase Auth
+  REST/GraphQL out)      PostHog Code,            (RLS), Redis
+                         retired)
 ```
+
+`apps/web` (browser) and `apps/mobile` (Expo) talk to the same backend through `@talyn/client`.
 
 Nothing executes on the user's machine. Every task is delegated to a **cloud provider** that runs the agent loop on its own sandbox and opens a PR; the backend creates the remote run, polls it, and ingests the transcript.
 
@@ -52,10 +54,10 @@ Nothing executes on the user's machine. Every task is delegated to a **cloud pro
 ### Workspaces
 Groups related repositories and integrations. Example: a "PostHog" workspace with `posthog/posthog`, `posthog/posthog.com`, `posthog/charts`. Strictly single-owner; per-workspace provider credentials are AES-GCM-encrypted on the `integrations` row.
 
-### Teams
-Seat billing, and nothing else. A team pays Polar for N seats. Each seat gives one GitHub account the Unlimited plan on that person's own account. **A team never shares a workspace.** Each member keeps their own workspaces, GitHub connection and agent subscription (Tom's call, September 2026: sharing is not planned).
+### Teams and Spaces
+A team is the multiplayer entity, behind the `spaces` flag. It has members (`team_members`, keyed by the numeric GitHub id) and **spaces**. A space is a container for sessions and tasks, not a shared workspace. **A team never shares a workspace.** Each member keeps their own workspaces, GitHub connection and agent subscription (Tom's call, September 2026), and a session in a space runs in its creator's own workspace. The prompter pays for each turn. See the Teams and Spaces entry in `CLAUDE.md` and the 2026-11-06 note in `SESSIONS.md`.
 
-A seat binds to the numeric GitHub user id, never to the login, which can be renamed. So an admin can assign a seat before the person signs up, and the seat goes live at their first sign-in. The id comes from the Supabase identity record through the admin API (`services/githubIdentity.ts`), never from the JWT's `user_metadata`, because a user can rewrite `user_metadata`. The tables (`teams`, `team_admins`, `team_seats`) are backend-only, like `billing_events`.
+Seat billing is separate and optional, behind the `teams` flag. A team pays Polar for N seats. Each seat gives one GitHub account the Unlimited plan on that person's own account. A seat binds to the numeric GitHub user id, never to the login, which can be renamed. So an admin can assign a seat before the person signs up, and the seat goes live at their first sign-in. The id comes from the Supabase identity record through the admin API (`services/githubIdentity.ts`), never from the JWT's `user_metadata`, because a user can rewrite `user_metadata`. The team and space tables (`teams`, `team_admins`, `team_seats`, `team_members`, `spaces`) are backend-only, like `billing_events`.
 
 ### Environments
 A secret-free **marker row**, one auto-provisioned per connected cloud provider. Its `type` is how a task resolves its provider — nothing more. (The daemon/SSH-backed execution environments this concept once described were removed in the June 2026 cloud-only refactor.)
@@ -63,7 +65,7 @@ A secret-free **marker row**, one auto-provisioned per connected cloud provider.
 ### Tasks
 Primary unit of work, always delegated to a cloud provider. Types: `code_writing` (freeform prompt on a repo), `pr_response`, `pr_review`; skill runs dispatch as tasks with the `SKILL.md` inlined into the prompt.
 
-Lifecycle: `queued` → `in_progress` → `completed` / `failed` / `cancelled`. The cloud poller drives status and ingests the transcript; review happens on the provider's PR (no local approval gate).
+Lifecycle: `queued` → `in_progress` → `completed` / `failed` / `needs_human` / `cancelled`, with `waiting_ci` as a paused, still-active state. `needs_human` is a refusal, not a failure. `TASK_STATUS_TERMINAL` in `packages/shared` is the one list of terminal statuses. The cloud poller drives status and ingests the transcript; review happens on the provider's PR (no local approval gate).
 
 ### GitHub / PR core
 The heart of the app: webhook-first PR monitoring (with polling reconciliation as the safety net), a per-workspace PR cache, the prioritized GitHub panel (Needs attention / Mine / Review, stacked PRs), the merge queue (auto-fix runs for conflicts/failed checks, bounded check re-runs and branch updates where GitHub allows, and stacked PRs, which take one of two routes: a GitHub NATIVE stack whose landing branch is behind a merge queue that batches stacks is handed over as one submission at its top rung — the provider tests and lands every rung in a single CI round, with the rungs beneath it held hands-off (`external_covered_by`) because a push to any member ejects the whole batch — while everything else drains bottom-up, each child parked in `awaiting_stack` until the PR its base belongs to lands, then retargeted onto the real base), and the auto-keep-mergeable watcher.
@@ -106,6 +108,14 @@ Completed team requests still clear. A cached summary cannot make reconciliation
 
 ## Key Decisions
 
+### Integration rules and source adapters
+
+GitHub, Slack, generic webhook, Linear and GitHub Issues rules share one engine in `services/workflows/`.
+Source adapters in `services/workflows/sources/` turn each source's events into rule facts.
+The `integration` column on `workflows` identifies each rule's source (`WORKFLOW_INTEGRATIONS` in `packages/shared/src/workflows.ts`).
+Existing rules use GitHub when the field is absent.
+Schedule runs scheduled rules through `services/loops/`.
+
 ### 0. Cloud-only pivot — 2026-06
 The local-execution model (bundled daemon, local/SSH environments, in-process Claude agents, approval gates, per-task git working trees) was removed wholesale. Every task runs on a cloud provider's sandbox; Talyn is a PR dashboard + delegation layer. This supersedes decisions 2–7 below, which are kept as history.
 
@@ -131,10 +141,10 @@ Branch management moved to the provider sandbox; Talyn tracks the resulting PR.
 The provider opens a normal PR; GitHub review IS the approval gate.
 
 ### 8. Reference Architecture: PostHog Code — 2024-04
-Reference: https://github.com/PostHog/code — informed session persistence, permission modes, and store/service layering; today PostHog Code is a live provider rather than a pattern source.
+Reference: https://github.com/PostHog/code — informed session persistence, permission modes, and store/service layering; PostHog Code later became a live provider, and is now retired (see decision 9).
 
 ### 9. Pluggable cloud providers — 2026-06
-One `CloudTaskProvider` interface (registry + per-provider `dispatch`/`reconcile`/credentials/`cancel`), so a new vendor lands as a self-contained module with no core changes. **Talyn Fleet (`selfhosted`) is the default** and PostHog Code is the fall-back; Codex Cloud stays deferred until OpenAI ships a server-to-server API. Claude Code (Anthropic Managed Agents) was removed in September 2026 — it billed metered API credits with no subscription option, which is the opposite of what the fleet offers, and the fleet runs Claude on the workspace's own subscription instead.
+One `CloudTaskProvider` interface (registry + per-provider `dispatch`/`reconcile`/credentials/`cancel`), so a new vendor lands as a self-contained module with no core changes. **Talyn Fleet (`selfhosted`) is the default.** PostHog Code is retired (2026-11-15): the `posthog-code-retired` flag (fallback ON) hides it for everyone, existing connections keep working, and no work falls back onto it. Deleting its code is the next step. Codex Cloud stays deferred until OpenAI ships a server-to-server API. Claude Code (Anthropic Managed Agents) was removed in September 2026 — it billed metered API credits with no subscription option, which is the opposite of what the fleet offers, and the fleet runs Claude on the workspace's own subscription instead.
 
 ### 10. GitHub App over OAuth — 2026-06/07
 A shared GitHub App supplies installations and webhooks. Workspace reads and writes use the connected user's token.

@@ -10,10 +10,13 @@ import { cn } from "@/lib/utils";
 export function GlowCard({
   children,
   className,
+  innerClassName,
   tone = "plain",
 }: {
   children: ReactNode;
   className?: string;
+  /** Classes for the content wrapper, e.g. a flex column that fills the card. */
+  innerClassName?: string;
   tone?: "plain" | "clay";
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -42,7 +45,7 @@ export function GlowCard({
           background: `radial-gradient(340px circle at var(--mx,50%) var(--my,0%), ${glow}, transparent 65%)`,
         }}
       />
-      <div className="relative">{children}</div>
+      <div className={cn("relative", innerClassName)}>{children}</div>
     </div>
   );
 }

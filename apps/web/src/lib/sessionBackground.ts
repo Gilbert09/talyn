@@ -1,4 +1,4 @@
-import type { WorkbenchBackground } from '@talyn/shared';
+import type { WorkbenchBackground, WorkbenchWakeup } from '@talyn/shared';
 
 function time(value: string | Date | number): number {
   return value instanceof Date ? value.getTime() : typeof value === 'number' ? value : new Date(value).getTime();
@@ -26,6 +26,18 @@ export function formatCountdown(wakeAt: string, now: Date | number): string {
   return `Wakes in ${days} ${days === 1 ? 'day' : 'days'}`;
 }
 
+/** When a scheduled wake-up fires, in words. A CI wake-up fires when CI finishes. */
+export function wakeupWhen(wakeup: Pick<WorkbenchWakeup, 'wakeAt' | 'ci'>, now: Date | number): string {
+  if (!wakeup.ci) return formatCountdown(wakeup.wakeAt, now);
+  return `Waits for CI on ${wakeup.ci.headSha.slice(0, 7)}`;
+}
+
+/** The tooltip of a scheduled wake-up: a CI wake-up also says its latest time. */
+export function wakeupTitle(wakeup: Pick<WorkbenchWakeup, 'wakeAt' | 'ci' | 'reason'>, now: Date | number): string {
+  if (!wakeup.ci) return `${formatCountdown(wakeup.wakeAt, now)}: ${wakeup.reason}`;
+  return `${wakeupWhen(wakeup, now)}. ${formatCountdown(wakeup.wakeAt, now)} at the latest: ${wakeup.reason}`;
+}
+
 export function wakeLaterPresets(now: Date): { id: string; label: string; delaySeconds: number }[] {
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -47,4 +59,9 @@ export function keepAwakeLabel(until: string | null, now: Date | number = Date.n
 
 export function isActiveBackground(bg: WorkbenchBackground | null | undefined): boolean {
   return Boolean(bg?.jobs.some((job) => job.status === 'running') || bg?.wakeups.some((wakeup) => wakeup.status === 'scheduled'));
+}
+
+/** What a job's log box says when the job has printed nothing. */
+export function emptyLogText(running: boolean): string {
+  return running ? 'No output yet.' : 'The job printed no output.';
 }

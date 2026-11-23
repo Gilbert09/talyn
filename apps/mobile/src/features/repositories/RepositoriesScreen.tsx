@@ -1,5 +1,5 @@
 import type { GitHubRepo, WatchedRepo } from '@talyn/client/native';
-import { sizePriceTable, type SandboxSizeSetting } from '@talyn/shared';
+import { MEASURED_BILLING_NOTE, sizePriceTable, type SandboxSizeSetting } from '@talyn/shared';
 import { router, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useState } from 'react';
@@ -72,7 +72,9 @@ export function RepositoriesPanel({ workspaceId }: { workspaceId: string }) {
         disabled={all.loading || offline} onPress={() => { void all.refresh(); }} />
     </View>
     <AppText variant="meta" tone="muted">
-      Your repositories and every org you belong to. {all.loading ? 'Refreshing…' : all.fetchedAt ? `Updated ${formatAge(all.fetchedAt)}.` : ''}
+      Your repositories and every org you belong to. {all.loading
+        ? all.fetchedAt ? 'Refreshing…' : all.repos.length ? `Loading more… ${all.repos.length} found so far.` : ''
+        : all.fetchedAt ? `Updated ${formatAge(all.fetchedAt)}.` : ''}
     </AppText>
 
     {all.firstLoad ? <View style={[styles.notice, { borderColor: c.border }]} accessibilityState={{ busy: true }}>
@@ -92,7 +94,8 @@ export function RepositoriesPanel({ workspaceId }: { workspaceId: string }) {
             {repo.private ? <Pill label="Private" /> : null}
           </View>} />)}
       </View> : <AppText variant="meta" tone="muted" style={styles.padded}>
-        {search ? 'No matching repositories. Try refresh if a repository is missing.' : 'No repositories found. Try refresh.'}
+        {search ? all.loading ? 'No matching repositories yet. Still loading…' : 'No matching repositories. Try refresh if a repository is missing.'
+          : 'No repositories found. Try refresh.'}
       </AppText>}
     {matches.truncated ? <AppText variant="meta" tone="muted">Showing the first {matches.shown.length} of {matches.total}. Type to narrow.</AppText> : null}
   </View>;
@@ -146,6 +149,7 @@ function SandboxSizeSheet({ repo, size, onClose }: {
       {info && locked ? <AppText variant="meta" tone="warning">
         {`${sizeName(info.effective)} boxes need Pro. On your plan a new session here cannot start until you pick Standard or Small.`}
       </AppText> : null}
+      {plan ? <AppText variant="meta" tone="muted">{MEASURED_BILLING_NOTE}</AppText> : null}
     </View>}
     sections={[{ key: 'sizes', items: options.map((option) => ({
       key: option.setting, label: option.label, detail: option.detail, selected: option.selected, disabled: saving,

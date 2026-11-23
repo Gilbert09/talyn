@@ -1,8 +1,7 @@
 # @talyn/cli
 
-Command-line client for the Talyn backend. Lets you (or a child Claude
-running inside a Talyn task) create tasks, inspect the backlog, and kick
-the Continuous Build scheduler without touching the UI.
+Command-line client for the Talyn backend. Lets you create and list tasks
+and manage the CLI auth token without touching the UI.
 
 ## Install
 
@@ -12,35 +11,30 @@ From a checkout of the Talyn monorepo:
 npm install        # from the repo root
 npm run build -w @talyn/cli
 npm link -w @talyn/cli
-# now `fastowl` is on your PATH
+# now `talyn` is on your PATH
 ```
 
 ## Environment
 
-The CLI reads two env vars that agents spawned by Talyn get automatically:
-
-- `TALYN_API_URL` — defaults to `http://localhost:4747`
-- `TALYN_WORKSPACE_ID` — default workspace for commands that need one
-- `TALYN_TASK_ID` — current task id (used by `task ready`)
-
-When Claude is running inside a Talyn task, all three are already set, so
-most commands work without flags.
+- `TALYN_API_URL`: defaults to `http://localhost:4747`. A non-local URL must be `https://`.
+- `TALYN_AUTH_TOKEN`: auth token. Wins over the stored token file (`~/.fastowl/token`).
+- `TALYN_WORKSPACE_ID`: default workspace for commands that need one
+- `TALYN_TASK_ID`: current task id
 
 ## Commands
 
 ```bash
-fastowl ping                             # health check
+talyn ping                              # health check
 
-fastowl task list                        # list tasks in current workspace
-fastowl task create --prompt "Add foo"   # spawn a new code_writing task
-fastowl task create --type manual \
-    --title "Merge PR #42"               # non-agent task
-fastowl task ready                       # mark current task awaiting_review
+talyn token set [token]                 # store the auth token (Settings → Copy CLI token)
+talyn token whoami                      # decode the token and print the user
+talyn token show                        # print the stored token (scripting only)
+talyn token clear                       # remove the stored token
 
-fastowl backlog sources                  # list backlog sources
-fastowl backlog sync <sourceId>          # re-read the source file
-fastowl backlog items                    # list items in current workspace
-fastowl backlog schedule                 # kick the Continuous Build scheduler
+talyn task list                         # list tasks in the current workspace
 ```
 
-Add `--json` to most read commands to get machine-readable output.
+The CLI cannot create a task. Only the Talyn app creates tasks.
+
+Add `--json` to the task commands to get machine-readable output.
+`--status` and `--type` filter `task list`.

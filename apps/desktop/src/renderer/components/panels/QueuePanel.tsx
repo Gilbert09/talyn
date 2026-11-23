@@ -60,6 +60,8 @@ const statusConfig: Record<
   // handed back a question. Showing a correct refusal as a failure is the
   // whole bug this state exists to fix.
   needs_human: { icon: UserRoundCheck, label: 'Needs you', color: 'text-amber-400' },
+  // The run published and its box is asleep until CI settles.
+  waiting_ci: { icon: Clock, label: 'Waiting for CI', color: 'text-sky-400' },
   cancelled: { icon: AlertCircle, label: 'Cancelled', color: 'text-slate-400' },
 };
 
@@ -111,8 +113,8 @@ export function QueuePanel() {
   const queuedTasks = tasks.filter((t) =>
     ['pending', 'queued'].includes(t.status)
   );
-  // In-flight: the cloud run is live.
-  const inProgressTasks = tasks.filter((t) => t.status === 'in_progress');
+  // In-flight: the cloud run is live, or paused while CI runs.
+  const inProgressTasks = tasks.filter((t) => t.status === 'in_progress' || t.status === 'waiting_ci');
   // Finished history, newest first — matches the server's cursor order so a
   // lazily-loaded older page slots in below without reshuffling.
   // Derived from the shared partition, not a literal: a status listed in

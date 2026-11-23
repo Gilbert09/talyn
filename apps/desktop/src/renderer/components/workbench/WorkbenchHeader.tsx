@@ -4,11 +4,13 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
+  Columns2,
   Copy,
   ExternalLink,
   GitBranch,
   GitMerge,
   GitPullRequest,
+  GitPullRequestClosed,
   Laptop,
   ListChecks,
   Loader2,
@@ -20,7 +22,7 @@ import {
   Cloud,
   Wrench,
 } from 'lucide-react';
-import { CREATE_PR_MESSAGE, workbenchDisplayName, type Workbench, type WorkbenchChat } from '@talyn/shared';
+import { CREATE_PR_MESSAGE, canCloseSessionPullRequest, splitViewOffered, workbenchDisplayName, type Workbench, type WorkbenchChat } from '@talyn/shared';
 import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import {
@@ -54,13 +56,16 @@ import {
 import type { WorkbenchOps, WorkbenchPromptActionKind } from '../../lib/workbenchOps';
 import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PrPill } from './WorkbenchBadges';
+import { PrCopyLinkButton } from './PrCopyLinkButton';
 import { ArchiveWorkbenchDialog, archiveWorkbench, restoreWorkbench, type ArchiveOptions } from './archiveWorkbench';
-import { createChatTab } from './ChatTabs';
+import { createSessionChat } from './createSessionChat';
 import { SandboxStatusChip } from './SandboxStatusPanel';
 import { SessionPreviewChips } from './SessionPreviewChips';
+import { AutomationChip } from './AutomationChip';
 import { SlackThreadChip } from './SlackThreadChip';
 import { slackSourceOf } from '../../lib/slackSession';
 import { LinkPullRequestDialog } from './LinkPullRequestDialog';
+import { ParentSessions } from './ParentSessions';
 import { ThreadChip } from '../threads/ThreadChip';
 import { isThread } from '../../lib/threads';
 import { continueAsThread } from '../../lib/threadActions';
@@ -74,6 +79,7 @@ import { useSpacesStore } from '../../stores/spaces';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { moveToSpace } from '../spaces/MoveToSpace';
 import { useGitHubActions } from '../panels/github/useGitHubActions';
+import { openInSplitView } from '../../lib/splitView';
 
 const NO_CHECKS: PRChecks = { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 };
 
@@ -129,10 +135,10 @@ export async function sendCreatePullRequest(
   chat: WorkbenchChat | null
 ): Promise<void> {
   try {
-    const target = chat ?? (await createChatTab(workbench));
+    const target = chat ?? (await createSessionChat(workbench));
     if (!target) return;
     const res = await ops.send(target, { text: CREATE_PR_MESSAGE, intent: 'create_pr', planMode: false });
-    trackEvent('session_message_sent', { queued: res.queued, plan_mode: false, model_id: target.model, attachments_count: 0 });
+    trackEvent('session_message_sent', { queued: res.queued, plan_mode: false, model_id: target.model, attachments_count: 0, runtime: workbench.runtime });
     if (res.queued && workbench.status !== 'moving') {
       toast.info(
         'Queued',
@@ -167,6 +173,7 @@ export function WorkbenchHeader({
   const openPrTab = () => setSideTab('pr');
   const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
+  const splitOn = useWorkspaceStore((s) => splitViewOffered(s.features));
   // The session's newest stored event across the chats this client holds.
   const lastMessageAt = useWorkbenchStore((s) => {
     let newest: string | null = null;
@@ -187,6 +194,8 @@ export function WorkbenchHeader({
   const [restoring, setRestoring] = useState(false);
   const [restartOpen, setRestartOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [closeOpen, setCloseOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
   const rename = useRenameSession(workbench);
   const thread = isThread(workbench);
   const viewer = useSessionViewer(workbench);
@@ -324,6 +333,23 @@ export function WorkbenchHeader({
     }
   };
 
+  const canClose = owner && !archived && !thread && canCloseSessionPullRequest(workbench, pr);
+  const closePr = async () => {
+    if (!pr) return;
+    setClosing(true);
+    try {
+      const res = await api.pullRequests.close(pr.id);
+      trackEvent('pull_request_closed', { workbench_id: workbench.id, already_closed: res.alreadyClosed });
+      toast.success(res.alreadyClosed ? `#${pr.number} was already closed` : `Closed #${pr.number}`);
+      setCloseOpen(false);
+    } catch (err) {
+      captureWorkbenchFailure('close_pull_request', err, workbench.id);
+      toast.error(`Could not close #${pr.number}`, err instanceof Error ? err.message : undefined);
+    } finally {
+      setClosing(false);
+    }
+  };
+
   const archive = async (opts: ArchiveOptions) => {
     setBusy('archive');
     if (await archiveWorkbench(workbench.id, true, opts)) setConfirm(null);
@@ -374,6 +400,7 @@ export function WorkbenchHeader({
               >
                 <ExternalLink className="h-3.5 w-3.5" />
               </Button>
+              <PrCopyLinkButton number={pr.number} title={pr.summary.title} url={pr.summary.url} />
             </div>
           )}
           {archived && owner && (
@@ -486,6 +513,17 @@ export function WorkbenchHeader({
                       </DropdownMenuItem>
                     );
                   })}
+                  {canClose && (
+                    <DropdownMenuItem
+                      disabled={closing || busy !== null}
+                      onSelect={() => setCloseOpen(true)}
+                      title="Close the pull request on GitHub without merging"
+                      data-attr="workbench-close-pr"
+                    >
+                      <GitPullRequestClosed className="mr-2 h-3.5 w-3.5" />
+                      Close pull request
+                    </DropdownMenuItem>
+                  )}
                   {!thread && (
                     <>
                       <DropdownMenuSeparator />
@@ -567,6 +605,18 @@ export function WorkbenchHeader({
           )}
         </div>
         <div className="app-region-no-drag flex shrink-0 items-center gap-1">
+          {splitOn && (
+            <Button
+              variant="ghost"
+              className="h-7 w-7 p-0"
+              onClick={() => openInSplitView(workbench.id, 'session_header')}
+              title="Open in split view"
+              aria-label="Open in split view"
+              data-attr="workbench-open-split-view"
+            >
+              <Columns2 className="h-4 w-4" />
+            </Button>
+          )}
           {!thread && owner && (
             <Button
               variant="ghost"
@@ -686,9 +736,11 @@ export function WorkbenchHeader({
             {slackSourceOf(workbench) && (
               <SlackThreadChip source={slackSourceOf(workbench)!} />
             )}
+            <AutomationChip workbenchId={workbench.id} source={workbench.source} />
             {!thread && workbench.threadId && (
               <ThreadChip threadId={workbench.threadId} />
             )}
+            {!thread && <ParentSessions workbench={workbench} />}
             {!thread && <SessionPreviewChips workbench={workbench} ops={ops} />}
             {pr?.state === 'open' && (
               <PRStatusPill
@@ -738,6 +790,19 @@ export function WorkbenchHeader({
         busy={busy === 'merge'}
         onConfirm={() => void merge()}
         onCancel={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={closeOpen && pr !== null}
+        title={pr ? `Close #${pr.number}?` : 'Close the pull request?'}
+        description={
+          pr
+            ? `${pr.summary.title} closes on GitHub without merging. The branch and this session stay. You can reopen the pull request on GitHub.`
+            : undefined
+        }
+        confirmLabel="Close pull request"
+        busy={closing}
+        onConfirm={() => void closePr()}
+        onCancel={() => setCloseOpen(false)}
       />
       <ConfirmDialog
         open={restartOpen}

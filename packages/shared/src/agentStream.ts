@@ -15,6 +15,7 @@
  */
 import type { AgentEvent } from './index.js';
 import type { WorkbenchAgent, WorkbenchContextUsage, WorkbenchEffort, WorkbenchTodo } from './workbench.js';
+import { isSubagentEvent } from './transcript.js';
 
 /** An AgentEvent before the store assigns its `seq`. */
 export type AgentEventDraft = Partial<Pick<AgentEvent, 'seq'>> &
@@ -73,6 +74,14 @@ export interface ClaudeArgvOptions {
 
 /** Env a sandbox exec of Claude Code needs: the guest runs as root, and bypassPermissions refuses root without it. */
 export const CLAUDE_SANDBOX_ENV: Readonly<Record<string, string>> = { IS_SANDBOX: '1' };
+
+/**
+ * Env for a Claude turn that Talyn retries itself when the API fails. Claude
+ * Code retries a failed request 10 times by default, with growing waits, on an
+ * awake box that bills. Fewer retries end the turn sooner; Talyn then suspends
+ * the box and retries the turn later.
+ */
+export const CLAUDE_OUTAGE_RETRY_ENV: Readonly<Record<string, string>> = { CLAUDE_CODE_MAX_RETRIES: '5' };
 
 /**
  * `claude -p --output-format stream-json --verbose --include-partial-messages …`.
@@ -226,7 +235,7 @@ export interface AgentStreamParser {
   /** One line of stdout in, zero or more events out. Blank lines yield nothing. */
   push(line: string): AgentEventDraft[];
   readonly sessionId: string | null;
-  /** Set once the run's final `result` arrives. */
+  /** The latest result. A process can emit several results before it exits. */
   readonly result: AgentStreamResult | null;
   /** The agent's latest to-do list, or null if it never wrote one. */
   readonly todos: WorkbenchTodo[] | null;
@@ -309,6 +318,7 @@ export function createClaudeStreamParser(state?: AgentStreamSnapshot): AgentStre
         nonJsonLines++;
         return [];
       }
+      if (isSubagentEvent(obj)) return [obj as AgentEventDraft];
       if (typeof obj.session_id === 'string' && obj.session_id) sessionId = obj.session_id;
 
       if (obj.type === 'system' && obj.subtype === 'init' && typeof obj.model === 'string') {
@@ -317,13 +327,11 @@ export function createClaudeStreamParser(state?: AgentStreamSnapshot): AgentStre
 
       if (obj.type === 'assistant') {
         const message = (obj.message ?? {}) as { content?: unknown; usage?: unknown; model?: unknown };
-        if (!obj.parent_tool_use_id) {
-          if (typeof message.model === 'string' && !model) model = message.model;
-          if (message.usage && typeof message.usage === 'object') {
-            const u = message.usage as Record<string, unknown>;
-            usedTokens =
-              num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens);
-          }
+        if (typeof message.model === 'string' && !model) model = message.model;
+        if (message.usage && typeof message.usage === 'object') {
+          const u = message.usage as Record<string, unknown>;
+          usedTokens =
+            num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens);
         }
         if (Array.isArray(message.content)) {
           for (const block of message.content) {

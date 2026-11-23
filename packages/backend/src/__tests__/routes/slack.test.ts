@@ -26,6 +26,7 @@ import { resetFeatureFlagsForTests } from '../../services/featureFlags.js';
 import { resetWebAppUrlCacheForTests } from '../../services/webApp.js';
 import { decryptString, encryptString, type EncryptedEnvelope } from '../../services/tokenCrypto.js';
 import { hashState } from '../../services/slack/oauth.js';
+import { resetSlackChannelCacheForTests } from '../../services/slack/channels.js';
 import { resetSlackEmojiCacheForTests } from '../../services/slack/emoji.js';
 
 /**
@@ -49,6 +50,7 @@ const ENV_KEYS = [
   'SLACK_MCP_CLIENT_SECRET',
   'SLACK_OAUTH_REDIRECT_URI',
   'WEB_APP_URL',
+  'MOBILE_RETURN_SCHEMES',
 ] as const;
 
 function headersFor(userId: string, extra: Record<string, string> = {}) {
@@ -92,6 +94,7 @@ describe('Slack routes', () => {
 
     slackCalls = [];
     resetSlackEmojiCacheForTests();
+    resetSlackChannelCacheForTests();
     slackAnswers = {
       'oauth.v2.access': () =>
         Response.json({
@@ -198,6 +201,7 @@ describe('Slack routes', () => {
     ['DELETE', '/slack/links/l1'],
     ['DELETE', '/slack/installations/T1'],
     ['GET', '/slack/teams/T1/emoji'],
+    ['GET', '/slack/teams/T1/channels'],
   ])('%s %s answers 403 slack_unavailable when workbenches is off', async (method, path) => {
     process.env.WORKBENCHES_ENABLED = 'false';
     resetFeatureFlagsForTests();
@@ -303,16 +307,143 @@ describe('Slack routes', () => {
     });
   });
 
+  describe('GET /slack/teams/:teamId/channels', () => {
+    const PAGE_ONE = [
+      { id: 'C3', name: 'zeta', is_private: false, is_archived: false },
+      { id: 'C2', name: 'archived', is_private: false, is_archived: true },
+      { id: 'G1', name: 'alpha-private', is_private: true, is_archived: false },
+    ];
+    const PAGE_TWO = [{ id: 'C4', name: 'mid', is_archived: false }];
+
+    function answerPages(): void {
+      slackAnswers['users.conversations'] = () => {
+        const last = slackCalls.filter((c) => c.method === 'users.conversations').at(-1);
+        return last?.form.cursor === 'page-2'
+          ? Response.json({ ok: true, channels: PAGE_TWO, response_metadata: { next_cursor: '' } })
+          : Response.json({ ok: true, channels: PAGE_ONE, response_metadata: { next_cursor: 'page-2' } });
+      };
+    }
+
+    it('asks for the bot\'s own channels, pages through, drops archived ones, and sorts by name', async () => {
+      await seedInstall('T1', TEST_USER_ID);
+      answerPages();
+      const res = await call<{ channels: unknown[]; needsScope?: string }>('GET', '/slack/teams/T1/channels');
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({
+        channels: [
+          { id: 'G1', name: 'alpha-private', isPrivate: true },
+          { id: 'C4', name: 'mid', isPrivate: false },
+          { id: 'C3', name: 'zeta', isPrivate: false },
+        ],
+      });
+      const sent = slackCalls.filter((c) => c.method === 'users.conversations');
+      expect(sent).toHaveLength(2);
+      expect(sent[0].form).toMatchObject({
+        types: 'public_channel,private_channel',
+        exclude_archived: 'true',
+      });
+      expect(sent[0].form.cursor).toBeUndefined();
+      expect(sent[1].form.cursor).toBe('page-2');
+      expect(sent[0].auth).toBe('Bearer xoxb');
+    });
+
+    it.each([
+      ['the installer', TEST_USER_ID, false, 200],
+      ['a linked user who did not install', OTHER, true, 200],
+      ['a stranger', OTHER, false, 404],
+    ])('answers %s with %#', async (_label, installer, link, status) => {
+      await seedInstall('T1', installer);
+      if (link) {
+        await db.insert(slackUserLinks).values({ id: 'l1', teamId: 'T1', slackUserId: 'U1', userId: TEST_USER_ID });
+      }
+      answerPages();
+      const res = await call('GET', '/slack/teams/T1/channels');
+      expect(res.status).toBe(status);
+      if (status === 404) expect(slackCalls.filter((c) => c.method === 'users.conversations')).toHaveLength(0);
+    });
+
+    it('caches the list for a minute per team', async () => {
+      await seedInstall('T1', TEST_USER_ID);
+      answerPages();
+      await call('GET', '/slack/teams/T1/channels');
+      await call('GET', '/slack/teams/T1/channels');
+      expect(slackCalls.filter((c) => c.method === 'users.conversations')).toHaveLength(2);
+
+      const realNow = Date.now;
+      Date.now = () => realNow() + 60_000 + 1000;
+      try {
+        await call('GET', '/slack/teams/T1/channels');
+      } finally {
+        Date.now = realNow;
+      }
+      expect(slackCalls.filter((c) => c.method === 'users.conversations')).toHaveLength(4);
+    });
+
+    it.each([
+      ['the scope Slack names', { needed: 'groups:read' }, 'groups:read'],
+      ['both read scopes when Slack names none', {}, 'channels:read,groups:read'],
+    ])('answers needsScope with %s, and does not cache it', async (_label, extra, needsScope) => {
+      await seedInstall('T1', TEST_USER_ID);
+      slackAnswers['users.conversations'] = () => Response.json({ ok: false, error: 'missing_scope', ...extra });
+      const res = await call('GET', '/slack/teams/T1/channels');
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ channels: [], needsScope });
+      await call('GET', '/slack/teams/T1/channels');
+      expect(slackCalls.filter((c) => c.method === 'users.conversations')).toHaveLength(2);
+    });
+
+    it('stops on a cursor Slack already sent', async () => {
+      await seedInstall('T1', TEST_USER_ID);
+      slackAnswers['users.conversations'] = () =>
+        Response.json({ ok: true, channels: PAGE_TWO, response_metadata: { next_cursor: 'again' } });
+      const res = await call<{ channels: unknown[] }>('GET', '/slack/teams/T1/channels');
+      expect(res.status).toBe(200);
+      expect(slackCalls.filter((c) => c.method === 'users.conversations')).toHaveLength(2);
+    });
+
+    it.each([
+      ['an HTTP 429 with Retry-After', () => new Response('', { status: 429, headers: { 'retry-after': '30' } }), 'Try again in 30 seconds.'],
+      ['a ratelimited answer', () => Response.json({ ok: false, error: 'ratelimited' }), 'Try again in a minute.'],
+    ])('answers a readable 502 on %s with no earlier list', async (_label, answer, wait) => {
+      await seedInstall('T1', TEST_USER_ID);
+      slackAnswers['users.conversations'] = answer;
+      const res = await call<unknown>('GET', '/slack/teams/T1/channels');
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe(`Slack is rate-limiting the channel list. ${wait}`);
+    });
+
+    it('serves the last good list when Slack rate-limits a refresh', async () => {
+      await seedInstall('T1', TEST_USER_ID);
+      answerPages();
+      await call('GET', '/slack/teams/T1/channels');
+      slackAnswers['users.conversations'] = () => new Response('', { status: 429, headers: { 'retry-after': '30' } });
+      const realNow = Date.now;
+      Date.now = () => realNow() + 60_000 + 1000;
+      try {
+        const res = await call<{ channels: { id: string }[] }>('GET', '/slack/teams/T1/channels');
+        expect(res.status).toBe(200);
+        expect(res.body.data!.channels.map((c) => c.id)).toEqual(['G1', 'C4', 'C3']);
+      } finally {
+        Date.now = realNow;
+      }
+    });
+
+    it('answers 502 on another Slack error', async () => {
+      await seedInstall('T1', TEST_USER_ID);
+      slackAnswers['users.conversations'] = () => Response.json({ ok: false, error: 'internal_error' });
+      expect((await call('GET', '/slack/teams/T1/channels')).status).toBe(502);
+    });
+  });
+
   it('builds the install URL with the bot scopes and PKCE, and stores only a state hash', async () => {
     const { url, state } = await start('install');
     expect(url.origin + url.pathname).toBe('https://slack.com/oauth/v2/authorize');
     expect(url.searchParams.get('client_id')).toBe('cid');
     expect(url.searchParams.get('redirect_uri')).toBe(REDIRECT);
     expect(url.searchParams.get('scope')!.split(',')).toEqual([
-      'app_mentions:read', 'reactions:read', 'reactions:write', 'channels:history', 'groups:history',
+      'app_mentions:read', 'chat:write', 'reactions:read', 'reactions:write', 'channels:history', 'groups:history',
       'im:history', 'mpim:history', 'channels:read', 'groups:read', 'users:read', 'emoji:read',
     ]);
-    expect(url.searchParams.get('scope')).not.toContain('chat:write');
     expect(url.searchParams.get('code_challenge_method')).toBe('S256');
     expect(url.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/);
     const rows = await db.select().from(slackOauthStates);
@@ -449,13 +580,13 @@ describe('Slack routes', () => {
     expect(slackCalls).toHaveLength(0);
   });
 
-  it('the web client is sent back to its settings page', async () => {
+  it('the web client is sent back to the Slack integration page', async () => {
     process.env.WEB_APP_URL = 'https://app.talyn.dev';
     resetWebAppUrlCacheForTests();
     const { state } = await start('install', { headers: { origin: 'https://app.talyn.dev' } });
     const ok = await callback({ code: 'c', state });
     expect(ok.status).toBe(302);
-    expect(ok.location).toBe('https://app.talyn.dev/settings?slack=installed');
+    expect(ok.location).toBe('https://app.talyn.dev/integrations/slack?slack=installed');
 
     const { state: s2 } = await start('link', { headers: { origin: 'https://app.talyn.dev' } });
     slackAnswers['openid.connect.userInfo'] = () =>
@@ -463,8 +594,153 @@ describe('Slack routes', () => {
     const bad = await callback({ code: 'c', state: s2 });
     expect(bad.status).toBe(302);
     const target = new URL(bad.location!);
+    expect(target.pathname).toBe('/integrations/slack');
     expect(target.searchParams.get('slack')).toBe('error');
     expect(target.searchParams.get('message')).toContain('not installed');
+  });
+
+  // -------------------------------------------------------------------------
+  // Mobile return
+  // -------------------------------------------------------------------------
+
+  describe('mobile return', () => {
+    it.each(['install', 'link'] as const)('POST /%s stores an allowlisted returnTo on the state row', async (flow) => {
+      await start(flow, { body: { returnTo: 'talyn-mobile-preview://' } });
+      const rows = await db.select().from(slackOauthStates);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].mobileReturn).toBe('talyn-mobile-preview://');
+    });
+
+    it.each(['install', 'link'] as const)('POST /%s without a returnTo stores none', async (flow) => {
+      await start(flow);
+      expect((await db.select().from(slackOauthStates))[0].mobileReturn).toBeNull();
+    });
+
+    it.each([
+      ['install', 'TALYN-MOBILE://'],
+      ['install', 'talyn-mobile:///'],
+      ['install', 'talyn-mobile://evil'],
+      ['install', 'https://evil.com'],
+      ['install', 'javascript:'],
+      ['install', ' talyn-mobile://'],
+      ['install', ''],
+      ['install', 42],
+      ['link', 'talyn-mobile://evil'],
+      ['link', 'https://evil.com'],
+      ['link', 'javascript:'],
+    ] as const)('POST /%s refuses returnTo %j with 400 invalid_return_to and mints no state', async (flow, returnTo) => {
+      const res = await call('POST', `/slack/${flow}`, { body: { returnTo } });
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({ success: false, code: 'invalid_return_to' });
+      expect(await db.select().from(slackOauthStates)).toHaveLength(0);
+    });
+
+    it('an install ends with a 302 to the app', async () => {
+      const { state } = await start('install', { body: { returnTo: 'talyn-mobile://' } });
+      const res = await callback({ code: 'c', state });
+      expect(res.status).toBe(302);
+      expect(res.location).toBe('talyn-mobile://slack/callback?slack=installed');
+      expect(await db.select().from(slackInstallations)).toHaveLength(1);
+    });
+
+    it('a link ends with a 302 to the app', async () => {
+      await seedInstall('T1', OTHER);
+      const { state } = await start('link', { body: { returnTo: 'talyn-mobile://' } });
+      const res = await callback({ code: 'c', state });
+      expect(res.status).toBe(302);
+      expect(res.location).toBe('talyn-mobile://slack/callback?slack=linked');
+    });
+
+    it('the app return wins over the web settings page', async () => {
+      process.env.WEB_APP_URL = 'https://app.talyn.dev';
+      resetWebAppUrlCacheForTests();
+      const { state } = await start('install', {
+        body: { returnTo: 'talyn-mobile://' },
+        headers: { origin: 'https://app.talyn.dev' },
+      });
+      expect((await callback({ code: 'c', state })).location).toBe('talyn-mobile://slack/callback?slack=installed');
+    });
+
+    it.each([
+      [
+        'a cancelled sign-in',
+        async (state: string) => callback({ error: 'access_denied', state }),
+        'The Slack sign-in was cancelled.',
+      ],
+      [
+        'another Slack error',
+        async (state: string) => callback({ error: 'invalid_scope', state }),
+        'Slack returned an error: invalid_scope.',
+      ],
+      [
+        'a missing code',
+        async (state: string) => callback({ state }),
+        'Missing code or state.',
+      ],
+      [
+        'an exchange Slack refuses',
+        async (state: string) => {
+          slackAnswers['oauth.v2.access'] = () => Response.json({ ok: false, error: 'invalid_code' });
+          return callback({ code: 'c', state });
+        },
+        'Slack refused the sign-in (invalid_code). Try again.',
+      ],
+      [
+        'an org-wide install',
+        async (state: string) => {
+          slackAnswers['oauth.v2.access'] = () =>
+            Response.json({ ok: true, access_token: 'x', token_type: 'bot', bot_user_id: 'U', app_id: 'A', team: null });
+          return callback({ code: 'c', state });
+        },
+        'Org-wide (Enterprise Grid) installs are not supported. Install Talyn in one workspace.',
+      ],
+    ])('%s ends with slack=error and the message', async (_label, finish, message) => {
+      const { state } = await start('install', { body: { returnTo: 'talyn-mobile://' } });
+      const res = await finish(state);
+      expect(res.status).toBe(302);
+      const target = new URL(res.location!);
+      expect(`${target.protocol}//${target.host}${target.pathname}`).toBe('talyn-mobile://slack/callback');
+      expect(target.searchParams.get('slack')).toBe('error');
+      expect(target.searchParams.get('message')).toBe(message);
+      expect(await db.select().from(slackOauthStates)).toHaveLength(0);
+    });
+
+    it('the flag switched off after the start still ends in the app, with the refusal', async () => {
+      const { state } = await start('install', { body: { returnTo: 'talyn-mobile://' } });
+      process.env.WORKBENCHES_ENABLED = 'false';
+      resetFeatureFlagsForTests();
+      const res = await callback({ code: 'c', state });
+      expect(res.status).toBe(302);
+      expect(new URL(res.location!).searchParams.get('slack')).toBe('error');
+      expect(slackCalls).toHaveLength(0);
+    });
+
+    it('a stored return that has left the allowlist is never a redirect target', async () => {
+      const { state } = await start('install', { body: { returnTo: 'talyn-mobile-preview://' } });
+      process.env.MOBILE_RETURN_SCHEMES = 'talyn-mobile://';
+      const res = await callback({ code: 'c', state });
+      expect(res.status).toBe(200);
+      expect(res.location).toBeNull();
+      expect(res.text).toContain('Slack connected');
+    });
+
+    it('a stored return that was never valid is ignored', async () => {
+      const { state } = await start('install');
+      await db
+        .update(slackOauthStates)
+        .set({ mobileReturn: 'https://evil.com' })
+        .where(eq(slackOauthStates.stateHash, hashState(state)));
+      const res = await callback({ code: 'c', state });
+      expect(res.status).toBe(200);
+      expect(res.location).toBeNull();
+    });
+
+    it('an unknown state has no app to return to', async () => {
+      await start('install', { body: { returnTo: 'talyn-mobile://' } });
+      const res = await callback({ code: 'c', state: 'not-a-state' });
+      expect(res.status).toBe(400);
+      expect(res.location).toBeNull();
+    });
   });
 
   // -------------------------------------------------------------------------

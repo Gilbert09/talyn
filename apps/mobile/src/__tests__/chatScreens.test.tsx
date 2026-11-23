@@ -21,7 +21,8 @@ jest.mock('../auth/AuthProvider', () => ({
   useWorkspace: () => ({ selected: 'one', choices: [{ id: 'one', name: 'Test workspace' }] }),
 }));
 const mockActions = { stop: jest.fn(async (_chatId: string) => undefined), approvePlan: jest.fn(async (_chatId: string) => ({ queued: false })),
-  setPlanMode: jest.fn(async (_chatId: string, _planMode: boolean) => ({})) };
+  setPlanMode: jest.fn(async (_chatId: string, _planMode: boolean) => ({})),
+  answerQuestion: jest.fn(async (_chatId: string, _text: string) => ({ queued: false })) };
 jest.mock('../features/chat/actions', () => ({ get chatActions() { return mockActions; } }));
 beforeEach(() => { mockActive.store.dispose(); mockActive = fixture(); mockParams = { id: 'session-one' }; });
 afterEach(() => { mockActive.store.dispose(); jest.restoreAllMocks(); });
@@ -47,6 +48,28 @@ describe('markdown messages', () => {
     await render(<Markdown text="[click](javascript:alert(1))" />);
     expect(screen.queryByRole('link')).toBeNull();
     expect(screen.getByText('click')).toBeVisible();
+  });
+  const SHOT = 'https://github.com/user-attachments/assets/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0';
+  it('shows an image as a thumbnail that opens full screen, with an open in browser action', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    await render(<Markdown text={`Before\n\n<img width="1096" height="1280" alt="Login screen" src="${SHOT}" />`} />);
+    expect(screen.getByText('Before')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Close image' })).toBeNull();
+    await fireEvent.press(screen.getByRole('button', { name: 'Open image: Login screen' }));
+    expect(screen.getByRole('button', { name: 'Close image' })).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: 'Open in browser' }));
+    expect(alert).toHaveBeenCalledWith('Open external website?', SHOT, expect.any(Array));
+    await fireEvent.press(screen.getByRole('button', { name: 'Close image' }));
+    expect(screen.queryByRole('button', { name: 'Close image' })).toBeNull();
+  });
+  it('shows an image that does not load as a row that opens the image in the browser', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    await render(<Markdown text={`![Diagram](${SHOT})`} />);
+    await fireEvent(screen.getByTestId('markdown-image'), 'error');
+    expect(screen.queryByRole('button', { name: 'Open image: Diagram' })).toBeNull();
+    expect(screen.getByText('Image unavailable: Diagram')).toBeVisible();
+    await fireEvent.press(screen.getByRole('link', { name: 'Image unavailable: Diagram. Open in browser' }));
+    expect(alert).toHaveBeenCalledWith('Open external website?', SHOT, expect.any(Array));
   });
 });
 
@@ -110,6 +133,17 @@ describe('plans and stopping', () => {
     expect(await screen.findByText('Approved')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Approve and build' })).toBeNull();
   });
+  it('answers an open question with one tap and refreshes the conversation', async () => {
+    transcript([
+      ev(1, { type: 'user', talyn_user_message: true, message: { content: [{ type: 'text', text: 'Add storage' }] } }),
+      ev(2, { type: 'talyn_question', id: 'q1', questions: [{ question: 'Which database?', options: [{ label: 'Postgres' }, { label: 'SQLite' }] }] }),
+    ]);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    const calls = mockActive.api.workbenches.get.mock.calls.length;
+    await fireEvent.press(await screen.findByRole('button', { name: 'SQLite' }));
+    expect(mockActions.answerQuestion).toHaveBeenCalledWith('chat-one', 'Which database?\n→ SQLite');
+    await waitFor(() => expect(mockActive.api.workbenches.get.mock.calls.length).toBeGreaterThan(calls));
+  });
   it('replaces send with a single-tap stop while the agent works', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ status: 'running' })] }));
     await render(<WorkbenchDetailScreen kind="session" />);
@@ -123,5 +157,79 @@ describe('plans and stopping', () => {
   it('has no text buttons for paging', async () => {
     await render(<WorkbenchDetailScreen kind="session" />); await screen.findByText('Agent response 1');
     expect(screen.queryByRole('button', { name: /Load older|Load latest|Conversation details/ })).toBeNull();
+  });
+});
+
+describe('subagents in the conversation', () => {
+  it.each([false, true])('gates the live turn count, enabled=%s', async (enabled) => {
+    mockActive.api.features.get.mockResolvedValue({ workbenches: true, sessionSubagents: enabled });
+    mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ status: 'running', agent: 'claude' })] }));
+    const call = (id: string) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Agent', input: { description: id } }] } });
+    transcript([ev(1, call('old'), 1), ev(2, call('current'), 2)]);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect((await screen.findAllByText('current'))[0]).toBeVisible();
+    expect(Boolean(screen.queryByText('1 subagent running'))).toBe(enabled);
+    expect(Boolean(screen.queryByRole('tab', { name: 'Subagent current, running' }))).toBe(enabled);
+    expect(screen.queryByText('2 subagents running')).toBeNull();
+    await act(async () => mockActive.emit('workbench:event', { workspaceId: 'one', chatId: 'chat-one', events: [
+      ev(3, { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'current', content: 'done' }] } }, 2),
+    ] }));
+    expect(screen.queryByText('1 subagent running')).toBeNull();
+  });
+
+  const agent = (id: string, description: string) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Agent',
+    input: { subagent_type: 'Explore', description, prompt: `Brief for ${description}.` } }] } });
+  const step = (id: string, parent: string) => ({ type: 'assistant', parent_tool_use_id: parent,
+    message: { content: [{ type: 'tool_use', id, name: 'Grep', input: { pattern: 'entry' } }] } });
+
+  it('opens each running subagent from the chip, then goes back to the main transcript', async () => {
+    mockActive.api.features.get.mockResolvedValue({ workbenches: true, sessionSubagents: true });
+    mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ status: 'running', agent: 'claude' })] }));
+    transcript([ev(1, agent('a', 'Find the entry')), ev(2, agent('b', 'Check the tests')), ev(3, step('g', 'a'))]);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    const chip = await screen.findByRole('button', { name: "2 subagents running. Open a subagent's tab" });
+    expect(screen.getByRole('tab', { name: 'Main transcript', selected: true })).toBeVisible();
+    await fireEvent.press(chip);
+    expect(screen.getByRole('tab', { name: 'Subagent Find the entry, running', selected: true })).toBeVisible();
+    expect(screen.getByTestId('subagent-transcript')).toBeVisible();
+    expect(screen.getByText('Brief for Find the entry.')).toBeVisible();
+    expect(screen.getByText('Still working')).toBeVisible();
+    await fireEvent.press(chip);
+    expect(screen.getByRole('tab', { name: 'Subagent Check the tests, running', selected: true })).toBeVisible();
+    expect(screen.getByText('Brief for Check the tests.')).toBeVisible();
+    await fireEvent.press(screen.getByRole('tab', { name: 'Main transcript' }));
+    expect(screen.queryByTestId('subagent-transcript')).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Main transcript', selected: true })).toBeVisible();
+  });
+
+  it('opens a subagent tab from the card and shows its result when it ends', async () => {
+    mockActive.api.features.get.mockResolvedValue({ workbenches: true, sessionSubagents: true });
+    mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ status: 'running', agent: 'claude' })] }));
+    transcript([ev(1, agent('a', 'Find the entry'))]);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Open Find the entry in a tab' }));
+    expect(screen.getByTestId('subagent-transcript')).toBeVisible();
+    await act(async () => mockActive.emit('workbench:event', { workspaceId: 'one', chatId: 'chat-one', events: [
+      ev(2, { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'a', content: 'Found it in main.ts.' }] } }),
+    ] }));
+    expect(screen.getByText('Found it in main.ts.')).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Subagent Find the entry', selected: true })).toBeVisible();
+  });
+
+  it('shows no tabs and no Open button with the flag off', async () => {
+    mockActive.api.features.get.mockResolvedValue({ workbenches: true, sessionSubagents: false });
+    mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ status: 'running', agent: 'claude' })] }));
+    transcript([ev(1, agent('a', 'Find the entry'))]);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(await screen.findByText('Find the entry')).toBeVisible();
+    expect(screen.queryByRole('tab', { name: 'Main transcript' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open Find the entry in a tab' })).toBeNull();
+  });
+
+  it('shows the stopped subagents note with the flag off', async () => {
+    mockActive.api.features.get.mockResolvedValue({ workbenches: true, sessionSubagents: false });
+    transcript([ev(1, { type: 'system', subtype: 'subagents_stopped', text: 'Two subagents stopped.' })]);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(await screen.findByText('Two subagents stopped.')).toBeVisible();
   });
 });

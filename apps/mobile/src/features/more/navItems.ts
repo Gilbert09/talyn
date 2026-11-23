@@ -1,11 +1,10 @@
-import { loopsOffered, workflowsOffered, type BillingStatus, type Features } from '@talyn/shared';
+import { type BillingStatus, type Features } from '@talyn/shared';
 import type { Href } from 'expo-router';
 
 import type { Symbol } from '../../components/UI';
 import { usageViewOf } from '../usage/model';
 
-export type NavKey = 'spaces' | 'automations' | 'usage' | 'agents' | 'insights';
-export type AutomationTab = 'workflows' | 'loops';
+export type NavKey = 'spaces' | 'integrations' | 'usage' | 'agents' | 'insights';
 
 /** The feature answer (null while it loads) and the billing status (null or undefined while it loads). */
 export type NavFeatures = Partial<Features> | null | undefined;
@@ -20,14 +19,6 @@ export interface NavItem {
   visible(features: NavFeatures, billing: NavBilling): boolean;
 }
 
-/** The automation segments web offers, in its order. Mirrors web `offeredAutomationTabs`. */
-export function automationTabs(features: NavFeatures): AutomationTab[] {
-  return [
-    ...(workflowsOffered(features) ? ['workflows' as const] : []),
-    ...(loopsOffered(features) ? ['loops' as const] : []),
-  ];
-}
-
 export const NAV_ITEMS: readonly NavItem[] = [
   {
     key: 'spaces', label: 'Spaces', route: '/spaces',
@@ -35,9 +26,9 @@ export const NAV_ITEMS: readonly NavItem[] = [
     visible: (features) => features?.spaces === true,
   },
   {
-    key: 'automations', label: 'Automations', route: '/automations',
+    key: 'integrations', label: 'Integrations', route: '/integrations',
     icon: { ios: 'arrow.triangle.2.circlepath', android: 'autorenew' },
-    visible: (features) => automationTabs(features).length > 0,
+    visible: () => true,
   },
   {
     key: 'insights', label: 'Insights', route: '/insights',

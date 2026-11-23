@@ -1,35 +1,42 @@
 {
-  "status": "Engineering inventory; privacy owner must approve store answers and retention before beta.",
-  "lockfileSha256": "553c2d28ca37f829ef79a673928f44a89236ba0f7a1c13637d6b2f2b18bec969",
+  "status": "Approved by the privacy owner (Tom Owers) on 2026-11-13: the Google Play Data safety and Apple App Privacy answers match this inventory. Re-approve after any change to collected data.",
+  "lockfileSha256": "06bf196f438d2898fb67759669d1edb19f4d9ddf2c7568d67e24f000ce84b87c",
   "mobileDependencies": {
     "@expo-google-fonts/inter": "^0.4.2",
     "@expo-google-fonts/jetbrains-mono": "^0.4.1",
     "@expo-google-fonts/space-grotesk": "^0.4.1",
+    "@posthog/react-native-plugin": "2.12.6",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/netinfo": "12.0.1",
     "@supabase/supabase-js": "2.103.3",
     "@talyn/client": "*",
     "@talyn/shared": "*",
-    "expo": "~58.0.23",
+    "expo": "~58.0.25",
+    "expo-application": "~58.1.2",
     "expo-clipboard": "~58.0.4",
-    "expo-constants": "~58.0.15",
-    "expo-crypto": "~58.0.7",
-    "expo-dev-client": "~58.0.18",
+    "expo-constants": "~58.0.16",
+    "expo-crypto": "~58.0.8",
+    "expo-dev-client": "~58.0.20",
     "expo-device": "~58.0.5",
-    "expo-font": "~58.0.11",
+    "expo-file-system": "~58.0.13",
+    "expo-font": "~58.0.12",
+    "expo-image-manipulator": "~58.0.16",
     "expo-image-picker": "~58.0.10",
-    "expo-linking": "~58.0.16",
+    "expo-linking": "~58.0.17",
+    "expo-localization": "~58.0.5",
     "expo-navigation-bar": "~58.0.4",
-    "expo-notifications": "~58.1.8",
-    "expo-router": "~58.0.30",
-    "expo-secure-store": "~58.0.2",
-    "expo-splash-screen": "~58.0.13",
-    "expo-symbols": "~58.0.4",
+    "expo-notifications": "~58.1.9",
+    "expo-router": "~58.0.31",
+    "expo-secure-store": "~58.0.3",
+    "expo-share-intent": "9.0.0",
+    "expo-splash-screen": "~58.0.14",
+    "expo-symbols": "~58.0.5",
     "expo-system-ui": "~58.0.7",
-    "expo-updates": "~58.0.21",
-    "expo-web-browser": "~58.0.7",
+    "expo-updates": "~58.0.22",
+    "expo-web-browser": "~58.0.8",
     "fast-text-encoding": "1.0.6",
     "marked": "^16.4.2",
+    "posthog-react-native": "4.84.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-native": "0.88.1",
@@ -41,10 +48,8 @@
     "react-native-worklets": "0.13.0"
   },
   "prohibited": [
-    "analytics",
     "advertising",
-    "tracking",
-    "session-replay"
+    "tracking"
   ],
   "data": [
     {
@@ -103,9 +108,10 @@
         "timezone",
         "app identity",
         "app version",
-        "opaque event IDs"
+        "opaque event IDs",
+        "alert text: session names, agent summaries, questions and errors, PR references and titles"
       ],
-      "purpose": "Optional generic alerts and authorized tap resolution",
+      "purpose": "Optional alerts with desktop-style text (Tom's call, 2026-11-12) and authorized tap resolution. Expo, FCM, and APNs receive the alert text; the data payload holds only opaque IDs",
       "location": "SecureStore installation ID; encrypted backend token; Expo Push Service; APNs; FCM",
       "retention": "See docs/MOBILE_PUSH_NOTIFICATIONS.md; approve processors before activation"
     },
@@ -118,7 +124,7 @@
       ],
       "purpose": "API delivery and operational security",
       "location": "Talyn infrastructure and service providers",
-      "retention": "Infrastructure logging and provider policies require review; no app analytics added"
+      "retention": "Infrastructure logging and provider policies require review. App analytics is listed separately under PostHog."
     },
     {
       "category": "Updates",
@@ -140,9 +146,9 @@
         "images the person picks from the photo library",
         "photos the person takes with the camera"
       ],
-      "purpose": "Attach images to a chat message, only when the person chooses to",
-      "location": "System photo picker and camera (permission asked on first use); uploaded to the session sandbox through the Talyn backend",
-      "retention": "Kept with the session's sandbox files; backend and sandbox retention require approval"
+      "purpose": "Attach images to a chat message or to the first message of a new session, only when the person chooses to",
+      "location": "System photo picker and camera (permission asked on first use); uploaded to the session sandbox through the Talyn backend. For a new session, made smaller on the phone and sent inline with the first message",
+      "retention": "Kept with the session's sandbox files. A new session's queued first message holds them until its turn starts; backend and sandbox retention require approval"
     },
     {
       "category": "Clipboard",
@@ -152,6 +158,15 @@
       "purpose": "Prefill the Claude sign-in code field; the person confirms before it is sent",
       "location": "Process memory only; sent to the Talyn backend only when the person submits",
       "retention": "Not stored on the device"
+    },
+    {
+      "category": "Shared items",
+      "fields": [
+        "text or a link the person shares to Talyn from another app, with the page title when that app sends one"
+      ],
+      "purpose": "Prefill the new-session composer, only when the person picks Talyn in a share sheet. Nothing is sent until the person sends the message",
+      "location": "iOS: the app group container (UserDefaults) between the share extension and the app, cleared when the app reads the item; Android: the share intent. Then process memory; sent to the Talyn backend only as a message the person sends",
+      "retention": "Not kept on the device after the composer shows it. A sent message follows Product content"
     },
     {
       "category": "Agent credentials",
@@ -168,11 +183,13 @@
       "fields": [
         "theme",
         "onboarding progress",
-        "chosen team space"
+        "chosen team space",
+        "last repository used to start a session, by workspace or space",
+        "analytics choice"
       ],
       "purpose": "Restore the person's choices on this device",
       "location": "AsyncStorage, scoped by environment and user where it names account data",
-      "retention": "Onboarding progress and space choice clear on sign-out; theme stays until changed or the app is removed"
+      "retention": "Onboarding progress and space choice clear on sign-out; theme, the analytics choice and the last repository stay until changed or the app is removed"
     },
     {
       "category": "Billing",
@@ -185,6 +202,25 @@
       "purpose": "Show the plan and let the person upgrade or buy credits",
       "location": "Talyn backend; checkout and portal run on Polar in the browser, not in the app",
       "retention": "Polar is the merchant of record; its retention and Talyn's billing records require approval"
+    },
+    {
+      "category": "Product analytics, session replay, and diagnostics",
+      "fields": [
+        "Supabase user ID as the distinct ID, with email and GitHub username as person properties",
+        "anonymous PostHog device ID before sign-in",
+        "usage events with IDs and settings, never titles, prompts, transcripts, code, or repository names",
+        "screen names as route patterns with no IDs",
+        "touch autocapture by component name and test ID",
+        "unmasked session replay: text, inputs, images, and sandboxed views are recorded; no console logs or network requests",
+        "exceptions with stack traces, the online state, and a connectivity flag",
+        "native crash reports (iOS, Android JVM, and Android NDK) with native stack traces, sent on the next launch for an NDK crash",
+        "device and app info: platform, OS, model, locale, timezone, app version and build, OTA update ID and channel, release environment",
+        "app lifecycle events (installed, updated, opened, backgrounded)",
+        "IP address as seen by PostHog ingestion"
+      ],
+      "purpose": "First-party product analytics, session replay of the app UI, and crash and error diagnostics. Tom reversed the MVP rule of no analytics or replay on 2026-11-10",
+      "location": "PostHog (project from EXPO_PUBLIC_TALYN_POSTHOG_KEY, US ingestion by default); SDK queue and anonymous ID in the app document directory",
+      "retention": "PostHog project retention. Settings > Account > \"Share usage data and session replays\" turns it off on the device from the next event, and stops replay. No key in the build means nothing is sent. Replay is off in development builds"
     }
   ],
   "processors": [
@@ -197,16 +233,17 @@
     "Configured coding-agent and repository providers through the existing backend",
     "Polar checkout and customer portal, opened in the browser",
     "Anthropic Claude sign-in, opened in the browser",
-    "GitHub App installation, opened in the browser"
+    "GitHub App installation, opened in the browser",
+    "PostHog product analytics, session replay, and error tracking (first-party use, no cross-app tracking)"
   ],
   "applePreparation": {
     "tracking": false,
     "trackingDomains": [],
-    "collectedDataTypes": "Do not infer a no-collection answer from the app manifest. Review linked account data, content, identifiers, and processor practices.",
+    "collectedDataTypes": "Do not infer a no-collection answer from the app manifest. Declare Product Interaction, Crash Data, Other Diagnostic Data, and the User ID (linked to the person, not used for tracking) for PostHog, plus linked account data and content. Review processor practices.",
     "requiredReasonApis": "Inspect merged archive manifests from React Native, Expo, AsyncStorage, SecureStore, and updates. Approve reasons from actual use. Do not copy generic reason codes."
   },
   "googlePreparation": {
-    "collection": "Review account data, messages, app activity, identifiers, and diagnostics against current Console definitions.",
+    "collection": "Review account data, messages, app activity (PostHog usage events and session replay), identifiers (user ID), and diagnostics (crash logs) against current Console definitions.",
     "sharing": "Assess processors and service-provider exceptions with the privacy owner.",
     "security": "Verify HTTPS transport and deletion completion. Do not attest to full deletion or encryption scope without evidence.",
     "deletion": "In-app deletion exists. Publish an unauthenticated deletion page with paying-admin restrictions and partial-cleanup support."

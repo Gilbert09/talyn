@@ -1,19 +1,22 @@
-import { and, eq, isNotNull, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, or, sql } from 'drizzle-orm';
 import type {
   ContinueWorkbenchAsThreadInput,
   ThreadSessionAction,
   ThreadSessionEvent,
   Workbench,
   WorkbenchAgent,
+  WorkbenchQuestionEvent,
 } from '@talyn/shared';
+import { parseQuestionEvent, QUESTION_EVENT_TYPE, questionSummary, questionText } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import { pullRequests as prTable, workbenches } from '../../db/schema.js';
+import { workspaceHasFeature } from '../featureFlags.js';
 import { createWorkbench } from './create.js';
 import { emitWorkbenchEvents } from './emit.js';
 import { WorkbenchError } from './errors.js';
-import { eligiblePr, linkedBeforeMerge } from './prEligibility.js';
+import { linkedBeforeMerge, ownsLinkedPr } from './prEligibility.js';
 import type { ReadinessUser } from './readiness.js';
-import { appendEvents, getWorkbench, isThread, listChats, threadAutoWakeState, threadSessions, type ChatRow, type WorkbenchRow } from './store.js';
+import { appendEvents, childSessions, getWorkbench, isThread, latestTurnEvent, listChats, threadAutoWakeState, threadSessions, type ChatRow, type WorkbenchRow } from './store.js';
 import { sendMessage } from './turns.js';
 
 /**
@@ -48,8 +51,8 @@ async function prUrlOf(pullRequestId: string | null): Promise<string | undefined
   return pr ? `https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}` : undefined;
 }
 
-async function childFingerprint(threadId: string): Promise<string> {
-  const children = await threadSessions(threadId);
+async function childFingerprint(threadId: string, thread = true): Promise<string> {
+  const children = await (thread ? threadSessions(threadId) : childSessions(threadId));
   const state = await Promise.all(children.map(async (child) => {
     // Read stored state only: an exec would wake every sleeping child box.
     const [pr] = child.pullRequestId ? await getPoolDbClient()
@@ -70,8 +73,32 @@ async function childFingerprint(threadId: string): Promise<string> {
   return JSON.stringify(state.sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
 }
 
+/** The question the session's chat asked in its latest turn: the named chat, else its newest one waiting for an answer. */
+async function pendingQuestion(sessionId: string, chatId?: string): Promise<WorkbenchQuestionEvent | null> {
+  const chats = (await listChats(sessionId)).filter((c) => !c.closedAt);
+  const chat = chatId
+    ? chats.find((c) => c.id === chatId)
+    : [...chats].filter((c) => c.status === 'awaiting_input').sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
+  if (!chat) return null;
+  const event = await latestTurnEvent(chat.id, chat.turnCount, QUESTION_EVENT_TYPE);
+  return event ? parseQuestionEvent(event) : null;
+}
+
 /** The message that wakes the thread. The agent cannot see transcript cards, so the facts go in the text. */
-export function threadWakeText(event: ThreadSessionEvent): string {
+export function threadWakeText(event: ThreadSessionEvent, question?: WorkbenchQuestionEvent | null): string {
+  if (event.action === 'needs_input' && question) {
+    const who = `"${event.name}" (session id ${event.sessionId}) on ${event.repo}`;
+    return [
+      `[Talyn] Session ${who} asks:`,
+      '',
+      questionText(question),
+      '',
+      'The person sees these questions in the session too. If the plan, the brief or the person\'s earlier messages give the answer, ' +
+        'send it with `talyn_send_session_message`: repeat each question with its answer. ' +
+        'If they do not, ask the person with `talyn_ask_user`, then send their answer to the session. ' +
+        'Other sessions of this thread may have changed too: see them all with `talyn_list_thread_sessions`.',
+    ].join('\n');
+  }
   const who = `"${event.name}" (session id ${event.sessionId}) on ${event.repo}`;
   const what =
     event.action === 'pr_opened'
@@ -91,36 +118,67 @@ export function threadWakeText(event: ThreadSessionEvent): string {
 }
 
 /**
- * Tell a session's thread that the session changed. Best effort: a failure is
+ * Tell a session's thread and parent that the session changed. Best effort: a failure is
  * logged and never fails the caller's turn or link. `wake: false` writes only
  * the card, for a change that a later wake reports anyway.
  */
 export async function notifyThread(
   child: WorkbenchRow,
   action: ThreadSessionAction,
-  opts: { wake?: boolean; status?: string } = {},
+  opts: { wake?: boolean; status?: string; chatId?: string; turn?: number } = {},
+): Promise<void> {
+  if (isThread(child)) return;
+  const parents = new Set([child.threadId, child.parentWorkbenchId]);
+  for (const parentId of parents) {
+    if (parentId && parentId !== child.id) await notifySessionParent(child, parentId, action, opts);
+  }
+}
+
+async function notifySessionParent(
+  child: WorkbenchRow,
+  parentId: string,
+  action: ThreadSessionAction,
+  opts: { wake?: boolean; status?: string; chatId?: string; turn?: number },
 ): Promise<void> {
   try {
-    if (!child.threadId || isThread(child)) return;
-    const thread = await getWorkbench(child.threadId);
-    if (!thread || !isThread(thread) || thread.archivedAt) return;
+    const thread = await getWorkbench(parentId);
+    if (!thread || thread.archivedAt) return;
+    const normalParent = !isThread(thread);
+    if (normalParent && !(await workspaceHasFeature('sessionSubagents', thread.workspaceId)).enabled) return;
     const chat = activeChat(await listChats(thread.id));
     if (!chat) return;
     const prUrl = await prUrlOf(child.pullRequestId);
+    const childChats = await listChats(child.id);
+    const question = action === 'needs_input' ? await pendingQuestion(child.id, opts.chatId) : null;
     const event: ThreadSessionEvent = {
       action,
       sessionId: child.id,
       name: child.title || child.name,
       repo: child.repoFullName,
-      status: opts.status ?? activeChat(await listChats(child.id))?.status ?? 'idle',
+      status: opts.status ?? activeChat(childChats)?.status ?? 'idle',
       ...(prUrl ? { prUrl } : {}),
+      ...(question ? { question: questionSummary(question).slice(0, 300) } : {}),
     };
-    const candidate = opts.wake !== false && WAKES.has(action);
+    const candidate = opts.wake !== false && WAKES.has(action) &&
+      (!normalParent || (child.notifyParent && (action === 'session_finished' || action === 'needs_input')));
     const coalesced = chat.queuedMessages.some((m) => m.origin === 'talyn');
     const wakeState = candidate && !coalesced ? await threadAutoWakeState(thread.id) : null;
-    const fingerprint = wakeState ? await childFingerprint(thread.id) : null;
+    const fingerprint = wakeState ? await childFingerprint(thread.id, !normalParent) : null;
     const noProgress = wakeState?.fingerprint === fingerprint && !wakeState?.userSinceWake;
-    const willWake = candidate && !coalesced && !noProgress;
+    let willWake = candidate && !coalesced && !noProgress;
+    if (willWake && normalParent) {
+      const childChat = childChats.find((c) => c.id === opts.chatId) ?? activeChat(childChats);
+      if (!childChat) return;
+      const key = childChat.id;
+      const turn = opts.turn ?? childChat.turnCount;
+      const [claimed] = await getPoolDbClient().update(workbenches).set({
+        settings: sql`jsonb_set(COALESCE(${workbenches.settings}, '{}'::jsonb), '{parentWakeTurns}',
+          COALESCE(${workbenches.settings} -> 'parentWakeTurns', '{}'::jsonb) || jsonb_build_object(${key}::text, ${turn}::int))`,
+      }).where(and(eq(workbenches.id, child.id),
+        sql`COALESCE((${workbenches.settings} -> 'parentWakeTurns' ->> ${key})::int, -1) < ${turn}`,
+      )).returning({ id: workbenches.id });
+      willWake = Boolean(claimed);
+    }
     const stored = await appendEvents(chat.id, [{
       turn: chat.turnCount,
       event: { type: 'talyn_thread', ...event, ...(willWake ? { wakeFingerprint: fingerprint } : {}) },
@@ -135,7 +193,7 @@ export async function notifyThread(
     }
     // One waiting wake is enough: the agent lists every session when it runs.
     if (!willWake) return;
-    await sendMessage(chat.id, { text: threadWakeText(event) }, { origin: 'talyn' });
+    await sendMessage(chat.id, { text: threadWakeText(event, question).replace('Other sessions of this thread', normalParent ? 'Other child sessions' : 'Other sessions of this thread') }, { origin: 'talyn' });
   } catch (err) {
     console.warn(`[thread] telling the thread of session ${child.id} about ${action} failed:`, err);
   }
@@ -143,7 +201,7 @@ export async function notifyThread(
 
 /** A pull request linked outside the end of a turn. Wakes the thread only when no turn of the session runs. */
 export async function notifyThreadOfLinkedPr(child: WorkbenchRow): Promise<void> {
-  if (!child.threadId) return;
+  if (!child.threadId && !child.parentWorkbenchId) return;
   // A running turn ends in `session_finished`, which wakes the thread and names the pull request.
   const running = (await listChats(child.id).catch(() => [])).some((c) => c.status === 'running');
   await notifyThread(child, 'pr_opened', { wake: !running });
@@ -161,8 +219,8 @@ export async function notifyThreadsOfMergedPr(pullRequestId: string): Promise<vo
     const children = await db.select({ id: workbenches.id }).from(workbenches)
       .innerJoin(prTable, eq(prTable.id, workbenches.pullRequestId))
       .where(and(
-        eq(workbenches.pullRequestId, pullRequestId), isNotNull(workbenches.threadId),
-        eq(prTable.state, 'merged'), eligiblePr(), linkedBeforeMerge(),
+        eq(workbenches.pullRequestId, pullRequestId), or(isNotNull(workbenches.threadId), isNotNull(workbenches.parentWorkbenchId)),
+        eq(prTable.state, 'merged'), ownsLinkedPr(), linkedBeforeMerge(),
         sql`NOT (COALESCE(${workbenches.settings} -> 'threadToldOfMerge', '[]'::jsonb) ? ${pullRequestId})`,
       ));
     for (const { id } of children) {
@@ -203,6 +261,7 @@ export async function announceSessionSpawn(parentId: string, childId: string): P
       await notifyThread(child, 'session_started');
       return;
     }
+    if (!(await workspaceHasFeature('sessionSubagents', parent.workspaceId)).enabled) return;
     const chat = activeChat(await listChats(parent.id));
     if (!chat) return;
     const event: ThreadSessionEvent = {

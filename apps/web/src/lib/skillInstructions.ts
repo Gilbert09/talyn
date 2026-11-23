@@ -1,4 +1,4 @@
-import type { AgentEvent } from '@talyn/shared';
+import { isSubagentEvent, type AgentEvent } from '@talyn/shared';
 
 /**
  * A `user` message that the agent's harness wrote, not the person.
@@ -40,6 +40,7 @@ export function skillInstructionsByToolId(events: AgentEvent[]): Map<string, str
   const skillCalls = new Set<string>();
   const waiting: string[] = [];
   for (const event of events) {
+    if (isSubagentEvent(event)) continue;
     const content = event.message?.content;
     if (event.type === 'assistant' && Array.isArray(content)) {
       for (const b of content as Array<{ type?: unknown; name?: unknown; id?: unknown }>) {

@@ -46,10 +46,18 @@ A repository marked **App not installed** belongs to an account that does not ha
 
 Talyn runs the agent on your own subscription. Pick one:
 
-- **Claude** uses your Claude Pro or Max subscription.
+- **Claude** uses your Claude Pro or Max subscription, or an Anthropic API key.
 - **Codex** uses your ChatGPT subscription.
 
 Follow the sign-in steps on the card. [Connect an agent](/docs/connect-agents) has the details for each one. You can connect both, and add the second one later.
+
+You must connect Claude or Codex to start sessions in a sandbox. **Next** stays off until you do, and a line under it says what is missing. If OpenAI does not offer ChatGPT sign-in in your region, connect Claude instead.
+
+### Use the CLI on your computer
+
+This option is rolling out to some accounts. In the desktop app, select **Claude Code or Codex on this computer**. Talyn then uses the `claude` or `codex` CLI that you installed on your computer, so you do not sign in here. Talyn shows the CLIs that it found. It uses your default agent if you installed it. If not, it uses the other CLI. In step 6, select **Choose folder…** and pick your checkout of the repository, if Talyn does not know it yet. The session runs in a git worktree on your computer and uses no box-hours. [Local sessions](/docs/sessions#local-sessions) has the details. The web app cannot run sessions on your computer, so it shows a link to the desktop app.
+
+If you do not have a subscription now, select **Skip for now**. Talyn skips the first session and opens the home page. Talyn shows your pull requests, but you cannot start a session until you connect an agent. A banner at the top of the app stays until you connect one. Select **Connect an agent** in the banner to connect one.
 
 ## 6. Start your first session
 
@@ -57,7 +65,7 @@ Follow the sign-in steps on the card. [Connect an agent](/docs/connect-agents) h
 2. Under **What do you want your agent to do?**, describe a small task. For example: "Add a test for the date parser".
 3. Select **Start session**.
 
-The first start can take a little longer while Talyn prepares the sandbox image for the repository. After that, Talyn opens the session. You see the agent's work in the chat and its changes in the **Changes** tab.
+For a sandbox session, the first start can take a little longer while Talyn prepares the sandbox image for the repository. After that, Talyn opens the session. You see the agent's work in the chat and its changes in the **Changes** tab.
 
 When the change looks right, select **Create PR** in the session header. The agent writes the title and description, and Talyn commits, pushes and opens the pull request.
 

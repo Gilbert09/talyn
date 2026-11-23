@@ -120,10 +120,10 @@ describe('workbench resume: credentials in the request', () => {
   const client = () => new FleetClient('https://fleet.test', 'tok');
 
   it.each([
-    ['resolved', async () => creds, { idleTtlSec: 600, credentials: creds }],
-    ['none for this box', async () => null, { idleTtlSec: 600 }],
-    ['a failed lookup', async () => Promise.reject(new Error('custody down')), { idleTtlSec: 600 }],
-    ['a lookup slower than the fleet fetch it replaces', () => new Promise<null>(() => undefined), { idleTtlSec: 600 }],
+    ['resolved', async () => creds, { idleTtlSec: 180, credentials: creds }],
+    ['none for this box', async () => null, { idleTtlSec: 180 }],
+    ['a failed lookup', async () => Promise.reject(new Error('custody down')), { idleTtlSec: 180 }],
+    ['a lookup slower than the fleet fetch it replaces', () => new Promise<null>(() => undefined), { idleTtlSec: 180 }],
   ] as const)('%s', async (_name, source, body) => {
     await resumeOnce(client(), 'sb', 'host', source as () => Promise<typeof creds | null>);
     expect(resumeBodies).toEqual([body]);
@@ -132,7 +132,7 @@ describe('workbench resume: credentials in the request', () => {
   it('looks up the owning session by default and goes without when it cannot', async () => {
     // No database in this suite: the lookup fails, and the resume still goes.
     await resumeOnce(client(), 'sb', 'storage');
-    expect(resumeBodies).toEqual([{ idleTtlSec: 600 }]);
+    expect(resumeBodies).toEqual([{ idleTtlSec: 180 }]);
   });
 
   it('asks for the credentials once for a burst of callers', async () => {

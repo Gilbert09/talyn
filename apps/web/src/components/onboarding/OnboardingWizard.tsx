@@ -1,16 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react';
+import type { WorkbenchAgent } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useGithubConnection } from '../../hooks/useGithubConnection';
 import { trackEvent } from '../../lib/analytics';
+import { api } from '../../lib/api';
 import { FirstSessionStep } from './steps/FirstSessionStep';
 import { ConnectAgentStep } from './steps/ConnectAgentStep';
 import { ConnectGitHubStep } from './steps/ConnectGitHubStep';
 import { WatchReposStep } from './steps/WatchReposStep';
 import { SourceSurvey, type SignupSource } from './SourceSurvey';
 import { useNavigationStore } from '../../stores/navigation';
+import { sessionAgentConnected } from '../../lib/agentConnection';
+import { usePostHogCodeOffered } from '../widgets/PostHogCodeRetirement';
+
+const GITHUB_POLL_MS = 4000;
 
 const STEPS = [
   { key: 'github', title: 'Connect GitHub' },
@@ -23,18 +29,31 @@ const STEPS = [
 export function OnboardingWizard() {
   const { currentWorkspaceId, repositories, cloudProviders, posthogStatus, setOnboardingComplete, setJustOnboarded } =
     useWorkspaceStore();
-  const { status, user } = useGithubConnection(currentWorkspaceId);
+  // The browser round trip can finish without a focus event reaching the app,
+  // so the GitHub step also re-checks every few seconds until it connects.
+  const { status, user } = useGithubConnection(currentWorkspaceId, { pollMs: GITHUB_POLL_MS });
   const navigate = useNavigationStore((s) => s.navigate);
+  const posthogOffered = usePostHogCodeOffered();
   const [step, setStep] = useState(0);
   const [creatingSession, setCreatingSession] = useState(false);
   const viewedStep = useRef<string | null>(null);
   const reportedAgents = useRef(new Set<string>());
   const [signupSource, setSignupSource] = useState<SignupSource | null>(null);
   const latestSignupSource = useRef<SignupSource | null>(null);
+  const setFeatures = useWorkspaceStore((s) => s.setFeatures);
 
   useEffect(() => {
     setOnboardingComplete(false);
   }, [setOnboardingComplete]);
+
+  // `useSystemStatus` loads features only after onboarding, so the wizard asks once itself.
+  useEffect(() => {
+    if (useWorkspaceStore.getState().features) return;
+    Promise.resolve()
+      .then(() => api.features.get())
+      .then(setFeatures)
+      .catch(() => {});
+  }, [setFeatures]);
 
   useEffect(() => {
     const key = STEPS[step].key;
@@ -55,8 +74,7 @@ export function OnboardingWizard() {
   const codexConnected = fleet?.connectedAgents?.includes('codex') ?? false;
   const posthogConnected = posthogStatus?.connected === true;
   const agentConnected = claudeConnected || codexConnected || posthogConnected;
-  // A session runs on the fleet, so where the fleet is offered only a fleet agent can start one.
-  const sessionAgentConnected = fleet ? claudeConnected || codexConnected : posthogConnected;
+  const canStartSessions = sessionAgentConnected(cloudProviders, posthogConnected);
 
   useEffect(() => {
     if (step !== 2) return;
@@ -68,14 +86,27 @@ export function OnboardingWizard() {
     }
   }, [step, claudeConnected, codexConnected, posthogConnected]);
 
-  const canAdvance = step === 0 ? githubConnected : step === 1 ? repositories.length > 0 : sessionAgentConnected;
+  const canAdvance = step === 0 ? githubConnected : step === 1 ? repositories.length > 0 : canStartSessions;
   const isLast = step === STEPS.length - 1;
+  const blockedHint = canAdvance
+    ? null
+    : step === 0
+      ? 'Connect GitHub and install the Talyn GitHub App on at least one account to continue.'
+      : step === 1
+        ? 'Choose at least one repository to continue.'
+        : step === 2
+          ? cloudProviders && !fleet && posthogOffered
+            ? 'Connect PostHog Code to start sessions, or skip for now.'
+            : 'Connect Claude or ChatGPT to start sessions, or skip for now.'
+          : null;
 
-  function finishOnboarding() {
+  function finishOnboarding({ agentSkipped = false }: { agentSkipped?: boolean } = {}) {
     trackEvent('onboarding_completed', {
       github_connected: githubConnected,
       repos_watched: repositories.length,
       agent_connected: agentConnected,
+      agent_skipped: agentSkipped,
+      agent_mode: !agentSkipped && agentConnected ? 'cloud' : 'none',
       // The answer can change while the session request is pending.
       signup_source: latestSignupSource.current,
     });
@@ -89,8 +120,8 @@ export function OnboardingWizard() {
     setStep((s) => s + 1);
   }
 
-  function handleSessionCreated() {
-    trackEvent('first_session_created', { from: 'onboarding' });
+  function handleSessionCreated(created: { runtime: 'sandbox'; agent: WorkbenchAgent }) {
+    trackEvent('first_session_created', { from: 'onboarding', runtime: created.runtime, agent: created.agent });
     trackEvent('onboarding_step_completed', { step: 'first_session' });
     finishOnboarding();
   }
@@ -99,6 +130,13 @@ export function OnboardingWizard() {
     trackEvent('onboarding_first_session_skipped');
     navigate({ view: 'home' }, { replace: true });
     finishOnboarding();
+  }
+
+  // The first-session step needs an agent, so a skip here ends onboarding.
+  function handleSkipAgent() {
+    trackEvent('onboarding_agent_skipped');
+    navigate({ view: 'home' }, { replace: true });
+    finishOnboarding({ agentSkipped: true });
   }
 
   return (
@@ -161,6 +199,23 @@ export function OnboardingWizard() {
             </div>
           )}
         </div>
+
+        {blockedHint && (
+          <p className="text-center text-[13px] text-muted-foreground" role="status">
+            {blockedHint}
+          </p>
+        )}
+        {step === 2 && !canAdvance && (
+          <div className="-mt-4 text-center">
+            <button
+              type="button"
+              onClick={handleSkipAgent}
+              className="text-[13px] font-medium text-foreground underline-offset-4 hover:underline"
+            >
+              Skip for now
+            </button>
+          </div>
+        )}
 
         {/* Footer nav */}
         <div className="flex items-center justify-between pt-2">

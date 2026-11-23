@@ -1,40 +1,37 @@
-import type { Workbench } from '@talyn/shared';
+import type { Workbench, WorkbenchTranscriptMatch } from '@talyn/shared';
 import { useGlobalSearchParams, usePathname, useRouter, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Animated, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import Reanimated, { Easing, FadeIn, FadeInRight, FadeOut, FadeOutRight, LayoutAnimationConfig, withTiming, type EntryAnimationsValues, type ExitAnimationsValues }
+  from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SessionStateIcon } from '../../components/Status';
-import { AppText, IconButton, Spinner, type Symbol } from '../../components/UI';
+import { AppText, IconButton, Row, Spinner } from '../../components/UI';
 import { workbenchState } from '../../lib/status';
 import { useNow } from '../../lib/time';
-import { HOME, newWorkRoute, threadRoute } from '../../navigation/routes';
+import { HOME, newWorkRoute, sessionRoute, threadRoute } from '../../navigation/routes';
 import { radius, sans, type, useTheme } from '../../theme/tokens';
-import { workbenchTitle } from '../../workflow/model';
-import { useNavItems } from '../more/MoreScreen';
-import { usePrCounts } from '../prs/counts';
-import { pullsRoute, type PullsTab } from '../prs/lists';
+import { workbenchKind, workbenchTitle } from '../../workflow/model';
 import { useSessionMenu } from '../sessions/SessionMenu';
 import { WorkbenchRow } from '../sessions/WorkbenchRow';
 import { useActiveContext } from '../spaces/context';
 import { ContextSwitcher } from './ContextSwitcher';
+import { DrawerBar, DrawerMenuButton, NEW_SESSION_CLEARANCE, NewSessionButton } from './DrawerBar';
 import { GroupHeader, Heading } from './DrawerParts';
+import { SessionStarters } from './SessionStarters';
 import { SpaceDrawerList } from './SpaceDrawer';
-import { useDrawerWork } from './data';
-import { activeTarget, badgeText, drawerEntries, toggled, type DrawerEntry, type DrawerTarget } from './model';
+import { useDrawerWork, usePlanState, useTranscriptMatches } from './data';
+import { activeTarget, drawerEntries, toggled, withTranscriptMatches, type DrawerEntry } from './model';
+import { usePullToSearch } from './pullToSearch';
 
 const LIST_LINKS = new Set(['/sessions', '/threads']);
 
-const PR_LINKS: ReadonlyArray<{ tab: PullsTab; label: string; icon: Symbol }> = [
-  { tab: 'mine', label: 'Pull requests', icon: { ios: 'arrow.triangle.pull', android: 'fork_right' } },
-  { tab: 'reviews', label: 'Review requests', icon: { ios: 'eye', android: 'visibility' } },
-  { tab: 'queue', label: 'Merge queue', icon: { ios: 'arrow.triangle.merge', android: 'merge' } },
-];
-
 /**
- * The navigation drawer, like web's sidebar: workspace, New session, search,
- * the session lists, then the app pages and Settings.
+ * The navigation drawer: the workspace with search and a menu with the other
+ * pages and Settings, the session lists with a floating New session button,
+ * then a bar with the pull request lists. A pull down at the top of the list opens search.
  */
 export function NavDrawer({ close }: { close(): void }) {
   const c = useTheme();
@@ -43,15 +40,19 @@ export function NavDrawer({ close }: { close(): void }) {
   const pathname = usePathname();
   const { tab } = useGlobalSearchParams<{ tab?: string }>();
   const active = activeTarget(pathname, tab);
-  const { features, offered, sessions, threads, personal } = useDrawerWork();
+  const { features, offered, sessions, threads, personal, reasons } = useDrawerWork();
   const [query, setQuery] = useState('');
+  const [searching, setSearching] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(() => new Set());
   const [collapsedThreads, setCollapsedThreads] = useState<ReadonlySet<string>>(() => new Set());
-  const entries = useMemo(() => offered ? drawerEntries({ sessions: personal.sessions, threads: personal.threads, query, collapsedGroups, collapsedThreads }) : [],
-    [offered, personal, query, collapsedGroups, collapsedThreads]);
+  const place = useActiveContext();
+  const space = place.active?.space ?? null;
+  const { matches, loading } = useTranscriptMatches(query, offered && !space);
+  const entries = useMemo(() => offered
+    ? withTranscriptMatches(drawerEntries({ sessions: personal.sessions, threads: personal.threads, query, collapsedGroups, collapsedThreads, reasons }), matches, loading)
+    : [], [offered, personal, reasons, query, collapsedGroups, collapsedThreads, matches, loading]);
   const now = useNow();
   const menu = useSessionMenu();
-  const place = useActiveContext();
   const owned = useMemo(() => new Map([...(sessions.data ?? []), ...(threads.data ?? [])].map((item) => [item.id, item])),
     [sessions.data, threads.data]);
 
@@ -61,6 +62,9 @@ export function NavDrawer({ close }: { close(): void }) {
 
   const go = (href: Href) => router.push(href);
   const goHome = () => { if (pathname === HOME) close(); else router.navigate(HOME); };
+  const openSearch = () => setSearching(true);
+  const closeSearch = () => { setQuery(''); setSearching(false); Keyboard.dismiss(); };
+  const pull = usePullToSearch(openSearch);
 
   const render = ({ item }: { item: DrawerEntry }) => {
     switch (item.type) {
@@ -74,84 +78,111 @@ export function NavDrawer({ close }: { close(): void }) {
       case 'row': return <View style={item.indent ? styles.indent : undefined}>
         <WorkbenchRow item={item.item} now={now} divider={false} onLongPress={menu.open} />
       </View>;
+      case 'transcript': return <TranscriptMatchRow match={item.match} />;
       case 'notice': return <AppText variant="meta" tone="muted" style={styles.notice}>{item.text}</AppText>;
+      case 'starters': return <SessionStarters />;
       case 'loading': return <View accessibilityState={{ busy: true }} style={styles.loading}><Spinner /></View>;
     }
   };
 
-  const pages = <AppPages active={active} go={go} history={offered} />;
-  // The pull request lists stay pinned. The other pages scroll after the lists, so a phone keeps room for sessions.
-  // With no list to scroll (still loading, or no sessions on the account) every page stays pinned.
-  const space = place.active?.space ?? null;
-  const pinnedAll = features === null || place.context.kind === 'pending' || (!offered && !space);
-  const footer = pinnedAll ? undefined : <View style={styles.footerPages}><AppPages active={active} go={go} history={offered} withPullRequests={false} /></View>;
   return <View style={[styles.drawer, { backgroundColor: c.paper, paddingTop: insets.top + 8, paddingBottom: Math.max(insets.bottom, 8) }]}>
     <View style={styles.top}>
-      <ContextSwitcher state={place} />
-      {offered ? <NavRow label="New session" icon={{ ios: 'square.and.pencil', android: 'edit_square' }} active={active === 'home'} onPress={goHome} /> : null}
-      {offered ? <SearchField value={query} onChange={setQuery} /> : null}
+      <LayoutAnimationConfig skipEntering>
+        {offered && searching ? <SearchField key="search" value={query} onChange={setQuery} onCancel={closeSearch} />
+          : <Reanimated.View key="header" entering={HEADER_IN} exiting={HEADER_OUT} style={styles.header}>
+            <View style={styles.switcher}><ContextSwitcher state={place} /></View>
+            {offered ? <IconButton label="Search" symbol={{ ios: 'magnifyingglass', android: 'search' }} onPress={openSearch} /> : null}
+            <DrawerMenuButton active={active} go={go} history={offered} />
+          </Reanimated.View>}
+      </LayoutAnimationConfig>
     </View>
-    {features === null || place.context.kind === 'pending' ? <View style={[styles.loading, { flex: 1 }]}><Spinner /></View>
-      : space ? <SpaceDrawerList key={space.id} space={space} owned={owned} query={query} onLongPress={menu.open} footer={footer}
-        onNewThread={offered ? () => go(newWorkRoute('thread')) : undefined} />
-      : !offered ? <View style={{ flex: 1 }} /> : <FlatList data={entries} keyExtractor={(entry) => entry.key} renderItem={render} style={{ flex: 1 }}
-        accessibilityLabel="Sessions and threads" contentContainerStyle={styles.list}
-        keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
-        initialNumToRender={20} maxToRenderPerBatch={16} windowSize={9}
-        ListFooterComponent={footer} />}
-    <View style={[styles.pinned, { borderTopColor: c.border }]}>{pinnedAll ? pages : <PullRequestLinks active={active} go={go} />}</View>
-    <View style={[styles.settings, { borderTopColor: c.border }]}>
-      <NavRow label="Settings" icon={{ ios: 'gearshape', android: 'settings' }} active={active === 'settings'} onPress={() => go('/settings')} />
+    <View style={{ flex: 1 }}>
+      {features === null || place.context.kind === 'pending' ? <View style={[styles.loading, { flex: 1 }]}><Spinner /></View>
+        : space ? <SpaceDrawerList key={space.id} space={space} owned={owned} query={query} pull={pull} onLongPress={menu.open}
+          onNewThread={offered ? () => go(newWorkRoute('thread')) : undefined} />
+        : !offered ? <View style={{ flex: 1 }} /> : <View style={{ flex: 1 }}>
+          {pull.hint}
+          <Animated.FlatList data={entries} keyExtractor={(entry) => entry.key} renderItem={render} style={{ flex: 1 }}
+            accessibilityLabel="Sessions and threads" contentContainerStyle={styles.list}
+            keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
+            initialNumToRender={20} maxToRenderPerBatch={16} windowSize={9} {...pull.listProps} />
+        </View>}
+      {offered ? <NewSessionButton selected={active === 'home'} onPress={goHome} /> : null}
     </View>
+    <DrawerBar active={active} go={go} />
     {menu.elements}
   </View>;
 }
 
-/** The app pages under the lists: the pull request lists with counts, then the pages the account may see. */
-function AppPages({ active, go, history, withPullRequests = true }: { active: DrawerTarget; go(href: Href): void; history: boolean; withPullRequests?: boolean }) {
-  const items = useNavItems();
-  return <View style={styles.pages}>
-    {withPullRequests ? <PullRequestLinks active={active} go={go} /> : null}
-    {items.map((item) => <NavRow key={item.key} label={item.label} icon={item.icon} active={active === item.key} onPress={() => go(item.route)} />)}
-    {history ? <NavRow label="History" icon={{ ios: 'clock.arrow.circlepath', android: 'history' }} active={active === 'history'} onPress={() => go('/history')} /> : null}
+const SEARCH_MS = 240;
+const SEARCH_EASING = Easing.bezier(0.2, 0.9, 0.3, 1);
+/** The width of the search button. The field grows out of it and shrinks back into it. */
+const SEARCH_BUTTON = 40;
+const HEADER_IN = FadeIn.duration(180).delay(80);
+const HEADER_OUT = FadeOut.duration(120);
+const CANCEL_IN = FadeInRight.duration(SEARCH_MS).easing(SEARCH_EASING);
+const CANCEL_OUT = FadeOutRight.duration(160);
+
+/** The field opens from the right, where the search button was, to its full width. */
+const searchGrow = (values: EntryAnimationsValues) => {
+  'worklet';
+  const timing = { duration: SEARCH_MS, easing: SEARCH_EASING };
+  return {
+    initialValues: { originX: values.targetOriginX + values.targetWidth - SEARCH_BUTTON, width: SEARCH_BUTTON, opacity: 0 },
+    animations: { originX: withTiming(values.targetOriginX, timing), width: withTiming(values.targetWidth, timing), opacity: withTiming(1, timing) },
+  };
+};
+
+/** On close, the field shrinks back to the right and fades out. */
+const searchShrink = (values: ExitAnimationsValues) => {
+  'worklet';
+  const timing = { duration: 160, easing: Easing.in(Easing.quad) };
+  return {
+    initialValues: { originX: values.currentOriginX, width: values.currentWidth, opacity: 1 },
+    animations: { originX: withTiming(values.currentOriginX + values.currentWidth - SEARCH_BUTTON, timing),
+      width: withTiming(SEARCH_BUTTON, timing), opacity: withTiming(0, timing) },
+  };
+};
+
+/**
+ * The search field that takes the workspace row's place while search is open.
+ * Cancel clears it and closes it. The field grows out of the search button and
+ * Cancel slides in, while the workspace row fades out.
+ */
+function SearchField({ value, onChange, onCancel }: { value: string; onChange(value: string): void; onCancel(): void }) {
+  const c = useTheme();
+  return <View style={styles.header}>
+    <Reanimated.View entering={searchGrow} exiting={searchShrink}
+      style={[styles.search, { backgroundColor: c.background, borderColor: c.primary }]}>
+      <SymbolView name={{ ios: 'magnifyingglass', android: 'search' }} size={16} tintColor={c.muted} />
+      <TextInput accessibilityLabel="Search sessions and threads" placeholder="Search" placeholderTextColor={c.muted}
+        selectionColor={c.primary} value={value} onChangeText={onChange} autoCapitalize="none" autoCorrect={false} returnKeyType="search" autoFocus
+        style={[type.body, styles.searchInput, { color: c.text }]} />
+      {value ? <Pressable accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={8} onPress={() => onChange('')}>
+        <SymbolView name={{ ios: 'xmark.circle.fill', android: 'cancel' }} size={16} tintColor={c.muted} />
+      </Pressable> : null}
+    </Reanimated.View>
+    <Reanimated.View entering={CANCEL_IN} exiting={CANCEL_OUT}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Cancel search" hitSlop={8} onPress={onCancel}>
+        <Text style={[type.body, sans(500), { color: c.primary }]}>Cancel</Text>
+      </Pressable>
+    </Reanimated.View>
   </View>;
 }
 
-/** Pull requests, Review requests and Merge queue, each with its count. */
-export function PullRequestLinks({ active, go }: { active: DrawerTarget; go(href: Href): void }) {
-  const counts = usePrCounts();
-  return <>
-    {PR_LINKS.map((link) => <NavRow key={link.tab} label={link.label} icon={link.icon} badge={counts[link.tab]}
-      active={active === `pulls:${link.tab}`} onPress={() => go(pullsRoute(link.tab))} />)}
-  </>;
-}
-
-export function NavRow({ label, icon, badge, active = false, onPress }: { label: string; icon: Symbol; badge?: number | null; active?: boolean; onPress(): void }) {
+/** A session or thread whose transcript holds the search: its name, its repository, and the text around the match. */
+function TranscriptMatchRow({ match }: { match: WorkbenchTranscriptMatch }) {
   const c = useTheme();
-  const [pressed, setPressed] = useState(false);
-  const count = badgeText(badge);
-  return <Pressable accessibilityRole="button" accessibilityLabel={count ? `${label}, ${count}` : label} accessibilityState={{ selected: active }}
-    onPress={onPress} onPressIn={() => setPressed(true)} onPressOut={() => setPressed(false)}
-    style={[styles.navRow, { backgroundColor: active ? c.surface : pressed ? c.surface : 'transparent' }]}>
-    <SymbolView name={icon} size={18} tintColor={active ? c.text : c.muted} />
-    <Text numberOfLines={1} style={[type.body, sans(active ? 600 : 500), { color: c.text, flex: 1 }]}>{label}</Text>
-    {count ? <View style={[styles.badge, { backgroundColor: c.surface, borderColor: c.border }]}>
-      <Text style={[type.caption, { color: c.text, fontVariant: ['tabular-nums'] }]}>{count}</Text>
-    </View> : null}
-  </Pressable>;
-}
-
-function SearchField({ value, onChange }: { value: string; onChange(value: string): void }) {
-  const c = useTheme();
-  return <View style={[styles.search, { backgroundColor: c.background, borderColor: c.border }]}>
-    <SymbolView name={{ ios: 'magnifyingglass', android: 'search' }} size={16} tintColor={c.muted} />
-    <TextInput accessibilityLabel="Search sessions and threads" placeholder="Search" placeholderTextColor={c.muted}
-      selectionColor={c.primary} value={value} onChangeText={onChange} autoCapitalize="none" autoCorrect={false} returnKeyType="search"
-      style={[type.body, styles.searchInput, { color: c.text }]} />
-    {value ? <Pressable accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={8} onPress={() => onChange('')}>
-      <SymbolView name={{ ios: 'xmark.circle.fill', android: 'cancel' }} size={16} tintColor={c.muted} />
-    </Pressable> : null}
-  </View>;
+  const item = match.workbench;
+  const title = workbenchTitle(item);
+  const thread = workbenchKind(item) === 'thread';
+  const place = thread ? 'Thread' : item.repoFullName;
+  return <Row href={thread ? threadRoute(item.id) : sessionRoute(item.id)} title={title} titleLines={1} divider={false}
+    subtitle={place || undefined} accessibilityLabel={[`${title}.`, place ? `${place}.` : '', item.archivedAt ? 'Archived.' : '', match.snippet]
+      .filter(Boolean).join(' ')}
+    leading={<SymbolView name={{ ios: 'text.bubble', android: 'chat' }} size={14} tintColor={c.muted} />}>
+    <AppText variant="meta" tone="muted" numberOfLines={2}>{match.snippet}</AppText>
+  </Row>;
 }
 
 /** A thread with how many of its sessions run, and a toggle for its sessions. */
@@ -162,7 +193,7 @@ function ThreadRow({ item, expanded, childCount, running, onToggle, onLongPress 
   const router = useRouter();
   const [pressed, setPressed] = useState(false);
   const title = workbenchTitle(item);
-  const state = workbenchState(item);
+  const state = usePlanState(item.id, workbenchState(item));
   return <View style={[styles.threadRow, { backgroundColor: pressed ? c.surface : 'transparent' }]}>
     <Pressable accessibilityRole="link" accessibilityLabel={[`${title}.`, `${state.label}.`, running ? `${running} running.` : ''].filter(Boolean).join(' ')}
       accessibilityActions={[{ name: 'longpress', label: `Actions for ${title}` }]}
@@ -183,11 +214,13 @@ function ThreadRow({ item, expanded, childCount, running, onToggle, onLongPress 
 
 const styles = StyleSheet.create({
   drawer: { flex: 1 },
-  top: { paddingHorizontal: 12, gap: 6, paddingBottom: 8 },
-  search: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 40, borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 10, marginTop: 2 },
+  top: { paddingHorizontal: 12, paddingBottom: 4 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44 },
+  switcher: { flex: 1, alignItems: 'flex-start' },
+  search: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 40, borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 10 },
   searchInput: { flex: 1, paddingVertical: 8 },
-  list: { paddingHorizontal: 12, paddingBottom: 16 },
+  list: { paddingHorizontal: 12, paddingBottom: NEW_SESSION_CLEARANCE },
   indent: { paddingLeft: 18 },
   notice: { paddingHorizontal: 6, paddingVertical: 8 },
   loading: { alignItems: 'center', justifyContent: 'center', paddingVertical: 16 },
@@ -195,10 +228,4 @@ const styles = StyleSheet.create({
   threadMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, paddingLeft: 4 },
   threadIcon: { width: 16, alignItems: 'center' },
   threadToggle: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  footerPages: { paddingTop: 12 },
-  pinned: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 6 },
-  pages: { gap: 1 },
-  settings: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingTop: 6 },
-  navRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 40, borderRadius: radius.md, paddingHorizontal: 10 },
-  badge: { minWidth: 24, paddingHorizontal: 6, borderRadius: radius.round, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center' },
 });

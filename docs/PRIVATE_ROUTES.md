@@ -1,4 +1,4 @@
-# Workspace private routes
+# Tailscale
 
 Workspace private routes add exact TCP destinations to new Talyn Fleet
 sandboxes. They do not replace the sandbox egress policy. A sandbox with
@@ -55,11 +55,11 @@ from its backend.
 
 ## User flow
 
-The user opens **Settings → Private routes** and selects **Connect Tailscale**.
+The user opens **Integrations → Tailscale → Connection** and selects **Connect Tailscale**.
 Talyn asks YAS to start the connector. The client opens the returned login URL
 once and does not store or log it.
 
-Tailscale does not redirect to Talyn. The settings page polls YAS every two
+Tailscale does not redirect to Talyn. The integration page polls YAS every two
 seconds. It stops when the connector is connected, needs approval, is
 unavailable, or a request fails.
 

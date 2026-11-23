@@ -5,7 +5,7 @@ import { AddressInfo } from 'net';
 import { eq } from 'drizzle-orm';
 import { getTableColumns } from 'drizzle-orm';
 import { SKILL_MAX_BYTES } from '@talyn/shared';
-import { skillRoutes, SKILL_LIST_COLUMNS } from '../../routes/skills.js';
+import { skillDiscoveryRoutes, skillRoutes, SKILL_LIST_COLUMNS } from '../../routes/skills.js';
 import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
@@ -27,7 +27,7 @@ const OTHER_USER_ID = 'user-other';
 async function makeServer(): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
   app.use(express.json());
-  app.use('/skills', requireAuth, skillRoutes());
+  app.use('/skills', requireAuth, skillDiscoveryRoutes(), skillRoutes());
   const server: Server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   const addr = server.address() as AddressInfo;

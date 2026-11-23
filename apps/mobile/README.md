@@ -12,7 +12,6 @@ and [#129](https://github.com/Gilbert09/talyn/pull/129).
 Use [the release runbook](../../docs/MOBILE_RELEASE.md) for exact configuration, secrets, signing, updates, and submission steps.
 Use [the release checklist](../../docs/MOBILE_RELEASE_CHECKLIST.md), [store asset inventory](../../docs/MOBILE_STORE_ASSETS.md),
 and [Maestro device flows](e2e/README.md) before beta and each store candidate.
-Merge #128, then #129, then this release change. Do not queue this stacked change before its parents.
 
 Development and preview remain useful without production secrets.
 Internal beta and production require explicit identities, public URLs, project configuration, and a reserved build number.
@@ -40,7 +39,8 @@ Open Settings after sign-in and workspace selection. Read the explanation, then 
 The app requests operating system permission only after that action.
 Permission denial does not block any workflow. Settings shows denied, disabled, failed, and unavailable states.
 Global and category choices apply to the selected workspace. Quiet hours use the saved IANA timezone.
-The sensitive preview choice is reserved. Every current alert uses generic text.
+Alerts show the session name and a short summary, or the PR reference and title, as on desktop.
+Android hides the alert text on a locked device. The sensitive preview choice is not used.
 
 Push needs a physical device and a development build.
 The config uses the Talyn EAS project (`@talyn-app/talyn-mobile`) unless `EXPO_PUBLIC_EAS_PROJECT_ID` names another one.
@@ -88,7 +88,8 @@ Privacy owners must approve Expo Push Service as a processor before enabling pro
 Review its retention, subprocessors, service region, deletion behavior, and contractual terms.
 Update Apple App Privacy and Google Play Data safety disclosures for device identifiers and notification delivery.
 Confirm those disclosures match token retention and provider processing in the deployed backend.
-No ATT prompt, advertising identifier, analytics, or tracking is added.
+No ATT prompt, advertising identifier, or cross-app tracking is added.
+PostHog analytics is first-party product analytics (Tom's call, 2026-11-10). See "Analytics" below.
 Do not approve sensitive previews without another payload and privacy review.
 
 Physical iOS and Android checks remain required. Test foreground, background, terminated, cold-start, and delayed notifications.
@@ -133,6 +134,11 @@ Use a Supabase publishable key or legacy anon key. Never use a secret key or ser
 | `EXPO_PUBLIC_SUPABASE_KEY` | Public publishable key or legacy anon key. |
 | `EXPO_PUBLIC_AUTH_CALLBACK_URL` | Exact callback URL for this environment, ending in `/callback`. |
 | `EXPO_PUBLIC_EAS_PROJECT_ID` | Optional public EAS project UUID. The default is the Talyn project `69499768-c478-44c0-8588-355c674515df`. |
+| `EXPO_PUBLIC_TALYN_POSTHOG_KEY` | Optional PostHog project key (`phc_`). With no key, analytics, replay, and error tracking are off. |
+| `EXPO_PUBLIC_TALYN_POSTHOG_HOST` | Optional PostHog ingestion origin. The default is `https://us.i.posthog.com`. |
+
+`POSTHOG_CLI_API_KEY` is a build secret, not a public value, and never enters the app.
+It is a PostHog personal API key (`phx_`) that uploads source maps and native symbols. See the release runbook.
 
 Set `APP_ENV` to `development`, `preview`, or `production`. Development is the default.
 Production configuration fails if any public value is missing. Production requires HTTPS for all three URLs.
@@ -158,6 +164,7 @@ talyn-mobile-development://auth/callback
 talyn-mobile-preview://auth/callback
 ```
 
+Production also needs `talyn-mobile://auth/callback` (the production scheme), because sign-in returns through the scheme.
 Add the approved production HTTPS callback verbatim after its host is confirmed.
 Do not add wildcards. Retain the existing web and desktop entries.
 GitHub's provider callback remains the Supabase project callback, rather than a mobile scheme.
@@ -199,7 +206,7 @@ No transcript, repository data, token, or verifier is cached in AsyncStorage or 
 AppState and NetInfo provide active/suspended and online/offline/unknown states.
 Unknown reachability permits a request. It does not prove internet access.
 Supabase refresh stops while suspended or offline. The shared client owns concurrent 401 recovery.
-No workflow socket is opened in this phase. Later workflows can use the configured native client.
+The workflow store opens the shared client socket (`src/native/socket.ts`) and patches rows from live events.
 
 Transient network errors, timeouts, rate limits, unknown auth failures, and 5xx responses retain the account.
 Only explicit refresh-token rejection permits automatic sign-out.
@@ -261,12 +268,19 @@ and **Check for updates**. Update errors show only there. The development client
 
 An update can change JavaScript and assets only. A new native module, config plugin, or native field in `app.config.ts`
 changes the native fingerprint, so its update reaches no installed app. Ship that change in a new binary.
+For iOS and Android internal-beta, `.github/workflows/mobile-testflight.yml` does this on each push to `main`: when a
+platform's fingerprint is new, it builds a binary. EAS submits iOS to TestFlight and Android to the Play internal track.
+Set `MOBILE_TESTFLIGHT_AUTO=0` to stop it.
+See [the release runbook](../../docs/MOBILE_RELEASE.md#automatic-testflight-and-play-builds-for-internal-beta).
 Updates are unsigned by decision (2026-11-09), because EAS code signing needs a paid EAS plan. EAS HTTPS delivery and
 access to `EXPO_TOKEN` and the Expo project protect them. Signing later needs that plan, a certificate in the config, and a new binary.
 See [the release runbook](../../docs/MOBILE_RELEASE.md#automatic-updates-for-preview-and-internal-beta) for secrets, checks, and rollback.
 
-An explicit HTTPS callback configures iOS Associated Domains and an exact Android intent filter.
-Expo's `preferUniversalLinks` enables the HTTPS authentication callback on iOS 17.4 and later.
+An explicit HTTPS callback configures iOS Associated Domains and an exact Android intent filter for links.
+The sign-in session does not return through the HTTPS callback. It returns through `<scheme>://auth/callback`.
+An HTTPS return works only after iOS (`webcredentials`) or Android (App Links) verifies the domain.
+Production sign-in never got past that check: the auth session ended at once with no browser.
+iOS gives a scheme return only to the auth session that started it, and PKCE protects the code.
 No AASA or `assetlinks.json` file is added because production identifiers are unverified.
 A configured domain or a mock callback does not prove universal-link verification.
 Confirm the production iOS minimum version and test the exact signed binary before release.
@@ -310,7 +324,7 @@ Use the native preview to inspect sign-in, workspace selection, and Settings aft
 
 ## Implemented workflow
 
-The native tabs remain Sessions, Threads, Attention, and Settings.
+Navigation is a left drawer that mirrors the web sidebar (`app/(drawer)/`). Sessions, Threads and Attention are drawer screens.
 Lists show the selected workspace. Pull-to-refresh uses authoritative REST snapshots.
 Session and thread lists show scope, status, latest activity, and supplied text response gates.
 The contract supplies no shared unread marker. The app does not invent one.
@@ -327,7 +341,12 @@ The queue and timeline are read only.
 External websites require confirmation. Only HTTP and HTTPS URLs without credentials are allowed.
 Rich reviews use the external website.
 
-The composer sends text to existing chats. It sends no attachments or unsupported gate actions.
+The composer sends text and images to existing chats. It sends no unsupported gate actions.
+A chat image goes to the session sandbox through the upload route (10 MB or less) before the message is sent.
+The New Work composer also takes images, except in a space (web's space composer has none).
+A new session has no sandbox yet, so each image is made smaller on the phone (`expo-image-manipulator`, 1600 px, JPEG).
+The images then go inline with the first message, which is sent after the create, like web.
+The server reads JSON bodies up to 2 MB, so the app blocks a start when the inline images are larger together.
 It requires a confirmed connection and current authorized session state.
 Sending, Queued on server, Sent, Failed, and Delivery unknown have separate labels.
 An acknowledgement records the server response. It does not prove that the agent completed the message.
@@ -358,14 +377,16 @@ Active resources and pending requests are protected from eviction.
 Lists use full endpoint snapshots because the current list methods expose no paging cursor.
 The app does not simulate pagination by slicing those responses.
 FlatList virtualizes sessions, PRs, child sessions, queue rows, and transcripts.
-A transcript retains at most 1200 events and approximately 2 MB of serialized UTF-16 content.
+A transcript retains at most 12000 events and approximately 24 MB of slimmed event content.
+A history page holds 500 events, extended to at most 2000 to reach the start of a turn, as on desktop and web.
+Most stored events are token deltas that draw nothing, so a smaller page shows only a few rows of a long turn.
 Each displayed text block is limited to 16000 characters. Code uses selectable chunks of at most 4000 characters.
 A partial history window has explicit labels and controls for older and latest history.
 Titles and list data still have the size of the server snapshot. Measure large accounts before release.
 
 REST establishes transcript cursors. Socket events are deduplicated by chat and sequence.
 Missing ranges are recovered with forward REST history. Older history uses the supported backward cursor.
-Each recovery reads at most four forward pages of 200 events after its initial page.
+Each recovery reads at most four forward pages of 500 events after its initial page.
 A larger backlog remains stale until another refresh. Recovery never loops without a bound.
 The shared transport retains its existing single GET transport retry and 401 recovery.
 The workflow adds no automatic read retry loop or message retry.
@@ -424,7 +445,7 @@ They establish a rendering bound in the test host. They do not measure device fr
 ## Physical-device and performance checks
 
 No physical-device or live-backend workflow result is claimed.
-Use the native preview with configured test services to inspect all four tabs and detail views.
+Use the native preview with configured test services to inspect the drawer screens and detail views.
 Complete these checks on signed iOS and Android development builds before beta.
 Use the minimum supported OS versions, a small phone, and a tablet or large Android window.
 Use authorized test accounts supplied through the normal sign-in flow. Do not add credentials to fixtures.
@@ -461,9 +482,7 @@ Semantic tokens live in `src/theme/tokens.ts`.
 Muted ink and action clay are darker in light mode to keep small text readable on paper.
 Shared controls live in `src/components/UI.tsx`.
 
-Native tabs keep their platform behavior.
-`ScreenContainer` handles safe areas, including the tab bar, through React Native Screens.
-Automatic tab content insets are disabled to prevent duplicate padding.
+`ScreenContainer` handles safe areas from the JS safe-area provider, not the native `SafeAreaView`.
 System fonts can scale without a limit.
 Rows and badges wrap, and content has a maximum width on tablets.
 
@@ -489,3 +508,24 @@ Use the device preview to check these items before release:
 - Enable reduced motion. Check that sign-in has no transition animation.
 
 The floating Expo development gear belongs to the development client.
+
+## Analytics
+
+Tom's call (2026-11-10): the app uses PostHog for product analytics, session replay, and error tracking, like web.
+This reverses the MVP rule of no analytics or replay SDK.
+The official SDK is `posthog-react-native`, with `@posthog/react-native-plugin` for session replay and native capture (the older `posthog-react-native-session-replay` package is deprecated).
+`src/lib/analytics.ts` holds the guarded helpers. They do nothing in a build with no `EXPO_PUBLIC_TALYN_POSTHOG_KEY`.
+
+- The distinct ID is the Supabase user ID, as on web. Email and GitHub username are person properties. Sign-out resets the identity.
+- Every event carries `client: 'mobile'`, `platform`, `app_version`, `app_build`, `update_id`, `update_channel`, `environment`, and `workspace_id`.
+- The SDK sends some events during its setup, before the super properties are registered, such as `Application Installed`. `before_send` adds the build properties to these events.
+- Each route change records a `$screen` named by its route pattern, such as `/pulls/[id]`. No IDs go in the name.
+- Touches are autocaptured by component name and test ID only. Text children and accessibility labels are not captured.
+- Session replay is not masked. It shows text, inputs, images, and sandboxed views. It records no console logs or network requests. It is off in development builds.
+- Exception autocapture runs in preview and production builds. Each exception goes through the shared `exceptionDropReason` and `isConnectivityMessage` rules, like web.
+- Native crash capture (iOS, Android JVM, and Android NDK on API 31 and later) runs in preview and production builds. Native crashes skip `before_send`. The opt-out still stops them.
+- Readable stack traces need uploaded symbols. With the `POSTHOG_CLI_API_KEY` secret, each OTA update uploads its Hermes source maps. Each EAS build uploads its source maps, dSYMs, R8 mapping and NDK symbols. Without the key, uploads skip with a notice. See [PostHog error tracking symbols](../../docs/MOBILE_RELEASE.md#posthog-error-tracking-symbols) for the secret and where to create it.
+- Settings > Account > "Share usage data and session replays" turns it all off. The choice is saved on the device and read before the first event.
+- Apple tracking stays false: there is no cross-app tracking, so there is no ATT prompt.
+- Before store submission, the App Store privacy answers and Play Data safety must declare analytics, diagnostics, and the user ID.
+- Event names and property keys match web. Never put titles, prompts, transcripts, code, or repository names in a property.

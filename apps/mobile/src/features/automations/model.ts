@@ -1,6 +1,6 @@
 import {
   LOOP_DISABLED_REASON_LABELS, LOOP_RUN_FAILURE_LABELS, LOOP_RUN_STATUS_LABELS, WORKFLOW_ACTION_LABELS, WORKFLOW_EVENT_LABELS,
-  WORKFLOW_RUN_STATUS_LABELS, describeSchedule, describeWorkflowActions, describeWorkflowTrigger, loopToInput,
+  WORKFLOW_RUN_STATUS_LABELS, describeSchedule, posthogClaimText, describeWorkflowActions, describeWorkflowTrigger, loopToInput,
   type LoopInput, type LoopRun, type LoopRunStatus, type LoopWithStats, type WorkflowInput, type WorkflowRun,
   type WorkflowRunStatus, type WorkflowWithStats,
 } from '@talyn/shared';
@@ -24,7 +24,13 @@ export function loopRunBadge(status: LoopRunStatus): Badge {
 }
 
 /** "When PR opened → add labels", like the web row. */
-export function workflowSummary(workflow: Pick<WorkflowWithStats, 'events' | 'actions'>): string {
+export function workflowSummary(workflow: Pick<WorkflowWithStats, 'integration' | 'events' | 'conditions' | 'actions'>): string {
+  if (workflow.integration === 'slack') {
+    const channels = workflow.conditions.channels?.map((channel) => `#${channel.replace(/^#/, '')}`).join(' or ');
+    const trigger = channels ? `In ${channels}` : `When ${describeWorkflowTrigger(workflow).toLowerCase()}`;
+    const actions = describeWorkflowActions(workflow).toLowerCase();
+    return actions ? `${trigger}, ${actions}` : trigger;
+  }
   const trigger = describeWorkflowTrigger(workflow).toLowerCase();
   const actions = describeWorkflowActions(workflow).toLowerCase();
   return actions ? `When ${trigger} → ${actions}` : `When ${trigger}`;
@@ -64,7 +70,7 @@ export function problemsText(failures7d: number): string | null {
 /** The whole-workflow replace web sends to flip `enabled`. The route takes no partial update. */
 export function workflowToggleInput(workflow: WorkflowWithStats, enabled: boolean): WorkflowInput {
   return {
-    name: workflow.name, enabled, events: workflow.events, conditions: workflow.conditions,
+    integration: workflow.integration, name: workflow.name, enabled, events: workflow.events, conditions: workflow.conditions,
     actions: workflow.actions, maxRunsPerPrPerHour: workflow.maxRunsPerPrPerHour,
   };
 }
@@ -78,12 +84,19 @@ export function withEnabled<T extends { id: string; enabled: boolean }>(items: r
 }
 
 /** Title and detail of a workflow run row. */
-export function workflowRunText(run: Pick<WorkflowRun, 'prNumber' | 'prTitle' | 'repoFullName' | 'event' | 'actions' | 'error'>): { title: string; detail: string } {
+export function workflowRunText(run: Pick<WorkflowRun, 'integration' | 'subjectLabel' | 'prNumber' | 'prTitle' | 'repoFullName' | 'event' | 'actions' | 'error' | 'posthogClaim'>): { title: string; detail: string } {
   const failed = run.actions.find((action) => !action.ok);
-  const problem = failed ? `${WORKFLOW_ACTION_LABELS[failed.type] ?? failed.type}: ${failed.error ?? 'did not run'}` : run.error;
+  const problem = String(failed?.code) === 'slack_scope_missing'
+    ? 'Slack did not allow this reply. Reinstall Slack to grant the chat:write permission.'
+    : failed ? `${WORKFLOW_ACTION_LABELS[failed.type] ?? failed.type}: ${failed.error ?? 'did not run'}` : run.error;
+  const slack = run.integration === 'slack' || run.event === 'slack_message';
+  const webhook = run.integration === 'webhook' || run.event === 'webhook_received';
+  const posthog = run.integration === 'posthog_inbox';
+  // A PostHog Inbox run: where Talyn's claim on the report stands, as web shows it.
+  const claim = posthog && run.posthogClaim ? posthogClaimText(run.posthogClaim) : null;
   return {
-    title: run.prTitle || `Pull request #${run.prNumber}`,
-    detail: problem ?? [run.repoFullName, WORKFLOW_EVENT_LABELS[run.event] ?? run.event].filter(Boolean).join(' · '),
+    title: webhook ? run.subjectLabel || 'Webhook request' : slack ? run.subjectLabel || 'Slack message' : posthog ? run.subjectLabel || 'PostHog report' : run.prTitle || `Pull request #${run.prNumber}`,
+    detail: problem ?? claim ?? [slack || webhook || posthog ? null : run.repoFullName, WORKFLOW_EVENT_LABELS[run.event] ?? run.event].filter(Boolean).join(' · '),
   };
 }
 

@@ -79,6 +79,71 @@ export async function userMayUseWorkflows(subject: FlagSubject): Promise<boolean
  */
 export function workflowsRefusalReason(): string {
   return workflowsKillSwitchPulled()
-    ? `workflows are switched off on this deployment (${FEATURE_FLAGS.workflows.envOverride}=false)`
+    ? `automations are switched off on this deployment (${FEATURE_FLAGS.workflows.envOverride}=false)`
     : 'this account is not in the audience for the "workflows" feature flag';
+}
+
+/**
+ * Whether this workspace's owner may use Slack rules.
+ *
+ * Asked IN ADDITION to {@link workspaceMayUseWorkflows}: a Slack rule is a
+ * workflow, so the workflows kill switch stops it too. Keyed on the owner for
+ * the same reason as the workflows gate: a Slack message has no Talyn caller,
+ * and the routes and the engine must give one answer.
+ */
+export async function workspaceMayUseSlackRules(workspaceId: string): Promise<boolean> {
+  return (await workspaceHasFeature('slackChannelRules', workspaceId)).enabled;
+}
+
+/** The message a Slack-rule refusal carries. See {@link workflowsRefusalReason}. */
+export function slackRulesRefusalReason(): string {
+  return readFlagOverride('slackChannelRules', process.env) === false
+    ? `Slack automations are switched off on this deployment (${FEATURE_FLAGS.slackChannelRules.envOverride}=false)`
+    : 'this account is not in the audience for the "slack-channel-rules" feature flag';
+}
+
+/**
+ * Whether this workspace's owner may use webhook rules.
+ *
+ * Asked IN ADDITION to {@link workspaceMayUseWorkflows} by the engine, and on
+ * its own by the receiver. Keyed on the owner: a webhook has no Talyn caller.
+ */
+export async function workspaceMayUseWebhookRules(workspaceId: string): Promise<boolean> {
+  return (await workspaceHasFeature('webhookRules', workspaceId)).enabled;
+}
+
+/** Whether this signed-in user may use webhook rules. The owner routes ask this. */
+export async function userMayUseWebhookRules(subject: FlagSubject): Promise<boolean> {
+  return (await evaluateFlag('webhookRules', subject)).enabled;
+}
+
+/**
+ * Whether this workspace's owner may use issue rules (Linear, GitHub Issues).
+ *
+ * Asked IN ADDITION to {@link workspaceMayUseWorkflows} by the engine, and on
+ * its own by the Linear receiver. Keyed on the owner: an issue event has no
+ * Talyn caller.
+ */
+export async function workspaceMayUseIssueRules(workspaceId: string): Promise<boolean> {
+  return (await workspaceHasFeature('issueRules', workspaceId)).enabled;
+}
+
+/** Whether this signed-in user may use issue rules. The owner routes ask this. */
+export async function userMayUseIssueRules(subject: FlagSubject): Promise<boolean> {
+  return (await evaluateFlag('issueRules', subject)).enabled;
+}
+
+/**
+ * Whether this workspace's owner may use PostHog Inbox rules.
+ *
+ * Asked IN ADDITION to {@link workspaceMayUseWorkflows} by the engine, and on
+ * its own by the poller. Keyed on the owner: a report has no Talyn caller.
+ */
+export async function workspaceMayUsePostHogInboxRules(workspaceId: string): Promise<boolean> {
+  return (await workspaceHasFeature('posthogInboxRules', workspaceId)).enabled;
+}
+
+/** Whether this signed-in user may use PostHog Inbox rules. The owner routes ask this. */
+export async function userMayUsePostHogInboxRules(subject: FlagSubject): Promise<boolean> {
+  return (await evaluateFlag('posthogInboxRules', subject)).enabled;
 }

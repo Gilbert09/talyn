@@ -12,6 +12,7 @@ import {
   type SlackUserLinkView,
 } from '@talyn/shared';
 import { api } from '../../lib/api';
+import { startSlackInstall } from '../../lib/slackInstall';
 import { captureAnalyticsException, trackEvent } from '../../lib/analytics';
 import { openExternal } from '../../lib/openExternal';
 import { toast } from '../../stores/toast';
@@ -701,10 +702,13 @@ export function SlackSettings() {
   async function start(kind: 'install' | 'link') {
     setBusy(kind);
     try {
-      const input = currentWorkspaceId ? { workspaceId: currentWorkspaceId } : {};
-      const { authorizeUrl } =
-        kind === 'install' ? await api.slack.install(input) : await api.slack.link(input);
-      await openExternal(authorizeUrl);
+      if (kind === 'install') {
+        await startSlackInstall(currentWorkspaceId);
+      } else {
+        const input = currentWorkspaceId ? { workspaceId: currentWorkspaceId } : {};
+        const { authorizeUrl } = await api.slack.link(input);
+        await openExternal(authorizeUrl);
+      }
     } catch (e) {
       captureAnalyticsException(e, { flow: 'slack_connect' });
       if (errorCode(e) === SLACK_NOT_CONFIGURED_CODE) {

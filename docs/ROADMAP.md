@@ -8,20 +8,26 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 
 ## Priority Queue (Next Up)
 
-1. **Cloud provider abstraction — Phases 0 + 3–5** (see `CLOUD_PROVIDERS.md`)
-   - Phase 0 spikes: Codex Cloud (is there a cloud-task REST API, or is it GitHub-mention only?) and Claude Routines (ad-hoc runs vs pre-created routines, transcript retrieval). Cheap (~0.5–1 day each) and they gate everything else.
-   - Phases 3–4: the actual `codex/` and `claudeRoutine/` provider modules (client + credentials + converter + transcriptSource + provider each).
-   - The deferred `TranscriptSource`/`TranscriptConverter` generalisation — the PostHog streamer/poller are wrapped as-is today, so the first new provider pays that refactor cost.
-   - Phase 5: per-provider Settings cards, feature flags, docs.
-2. **Desktop generalisation** — Settings integration card + composer model/reasoning controls are hard-coded to PostHog Code; generalise per-provider once a second provider lands (on the Phase 3 critical path).
-3. **Multi-instance safety (advisory locks)** — see Known Gaps below; required before running more than one backend replica again.
+1. **Cloud provider abstraction: remaining follow-ups** (see `CLOUD_PROVIDERS.md`). The seam is done. Talyn Fleet is live. PostHog Code is retired (step 1 done 2026-11-15). Codex Cloud is deferred (no server-to-server API), and Claude Code was removed in `9c5689f37c`.
+   - [ ] **Step 2: delete the PostHog Code provider.** Step 1 hides it for everyone with the `posthog-code-retired` flag (fallback ON). Existing connections still run. Before the delete, move or stop the workspaces that still have a PostHog Code row. The delete covers:
+     - the provider module: `services/cloudProviders/posthog/`, `services/posthogCode/` and `routes/posthog.ts`, with their tests;
+     - the code review spill onto PostHog Code in `services/codeReview/executor.ts`, and its poller;
+     - the PostHog Code hop in `services/cloudProviders/quotaFailover.ts`;
+     - the `posthog_code` option in the loop editor and the loop validator, and the `posthog_code` default in `emptyLoopInput` (the MCP `create_loop` tool now picks the fleet while the flag is on);
+     - the PostHog Code settings card, onboarding option and retirement notice in web, desktop and mobile;
+     - the `posthogCodeRetired` flag, `POSTHOG_CODE_RETIRED`, and the helpers in `services/posthogCodeRetirement.ts` and `packages/shared/src/posthogCodeRetirement.ts`;
+     - the `POSTHOG_OAUTH_*` setup in `docs/SETUP.md` § 6b and the CIMD route in `apps/marketing/app/oauth-client/`.
+   - The deferred `TranscriptSource`/`TranscriptConverter` generalisation.
+   - Measure the real ChatGPT access-token lifetime. It decides whether server-side Codex refresh is worth its ToS exposure.
+2. ~~**Desktop generalisation**~~: done. Each PR row has a per-task agent menu, and the Settings cards and default agent follow the provider list.
+3. ~~**Multi-instance safety (advisory locks)**~~: resolved in Session 65 (`services/advisoryLock.ts`). See Known Gaps below.
 4. **Auth polish (Phase 18.2 leftovers)** — proper `talyn login` PKCE flow, CLI refresh-token rotation, and the invite flow (`workspaces_users` join table + invitation tokens). Without invites it isn't really multi-tenant, just `TALYN_ALLOWED_EMAILS`.
-5. **Desktop test coverage** — `QUALITY_PARITY.md` Tier 1: ~3 trivial renderer test files vs 240+ backend tests; UI regressions go uncaught.
+5. **Desktop test coverage**: `QUALITY_PARITY.md` Tier 1. The renderer has 240+ test files in `apps/desktop/src/__tests__`. The strategy is in `TESTING.md`: keep the frontend layer small and test where the logic lives.
 
 ### Teams and Spaces
 
 - [x] Phase 2: space subscriptions, filtered WebSocket events, and presence across replicas.
-- [ ] Phase 4: connect the space UI to subscriptions and presence helpers.
+- [x] Phase 4: connect the space UI to subscriptions and presence helpers. Web `555af9c0be`, desktop `602fa0bf9e`, mobile `48b606e37c` (`subscribe_space` and `presence` over the WebSocket, `usePresenceHeartbeat`). Space composer parity in `f825ae4421`.
 
 ### Team plan — seat billing, behind the `teams` flag (2026-09-29)
 
@@ -78,11 +84,14 @@ Follow-ups, in the order they are worth doing:
 - [ ] **Chunking threshold.** One lens over a large PR whole versus in pieces;
       compare findings-per-file and the judge's rejection rate. The current
       file-count split is provisional and marked as such in the code.
-- [ ] **Diff hunk inside a finding card.** `sliceUnifiedHunk` is written and
-      unused; the card shows the path and the explanation but not the code.
-- [ ] **Inline comments for blockers.** The setting exists and the posting path
-      does not, so the toggle currently does nothing. Wire it, or drop the toggle
-      until it does.
+- [ ] **Diff hunk inside a finding card.** `sliceUnifiedHunk` no longer exists in
+      the code. The card shows the path and the explanation but not the code. Write
+      a new helper if this is still wanted.
+- [x] **Posting findings to the PR.** "Post to PR" posts one `COMMENT` review, with
+      inline comments where the finding is verified and in the diff (`e440a33c73`).
+- [ ] **`inlineComments` toggle.** The setting is stored and has a toggle on all
+      three apps, but nothing in the backend reads it: Post to PR always decides
+      inline versus body from the diff. Wire it, or drop the toggle.
 - [ ] **MCP submission channel (v2).** Removes prose-parsing and lets findings
       arrive incrementally. Needs a streamable-HTTP MCP endpoint and a per-run
       scoped credential; the text parser stays regardless, because the fall-back
@@ -116,7 +125,7 @@ Follow-ups now that review priority has shipped:
 - [ ] **Status pills on the Reviews row.** The `mine` variant has rendered `PRReviewPill` + `PRStatusPill` + the unresolved-threads chip all along; the `review` variant renders only a requester chip, so the tab hides the very state you triage on. Needs no flag and is worth doing on its own merits.
 - [x] **Make Priority the default for all users.** New client builds reset the old sort preference once. Later choices remain saved.
 - [ ] **Snooze / pin / dismiss.** Gmail's ablation found personalising the THRESHOLD beat personalising the model. A sort has no threshold, so it does not transfer today — but it would the moment this becomes a bucketed or filtered view.
-- [ ] **Announce it.** `availability: 'gated'` withholds every `reviews`-scoped highlight from everybody until it flips to `'general'`, which is also what replays the withheld backlog.
+- [x] **Announce it.** The `review-priority` flag is `availability: 'general'` (`releaseScopes: ['reviews']`), so its highlights are no longer withheld.
 
 - [x] **Talyn Fleet released to every workspace** (Session 136, 2026-09-16). The `talyn-fleet` PostHog flag's email condition became an empty property list at 100%, and the register entry's `availability` went `gated` → `general`, which replays the withheld backlog of fleet highlights. The flag stays in place as a kill switch and as the way to take the hardware away from one account. `fallback` stays **OFF** and now deliberately disagrees with `availability`: finite hardware must not open to everybody because PostHog is unreachable. Capacity overflow falls back to PostHog Code where the workspace has it — except for a loop, which pins its provider and fails visibly instead. Open follow-up: make the fleet front and centre over PostHog Code in onboarding and marketing.
 
@@ -131,9 +140,13 @@ Follow-ups now that Loops has shipped:
 
 ## Backlog
 
+- [ ] **Split view — mobile, docs and release** — web and desktop show several sessions side by side behind the `split-view` flag (2026-11-11). Not on mobile: a phone has no room for two transcripts, so revisit for tablets when the flag is released. Before flipping `availability` to `'general'`, add a "Several sessions side by side" section to `apps/marketing/content/docs/sessions.md`, and consider pane shortcuts (move focus between panes) and remembering panes per workspace.
+- [ ] **Text file attachments — mobile picker** — web and desktop attach UTF-8 text files (2026-11-16). Mobile shows them in the transcript, but cannot pick one: that needs `expo-document-picker`, a native module, so a new store build. Add it with the next native build, and send the file as `text/plain` under its own name, as the web does.
 - [ ] **Analytics panel — token / cost usage** — surface an Analytics tab aggregating per-workspace spend, per-task spend + token breakdown, per-model mix, and a trend chart from whatever usage data each cloud provider's transcript/run exposes. Inspiration: how PostHog / Linear surface "insights" around usage.
-- [ ] **Show logged-in user in the app chrome** — bottom-left of the sidebar should display GitHub username + avatar so users know which account they're using (especially on laptops with multiple GitHub accounts).
-- [ ] **Auto-connect GitHub integration from the Supabase login session** — today users sign in with GitHub OAuth (Supabase), then *separately* click "Connect GitHub" in Settings → Integrations to run a second OAuth flow. Supabase's sign-in session already returns `provider_token` with `repo` scope — we should pull it off `session.provider_token` on first login and store it as the workspace's GitHub integration token, skipping the second flow.
+- [x] **Approve / Request changes on web and desktop** — all three apps have them on a pull request that asks for your review (`POST /pull-requests/:id/review`, sent as the person's own GitHub review). Web and desktop open a dialog from the PR detail header (2026-11-10).
+- [x] **Show logged-in user in the app chrome**: `UserChip` in the sidebar shows the GitHub username and avatar. Desktop `a11a73387c`, web `27135bb7b5`.
+- [ ] **Auto-connect GitHub from the Supabase login session.** Users now sign in with GitHub, then connect it again under Integrations.
+  Supabase returns `session.provider_token` with `repo` scope. Store that token for the workspace and skip the second flow.
 - [ ] **Load-bearing eslint-disables** — a few `eslint-disable-next-line` / `@ts-ignore` sites exist (`middleware/auth.ts` namespace augmentation, `apps/desktop/src/main/main.ts` console usage, Electron ERB build scripts). All intentional and low-risk; noted for a future "lint-cleanup" pass if it's ever worth the churn.
 - [x] **Workspace endpoint returns empty `repos` + `integrations`** — Fixed 2026-04-19.
 - [x] **Change default ports** — Changed from 3001 to 4747 to avoid conflicts with common dev servers
@@ -151,7 +164,7 @@ Follow-ups now that Loops has shipped:
 
 ## Known Gaps (tracked but not yet phased)
 
-- **Desktop testing**: ~3 trivial renderer test files vs 240+ backend tests. Full plan in `docs/TESTING.md` (Phases D/E: component/hook tests + Playwright E2E).
+- **Desktop testing**: the renderer has 240+ test files in `apps/desktop/src/__tests__`. The strategy is in `docs/TESTING.md`, which has no phases. It keeps the frontend layer small.
 - **Launch decisions (Session 65 audit)**: access model (allowlist vs invites — no invite flow exists); ~~stable vs prerelease update channel~~ (Session 96: the stable release ships nightly with the full arch matrix and nothing publishes pre-releases; the in-app picker is now a no-op to remove or repurpose); error-tracking/uptime alerting (process handlers log, nothing pages); `docs/SETUP.md` rewrite (predates the cloud-only refactor). ~~Repo codename exposure~~ — renamed `Gilbert09/owl` → `Gilbert09/talyn` (Session 65; GitHub redirects keep old release feeds + git remotes working — never reuse the `owl` name).
 - **Scale-out follow-ups (pre ~50 workspaces)**: the reconcile sweep iterates workspaces serially and outgrows its 5-min interval; no cross-workspace GraphQL dedupe for shared-org installations (Search budget saturation); no task/transcript retention sweep; `requireAuth` does an uncached Supabase round-trip per request.
 
@@ -363,7 +376,7 @@ Follow-ups now that Loops has shipped:
   - [x] Approve/Request changes (review submission)
 
 - [x] **6.5 GitHub UI** (COMPLETED)
-  - [x] Connect GitHub button (in Settings > Integrations)
+  - [x] Connect GitHub button (in Integrations > GitHub)
   - [x] Connection status display (shows connected user)
   - [x] Disconnect button
   - [x] Repository selector (in Settings > Workspace > Watched Repositories)
@@ -371,34 +384,26 @@ Follow-ups now that Loops has shipped:
   - [x] CI status indicators (check status icons in PR list)
   - [x] Dedicated GitHub panel in sidebar
 
-## Phase 7: Slack Integration
+## Phase 7: Slack integration
 
-- [ ] **7.1 Slack OAuth**
-  - [ ] OAuth flow implementation
-  - [ ] Token storage
-  - [ ] Workspace connection
+- [x] Install the Slack app and connect a workspace through OAuth.
+- [x] Link a Slack account to a Talyn account.
+- [x] Start personal sessions with an emoji, mention, or direct message.
+- [x] Create channel rules for new messages. The `slackChannelRules` flag controls rollout.
+- [x] Reply in a thread or react when a channel rule matches.
 
-- [ ] **7.2 Slack Service**
-  - [ ] Slack Web API client
-  - [ ] List channels
-  - [ ] Message queries
-  - [ ] Send messages
-  - [ ] Real-time events (Socket Mode or webhooks)
+### Integration follow-ups
 
-- [ ] **7.3 Slack Monitoring**
-  - [ ] Configure monitored channels
-  - [ ] Direct mentions → inbox
-  - [ ] Channel keywords → inbox
-
-- [ ] **7.4 Slack Actions**
-  - [ ] Reply to message
-  - [ ] View thread
-  - [ ] Open in Slack
-
-- [ ] **7.5 Slack UI**
-  - [ ] Connect Slack button
-  - [ ] Channel selector
-  - [ ] Message preview in inbox items
+- [x] Add Linear as a rule source, with GitHub Issues. The `issueRules` flag controls rollout (2026-11-12).
+- [ ] Add Sentry as a rule source.
+- [x] Add PostHog Inbox (self-driving reports) as a rule source: poller, ingest by report id, filters, daily cap, dry run. The `posthogInboxRules` flag controls rollout (2026-11-14).
+- [x] PostHog Inbox: give the Inbox its own PostHog connection (the `posthog_inbox` row, its own OAuth on the shared callback, or a personal API key), so a new workspace can connect PostHog while PostHog Code is retired. A PostHog Code grant with the Inbox scopes still serves as a fallback (2026-11-16).
+- [x] PostHog Inbox step 2: claim the report in PostHog before the session starts, attach the pull request URL to the claim, and release the claim when the work ends without a pull request or the pull request closes without a merge. Needs `inbox:write` and `task:write`. Claim state shows in the run history (2026-11-16).
+- [x] PostHog Inbox step 3: receive PostHog's `$signals_report_ready` push (a PostHog webhook destination) and call `ingestPostHogReport` with only the report id. The poller becomes a 30-minute reconcile while pushes arrive (2026-11-16).
+- [x] PostHog Inbox backlog: browse older matching reports (7, 30 or 90 days) and start work on up to 20 of them ("Run selected"). Manual runs show who started them. MCP tools list and run the backlog. Mobile shows the backlog read-only (2026-11-16).
+- [ ] PostHog Inbox push on mobile: make and rotate the webhook URL natively (mobile shows the last push read-only today).
+- [ ] PostHog Inbox on mobile: an editor (mobile shows the rules read-only today).
+- [ ] Add a generic inbound webhook source.
 
 ## Phase 8: PostHog Integration
 
@@ -516,8 +521,7 @@ Follow-ups now that Loops has shipped:
   - [x] Phase B cont'd: agentService lifecycle + init + cleanupStaleAgents, agentStructured (start/stop/sendMessage/resumeRun/truncation), prMonitor, ai, websocket, taskFileWatcher, daemonProxyHandler, daemonAutoUpdate, taskPullRequest, gitContext, claudeCli, commitMessagePrefetch, github, middleware/auth.
   - [x] Phase C (mostly done): routes/tasks lifecycle + live-diff, routes/inbox, routes/backlog, routes/daemon, routes/permission, routes/github, routes/repositories, routes/environments. A few small routes still uncovered.
   - [x] Daemon package tests: config, executor, git, version, proxyServer, wsClient, selfUpdate (98 tests across 7 files).
-  - [ ] Phase D: Frontend hook + component tests (e.g. `useTaskFiles`, `AgentConversation`, `QueuePanel` row rendering)
-  - [ ] Phase E: Playwright E2E for 5 golden flows
+  - Phases D and E (frontend tests, Playwright E2E) are superseded. `TESTING.md` was rewritten and has no phases. See it for the current plan.
 
 - [ ] **12.6 Documentation**
   - [ ] User guide

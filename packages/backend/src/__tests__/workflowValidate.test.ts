@@ -3,7 +3,9 @@ import {
   DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR,
   MAX_WORKFLOW_NAME_LENGTH,
   validateWorkflow,
+  workflowActionsFor,
   type WorkflowInput,
+  type WorkflowIntegration,
 } from '@talyn/shared';
 
 /**
@@ -117,6 +119,54 @@ describe('validateWorkflow — refusals', () => {
   ])('refuses an action that would do nothing: %s', (_name, action, message) => {
     expect(() => validateWorkflow(input({ actions: [action as never] }))).toThrow(message);
   });
+
+  it.each<[string, unknown, unknown]>([
+    ['with no body', { type: 'approve_pr' }, { type: 'approve_pr' }],
+    ['with a blank body', { type: 'approve_pr', body: '   ' }, { type: 'approve_pr' }],
+    ['with a body', { type: 'approve_pr', body: ' LGTM ' }, { type: 'approve_pr', body: 'LGTM' }],
+  ])('accepts approve_pr %s', (_name, action, expected) => {
+    const out = validateWorkflow(input({ actions: [action as never] }));
+    expect(out.actions[0]).toEqual(expected);
+  });
+
+  it('refuses approve_pr with a body that is not a string', () => {
+    expect(() =>
+      validateWorkflow(input({ actions: [{ type: 'approve_pr', body: 42 } as never] }))
+    ).toThrow(/body must be a string/);
+  });
+
+  it.each<[WorkflowIntegration, boolean]>([
+    ['github', true],
+    ['slack', false],
+    ['webhook', false],
+    ['linear', false],
+    ['github_issues', false],
+    ['posthog_inbox', false],
+  ])('offers approve_pr on a %s rule: %s', (integration, offered) => {
+    expect(workflowActionsFor(integration).includes('approve_pr')).toBe(offered);
+  });
+
+  it.each<[string, unknown, unknown]>([
+    ['with a prompt', { type: 'run_prompt', prompt: ' Fix it ' }, { type: 'start_session', repositoryId: null, prompt: 'Fix it' }],
+    [
+      'with a model',
+      { type: 'run_prompt', prompt: 'Fix it', model: 'claude-sonnet-5-5' },
+      { type: 'start_session', repositoryId: null, prompt: 'Fix it', model: 'claude-sonnet-5-5' },
+    ],
+  ])('saves an old run_prompt %s as a session on the pull request', (_name, action, expected) => {
+    const out = validateWorkflow(input({ actions: [action as never] }));
+    expect(out.actions).toEqual([expected]);
+  });
+
+  it.each<[WorkflowIntegration]>([['github'], ['slack'], ['webhook'], ['linear'], ['github_issues'], ['posthog_inbox']])(
+    'offers no task action on a %s rule',
+    (integration) => {
+      const offered = workflowActionsFor(integration);
+      expect(offered).not.toContain('run_prompt');
+      expect(offered).not.toContain('start_task');
+      expect(offered).toContain('start_session');
+    }
+  );
 
   it('refuses a local skill, and says why', () => {
     expect(() =>

@@ -24,9 +24,11 @@ interface CommandDialogProps {
   onOpenChange: (open: boolean) => void;
   children: React.ReactNode;
   className?: string;
+  /** False when the caller filters and orders the rows itself. */
+  shouldFilter?: boolean;
 }
 
-const CommandDialog = ({ children, className, open, onOpenChange }: CommandDialogProps) => (
+const CommandDialog = ({ children, className, open, onOpenChange, shouldFilter }: CommandDialogProps) => (
   <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent
       className={cn('max-w-xl overflow-hidden p-0 shadow-lg', className)}
@@ -34,7 +36,10 @@ const CommandDialog = ({ children, className, open, onOpenChange }: CommandDialo
         if (e.key === 'Escape') onOpenChange(false);
       }}
     >
-      <Command className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground">
+      <Command
+        shouldFilter={shouldFilter}
+        className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground"
+      >
         {children}
       </Command>
     </DialogContent>

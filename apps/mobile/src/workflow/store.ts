@@ -1,12 +1,12 @@
 import { cloudProviders, environments, features, pullRequests, repositories, tasks, workbenches, workspaces, wsClient,
   type ClientLifecycle, type CodeReviewDismissReason, type CodeReviewFinding, type CodeReviewPreset, type CodeReviewPublic,
-  type PRRow } from '@talyn/client/native';
+  type PRReviewEvent, type PRRow } from '@talyn/client/native';
 import type { CreateWorkbenchInput, Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 
 import { cacheKey, canCompose, canStartSend, deliveryReducer, EMPTY_DELIVERY, EMPTY_RESOURCE, emptyTranscript, explicitSendFailure,
-  failureState, mergeEvents, PAGE_SIZE, sameScope, selectWorkbenches, upsertWorkbench, withChat, workbenchKind, workbenchTitle,
+  failureState, mergeEvents, PAGE_CEILING, PAGE_SIZE, releaseOlder, sameScope, windowFull, selectWorkbenches, upsertWorkbench, withChat, workbenchKind, workbenchTitle,
   type Delivery, type Entity, type Resource, type Scope, type Transcript } from './model';
-import { applyPrUpdate, jsonEqual, mergeRowUpdate, type PullRequestUpdate } from './prPatch';
+import { applyPrUpdate, jsonEqual, mergeRowUpdate, reuseRows, type PullRequestUpdate } from './prPatch';
 
 export const workflowApi = { workbenches, pullRequests, features, repositories, cloudProviders, workspaces, environments, tasks };
 export type WorkflowApi = typeof workflowApi;
@@ -22,6 +22,8 @@ export interface LocalState { draft: string; delivery: Delivery; offset: number;
 const EMPTY_LOCAL: LocalState = Object.freeze({ draft: '', delivery: EMPTY_DELIVERY, offset: 0, following: true, selectedChat: null });
 const CACHE_LIMIT = 32;
 const SEND_TIMEOUT = 30_000;
+/** Events read after a tool call to find its result. A result follows its call within a few events. */
+export const FULL_LOOKUP = 50;
 /** Bursts of invalidations inside this window cost one refetch. */
 export const RECOVERY_DEBOUNCE = 250;
 /** A busy repository emits constantly. Echo-driven refetches of one entry run at most this often. */
@@ -96,7 +98,9 @@ export class WorkflowStore {
       on<{ chatId: string; events: WorkbenchEvent[] }>('workbench:event', ({ chatId, events }) => {
         const entry = this.entry('transcript', chatId, false);
         if (!entry || entry.state.status === 'deleted' || entry.state.status === 'unauthorized') return;
-        const data = mergeEvents(chatId, entry.state.data as Transcript | undefined ?? emptyTranscript(), events);
+        const reading = this.local(chatId).following ? 'newest' : 'older';
+        const data = mergeEvents(chatId, entry.state.data as Transcript | undefined ?? emptyTranscript(), events ?? [], 'live', undefined, reading);
+        if (data === entry.state.data) return;
         entry.state = { ...entry.state, data, stale: entry.state.stale || data.gap };
         this.emit();
         if (data.gap) this.invalidateEntry(entry, false);
@@ -166,11 +170,14 @@ export class WorkflowStore {
     }
     for (const entry of this.entries.values()) {
       if (entry.entity !== 'children') continue;
-      changed = this.updateData<Workbench[]>(entry, (rows) => upsertWorkbench(rows, item, item.threadId === entry.id)) || changed;
+      changed = this.updateData<Workbench[]>(entry, (rows) => upsertWorkbench(rows, item, (item.threadId === entry.id || item.parentId === entry.id))) || changed;
     }
     if (changed) this.emit();
   }
   private patchChat(chat: WorkbenchChat) {
+    // A turn that starts or ends can add or remove a plan that waits for approval.
+    const before = this.findWorkbench(chat.workbenchId)?.chats?.find((value) => value.id === chat.id);
+    if (before?.status !== chat.status) this.invalidateEntry(this.entry('contextAttention', '', false));
     const patch = (rows: Workbench[]) => rows.some((row) => row.id === chat.workbenchId) ? rows.map((row) => withChat(row, chat)) : rows;
     let changed = this.updateData<Workbench>(this.entry('workbench', chat.workbenchId, false), (item) => withChat(item, chat));
     for (const entry of this.entries.values()) {
@@ -282,13 +289,15 @@ export class WorkflowStore {
         const kind = entity === 'sessions' ? 'session' : 'thread';
         return selectWorkbenches(await this.api.workbenches.list(scope.workspace, { kinds: [kind] }), kind, scope.workspace);
       }
-      case 'attention': return (await this.api.pullRequests.list({ workspaceId: scope.workspace, state: 'open', relationship: 'all' }))
-        .filter((row) => row.workspaceId === scope.workspace);
+      case 'attention': return reuseRows(data as PRRow[] | undefined,
+        (await this.api.pullRequests.list({ workspaceId: scope.workspace, state: 'open', relationship: 'all' }))
+          .filter((row) => row.workspaceId === scope.workspace));
+      case 'contextAttention': return (await this.api.workspaces.attention()).sessions ?? {};
       case 'workbench': return this.authorizedWorkbench(id, scope);
       case 'children': {
         await this.authorizedWorkbench(id, scope);
         assertScope();
-        return (await this.api.workbenches.threadSessions(id)).filter((item) => item.workspaceId === scope.workspace && item.threadId === id);
+        return (await this.api.workbenches.threadSessions(id)).filter((item) => item.workspaceId === scope.workspace && (item.threadId === id || item.parentId === id));
       }
       case 'readiness': return this.api.workbenches.readiness(scope.workspace);
       case 'pr': return this.authorizedPr(id, scope);
@@ -303,20 +312,24 @@ export class WorkflowStore {
         return item;
       }
       case 'environments': return this.api.environments.list();
-      case 'codeReview': {
+      case 'codeReview': case 'prDescription': case 'prFiles': case 'prReviews': {
         // A held row answers the scope question without a live GitHub read.
         const held = this.findPr(id);
         if (!held) await this.authorizedPr(id, scope);
         else if (held.workspaceId !== scope.workspace) throw { status: 403 };
         assertScope();
+        if (entity === 'prDescription') return this.api.pullRequests.description(id);
+        if (entity === 'prFiles') return this.api.pullRequests.files(id);
+        if (entity === 'prReviews') return this.api.pullRequests.reviews(id);
         return this.api.pullRequests.codeReview(id);
       }
     }
   }
   private async reconcile(chatId: string, scope: Scope, prior?: Transcript): Promise<Transcript> {
     let state = prior ?? emptyTranscript();
-    if (!prior?.events.length) {
-      const page = await this.api.workbenches.events(chatId, { before: 'latest', limit: PAGE_SIZE });
+    // Socket events alone set no history boundary. The newest page does; the held events merge in after.
+    if (!prior?.anchored || !prior.events.length) {
+      const page = await this.api.workbenches.events(chatId, { before: 'latest', limit: PAGE_SIZE, ceiling: PAGE_CEILING });
       if (this.scope !== scope) throw new Error('Scope changed.');
       state = mergeEvents(chatId, emptyTranscript(), page.events, 'rest', page);
       // Older servers ignore backward paging. Continue only within a bounded recovery batch.
@@ -339,30 +352,68 @@ export class WorkflowStore {
     this.updateLocal(chatId, { offset: 0, following: true });
     await this.load('transcript', chatId);
   }
+  /**
+   * The page of history just older than the window. The newest events stay; when the window
+   * is full, the transcript is marked `limited` instead and nothing is fetched.
+   */
   async older(chatId: string) {
     const entry = this.entry('transcript', chatId, false);
     const prior = entry?.state.data as Transcript | undefined;
-    if (!entry || !prior?.hasOlder || !prior.oldest || entry.pending || !this.canRead()) return;
+    if (!entry || !prior?.hasOlder || !prior.oldest || prior.limited || prior.olderFailed || entry.pending || !this.canRead()) return;
+    if (windowFull(prior)) { entry.state = { ...entry.state, data: { ...prior, limited: true } }; this.emit(); return; }
     const generation = this.generation; const revision = ++entry.revision;
     const valid = () => generation === this.generation && revision === entry.revision;
     entry.state = { ...entry.state, refreshing: true }; this.emit();
     entry.pending = (async () => {
       try {
-        const page = await this.api.workbenches.events(chatId, { before: prior.oldest!, limit: PAGE_SIZE });
+        const page = await this.api.workbenches.events(chatId, { before: prior.oldest!, limit: PAGE_SIZE, ceiling: PAGE_CEILING });
         if (!valid()) return;
         if (page.oldestSeq === undefined) throw new Error('Older history is not supported.');
-        entry.state = { ...entry.state, status: 'ready', data: mergeEvents(chatId, entry.state.data as Transcript, page.events, 'older', page), refreshing: false };
+        entry.state = { ...entry.state, data: mergeEvents(chatId, entry.state.data as Transcript, page.events, 'older', page), refreshing: false };
       } catch {
-        if (valid()) entry.state = { ...entry.state, status: 'error', stale: true, refreshing: false };
+        // The held window stays on screen. The reader retries from the top of the list.
+        if (valid()) entry.state = { ...entry.state, data: { ...entry.state.data as Transcript, olderFailed: true }, refreshing: false };
       } finally { if (valid()) { entry.pending = undefined; this.emit(); } }
     })();
     return entry.pending;
+  }
+  /** Ask for older history again after a failed page. */
+  retryOlder(chatId: string) {
+    const entry = this.entry('transcript', chatId, false);
+    const data = entry?.state.data as Transcript | undefined;
+    if (!entry || !data?.olderFailed) return Promise.resolve();
+    entry.state = { ...entry.state, data: { ...data, olderFailed: false } };
+    return this.older(chatId);
+  }
+  /** The reader is back at the newest message: free older events past `RELEASE_AT`. */
+  release(chatId: string) {
+    const entry = this.entry('transcript', chatId, false);
+    const data = entry?.state.data as Transcript | undefined;
+    if (!entry || !data || entry.pending) return;
+    const next = releaseOlder(data);
+    if (next === data) return;
+    entry.state = { ...entry.state, data: next }; this.emit();
+  }
+  /**
+   * The stored events from `seq` on, whole, as the server holds them. For a tool call the
+   * window keeps only in part. Nothing here enters the window.
+   */
+  async fullEvents(chatId: string, seq: number, limit = FULL_LOOKUP) {
+    if (!this.scope || !this.canRead()) throw new Error('Offline.');
+    const page = await this.api.workbenches.events(chatId, { after: Math.max(0, seq - 1), limit });
+    return page.events.filter((item) => item.chatId === chatId);
   }
   private localKey(id: string) { return this.scope ? cacheKey(this.scope, 'transcript', id) : null; }
   local(id: string): LocalState { const key = this.localKey(id); return key ? this.locals.get(key) ?? EMPTY_LOCAL : EMPTY_LOCAL; }
   updateLocal(id: string, patch: Partial<LocalState>) {
     const key = this.localKey(id); if (!key) return;
     this.locals.set(key, { ...this.local(id), ...patch }); this.emit();
+  }
+  /** Keep a list's scroll position without a store update. A scroll fires many times a second, and no screen reads the offset live. */
+  rememberOffset(id: string, offset: number) {
+    const key = this.localKey(id); if (!key) return;
+    const held = this.local(id);
+    if (held.offset !== offset) this.locals.set(key, { ...held, offset });
   }
   private clearEntityDrafts(entity: Entity, id: string) {
     if (entity === 'transcript') { const key = this.localKey(id); if (key) this.locals.delete(key); }
@@ -416,6 +467,7 @@ export class WorkflowStore {
         delivery: deliveryReducer(this.local(chatId).delivery, { type: 'ack', queued: ack.queued }) });
       this.invalidateEntry(this.entry('workbench', workbenchId, false), false);
       this.invalidateEntry(this.entry('transcript', chatId, false), false);
+      this.invalidateEntry(this.entry('contextAttention', '', false), false);
       this.emit();
     }).catch((error: unknown) => {
       if (!valid()) return;
@@ -427,6 +479,14 @@ export class WorkflowStore {
   }
   /** Owe one entry a quiet refetch, e.g. after an action the socket may not echo. */
   refresh(entity: Entity, id = '') { this.invalidateEntry(this.entry(entity, id, false), false); }
+  /**
+   * Pull to refresh on the PR list. It asks GitHub first, as the Refresh button on desktop and web does.
+   * Without that, it only re-reads the backend's cached list. A failed poll still re-reads the list.
+   */
+  async refreshPullRequests(): Promise<void> {
+    if (this.canRead()) await this.api.repositories.forcePoll().catch(() => undefined);
+    await this.load('attention');
+  }
 
   // -------------------------------------------------------------------------
   // Actions. Each updates held rows first where web does, then the server row wins.
@@ -483,6 +543,13 @@ export class WorkflowStore {
   findPr(id: string): PRRow | undefined {
     return this.read<PrDetail>('pr', id).data?.row ?? this.read<PRRow[]>('attention').data?.find((row) => row.id === id);
   }
+  /**
+   * The row from the open-PR list only. A cached detail may predate an access change, so it is never
+   * drawn before the current read; the list is the data the list screen already shows.
+   */
+  listedPr(id: string): PRRow | undefined {
+    return this.read<PRRow[]>('attention').data?.find((row) => row.id === id);
+  }
   /** Patch a held pull request row in the list and in its detail. */
   patchPr(id: string, patch: Partial<PRRow>) {
     let changed = this.updateData<PRRow[]>(this.entry('attention', '', false),
@@ -503,6 +570,17 @@ export class WorkflowStore {
       throw error;
     }
   }
+  /** Hide a review request from the Reviews list, or bring it back. Optimistic, like the queue toggle. */
+  async setReviewHidden(id: string, hidden: boolean) {
+    const prior = this.findPr(id)?.reviewHiddenAt ?? null;
+    this.patchPr(id, { reviewHiddenAt: hidden ? new Date().toISOString() : null });
+    try {
+      await this.api.pullRequests.setReviewHidden(id, hidden);
+    } catch (error) {
+      this.patchPr(id, { reviewHiddenAt: prior });
+      throw error;
+    }
+  }
   async setAutoKeep(id: string, enabled: boolean) {
     const row = this.findPr(id);
     const prior = row ? { autoKeepMergeable: row.autoKeepMergeable, autoMergeState: row.autoMergeState } : null;
@@ -516,6 +594,19 @@ export class WorkflowStore {
   }
   async mergePr(id: string) {
     const result = await this.api.pullRequests.merge(id);
+    this.refresh('pr', id); this.refresh('attention');
+    return result;
+  }
+  /** Close the PR on GitHub without merging. The backend refuses a PR the person did not open. */
+  async closePr(id: string) {
+    const result = await this.api.pullRequests.close(id);
+    this.refresh('pr', id); this.refresh('attention');
+    return result;
+  }
+  /** Approve or request changes as the person. The answer carries the refreshed row. */
+  async submitPrReview(id: string, event: PRReviewEvent, body?: string) {
+    const result = await this.api.pullRequests.submitReview(id, { event, ...(body ? { body } : {}) });
+    if (result?.row) this.patchPr(id, result.row);
     this.refresh('pr', id); this.refresh('attention');
     return result;
   }

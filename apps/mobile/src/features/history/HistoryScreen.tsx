@@ -8,6 +8,7 @@ import { ScreenContainer } from '../../components/ScreenContainer';
 import { PrPill } from '../../components/Status';
 import { AppText, EmptyState, IconButton, Input, Row, SectionLabel, Segmented, useActionSheet, type Symbol } from '../../components/UI';
 import { StateNotice, workflowStyles as styles } from '../../components/Workflow';
+import { trackEvent } from '../../lib/analytics';
 import { showActionError } from '../../lib/errors';
 import { shortTime, useNow } from '../../lib/time';
 import { sessionRoute, threadRoute } from '../../navigation/routes';
@@ -67,6 +68,7 @@ export function HistoryScreen() {
     setBusy(item.id);
     try {
       await workflow.restoreWorkbench(item.id);
+      trackEvent('session_restored', { workbench_id: item.id, kind: item.kind ?? 'session', runtime: item.runtime });
       if (all) state.set(all.filter((value) => value.id !== item.id));
       router.push(routeOf(item));
     } catch (error) {

@@ -1,10 +1,10 @@
 import type { MergeQueuePublic, PRRow } from '@talyn/client/native';
 
 import { prCounts } from '../features/prs/counts';
-import { buildQueueGroups, compareByCreated, hiddenReviewCohort, isAwaitingReview, isNeedsAttention, isReadyToMerge, mineSections,
+import { buildQueueGroups, compareByCreated, hiddenReviewCohort, isAwaitingReview, isNeedsAttention, isReadyToMerge,
   pullsTab, queueBlockedReason, queueBudgetsLine, queueChip, queueParentStatus, queueStatusLine, reviewCohort, reviewRequestLabel,
   sortReviews } from '../features/prs/lists';
-import { pullsSections } from '../features/prs/PullRequestsScreen';
+import { queueSections } from '../features/prs/PullRequestsScreen';
 import { pr } from './workflowFixtures';
 
 jest.mock('../auth/AuthProvider', () => ({ useMobileRuntime: () => ({}), useNetwork: () => 'online' }));
@@ -45,25 +45,20 @@ describe('pull request pages', () => {
     expect(isReadyToMerge(row('pr-1', { mergeQueue }, patch as Partial<PRRow['summary']>))).toBe(expected);
   });
 
-  it('puts the PRs that need you first, then ready, waiting, and the rest, newest first', () => {
-    const rows = [
-      row('pr-1', { authored: true, createdAt: '2026-11-01T00:00:00Z' }, { blockingReason: 'unknown', reviewDecision: undefined }),
-      row('pr-2', { authored: true, createdAt: '2026-11-02T00:00:00Z' }, { blockingReason: 'merge_conflicts' }),
-      row('pr-3', { authored: false, watching: true, createdAt: '2026-11-03T00:00:00Z' }, { blockingReason: 'checks_failed' }),
-      row('pr-4', { authored: true }, { blockingReason: 'mergeable', reviewDecision: 'APPROVED' }),
-      row('pr-5', { authored: true }, { blockingReason: 'blocked', reviewDecision: 'REVIEW_REQUIRED' }),
-      row('pr-6', { authored: false, watching: false }, { blockingReason: 'merge_conflicts' }),
-    ];
-    expect(mineSections(rows).map((section) => [section.title, section.rows.map((item) => item.id)])).toEqual([
-      ['Needs attention', ['pr-3', 'pr-2']], ['Ready to merge', ['pr-4']], ['Waiting for review', ['pr-5']], ['Open', ['pr-1']],
-    ]);
-  });
-
-  it('orders by the GitHub open date, then the row date, then the id', () => {
+  it.each([
+    ['desc', ['pr-2', 'pr-1', 'pr-3', 'pr-4']],
+    ['asc', ['pr-4', 'pr-1', 'pr-3', 'pr-2']],
+  ] as const)('orders by the GitHub open date, then the row date, then the id, %s', (dir, expected) => {
     const a = row('pr-1', { createdAt: '2026-11-05T00:00:00Z' });
     const b = row('pr-2', { createdAt: '2026-11-01T00:00:00Z' }, { createdAt: '2026-11-09T00:00:00Z' } as Partial<PRRow['summary']>);
     const c = row('pr-3', { createdAt: '2026-11-05T00:00:00Z' });
-    expect([a, b, c].sort(compareByCreated).map((item) => item.id)).toEqual(['pr-2', 'pr-1', 'pr-3']);
+    const d = row('pr-4', { createdAt: '2026-10-01T00:00:00Z' });
+    expect([c, d, a, b].sort((x, y) => compareByCreated(x, y, dir)).map((item) => item.id)).toEqual(expected);
+  });
+
+  it('defaults to newest first when used as a plain comparator', () => {
+    const rows = [row('pr-1', { createdAt: '2026-11-01T00:00:00Z' }), row('pr-2', { createdAt: '2026-11-02T00:00:00Z' })];
+    expect(rows.sort(compareByCreated).map((item) => item.id)).toEqual(['pr-2', 'pr-1']);
   });
 
   it('splits review requests into visible and hidden, the most recently hidden first', () => {
@@ -76,20 +71,21 @@ describe('pull request pages', () => {
   });
 
   it.each([
-    [false, ['pr-2', 'pr-1', 'pr-3']],
+    ['newest', ['pr-2', 'pr-1', 'pr-3']],
+    ['oldest', ['pr-3', 'pr-1', 'pr-2']],
     // The server's verdicts win: blocking others first, then score. A row it did not score is scored here.
-    [true, ['pr-3', 'pr-1', 'pr-2']],
-  ] as const)('sorts reviews with priority %s', (priority, expected) => {
+    ['priority', ['pr-3', 'pr-1', 'pr-2']],
+  ] as const)('sorts reviews by %s', (mode, expected) => {
     const verdict = (gate: string, score: number) => ({ gate, score, terms: [], topReason: null }) as unknown as PRRow['priority'];
     const rows = [row('pr-1', { createdAt: '2026-11-02T00:00:00Z', priority: verdict('actionable', 90) }),
       row('pr-2', { createdAt: '2026-11-05T00:00:00Z', priority: verdict('actionable', 10) }),
       row('pr-3', { createdAt: '2026-11-01T00:00:00Z', priority: verdict('blocking_others', 0) })];
-    expect(sortReviews(rows, { priority, now: Date.parse('2026-11-09T00:00:00Z') }).map((item) => item.id)).toEqual(expected);
+    expect(sortReviews(rows, { mode, now: Date.parse('2026-11-09T00:00:00Z') }).map((item) => item.id)).toEqual(expected);
   });
 
   it('scores a row the server did not', () => {
     const rows = [row('pr-1', { createdAt: '2026-11-02T00:00:00Z' }), row('pr-2', { createdAt: '2026-11-05T00:00:00Z' })];
-    expect(sortReviews(rows, { priority: true, now: Date.parse('2026-11-09T00:00:00Z') }).map((item) => item.id).sort()).toEqual(['pr-1', 'pr-2']);
+    expect(sortReviews(rows, { mode: 'priority', now: Date.parse('2026-11-09T00:00:00Z') }).map((item) => item.id).sort()).toEqual(['pr-1', 'pr-2']);
   });
 
   it.each([
@@ -108,13 +104,9 @@ describe('pull request pages', () => {
     { mine: 2, reviews: 1, queue: 1 }],
   ] as const)('counts badges for %#', (rows, expected) => expect(prCounts(rows as PRRow[] | undefined)).toEqual(expected));
 
-  it('draws each page from the same rows', () => {
-    const rows = [row('pr-1', { authored: true, reviewRequested: false, mergeQueued: true, mergeQueue: entry({ position: 2 }) }),
-      row('pr-2', { reviewRequested: true })];
-    const options = { priority: false, now: 0 };
-    expect(pullsSections('mine', rows, options).flatMap((section) => section.data.map((item) => item.id))).toEqual(['pr-1']);
-    expect(pullsSections('reviews', rows, options).flatMap((section) => section.data.map((item) => item.id))).toEqual(['pr-2']);
-    expect(pullsSections('queue', rows, options)).toEqual([expect.objectContaining({ title: 'example/project → main', data: [rows[0]] })]);
+  it('groups the queue page by where each PR lands', () => {
+    const rows = [row('pr-1', { authored: true, reviewRequested: false, mergeQueued: true, mergeQueue: entry({ position: 2 }) })];
+    expect(queueSections(rows)).toEqual([expect.objectContaining({ title: 'example/project → main', data: [rows[0]] })]);
   });
 });
 

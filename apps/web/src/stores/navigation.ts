@@ -1,34 +1,35 @@
 import { create } from 'zustand';
-import type { Workbench } from '@talyn/shared';
-import { setPanelNavigator, useWorkspaceStore, type SettingsSection } from './workspace';
+import { isIntegrationKind, type IntegrationKind, type Workbench } from '@talyn/shared';
+import { contextsEqual, setPanelNavigator, useWorkspaceStore, type AppContext, type SettingsSection } from './workspace';
 import { useWorkbenchStore } from './workbenches';
+import { findSpace, useSpacesStore } from './spaces';
 import type { ActivePanel } from '../lib/panels';
 import { PR_TABS, type PrTab } from '../lib/prTabs';
 export { PR_TABS, type PrTab } from '../lib/prTabs';
-export type AutomationTab = 'workflows' | 'loops';
-
 export type Route =
   | { view: 'home'; mode?: 'session' | 'thread' }
   | { view: 'workbench'; id: string }
   | { view: 'history' }
+  /** Split view: several sessions side by side. The panes are in `stores/splitView.ts`. */
+  | { view: 'split' }
   | { view: 'mcp_servers' }
   | { view: 'insights' }
   | { view: 'prs'; tab: PrTab }
-  | { view: 'automations'; tab: AutomationTab }
+  /** The Integrations area: the catalog, or one integration's page. */
+  | { view: 'integrations'; kind?: IntegrationKind }
   | { view: 'settings'; section: SettingsSection };
 
-export const AUTOMATION_TABS: readonly AutomationTab[] = ['workflows', 'loops'];
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'sessions',
   'shortcuts',
   'workspace',
   'sandboxSetup',
-  'privateRoutes',
   'integrations',
   'skills',
   'instructions',
   'memory',
   'codeReview',
+  'notifications',
   'account',
   'billing',
   'teams',
@@ -48,6 +49,7 @@ export function isRoute(value: unknown): value is Route {
   switch (r.view) {
     case 'home':
     case 'history':
+    case 'split':
     case 'mcp_servers':
     case 'insights':
       return true;
@@ -55,8 +57,8 @@ export function isRoute(value: unknown): value is Route {
       return typeof r.id === 'string' && r.id.length > 0;
     case 'prs':
       return PR_TABS.includes(r.tab as PrTab);
-    case 'automations':
-      return AUTOMATION_TABS.includes(r.tab as AutomationTab);
+    case 'integrations':
+      return r.kind === undefined || isIntegrationKind(r.kind);
     case 'settings':
       return SETTINGS_SECTIONS.includes(r.section as SettingsSection);
     default:
@@ -71,8 +73,9 @@ export function routesEqual(a: Route, b: Route): boolean {
 export function panelForRoute(route: Route): ActivePanel {
   switch (route.view) {
     case 'prs':
-    case 'automations':
       return route.tab;
+    case 'integrations':
+      return 'integrations';
     case 'settings':
       return 'settings';
     case 'mcp_servers':
@@ -85,7 +88,6 @@ export function panelForRoute(route: Route): ActivePanel {
 export function analyticsPanel(route: Route): string {
   switch (route.view) {
     case 'prs':
-    case 'automations':
       return route.tab;
     default:
       return route.view;
@@ -107,9 +109,8 @@ export function routeForPanel(
     case 'merge_queue':
     case 'queue':
       return { view: 'prs', tab: panel };
-    case 'workflows':
-    case 'loops':
-      return { view: 'automations', tab: panel };
+    case 'integrations':
+      return { view: 'integrations' };
     case 'settings':
       return { view: 'settings', section: ctx.settingsSection };
     case 'mcp_servers':
@@ -122,11 +123,37 @@ export function routeForPanel(
   }
 }
 
+/** A place in history: the route and the context (Personal or a space) it showed in. */
+export interface HistoryEntry {
+  route: Route;
+  context: AppContext;
+}
+
+function contextNow(): AppContext {
+  const ws = useWorkspaceStore.getState();
+  return ws.currentContext.kind === 'personal'
+    ? { kind: 'personal', workspaceId: ws.currentContext.workspaceId ?? ws.currentWorkspaceId }
+    : ws.currentContext;
+}
+
+/**
+ * Back and forward return to the context an entry showed in. For example, a
+ * session that moved the app to its space goes back to the PR list in the
+ * first context. Only with Spaces on, and only to a context that still exists.
+ */
+function restoreContext(context: AppContext): void {
+  const ws = useWorkspaceStore.getState();
+  if (ws.features?.spaces !== true || contextsEqual(contextNow(), context)) return;
+  if (context.kind === 'space' && !findSpace(useSpacesStore.getState().teams, context.spaceId)) return;
+  if (context.kind === 'personal' && !(ws.workspaces ?? []).some((w) => w.id === context.workspaceId)) return;
+  ws.setContext(context);
+}
+
 interface NavigationState {
   route: Route;
   replace: boolean;
-  backStack: Route[];
-  forwardStack: Route[];
+  backStack: HistoryEntry[];
+  forwardStack: HistoryEntry[];
   lastWorkbenchId: string | null;
   paletteOpen: boolean;
   addRepositoryOpen: boolean;
@@ -186,7 +213,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
         route,
         replace: false,
         lastWorkbenchId,
-        backStack: [...s.backStack, cur].slice(-HISTORY_LIMIT),
+        backStack: [...s.backStack, { route: cur, context: contextNow() }].slice(-HISTORY_LIMIT),
         forwardStack: [],
       }));
     }
@@ -196,12 +223,14 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   back: () => {
     const { backStack, route } = get();
     if (backStack.length === 0) return;
-    const prev = backStack[backStack.length - 1];
+    const { route: prev, context } = backStack[backStack.length - 1];
+    const here: HistoryEntry = { route, context: contextNow() };
+    restoreContext(context);
     set((s) => ({
       route: prev,
       replace: true,
       backStack: s.backStack.slice(0, -1),
-      forwardStack: [route, ...s.forwardStack].slice(0, HISTORY_LIMIT),
+      forwardStack: [here, ...s.forwardStack].slice(0, HISTORY_LIMIT),
       lastWorkbenchId: prev.view === 'workbench' ? prev.id : s.lastWorkbenchId,
     }));
     applyRoute(prev);
@@ -210,12 +239,14 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   forward: () => {
     const { forwardStack, route } = get();
     if (forwardStack.length === 0) return;
-    const next = forwardStack[0];
+    const { route: next, context } = forwardStack[0];
+    const here: HistoryEntry = { route, context: contextNow() };
+    restoreContext(context);
     set((s) => ({
       route: next,
       replace: true,
       forwardStack: s.forwardStack.slice(1),
-      backStack: [...s.backStack, route].slice(-HISTORY_LIMIT),
+      backStack: [...s.backStack, here].slice(-HISTORY_LIMIT),
       lastWorkbenchId: next.view === 'workbench' ? next.id : s.lastWorkbenchId,
     }));
     applyRoute(next);
@@ -227,7 +258,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
 
   reconcileWorkbenchRoute: ({ workbenches, listLoaded, offered }) => {
     const { route } = get();
-    if (route.view !== 'workbench' && route.view !== 'history') return;
+    if (route.view !== 'workbench' && route.view !== 'history' && route.view !== 'split') return;
     if (offered === false) {
       get().navigate(HOME, { replace: true });
       return;

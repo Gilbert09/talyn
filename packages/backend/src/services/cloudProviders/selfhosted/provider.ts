@@ -14,7 +14,8 @@ import {
 } from '../../selfHosted/credentials.js';
 import { codexCredentialFrom } from '../../selfHosted/codexOauth.js';
 import { addFleetAccount, updateFleetAccountCredential } from '../../selfHosted/accounts.js';
-import { dispatchTaskToFleet } from '../../selfHosted/executor.js';
+import { ciParkFromTask, dispatchTaskToFleet } from '../../selfHosted/executor.js';
+import { meterBoxClosed } from '../../billing/usageHooks.js';
 import { selfHostedPoller } from '../../selfHosted/poller.js';
 import type { CloudTaskProvider, CloudTaskRow, DispatchResult } from '../types.js';
 
@@ -38,6 +39,8 @@ interface SelfHostedCredInput {
   /** Fleet account to reconnect. The old ChatGPT account-id field still works. */
   codexFleetAccountId?: string;
   codexLabel?: string;
+  /** Add a new Codex account that the server names. */
+  codexNewAccount?: boolean;
   codexExpiresIn?: number;
   /** An OpenAI PLATFORM key (`sk-…`), for metered billing instead of a subscription. */
   openaiKey?: string;
@@ -178,14 +181,17 @@ export const selfHostedProvider: CloudTaskProvider = {
     // Connecting Codex as a subscription clears any platform key beside it and
     // vice versa: a leftover credential the user believes they replaced is one
     // the dispatch path could silently fall back to.
-    const targetedCodex = Boolean(codex && (body.codexFleetAccountId || body.codexLabel));
+    const targetedCodex = Boolean(codex && (body.codexFleetAccountId || body.codexLabel || body.codexNewAccount === true));
+    let accountId: string | undefined;
     if (targetedCodex && codex) {
       if (body.codexFleetAccountId) {
         await updateFleetAccountCredential(body.codexFleetAccountId, codex);
+        accountId = body.codexFleetAccountId;
       } else {
-        await addFleetAccount(workspaceId, {
+        const added = await addFleetAccount(workspaceId, {
           kind: 'codex_oauth', credential: codex, label: body.codexLabel,
         });
+        accountId = added.id;
       }
     }
     if (!targetedCodex || claudeToken || openaiKey || clearClaude || clearCodex) {
@@ -200,7 +206,7 @@ export const selfHostedProvider: CloudTaskProvider = {
             : {}),
       });
     }
-    return { ok: true };
+    return { ok: true, ...(accountId ? { accountId } : {}) };
   },
 
   async hasCredentials(workspaceId) {
@@ -243,6 +249,13 @@ export const selfHostedProvider: CloudTaskProvider = {
     const { sandbox } = await client.getSandbox(cloud.remoteTaskId);
     if (sandbox.workspaceId !== task.workspaceId) {
       throw new Error('Fleet sandbox not found in this workspace');
+    }
+    // A box that outlives its task (`ci-park`) would only go idle on a cancel,
+    // and a parked one is asleep with nothing to cancel. Delete it instead.
+    if (ciParkFromTask(task)) {
+      await client.deleteSandbox(cloud.remoteTaskId);
+      await meterBoxClosed({ sandboxId: cloud.remoteTaskId, reason: 'deleted', workspaceId: task.workspaceId });
+      return;
     }
     await client.cancelSandbox(cloud.remoteTaskId);
   },

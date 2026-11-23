@@ -1,5 +1,10 @@
 import { isCodeReviewPreset, type CodeReviewPreset } from './codeReview.js';
-// Workflows — the user's own automations over PR lifecycle events.
+// Workflows — the user's own automations over PR lifecycle events and, since
+// rules became per integration, over Slack channel messages.
+//
+// A rule belongs to ONE integration (`integration`, absent ⇒ `github`), and its
+// events, conditions and actions must all belong to that integration. The
+// validator refuses a mix with a message that says what to change.
 //
 // A workflow is a named, workspace-scoped rule of the shape "on these events,
 // matching these conditions, do these actions". It is evaluated on the GitHub
@@ -20,6 +25,51 @@ import { isCodeReviewPreset, type CodeReviewPreset } from './codeReview.js';
 // is not.
 
 import type { SkillKey } from './skills.js';
+import type { PostHogClaimSummary, WorkflowRunTrigger } from './posthogInbox.js';
+
+// ============================================================================
+// Integrations
+// ============================================================================
+
+/** The integrations a rule can belong to. */
+export const WORKFLOW_INTEGRATIONS = ['github', 'slack', 'webhook', 'linear', 'github_issues', 'posthog_inbox'] as const;
+
+export type WorkflowIntegration = (typeof WORKFLOW_INTEGRATIONS)[number];
+
+/** How each integration reads in a message or a picker. */
+export const WORKFLOW_INTEGRATION_LABELS: Record<WorkflowIntegration, string> = {
+  github: 'GitHub',
+  slack: 'Slack',
+  webhook: 'Webhook',
+  linear: 'Linear',
+  github_issues: 'GitHub Issues',
+  posthog_inbox: 'PostHog Inbox',
+};
+
+/** The integrations whose rules act on an issue in a tracker. */
+export const ISSUE_WORKFLOW_INTEGRATIONS = ['linear', 'github_issues'] as const;
+
+export type IssueWorkflowIntegration = (typeof ISSUE_WORKFLOW_INTEGRATIONS)[number];
+
+export function isIssueWorkflowIntegration(value: unknown): value is IssueWorkflowIntegration {
+  return typeof value === 'string' && (ISSUE_WORKFLOW_INTEGRATIONS as readonly string[]).includes(value);
+}
+
+export function isWorkflowIntegration(value: unknown): value is WorkflowIntegration {
+  return typeof value === 'string' && (WORKFLOW_INTEGRATIONS as readonly string[]).includes(value);
+}
+
+/**
+ * The integration a stored rule, an input or a run belongs to.
+ *
+ * Absent means `github`: every rule written before integrations existed is a
+ * GitHub rule, and an old client sends no field at all.
+ */
+export function workflowIntegrationOf(
+  value: { integration?: WorkflowIntegration | null } | null | undefined
+): WorkflowIntegration {
+  return isWorkflowIntegration(value?.integration) ? value.integration : 'github';
+}
 
 // ============================================================================
 // Triggers
@@ -42,7 +92,7 @@ import type { SkillKey } from './skills.js';
  * PR goes green" is the rule people come to this screen to write, and it used
  * to be the last option on a scrolling list.
  */
-export const WORKFLOW_TRIGGER_EVENTS = [
+export const GITHUB_WORKFLOW_EVENTS = [
   'pr_checks_passed',
   'pr_checks_completed',
   'pr_opened',
@@ -65,7 +115,100 @@ export const WORKFLOW_TRIGGER_EVENTS = [
   'pr_comment',
 ] as const;
 
-export type WorkflowTriggerEvent = (typeof WORKFLOW_TRIGGER_EVENTS)[number];
+export type GithubWorkflowEvent = (typeof GITHUB_WORKFLOW_EVENTS)[number];
+
+/**
+ * The GitHub PR events, under the name the editors and the MCP schema have
+ * always read. It does NOT include the Slack events: the GitHub editor offers
+ * this list, and a Slack event there could only be refused on save.
+ */
+export const WORKFLOW_TRIGGER_EVENTS = GITHUB_WORKFLOW_EVENTS;
+
+/**
+ * The Slack events a rule can trigger on.
+ *
+ * `slack_message` is a new message in a watched channel, from a person or from
+ * another app or bot (an alerting app is the usual reason to watch a channel).
+ * Edits and Talyn's own messages are dropped before matching, by the Slack
+ * source adapter.
+ */
+export const SLACK_WORKFLOW_EVENTS = ['slack_message'] as const;
+
+export type SlackWorkflowEvent = (typeof SLACK_WORKFLOW_EVENTS)[number];
+
+/**
+ * The webhook events a rule can trigger on: one request to the rule's own URL.
+ * A webhook rule has its own URL, so the event needs no other name.
+ */
+export const WEBHOOK_WORKFLOW_EVENTS = ['webhook_received'] as const;
+
+export type WebhookWorkflowEvent = (typeof WEBHOOK_WORKFLOW_EVENTS)[number];
+
+/**
+ * The issue events a Linear or GitHub Issues rule can trigger on. One vendor
+ * update can yield several of them (a label and an assignee changed at once).
+ */
+export const ISSUE_WORKFLOW_EVENTS = [
+  'issue_created',
+  'issue_labeled',
+  'issue_assigned',
+  'issue_status_changed',
+  'issue_commented',
+  'issue_updated',
+] as const;
+
+/**
+ * The event of a merge write-back run: the pull request that a rule's work
+ * opened merged. Talyn records it on the rule's history. A rule cannot
+ * trigger on it, so it is not in {@link ISSUE_WORKFLOW_EVENTS}.
+ */
+export const ISSUE_MERGE_EVENT = 'issue_pr_merged' as const;
+
+export type IssueWorkflowEvent = (typeof ISSUE_WORKFLOW_EVENTS)[number] | typeof ISSUE_MERGE_EVENT;
+
+/**
+ * The PostHog Inbox events a rule can trigger on. `report_ready` is a PostHog
+ * self-driving report that is ready for work. Talyn finds it by polling the
+ * workspace's PostHog project (and, later, from a PostHog webhook), and always
+ * reads the report again from PostHog before it acts.
+ */
+export const POSTHOG_INBOX_WORKFLOW_EVENTS = ['report_ready'] as const;
+
+export type PostHogInboxWorkflowEvent = (typeof POSTHOG_INBOX_WORKFLOW_EVENTS)[number];
+
+/** Every event any rule can trigger on. */
+export type WorkflowTriggerEvent =
+  | GithubWorkflowEvent
+  | SlackWorkflowEvent
+  | WebhookWorkflowEvent
+  | IssueWorkflowEvent
+  | PostHogInboxWorkflowEvent;
+
+/** Every event, of every integration. */
+export const ALL_WORKFLOW_TRIGGER_EVENTS: readonly WorkflowTriggerEvent[] = [
+  ...GITHUB_WORKFLOW_EVENTS,
+  ...SLACK_WORKFLOW_EVENTS,
+  ...WEBHOOK_WORKFLOW_EVENTS,
+  ...ISSUE_WORKFLOW_EVENTS,
+  ...POSTHOG_INBOX_WORKFLOW_EVENTS,
+];
+
+/** The events that belong to one integration. */
+export function workflowEventsFor(integration: WorkflowIntegration): readonly WorkflowTriggerEvent[] {
+  switch (integration) {
+    case 'slack':
+      return SLACK_WORKFLOW_EVENTS;
+    case 'webhook':
+      return WEBHOOK_WORKFLOW_EVENTS;
+    case 'linear':
+    case 'github_issues':
+      return ISSUE_WORKFLOW_EVENTS;
+    case 'posthog_inbox':
+      return POSTHOG_INBOX_WORKFLOW_EVENTS;
+    default:
+      return GITHUB_WORKFLOW_EVENTS;
+  }
+}
 
 /**
  * Display strings for the trigger list, so the two editors cannot disagree
@@ -92,6 +235,16 @@ export const WORKFLOW_EVENT_LABELS: Record<WorkflowTriggerEvent, string> = {
   pr_comment: 'Comment on the PR',
   pr_checks_completed: 'A check suite finished',
   pr_checks_passed: 'All checks passed',
+  slack_message: 'New message in a channel',
+  webhook_received: 'Webhook received',
+  issue_created: 'Issue created',
+  issue_labeled: 'Label added to the issue',
+  issue_assigned: 'Issue assigned',
+  issue_status_changed: 'Issue status changed',
+  issue_commented: 'Comment on the issue',
+  issue_updated: 'Issue title or description changed',
+  issue_pr_merged: 'Pull request merged',
+  report_ready: 'Report ready for work',
 };
 
 /**
@@ -245,6 +398,252 @@ export interface WorkflowConditions {
   checkConclusions?: WorkflowCheckConclusion[];
   /** Case-insensitive substring of the comment / review body. */
   bodyContains?: string;
+
+  // ---- Slack rules only -------------------------------------------------
+
+  /** The Slack team (workspace) the rule watches. Required on a Slack rule. */
+  slackTeamId?: string;
+  /** Slack channel ids. Matches a message in ANY of them. Required on a Slack rule. */
+  channels?: string[];
+  /** Case-insensitive substring of the Slack message text. */
+  textContains?: string;
+  /** Who may trigger the rule. Absent means `any`. */
+  slackAuthors?: WorkflowSlackAuthorMatch;
+  /** Whether a reply inside a thread triggers the rule. Absent means no. */
+  includeThreadReplies?: boolean;
+
+  // ---- Webhook rules only -----------------------------------------------
+
+  /** Tests on the JSON body of the request. All must pass. Absent means every request. */
+  payloadMatches?: WebhookPayloadCondition[];
+
+  // ---- Issue rules (Linear, GitHub Issues) ------------------------------
+  //
+  // An issue rule also reads `repos` (GitHub Issues), `labelsAny`,
+  // `labelsAll`, `labelsNone`, `labelName`, `titleContains` and
+  // `bodyContains`, with the same meaning as on a pull request.
+
+  /** Linear only: the Linear connection (one organization) the rule watches. Required. */
+  connectionId?: string;
+  /** Linear team keys, like `ENG`. Matches ANY. */
+  teams?: string[];
+  /** Linear project names. Matches ANY. */
+  projects?: string[];
+  /** Status names: a Linear workflow state, or `open` / `closed` on GitHub. Matches ANY. */
+  statuses?: string[];
+  /** Linear priority names (`Urgent`, `High`, `Medium`, `Low`, `No priority`). Matches ANY. */
+  priorities?: string[];
+  /** Who the issue is assigned to. */
+  issueAssignee?: IssueAssigneeMatch;
+  /** GitHub Issues only: who opened the issue, by login. Matches ANY. */
+  issueAuthors?: string[];
+
+  // ---- PostHog Inbox rules ------------------------------------------------
+  //
+  // A PostHog Inbox rule also reads `priorities` (`P0`–`P4`) and
+  // `titleContains`.
+
+  /** Actionability judgments. Matches ANY. Absent means `immediately_actionable` only. */
+  actionability?: string[];
+  /** PostHog source products, like `error_tracking`. Matches when the report has ANY of them. */
+  sourceProducts?: string[];
+  /** The scout that wrote the report, by skill name. */
+  scouts?: PostHogInboxScoutMatch;
+  /**
+   * `owner/repo` names. The report's repository must be one of them. Without
+   * this, any repository connected to the Talyn workspace. A report whose
+   * repository is not connected never runs.
+   */
+  repositories?: string[];
+  /** GitHub logins. Matches when PostHog suggests ANY of them as a reviewer. */
+  suggestedReviewers?: string[];
+  /** Case-insensitive substring of the report summary. */
+  summaryContains?: string;
+  /** The report must group at least this many signals. */
+  minSignalCount?: number;
+}
+
+/**
+ * Which scouts a PostHog Inbox rule takes reports from, by skill name.
+ * `include`: the report's scout must be one of them. `exclude`: it must not be.
+ * A report with no scout fails `include` and passes `exclude`.
+ */
+export interface PostHogInboxScoutMatch {
+  include?: string[];
+  exclude?: string[];
+}
+
+/**
+ * Who an issue is assigned to.
+ *
+ * - `talyn`: Linear only. The issue is assigned or delegated to Talyn's app
+ *   user (the connection must have the `app:assignable` scope).
+ * - `me`: GitHub Issues only. The workspace's connected GitHub user.
+ * - `unassigned`: nobody.
+ * - `people`: any of these logins, names or ids (case-insensitive).
+ */
+export type IssueAssigneeMatch =
+  | { kind: 'talyn' }
+  | { kind: 'me' }
+  | { kind: 'unassigned' }
+  | { kind: 'people'; people: string[] };
+
+export const ISSUE_ASSIGNEE_KINDS = ['talyn', 'me', 'unassigned', 'people'] as const;
+
+export const ISSUE_ASSIGNEE_KIND_LABELS: Record<(typeof ISSUE_ASSIGNEE_KINDS)[number], string> = {
+  talyn: 'Talyn',
+  me: 'Me',
+  unassigned: 'Nobody',
+  people: 'Specific people',
+};
+
+/**
+ * One test on a webhook's JSON body.
+ *
+ * `path` is a dot path with array indices: `issue.labels[0].name` or
+ * `issue.labels.0.name`. A path that does not resolve fails every test.
+ *
+ * - `equals`: the value at the path, as text, is exactly `value`.
+ * - `contains`: for text, `value` appears in it (case-insensitive). For an
+ *   array, one item, as text, is `value` (case-insensitive).
+ * - `exists`: the path resolves to a value that is not null.
+ *
+ * No expression language on purpose: a short list of these is legible in the
+ * editor, and a rule that needs OR is two rules.
+ */
+export interface WebhookPayloadCondition {
+  path: string;
+  op: WebhookPayloadOp;
+  /** Required for `equals` and `contains`. Absent for `exists`. */
+  value?: string;
+}
+
+export const WEBHOOK_PAYLOAD_OPS = ['equals', 'contains', 'exists'] as const;
+
+export type WebhookPayloadOp = (typeof WEBHOOK_PAYLOAD_OPS)[number];
+
+export const WEBHOOK_PAYLOAD_OP_LABELS: Record<WebhookPayloadOp, string> = {
+  equals: 'equals',
+  contains: 'contains',
+  exists: 'is present',
+};
+
+/**
+ * Who may trigger a Slack rule.
+ *
+ * `any` is the default: anyone who posts in a watched channel, apps and bots
+ * included. `linked` narrows
+ * a rule to Slack users who linked their Slack account to Talyn in that Slack
+ * team. The editors do not offer it, but MCP can set it.
+ */
+export type WorkflowSlackAuthorMatch =
+  | { kind: 'linked' }
+  | { kind: 'any' }
+  | { kind: 'users'; userIds: string[] };
+
+export const WORKFLOW_SLACK_AUTHOR_KINDS = ['linked', 'any', 'users'] as const;
+
+export const WORKFLOW_SLACK_AUTHOR_KIND_LABELS: Record<
+  (typeof WORKFLOW_SLACK_AUTHOR_KINDS)[number],
+  string
+> = {
+  linked: 'People linked to Talyn',
+  any: 'Anyone in the channel',
+  users: 'Specific people',
+};
+
+/** The condition keys a GitHub rule may carry. */
+export const GITHUB_WORKFLOW_CONDITION_KEYS = [
+  'repos',
+  'baseBranches',
+  'baseIsDefault',
+  'titleContains',
+  'draft',
+  'labelsAny',
+  'labelsAll',
+  'labelsNone',
+  'author',
+  'actor',
+  'reviewStates',
+  'labelName',
+  'target',
+  'checkConclusions',
+  'bodyContains',
+] as const satisfies ReadonlyArray<keyof WorkflowConditions>;
+
+/** The condition keys a Slack rule may carry. */
+export const SLACK_WORKFLOW_CONDITION_KEYS = [
+  'slackTeamId',
+  'channels',
+  'textContains',
+  'slackAuthors',
+  'includeThreadReplies',
+] as const satisfies ReadonlyArray<keyof WorkflowConditions>;
+
+/** The condition keys a webhook rule may carry. */
+export const WEBHOOK_WORKFLOW_CONDITION_KEYS = ['payloadMatches'] as const satisfies ReadonlyArray<
+  keyof WorkflowConditions
+>;
+
+/** The condition keys a GitHub Issues rule may carry. */
+export const GITHUB_ISSUES_WORKFLOW_CONDITION_KEYS = [
+  'repos',
+  'labelsAny',
+  'labelsAll',
+  'labelsNone',
+  'labelName',
+  'issueAssignee',
+  'issueAuthors',
+  'statuses',
+  'titleContains',
+  'bodyContains',
+] as const satisfies ReadonlyArray<keyof WorkflowConditions>;
+
+/** The condition keys a Linear rule may carry. */
+export const LINEAR_WORKFLOW_CONDITION_KEYS = [
+  'connectionId',
+  'teams',
+  'projects',
+  'statuses',
+  'priorities',
+  'labelsAny',
+  'labelsAll',
+  'labelsNone',
+  'labelName',
+  'issueAssignee',
+  'titleContains',
+  'bodyContains',
+] as const satisfies ReadonlyArray<keyof WorkflowConditions>;
+
+/** The condition keys a PostHog Inbox rule may carry. */
+export const POSTHOG_INBOX_WORKFLOW_CONDITION_KEYS = [
+  'priorities',
+  'actionability',
+  'sourceProducts',
+  'scouts',
+  'repositories',
+  'suggestedReviewers',
+  'titleContains',
+  'summaryContains',
+  'minSignalCount',
+] as const satisfies ReadonlyArray<keyof WorkflowConditions>;
+
+/** The condition keys each integration's rules may carry. */
+export function workflowConditionKeysFor(integration: WorkflowIntegration): readonly string[] {
+  switch (integration) {
+    case 'slack':
+      return SLACK_WORKFLOW_CONDITION_KEYS;
+    case 'webhook':
+      return WEBHOOK_WORKFLOW_CONDITION_KEYS;
+    case 'linear':
+      return LINEAR_WORKFLOW_CONDITION_KEYS;
+    case 'github_issues':
+      return GITHUB_ISSUES_WORKFLOW_CONDITION_KEYS;
+    case 'posthog_inbox':
+      return POSTHOG_INBOX_WORKFLOW_CONDITION_KEYS;
+    default:
+      return GITHUB_WORKFLOW_CONDITION_KEYS;
+  }
 }
 
 // ============================================================================
@@ -257,6 +656,7 @@ export const WORKFLOW_ACTION_TYPES = [
   'request_reviewers',
   'assign',
   'comment',
+  'approve_pr',
   'run_skill',
   'run_prompt',
   'watch_pr',
@@ -264,7 +664,95 @@ export const WORKFLOW_ACTION_TYPES = [
   'run_code_review',
 ] as const;
 
-export type WorkflowActionType = (typeof WORKFLOW_ACTION_TYPES)[number];
+/**
+ * The PR actions, under the name the GitHub editor and the MCP schema have
+ * always read. It does not include `start_session` or the Slack actions; see
+ * {@link ALL_WORKFLOW_ACTION_TYPES} and {@link workflowActionsFor}.
+ */
+export type GithubPrWorkflowActionType = (typeof WORKFLOW_ACTION_TYPES)[number];
+
+/** Start a session. Every integration's rules can use it. */
+export const SHARED_WORKFLOW_ACTION_TYPES = ['start_session'] as const;
+
+/** Act on the Slack message that triggered the rule. Slack rules only. */
+export const SLACK_WORKFLOW_ACTION_TYPES = ['slack_reply', 'slack_react'] as const;
+
+/**
+ * Old: start a cloud task on a named repository. No integration offers it now;
+ * see {@link TASK_WORKFLOW_ACTION_TYPES}.
+ */
+export const INBOUND_WORKFLOW_ACTION_TYPES = ['start_task'] as const;
+
+/**
+ * Write back to the issue that triggered the rule. Issue rules only. Talyn
+ * writes with the connection's credential; the agent never holds it.
+ */
+export const ISSUE_WORKFLOW_ACTION_TYPES = ['issue_comment', 'issue_set_status'] as const;
+
+/** Every action type, of every integration. */
+export const ALL_WORKFLOW_ACTION_TYPES = [
+  ...WORKFLOW_ACTION_TYPES,
+  ...SHARED_WORKFLOW_ACTION_TYPES,
+  ...SLACK_WORKFLOW_ACTION_TYPES,
+  ...INBOUND_WORKFLOW_ACTION_TYPES,
+  ...ISSUE_WORKFLOW_ACTION_TYPES,
+] as const;
+
+export type WorkflowActionType = (typeof ALL_WORKFLOW_ACTION_TYPES)[number];
+
+/**
+ * Old actions that started a cloud task. An automation starts sessions only,
+ * so no integration offers these. A stored or submitted one is converted to
+ * `start_session` by {@link workflowActionAsSession}.
+ */
+export const TASK_WORKFLOW_ACTION_TYPES = ['run_prompt', 'start_task'] as const;
+
+function withoutTaskActions(types: readonly WorkflowActionType[]): WorkflowActionType[] {
+  return types.filter((t) => !(TASK_WORKFLOW_ACTION_TYPES as readonly string[]).includes(t));
+}
+
+/** The action types one integration's rules may use. */
+export function workflowActionsFor(integration: WorkflowIntegration): readonly WorkflowActionType[] {
+  switch (integration) {
+    case 'slack':
+      return [...SHARED_WORKFLOW_ACTION_TYPES, ...SLACK_WORKFLOW_ACTION_TYPES];
+    case 'webhook':
+      return [...SHARED_WORKFLOW_ACTION_TYPES];
+    case 'linear':
+    case 'github_issues':
+      return [...SHARED_WORKFLOW_ACTION_TYPES, ...ISSUE_WORKFLOW_ACTION_TYPES];
+    case 'posthog_inbox':
+      return [...SHARED_WORKFLOW_ACTION_TYPES];
+    default:
+      return [...withoutTaskActions(WORKFLOW_ACTION_TYPES), ...SHARED_WORKFLOW_ACTION_TYPES];
+  }
+}
+
+/**
+ * The session form of an old task action. Automations start sessions, never
+ * cloud tasks:
+ * - `run_prompt` (a GitHub rule) becomes `start_session` on the PR's repository.
+ * - `start_task` (a webhook or issue rule) becomes `start_session` with the
+ *   same repository, prompt, model, internet access and issue write-back.
+ *
+ * Every other action comes back unchanged. The validator, the rule store and
+ * the engine all call this, so a rule saved before the change runs a session.
+ */
+export function workflowActionAsSession(action: WorkflowAction): WorkflowAction {
+  if (action.type === 'run_prompt') {
+    return {
+      type: 'start_session',
+      repositoryId: null,
+      prompt: action.prompt,
+      ...(action.model ? { model: action.model } : {}),
+    };
+  }
+  if (action.type === 'start_task') {
+    const { type: _type, ...rest } = action;
+    return { ...rest, type: 'start_session' };
+  }
+  return action;
+}
 
 export type WorkflowMergeMethod = 'squash' | 'merge' | 'rebase';
 
@@ -284,7 +772,15 @@ export type WorkflowAction =
   | { type: 'request_reviewers'; users?: string[]; teams?: string[] }
   | { type: 'assign'; users: string[] }
   | { type: 'comment'; body: string }
+  /**
+   * Approve the pull request as the workspace's GitHub account. `body` is an
+   * optional review comment, with the same `{{...}}` fields as `comment`.
+   * GitHub refuses an approval on your own pull request.
+   */
+  | { type: 'approve_pr'; body?: string }
+  /** Start a session on the pull request that runs the skill. */
   | { type: 'run_skill'; skillKey: SkillKey; model?: string }
+  /** Old: a cloud task with a prompt. Read as `start_session` now. */
   | { type: 'run_prompt'; prompt: string; model?: string }
   | { type: 'watch_pr' }
   | { type: 'enqueue_merge_queue'; method?: WorkflowMergeMethod }
@@ -300,7 +796,120 @@ export type WorkflowAction =
    * and `withTaskLimitGate` would eat the plan's allowance — so it is metered by
    * the review cycle gate instead.
    */
-  | { type: 'run_code_review'; preset?: CodeReviewPreset };
+  | { type: 'run_code_review'; preset?: CodeReviewPreset }
+  /**
+   * Start a session with the rule's prompt.
+   *
+   * `repositoryId: null` means "let Talyn choose", which only a Slack rule can
+   * do: Talyn picks the repository from the message. A GitHub rule runs on the
+   * pull request's own repository. A webhook rule must name one.
+   *
+   * On a GitHub Issues rule, `null` means the issue's own repository. A
+   * Linear rule must name one. A PostHog Inbox rule always works on the
+   * report's own repository, so it must leave this `null`.
+   *
+   * `spaceId` puts the session in one of the owner's team spaces. Absent means
+   * Personal. The session still runs in the rule's workspace. The backend
+   * checks the space when the rule is saved and again when the rule fires.
+   */
+  | ({
+      type: 'start_session';
+      repositoryId: string | null;
+      prompt: string;
+      model?: string;
+      internetAccess?: boolean;
+      spaceId?: string;
+    } & IssueWriteBackSettings)
+  /** Reply in the thread of the Slack message that triggered the rule. */
+  | { type: 'slack_reply'; text: string }
+  /** React to the Slack message that triggered the rule. `emoji` has no colons. */
+  | { type: 'slack_react'; emoji: string }
+  /**
+   * Old: a cloud task (`code_writing`) on the named repository with the rule's
+   * prompt. Read as `start_session` now, with the same fields.
+   */
+  | ({
+      type: 'start_task';
+      repositoryId: string | null;
+      prompt: string;
+      model?: string;
+      internetAccess?: boolean;
+    } & IssueWriteBackSettings)
+  /**
+   * Comment on the issue that triggered the rule. `afterStart` marks the
+   * comment Talyn adds after a start action ("Talyn started: <link>"); the
+   * validator never stores it.
+   */
+  | { type: 'issue_comment'; body: string; afterStart?: true }
+  /**
+   * Move the issue to a status. `done` is the team's first completed state on
+   * Linear and "closed as completed" on GitHub. Any other value is a Linear
+   * state name, or `open` / `closed` on GitHub.
+   */
+  | { type: 'issue_set_status'; status: string };
+
+/**
+ * The write-back an issue rule's start action does. Both default to ON, so
+ * only `false` is stored. Refused on rules that are not issue rules.
+ */
+export interface IssueWriteBackSettings {
+  /** Comment on the issue when the work starts: "Talyn started: <link>". */
+  issueStartComment?: boolean;
+  /** When the work's pull request merges, move the issue to done as well as comment. */
+  issueDoneOnMerge?: boolean;
+}
+
+/** The comment Talyn adds when an issue rule's session starts. */
+export const ISSUE_START_COMMENT_SESSION = 'Talyn started working on this: {{session.url}}';
+/** The comment Talyn adds when an issue rule's task starts. */
+export const ISSUE_START_COMMENT_TASK = 'Talyn started working on this: {{task.url}}';
+/** The comment Talyn adds when the work's pull request merges. */
+export const ISSUE_MERGE_COMMENT = 'Talyn merged a fix for this: {{pr.url}}';
+
+/**
+ * The actions a run of this rule takes, in order: the rule's own actions,
+ * plus the start comment after a start action on an issue rule. The engine
+ * and the retry sweep both run this list, so the outcomes of a run line up
+ * with it.
+ */
+export function effectiveWorkflowActions(
+  workflow: Pick<WorkflowDefinition, 'actions'> & { integration?: WorkflowIntegration }
+): WorkflowAction[] {
+  if (!isIssueWorkflowIntegration(workflowIntegrationOf(workflow))) return workflow.actions;
+  const out: WorkflowAction[] = [];
+  for (const action of workflow.actions) {
+    out.push(action);
+    if ((action.type === 'start_session' || action.type === 'start_task') && action.issueStartComment !== false) {
+      out.push({
+        type: 'issue_comment',
+        body: action.type === 'start_session' ? ISSUE_START_COMMENT_SESSION : ISSUE_START_COMMENT_TASK,
+        afterStart: true,
+      });
+    }
+  }
+  return out;
+}
+
+/** The start action of an issue rule, or null. The validator allows at most one. */
+export function issueStartAction(
+  workflow: Pick<WorkflowDefinition, 'actions'>
+): Extract<WorkflowAction, { type: 'start_session' | 'start_task' }> | null {
+  for (const action of workflow.actions) {
+    if (action.type === 'start_session' || action.type === 'start_task') return action;
+  }
+  return null;
+}
+
+/**
+ * The actions of a merge write-back run: a comment with the pull request's
+ * link, then the move to done unless the rule turned it off.
+ */
+export function issueMergeActions(workflow: Pick<WorkflowDefinition, 'actions'>): WorkflowAction[] {
+  const start = issueStartAction(workflow);
+  const actions: WorkflowAction[] = [{ type: 'issue_comment', body: ISSUE_MERGE_COMMENT }];
+  if (start?.issueDoneOnMerge !== false) actions.push({ type: 'issue_set_status', status: 'done' });
+  return actions;
+}
 
 export const WORKFLOW_ACTION_LABELS: Record<WorkflowActionType, string> = {
   add_labels: 'Add labels',
@@ -308,16 +917,26 @@ export const WORKFLOW_ACTION_LABELS: Record<WorkflowActionType, string> = {
   request_reviewers: 'Request reviewers',
   assign: 'Assign people',
   comment: 'Post a comment',
+  approve_pr: 'Approve the PR',
   run_skill: 'Run a skill',
   run_prompt: 'Run a prompt',
   watch_pr: 'Add to My PRs',
   enqueue_merge_queue: 'Add to the merge queue',
   run_code_review: 'Run a code review',
+  start_session: 'Start a session',
+  slack_reply: 'Reply in the thread',
+  slack_react: 'Add a reaction',
+  start_task: 'Start a task',
+  issue_comment: 'Comment on the issue',
+  issue_set_status: 'Change the issue status',
 };
 
-/** Actions that start a cloud task, and so consume a plan task slot. */
-export function workflowActionStartsTask(action: WorkflowAction): boolean {
-  return action.type === 'run_skill' || action.type === 'run_prompt';
+/**
+ * Actions that started a cloud task. Always false now: every automation action
+ * that starts work starts a session.
+ */
+export function workflowActionStartsTask(_action: WorkflowAction): boolean {
+  return false;
 }
 
 // ============================================================================
@@ -342,40 +961,69 @@ export function workflowActionStartsTask(action: WorkflowAction): boolean {
  */
 export const DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR = 5;
 
+/**
+ * How many runs a PostHog Inbox rule may make in a day, when the rule does not
+ * say. Every run starts a session that bills box-hours, and one PostHog
+ * project can make thousands of reports a week, so these rules always carry a
+ * daily cap.
+ */
+export const DEFAULT_POSTHOG_INBOX_RUNS_PER_DAY = 10;
+
+/** The largest daily cap a rule may set. */
+export const MAX_WORKFLOW_RUNS_PER_DAY = 1000;
+
 export const MAX_WORKFLOW_NAME_LENGTH = 80;
 
 /** A workflow as stored and as both front ends render it. */
 export interface WorkflowDefinition {
   id: string;
   workspaceId: string;
+  /**
+   * The integration the rule belongs to. Absent on rules from servers older
+   * than integrations, and absent means `github` — read it through
+   * {@link workflowIntegrationOf}.
+   */
+  integration?: WorkflowIntegration;
   name: string;
   enabled: boolean;
   events: WorkflowTriggerEvent[];
   conditions: WorkflowConditions;
   actions: WorkflowAction[];
   maxRunsPerPrPerHour: number;
+  /**
+   * How many runs the rule may make in 24 hours, counted over all subjects.
+   * Absent or null means no daily cap. PostHog Inbox rules always have one.
+   */
+  maxRunsPerDay?: number | null;
   createdAt: string;
   updatedAt: string;
 }
 
 /** What a create/update call sends. */
 export interface WorkflowInput {
+  /** Absent means `github`, so an old client keeps creating GitHub rules. */
+  integration?: WorkflowIntegration;
   name: string;
   enabled?: boolean;
   events: WorkflowTriggerEvent[];
   conditions?: WorkflowConditions;
   actions: WorkflowAction[];
   maxRunsPerPrPerHour?: number;
+  /** Absent or null means no daily cap (a PostHog Inbox rule gets the default). */
+  maxRunsPerDay?: number | null;
 }
 
 /** The validated, normalised core of a workflow — what the DB columns hold. */
 export interface NormalizedWorkflow {
+  integration: WorkflowIntegration;
   name: string;
   enabled: boolean;
   events: WorkflowTriggerEvent[];
   conditions: WorkflowConditions;
   actions: WorkflowAction[];
   maxRunsPerPrPerHour: number;
+  /** Absent or null means no daily cap. */
+  maxRunsPerDay?: number | null;
 }
 
 // ============================================================================
@@ -471,6 +1119,51 @@ export type WorkflowActionFailureCode =
   | 'review_limit_reached'
   /** Code review cannot run here: no reviewer covers this repository. */
   | 'code_review_unavailable'
+  /**
+   * The Slack install has no `chat:write` scope, so Talyn cannot reply. Not
+   * retried: it clears only when somebody installs the Slack app again.
+   */
+  | 'slack_scope_missing'
+  /** Slack refused a call (not a rate limit, not a missing scope). */
+  | 'slack_error'
+  /**
+   * A Slack rule left the repository to Talyn, and the message did not name
+   * one clearly. Not retried, and no pending request is made: nobody is
+   * waiting to pick one. Set a repository on the rule.
+   */
+  | 'repository_unresolved'
+  /** The session could not start (agent not connected, sessions not allowed). */
+  | 'session_unavailable'
+  /**
+   * Work that an earlier event started on this issue is still running, so no
+   * second session or task is started for it.
+   */
+  | 'issue_already_running'
+  /** The issue tracker refused a write-back (not a rate limit). */
+  | 'issue_error'
+  /** The tracker connection is gone or needs a new sign-in, so Talyn cannot write back. */
+  | 'issue_unavailable'
+  /**
+   * Another person or agent claimed the PostHog report first, so no session
+   * starts. The run is recorded as skipped.
+   */
+  | 'report_claimed_elsewhere'
+  /**
+   * Parked: PostHog did not answer the claim (a 5xx or a network failure).
+   * Retried with the poller's backoff.
+   */
+  | 'posthog_unavailable'
+  /**
+   * Parked: PostHog refused the claim (401 or 403). The connection probably
+   * needs the `inbox:write` and `task:write` permissions. Retried after a
+   * long backoff.
+   */
+  | 'posthog_unauthorized'
+  /**
+   * The PostHog connection cannot claim reports (gone, or a grant without
+   * `inbox:write` and `task:write`), so no session starts. Not retried.
+   */
+  | 'posthog_claim_unavailable'
   | 'error';
 
 /** One action's outcome inside one run. */
@@ -496,8 +1189,21 @@ export interface WorkflowRun {
   id: string;
   workflowId: string;
   workspaceId: string;
+  /** Absent on servers older than integrations, and absent means `github`. */
+  integration?: WorkflowIntegration;
+  /**
+   * What the run acted on, as a stable key: `pr:<owner/repo>#<number>` or
+   * `slack:<team>:<channel>`. The per-hour rate cap counts runs per key.
+   */
+  subjectKey?: string | null;
+  /** The subject as a person reads it: `owner/repo#12` or `#eng-bugs`. */
+  subjectLabel?: string | null;
+  /** The session a `start_session` action started, if any. */
+  workbenchId?: string | null;
   repositoryId: string | null;
+  /** Empty on a Slack run. */
   repoFullName: string;
+  /** 0 on a Slack run. */
   prNumber: number;
   prTitle: string;
   prUrl: string;
@@ -513,6 +1219,15 @@ export interface WorkflowRun {
   /** How many times the actions have been attempted. Starts at 1. */
   attempts: number;
   createdAt: string;
+  /**
+   * A PostHog Inbox run: Talyn's claim on the report in PostHog. Absent on
+   * other runs, on runs that made no claim, and on older servers.
+   */
+  posthogClaim?: PostHogClaimSummary | null;
+  /** How the run started. Absent on older servers, and absent means `event`. */
+  trigger?: WorkflowRunTrigger;
+  /** A `manual` run: the name or email of the person who started it. */
+  triggeredBy?: string | null;
 }
 
 /**
@@ -575,8 +1290,14 @@ export interface WorkflowActor {
  * the whole taxonomy is unit-testable against verbatim GitHub bodies, and so a
  * workflow can act on a PR Talyn has never heard of.
  */
-export interface WorkflowEventFacts {
-  event: WorkflowTriggerEvent;
+export interface GithubEventFacts {
+  /**
+   * The integration tag of the facts union. Optional on this side: facts stored
+   * on runs written before integrations existed carry no tag, and absent means
+   * GitHub.
+   */
+  integration?: 'github';
+  event: GithubWorkflowEvent;
   repoFullName: string;
   number: number;
   title: string;
@@ -618,7 +1339,268 @@ export interface WorkflowEventFacts {
   unknownFields?: ReadonlyArray<WorkflowFactField>;
 }
 
-/** A fact a payload may not carry. See {@link WorkflowEventFacts.unknownFields}. */
+/**
+ * The GitHub facts, under the name every GitHub caller has always used. A
+ * caller that can also see Slack facts takes {@link WorkflowFacts}.
+ */
+export type WorkflowEventFacts = GithubEventFacts;
+
+/**
+ * The facts one Slack message yields.
+ *
+ * Built by the Slack source adapter from a Slack `message` event. The adapter
+ * drops edits and Talyn's own messages before this exists, and
+ * it fills `authorLinked` from `slack_user_links`, because the matcher is pure
+ * and cannot read the database.
+ */
+export interface SlackEventFacts {
+  integration: 'slack';
+  event: SlackWorkflowEvent;
+  teamId: string;
+  channelId: string;
+  /** Without the `#`. Absent when the adapter could not resolve it. */
+  channelName?: string;
+  /**
+   * The Slack user who wrote the message. For an app, its bot user, or its
+   * `B…` bot id when Slack sends no user (a legacy integration or webhook).
+   */
+  userId: string;
+  /** The message's words, with an app's blocks and attachments read in. */
+  text: string;
+  /** The message's own timestamp, which is also its id in the channel. */
+  ts: string;
+  /**
+   * The thread the message is in, or null for a message at the top of the
+   * channel. A thread's first message has `threadTs === ts`; only a REPLY has a
+   * different one.
+   */
+  threadTs: string | null;
+  permalink?: string;
+  /** Whether `userId` is linked to a Talyn account in this Slack team. */
+  authorLinked: boolean;
+}
+
+/**
+ * The facts one webhook request yields.
+ *
+ * Built by the webhook source adapter from a stored inbound delivery. A
+ * webhook rule owns its URL, so `ruleId` names the one rule the request is
+ * for, and the matcher refuses every other rule.
+ *
+ * `payload` is the parsed JSON body (or the body as text when it is not
+ * JSON). A run's stored facts drop it to keep `workflow_runs` small, and a
+ * retry reads it again from `inbound_deliveries` by `deliveryRowId`.
+ */
+export interface WebhookEventFacts {
+  integration: 'webhook';
+  event: WebhookWorkflowEvent;
+  ruleId: string;
+  connectionId: string;
+  /** `inbound_deliveries.id` of the stored request. */
+  deliveryRowId: string;
+  /** The sender's delivery id (`X-Talyn-Delivery`), or a hash of the body. */
+  deliveryId: string;
+  receivedAt: string;
+  payload: unknown;
+  /** The request headers Talyn keeps: never a credential or a signature. */
+  headers: Record<string, string>;
+}
+
+/**
+ * The facts one issue event yields, from Linear or GitHub Issues.
+ *
+ * Built by the vendor's source adapter. Text fields are cut to
+ * {@link MAX_ISSUE_FACT_TEXT} so a run row stays small; the prompt quotes no
+ * more than that anyway.
+ */
+export interface IssueEventFacts {
+  integration: IssueWorkflowIntegration;
+  event: IssueWorkflowEvent;
+  /** Linear: `inbound_connections.id`. GitHub Issues: null (the GitHub App connection). */
+  connectionId: string | null;
+  /** The vendor's stable id: the Linear issue id, or the GitHub issue's numeric id. */
+  externalId: string;
+  /** What a person calls the issue: `ENG-123`, or `owner/repo#12`. */
+  identifier: string;
+  title: string;
+  /** The issue description. */
+  body: string;
+  url: string;
+  labels: string[];
+  /** The assignee's login or name, or null. */
+  assignee: string | null;
+  /** The assignee's vendor id, when the payload has it. */
+  assigneeId?: string | null;
+  /** Linear: the agent the issue is delegated to (an app user), when the payload has it. */
+  delegateId?: string | null;
+  /** Linear: whether the issue is assigned or delegated to Talyn's app user. Set by the adapter. */
+  assignedToApp?: boolean;
+  /** Linear team key. Null on GitHub. */
+  team: string | null;
+  /** Linear team id, for write-back. */
+  teamId?: string | null;
+  /** Linear project name. Null on GitHub. */
+  project: string | null;
+  /** Linear state name, or `open` / `closed` on GitHub. */
+  status: string;
+  /** Linear priority name. Null on GitHub. */
+  priority: string | null;
+  /** Who did this event, by login or name. Null when the payload does not say. */
+  actor: string | null;
+  /** The actor's vendor id. */
+  actorId?: string | null;
+  /** GitHub: who opened the issue. */
+  author?: string | null;
+  /** GitHub Issues: the repository, `owner/repo`. */
+  repoFullName?: string;
+  /** GitHub Issues: the issue number. */
+  number?: number;
+  /** `issue_labeled`: the label that was added. */
+  labelName?: string;
+  /** `issue_commented`: the new comment. */
+  comment?: { id: string; body: string; author: string | null };
+  /** A merge write-back run only: the pull request that merged. */
+  mergedPrUrl?: string;
+  /**
+   * Fields this event's payload could not supply. A condition on one fails,
+   * as on a pull request (see {@link GithubEventFacts.unknownFields}).
+   */
+  unknownFields?: ReadonlyArray<IssueFactField>;
+}
+
+/** An issue fact a payload may not carry. */
+export type IssueFactField = 'labels' | 'assignee' | 'team' | 'project' | 'status' | 'priority' | 'body';
+
+/**
+ * The longest issue text a fact keeps (the body, a comment). 16 KB is what
+ * the prompt quotes of a request body, and a run row stores its facts.
+ */
+export const MAX_ISSUE_FACT_TEXT = 16 * 1024;
+
+/**
+ * The facts one PostHog Inbox report yields.
+ *
+ * Built by the PostHog Inbox source adapter from the report as PostHog serves
+ * it at `GET /api/projects/:id/signals/reports/:id/`, never from a pushed
+ * payload. `summary` is cut to {@link MAX_ISSUE_FACT_TEXT}.
+ */
+export interface PostHogInboxFacts {
+  integration: 'posthog_inbox';
+  event: PostHogInboxWorkflowEvent;
+  /** The `integrations` row of the workspace's PostHog connection. */
+  connectionId: string;
+  /** The PostHog project (team) id. */
+  projectId: string;
+  reportId: string;
+  /** The report's `updated_at`, as PostHog sent it. Part of the dedupe key. */
+  updatedAt: string;
+  title: string;
+  summary: string;
+  /** The report in the PostHog app. */
+  url: string;
+  /** `ready`, `in_progress`, `suppressed` and so on. */
+  status: string;
+  /** `P0`–`P4`, or null when PostHog has not judged it. */
+  priority: string | null;
+  /** `immediately_actionable`, `requires_human_input`, `not_actionable`, or null. */
+  actionability: string | null;
+  /** Whether PostHog says somebody already handles the problem. Null when unknown. */
+  alreadyAddressed: boolean | null;
+  /** Who suppressed the report (`safety_judge`, `dismissed`, ...), or null. */
+  suppressionSource: string | null;
+  sourceProducts: string[];
+  /** The skill name of the scout that wrote the report, or null. */
+  scout: string | null;
+  /** `owner/repo` from the report's repository selection, or null. */
+  repository: string | null;
+  /** GitHub logins PostHog suggests as reviewers. */
+  suggestedReviewers: string[];
+  signalCount: number;
+  /**
+   * Set by the adapter for one workspace: the Talyn repository that matches
+   * {@link repository}, or null when that repository is not connected there.
+   */
+  workspaceRepositoryId?: string | null;
+  /** Fields PostHog could not supply. A condition on one fails. */
+  unknownFields?: ReadonlyArray<PostHogInboxFactField>;
+}
+
+/** A PostHog Inbox fact a read may not carry. */
+export type PostHogInboxFactField = 'sourceProducts' | 'scout' | 'suggestedReviewers';
+
+/** The facts any rule can match on, tagged by integration. */
+export type WorkflowFacts =
+  | GithubEventFacts
+  | SlackEventFacts
+  | WebhookEventFacts
+  | IssueEventFacts
+  | PostHogInboxFacts;
+
+export function isPostHogInboxFacts(facts: WorkflowFacts): facts is PostHogInboxFacts {
+  return facts.integration === 'posthog_inbox';
+}
+
+export function isIssueFacts(facts: WorkflowFacts): facts is IssueEventFacts {
+  return facts.integration === 'linear' || facts.integration === 'github_issues';
+}
+
+export function isSlackFacts(facts: WorkflowFacts): facts is SlackEventFacts {
+  return facts.integration === 'slack';
+}
+
+export function isWebhookFacts(facts: WorkflowFacts): facts is WebhookEventFacts {
+  return facts.integration === 'webhook';
+}
+
+export function isGithubFacts(facts: WorkflowFacts): facts is GithubEventFacts {
+  return facts.integration === undefined || facts.integration === 'github';
+}
+
+/** The integration a set of facts came from. Untagged facts are GitHub's. */
+export function factsIntegration(facts: WorkflowFacts): WorkflowIntegration {
+  return facts.integration ?? 'github';
+}
+
+/** Whether a Slack message is a reply inside a thread, not a top-level message. */
+export function isSlackThreadReply(facts: Pick<SlackEventFacts, 'ts' | 'threadTs'>): boolean {
+  return !!facts.threadTs && facts.threadTs !== facts.ts;
+}
+
+/**
+ * What a run acted on: a stable key and a label a person reads.
+ *
+ * The key is what the per-hour rate cap counts by. A GitHub rule is capped per
+ * pull request (`pr:<owner/repo>#<number>`), a Slack rule per channel
+ * (`slack:<team>:<channel>`), a webhook rule per rule (`webhook:<ruleId>`),
+ * because the rule's URL is the only subject a webhook has.
+ */
+export function workflowSubjectOf(facts: WorkflowFacts): { key: string; label: string } {
+  if (isIssueFacts(facts)) {
+    return { key: `issue:${facts.integration}:${facts.externalId}`, label: facts.identifier };
+  }
+  if (isWebhookFacts(facts)) {
+    return { key: `webhook:${facts.ruleId}`, label: 'Webhook' };
+  }
+  if (isPostHogInboxFacts(facts)) {
+    const title = facts.title.trim();
+    return {
+      key: `posthog_inbox:${facts.reportId}`,
+      label: title ? (title.length > 80 ? `${title.slice(0, 79)}…` : title) : `Report ${facts.reportId}`,
+    };
+  }
+  if (isSlackFacts(facts)) {
+    return {
+      key: `slack:${facts.teamId}:${facts.channelId}`,
+      label: facts.channelName ? `#${facts.channelName}` : facts.channelId,
+    };
+  }
+  return {
+    key: `pr:${facts.repoFullName}#${facts.number}`,
+    label: `${facts.repoFullName}#${facts.number}`,
+  };
+}
+
+/** A fact a payload may not carry. See {@link GithubEventFacts.unknownFields}. */
 export type WorkflowFactField =
   | 'title'
   | 'author'
@@ -705,8 +1687,12 @@ export function actorMatches(
  * refused at validation time, so it cannot silently pass here.
  */
 export function workflowMatches(
-  workflow: Pick<WorkflowDefinition, 'events' | 'conditions'>,
-  facts: WorkflowEventFacts,
+  workflow: Pick<WorkflowDefinition, 'events' | 'conditions'> & {
+    integration?: WorkflowIntegration;
+    /** Required to match webhook facts: a webhook names its one rule. */
+    id?: string;
+  },
+  facts: WorkflowFacts,
   /**
    * The workspace's connected GitHub login, for any `viewer` actor match.
    * Absent means unknown, which FAILS the condition — "when I am asked to
@@ -715,8 +1701,32 @@ export function workflowMatches(
    */
   viewerLogin?: string | null
 ): boolean {
+  // A rule only ever matches facts from its own integration. The event sets do
+  // not overlap, so this is also implied by the event test below; it is said
+  // here so a rule with no events stored cannot fall through to the other side.
+  const integration = workflowIntegrationOf(workflow);
+  if (integration !== factsIntegration(facts)) return false;
   if (!workflow.events.includes(facts.event)) return false;
-  const c = workflow.conditions ?? {};
+  const conditions = workflow.conditions ?? {};
+  if (isWebhookFacts(facts)) {
+    // A webhook's URL belongs to one rule. Without the id, no match: a rule
+    // must never act on a request sent to another rule's URL.
+    if (!workflow.id || workflow.id !== facts.ruleId) return false;
+    return webhookConditionsMatch(conditions, facts);
+  }
+  if (isIssueFacts(facts)) return issueConditionsMatch(conditions, facts, viewerLogin);
+  if (isPostHogInboxFacts(facts)) return posthogInboxConditionsMatch(conditions, facts);
+  return isSlackFacts(facts)
+    ? slackConditionsMatch(conditions, facts)
+    : githubConditionsMatch(conditions, facts, viewerLogin);
+}
+
+/** The GitHub half of {@link workflowMatches}. */
+function githubConditionsMatch(
+  c: WorkflowConditions,
+  facts: GithubEventFacts,
+  viewerLogin: string | null | undefined
+): boolean {
   // A condition on a fact the payload never carried cannot be satisfied. See
   // WorkflowEventFacts.unknownFields — the engine enriches what it can first.
   const unknown = (f: WorkflowFactField): boolean => !!facts.unknownFields?.includes(f);
@@ -786,34 +1796,406 @@ export function workflowMatches(
   return true;
 }
 
+/** Whether one Slack message's author passes a rule's `slackAuthors`. */
+export function slackAuthorMatches(
+  match: WorkflowSlackAuthorMatch | undefined,
+  facts: Pick<SlackEventFacts, 'userId' | 'authorLinked'>
+): boolean {
+  const kind = match?.kind ?? 'any';
+  switch (kind) {
+    case 'any':
+      return true;
+    case 'linked':
+      return facts.authorLinked;
+    case 'users': {
+      const ids = normalizeList((match as { userIds?: string[] }).userIds);
+      return ids.includes(facts.userId.trim().toLowerCase());
+    }
+  }
+}
+
+/**
+ * The Slack half of {@link workflowMatches}.
+ *
+ * The team and the channel list are REQUIRED. A rule that lost either (a
+ * hand-edited row, a bad migration) matches nothing, because "every channel in
+ * every Slack team" is never what somebody wrote.
+ */
+function slackConditionsMatch(c: WorkflowConditions, facts: SlackEventFacts): boolean {
+  const team = (c.slackTeamId ?? '').trim();
+  if (!team || team !== facts.teamId) return false;
+
+  const channels = normalizeList(c.channels);
+  if (channels.length === 0 || !channels.includes(facts.channelId.trim().toLowerCase())) {
+    return false;
+  }
+
+  if (isSlackThreadReply(facts) && c.includeThreadReplies !== true) return false;
+
+  if (!slackAuthorMatches(c.slackAuthors, facts)) return false;
+
+  const text = (c.textContains ?? '').trim().toLowerCase();
+  if (text && !facts.text.toLowerCase().includes(text)) return false;
+
+  return true;
+}
+
+/** Whether an issue's assignee passes a rule's `issueAssignee`. */
+export function issueAssigneeMatches(
+  match: IssueAssigneeMatch | undefined,
+  facts: Pick<IssueEventFacts, 'assignee' | 'assigneeId' | 'assignedToApp' | 'unknownFields'>,
+  viewerLogin?: string | null
+): boolean {
+  if (!match) return true;
+  if (facts.unknownFields?.includes('assignee')) return false;
+  const assignee = (facts.assignee ?? '').trim().toLowerCase();
+  switch (match.kind) {
+    case 'talyn':
+      return facts.assignedToApp === true;
+    case 'me': {
+      const viewer = (viewerLogin ?? '').trim().toLowerCase();
+      return viewer.length > 0 && viewer === assignee;
+    }
+    case 'unassigned':
+      return !assignee && !facts.assigneeId && facts.assignedToApp !== true;
+    case 'people': {
+      const people = normalizeList(match.people);
+      const id = (facts.assigneeId ?? '').trim().toLowerCase();
+      return people.some((p) => (assignee && p === assignee) || (id && p === id));
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * The issue half of {@link workflowMatches}. Every list matches ANY of its
+ * values, case-insensitive. A condition on a fact the payload lacked fails.
+ *
+ * A Linear rule must name its connection: a rule with none matches nothing,
+ * because one workspace can connect several Linear organizations.
+ */
+export function issueConditionsMatch(
+  c: WorkflowConditions,
+  facts: IssueEventFacts,
+  viewerLogin?: string | null
+): boolean {
+  const unknown = (f: IssueFactField): boolean => !!facts.unknownFields?.includes(f);
+  const inList = (list: string[] | undefined, value: string | null | undefined, field?: IssueFactField): boolean => {
+    const wanted = normalizeList(list);
+    if (wanted.length === 0) return true;
+    if (field && unknown(field)) return false;
+    return !!value && wanted.includes(value.trim().toLowerCase());
+  };
+
+  if (facts.integration === 'linear') {
+    const connection = (c.connectionId ?? '').trim();
+    if (!connection || connection !== facts.connectionId) return false;
+  }
+
+  if (!inList(c.repos, facts.repoFullName)) return false;
+  if (!inList(c.teams, facts.team, 'team')) return false;
+  if (!inList(c.projects, facts.project, 'project')) return false;
+  if (!inList(c.statuses, facts.status, 'status')) return false;
+  if (!inList(c.priorities, facts.priority, 'priority')) return false;
+  if (!inList(c.issueAuthors, facts.author)) return false;
+
+  const none = normalizeList(c.labelsNone);
+  const any = normalizeList(c.labelsAny);
+  const all = normalizeList(c.labelsAll);
+  if (none.length > 0 || any.length > 0 || all.length > 0) {
+    if (unknown('labels')) return false;
+    const have = normalizeList(facts.labels);
+    if (none.some((l) => have.includes(l))) return false;
+    if (any.length > 0 && !any.some((l) => have.includes(l))) return false;
+    if (all.length > 0 && !all.every((l) => have.includes(l))) return false;
+  }
+
+  const labelName = (c.labelName ?? '').trim().toLowerCase();
+  if (labelName && (facts.labelName ?? '').trim().toLowerCase() !== labelName) return false;
+
+  if (!issueAssigneeMatches(c.issueAssignee, facts, viewerLogin)) return false;
+
+  const title = (c.titleContains ?? '').trim().toLowerCase();
+  if (title && !facts.title.toLowerCase().includes(title)) return false;
+
+  // The issue description, and on `issue_commented` the new comment as well.
+  const body = (c.bodyContains ?? '').trim().toLowerCase();
+  if (body) {
+    const inComment = !!facts.comment && facts.comment.body.toLowerCase().includes(body);
+    const inBody = !unknown('body') && facts.body.toLowerCase().includes(body);
+    if (!inComment && !inBody) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Whether PostHog says no automation may act on this report, whatever a rule
+ * says: the safety judge suppressed it, it is not `ready`, or somebody already
+ * handles it.
+ */
+export function posthogInboxReportBlocked(
+  facts: Pick<PostHogInboxFacts, 'status' | 'suppressionSource' | 'alreadyAddressed'>
+): 'safety' | 'not_ready' | 'already_addressed' | null {
+  if ((facts.suppressionSource ?? '').trim().toLowerCase() === 'safety_judge') return 'safety';
+  if (facts.status.trim().toLowerCase() !== 'ready') return 'not_ready';
+  if (facts.alreadyAddressed === true) return 'already_addressed';
+  return null;
+}
+
+/** The actionability a PostHog Inbox rule takes when it does not say. */
+export const DEFAULT_POSTHOG_INBOX_ACTIONABILITY = ['immediately_actionable'] as const;
+
+/**
+ * The PostHog Inbox half of {@link workflowMatches}. Every list matches ANY of
+ * its values, case-insensitive.
+ *
+ * Two tests apply to every rule. A report PostHog blocked (see
+ * {@link posthogInboxReportBlocked}) never matches, and neither does a report
+ * whose repository is not connected to the workspace
+ * (`workspaceRepositoryId`, which the adapter sets).
+ */
+export function posthogInboxConditionsMatch(c: WorkflowConditions, facts: PostHogInboxFacts): boolean {
+  if (posthogInboxReportBlocked(facts)) return false;
+  if (!facts.repository || !facts.workspaceRepositoryId) return false;
+  const unknown = (f: PostHogInboxFactField): boolean => !!facts.unknownFields?.includes(f);
+
+  const repositories = normalizeList(c.repositories);
+  if (repositories.length > 0 && !repositories.includes(facts.repository.trim().toLowerCase())) return false;
+
+  const priorities = normalizeList(c.priorities);
+  if (priorities.length > 0 && !(facts.priority && priorities.includes(facts.priority.trim().toLowerCase()))) {
+    return false;
+  }
+
+  const actionability = normalizeList(c.actionability ?? [...DEFAULT_POSTHOG_INBOX_ACTIONABILITY]);
+  if (!(facts.actionability && actionability.includes(facts.actionability.trim().toLowerCase()))) return false;
+
+  const products = normalizeList(c.sourceProducts);
+  if (products.length > 0) {
+    if (unknown('sourceProducts')) return false;
+    const have = normalizeList(facts.sourceProducts);
+    if (!products.some((p) => have.includes(p))) return false;
+  }
+
+  const include = normalizeList(c.scouts?.include);
+  const exclude = normalizeList(c.scouts?.exclude);
+  if (include.length > 0 || exclude.length > 0) {
+    if (unknown('scout')) return false;
+    const scout = (facts.scout ?? '').trim().toLowerCase();
+    if (include.length > 0 && !(scout && include.includes(scout))) return false;
+    if (scout && exclude.includes(scout)) return false;
+  }
+
+  const reviewers = normalizeList(c.suggestedReviewers);
+  if (reviewers.length > 0) {
+    if (unknown('suggestedReviewers')) return false;
+    const have = normalizeList(facts.suggestedReviewers);
+    if (!reviewers.some((r) => have.includes(r))) return false;
+  }
+
+  const title = (c.titleContains ?? '').trim().toLowerCase();
+  if (title && !facts.title.toLowerCase().includes(title)) return false;
+
+  const summary = (c.summaryContains ?? '').trim().toLowerCase();
+  if (summary && !facts.summary.toLowerCase().includes(summary)) return false;
+
+  if (typeof c.minSignalCount === 'number' && c.minSignalCount > 0 && facts.signalCount < c.minSignalCount) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * PURE: whether a PostHog Inbox rule's own conditions match a report, setting
+ * aside the tests every rule shares (blocked, not ready, already addressed,
+ * repository not connected). The backlog lists these reports and shows those
+ * tests as the row's state instead of hiding the row.
+ */
+export function posthogInboxContentMatches(c: WorkflowConditions, facts: PostHogInboxFacts): boolean {
+  return posthogInboxConditionsMatch(c, {
+    ...facts,
+    status: 'ready',
+    suppressionSource: null,
+    alreadyAddressed: false,
+    // A report with no repository fails a repository condition and passes
+    // without one; the state then says it has no connected repository.
+    repository: facts.repository ?? '\u0000none',
+    workspaceRepositoryId: facts.workspaceRepositoryId ?? 'unconnected',
+  });
+}
+
+// ============================================================================
+// Webhook payload paths
+// ============================================================================
+
+/** One step of a payload path: an object key or an array index. */
+export type WebhookPathStep = string | number;
+
+/**
+ * Parse a payload path (`a.b[0].c` or `a.b.0.c`) into steps, or null when it
+ * is not a path. A key is letters, digits, `_`, `-` or `$`. A step that is all
+ * digits is an index into an array and a key into an object.
+ */
+export function parseWebhookPath(path: string): WebhookPathStep[] | null {
+  const trimmed = path.trim();
+  if (!trimmed) return null;
+  const steps: WebhookPathStep[] = [];
+  for (const segment of trimmed.split('.')) {
+    const m = /^([A-Za-z0-9_$-]*)((?:\[\d+\])*)$/.exec(segment);
+    if (!m) return null;
+    const [, key, indices] = m;
+    if (!key && !indices) return null;
+    if (key) steps.push(/^\d+$/.test(key) ? Number(key) : key);
+    for (const idx of indices.matchAll(/\[(\d+)\]/g)) steps.push(Number(idx[1]));
+  }
+  return steps;
+}
+
+/** The value at `path` in `payload`, or `undefined` when the path does not resolve. */
+export function webhookValueAt(payload: unknown, path: string): unknown {
+  const steps = parseWebhookPath(path);
+  if (!steps) return undefined;
+  let current: unknown = payload;
+  for (const step of steps) {
+    if (current === null || typeof current !== 'object') return undefined;
+    if (Array.isArray(current)) {
+      const index = typeof step === 'number' ? step : /^\d+$/.test(step) ? Number(step) : NaN;
+      if (!Number.isInteger(index) || index >= current.length) return undefined;
+      current = current[index];
+    } else {
+      const key = String(step);
+      if (!Object.prototype.hasOwnProperty.call(current, key)) return undefined;
+      current = (current as Record<string, unknown>)[key];
+    }
+  }
+  return current;
+}
+
+/** A payload value as text, for `equals` and `contains`. Objects are JSON. */
+function webhookValueText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value) ?? '';
+}
+
+/** Whether one payload condition passes. A path that does not resolve fails. */
+export function webhookConditionPasses(payload: unknown, c: WebhookPayloadCondition): boolean {
+  const value = webhookValueAt(payload, c.path);
+  if (value === undefined) return false;
+  switch (c.op) {
+    case 'exists':
+      return value !== null;
+    case 'equals':
+      if (value === null || c.value === undefined) return false;
+      return webhookValueText(value) === c.value;
+    case 'contains': {
+      if (value === null || c.value === undefined) return false;
+      const needle = c.value.toLowerCase();
+      if (Array.isArray(value)) {
+        return value.some(
+          (item) => item !== null && typeof item !== 'object' && webhookValueText(item).toLowerCase() === needle
+        );
+      }
+      if (typeof value === 'object') return false;
+      return webhookValueText(value).toLowerCase().includes(needle);
+    }
+    default:
+      return false;
+  }
+}
+
+/** The webhook half of {@link workflowMatches}. Every payload condition must pass. */
+export function webhookConditionsMatch(c: WorkflowConditions, facts: WebhookEventFacts): boolean {
+  return (c.payloadMatches ?? []).every((condition) => webhookConditionPasses(facts.payload, condition));
+}
+
 // ============================================================================
 // Comment templating
 // ============================================================================
 
+/** Values a template can use that do not come from the facts. */
+export interface WorkflowTemplateExtras {
+  /** The session a `start_session` action in the same run started. */
+  sessionUrl?: string | null;
+  /** The task a `start_task` action in the same run started. */
+  taskUrl?: string | null;
+  /** The pull request a merge write-back is about. */
+  prUrl?: string | null;
+}
+
 /**
- * Interpolate `{{pr.number}}`-style placeholders in a comment body.
+ * Interpolate `{{pr.number}}`-style placeholders in a comment or a reply.
  *
  * A deliberately tiny vocabulary — enough for a useful comment, and nothing
  * that reaches outside the facts we already hold. An unknown placeholder is
  * left VERBATIM rather than blanked: a comment that posts `{{pr.reviewer}}`
- * tells the user their template is wrong, where an empty string hides it.
+ * tells the user their template is wrong, where an empty string hides it. A
+ * known placeholder with no value here (no permalink, no session yet) is left
+ * verbatim for the same reason.
+ *
+ * GitHub facts: `pr.number`, `pr.title`, `pr.url`, `pr.author`,
+ * `pr.baseBranch`, `pr.headBranch`, `repo`, `actor`, `event`.
+ * Slack facts: `message.text`, `message.permalink`, `channel`, `event`.
+ * Both: `session.url`, when a session was started.
  */
-export function renderWorkflowComment(body: string, facts: WorkflowEventFacts): string {
-  const vars: Record<string, string> = {
-    'pr.number': String(facts.number),
-    'pr.title': facts.title,
-    'pr.url': facts.url,
-    'pr.author': facts.author.login,
-    'pr.baseBranch': facts.baseBranch,
-    'pr.headBranch': facts.headBranch,
-    'repo': facts.repoFullName,
-    'actor': facts.actor.login,
-    'event': WORKFLOW_EVENT_LABELS[facts.event],
-  };
+export function renderWorkflowTemplate(
+  body: string,
+  facts: WorkflowFacts,
+  extras: WorkflowTemplateExtras = {}
+): string {
+  // A webhook's payload is never rendered here: a template's output is posted
+  // where people read it, and only the prompt fence may carry sender text.
+  const vars: Record<string, string> = isWebhookFacts(facts)
+    ? { event: WORKFLOW_EVENT_LABELS[facts.event] }
+    : isPostHogInboxFacts(facts)
+    ? {
+        'report.id': facts.reportId,
+        'report.url': facts.url,
+        'report.title': facts.title,
+        event: WORKFLOW_EVENT_LABELS[facts.event],
+      }
+    : isIssueFacts(facts)
+    ? {
+        // Identifiers only: a template's output is posted on the issue, and
+        // the issue's own text has no place in Talyn's comment.
+        'issue.identifier': facts.identifier,
+        'issue.url': facts.url,
+        'issue.title': facts.title,
+        ...(facts.mergedPrUrl ? { 'pr.url': facts.mergedPrUrl } : {}),
+        event: WORKFLOW_EVENT_LABELS[facts.event],
+      }
+    : isSlackFacts(facts)
+    ? {
+        'message.text': facts.text,
+        ...(facts.permalink ? { 'message.permalink': facts.permalink } : {}),
+        // Slack draws `<#C123>` as a link to the channel, so a reply reads
+        // right even when the adapter could not resolve the name.
+        channel: facts.channelName ? `#${facts.channelName}` : `<#${facts.channelId}>`,
+        event: WORKFLOW_EVENT_LABELS[facts.event],
+      }
+    : {
+        'pr.number': String(facts.number),
+        'pr.title': facts.title,
+        'pr.url': facts.url,
+        'pr.author': facts.author.login,
+        'pr.baseBranch': facts.baseBranch,
+        'pr.headBranch': facts.headBranch,
+        repo: facts.repoFullName,
+        actor: facts.actor.login,
+        event: WORKFLOW_EVENT_LABELS[facts.event],
+      };
+  if (extras.sessionUrl) vars['session.url'] = extras.sessionUrl;
+  if (extras.taskUrl) vars['task.url'] = extras.taskUrl;
+  if (extras.prUrl) vars['pr.url'] = extras.prUrl;
   return body.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (whole, key: string) =>
     key in vars ? vars[key]! : whole
   );
 }
+
+/** The comment renderer under its old name. See {@link renderWorkflowTemplate}. */
+export const renderWorkflowComment = renderWorkflowTemplate;
 
 // ============================================================================
 // Validation
@@ -868,7 +2250,7 @@ function validateActorMatch(raw: unknown, at: string): WorkflowActorMatch | unde
  * no-op on anything that came through this door.
  */
 export function validateWorkflow(raw: unknown): NormalizedWorkflow {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('workflow must be an object');
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('automation must be an object');
   const w = raw as Record<string, unknown>;
 
   const name = typeof w.name === 'string' ? w.name.trim() : '';
@@ -881,16 +2263,32 @@ export function validateWorkflow(raw: unknown): NormalizedWorkflow {
     fail('enabled must be a boolean');
   }
 
-  const events = stringList(w.events, 'events') as WorkflowTriggerEvent[];
-  if (events.length === 0) fail('a workflow needs at least one trigger event');
-  for (const e of events) {
-    if (!(WORKFLOW_TRIGGER_EVENTS as readonly string[]).includes(e)) {
-      fail(`"${e}" is not a PR event Talyn can trigger on`);
-    }
+  if (w.integration !== undefined && w.integration !== null && !isWorkflowIntegration(w.integration)) {
+    fail(`integration must be one of ${WORKFLOW_INTEGRATIONS.join(', ')}`);
   }
+  const integration = workflowIntegrationOf(w as { integration?: WorkflowIntegration | null });
 
-  const conditions = validateConditions(w.conditions, events);
-  const actions = validateActions(w.actions);
+  const events = stringList(w.events, 'events') as WorkflowTriggerEvent[];
+  if (events.length === 0) fail('an automation needs at least one trigger event');
+  for (const e of events) validateEvent(e, integration);
+
+  const conditions =
+    integration === 'slack'
+      ? validateSlackConditions(w.conditions)
+      : integration === 'webhook'
+        ? validateWebhookConditions(w.conditions)
+        : isIssueWorkflowIntegration(integration)
+          ? validateIssueConditions(w.conditions, integration, events)
+          : integration === 'posthog_inbox'
+            ? validatePostHogInboxConditions(w.conditions)
+            : validateConditions(w.conditions, events);
+  const actions = validateActions(w.actions, integration);
+  if (isIssueWorkflowIntegration(integration)) {
+    const starts = actions.filter((a) => a.type === 'start_session');
+    // One issue gets one piece of work. A second start in the same run would
+    // start a second session on the same issue.
+    if (starts.length > 1) fail('An issue automation can start one session, not more.');
+  }
 
   let maxRuns = DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR;
   if (w.maxRunsPerPrPerHour !== undefined) {
@@ -901,14 +2299,370 @@ export function validateWorkflow(raw: unknown): NormalizedWorkflow {
     maxRuns = n;
   }
 
+  let maxRunsPerDay: number | null = integration === 'posthog_inbox' ? DEFAULT_POSTHOG_INBOX_RUNS_PER_DAY : null;
+  if (w.maxRunsPerDay !== undefined && w.maxRunsPerDay !== null) {
+    const n = w.maxRunsPerDay;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > MAX_WORKFLOW_RUNS_PER_DAY) {
+      fail(`maxRunsPerDay must be a whole number from 1 to ${MAX_WORKFLOW_RUNS_PER_DAY}`);
+    }
+    maxRunsPerDay = n;
+  }
+
   return {
+    integration,
     name,
     enabled: w.enabled === undefined ? true : (w.enabled as boolean),
     events,
     conditions,
     actions,
     maxRunsPerPrPerHour: maxRuns,
+    // Only when set, so a rule without a daily cap normalises as it always has.
+    ...(maxRunsPerDay !== null ? { maxRunsPerDay } : {}),
   };
+}
+
+/** Refuse an event that is unknown, or that belongs to another integration. */
+function validateEvent(event: string, integration: WorkflowIntegration): void {
+  const own = workflowEventsFor(integration) as readonly string[];
+  if (own.includes(event)) return;
+  const other = WORKFLOW_INTEGRATIONS.find(
+    (i) => i !== integration && (workflowEventsFor(i) as readonly string[]).includes(event)
+  );
+  if (other) {
+    const otherLabel = WORKFLOW_INTEGRATION_LABELS[other];
+    fail(
+      `"${event}" is a ${otherLabel} event, and this is a ` +
+        `${WORKFLOW_INTEGRATION_LABELS[integration]} automation. Make a ${otherLabel} automation for it instead.`
+    );
+  }
+  fail(
+    integration === 'github'
+      ? `"${event}" is not a PR event Talyn can trigger on`
+      : `"${event}" is not a ${WORKFLOW_INTEGRATION_LABELS[integration]} event Talyn can trigger on`
+  );
+}
+
+/** Refuse a condition that belongs to another integration, with a message that names it. */
+function refuseForeignConditions(
+  c: Record<string, unknown>,
+  integration: WorkflowIntegration
+): void {
+  // `targetIsViewer` is the legacy GitHub field that `target` replaced.
+  const keysOf = (i: WorkflowIntegration): readonly string[] =>
+    i === 'github' ? [...workflowConditionKeysFor(i), 'targetIsViewer'] : workflowConditionKeysFor(i);
+  for (const key of Object.keys(c)) {
+    if (keysOf(integration).includes(key)) continue;
+    const other = WORKFLOW_INTEGRATIONS.find((i) => i !== integration && keysOf(i).includes(key));
+    if (!other) continue;
+    fail(
+      `"${key}" is a ${WORKFLOW_INTEGRATION_LABELS[other]} condition, and this is a ` +
+        `${WORKFLOW_INTEGRATION_LABELS[integration]} automation. Remove it.`
+    );
+  }
+}
+
+/**
+ * A webhook rule's conditions: an optional list of payload tests. No
+ * conditions is legal and means every request to the rule's URL.
+ */
+function validateWebhookConditions(raw: unknown): WorkflowConditions {
+  const given = raw === undefined || raw === null ? {} : raw;
+  if (typeof given !== 'object' || Array.isArray(given)) fail('conditions must be an object');
+  const c = given as Record<string, unknown>;
+
+  refuseForeignConditions(c, 'webhook');
+  const unknown = Object.keys(c).filter(
+    (k) => !(WEBHOOK_WORKFLOW_CONDITION_KEYS as readonly string[]).includes(k)
+  );
+  if (unknown.length > 0) fail(`Unknown condition "${unknown[0]}"`);
+
+  if (c.payloadMatches === undefined) return {};
+  if (!Array.isArray(c.payloadMatches)) fail('conditions.payloadMatches must be an array');
+  const out: WebhookPayloadCondition[] = c.payloadMatches.map((entry, i) =>
+    validatePayloadCondition(entry, `conditions.payloadMatches[${i}]`)
+  );
+  return out.length > 0 ? { payloadMatches: out } : {};
+}
+
+function validatePayloadCondition(raw: unknown, at: string): WebhookPayloadCondition {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail(`${at} must be an object`);
+  const r = raw as Record<string, unknown>;
+  const path = typeof r.path === 'string' ? r.path.trim() : '';
+  if (!path) fail(`${at}.path must be a non-empty string, like "issue.title"`);
+  if (!parseWebhookPath(path)) {
+    fail(`${at}.path "${path}" is not a path. Use keys and indexes, like "issue.labels[0].name".`);
+  }
+  const op = r.op;
+  if (typeof op !== 'string' || !(WEBHOOK_PAYLOAD_OPS as readonly string[]).includes(op)) {
+    fail(`${at}.op must be one of ${WEBHOOK_PAYLOAD_OPS.join(', ')}`);
+  }
+  if (op === 'exists') return { path, op: 'exists' };
+  if (typeof r.value !== 'string') fail(`${at}.value must be a string`);
+  if (op === 'contains' && !r.value.trim()) fail(`${at}.value must not be empty`);
+  return { path, op: op as WebhookPayloadOp, value: r.value };
+}
+
+/**
+ * An issue rule's conditions. A Linear rule must name its connection. A
+ * condition that belongs to the other tracker is refused with its name.
+ */
+function validateIssueConditions(
+  raw: unknown,
+  integration: IssueWorkflowIntegration,
+  events: WorkflowTriggerEvent[]
+): WorkflowConditions {
+  const given = raw === undefined || raw === null ? {} : raw;
+  if (typeof given !== 'object' || Array.isArray(given)) fail('conditions must be an object');
+  const c = given as Record<string, unknown>;
+  const label = WORKFLOW_INTEGRATION_LABELS[integration];
+
+  const own = workflowConditionKeysFor(integration);
+  const otherIssue = integration === 'linear' ? 'github_issues' : 'linear';
+  for (const key of Object.keys(c)) {
+    if (own.includes(key)) continue;
+    if (workflowConditionKeysFor(otherIssue).includes(key)) {
+      fail(`"${key}" is a ${WORKFLOW_INTEGRATION_LABELS[otherIssue]} condition, and this is a ${label} automation. Remove it.`);
+    }
+  }
+  refuseForeignConditions(c, integration);
+  const unknownKeys = Object.keys(c).filter((k) => !own.includes(k));
+  if (unknownKeys.length > 0) fail(`Unknown condition "${unknownKeys[0]}"`);
+
+  const out: WorkflowConditions = {};
+  if (integration === 'linear') {
+    const connection = typeof c.connectionId === 'string' ? c.connectionId.trim() : '';
+    if (c.connectionId !== undefined && typeof c.connectionId !== 'string') {
+      fail('conditions.connectionId must be a string');
+    }
+    if (!connection) fail('A Linear automation needs a Linear workspace. Pick the Linear workspace to watch.');
+    out.connectionId = connection;
+  }
+
+  const lists = ['repos', 'teams', 'projects', 'statuses', 'priorities', 'labelsAny', 'labelsAll', 'labelsNone', 'issueAuthors'] as const;
+  for (const key of lists) {
+    if (!own.includes(key)) continue;
+    const list = optionalStringList(c[key], `conditions.${key}`);
+    if (list) out[key] = list;
+  }
+
+  for (const key of ['titleContains', 'bodyContains', 'labelName'] as const) {
+    if (c[key] === undefined) continue;
+    if (typeof c[key] !== 'string') fail(`conditions.${key} must be a string`);
+    const trimmed = (c[key] as string).trim();
+    if (!trimmed) continue;
+    if (key === 'labelName' && !events.includes('issue_labeled')) {
+      fail(`"labelName" only applies to ${WORKFLOW_EVENT_LABELS.issue_labeled}, which this automation does not trigger on`);
+    }
+    out[key] = trimmed;
+  }
+
+  if (c.issueAssignee !== undefined) {
+    const match = validateIssueAssignee(c.issueAssignee, integration);
+    if (match) out.issueAssignee = match;
+  }
+  return out;
+}
+
+function validateIssueAssignee(raw: unknown, integration: IssueWorkflowIntegration): IssueAssigneeMatch | undefined {
+  const at = 'conditions.issueAssignee';
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail(`${at} must be an object`);
+  const kind = (raw as { kind?: unknown }).kind;
+  if (kind === 'any') return undefined;
+  if (typeof kind !== 'string' || !(ISSUE_ASSIGNEE_KINDS as readonly string[]).includes(kind)) {
+    fail(`${at}.kind must be one of ${ISSUE_ASSIGNEE_KINDS.join(', ')}`);
+  }
+  if (kind === 'talyn' && integration !== 'linear') {
+    fail('Only a Linear issue can be assigned to Talyn. On GitHub, choose "Me" or specific people.');
+  }
+  if (kind === 'me' && integration !== 'github_issues') {
+    fail('"Me" works on GitHub Issues only. On Linear, choose Talyn or specific people.');
+  }
+  if (kind === 'people') {
+    const people = stringList((raw as { people?: unknown }).people ?? [], `${at}.people`);
+    if (people.length === 0) fail(`${at} names nobody, so it can never match`);
+    return { kind: 'people', people };
+  }
+  return { kind: kind as 'talyn' | 'me' | 'unassigned' };
+}
+
+/** The values PostHog uses for a report's priority. */
+export const POSTHOG_INBOX_PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'] as const;
+
+/** The values PostHog uses for a report's actionability judgment. */
+export const POSTHOG_INBOX_ACTIONABILITY = ['immediately_actionable', 'requires_human_input', 'not_actionable'] as const;
+
+export const POSTHOG_INBOX_ACTIONABILITY_LABELS: Record<(typeof POSTHOG_INBOX_ACTIONABILITY)[number], string> = {
+  immediately_actionable: 'Ready to fix',
+  requires_human_input: 'Needs a person',
+  not_actionable: 'Not actionable',
+};
+
+/** A PostHog Inbox rule's conditions. Every one is optional. */
+function validatePostHogInboxConditions(raw: unknown): WorkflowConditions {
+  const given = raw === undefined || raw === null ? {} : raw;
+  if (typeof given !== 'object' || Array.isArray(given)) fail('conditions must be an object');
+  const c = given as Record<string, unknown>;
+
+  refuseForeignConditions(c, 'posthog_inbox');
+  const own = POSTHOG_INBOX_WORKFLOW_CONDITION_KEYS as readonly string[];
+  const unknownKeys = Object.keys(c).filter((k) => !own.includes(k));
+  if (unknownKeys.length > 0) fail(`Unknown condition "${unknownKeys[0]}"`);
+
+  const out: WorkflowConditions = {};
+
+  const priorities = optionalStringList(c.priorities, 'conditions.priorities');
+  if (priorities) {
+    const normalized = priorities.map((p) => p.toUpperCase());
+    for (const p of normalized) {
+      if (!(POSTHOG_INBOX_PRIORITIES as readonly string[]).includes(p)) {
+        fail(`"${p}" is not a PostHog priority. Use ${POSTHOG_INBOX_PRIORITIES.join(', ')}.`);
+      }
+    }
+    out.priorities = [...new Set(normalized)];
+  }
+
+  const actionability = optionalStringList(c.actionability, 'conditions.actionability');
+  if (actionability) {
+    const normalized = actionability.map((a) => a.toLowerCase());
+    for (const a of normalized) {
+      if (!(POSTHOG_INBOX_ACTIONABILITY as readonly string[]).includes(a)) {
+        fail(`"${a}" is not a PostHog actionability. Use ${POSTHOG_INBOX_ACTIONABILITY.join(', ')}.`);
+      }
+    }
+    out.actionability = [...new Set(normalized)];
+  }
+
+  for (const key of ['sourceProducts', 'suggestedReviewers'] as const) {
+    const list = optionalStringList(c[key], `conditions.${key}`);
+    if (list) out[key] = list;
+  }
+
+  const repositories = optionalStringList(c.repositories, 'conditions.repositories');
+  if (repositories) {
+    for (const r of repositories) {
+      if (!/^[^/\s]+\/[^/\s]+$/.test(r)) fail(`"${r}" is not a repository. Use owner/repo.`);
+    }
+    out.repositories = repositories;
+  }
+
+  if (c.scouts !== undefined && c.scouts !== null) {
+    if (typeof c.scouts !== 'object' || Array.isArray(c.scouts)) fail('conditions.scouts must be an object');
+    const scouts = c.scouts as Record<string, unknown>;
+    const extra = Object.keys(scouts).filter((k) => k !== 'include' && k !== 'exclude');
+    if (extra.length > 0) fail(`conditions.scouts has an unknown field "${extra[0]}". Use include or exclude.`);
+    const include = optionalStringList(scouts.include, 'conditions.scouts.include');
+    const exclude = optionalStringList(scouts.exclude, 'conditions.scouts.exclude');
+    if (include && exclude && include.some((s) => exclude.map((e) => e.toLowerCase()).includes(s.toLowerCase()))) {
+      fail('A scout cannot be both included and excluded.');
+    }
+    if (include || exclude) out.scouts = { ...(include ? { include } : {}), ...(exclude ? { exclude } : {}) };
+  }
+
+  for (const key of ['titleContains', 'summaryContains'] as const) {
+    if (c[key] === undefined) continue;
+    if (typeof c[key] !== 'string') fail(`conditions.${key} must be a string`);
+    const trimmed = (c[key] as string).trim();
+    if (trimmed) out[key] = trimmed;
+  }
+
+  if (c.minSignalCount !== undefined && c.minSignalCount !== null) {
+    const n = c.minSignalCount;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) {
+      fail('conditions.minSignalCount must be a whole number of 1 or more');
+    }
+    if (n > 1) out.minSignalCount = n;
+  }
+  return out;
+}
+
+/** The write-back settings of an issue rule's start action. Only `false` is stored. */
+function validateIssueWriteBack(
+  a: Record<string, unknown>,
+  at: string,
+  integration: WorkflowIntegration
+): IssueWriteBackSettings {
+  const out: IssueWriteBackSettings = {};
+  for (const key of ['issueStartComment', 'issueDoneOnMerge'] as const) {
+    if (a[key] === undefined) continue;
+    if (typeof a[key] !== 'boolean') fail(`${at}.${key} must be a boolean`);
+    if (!isIssueWorkflowIntegration(integration)) {
+      fail(`${at}.${key} is for issue automations (Linear, GitHub Issues)`);
+    }
+    if (a[key] === false) out[key] = false;
+  }
+  return out;
+}
+
+/**
+ * A Slack rule's conditions. The team and at least one channel are REQUIRED:
+ * a Slack rule that watches "every channel" is never what somebody meant, and
+ * the Slack source finds a rule's workspace by its team.
+ */
+function validateSlackConditions(raw: unknown): WorkflowConditions {
+  const given = raw === undefined || raw === null ? {} : raw;
+  if (typeof given !== 'object' || Array.isArray(given)) fail('conditions must be an object');
+  const c = given as Record<string, unknown>;
+
+  refuseForeignConditions(c, 'slack');
+  const unknown = Object.keys(c).filter(
+    (k) => !(SLACK_WORKFLOW_CONDITION_KEYS as readonly string[]).includes(k)
+  );
+  if (unknown.length > 0) fail(`Unknown condition "${unknown[0]}"`);
+
+  const out: WorkflowConditions = {};
+
+  if (c.slackTeamId !== undefined && typeof c.slackTeamId !== 'string') {
+    fail('conditions.slackTeamId must be a string');
+  }
+  const team = typeof c.slackTeamId === 'string' ? c.slackTeamId.trim() : '';
+  if (!team) fail('A Slack automation needs a Slack workspace. Pick the Slack workspace to watch.');
+  out.slackTeamId = team;
+
+  const channels = c.channels === undefined ? [] : stringList(c.channels, 'conditions.channels');
+  if (channels.length === 0) fail('A Slack automation needs at least one channel to watch.');
+  out.channels = channels;
+
+  if (c.textContains !== undefined) {
+    if (typeof c.textContains !== 'string') fail('conditions.textContains must be a string');
+    const trimmed = c.textContains.trim();
+    if (trimmed) out.textContains = trimmed;
+  }
+
+  if (c.slackAuthors !== undefined) {
+    const authors = validateSlackAuthors(c.slackAuthors);
+    if (authors) out.slackAuthors = authors;
+  }
+
+  if (c.includeThreadReplies !== undefined) {
+    if (typeof c.includeThreadReplies !== 'boolean') {
+      fail('conditions.includeThreadReplies must be a boolean');
+    }
+    // Only `true` is stored: absent already means "top-level messages only".
+    if (c.includeThreadReplies) out.includeThreadReplies = true;
+  }
+
+  return out;
+}
+
+function validateSlackAuthors(raw: unknown): WorkflowSlackAuthorMatch | undefined {
+  const at = 'conditions.slackAuthors';
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail(`${at} must be an object`);
+  const kind = (raw as { kind?: unknown }).kind;
+  if (
+    typeof kind !== 'string' ||
+    !(WORKFLOW_SLACK_AUTHOR_KINDS as readonly string[]).includes(kind)
+  ) {
+    fail(`${at}.kind must be one of ${WORKFLOW_SLACK_AUTHOR_KINDS.join(', ')}`);
+  }
+  if (kind === 'users') {
+    const userIds = stringList((raw as { userIds?: unknown }).userIds ?? [], `${at}.userIds`);
+    if (userIds.length === 0) fail(`${at} names no Slack users, so it can never match`);
+    return { kind: 'users', userIds };
+  }
+  // `any` is the default, so it is dropped: the stored jsonb holds only what
+  // differs from it. `linked` is kept, because it NARROWS the rule.
+  if (kind === 'any') return undefined;
+  return { kind: 'linked' };
 }
 
 /**
@@ -945,13 +2699,14 @@ function validateConditions(
     'checkConclusions',
     'bodyContains',
   ];
+  refuseForeignConditions(c, 'github');
   const unknown = Object.keys(c).filter((k) => !known.includes(k));
   if (unknown.length > 0) fail(`Unknown condition "${unknown[0]}"`);
 
   const appliesTo = (allowed: readonly WorkflowTriggerEvent[], field: string): void => {
     if (!events.some((e) => allowed.includes(e))) {
       const names = allowed.map((e) => WORKFLOW_EVENT_LABELS[e]).join(', ');
-      fail(`"${field}" only applies to ${names}, which this workflow does not trigger on`);
+      fail(`"${field}" only applies to ${names}, which this automation does not trigger on`);
     }
   };
 
@@ -1039,18 +2794,54 @@ function validateConditions(
   return out;
 }
 
-function validateActions(raw: unknown): WorkflowAction[] {
+function validateActions(raw: unknown, integration: WorkflowIntegration): WorkflowAction[] {
   if (!Array.isArray(raw)) fail('actions must be an array');
-  if (raw.length === 0) fail('a workflow needs at least one action');
-  return raw.map((entry, i) => validateAction(entry, `actions[${i}]`));
+  if (raw.length === 0) fail('an automation needs at least one action');
+  return raw.map((entry, i) => validateAction(entry, `actions[${i}]`, integration));
 }
 
-function validateAction(raw: unknown, at: string): WorkflowAction {
+function validateAction(
+  raw: unknown,
+  at: string,
+  integration: WorkflowIntegration
+): WorkflowAction {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail(`${at} must be an object`);
   const a = raw as Record<string, unknown>;
   const type = a.type;
-  if (typeof type !== 'string' || !(WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)) {
-    fail(`${at}.type is not an action Talyn can take on a PR`);
+  // An old task action is accepted and saved as the session that replaces it,
+  // when the integration offered it before. The editors no longer offer it.
+  if (type === 'run_prompt' && integration === 'github') {
+    return validateAction({ ...a, type: 'start_session', repositoryId: null }, at, integration);
+  }
+  if (type === 'start_task' && (integration === 'webhook' || isIssueWorkflowIntegration(integration))) {
+    return validateAction({ ...a, type: 'start_session' }, at, integration);
+  }
+  if (typeof type === 'string' && (TASK_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)) {
+    fail(`${at}: an automation starts a session, not a cloud task. Use "${WORKFLOW_ACTION_LABELS.start_session}"`);
+  }
+  if (typeof type !== 'string' || !(ALL_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)) {
+    fail(
+      integration === 'github'
+        ? `${at}.type is not an action Talyn can take on a PR`
+        : `${at}.type is not an action a ${WORKFLOW_INTEGRATION_LABELS[integration]} automation can take`
+    );
+  }
+  if (!(workflowActionsFor(integration) as readonly string[]).includes(type)) {
+    const label = WORKFLOW_ACTION_LABELS[type as WorkflowActionType];
+    const allowed = workflowActionsFor(integration)
+      .map((t) => `"${WORKFLOW_ACTION_LABELS[t]}"`)
+      .join(', ');
+    const reason = (SLACK_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)
+      ? 'acts on a Slack message'
+      : (INBOUND_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)
+        ? 'is for webhook and issue automations'
+        : (ISSUE_WORKFLOW_ACTION_TYPES as readonly string[]).includes(type)
+          ? 'acts on an issue'
+          : 'acts on a pull request';
+    fail(
+      `${at}: "${label}" ${reason}, so a ${WORKFLOW_INTEGRATION_LABELS[integration]} automation ` +
+        `cannot use it. Use ${allowed}.`
+    );
   }
 
   switch (type as WorkflowActionType) {
@@ -1077,6 +2868,13 @@ function validateAction(raw: unknown, at: string): WorkflowAction {
       }
       return { type: 'comment', body: a.body.trim() };
     }
+    case 'approve_pr': {
+      if (a.body !== undefined && typeof a.body !== 'string') {
+        fail(`${at}.body must be a string`);
+      }
+      const body = typeof a.body === 'string' ? a.body.trim() : '';
+      return { type: 'approve_pr', ...(body ? { body } : {}) };
+    }
     case 'run_skill': {
       if (typeof a.skillKey !== 'string' || !a.skillKey.trim()) {
         fail(`${at}.skillKey must be a non-empty string`);
@@ -1088,19 +2886,12 @@ function validateAction(raw: unknown, at: string): WorkflowAction {
       // storing a rule that silently fails every time it matches.
       if (skillKey.startsWith('local:')) {
         fail(
-          'A workflow cannot run a local skill — those live on your machine and Talyn runs ' +
-            'workflows on the server. Use a repo skill or one saved to the workspace.'
+          'An automation cannot run a local skill. Local skills stay on your machine. Talyn runs ' +
+            'automations on the server. Use a repository skill or one saved to the workspace.'
         );
       }
       const model = typeof a.model === 'string' && a.model.trim() ? a.model.trim() : undefined;
       return { type: 'run_skill', skillKey, ...(model ? { model } : {}) };
-    }
-    case 'run_prompt': {
-      if (typeof a.prompt !== 'string' || !a.prompt.trim()) {
-        fail(`${at}.prompt must be a non-empty string`);
-      }
-      const model = typeof a.model === 'string' && a.model.trim() ? a.model.trim() : undefined;
-      return { type: 'run_prompt', prompt: a.prompt.trim(), ...(model ? { model } : {}) };
     }
     case 'watch_pr':
       return { type: 'watch_pr' };
@@ -1123,6 +2914,81 @@ function validateAction(raw: unknown, at: string): WorkflowAction {
         type: 'run_code_review',
         ...(p ? { preset: p as CodeReviewPreset } : {}),
       };
+    }
+    case 'start_session': {
+      if (typeof a.prompt !== 'string' || !a.prompt.trim()) {
+        fail(`${at}.prompt must be a non-empty string`);
+      }
+      let repositoryId: string | null = null;
+      if (a.repositoryId !== undefined && a.repositoryId !== null) {
+        if (typeof a.repositoryId !== 'string') fail(`${at}.repositoryId must be a string or null`);
+        repositoryId = a.repositoryId.trim() || null;
+      }
+      // A Slack rule can leave the repository to Talyn: it reads the message
+      // to choose one. A GitHub Issues rule defaults to the issue's own
+      // repository. A webhook or a Linear issue has nothing to choose from.
+      if ((integration === 'webhook' || integration === 'linear') && !repositoryId) {
+        fail(`${at}: choose the repository the session works on`);
+      }
+      // A PostHog report names its repository. A rule limits it with the
+      // Repository condition instead.
+      if (integration === 'posthog_inbox' && repositoryId) {
+        fail(
+          `${at}: a PostHog Inbox automation works on the report's own repository. ` +
+            'To limit the repositories, use the Repository condition.'
+        );
+      }
+      if (a.internetAccess !== undefined && typeof a.internetAccess !== 'boolean') {
+        fail(`${at}.internetAccess must be a boolean`);
+      }
+      const model = typeof a.model === 'string' && a.model.trim() ? a.model.trim() : undefined;
+      if (a.spaceId !== undefined && a.spaceId !== null && typeof a.spaceId !== 'string') {
+        fail(`${at}.spaceId must be a string or null`);
+      }
+      const spaceId = typeof a.spaceId === 'string' && a.spaceId.trim() ? a.spaceId.trim() : undefined;
+      return {
+        type: 'start_session',
+        repositoryId,
+        prompt: a.prompt.trim(),
+        ...(model ? { model } : {}),
+        ...(a.internetAccess === true ? { internetAccess: true } : {}),
+        ...(spaceId ? { spaceId } : {}),
+        ...validateIssueWriteBack(a, at, integration),
+      };
+    }
+    case 'slack_reply': {
+      if (typeof a.text !== 'string' || !a.text.trim()) {
+        fail(`${at}.text must be a non-empty string`);
+      }
+      return { type: 'slack_reply', text: a.text.trim() };
+    }
+    case 'slack_react': {
+      if (typeof a.emoji !== 'string') fail(`${at}.emoji must be a string`);
+      // People type `:eyes:` as often as `eyes`. Slack's API wants the bare name.
+      const emoji = a.emoji.trim().replace(/^:+|:+$/g, '');
+      if (!emoji || /\s/.test(emoji)) {
+        fail(`${at}.emoji must be one emoji name, like "eyes" or ":white_check_mark:"`);
+      }
+      return { type: 'slack_react', emoji };
+    }
+    case 'run_prompt':
+    case 'start_task':
+      // Converted to `start_session` or refused above.
+      return fail(`${at}: an automation starts a session, not a cloud task`);
+    case 'issue_comment': {
+      if (typeof a.body !== 'string' || !a.body.trim()) fail(`${at}.body must be a non-empty string`);
+      // `afterStart` is Talyn's own marker and is never stored.
+      return { type: 'issue_comment', body: a.body.trim() };
+    }
+    case 'issue_set_status': {
+      if (typeof a.status !== 'string' || !a.status.trim()) {
+        fail(`${at}.status must be a status name, or "done"`);
+      }
+      const status = a.status.trim();
+      if (integration === 'github_issues' && !['done', 'open', 'closed'].includes(status.toLowerCase())) {
+        fail(`${at}.status must be done, open or closed on GitHub Issues`);
+      }
+      return { type: 'issue_set_status', status: integration === 'github_issues' ? status.toLowerCase() : status };
     }
   }
 }
@@ -1168,11 +3034,102 @@ export function workflowsOffered(features: { workflows?: boolean } | null | unde
 }
 
 /**
- * A blank workflow the editor opens on. Save stays refused until it has a name
- * and at least one action — see {@link workflowInputProblem}.
+ * Whether Slack rules should be drawn. The same three-state discipline as
+ * {@link workflowsOffered}, and also not authorisation: the routes and the
+ * engine gate on the `slackChannelRules` flag themselves.
  */
-export function emptyWorkflowInput(): WorkflowInput {
+export function slackRulesOffered(
+  features: { workflows?: boolean; slackChannelRules?: boolean } | null | undefined
+): boolean {
+  return workflowsOffered(features) && features?.slackChannelRules === true;
+}
+
+/**
+ * Whether webhook rules should be drawn. The same three-state discipline as
+ * {@link workflowsOffered}, and also not authorisation: the routes, the
+ * receiver and the engine gate on the `webhookRules` flag themselves.
+ */
+export function webhookRulesOffered(
+  features: { workflows?: boolean; webhookRules?: boolean } | null | undefined
+): boolean {
+  return workflowsOffered(features) && features?.webhookRules === true;
+}
+
+/**
+ * Whether issue rules (Linear, GitHub Issues) should be drawn. The same
+ * three-state discipline as {@link workflowsOffered}, and also not
+ * authorisation: the routes and the engine gate on the `issueRules` flag.
+ */
+export function issueRulesOffered(
+  features: { workflows?: boolean; issueRules?: boolean } | null | undefined
+): boolean {
+  return workflowsOffered(features) && features?.issueRules === true;
+}
+
+/**
+ * Whether PostHog Inbox rules should be drawn. The same three-state
+ * discipline as {@link workflowsOffered}, and also not authorisation: the
+ * routes, the poller and the engine gate on the `posthogInboxRules` flag.
+ */
+export function posthogInboxRulesOffered(
+  features: { workflows?: boolean; posthogInboxRules?: boolean } | null | undefined
+): boolean {
+  return workflowsOffered(features) && features?.posthogInboxRules === true;
+}
+
+/**
+ * A blank workflow the editor opens on. Save stays refused until it has a name
+ * and at least one action — see {@link workflowInputProblem}. A Slack rule also
+ * needs its Slack workspace and a channel.
+ */
+export function emptyWorkflowInput(integration: WorkflowIntegration = 'github'): WorkflowInput {
+  if (isIssueWorkflowIntegration(integration)) {
+    return {
+      integration,
+      name: '',
+      enabled: true,
+      events: ['issue_created'],
+      conditions: {},
+      actions: [],
+      maxRunsPerPrPerHour: DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR,
+    };
+  }
+  if (integration === 'posthog_inbox') {
+    return {
+      integration: 'posthog_inbox',
+      name: '',
+      enabled: true,
+      events: ['report_ready'],
+      conditions: {},
+      actions: [],
+      maxRunsPerPrPerHour: DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR,
+      maxRunsPerDay: DEFAULT_POSTHOG_INBOX_RUNS_PER_DAY,
+    };
+  }
+  if (integration === 'webhook') {
+    return {
+      integration: 'webhook',
+      name: '',
+      enabled: true,
+      events: ['webhook_received'],
+      conditions: {},
+      actions: [],
+      maxRunsPerPrPerHour: DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR,
+    };
+  }
+  if (integration === 'slack') {
+    return {
+      integration: 'slack',
+      name: '',
+      enabled: true,
+      events: ['slack_message'],
+      conditions: {},
+      actions: [],
+      maxRunsPerPrPerHour: DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR,
+    };
+  }
   return {
+    integration: 'github',
     name: '',
     enabled: true,
     // One trigger preselected, because a workflow with no trigger is not a draft
@@ -1190,12 +3147,14 @@ export function emptyWorkflowInput(): WorkflowInput {
 /** Turn a stored definition back into what the editor edits. */
 export function workflowToInput(workflow: WorkflowDefinition): WorkflowInput {
   return {
+    integration: workflowIntegrationOf(workflow),
     name: workflow.name,
     enabled: workflow.enabled,
     events: [...workflow.events],
     conditions: { ...workflow.conditions },
     actions: workflow.actions.map((a) => ({ ...a })),
     maxRunsPerPrPerHour: workflow.maxRunsPerPrPerHour,
+    ...(workflow.maxRunsPerDay !== undefined ? { maxRunsPerDay: workflow.maxRunsPerDay } : {}),
   };
 }
 
@@ -1212,6 +3171,8 @@ export function emptyWorkflowAction(type: WorkflowActionType): WorkflowAction {
       return { type: 'assign', users: [] };
     case 'comment':
       return { type: 'comment', body: '' };
+    case 'approve_pr':
+      return { type: 'approve_pr' };
     case 'run_skill':
       return { type: 'run_skill', skillKey: '' };
     case 'run_prompt':
@@ -1224,6 +3185,18 @@ export function emptyWorkflowAction(type: WorkflowActionType): WorkflowAction {
       // No preset, so a new row inherits the workspace default until somebody
       // deliberately pins one.
       return { type: 'run_code_review' };
+    case 'start_session':
+      return { type: 'start_session', repositoryId: null, prompt: '' };
+    case 'slack_reply':
+      return { type: 'slack_reply', text: '' };
+    case 'slack_react':
+      return { type: 'slack_react', emoji: 'eyes' };
+    case 'start_task':
+      return { type: 'start_task', repositoryId: '', prompt: '' };
+    case 'issue_comment':
+      return { type: 'issue_comment', body: '' };
+    case 'issue_set_status':
+      return { type: 'issue_set_status', status: 'done' };
   }
 }
 
@@ -1272,7 +3245,7 @@ export const WORKFLOW_CONDITION_SPECS: readonly WorkflowConditionSpec[] = [
   {
     key: 'repos',
     label: 'Repository',
-    hint: 'Only these repositories. Leave a workflow without this to cover every repository the workspace watches.',
+    hint: 'Only these repositories. Leave an automation without this to cover every repository the workspace watches.',
     input: 'repos',
     appliesTo: null,
   },
@@ -1322,7 +3295,7 @@ export const WORKFLOW_CONDITION_SPECS: readonly WorkflowConditionSpec[] = [
     key: 'labelsNone',
     label: 'Has none of these labels',
     input: 'labels',
-    hint: 'Carrying any one of them stops the workflow.',
+    hint: 'Carrying any one of them stops the automation.',
     appliesTo: null,
   },
   {
@@ -1421,6 +3394,461 @@ export function emptyWorkflowConditionValue(
   }
 }
 
+/** The widget a Slack condition is edited with. */
+export type SlackWorkflowConditionInput =
+  | 'slackTeam'
+  | 'channels'
+  | 'text'
+  | 'slackAuthors'
+  | 'threadReplies';
+
+export interface SlackWorkflowConditionSpec {
+  key: (typeof SLACK_WORKFLOW_CONDITION_KEYS)[number];
+  label: string;
+  hint: string;
+  input: SlackWorkflowConditionInput;
+  /** The validator refuses a Slack rule without it. */
+  required: boolean;
+}
+
+/**
+ * Every condition a Slack rule can carry, as data — the Slack counterpart of
+ * {@link WORKFLOW_CONDITION_SPECS}. Kept apart because the GitHub editor builds
+ * its menu from that list, and a Slack field there could only be refused.
+ */
+export const SLACK_WORKFLOW_CONDITION_SPECS: readonly SlackWorkflowConditionSpec[] = [
+  {
+    key: 'slackTeamId',
+    label: 'Slack workspace',
+    hint: 'The Slack workspace to watch. Talyn must be installed there.',
+    input: 'slackTeam',
+    required: true,
+  },
+  {
+    key: 'channels',
+    label: 'Channels',
+    hint: 'A message in any of these channels can trigger the automation. Invite Talyn to a channel first.',
+    input: 'channels',
+    required: true,
+  },
+  {
+    key: 'slackAuthors',
+    label: 'Who can trigger it',
+    hint: 'By default, anyone in the channel, apps and bots included.',
+    input: 'slackAuthors',
+    required: false,
+  },
+  {
+    key: 'textContains',
+    label: 'Message contains',
+    hint: 'Case-insensitive.',
+    input: 'text',
+    required: false,
+  },
+  {
+    key: 'includeThreadReplies',
+    label: 'Replies in threads',
+    hint: 'By default, only new messages in the channel trigger the automation, not replies.',
+    input: 'threadReplies',
+    required: false,
+  },
+];
+
+/** The widget a webhook condition is edited with. */
+export type WebhookWorkflowConditionInput = 'payloadMatches';
+
+export interface WebhookWorkflowConditionSpec {
+  key: (typeof WEBHOOK_WORKFLOW_CONDITION_KEYS)[number];
+  label: string;
+  hint: string;
+  input: WebhookWorkflowConditionInput;
+  required: boolean;
+}
+
+/** Every condition a webhook rule can carry, as data. */
+export const WEBHOOK_WORKFLOW_CONDITION_SPECS: readonly WebhookWorkflowConditionSpec[] = [
+  {
+    key: 'payloadMatches',
+    label: 'Payload matches',
+    hint:
+      'Tests on the JSON body, like "action equals opened" or "issue.labels contains bug". ' +
+      'Every test must pass. Without tests, every request starts the automation.',
+    input: 'payloadMatches',
+    required: false,
+  },
+];
+
+/** The widget an issue condition is edited with. */
+export type IssueWorkflowConditionInput =
+  | 'connection'
+  | 'repos'
+  | 'teams'
+  | 'projects'
+  | 'statuses'
+  | 'priorities'
+  | 'labels'
+  | 'label'
+  | 'assignee'
+  | 'people'
+  | 'text';
+
+export interface IssueWorkflowConditionSpec {
+  key: (typeof LINEAR_WORKFLOW_CONDITION_KEYS)[number] | (typeof GITHUB_ISSUES_WORKFLOW_CONDITION_KEYS)[number];
+  label: string;
+  hint: string;
+  input: IssueWorkflowConditionInput;
+  required: boolean;
+  /** The integrations that have this condition. */
+  integrations: readonly IssueWorkflowIntegration[];
+  /** Events it applies to, or null for every issue event. */
+  appliesTo: readonly WorkflowTriggerEvent[] | null;
+}
+
+/** Every condition an issue rule can carry, as data. */
+export const ISSUE_WORKFLOW_CONDITION_SPECS: readonly IssueWorkflowConditionSpec[] = [
+  {
+    key: 'connectionId',
+    label: 'Linear workspace',
+    hint: 'The Linear workspace to watch.',
+    input: 'connection',
+    required: true,
+    integrations: ['linear'],
+    appliesTo: null,
+  },
+  {
+    key: 'repos',
+    label: 'Repository',
+    hint: 'Only issues in these repositories. Without this, every repository the workspace watches.',
+    input: 'repos',
+    required: false,
+    integrations: ['github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'teams',
+    label: 'Team',
+    hint: 'Only issues in these Linear teams.',
+    input: 'teams',
+    required: false,
+    integrations: ['linear'],
+    appliesTo: null,
+  },
+  {
+    key: 'projects',
+    label: 'Project',
+    hint: 'Only issues in these Linear projects.',
+    input: 'projects',
+    required: false,
+    integrations: ['linear'],
+    appliesTo: null,
+  },
+  {
+    key: 'statuses',
+    label: 'Status',
+    hint: 'Only issues in one of these statuses.',
+    input: 'statuses',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'priorities',
+    label: 'Priority',
+    hint: 'Only issues with one of these priorities.',
+    input: 'priorities',
+    required: false,
+    integrations: ['linear'],
+    appliesTo: null,
+  },
+  {
+    key: 'labelsAny',
+    label: 'Has any of these labels',
+    hint: 'Matches when the issue has at least one.',
+    input: 'labels',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'labelsAll',
+    label: 'Has all of these labels',
+    hint: 'Matches only when the issue has every one.',
+    input: 'labels',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'labelsNone',
+    label: 'Has none of these labels',
+    hint: 'Any one of them stops the automation.',
+    input: 'labels',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'labelName',
+    label: 'The label that was added',
+    hint: 'Only when this exact label was added.',
+    input: 'label',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: ['issue_labeled'],
+  },
+  {
+    key: 'issueAssignee',
+    label: 'Assigned to',
+    hint: 'Who the issue is assigned to.',
+    input: 'assignee',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'issueAuthors',
+    label: 'Opened by',
+    hint: 'GitHub logins of the people who opened the issue.',
+    input: 'people',
+    required: false,
+    integrations: ['github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'titleContains',
+    label: 'Title contains',
+    hint: 'Case-insensitive.',
+    input: 'text',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+  {
+    key: 'bodyContains',
+    label: 'Description or comment contains',
+    hint: 'Case-insensitive. On a new comment, the comment counts too.',
+    input: 'text',
+    required: false,
+    integrations: ['linear', 'github_issues'],
+    appliesTo: null,
+  },
+];
+
+/** The issue condition specs of one tracker. */
+export function issueConditionSpecsFor(integration: IssueWorkflowIntegration): IssueWorkflowConditionSpec[] {
+  return ISSUE_WORKFLOW_CONDITION_SPECS.filter((spec) => spec.integrations.includes(integration));
+}
+
+/** The widget a PostHog Inbox condition is edited with. */
+export type PostHogInboxConditionInput =
+  | 'priorities'
+  | 'actionability'
+  | 'list'
+  | 'scouts'
+  | 'repos'
+  | 'people'
+  | 'text'
+  | 'number';
+
+export interface PostHogInboxConditionSpec {
+  key: (typeof POSTHOG_INBOX_WORKFLOW_CONDITION_KEYS)[number];
+  label: string;
+  hint: string;
+  input: PostHogInboxConditionInput;
+  required: boolean;
+}
+
+/** Every condition a PostHog Inbox rule can carry, as data. */
+export const POSTHOG_INBOX_CONDITION_SPECS: readonly PostHogInboxConditionSpec[] = [
+  {
+    key: 'repositories',
+    label: 'Repository',
+    hint:
+      "Only reports for these repositories. Without this, any repository connected to the workspace. " +
+      "A report for a repository that is not connected never starts a session.",
+    input: 'repos',
+    required: false,
+  },
+  {
+    key: 'priorities',
+    label: 'Priority',
+    hint: 'Only reports with one of these priorities. P0 is the most urgent.',
+    input: 'priorities',
+    required: false,
+  },
+  {
+    key: 'actionability',
+    label: 'Actionability',
+    hint: 'Without this, only reports PostHog judged ready to fix.',
+    input: 'actionability',
+    required: false,
+  },
+  {
+    key: 'sourceProducts',
+    label: 'Source product',
+    hint: 'Only reports with signals from one of these PostHog products, like error_tracking or session_replay.',
+    input: 'list',
+    required: false,
+  },
+  {
+    key: 'scouts',
+    label: 'Scout',
+    hint: 'Include or exclude reports by the scout that wrote them, by skill name.',
+    input: 'scouts',
+    required: false,
+  },
+  {
+    key: 'suggestedReviewers',
+    label: 'Suggested reviewer',
+    hint: 'GitHub logins. Only reports where PostHog suggests one of them as a reviewer.',
+    input: 'people',
+    required: false,
+  },
+  {
+    key: 'titleContains',
+    label: 'Title contains',
+    hint: 'Case-insensitive.',
+    input: 'text',
+    required: false,
+  },
+  {
+    key: 'summaryContains',
+    label: 'Summary contains',
+    hint: 'Case-insensitive.',
+    input: 'text',
+    required: false,
+  },
+  {
+    key: 'minSignalCount',
+    label: 'At least this many signals',
+    hint: 'A report groups signals. More signals usually means a wider problem.',
+    input: 'number',
+    required: false,
+  },
+];
+
+/**
+ * The rule a PostHog Inbox preview validates: the editor's conditions with a
+ * stand-in name and action, so a rule can be previewed before it has a name
+ * or a prompt. The dry-run route validates the same input.
+ */
+export function posthogInboxPreviewInput(conditions: WorkflowConditions | undefined): WorkflowInput {
+  return {
+    integration: 'posthog_inbox',
+    name: 'Preview',
+    events: ['report_ready'],
+    conditions: conditions ?? {},
+    actions: [{ type: 'start_session', repositoryId: null, prompt: 'Preview' }],
+  };
+}
+
+/**
+ * Why a PostHog Inbox rule does not match a report, in a few words, or null
+ * when it matches. For the editor's dry run. It runs the matcher one
+ * condition at a time, so it cannot disagree with {@link workflowMatches}.
+ */
+export function posthogInboxMismatchReason(conditions: WorkflowConditions, facts: PostHogInboxFacts): string | null {
+  const blocked = posthogInboxReportBlocked(facts);
+  if (blocked === 'safety') return "PostHog's safety judge held it back";
+  if (blocked === 'not_ready') return `It is ${facts.status || 'not ready'}, not ready`;
+  if (blocked === 'already_addressed') return 'PostHog says it is already being handled';
+  if (!facts.repository) return 'PostHog did not pick a repository for it';
+  if (!facts.workspaceRepositoryId) return `${facts.repository} is not connected to this workspace`;
+  const base: WorkflowConditions = conditions.actionability ? { actionability: conditions.actionability } : {};
+  if (!posthogInboxConditionsMatch(base, facts)) {
+    return `Actionability is ${facts.actionability ?? 'not judged yet'}`;
+  }
+  for (const spec of POSTHOG_INBOX_CONDITION_SPECS) {
+    if (spec.key === 'actionability' || conditions[spec.key] === undefined) continue;
+    if (!posthogInboxConditionsMatch({ ...base, [spec.key]: conditions[spec.key] }, facts)) {
+      return `${spec.label} does not match`;
+    }
+  }
+  return null;
+}
+
+/** A fresh payload test for the editor. Empty, so it saves as nothing until filled in. */
+export function emptyWebhookPayloadCondition(): WebhookPayloadCondition {
+  return { path: '', op: 'equals', value: '' };
+}
+
+/** One condition as a vocabulary listing shows it. */
+export interface WorkflowConditionSummary {
+  key: keyof WorkflowConditions;
+  label: string;
+  hint: string;
+  required: boolean;
+  /** Events the condition applies to, or `null` for every event of the integration. */
+  appliesTo: readonly WorkflowTriggerEvent[] | null;
+}
+
+/** What one integration's rules can trigger on, test and do. */
+export interface WorkflowVocabulary {
+  integration: WorkflowIntegration;
+  events: ReadonlyArray<{ event: WorkflowTriggerEvent; label: string }>;
+  conditions: readonly WorkflowConditionSummary[];
+  actions: ReadonlyArray<{ type: WorkflowActionType; label: string }>;
+}
+
+/**
+ * The events, conditions and actions of one integration.
+ *
+ * The same lists {@link validateWorkflow} accepts for a rule of that
+ * integration, so a client or an agent that builds a rule from this listing
+ * cannot compose one the API then refuses on vocabulary grounds.
+ */
+export function workflowVocabulary(integration: WorkflowIntegration): WorkflowVocabulary {
+  const events = workflowEventsFor(integration).map((event) => ({
+    event,
+    label: WORKFLOW_EVENT_LABELS[event],
+  }));
+  const actions = workflowActionsFor(integration).map((type) => ({
+    type,
+    label: WORKFLOW_ACTION_LABELS[type],
+  }));
+  const conditions: WorkflowConditionSummary[] =
+    isIssueWorkflowIntegration(integration)
+      ? issueConditionSpecsFor(integration).map((spec) => ({
+          key: spec.key,
+          label: spec.label,
+          hint: spec.hint,
+          required: spec.required,
+          appliesTo: spec.appliesTo,
+        }))
+      : integration === 'posthog_inbox'
+      ? POSTHOG_INBOX_CONDITION_SPECS.map((spec) => ({
+          key: spec.key,
+          label: spec.label,
+          hint: spec.hint,
+          required: spec.required,
+          appliesTo: null,
+        }))
+      : integration === 'webhook'
+      ? WEBHOOK_WORKFLOW_CONDITION_SPECS.map((spec) => ({
+          key: spec.key,
+          label: spec.label,
+          hint: spec.hint,
+          required: spec.required,
+          appliesTo: null,
+        }))
+      : integration === 'slack'
+      ? SLACK_WORKFLOW_CONDITION_SPECS.map((spec) => ({
+          key: spec.key,
+          label: spec.label,
+          hint: spec.hint,
+          required: spec.required,
+          appliesTo: null,
+        }))
+      : WORKFLOW_CONDITION_SPECS.map((spec) => ({
+          key: spec.key,
+          label: spec.label,
+          hint: spec.hint,
+          required: false,
+          appliesTo: spec.appliesTo,
+        }));
+  return { integration, events, conditions, actions };
+}
+
 /** The spec for one condition key. */
 export function workflowConditionSpec(
   key: keyof WorkflowConditions
@@ -1476,7 +3904,7 @@ export function workflowInputProblem(input: WorkflowInput): string | null {
     validateWorkflow(input);
     return null;
   } catch (err) {
-    return err instanceof Error ? err.message : 'This workflow is not valid';
+    return err instanceof Error ? err.message : 'This automation is not valid';
   }
 }
 
@@ -1493,6 +3921,8 @@ export function describeWorkflowAction(action: WorkflowAction): string {
       return `Assign ${action.users.join(', ')}`;
     case 'comment':
       return 'Post a comment';
+    case 'approve_pr':
+      return 'Approve the PR';
     case 'run_skill':
       return `Run skill ${action.skillKey.replace(/^(repo:[^:]+:|platform:)/, '')}`;
     case 'run_prompt':
@@ -1507,6 +3937,18 @@ export function describeWorkflowAction(action: WorkflowAction): string {
       return action.preset
         ? `Run a ${action.preset} code review`
         : 'Run a code review';
+    case 'start_session':
+      return 'Start a session';
+    case 'slack_reply':
+      return 'Reply in the thread';
+    case 'slack_react':
+      return `React with :${action.emoji}:`;
+    case 'start_task':
+      return 'Start a task';
+    case 'issue_comment':
+      return action.afterStart ? 'Comment that the work started' : 'Comment on the issue';
+    case 'issue_set_status':
+      return action.status === 'done' ? 'Move the issue to done' : `Move the issue to ${action.status}`;
   }
 }
 
