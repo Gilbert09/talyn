@@ -277,6 +277,45 @@ export async function listFindings(
     .orderBy(asc(severityRank(prCodeReviewFindings.severity)), desc(prCodeReviewFindings.createdAt));
 }
 
+/** A confirmed finding as the owning session is told about it. */
+export interface ConfirmedFindingRow {
+  id: string;
+  severity: string;
+  filePath: string;
+  lineStart: number | null;
+  lineEnd: number | null;
+  title: string;
+  body: string;
+  anchorVerified: boolean;
+}
+
+/**
+ * Confirmed findings that are still open: not dismissed, fixed, stale or
+ * picked for a fix. Most severe first. With the body, for a one-line summary.
+ */
+export async function confirmedOpenFindings(reviewId: string): Promise<ConfirmedFindingRow[]> {
+  return getDbClient()
+    .select({
+      id: prCodeReviewFindings.id,
+      severity: prCodeReviewFindings.severity,
+      filePath: prCodeReviewFindings.filePath,
+      lineStart: prCodeReviewFindings.lineStart,
+      lineEnd: prCodeReviewFindings.lineEnd,
+      title: prCodeReviewFindings.title,
+      body: prCodeReviewFindings.body,
+      anchorVerified: prCodeReviewFindings.anchorVerified,
+    })
+    .from(prCodeReviewFindings)
+    .where(
+      and(
+        eq(prCodeReviewFindings.reviewId, reviewId),
+        eq(prCodeReviewFindings.verdict, 'confirmed'),
+        eq(prCodeReviewFindings.disposition, 'open')
+      )
+    )
+    .orderBy(asc(severityRank(prCodeReviewFindings.severity)), asc(prCodeReviewFindings.createdAt));
+}
+
 export async function getFinding(findingId: string): Promise<FindingDetailRow | null> {
   const rows = await getDbClient()
     .select(FINDING_DETAIL_COLUMNS)

@@ -6,6 +6,7 @@ import {
   type CodeReviewPreset,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
+import { advisoryLockKey } from '../advisoryLock.js';
 
 // Named the way mergeQueue/store.ts names it, so the two engines read alike.
 type Db = ReturnType<typeof getDbClient>;
@@ -370,6 +371,48 @@ export async function appendReviewEvent(
     code: event.code ?? null,
     message: event.message ?? '',
     detail: event.detail ?? null,
+  });
+}
+
+/**
+ * Append an audit row once per cycle: true when this call wrote it, false
+ * when an event with the same code and `detail.cycle` is already there.
+ *
+ * The advisory lock serialises two callers that finish the same cycle at
+ * once. It deliberately does NOT bump the review's version, as a CAS claim
+ * would: a new cycle that starts at the same moment would then lose its CAS.
+ */
+export async function appendReviewEventOnce(
+  reviewId: string,
+  cycle: number,
+  event: ReviewEventDraft & { code: string },
+  db: Db = getDbClient()
+): Promise<boolean> {
+  const key = advisoryLockKey(`code-review-event:${reviewId}:${cycle}:${event.code}`).toString();
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${key}::bigint)`);
+    const [prior] = await tx
+      .select({ id: prCodeReviewEvents.id })
+      .from(prCodeReviewEvents)
+      .where(
+        and(
+          eq(prCodeReviewEvents.reviewId, reviewId),
+          eq(prCodeReviewEvents.code, event.code),
+          sql`${prCodeReviewEvents.detail} ->> 'cycle' = ${String(cycle)}`
+        )
+      )
+      .limit(1);
+    if (prior) return false;
+    await tx.insert(prCodeReviewEvents).values({
+      reviewId,
+      fromPhase: event.fromPhase ?? null,
+      toPhase: event.toPhase,
+      trigger: event.trigger,
+      code: event.code,
+      message: event.message ?? '',
+      detail: { ...(event.detail ?? {}), cycle },
+    });
+    return true;
   });
 }
 

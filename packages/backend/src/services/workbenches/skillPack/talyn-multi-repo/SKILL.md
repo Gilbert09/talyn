@@ -14,10 +14,14 @@ Rules:
 - One repository per session. Never ask one session to change two repositories.
 - Talyn does not post in Slack. Do not try to post there. Report in your reply.
 - Never send a message to your own session (`$TALYN_SESSION_ID`).
-- When the person asks to turn this session into a thread, do not follow the steps below.
+- When the work needs changes in more than one repository, turn this session into a thread by default. Do not ask the person first.
+  Do not follow the steps below.
   Call `talyn_continue_as_thread` with a `prompt` that holds the plan: the repositories, their order and the decisions made.
   Then end your turn. The thread starts the sessions.
-- When the work needs sessions on several repositories and the person did not ask for a thread, ask them if they want one.
+- Do the same when the person asks to turn this session into a thread.
+- When this session is in a thread already or another session started it, it cannot become a thread.
+  Do not follow the steps below. Report the other repository's change in your reply. The thread or the session that started you reads it.
+- Follow the steps below only when the person told you to keep the work in this session.
 
 ## 1. Find the repository
 

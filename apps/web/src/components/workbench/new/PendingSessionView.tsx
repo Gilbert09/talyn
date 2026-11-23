@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { ImageIcon, Loader2 } from 'lucide-react';
+import { endQuotesAtPlainLines } from '@talyn/shared';
 import { renderMarkdownish } from '../../../lib/markdown';
 import type { NewWorkbenchSpec } from './useCreateWorkbench';
 
@@ -38,7 +39,7 @@ export function PendingSessionView({ spec }: { spec: NewWorkbenchSpec }) {
             <div className="flex justify-end">
               <div className="max-w-[85%] space-y-1">
                 <div className="rounded-lg bg-muted px-3 py-2 text-[13px] text-foreground [overflow-wrap:anywhere]">
-                  {prompt && renderMarkdownish(prompt, 'surface')}
+                  {prompt && renderMarkdownish(endQuotesAtPlainLines(prompt), 'surface')}
                   {images > 0 && (
                     <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
                       <ImageIcon className="h-3.5 w-3.5" />

@@ -1,8 +1,9 @@
 import React from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { composerMarkdown, type ComposerLine } from '@talyn/shared';
+import { composerMarkdown, endQuotesAtPlainLines, type ComposerLine } from '@talyn/shared';
 import { MarkdownTextarea } from '../components/workbench/MarkdownTextarea';
+import { renderMarkdownish } from '../lib/markdown';
 
 /** Each line as `kind: text{marks}|text…`, so a case reads at a glance. */
 function shape(lines: ComposerLine[]): string[] {
@@ -109,5 +110,34 @@ describe('MarkdownTextarea', () => {
     const ref = React.createRef<HTMLTextAreaElement>();
     render(<MarkdownTextarea ref={ref} value="x" onChange={() => undefined} textClassName="" />);
     expect(ref.current?.tagName).toBe('TEXTAREA');
+  });
+});
+
+describe('endQuotesAtPlainLines', () => {
+  it.each([
+    ['no quote', 'a\nb', 'a\nb'],
+    ['a plain line after a quote', '> quote\nreply', '> quote\n\nreply'],
+    ['a quote between paragraphs', 'intro\n> quote\nreply', 'intro\n> quote\n\nreply'],
+    ['a blank line already there', '> quote\n\nreply', '> quote\n\nreply'],
+    ['a quote over many lines', '> one\n> two\nreply', '> one\n> two\n\nreply'],
+    ['a nested quote', '>> deep\nreply', '>> deep\n\nreply'],
+    ['an indented quote', '   > quote\nreply', '   > quote\n\nreply'],
+    ['four spaces is not a quote', '    > code\nreply', '    > code\nreply'],
+    ['a quote as the last line', 'reply\n> quote', 'reply\n> quote'],
+    ['a fence after a quote', '> quote\n```\ncode\n```', '> quote\n\n```\ncode\n```'],
+    ['a quote marker inside a fence', '```\n> not a quote\nline\n```', '```\n> not a quote\nline\n```'],
+    ['a tilde fence', '~~~\n> x\ny\n~~~\n> q\nr', '~~~\n> x\ny\n~~~\n> q\n\nr'],
+    ['a fence inside a quote', '> ```\n> code\n> ```\nreply', '> ```\n> code\n> ```\n\nreply'],
+    ['two quotes', '> a\nb\n> c\nd', '> a\n\nb\n> c\n\nd'],
+  ])('%s', (_name, input, expected) => {
+    expect(endQuotesAtPlainLines(input)).toBe(expected);
+  });
+
+  it('keeps the reply out of the rendered quote', () => {
+    const { container } = render(<>{renderMarkdownish(endQuotesAtPlainLines('> bkah blah blah\nmore content'), 'surface')}</>);
+    const quote = container.querySelector('blockquote');
+    expect(quote?.textContent?.trim()).toBe('bkah blah blah');
+    expect(container.textContent).toContain('more content');
+    expect(quote?.textContent).not.toContain('more content');
   });
 });

@@ -422,6 +422,23 @@ describe('workflow engine', () => {
       expect((run?.actions as Array<{ type: string; ok: boolean }>)[0]).toMatchObject({ type: 'run_skill', ok: true });
     });
 
+    it('counts a run that starts a session in the stats', async () => {
+      const wf = await addWorkflow({ actions: [{ type: 'run_skill', skillKey: 'platform:skill-1', model: MODEL }] });
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      const [listed] = await listWorkflows(WORKSPACE);
+      expect(listed?.id).toBe(wf.id);
+      expect(listed?.stats).toMatchObject({ runsTotal: 1, sessionsStarted: 1, tasksStarted: 1 });
+    });
+
+    it('does not count a run that starts no session in the stats', async () => {
+      await addWorkflow();
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      const [listed] = await listWorkflows(WORKSPACE);
+      expect(listed?.stats).toMatchObject({ runsTotal: 1, sessionsStarted: 0 });
+    });
+
     it.each([
       ['run_prompt', { type: 'run_prompt', prompt: 'Review this', model: MODEL }, 'Review this'],
       ['run_skill', { type: 'run_skill', skillKey: 'platform:skill-1', model: MODEL }, 'Remove dead code.'],

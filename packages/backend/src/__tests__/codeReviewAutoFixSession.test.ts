@@ -12,6 +12,12 @@ const m = vi.hoisted(() => ({
   liveWorkbenchForPr: vi.fn(),
 }));
 
+// Report-back off: this file covers the earlier behaviour. The flag-on cases
+// are in codeReviewSessionReport.test.ts.
+vi.mock('../services/featureFlags.js', async (orig) => ({
+  ...(await orig<typeof import('../services/featureFlags.js')>()),
+  workspaceHasFeature: vi.fn().mockResolvedValue({ enabled: false, source: 'fallback' }),
+}));
 vi.mock('../services/codeReview/findings.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/findings.js')>()),
   markStale: vi.fn().mockResolvedValue(0),
