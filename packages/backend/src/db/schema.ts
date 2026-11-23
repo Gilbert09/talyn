@@ -512,6 +512,9 @@ export const workspaces = pgTable(
     description: text('description'),
     logo: jsonb('logo'),
     settings: jsonb('settings').notNull().default({}),
+    // The owner's order for the workspace list (the context rail). Null sorts
+    // last, by name, so a new workspace needs no position.
+    position: integer('position'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

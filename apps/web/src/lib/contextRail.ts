@@ -11,7 +11,8 @@ import {
   type WorkspaceLogo,
 } from '@talyn/shared';
 import { api } from './api';
-import type { AppContext } from '../stores/workspace';
+import { useWorkspaceStore, type AppContext } from '../stores/workspace';
+import { toast } from '../stores/toast';
 
 /**
  * The context rail: the bar on the far left that switches between my
@@ -82,6 +83,42 @@ export function railInitials(name: string): string {
   if (words.length === 0) return '?';
   const letters = words.length === 1 ? [...words[0]].slice(0, 1) : [[...words[0]][0], [...words[1]][0]];
   return letters.join('').toUpperCase();
+}
+
+/**
+ * My workspaces after a drag in the rail drops `fromId` on `toId`: the dragged
+ * one takes the target's place. The same array when nothing moves.
+ */
+export function moveWorkspace(workspaces: Workspace[], fromId: string, toId: string): Workspace[] {
+  const from = workspaces.findIndex((w) => w.id === fromId);
+  const to = workspaces.findIndex((w) => w.id === toId);
+  if (from < 0 || to < 0 || from === to) return workspaces;
+  const next = [...workspaces];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
+/**
+ * Move a workspace in the rail and save my order. The rail shows the new order
+ * at once. If the save fails, the old order comes back.
+ */
+export async function reorderWorkspace(fromId: string, toId: string): Promise<void> {
+  const before = useWorkspaceStore.getState().workspaces;
+  const next = moveWorkspace(before, fromId, toId);
+  if (next === before) return;
+  useWorkspaceStore.getState().setWorkspaces(next);
+  try {
+    await api.workspaces.reorder(next.map((w) => w.id));
+  } catch {
+    // Sort by the old order, not back to `before`: a settings save can replace a workspace meanwhile.
+    const rank = new Map(before.map((w, i) => [w.id, i]));
+    const current = useWorkspaceStore.getState().workspaces;
+    useWorkspaceStore
+      .getState()
+      .setWorkspaces([...current].sort((a, b) => (rank.get(a.id) ?? before.length) - (rank.get(b.id) ?? before.length)));
+    toast.error('Could not save the workspace order');
+  }
 }
 
 /** How often the rail asks for its badges. Each ask is two narrow reads. */

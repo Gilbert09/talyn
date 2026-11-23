@@ -1,3 +1,4 @@
+import { useState, type DragEvent } from 'react';
 import { attentionBadgeLabel } from '@talyn/shared';
 import { cn, isMacDesktop } from '../../lib/utils';
 import { formatKeys } from '../../lib/shortcuts';
@@ -6,7 +7,13 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useSpacesStore } from '../../stores/spaces';
 import { spacesOffered, switchContext, useActiveSpace } from '../../lib/spaces';
-import { railEntries, railEntryAttention, useContextAttention, type RailEntry } from '../../lib/contextRail';
+import {
+  railEntries,
+  railEntryAttention,
+  reorderWorkspace,
+  useContextAttention,
+  type RailEntry,
+} from '../../lib/contextRail';
 import { SpaceTile } from '../spaces/SpaceAvatars';
 import { CONTEXT_JUMP_KEYS } from './appShortcuts';
 
@@ -15,6 +22,7 @@ const TILE = 36;
 /**
  * The bar on the far left, like Slack's: one tile per workspace and per space,
  * with a red count of what waits on me there. Hidden with only one context.
+ * Drag a workspace tile onto another to change the order of my workspaces.
  */
 export function ContextRail() {
   const workspaces = useWorkspaceStore((s) => s.workspaces);
@@ -26,7 +34,45 @@ export function ContextRail() {
   const shown = entries.length > 1;
   const activeKey = active ? `space:${active.space.id}` : `workspace:${currentWorkspaceId ?? ''}`;
   const counts = useContextAttention(shown, activeKey);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
   if (!shown) return null;
+
+  const reorderable = workspaces.length > 1;
+  const indexOf = (id: string | null) => workspaces.findIndex((w) => w.id === id);
+  const endDrag = () => {
+    setDragId(null);
+    setOverId(null);
+  };
+  // Native drag and drop on the tile's wrapper, not the button: Firefox does not drag a <button>.
+  const dragProps = (entry: RailEntry) => {
+    if (entry.kind !== 'workspace' || !reorderable) return {};
+    return {
+      draggable: true,
+      onDragStart: (event: DragEvent) => {
+        setDragId(entry.id);
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', entry.id);
+      },
+      onDragOver: (event: DragEvent) => {
+        if (dragId === null) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        if (overId !== entry.id) setOverId(entry.id);
+      },
+      onDrop: (event: DragEvent) => {
+        event.preventDefault();
+        if (dragId !== null) void reorderWorkspace(dragId, entry.id);
+        endDrag();
+      },
+      onDragEnd: endDrag,
+    };
+  };
+  // Where the dragged tile lands: a line above the target when it moves up, below when it moves down.
+  const dropLine = (entry: RailEntry): 'above' | 'below' | null => {
+    if (entry.kind !== 'workspace' || dragId === null || overId !== entry.id || dragId === entry.id) return null;
+    return indexOf(dragId) > indexOf(entry.id) ? 'above' : 'below';
+  };
 
   const select = (entry: RailEntry) => {
     if (spacesOn) switchContext(entry.context);
@@ -49,8 +95,24 @@ export function ContextRail() {
           const key = `${entry.kind}:${entry.id}`;
           const isActive = key === activeKey;
           const count = railEntryAttention(entry, counts, entries);
+          const line = dropLine(entry);
           return (
-            <div key={key} className="flex w-full flex-col items-center gap-2">
+            <div
+              key={key}
+              data-attr={entry.kind === 'workspace' ? 'context-rail-workspace-slot' : undefined}
+              className={cn('relative flex w-full flex-col items-center gap-2', dragId === entry.id && 'opacity-40')}
+              {...dragProps(entry)}
+            >
+              {line && (
+                <div
+                  aria-hidden
+                  data-attr="context-rail-drop-line"
+                  className={cn(
+                    'pointer-events-none absolute left-1/2 h-0.5 w-9 -translate-x-1/2 rounded-full bg-primary',
+                    line === 'above' ? '-top-[5px]' : '-bottom-[5px]'
+                  )}
+                />
+              )}
               {entry.groupStart && <div aria-hidden className="h-px w-8 bg-border" />}
               <RailTile
                 entry={entry}
