@@ -736,7 +736,7 @@ export function WorkbenchHeader({
             {slackSourceOf(workbench) && (
               <SlackThreadChip source={slackSourceOf(workbench)!} />
             )}
-            <AutomationChip source={workbench.source} />
+            <AutomationChip workbenchId={workbench.id} source={workbench.source} />
             {!thread && workbench.threadId && (
               <ThreadChip threadId={workbench.threadId} />
             )}

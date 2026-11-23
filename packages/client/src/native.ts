@@ -2923,6 +2923,10 @@ export const workbenches = {
   restoreCheckpoint: (chatId: string, turn: number) =>
     request<void>('POST', `/workbenches/chats/${enc(chatId)}/checkpoints/${turn}/restore`),
 
+  /** The rule or loop that started the session, with the event it acted on. Null for other sessions. */
+  origin: (id: string) =>
+    request<import('@talyn/shared').SessionOrigin | null>('GET', `/workbenches/${enc(id)}/origin`),
+
   // ---- Background jobs and wake-ups ----
   // Live updates arrive as `workbench:background` WS events carrying the
   // whole `WorkbenchBackground`.
