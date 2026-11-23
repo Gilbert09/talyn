@@ -154,6 +154,12 @@ describe('session skill pack', () => {
         if (content.includes('curl')) expect(content).toContain('http://github.$YAS_INTEGRATIONS_DOMAIN');
         expect(content).not.toMatch(/\bgh (api|pr|run|auth)\b/);
       }
+      // Work across repositories becomes a thread by default, with no question first.
+      for (const text of [skillText('talyn-multi-repo'), TALYN_BRIEFING]) {
+        expect(text).toContain('talyn_continue_as_thread');
+        expect(text).toContain('Do not ask the person first.');
+        expect(text).not.toMatch(/ask them if they want one/);
+      }
       // The depth limit on starting sessions.
       for (const name of ['talyn-multi-repo', 'talyn-delegate']) {
         expect(skillText(name)).toContain('2 levels');

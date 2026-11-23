@@ -193,7 +193,7 @@ function WorkflowRow({
           <StatCell label="24h" value={stats.runs24h} />
           <StatCell label="7d" value={stats.runs7d} />
           <StatCell label="all time" value={stats.runsTotal} />
-          <StatCell label="tasks" value={stats.tasksStarted} />
+          <StatCell label="sessions" value={stats.sessionsStarted} />
           <StatCell
             label={stats.lastStatus ? WORKFLOW_RUN_STATUS_LABELS[stats.lastStatus] : 'last run'}
             value={relative(stats.lastRunAt)}

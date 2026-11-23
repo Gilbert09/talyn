@@ -41,7 +41,7 @@ jest.mock('expo-router', () => ({
   Stack: { Screen: () => null },
 }));
 
-const stats = { runsTotal: 2, runs24h: 1, runs7d: 2, failures7d: 1, tasksStarted: 1,
+const stats = { runsTotal: 2, runs24h: 1, runs7d: 2, failures7d: 1, sessionsStarted: 1,
   lastRunAt: '2026-11-10T10:00:00Z', lastStatus: 'failed' as const };
 const slackRule: WorkflowWithStats = {
   id: 'slack-1', workspaceId: 'ws-1', integration: 'slack', name: 'Help in support', enabled: true,

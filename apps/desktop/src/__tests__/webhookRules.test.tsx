@@ -10,7 +10,7 @@ import { WorkflowsPanel } from '../renderer/components/panels/workflows/Workflow
 import { WebhookDeliveriesList } from '../renderer/components/panels/workflows/WebhookDeliveriesList';
 import { withoutEmptyPayloadTests } from '../renderer/components/panels/workflows/webhookFields';
 
-const stats = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null };
+const stats = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, sessionsStarted: 0, lastRunAt: null, lastStatus: null };
 
 const webhookRule = {
   id: 'wf1',

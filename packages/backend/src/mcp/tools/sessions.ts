@@ -917,7 +917,7 @@ export const SESSIONS = [
   defineTool(
     'continue_as_thread',
     "Turn a session into a thread, for work that needs sessions on more than one repository. Talyn starts a new thread. Its first message recaps the session's conversation, then gives `prompt`. The session joins the thread and keeps its branch, changes and pull request. The thread starts sessions on the other repositories with talyn_create_session. " +
-      'Use it when the person asks for a thread. When the work needs several repositories and the person did not ask, ask them first. ' +
+      'Use it by default when the work needs changes in more than one repository: do not ask the person first. Also use it when the person asks for a thread. ' +
       'From a session token: only the calling session, and only when it is not in a thread already and no other session started it.',
     {
       session_id: { type: 'string', description: 'The session. Default: the calling session.' },

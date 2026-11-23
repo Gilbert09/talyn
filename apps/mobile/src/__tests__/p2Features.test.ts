@@ -68,7 +68,7 @@ const account = (patch: Partial<FleetAccountView> = {}): FleetAccountView => ({
 const workflow = (patch: Partial<WorkflowWithStats> = {}): WorkflowWithStats => ({
   id: 'wf1', workspaceId: 'w1', name: 'Label new PRs', enabled: true, events: ['pr_opened'], conditions: {},
   actions: [{ type: 'add_labels', labels: ['triage'] }], maxRunsPerPrPerHour: 5, createdAt: '', updatedAt: '',
-  stats: { runsTotal: 3, runs24h: 1, runs7d: 2, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null }, ...patch,
+  stats: { runsTotal: 3, runs24h: 1, runs7d: 2, failures7d: 0, sessionsStarted: 0, lastRunAt: null, lastStatus: null }, ...patch,
 } as WorkflowWithStats);
 const loop = (patch: Partial<LoopWithStats> = {}): LoopWithStats => ({
   id: 'l1', workspaceId: 'w1', name: 'Daily sweep', enabled: true, prompt: 'Fix things', cron: '0 9 * * *', timezone: 'Europe/London',

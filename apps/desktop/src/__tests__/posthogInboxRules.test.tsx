@@ -20,7 +20,7 @@ import { WorkflowsPanel } from '../renderer/components/panels/workflows/Workflow
 import { WorkflowRunsList } from '../renderer/components/panels/workflows/WorkflowRunsList';
 import { PostHogInboxConnectionSection } from '../renderer/components/panels/workflows/posthogInboxFields';
 
-const STATS = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null };
+const STATS = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, sessionsStarted: 0, lastRunAt: null, lastStatus: null };
 
 function inboxStatus(over: Partial<PostHogInboxStatus> = {}): PostHogInboxStatus {
   return {
@@ -190,7 +190,7 @@ describe('PostHog Inbox in the catalog', () => {
       {
         id: 'wf1', workspaceId: 'ws1', integration: 'posthog_inbox', name: 'Fix urgent reports', enabled: true,
         events: ['report_ready'], conditions: {}, actions: [{ type: 'start_session', prompt: 'Fix it' }],
-        stats: { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null },
+        stats: { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, sessionsStarted: 0, lastRunAt: null, lastStatus: null },
       } as never,
     ]);
     const backlog = jest.spyOn(api.workflows, 'posthogInboxBacklog').mockResolvedValue({
