@@ -168,7 +168,7 @@ export function LoopEditorPage({
       await onSave({ ...input, target: 'session', mcpServerIds: null });
     } catch (err) {
       captureAnalyticsException(err, { flow: 'loop_save' });
-      setSaveError(err instanceof Error ? err.message : 'Could not save this loop');
+      setSaveError(err instanceof Error ? err.message : 'Could not save this automation');
     } finally {
       setSaving(false);
     }
@@ -180,11 +180,11 @@ export function LoopEditorPage({
     <div className="flex h-full flex-col">
       <PageHeader
         variant="toolbar"
-        title={<span className="truncate">{input.name.trim() || (editing ? 'Loop' : 'New loop')}</span>}
+        title={<span className="truncate">{input.name.trim() || (editing ? 'Automation' : 'New automation')}</span>}
         icon={
           <Button variant="ghost" size="sm" onClick={onCancel} data-attr="loop-editor-back">
             <ArrowLeft className="mr-1 h-3.5 w-3.5" />
-            Loops
+            Automations
           </Button>
         }
         actions={
@@ -215,7 +215,7 @@ export function LoopEditorPage({
             </p>
           )}
 
-          <Section title="Name" description="What this loop is for, in a few words.">
+          <Section title="Name" description="What this automation is for, in a few words.">
             <TextField
               value={input.name}
               onChange={(name) => setInput((p) => ({ ...p, name: name.slice(0, MAX_LOOP_NAME_LENGTH) }))}
@@ -360,7 +360,7 @@ export function LoopEditorPage({
 
           <Section
             title="Repository"
-            description="Every run clones this repository. A loop works on one."
+            description="Every run clones this repository. An automation works on one."
           >
             <Select
               value={input.repositoryId}
@@ -389,7 +389,7 @@ export function LoopEditorPage({
             {availableAgents.length === 0 ? (
               <p className="text-xs text-muted-foreground">
                 No Talyn Fleet agent is connected to this workspace. Connect one in Settings &rarr;
-                Agents before a loop can run.
+                Agents before an automation can run.
               </p>
             ) : (
               <div className="flex flex-wrap items-end gap-3">
@@ -446,7 +446,7 @@ export function LoopEditorPage({
               ))}
             </div>
             <p className="text-xs text-muted-foreground">
-              Skipping is recorded in the history, so a loop that keeps standing down is visible
+              Skipping is recorded in the history, so an automation that keeps standing down is visible
               rather than silent. Start it anyway when the prompt is safe to run twice at once.
             </p>
           </Section>
@@ -457,7 +457,7 @@ export function LoopEditorPage({
           {input.provider === 'selfhosted' && (
             <Section
               title="Internet access"
-              description="Whether this loop can reach sites outside your repository."
+              description="Whether this automation can reach sites outside your repository."
             >
               <div className="flex flex-wrap gap-1">
                 {[
@@ -480,8 +480,8 @@ export function LoopEditorPage({
               </div>
               <p className="text-xs text-muted-foreground">
                 {input.internetAccess
-                  ? 'This loop can reach any site. Turn it on only for prompts you trust: a run that can read your code can also send it somewhere.'
-                  : 'This loop reaches your repository and its agent, and nothing else. Switch it on if the prompt has to call something outside — posting to a webhook, say.'}
+                  ? 'This automation can reach any site. Turn it on only for prompts you trust: a run that can read your code can also send it somewhere.'
+                  : 'This automation reaches your repository and its agent, and nothing else. Switch it on if the prompt has to call something outside — posting to a webhook, say.'}
               </p>
             </Section>
           )}
@@ -493,7 +493,7 @@ export function LoopEditorPage({
               Cancel
             </Button>
             <Button size="sm" onClick={save} disabled={saving} data-attr="loop-save-inline">
-              {saving ? 'Saving...' : editing ? 'Save changes' : 'Create loop'}
+              {saving ? 'Saving...' : editing ? 'Save changes' : 'Create automation'}
             </Button>
           </div>
         </div>

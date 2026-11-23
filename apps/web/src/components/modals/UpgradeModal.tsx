@@ -140,7 +140,7 @@ function LegacyUpgradeModal({
     if (upgradeReason === 'loop_limit') {
       const lLimit = status?.loopLimit ?? FREE_PLAN_LOOP_LIMIT;
       return (
-        `The free plan keeps up to ${lLimit} loops across all your workspaces — ` +
+        `The free plan keeps up to ${lLimit} schedule automations across all your workspaces — ` +
         `you have ${status?.loops ?? lLimit}. Upgrade for as many as you want, or ` +
         'delete one you no longer need.'
       );
@@ -241,7 +241,7 @@ function LegacyUpgradeModal({
                 <Check className="h-4 w-4" /> Unlimited automations
               </li>
               <li className="flex items-center gap-2">
-                <Check className="h-4 w-4" /> Unlimited loops
+                <Check className="h-4 w-4" /> Unlimited schedule automations
               </li>
               <li className="flex items-center gap-2">
                 <Check className="h-4 w-4" /> Review and fix as many pull requests at once as

@@ -176,7 +176,7 @@ function LegacyBillingSettings() {
                 limit={status.workflowLimit ?? limit}
               />
               <UsageMeter
-                label="Loops"
+                label="Schedule automations"
                 used={status.loops}
                 limit={status.loopLimit ?? limit}
               />
