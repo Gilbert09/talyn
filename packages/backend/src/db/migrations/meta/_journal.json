@@ -1030,6 +1030,13 @@
       "when": 1790900000230,
       "tag": "0146_workspace_position",
       "breakpoints": true
+    },
+    {
+      "idx": 149,
+      "version": "7",
+      "when": 1790900000240,
+      "tag": "0147_team_email_invites",
+      "breakpoints": true
     }
   ]
 }
