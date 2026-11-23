@@ -9,7 +9,7 @@ const mockRule = {
   id: 'r1', workspaceId: 'ws-1', integration: 'posthog_inbox', name: 'Fix urgent reports', enabled: true, events: ['report_ready'],
   conditions: { priorities: ['P0', 'P1'], scouts: { exclude: ['noisy'] }, minSignalCount: 3 },
   actions: [{ type: 'start_task', repositoryId: 'repo-1', prompt: 'Fix' }], maxRunsPerPrPerHour: 5, maxRunsPerDay: 10, createdAt: '', updatedAt: '',
-  stats: { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null },
+  stats: { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, sessionsStarted: 0, lastRunAt: null, lastStatus: null },
 } as unknown as WorkflowWithStats;
 
 const mockLifecycle = jest.requireActual<typeof import('./workflowFixtures')>('./workflowFixtures').fixture().lifecycle;

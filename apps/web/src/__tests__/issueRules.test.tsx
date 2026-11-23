@@ -22,7 +22,7 @@ import { WorkflowRunsList } from '../components/panels/workflows/WorkflowRunsLis
 import { issueAssigneeKinds } from '../components/panels/workflows/issueFields';
 import { OpenTask } from '../routes/OpenTask';
 
-const STATS = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null };
+const STATS = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, sessionsStarted: 0, lastRunAt: null, lastStatus: null };
 const assign = vi.fn();
 
 function connection(over: Partial<LinearConnection> = {}): LinearConnection {

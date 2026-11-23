@@ -171,7 +171,7 @@ describe('WorkflowsPanel — the free-plan workflow cap', () => {
         runs24h: 0,
         runs7d: 0,
         failures7d: 0,
-        tasksStarted: 0,
+        sessionsStarted: 0,
         lastRunAt: null,
         lastStatus: null,
       },

@@ -261,6 +261,7 @@ function emptyStats(): WorkflowStats {
     runs24h: 0,
     runs7d: 0,
     failures7d: 0,
+    sessionsStarted: 0,
     tasksStarted: 0,
     lastRunAt: null,
     lastStatus: null,
@@ -290,7 +291,8 @@ export async function statsFor(workflowIds: string[]): Promise<Map<string, Workf
       // A parked run is not a failure — it is owed work. Counting it as one would
       // put a "problems this week" badge on a workflow that is about to succeed.
       failures7d: sql<number>`count(*) filter (where ${runsTable.status} in ('failed', 'partial') and ${runsTable.createdAt} > now() - interval '7 days')::int`,
-      tasksStarted: sql<number>`count(${runsTable.taskId})::int`,
+      // Runs from before automations moved to sessions carry a task id instead.
+      sessionsStarted: sql<number>`count(*) filter (where ${runsTable.workbenchId} is not null or ${runsTable.taskId} is not null)::int`,
       lastRunAt: sql<Date | null>`max(${runsTable.createdAt})`,
       lastStatus: sql<
         string | null
@@ -306,7 +308,8 @@ export async function statsFor(workflowIds: string[]): Promise<Map<string, Workf
       runs24h: Number(r.runs24h ?? 0),
       runs7d: Number(r.runs7d ?? 0),
       failures7d: Number(r.failures7d ?? 0),
-      tasksStarted: Number(r.tasksStarted ?? 0),
+      sessionsStarted: Number(r.sessionsStarted ?? 0),
+      tasksStarted: Number(r.sessionsStarted ?? 0),
       lastRunAt: r.lastRunAt ? new Date(r.lastRunAt).toISOString() : null,
       lastStatus: (r.lastStatus as WorkflowRunStatus | null) ?? null,
     });

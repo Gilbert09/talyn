@@ -1244,7 +1244,10 @@ export interface WorkflowStats {
   runs7d: number;
   /** `failed` + `partial` in the last 7 days. */
   failures7d: number;
-  tasksStarted: number;
+  /** Runs that started a session (or, before sessions, a task). */
+  sessionsStarted: number;
+  /** @deprecated Same value as `sessionsStarted`, for app builds that still read it. */
+  tasksStarted?: number;
   lastRunAt: string | null;
   lastStatus: WorkflowRunStatus | null;
 }
