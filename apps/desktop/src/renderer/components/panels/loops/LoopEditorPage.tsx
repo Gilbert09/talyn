@@ -26,6 +26,7 @@ import { Textarea } from '../../ui/textarea';
 import { cn } from '../../../lib/utils';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { Section, TextField } from '../workflows/workflowFields';
+import { RepoPicker } from '../../workbench/new/NewWorkbenchControls';
 
 /**
  * The loop editor.
@@ -362,24 +363,21 @@ export function LoopEditorPage({
             title="Repository"
             description="Every run clones this repository. An automation works on one."
           >
-            <Select
+            <RepoPicker
+              repositories={repositories}
               value={input.repositoryId}
-              onChange={(e) => {
-                const repo = repositories.find((r) => r.id === e.target.value);
+              onChange={(id) => {
+                const repo = repositories.find((r) => r.id === id);
                 setInput((p) => ({
                   ...p,
                   repositoryId: repo?.id ?? '',
                   repoFullName: repo?.fullName ?? '',
                 }));
               }}
-            >
-              <option value="">Pick a repository...</option>
-              {repositories.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.fullName}
-                </option>
-              ))}
-            </Select>
+              composerShortcut={false}
+              placeholder="Pick a repository"
+              className="h-8 w-full max-w-none border border-input bg-background px-2.5 text-[13px]"
+            />
           </Section>
 
           <Section
