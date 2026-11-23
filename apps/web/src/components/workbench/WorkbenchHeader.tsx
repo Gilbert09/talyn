@@ -53,7 +53,7 @@ import {
 } from '../../lib/workbenchActions';
 import type { WorkbenchOps, WorkbenchPromptActionKind } from '../../lib/workbenchOps';
 import { PRStatusPill } from '../widgets/PRStatusPill';
-import { CodeReviewRowChip } from '../widgets/codeReview/CodeReviewRowChip';
+import { WorkbenchCodeReviewBadge } from './CodeCompleteReviewCard';
 import { PrPill } from './WorkbenchBadges';
 import { PrCopyLinkButton } from './PrCopyLinkButton';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from './archiveWorkbench';
@@ -789,12 +789,9 @@ export function WorkbenchHeader({
                 />
               </button>
             )}
-            {!thread && pr?.codeReview && (
-              <span className="app-region-no-drag inline-flex shrink-0 items-center" data-attr="workbench-code-review">
-                <CodeReviewRowChip review={pr.codeReview} onOpen={() => openPrDetail(pr.id, 'findings')} />
-              </span>
-            )}
           </div>
+          {/* Outside the chips strip, which scrolls and truncates: the review stays in view on a narrow header. */}
+          {!thread && <WorkbenchCodeReviewBadge workbench={workbench} pr={pr} />}
         </div>
       </div>
       {linkOpen && <LinkPullRequestDialog workbench={workbench} onClose={() => setLinkOpen(false)} />}

@@ -16,6 +16,17 @@ Findings appear as the reviewers find them. Until the checking pass has run, Tal
 
 After a review, select **Review again** to run another, or **Review this commit** when there are new commits. Select **Stop** to cancel a review that is running.
 
+## Review from a session
+
+When a session's work is code complete, a review card shows at the end of the chat. A session is code complete when all of these are true:
+
+- The last turn ended, and no message waits in the queue.
+- The session has an open pull request.
+- No background job or session script runs.
+- The branch has no uncommitted changes and no commits that are not on GitHub.
+
+With no review of the pull request's latest commit, the card has a **Run code review** button. When a review runs or is done, the card shows its status and the open findings by severity. Select **View findings** to open them. When Talyn sent the findings to the session, the card says so. The session header shows the same review status as a badge, also on mobile.
+
 ## Depth
 
 | Depth | What runs | How long |

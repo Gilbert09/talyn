@@ -591,7 +591,9 @@ async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): P
     settleTurnActivity(wb.id);
     // A thread has no diff, checkpoint, pull request or branch.
     if (isThread(wb)) return;
-    wb = await refreshDiffStat(wb);
+    // The box's HEAD: the auto-start below compares it with the pull request's head.
+    let boxHead: string | null = null;
+    wb = await refreshDiffStat(wb, { onHead: (sha) => { boxHead = sha; } });
     // After the stat, not beside it: two git reads at once on a box near its memory ceiling is worse than a second's wait.
     void checkpointWork(wb, 'turn_end');
     // The thread hears about a new pull request in the `session_finished` wake below, not in a second one.
@@ -605,6 +607,13 @@ async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): P
     }
     // The turn may have fixed the PR, so the merge queue and auto-keep look again.
     if (linked.pullRequestId) notifyPrSessionChanged(linked.workspaceId, linked.pullRequestId, 'session:turn_end');
+    // Code complete: a review of the pushed head can start by itself (flagged).
+    // Loaded here, not at the top: the code review engine is a large import graph for every module that loads turns.ts.
+    if (linked.pullRequestId && chat.status === 'idle') {
+      void import('../codeReview/sessionAutoStart.js')
+        .then(({ startReviewIfCodeComplete }) => startReviewIfCodeComplete(linked, boxHead))
+        .catch((err) => console.warn(`[workbench] code review auto-start for ${linked.id} failed:`, err));
+    }
     // After the link: a PR this turn opened keeps the branch its name.
     if (succeeded && linked.runtime === 'sandbox') startBranchNaming(linked.id, succeeded);
     // A resize or a restart asked for during this turn. When a queued message already started the next turn, its start applies it.

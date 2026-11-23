@@ -19,6 +19,8 @@ import { workbenchKind } from '../../workflow/model';
 import { Conversation } from '../chat/Conversation';
 import { runningJobs } from './background';
 import { ChangesTab } from './ChangesTab';
+import { CodeCompleteReviewCard } from './CodeCompleteReviewCard';
+import { reviewBadge, reviewCard } from './codeComplete';
 import { useBackground } from './data';
 import { HeaderTitle, HeaderTrailing, QuickActionRow, quickMenuActions, SessionDetailsSheet, useQuickActions } from './DetailHeader';
 import { JobsTab } from './JobsTab';
@@ -77,6 +79,9 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
   const quick = useQuickActions({ item: placeholder, row, runSession: menu.run, toast: menu.toast });
   const [retrying, setRetrying] = useState(false);
   const [find, setFind] = useState(0);
+  const codeFacts = item && kind === 'session' ? { item, row, runningJobs: background.data ? runningJobs(background.data) : null } : null;
+  const card = codeFacts ? reviewCard(codeFacts) : null;
+  const badge = codeFacts ? reviewBadge(codeFacts) : null;
 
   let content = null;
   if (item) {
@@ -93,6 +98,7 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
       {keyboard.open ? null : <QuickActionRow actions={actions} busy={quick.busy} run={quick.run} />}
     </View> : null;
     content = <Conversation key={item.id} item={item} ready={state.status === 'ready' || state.status === 'error'} header={header}
+      bottom={card && row ? <CodeCompleteReviewCard view={card} row={row} workbenchId={item.id} /> : undefined}
       find={find} onCloseFind={() => setFind(0)}
       top={showChildren ? (pause) => <View style={{ gap: 4 }}>
         <StateNotice resource={children} offline={offline} refresh={children.refresh} refreshLabel="Refresh child sessions" />
@@ -130,9 +136,9 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
   const android = Platform.OS === 'android';
   return <ScreenContainer>
     {item ? <Stack.Screen options={{
-      headerTitle: () => <HeaderTitle item={item} row={row} onPress={() => setView('details')} />,
+      headerTitle: () => <HeaderTitle item={item} row={row} badge={badge} onPress={() => setView('details')} />,
       headerRight: () => <View style={local.headerRight}>
-        <HeaderTrailing item={item} row={row} onChanges={() => setView('changes')} />
+        <HeaderTrailing item={item} row={row} badge={badge} onChanges={() => setView('changes')} />
         <IconButton label="Find in transcript" symbol={{ ios: 'magnifyingglass', android: 'search' }} onPress={() => setFind((value) => value + 1)} />
         <IconButton label={kind === 'session' ? 'Session actions' : 'Thread actions'}
           symbol={{ ios: 'ellipsis.circle', android: 'more_vert' }} onPress={() => openMenu(item)} />

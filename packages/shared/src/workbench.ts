@@ -218,6 +218,11 @@ export interface Workbench {
   uncommittedStats?: WorkbenchDiffStat | null;
   committedStats?: WorkbenchDiffStat | null;
   /**
+   * Commits on the branch that are not on GitHub, from the last work check of
+   * the box. Null when not known yet. Absent on older servers.
+   */
+  unpushedCommits?: number | null;
+  /**
    * Why `status` is what it is, in words a person can act on — set on `error`
    * (what failed while provisioning) and cleared when there is nothing to say.
    */

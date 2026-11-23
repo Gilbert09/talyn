@@ -123,3 +123,23 @@ export async function refreshPullRequest(row: RefreshRow): Promise<RefreshOutcom
   markRefreshed(row.workspaceId, result.rowId);
   return { kind: 'refreshed', rowId: result.rowId };
 }
+
+/** {@link refreshPullRequest} by the row id. Null when the row is gone. */
+export async function refreshPullRequestById(id: string): Promise<RefreshOutcome | null> {
+  const [row] = await getDbClient()
+    .select({
+      id: pullRequestsTable.id,
+      workspaceId: pullRequestsTable.workspaceId,
+      repositoryId: pullRequestsTable.repositoryId,
+      taskId: pullRequestsTable.taskId,
+      owner: pullRequestsTable.owner,
+      repo: pullRequestsTable.repo,
+      number: pullRequestsTable.number,
+      state: pullRequestsTable.state,
+      mergeQueued: pullRequestsTable.mergeQueued,
+    })
+    .from(pullRequestsTable)
+    .where(eq(pullRequestsTable.id, id))
+    .limit(1);
+  return row ? refreshPullRequest(row) : null;
+}

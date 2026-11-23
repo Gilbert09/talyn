@@ -9,6 +9,7 @@ import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { PlanCard, type PlanCardState } from './PlanCard';
 import { QuestionCard, type QuestionCardState } from './QuestionCard';
+import { CodeCompleteReviewCard } from './CodeCompleteReviewCard';
 import { MessageAttachments } from './MessageAttachments';
 import { TranscriptFindBar } from './TranscriptFindBar';
 import { TranscriptSelectionAction } from './TranscriptSelectionAction';
@@ -93,6 +94,12 @@ export function WorkbenchTranscript({
     // A page that does not fill the view gives no scroll to react to.
     maybeLoadOlder();
   }, [events.length, outgoing.length, firstSeq, chat.id, older.hasOlder, older.loading, maybeLoadOlder]);
+
+  // A card that appears below the last turn keeps a transcript at its bottom in view.
+  const keepAtBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (el && wasAtBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, []);
 
   const running = chat.status === 'running';
   const totals = useMemo(() => chatTotals(events), [events]);
@@ -186,6 +193,9 @@ export function WorkbenchTranscript({
                 <div className="pl-5 opacity-70">This can take a few minutes after a long idle.</div>
               )}
             </div>
+          )}
+          {workbench && !running && turns.length > 0 && (
+            <CodeCompleteReviewCard workbench={workbench} onLayout={keepAtBottom} />
           )}
         </div>
       </div>

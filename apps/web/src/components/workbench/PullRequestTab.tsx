@@ -20,20 +20,18 @@ import {
 } from '@talyn/shared';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
-import { api, type PRChecks, type PRRow } from '../../lib/api';
-import { toast } from '../../stores/toast';
-import { captureAnalyticsException, trackEvent } from '../../lib/analytics';
-import { maybeHandleBillingLimit } from '../../stores/billing';
-import { usePullRequestStore } from '../../stores/pullRequests';
+import type { PRChecks, PRRow } from '../../lib/api';
 import { useGitHubActions } from '../panels/github/useGitHubActions';
 import { MergeQueueSection, PRDetailSheet, ReviewsTab, usePrAutoKeep } from '../widgets/PRDetailSheet';
 import { PRStatusPill, blockingReasonText } from '../widgets/PRStatusPill';
 import { PRReviewPill } from '../widgets/PRReviewPill';
 import { CodeReviewRowChip } from '../widgets/codeReview/CodeReviewRowChip';
 import { CodeReviewSeverityCounts } from '../widgets/codeReview/CodeReviewSeverityCounts';
+import { sessionReportText } from '../widgets/codeReview/sessionReportText';
 import { NoPullRequest, PrChecksList, usePrDetail } from './WorkbenchChecks';
 import { PrPill } from './WorkbenchBadges';
 import { timeAgo } from './new/RecentWorkbenches';
+import { useStartCodeReview } from './useStartCodeReview';
 
 const NO_CHECKS: PRChecks = {
   total: 0,
@@ -76,7 +74,7 @@ export function PullRequestTab({
   const { setMergeQueue } = useGitHubActions();
   const [sheet, setSheet] = useState<SheetTab | null>(null);
   const [queueBusy, setQueueBusy] = useState(false);
-  const [reviewBusy, setReviewBusy] = useState(false);
+  const { busy: reviewBusy, start: startReview } = useStartCodeReview(pr);
 
   if (!pr) {
     // A merged or closed PR is not in the open-PR store and is fetched on its
@@ -109,23 +107,6 @@ export function PullRequestTab({
       await setMergeQueue(pr, !pr.mergeQueued);
     } finally {
       setQueueBusy(false);
-    }
-  };
-
-  const startReview = async () => {
-    setReviewBusy(true);
-    try {
-      const next = await api.pullRequests.startCodeReview(pr.id);
-      trackEvent('code_review_started', { preset: next.preset, depth: next.preset });
-      usePullRequestStore.getState().patchRow(pr.id, { codeReview: next });
-      toast.info('Code review started', 'The findings show here when it finishes.');
-    } catch (err) {
-      captureAnalyticsException(err, { flow: 'code_review_start' });
-      if (!maybeHandleBillingLimit(err, 'code_review_start')) {
-        toast.error('Could not start the code review', err instanceof Error ? err.message : undefined);
-      }
-    } finally {
-      setReviewBusy(false);
     }
   };
 
@@ -305,17 +286,7 @@ export function PullRequestTab({
   );
 }
 
-/** Where the report-back sent the review's findings, in words. */
-export function sessionReportText(
-  report: NonNullable<CodeReviewPublic['sessionReport']>,
-  workbenchId: string,
-  now: number = Date.now(),
-): string {
-  const findings = `${report.findingCount} ${report.findingCount === 1 ? 'finding' : 'findings'}`;
-  if (report.workbenchId !== workbenchId) return `Talyn sent ${findings} to another session.`;
-  const ago = timeAgo(report.sentAt, now);
-  return `Talyn sent ${findings} to this session${ago === 'now' ? ' just now' : ` ${ago} ago`}.`;
-}
+export { sessionReportText } from '../widgets/codeReview/sessionReportText';
 
 function GitHubLink({ url }: { url: string }) {
   return (

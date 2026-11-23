@@ -374,6 +374,25 @@ export async function appendReviewEvent(
   });
 }
 
+/** How many cycles of the review a start of kind `startedFor` began (`cycle_started` events). */
+export async function countCyclesStartedFor(
+  reviewId: string,
+  startedFor: string,
+  db: Db = getDbClient()
+): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(prCodeReviewEvents)
+    .where(
+      and(
+        eq(prCodeReviewEvents.reviewId, reviewId),
+        eq(prCodeReviewEvents.code, 'cycle_started'),
+        sql`${prCodeReviewEvents.detail} ->> 'startedFor' = ${startedFor}`
+      )
+    );
+  return Number(row?.n ?? 0);
+}
+
 /**
  * Append an audit row once per cycle: true when this call wrote it, false
  * when an event with the same code and `detail.cycle` is already there.

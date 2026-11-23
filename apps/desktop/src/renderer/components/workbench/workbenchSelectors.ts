@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ContextAttentionReason, Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
+import {
+  isSessionCodeComplete,
+  type ContextAttentionReason,
+  type Workbench,
+  type WorkbenchBackground,
+  type WorkbenchChat,
+} from '@talyn/shared';
 import { api, type PRRow } from '../../lib/api';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { isPrOnlyUnseen, useWorkbenchStore, type UnseenUpdates } from '../../stores/workbenches';
@@ -10,6 +16,7 @@ import { newestSessions } from '../../lib/sessionOrder';
 import { inPersonalList, spacesOffered } from '../../lib/spaces';
 import { useSpacesStore } from '../../stores/spaces';
 import { useWorkspaceStore } from '../../stores/workspace';
+import { useRunningJobs } from '../../stores/sessionBackground';
 
 /** What the sidebar groups need from a session: a workbench, or a space's session row. */
 export type SidebarItem = Pick<Workbench, 'id' | 'kind' | 'repoFullName' | 'createdAt'>;
@@ -217,4 +224,33 @@ export function useWorkbenchPr(workbench: Workbench): PRRow | null {
   }, [id, row, workbench.updatedAt]);
   if (!id) return null;
   return row ?? (fetched?.id === id ? fetched : null);
+}
+
+/**
+ * True when the session is "code complete" (see `isSessionCodeComplete`): its
+ * turns are done, nothing runs, the work is pushed and its pull request is
+ * open. `pr` is the session's PR row; without it the workbench's PR summary
+ * gives the state.
+ */
+export function useSessionCodeComplete(workbench: Workbench | null | undefined, pr: PRRow | null | undefined): boolean {
+  const id = workbench?.id ?? '';
+  const storeChats = useWorkbenchStore((s) => (id ? s.chats[id] : undefined));
+  const runningScripts = useWorkbenchStore(
+    (s) => Object.values(s.scriptOutput[id] ?? {}).filter((output) => output.running).length,
+  );
+  const runningJobs = useRunningJobs(id).length;
+  if (!workbench) return false;
+  const pullRequestState = workbench.pullRequestId
+    ? ((pr?.id === workbench.pullRequestId ? pr.state : null) ?? workbench.pr?.state ?? null)
+    : null;
+  return isSessionCodeComplete({
+    kind: workbench.kind,
+    archived: isArchived(workbench),
+    chats: storeChats ?? workbench.chats ?? [],
+    pullRequestState,
+    runningBackgroundJobs: runningJobs,
+    runningScripts,
+    uncommittedFiles: workbench.uncommittedStats?.files ?? null,
+    unpushedCommits: workbench.unpushedCommits ?? null,
+  });
 }

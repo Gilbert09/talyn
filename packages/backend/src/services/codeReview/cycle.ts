@@ -65,7 +65,7 @@ export interface StartReviewInput {
   /** Set when the clock started this rather than a person. */
   auto?: boolean;
   /** What asked for the cycle, for analytics. Absent means `auto` decides. */
-  trigger?: 'api' | 'auto' | 'workflow';
+  trigger?: 'api' | 'auto' | 'workflow' | 'session_complete';
   userId?: string | null;
 }
 
@@ -172,6 +172,8 @@ export async function startReviewCycle(input: StartReviewInput): Promise<StartOu
               cycle: review.cycle + 1,
               builtInReviewers: builtInLenses.length > 0,
               customReviewers: customReviewers.length,
+              // What asked for the cycle. The session auto-start counts its own starts by it.
+              startedFor: input.trigger ?? (input.auto ? 'auto' : 'api'),
             },
           }
         );

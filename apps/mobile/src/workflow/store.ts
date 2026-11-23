@@ -626,8 +626,9 @@ export class WorkflowStore {
     if (this.updateData<CodeReviewData>(this.entry('codeReview', id, false), (data) => data.findings.some((finding) => ids.has(finding.id))
       ? { ...data, findings: data.findings.map((finding) => ids.has(finding.id) ? { ...finding, ...patch } : finding) } : data)) this.emit();
   }
-  async startCodeReview(id: string, preset: CodeReviewPreset, reset = false) {
-    const review = await this.api.pullRequests.startCodeReview(id, { preset, ...(reset ? { reset: true } : {}) });
+  /** No preset: the server uses the workspace's default. */
+  async startCodeReview(id: string, preset?: CodeReviewPreset, reset = false) {
+    const review = await this.api.pullRequests.startCodeReview(id, { ...(preset ? { preset } : {}), ...(reset ? { reset: true } : {}) });
     this.applyCodeReview(id, review);
     this.refresh('codeReview', id);
     return review;

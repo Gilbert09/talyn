@@ -179,6 +179,7 @@ export function rowToWorkbench(row: WorkbenchRow): Workbench {
     diffStat: row.diffStat ? { added: row.diffStat.added, removed: row.diffStat.removed, files: row.diffStat.files } : null,
     uncommittedStats: row.diffStat?.uncommittedStats ?? null,
     committedStats: row.diffStat?.committedStats ?? null,
+    unpushedCommits: row.workUnpushedCommits ?? null,
     changesAt: row.changesAt ? row.changesAt.toISOString() : null,
     changesEtag: row.changesEtag ?? null,
     spaceId: row.spaceId ?? null,
