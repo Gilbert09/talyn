@@ -66,7 +66,7 @@ const loop = {
 };
 const workflow = {
   ...emptyWorkflowInput(), id: 'workflow-1', name: 'Triage', enabled: true,
-  stats: { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null },
+  stats: { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, sessionsStarted: 0, lastRunAt: null, lastStatus: null },
 };
 const server = {
   id: 'server-1', name: 'Docs', displayName: null, url: 'https://example.com/mcp',

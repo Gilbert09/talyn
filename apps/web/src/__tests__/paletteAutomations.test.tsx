@@ -24,7 +24,7 @@ vi.mock('../components/panels/loops/LoopEditorPage', () => ({
   ),
 }));
 
-const STATS = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null };
+const STATS = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, sessionsStarted: 0, lastRunAt: null, lastStatus: null };
 const ALL_FEATURES = { workbenches: true, workflows: true, slackChannelRules: true, webhookRules: true, issueRules: true, loops: true } as Features;
 
 function rule(id: string, name: string, integration: WorkflowIntegration = 'github', enabled = true): WorkflowWithStats {

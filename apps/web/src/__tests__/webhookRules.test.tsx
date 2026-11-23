@@ -15,7 +15,7 @@ import { WorkflowsPanel } from '../components/panels/workflows/WorkflowsPanel';
 import { WebhookDeliveriesList } from '../components/panels/workflows/WebhookDeliveriesList';
 import { webhookPathProblem } from '../components/panels/workflows/webhookFields';
 
-const STATS = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null };
+const STATS = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, sessionsStarted: 0, lastRunAt: null, lastStatus: null };
 
 const RULE: WorkflowWithStats = {
   id: 'wf1',

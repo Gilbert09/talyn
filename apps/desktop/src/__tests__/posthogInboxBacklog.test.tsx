@@ -25,7 +25,7 @@ import { WorkflowsPanel } from '../renderer/components/panels/workflows/Workflow
 import { WorkflowRunsList } from '../renderer/components/panels/workflows/WorkflowRunsList';
 import { PostHogInboxReports } from '../renderer/components/panels/workflows/posthogInboxReports';
 
-const STATS = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null };
+const STATS = { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, sessionsStarted: 0, lastRunAt: null, lastStatus: null };
 
 function row(id: string, over: Partial<PostHogInboxBacklogRow> = {}): PostHogInboxBacklogRow {
   return {

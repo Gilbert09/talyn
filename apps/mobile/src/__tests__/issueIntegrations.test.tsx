@@ -54,7 +54,7 @@ const connection = (extra: Partial<LinearConnection> = {}): LinearConnection => 
 });
 const rule = { id: 'r1', workspaceId: 'ws-1', integration: 'linear', name: 'Triage issues', enabled: true, events: ['issue_opened'],
   conditions: {}, actions: [{ type: 'start_task', repositoryId: 'repo-1', prompt: 'Fix' }], maxRunsPerPrPerHour: 5, createdAt: '', updatedAt: '',
-  stats: { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null } } as unknown as WorkflowWithStats;
+  stats: { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, sessionsStarted: 0, lastRunAt: null, lastStatus: null } } as unknown as WorkflowWithStats;
 
 beforeEach(() => {
   jest.restoreAllMocks();

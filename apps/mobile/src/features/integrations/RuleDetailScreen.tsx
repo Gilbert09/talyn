@@ -68,7 +68,7 @@ function WorkflowFacts({ workflow, integration }: { workflow: WorkflowWithStats;
     <Fact label="Then" value={describeWorkflowActions(workflow) || 'Nothing'} />
     {space ? <Fact label="Space" value={space} /> : null}
     <Fact label="Runs" value={`${workflow.stats.runs24h} today · ${workflow.stats.runs7d} this week · ${workflow.stats.runsTotal} in all`} />
-    <Fact label="Tasks started" value={String(workflow.stats.tasksStarted)} divider={Boolean(problems)} />
+    <Fact label="Sessions started" value={String(workflow.stats.sessionsStarted)} divider={Boolean(problems)} />
     {problems ? <Fact label="Problems" value={problems} tone="warning" divider={false} /> : null}
   </Group>
   {inbox.length || cap ? <Group title="Only when">

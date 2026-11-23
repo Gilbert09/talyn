@@ -48,7 +48,7 @@ describe('Slack automations', () => {
   it('lists with a filter and creates a valid Slack definition', async () => {
     const create = jest.spyOn(api.workflows, 'create').mockImplementation(async (_workspaceId, input) => ({
       id: 'wf1', workspaceId: 'ws1', ...input,
-      stats: { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, tasksStarted: 0, lastRunAt: null, lastStatus: null },
+      stats: { runsTotal: 0, runs24h: 0, runs7d: 0, failures7d: 0, sessionsStarted: 0, lastRunAt: null, lastStatus: null },
     } as never));
     await openSlackEditor();
     await addAction('Add a reaction');
