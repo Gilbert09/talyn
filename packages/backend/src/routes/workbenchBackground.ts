@@ -18,6 +18,7 @@ import {
   stopBackgroundJob,
 } from '../services/workbenches/background.js';
 import { fleetErrorAsRefusal, WorkbenchError } from '../services/workbenches/errors.js';
+import { sessionOriginOf } from '../services/workbenches/origin.js';
 import { chooseReadSource } from '../services/workbenches/sandboxReadSource.js';
 import { getWorkbench, type WorkbenchRow } from '../services/workbenches/store.js';
 
@@ -79,6 +80,13 @@ export function workbenchBackgroundRoutes(): Router {
     const row = await gated(req, res);
     if (!row) return;
     ok(res, await backgroundOf(row.id));
+  });
+
+  /** The rule or loop that started the session, with the event it acted on. Null for other sessions. */
+  router.get('/:id/origin', async (req, res) => {
+    const row = await gated(req, res);
+    if (!row) return;
+    ok(res, await sessionOriginOf(row.workspaceId, row.source));
   });
 
   router.post('/:id/slack-reply', async (req, res) => {

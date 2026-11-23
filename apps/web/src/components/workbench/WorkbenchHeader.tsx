@@ -749,7 +749,7 @@ export function WorkbenchHeader({
             {slackSourceOf(workbench) && (
               <SlackThreadChip source={slackSourceOf(workbench)!} />
             )}
-            <AutomationChip source={workbench.source} />
+            <AutomationChip workbenchId={workbench.id} source={workbench.source} />
             {!thread && <SessionPreviewLinks workbench={workbench} ops={ops} />}
             {workbench.settings?.internetAccess === false && (
               <span
