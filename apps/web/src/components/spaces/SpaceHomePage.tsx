@@ -76,8 +76,8 @@ export function SpaceHomePage({ active }: { active: SpaceRef }) {
       {/* Hidden, not unmounted: the composer keeps its draft and finishes the create. */}
       <div className="h-full overflow-y-auto" data-attr="space-home" hidden={pending !== null}>
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-8 px-6 pb-16 pt-[10vh]">
-          <div className="flex items-center justify-center gap-2" data-attr="space-header">
-            <SpaceDot color={space.color} image={space.image} className="h-3 w-3" />
+          <div className="flex items-baseline justify-center gap-2" data-attr="space-header">
+            <SpaceDot color={space.color} image={space.image} className="h-3 w-3 self-center" />
             <h1 className="font-display text-2xl font-semibold tracking-tight">{space.name}</h1>
             <span className="text-sm text-muted-foreground">{team.name}</span>
           </div>
