@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import React from 'react';
 import { render, fireEvent, waitFor, cleanup, screen } from '@testing-library/react';
-import type { CloudAgentChoice, LoopInput } from '@talyn/shared';
+import { emptyLoopInput, type CloudAgentChoice, type LoopInput, type LoopWithStats } from '@talyn/shared';
 import { useWorkspaceStore } from '../stores/workspace';
 import { LoopEditorPage } from '../components/panels/loops/LoopEditorPage';
 
@@ -24,7 +24,10 @@ const AGENTS: CloudAgentChoice[] = [
   },
 ];
 
-function renderEditor(onSave: (i: LoopInput) => Promise<void> = async () => {}) {
+function renderEditor(
+  onSave: (i: LoopInput) => Promise<void> = async () => {},
+  editing: LoopWithStats | null = null
+) {
   useWorkspaceStore.setState({
     currentWorkspaceId: 'ws1',
     repositories: [
@@ -32,10 +35,11 @@ function renderEditor(onSave: (i: LoopInput) => Promise<void> = async () => {}) 
     ],
   } as never);
   return render(
-    <LoopEditorPage editing={null} agents={AGENTS} onCancel={() => {}} onSave={onSave} />
+    <LoopEditorPage editing={editing} agents={AGENTS} onCancel={() => {}} onSave={onSave} />
   );
 }
 
+const repoPicker = () => screen.getByRole('button', { name: 'Repository' });
 const createButton = () => document.querySelector('[data-attr="loop-save-inline"]')!;
 // queryAllByText, not queryByText: the message is deliberately shown twice —
 // a banner at the top of a long form, and again beside the button you actually
@@ -43,6 +47,16 @@ const createButton = () => document.querySelector('[data-attr="loop-save-inline"
 const problemShown = () => screen.queryAllByText(/name must be a non-empty string/i).length > 0;
 
 describe('LoopEditorPage — when it complains', () => {
+  beforeEach(() => {
+    // jsdom has no ResizeObserver or scrollIntoView. The repository list (cmdk) calls both.
+    (global as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
@@ -104,7 +118,10 @@ describe('LoopEditorPage — when it complains', () => {
 
     fireEvent.change(document.querySelector('input')!, { target: { value: 'Triage' } });
     fireEvent.change(document.querySelector('textarea')!, { target: { value: 'Do the thing.' } });
-    fireEvent.change(screen.getByDisplayValue('Pick a repository...'), { target: { value: 'repo-1' } });
+    expect(repoPicker().textContent).toContain('Pick a repository');
+    fireEvent.click(repoPicker());
+    fireEvent.click(await screen.findByRole('option', { name: /acme\/widget/ }));
+    expect(repoPicker().textContent).toContain('acme/widget');
     fireEvent.click(createButton());
 
     await waitFor(() => expect(onSave).toHaveBeenCalled());
@@ -112,6 +129,36 @@ describe('LoopEditorPage — when it complains', () => {
       target: 'session',
       provider: 'selfhosted',
       mcpServerIds: null,
+      repositoryId: 'repo-1',
+      repoFullName: 'acme/widget',
     });
+  });
+
+  it('preselects the repository of a loop being edited', async () => {
+    const onSave = vi.fn(async (_input: LoopInput) => {});
+    const loop = {
+      ...emptyLoopInput('UTC'),
+      id: 'loop-1',
+      workspaceId: 'ws1',
+      name: 'Triage',
+      prompt: 'Do the thing.',
+      provider: 'selfhosted',
+      model: 'claude-opus-5',
+      repositoryId: 'repo-1',
+      repoFullName: 'acme/widget',
+      createdAt: '',
+      updatedAt: '',
+    } as unknown as LoopWithStats;
+    renderEditor(onSave, loop);
+    expect(repoPicker().textContent).toContain('acme/widget');
+
+    fireEvent.click(repoPicker());
+    const option = await screen.findByRole('option', { name: /acme\/widget/ });
+    expect(option.querySelector('svg.lucide-check')).not.toBeNull();
+    fireEvent.click(option);
+
+    fireEvent.click(document.querySelector('[data-attr="loop-save-inline"]')!);
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0]).toMatchObject({ repositoryId: 'repo-1', repoFullName: 'acme/widget' });
   });
 });
