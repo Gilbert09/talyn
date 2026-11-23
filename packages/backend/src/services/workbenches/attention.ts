@@ -18,7 +18,7 @@ import {
 /**
  * The context rail's badges: for each workspace the caller owns, and for each
  * space their sessions are in, how many live sessions wait on them. A session
- * whose alert the owner already saw (`attention_ack`) does not count.
+ * counts until the thing it waits on is resolved. Opening it does not clear it.
  *
  * Two narrow reads. Neither ships `settings`, the queued prompts or the PR
  * summary blob: the rail asks every 30 seconds, so the egress rule in
@@ -36,7 +36,6 @@ export function attentionSessionsQuery(db: Database, ownerId: string, workbenchI
       status: workbenchesTable.status,
       sandboxState: workbenchesTable.sandboxState,
       archivedAt: workbenchesTable.archivedAt,
-      attentionAck: workbenchesTable.attentionAck,
       prId: prTable.id,
       prState: prTable.state,
       prMergeable: sql<string | null>`${prTable.lastSummary} ->> 'mergeable'`,
@@ -136,22 +135,8 @@ export async function contextAttention(db: Database, ownerId: string): Promise<R
   return countContextAttention(
     keyed.flatMap(({ session, key }) => {
       const reason = attentionReason(key);
-      if (reason === null || key === session.attentionAck) return [];
+      if (reason === null) return [];
       return [{ id: session.id, workspaceId: session.workspaceId, spaceId: session.spaceId, reason }];
     }),
   );
-}
-
-/**
- * The owner opened the session: keep its current alert as seen, so the rail
- * stops counting it. Answers false for a session the caller does not own, or
- * one that is archived. A teammate's view never clears the owner's badge.
- */
-export async function acknowledgeAttention(db: Database, ownerId: string, workbenchId: string): Promise<boolean> {
-  const [entry] = await attentionKeys(db, await attentionSessionsQuery(db, ownerId, workbenchId));
-  if (!entry) return false;
-  if (entry.key !== entry.session.attentionAck) {
-    await db.update(workbenchesTable).set({ attentionAck: entry.key }).where(eq(workbenchesTable.id, workbenchId));
-  }
-  return true;
 }

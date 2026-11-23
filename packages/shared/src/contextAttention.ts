@@ -66,11 +66,9 @@ export function sessionNeedsAttention(session: AttentionSessionInput): boolean {
 
 /**
  * A name for what the session waits on me for, or null when it waits on
- * nothing. When I open the session, the server keeps this key
- * (`workbenches.attention_ack`), and the rail stops counting the session while
- * the key stays the same. A new alert has a new key, so it counts again: a
- * question in a later turn has a new turn count, and conflicts after a push
- * have a new head.
+ * nothing. Opening the session does not clear it: the session counts until
+ * the key goes null. A new alert has a new key: a question in a later turn
+ * has a new turn count, and conflicts after a push have a new head.
  */
 export function sessionAttentionKey(session: AttentionSessionInput): string | null {
   if (session.archivedAt) return null;

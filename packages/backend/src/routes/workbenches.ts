@@ -42,7 +42,6 @@ import {
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { runWorkbenchAction } from '../services/workbenches/actions.js';
-import { acknowledgeAttention } from '../services/workbenches/attention.js';
 import { getDbClient } from '../db/client.js';
 import { changesResponseEtag } from '../services/workbenches/changesStored.js';
 import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
@@ -976,16 +975,12 @@ export function workbenchRoutes(): Router {
   });
 
   /**
-   * The person opened the session: its current alert stops counting on the
-   * context rail. Owner-only by the query, so a teammate's view is a no-op.
+   * Older desktop builds call this when a session opens. Opening a session no
+   * longer clears its alert: it stays on the context rail until it is resolved.
    */
-  router.post('/:id/attention/seen', async (req, res) => {
-    const user = assertUser(req);
-    try {
-      ok(res, { acknowledged: await acknowledgeAttention(getDbClient(), user.id, req.params.id) });
-    } catch (err) {
-      fail(res, err);
-    }
+  router.post('/:id/attention/seen', (req, res) => {
+    assertUser(req);
+    ok(res, { acknowledged: false });
   });
 
   /** Provision again after a failed or stuck start. Refused, unchanged, while the fleet still cannot run it. */
