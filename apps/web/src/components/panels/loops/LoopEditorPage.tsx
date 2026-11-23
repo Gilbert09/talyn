@@ -24,7 +24,10 @@ import { Select } from '../../ui/select';
 import { Textarea } from '../../ui/textarea';
 import { cn } from '../../../lib/utils';
 import { useWorkspaceStore } from '../../../stores/workspace';
+import { useSpacesStore } from '../../../stores/spaces';
+import { spacesOffered } from '../../../lib/spaces';
 import { Section, TextField } from '../workflows/workflowFields';
+import { RepoPicker } from '../../workbench/new/NewWorkbenchControls';
 
 /**
  * The loop editor.
@@ -167,7 +170,7 @@ export function LoopEditorPage({
       await onSave({ ...input, target: 'session', mcpServerIds: null });
     } catch (err) {
       captureAnalyticsException(err, { flow: 'loop_save' });
-      setSaveError(err instanceof Error ? err.message : 'Could not save this loop');
+      setSaveError(err instanceof Error ? err.message : 'Could not save this automation');
     } finally {
       setSaving(false);
     }
@@ -180,11 +183,11 @@ export function LoopEditorPage({
       <header className="flex items-center gap-3 border-b px-6 py-4">
         <Button variant="ghost" size="sm" onClick={onCancel} data-attr="loop-editor-back">
           <ArrowLeft className="mr-1 h-4 w-4" />
-          Loops
+          Automations
         </Button>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-lg font-semibold">
-            {input.name.trim() || (editing ? 'Loop' : 'New loop')}
+            {input.name.trim() || (editing ? 'Automation' : 'New automation')}
           </h1>
         </div>
         {/* Only when editing. A loop you are creating is on — nobody composes a
@@ -211,7 +214,7 @@ export function LoopEditorPage({
             </p>
           )}
 
-          <Section title="Name" description="What this loop is for, in a few words.">
+          <Section title="Name" description="What this automation is for, in a few words.">
             <TextField
               value={input.name}
               onChange={(name) => setInput((p) => ({ ...p, name: name.slice(0, MAX_LOOP_NAME_LENGTH) }))}
@@ -356,27 +359,29 @@ export function LoopEditorPage({
 
           <Section
             title="Repository"
-            description="Every run clones this repository. A loop works on one."
+            description="Every run clones this repository. An automation works on one."
           >
-            <Select
+            <RepoPicker
+              repositories={repositories}
               value={input.repositoryId}
-              onChange={(e) => {
-                const repo = repositories.find((r) => r.id === e.target.value);
+              onChange={(id) => {
+                const repo = repositories.find((r) => r.id === id);
                 setInput((p) => ({
                   ...p,
                   repositoryId: repo?.id ?? '',
                   repoFullName: repo?.fullName ?? '',
                 }));
               }}
-            >
-              <option value="">Pick a repository...</option>
-              {repositories.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.fullName}
-                </option>
-              ))}
-            </Select>
+              composerShortcut={false}
+              placeholder="Pick a repository"
+              className="h-10 w-full max-w-none border border-input bg-background px-3 text-sm"
+            />
           </Section>
+
+          <LoopSpaceSection
+            spaceId={input.spaceId ?? null}
+            onChange={(spaceId) => setInput((p) => ({ ...p, spaceId }))}
+          />
 
           <Section
             title="Agent"
@@ -385,7 +390,7 @@ export function LoopEditorPage({
             {availableAgents.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 No Talyn Fleet agent is connected to this workspace. Connect one in Settings &rarr;
-                Integrations before a loop can run.
+                Integrations before an automation can run.
               </p>
             ) : (
               <div className="flex flex-wrap items-end gap-3">
@@ -442,7 +447,7 @@ export function LoopEditorPage({
               ))}
             </div>
             <p className="text-xs text-muted-foreground">
-              Skipping is recorded in the history, so a loop that keeps standing down is visible
+              Skipping is recorded in the history, so an automation that keeps standing down is visible
               rather than silent. Start it anyway when the prompt is safe to run twice at once.
             </p>
           </Section>
@@ -453,7 +458,7 @@ export function LoopEditorPage({
           {input.provider === 'selfhosted' && (
             <Section
               title="Internet access"
-              description="Whether this loop can reach sites outside your repository."
+              description="Whether this automation can reach sites outside your repository."
             >
               <div className="flex flex-wrap gap-1">
                 {[
@@ -476,8 +481,8 @@ export function LoopEditorPage({
               </div>
               <p className="text-xs text-muted-foreground">
                 {input.internetAccess
-                  ? 'This loop can reach any site. Turn it on only for prompts you trust: a run that can read your code can also send it somewhere.'
-                  : 'This loop reaches your repository and its agent, and nothing else. Switch it on if the prompt has to call something outside — posting to a webhook, say.'}
+                  ? 'This automation can reach any site. Turn it on only for prompts you trust: a run that can read your code can also send it somewhere.'
+                  : 'This automation reaches your repository and its agent, and nothing else. Switch it on if the prompt has to call something outside — posting to a webhook, say.'}
               </p>
             </Section>
           )}
@@ -489,11 +494,59 @@ export function LoopEditorPage({
               Cancel
             </Button>
             <Button onClick={save} disabled={saving} data-attr="loop-save-inline">
-              {saving ? 'Saving...' : editing ? 'Save changes' : 'Create loop'}
+              {saving ? 'Saving...' : editing ? 'Save changes' : 'Create automation'}
             </Button>
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Where each run's session goes: Personal, or a space of one of my teams.
+ *
+ * Shown only when Spaces is offered and I am in a team with a space, or the
+ * loop already names one. The session still runs in this workspace. The space
+ * makes it visible to the space's team. The server checks the space when the
+ * loop is saved, and again at each run.
+ */
+function LoopSpaceSection({
+  spaceId,
+  onChange,
+}: {
+  spaceId: string | null;
+  onChange: (spaceId: string | null) => void;
+}) {
+  const offered = useWorkspaceStore((s) => spacesOffered(s.features));
+  const teams = useSpacesStore((s) => s.teams);
+  const withSpaces = (teams ?? []).filter((team) => team.spaces.length > 0);
+  if (!offered || (withSpaces.length === 0 && !spaceId)) return null;
+  const known = withSpaces.some((team) => team.spaces.some((space) => space.id === spaceId));
+  return (
+    <Section title="Space" description="Every run's session goes to this space.">
+      <Select
+        value={spaceId ?? ''}
+        onChange={(e) => onChange(e.target.value || null)}
+        data-attr="loop-space"
+      >
+        <option value="">Personal</option>
+        {spaceId && !known && <option value={spaceId}>A space you cannot use</option>}
+        {withSpaces.map((team) => (
+          <optgroup key={team.id} label={team.name}>
+            {team.spaces.map((space) => (
+              <option key={space.id} value={space.id}>
+                {space.name}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </Select>
+      <p className="text-xs text-muted-foreground">
+        {spaceId
+          ? "The session runs in this workspace. People in the space's team can see it. If you leave the team or the space is archived, runs go to Personal."
+          : 'Only you can see the session.'}
+      </p>
+    </Section>
   );
 }

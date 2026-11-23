@@ -212,6 +212,29 @@ describe('internet access', () => {
   });
 });
 
+describe('space', () => {
+  it.each([
+    ['absent', undefined],
+    ['null', null],
+    ['an empty string', ''],
+    ['only spaces', '   '],
+  ])('is Personal (null) when %s', (_label, spaceId) => {
+    expect(validateLoop({ ...VALID, spaceId }).spaceId).toBeNull();
+  });
+
+  it('keeps a space id, trimmed', () => {
+    expect(validateLoop(withField({ spaceId: ' space-1 ' })).spaceId).toBe('space-1');
+  });
+
+  it.each([42, true, ['space-1'], { id: 'space-1' }])('refuses %j', (spaceId) => {
+    expect(() => validateLoop({ ...VALID, spaceId })).toThrow(/spaceId must be a space id, or null for Personal/);
+  });
+
+  it('opens a blank editor and an old loop on Personal', () => {
+    expect(emptyLoopInput('UTC').spaceId).toBeNull();
+  });
+});
+
 describe('loopInputProblem', () => {
   it('reports the blank editor as incomplete rather than throwing', () => {
     // It drives the Save button's disabled state, so it must answer for every

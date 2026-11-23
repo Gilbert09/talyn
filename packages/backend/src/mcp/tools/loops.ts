@@ -38,6 +38,10 @@ const fields = {
   internetAccess: booleanSchema,
   repositoryId: textSchema,
   repoFullName: textSchema,
+  spaceId: {
+    type: ['string', 'null'],
+    description: "A team space each run's session starts in. Null or absent means Personal.",
+  },
 };
 const inputSchema = {
   ...workspaceSchema,

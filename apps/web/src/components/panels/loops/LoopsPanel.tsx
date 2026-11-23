@@ -443,7 +443,7 @@ export function LoopsPanel() {
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="Delete this loop?"
+        title="Delete this automation?"
         description={
           <>
             Deleting <span className="font-medium text-foreground">{pendingDelete?.name}</span> 

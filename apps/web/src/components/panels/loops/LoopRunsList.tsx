@@ -114,6 +114,9 @@ function RunRow({ run }: { run: LoopRun }) {
             {loopRunReason(run)}
           </p>
         )}
+        {/* What the run did differently from the loop, such as a session in
+            Personal because the loop's space was not usable. */}
+        {run.notice && <p className="mt-0.5 text-xs text-amber-500">{run.notice}</p>}
       </div>
 
       <div className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
@@ -180,7 +183,7 @@ export function LoopRunsList({
   if (runs.length === 0) {
     return (
       <p className="px-4 py-3 text-sm text-muted-foreground">
-        This loop has not run yet. It will appear here the moment it does.
+        This automation has not run yet. It will appear here the moment it does.
       </p>
     );
   }

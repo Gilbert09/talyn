@@ -7,7 +7,7 @@ export const validRoutes: Href[] = [
   HOME, '/settings', '/workspaces',
   // Old list links, kept for deep links and notification fallbacks.
   '/sessions', '/threads', '/attention',
-  sessionRoute('session-id'), threadRoute('thread-id'), pullRequestRoute('pr-id'),
+  sessionRoute('session-id'), threadRoute('thread-id'), pullRequestRoute('pr-id'), pullRequestRoute('pr-id', { tab: 'findings' }),
   pullsRoute('mine'), pullsRoute('reviews'), pullsRoute('queue'),
   newWorkRoute('session'), newWorkRoute('thread'), '/new',
   '/spaces', '/integrations', '/automations', '/automations/workflows', '/automations/loops', '/usage', '/agents', '/insights', '/billing', '/billing/return',

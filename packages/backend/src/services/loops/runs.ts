@@ -54,6 +54,7 @@ export const DUE_LOOP_COLUMNS = {
   mcpServerIds: loopsTable.mcpServerIds,
   repositoryId: loopsTable.repositoryId,
   repoFullName: loopsTable.repoFullName,
+  spaceId: loopsTable.spaceId,
   nextRunAt: loopsTable.nextRunAt,
   consecutiveFailures: loopsTable.consecutiveFailures,
 } as const;
@@ -314,7 +315,8 @@ function captureLoopRan(
 export async function markSessionDispatched(
   runId: string,
   workbenchId: string,
-  workbenchChatId: string
+  workbenchChatId: string,
+  notice: string | null = null
 ): Promise<void> {
   await getDbClient()
     .update(runsTable)
@@ -325,6 +327,7 @@ export async function markSessionDispatched(
       status: 'queued',
       failureCode: null,
       error: null,
+      notice,
       retryAfter: null,
     })
     .where(eq(runsTable.id, runId));

@@ -13,6 +13,9 @@ import type { Database } from '../../db/client.js';
 import {
   loops as loopsTable,
   repositories as reposTable,
+  spaces as spacesTable,
+  teamMembers as teamMembersTable,
+  teams as teamsTable,
   workbenchChats as chatsTable,
   workbenches as workbenchesTable,
   workspaces as workspacesTable,
@@ -518,6 +521,118 @@ describe('loop routes', () => {
       expect(run).toMatchObject({ status: 'failed', failureCode: 'environment_missing', taskId: null, sessionId: null });
       expect(run.error).toMatch(/choose a Talyn Fleet agent/);
       expect(createSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a space for the runs', () => {
+    const save = (method: 'POST' | 'PATCH', path: string, payload: Record<string, unknown>) =>
+      fetch(`${url}/api/v1/loops${path}`, { method, headers, body: JSON.stringify(payload) });
+
+    beforeEach(async () => {
+      process.env.SPACES_ENABLED = 'true';
+      await db.insert(teamsTable).values([{ id: 'team-1', name: 'Acme' }, { id: 'team-2', name: 'Other' }]);
+      await db.insert(teamMembersTable).values([
+        { id: 'm-1', teamId: 'team-1', githubUserId: 100, userId: TEST_USER_ID, githubLogin: 'tom', role: 'owner' },
+      ]);
+      await db.insert(spacesTable).values([
+        { id: 'space-1', teamId: 'team-1', name: 'Web' },
+        { id: 'space-3', teamId: 'team-1', name: 'Mobile' },
+        { id: 'space-old', teamId: 'team-1', name: 'Old', archivedAt: new Date() },
+        { id: 'space-2', teamId: 'team-2', name: 'Not mine' },
+      ]);
+    });
+
+    afterEach(() => {
+      delete process.env.SPACES_ENABLED;
+    });
+
+    it.each([
+      ['no space', {}],
+      ['a null space', { spaceId: null }],
+      ['an empty space', { spaceId: '' }],
+    ])('saves %s as Personal', async (_label, over) => {
+      const made = await create(over);
+      expect(made.spaceId).toBeNull();
+      const [row] = await db.select().from(loopsTable).where(eq(loopsTable.id, made.id));
+      expect(row.spaceId).toBeNull();
+    });
+
+    it('creates a loop with a space the caller is in, and lists it', async () => {
+      const made = await create({ spaceId: 'space-1' });
+      expect(made.spaceId).toBe('space-1');
+      const listed = await fetch(`${url}/api/v1/loops?workspaceId=ws-mine`, { headers });
+      expect(((await listed.json()) as { data: LoopWithStats[] }).data[0].spaceId).toBe('space-1');
+    });
+
+    it('updates the space, and clears it back to Personal', async () => {
+      const made = await create();
+      const moved = await save('PATCH', `/${made.id}`, { spaceId: 'space-3' });
+      expect(moved.status).toBe(200);
+      expect(((await moved.json()) as { data: LoopWithStats }).data.spaceId).toBe('space-3');
+
+      // A PATCH that does not name the space keeps it.
+      const renamed = await save('PATCH', `/${made.id}`, { name: 'Renamed' });
+      expect(((await renamed.json()) as { data: LoopWithStats }).data.spaceId).toBe('space-3');
+
+      const cleared = await save('PATCH', `/${made.id}`, { spaceId: null });
+      expect(((await cleared.json()) as { data: LoopWithStats }).data.spaceId).toBeNull();
+    });
+
+    it.each([
+      ['a space of another team', 'true', 'space-2', 'The space was not found, or you are not in its team.'],
+      ['a space that does not exist', 'true', 'space-gone', 'The space was not found, or you are not in its team.'],
+      ['an archived space', 'true', 'space-old', 'The space is archived.'],
+      ['any space while Spaces is off', 'false', 'space-1', 'Spaces are not available for this account.'],
+    ])('refuses to create a loop with %s', async (_label, flag, spaceId, error) => {
+      process.env.SPACES_ENABLED = flag;
+      const res = await save('POST', '', body({ spaceId }));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ success: false, error, code: 'space_unavailable' });
+      expect(await db.select().from(loopsTable)).toEqual([]);
+    });
+
+    it.each([
+      ['a space of another team', 'space-2'],
+      ['an archived space', 'space-old'],
+    ])('refuses to update a loop to %s and keeps the old space', async (_label, spaceId) => {
+      const made = await create({ spaceId: 'space-1' });
+      const res = await save('PATCH', `/${made.id}`, { spaceId });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { code: string }).code).toBe('space_unavailable');
+      const [row] = await db.select().from(loopsTable).where(eq(loopsTable.id, made.id));
+      expect(row.spaceId).toBe('space-1');
+    });
+
+    it('lets a loop keep a space the caller left, so it can still be edited', async () => {
+      const made = await create({ spaceId: 'space-1' });
+      await db.delete(teamMembersTable).where(eq(teamMembersTable.id, 'm-1'));
+
+      const off = await save('PATCH', `/${made.id}`, { enabled: false });
+      expect(off.status).toBe(200);
+      expect(((await off.json()) as { data: LoopWithStats }).data.spaceId).toBe('space-1');
+    });
+
+    it('Run now starts the session in the loop’s space', async () => {
+      const made = await create({ spaceId: 'space-1' });
+      const res = await fetch(`${url}/api/v1/loops/${made.id}/run`, { method: 'POST', headers });
+      const run = ((await res.json()) as { data: LoopRun }).data;
+      expect(run).toMatchObject({ status: 'queued', notice: null });
+      expect(createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ spaceId: 'space-1' }),
+        expect.objectContaining({ id: TEST_USER_ID })
+      );
+    });
+
+    it('Run now starts in Personal and says why when the space was archived after the save', async () => {
+      const made = await create({ spaceId: 'space-1' });
+      await db.update(spacesTable).set({ archivedAt: new Date() }).where(eq(spacesTable.id, 'space-1'));
+      const res = await fetch(`${url}/api/v1/loops/${made.id}/run`, { method: 'POST', headers });
+      const run = ((await res.json()) as { data: LoopRun }).data;
+      expect(run).toMatchObject({
+        status: 'queued',
+        notice: 'Started in Personal, not in the chosen space: The space is archived.',
+      });
+      expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ spaceId: null }), expect.anything());
     });
   });
 });

@@ -48,6 +48,7 @@ export function SplitView() {
   const workbenches = useWorkbenchStore((s) => s.workbenches);
   const listLoaded = useWorkbenchStore((s) => s.listLoaded);
   const prDetailId = useWorkbenchStore((s) => s.prDetailId);
+  const prDetailTab = useWorkbenchStore((s) => s.prDetailTab);
   const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
   const { columns, rows } = splitGridShape(panes.length);
 
@@ -92,7 +93,13 @@ export function SplitView() {
           ))}
         </div>
       )}
-      <PRDetailSheet pullRequestId={prDetailId} onClose={() => openPrDetail(null)} layout="overlay" />
+      <PRDetailSheet
+        key={prDetailTab}
+        pullRequestId={prDetailId}
+        onClose={() => openPrDetail(null)}
+        layout="overlay"
+        initialTab={prDetailTab}
+      />
     </div>
   );
 }

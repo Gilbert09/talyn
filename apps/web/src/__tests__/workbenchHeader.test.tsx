@@ -757,3 +757,61 @@ describe('WorkbenchHeader last message', () => {
     expect(screen.queryByText(/^Last message/)).not.toBeInTheDocument();
   });
 });
+
+describe('WorkbenchHeader code review', () => {
+  afterEach(() => useWorkbenchStore.setState({ prDetailId: null, prDetailTab: 'overview' }));
+
+  const review = (over: Record<string, unknown>) =>
+    ({
+      phase: 'ready',
+      phasePlan: [],
+      openCount: 0,
+      counts: { blocker: 0, major: 0, minor: 0, nit: 0 },
+      deferredSince: null,
+      staleForHead: false,
+      failureReason: null,
+      ...over,
+    }) as unknown as PRRow['codeReview'];
+  const withReview = (codeReview: PRRow['codeReview'], state: PRRow['state'] = 'open') =>
+    ({ ...prRow({}, state), codeReview }) as PRRow;
+
+  it.each([
+    { name: 'open findings', codeReview: review({ openCount: 3, counts: { blocker: 1, major: 2, minor: 0, nit: 0 } }), text: '3 findings' },
+    { name: 'a failed review', codeReview: review({ phase: 'failed', failureReason: 'Boom' }), text: 'Review failed' },
+  ])('shows $name and opens the findings tab of the details', ({ codeReview, text }) => {
+    render(<WorkbenchHeader workbench={WB} pr={withReview(codeReview)} chat={chat} ops={ops()} />);
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(text) }));
+    expect(useWorkbenchStore.getState()).toMatchObject({ prDetailId: 'pr1', prDetailTab: 'findings' });
+  });
+
+  it('shows the findings on a merged PR too', () => {
+    const codeReview = review({ openCount: 1, counts: { blocker: 0, major: 1, minor: 0, nit: 0 } });
+    render(<WorkbenchHeader workbench={WB} pr={withReview(codeReview, 'merged')} chat={chat} ops={ops()} />);
+    expect(screen.getByRole('button', { name: /1 finding/ })).toBeInTheDocument();
+  });
+
+  it('shows the progress of a running review', () => {
+    const codeReview = review({ phase: 'reviewing', phasePlan: ['reviewing', 'validating'], runsDone: 1, runsTotal: 3 });
+    const { container } = render(<WorkbenchHeader workbench={WB} pr={withReview(codeReview)} chat={chat} ops={ops()} />);
+    expect(container.querySelector('[data-attr="workbench-code-review"]')).not.toBeNull();
+  });
+
+  it.each([
+    { name: 'a clean review', workbench: WB, codeReview: review({}) },
+    { name: 'no review', workbench: WB, codeReview: null },
+    { name: 'a thread', workbench: { ...WB, kind: 'thread' } as Workbench, codeReview: review({ openCount: 2, counts: { blocker: 0, major: 2, minor: 0, nit: 0 } }) },
+  ])('draws no review chip for $name', ({ workbench, codeReview }) => {
+    const { container } = render(<WorkbenchHeader workbench={workbench} pr={withReview(codeReview)} chat={chat} ops={ops()} />);
+    const slot = container.querySelector('[data-attr="workbench-code-review"]');
+    expect(slot === null || slot.childElementCount === 0).toBe(true);
+    expect(screen.queryByRole('button', { name: /finding/ })).not.toBeInTheDocument();
+  });
+
+  it('closing the details resets the tab to the overview', () => {
+    useWorkbenchStore.getState().openPrDetail('pr1', 'findings');
+    useWorkbenchStore.getState().openPrDetail(null);
+    expect(useWorkbenchStore.getState()).toMatchObject({ prDetailId: null, prDetailTab: 'overview' });
+    useWorkbenchStore.getState().openPrDetail('pr1');
+    expect(useWorkbenchStore.getState().prDetailTab).toBe('overview');
+  });
+});

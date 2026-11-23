@@ -64,6 +64,7 @@ import { PollingOnlyBadge } from './PollingOnlyBadge';
 import { toast } from '../../stores/toast';
 import { canResubmitMergeQueue, resubmitMergeQueue } from '../../lib/mergeQueueResubmit';
 import { trackEvent } from '../../lib/analytics';
+import type { PrDetailTab } from '../../lib/prDetail';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useGitHubActions } from '../panels/github/useGitHubActions';
@@ -554,7 +555,12 @@ export function PRDetailSheet({
             >
               <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />
             </Button>
-            {view && <PrSessionChip session={view.row.session} onOpened={onClose} />}
+            {view && (
+              <PrSessionChip
+                session={view.row.session ?? view.row.codeReview?.session ?? null}
+                onOpened={onClose}
+              />
+            )}
             {view && <OpenInWorkbenchButton row={view.row} onOpened={onClose} />}
             {view && (
               <Button
@@ -959,7 +965,7 @@ export function usePrAutoKeep(
 // `findings` sits SECOND, right after overview: the reading order is "what is this
 // pull request / what is wrong with it / what does CI think". Adding a member here
 // is what routes the compiler to every switch that has to handle it.
-type TabKey = 'overview' | 'findings' | 'files' | 'checks' | 'reviews';
+type TabKey = PrDetailTab;
 
 function DetailTabs({
   data,

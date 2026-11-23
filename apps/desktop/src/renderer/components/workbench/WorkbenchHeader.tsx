@@ -55,6 +55,7 @@ import {
 } from '../../lib/workbenchActions';
 import type { WorkbenchOps, WorkbenchPromptActionKind } from '../../lib/workbenchOps';
 import { PRStatusPill } from '../widgets/PRStatusPill';
+import { CodeReviewRowChip } from '../widgets/codeReview/CodeReviewRowChip';
 import { PrPill } from './WorkbenchBadges';
 import { PrCopyLinkButton } from './PrCopyLinkButton';
 import { ArchiveWorkbenchDialog, archiveWorkbench, restoreWorkbench, type ArchiveOptions } from './archiveWorkbench';
@@ -770,6 +771,11 @@ export function WorkbenchHeader({
                   draft={pr.summary.draft}
                 />
               </button>
+            )}
+            {!thread && pr?.codeReview && (
+              <span className="app-region-no-drag inline-flex shrink-0 items-center" data-attr="workbench-code-review">
+                <CodeReviewRowChip review={pr.codeReview} onOpen={() => openPrDetail(pr.id, 'findings')} />
+              </span>
             )}
           </div>
         </div>

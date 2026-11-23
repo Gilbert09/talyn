@@ -42,7 +42,6 @@ import {
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { runWorkbenchAction } from '../services/workbenches/actions.js';
-import { getDbClient } from '../db/client.js';
 import { changesResponseEtag } from '../services/workbenches/changesStored.js';
 import { importClaudeSession, importTargetChat, parseImportBody } from '../services/workbenches/claudeImport.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
@@ -88,6 +87,7 @@ import {
   switchChatAgent,
 } from '../services/workbenches/sessionOps.js';
 import { getWorkbenchTiming } from '../services/workbenches/turnInsights.js';
+import { codeReviewForPr } from '../services/codeReview/public.js';
 import { scheduleTurnUsage } from '../services/insights/turnUsage.js';
 import { getSandboxStatus } from '../services/workbenches/sandboxStatus.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
@@ -771,6 +771,19 @@ export function workbenchRoutes(): Router {
     if (found.member) return ok(res, memberView(await publicWorkbench(found.row)));
     // A PR opened since the last look — by the agent's own `gh pr create`.
     ok(res, await publicWorkbench(await linkPullRequest(found.row)));
+  });
+
+  /**
+   * The code review of the session's pull request. A review belongs to the
+   * pull request, and the session owns it through `pullRequestId`, so this is
+   * a read of that link. `review` is null when the session has no pull
+   * request or the pull request was never reviewed.
+   */
+  router.get('/:id/code-review', async (req, res) => {
+    const found = await readableWorkbench(req, res, await getWorkbench(req.params.id), 'Session not found');
+    if (!found) return;
+    const pullRequestId = found.row.pullRequestId ?? null;
+    ok(res, { pullRequestId, review: pullRequestId ? await codeReviewForPr(pullRequestId) : null });
   });
 
   router.post('/', async (req, res) => {

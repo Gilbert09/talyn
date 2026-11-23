@@ -160,7 +160,7 @@ export const LOOP_RUN_FAILURE_LABELS: Record<LoopRunFailureCode, string> = {
   fleet_not_allowed: 'This workspace lost access to Talyn Fleet',
   agent_not_connected: 'That fleet agent is not connected',
   sessions_not_allowed: 'Sessions are not available in this workspace',
-  loops_not_allowed: 'This workspace lost access to Loops',
+  loops_not_allowed: 'This workspace lost access to schedule automations',
   task_deleted: 'The task was deleted before it finished',
   session_deleted: 'The session was deleted before it finished',
   session_failed: 'The session stopped before it finished',
@@ -247,6 +247,14 @@ export interface LoopDefinition {
   /** Null only after the repository row was deleted; `repoFullName` survives. */
   repositoryId: string | null;
   repoFullName: string;
+  /**
+   * The team space each run's session goes to, or null for Personal.
+   *
+   * A run checks the space again. When the owner left its team, the space is
+   * archived or Spaces is off, the session starts in Personal and the run's
+   * `notice` says why.
+   */
+  spaceId: string | null;
   /** The next firing, maintained by the scheduler. Null while disabled. */
   nextRunAt: string | null;
   /** Set when the engine switched the loop off; null when the user did. */
@@ -270,6 +278,8 @@ export interface LoopInput {
   mcpServerIds?: string[] | null;
   repositoryId: string;
   repoFullName: string;
+  /** Absent and null both mean Personal. */
+  spaceId?: string | null;
 }
 
 /** The validator's output: exactly the columns a row holds. */
@@ -287,6 +297,7 @@ export interface NormalizedLoop {
   mcpServerIds: string[] | null;
   repositoryId: string;
   repoFullName: string;
+  spaceId: string | null;
 }
 
 /**
@@ -328,6 +339,12 @@ export interface LoopRun {
   status: LoopRunStatus;
   failureCode: LoopRunFailureCode | null;
   error: string | null;
+  /**
+   * Something the run did differently from the loop, such as a session that
+   * started in Personal because the loop's space was not usable. Null when
+   * the run did what the loop says.
+   */
+  notice: string | null;
   retryAfter: string | null;
   createdAt: string;
   settledAt: string | null;
@@ -723,6 +740,13 @@ export function validateLoop(raw: unknown): NormalizedLoop {
     fail('repoFullName must look like owner/repo');
   }
 
+  // Null, absent and an empty string all mean Personal. The route checks that
+  // the owner can use a space; this only checks the shape.
+  if (l.spaceId !== undefined && l.spaceId !== null && typeof l.spaceId !== 'string') {
+    fail('spaceId must be a space id, or null for Personal');
+  }
+  const spaceId = typeof l.spaceId === 'string' && l.spaceId.trim() ? l.spaceId.trim() : null;
+
   return {
     name,
     enabled: l.enabled === undefined ? true : (l.enabled as boolean),
@@ -737,6 +761,7 @@ export function validateLoop(raw: unknown): NormalizedLoop {
     mcpServerIds: Array.isArray(l.mcpServerIds) ? (l.mcpServerIds as string[]) : null,
     repositoryId,
     repoFullName,
+    spaceId,
   };
 }
 
@@ -781,6 +806,7 @@ export function emptyLoopInput(timezone = localTimezone()): LoopInput {
     mcpServerIds: null,
     repositoryId: '',
     repoFullName: '',
+    spaceId: null,
   };
 }
 
@@ -799,6 +825,7 @@ export function loopToInput(loop: LoopDefinition): LoopInput {
     mcpServerIds: loop.mcpServerIds,
     repositoryId: loop.repositoryId ?? '',
     repoFullName: loop.repoFullName,
+    spaceId: loop.spaceId ?? null,
   };
 }
 

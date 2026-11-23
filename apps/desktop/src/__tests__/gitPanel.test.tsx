@@ -10,7 +10,7 @@ import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
 import { GIT_PANEL_MAX_WIDTH, GIT_PANEL_MIN_WIDTH, readLayout } from '../renderer/lib/workbenchLayout';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { GitPanel } from '../renderer/components/workbench/GitPanel';
-import { PullRequestTab } from '../renderer/components/workbench/PullRequestTab';
+import { PullRequestTab, sessionReportText } from '../renderer/components/workbench/PullRequestTab';
 import { usePullRequestStore } from '../renderer/stores/pullRequests';
 import { ChangesTab, CHANGES_REFRESH_MS } from '../renderer/components/workbench/ChangesTab';
 
@@ -403,10 +403,86 @@ describe('Pull request tab', () => {
 
   it('a finished review with no findings says so and opens the findings', () => {
     getPr.mockResolvedValue({ row: PR, fresh });
-    const done = prWith({ codeReview: { phase: 'ready', phasePlan: [], openCount: 0 } as unknown as PRRow['codeReview'] });
+    const done = prWith({
+      codeReview: {
+        phase: 'ready',
+        phasePlan: [],
+        openCount: 0,
+        counts: { blocker: 0, major: 0, minor: 0, nit: 0 },
+      } as unknown as PRRow['codeReview'],
+    });
     render(<PullRequestTab workbench={WB} chat={chat} pr={done} visible turnsEnded={0} />);
-    fireEvent.click(screen.getByText('No open findings'));
+    expect(screen.getByText('No open findings')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('pr-code-review-open'));
     expect(screen.getByTestId('pr-sheet')).toHaveAttribute('data-tab', 'findings');
+  });
+
+  it.each([
+    {
+      name: 'running',
+      review: { phase: 'reviewing', phasePlan: ['reviewing'], openCount: 0, counts: { blocker: 0, major: 0, minor: 0, nit: 0 } },
+      noFindings: false,
+      counts: [] as string[],
+    },
+    {
+      name: 'failed',
+      review: { phase: 'failed', phasePlan: [], openCount: 0, counts: { blocker: 0, major: 0, minor: 0, nit: 0 }, failureReason: 'Boom' },
+      noFindings: false,
+      counts: [],
+    },
+    {
+      name: 'clean',
+      review: { phase: 'ready', phasePlan: [], openCount: 0, counts: { blocker: 0, major: 0, minor: 0, nit: 0 } },
+      noFindings: true,
+      counts: [],
+    },
+    {
+      name: 'open findings',
+      review: { phase: 'ready', phasePlan: [], openCount: 3, counts: { blocker: 2, major: 1, minor: 0, nit: 0 } },
+      noFindings: false,
+      counts: ['2 must fix', '1 should fix'],
+    },
+    {
+      name: 'open findings with nitpicks below the bar',
+      review: { phase: 'ready', phasePlan: [], openCount: 2, counts: { blocker: 0, major: 1, minor: 1, nit: 4 } },
+      noFindings: false,
+      counts: ['1 should fix', '1 consider'],
+    },
+  ])('the code review summary when $name', ({ review, noFindings, counts }) => {
+    getPr.mockResolvedValue({ row: PR, fresh });
+    const row = prWith({ codeReview: { deferredSince: null, staleForHead: false, ...review } as unknown as PRRow['codeReview'] });
+    render(<PullRequestTab workbench={WB} chat={chat} pr={row} visible turnsEnded={0} />);
+    const section = screen.getByTestId('pr-code-review');
+    expect(within(section).queryByText('No open findings') !== null).toBe(noFindings);
+    const shown = within(section).queryByTestId('code-review-severity-counts');
+    expect(shown ? Array.from(shown.children).map((c) => c.textContent?.trim()) : []).toEqual(counts);
+    fireEvent.click(within(section).getByRole('button', { name: 'View findings' }));
+    expect(screen.getByTestId('pr-sheet')).toHaveAttribute('data-tab', 'findings');
+  });
+
+  const NOW = Date.parse('2026-11-23T12:00:00Z');
+  it.each([
+    { name: 'to this session just now', report: { workbenchId: 'wb1', sentAt: '2026-11-23T11:59:30Z', findingCount: 2 }, text: 'Talyn sent 2 findings to this session just now.' },
+    { name: 'to this session earlier', report: { workbenchId: 'wb1', sentAt: '2026-11-23T10:00:00Z', findingCount: 1 }, text: 'Talyn sent 1 finding to this session 2h ago.' },
+    { name: 'to another session', report: { workbenchId: 'wb9', sentAt: '2026-11-23T10:00:00Z', findingCount: 3 }, text: 'Talyn sent 3 findings to another session.' },
+  ])('says the findings went $name', ({ report, text }) => {
+    expect(sessionReportText(report, 'wb1', NOW)).toBe(text);
+  });
+
+  it.each([
+    { name: 'shows', sessionReport: { workbenchId: 'wb1', sentAt: new Date().toISOString(), findingCount: 2 }, text: 'Talyn sent 2 findings to this session just now.' },
+    { name: 'hides with no report', sessionReport: null, text: null },
+    { name: 'hides on an older backend', sessionReport: undefined, text: null },
+  ])('the report-back line $name', ({ sessionReport, text }) => {
+    getPr.mockResolvedValue({ row: PR, fresh });
+    const row = prWith({
+      codeReview: {
+        phase: 'ready', phasePlan: [], openCount: 2, counts: { blocker: 2, major: 0, minor: 0, nit: 0 },
+        deferredSince: null, staleForHead: false, sessionReport,
+      } as unknown as PRRow['codeReview'],
+    });
+    render(<PullRequestTab workbench={WB} chat={chat} pr={row} visible turnsEnded={0} />);
+    expect(screen.queryByTestId('pr-code-review-sent')?.textContent ?? null).toBe(text);
   });
 
   it('Details and the title open the full view on its overview', () => {

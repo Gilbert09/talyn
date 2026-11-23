@@ -201,6 +201,17 @@ function readScope(args: Record<string, unknown>, context: MemoryContext): Memor
   return scope;
 }
 
+/**
+ * The entry an agent names. The index tells agents to read an entry "by its
+ * name", and a deferred tool is often called before its schema loads, so
+ * `name` and `id` are accepted too.
+ */
+function memoryRef(args: Record<string, unknown>): string {
+  const ref = str(args.memory_id) ?? str(args.name) ?? str(args.id);
+  if (!ref) throw new Error('memory_id is required: the entry id, or its name as the memory index shows it.');
+  return ref;
+}
+
 const memoryIdSchema = {
   memory_id: {
     type: 'string',
@@ -315,7 +326,7 @@ export const MEMORY = [
     ['memory_id'],
     { readOnlyHint: true },
     async (ownerId, args, ctx) => {
-      const ref = requireId(args, 'memory_id');
+      const ref = memoryRef(args);
       const context = await resolveContext(ownerId, args, ctx);
       const { entry: found, others } = await resolveEntry(ownerId, context, ref, { unique: false });
       const entry = 'body' in found ? (found as MemoryEntry) : await entryById(ownerId, found.id);
@@ -335,7 +346,7 @@ export const MEMORY = [
     ['memory_id'],
     { destructiveHint: true, idempotentHint: true },
     async (ownerId, args, ctx) => {
-      const ref = requireId(args, 'memory_id');
+      const ref = memoryRef(args);
       const context = await resolveContext(ownerId, args, ctx);
       const { entry } = await resolveEntry(ownerId, context, ref, { unique: true });
       if (entry.forgottenAt) return `Already forgotten:\n${entryLine(entry)}`;

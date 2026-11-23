@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   codeReviewPhasePlan,
   CODE_REVIEW_REPORTING_BAR,
@@ -7,10 +7,13 @@ import {
   type CodeReviewCounts,
   type CodeReviewPhase,
   type CodeReviewPublic,
+  type CodeReviewSession,
+  type CodeReviewSessionReport,
   type CodeReviewSeverity,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import {
+  prCodeReviewEvents,
   prCodeReviewFindings,
   prCodeReviewRuns,
   prCodeReviews,
@@ -33,6 +36,8 @@ import {
   type ReviewRow,
 } from './store.js';
 import { deferredSinceOf, hasDeferredUnit, settledUnitCount } from './decide.js';
+import { owningWorkbenchesForPrs } from '../workbenches/prSessions.js';
+import { SESSION_REPORT_SENT } from './sessionReport.js';
 
 /**
  * The one public shape a review takes.
@@ -62,6 +67,10 @@ interface ReviewFacts {
   /** When the longest wait for a runner began, when a unit records it. */
   deferredSince: Date | null;
   currentHead: string | null;
+  /** The session that owns the pull request, resolved now rather than stored. */
+  session: CodeReviewSession | null;
+  /** The report-back of the review's current cycle, if one went. */
+  sessionReport: CodeReviewSessionReport | null;
 }
 
 /** Pure: facts in, payload out. Shared by the one-review and the batch paths. */
@@ -113,19 +122,61 @@ function shapeReview(review: ReviewRow, facts: ReviewFacts): CodeReviewPublic {
       phase === 'ready' || phase === 'failed' || phase === 'cancelled' || phase === 'fixed'
         ? review.updatedAt.toISOString()
         : null,
+    session: facts.session,
+    sessionReport: facts.sessionReport,
   };
+}
+
+/**
+ * The report-back of each review's current cycle, in one query. An older
+ * cycle's report is not shown: its findings are not the ones on screen.
+ * Degrades to an empty map, like the session lookup.
+ */
+export async function sessionReportsFor(
+  reviews: Pick<ReviewRow, 'id' | 'cycle'>[]
+): Promise<Map<string, CodeReviewSessionReport>> {
+  const out = new Map<string, CodeReviewSessionReport>();
+  if (!reviews.length) return out;
+  const cycleOf = new Map(reviews.map((r) => [r.id, r.cycle]));
+  try {
+    const rows = await getDbClient()
+      .select({ reviewId: prCodeReviewEvents.reviewId, at: prCodeReviewEvents.at, detail: prCodeReviewEvents.detail })
+      .from(prCodeReviewEvents)
+      .where(
+        and(
+          inArray(prCodeReviewEvents.reviewId, [...cycleOf.keys()]),
+          eq(prCodeReviewEvents.code, SESSION_REPORT_SENT)
+        )
+      )
+      .orderBy(desc(prCodeReviewEvents.at));
+    for (const row of rows) {
+      const detail = (row.detail ?? {}) as { cycle?: unknown; workbenchId?: unknown; findingIds?: unknown };
+      if (out.has(row.reviewId) || Number(detail.cycle) !== cycleOf.get(row.reviewId)) continue;
+      if (typeof detail.workbenchId !== 'string') continue;
+      out.set(row.reviewId, {
+        workbenchId: detail.workbenchId,
+        sentAt: row.at.toISOString(),
+        findingCount: Array.isArray(detail.findingIds) ? detail.findingIds.length : 0,
+      });
+    }
+  } catch (err) {
+    console.warn('[code-review] could not read the session reports:', err);
+  }
+  return out;
 }
 
 export async function toPublicReview(
   review: ReviewRow,
   options: { headSha?: string | null } = {}
 ): Promise<CodeReviewPublic> {
-  const [counts, dismissedCount, funnel, runs, bars] = await Promise.all([
+  const [counts, dismissedCount, funnel, runs, bars, sessions, reports] = await Promise.all([
     severityCounts(review.id),
     countDismissed(review.id),
     funnelCounts(review.id),
     runsForCycle(review.id, review.cycle),
     reportingBarsFor([review.workspaceId]),
+    owningWorkbenchesForPrs(review.workspaceId, [review.pullRequestId]),
+    sessionReportsFor([review]),
   ]);
   const currentHead =
     options.headSha !== undefined
@@ -143,6 +194,8 @@ export async function toPublicReview(
     deferred: hasDeferredUnit(runs, review.cycle),
     deferredSince: deferredSinceOf(runs, review.cycle),
     currentHead,
+    session: sessions.get(review.pullRequestId) ?? null,
+    sessionReport: reports.get(review.id) ?? null,
   });
 }
 
@@ -195,7 +248,8 @@ export async function codeReviewsForPrs(
 
     const reviewIds = reviews.map((r) => r.id);
 
-    const [countRows, settledRows, deferredRows, heads, bars] = await Promise.all([
+    const workspaceIds = [...new Set(reviews.map((r) => r.workspaceId))];
+    const [countRows, settledRows, deferredRows, heads, bars, sessions, reports] = await Promise.all([
       db
         .select({
           reviewId: prCodeReviewFindings.reviewId,
@@ -253,7 +307,10 @@ export async function codeReviewsForPrs(
         .where(inArray(pullRequestsTable.id, pullRequestIds)),
       // One query for the page, not one per review — a list usually spans one
       // workspace, and never enough to be worth a read each.
-      reportingBarsFor([...new Set(reviews.map((r) => r.workspaceId))]),
+      reportingBarsFor(workspaceIds),
+      // One query for the page. It degrades to no links rather than failing.
+      owningWorkbenchesForPrs(workspaceIds, pullRequestIds),
+      sessionReportsFor(reviews),
     ]);
 
     const headById = new Map(
@@ -297,6 +354,8 @@ export async function codeReviewsForPrs(
           deferred: Boolean(deferredRow(review)),
           deferredSince: toDate(deferredRow(review)?.since),
           currentHead: headById.get(review.pullRequestId) ?? null,
+          session: sessions.get(review.pullRequestId) ?? null,
+          sessionReport: reports.get(review.id) ?? null,
         })
       );
     }
