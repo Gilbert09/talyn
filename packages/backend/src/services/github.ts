@@ -194,6 +194,17 @@ function encodeGitHubPath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
 }
 
+/** One changed file of a pull request (`GET /repos/{owner}/{repo}/pulls/{number}/files`). */
+export interface GitHubPRFile {
+  sha: string;
+  filename: string;
+  status: 'added' | 'removed' | 'modified' | 'renamed' | 'copied' | 'changed' | 'unchanged';
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
+}
+
 /** One entry of a git tree listing (see {@link GitHubService.getTreeRecursive}). */
 export interface GitTreeEntry {
   /** Path relative to the tree that was requested. */
@@ -3120,23 +3131,6 @@ class GitHubService extends EventEmitter {
     return this.apiRequest(workspaceId, `/repos/${owner}/${repo}/branches?${params}`);
   }
 
-  async getPRFiles(
-    workspaceId: string,
-    owner: string,
-    repo: string,
-    number: number
-  ): Promise<Array<{
-    sha: string;
-    filename: string;
-    status: 'added' | 'removed' | 'modified' | 'renamed' | 'copied' | 'changed' | 'unchanged';
-    additions: number;
-    deletions: number;
-    changes: number;
-    patch?: string;
-  }>> {
-    return this.apiRequest(workspaceId, `/repos/${owner}/${repo}/pulls/${number}/files`);
-  }
-
   /**
    * The files that changed between two commits, with their patches
    * (`GET /repos/{owner}/{repo}/compare/{base}...{head}`). GitHub lists at
@@ -3166,19 +3160,21 @@ class GitHubService extends EventEmitter {
   /**
    * Every changed file of a pull request, with its patch.
    *
-   * `getPRFiles` reads one page. This reads all of them, 100 at a time. GitHub
-   * stops this listing at 3000 files, so the loop ends there at the latest.
+   * GitHub's default page is 30 files. This reads all pages, 100 at a time.
+   * GitHub stops this listing at 3000 files, so the loop ends there at the
+   * latest. There is no one-page variant: it made the Files tab and code
+   * review stop at 30 files.
    */
   async getAllPRFiles(
     workspaceId: string,
     owner: string,
     repo: string,
     number: number
-  ): Promise<Awaited<ReturnType<GitHubService['getPRFiles']>>> {
+  ): Promise<GitHubPRFile[]> {
     const perPage = 100;
-    const files: Awaited<ReturnType<GitHubService['getPRFiles']>> = [];
+    const files: GitHubPRFile[] = [];
     for (let page = 1; ; page += 1) {
-      const batch = await this.apiRequest<Awaited<ReturnType<GitHubService['getPRFiles']>>>(
+      const batch = await this.apiRequest<GitHubPRFile[]>(
         workspaceId,
         `/repos/${owner}/${repo}/pulls/${number}/files?per_page=${perPage}&page=${page}`
       );

@@ -9,7 +9,7 @@ import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native'
 
 import { AppText, Button, IconButton, Input, type Symbol } from '../../components/UI';
 import { openExternal, safeExternalUrl } from '../../components/Workflow';
-import { parseMarkdown, inlineText, type MdBlock, type MdInline } from '../../lib/markdown';
+import { chunkText, parseMarkdown, inlineText, type MdBlock, type MdInline } from '../../lib/markdown';
 import { shortTime } from '../../lib/time';
 import { pullRequestRoute, sessionRoute } from '../../navigation/routes';
 import { mono, radius, sans, type, useTheme, withAlpha } from '../../theme/tokens';
@@ -108,7 +108,8 @@ export function ThinkingRow({ text, compact = false }: { text: string; compact?:
       <Text style={[type.meta, { color: c.muted }]}>✻</Text>
       <Text numberOfLines={open ? undefined : 1} style={[type.meta, styles.italic, { color: c.muted, flex: 1 }]}>{open && !compact ? 'Thinking' : mark(first)}</Text>
     </Pressable>
-    {open ? <Text selectable style={[type.meta, styles.italic, styles.thinkingBody, { color: c.muted }]}>{text}</Text> : null}
+    {open ? <View style={styles.thinkingBody}>{chunkText(text).map((chunk, index) =>
+      <Text key={index} selectable style={[type.meta, styles.italic, { color: c.muted }]}>{chunk}</Text>)}</View> : null}
   </View>;
 }
 

@@ -44,6 +44,13 @@ describe('markdown messages', () => {
     await act(async () => alert.mock.calls[0][2]![1].onPress?.());
     expect(open).toHaveBeenCalledWith('https://example.com/docs');
   });
+  it('draws a long paragraph as several Text views, so Android does not draw a blank box', async () => {
+    const lines = Array.from({ length: 200 }, (_, index) => `Line ${index} of a long brief`);
+    await render(<Markdown text={lines.join('\n')} />);
+    expect(screen.getByText(/^Line 0 of a long brief/)).toBeVisible();
+    expect(screen.getByText(/Line 199 of a long brief$/)).toBeVisible();
+    expect(screen.getAllByText(/Line \d+ of a long brief/).length).toBeGreaterThan(1);
+  });
   it('renders an unsafe link as plain text', async () => {
     await render(<Markdown text="[click](javascript:alert(1))" />);
     expect(screen.queryByRole('link')).toBeNull();

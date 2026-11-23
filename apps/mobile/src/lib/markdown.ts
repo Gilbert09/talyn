@@ -265,3 +265,80 @@ export function parseMarkdown(text: string): MdDocument {
 export function inlineText(children: MdInline[]): string {
   return children.map((child) => child.type === 'br' ? '\n' : child.type === 'text' || child.type === 'code' ? child.text : inlineText(child.children)).join('');
 }
+
+/**
+ * The most characters and lines that one native `Text` gets. Android draws a
+ * `Text` into one GPU texture. A `Text` taller than the largest texture (8k
+ * to 16k px) draws blank, so long text goes into several `Text` views.
+ */
+export const TEXT_CHUNK_CHARS = 1500;
+export const TEXT_CHUNK_LINES = 40;
+
+export interface ChunkOptions {
+  chars?: number;
+  lines?: number;
+  /** Text that wraps can also be cut at a space. Code does not wrap, so it is cut only at a newline. */
+  wrap?: boolean;
+}
+
+/**
+ * Where to cut text into chunks, as `[start, end)` ranges. A cut goes at a
+ * newline when it can, then at a space. The newline or space at a cut is
+ * not in a chunk: the next `Text` starts on a new line in its place.
+ */
+export function chunkRanges(text: string, { chars = TEXT_CHUNK_CHARS, lines = TEXT_CHUNK_LINES, wrap = true }: ChunkOptions = {}): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let start = 0;
+  while (text.length - start > 0) {
+    let limit = Math.min(text.length, start + chars);
+    for (let index = start + 1, newlines = 0; index < limit; index += 1) {
+      if (text[index] === '\n' && ++newlines >= lines) { limit = index; break; }
+    }
+    if (limit >= text.length) { ranges.push([start, text.length]); break; }
+    if (text[limit] === '\n') { ranges.push([start, limit]); start = limit + 1; continue; }
+    const floor = start + Math.floor((limit - start) / 2);
+    let cut = text.lastIndexOf('\n', limit - 1);
+    if (cut <= floor && wrap) {
+      for (let index = limit - 1; index > floor; index -= 1) if (/\s/.test(text[index])) { cut = index; break; }
+    }
+    if (cut > floor) { ranges.push([start, cut]); start = cut + 1; continue; }
+    // No good place to cut. Do not split a surrogate pair.
+    if (/[\uD800-\uDBFF]/.test(text[limit - 1]) && limit - 1 > start) limit -= 1;
+    ranges.push([start, limit]);
+    start = limit;
+  }
+  return ranges.length ? ranges : [[0, 0]];
+}
+
+/** Text in chunks that each fit in one native `Text`. */
+export function chunkText(text: string, options?: ChunkOptions): string[] {
+  const ranges = chunkRanges(text, options);
+  return ranges.length === 1 ? [text] : ranges.map(([start, end]) => text.slice(start, end));
+}
+
+const inlineLength = (node: MdInline): number => node.type === 'br' ? 1
+  : node.type === 'text' || node.type === 'code' ? node.text.length : node.children.reduce((sum, child) => sum + inlineLength(child), 0);
+
+/** The inline nodes for the characters `[from, to)` of `inlineText(nodes)`. Bold, links and other marks stay on each part. */
+function sliceInlines(nodes: MdInline[], from: number, to: number): MdInline[] {
+  const out: MdInline[] = [];
+  let position = 0;
+  for (const node of nodes) {
+    const start = position;
+    position += inlineLength(node);
+    if (position <= from || start >= to) continue;
+    if (node.type === 'br') out.push(node);
+    else if (node.type === 'text' || node.type === 'code') out.push({ ...node, text: node.text.slice(Math.max(0, from - start), to - start) });
+    else {
+      const children = sliceInlines(node.children, from - start, to - start);
+      if (children.length) out.push({ ...node, children });
+    }
+  }
+  return out;
+}
+
+/** A paragraph in chunks that each fit in one native `Text`. Short paragraphs come back as one chunk, unchanged. */
+export function chunkInlines(nodes: MdInline[], options?: ChunkOptions): MdInline[][] {
+  const ranges = chunkRanges(inlineText(nodes), options);
+  return ranges.length === 1 ? [nodes] : ranges.map(([start, end]) => sliceInlines(nodes, start, end));
+}

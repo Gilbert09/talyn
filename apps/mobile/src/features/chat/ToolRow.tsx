@@ -4,6 +4,7 @@ import { createContext, memo, useContext, useMemo, useRef, useState, type Compon
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useFeatures } from '../../lib/features';
+import { chunkText } from '../../lib/markdown';
 import { useNow } from '../../lib/time';
 import { mono, radius, type, useTheme, withAlpha } from '../../theme/tokens';
 import { ROW_TEXT_LIMIT } from '../../workflow/model';
@@ -111,11 +112,17 @@ function Chevron({ open }: { open: boolean }) {
   return <SymbolView name={open ? { ios: 'chevron.down', android: 'expand_more' } : { ios: 'chevron.right', android: 'chevron_right' }} size={12} tintColor={c.muted} />;
 }
 
+/** Monospace text in several `Text` views. One `Text` that is too tall draws blank on Android. */
+function CodeChunks({ text, color }: { text: string; color: string }) {
+  const chunks = useMemo(() => chunkText(text, { wrap: false }), [text]);
+  return <View>{chunks.map((chunk, index) => <Text key={index} selectable style={[styles.code, { color }]}>{chunk}</Text>)}</View>;
+}
+
 /** Monospace text with diff lines tinted. Plain text when it is not a diff. */
 function CodeText({ text, diff, tone }: { text: string; diff: boolean; tone?: 'error' }) {
   const c = useTheme();
   const color = tone === 'error' ? c.destructive : c.muted;
-  if (!diff) return <Text selectable style={[styles.code, { color }]}>{text}</Text>;
+  if (!diff) return <CodeChunks text={text} color={color} />;
   const tint = (kind: DiffTone) => kind === 'add' ? { color: c.success, backgroundColor: withAlpha(c.success, 0.1) }
     : kind === 'del' ? { color: c.destructive, backgroundColor: withAlpha(c.destructive, 0.1) } : kind === 'hunk' ? { color: c.information } : { color };
   return <View>{text.split('\n').map((line, index) => <Text key={index} selectable style={[styles.code, tint(diffTone(line))]}>{line || ' '}</Text>)}</View>;
@@ -213,7 +220,7 @@ export const ToolRow = memo(function ToolRow({ tool: held, nested = false, parti
       <Chevron open={open} />
     </Pressable>
     {open || (tool.isError && shown?.text) ? <View style={[styles.body, { borderColor: tool.isError ? withAlpha(c.destructive, 0.4) : c.border }]}>
-      {open && input ? <Section label="Input"><Text selectable style={[styles.code, { color: c.text }]}>{input.slice(0, PREVIEW_CHARS * 4)}</Text></Section> : null}
+      {open && input ? <Section label="Input"><CodeChunks text={input.slice(0, PREVIEW_CHARS * 4)} color={c.text} /></Section> : null}
       {open && isPreview && actions && !shown?.text ? whole.status === 'loading' ? <Text style={[type.caption, { color: c.muted }]}>Loading the whole call</Text>
         : <ShowMore label={whole.status === 'failed' ? 'Could not load the whole call. Try again' : 'Show the whole call'} onPress={loadWhole} /> : null}
       {open && editDiff && editDiff.lines.length ? <EditDiffBody diff={editDiff} /> : null}
