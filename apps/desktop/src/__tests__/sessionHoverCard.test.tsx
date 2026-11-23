@@ -272,6 +272,23 @@ describe('session hover card', () => {
     expect(screen.getByRole('tooltip')).not.toHaveTextContent('Needs you');
   });
 
+  it('says the session failed when this client sees a failure that the rail does not know yet', async () => {
+    useContextAttentionStore.setState({ counts: { workspaces: { ws1: 1 }, spaces: {}, sessions: { incidents: 'reply' } } });
+    store().upsertChat({
+      id: 'c1',
+      workbenchId: 'incidents',
+      status: 'error',
+      agent: 'claude',
+      createdAt: '2026-10-13T00:00:00Z',
+      updatedAt: '2026-10-13T00:00:00Z',
+    } as WorkbenchChat);
+    show();
+    await hover(row());
+    const box = document.querySelector('[data-attr="session-glance-needs-you"]')!;
+    expect(box.textContent).toContain('failed. Open it to see the error');
+    expect(box.textContent).not.toContain('asked you a question');
+  });
+
   it('has no needs-you box while the session works, because the rail can be stale', async () => {
     useContextAttentionStore.setState({ counts: { workspaces: { ws1: 1 }, spaces: {}, sessions: { incidents: 'reply' } } });
     store().upsertChat({

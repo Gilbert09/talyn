@@ -28,12 +28,13 @@ import { PrPill, SessionStateIcon } from './WorkbenchBadges';
 
 /**
  * Why the session is in "Needs you", from the context rail's last answer, or
- * null. Live work on this client wins: the server's answer can be 30 seconds old.
+ * null. Live work and a failure on this client win: the server's answer can be 30 seconds old.
  */
 function useNeedsYouText(id: string, state: SessionState, prNumber: number | null | undefined): string | null {
   const reason: ContextAttentionReason | undefined = useAttentionReason(id);
   if (!reason || state.kind === 'working' || state.kind === 'starting') return null;
-  return attentionReasonText(reason, prNumber);
+  // As in withServerAttention, a failure that this client sees wins over an older reason.
+  return attentionReasonText(state.kind === 'failed' ? 'failed' : reason, prNumber);
 }
 
 function cardLabel(title: string, state: SessionState, needsYou: string | null): string {
