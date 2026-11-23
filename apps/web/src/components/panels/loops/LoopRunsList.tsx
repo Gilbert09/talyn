@@ -180,7 +180,7 @@ export function LoopRunsList({
   if (runs.length === 0) {
     return (
       <p className="px-4 py-3 text-sm text-muted-foreground">
-        This loop has not run yet. It will appear here the moment it does.
+        This automation has not run yet. It will appear here the moment it does.
       </p>
     );
   }

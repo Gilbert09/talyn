@@ -65,7 +65,7 @@ export function useLoops(): UseLoops {
       .catch((err: unknown) => {
         if (workspaceRef.current !== workspaceId) return;
         setLoops([]);
-        setError(err instanceof Error ? err.message : 'Could not load loops');
+        setError(err instanceof Error ? err.message : 'Could not load automations');
       });
   }, [workspaceId]);
 

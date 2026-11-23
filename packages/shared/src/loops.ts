@@ -160,7 +160,7 @@ export const LOOP_RUN_FAILURE_LABELS: Record<LoopRunFailureCode, string> = {
   fleet_not_allowed: 'This workspace lost access to Talyn Fleet',
   agent_not_connected: 'That fleet agent is not connected',
   sessions_not_allowed: 'Sessions are not available in this workspace',
-  loops_not_allowed: 'This workspace lost access to Loops',
+  loops_not_allowed: 'This workspace lost access to schedule automations',
   task_deleted: 'The task was deleted before it finished',
   session_deleted: 'The session was deleted before it finished',
   session_failed: 'The session stopped before it finished',
