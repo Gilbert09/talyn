@@ -46,7 +46,7 @@ describe('talyn_continue_as_thread', () => {
     const schema = tool('continue_as_thread').inputSchema as { properties: Record<string, unknown>; required: string[] };
     expect(schema.required).toEqual([]);
     expect(Object.keys(schema.properties).sort()).toEqual(['prompt', 'session_id']);
-    expect(tool('continue_as_thread').description).toContain('ask them first');
+    expect(tool('continue_as_thread').description).toContain('do not ask the person first');
   });
 
   it.each([

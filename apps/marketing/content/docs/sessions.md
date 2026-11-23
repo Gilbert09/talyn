@@ -202,7 +202,7 @@ Every session a thread starts is an ordinary session. You can open it, read its 
 
 To turn a session into a thread, open **More actions** in the session header and select **Continue as thread**. The new thread starts with a recap of the session, and the session joins it.
 
-You can also ask the session's agent to do it, for example "turn this into a thread". The agent starts the thread and gives it its plan. When the agent finds that the work needs sessions on several repositories, it asks you first.
+You can also ask the session's agent to do it, for example "turn this into a thread". The agent starts the thread and gives it its plan. When the agent finds that the work needs changes in more than one repository, it turns the session into a thread by itself. To keep the work in one session, tell the agent so.
 
 ## Split view
 

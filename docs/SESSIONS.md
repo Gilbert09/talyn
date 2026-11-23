@@ -8028,6 +8028,15 @@ Decisions:
 - The `search` parameter is a superset filter. PostHog may return rows that do not contain the words, so Talyn's matcher decides.
 Left: an editor for these rules on mobile, mobile "Run selected", and an exact count of matching reports. PostHog's `count` is before Talyn's matcher, so the page shows only how many reports Talyn read.
 
+### 2026-11-23 — A session that needs several repositories becomes a thread by default
+
+Before, when a session found that its work needed more than one repository, the agent asked the person if they wanted a thread. The person had to answer before the work went on.
+Now the agent calls `talyn_continue_as_thread` with its plan and does not ask first. The briefing (`packages/shared/src/talynBriefing.ts`), the `talyn-multi-repo` skill and the tool description say this.
+Decisions:
+- A session that is in a thread already, or that another session started, cannot become a thread. It reports the other repository's change in its reply, as the tool's errors already say.
+- When the person told the agent to keep the work in one session, the agent starts a session on the other repository with `talyn_create_session`, as before.
+- No feature flag: this changes only agent instructions, and the tool already has its own checks.
+
 ### 2026-11-17 — A session can turn itself into a thread
 
 Before, only a person could continue a session as a thread, with **Continue as thread** in the session menu. The `talyn` MCP server had no tool for it. A person asked a session to "turn this into a thread", and the agent could only tell them to press the menu item. Nothing happened until they did.
