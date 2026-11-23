@@ -18,6 +18,7 @@ import {
   type GitPanelTab,
 } from '../lib/workbenchLayout';
 import type { PendingUserMessage } from '../lib/workbenchFormat';
+import type { PrDetailTab } from '../lib/prDetail';
 
 /** A prompt shown in the transcript until its own event arrives. See `pendingMessageState`. */
 export type OutgoingWorkbenchMessage = PendingUserMessage;
@@ -261,7 +262,10 @@ interface WorkbenchState {
   openSubagentTab: (chatId: string, toolId: string | null) => void;
   /** The Talyn pull request id shown in the session's details overlay, or null. */
   prDetailId: string | null;
-  openPrDetail: (pullRequestId: string | null) => void;
+  /** The tab the details overlay opens on. */
+  prDetailTab: PrDetailTab;
+  /** Open the details overlay on a tab ('overview' by default), or close it with null. */
+  openPrDetail: (pullRequestId: string | null, tab?: PrDetailTab) => void;
   setRightPanelOpen: (open: boolean) => void;
   toggleRightPanel: () => void;
   setRightPanelWidth: (width: number) => void;
@@ -324,6 +328,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   sideTab: initialLayout.gitPanelTab,
   subagentTab: {},
   prDetailId: null,
+  prDetailTab: 'overview',
   rightPanelOpen: true,
   rightPanelWidth: initialLayout.gitPanelWidth,
   terminalOpen: false,
@@ -484,7 +489,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }),
 
 
-  openPrDetail: (prDetailId) => set({ prDetailId }),
+  openPrDetail: (prDetailId, tab = 'overview') => set({ prDetailId, prDetailTab: prDetailId ? tab : 'overview' }),
   setSideTab: (sideTab) => {
     set({ sideTab, rightPanelOpen: true });
     writeLayout({ gitPanelTab: sideTab });

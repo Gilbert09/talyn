@@ -24,7 +24,7 @@ import { WEB_APP_URL } from '../settings/about';
 import { AutomationToggles } from './AutomationToggles';
 import { fixAgentChoices, linkedTaskState, prActions, startPrFix, type FixOutcome } from './actions';
 import { CodeReviewSection, CodeReviewSelectionBar, CodeReviewStartSheet, useCodeReview } from './CodeReviewSection';
-import { failingBadge, groupChecks, type PrDetailTab } from './detailModel';
+import { failingBadge, groupChecks, prDetailTab, type PrDetailTab } from './detailModel';
 import { pullsRoute } from './lists';
 import { prNextStep, type NextStep, type NextStepIcon, type NextStepPrimary, type NextStepTone } from './nextStep';
 import { ChecksTab, Description, DetailTabStrip, FilesTab, QueueSection, ReviewsTab, type TabSpec } from './PrDetailTabs';
@@ -110,8 +110,10 @@ export function PullRequestDetailScreen() {
   const seeding = !current && Boolean(seed) && (state.status === 'loading' || state.status === 'idle');
   const fresh = state.data?.fresh ?? null;
   const queued = Boolean(row && (row.mergeQueued || row.mergeQueue));
-  const [tab, setTab] = useState<PrDetailTab>('overview');
-  const [seen, setSeen] = useState<ReadonlySet<PrDetailTab>>(new Set(['overview']));
+  // A link can open a tab, for example Findings from a session.
+  const startTab = prDetailTab(params.tab) ?? 'overview';
+  const [tab, setTab] = useState<PrDetailTab>(startTab);
+  const [seen, setSeen] = useState<ReadonlySet<PrDetailTab>>(new Set(['overview', startTab]));
   const timeline = useResource<{ events: MergeQueueTimelineEvent[] }>('timeline', id, queued);
   // The live fetch carries the body. The cached copy is only for when it is unavailable.
   const description = useResource<{ body: string | null }>('prDescription', id, Boolean(row) && !fresh);
@@ -136,7 +138,7 @@ export function PullRequestDetailScreen() {
   const [taskWaitingCi, setTaskWaitingCi] = useState(false);
   const [notice, setNotice] = useState<{ message: string; session?: { id: string; name: string } } | null>(null);
   useEffect(() => { if (row) completeIntent(`/attention/${encodeURIComponent(id)}`); }, [row, id]);
-  useEffect(() => { setNotice(null); setReviewPrompt(null); setTab('overview'); setSeen(new Set(['overview'])); }, [id]);
+  useEffect(() => { setNotice(null); setReviewPrompt(null); setTab(startTab); setSeen(new Set(['overview', startTab])); }, [id, startTab]);
   const taskId = row?.taskId ?? null;
   useEffect(() => {
     let cancelled = false;

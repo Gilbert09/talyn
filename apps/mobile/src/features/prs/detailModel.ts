@@ -1,7 +1,11 @@
 import type { PRBlockingReason, PRCheckContext, PRFile, PRReviewDetail, PRReviewThread } from '@talyn/client/native';
 import { humanGatesIn } from '@talyn/shared';
 
-export type PrDetailTab = 'overview' | 'checks' | 'files' | 'reviews' | 'findings';
+export const PR_DETAIL_TABS = ['overview', 'checks', 'files', 'reviews', 'findings'] as const;
+export type PrDetailTab = (typeof PR_DETAIL_TABS)[number];
+/** The `tab` route parameter as a tab, or null when it names none. */
+export const prDetailTab = (value: unknown): PrDetailTab | null =>
+  typeof value === 'string' && (PR_DETAIL_TABS as readonly string[]).includes(value) ? value as PrDetailTab : null;
 
 export interface FailingCheck { check: PRCheckContext; optional: boolean; needsHuman: boolean }
 export interface CheckGroups { failing: FailingCheck[]; running: PRCheckContext[]; passed: PRCheckContext[]; skipped: PRCheckContext[] }

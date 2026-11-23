@@ -3,7 +3,6 @@ import { Loader2, ScanSearch } from 'lucide-react';
 import {
   CODE_REVIEW_PHASE_AT_REST,
   CODE_REVIEW_PRESET_LABELS,
-  CODE_REVIEW_SEVERITY_LABELS,
   codeReviewProgress,
   type TaskStatus,
 } from '@talyn/shared';
@@ -14,6 +13,8 @@ import { Button } from '../../ui/button';
 import { Progress } from '../../ui/progress';
 import { cn } from '../../../lib/utils';
 import { lazyWithReload } from '../../../lib/lazyWithReload';
+import { CodeReviewSeverityCounts } from '../../widgets/codeReview/CodeReviewSeverityCounts';
+import { PrSessionChip } from '../../widgets/session/PrSessionChip';
 import { activeFixStatus } from './activeFix';
 import { reviewStage, reviewStageChipClass, reviewStageEdgeClass } from './reviewStage';
 
@@ -284,25 +285,7 @@ function ReviewRow({
 
         {!running && review.funnel.raised > 0 && (
           <>
-            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-              {(['blocker', 'major', 'minor', 'nit'] as const).map((severity) =>
-                review.counts[severity] ? (
-                  <span key={severity} className="flex items-center gap-1">
-                    <span
-                      className={cn(
-                        'h-1.5 w-1.5 rounded-full',
-                        severity === 'blocker' && 'bg-red-500',
-                        severity === 'major' && 'bg-amber-500',
-                        severity === 'minor' && 'bg-zinc-400',
-                        severity === 'nit' && 'bg-zinc-300'
-                      )}
-                      aria-hidden
-                    />
-                    {review.counts[severity]} {CODE_REVIEW_SEVERITY_LABELS[severity].toLowerCase()}
-                  </span>
-                ) : null
-              )}
-            </div>
+            <CodeReviewSeverityCounts counts={review.counts} className="mt-2" />
             {/* The funnel, said out loud. Without it a short list is
                 indistinguishable from a shallow review — and the ratio is the
                 most informative single fact about how a review went. */}
@@ -331,16 +314,19 @@ function ReviewRow({
       {/* Outside the row's own button — a button inside a button is invalid, and
           this goes somewhere else entirely. The GitHub link that used to sit
           here is gone: the row opens the detail sheet, which links out. */}
-      {showFix && (
+      {(showFix || review.session) && (
         <div className="flex items-center gap-3 border-t px-3 py-1.5">
-          <button
-            type="button"
-            onClick={onOpenTask}
-            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-          >
-            <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
-            Open the run
-          </button>
+          {review.session && <PrSessionChip session={review.session} withName />}
+          {showFix && (
+            <button
+              type="button"
+              onClick={onOpenTask}
+              className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+              Open the run
+            </button>
+          )}
         </div>
       )}
     </div>

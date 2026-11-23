@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
-import type { WorkbenchStatus } from '@talyn/shared';
+import type { CodeReviewSession, WorkbenchStatus } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import { pullRequests as prTable, workbenches as workbenchesTable } from '../../db/schema.js';
 import { emitPullRequestUpdated } from '../websocket.js';
@@ -60,6 +60,52 @@ export async function liveWorkbenchesForPrs(
 
 export async function liveWorkbenchForPr(workspaceId: string, prId: string): Promise<PrSession | null> {
   return (await liveWorkbenchesForPrs(workspaceId, [prId])).get(prId) ?? null;
+}
+
+/** The query behind {@link owningWorkbenchesForPrs}, exposed for the egress test. */
+export function owningWorkbenchesForPrsQuery(workspaceIds: string[], prIds: string[]) {
+  return getPoolDbClient()
+    .select({ ...SESSION_COLUMNS, archived: sql<boolean>`${workbenchesTable.archivedAt} IS NOT NULL` })
+    .from(workbenchesTable)
+    .where(and(inArray(workbenchesTable.workspaceId, workspaceIds), inArray(workbenchesTable.pullRequestId, prIds)))
+    // Live sessions first, in the order `liveWorkbenchesForPrs` uses, so the PR
+    // chip and the review name the same session. Then the newest archive.
+    .orderBy(
+      sql`${workbenchesTable.archivedAt} IS NOT NULL`,
+      desc(workbenchesTable.archivedAt),
+      desc(workbenchesTable.updatedAt),
+    );
+}
+
+/**
+ * The session that owns each pull request, for a code review. Like
+ * {@link liveWorkbenchesForPrs}, but an archived session counts when no live
+ * session links the PR: a review of a merged PR still belongs to the session
+ * that opened it. Degrades to an empty map: a missing link must not fail the
+ * review payload.
+ */
+export async function owningWorkbenchesForPrs(
+  workspaceIds: string | string[],
+  prIds: string[],
+): Promise<Map<string, CodeReviewSession>> {
+  const out = new Map<string, CodeReviewSession>();
+  const workspaces = Array.isArray(workspaceIds) ? workspaceIds : [workspaceIds];
+  if (!prIds.length || !workspaces.length) return out;
+  try {
+    for (const r of await owningWorkbenchesForPrsQuery(workspaces, prIds)) {
+      if (r.pullRequestId && !out.has(r.pullRequestId)) {
+        out.set(r.pullRequestId, {
+          id: r.id,
+          name: r.name,
+          status: r.status as WorkbenchStatus,
+          archived: Boolean(r.archived),
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[workbenches] owning session lookup failed:', err instanceof Error ? err.message : err);
+  }
+  return out;
 }
 
 /**

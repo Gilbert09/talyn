@@ -1,4 +1,5 @@
 import { parseSkillKey } from './skills.js';
+import type { WorkbenchStatus } from './workbench.js';
 
 /**
  * Code review — the vocabulary both front ends, the routes and the engine share.
@@ -731,6 +732,37 @@ export interface CodeReviewPublic {
   lastFix: { at: string; fixedCount: number; commentUrl: string | null } | null;
   startedAt: string | null;
   finishedAt: string | null;
+  /**
+   * The session that owns the reviewed pull request: the session whose
+   * `pullRequestId` is this review's pull request. Resolved when the payload
+   * is built, so a session that links the pull request after the review
+   * started shows too. A live session wins over an archived one. Null when
+   * no session links the pull request. Absent from an older backend.
+   */
+  session?: CodeReviewSession | null;
+  /**
+   * When this cycle's confirmed findings went to a session as a message (the
+   * report-back). Null when they did not go. Absent from an older backend.
+   */
+  sessionReport?: CodeReviewSessionReport | null;
+}
+
+/** The report-back of one cycle, as {@link CodeReviewPublic.sessionReport} carries it. */
+export interface CodeReviewSessionReport {
+  /** The session that got the message. */
+  workbenchId: string;
+  sentAt: string;
+  /** How many findings the message carried. */
+  findingCount: number;
+}
+
+/** The session a review belongs to, as {@link CodeReviewPublic.session} carries it. */
+export interface CodeReviewSession {
+  id: string;
+  name: string;
+  status: WorkbenchStatus;
+  /** The session is archived. It still opens, but it cannot take a message. */
+  archived: boolean;
 }
 
 // ---------- Progress ----------

@@ -1336,6 +1336,32 @@ describe('MCP reads and edge cases', () => {
     expect(out.includes('f2 [')).toBe(status !== 'open');
   });
 
+  it.each([
+    [{ id: 'w1', name: 'paris', status: 'ready', archived: false }, '  session: w1 (paris)'],
+    [{ id: 'w1', name: 'paris', status: 'archived', archived: true }, '  session: w1 (paris, archived)'],
+    [null, null],
+    [undefined, null],
+  ])('names the session that owns the review: %j', async (session, expected) => {
+    mockApi({
+      'GET /api/v1/pull-requests/pr1/code-review': () => ({ review: { ...review, session }, findings: [] }),
+    });
+    const out = await tool('talyn_get_code_review').handler(OWNER, { pull_request_id: 'pr1' });
+    const first = out.split('\n')[0];
+    if (expected) expect(first).toContain(expected);
+    else expect(first).not.toContain('session:');
+  });
+
+  it('says when the findings went to a session', async () => {
+    mockApi({
+      'GET /api/v1/pull-requests/pr1/code-review': () => ({
+        review: { ...review, sessionReport: { workbenchId: 'w1', sentAt: '2026-11-23T10:00:00Z', findingCount: 2 } },
+        findings: [],
+      }),
+    });
+    const out = await tool('talyn_get_code_review').handler(OWNER, { pull_request_id: 'pr1' });
+    expect(out.split('\n')[0]).toContain('  sent to session w1: 2 findings at 2026-11-23T10:00:00Z');
+  });
+
   it.each(['workflow', 'loop'])('does not update a missing %s', async (area) => {
     const { calls } = mockApi({ [`GET /api/v1/${area}s`]: () => [] });
     await expect(
