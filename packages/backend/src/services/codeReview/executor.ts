@@ -81,6 +81,7 @@ import {
 import { heldBackAgents } from '../selfHosted/exhaustedQuota.js';
 import { workspaceReviewSettings } from './cycle.js';
 import { liveWorkbenchForPr, sessionHoldReason } from '../workbenches/prSessions.js';
+import { findingsWentToSession, reportFindingsToSession } from './sessionReport.js';
 
 export { anchorVerifier, filesForChunk, keyFor, matchJudgeKeep } from './unitPure.js';
 
@@ -1003,6 +1004,12 @@ export async function finishCycle(review: ReviewRow, note?: string): Promise<voi
   // the review, and an auto-fix that takes twenty minutes must not delay it or be
   // able to lose it by throwing.
   void captureCycleFinished(review);
+
+  // The findings go to the live session that owns the pull request, when it
+  // can take a message. Then its agent decides, and auto-fix must not push
+  // beside it. Otherwise auto-fix runs (or holds back) as before.
+  const report = await reportFindingsToSession(review);
+  if (findingsWentToSession(report)) return;
 
   await maybeAutoFix(review);
 }
