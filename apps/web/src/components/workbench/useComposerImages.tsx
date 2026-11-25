@@ -65,7 +65,8 @@ export async function readTextAttachment(file: Blob): Promise<string> {
   return btoa(binary);
 }
 
-export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchOps, status?: WorkbenchStatus) {
+/** `refusal` replaces the reason in the error when a file cannot be attached now. */
+export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchOps, status?: WorkbenchStatus, refusal?: string) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [attachments, setAttachments] = useState<WorkbenchAttachment[]>([]);
   const [pendingUploads, setPendingUploads] = useState(0);
@@ -76,7 +77,7 @@ export function useComposerImages(runtime: 'sandbox' | 'local', ops?: WorkbenchO
     if (files.length === 0) return;
     if (ops && (ops.unavailable || !ops.canAttach)) {
       if (runtime === 'sandbox' && status && workbenchQueuesMessages(status)) setImageNotReady(true);
-      else toast.error('Could not attach the file', ops.unavailable ?? 'Attachments are unavailable.');
+      else toast.error('Could not attach the file', refusal ?? ops.unavailable ?? 'Attachments are unavailable.');
       return;
     }
     setImageNotReady(false);

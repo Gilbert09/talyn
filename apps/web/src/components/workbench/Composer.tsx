@@ -85,7 +85,11 @@ export function Composer({
   // The draft is read at Enter and cleared after the restore, so typing waits for the restore.
   const [restoring, setRestoring] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const images = useComposerImages(ops.runtime, ops, workbench.status);
+  // A teammate's session: the message runs on my subscription; chat settings and wakes stay the owner's.
+  const owner = useIsWorkbenchOwner(workbench);
+  const restoreOnSend = restoresOnSend(workbench, owner);
+  // An archived session has no box to take a file yet: the first message restores it.
+  const images = useComposerImages(ops.runtime, ops, workbench.status, restoreOnSend ? ARCHIVED_ATTACH_REFUSAL : undefined);
   const { attachments, setAttachments, pendingUploads, failedUploads, imageNotReady, setImageNotReady, fileInputRef, attachFiles, onPaste } = images;
   useEffect(() => {
     if (attachRef) attachRef.current = (files) => void attachFiles(files);
@@ -113,10 +117,7 @@ export function Composer({
   const chatEvents = useWorkbenchStore((s) => (chat ? s.chatEvents[chat.id]?.events : undefined));
   const { queuing } = usePendingMessages(chat, chatEvents);
   const waitText = sandboxWaitText(workbench);
-  // A teammate's session: the message runs on my subscription; chat settings and wakes stay the owner's.
-  const owner = useIsWorkbenchOwner(workbench);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const restoreOnSend = restoresOnSend(workbench, owner);
   useEffect(() => setRefusal(null), [workbench.id, chat?.id]);
 
   useEffect(() => {
@@ -492,7 +493,7 @@ export function Composer({
           aria-label="Message the agent"
         />
         <div className="flex items-center gap-1 px-2 pb-1.5">
-          <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} videos />
+          {!restoreOnSend && <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} videos />}
           <AgentPicker
             value={agent}
             onChange={(next) => void patchChat({ agent: next, model: fleetModelForAgentSwitch(model, next) })}
@@ -549,6 +550,8 @@ export function Composer({
     </div>
   );
 }
+
+export const ARCHIVED_ATTACH_REFUSAL = 'Send a message to restore the session, then attach the file.';
 
 /**
  * True when a send restores the archived session first. Only the owner can

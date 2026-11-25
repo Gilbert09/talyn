@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
-import { Composer, restoresOnSend } from '../components/workbench/Composer';
+import { ARCHIVED_ATTACH_REFUSAL, Composer, restoresOnSend } from '../components/workbench/Composer';
 import { sandboxOps } from '../lib/workbenchOps';
 import { api } from '../lib/api';
 import { toast } from '../stores/toast';
@@ -70,6 +70,24 @@ describe('an archived session', () => {
     const box = renderComposer();
     expect(box).toBeEnabled();
     expect(box).toHaveAttribute('placeholder', 'This session is archived. Send a message to restore it.');
+  });
+
+  it('hides the attach button and tells the owner to send a message before a file', () => {
+    const error = vi.spyOn(toast, 'error');
+    const attach = vi.spyOn(api.workbenches, 'uploadAttachment');
+    const box = renderComposer();
+    expect(screen.queryByRole('button', { name: /^Attach/ })).not.toBeInTheDocument();
+
+    const file = new File(['png'], 'shot.png', { type: 'image/png' });
+    fireEvent.paste(box, { clipboardData: { items: [{ kind: 'file', getAsFile: () => file }] } });
+
+    expect(error).toHaveBeenCalledWith('Could not attach the file', ARCHIVED_ATTACH_REFUSAL);
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it('keeps the attach button for a live session', () => {
+    renderComposer({ ...archived, status: 'ready', sandboxState: 'running', archivedAt: null } as unknown as Workbench);
+    expect(screen.getByRole('button', { name: /^Attach/ })).toBeInTheDocument();
   });
 
   it('keeps the composer closed for a teammate', () => {
