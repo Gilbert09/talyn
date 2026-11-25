@@ -73,6 +73,18 @@ describe('rowSearchText gives the text a row shows before it opens', () => {
     ['box refusal', { ...base, kind: 'system', text: 'Add hours.', subtype: 'usage_exhausted', isError: false }, ['Out of hours. Add hours.'], []],
     ['code review card', { ...base, kind: 'system', text: 'Code review failed. Runner crashed', subtype: 'talyn_code_review', isError: true },
       ['Code review failed. Runner crashed'], []],
+    ['finished code review card with findings', { ...base, kind: 'system', text: 'Code review finished with 2 findings. Reviewed.', subtype: 'talyn_code_review', isError: false,
+      codeReview: {
+        action: 'finished', reviewId: 'r1', pullRequestId: 'pr1', prNumber: 12, cycle: 1, headSha: null, findingCount: 2, sentToAgent: false,
+        findings: [
+          { id: 'f2', severity: 'nit', title: 'Rename the helper', summary: '', filePath: null, lineStart: null, lineEnd: null },
+          { id: 'f1', severity: 'blocker', title: 'Token leaks into logs', summary: 'The token is logged.', filePath: 'src/a.ts', lineStart: 3, lineEnd: 5 },
+        ],
+      } },
+      ['#12', 'Must fix', 'Token leaks into logs', 'src/a.ts:3-5', 'The token is logged.', 'Nitpick', 'Rename the helper'], []],
+    ['started code review card with no PR number', { ...base, kind: 'system', text: 'Code review started. 3 changed files', subtype: 'talyn_code_review', isError: false,
+      codeReview: { action: 'started', reviewId: 'r1', pullRequestId: 'pr1', prNumber: null, cycle: 1, headSha: null, fileCount: 3, reviewerCount: 0 } },
+      ['Code review started. 3 changed files'], ['#']],
     ['long Talyn message is cut', { ...base, kind: 'system', text: `${'x'.repeat(280)}TAIL`, subtype: 'talyn_message', isError: false }, ['x…'], ['TAIL']],
     ['failed turn', { ...base, kind: 'failed', text: 'Out of memory' }, ['Turn failed. Out of memory'], []],
     ['stopped', { ...base, kind: 'stopped' }, ['Stopped'], []],

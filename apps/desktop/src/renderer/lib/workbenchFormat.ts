@@ -99,6 +99,11 @@ export interface TranscriptTurn {
   /** The agent's events for the turn, user message excluded. */
   events: AgentEvent[];
   subagentEvents?: AgentEvent[];
+  /**
+   * Talyn's triggered message (a wake-up, a job exit, a code review report)
+   * started the turn. The message stays in `events`, and `userAt` is its time.
+   */
+  triggered: boolean;
   /** When the user's message was stored. Null when unknown. */
   userAt: string | null;
   /** When the turn's newest agent event was stored. Null when unknown. */
@@ -115,9 +120,10 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
       continue;
     }
     // Talyn wrote a triggered message (a wake-up, a job exit, a code review report): AgentBlocks draws it as a row.
-    const text = messageTrigger(e.event.talyn) ? null : userMessageText(e.event);
+    const triggered = messageTrigger(e.event.talyn) !== null;
+    const text = triggered ? null : userMessageText(e.event);
     if (!current || current.turn !== e.turn || (text !== null && current.userText !== null)) {
-      current = { turn: e.turn, userText: null, userSeq: null, attachments: [], sender: null, events: [], userAt: null, lastAt: null };
+      current = { turn: e.turn, userText: null, userSeq: null, attachments: [], sender: null, events: [], userAt: null, lastAt: null, triggered: false };
       turns.push(current);
     }
     if (text !== null && current.userText === null && current.events.length === 0) {
@@ -127,6 +133,10 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
       current.sender = messageSender((e.event as { talyn?: unknown }).talyn);
       current.userAt = e.createdAt ?? null;
     } else {
+      if (triggered && current.userText === null && current.events.length === 0) {
+        current.triggered = true;
+        current.userAt = e.createdAt ?? null;
+      }
       current.events.push({ ...e.event, timestamp: e.event.timestamp ?? e.createdAt });
       if (e.createdAt) current.lastAt = e.createdAt;
     }

@@ -1,4 +1,7 @@
-import { describeTool, type ToolBlock } from '@talyn/shared';
+import {
+  CODE_REVIEW_SEVERITY_LABELS, codeReviewTranscriptFindingLocation, describeTool, sortCodeReviewTranscriptFindings,
+  type CodeReviewTranscriptEvent, type ToolBlock,
+} from '@talyn/shared';
 
 import { inlineText, parseMarkdown, type MdBlock } from '../../lib/markdown';
 import { preview, readableOutput, toolLine } from './toolFormat';
@@ -22,7 +25,19 @@ export function systemRowText(row: SystemRow): string {
   if (row.subtype === 'talyn_interruption') return 'Interrupted';
   if (row.subtype && BOX_REFUSALS[row.subtype]) return `${BOX_REFUSALS[row.subtype]}. ${row.text}`;
   if (row.subtype === 'talyn_message') return row.text.length > 280 ? `${row.text.slice(0, 280)}…` : row.text;
+  if (row.subtype === 'talyn_code_review' && row.codeReview) return codeReviewCardText(row.text, row.codeReview);
   return row.text;
+}
+
+/** The text a code review card shows, in the order it draws it, so find can match a finding. */
+function codeReviewCardText(text: string, event: CodeReviewTranscriptEvent): string {
+  const lines = [event.prNumber ? `${text} #${event.prNumber}` : text];
+  if (event.action === 'finished') {
+    for (const f of sortCodeReviewTranscriptFindings(event.findings)) {
+      lines.push(CODE_REVIEW_SEVERITY_LABELS[f.severity], f.title, codeReviewTranscriptFindingLocation(f) ?? '', f.summary);
+    }
+  }
+  return lines.filter(Boolean).join('\n');
 }
 
 type PermissionRow = Extract<TranscriptRow, { kind: 'permission' }>;

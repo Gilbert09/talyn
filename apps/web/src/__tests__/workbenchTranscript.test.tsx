@@ -667,6 +667,23 @@ describe('code review events', () => {
     expect(screen.getByText('Fixing it.')).toBeInTheDocument();
   });
 
+  it('offers Revert to here on a turn that the report message started', async () => {
+    const restoreCheckpoint = vi.fn().mockResolvedValue(undefined);
+    const revertOps = { unavailable: null, restoreCheckpoint } as unknown as WorkbenchOps;
+    render(<WorkbenchTranscript chat={chat} events={reviewEvents()} loading={false} error={null} ops={revertOps} />);
+    const buttons = screen.getAllByRole('button', { name: /Revert to here/ });
+    // The person's message 1 and the report turn 2.
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(restoreCheckpoint).toHaveBeenCalledWith('c1', 2));
+  });
+
+  it('offers no Revert to here on a triggered turn while the chat runs', () => {
+    render(<WorkbenchTranscript chat={{ ...chat, status: 'running' }} events={reviewEvents()} loading={false} error={null} ops={ops} />);
+    expect(screen.queryByRole('button', { name: /Revert to here/ })).toBeNull();
+  });
+
   it('finds the card text with the find bar', () => {
     render(<WorkbenchTranscript chat={chat} events={reviewEvents()} loading={false} error={null} ops={ops} older={older({ hasOlder: false })} />);
     act(() => requestTranscriptFind('wb1'));
