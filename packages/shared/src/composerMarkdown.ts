@@ -85,6 +85,27 @@ export function composerMarkdown(text: string): ComposerLine[] {
 }
 
 /**
+ * What a new line does at the end of a code fence that nothing closes yet:
+ * it also adds the closing fence, and puts the caret on the empty line
+ * between the two. Null when the new line is a plain new line.
+ */
+export function closeFenceOnNewline(text: string, start: number, end: number): { insert: string; caret: number } | null {
+  if (start !== end) return null;
+  const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+  const next = text.indexOf('\n', start);
+  if (text.slice(start, next === -1 ? text.length : next).trim() !== '') return null;
+  const lines = composerMarkdown(text);
+  const index = text.slice(0, lineStart).split('\n').length - 1;
+  if (lines[index]?.kind !== 'fence') return null;
+  // Fence lines alternate open, close. Only the last one, when it opens, has nothing to close it.
+  const fences = lines.flatMap((line, at) => (line.kind === 'fence' ? [at] : []));
+  if (fences.length % 2 === 0 || fences[fences.length - 1] !== index) return null;
+  const marker = FENCE.exec(text.slice(lineStart, start))?.[0];
+  if (!marker) return null;
+  return { insert: `\n\n${marker}`, caret: start + 1 };
+}
+
+/**
  * Ends each quote at the first line without `>`, as the composer shows it.
  *
  * In CommonMark a plain line after `> quote` is a "lazy continuation": it
