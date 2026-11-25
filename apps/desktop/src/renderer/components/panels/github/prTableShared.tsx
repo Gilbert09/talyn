@@ -63,6 +63,7 @@ import { TrunkMergeEtaChip } from '../../widgets/TrunkMergeEta';
 import { cn } from '../../../lib/utils';
 import { openExternal, isOpenInBrowserClick } from '../../../lib/openExternal';
 import { toast } from '../../../stores/toast';
+import { mergeRefusalCode, showMergeRefusal } from '../../../lib/mergeRefusal';
 import { canResubmitMergeQueue, resubmitMergeQueue } from '../../../lib/mergeQueueResubmit';
 import { trackEvent } from '../../../lib/analytics';
 import { useBillingStore } from '../../../stores/billing';
@@ -594,10 +595,15 @@ const PRTableRow = React.memo(function PRTableRow({
       // Surface *why* it failed — GitHub's message (e.g. "Pull Request is
       // not mergeable", "At least 1 approving review is required") is the
       // useful part. Previously this only lived in a hover tooltip.
-      toast.error(
-        `Couldn't merge ${row.owner}/${row.repo}#${row.number}`,
-        friendlyMergeError(message)
-      );
+      if (mergeRefusalCode(err)) {
+        // The backend already wrote a message for this refusal.
+        showMergeRefusal(`Couldn't merge ${row.owner}/${row.repo}#${row.number}`, row, err);
+      } else {
+        toast.error(
+          `Couldn't merge ${row.owner}/${row.repo}#${row.number}`,
+          friendlyMergeError(message)
+        );
+      }
     } finally {
       setBusy(null);
       // Disarm on EVERY completed attempt, not just the failures.

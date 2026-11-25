@@ -1624,6 +1624,15 @@ export const pullRequests = {
       alreadyTerminal?: boolean;
     }>('POST', `/pull-requests/${id}/merge`, { method }),
   /**
+   * GitHub's "Update branch": merge the base into the PR's head on GitHub. The
+   * fix for a merge refused with code `branch_behind`. The checks run again on
+   * the new head, so this does not merge. Refused with `update_branch_conflict`
+   * when the base conflicts with the head. `updated: false` means the head
+   * already had the base's commits.
+   */
+  updateBranch: (id: string) =>
+    request<{ updated: boolean; message: string }>('POST', `/pull-requests/${id}/update-branch`),
+  /**
    * Close the PR on GitHub without merging, as the connected GitHub user, with
    * an optional comment first. The backend closes only the person's own PRs
    * (or PRs a Talyn session opened) and refuses a merged PR (409

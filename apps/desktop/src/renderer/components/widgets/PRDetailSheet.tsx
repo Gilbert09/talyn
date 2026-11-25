@@ -62,6 +62,7 @@ import { PRStatusPill } from './PRStatusPill';
 import { PRReviewPill } from './PRReviewPill';
 import { PollingOnlyBadge } from './PollingOnlyBadge';
 import { toast } from '../../stores/toast';
+import { mergeErrorText, mergeRefusalCode, showMergeRefusal } from '../../lib/mergeRefusal';
 import { canResubmitMergeQueue, resubmitMergeQueue } from '../../lib/mergeQueueResubmit';
 import { trackEvent } from '../../lib/analytics';
 import type { PrDetailTab } from '../../lib/prDetail';
@@ -431,7 +432,18 @@ export function PRDetailSheet({
       setData(next);
       setConfirmMerge(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Merge failed');
+      setError(mergeErrorText(err));
+      // A refused merge gets a code, and the backend refetched the PR first.
+      // Show its new status now, with the fix in a toast.
+      if (mergeRefusalCode(err) && view) {
+        setConfirmMerge(false);
+        showMergeRefusal(`Could not merge #${view.row.number}`, { id: pullRequestId, number: view.row.number }, err);
+        // Fire-and-forget: the sheet can show another PR by the time it lands.
+        void api.pullRequests
+          .get(pullRequestId)
+          .then((res) => setData((prev) => (prev && prev.row.id === res.row.id ? res : prev)))
+          .catch(() => undefined);
+      }
     } finally {
       setMerging(false);
     }

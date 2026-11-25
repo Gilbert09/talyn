@@ -170,6 +170,11 @@ export interface PRSummary {
    */
   effectiveReviewDecision: ReviewDecision;
   blockingReason: BlockingReason;
+  /**
+   * Set only by Talyn, never by a fetch: GitHub refused to merge this head as
+   * behind the base. See `services/mergeRefusal.ts`.
+   */
+  refusedBehind?: { headSha: string; until: string };
   checks: CheckBreakdown;
   /** Identity of the SET of failing checks — see {@link computeFailingChecksDigest}. */
   failingChecksDigest?: string;

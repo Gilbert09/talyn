@@ -39,6 +39,7 @@ import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { openExternal } from '../../lib/openExternal';
 import { formatKeys } from '../../lib/shortcuts';
 import { toast } from '../../stores/toast';
+import { showMergeRefusal } from '../../lib/mergeRefusal';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { NEXT_ACTION_LABEL, prRowAsLike } from '../../lib/workbenchFormat';
 import {
@@ -348,7 +349,10 @@ export function WorkbenchHeader({
       setConfirm(null);
     } catch (err) {
       captureWorkbenchFailure('merge_pull_request', err, workbench.id);
-      toast.error(`Could not merge #${pr.number}`, err instanceof Error ? err.message : undefined);
+      showMergeRefusal(`Could not merge #${pr.number}`, pr, err);
+      // The confirm asked about a merge that GitHub refused. Close it, so the
+      // person sees the new status and the toast's fix.
+      setConfirm(null);
     } finally {
       setBusy(null);
     }

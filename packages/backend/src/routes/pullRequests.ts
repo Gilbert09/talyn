@@ -10,6 +10,12 @@ import {
 } from '../services/prRefresh.js';
 import { mergeQueueTimelineForPr } from '../services/mergeQueue/timeline.js';
 import {
+  describeMergeRefusal,
+  keepRefusedBehind,
+  readRefusedBehind,
+  refusedBehindMark,
+} from '../services/mergeRefusal.js';
+import {
   dismissFinding,
   markFindingFixedByHand,
   postReviewFindings,
@@ -704,6 +710,8 @@ export function pullRequestRoutes(): Router {
         numbers: [row.number],
       });
       fresh = results[0]?.pr ?? null;
+      // A merge GitHub just refused as behind outranks a fetch that still says CLEAN.
+      if (fresh) fresh = keepRefusedBehind(readRefusedBehind(row.lastSummary), fresh);
     } catch (err) {
       // Network blip, token revoked, etc — caller still gets the
       // cached row.
@@ -1694,6 +1702,7 @@ export function pullRequestRoutes(): Router {
         number: pullRequestsTable.number,
         lastSummary: pullRequestsTable.lastSummary,
         repositoryId: pullRequestsTable.repositoryId,
+        taskId: pullRequestsTable.taskId,
         // Both only for the terminal reconcile on a refused merge below.
         state: pullRequestsTable.state,
         mergeQueued: pullRequestsTable.mergeQueued,
@@ -1729,6 +1738,16 @@ export function pullRequestRoutes(): Router {
     // so probing it answers "nothing governs this merge" and the button below
     // would merge the PR into its parent's branch.
     const baseBranch = summary.stack?.baseRefName || summary.baseBranch || '';
+
+    // A refused merge says the row was wrong: it offered Merge on a PR GitHub
+    // will not merge. Refetch it now, so every client shows the real status
+    // (for example "Behind") at the same time as the error, not a poll later.
+    const refuseMerge = async (raw: string) => {
+      const refusal = describeMergeRefusal(raw, { number: row.number, baseBranch });
+      if (refusal.code === 'branch_behind') await recordRefusedBehind(row, summary.headSha);
+      await refreshAfterMergeAttempt(row);
+      return refusal;
+    };
 
     // A stack member on an UNGATED base has no queue to hand the whole stack
     // to, and merging it directly lands it in the rung below rather than where
@@ -1844,10 +1863,10 @@ export function pullRequestRoutes(): Router {
       // but didn't merge). Don't flip the row to merged or report success in
       // that case — surface its message so the UI can explain why.
       if (!result.merged) {
-        return res.status(400).json({
-          success: false,
-          error: result.message || 'GitHub did not merge the pull request',
-        });
+        const refusal = await refuseMerge(
+          result.message || 'GitHub did not merge the pull request'
+        );
+        return res.status(400).json({ success: false, code: refusal.code, error: refusal.message });
       }
       // Mark the row merged directly. We can't rely on a GraphQL refetch
       // here — `batchPullRequests` filters to `states: [OPEN]`, so a
@@ -1913,8 +1932,93 @@ export function pullRequestRoutes(): Router {
           },
         });
       }
-      res.status(400).json({ success: false, error: message });
+      const refusal = await refuseMerge(message);
+      res.status(400).json({ success: false, code: refusal.code, error: refusal.message });
     }
+  });
+
+  // GitHub's "Update branch": merge the base into the PR's head on GitHub. The
+  // fix for a merge refused with `branch_behind`, and what the merge queue does
+  // for a queued PR. The PR's checks run again on the new head, so the answer
+  // is not a merge — the person (or the queue) merges when they pass.
+  router.post('/:id/update-branch', async (req, res) => {
+    const db = getDbClient();
+    const [row] = await db
+      .select({
+        id: pullRequestsTable.id,
+        workspaceId: pullRequestsTable.workspaceId,
+        repositoryId: pullRequestsTable.repositoryId,
+        taskId: pullRequestsTable.taskId,
+        owner: pullRequestsTable.owner,
+        repo: pullRequestsTable.repo,
+        number: pullRequestsTable.number,
+        state: pullRequestsTable.state,
+        mergeQueued: pullRequestsTable.mergeQueued,
+        lastSummary: pullRequestsTable.lastSummary,
+      })
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, req.params.id))
+      .limit(1);
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Pull request not found' });
+    }
+    try {
+      await requireWorkspaceAccess(req, row.workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    if (row.state !== 'open') {
+      return res.status(409).json({
+        success: false,
+        code: 'pull_request_not_open',
+        error: `#${row.number} is ${row.state}. Only an open pull request can be updated.`,
+      });
+    }
+    const base = (row.lastSummary as { baseBranch?: string } | null)?.baseBranch || 'the base branch';
+    const outcome = await githubService.updatePullRequestBranchOutcome(
+      row.workspaceId,
+      row.owner,
+      row.repo,
+      row.number
+    );
+    void captureWorkspaceEvent(row.workspaceId, 'pull_request_branch_updated', {
+      repo: `${row.owner}/${row.repo}`,
+      pr_number: row.number,
+      outcome,
+    });
+    if (outcome === 'conflict') {
+      await refreshAfterMergeAttempt(row);
+      return res.status(409).json({
+        success: false,
+        code: 'update_branch_conflict',
+        error: `#${row.number} has merge conflicts with ${base}. Resolve the conflicts, then merge again.`,
+      });
+    }
+    if (outcome === 'up_to_date') {
+      await refreshAfterMergeAttempt(row);
+      return res.json({
+        success: true,
+        data: {
+          updated: false,
+          message: `#${row.number} already has the newest commits from ${base}. Merge it again.`,
+        },
+      });
+    }
+    if (outcome === 'error') {
+      return res.status(400).json({
+        success: false,
+        code: 'update_branch_failed',
+        error: `GitHub did not update #${row.number}. Try again, or update the branch on GitHub.`,
+      });
+    }
+    await refreshAfterMergeAttempt(row);
+    res.json({
+      success: true,
+      data: {
+        updated: true,
+        message: `Merged ${base} into #${row.number}. Its checks run again. Merge it when they pass.`,
+      },
+    });
   });
 
   // Approve or request changes on a PR that asked for the user's review.
@@ -2169,6 +2273,62 @@ interface PullRequestRow {
   lastSummaryDigest: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * Store "GitHub refused this head as behind" on the row, before the refetch
+ * that follows, so the mark holds even when that refetch fails. The head comes
+ * from GitHub (REST) because the cached one can be older than the head GitHub
+ * refused; the cached one is the fallback. Never throws.
+ */
+async function recordRefusedBehind(
+  row: { id: string; workspaceId: string; owner: string; repo: string; number: number; lastSummary: unknown },
+  cachedHeadSha: string | undefined
+): Promise<void> {
+  try {
+    let headSha = cachedHeadSha;
+    try {
+      const pr = await githubService.getPullRequest(row.workspaceId, row.owner, row.repo, row.number);
+      headSha = pr.head?.sha || headSha;
+    } catch {
+      // The cached head is the best we have.
+    }
+    if (!headSha) return;
+    const mark = refusedBehindMark(headSha);
+    const stored = (row.lastSummary ?? {}) as PRSummary;
+    const kept = keepRefusedBehind(mark, stored);
+    const patch = JSON.stringify({
+      refusedBehind: mark,
+      blockingReason: kept.blockingReason,
+      mergeStateStatus: kept.mergeStateStatus,
+    });
+    await getDbClient()
+      .update(pullRequestsTable)
+      .set({
+        lastSummary: sql`${pullRequestsTable.lastSummary} || ${patch}::jsonb`,
+        // The stored summary no longer matches its digest, so the next fetch must write.
+        lastSummaryDigest: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(pullRequestsTable.id, row.id));
+  } catch (err) {
+    console.warn(
+      `[pullRequests] recording the behind refusal failed for ${row.owner}/${row.repo}#${row.number}:`,
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+/** Refetch a PR after a merge or a branch update. Never throws: the answer must still go out. */
+async function refreshAfterMergeAttempt(row: Parameters<typeof refreshPullRequest>[0]): Promise<void> {
+  try {
+    await refreshPullRequest(row);
+  } catch (err) {
+    console.warn(
+      `[pullRequests] refresh after merge attempt failed for ${row.owner}/${row.repo}#${row.number}:`,
+      err instanceof Error ? err.message : err
+    );
+  }
 }
 
 /**
