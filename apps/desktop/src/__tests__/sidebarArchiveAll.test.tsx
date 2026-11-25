@@ -125,6 +125,24 @@ describe('sidebar archive all', () => {
     await waitFor(() => expect(useWorkbenchStore.getState().selectedWorkbenchId).toBeNull());
   });
 
+  it('keeps a session the person opened while the archive ran', async () => {
+    let answer: (value: unknown) => void = () => {};
+    archiveMany.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+    useNavigationStore.getState().navigate({ view: 'workbench', id: 'lisbon' });
+    useWorkbenchStore.getState().selectWorkbench('lisbon');
+    renderList();
+    fireEvent.click(archiveAllButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive all' }));
+    await waitFor(() => expect(archiveMany).toHaveBeenCalledTimes(1));
+
+    useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' });
+    useWorkbenchStore.getState().selectWorkbench('oslo');
+    answer({ archived: ['lisbon', 'porto'].map(archivedRow), failed: [] });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Archived 2 sessions'));
+    expect(useWorkbenchStore.getState().selectedWorkbenchId).toBe('oslo');
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'oslo' });
+  });
+
   it('counts only the sessions that archived when one fails', async () => {
     archiveMany.mockImplementation(async (ids: string[]) => ({
       archived: ids.filter((id) => id !== 'porto').map(archivedRow),

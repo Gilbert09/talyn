@@ -129,7 +129,9 @@ export async function archiveWorkbenches(ids: string[], openId: string | null): 
     const worker = async () => {
       while (next < result.archived.length) {
         const wb = result.archived[next++];
-        await finishArchive(wb, wb.id === openId, false);
+        // The dialog closed at once, so the person may have opened another session since.
+        const stillOpen = wb.id === openId && useWorkbenchStore.getState().selectedWorkbenchId === wb.id;
+        await finishArchive(wb, stillOpen, false);
       }
     };
     await Promise.all(Array.from({ length: Math.min(LOCAL_CLEANUP_CONCURRENCY, result.archived.length) }, worker));
