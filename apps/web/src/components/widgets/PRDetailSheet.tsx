@@ -440,7 +440,11 @@ export function PRDetailSheet({
       if (mergeRefusalCode(err) && view) {
         setConfirmMerge(false);
         showMergeRefusal(`Could not merge #${view.row.number}`, { id: pullRequestId, number: view.row.number }, err);
-        void api.pullRequests.get(pullRequestId).then(setData).catch(() => undefined);
+        // Fire-and-forget: the sheet can show another PR by the time it lands.
+        void api.pullRequests
+          .get(pullRequestId)
+          .then((res) => setData((prev) => (prev && prev.row.id === res.row.id ? res : prev)))
+          .catch(() => undefined);
       }
     } finally {
       setMerging(false);
