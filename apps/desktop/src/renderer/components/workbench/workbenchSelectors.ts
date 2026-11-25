@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  isSessionCodeComplete,
+  codeCompleteBlockers,
+  type CodeCompleteBlocker,
   type ContextAttentionReason,
   type Workbench,
   type WorkbenchBackground,
@@ -227,23 +228,26 @@ export function useWorkbenchPr(workbench: Workbench): PRRow | null {
 }
 
 /**
- * True when the session is "code complete" (see `isSessionCodeComplete`): its
- * turns are done, nothing runs, the work is pushed and its pull request is
- * open. `pr` is the session's PR row; without it the workbench's PR summary
- * gives the state.
+ * Why the session is not "code complete" (see `codeCompleteBlockers`). Empty
+ * when its turns are done, nothing runs, the work is pushed and its pull
+ * request is open. `pr` is the session's PR row; without it the workbench's PR
+ * summary gives the state.
  */
-export function useSessionCodeComplete(workbench: Workbench | null | undefined, pr: PRRow | null | undefined): boolean {
+export function useSessionCodeCompleteBlockers(
+  workbench: Workbench | null | undefined,
+  pr: PRRow | null | undefined,
+): CodeCompleteBlocker[] {
   const id = workbench?.id ?? '';
   const storeChats = useWorkbenchStore((s) => (id ? s.chats[id] : undefined));
   const runningScripts = useWorkbenchStore(
     (s) => Object.values(s.scriptOutput[id] ?? {}).filter((output) => output.running).length,
   );
   const runningJobs = useRunningJobs(id).length;
-  if (!workbench) return false;
+  if (!workbench) return ['no_chat'];
   const pullRequestState = workbench.pullRequestId
     ? ((pr?.id === workbench.pullRequestId ? pr.state : null) ?? workbench.pr?.state ?? null)
     : null;
-  return isSessionCodeComplete({
+  return codeCompleteBlockers({
     kind: workbench.kind,
     archived: isArchived(workbench),
     chats: storeChats ?? workbench.chats ?? [],
@@ -253,4 +257,9 @@ export function useSessionCodeComplete(workbench: Workbench | null | undefined, 
     uncommittedFiles: workbench.uncommittedStats?.files ?? null,
     unpushedCommits: workbench.unpushedCommits ?? null,
   });
+}
+
+/** True when the session is "code complete" (see `isSessionCodeComplete`). */
+export function useSessionCodeComplete(workbench: Workbench | null | undefined, pr: PRRow | null | undefined): boolean {
+  return useSessionCodeCompleteBlockers(workbench, pr).length === 0;
 }

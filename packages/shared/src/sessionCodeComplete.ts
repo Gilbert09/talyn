@@ -128,6 +128,33 @@ export function sessionReviewState(review: SessionReviewFacts | null | undefined
 }
 
 /**
+ * Blockers that hide the end-of-chat review card even while a review of the
+ * pull request exists: the session has no open pull request or no chat, it is
+ * a thread or archived, or a turn runs (the turn's own output is at the end).
+ */
+const REVIEW_CARD_HIDDEN_BY: ReadonlySet<CodeCompleteBlocker> = new Set<CodeCompleteBlocker>([
+  'thread',
+  'archived',
+  'no_chat',
+  'turn_running',
+  'no_pull_request',
+  'pull_request_not_open',
+]);
+
+/**
+ * Does the end-of-chat review card show? Always when the session is code
+ * complete. When it is not, the card still shows a review that runs, waits,
+ * failed or finished, so a review never runs with nothing in the chat. A
+ * running script, a background job or work that is not pushed must not hide
+ * it. Only the "Ready for review" offer (state `none`) needs code complete.
+ */
+export function sessionReviewCardShown(blockers: readonly CodeCompleteBlocker[], state: SessionReviewState): boolean {
+  if (blockers.length === 0) return true;
+  if (state === 'none') return false;
+  return blockers.every((blocker) => !REVIEW_CARD_HIDDEN_BY.has(blocker));
+}
+
+/**
  * Has the head `headSha` had a review already? The auto-start asks this, so
  * it starts at most one cycle per head. A cycle that targets the head counts
  * when it ran, failed or was cancelled: a person who cancelled it chose so.

@@ -326,6 +326,55 @@ describe('CodeCompleteReviewCard is hidden when the session is not code complete
   });
 });
 
+describe('CodeCompleteReviewCard shows a review when the session is not code complete', () => {
+  const notComplete = [
+    { name: 'a session script runs', over: { scripts: true } },
+    { name: 'a background job runs', over: { jobs: 1 } },
+    { name: 'files are uncommitted', over: { workbench: { uncommittedStats: { added: 3, removed: 0, files: 2 } } } },
+    { name: 'commits are not pushed', over: { workbench: { unpushedCommits: 1 } } },
+    { name: 'a message is queued', over: { chats: [{ ...IDLE, queuedMessages: [{ id: 'q1' }] } as unknown as WorkbenchChat] } },
+  ];
+  const reviews = [
+    { state: 'running', codeReview: review({ phase: 'reviewing', phasePlan: ['preparing', 'reviewing'], runsDone: 1, runsTotal: 3 }) },
+    { state: 'waiting', codeReview: review({ phase: 'queued', deferredSince: '2026-11-20T00:00:00Z' }) },
+    { state: 'failed', codeReview: review({ phase: 'failed' }) },
+    { state: 'done', codeReview: review({ openCount: 1, counts: { ...COUNTS, major: 1 } }) },
+    {
+      state: 'done',
+      codeReview: review({
+        staleForHead: true,
+        openCount: 0,
+        sessionReport: { workbenchId: 'wb1', sentAt: new Date().toISOString(), findingCount: 1 },
+      }),
+    },
+  ];
+
+  it.each(notComplete.flatMap(({ name, over }) => reviews.map((r) => ({ name, over, ...r }))))(
+    'shows a $state review when $name, with no start button',
+    ({ over, state, codeReview }) => {
+      const base = over as Parameters<typeof arrange>[0];
+      render(<CodeCompleteReviewCard workbench={arrange({ ...base, pr: { codeReview } })} />);
+      expect(card()).toHaveAttribute('data-state', state);
+      for (const name of ['Run code review', 'Run again', 'Review again']) {
+        expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+      }
+    },
+  );
+
+  it.each([
+    { name: 'a turn runs', over: { chats: [{ ...IDLE, status: 'running' } as WorkbenchChat] } },
+    { name: 'the PR is closed', over: { pr: { state: 'closed' as const } } },
+    { name: 'the session is archived', over: { workbench: { archivedAt: '2026-11-21T00:00:00Z' } } },
+    { name: 'it is a thread', over: { workbench: { kind: 'thread' as const } } },
+    { name: 'there is no chat', over: { chats: [] } },
+  ])('hides a running review when $name', ({ over }) => {
+    const base = over as Parameters<typeof arrange>[0];
+    const codeReview = review({ phase: 'reviewing', phasePlan: ['preparing', 'reviewing'], runsDone: 1, runsTotal: 3 });
+    render(<CodeCompleteReviewCard workbench={arrange({ ...base, pr: { ...base?.pr, codeReview } })} />);
+    expect(card()).not.toBeInTheDocument();
+  });
+});
+
 describe('the transcript shows the card after the last turn', () => {
   const ops = { unavailable: null } as unknown as WorkbenchOps;
   const events: WorkbenchEvent[] = [1, 2].map((n) => ({

@@ -68,9 +68,32 @@ describe('end-of-chat review card', () => {
 
   it.each([
     ['a turn runs', withItem({ chats: [chat({ status: 'running' })] })],
+    ['a turn runs during a review', facts({ item: session({ chats: [chat({ status: 'running' })] }), row: pr({ codeReview: review({ phase: 'reviewing' }) }) })],
     ['the PR is closed', facts({ row: pr({ state: 'closed', codeReview: review() }) })],
-    ['a background job runs', facts({ runningJobs: 2, row: pr({ codeReview: review() }) })],
+    ['the session is archived during a review', facts({ item: session({ archivedAt: '2026-11-09T10:00:00Z' }), row: pr({ codeReview: review({ phase: 'reviewing' }) }) })],
+    ['a thread', facts({ item: session({ kind: 'thread' }), row: pr({ codeReview: review({ phase: 'reviewing' }) }) })],
+    ['no review and a background job runs', facts({ runningJobs: 2 })],
+    ['findings for an older commit and unpushed commits', facts({ item: session({ unpushedCommits: 1 }), row: pr({ codeReview: review({ staleForHead: true }) }) })],
   ])('is hidden when %s', (_name, input) => expect(reviewCard(input)).toBeNull());
+
+  const notComplete = {
+    'a background job runs': { runningJobs: 2 },
+    'files are uncommitted': { item: session({ uncommittedStats: { added: 1, removed: 0, files: 1 } }) },
+    'commits are not pushed': { item: session({ unpushedCommits: 1 }) },
+    'a message is queued': { item: session({ chats: [chat({ queuedMessages: [queued] as never })] }) },
+  } satisfies Record<string, Partial<CodeCompleteFacts>>;
+
+  it.each(Object.entries(notComplete).flatMap(([name, patch]) => [
+    [name, 'running', review({ phase: 'reviewing', runsDone: 1, runsTotal: 4 }), patch, null],
+    [name, 'waiting', review({ phase: 'queued', runsDone: 0, deferredSince: '2026-11-08T10:00:00Z' }), patch, null],
+    [name, 'failed', review({ phase: 'failed', openCount: 0 }), patch, 'Run again'],
+    [name, 'done', review(), patch, null],
+  ] as const))('%s: shows the %s review, without a start button', (_name, state, codeReview, patch, completeStart) => {
+    const card = reviewCard(facts({ ...patch, row: pr({ codeReview }) }));
+    expect(card).toMatchObject({ state, start: null });
+    // The same review offers a start once the session is code complete.
+    expect(reviewCard(facts({ row: pr({ codeReview }) }))?.start ?? null).toBe(completeStart);
+  });
 });
 
 describe('header review badge', () => {

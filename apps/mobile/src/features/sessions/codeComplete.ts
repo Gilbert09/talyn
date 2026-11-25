@@ -1,6 +1,6 @@
 import type { CodeReviewPublic, PRRow } from '@talyn/client/native';
-import { codeReviewProgress, isSessionCodeComplete, sessionReviewState, type CodeCompleteInput, type SessionReviewState,
-  type Workbench } from '@talyn/shared';
+import { codeCompleteBlockers, codeReviewProgress, isSessionCodeComplete, sessionReviewCardShown, sessionReviewState,
+  type CodeCompleteInput, type SessionReviewState, type Workbench } from '@talyn/shared';
 
 import type { Tone } from '../../components/UI';
 import { openFindingCounts, sessionReportLine } from '../prs/codeReview';
@@ -47,11 +47,22 @@ export interface ReviewCardView {
   tone: Tone;
 }
 
-/** The card at the end of the chat. Null when the session is not code complete. */
+/**
+ * The card at the end of the chat, or null. "Ready for review" needs the
+ * session code complete; a review that runs, waits, failed or finished shows
+ * also before that (see `sessionReviewCardShown`), without a start button.
+ */
 export function reviewCard(facts: CodeCompleteFacts): ReviewCardView | null {
-  if (!sessionCodeComplete(facts)) return null;
+  const blockers = codeCompleteBlockers(codeCompleteInput(facts));
   const review = facts.row?.codeReview ?? null;
   const state = sessionReviewState(review);
+  if (!sessionReviewCardShown(blockers, state)) return null;
+  const card = reviewCardFor(facts, review, state);
+  // Before the work is pushed, a new review would read an old head.
+  return blockers.length === 0 ? card : { ...card, start: null };
+}
+
+function reviewCardFor(facts: CodeCompleteFacts, review: CodeReviewPublic | null, state: SessionReviewState): ReviewCardView {
   const sent = review ? sessionReportLine(review, facts.item.id) : null;
   const base = { state, text: null, findings: null, progress: null, sent, start: null, viewFindings: false };
   switch (state) {

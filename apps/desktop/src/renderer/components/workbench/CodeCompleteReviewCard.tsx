@@ -1,6 +1,6 @@
 import React, { useLayoutEffect } from 'react';
 import { AlertTriangle, CheckCircle2, Clock, Loader2, ScanSearch } from 'lucide-react';
-import { sessionReviewState, type SessionReviewState, type Workbench } from '@talyn/shared';
+import { sessionReviewCardShown, sessionReviewState, type SessionReviewState, type Workbench } from '@talyn/shared';
 import type { PRRow } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { isThread } from '../../lib/threads';
@@ -11,7 +11,7 @@ import { CodeReviewRowChip } from '../widgets/codeReview/CodeReviewRowChip';
 import { CodeReviewSeverityCounts } from '../widgets/codeReview/CodeReviewSeverityCounts';
 import { sessionReportText } from '../widgets/codeReview/sessionReportText';
 import { useStartCodeReview } from './useStartCodeReview';
-import { useSessionCodeComplete } from './workbenchSelectors';
+import { useSessionCodeComplete, useSessionCodeCompleteBlockers } from './workbenchSelectors';
 
 const CARD_ATTR = 'code-complete-review-card';
 
@@ -30,9 +30,11 @@ const TITLES: Record<SessionReviewState, string> = {
 };
 
 /**
- * At the end of the chat, while the session is code complete: the pull
- * request is ready for a code review. Offers to run one, then shows its
- * progress and its open findings. Draws nothing in other conditions.
+ * At the end of the chat. While the session is code complete, the pull
+ * request is ready for a code review: offers to run one. A review that runs,
+ * waits, failed or finished shows also when the session is not code complete
+ * (for example while a script runs), so a running review is never invisible.
+ * See `sessionReviewCardShown`.
  */
 export function CodeCompleteReviewCard({
   workbench,
@@ -43,12 +45,13 @@ export function CodeCompleteReviewCard({
   onLayout?: () => void;
 }) {
   const pr = useStorePr(workbench);
-  const complete = useSessionCodeComplete(workbench, pr);
+  const blockers = useSessionCodeCompleteBlockers(workbench, pr);
+  const complete = blockers.length === 0;
   const openPrDetail = useWorkbenchStore((s) => s.openPrDetail);
   const { busy, start } = useStartCodeReview(pr);
   const review = pr?.codeReview ?? null;
-  const shown = complete && pr !== null;
   const state = sessionReviewState(review);
+  const shown = pr !== null && sessionReviewCardShown(blockers, state);
 
   useLayoutEffect(() => {
     if (shown) onLayout?.();
@@ -59,7 +62,9 @@ export function CodeCompleteReviewCard({
   const viewFindings = () => openPrDetail(pr.id, 'findings');
   // The session handled every finding and pushed: the findings belong to an
   // older commit, so a new review of the fixes is one click away.
-  const reviewAgain = state === 'done' && Boolean(review?.staleForHead);
+  // Before the work is pushed, a new review would read an old head.
+  const reviewAgain = complete && state === 'done' && Boolean(review?.staleForHead);
+  const canRun = complete && (state === 'none' || state === 'failed' || reviewAgain);
   const highlight = state === 'none' || (state === 'done' && (review?.openCount ?? 0) > 0);
 
   return (
@@ -115,7 +120,7 @@ export function CodeCompleteReviewCard({
       </div>
       {(state === 'none' || state === 'failed' || state === 'done') && (
         <div className="flex flex-wrap items-center gap-2 border-t border-border/60 px-3 py-2">
-          {(state === 'none' || state === 'failed' || reviewAgain) && (
+          {canRun && (
             <Button
               size="sm"
               variant={reviewAgain ? 'outline' : 'default'}
