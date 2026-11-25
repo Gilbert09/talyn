@@ -2,12 +2,10 @@
 // the live session that owns the pull request, as one message. The session's
 // agent then fixes or dismisses each finding, and auto-fix stands down.
 //
-// Gated by the `codeReviewSessionReportBack` flag. With the flag off, or when
-// the session cannot take a message (local, in error, archived), nothing is
-// sent and the caller keeps the earlier behaviour.
+// When the session cannot take a message (local, in error, archived), nothing
+// is sent and the caller keeps the earlier behaviour (auto-fix may run).
 
 import { CODE_REVIEW_DISMISS_REASONS, type CodeReviewPhase } from '@talyn/shared';
-import { workspaceHasFeature } from '../featureFlags.js';
 import { deliverToSession } from '../mergeQueue/sessionFix.js';
 import { liveSessionActivityForPr, type PrSessionActivity } from '../workbenches/prSessions.js';
 import { confirmedOpenFindings, type ConfirmedFindingRow } from './findings.js';
@@ -32,7 +30,7 @@ export type SessionReportOutcome =
   | { kind: 'already_sent' }
   | {
       kind: 'skipped';
-      reason: 'flag_off' | 'not_ready' | 'no_session' | 'no_findings' | Exclude<PrSessionActivity, 'idle' | 'working'>;
+      reason: 'not_ready' | 'no_session' | 'no_findings' | Exclude<PrSessionActivity, 'idle' | 'working'>;
     }
   | { kind: 'failed'; error: string };
 
@@ -93,9 +91,6 @@ export function sessionReportMessage(input: {
  */
 export async function reportFindingsToSession(review: ReviewRow): Promise<SessionReportOutcome> {
   try {
-    if (!(await workspaceHasFeature('codeReviewSessionReportBack', review.workspaceId)).enabled) {
-      return { kind: 'skipped', reason: 'flag_off' };
-    }
     // Re-read: `finishCycle` has just moved the row. Only a `ready` review of
     // this same cycle reports; anything else means a new commit, a cancel or a
     // fix moved it, and the next cycle reports instead.

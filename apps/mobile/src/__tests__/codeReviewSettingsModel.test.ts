@@ -20,7 +20,9 @@ const skill = (overrides: Partial<SkillSummary> = {}): SkillSummary => ({ key: T
 
 describe('codeReviewSettingsOf', () => {
   it.each([
-    ['nothing stored', undefined, {}, { preset: 'standard', autoReview: false, builtInReviewers: true, autoFixSeverity: 'blocker', reportingBar: 'minor' }],
+    ['nothing stored', undefined, {}, { preset: 'standard', autoReview: false, reviewOnSessionComplete: true, builtInReviewers: true, autoFixSeverity: 'blocker', reportingBar: 'minor' }],
+    ['session reviews turned off', { reviewOnSessionComplete: false }, {}, { reviewOnSessionComplete: false }],
+    ['a pending session review change', { reviewOnSessionComplete: false }, { reviewOnSessionComplete: true }, { reviewOnSessionComplete: true }],
     ['a stored preset', { preset: 'deep' as const }, {}, { preset: 'deep' }],
     ['a pending change over the stored one', { preset: 'deep' as const, autoReview: false }, { autoReview: true }, { preset: 'deep', autoReview: true }],
     ['an unknown preset', { preset: 'huge' as never }, {}, { preset: 'standard' }],

@@ -140,9 +140,21 @@ export function CodeReviewSettingsCard() {
       <Step
         n={1}
         icon={ScanSearch}
-        title="Review every pull request"
-        badge={settings.autoReview ? 'On' : 'Off'}
+        title="Review automatically"
+        badge={settings.reviewOnSessionComplete || settings.autoReview ? 'On' : 'Off'}
       >
+        <Toggle
+          checked={settings.reviewOnSessionComplete}
+          disabled={saving || !currentWorkspaceId}
+          attr="settings-code-review-session-complete"
+          title="Review a session's pull request when its work is done"
+          onChange={(next) => void save({ reviewOnSessionComplete: next }, 'session reviews')}
+        >
+          When a session has pushed its work and stopped, Talyn reviews its pull request. The
+          session's agent gets the findings, then fixes or dismisses each one. At most three
+          automatic reviews for each pull request. On every plan.
+        </Toggle>
+        <div className="mt-3" />
         <Toggle
           checked={settings.autoReview}
           disabled={saving || !currentWorkspaceId}

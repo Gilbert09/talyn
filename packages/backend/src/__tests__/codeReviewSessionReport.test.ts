@@ -8,7 +8,6 @@ import { resolveCodeReviewSettings } from '@talyn/shared';
  */
 
 const m = vi.hoisted(() => ({
-  flag: vi.fn(),
   getReview: vi.fn(),
   getPrForReview: vi.fn(),
   appendReviewEvent: vi.fn(),
@@ -22,10 +21,6 @@ const m = vi.hoisted(() => ({
   deliverToSession: vi.fn(),
 }));
 
-vi.mock('../services/featureFlags.js', async (orig) => ({
-  ...(await orig<typeof import('../services/featureFlags.js')>()),
-  workspaceHasFeature: m.flag,
-}));
 vi.mock('../services/codeReview/findings.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/findings.js')>()),
   markStale: vi.fn().mockResolvedValue(0),
@@ -110,7 +105,6 @@ function eventCodes(): string[] {
 }
 
 beforeEach(() => {
-  m.flag.mockResolvedValue({ enabled: true, source: 'posthog' });
   m.getReview.mockResolvedValue(ready);
   m.getPrForReview.mockResolvedValue({ id: 'pr-1', owner: 'acme', repo: 'app', number: 42 });
   m.settings.mockResolvedValue(resolveCodeReviewSettings({ autoFix: true }));
@@ -128,26 +122,20 @@ afterEach(() => vi.resetAllMocks());
 
 describe('finishCycle with a live session on the pull request', () => {
   it.each([
-    // activity, flag, sent to session, auto-fix held back, fix run started
-    { activity: 'idle', flag: true, sent: true, held: false, fixed: false },
-    { activity: 'working', flag: true, sent: true, held: false, fixed: false },
-    { activity: 'local', flag: true, sent: false, held: true, fixed: false },
-    { activity: 'unavailable', flag: true, sent: false, held: true, fixed: false },
-    { activity: 'idle', flag: false, sent: false, held: true, fixed: false },
-    { activity: 'working', flag: false, sent: false, held: true, fixed: false },
-    { activity: 'local', flag: false, sent: false, held: true, fixed: false },
-  ])('$activity session, flag $flag: sent=$sent held=$held', async ({ activity, flag, sent, held, fixed }) => {
-    m.flag.mockResolvedValue({ enabled: flag, source: 'posthog' });
+    // activity, sent to session, auto-fix held back, fix run started
+    { activity: 'idle', sent: true, held: false, fixed: false },
+    { activity: 'working', sent: true, held: false, fixed: false },
+    { activity: 'local', sent: false, held: true, fixed: false },
+    { activity: 'unavailable', sent: false, held: true, fixed: false },
+  ])('$activity session: sent=$sent held=$held', async ({ activity, sent, held, fixed }) => {
     m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity });
 
     await finishCycle(review);
 
-    expect(m.flag).toHaveBeenCalledWith('codeReviewSessionReportBack', 'ws-1');
     expect(m.deliverToSession).toHaveBeenCalledTimes(sent ? 1 : 0);
     expect(m.appendReviewEventOnce).toHaveBeenCalledTimes(sent ? 1 : 0);
     expect(eventCodes().includes('auto_fix_session_active')).toBe(held);
     expect(m.startFixRun).toHaveBeenCalledTimes(fixed ? 1 : 0);
-    if (!flag) expect(m.liveSessionActivityForPr).not.toHaveBeenCalled();
   });
 
   it('records the report once per cycle, with the session and the findings', async () => {
@@ -224,9 +212,8 @@ describe('finishCycle with a live session on the pull request', () => {
     expect(m.startFixRun).not.toHaveBeenCalled();
   });
 
-  it('keeps the earlier behaviour when the flag cannot be read', async () => {
-    m.flag.mockRejectedValue(new Error('posthog down'));
-    m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
+  it('keeps the earlier behaviour when the session cannot be read', async () => {
+    m.liveSessionActivityForPr.mockRejectedValue(new Error('database down'));
 
     await finishCycle(review);
 

@@ -607,7 +607,7 @@ async function afterTurn(chat: ChatRow | null, succeeded?: BranchNamingInput): P
     }
     // The turn may have fixed the PR, so the merge queue and auto-keep look again.
     if (linked.pullRequestId) notifyPrSessionChanged(linked.workspaceId, linked.pullRequestId, 'session:turn_end');
-    // Code complete: a review of the pushed head can start by itself (flagged).
+    // Code complete: a review of the pushed head can start by itself (workspace setting, on by default).
     // Loaded here, not at the top: the code review engine is a large import graph for every module that loads turns.ts.
     if (linked.pullRequestId && chat.status === 'idle') {
       void import('../codeReview/sessionAutoStart.js')

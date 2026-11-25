@@ -47,6 +47,7 @@ WORKSPACES.push(
         `default auto-keep: ${settings.defaultAutoKeepMergeable ?? false}`,
         `merge queue mode: ${settings.mergeQueueMode === 'eager' ? 'eager' : 'ordered'}`,
         `code-review auto review: ${settings.codeReview?.autoReview ?? false}`,
+        `code-review review on session complete: ${settings.codeReview?.reviewOnSessionComplete !== false}`,
         `custom prompts: ${prompts.map(([name]) => name).join(', ') || 'none'}`,
       ];
       if (bool(args, 'include_prompts', false)) {

@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resolveCodeReviewSettings } from '@talyn/shared';
+import { codeReviewSettingsPatch, resolveCodeReviewSettings } from '@talyn/shared';
 
 /**
  * Code review auto-start: at turn end, a code-complete session starts a review
- * of its pull request's head, once per head, behind a flag.
+ * of its pull request's head, once per head, behind a workspace setting that
+ * is on by default.
  */
 
 const m = vi.hoisted(() => ({
-  flag: vi.fn(),
   getPrForReview: vi.fn(),
   getReviewForPr: vi.fn(),
   listChats: vi.fn(),
@@ -15,16 +15,10 @@ const m = vi.hoisted(() => ({
   storedScriptNames: vi.fn(),
   refresh: vi.fn(),
   settings: vi.fn(),
-  owner: vi.fn(),
-  autoFeatures: vi.fn(),
   start: vi.fn(),
   countStarted: vi.fn(),
 }));
 
-vi.mock('../services/featureFlags.js', async (orig) => ({
-  ...(await orig<typeof import('../services/featureFlags.js')>()),
-  workspaceHasFeature: m.flag,
-}));
 vi.mock('../services/codeReview/store.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/store.js')>()),
   getPrForReview: m.getPrForReview,
@@ -50,11 +44,6 @@ vi.mock('../services/prRefresh.js', async (orig) => ({
 vi.mock('../services/codeReview/workspaceSettings.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/workspaceSettings.js')>()),
   workspaceReviewSettings: m.settings,
-  workspaceOwner: m.owner,
-}));
-vi.mock('../services/billing/entitlements.js', async (orig) => ({
-  ...(await orig<typeof import('../services/billing/entitlements.js')>()),
-  ownerHasAutoFeatures: m.autoFeatures,
 }));
 vi.mock('../services/codeReview/cycle.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/cycle.js')>()),
@@ -89,7 +78,6 @@ function pr(state: string, headSha: string | undefined = HEAD) {
 }
 
 beforeEach(() => {
-  m.flag.mockResolvedValue({ enabled: true, source: 'posthog' });
   m.getPrForReview.mockResolvedValue(pr('open'));
   m.getReviewForPr.mockResolvedValue(null);
   m.listChats.mockResolvedValue([{ id: 'c1', status: 'idle', queuedMessages: [], closedAt: null }]);
@@ -97,8 +85,6 @@ beforeEach(() => {
   m.storedScriptNames.mockResolvedValue([]);
   m.refresh.mockResolvedValue({ kind: 'refreshed', rowId: 'pr-1' });
   m.settings.mockResolvedValue(resolveCodeReviewSettings({}));
-  m.owner.mockResolvedValue('user-1');
-  m.autoFeatures.mockResolvedValue(true);
   m.start.mockResolvedValue({ ok: true, started: true, review: { id: 'rev-1' } });
   m.countStarted.mockResolvedValue(0);
 });
@@ -109,13 +95,13 @@ describe('startReviewIfCodeComplete', () => {
   it('starts an automatic review of the pushed head', async () => {
     const out = await startReviewIfCodeComplete(WB, HEAD);
     expect(out).toEqual({ kind: 'started', reviewId: 'rev-1', headSha: HEAD });
-    expect(m.flag).toHaveBeenCalledWith('codeReviewAutoStartOnComplete', 'ws-1');
+    expect(m.settings).toHaveBeenCalledWith('ws-1');
     expect(m.start).toHaveBeenCalledWith({ pullRequestId: 'pr-1', auto: true, trigger: 'session_complete' });
     expect(m.refresh).not.toHaveBeenCalled();
   });
 
   it.each<[string, () => void, Wb, string | null, string]>([
-    ['the flag is off', () => m.flag.mockResolvedValue({ enabled: false, source: 'fallback' }), WB, HEAD, 'flag_off'],
+    ['the workspace turned the setting off', () => m.settings.mockResolvedValue(resolveCodeReviewSettings({ reviewOnSessionComplete: false })), WB, HEAD, 'settings_off'],
     ['the session is local', () => {}, wb({ runtime: 'local', sandboxId: null }), HEAD, 'local'],
     ['the session is a thread', () => {}, wb({ kind: 'thread' }), HEAD, 'thread'],
     ['the session has no pull request', () => {}, wb({ pullRequestId: null }), HEAD, 'no_pull_request'],
@@ -126,7 +112,6 @@ describe('startReviewIfCodeComplete', () => {
     ['a cycle is in flight', () => m.getReviewForPr.mockResolvedValue({ phase: 'reviewing', reviewedHeadSha: OLD, targetHeadSha: OLD }), WB, HEAD, 'already_reviewed'],
     ['a person cancelled the cycle for the head', () => m.getReviewForPr.mockResolvedValue({ phase: 'cancelled', reviewedHeadSha: OLD, targetHeadSha: HEAD }), WB, HEAD, 'already_reviewed'],
     ['the reviewers are off', () => m.settings.mockResolvedValue(resolveCodeReviewSettings({ builtInReviewers: false })), WB, HEAD, 'settings_off'],
-    ['the plan has no automatic features', () => m.autoFeatures.mockResolvedValue(false), WB, HEAD, 'plan'],
     ['the pull request has no head', () => m.getPrForReview.mockResolvedValue(pr('open', '')), WB, null, 'no_head'],
   ])('skips when %s', async (_name, arrange, row, boxHead, reason) => {
     arrange();
@@ -248,8 +233,49 @@ describe('startReviewIfCodeComplete', () => {
     });
   });
 
+  it.each<[string, Record<string, unknown> | null, string]>([
+    ['the workspace has no code review settings', null, 'started'],
+    ['the key is absent', {}, 'started'],
+    ['the key is true', { reviewOnSessionComplete: true }, 'started'],
+    ['the key is false', { reviewOnSessionComplete: false }, 'skipped'],
+    ['automatic review of every PR is off', { autoReview: false }, 'started'],
+  ])('when %s, the outcome is %s', async (_name, stored, kind) => {
+    m.settings.mockResolvedValue(resolveCodeReviewSettings(stored as never));
+    const out = await startReviewIfCodeComplete(WB, HEAD);
+    expect(out.kind).toBe(kind);
+    if (out.kind === 'skipped') expect(out.reason).toBe('settings_off');
+  });
+
+  it('reads nothing else when the setting is off', async () => {
+    m.settings.mockResolvedValue(resolveCodeReviewSettings({ reviewOnSessionComplete: false }));
+    await startReviewIfCodeComplete(WB, HEAD);
+    expect(m.getPrForReview).not.toHaveBeenCalled();
+    expect(m.listChats).not.toHaveBeenCalled();
+  });
+
   it('never throws', async () => {
     m.listChats.mockRejectedValue(new Error('db down'));
     expect(await startReviewIfCodeComplete(WB, HEAD)).toEqual({ kind: 'failed', error: 'db down' });
+  });
+});
+
+describe('the reviewOnSessionComplete setting', () => {
+  it.each<[unknown, boolean]>([
+    [undefined, true],
+    [true, true],
+    [false, false],
+    ['false', true],
+    [0, true],
+  ])('resolves the stored value %j to %s', (stored, on) => {
+    expect(resolveCodeReviewSettings({ reviewOnSessionComplete: stored } as never).reviewOnSessionComplete).toBe(on);
+  });
+
+  it.each<[unknown, Record<string, unknown>]>([
+    [true, { reviewOnSessionComplete: true }],
+    [false, { reviewOnSessionComplete: false }],
+    ['yes', {}],
+    [null, {}],
+  ])('keeps the patch value %j as %j', (value, patch) => {
+    expect(codeReviewSettingsPatch({ reviewOnSessionComplete: value })).toEqual(patch);
   });
 });

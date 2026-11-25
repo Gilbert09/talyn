@@ -1,8 +1,8 @@
 // Code review auto-start: when a session becomes code complete at the end of a
 // turn, start a review of its pull request's head, once per head.
 //
-// Gated by the `codeReviewAutoStartOnComplete` flag (asked for the workspace
-// owner). Never for local sessions: the backend cannot see their box.
+// Gated by the workspace setting `reviewOnSessionComplete` (on by default, on
+// every plan). Never for local sessions: the backend cannot see their box.
 
 import {
   codeCompleteBlockers,
@@ -12,15 +12,13 @@ import {
   type CodeReviewPhase,
   type WorkbenchChatStatus,
 } from '@talyn/shared';
-import { ownerHasAutoFeatures } from '../billing/entitlements.js';
-import { workspaceHasFeature } from '../featureFlags.js';
 import { refreshPullRequestById } from '../prRefresh.js';
 import { runningJobsQuery } from '../workbenches/backgroundStore.js';
 import { storedScriptNames } from '../workbenches/scriptStore.js';
 import { listChats, type WorkbenchRow } from '../workbenches/store.js';
 import { startReviewCycle } from './cycle.js';
 import { countCyclesStartedFor, getPrForReview, getReviewForPr, type ReviewPrRow } from './store.js';
-import { workspaceOwner, workspaceReviewSettings } from './workspaceSettings.js';
+import { workspaceReviewSettings } from './workspaceSettings.js';
 
 /**
  * The most cycles the auto-start begins on one pull request. With the
@@ -35,13 +33,11 @@ export type SessionAutoStartSkip =
   | 'local'
   | 'thread'
   | 'no_pull_request'
-  | 'flag_off'
   | 'pull_request_not_open'
   | 'no_head'
   | 'already_reviewed'
   | 'not_code_complete'
   | 'head_not_pushed'
-  | 'plan'
   | 'settings_off'
   | 'limit_reached';
 
@@ -75,9 +71,8 @@ export async function startReviewIfCodeComplete(
     if (wb.kind === 'thread') return { kind: 'skipped', reason: 'thread' };
     const pullRequestId = wb.pullRequestId;
     if (!pullRequestId) return { kind: 'skipped', reason: 'no_pull_request' };
-    if (!(await workspaceHasFeature('codeReviewAutoStartOnComplete', wb.workspaceId)).enabled) {
-      return { kind: 'skipped', reason: 'flag_off' };
-    }
+    const settings = await workspaceReviewSettings(wb.workspaceId);
+    if (!settings.reviewOnSessionComplete) return { kind: 'skipped', reason: 'settings_off' };
 
     let pr = await getPrForReview(pullRequestId);
     if (!pr || pr.state !== 'open') return { kind: 'skipped', reason: 'pull_request_not_open' };
@@ -117,15 +112,11 @@ export async function startReviewIfCodeComplete(
       return { kind: 'skipped', reason: 'limit_reached' };
     }
 
-    const settings = await workspaceReviewSettings(wb.workspaceId);
     if (!settings.builtInReviewers && !customReviewersForRepo(settings.customReviewers, pr).length) {
       return { kind: 'skipped', reason: 'settings_off' };
     }
-    // The plan gate of every automatic review: an automatic start spends box
-    // time with nobody asking.
-    if (!(await ownerHasAutoFeatures(await workspaceOwner(wb.workspaceId)))) {
-      return { kind: 'skipped', reason: 'plan' };
-    }
+    // No plan gate: this review is on for every plan. The box gate in
+    // `startReviewCycle` still holds it to the owner's compute time.
 
     const outcome = await startReviewCycle({ pullRequestId, auto: true, trigger: 'session_complete' });
     if (!outcome.ok) return { kind: 'declined', code: outcome.code };

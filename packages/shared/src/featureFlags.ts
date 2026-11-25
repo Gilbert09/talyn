@@ -489,45 +489,6 @@ export const FEATURE_FLAGS = {
   },
 
   /**
-   * Code review report-back: when a review cycle finishes on a pull request
-   * that a live cloud session owns, Talyn sends the confirmed findings to that
-   * session as a message, and auto-fix does not run. The session's agent fixes
-   * or dismisses each finding.
-   *
-   * Asked for the workspace OWNER. Fallback OFF: with PostHog down, Talyn keeps
-   * the earlier behaviour (the session only holds auto-fix back). No release
-   * scope: `code-review` would withhold every code review highlight.
-   */
-  codeReviewSessionReportBack: {
-    posthogKey: 'code-review-session-report-back',
-    envOverride: 'CODE_REVIEW_SESSION_REPORT_BACK_ENABLED',
-    fallback: false,
-    description: 'Code review report-back — send confirmed findings to the session that owns the pull request',
-    availability: 'gated',
-    releaseScopes: [],
-  },
-
-  /**
-   * Code review auto-start: when a session becomes code complete (its turn
-   * ended, its pull request is open, nothing runs and everything is pushed),
-   * Talyn starts a code review of the pull request's head, once per head.
-   *
-   * Server-only, asked for the workspace OWNER at turn end. Fallback OFF and
-   * gated: a review spends box-hours with nobody asking, so a PostHog outage
-   * must not switch it on. The card's "Run code review" button and the header
-   * badge are not gated by this flag. No release scope: `code-review` would
-   * withhold every code review highlight.
-   */
-  codeReviewAutoStartOnComplete: {
-    posthogKey: 'code-review-auto-start-on-complete',
-    envOverride: 'CODE_REVIEW_AUTO_START_ON_COMPLETE_ENABLED',
-    fallback: false,
-    description: 'Code review auto-start — review the pull request when its session is code complete',
-    availability: 'gated',
-    releaseScopes: [],
-  },
-
-  /**
    * Slack channel rules: a message in a watched Slack channel starts work
    * (a session, a reply, a reaction), as a rule of the Slack integration.
    *
