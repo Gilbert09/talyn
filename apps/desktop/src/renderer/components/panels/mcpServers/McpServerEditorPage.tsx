@@ -1077,7 +1077,11 @@ function SignIn({
       if (current === attempt.current)
         setError(err instanceof Error ? err.message : 'Could not start sign-in.');
     } finally {
-      closeLoopback();
+      // Only a finished attempt frees the loopback port. After an unmount or a
+      // superseded attempt, the browser can still deliver the code, and the
+      // listener forwards it on its own until its timeout. A newer sign-in
+      // closes it in the main process.
+      if (current === attempt.current) closeLoopback();
       if (!opened) browser.close();
       // A superseded attempt — the user pressed sign-in again, or left the
       // page — is reported as such rather than as an error. Counting it as a
