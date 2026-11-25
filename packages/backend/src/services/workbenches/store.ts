@@ -410,15 +410,17 @@ export async function keepSandboxes(id: string, ids: string[]): Promise<void> {
 /**
  * Claim a lost box once. The old sandbox id keeps late calls from replacing its
  * new box. `keepSandboxIds` go on `settings.keptSandboxIds`, so the reaper
- * does not delete those boxes.
+ * does not delete those boxes. With `onlyRunningChatId`, the claim fails
+ * while any other chat of the session runs a turn.
  */
 export async function claimLostWorkbench(
   id: string,
   sandboxId: string,
   replacementId: string,
   message: string,
-  opts: { keepSandboxIds?: string[] } = {},
+  opts: { keepSandboxIds?: string[]; onlyRunningChatId?: string } = {},
 ): Promise<WorkbenchRow | null> {
+  const onlyRunning = opts.onlyRunningChatId;
   const [row] = await db()
     .update(workbenchesTable)
     .set({
@@ -437,6 +439,11 @@ export async function claimLostWorkbench(
       eq(workbenchesTable.sandboxId, sandboxId),
       eq(workbenchesTable.status, 'ready'),
       isNull(workbenchesTable.archivedAt),
+      // No chat but `onlyRunningChatId` runs a turn on the box.
+      onlyRunning === undefined ? undefined : sql`NOT EXISTS (
+        SELECT 1 FROM ${chatsTable}
+        WHERE ${chatsTable.workbenchId} = ${workbenchesTable.id}
+          AND ${chatsTable.status} = 'running' AND ${chatsTable.id} <> ${onlyRunning})`,
     ))
     .returning(WORKBENCH_COLUMNS);
   return row ?? null;

@@ -495,6 +495,21 @@ export interface WorkbenchQueuedMessage {
    * Absent for an ordinary queued message.
    */
   capacityWait?: WorkbenchCapacityWait;
+  /**
+   * Set when Talyn replaced the box because its host did not answer, before
+   * the agent of `turn` started. The turn does not fail over again, and its
+   * wait for a box keeps the bound that started at `waitStartedAt`.
+   */
+  hostFailover?: WorkbenchHostFailover;
+}
+
+/** A message whose box Talyn replaced because its host did not answer. See `WorkbenchQueuedMessage.hostFailover`. */
+export interface WorkbenchHostFailover {
+  turn: number;
+  /** When Talyn replaced the box. */
+  at: string;
+  /** When the turn's wait for a box started, before the failover. */
+  waitStartedAt: string;
 }
 
 /**

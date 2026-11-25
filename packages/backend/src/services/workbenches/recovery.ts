@@ -115,16 +115,18 @@ export const SANDBOX_HOST_FAILOVER_MESSAGE = "The sandbox's host is not answerin
 
 /**
  * Replace a box whose fleet host does not answer, before a turn's agent
- * starts. The same claim as a lost box, but Talyn keeps the old box: the host
+ * starts. `chatId` is the chat of that turn. No other chat of the session may
+ * run: its agent can still run in the old box, so a new box could repeat its
+ * work. The same claim as a lost box, but Talyn keeps the old box: the host
  * can come back, and an operator can recover the work on it. There is no
  * fleet read first, because the host does not answer it.
  *
- * Null when no replacement starts: another recovery runs, the box was
+ * Null when no replacement starts: another chat runs, another recovery runs, the box was
  * replaced in the last 10 minutes (no second replacement in a loop: the new
  * box can land on the same host until the fleet skips it), or the session
  * moved on.
  */
-export async function replaceSilentHostSandbox(row: WorkbenchRow): Promise<WorkbenchRow | null> {
+export async function replaceSilentHostSandbox(row: WorkbenchRow, chatId: string): Promise<WorkbenchRow | null> {
   if (!row.sandboxId || recovering.has(row.id)) return null;
   const now = Date.now();
   if (now - (attempts.get(row.id) ?? 0) < RETRY_WINDOW_MS) return null;
@@ -134,6 +136,7 @@ export async function replaceSilentHostSandbox(row: WorkbenchRow): Promise<Workb
     const replacementId = nextSandboxId(row);
     claimed = await claimLostWorkbench(row.id, sandboxId, replacementId, SANDBOX_HOST_FAILOVER_MESSAGE, {
       keepSandboxIds: keptSandboxIdsFor(row),
+      onlyRunningChatId: chatId,
     });
     if (!claimed) return;
     attempts.set(row.id, now);

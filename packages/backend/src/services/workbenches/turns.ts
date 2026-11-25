@@ -1307,11 +1307,13 @@ async function capacityWaitOutcome(
   const chatId = chat.id;
   const now = Date.now();
   const prior = message.capacityWait?.turn === turn ? message.capacityWait : undefined;
-  const startedAt = prior ? Date.parse(prior.startedAt) : now;
+  // A turn that already failed over keeps the bound of its first wait, and does not fail over again.
+  const failedOver = message.hostFailover?.turn === turn ? message.hostFailover : undefined;
+  const startedAt = prior ? Date.parse(prior.startedAt) : failedOver ? Date.parse(failedOver.waitStartedAt) : now;
   const hostSilent = wb !== null && (await hostFailoverEnabled(wb.workspaceId)) && (await hostNotAnswering(wb, err));
   const hostSilentSince = hostSilent ? (prior?.hostSilentSince ? Date.parse(prior.hostSilentSince) : now) : null;
-  if (wb && hostSilentSince !== null && now - hostSilentSince >= HOST_FAILOVER.silentForMs) {
-    const replaced = await failOverSilentHost(wb, chat, message, turn, events, now - hostSilentSince);
+  if (wb && !failedOver && hostSilentSince !== null && now - hostSilentSince >= HOST_FAILOVER.silentForMs) {
+    const replaced = await failOverSilentHost(wb, chat, message, turn, events, now - hostSilentSince, startedAt);
     if (replaced) return replaced;
   }
   const left = PROVISION_CAPACITY_WAIT.maxMs - (now - startedAt);
@@ -1358,20 +1360,27 @@ async function failOverSilentHost(
   turn: number,
   events: EventBatcher,
   silentMs: number,
+  waitStartedAt: number,
 ): Promise<TurnOutcome | null> {
   // The row as it is now: a step of this turn can have moved the box.
   const current = (await getWorkbench(wb.id)) ?? wb;
   const checkpointAt = current.workCheckpointAt ?? null;
-  const replaced = await replaceSilentHostSandbox(current).catch((err: unknown) => {
+  const replaced = await replaceSilentHostSandbox(current, chat.id).catch((err: unknown) => {
     console.warn(`[workbench] replacing sandbox ${current.sandboxId} of a silent host failed:`, err);
     return null;
   });
   if (!replaced) {
-    noteTurn('turn_host_failover_skipped', chat.id, turn, `the host of ${current.sandboxId} is silent, but no new box started; waiting`);
+    noteTurn('turn_host_failover_skipped', chat.id, turn,
+      `the host of ${current.sandboxId} is silent, but no new box started (another chat runs, or a recent replacement); waiting`);
     return null;
   }
+  // Not a wait while the new box starts. The failover mark keeps the bound and stops a second failover.
   const { capacityWait: _wait, ...plain } = message;
-  return requeueForReplacement(chat, plain, turn, events, {
+  const marked: WorkbenchQueuedMessage = {
+    ...plain,
+    hostFailover: { turn, at: new Date().toISOString(), waitStartedAt: new Date(waitStartedAt).toISOString() },
+  };
+  return requeueForReplacement(chat, marked, turn, events, {
     subtype: 'sandbox_host_failover',
     text: hostFailoverNote(checkpointAt),
     detail: `the host of ${current.sandboxId} did not answer for ${Math.round(silentMs / 1000)} s before the agent started; the message waits for the new box`,

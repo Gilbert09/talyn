@@ -283,21 +283,61 @@ describe('a turn fails over from a box whose host does not answer', () => {
     expect(scheduleProvision).not.toHaveBeenCalled();
   });
 
-  it('does not fail over a second time when the new box\'s host is silent too', async () => {
+  it('fails over once per turn, and the wait keeps the bound of its first refusal', async () => {
     refusal = SILENT_HOST[0][1];
     await sendMessage('chat', { text: 'go' });
     await failedOver();
     const replacement = (await workbench()).sandboxId;
-    Object.assign(PROVISION_CAPACITY_WAIT, { maxMs: 600 });
+    const mark = (await chat()).queuedMessages[0].hostFailover;
+    expect(mark).toMatchObject({ turn: 1, at: expect.any(String), waitStartedAt: expect.any(String) });
+    // The 10-minute window of recovery is over: only the mark on the message stops a second failover.
+    resetLostRecoveryForTests();
+    // The bound counts from the first refusal on the old box, so it ends soon after the failover.
+    Object.assign(PROVISION_CAPACITY_WAIT, { maxMs: Date.now() - Date.parse(mark!.waitStartedAt) + 500 });
 
     // The new box lands on the same host: it does not answer either.
     expect(await provisionEnds()).toBe(true);
     await vi.waitFor(async () => expect((await chat()).status).toBe('error'), { timeout: 5000 });
     expect((await chat()).statusMessage).toBe(NO_FREE_SANDBOX_TURN_MESSAGE);
     expect(await workbench()).toMatchObject({ status: 'ready', sandboxId: replacement });
+    expect((await workbench()).settings?.keptSandboxIds).toEqual([OLD_BOX]);
     expect(scheduleProvision).toHaveBeenCalledTimes(1);
     expect(await failoverNotes()).toHaveLength(1);
     expect(agentRuns).toBe(0);
+  });
+
+  it('a later turn can fail over again', async () => {
+    refusal = SILENT_HOST[0][1];
+    await sendMessage('chat', { text: 'first' });
+    await failedOver();
+    resetLostRecoveryForTests();
+    refusal = null;
+    expect(await provisionEnds()).toBe(true);
+    await vi.waitFor(async () => expect(agentRuns).toBe(1), { timeout: 5000 });
+    await vi.waitFor(async () => expect((await chat()).status).toBe('idle'), { timeout: 5000 });
+
+    refusal = SILENT_HOST[0][1];
+    await sendMessage('chat', { text: 'second' });
+    await failedOver();
+    expect(scheduleProvision).toHaveBeenCalledTimes(2);
+    expect((await failoverNotes()).map((e) => e.turn)).toEqual([1, 2]);
+  });
+
+  it('does not replace the box while another chat of the session runs a turn', async () => {
+    await testDb.db.insert(workbenchChats).values({
+      id: 'chat-b', workbenchId: 'wb', workspaceId: 'ws', title: 'Other', agent: 'claude', turnCount: 1, status: 'running',
+    });
+    refusal = SILENT_HOST[0][1];
+    await sendMessage('chat', { text: 'go' });
+    await waiting(4);
+    expect(await workbench()).toMatchObject({ status: 'ready', sandboxId: OLD_BOX });
+    expect(scheduleProvision).not.toHaveBeenCalled();
+    expect(await failoverNotes()).toEqual([]);
+
+    // The other turn ends: the next silent answer fails over.
+    await testDb.db.update(workbenchChats).set({ status: 'idle' }).where(eq(workbenchChats.id, 'chat-b'));
+    await failedOver();
+    expect(scheduleProvision).toHaveBeenCalledTimes(1);
   });
 
   it('does not fail over a turn whose agent already started', async () => {
