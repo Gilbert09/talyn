@@ -1051,6 +1051,13 @@
       "when": 1790900000260,
       "tag": "0149_review_unit_capacity_wait",
       "breakpoints": true
+    },
+    {
+      "idx": 152,
+      "version": "7",
+      "when": 1790900000270,
+      "tag": "0150_mobile_skip_sandbox_wait",
+      "breakpoints": true
     }
   ]
 }

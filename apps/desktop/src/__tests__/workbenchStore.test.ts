@@ -202,6 +202,27 @@ describe('workbench store', () => {
       expect(Boolean(useWorkbenchStore.getState().unread.c1)).toBe(fires);
     });
 
+    it('does not call the listener while a turn waits for a sandbox, only when it ends', () => {
+      const listener = jest.fn();
+      setChatFinishedListener(listener);
+      const s = useWorkbenchStore.getState();
+      const wait = (attempts: number) => ({
+        id: 'm1', text: 'hi', queuedAt: '2026-01-01T00:00:00.000Z',
+        capacityWait: { turn: 1, startedAt: '2026-01-01T00:00:00.000Z', retryAt: '2026-01-01T00:01:00.000Z', attempts, reason: 'capacity' as const },
+      });
+      s.upsertChat(chat('c1', { status: 'running' }));
+      for (const attempts of [1, 2, 3]) {
+        s.upsertChat(chat('c1', { status: 'idle', queuedMessages: [wait(attempts)] }));
+        s.upsertChat(chat('c1', { status: 'running', queuedMessages: [] }));
+      }
+      expect(listener).not.toHaveBeenCalled();
+      expect(useWorkbenchStore.getState().unread.c1).toBeUndefined();
+      expect(useWorkbenchStore.getState().unseen.wb1).toBeUndefined();
+      s.upsertChat(chat('c1', { status: 'idle', queuedMessages: [] }));
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(useWorkbenchStore.getState().unread.c1).toBe(true);
+    });
+
     it('does not mark the chat unread when it is open and the window is focused', () => {
       jest.spyOn(document, 'hasFocus').mockReturnValue(true);
       const s = useWorkbenchStore.getState();
