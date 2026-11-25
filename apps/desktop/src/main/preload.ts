@@ -4,6 +4,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { DesktopWorkbenchBridge } from '../workbenchBridgeTypes';
 import type { UpdaterEvent, UpdaterCheckResult, UpdateChannel } from './updaterEvents';
 import type { CodexSignInResult } from './codexAuth';
+import type { McpLoopbackCallback } from './mcpOAuthLoopback';
 import type { ReviewRankingExportResult } from './reviewRankingExport';
 import type {
   InstallLocalAgentKitRequest,
@@ -275,6 +276,23 @@ const electronHandler = {
      */
     signIn(): Promise<CodexSignInResult> {
       return ipcRenderer.invoke('codex:sign-in');
+    },
+  },
+  mcpOAuth: {
+    /**
+     * Listen on a loopback callback for an MCP server sign-in. The renderer
+     * offers `redirectUri` to the backend, which uses it only when the server
+     * refuses the hosted callback.
+     */
+    listen(): Promise<{ id: string; redirectUri: string }> {
+      return ipcRenderer.invoke('mcp-oauth:listen');
+    },
+    /** Resolves with the callback for `state`, or null when the listener closes. */
+    wait(id: string, state: string): Promise<McpLoopbackCallback | null> {
+      return ipcRenderer.invoke('mcp-oauth:wait', id, state);
+    },
+    close(id: string): Promise<void> {
+      return ipcRenderer.invoke('mcp-oauth:close', id);
     },
   },
   skills: {

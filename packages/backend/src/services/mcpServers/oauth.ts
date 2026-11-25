@@ -93,6 +93,37 @@ export function mcpClientMetadataUrl(): string {
   return url;
 }
 
+/**
+ * A loopback callback that the desktop app listens on, in its one accepted
+ * form: `http://127.0.0.1:<port>/callback`.
+ *
+ * Some vendors (pganalyze) register only allowlisted redirect URIs, and the
+ * hosted callback is not on their list. Loopback addresses usually are (RFC
+ * 8252), because a local client like Claude Code needs them. The code that
+ * arrives there is useless without the PKCE verifier, which stays here.
+ */
+export function mcpLoopbackRedirectUri(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  const port = Number(url.port);
+  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !Number.isInteger(port) ||
+      port < 1024 || port > 65535) {
+    return null;
+  }
+  const canonical = `http://127.0.0.1:${port}/callback`;
+  return value === canonical ? canonical : null;
+}
+
+/** The text a client shows when a server takes sign-in only on a loopback
+ *  address and this client cannot listen on one. */
+const DESKTOP_ONLY_SIGN_IN =
+  'this server accepts sign-in only on this computer. Connect it from the Talyn desktop app, or paste an API key instead.';
+
 /** The stored shape. Never returned to a client — see `grantStatus`. */
 export interface StoredMcpOAuth {
   status: 'pending' | 'connected' | 'needs_reauth';
@@ -107,6 +138,9 @@ export interface StoredMcpOAuth {
   scopes?: string[];
   /** The RFC 8707 resource this grant is bound to. */
   resource?: string;
+  /** A loopback redirect the client is registered with. Absent means the
+   *  hosted `mcpRedirectUri()`. */
+  redirectUri?: string;
   accessTokenEnc?: EncryptedEnvelope;
   refreshTokenEnc?: EncryptedEnvelope;
   expiresAt?: string;
@@ -181,6 +215,7 @@ function sha256(s: string): Buffer {
 async function registerClient(
   server: AuthServerMetadata,
   scopes: string[],
+  redirectUri: string,
   signal: AbortSignal,
   context?: McpRequestContext
 ): Promise<{ clientId: string; clientSecret?: string }> {
@@ -197,17 +232,19 @@ async function registerClient(
     body: JSON.stringify({
       client_name: 'Talyn',
       client_uri: webAppUrl('/') ?? undefined,
-      redirect_uris: [mcpRedirectUri()],
+      redirect_uris: [redirectUri],
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
-      // Named so a native-client rule does not apply to a hosted redirect.
-      application_type: 'web',
+      // A hosted redirect is a web client. A loopback one is a native client,
+      // because some servers refuse an http://127.0.0.1 address for 'web'.
+      application_type: mcpLoopbackRedirectUri(redirectUri) ? 'native' : 'web',
       ...(scopes.length > 0 ? { scope: scopes.join(' ') } : {}),
     }),
   }, context).catch((error) => { throw new McpDiscoveryError(fetchFailureReason(error)); });
   if (!resp.ok) {
-    throw new McpDiscoveryError(await registrationRefusal(resp));
+    const refusal = await registrationRefusal(resp, redirectUri);
+    throw refusal.redirectRefused ? new McpRedirectRefusedError(refusal.message) : new McpDiscoveryError(refusal.message);
   }
   const doc = await readJsonResponse(resp) as { client_id?: unknown; client_secret?: unknown };
   if (typeof doc.client_id !== 'string' || !doc.client_id) {
@@ -225,7 +262,10 @@ async function registerClient(
  * `error_description` is safe to show. Some vendors (pganalyze) allow only
  * listed redirect URIs, and the user must know which address to ask for.
  */
-async function registrationRefusal(resp: Response): Promise<string> {
+async function registrationRefusal(
+  resp: Response,
+  redirectUri: string
+): Promise<{ message: string; redirectRefused: boolean }> {
   const base = `the server refused to set up sign-in (${resp.status})`;
   let doc: { error?: unknown; error_description?: unknown } = {};
   try {
@@ -235,15 +275,22 @@ async function registrationRefusal(resp: Response): Promise<string> {
     await resp.body?.cancel().catch(() => {});
   }
   if (doc.error === 'invalid_redirect_uri') {
-    return `${base}: it does not accept Talyn's sign-in address ${mcpRedirectUri()}. ` +
-      'Ask the vendor to allow that address, or paste an API key instead.';
+    return {
+      message: `${base}: it does not accept Talyn's sign-in address ${redirectUri}. ` +
+        'Connect it from the Talyn desktop app, ask the vendor to allow that address, or paste an API key instead.',
+      redirectRefused: true,
+    };
   }
   const raw = typeof doc.error_description === 'string' ? doc.error_description
     : typeof doc.error === 'string' ? doc.error : '';
   // eslint-disable-next-line no-control-regex
   const reason = raw.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 300);
-  return reason ? `${base}: ${reason}` : base;
+  return { message: reason ? `${base}: ${reason}` : base, redirectRefused: false };
 }
+
+/** The registration endpoint refused the redirect URI itself. The desktop app
+ *  can retry with a loopback one. */
+export class McpRedirectRefusedError extends McpDiscoveryError {}
 
 /**
  * The CIMD document is one static file for every server, and it registers no
@@ -283,13 +330,19 @@ export async function startMcpOAuth(
   server: Pick<McpServerDefinition, 'id' | 'url' | 'workspaceId'>,
   existing: StoredMcpOAuth | null,
   now: Date,
-  opts: { mobileReturn?: string | null } = {}
+  opts: { mobileReturn?: string | null; loopbackRedirectUri?: string | null } = {}
 ): Promise<StartedFlow> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new DOMException('The MCP request timed out.', 'TimeoutError')), EXCHANGE_TIMEOUT_MS);
   try {
-    const redirectUri = mcpRedirectUri();
-    const localCallback = new URL(redirectUri).hostname === 'localhost';
+    const hostedRedirectUri = mcpRedirectUri();
+    const localCallback = new URL(hostedRedirectUri).hostname === 'localhost';
+    const loopback = opts.loopbackRedirectUri ?? null;
+    // A grant registered on a loopback redirect stays there: the vendor already
+    // refused the hosted one.
+    const loopbackOnly = !!existing?.redirectUri;
+    if (loopbackOnly && !loopback) throw new McpDiscoveryError(DESKTOP_ONLY_SIGN_IN);
+    let redirectUri = loopbackOnly ? (loopback as string) : hostedRedirectUri;
     let meta: AuthServerMetadata;
     let resource = existing?.resource ?? server.url;
     let scopes = existing?.scopes ?? [];
@@ -298,7 +351,8 @@ export async function startMcpOAuth(
     let clientSource = existing?.clientSource;
 
     if (existing?.authorizationEndpoint && existing.tokenEndpoint && clientId &&
-        !needsScopedClient(existing.clientSource, scopes, existing.registrationEndpoint)) {
+        !needsScopedClient(existing.clientSource, scopes, existing.registrationEndpoint) &&
+        (existing.redirectUri ?? hostedRedirectUri) === redirectUri) {
       meta = {
         issuer: existing.issuer ?? '',
         authorizationEndpoint: existing.authorizationEndpoint,
@@ -325,13 +379,21 @@ export async function startMcpOAuth(
           throw new McpOAuthUnavailableError('Slack sign-in is not configured for this Talyn deployment. An administrator must register a Slack app and configure its client credentials.');
         }
         clientSource = 'byo';
-      } else if (meta.clientIdMetadataDocumentSupported && !(localCallback && meta.registrationEndpoint) &&
+      } else if (!loopbackOnly && meta.clientIdMetadataDocumentSupported && !(localCallback && meta.registrationEndpoint) &&
           !needsScopedClient('cimd', scopes, meta.registrationEndpoint)) {
         // The forward-compatible path: one hosted document, nothing registered.
         clientId = mcpClientMetadataUrl();
         clientSource = 'cimd';
       } else {
-        const registered = await registerClient(meta, scopes, controller.signal, { workspaceId: server.workspaceId, purpose: 'registration' });
+        const context = { workspaceId: server.workspaceId, purpose: 'registration' } as const;
+        let registered: Awaited<ReturnType<typeof registerClient>>;
+        try {
+          registered = await registerClient(meta, scopes, redirectUri, controller.signal, context);
+        } catch (err) {
+          if (!(err instanceof McpRedirectRefusedError) || !loopback || redirectUri === loopback) throw err;
+          redirectUri = loopback;
+          registered = await registerClient(meta, scopes, redirectUri, controller.signal, context);
+        }
         clientId = registered.clientId;
         clientSecret = registered.clientSecret;
         clientSource = 'dcr';
@@ -377,6 +439,7 @@ export async function startMcpOAuth(
         ...(clientSource ? { clientSource } : {}),
         scopes,
         resource,
+        redirectUri: redirectUri === hostedRedirectUri ? undefined : redirectUri,
         flow: {
           id: flowId,
           stateHash: base64url(sha256(state)),
@@ -503,7 +566,7 @@ export async function completeMcpOAuth(
       new URLSearchParams({
         grant_type: 'authorization_code',
         code,
-        redirect_uri: mcpRedirectUri(),
+        redirect_uri: stored.redirectUri ?? mcpRedirectUri(),
         client_id: stored.clientId ?? '',
         code_verifier: flow.verifierEnc ? decryptString(flow.verifierEnc) : flow.verifier ?? '',
         resource: stored.resource ?? '',

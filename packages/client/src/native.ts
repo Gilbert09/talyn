@@ -2722,13 +2722,22 @@ export const mcpServers = {
   /**
    * `returnTo` is the mobile app's URL base: the web callback page then sends
    * the browser to `${returnTo}mcp/callback?mcp=connected|error`.
+   *
+   * `loopbackRedirectUri` is a `http://127.0.0.1:<port>/callback` address the
+   * desktop app listens on. The backend uses it only when the server refuses
+   * the hosted callback; the authorize URL's `redirect_uri` says which won.
    */
-  startSignIn: (id: string, opts?: { returnTo?: string }) =>
-    request<{ flowId: string; authorizeUrl: string; expiresAt: string; scopes: string[] }>(
+  startSignIn: (id: string, opts?: { returnTo?: string; loopbackRedirectUri?: string }) => {
+    const body = {
+      ...(opts?.returnTo ? { returnTo: opts.returnTo } : {}),
+      ...(opts?.loopbackRedirectUri ? { loopbackRedirectUri: opts.loopbackRedirectUri } : {}),
+    };
+    return request<{ flowId: string; authorizeUrl: string; expiresAt: string; scopes: string[] }>(
       'POST',
       `/mcp-servers/${id}/connect`,
-      opts?.returnTo ? { returnTo: opts.returnTo } : undefined
-    ),
+      Object.keys(body).length > 0 ? body : undefined
+    );
+  },
 
   /** The poll a client runs while somebody is at the consent screen. */
   signInStatus: (id: string, flowId: string) =>

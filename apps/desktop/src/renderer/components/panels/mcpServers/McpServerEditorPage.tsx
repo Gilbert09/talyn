@@ -24,6 +24,7 @@ import { Section, TextField } from '../workflows/workflowFields';
 import { api } from '../../../lib/api';
 import { Markdown } from '../../../lib/markdown';
 import { openExternal, prepareSignInWindow } from '../../../lib/openExternal';
+import { startMcpSignIn } from '../../../lib/mcpSignIn';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 
@@ -1034,12 +1035,14 @@ function SignIn({
     setBusy(true);
     setError(null);
     setAuthorizeUrl(null);
+    let closeLoopback: () => void = () => undefined;
     try {
       const saved = await prepare();
       hostUrl = saved.url;
       setServerId(saved.id);
       if (current !== attempt.current) return;
-      const flow = await api.mcpServers.startSignIn(saved.id);
+      const { flow, close } = await startMcpSignIn(saved.id);
+      closeLoopback = close;
       if (current !== attempt.current) return;
       try {
         opened = await browser.open(flow.authorizeUrl);
@@ -1074,6 +1077,7 @@ function SignIn({
       if (current === attempt.current)
         setError(err instanceof Error ? err.message : 'Could not start sign-in.');
     } finally {
+      closeLoopback();
       if (!opened) browser.close();
       // A superseded attempt — the user pressed sign-in again, or left the
       // page — is reported as such rather than as an error. Counting it as a

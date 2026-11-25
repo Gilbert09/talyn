@@ -3,6 +3,7 @@ import {
   completeMcpOAuth,
   readMcpAccount,
   grantStatus,
+  mcpLoopbackRedirectUri,
   serverIdFromState,
   startMcpOAuth,
   type StoredMcpOAuth,
@@ -175,7 +176,8 @@ describe('starting a sign-in', () => {
       400,
       JSON.stringify({ error: 'invalid_redirect_uri', error_description: 'Only specific redirect URIs are currently allowed.' }),
       "the server refused to set up sign-in (400): it does not accept Talyn's sign-in address " +
-        'https://app.talyn.dev/mcp/callback. Ask the vendor to allow that address, or paste an API key instead.',
+        'https://app.talyn.dev/mcp/callback. Connect it from the Talyn desktop app, ask the vendor to allow that ' +
+        'address, or paste an API key instead.',
     ],
     [
       'an RFC 7591 error with a description',
@@ -323,6 +325,175 @@ describe('starting a sign-in', () => {
     );
     expect(started.stored.flow?.mobileReturn).toBe(expected);
     expect(started.stored.flow && 'mobileReturn' in started.stored.flow).toBe(expected !== undefined);
+  });
+});
+
+describe('loopback redirect URI', () => {
+  it.each([
+    ['http://127.0.0.1:47823/callback', 'http://127.0.0.1:47823/callback'],
+    ['http://127.0.0.1:1024/callback', 'http://127.0.0.1:1024/callback'],
+    ['http://127.0.0.1:65535/callback', 'http://127.0.0.1:65535/callback'],
+    ['http://127.0.0.1:1023/callback', null],
+    ['http://127.0.0.1/callback', null],
+    ['http://127.0.0.1:80/callback', null],
+    ['http://localhost:47823/callback', null],
+    ['http://[::1]:47823/callback', null],
+    ['https://127.0.0.1:47823/callback', null],
+    ['http://127.0.0.1:47823/callback/', null],
+    ['http://127.0.0.1:47823/other', null],
+    ['http://127.0.0.1:47823/callback?next=x', null],
+    ['http://127.0.0.1:47823/callback#x', null],
+    ['http://user@127.0.0.1:47823/callback', null],
+    ['http://127.0.0.1.evil.com:47823/callback', null],
+    ['HTTP://127.0.0.1:47823/callback', null],
+    ['not a url', null],
+    ['', null],
+    [47823, null],
+    [null, null],
+    [undefined, null],
+  ])('accepts %j as %j', (value, expected) => {
+    expect(mcpLoopbackRedirectUri(value)).toBe(expected);
+  });
+});
+
+describe('signing in on a loopback redirect', () => {
+  const LOOPBACK = 'http://127.0.0.1:47823/callback';
+  const SERVER = { id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' };
+  const REFUSED = JSON.stringify({ error: 'invalid_redirect_uri', error_description: 'not allowed' });
+
+  function discoverServer(cimd = false) {
+    return vi.spyOn(discovery, 'discover').mockResolvedValue({
+      resource: { authorizationServers: ['https://auth.example.com'], scope: 'read' },
+      server: {
+        issuer: 'https://auth.example.com',
+        authorizationEndpoint: 'https://auth.example.com/authorize',
+        tokenEndpoint: 'https://auth.example.com/token',
+        registrationEndpoint: 'https://auth.example.com/register',
+        clientIdMetadataDocumentSupported: cimd,
+      },
+    });
+  }
+
+  /** The register endpoint refuses every redirect in `refused`, and registers the rest. */
+  function stubRegister(refused: string[]) {
+    stubFetch({}, (url, init) => {
+      if (url !== 'https://auth.example.com/register') return null;
+      const body = JSON.parse(init?.body as string) as { redirect_uris: string[] };
+      return refused.includes(body.redirect_uris[0] as string)
+        ? new Response(REFUSED, { status: 400 })
+        : new Response(JSON.stringify({ client_id: `client-for-${body.redirect_uris[0]}` }), { status: 201 });
+    });
+  }
+
+  function registrations() {
+    return vi.mocked(fetch).mock.calls
+      .filter(([url]) => String(url) === 'https://auth.example.com/register')
+      .map(([, init]) => JSON.parse(init?.body as string) as { redirect_uris: string[]; application_type: string });
+  }
+
+  const loopbackGrant: StoredMcpOAuth = {
+    status: 'connected',
+    issuer: 'https://auth.example.com',
+    authorizationEndpoint: 'https://auth.example.com/authorize',
+    tokenEndpoint: 'https://auth.example.com/token',
+    registrationEndpoint: 'https://auth.example.com/register',
+    clientId: 'loopback-client',
+    clientSource: 'dcr',
+    resource: 'https://mcp.example.com/mcp',
+    scopes: ['read'],
+    redirectUri: LOOPBACK,
+  };
+
+  it('falls back to the loopback redirect when the server refuses the hosted one', async () => {
+    discoverServer();
+    stubRegister(['https://app.talyn.dev/mcp/callback']);
+    const started = await startMcpOAuth(SERVER, null, new Date(), { loopbackRedirectUri: LOOPBACK });
+    expect(registrations()).toEqual([
+      expect.objectContaining({ redirect_uris: ['https://app.talyn.dev/mcp/callback'], application_type: 'web' }),
+      expect.objectContaining({ redirect_uris: [LOOPBACK], application_type: 'native' }),
+    ]);
+    expect(started.stored).toMatchObject({ redirectUri: LOOPBACK, clientId: `client-for-${LOOPBACK}`, clientSource: 'dcr' });
+    expect(new URL(started.authorizeUrl).searchParams.get('redirect_uri')).toBe(LOOPBACK);
+  });
+
+  it('keeps the hosted redirect when the server accepts it', async () => {
+    discoverServer();
+    stubRegister([]);
+    const started = await startMcpOAuth(SERVER, null, new Date(), { loopbackRedirectUri: LOOPBACK });
+    expect(registrations()).toHaveLength(1);
+    expect(started.stored.redirectUri).toBeUndefined();
+    expect(new URL(started.authorizeUrl).searchParams.get('redirect_uri')).toBe('https://app.talyn.dev/mcp/callback');
+  });
+
+  it('keeps CIMD when the server supports it', async () => {
+    vi.spyOn(discovery, 'discover').mockResolvedValue({
+      resource: { authorizationServers: ['https://auth.example.com'] },
+      server: {
+        issuer: 'https://auth.example.com',
+        authorizationEndpoint: 'https://auth.example.com/authorize',
+        tokenEndpoint: 'https://auth.example.com/token',
+        clientIdMetadataDocumentSupported: true,
+      },
+    });
+    stubRegister([]);
+    const started = await startMcpOAuth(SERVER, null, new Date(), { loopbackRedirectUri: LOOPBACK });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(started.stored).toMatchObject({ clientSource: 'cimd', redirectUri: undefined });
+  });
+
+  it('reports the refusal when the loopback redirect is refused too', async () => {
+    discoverServer();
+    stubRegister(['https://app.talyn.dev/mcp/callback', LOOPBACK]);
+    await expect(startMcpOAuth(SERVER, null, new Date(), { loopbackRedirectUri: LOOPBACK }))
+      .rejects.toThrow(`it does not accept Talyn's sign-in address ${LOOPBACK}`);
+    expect(registrations()).toHaveLength(2);
+  });
+
+  it('does not retry on loopback for a refusal that is not about the redirect', async () => {
+    discoverServer();
+    stubFetch({}, (url) => url === 'https://auth.example.com/register'
+      ? new Response(JSON.stringify({ error: 'invalid_client_metadata' }), { status: 400 })
+      : null);
+    await expect(startMcpOAuth(SERVER, null, new Date(), { loopbackRedirectUri: LOOPBACK }))
+      .rejects.toThrow('the server refused to set up sign-in (400): invalid_client_metadata');
+    expect(registrations()).toHaveLength(1);
+  });
+
+  it('reuses a loopback client for the same redirect', async () => {
+    const discover = discoverServer();
+    stubRegister([]);
+    const started = await startMcpOAuth(SERVER, loopbackGrant, new Date(), { loopbackRedirectUri: LOOPBACK });
+    expect(discover).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(started.stored).toMatchObject({ clientId: 'loopback-client', redirectUri: LOOPBACK, status: 'connected' });
+    expect(new URL(started.authorizeUrl).searchParams.get('redirect_uri')).toBe(LOOPBACK);
+  });
+
+  it('registers again on the new loopback port and skips the hosted redirect', async () => {
+    const other = 'http://127.0.0.1:51000/callback';
+    discoverServer();
+    stubRegister(['https://app.talyn.dev/mcp/callback']);
+    const started = await startMcpOAuth(SERVER, loopbackGrant, new Date(), { loopbackRedirectUri: other });
+    expect(registrations()).toEqual([expect.objectContaining({ redirect_uris: [other], application_type: 'native' })]);
+    expect(started.stored).toMatchObject({ clientId: `client-for-${other}`, redirectUri: other });
+  });
+
+  it.each([undefined, null])('refuses a loopback grant when the client offers no loopback (%j)', async (loopbackRedirectUri) => {
+    discoverServer();
+    stubRegister([]);
+    await expect(startMcpOAuth(SERVER, loopbackGrant, new Date(), { loopbackRedirectUri }))
+      .rejects.toThrow('Connect it from the Talyn desktop app');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('exchanges the code with the loopback redirect', async () => {
+    const started = await startMcpOAuth(SERVER, loopbackGrant, new Date(), { loopbackRedirectUri: LOOPBACK });
+    const state = new URL(started.authorizeUrl).searchParams.get('state') as string;
+    stubFetch({ 'https://auth.example.com/token': { access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 } });
+    const next = await completeMcpOAuth(started.stored, state, 'code-1', new Date(), { workspaceId: 'ws-1', purpose: 'exchange' });
+    expect(next.status).toBe('connected');
+    const body = vi.mocked(fetch).mock.calls[0]?.[1]?.body as URLSearchParams;
+    expect(body.get('redirect_uri')).toBe(LOOPBACK);
   });
 });
 
