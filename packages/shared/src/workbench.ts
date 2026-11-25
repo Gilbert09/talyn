@@ -509,6 +509,15 @@ export interface WorkbenchTurnPayer {
   avatarUrl: string | null;
 }
 
+/**
+ * The chat is not running, and the message at the head of its queue waits for
+ * a free sandbox. Its turn did not end: Talyn tries it again. A turn that
+ * leaves `running` for this wait is not finished, so it must not notify.
+ */
+export function chatWaitsForSandbox(chat: { status: WorkbenchChatStatus; queuedMessages?: WorkbenchQueuedMessage[] | null }): boolean {
+  return chat.status !== 'running' && Boolean(chat.queuedMessages?.[0]?.capacityWait);
+}
+
 /** A queued message that waits for a free sandbox. See `WorkbenchQueuedMessage.capacityWait`. */
 export interface WorkbenchCapacityWait {
   /** The turn the message keeps. The transcript shows its user message there. */
