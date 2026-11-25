@@ -131,6 +131,11 @@ export function withServerAttention(
   return { kind: 'pr_attention', label: prNumber ? `#${prNumber} has conflicts` : 'The pull request has conflicts' };
 }
 
+/** The phase in lower case. A phase from a newer backend has no label here. */
+export function codeReviewPhaseText(phase: string): string {
+  return (CODE_REVIEW_PHASE_LABELS[phase as keyof typeof CODE_REVIEW_PHASE_LABELS] ?? 'in progress').toLowerCase();
+}
+
 /** True when a session belongs in the sidebar's active group. */
 export function isActiveSessionState(state: SessionState): boolean {
   return state.kind !== 'idle' && state.kind !== 'merged' && state.kind !== 'closed';
@@ -168,7 +173,7 @@ export function sessionState(
     const label =
       review === 'waiting'
         ? `#${pr.number}: code review waits for a runner`
-        : `#${pr.number}: code review running (${CODE_REVIEW_PHASE_LABELS[pr.codeReview!.phase].toLowerCase()})`;
+        : `#${pr.number}: code review running (${codeReviewPhaseText(pr.codeReview!.phase)})`;
     return hasUnread ? { kind: 'code_review', label, unread: true } : { kind: 'code_review', label };
   }
   if (hasUnread) {

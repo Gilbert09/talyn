@@ -85,7 +85,15 @@ export function SessionStateIcon({ state }: { state: SessionState }) {
     case 'background_job':
       return <Timer className={cn(icon, 'text-success')} aria-label={label} data-attr="session-state-background-job" />;
     case 'code_review':
-      return <ScanSearch className={cn(icon, 'animate-pulse text-violet-500')} aria-label={label} data-attr="session-state-code-review" />;
+      // An unread reply under a running review keeps its dot, small, on the corner of the icon.
+      return (
+        <span className="relative inline-flex" aria-label={state.unread ? `${label}. New reply` : label} data-attr="session-state-code-review">
+          <ScanSearch className={cn(icon, 'animate-pulse text-violet-500')} aria-hidden />
+          {state.unread && (
+            <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-info ring-1 ring-background" data-attr="session-state-unread-dot" />
+          )}
+        </span>
+      );
     case 'pr_opened':
       return <GitPullRequest className={cn(icon, 'text-success')} aria-label={label} data-attr="sidebar-workbench-pr-opened" />;
     case 'pr_attention':

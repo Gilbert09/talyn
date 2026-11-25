@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import { ScanSearch } from 'lucide-react';
 import {
-  CODE_REVIEW_PHASE_LABELS,
   agentGlance,
   attentionReasonText,
   checksGlance,
@@ -19,7 +18,7 @@ import { cn } from '../../lib/utils';
 import { useAttentionReason } from '../../lib/contextRail';
 import type { PRRow } from '../../lib/api';
 import { relativeTimeLabel, useRelativeNow } from '../../lib/relativeTime';
-import type { SessionState } from '../../lib/sessionState';
+import { codeReviewPhaseText, type SessionState } from '../../lib/sessionState';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { useBackground } from '../../stores/sessionBackground';
@@ -346,7 +345,7 @@ function CodeReviewGlance({ review }: { review: NonNullable<PRRow['codeReview']>
   let text: string;
   let tone: string;
   if (state === 'running') {
-    text = `Code review running: ${CODE_REVIEW_PHASE_LABELS[review.phase].toLowerCase()}`;
+    text = `Code review running: ${codeReviewPhaseText(review.phase)}`;
     tone = 'text-violet-600 dark:text-violet-300';
   } else if (state === 'waiting') {
     text = 'Code review waits for a runner';

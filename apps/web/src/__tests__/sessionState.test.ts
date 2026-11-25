@@ -218,6 +218,10 @@ describe('code review of the pull request', () => {
     );
   });
 
+  it('labels a phase from a newer backend without throwing', () => {
+    expect(sessionState(WB, [], {}, reviewed('rethinking')).label).toBe('#7: code review running (in progress)');
+  });
+
   it('keeps the unread reply as a flag', () => {
     expect(sessionState(WB, [chat('idle')], { c1: true }, reviewed('reviewing'))).toMatchObject({ kind: 'code_review', unread: true });
     expect(sessionState(WB, [chat('idle')], { c1: true }, reviewed('reviewing'), true)).toMatchObject({ kind: 'code_review', unread: true });

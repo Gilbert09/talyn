@@ -13,6 +13,7 @@ jest.mock('../renderer/stores/toast', () => ({
 
 import { SidebarWorkbenchList } from '../renderer/components/layout/SidebarWorkbenchList';
 import { SpaceSessionHoverCard } from '../renderer/components/workbench/SessionHoverCard';
+import { SessionStateIcon } from '../renderer/components/workbench/WorkbenchBadges';
 import { ConfirmDialog } from '../renderer/components/ui/confirm-dialog';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { installNavigation, useNavigationStore } from '../renderer/stores/navigation';
@@ -397,6 +398,22 @@ describe('session hover card: code review', () => {
     show();
     expect(document.querySelector('[data-attr="session-state-code-review"]')).not.toBeNull();
     expect(row().querySelector('.font-semibold')).not.toBeNull();
+  });
+
+  it('keeps the unread dot on the review icon, where no bold title shows', () => {
+    render(<SessionStateIcon state={{ kind: 'code_review', label: '#1: code review running', unread: true }} />);
+    expect(document.querySelector('[data-attr="session-state-unread-dot"]')).not.toBeNull();
+    expect(screen.getByLabelText('#1: code review running. New reply')).not.toBeNull();
+    cleanup();
+    render(<SessionStateIcon state={{ kind: 'code_review', label: '#1: code review running' }} />);
+    expect(document.querySelector('[data-attr="session-state-unread-dot"]')).toBeNull();
+  });
+
+  it('names a phase from a newer backend in the card without throwing', async () => {
+    withReview({ phase: 'rethinking' });
+    show();
+    await hover(row());
+    expect(reviewLine()!.textContent).toBe('Code review running: in progress');
   });
 
   it.each([
