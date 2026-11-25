@@ -19,7 +19,7 @@ import {
   wakeWithCredentials,
 } from '../services/workbenches/sandboxRuntime.js';
 import { getChat, getWorkbench, insertChat, insertWorkbench, listEvents, updateWorkbench } from '../services/workbenches/store.js';
-import { sendMessage } from '../services/workbenches/turns.js';
+import { SANDBOX_LOST_REQUEUED_NOTE, sendMessage } from '../services/workbenches/turns.js';
 
 vi.mock('../services/workbenches/lifecycle.js', () => ({ scheduleProvision: vi.fn() }));
 
@@ -266,16 +266,23 @@ describe('lost workbench recovery', () => {
     ]);
   });
 
-  it('ends a running turn with the plain loss message', async () => {
+  it('keeps the message of a turn whose box was lost at wake for the new box', async () => {
     await sendMessage('chat-recovery', { text: 'Fix the issue' });
     await sendMessage('chat-recovery', { text: 'Continue after recovery' });
     await vi.waitFor(async () => {
       expect(await getChat('chat-recovery')).toMatchObject({
-        status: 'error', statusMessage: SANDBOX_LOST_MESSAGE,
-        queuedMessages: [expect.objectContaining({ text: 'Continue after recovery' })],
+        status: 'idle', statusMessage: null,
+        queuedMessages: [
+          expect.objectContaining({ text: 'Fix the issue' }),
+          expect.objectContaining({ text: 'Continue after recovery' }),
+        ],
       });
     });
+    expect(await getWorkbench('wb-recovery')).toMatchObject({ status: 'provisioning', sandboxState: 'lost', statusMessage: SANDBOX_LOST_MESSAGE });
+    expect(scheduleProvision).toHaveBeenCalledTimes(1);
     const events = (await listEvents('chat-recovery', 0, 20)).events;
-    expect(events.some((event) => event.event.type === 'result' && event.event.result === SANDBOX_LOST_MESSAGE)).toBe(true);
+    expect(events.filter((event) => event.event.type === 'result')).toEqual([]);
+    expect(events.filter((event) => event.event.subtype === 'sandbox_lost_requeued').map((event) => event.event.text))
+      .toEqual([SANDBOX_LOST_REQUEUED_NOTE]);
   });
 });

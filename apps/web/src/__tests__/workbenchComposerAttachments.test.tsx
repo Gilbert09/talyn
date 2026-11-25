@@ -193,6 +193,7 @@ const waitingChat = (wait: object, extra: object = {}) => ({
 it.each([
   ['capacity', /^Waiting for a free sandbox… \(retrying in \d+s\)$/],
   ['waking', /^Waking the sandbox…$/],
+  ['replacing', /^Starting a new sandbox…$/],
 ])('shows a status line and no Queued chip for a %s wait', (reason, text) => {
   const ops = { ...sandboxOps(workbench), removeQueued: vi.fn() };
   render(<Composer workbench={workbench} chat={waitingChat({ reason })} ops={ops} todos={null} contextUsage={null} slashCommands={null} />);
