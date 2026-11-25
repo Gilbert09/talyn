@@ -57,6 +57,13 @@ describe('end-of-chat review card', () => {
     ['findings sent to this session', review({ sessionReport: { workbenchId: 'session-one', sentAt: '2026-11-23T10:00:00Z', findingCount: 2 } }),
       { ...base, state: 'done', title: 'Code review done', findings: 'Must fix 1 · Should fix 1', viewFindings: true, tone: 'warning',
         sent: 'Talyn sent 2 findings to this session.' }],
+    ['sent findings the session handled on an older commit', review({ staleForHead: true, counts: { blocker: 0, major: 0, minor: 0, nit: 0 }, openCount: 0,
+      sessionReport: { workbenchId: 'session-one', sentAt: '2026-11-23T10:00:00Z', findingCount: 1 } }),
+      { ...base, state: 'done', title: 'Code review done', findings: 'No open findings. The session fixed or dismissed each finding.',
+        start: 'Review again', viewFindings: true, tone: 'success', sent: 'Talyn sent 1 finding to this session.' }],
+    ['a sent finding still open on an older commit', review({ staleForHead: true, counts: { blocker: 0, major: 0, minor: 1, nit: 0 }, openCount: 1,
+      sessionReport: { workbenchId: 'session-one', sentAt: '2026-11-23T10:00:00Z', findingCount: 1 } }),
+      { ...base, state: 'none', title: 'Ready for review', text: 'The work is pushed and the pull request is open.', start: 'Run code review', tone: 'primary' }],
   ] as const)('%s', (_name, codeReview, expected) => expect(reviewCard(facts({ row: pr({ codeReview }) }))).toEqual(expected));
 
   it.each([
@@ -80,6 +87,9 @@ describe('header review badge', () => {
       { label: '1 finding', short: '1', icon: 'findings', tone: 'warning', accessibilityLabel: 'Code review: 1 finding. Show the findings.' }],
     ['clean', facts({ row: pr({ codeReview: review({ counts: { blocker: 0, major: 0, minor: 0, nit: 0 }, openCount: 0 }) }) }),
       { label: 'No findings', short: null, icon: 'check', tone: 'success', accessibilityLabel: 'Code review: No findings. Show the findings.' }],
+    ['sent findings the session handled', facts({ row: pr({ codeReview: review({ staleForHead: true, counts: { blocker: 0, major: 0, minor: 0, nit: 0 },
+      openCount: 0, sessionReport: { workbenchId: 'session-one', sentAt: '2026-11-23T10:00:00Z', findingCount: 1 } }) }) }),
+      { label: 'No open findings', short: null, icon: 'check', tone: 'success', accessibilityLabel: 'Code review: No open findings. Show the findings.' }],
     ['failed', facts({ row: pr({ codeReview: review({ phase: 'failed' }) }) }), { label: 'Review failed', short: null, icon: 'failed',
       tone: 'destructive', accessibilityLabel: 'Code review: Review failed. Show the findings.' }],
     ['a review while a turn runs', facts({ item: session({ chats: [chat({ status: 'running' })] }), row: pr({ codeReview: review() }) }),

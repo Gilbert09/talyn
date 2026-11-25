@@ -3,6 +3,7 @@ import {
   codeCompleteBlockers,
   isSessionCodeComplete,
   reviewCoversHead,
+  reviewHandledBySession,
   sessionReviewState,
   type CodeCompleteInput,
   type CodeReviewPhase,
@@ -86,6 +87,8 @@ describe('codeCompleteBlockers', () => {
   });
 });
 
+const REPORT = { workbenchId: 'wb-1', sentAt: '2026-11-25T17:15:15Z', findingCount: 1 };
+
 describe('sessionReviewState', () => {
   it.each<[string, Parameters<typeof sessionReviewState>[0], ReturnType<typeof sessionReviewState>]>([
     ['no review', null, 'none'],
@@ -102,8 +105,28 @@ describe('sessionReviewState', () => {
     ['a fixed review', { phase: 'fixed', staleForHead: false }, 'done'],
     ['a deferral on a review at rest', { phase: 'ready', staleForHead: false, deferredSince: '2026-11-23T10:00:00Z' }, 'done'],
     ['a failed review', { phase: 'failed', staleForHead: false }, 'failed'],
+    ['an older head whose sent findings were all handled', { phase: 'ready', staleForHead: true, openCount: 0, sessionReport: REPORT }, 'done'],
+    ['an older fixed review whose sent findings were all handled', { phase: 'fixed', staleForHead: true, openCount: 0, sessionReport: REPORT }, 'done'],
+    ['an older head with a sent finding still open', { phase: 'ready', staleForHead: true, openCount: 1, sessionReport: REPORT }, 'none'],
+    ['an older head with no open findings that went nowhere', { phase: 'ready', staleForHead: true, openCount: 0, sessionReport: null }, 'none'],
+    ['an older head with no open count from an older backend', { phase: 'ready', staleForHead: true, sessionReport: REPORT }, 'none'],
+    ['a failed review of an older head after a report', { phase: 'failed', staleForHead: true, openCount: 0, sessionReport: REPORT }, 'none'],
+    ['a cancelled review after a report', { phase: 'cancelled', staleForHead: true, openCount: 0, sessionReport: REPORT }, 'none'],
+    ['a new review that runs after a report', { phase: 'reviewing', staleForHead: true, openCount: 0, sessionReport: REPORT }, 'running'],
   ])('%s is %s', (_name, review, state) => {
     expect(sessionReviewState(review)).toBe(state);
+  });
+});
+
+describe('reviewHandledBySession', () => {
+  it.each<[string, Parameters<typeof reviewHandledBySession>[0], boolean]>([
+    ['no review', null, false],
+    ['a current review', { phase: 'ready', staleForHead: false, openCount: 0, sessionReport: REPORT }, false],
+    ['an older head, all handled', { phase: 'ready', staleForHead: true, openCount: 0, sessionReport: REPORT }, true],
+    ['an older head, one open', { phase: 'ready', staleForHead: true, openCount: 1, sessionReport: REPORT }, false],
+    ['an older head, not sent', { phase: 'ready', staleForHead: true, openCount: 0 }, false],
+  ])('%s is %s', (_name, review, expected) => {
+    expect(reviewHandledBySession(review)).toBe(expected);
   });
 });
 

@@ -134,6 +134,26 @@ export const CODEREVIEW = [
     }
   ),
   defineTool(
+    'mark_code_review_finding_fixed',
+    'Mark an open finding fixed after you pushed the fix. Give the commit sha of the fix. A later review opens it again if the problem is still there.',
+    {
+      ...findingSchema,
+      commit_sha: { type: 'string', description: 'The commit that fixes the finding.' },
+    },
+    ['pull_request_id', 'finding_id'],
+    { openWorldHint: true },
+    async (ownerId, args) => {
+      const sha = str(args.commit_sha);
+      const data = await callApi<CodeReviewPublic>(
+        ownerId,
+        'POST',
+        `${base(args)}/findings/${requireId(args, 'finding_id')}/fixed`,
+        sha ? { headSha: sha } : {}
+      );
+      return `${requireId(args, 'finding_id')} marked fixed.\n${reviewLine(data)}`;
+    }
+  ),
+  defineTool(
     'list_code_reviews',
     'List recent code reviews in a workspace.',
     { ...workspaceSchema, limit: pageSchema.limit },

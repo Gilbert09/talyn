@@ -84,7 +84,8 @@ curl -s -X POST -H 'Content-Type: application/json' "$PROXY/threads/resolve" -d 
 - Reply to a top-level review or comment with `POST $GH/repos/OWNER/REPO/issues/N/comments`.
 - For a Talyn finding that is wrong, with evidence, use `talyn_dismiss_code_review_finding`
   with `pull_request_id`, `finding_id` and a `reason` such as `wrong_about_code`. Say why in your reply.
-  A finding you fixed needs no action. The next review cycle marks it.
+- For a Talyn finding that you fixed, push the fix. Then call `talyn_mark_code_review_finding_fixed`
+  with `pull_request_id`, `finding_id` and the `commit_sha` of the fix.
 
 ## 6. Request review again
 

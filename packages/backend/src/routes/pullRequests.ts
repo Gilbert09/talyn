@@ -11,6 +11,7 @@ import {
 import { mergeQueueTimelineForPr } from '../services/mergeQueue/timeline.js';
 import {
   dismissFinding,
+  markFindingFixedByHand,
   postReviewFindings,
   undismissFinding,
 } from '../services/codeReview/actions.js';
@@ -1550,6 +1551,33 @@ export function pullRequestRoutes(): Router {
     const reason = isCodeReviewDismissReason(req.body?.reason) ? req.body.reason : null;
     const user = assertUser(req);
     await dismissFinding({ review, finding, reason, userId: user.id });
+    res.json({ success: true, data: await publicReviewById(review.id) });
+  });
+
+  /**
+   * Mark a finding fixed. The session that got the findings calls this (through
+   * the MCP tool) after it pushes the fix, so the finding stops counting as open.
+   */
+  router.post('/:id/code-review/findings/:findingId/fixed', async (req, res) => {
+    const workspaceId = await reviewGate(req, res);
+    if (!workspaceId) return;
+    const finding = await getFinding(req.params.findingId);
+    const review = await getReviewForPr(req.params.id);
+    if (!finding || !review || finding.reviewId !== review.id) {
+      return res.status(404).json({ success: false, error: 'Finding not found' });
+    }
+    const rawSha = typeof req.body?.headSha === 'string' ? req.body.headSha.trim() : '';
+    if (rawSha && !/^[0-9a-f]{7,40}$/i.test(rawSha)) {
+      return res.status(400).json({ success: false, error: 'headSha must be a commit sha.' });
+    }
+    const user = assertUser(req);
+    const moved = await markFindingFixedByHand({ review, finding, headSha: rawSha || null, userId: user.id });
+    if (!moved) {
+      return res.status(409).json({
+        success: false,
+        error: `The finding is ${finding.disposition}, not open. Only an open finding can be marked fixed.`,
+      });
+    }
     res.json({ success: true, data: await publicReviewById(review.id) });
   });
 

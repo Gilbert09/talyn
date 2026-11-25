@@ -507,6 +507,7 @@ describe('sessionReportMessage', () => {
     expect(text).toContain('- f2 [minor] src/b.ts:4 (location not verified): Unused import');
     expect(text).toContain('talyn_get_code_review_finding');
     expect(text).toContain('talyn_dismiss_code_review_finding');
+    expect(text).toContain('talyn_mark_code_review_finding_fixed');
     expect(text).toContain('not_a_problem, already_handled, wont_fix_here, wrong_about_code');
     expect(text).toContain('push');
   });

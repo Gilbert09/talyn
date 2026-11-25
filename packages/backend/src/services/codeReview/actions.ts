@@ -1,7 +1,7 @@
 import type { CodeReviewDismissReason } from '@talyn/shared';
 import { captureWorkspaceEvent } from '../analytics.js';
 import { onQueueMembershipChanged } from '../mergeQueue/triggers.js';
-import { setDisposition, type FindingDetailRow } from './findings.js';
+import { markFindingFixed, setDisposition, type FindingDetailRow } from './findings.js';
 import { postFindingsToPr, type PostOutcome } from './postToPr.js';
 import type { ReviewRow } from './store.js';
 
@@ -55,6 +55,31 @@ export async function dismissFinding(input: {
 export async function undismissFinding(input: { review: ReviewFacts; findingId: string }): Promise<void> {
   await setDisposition(input.findingId, 'open');
   void onQueueMembershipChanged(input.review.pullRequestId, 'code_review:undismissed');
+}
+
+/**
+ * Mark a finding fixed: the session that got the findings fixed it and pushed.
+ * `headSha` is the commit with the fix, when the caller knows it. Returns false
+ * when the finding was not open (already fixed, dismissed or stale).
+ */
+export async function markFindingFixedByHand(input: {
+  review: ReviewFacts;
+  finding: FindingDetailRow;
+  headSha: string | null;
+  userId: string;
+}): Promise<boolean> {
+  const { review, finding, headSha, userId } = input;
+  const moved = await markFindingFixed(finding.id, { headSha, userId });
+  if (!moved) return false;
+  void captureWorkspaceEvent(review.workspaceId, 'code_review_finding_marked_fixed', {
+    severity: finding.severity,
+    has_commit: Boolean(headSha),
+    verdict: finding.verdict,
+    cycle: review.cycle,
+  });
+  // A fixed blocker no longer parks a merge-queue entry, as with a dismissal.
+  void onQueueMembershipChanged(review.pullRequestId, 'code_review:fixed');
+  return true;
 }
 
 /**

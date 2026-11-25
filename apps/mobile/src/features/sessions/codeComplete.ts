@@ -69,8 +69,11 @@ export function reviewCard(facts: CodeCompleteFacts): ReviewCardView | null {
         tone: 'destructive' };
     case 'done': {
       const counts = openFindingCounts(review!);
-      return { ...base, title: 'Code review done', findings: counts.length ? counts.join(' · ') : 'No open findings', viewFindings: true,
-        tone: counts.length ? 'warning' : 'success' };
+      // The session handled every finding and pushed: offer a review of the fixes.
+      const handled = review!.staleForHead && !counts.length;
+      return { ...base, title: 'Code review done',
+        findings: counts.length ? counts.join(' · ') : handled ? 'No open findings. The session fixed or dismissed each finding.' : 'No open findings',
+        start: handled ? 'Review again' : null, viewFindings: true, tone: counts.length ? 'warning' : 'success' };
     }
   }
 }
@@ -109,7 +112,7 @@ export function reviewBadge(facts: CodeCompleteFacts): ReviewBadgeView | null {
     case 'done': {
       const open = review!.openCount;
       return open > 0 ? badge(findingsLabel(open), String(open), 'findings', review!.counts.blocker > 0 ? 'destructive' : 'warning')
-        : badge('No findings', null, 'check', 'success');
+        : badge(review!.staleForHead ? 'No open findings' : 'No findings', null, 'check', 'success');
     }
   }
 }

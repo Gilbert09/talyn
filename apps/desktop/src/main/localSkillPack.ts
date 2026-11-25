@@ -210,6 +210,7 @@ Give the person a short list: the pull request, what blocks it, and the next ste
 - To fix findings, start a session on the pull request with the talyn-remote-session skill.
   Name the findings in the prompt.
 - \`talyn_dismiss_code_review_finding\` dismisses a finding that is wrong.
+- \`talyn_mark_code_review_finding_fixed\` marks a finding fixed after you push the fix.
 
 ## Land it
 

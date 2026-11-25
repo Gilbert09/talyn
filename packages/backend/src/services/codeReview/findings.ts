@@ -623,6 +623,38 @@ export async function markFixed(
 }
 
 /**
+ * Mark one finding fixed by hand: the session that got the report fixed it and
+ * pushed. No fix task. A later cycle that finds the same key opens it again
+ * (see `upsertFindings`), so a fix that did not hold does not stay hidden.
+ * Only an open or selected finding moves; returns false for any other.
+ */
+export async function markFindingFixed(
+  findingId: string,
+  options: { headSha?: string | null; userId?: string | null } = {}
+): Promise<boolean> {
+  const now = new Date();
+  const updated = await getDbClient()
+    .update(prCodeReviewFindings)
+    .set({
+      disposition: 'fixed',
+      fixTaskId: null,
+      fixedAt: now,
+      fixedHeadSha: options.headSha ?? null,
+      dispositionAt: now,
+      dispositionBy: options.userId ?? null,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(prCodeReviewFindings.id, findingId),
+        inArray(prCodeReviewFindings.disposition, [...ACTIVE_DISPOSITIONS])
+      )
+    )
+    .returning({ id: prCodeReviewFindings.id });
+  return updated.length > 0;
+}
+
+/**
  * Put them back when a fix run did not land, so nothing claims a fix it lacks.
  *
  * Only `selected` rows: a failed run never got as far as marking anything fixed.
