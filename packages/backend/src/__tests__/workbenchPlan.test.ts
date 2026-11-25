@@ -102,6 +102,11 @@ describe('workbenchTurnPrompt', () => {
     expect(instructions).not.toContain('Talyn does that after your reply');
   });
 
+  it('keeps the person\'s own "do not push" (a review of another person\'s PR)', () => {
+    expect(OPEN_PULL_REQUEST_NOTE).toContain('if the person told you not to push');
+    expect(OPEN_PULL_REQUEST_NOTE).not.toMatch(/earlier instructions .* no longer apply/i);
+  });
+
   it.each([
     ['a Create PR turn', { intent: 'create_pr' as const }],
     ['a thread', { thread: true }],

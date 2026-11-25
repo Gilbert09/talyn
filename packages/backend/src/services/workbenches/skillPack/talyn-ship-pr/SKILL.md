@@ -11,7 +11,8 @@ Read the instructions for this turn first.
 - If they tell you to end the reply with a `talyn-pr` block, Talyn opens the pull request after your reply.
   Do not commit, push or open it yourself. Use steps 1 to 3 below only to write the title and the body.
 - If this session already has a pull request, Talyn does not commit or push for you.
-  Commit the changes and run `git push` to update it. Do not open a new pull request.
+  Commit the changes and run `git push` to update it, unless the person told you not to push.
+  Do not open a new pull request.
 - Otherwise you open it, with step 4.
 
 Stay on this session's branch. Do not create, rename or switch branches.
