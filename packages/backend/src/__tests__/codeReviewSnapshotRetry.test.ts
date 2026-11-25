@@ -103,6 +103,27 @@ describe('onSnapshot retries a deferred session-complete start', () => {
     expect(m.startIfComplete).not.toHaveBeenCalled();
   });
 
+  it.each<[string, Record<string, unknown> | null, boolean]>([
+    ['a deferred start is recorded', DEFERRED, true],
+    ['no error is recorded', { ...DEFERRED, lastError: null }, false],
+  ])('on a draft with auto review running, when %s, retries=%s', async (_name, review, retries) => {
+    m.getReviewForPr.mockResolvedValue(review);
+    m.getPrForReview.mockResolvedValue({ id: 'pr-1', lastSummary: { headSha: HEAD, draft: true } });
+    m.settings.mockResolvedValue(resolveCodeReviewSettings({ autoReview: true }));
+    m.autoFeatures.mockResolvedValue(true);
+    await onSnapshot('pr-1', 'ws-1', 'open');
+    expect(m.startIfComplete).toHaveBeenCalledTimes(retries ? 1 : 0);
+    expect(m.startCycle).not.toHaveBeenCalled();
+  });
+
+  it('does not retry on a draft when the workspace turned session reviews off', async () => {
+    m.getPrForReview.mockResolvedValue({ id: 'pr-1', lastSummary: { headSha: HEAD, draft: true } });
+    m.settings.mockResolvedValue(resolveCodeReviewSettings({ autoReview: true, reviewOnSessionComplete: false }));
+    m.autoFeatures.mockResolvedValue(true);
+    await onSnapshot('pr-1', 'ws-1', 'open');
+    expect(m.startIfComplete).not.toHaveBeenCalled();
+  });
+
   it('leaves the start to auto review when auto review runs on this plan', async () => {
     m.settings.mockResolvedValue(resolveCodeReviewSettings({ autoReview: true }));
     m.autoFeatures.mockResolvedValue(true);

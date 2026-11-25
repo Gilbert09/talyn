@@ -112,7 +112,13 @@ export async function onSnapshot(
   // AUTOMATIC reviews only. Asking for a review of your own draft is a perfectly
   // good thing to want, and the button still does it; what this refuses is doing
   // it on your behalf, repeatedly, unasked.
-  if (summary.draft === true) return;
+  //
+  // The session-complete start does review a draft, so a deferred one is retried
+  // here, as when auto review does not run.
+  if (summary.draft === true) {
+    if (review?.lastError && settings.reviewOnSessionComplete) await retrySessionCompleteStart(workspaceId, prId);
+    return;
+  }
   if (review && review.reviewedHeadSha === head) return;
   if (review && review.targetHeadSha === head && review.phase !== 'idle') return;
 
