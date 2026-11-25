@@ -140,6 +140,13 @@ export function Composer({
     if (autoFocus) textareaRef.current?.focus();
   }, [draftKey]);
 
+  // A disabled textarea loses focus, so give it back when the restore ends.
+  const wasRestoring = useRef(false);
+  useEffect(() => {
+    if (wasRestoring.current && !restoring) textareaRef.current?.focus();
+    wasRestoring.current = restoring;
+  }, [restoring]);
+
   // ⌘L (lib/shortcuts.ts) asks the open composer for focus.
   useEffect(() => {
     if (!autoFocus) return undefined;

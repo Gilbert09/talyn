@@ -134,9 +134,15 @@ describe('an archived session', () => {
     await waitFor(() => expect(box).toBeDisabled());
     expect(box).toHaveValue('Pick this up again');
     expect(sendMessage).not.toHaveBeenCalled();
+    // A browser takes focus away from a disabled field. jsdom does not, so move it here.
+    const elsewhere = document.body.appendChild(document.createElement('button'));
+    act(() => elsewhere.focus());
+    expect(box).not.toHaveFocus();
     await act(async () => finish(restored));
     await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
     expect(box).toBeEnabled();
+    expect(box).toHaveFocus();
+    elsewhere.remove();
   });
 
   it('keeps the draft and sends nothing when the restore fails', async () => {
