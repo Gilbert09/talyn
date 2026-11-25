@@ -212,6 +212,7 @@ const turnLoops = new Map<string, number>();
 export const MAX_TURN_ATTEMPTS = 4;
 export const LAUNCH_FAILED_MESSAGE = 'The agent could not start in the sandbox.';
 export const LOST_CONTACT_MESSAGE = 'Talyn lost contact with the agent in the sandbox.';
+export const SANDBOX_LOST_REQUEUED_NOTE = 'The sandbox was lost. Talyn is starting a new one and runs this message there.';
 const DEFAULT_LAUNCH_BACKOFF_MS: readonly number[] = [2_000, 5_000, 15_000];
 let launchBackoffMs = DEFAULT_LAUNCH_BACKOFF_MS;
 
@@ -1119,6 +1120,10 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     if (live.controller.signal.aborted || isWorkbenchDetached()) return handoffOutcome('the follower was stopped', err);
     if (live.cancelRequested) return cancelledOutcome(events, sawResult);
     if (err instanceof FleetRunNotFoundError) {
+      if (!launched && firstAttempt === 0) {
+        const requeued = await requeueForReplacement(chat, message, turn, events);
+        if (requeued) return requeued;
+      }
       events.add(errorResultEvent('error_during_execution', SANDBOX_LOST_MESSAGE));
       await events.flush();
       return { status: 'error', statusMessage: SANDBOX_LOST_MESSAGE, cancelled: true };
@@ -1238,6 +1243,30 @@ async function wakeRefusalReason(wb: WorkbenchRow | null, err: unknown): Promise
   } catch {
     return 'capacity';
   }
+}
+
+/**
+ * The box was lost before the agent started, and recovery is starting a
+ * replacement. Nothing of the turn ran, so the message goes back to the head
+ * of the queue with its turn. The new box runs it when its provision ends.
+ * Null when no replacement starts (the box was kept asleep, or it was lost
+ * again and the session failed): the turn then fails as before.
+ */
+async function requeueForReplacement(
+  chat: ChatRow,
+  message: WorkbenchQueuedMessage,
+  turn: number,
+  events: EventBatcher,
+): Promise<TurnOutcome | null> {
+  const wb = await getWorkbench(chat.workbenchId);
+  if (wb?.status !== 'provisioning' || wb.sandboxState !== 'lost') return null;
+  events.add({ type: 'system', subtype: 'sandbox_lost_requeued', text: SANDBOX_LOST_REQUEUED_NOTE });
+  await events.flush();
+  const requeued = await requeueTurn(chat.id, message, { turn });
+  if (!requeued) return null;
+  noteTurn('turn_sandbox_lost_requeued', chat.id, turn, 'the box was lost before the agent started; the message waits for the replacement');
+  emitWorkbenchChat(requeued.workspaceId, rowToChat(requeued));
+  return { status: 'idle', statusMessage: null, cancelled: false, requeued: true };
 }
 
 /**

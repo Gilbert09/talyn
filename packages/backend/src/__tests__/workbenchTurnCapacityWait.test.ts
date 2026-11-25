@@ -7,6 +7,7 @@ import { repositories, workbenchChats, workbenches, workspaces } from '../db/sch
 import {
   FleetCapacityError,
   FleetHttpError,
+  FleetRunNotFoundError,
   FleetThrottleError,
   HIBERNATION_FETCH_FAILED,
 } from '../services/selfHosted/client.js';
@@ -31,8 +32,9 @@ const { PROVISION_CAPACITY_WAIT, WAITING_FOR_SANDBOX_MESSAGE, archiveWorkbench, 
   await import('../services/workbenches/lifecycle.js');
 const {
   NO_FREE_SANDBOX_TURN_MESSAGE, SANDBOX_DID_NOT_WAKE_TURN_MESSAGE, WAKING_SANDBOX_MESSAGE, cancelTurn, isWaitingForSandbox, sendMessage, setTurnRetryDelaysForTests,
-  startQueuedIfIdle, sweepOrphanedTurns,
+  SANDBOX_LOST_REQUEUED_NOTE, startQueuedIfIdle, sweepOrphanedTurns,
 } = await import('../services/workbenches/turns.js');
+const { SANDBOX_LOST_MESSAGE } = await import('../services/workbenches/recovery.js');
 
 const DEFAULT_WAIT = { ...PROVISION_CAPACITY_WAIT };
 
@@ -392,5 +394,70 @@ describe('a turn waits for a free sandbox', () => {
     expect(wakeTries).toBe(tries);
     expect(await userMessages()).toHaveLength(1);
     expect(await results()).toHaveLength(1);
+  });
+  describe('the box is lost before the agent starts', () => {
+    /** The wake answers that the box is gone. `replaced` also does what recovery does when it starts a new box. */
+    function loseBox(replaced: boolean) {
+      const answer = fleet.handler;
+      fleet.handler = async (script, req) => {
+        if (script.includes('git commit-tree') || script.includes('df -B1')) {
+          wakeTries++;
+          if (replaced) {
+            await testDb.db.update(workbenches)
+              .set({ status: 'provisioning', sandboxState: 'lost', sandboxId: 'talyn-wb-test-2', statusMessage: SANDBOX_LOST_MESSAGE })
+              .where(eq(workbenches.id, 'wb'));
+          }
+          fleet.handler = answer;
+          throw new FleetRunNotFoundError('The fleet no longer runs sandbox talyn-wb-test.');
+        }
+        return answer(script, req);
+      };
+    }
+    const lostNotes = async () => (await events()).filter((e) => e.event.subtype === 'sandbox_lost_requeued');
+
+    it('keeps the message queued for the new box, then runs it there in the same turn', async () => {
+      loseBox(true);
+      await sendMessage('chat', { text: 'fix the build' });
+      await vi.waitFor(async () => {
+        const row = await chat();
+        expect(row.status).toBe('idle');
+        expect(row.queuedMessages).toHaveLength(1);
+      }, { timeout: 5000 });
+
+      const row = await chat();
+      expect(row.turnCount).toBe(0);
+      expect(row.statusMessage).toBeNull();
+      expect(row.queuedMessages[0]).toMatchObject({ text: 'fix the build' });
+      expect(await drainPending()).toBe(true);
+      expect((await lostNotes()).map((e) => [e.turn, e.event.text])).toEqual([[1, SANDBOX_LOST_REQUEUED_NOTE]]);
+      expect(await results()).toEqual([]);
+      expect(agentRuns).toBe(0);
+      // The box is still provisioning: nothing starts yet.
+      expect(await startQueuedIfIdle('chat')).toBe(false);
+
+      // The provision ends and drains the queue, as lifecycle.ts does.
+      await testDb.db.update(workbenches).set({ status: 'ready', sandboxState: 'running', statusMessage: null }).where(eq(workbenches.id, 'wb'));
+      expect(await startQueuedIfIdle('chat')).toBe(true);
+      await settled('idle');
+      expect(agentRuns).toBe(1);
+      expect((await chat()).turnCount).toBe(1);
+      const users = await userMessages();
+      expect(users.map((e) => e.turn)).toEqual([1]);
+      expect((await results()).map((e) => [e.turn, e.event.is_error])).toEqual([[1, false]]);
+    });
+
+    it('fails the turn as before when no new box starts', async () => {
+      // Recovery finds the box asleep and keeps it, so the session stays ready.
+      fleet.sandboxStatus = 'suspended';
+      loseBox(false);
+      await sendMessage('chat', { text: 'fix the build' });
+      await vi.waitFor(async () => expect((await chat()).status).toBe('error'), { timeout: 5000 });
+      const row = await chat();
+      expect(row.statusMessage).toBe(SANDBOX_LOST_MESSAGE);
+      expect(row.queuedMessages).toEqual([]);
+      expect(await lostNotes()).toEqual([]);
+      expect((await results()).map((e) => e.event.result)).toEqual([SANDBOX_LOST_MESSAGE]);
+      expect(agentRuns).toBe(0);
+    });
   });
 });
