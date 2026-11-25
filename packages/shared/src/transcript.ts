@@ -1488,13 +1488,20 @@ export function toolOutputImageCount(output: unknown): number {
 }
 
 /**
- * The label of an image that a tool call returned: the file path for a Read,
- * else the tool's own name without its MCP server prefix. The first argument of
- * an unknown tool is often a flag such as `png`, so it is never the label.
+ * The label of an image that a tool call returned: the image file the call
+ * named (Read, `talyn_show_image`, a screenshot tool's `filename`), else the
+ * tool's own name without its MCP server prefix. The first argument of an
+ * unknown tool is often a flag such as `png`, so it is never the label.
  */
 export function toolImageLabel(name: string, input: unknown): string {
   const described = describeTool(name, input);
   if (described.label === 'read' && described.detail) return described.detail;
+  if (input && typeof input === 'object') {
+    for (const key of ['path', 'file_path', 'filePath', 'filename']) {
+      const value = (input as Record<string, unknown>)[key];
+      if (typeof value === 'string' && /\.(png|jpe?g|gif|webp)$/i.test(value.trim())) return value.trim();
+    }
+  }
   return name.replace(/^mcp__.+?__/, '') || 'image';
 }
 

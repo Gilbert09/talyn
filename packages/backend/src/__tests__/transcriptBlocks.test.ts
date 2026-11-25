@@ -339,8 +339,13 @@ describe('toolOutputImages', () => {
     ['Read uses the file path', 'Read', { file_path: '/tmp/shot.png' }, '/tmp/shot.png'],
     ['an MCP tool uses its name, not its first argument', 'mcp__playwright__browser_take_screenshot', { type: 'png', fullPage: true }, 'browser_take_screenshot'],
     ['an MCP tool with no input', 'mcp__chrome-devtools__take_screenshot', {}, 'take_screenshot'],
-    ['another tool uses its name', 'view_image', { path: '/tmp/x.png' }, 'view_image'],
+    ['another tool with an image path uses the path', 'view_image', { path: '/tmp/x.png' }, '/tmp/x.png'],
+    ['another tool with no image path uses its name', 'view_image', { id: 3 }, 'view_image'],
     ['Read with no path uses the tool name', 'Read', {}, 'Read'],
+    ['talyn_show_image uses its path', 'mcp__talyn__talyn_show_image', { path: '/tmp/shot.png' }, '/tmp/shot.png'],
+    ['a screenshot tool uses its filename', 'mcp__playwright__browser_take_screenshot', { type: 'jpeg', filename: 'page.JPEG' }, 'page.JPEG'],
+    ['a path that is not an image is not a label', 'mcp__x__export', { path: '/tmp/a.txt' }, 'export'],
+    ['a file_path that is an image', 'mcp__x__render', { file_path: 'out/chart.webp' }, 'out/chart.webp'],
   ])('labels a tool image: %s', (_name, tool, input, label) => {
     expect(toolImageLabel(tool, input)).toBe(label);
   });

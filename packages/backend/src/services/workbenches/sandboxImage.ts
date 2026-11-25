@@ -10,8 +10,12 @@ import type { WorkbenchRow } from './store.js';
  * bytes, so this read cannot return a text file such as a secret.
  */
 
-/** The largest image Talyn shows. Its base64 (a third larger) stays under the 5 MB image limit of the Anthropic API. */
-export const MAX_IMAGE_BYTES = 3.5 * 1024 * 1024;
+/**
+ * The largest image Talyn shows. The quiet exec answer is base64 and the fleet cuts
+ * it at 4 MiB, so the file must stay well under 3 MiB. This also keeps the image
+ * under the 5 MB image limit of the Anthropic API.
+ */
+export const MAX_IMAGE_BYTES = 2.5 * 1024 * 1024;
 
 export type SandboxImageType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
 

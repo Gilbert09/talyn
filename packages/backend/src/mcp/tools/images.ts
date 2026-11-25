@@ -21,7 +21,7 @@ function sizeText(bytes: number): string {
 export const IMAGES = [
   defineTool(
     'show_image',
-    "Show an image file from this session's sandbox to the person. Talyn shows the image in the transcript. Use it for each screenshot that you make for the person or for a pull request. The file must be a PNG, JPEG, GIF or WebP image of 3.5 MB or less. The image also goes into your context.",
+    "Show an image file from this session's sandbox to the person. Talyn shows the image in the transcript. Use it for each screenshot that you make for the person or for a pull request. The file must be a PNG, JPEG, GIF or WebP image of 2.5 MB or less. The image also goes into your context.",
     {
       path: { type: 'string', description: 'The image file. Absolute, or relative to the repository.' },
       session_id: {

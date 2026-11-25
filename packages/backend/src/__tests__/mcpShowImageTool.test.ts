@@ -126,7 +126,7 @@ describe('talyn_show_image', () => {
 
   it.each([
     [404, '/tmp/none.png does not exist.'],
-    [413, '/tmp/big.png is too large to show (6.0 MB). The limit is 3.5 MB. Take a smaller screenshot or save it as JPEG.'],
+    [413, '/tmp/big.png is too large to show (6.0 MB). The limit is 2.5 MB. Take a smaller screenshot or save it as JPEG.'],
     [415, '/home/u/.env is not a PNG, JPEG, GIF or WebP image.'],
   ])('turns a %i refusal into an error result', async (status, message) => {
     mockApi(() => ({ status, body: { success: false, error: message } }));

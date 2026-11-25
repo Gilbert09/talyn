@@ -1,8 +1,11 @@
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
+import * as teamsAccess from '../services/teams/access.js';
+import * as featureFlags from '../services/featureFlags.js';
+import * as workbenchAccess from '../services/workbenches/access.js';
 import { invokeRoute } from './helpers/invokeRoute.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { FakeFleet } from './helpers/fakeFleet.js';
-import { repositories, workspaces } from '../db/schema.js';
+import { repositories, spaces, teams, workspaces } from '../db/schema.js';
 import { insertWorkbench, type WorkbenchRow } from '../services/workbenches/store.js';
 import { workbenchRoutes } from '../routes/workbenches.js';
 import { resetFeatureFlagsForTests } from '../services/featureFlags.js';
@@ -143,7 +146,7 @@ describe('readSandboxImage', () => {
     vi.mocked(runCapture).mockResolvedValue(reply(stdout, 4));
     const err = await refusal(readSandboxImage(row, '/tmp/big.png'));
     expect(err.status).toBe(413);
-    expect(err.message).toBe(`/tmp/big.png is too large to show${size}. The limit is 3.5 MB. Take a smaller screenshot or save it as JPEG.`);
+    expect(err.message).toBe(`/tmp/big.png is too large to show${size}. The limit is 2.5 MB. Take a smaller screenshot or save it as JPEG.`);
   });
 
   it('refuses an answer the fleet cut with 413', async () => {
@@ -256,6 +259,27 @@ describe('GET /workbenches/:id/image', () => {
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('not_ready');
     expect(runCapture).not.toHaveBeenCalled();
+  });
+
+  it('hides the session from a space member, who could otherwise read images outside the repository', async () => {
+    await db.db.insert(teams).values({ id: 'team', name: 'Team' });
+    await db.db.insert(spaces).values({ id: 'space', teamId: 'team', name: 'Space' });
+    await insertWorkbench({ id: 'shared', workspaceId: 'ws', repositoryId: 'repo', repoFullName: 'o/r', baseBranch: 'main', branch: 'shared', name: 'shared', runtime: 'sandbox', status: 'ready', sandboxId: 'sb2', sandboxState: 'running', agent: 'claude', spaceId: 'space' } as Parameters<typeof insertWorkbench>[0]);
+    const spies = [
+      vi.spyOn(teamsAccess, 'canViewItem').mockResolvedValue(true),
+      vi.spyOn(featureFlags, 'isFeatureEnabled').mockResolvedValue(true),
+      vi.spyOn(workbenchAccess, 'userMayUseWorkbenches').mockResolvedValue(true),
+    ];
+    try {
+      vi.mocked(runCapture).mockResolvedValue(reply(PNG));
+      for (const query of [{ path: '/tmp/shot.png' }, { path: '/tmp/shot.png', live: '1' }]) {
+        expect((await call(query, { id: 'shared', user: 'teammate' })).status).toBe(404);
+      }
+      expect(teamsAccess.canViewItem).toHaveBeenCalled();
+      expect(runCapture).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
   });
 
   it("hides another person's session", async () => {

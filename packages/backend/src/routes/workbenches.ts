@@ -1262,6 +1262,8 @@ export function workbenchRoutes(): Router {
   router.get('/:id/file', async (req, res) => {
     const found = await readableWorkbench(req, res, await getWorkbench(req.params.id), 'Session not found');
     if (!found) return;
+    // Only the owner: the path may be anywhere in the box, and the route exists for talyn_show_image.
+    if (found.member) return bad(res, 404, 'Session not found');
     const row = found.row;
     try {
       if (typeof req.query.path !== 'string' || !req.query.path) {
@@ -1278,13 +1280,15 @@ export function workbenchRoutes(): Router {
   router.get('/:id/image', async (req, res) => {
     const found = await readableWorkbench(req, res, await getWorkbench(req.params.id), 'Session not found');
     if (!found) return;
+    // Only the owner: the path may be anywhere in the box, and the route exists for talyn_show_image.
+    if (found.member) return bad(res, 404, 'Session not found');
     const row = found.row;
     try {
       if (typeof req.query.path !== 'string' || !req.query.path) {
         await requireReadySandbox(row);
         return bad(res, 400, 'path is required');
       }
-      ok(res, await readSessionImage(row, req.query.path, { live: !found.member && wantsLive(req) }));
+      ok(res, await readSessionImage(row, req.query.path, { live: wantsLive(req) }));
     } catch (err) {
       fail(res, err);
     }
