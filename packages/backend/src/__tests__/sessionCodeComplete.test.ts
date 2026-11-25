@@ -4,8 +4,11 @@ import {
   isSessionCodeComplete,
   reviewCoversHead,
   reviewHandledBySession,
+  sessionReviewCardShown,
   sessionReviewState,
+  type CodeCompleteBlocker,
   type CodeCompleteInput,
+  type SessionReviewState,
   type CodeReviewPhase,
 } from '@talyn/shared';
 
@@ -152,5 +155,51 @@ describe('reviewCoversHead', () => {
     ['an idle row that names the head', review('idle', '', HEAD), HEAD, false],
   ])('%s', (_name, value, head, covered) => {
     expect(reviewCoversHead(value, head)).toBe(covered);
+  });
+});
+
+describe('sessionReviewCardShown', () => {
+  const STATES: SessionReviewState[] = ['none', 'waiting', 'running', 'failed', 'done'];
+  const SOFT: CodeCompleteBlocker[] = [
+    'turn_queued',
+    'chat_not_idle',
+    'background_job_running',
+    'script_running',
+    'uncommitted_changes',
+    'unpushed_commits',
+  ];
+  const HARD: CodeCompleteBlocker[] = [
+    'thread',
+    'archived',
+    'no_chat',
+    'turn_running',
+    'no_pull_request',
+    'pull_request_not_open',
+  ];
+
+  it.each(STATES)('shows a %s review when the session is code complete', (state) => {
+    expect(sessionReviewCardShown([], state)).toBe(true);
+  });
+
+  it.each(SOFT.flatMap((blocker) => STATES.map((state) => [blocker, state, state !== 'none'] as const)))(
+    'with %s, a %s review shows: %s',
+    (blocker, state, shown) => {
+      expect(sessionReviewCardShown([blocker], state)).toBe(shown);
+    },
+  );
+
+  it.each(HARD.flatMap((blocker) => STATES.map((state) => [blocker, state] as const)))(
+    'with %s, a %s review is hidden',
+    (blocker, state) => {
+      expect(sessionReviewCardShown([blocker], state)).toBe(false);
+    },
+  );
+
+  it.each(HARD)('a running script and %s hide a running review', (blocker) => {
+    expect(sessionReviewCardShown(['script_running', blocker], 'running')).toBe(false);
+  });
+
+  it('shows a running review with several soft blockers', () => {
+    expect(sessionReviewCardShown(['script_running', 'background_job_running', 'unpushed_commits'], 'running')).toBe(true);
   });
 });
