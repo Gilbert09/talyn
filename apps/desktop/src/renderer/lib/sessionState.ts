@@ -127,7 +127,8 @@ export function withServerAttention(
   if (reason === 'failed') return { kind: 'failed', label: 'Failed: open it to see why' };
   if (reason === 'reply') return { kind: 'needs_reply', label: 'Waiting for your answer' };
   if (reason === 'plan') return { kind: 'needs_reply', label: 'A plan waits for your approval' };
-  if (reason !== 'conflict' || state.kind === 'pr_attention') return state;
+  // A running review ranks above conflicts, as in sessionState.
+  if (reason !== 'conflict' || state.kind === 'pr_attention' || state.kind === 'code_review') return state;
   return { kind: 'pr_attention', label: prNumber ? `#${prNumber} has conflicts` : 'The pull request has conflicts' };
 }
 

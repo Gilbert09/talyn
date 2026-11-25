@@ -227,6 +227,19 @@ describe('code review of the pull request', () => {
     expect(sessionState(WB, [], {}, reviewed('reviewing')).unread).toBeUndefined();
   });
 
+  it('keeps a running review and its unread flag over server conflicts', () => {
+    const running: SessionState = { kind: 'code_review', label: '#7: code review running (looking for problems)', unread: true };
+    expect(withServerAttention(running, 'conflict', 7)).toBe(running);
+  });
+
+  it.each([
+    ['reply', 'needs_reply'],
+    ['plan', 'needs_reply'],
+    ['failed', 'failed'],
+  ] as const)('lets server %s attention win over a running review', (reason, kind) => {
+    expect(withServerAttention({ kind: 'code_review', label: 'x' }, reason, 7).kind).toBe(kind);
+  });
+
   it('puts a session with a running review in the active group', () => {
     expect(isActiveSessionState({ kind: 'code_review', label: 'x' })).toBe(true);
   });
