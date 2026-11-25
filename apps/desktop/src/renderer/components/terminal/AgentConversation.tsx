@@ -12,6 +12,7 @@ import { Bot, Loader2, ChevronDown, ChevronRight, GitPullRequest, PanelTop, Paus
 import { cn } from '../../lib/utils';
 import { PROSE_MEASURE, renderMarkdownish } from '../../lib/markdown';
 import { skillInstructionsByToolId } from '../../lib/skillInstructions';
+import { ToolImages } from '../../lib/imagePreview';
 import { MemoryChangeCard } from '../memory/MemoryChangeCard';
 import { BoxRefusalAction } from '../billing/BoxRefusalAction';
 import { TalynMessageCard, ThreadSessionCard } from '../threads/ThreadSessionCard';
@@ -32,6 +33,7 @@ import {
   stripAutoPrBlock,
   stripPlanBlocks,
   subagentCardModel,
+  toolOutputImages,
 } from '@talyn/shared';
 
 interface AgentConversationProps {
@@ -490,6 +492,11 @@ function ToolBlockView({
     [output, editDiff, isError]
   );
 
+  const images = useMemo(
+    () => toolOutputImages(output).map((image) => ({ src: image.src, alt: toolImageAlt(name, input) })),
+    [output, name, input]
+  );
+
   const maxLines = isError ? PREVIEW_LINES_ERROR : PREVIEW_LINES;
   const maxChars = isError ? PREVIEW_CHARS_ERROR : PREVIEW_CHARS;
   const fitsInline = out.text.length > 0 && out.lines <= maxLines && out.chars <= maxChars;
@@ -589,6 +596,7 @@ function ToolBlockView({
         </div>
       )}
       {hasDiff && open && editDiff && <EditDiffBody diff={editDiff} />}
+      <ToolImages images={images} />
       {skillInstructions && <SkillInstructions text={skillInstructions} />}
     </div>
   );
@@ -692,6 +700,12 @@ function SkillInstructions({ text }: { text: string }) {
  * place progress is visible. So does a group whose last call failed when the turn
  * ended there. Any other failure stays closed and is counted in the summary line.
  */
+/** The label of a tool image: the file it came from, or the tool's name. */
+function toolImageAlt(name: string, input: unknown): string {
+  const described = describeTool(name, input);
+  return (described.isCommand ? '' : shortenPath(described.detail)) || described.label;
+}
+
 function ToolGroupView({
   items,
   summary,
@@ -712,6 +726,16 @@ function ToolGroupView({
 }) {
   // Taken once, at mount, so a group that finishes while open stays open.
   const [open, setOpen] = useState(running || openOnFailure);
+  // A closed group still shows its images: a screenshot is the result the person wants to see.
+  const images = useMemo(
+    () =>
+      items.flatMap((item) =>
+        item.kind === 'tool'
+          ? toolOutputImages(item.output).map((image) => ({ src: image.src, alt: toolImageAlt(item.name, item.input) }))
+          : []
+      ),
+    [items]
+  );
 
   return (
     <div className="font-mono text-xs min-w-0">
@@ -762,6 +786,7 @@ function ToolGroupView({
           )}
         </div>
       )}
+      {!open && <ToolImages images={images} />}
     </div>
   );
 }

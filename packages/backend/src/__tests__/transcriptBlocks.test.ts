@@ -13,6 +13,7 @@ import {
   groupedBlockSignature,
   mergeToolBlocks,
   mergedBlockSignature,
+  toolOutputImages,
   type AgentEvent,
 } from '@talyn/shared';
 
@@ -284,6 +285,56 @@ describe('formatToolOutput', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
     expect(() => formatToolOutput(cyclic)).not.toThrow();
+  });
+});
+
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const claudeImage = (media_type = 'image/png', data = PNG) => ({ type: 'image', source: { type: 'base64', media_type, data } });
+const mcpImage = (mimeType = 'image/png', data = PNG) => ({ type: 'image', data, mimeType });
+
+/**
+ * A screenshot or an image file that the agent opened arrives as an image part
+ * in the tool result. The transcript shows it as a picture, not as base64 JSON.
+ */
+describe('toolOutputImages', () => {
+  it.each([
+    ['a Read of a .png (Anthropic shape)', [claudeImage()], ['data:image/png;base64,' + PNG]],
+    ['an MCP screenshot (MCP shape)', [mcpImage()], ['data:image/png;base64,' + PNG]],
+    ['text and an image', [{ type: 'text', text: 'Took a screenshot' }, mcpImage('image/jpeg')], ['data:image/jpeg;base64,' + PNG]],
+    ['two images', [claudeImage(), claudeImage('image/webp')], ['data:image/png;base64,' + PNG, 'data:image/webp;base64,' + PNG]],
+    ['an upper-case media type', [claudeImage('IMAGE/GIF')], ['data:image/gif;base64,' + PNG]],
+  ])('reads %s', (_name, output, srcs) => {
+    expect(toolOutputImages(output).map((image) => image.src)).toEqual(srcs);
+  });
+
+  it.each([
+    ['a string', 'done'],
+    ['undefined', undefined],
+    ['an object', { type: 'image', data: PNG, mimeType: 'image/png' }],
+    ['text only', [{ type: 'text', text: 'hi' }]],
+    ['an SVG', [claudeImage('image/svg+xml')]],
+    ['a URL source', [{ type: 'image', source: { type: 'url', url: 'https://example.com/a.png' } }]],
+    ['a source without data (a slim mobile event)', [{ type: 'image', source: { type: 'base64' } }]],
+    ['data that is not base64', [mcpImage('image/png', 'abc"><script>')]],
+    ['empty data', [mcpImage('image/png', '')]],
+    ['no media type', [{ type: 'image', data: PNG }]],
+    ['a null part', [null]],
+  ])('finds no image in %s', (_name, output) => {
+    expect(toolOutputImages(output)).toEqual([]);
+  });
+
+  it.each([
+    ['an image only', [claudeImage()], ''],
+    ['text and an image', [{ type: 'text', text: 'Saved shot.png' }, mcpImage()], 'Saved shot.png'],
+    ['an image with no data', [{ type: 'image', source: { type: 'base64' } }], ''],
+  ])('keeps base64 out of the text for %s', (_name, output, text) => {
+    const out = formatToolOutput(output);
+    expect(out.text).toBe(text);
+    expect(out.text).not.toContain(PNG);
+  });
+
+  it('still prints JSON for a part that is neither text nor an image', () => {
+    expect(formatToolOutput([{ type: 'resource', uri: 'file:///a' }]).isJson).toBe(true);
   });
 });
 
