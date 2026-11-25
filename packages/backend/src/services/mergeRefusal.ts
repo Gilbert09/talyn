@@ -72,7 +72,7 @@ export function describeMergeRefusal(
 
 /**
  * The refused merge is the newest fact about the PR. GitHub computes
- * `mergeStateStatus` in the background, so a refetch right after the refusal
+ * `mergeStateStatus` in the background, so a fetch right after the refusal
  * can still say CLEAN — and the row would go back to "Ready" with a Merge
  * button that fails again. Only a summary that says the PR is ready changes.
  */
@@ -85,4 +85,46 @@ export function markSummaryBehind(summary: PRSummary): PRSummary {
     return summary;
   }
   return { ...summary, mergeStateStatus: 'BEHIND', blockingReason: 'behind' };
+}
+
+/**
+ * How long a "refused as behind" mark outlives the refusal. GitHub finishes
+ * its recompute well within this; the mark only bridges that gap.
+ */
+export const REFUSED_BEHIND_TTL_MS = 10 * 60_000;
+
+/** PR row id → the head commit GitHub refused as behind (null until a fetch names it), and until when. */
+const refusedBehind = new Map<string, { headSha: string | null; until: number }>();
+
+/**
+ * Note that GitHub refused to merge this PR because its head is behind the
+ * base. The base only moves forward, so the same head stays behind; a new head
+ * (for example from "Update branch") ends the mark. The cached head can be
+ * older than the one GitHub refused, so the mark takes its head from the first
+ * fetch after the refusal — the route's own refetch, a moment later.
+ */
+export function noteRefusedBehind(prId: string, now = Date.now()): void {
+  refusedBehind.set(prId, { headSha: null, until: now + REFUSED_BEHIND_TTL_MS });
+}
+
+/**
+ * Every summary write goes through this (`prCache.upsertRow`), so no later
+ * fetch — the poll, the detail sheet's live read, a manual refresh — can put a
+ * stale CLEAN back on a PR GitHub just refused as behind.
+ */
+export function keepRefusedBehind(prId: string | undefined, summary: PRSummary, now = Date.now()): PRSummary {
+  if (!prId) return summary;
+  const mark = refusedBehind.get(prId);
+  if (!mark) return summary;
+  if (mark.until <= now || (mark.headSha !== null && mark.headSha !== summary.headSha)) {
+    refusedBehind.delete(prId);
+    return summary;
+  }
+  if (mark.headSha === null && summary.headSha) mark.headSha = summary.headSha;
+  return markSummaryBehind(summary);
+}
+
+/** Test helper. */
+export function _resetRefusedBehind(): void {
+  refusedBehind.clear();
 }

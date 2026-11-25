@@ -9,7 +9,7 @@ import {
   refreshPullRequest,
 } from '../services/prRefresh.js';
 import { mergeQueueTimelineForPr } from '../services/mergeQueue/timeline.js';
-import { describeMergeRefusal, markSummaryBehind } from '../services/mergeRefusal.js';
+import { describeMergeRefusal, keepRefusedBehind, noteRefusedBehind } from '../services/mergeRefusal.js';
 import {
   dismissFinding,
   postReviewFindings,
@@ -704,6 +704,8 @@ export function pullRequestRoutes(): Router {
         numbers: [row.number],
       });
       fresh = results[0]?.pr ?? null;
+      // A merge GitHub just refused as behind outranks a fetch that still says CLEAN.
+      if (fresh) fresh = keepRefusedBehind(row.id, fresh);
     } catch (err) {
       // Network blip, token revoked, etc — caller still gets the
       // cached row.
@@ -1709,9 +1711,8 @@ export function pullRequestRoutes(): Router {
     // (for example "Behind") at the same time as the error, not a poll later.
     const refuseMerge = async (raw: string) => {
       const refusal = describeMergeRefusal(raw, { number: row.number, baseBranch });
-      await refreshAfterMergeAttempt(row, {
-        adjust: refusal.code === 'branch_behind' ? markSummaryBehind : undefined,
-      });
+      if (refusal.code === 'branch_behind') noteRefusedBehind(row.id);
+      await refreshAfterMergeAttempt(row);
       return refusal;
     };
 
@@ -2241,17 +2242,10 @@ interface PullRequestRow {
   updatedAt: Date;
 }
 
-/**
- * Reconcile a PR's lifecycle state against GitHub (see `services/prRefresh.ts`)
- * and return the corrected row, or null if nothing changed / the lookup failed.
- */
 /** Refetch a PR after a merge or a branch update. Never throws: the answer must still go out. */
-async function refreshAfterMergeAttempt(
-  row: Parameters<typeof refreshPullRequest>[0],
-  opts: Parameters<typeof refreshPullRequest>[1] = {}
-): Promise<void> {
+async function refreshAfterMergeAttempt(row: Parameters<typeof refreshPullRequest>[0]): Promise<void> {
   try {
-    await refreshPullRequest(row, opts);
+    await refreshPullRequest(row);
   } catch (err) {
     console.warn(
       `[pullRequests] refresh after merge attempt failed for ${row.owner}/${row.repo}#${row.number}:`,
@@ -2260,6 +2254,10 @@ async function refreshAfterMergeAttempt(
   }
 }
 
+/**
+ * Reconcile a PR's lifecycle state against GitHub (see `services/prRefresh.ts`)
+ * and return the corrected row, or null if nothing changed / the lookup failed.
+ */
 async function reconcileTerminalState(
   row: Pick<
     PullRequestRow,

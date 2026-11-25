@@ -1,8 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
+  _resetRefusedBehind,
   describeMergeRefusal,
   githubMergeWords,
+  keepRefusedBehind,
   markSummaryBehind,
+  noteRefusedBehind,
+  REFUSED_BEHIND_TTL_MS,
   type MergeRefusalCode,
 } from '../services/mergeRefusal.js';
 import type { BlockingReason, PRSummary } from '../services/githubGraphql.js';
@@ -80,5 +84,45 @@ describe('markSummaryBehind', () => {
     const out = markSummaryBehind(summary(before));
     expect(out.blockingReason).toBe(after);
     if (after === 'behind' && before !== 'behind') expect(out.mergeStateStatus).toBe('BEHIND');
+  });
+});
+
+describe('keepRefusedBehind', () => {
+  afterEach(() => _resetRefusedBehind());
+
+  const clean = (headSha: string): PRSummary =>
+    ({ number: 1, headSha, mergeStateStatus: 'CLEAN', blockingReason: 'mergeable' }) as unknown as PRSummary;
+  const T0 = 1_000_000;
+
+  it('leaves a PR with no mark alone', () => {
+    expect(keepRefusedBehind('pr-1', clean('a'), T0).blockingReason).toBe('mergeable');
+    expect(keepRefusedBehind(undefined, clean('a'), T0).blockingReason).toBe('mergeable');
+  });
+
+  it('keeps the head the first fetch names behind, for every later fetch of that head', () => {
+    noteRefusedBehind('pr-1', T0);
+    expect(keepRefusedBehind('pr-1', clean('a'), T0 + 1).blockingReason).toBe('behind');
+    expect(keepRefusedBehind('pr-1', clean('a'), T0 + 60_000).blockingReason).toBe('behind');
+    // Another PR is not touched.
+    expect(keepRefusedBehind('pr-2', clean('a'), T0 + 1).blockingReason).toBe('mergeable');
+  });
+
+  it('ends the mark on a new head (for example after Update branch)', () => {
+    noteRefusedBehind('pr-1', T0);
+    keepRefusedBehind('pr-1', clean('a'), T0 + 1);
+    expect(keepRefusedBehind('pr-1', clean('b'), T0 + 2).blockingReason).toBe('mergeable');
+    // Gone for good, also for the old head.
+    expect(keepRefusedBehind('pr-1', clean('a'), T0 + 3).blockingReason).toBe('mergeable');
+  });
+
+  it('ends the mark when it expires', () => {
+    noteRefusedBehind('pr-1', T0);
+    expect(keepRefusedBehind('pr-1', clean('a'), T0 + REFUSED_BEHIND_TTL_MS).blockingReason).toBe('mergeable');
+  });
+
+  it('does not hide a stronger blocker', () => {
+    noteRefusedBehind('pr-1', T0);
+    const conflicting = { ...clean('a'), blockingReason: 'merge_conflicts' } as PRSummary;
+    expect(keepRefusedBehind('pr-1', conflicting, T0 + 1).blockingReason).toBe('merge_conflicts');
   });
 });

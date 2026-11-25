@@ -10,6 +10,7 @@ import { githubService } from '../services/github.js';
 import * as graphqlModule from '../services/githubGraphql.js';
 import type { PRSummary } from '../services/githubGraphql.js';
 import * as mergeGate from '../services/repoMergeGate.js';
+import { _resetRefusedBehind } from '../services/mergeRefusal.js';
 
 /**
  * A merge GitHub refuses comes back as a code and a message a person can act
@@ -94,6 +95,7 @@ describe('merge refusals and Update branch', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await testDb.cleanup();
     vi.restoreAllMocks();
+    _resetRefusedBehind();
   });
 
   const post = (path: string) =>
@@ -131,6 +133,27 @@ describe('merge refusals and Update branch', () => {
       const stored = await storedSummary();
       expect(stored.blockingReason).toBe('behind');
       expect(stored.mergeStateStatus).toBe('BEHIND');
+    });
+
+    it('keeps the row Behind when the detail sheet reads GitHub\'s stale CLEAN again', async () => {
+      vi.spyOn(githubService, 'mergePullRequest').mockRejectedValue(new Error(OUT_OF_DATE));
+      const batch = vi
+        .spyOn(graphqlModule, 'batchPullRequests')
+        .mockResolvedValue([{ branch: 'feat', pr: summary() }] as never);
+      expect((await post('/pull-requests/pr-1/merge')).status).toBe(400);
+
+      const res = await fetch(`${url}/pull-requests/pr-1`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.data.fresh.blockingReason).toBe('behind');
+      expect(batch).toHaveBeenCalledTimes(2);
+      expect((await storedSummary()).blockingReason).toBe('behind');
+
+      // A new head (Update branch) is not behind any more.
+      batch.mockResolvedValue([{ branch: 'feat', pr: summary({ headSha: 'sha2' }) }] as never);
+      const after = await (await fetch(`${url}/pull-requests/pr-1`)).json();
+      expect(after.data.fresh.blockingReason).toBe('mergeable');
+      expect((await storedSummary()).blockingReason).toBe('mergeable');
     });
 
     it('does not mark a row Behind for another refusal, but refetches it', async () => {

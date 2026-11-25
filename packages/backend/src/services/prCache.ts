@@ -10,6 +10,7 @@ import {
 } from '../db/schema.js';
 import { readWorkspaceSettings } from './workspaceSettings.js';
 import { emitPullRequestUpdated } from './websocket.js';
+import { keepRefusedBehind } from './mergeRefusal.js';
 import { captureWorkspaceEvent } from './analytics.js';
 import { domainEvents } from './events.js';
 import { debugBus, describeError } from './debugBus.js';
@@ -317,8 +318,6 @@ export async function forceFetchAndUpsert(opts: {
   owner: string;
   repo: string;
   number: number;
-  /** Correct the fetched summary before it is stored, with a fact GitHub's fetch can lag. */
-  adjust?: (summary: PRSummary) => PRSummary;
 }): Promise<UpsertResult | null> {
   const db = getDbClient();
   const existing = await readRow(db, opts.workspaceId, opts.repositoryId, opts.number);
@@ -345,9 +344,8 @@ export async function forceFetchAndUpsert(opts: {
     // required from non-required failing checks.
     numbers: [opts.number],
   });
-  const fetched = results[0]?.pr ?? null;
-  if (!fetched) return null;
-  const summary = opts.adjust ? opts.adjust(fetched) : fetched;
+  const summary = results[0]?.pr ?? null;
+  if (!summary) return null;
   const previous: CursorState | null = existing
     ? {
         lastReviewId: existing.lastReviewId,
@@ -653,6 +651,8 @@ async function upsertRow(
       };
     }
   }
+  // A merge GitHub just refused as behind outranks a fetch that still says CLEAN.
+  summary = keepRefusedBehind(opts.existingId, summary);
   const lastSummary = summaryToJsonb(summary);
   const cursors = nextCursors(summary);
   // A newly-tracked open PR inherits the workspace's "auto-keep mergeable by
