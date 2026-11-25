@@ -78,6 +78,7 @@ import {
   readSessionConfig,
   readSessionDiff,
   readSessionFile,
+  readSessionImage,
   readSessionPreviewPatch,
   requireReadySandbox,
   resizeSession,
@@ -1268,6 +1269,22 @@ export function workbenchRoutes(): Router {
         return bad(res, 400, 'path is required');
       }
       ok(res, await readSessionFile(row, req.query.path, { live: !found.member && wantsLive(req) }));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  // One image from anywhere in the box, for talyn_show_image. Only PNG, JPEG, GIF or WebP come back.
+  router.get('/:id/image', async (req, res) => {
+    const found = await readableWorkbench(req, res, await getWorkbench(req.params.id), 'Session not found');
+    if (!found) return;
+    const row = found.row;
+    try {
+      if (typeof req.query.path !== 'string' || !req.query.path) {
+        await requireReadySandbox(row);
+        return bad(res, 400, 'path is required');
+      }
+      ok(res, await readSessionImage(row, req.query.path, { live: !found.member && wantsLive(req) }));
     } catch (err) {
       fail(res, err);
     }

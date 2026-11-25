@@ -62,6 +62,11 @@ function clipValue(value: unknown, cap: number, clip: Clip, items: number, depth
     const { source, ...rest } = record;
     return { ...rest, source: { type: (source as { type?: unknown }).type ?? 'omitted' } };
   }
+  if (record.type === 'image' && typeof record.data === 'string') {
+    clip.cut = true; clip.size += OVERHEAD;
+    const { data: _data, ...rest } = record;
+    return rest;
+  }
   let changed = false;
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(record)) {

@@ -32,6 +32,7 @@ import { startStaleGoldenMove } from './move.js';
 import { chooseReadSource, type StoredReadReason } from './sandboxReadSource.js';
 import { publicWorkbench } from './prLink.js';
 import { recoverLostSandbox } from './recovery.js';
+import { readSandboxImage, type SandboxImage } from './sandboxImage.js';
 import { requestSessionResize, type ResizeInput, type SessionResizeResult } from './resize.js';
 import { requestSessionRestart, type RestartInput, type SessionRestartResult } from './restart.js';
 import { loadWorkbenchConfig, loadWorkbenchConfigWithDetection } from './sandboxRuntime.js';
@@ -207,6 +208,20 @@ export async function readSessionFile(row: WorkbenchRow, path: string, opts: { l
   }
   await requireReadySandbox(row);
   return readRepoFile(row, path);
+}
+
+/**
+ * One image from the box, for `talyn_show_image`. Talyn stores no copy of it,
+ * so a sleeping box is refused unless `live` asks to wake it.
+ */
+export async function readSessionImage(row: WorkbenchRow, path: string, opts: { live?: boolean } = {}): Promise<SandboxImage> {
+  const reason = await storedSource(row, opts.live === true);
+  if (reason) {
+    const refusal = noStoredCopy(reason, 'this image');
+    if (refusal) throw refusal;
+  }
+  await requireReadySandbox(row);
+  return readSandboxImage(row, path);
 }
 
 export async function listSessionFiles(row: WorkbenchRow, opts: { live?: boolean } = {}): Promise<WorkbenchFileList> {

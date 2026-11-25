@@ -1478,6 +1478,16 @@ function imagePartSrc(part: unknown): ToolOutputImage | null {
 }
 
 /**
+ * How many image parts a tool result holds, counted with or without their
+ * data. Mobile keeps a slim copy of each event with the image data removed,
+ * so it needs this to know that an image is there to load.
+ */
+export function toolOutputImageCount(output: unknown): number {
+  if (!Array.isArray(output)) return 0;
+  return output.filter((part) => part && typeof part === 'object' && (part as { type?: unknown }).type === 'image').length;
+}
+
+/**
  * The label of an image that a tool call returned: the file path for a Read,
  * else the tool's own name without its MCP server prefix. The first argument of
  * an unknown tool is often a flag such as `png`, so it is never the label.

@@ -1,14 +1,15 @@
-import { editDiffFromInput, subagentCardModel, type EditDiff, type SubagentCardModel, type ToolBlock, type ToolGroupBlock } from '@talyn/shared';
+import { editDiffFromInput, subagentCardModel, toolImageLabel, toolOutputImageCount, toolOutputImages, type EditDiff, type SubagentCardModel, type ToolBlock, type ToolGroupBlock } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
 import { createContext, memo, useContext, useMemo, useRef, useState, type ComponentRef, type ReactNode } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useFeatures } from '../../lib/features';
 import { chunkText } from '../../lib/markdown';
 import { useNow } from '../../lib/time';
 import { mono, radius, type, useTheme, withAlpha } from '../../theme/tokens';
 import { ROW_TEXT_LIMIT } from '../../workflow/model';
-import { useTranscriptActions } from './fullTool';
+import { useTranscriptActions, useWholeTool, type WholeStatus } from './fullTool';
+import { FullScreenImage } from './FullScreenImage';
 import { Markdown } from './Markdown';
 import { StatusDot } from './Pulse';
 import { useHighlighter } from './findHighlight';
@@ -170,7 +171,38 @@ function inputText(input: unknown): string {
   try { return JSON.stringify(input, null, 2) ?? ''; } catch { return String(input); }
 }
 
-type FullState = { status: 'idle' | 'loading' | 'failed' } | { status: 'ready'; tool: ToolBlock };
+/**
+ * The images a tool call returned, under its line. A slim copy has no image data:
+ * a button loads the whole call.
+ */
+function ToolImages({ tool, status, canLoad, loadWhole }: { tool: ToolBlock; status: WholeStatus; canLoad: boolean; loadWhole(): void }) {
+  const c = useTheme();
+  const [shown, setShown] = useState<{ src: string; label: string } | null>(null);
+  const count = toolOutputImageCount(tool.output);
+  const images = useMemo(() => toolOutputImages(tool.output), [tool.output]);
+  if (count === 0) return null;
+  const label = toolImageLabel(tool.name, tool.input);
+  if (images.length === 0) {
+    return <View style={styles.images}>
+      {status === 'loading' ? <Text style={[type.caption, { color: c.muted }]}>{count === 1 ? 'Loading image' : 'Loading images'}</Text>
+        : canLoad ? <ShowMore label={status === 'failed' ? 'Could not load the image. Try again' : count === 1 ? 'Show image' : `Show ${count} images`} onPress={loadWhole} />
+          : <Text style={[type.caption, { color: c.muted }]}>{count === 1 ? 'Image' : 'Images'}. Open the session on the web to see {count === 1 ? 'it' : 'them'}.</Text>}
+    </View>;
+  }
+  return <View style={styles.images}>
+    {images.map((image, index) => <Pressable key={index} accessibilityRole="imagebutton" accessibilityLabel={label} onPress={() => setShown({ src: image.src, label })}>
+      <Image source={{ uri: image.src }} resizeMode="contain"
+        style={[styles.thumb, { borderColor: c.border, backgroundColor: withAlpha(c.surface, 0.6) }]} />
+    </Pressable>)}
+    {shown ? <FullScreenImage source={{ uri: shown.src }} label={shown.label} zoomable onClose={() => setShown(null)} /> : null}
+  </View>;
+}
+
+/** The images of one call in a closed group. Owns its own load state. */
+function GroupToolImages({ tool: held }: { tool: ToolBlock }) {
+  const { tool, status, loadWhole, canLoad } = useWholeTool(held);
+  return <ToolImages tool={tool} status={status} canLoad={canLoad} loadWhole={loadWhole} />;
+}
 
 /**
  * One tool call as a compact mono line, like web: a status dot, the verb and
@@ -185,17 +217,9 @@ export const ToolRow = memo(function ToolRow({ tool: held, nested = false, parti
   const actions = useTranscriptActions();
   const [open, setOpen] = useState(false);
   const [full, setFull] = useState(false);
-  const [whole, setWhole] = useState<FullState>({ status: 'idle' });
-  const asked = useRef(false);
-  const tool = useMemo(() => whole.status === 'ready' ? { ...held, input: whole.tool.input, output: whole.tool.output ?? held.output } : held, [whole, held]);
-  const isPreview = (partial || actions?.partialTools?.has(held.toolId)) && whole.status !== 'ready';
-  const loadWhole = () => {
-    if (!actions || asked.current) return;
-    asked.current = true;
-    setWhole({ status: 'loading' });
-    const failed = () => { asked.current = false; setWhole({ status: 'failed' }); };
-    actions.loadFullTool(held).then((loaded) => { if (loaded) setWhole({ status: 'ready', tool: loaded }); else failed(); }, failed);
-  };
+  const { tool, status, loadWhole } = useWholeTool(held);
+  const whole = { status };
+  const isPreview = (partial || actions?.partialTools?.has(held.toolId)) && status !== 'ready';
   const line = useMemo(() => toolLine(tool.name, tool.input), [tool.name, tool.input]);
   const editDiff = useMemo(() => editDiffFromInput(tool.name, tool.input), [tool.name, tool.input]);
   const output = useMemo(() => open || tool.isError ? readableOutput(editDiff && !tool.isError ? undefined : tool.output) : null,
@@ -232,6 +256,7 @@ export const ToolRow = memo(function ToolRow({ tool: held, nested = false, parti
               : isPreview ? <Text style={[type.caption, { color: c.muted }]}>Preview. Open the session on the web for the whole output.</Text> : null}
       </Section> : open && !editDiff && tool.settled ? <Text style={[type.caption, { color: c.muted }]}>No output.</Text> : null}
     </View> : null}
+    <ToolImages tool={tool} status={status} canLoad={Boolean(actions)} loadWhole={loadWhole} />
   </View>;
 });
 
@@ -250,6 +275,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({ group, partial = [] }: 
       </Text>
       <Chevron open={open} />
     </Pressable>
+    {!open ? group.children.map((child) => child.kind === 'tool' ? <GroupToolImages key={child.key} tool={child} /> : null) : null}
     {open ? <View style={[styles.group, { borderColor: c.border }]}>
       {group.children.map((child) => child.kind === 'thinking'
         ? <ThinkingRow key={child.key} text={child.text} compact />
@@ -275,5 +301,7 @@ const styles = StyleSheet.create({
   group: { marginLeft: 2, marginTop: 4, borderLeftWidth: StyleSheet.hairlineWidth * 2, paddingLeft: 10, gap: 2 },
   code: { ...mono(400), fontSize: 12, lineHeight: 18 },
   diff: { borderRadius: 4, paddingVertical: 4, paddingHorizontal: 6 },
+  images: { marginLeft: 2, marginTop: 4, gap: 6, alignItems: 'flex-start' },
+  thumb: { height: 160, width: 260, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth },
   more: { alignSelf: 'flex-start', paddingVertical: 4 },
 });

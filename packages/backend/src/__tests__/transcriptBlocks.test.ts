@@ -14,6 +14,7 @@ import {
   mergeToolBlocks,
   mergedBlockSignature,
   toolImageLabel,
+  toolOutputImageCount,
   toolOutputImages,
   type AgentEvent,
 } from '@talyn/shared';
@@ -342,6 +343,17 @@ describe('toolOutputImages', () => {
     ['Read with no path uses the tool name', 'Read', {}, 'Read'],
   ])('labels a tool image: %s', (_name, tool, input, label) => {
     expect(toolImageLabel(tool, input)).toBe(label);
+  });
+
+  it.each([
+    ['an image with data', [claudeImage()], 1],
+    ['a slim image with its data removed', [{ type: 'image', source: { type: 'base64' } }, { type: 'image', mimeType: 'image/png' }], 2],
+    ['text and an image', [{ type: 'text', text: 'x' }, mcpImage()], 1],
+    ['text only', [{ type: 'text', text: 'x' }], 0],
+    ['a string', 'image', 0],
+    ['undefined', undefined, 0],
+  ])('counts the image parts in %s', (_name, output, count) => {
+    expect(toolOutputImageCount(output)).toBe(count);
   });
 
   it('still prints JSON for a part that is neither text nor an image', () => {

@@ -96,6 +96,9 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_schedule_wakeup',
   'talyn_list_wakeups',
   'talyn_cancel_wakeup',
+  // Reads one image from the session's own box (the tool refuses another
+  // session). Only real images come back, never a text file.
+  'talyn_show_image',
   // Repository setup that outlives the session, allowed on purpose: the
   // backend refuses secrets, downloaded scripts piped into a shell and data
   // egress, logs each step with its session, and the step is only suggested

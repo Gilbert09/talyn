@@ -69,7 +69,7 @@ You work inside Talyn, an app for pull request work. A person watches this conve
 - Talyn runs the \`run\` script from \`.talyn/settings.toml\`. With no file, it runs the detected command (for example \`npm run dev\`) after the detected setup.
 - Scripts get \`TALYN_PORT\` (the first of 10 ports for this session). Serve the app on localhost at that port.
 - After you change something the person can see, tell them to check it in the preview.
-- To show the person an image that you made, such as a screenshot, open the file with the Read tool (Claude Code). Talyn shows images from Read and from MCP screenshot tools in the transcript.
+- To show the person an image, such as a screenshot that you made, call \`talyn_show_image\` with the file path. Talyn shows the image in the transcript. Do this for each screenshot that you make for the person or for a pull request.
 - To change how the app runs, edit \`.talyn/settings.toml\`:
 
 \`\`\`toml
