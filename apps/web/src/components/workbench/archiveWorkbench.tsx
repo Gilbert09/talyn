@@ -3,6 +3,7 @@ import { api } from '../../lib/api';
 import { trackEvent } from '../../lib/analytics';
 import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { toast } from '../../stores/toast';
+import { maybeHandleBillingLimit } from '../../stores/billing';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 
@@ -18,6 +19,22 @@ export async function archiveWorkbench(id: string, leave: boolean): Promise<bool
     captureWorkbenchFailure('archive_session', err, id);
     toast.error('Could not archive the session', err instanceof Error ? err.message : undefined);
     return false;
+  }
+}
+
+/** Restore an archived session. Shows its own error and returns null when the restore fails. */
+export async function restoreWorkbench(workbench: Pick<Workbench, 'id'>): Promise<Workbench | null> {
+  try {
+    const wb = await api.workbenches.restore(workbench.id);
+    trackEvent('session_restored', { workbench_id: workbench.id, kind: wb.kind ?? 'session', runtime: wb.runtime });
+    useWorkbenchStore.getState().upsertWorkbench(wb);
+    return wb;
+  } catch (err) {
+    captureWorkbenchFailure('restore_session', err, workbench.id);
+    if (!maybeHandleBillingLimit(err, 'session_restore')) {
+      toast.error('Could not restore the session', err instanceof Error ? err.message : undefined);
+    }
+    return null;
   }
 }
 

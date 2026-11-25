@@ -32,10 +32,11 @@ import {
 import { composerSettingsLinks, matchComposerLinks } from '../../lib/composerLinks';
 import { useNavigationStore } from '../../stores/navigation';
 import { FOCUS_COMPOSER_EVENT } from '../../lib/shortcuts';
-import type { WorkbenchOps } from '../../lib/workbenchOps';
+import { opsFor, type WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 import { composerDraftKey, useWorkbenchStore } from '../../stores/workbenches';
 import { createSessionChat } from './createSessionChat';
+import { restoreWorkbench } from './archiveWorkbench';
 import { useSlashCommandFileDescriptions } from './useSlashCommandFileDescriptions';
 import { ComposerPopover, applyTrigger, findTrigger, type ComposerMentionSource, type ComposerTrigger } from './ComposerPopover';
 import { isThread, threadMentions } from '../../lib/threads';
@@ -81,8 +82,14 @@ export function Composer({
   const setDraft = useWorkbenchStore((s) => s.setDraft);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [sending, setSending] = useState(false);
+  // The draft is read at Enter and cleared after the restore, so typing waits for the restore.
+  const [restoring, setRestoring] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const images = useComposerImages(ops.runtime, ops, workbench.status);
+  // A teammate's session: the message runs on my subscription; chat settings and wakes stay the owner's.
+  const owner = useIsWorkbenchOwner(workbench);
+  const restoreOnSend = restoresOnSend(workbench, owner);
+  // An archived session has no box to take a file yet: the first message restores it.
+  const images = useComposerImages(ops.runtime, ops, workbench.status, restoreOnSend ? ARCHIVED_ATTACH_REFUSAL : undefined);
   const { attachments, setAttachments, pendingUploads, failedUploads, imageNotReady, setImageNotReady, fileInputRef, attachFiles, onPaste } = images;
   useEffect(() => {
     if (attachRef) attachRef.current = (files) => void attachFiles(files);
@@ -110,8 +117,6 @@ export function Composer({
   const chatEvents = useWorkbenchStore((s) => (chat ? s.chatEvents[chat.id]?.events : undefined));
   const { queuing } = usePendingMessages(chat, chatEvents);
   const waitText = sandboxWaitText(workbench);
-  // A teammate's session: the message runs on my subscription; chat settings and wakes stay the owner's.
-  const owner = useIsWorkbenchOwner(workbench);
   const [refusal, setRefusal] = useState<string | null>(null);
   useEffect(() => setRefusal(null), [workbench.id, chat?.id]);
 
@@ -134,6 +139,13 @@ export function Composer({
   useEffect(() => {
     if (autoFocus) textareaRef.current?.focus();
   }, [draftKey]);
+
+  // A disabled textarea loses focus, so give it back when the restore ends.
+  const wasRestoring = useRef(false);
+  useEffect(() => {
+    if (wasRestoring.current && !restoring) textareaRef.current?.focus();
+    wasRestoring.current = restoring;
+  }, [restoring]);
 
   // ⌘L (lib/shortcuts.ts) asks the open composer for focus.
   useEffect(() => {
@@ -245,8 +257,10 @@ export function Composer({
 
   // A session whose sandbox is starting, moving or being replaced still takes
   // messages: the backend queues them and runs them when the sandbox is ready.
+  // An archived session takes a message from its owner too: the send restores it first.
   const sendBlocked =
     Boolean(ops.unavailable) &&
+    !restoreOnSend &&
     !workbenchQueuesMessages(workbench.status) &&
     !(workbench.status === 'ready' && workbench.sandboxState === 'lost');
 
@@ -271,8 +285,21 @@ export function Composer({
       model,
       effort,
     };
+    let current = workbench;
+    let sendOps = ops;
+    if (restoreOnSend) {
+      // restoreWorkbench shows its own error, and the draft stays.
+      setRestoring(true);
+      const restored = await restoreWorkbench(workbench).finally(() => setRestoring(false));
+      if (!restored) {
+        setSending(false);
+        return;
+      }
+      current = restored;
+      sendOps = opsFor(restored);
+    }
     try {
-      const target = chat ?? (await createSessionChat(workbench));
+      const target = chat ?? (await createSessionChat(current));
       if (!target) return;
       outgoingChatId = target.id;
       // A running turn or a waiting queue means this message waits too: show it as queued, not in the transcript.
@@ -282,13 +309,13 @@ export function Composer({
       setAttachments([]);
       setImageNotReady(false);
       setTrigger(null);
-      const res = await ops.send(target, input);
+      const res = await sendOps.send(target, input);
       useWorkbenchStore.getState().settleOutgoingMessage(target.id, outgoingId, res.queued);
       trackEvent('session_message_sent', { queued: res.queued, plan_mode: planMode, model_id: model, attachments_count: attachments.length, runtime: workbench.runtime });
-      if (res.queued && workbench.status !== 'moving') {
+      if (res.queued && current.status !== 'moving') {
         toast.info(
           'Queued',
-          workbench.status === 'provisioning'
+          current.status === 'provisioning'
             ? 'It runs when the sandbox is ready.'
             : 'It runs when the current turn ends.',
         );
@@ -451,10 +478,10 @@ export function Composer({
           ref={textareaRef}
           value={draft}
           rows={1}
-          disabled={sendBlocked}
+          disabled={sendBlocked || restoring}
           onChange={(e) => {
             setDraft(draftKey, e.target.value);
-            if (owner) wakeWorkbench(workbench.id);
+            if (owner && !restoreOnSend) wakeWorkbench(workbench.id);
             if (refusal) setRefusal(null);
             updateTrigger(e.target.value, e.target.selectionStart);
           }}
@@ -463,7 +490,7 @@ export function Composer({
           onPaste={onPaste}
           onBlur={() => setTrigger(null)}
           placeholder={
-            ops.unavailable ??
+            (restoreOnSend ? 'This session is archived. Send a message to restore it.' : ops.unavailable) ??
             (running
               ? 'The agent is working. A message now is queued for when it finishes.'
               : thread ? 'Ask the thread… (@ for sessions and repositories)' : 'Ask the agent… (@ for files, / for commands)')
@@ -473,7 +500,7 @@ export function Composer({
           aria-label="Message the agent"
         />
         <div className="flex items-center gap-1 px-2 pb-1.5">
-          <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} videos />
+          {!restoreOnSend && <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} videos />}
           <AgentPicker
             value={agent}
             onChange={(next) => void patchChat({ agent: next, model: fleetModelForAgentSwitch(model, next) })}
@@ -529,6 +556,16 @@ export function Composer({
       </div>
     </div>
   );
+}
+
+export const ARCHIVED_ATTACH_REFUSAL = 'Send a message to restore the session, then attach the file.';
+
+/**
+ * True when a send restores the archived session first. Only the owner can
+ * restore, and the web app can only run a sandbox session.
+ */
+export function restoresOnSend(workbench: Workbench, owner: boolean): boolean {
+  return owner && workbench.runtime === 'sandbox' && (workbench.status === 'archived' || Boolean(workbench.archivedAt));
 }
 
 /** The wait-for-a-sandbox text, with the seconds until the next try. */
