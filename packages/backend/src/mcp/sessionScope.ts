@@ -53,6 +53,7 @@ export const SESSION_TOKEN_TOOLS: ReadonlySet<string> = new Set([
   'talyn_start_code_review',
   'talyn_cancel_code_review',
   'talyn_dismiss_code_review_finding',
+  'talyn_mark_code_review_finding_fixed',
   // Tasks
   'talyn_list_tasks',
   'talyn_get_task',

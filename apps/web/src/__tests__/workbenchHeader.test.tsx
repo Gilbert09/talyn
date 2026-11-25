@@ -808,6 +808,18 @@ describe('WorkbenchHeader code review', () => {
     expect(screen.queryByRole('button', { name: /finding/ })).not.toBeInTheDocument();
   });
 
+  it('shows No open findings when the session handled each sent finding and pushed', () => {
+    const codeReview = review({
+      staleForHead: true,
+      openCount: 0,
+      sessionReport: { workbenchId: WB.id, sentAt: '2026-11-25T17:15:15Z', findingCount: 1 },
+    });
+    render(<WorkbenchHeader workbench={WB} pr={withReview(codeReview)} chat={chat} ops={ops()} />);
+    fireEvent.click(screen.getByRole('button', { name: /No open findings/ }));
+    expect(useWorkbenchStore.getState()).toMatchObject({ prDetailId: 'pr1', prDetailTab: 'findings' });
+    expect(screen.queryByRole('button', { name: /older commit/ })).not.toBeInTheDocument();
+  });
+
   it('shows No findings for a clean review of the head, and opens the findings tab', () => {
     render(<WorkbenchHeader workbench={WB} pr={withReview(review({}))} chat={chat} ops={ops()} />);
     fireEvent.click(screen.getByRole('button', { name: /No findings/ }));

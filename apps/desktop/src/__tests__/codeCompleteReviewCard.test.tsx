@@ -212,6 +212,37 @@ describe('CodeCompleteReviewCard states', () => {
     expect(screen.queryByTestId('code-complete-review-sent')).not.toBeInTheDocument();
   });
 
+  it.each([
+    { name: 'this session', workbenchId: 'wb1' },
+    { name: 'another session', workbenchId: 'wb2' },
+  ])('shows a review done when $name fixed or dismissed each sent finding and pushed', ({ workbenchId }) => {
+    const codeReview = review({
+      staleForHead: true,
+      openCount: 0,
+      sessionReport: { workbenchId, sentAt: new Date().toISOString(), findingCount: 1 },
+    });
+    render(<CodeCompleteReviewCard workbench={arrange({ pr: { codeReview } })} />);
+    expect(card()).toHaveAttribute('data-state', 'done');
+    expect(card()).toHaveTextContent('Code review done');
+    expect(card()).toHaveTextContent('No open findings. The session fixed or dismissed each finding.');
+    expect(screen.getByTestId('code-complete-review-sent')).toHaveTextContent(/^Talyn sent 1 finding to/);
+    expect(screen.getByRole('button', { name: 'Review again' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View findings' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run code review' })).not.toBeInTheDocument();
+  });
+
+  it('offers a new review when a sent finding is still open on an older commit', () => {
+    const codeReview = review({
+      staleForHead: true,
+      openCount: 1,
+      counts: { ...COUNTS, minor: 1 },
+      sessionReport: { workbenchId: 'wb1', sentAt: new Date().toISOString(), findingCount: 1 },
+    });
+    render(<CodeCompleteReviewCard workbench={arrange({ pr: { codeReview } })} />);
+    expect(card()).toHaveAttribute('data-state', 'none');
+    expect(screen.getByRole('button', { name: 'Run code review' })).toBeInTheDocument();
+  });
+
   it('shows no failure reason when the review has none', () => {
     render(<CodeCompleteReviewCard workbench={arrange({ pr: { codeReview: review({ phase: 'failed' }) } })} />);
     expect(card()).toHaveTextContent('The code review did not finish.');
@@ -245,6 +276,14 @@ describe('CodeCompleteReviewCard runs a review', () => {
   it.each([
     { name: 'Run code review', codeReview: null },
     { name: 'Run again', codeReview: review({ phase: 'failed' }) },
+    {
+      name: 'Review again',
+      codeReview: review({
+        staleForHead: true,
+        openCount: 0,
+        sessionReport: { workbenchId: 'wb1', sentAt: new Date().toISOString(), findingCount: 1 },
+      }),
+    },
   ])('$name starts a review and shows it running', async ({ name, codeReview }) => {
     let resolve: (value: unknown) => void = () => {};
     startCodeReview.mockReturnValue(new Promise((r) => (resolve = r)));

@@ -16,7 +16,13 @@ import {
   tasks,
   workspaces,
 } from '../db/schema.js';
-import { listFindings, markFixed, unmarkFixed } from '../services/codeReview/findings.js';
+import {
+  listFindings,
+  markFindingFixed,
+  markFixed,
+  severityCounts,
+  unmarkFixed,
+} from '../services/codeReview/findings.js';
 
 const PUSHED = 'c'.repeat(40);
 
@@ -129,5 +135,45 @@ describe('markFixed / unmarkFixed — the commit link', () => {
     await markFixed('rev-1', ['f-1'], 'task-1', PUSHED);
     expect(await listFindings('rev-1')).toHaveLength(0);
     expect(await listFindings('rev-1', { includeInactive: true })).toHaveLength(1);
+  });
+
+  describe('markFindingFixed — a session fixed it by hand', () => {
+    it.each([
+      { from: 'open', moves: true },
+      { from: 'selected', moves: true },
+      { from: 'dismissed', moves: false },
+      { from: 'fixed', moves: false },
+      { from: 'stale', moves: false },
+      { from: 'discarded', moves: false },
+    ] as const)('from $from: moves=$moves', async ({ from, moves }) => {
+      await testDb.db.update(prCodeReviewFindings).set({ disposition: from });
+      expect(await markFindingFixed('f-1', { headSha: PUSHED, userId: 'owner-a' })).toBe(moves);
+      const row = await only();
+      expect(row.disposition).toBe(moves ? 'fixed' : from);
+      expect(row.fixedHeadSha).toBe(moves ? PUSHED : null);
+    });
+
+    it.each([
+      { headSha: PUSHED, expected: PUSHED },
+      { headSha: null, expected: null },
+      { headSha: undefined, expected: null },
+    ])('records the commit $headSha with no fix task', async ({ headSha, expected }) => {
+      await testDb.db.update(prCodeReviewFindings).set({ disposition: 'open', fixTaskId: 'task-1' });
+      expect(await markFindingFixed('f-1', { headSha })).toBe(true);
+      const row = await only();
+      expect(row.disposition).toBe('fixed');
+      expect(row.fixedHeadSha).toBe(expected);
+      expect(row.fixTaskId).toBeNull();
+    });
+
+    it('stops counting the finding as open', async () => {
+      expect((await severityCounts('rev-1')).blocker).toBe(1);
+      await markFindingFixed('f-1', { headSha: PUSHED });
+      expect((await severityCounts('rev-1')).blocker).toBe(0);
+    });
+
+    it('does nothing for an unknown finding', async () => {
+      expect(await markFindingFixed('f-missing')).toBe(false);
+    });
   });
 });

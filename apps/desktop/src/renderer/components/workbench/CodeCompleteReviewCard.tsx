@@ -57,6 +57,9 @@ export function CodeCompleteReviewCard({
   if (!shown || !pr) return null;
 
   const viewFindings = () => openPrDetail(pr.id, 'findings');
+  // The session handled every finding and pushed: the findings belong to an
+  // older commit, so a new review of the fixes is one click away.
+  const reviewAgain = state === 'done' && Boolean(review?.staleForHead);
   const highlight = state === 'none' || (state === 'done' && (review?.openCount ?? 0) > 0);
 
   return (
@@ -102,7 +105,7 @@ export function CodeCompleteReviewCard({
           (review.openCount > 0 ? (
             <CodeReviewSeverityCounts counts={review.counts} openCount={review.openCount} />
           ) : (
-            <p>No open findings</p>
+            <p>{reviewAgain ? 'No open findings. The session fixed or dismissed each finding.' : 'No open findings'}</p>
           ))}
         {review?.sessionReport && (
           <p className="text-[11px]" data-testid="code-complete-review-sent">
@@ -112,10 +115,16 @@ export function CodeCompleteReviewCard({
       </div>
       {(state === 'none' || state === 'failed' || state === 'done') && (
         <div className="flex flex-wrap items-center gap-2 border-t border-border/60 px-3 py-2">
-          {(state === 'none' || state === 'failed') && (
-            <Button size="sm" onClick={() => void start()} disabled={busy} data-attr="code-complete-review-run">
+          {(state === 'none' || state === 'failed' || reviewAgain) && (
+            <Button
+              size="sm"
+              variant={reviewAgain ? 'outline' : 'default'}
+              onClick={() => void start()}
+              disabled={busy}
+              data-attr="code-complete-review-run"
+            >
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScanSearch className="h-3.5 w-3.5" />}
-              {state === 'failed' ? 'Run again' : 'Run code review'}
+              {state === 'failed' ? 'Run again' : reviewAgain ? 'Review again' : 'Run code review'}
             </Button>
           )}
           {(state === 'failed' || state === 'done') && (
@@ -163,10 +172,14 @@ export function WorkbenchCodeReviewBadge({ workbench, pr }: { workbench: Workben
         type="button"
         onClick={openFindings}
         className={cn(BADGE_BASE, 'bg-muted text-muted-foreground hover:text-foreground')}
-        title="The code review found nothing to fix. Show the findings"
+        title={
+          review?.staleForHead
+            ? 'The session fixed or dismissed each finding. Show the findings'
+            : 'The code review found nothing to fix. Show the findings'
+        }
       >
         <CheckCircle2 className="h-2.5 w-2.5" />
-        No findings
+        {review?.staleForHead ? 'No open findings' : 'No findings'}
       </button>
     );
   } else if (complete && state === 'none') {

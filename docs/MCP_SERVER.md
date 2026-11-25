@@ -155,6 +155,7 @@ Use `talyn_list_workspaces` to find workspace ids.
 | `talyn_cancel_code_review` | Cancel a running review. |
 | `talyn_get_code_review_finding` | Read the full body, suggestion, anchor, and verdict reason. |
 | `talyn_dismiss_code_review_finding` | Dismiss a finding with a fixed reason. Use `undo` to restore it. |
+| `talyn_mark_code_review_finding_fixed` | Mark an open finding fixed after you push the fix. Give `commit_sha`. A later review opens it again if the problem stays. |
 
 ### Tasks
 

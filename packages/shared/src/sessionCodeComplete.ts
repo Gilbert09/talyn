@@ -90,7 +90,9 @@ export function isSessionCodeComplete(input: CodeCompleteInput): boolean {
  *  - `waiting`: a cycle runs and waits for a runner.
  *  - `running`: a cycle runs.
  *  - `failed`: the cycle for this head did not finish.
- *  - `done`: the cycle for this head finished; the findings are current.
+ *  - `done`: the cycle for this head finished; the findings are current. Also
+ *    a cycle for an older head whose findings went to the session and that has
+ *    no open findings left (see {@link reviewHandledBySession}).
  */
 export type SessionReviewState = 'none' | 'waiting' | 'running' | 'failed' | 'done';
 
@@ -99,11 +101,28 @@ export interface SessionReviewFacts {
   phase: CodeReviewPhase;
   staleForHead: boolean;
   deferredSince?: string | null;
+  /** Absent from an older backend: then a stale review stays `none`. */
+  openCount?: number;
+  sessionReport?: unknown;
+}
+
+/**
+ * True when the findings of a finished cycle went to the session (the
+ * report-back) and the session fixed or dismissed every one of them. The head
+ * then moved because of the fixes, so the stale review still counts as done:
+ * the card must not offer a new review as if nothing happened, and the header
+ * must not show the fixed findings as open.
+ */
+export function reviewHandledBySession(review: SessionReviewFacts | null | undefined): boolean {
+  if (!review || !review.staleForHead || !review.sessionReport) return false;
+  if (review.phase !== 'ready' && review.phase !== 'fixed') return false;
+  return review.openCount === 0;
 }
 
 export function sessionReviewState(review: SessionReviewFacts | null | undefined): SessionReviewState {
   if (!review) return 'none';
   if (!CODE_REVIEW_PHASE_AT_REST[review.phase]) return review.deferredSince ? 'waiting' : 'running';
+  if (reviewHandledBySession(review)) return 'done';
   if (review.phase === 'idle' || review.phase === 'cancelled' || review.staleForHead) return 'none';
   return review.phase === 'failed' ? 'failed' : 'done';
 }

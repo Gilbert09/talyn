@@ -88,7 +88,7 @@ export function sessionReportMessage(input: {
       : []),
     '',
     'Check each finding against the code. For the full body and suggestion, call talyn_get_code_review_finding with the pull request id and the finding id.',
-    '- If a finding is valid, fix it on this branch. Then push.',
+    '- If a finding is valid, fix it on this branch. Then push. Then mark it fixed with talyn_mark_code_review_finding_fixed and the commit sha of the fix.',
     `- If a finding is not valid, dismiss it with talyn_dismiss_code_review_finding and a reason (${CODE_REVIEW_DISMISS_REASONS.join(', ')}).`,
     'Then report what you fixed and what you dismissed.',
   ];
