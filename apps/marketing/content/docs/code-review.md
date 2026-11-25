@@ -25,7 +25,7 @@ When a session's work is code complete, a review card shows at the end of the ch
 - No background job or session script runs.
 - The branch has no uncommitted changes and no commits that are not on GitHub.
 
-By default, Talyn starts a review of the latest commit by itself when the session becomes code complete. When the review finds problems, Talyn sends the confirmed findings to the session. The session's agent checks each finding, then fixes it and pushes, or dismisses it with a reason. Talyn starts at most three of these automatic reviews for each pull request. To turn them off, see [Settings](#settings).
+By default, Talyn starts a review of the latest commit by itself when the session becomes code complete. When a review of the pull request finds problems, Talyn sends the confirmed findings to the session. This includes a review that you start. Automatic reviews send findings to the session at most three times for each pull request. The session's agent checks each finding, then fixes it and pushes, or dismisses it with a reason. Talyn starts at most three of these automatic reviews for each pull request. To turn them off, see [Settings](#settings).
 
 With no review of the pull request's latest commit, the card has a **Run code review** button. When a review runs or is done, the card shows its status and the open findings by severity. Select **View findings** to open them. When Talyn sent the findings to the session, the card says so. The session header shows the same review status as a badge, also on mobile.
 
@@ -79,7 +79,7 @@ Talyn posts one review from your own GitHub account, as a comment. It never appr
 
 Open **Settings > Code review** to change how reviews work in this workspace.
 
-- **Review automatically**: **Review a session's pull request when its work is done** is on by default, on every plan. Turn it off to stop the automatic review when a session becomes code complete. Turn on **Review my new pull requests automatically** to review pull requests from your workspace as they are pushed. Drafts are skipped. This needs a paid plan.
+- **Review automatically**: **Review a session's pull request when its work is done** is on by default, on every plan. Turn it off to stop the automatic review when a session becomes code complete. When it is off, Talyn also does not send findings to the session. Turn on **Review my new pull requests automatically** to review pull requests from your workspace as they are pushed. Drafts are skipped. This needs a paid plan.
 - **How deeply**: the default depth.
 - **Who reviews**: Talyn's reviewers, your own reviewers, or both. See below.
 - **What is worth your attention**: the lowest severity to show.

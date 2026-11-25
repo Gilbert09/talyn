@@ -19,6 +19,7 @@ const m = vi.hoisted(() => ({
   liveWorkbenchForPr: vi.fn(),
   liveSessionActivityForPr: vi.fn(),
   deliverToSession: vi.fn(),
+  countAutomaticReports: vi.fn(),
 }));
 
 vi.mock('../services/codeReview/findings.js', async (orig) => ({
@@ -34,6 +35,7 @@ vi.mock('../services/codeReview/store.js', async (orig) => ({
   getPrForReview: m.getPrForReview,
   appendReviewEvent: m.appendReviewEvent,
   appendReviewEventOnce: m.appendReviewEventOnce,
+  countAutomaticSessionReports: m.countAutomaticReports,
 }));
 vi.mock('../services/codeReview/analytics.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/analytics.js')>()),
@@ -62,6 +64,7 @@ const {
   findingSummary,
   reportFindingsToSession,
   sessionReportMessage,
+  SESSION_REPORT_MAX_AUTOMATIC,
   SESSION_REPORT_MAX_LISTED,
 } = await import('../services/codeReview/sessionReport.js');
 
@@ -116,6 +119,7 @@ beforeEach(() => {
   m.liveWorkbenchForPr.mockResolvedValue(SESSION);
   m.deliverToSession.mockResolvedValue('chat-1');
   m.startFixRun.mockResolvedValue({ ok: true, taskId: 't1' });
+  m.countAutomaticReports.mockResolvedValue(0);
 });
 
 afterEach(() => vi.resetAllMocks());
@@ -149,7 +153,7 @@ describe('finishCycle with a live session on the pull request', () => {
       expect.objectContaining({
         code: 'session_report_sent',
         message: expect.stringContaining('"paris"'),
-        detail: { workbenchId: 'wb-1', activity: 'working', findingIds: ['f1', 'f2'] },
+        detail: { workbenchId: 'wb-1', activity: 'working', auto: false, findingIds: ['f1', 'f2'] },
       })
     );
     expect(m.deliverToSession).toHaveBeenCalledWith('wb-1', expect.stringContaining('acme/app#42'));
@@ -210,6 +214,66 @@ describe('finishCycle with a live session on the pull request', () => {
       expect.objectContaining({ message: expect.stringContaining('The session is gone.') })
     );
     expect(m.startFixRun).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing when the workspace turned session reviews off, and auto-fix holds back', async () => {
+    m.settings.mockResolvedValue(resolveCodeReviewSettings({ autoFix: true, reviewOnSessionComplete: false }));
+    m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
+
+    expect(await reportFindingsToSession(review)).toEqual({ kind: 'skipped', reason: 'settings_off' });
+    await finishCycle(review);
+
+    expect(m.liveSessionActivityForPr).not.toHaveBeenCalled();
+    expect(m.deliverToSession).not.toHaveBeenCalled();
+    expect(m.startFixRun).not.toHaveBeenCalled();
+    expect(eventCodes()).toEqual(['auto_fix_session_active']);
+  });
+
+  it.each([
+    // started automatically, earlier automatic reports, sent
+    { auto: false, earlier: 0, sent: true },
+    { auto: false, earlier: 3, sent: true },
+    { auto: false, earlier: 10, sent: true },
+    { auto: true, earlier: 0, sent: true },
+    { auto: true, earlier: 2, sent: true },
+    { auto: true, earlier: 3, sent: false },
+    { auto: true, earlier: 7, sent: false },
+  ])('auto=$auto with $earlier earlier automatic reports: sent=$sent', async ({ auto, earlier, sent }) => {
+    m.getReview.mockResolvedValue({ ...ready, auto });
+    m.countAutomaticReports.mockResolvedValue(earlier);
+    m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
+
+    const out = await reportFindingsToSession(review);
+
+    expect(m.deliverToSession).toHaveBeenCalledTimes(sent ? 1 : 0);
+    if (sent) {
+      expect(out).toMatchObject({ kind: 'sent' });
+      expect(m.appendReviewEventOnce).toHaveBeenCalledWith(
+        'rev-1',
+        3,
+        expect.objectContaining({ code: 'session_report_sent', detail: expect.objectContaining({ auto }) })
+      );
+    } else {
+      expect(out).toEqual({ kind: 'skipped', reason: 'limit_reached' });
+      expect(m.appendReviewEventOnce).toHaveBeenCalledWith(
+        'rev-1',
+        3,
+        expect.objectContaining({ code: 'session_report_limit', message: expect.stringContaining('"paris"') })
+      );
+    }
+  });
+
+  it('bounds automatic reports at three, and then auto-fix holds back for the session', async () => {
+    expect(SESSION_REPORT_MAX_AUTOMATIC).toBe(3);
+    m.getReview.mockResolvedValue({ ...ready, auto: true });
+    m.countAutomaticReports.mockResolvedValue(SESSION_REPORT_MAX_AUTOMATIC);
+    m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
+
+    await finishCycle(review);
+
+    expect(m.deliverToSession).not.toHaveBeenCalled();
+    expect(m.startFixRun).not.toHaveBeenCalled();
+    expect(eventCodes()).toEqual(['auto_fix_session_active']);
   });
 
   it('keeps the earlier behaviour when the session cannot be read', async () => {

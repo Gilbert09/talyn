@@ -2,8 +2,14 @@
 // the live session that owns the pull request, as one message. The session's
 // agent then fixes or dismisses each finding, and auto-fix stands down.
 //
-// When the session cannot take a message (local, in error, archived), nothing
-// is sent and the caller keeps the earlier behaviour (auto-fix may run).
+// Gated by the workspace setting `reviewOnSessionComplete` (on by default).
+// When the setting is off, or the session cannot take a message (local, in
+// error, archived), nothing is sent and the caller keeps the earlier behaviour.
+//
+// A cycle that no person started (auto review on each push, a workflow, the
+// session auto-start) reports at most SESSION_REPORT_MAX_AUTOMATIC times on one
+// pull request. Without the bound, report → fix → push → automatic review →
+// report runs until a review finds nothing.
 
 import { CODE_REVIEW_DISMISS_REASONS, type CodeReviewPhase } from '@talyn/shared';
 import { deliverToSession } from '../mergeQueue/sessionFix.js';
@@ -12,14 +18,20 @@ import { confirmedOpenFindings, type ConfirmedFindingRow } from './findings.js';
 import {
   appendReviewEvent,
   appendReviewEventOnce,
+  countAutomaticSessionReports,
   getPrForReview,
   getReview,
   type ReviewRow,
 } from './store.js';
+import { workspaceReviewSettings } from './cycle.js';
 
 /** The event that records the report of one cycle. Its `detail.cycle` is the idempotency key. */
 export const SESSION_REPORT_SENT = 'session_report_sent';
 export const SESSION_REPORT_FAILED = 'session_report_failed';
+export const SESSION_REPORT_LIMIT = 'session_report_limit';
+
+/** The most automatic cycles that send findings to the session, per pull request. Cycles a person started do not count. */
+export const SESSION_REPORT_MAX_AUTOMATIC = 3;
 
 /** The most findings the message lists. The rest are one tool call away. */
 export const SESSION_REPORT_MAX_LISTED = 20;
@@ -30,7 +42,7 @@ export type SessionReportOutcome =
   | { kind: 'already_sent' }
   | {
       kind: 'skipped';
-      reason: 'not_ready' | 'no_session' | 'no_findings' | Exclude<PrSessionActivity, 'idle' | 'working'>;
+      reason: 'settings_off' | 'not_ready' | 'no_session' | 'limit_reached' | 'no_findings' | Exclude<PrSessionActivity, 'idle' | 'working'>;
     }
   | { kind: 'failed'; error: string };
 
@@ -91,6 +103,9 @@ export function sessionReportMessage(input: {
  */
 export async function reportFindingsToSession(review: ReviewRow): Promise<SessionReportOutcome> {
   try {
+    if (!(await workspaceReviewSettings(review.workspaceId)).reviewOnSessionComplete) {
+      return { kind: 'skipped', reason: 'settings_off' };
+    }
     // Re-read: `finishCycle` has just moved the row. Only a `ready` review of
     // this same cycle reports; anything else means a new commit, a cancel or a
     // fix moved it, and the next cycle reports instead.
@@ -113,6 +128,19 @@ export async function reportFindingsToSession(review: ReviewRow): Promise<Sessio
     // and a turn that has nothing to do only costs box time.
     if (!findings.length) return { kind: 'skipped', reason: 'no_findings' };
 
+    const automatic = fresh.auto === true;
+    if (automatic && (await countAutomaticSessionReports(fresh.id)) >= SESSION_REPORT_MAX_AUTOMATIC) {
+      await appendReviewEventOnce(fresh.id, fresh.cycle, {
+        fromPhase: fresh.phase as CodeReviewPhase,
+        toPhase: fresh.phase as CodeReviewPhase,
+        trigger: 'executor',
+        code: SESSION_REPORT_LIMIT,
+        message: `Did not send the findings to the session "${session.name}": ${SESSION_REPORT_MAX_AUTOMATIC} automatic reviews of this pull request already did.`,
+        detail: { workbenchId: session.id, findingIds: findings.map((f) => f.id) },
+      });
+      return { kind: 'skipped', reason: 'limit_reached' };
+    }
+
     const pr = await getPrForReview(fresh.pullRequestId);
     const prRef = pr ? `${pr.owner}/${pr.repo}#${pr.number}` : 'the pull request';
     // Record, then send (as wake-ups do). A crash between the two loses the
@@ -126,6 +154,7 @@ export async function reportFindingsToSession(review: ReviewRow): Promise<Sessio
       detail: {
         workbenchId: session.id,
         activity: session.activity,
+        auto: automatic,
         findingIds: findings.map((f) => f.id),
       },
     });

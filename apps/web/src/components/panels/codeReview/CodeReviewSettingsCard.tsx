@@ -151,8 +151,9 @@ export function CodeReviewSettingsCard() {
           onChange={(next) => void save({ reviewOnSessionComplete: next }, 'session reviews')}
         >
           When a session has pushed its work and stopped, Talyn reviews its pull request. The
-          session's agent gets the findings, then fixes or dismisses each one. At most three
-          automatic reviews for each pull request. On every plan.
+          session's agent gets the findings of each review of that pull request, then fixes or
+          dismisses each one. At most three automatic reviews for each pull request. On every
+          plan.
         </Toggle>
         <div className="mt-3" />
         <Toggle

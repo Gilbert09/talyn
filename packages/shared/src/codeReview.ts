@@ -1134,8 +1134,11 @@ export interface CodeReviewSettings {
   autoReview?: boolean;
   /**
    * Review a session's pull request when the session is code complete, and
-   * send the confirmed findings to that session. ON unless somebody turned it
-   * off, on every plan. Separate from `autoReview`, which reviews on each push.
+   * send the confirmed findings of each review of that pull request to the
+   * session (at most three automatic reports per pull request). ON unless
+   * somebody turned it off, on every plan. Separate from `autoReview`, which
+   * reviews on each push. Off: no automatic review at code complete and no
+   * findings sent to the session.
    */
   reviewOnSessionComplete?: boolean;
   /** Post one comment after a fix run lands, saying what it fixed. */
