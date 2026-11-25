@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
+import { ScanSearch } from 'lucide-react';
 import {
   agentGlance,
   attentionReasonText,
@@ -6,6 +7,7 @@ import {
   prSizeGlance,
   sandboxGlance,
   sessionGlanceFacts,
+  sessionReviewState,
   workbenchDisplayName,
   type ContextAttentionReason,
   type SessionGlanceFact,
@@ -16,7 +18,7 @@ import { cn } from '../../lib/utils';
 import { useAttentionReason } from '../../lib/contextRail';
 import type { PRRow } from '../../lib/api';
 import { relativeTimeLabel, useRelativeNow } from '../../lib/relativeTime';
-import type { SessionState } from '../../lib/sessionState';
+import { codeReviewPhaseText, type SessionState } from '../../lib/sessionState';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { useBackground } from '../../stores/sessionBackground';
@@ -330,7 +332,39 @@ function PullRequestGlance({ row, now }: { row: PRRow; now: number }) {
         {open && <PRReviewPill reviewDecision={summary.effectiveReviewDecision ?? summary.reviewDecision} state={row.state} />}
       </div>
       {checks && <div className="text-muted-foreground" data-attr="session-glance-checks">Checks: {checks}</div>}
+      {open && <CodeReviewGlance review={row.codeReview ?? null} />}
       {meta.length > 0 && <div className="text-muted-foreground">{meta.join(' · ')}</div>}
+    </div>
+  );
+}
+
+/** One line on Talyn's code review of the pull request. Nothing when the current head has no review. */
+function CodeReviewGlance({ review }: { review: NonNullable<PRRow['codeReview']> | null }) {
+  const state = sessionReviewState(review);
+  if (!review || state === 'none') return null;
+  let text: string;
+  let tone: string;
+  if (state === 'running') {
+    text = `Code review running: ${codeReviewPhaseText(review.phase)}`;
+    tone = 'text-violet-600 dark:text-violet-300';
+  } else if (state === 'waiting') {
+    text = 'Code review waits for a runner';
+    tone = 'text-warning';
+  } else if (state === 'failed') {
+    text = 'Code review failed';
+    tone = 'text-destructive';
+  } else if (review.openCount === 0) {
+    text = 'Code review: no open findings';
+    tone = 'text-muted-foreground';
+  } else {
+    const blockers = review.counts.blocker;
+    text = `Code review: ${review.openCount} open finding${review.openCount === 1 ? '' : 's'}${blockers > 0 ? `, ${blockers} must fix` : ''}`;
+    tone = blockers > 0 ? 'text-warning' : 'text-muted-foreground';
+  }
+  return (
+    <div className={cn('flex items-center gap-1', tone)} data-attr="session-glance-code-review">
+      <ScanSearch className={cn('h-3 w-3 shrink-0', state === 'running' && 'animate-pulse')} aria-hidden />
+      <span>{text}</span>
     </div>
   );
 }
