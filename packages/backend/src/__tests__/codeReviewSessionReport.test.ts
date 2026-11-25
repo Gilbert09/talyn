@@ -8,7 +8,6 @@ import { resolveCodeReviewSettings } from '@talyn/shared';
  */
 
 const m = vi.hoisted(() => ({
-  flag: vi.fn(),
   getReview: vi.fn(),
   getPrForReview: vi.fn(),
   appendReviewEvent: vi.fn(),
@@ -20,15 +19,12 @@ const m = vi.hoisted(() => ({
   liveWorkbenchForPr: vi.fn(),
   liveSessionActivityForPr: vi.fn(),
   deliverToSession: vi.fn(),
+  countAutomaticReports: vi.fn(),
   cas: vi.fn(),
   appendCard: vi.fn(),
   appendFinishedCard: vi.fn(),
 }));
 
-vi.mock('../services/featureFlags.js', async (orig) => ({
-  ...(await orig<typeof import('../services/featureFlags.js')>()),
-  workspaceHasFeature: m.flag,
-}));
 vi.mock('../services/codeReview/findings.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/findings.js')>()),
   markStale: vi.fn().mockResolvedValue(0),
@@ -42,6 +38,7 @@ vi.mock('../services/codeReview/store.js', async (orig) => ({
   getPrForReview: m.getPrForReview,
   appendReviewEvent: m.appendReviewEvent,
   appendReviewEventOnce: m.appendReviewEventOnce,
+  countAutomaticSessionReports: m.countAutomaticReports,
 }));
 vi.mock('../services/codeReview/analytics.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/analytics.js')>()),
@@ -76,6 +73,7 @@ const {
   findingSummary,
   reportFindingsToSession,
   sessionReportMessage,
+  SESSION_REPORT_MAX_AUTOMATIC,
   SESSION_REPORT_MAX_LISTED,
 } = await import('../services/codeReview/sessionReport.js');
 
@@ -124,7 +122,6 @@ function eventCodes(): string[] {
 }
 
 beforeEach(() => {
-  m.flag.mockResolvedValue({ enabled: true, source: 'posthog' });
   m.getReview.mockResolvedValue(ready);
   m.getPrForReview.mockResolvedValue({ id: 'pr-1', owner: 'acme', repo: 'app', number: 42 });
   m.settings.mockResolvedValue(resolveCodeReviewSettings({ autoFix: true }));
@@ -151,32 +148,27 @@ beforeEach(() => {
     return true;
   });
   m.startFixRun.mockResolvedValue({ ok: true, taskId: 't1' });
+  m.countAutomaticReports.mockResolvedValue(0);
 });
 
 afterEach(() => vi.resetAllMocks());
 
 describe('finishCycle with a live session on the pull request', () => {
   it.each([
-    // activity, flag, sent to session, auto-fix held back, fix run started
-    { activity: 'idle', flag: true, sent: true, held: false, fixed: false },
-    { activity: 'working', flag: true, sent: true, held: false, fixed: false },
-    { activity: 'local', flag: true, sent: false, held: true, fixed: false },
-    { activity: 'unavailable', flag: true, sent: false, held: true, fixed: false },
-    { activity: 'idle', flag: false, sent: false, held: true, fixed: false },
-    { activity: 'working', flag: false, sent: false, held: true, fixed: false },
-    { activity: 'local', flag: false, sent: false, held: true, fixed: false },
-  ])('$activity session, flag $flag: sent=$sent held=$held', async ({ activity, flag, sent, held, fixed }) => {
-    m.flag.mockResolvedValue({ enabled: flag, source: 'posthog' });
+    // activity, sent to session, auto-fix held back, fix run started
+    { activity: 'idle', sent: true, held: false, fixed: false },
+    { activity: 'working', sent: true, held: false, fixed: false },
+    { activity: 'local', sent: false, held: true, fixed: false },
+    { activity: 'unavailable', sent: false, held: true, fixed: false },
+  ])('$activity session: sent=$sent held=$held', async ({ activity, sent, held, fixed }) => {
     m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity });
 
     await finishCycle(review);
 
-    expect(m.flag).toHaveBeenCalledWith('codeReviewSessionReportBack', 'ws-1');
     expect(m.deliverToSession).toHaveBeenCalledTimes(sent ? 1 : 0);
     expect(m.appendReviewEventOnce).toHaveBeenCalledTimes(sent ? 1 : 0);
     expect(eventCodes().includes('auto_fix_session_active')).toBe(held);
     expect(m.startFixRun).toHaveBeenCalledTimes(fixed ? 1 : 0);
-    if (!flag) expect(m.liveSessionActivityForPr).not.toHaveBeenCalled();
   });
 
   it('records the report once per cycle, with the session and the findings', async () => {
@@ -190,7 +182,7 @@ describe('finishCycle with a live session on the pull request', () => {
       expect.objectContaining({
         code: 'session_report_sent',
         message: expect.stringContaining('"paris"'),
-        detail: { workbenchId: 'wb-1', activity: 'working', findingIds: ['f1', 'f2'] },
+        detail: { workbenchId: 'wb-1', activity: 'working', auto: false, findingIds: ['f1', 'f2'] },
       })
     );
     expect(m.deliverToSession).toHaveBeenCalledWith(
@@ -257,9 +249,68 @@ describe('finishCycle with a live session on the pull request', () => {
     expect(m.startFixRun).not.toHaveBeenCalled();
   });
 
-  it('keeps the earlier behaviour when the flag cannot be read', async () => {
-    m.flag.mockRejectedValue(new Error('posthog down'));
+  it('sends nothing when the workspace turned session reviews off, and auto-fix holds back', async () => {
+    m.settings.mockResolvedValue(resolveCodeReviewSettings({ autoFix: true, reviewOnSessionComplete: false }));
     m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
+
+    expect(await reportFindingsToSession(review)).toEqual({ kind: 'skipped', reason: 'settings_off' });
+    await finishCycle(review);
+
+    expect(m.liveSessionActivityForPr).not.toHaveBeenCalled();
+    expect(m.deliverToSession).not.toHaveBeenCalled();
+    expect(m.startFixRun).not.toHaveBeenCalled();
+    expect(eventCodes()).toEqual(['auto_fix_session_active']);
+  });
+
+  it.each([
+    // started automatically, earlier automatic reports, sent
+    { auto: false, earlier: 0, sent: true },
+    { auto: false, earlier: 3, sent: true },
+    { auto: false, earlier: 10, sent: true },
+    { auto: true, earlier: 0, sent: true },
+    { auto: true, earlier: 2, sent: true },
+    { auto: true, earlier: 3, sent: false },
+    { auto: true, earlier: 7, sent: false },
+  ])('auto=$auto with $earlier earlier automatic reports: sent=$sent', async ({ auto, earlier, sent }) => {
+    m.getReview.mockResolvedValue({ ...ready, auto });
+    m.countAutomaticReports.mockResolvedValue(earlier);
+    m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
+
+    const out = await reportFindingsToSession(review);
+
+    expect(m.deliverToSession).toHaveBeenCalledTimes(sent ? 1 : 0);
+    if (sent) {
+      expect(out).toMatchObject({ kind: 'sent' });
+      expect(m.appendReviewEventOnce).toHaveBeenCalledWith(
+        'rev-1',
+        3,
+        expect.objectContaining({ code: 'session_report_sent', detail: expect.objectContaining({ auto }) })
+      );
+    } else {
+      expect(out).toEqual({ kind: 'skipped', reason: 'limit_reached' });
+      expect(m.appendReviewEventOnce).toHaveBeenCalledWith(
+        'rev-1',
+        3,
+        expect.objectContaining({ code: 'session_report_limit', message: expect.stringContaining('"paris"') })
+      );
+    }
+  });
+
+  it('bounds automatic reports at three, and then auto-fix holds back for the session', async () => {
+    expect(SESSION_REPORT_MAX_AUTOMATIC).toBe(3);
+    m.getReview.mockResolvedValue({ ...ready, auto: true });
+    m.countAutomaticReports.mockResolvedValue(SESSION_REPORT_MAX_AUTOMATIC);
+    m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
+
+    await finishCycle(review);
+
+    expect(m.deliverToSession).not.toHaveBeenCalled();
+    expect(m.startFixRun).not.toHaveBeenCalled();
+    expect(eventCodes()).toEqual(['auto_fix_session_active']);
+  });
+
+  it('keeps the earlier behaviour when the session cannot be read', async () => {
+    m.liveSessionActivityForPr.mockRejectedValue(new Error('database down'));
 
     await finishCycle(review);
 
@@ -322,9 +373,17 @@ describe('finishCycle transcript cards', () => {
     { name: 'a local session', setup: () => m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'local' }) },
     { name: 'no session', setup: () => m.liveSessionActivityForPr.mockResolvedValue(null) },
     {
-      name: 'the report flag off',
+      name: 'session reviews turned off',
       setup: () => {
-        m.flag.mockResolvedValue({ enabled: false, source: 'posthog' });
+        m.settings.mockResolvedValue(resolveCodeReviewSettings({ autoFix: true, reviewOnSessionComplete: false }));
+        m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
+      },
+    },
+    {
+      name: 'the automatic report limit reached',
+      setup: () => {
+        m.getReview.mockResolvedValue({ ...ready, auto: true });
+        m.countAutomaticReports.mockResolvedValue(SESSION_REPORT_MAX_AUTOMATIC);
         m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
       },
     },

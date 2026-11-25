@@ -1132,6 +1132,15 @@ export interface CodeReviewSettings {
   preset?: CodeReviewPreset;
   /** Review every new PR this workspace's members author. Unlimited only. */
   autoReview?: boolean;
+  /**
+   * Review a session's pull request when the session is code complete, and
+   * send the confirmed findings of each review of that pull request to the
+   * session (at most three automatic reports per pull request). ON unless
+   * somebody turned it off, on every plan. Separate from `autoReview`, which
+   * reviews on each push. Off: no automatic review at code complete and no
+   * findings sent to the session.
+   */
+  reviewOnSessionComplete?: boolean;
   /** Post one comment after a fix run lands, saying what it fixed. */
   fixSummaryComment?: boolean;
   /** Post blockers as inline review comments. The loud option, off by default. */
@@ -1173,6 +1182,7 @@ export interface CodeReviewSettings {
 export interface ResolvedCodeReviewSettings {
   preset: CodeReviewPreset;
   autoReview: boolean;
+  reviewOnSessionComplete: boolean;
   fixSummaryComment: boolean;
   inlineComments: boolean;
   autoFix: boolean;
@@ -1200,6 +1210,9 @@ export function resolveCodeReviewSettings(
   return {
     preset: isCodeReviewPreset(settings?.preset) ? settings.preset : DEFAULT_CODE_REVIEW_PRESET,
     autoReview: settings?.autoReview === true,
+    // On unless somebody turned it off: an absent key is every workspace that
+    // existed before the setting did.
+    reviewOnSessionComplete: settings?.reviewOnSessionComplete !== false,
     fixSummaryComment: settings?.fixSummaryComment === true,
     inlineComments: settings?.inlineComments === true,
     autoFix: settings?.autoFix === true,
@@ -1234,6 +1247,7 @@ export function codeReviewSettingsPatch(input: unknown): CodeReviewSettings {
   const patch: CodeReviewSettings = {};
   if (isCodeReviewPreset(raw.preset)) patch.preset = raw.preset;
   if (typeof raw.autoReview === 'boolean') patch.autoReview = raw.autoReview;
+  if (typeof raw.reviewOnSessionComplete === 'boolean') patch.reviewOnSessionComplete = raw.reviewOnSessionComplete;
   if (typeof raw.fixSummaryComment === 'boolean') patch.fixSummaryComment = raw.fixSummaryComment;
   if (typeof raw.inlineComments === 'boolean') patch.inlineComments = raw.inlineComments;
   if (typeof raw.autoFix === 'boolean') patch.autoFix = raw.autoFix;

@@ -77,7 +77,10 @@ export function CodeReviewSettingsScreen() {
     <Intro>Talyn reads a pull request and puts what it finds in the app.</Intro>
     {offline ? <Banner message="You are offline. Connect to the internet to change these settings." /> : null}
 
-    <Step n={1} title="Review every pull request" badge={settings.autoReview ? 'On' : 'Off'}>
+    <Step n={1} title="Review automatically" badge={settings.reviewOnSessionComplete || settings.autoReview ? 'On' : 'Off'}>
+      <ToggleRow title="Review a session's pull request when its work is done" value={settings.reviewOnSessionComplete} disabled={disabled}
+        detail="When a session has pushed its work and stopped, Talyn reviews its pull request. The session's agent gets the findings of each review of that pull request, then fixes or dismisses each one. At most three automatic reviews for each pull request. On every plan."
+        onChange={(value) => { void save({ reviewOnSessionComplete: value }, 'session reviews'); }} />
       <ToggleRow title="Review my new pull requests automatically" value={settings.autoReview} disabled={disabled} divider={false}
         detail="Every pull request you open in a watched repository is reviewed as you push. Part of Pro and Max."
         onChange={(value) => { void save({ autoReview: value }, 'automatic reviews'); }} />

@@ -393,6 +393,21 @@ export async function countCyclesStartedFor(
   return Number(row?.n ?? 0);
 }
 
+/** How many automatic cycles of the review sent their findings to a session (`session_report_sent` events with `detail.auto`). */
+export async function countAutomaticSessionReports(reviewId: string, db: Db = getDbClient()): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(prCodeReviewEvents)
+    .where(
+      and(
+        eq(prCodeReviewEvents.reviewId, reviewId),
+        eq(prCodeReviewEvents.code, 'session_report_sent'),
+        sql`${prCodeReviewEvents.detail} ->> 'auto' = 'true'`
+      )
+    );
+  return Number(row?.n ?? 0);
+}
+
 /**
  * Append an audit row once per cycle: true when this call wrote it, false
  * when an event with the same code and `detail.cycle` is already there.
