@@ -169,6 +169,48 @@ describe('starting a sign-in', () => {
     }
   });
 
+  it.each([
+    [
+      'a redirect URI allowlist (pganalyze)',
+      400,
+      JSON.stringify({ error: 'invalid_redirect_uri', error_description: 'Only specific redirect URIs are currently allowed.' }),
+      "the server refused to set up sign-in (400): it does not accept Talyn's sign-in address " +
+        'https://app.talyn.dev/mcp/callback. Ask the vendor to allow that address, or paste an API key instead.',
+    ],
+    [
+      'an RFC 7591 error with a description',
+      400,
+      JSON.stringify({ error: 'invalid_client_metadata', error_description: 'scope\nnot\tallowed' }),
+      'the server refused to set up sign-in (400): scope not allowed',
+    ],
+    [
+      'an RFC 7591 error with no description',
+      400,
+      JSON.stringify({ error: 'invalid_client_metadata' }),
+      'the server refused to set up sign-in (400): invalid_client_metadata',
+    ],
+    ['a long description', 400, JSON.stringify({ error_description: 'x'.repeat(500) }), `the server refused to set up sign-in (400): ${'x'.repeat(300)}`],
+    ['an HTML error page', 403, '<html>Forbidden</html>', 'the server refused to set up sign-in (403)'],
+    ['a JSON array', 400, '[]', 'the server refused to set up sign-in (400)'],
+    ['an empty body', 500, '', 'the server refused to set up sign-in (500)'],
+    ['a description that is not a string', 400, JSON.stringify({ error_description: 42 }), 'the server refused to set up sign-in (400)'],
+  ])('reports a refused registration with %s', async (_name, status, body, message) => {
+    vi.spyOn(discovery, 'discover').mockResolvedValue({
+      resource: { authorizationServers: ['https://auth.example.com'], scope: 'read' },
+      server: {
+        issuer: 'https://auth.example.com',
+        authorizationEndpoint: 'https://auth.example.com/authorize',
+        tokenEndpoint: 'https://auth.example.com/token',
+        registrationEndpoint: 'https://auth.example.com/register',
+        clientIdMetadataDocumentSupported: false,
+      },
+    });
+    stubFetch({}, (url) => url === 'https://auth.example.com/register' ? new Response(body, { status }) : null);
+    const started = startMcpOAuth({ id: 'srv-1', workspaceId: 'ws-1', url: 'https://mcp.example.com/mcp' }, null, new Date());
+    await expect(started).rejects.toBeInstanceOf(McpDiscoveryError);
+    await expect(started).rejects.toMatchObject({ message });
+  });
+
   it('explains why a metadata-only server cannot use localhost', async () => {
     process.env.WEB_APP_URL = 'http://localhost:5173';
     vi.spyOn(discovery, 'discover').mockResolvedValue({

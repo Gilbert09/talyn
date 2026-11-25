@@ -207,8 +207,7 @@ async function registerClient(
     }),
   }, context).catch((error) => { throw new McpDiscoveryError(fetchFailureReason(error)); });
   if (!resp.ok) {
-    await resp.body?.cancel();
-    throw new McpDiscoveryError(`the server refused to set up sign-in (${resp.status})`);
+    throw new McpDiscoveryError(await registrationRefusal(resp));
   }
   const doc = await readJsonResponse(resp) as { client_id?: unknown; client_secret?: unknown };
   if (typeof doc.client_id !== 'string' || !doc.client_id) {
@@ -218,6 +217,32 @@ async function registerClient(
     clientId: doc.client_id,
     ...(typeof doc.client_secret === 'string' ? { clientSecret: doc.client_secret } : {}),
   };
+}
+
+/**
+ * Why a registration endpoint said no, in the vendor's own words when it gave
+ * an RFC 7591 error. A registration error carries no credential, so its
+ * `error_description` is safe to show. Some vendors (pganalyze) allow only
+ * listed redirect URIs, and the user must know which address to ask for.
+ */
+async function registrationRefusal(resp: Response): Promise<string> {
+  const base = `the server refused to set up sign-in (${resp.status})`;
+  let doc: { error?: unknown; error_description?: unknown } = {};
+  try {
+    const parsed: unknown = JSON.parse(await readMcpBody(resp, 16 * 1024));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) doc = parsed;
+  } catch {
+    await resp.body?.cancel().catch(() => {});
+  }
+  if (doc.error === 'invalid_redirect_uri') {
+    return `${base}: it does not accept Talyn's sign-in address ${mcpRedirectUri()}. ` +
+      'Ask the vendor to allow that address, or paste an API key instead.';
+  }
+  const raw = typeof doc.error_description === 'string' ? doc.error_description
+    : typeof doc.error === 'string' ? doc.error : '';
+  // eslint-disable-next-line no-control-regex
+  const reason = raw.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 300);
+  return reason ? `${base}: ${reason}` : base;
 }
 
 /**
