@@ -61,6 +61,7 @@ describe('CodeReviewTranscriptCard', () => {
     ['started', started, 'Code review started', '3 changed files · 2 reviewers at abcdef1'],
     ['finished with no findings', clean, 'Code review finished with no findings', 'Reviewed at abcdef1.'],
     ['failed', failed, 'Code review failed', 'The runner stopped.'],
+    ['stopped', { ...base, action: 'cancelled' } as CodeReviewTranscriptEvent, 'Code review stopped', 'Stopped before it finished at abcdef1.'],
   ])('shows the title and detail when %s', (_n, event, title, detail) => {
     render(<CodeReviewTranscriptCard event={event} />);
     expect(card()).toHaveTextContent(title);
@@ -74,6 +75,12 @@ describe('CodeReviewTranscriptCard', () => {
     render(<CodeReviewTranscriptCard event={failed} />);
     expect(card()).toHaveClass('border-destructive/40');
     expect(card()).toHaveAttribute('data-action', 'failed');
+  });
+
+  it('does not mark a stopped review as an error', () => {
+    render(<CodeReviewTranscriptCard event={{ ...base, action: 'cancelled' }} />);
+    expect(card()).not.toHaveClass('border-destructive/40');
+    expect(card()).toHaveAttribute('data-action', 'cancelled');
   });
 
   it('leaves out the number when Talyn did not know it', () => {

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertCircle, AlertTriangle, CheckCircle2, ScanSearch } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, CircleStop, ScanSearch } from 'lucide-react';
 import {
   CODE_REVIEW_SEVERITY_LABELS,
   codeReviewTranscriptCounts,
@@ -47,7 +47,15 @@ export function CodeReviewTranscriptCard({ event }: { event: CodeReviewTranscrip
   const failed = event.action === 'failed';
   const findings = event.action === 'finished' ? event.findings : [];
   const hasFindings = event.action === 'finished' && event.findingCount > 0;
-  const Icon = failed ? AlertCircle : event.action === 'started' ? ScanSearch : hasFindings ? AlertTriangle : CheckCircle2;
+  const Icon = failed
+    ? AlertCircle
+    : event.action === 'started'
+      ? ScanSearch
+      : event.action === 'cancelled'
+        ? CircleStop
+        : hasFindings
+          ? AlertTriangle
+          : CheckCircle2;
   const prLabel = event.prNumber !== null ? `pull request #${event.prNumber}` : 'the pull request';
 
   return (
@@ -63,7 +71,7 @@ export function CodeReviewTranscriptCard({ event }: { event: CodeReviewTranscrip
               'h-3.5 w-3.5 shrink-0',
               failed
                 ? 'text-destructive'
-                : event.action === 'started'
+                : event.action === 'started' || event.action === 'cancelled'
                   ? 'text-muted-foreground'
                   : hasFindings
                     ? 'text-warning'

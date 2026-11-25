@@ -678,6 +678,17 @@ describe('code review events', () => {
     await waitFor(() => expect(restoreCheckpoint).toHaveBeenCalledWith('c1', 2));
   });
 
+  it('keeps the state of a triggered turn when older history loads above it', () => {
+    const revertOps = { unavailable: null, restoreCheckpoint: jest.fn() } as unknown as WorkbenchOps;
+    const recent = reviewEvents().slice(2);
+    const view = (events: WorkbenchEvent[]) => <WorkbenchTranscript chat={chat} events={events} loading={false} error={null} ops={revertOps} />;
+    const { rerender } = render(view(recent));
+    fireEvent.click(screen.getByRole('button', { name: /Revert to here/ }));
+    expect(screen.getByText(/Restore the files to before this message/)).toBeInTheDocument();
+    rerender(view(reviewEvents()));
+    expect(screen.getByText(/Restore the files to before this message/)).toBeInTheDocument();
+  });
+
   it('offers no Revert to here on a triggered turn while the chat runs', () => {
     render(<WorkbenchTranscript chat={{ ...chat, status: 'running' }} events={reviewEvents()} loading={false} error={null} ops={ops} />);
     expect(screen.queryByRole('button', { name: /Revert to here/ })).toBeNull();

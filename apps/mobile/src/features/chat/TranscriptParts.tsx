@@ -169,9 +169,14 @@ function CodeReviewCard({ event }: { event: CodeReviewTranscriptEvent }) {
   const mark = useHighlighter();
   const [all, setAll] = useState(false);
   const failed = event.action === 'failed';
-  const tint = failed ? c.destructive : event.action === 'finished' && event.findingCount === 0 ? c.success : c.information;
+  const findingsFound = event.action === 'finished' && event.findingCount > 0;
+  const tint = failed ? c.destructive
+    : event.action === 'cancelled' ? c.muted
+      : event.action === 'finished' ? (findingsFound ? c.warning : c.success) : c.information;
   const icon: Symbol = failed ? { ios: 'exclamationmark.circle', android: 'error' }
-    : event.action === 'finished' ? { ios: 'checkmark.shield', android: 'verified_user' } : { ios: 'magnifyingglass', android: 'search' };
+    : event.action === 'cancelled' ? { ios: 'stop.circle', android: 'stop_circle' }
+      : findingsFound ? { ios: 'exclamationmark.triangle', android: 'warning' }
+        : event.action === 'finished' ? { ios: 'checkmark.shield', android: 'verified_user' } : { ios: 'magnifyingglass', android: 'search' };
   const title = codeReviewTranscriptTitle(event);
   const detail = codeReviewTranscriptDetail(event);
   const findings = useMemo(() => event.action === 'finished' ? sortCodeReviewTranscriptFindings(event.findings) : [], [event]);

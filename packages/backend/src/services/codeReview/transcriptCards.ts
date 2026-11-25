@@ -31,12 +31,14 @@ export const TRANSCRIPT_CARD_CODES: Record<CodeReviewTranscriptAction, string> =
   started: 'transcript_card_started',
   finished: 'transcript_card_finished',
   failed: 'transcript_card_failed',
+  cancelled: 'transcript_card_cancelled',
 };
 
 const PHASE_AFTER: Record<CodeReviewTranscriptAction, CodeReviewPhase> = {
   started: 'reviewing',
   finished: 'ready',
   failed: 'failed',
+  cancelled: 'cancelled',
 };
 
 type WithoutReviewFields<T> = T extends unknown ? Omit<T, 'reviewId' | 'pullRequestId' | 'prNumber' | 'cycle'> : never;

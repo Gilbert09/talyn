@@ -18,6 +18,8 @@ const m = vi.hoisted(() => ({
   appendReviewEventOnce: vi.fn(),
   getPrForReview: vi.fn(),
   confirmedOpenFindings: vi.fn(),
+  casTransition: vi.fn(),
+  runsForCycle: vi.fn(),
   getWorkbench: vi.fn(),
   insertChat: vi.fn(),
   sendMessage: vi.fn(),
@@ -52,6 +54,8 @@ vi.mock('../services/codeReview/store.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/store.js')>()),
   appendReviewEventOnce: m.appendReviewEventOnce,
   getPrForReview: m.getPrForReview,
+  casTransition: m.casTransition,
+  runsForCycle: m.runsForCycle,
 }));
 vi.mock('../services/codeReview/findings.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/findings.js')>()),
@@ -66,6 +70,7 @@ const {
   TRANSCRIPT_CARD_CODES,
 } = await import('../services/codeReview/transcriptCards.js');
 const { deliverToSession } = await import('../services/mergeQueue/sessionFix.js');
+const { cancelReviewCycle } = await import('../services/codeReview/cycle.js');
 
 const REVIEW = { id: 'rev-1', workspaceId: 'ws-1', pullRequestId: 'pr-1', cycle: 3 };
 const SESSION = { id: 'wb-1', name: 'paris', status: 'ready' };
@@ -332,5 +337,46 @@ describe('deliverToSession', () => {
     });
     await expect(deliverToSession('wb-1', 'Fix these.', { beforeSend })).rejects.toThrow('hook failed');
     expect(m.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('stopping a review', () => {
+  const reviewRow = (phase: string) =>
+    ({ ...REVIEW, version: 7, phase, targetHeadSha: 'b'.repeat(40) }) as unknown as Parameters<typeof cancelReviewCycle>[0];
+
+  beforeEach(() => {
+    m.runsForCycle.mockResolvedValue([]);
+    m.casTransition.mockResolvedValue(true);
+  });
+
+  it.each(['reviewing', 'sweeping', 'validating'])('closes the started card when it stops in %s', async (phase) => {
+    await cancelReviewCycle(reviewRow(phase));
+    expect(m.appendReviewEventOnce).toHaveBeenCalledWith('rev-1', 3, expect.objectContaining({ code: TRANSCRIPT_CARD_CODES.cancelled }));
+    expect(m.appendEvents).toHaveBeenCalledWith('chat-1', [
+      {
+        turn: 5,
+        event: {
+          type: 'talyn_code_review',
+          action: 'cancelled',
+          reviewId: 'rev-1',
+          pullRequestId: 'pr-1',
+          prNumber: 42,
+          cycle: 3,
+          headSha: 'b'.repeat(40),
+        },
+      },
+    ]);
+  });
+
+  it.each(['queued', 'preparing', 'fixing'])('writes no card when it stops in %s', async (phase) => {
+    await cancelReviewCycle(reviewRow(phase));
+    expect(m.casTransition).toHaveBeenCalled();
+    expect(m.appendEvents).not.toHaveBeenCalled();
+  });
+
+  it('writes no card when the stop lost the race', async () => {
+    m.casTransition.mockResolvedValue(false);
+    await cancelReviewCycle(reviewRow('reviewing'));
+    expect(m.appendEvents).not.toHaveBeenCalled();
   });
 });

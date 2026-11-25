@@ -141,7 +141,7 @@ export function WorkbenchTranscript({
             const questionState: QuestionCardState = !last ? 'answered' : running || outgoing.length > 0 ? 'waiting' : 'open';
             return (
               <TurnView
-                key={`${chat.id}:${turn.turn}:${turn.userSeq ?? i}`}
+                key={`${chat.id}:${turn.turn}:${turn.userSeq ?? turn.triggerSeq ?? i}`}
                 chatId={chat.id}
                 chat={chat}
                 turn={turn}
@@ -305,7 +305,7 @@ function useStableTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
       };
     });
     const out = splitTurns(displayEvents).map((turn, i) => {
-      const key = `${turn.turn}:${turn.userSeq ?? i}`;
+      const key = `${turn.turn}:${turn.userSeq ?? turn.triggerSeq ?? i}`;
       const size = turn.events.length + (turn.subagentEvents?.length ?? 0);
       const last = Math.max(turn.events.at(-1)?.seq ?? -1, turn.subagentEvents?.at(-1)?.seq ?? -1);
       const prev = cache.current.get(key);

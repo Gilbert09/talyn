@@ -48,6 +48,7 @@ const finished = (over: Partial<Extract<CodeReviewTranscriptEvent, { action: 'fi
   ...over,
 });
 const failed: CodeReviewTranscriptEvent = { ...BASE, action: 'failed', message: 'No reviewer finished.' };
+const cancelled: CodeReviewTranscriptEvent = { ...BASE, action: 'cancelled' };
 
 describe('codeReviewTranscriptEvent and parseCodeReviewTranscriptEvent', () => {
   it.each([
@@ -55,6 +56,7 @@ describe('codeReviewTranscriptEvent and parseCodeReviewTranscriptEvent', () => {
     { name: 'finished', event: finished() },
     { name: 'finished, sent, no findings', event: finished({ findingCount: 0, findings: [], sentToAgent: true }) },
     { name: 'failed', event: failed },
+    { name: 'cancelled', event: cancelled },
     { name: 'no number or head', event: { ...failed, prNumber: null, headSha: null } },
   ])('round-trips a $name event', ({ event }) => {
     const stored = codeReviewTranscriptEvent(event);
@@ -67,7 +69,7 @@ describe('codeReviewTranscriptEvent and parseCodeReviewTranscriptEvent', () => {
     { name: 'no review id', raw: { ...codeReviewTranscriptEvent(started), reviewId: undefined } },
     { name: 'an empty review id', raw: { ...codeReviewTranscriptEvent(started), reviewId: '' } },
     { name: 'no pull request id', raw: { ...codeReviewTranscriptEvent(started), pullRequestId: 7 } },
-    { name: 'an unknown action', raw: { ...codeReviewTranscriptEvent(started), action: 'cancelled' } },
+    { name: 'an unknown action', raw: { ...codeReviewTranscriptEvent(started), action: 'paused' } },
     { name: 'no action', raw: { type: 'talyn_code_review', reviewId: 'r', pullRequestId: 'p' } },
   ])('answers null for $name', ({ raw }) => {
     expect(parseCodeReviewTranscriptEvent(raw as Record<string, unknown>)).toBeNull();
@@ -178,6 +180,8 @@ describe('text helpers', () => {
     },
     { event: failed, title: 'Code review failed', detail: 'No reviewer finished.' },
     { event: { ...failed, message: '' }, title: 'Code review failed', detail: 'The review stopped with an error.' },
+    { event: cancelled, title: 'Code review stopped', detail: 'Stopped before it finished at 0123456.' },
+    { event: { ...cancelled, headSha: null }, title: 'Code review stopped', detail: 'Stopped before it finished.' },
   ])('$title / $detail', ({ event, title, detail }) => {
     const e = event as CodeReviewTranscriptEvent;
     expect(codeReviewTranscriptTitle(e)).toBe(title);
@@ -250,6 +254,7 @@ describe('buildBlocks with a code review event', () => {
     { event: started, isError: false },
     { event: finished({ sentToAgent: true }), isError: false },
     { event: failed, isError: true },
+    { event: cancelled, isError: false },
   ])('draws a $event.action event as a system card', ({ event, isError }) => {
     const blocks = buildBlocks([at(7, codeReviewTranscriptEvent(event))]);
     expect(blocks).toEqual([

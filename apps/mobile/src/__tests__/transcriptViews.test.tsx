@@ -9,6 +9,10 @@ import type { TranscriptRow as Row } from '../features/chat/transcript';
 import { sameRowProps, TranscriptRow, type PlanControls, type QuestionControls } from '../features/chat/TranscriptRow';
 import { session } from './workflowFixtures';
 
+jest.mock('expo-symbols', () => {
+  const native = jest.requireActual('react-native');
+  return { SymbolView: ({ name }: { name: { ios: string } }) => <native.View testID={`symbol:${name.ios}`} /> };
+});
 jest.mock('expo-router', () => ({ Link: ({ children }: { children: React.ReactNode }) => children }));
 jest.mock('../auth/AuthProvider', () => ({ useMobileRuntime: () => ({ workflow: {} }), useNetwork: () => 'online' }));
 
@@ -98,6 +102,23 @@ describe('a code review card', () => {
   it('shows a clean review without a findings link', async () => {
     await show(finished([]));
     expect(screen.getByText('Code review finished with no findings')).toBeVisible();
+    expect(screen.queryByText('View findings')).toBeNull();
+  });
+  it.each([
+    ['started', { ...base, action: 'started', fileCount: 1, reviewerCount: 1 }, 'magnifyingglass'],
+    ['clean', { ...base, action: 'finished', findingCount: 0, findings: [], sentToAgent: false }, 'checkmark.shield'],
+    ['with findings', { ...base, action: 'finished', findingCount: 1, findings: [finding('a', 'nit')], sentToAgent: false }, 'exclamationmark.triangle'],
+    ['failed', { ...base, action: 'failed', message: 'x' }, 'exclamationmark.circle'],
+    ['stopped', { ...base, action: 'cancelled' }, 'stop.circle'],
+  ])('uses the right icon for a %s review', async (_name, event, ios) => {
+    await show(event);
+    const icons = screen.getAllByTestId(/^symbol:/).map((node) => String(node.props.testID).slice('symbol:'.length));
+    expect(icons[0]).toBe(ios);
+  });
+  it('shows a stopped review', async () => {
+    await show({ ...base, action: 'cancelled' });
+    expect(screen.getByText('Code review stopped')).toBeVisible();
+    expect(screen.getByText('Stopped before it finished at abc1234.')).toBeVisible();
     expect(screen.queryByText('View findings')).toBeNull();
   });
   it('shows a failed review with its message', async () => {

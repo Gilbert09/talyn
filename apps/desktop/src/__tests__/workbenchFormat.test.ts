@@ -192,9 +192,9 @@ describe('transcript turns', () => {
       talynMessage(3, 2, 'The code review finished.', { trigger }),
       we(4, 2, {}),
     ]);
-    expect(turns.map((t) => [t.turn, t.userText, t.userSeq, t.triggered, t.events.map((e) => e.seq)])).toEqual([
-      [1, 'first', 1, false, [2]],
-      [2, null, null, true, [3, 4]],
+    expect(turns.map((t) => [t.turn, t.userText, t.userSeq, t.triggered, t.triggerSeq, t.events.map((e) => e.seq)])).toEqual([
+      [1, 'first', 1, false, null, [2]],
+      [2, null, null, true, 3, [3, 4]],
     ]);
   });
 
@@ -232,7 +232,7 @@ describe('transcript turns', () => {
       we(1, 1, {}),
       talynMessage(2, 1, 'Report', { trigger: { kind: 'code_review', reviewId: 'r1', findingCount: 1 } }),
     ]);
-    expect(turns.map((t) => [t.triggered, t.userAt])).toEqual([[false, null]]);
+    expect(turns.map((t) => [t.triggered, t.triggerSeq, t.userAt])).toEqual([[false, null, null]]);
   });
 
   it('keeps a turn whose user message was never recorded', () => {

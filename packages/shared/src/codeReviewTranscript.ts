@@ -55,6 +55,10 @@ export type CodeReviewTranscriptEvent =
   | (CodeReviewTranscriptBase & {
       action: 'failed';
       message: string;
+    })
+  | (CodeReviewTranscriptBase & {
+      /** A person stopped the review (also before a restart). */
+      action: 'cancelled';
     });
 
 export type CodeReviewTranscriptAction = CodeReviewTranscriptEvent['action'];
@@ -133,6 +137,8 @@ export function parseCodeReviewTranscriptEvent(event: Record<string, unknown>): 
     }
     case 'failed':
       return { ...base, action: 'failed', message: str(event.message) ?? '' };
+    case 'cancelled':
+      return { ...base, action: 'cancelled' };
     default:
       return null;
   }
@@ -153,6 +159,8 @@ export function codeReviewTranscriptTitle(event: CodeReviewTranscriptEvent): str
         : `Code review finished with ${plural(event.findingCount, 'finding', 'findings')}`;
     case 'failed':
       return 'Code review failed';
+    case 'cancelled':
+      return 'Code review stopped';
   }
 }
 
@@ -171,6 +179,8 @@ export function codeReviewTranscriptDetail(event: CodeReviewTranscriptEvent): st
       return event.sentToAgent ? `Reviewed${at}. Talyn sent the findings to the agent.` : `Reviewed${at}.`;
     case 'failed':
       return event.message || 'The review stopped with an error.';
+    case 'cancelled':
+      return `Stopped before it finished${at}.`;
   }
 }
 
