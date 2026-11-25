@@ -9,6 +9,8 @@ import { TriggerRow } from '../components/workbench/TriggerRow';
 const wakeup: WorkbenchMessageTrigger = { kind: 'wakeup', wakeupId: 'w1', reason: 'Check the build', createdBy: 'user' };
 const jobExit: WorkbenchMessageTrigger = { kind: 'job_exit', wakeupId: 'w2', reason: 'Finished', jobId: 'j1', jobName: 'build', exitCode: 3 };
 const prRetry: WorkbenchMessageTrigger = { kind: 'pr_retry', attempt: 1, error: 'GitHub rejected the push: fetch first' };
+const codeReview = (findingCount: number): WorkbenchMessageTrigger => ({ kind: 'code_review', reviewId: 'r1', findingCount });
+const report = '[Talyn] The code review of #12 finished with 2 confirmed findings. Review: r1.';
 const event = (text: string, trigger?: WorkbenchMessageTrigger): AgentEvent => ({
   seq: 1,
   type: 'user',
@@ -43,6 +45,32 @@ describe('TriggerRow', () => {
     expect(screen.queryByText(/long body/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Hide error' }));
     expect(screen.queryByText('GitHub rejected the push: fetch first')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [1, 'Talyn sent 1 code review finding to the agent to check.'],
+    [2, 'Talyn sent 2 code review findings to the agent to check.'],
+  ])('shows a code review report with %i findings and expands the full message', (count, line) => {
+    render(<TriggerRow trigger={codeReview(count)} text={report} />);
+    expect(screen.getByText(line)).toBeInTheDocument();
+    expect(screen.queryByText(report)).not.toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: 'Show message' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(screen.getByText(report)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide message' }));
+    expect(screen.queryByText(report)).not.toBeInTheDocument();
+  });
+
+  it('draws no toggle for a code review report with no text', () => {
+    render(<TriggerRow trigger={codeReview(2)} text="" />);
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('uses the trigger row for a code review report in history', () => {
+    render(<AgentBlocks events={[event(report, codeReview(2))]} />);
+    expect(screen.getByText('Talyn sent 2 code review findings to the agent to check.')).toBeInTheDocument();
+    expect(screen.queryByTestId('talyn-message')).not.toBeInTheDocument();
   });
 
   it('uses the trigger row for history with a trigger', () => {

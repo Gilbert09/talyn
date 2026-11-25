@@ -171,3 +171,76 @@ describe('withServerAttention', () => {
     expect(isActiveSessionState(withServerAttention(state('idle'), reason))).toBe(true);
   });
 });
+
+describe('code review of the pull request', () => {
+  const review = (phase: string, over: Record<string, unknown> = {}) => ({ phase, staleForHead: false, deferredSince: null, ...over }) as never;
+  const reviewed = (phase: string, over: Record<string, unknown> = {}, summary: Partial<PRRow['summary']> = {}) => ({
+    ...pr('open', summary),
+    codeReview: review(phase, over),
+  });
+  const unreadChat = [chat('idle')];
+
+  it.each<[string, ReturnType<typeof chat>[], Record<string, true>, ReturnType<typeof reviewed>, SessionStateKind]>([
+    ['a running review wins over the PR state', [], {}, reviewed('reviewing'), 'code_review'],
+    ['a queued review', [], {}, reviewed('queued'), 'code_review'],
+    ['a review that waits for a runner', [], {}, reviewed('preparing', { deferredSince: '2026-11-25T00:00:00Z' }), 'code_review'],
+    ['a fix run', [], {}, reviewed('fixing'), 'code_review'],
+    ['a running review wins over an unread reply', unreadChat, { c1: true }, reviewed('validating'), 'code_review'],
+    ['a running review wins over conflicts', [], {}, reviewed('sweeping', {}, { mergeable: 'CONFLICTING' }), 'code_review'],
+    ['a running chat wins over a running review', [chat('running')], {}, reviewed('reviewing'), 'working'],
+    ['a question wins over a running review', [chat('awaiting_input')], {}, reviewed('reviewing'), 'needs_reply'],
+    ['a finished review leaves the PR state', [], {}, reviewed('ready'), 'ready_to_merge'],
+    ['a failed review leaves the PR state', [], {}, reviewed('failed'), 'ready_to_merge'],
+    ['a stopped review leaves the PR state', [], {}, reviewed('cancelled'), 'ready_to_merge'],
+    ['a finished review leaves an unread reply', unreadChat, { c1: true }, reviewed('ready'), 'needs_reply'],
+  ])('%s', (_name, chats, unread, row, kind) => {
+    expect(sessionState(WB, chats, unread, row).kind).toBe(kind);
+  });
+
+  it('ignores a running review on a merged or closed PR', () => {
+    expect(sessionState(WB, [], {}, { ...pr('merged'), codeReview: review('reviewing') }).kind).toBe('merged');
+    expect(sessionState(WB, [], {}, { ...pr('closed'), codeReview: review('reviewing') }).kind).toBe('closed');
+  });
+
+  it('wins over a running background job', () => {
+    const background = { jobs: [{ status: 'running' }], wakeups: [] } as unknown as WorkbenchBackground;
+    expect(sessionState(WB, [], {}, reviewed('reviewing'), false, background).kind).toBe('code_review');
+  });
+
+  it('says what the review does in the label', () => {
+    expect(sessionState(WB, [], {}, reviewed('validating'))).toEqual({
+      kind: 'code_review',
+      label: '#7: code review running (checking the findings)',
+    });
+    expect(sessionState(WB, [], {}, reviewed('preparing', { deferredSince: '2026-11-25T00:00:00Z' })).label).toBe(
+      '#7: code review waits for a runner'
+    );
+  });
+
+  it('labels a phase from a newer backend without throwing', () => {
+    expect(sessionState(WB, [], {}, reviewed('rethinking')).label).toBe('#7: code review running (in progress)');
+  });
+
+  it('keeps the unread reply as a flag', () => {
+    expect(sessionState(WB, [chat('idle')], { c1: true }, reviewed('reviewing'))).toMatchObject({ kind: 'code_review', unread: true });
+    expect(sessionState(WB, [chat('idle')], { c1: true }, reviewed('reviewing'), true)).toMatchObject({ kind: 'code_review', unread: true });
+    expect(sessionState(WB, [], {}, reviewed('reviewing')).unread).toBeUndefined();
+  });
+
+  it('keeps a running review and its unread flag over server conflicts', () => {
+    const running: SessionState = { kind: 'code_review', label: '#7: code review running (looking for problems)', unread: true };
+    expect(withServerAttention(running, 'conflict', 7)).toBe(running);
+  });
+
+  it.each([
+    ['reply', 'needs_reply'],
+    ['plan', 'needs_reply'],
+    ['failed', 'failed'],
+  ] as const)('lets server %s attention win over a running review', (reason, kind) => {
+    expect(withServerAttention({ kind: 'code_review', label: 'x' }, reason, 7).kind).toBe(kind);
+  });
+
+  it('puts a session with a running review in the active group', () => {
+    expect(isActiveSessionState({ kind: 'code_review', label: 'x' })).toBe(true);
+  });
+});

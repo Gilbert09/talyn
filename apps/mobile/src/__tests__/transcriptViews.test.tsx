@@ -9,6 +9,10 @@ import type { TranscriptRow as Row } from '../features/chat/transcript';
 import { sameRowProps, TranscriptRow, type PlanControls, type QuestionControls } from '../features/chat/TranscriptRow';
 import { session } from './workflowFixtures';
 
+jest.mock('expo-symbols', () => {
+  const native = jest.requireActual('react-native');
+  return { SymbolView: ({ name }: { name: { ios: string } }) => <native.View testID={`symbol:${name.ios}`} /> };
+});
 jest.mock('expo-router', () => ({ Link: ({ children }: { children: React.ReactNode }) => children }));
 jest.mock('../auth/AuthProvider', () => ({ useMobileRuntime: () => ({ workflow: {} }), useNetwork: () => 'online' }));
 
@@ -76,6 +80,95 @@ describe('rows draw again only for what they show', () => {
     ['plan, question controls', planRow, { question: { ...question, busy: true } }, true],
   ])('%s: same is %s', (_name, row, change, same) => {
     expect(sameRowProps({ ...base, row }, { ...base, row, ...change })).toBe(same);
+  });
+});
+
+describe('a code review card', () => {
+  const finding = (id: string, severity: 'blocker' | 'major' | 'minor' | 'nit', patch: Record<string, unknown> = {}) =>
+    ({ id, severity, title: `Title ${id}`, summary: `Summary ${id}.`, filePath: `src/${id}.ts`, lineStart: 4, lineEnd: 6, ...patch });
+  const base = { reviewId: 'r1', pullRequestId: 'pr-1', prNumber: 12, cycle: 1, headSha: 'abc1234def' };
+  const row = (codeReview: unknown, text = 'Code review'): Row => ({ key: 'cr', timestamp: null, kind: 'system', text, subtype: 'talyn_code_review', isError: false,
+    codeReview: codeReview as never });
+  const show = (codeReview: unknown) => render(<TranscriptRow row={row(codeReview)} now={1} workbench={workbench} plan={plan} question={question} />);
+  const finished = (findings: unknown[], findingCount = findings.length) => ({ ...base, action: 'finished', findingCount, findings, sentToAgent: false });
+
+  it('shows a started review with its size', async () => {
+    await show({ ...base, action: 'started', fileCount: 1, reviewerCount: 3 });
+    expect(screen.getByText('Code review started')).toBeVisible();
+    expect(screen.getByText('#12')).toBeVisible();
+    expect(screen.getByText('1 changed file · 3 reviewers at abc1234')).toBeVisible();
+    expect(screen.queryByText('View findings')).toBeNull();
+  });
+  it('shows a clean review without a findings link', async () => {
+    await show(finished([]));
+    expect(screen.getByText('Code review finished with no findings')).toBeVisible();
+    expect(screen.queryByText('View findings')).toBeNull();
+  });
+  it.each([
+    ['started', { ...base, action: 'started', fileCount: 1, reviewerCount: 1 }, 'magnifyingglass'],
+    ['clean', { ...base, action: 'finished', findingCount: 0, findings: [], sentToAgent: false }, 'checkmark.shield'],
+    ['with findings', { ...base, action: 'finished', findingCount: 1, findings: [finding('a', 'nit')], sentToAgent: false }, 'exclamationmark.triangle'],
+    ['failed', { ...base, action: 'failed', message: 'x' }, 'exclamationmark.circle'],
+    ['stopped', { ...base, action: 'cancelled' }, 'stop.circle'],
+  ])('uses the right icon for a %s review', async (_name, event, ios) => {
+    await show(event);
+    const icons = screen.getAllByTestId(/^symbol:/).map((node) => String(node.props.testID).slice('symbol:'.length));
+    expect(icons[0]).toBe(ios);
+  });
+  it('shows a stopped review', async () => {
+    await show({ ...base, action: 'cancelled' });
+    expect(screen.getByText('Code review stopped')).toBeVisible();
+    expect(screen.getByText('Stopped before it finished at abc1234.')).toBeVisible();
+    expect(screen.queryByText('View findings')).toBeNull();
+  });
+  it('shows a failed review with its message', async () => {
+    await show({ ...base, action: 'failed', message: 'Runner crashed' });
+    expect(screen.getByText('Code review failed')).toBeVisible();
+    expect(screen.getByText('Runner crashed')).toBeVisible();
+  });
+  it('leaves out the number when Talyn did not know it', async () => {
+    await show({ ...base, prNumber: null, action: 'started', fileCount: 0, reviewerCount: 0 });
+    expect(screen.queryByText(/^#/)).toBeNull();
+    expect(screen.getByText('Reviewing the pull request at abc1234')).toBeVisible();
+  });
+  it('lists the first three findings, most serious first, with counts and a location', async () => {
+    await show(finished([finding('a', 'nit'), finding('b', 'blocker'), finding('c', 'minor'), finding('d', 'major'), finding('e', 'blocker', { filePath: null })]));
+    expect(screen.getByText('2 Must fix · 1 Should fix · 1 Consider · 1 Nitpick')).toBeVisible();
+    const titles = screen.getAllByText(/^Title /).map((node) => node.props.children);
+    expect(titles).toEqual(['Title b', 'Title e', 'Title d']);
+    expect(screen.getAllByText('Must fix')).toHaveLength(2);
+    expect(screen.getByText('Should fix')).toBeVisible();
+    expect(screen.getByText('src/b.ts:4-6')).toBeVisible();
+    expect(screen.getByText('Show 2 more')).toBeVisible();
+    expect(screen.getByText('View findings')).toBeVisible();
+  });
+  it('shows all findings and folds them again', async () => {
+    await show(finished([finding('a', 'major'), finding('b', 'major'), finding('c', 'major'), finding('d', 'nit')]));
+    expect(screen.queryByText('Title d')).toBeNull();
+    await fireEvent.press(screen.getByText('Show 1 more'));
+    expect(screen.getByText('Title d')).toBeVisible();
+    await fireEvent.press(screen.getByText('Show fewer'));
+    expect(screen.queryByText('Title d')).toBeNull();
+  });
+  it('has no toggle for three findings or fewer', async () => {
+    await show(finished([finding('a', 'major'), finding('b', 'nit')]));
+    expect(screen.queryByText(/^Show /)).toBeNull();
+  });
+  it('opens a finding summary on a tap', async () => {
+    await show(finished([finding('a', 'major')]));
+    const summary = screen.getByText('Summary a.');
+    expect(summary.props.numberOfLines).toBe(2);
+    await fireEvent.press(screen.getByRole('button', { name: /Should fix\. Title a/ }));
+    expect(screen.getByText('Summary a.').props.numberOfLines).toBeUndefined();
+  });
+  it('tells how many findings the snapshot left out', async () => {
+    await show(finished([finding('a', 'major')], 25));
+    expect(screen.getByText('24 more in the findings list')).toBeVisible();
+  });
+  it('shows a finding with no summary and no file as a title only', async () => {
+    await show(finished([finding('a', 'minor', { summary: '', filePath: null })]));
+    expect(screen.getByText('Title a')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Title a/ })).toBeNull();
   });
 });
 

@@ -26,6 +26,7 @@ import { lensesForPreset } from './lenses.js';
 import { workspaceOwner, workspacePreset, workspaceReviewSettings } from './workspaceSettings.js';
 import { reviewerShape } from './analytics.js';
 import { captureWorkspaceEvent } from '../analytics.js';
+import { appendCodeReviewCard } from './transcriptCards.js';
 
 /**
  * Starting and stopping a review cycle.
@@ -266,7 +267,7 @@ export async function cancelReviewCycle(review: ReviewRow): Promise<void> {
     })
   );
 
-  await casTransition(
+  const cancelled = await casTransition(
     review.id,
     review.version,
     { phase: 'cancelled', phaseStartedAt: new Date() },
@@ -278,7 +279,14 @@ export async function cancelReviewCycle(review: ReviewRow): Promise<void> {
       message: `Stopped with ${runs.length} part(s) running.`,
     }
   );
+  // Only a cycle that got a started card gets a closing one. A stop in
+  // `fixing` comes after the finished card.
+  if (cancelled && STARTED_CARD_PHASES.has(review.phase)) {
+    await appendCodeReviewCard(review, { action: 'cancelled', headSha: review.targetHeadSha || null });
+  }
 }
+
+const STARTED_CARD_PHASES: ReadonlySet<string> = new Set(['reviewing', 'sweeping', 'validating']);
 
 // The workspace's own review settings live in a leaf module — see
 // `workspaceSettings.ts` for why — and are re-exported here so every existing

@@ -13,13 +13,13 @@
 // same needs-human stand-down).
 
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
-import { parseNeedsHumanSentinel } from '@talyn/shared';
+import { parseNeedsHumanSentinel, type WorkbenchMessageTrigger } from '@talyn/shared';
 import { v4 as uuid } from 'uuid';
 import { getPoolDbClient } from '../../db/client.js';
 import { mergeQueueEvents, workbenchEvents } from '../../db/schema.js';
 import { sessionActivity } from '../workbenches/prSessions.js';
 import { emitWorkbenchChat } from '../workbenches/emit.js';
-import { getWorkbench, insertChat, latestChat, rowToChat } from '../workbenches/store.js';
+import { getWorkbench, insertChat, latestChat, rowToChat, type ChatRow } from '../workbenches/store.js';
 import { sendMessage } from '../workbenches/turns.js';
 import type { EntrySnapshot } from './types.js';
 
@@ -116,8 +116,15 @@ export function sessionFixMessage(ref: string, prompt: string): string {
  * Send `text` to the session's most recent chat (a new chat when it has none
  * open), through the ordinary send path. Returns the chat it went to. Throws
  * when the session cannot take a message (archived, in error, local).
+ *
+ * `trigger` tells the clients why Talyn sent the message. `beforeSend` runs
+ * with the chosen chat just before the send, so its events come first.
  */
-export async function deliverToSession(workbenchId: string, text: string): Promise<string> {
+export async function deliverToSession(
+  workbenchId: string,
+  text: string,
+  opts: { trigger?: WorkbenchMessageTrigger; beforeSend?: (chat: ChatRow) => Promise<unknown> } = {}
+): Promise<string> {
   const row = await getWorkbench(workbenchId);
   if (!row) throw new Error('The session is gone.');
   let chat = await latestChat(row.id);
@@ -132,6 +139,7 @@ export async function deliverToSession(workbenchId: string, text: string): Promi
     });
     emitWorkbenchChat(row.workspaceId, rowToChat(chat));
   }
-  await sendMessage(chat.id, { text }, { origin: 'talyn' });
+  if (opts.beforeSend) await opts.beforeSend(chat);
+  await sendMessage(chat.id, { text }, { origin: 'talyn', ...(opts.trigger ? { trigger: opts.trigger } : {}) });
   return chat.id;
 }

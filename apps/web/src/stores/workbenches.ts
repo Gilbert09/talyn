@@ -18,6 +18,7 @@ import {
   type GitPanelTab,
 } from '../lib/workbenchLayout';
 import type { PendingUserMessage } from '../lib/workbenchFormat';
+import { chatWaitsForSandbox } from '@talyn/shared';
 import type { PrDetailTab } from '../lib/prDetail';
 
 /** A prompt shown in the transcript until its own event arrives. See `pendingMessageState`. */
@@ -410,7 +411,9 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   upsertChat: (chat) => {
     const prev = (get().chats[chat.workbenchId] ?? []).find((c) => c.id === chat.id);
     set((s) => ({ chats: { ...s.chats, [chat.workbenchId]: upsertChatList(s.chats[chat.workbenchId] ?? [], chat) } }));
-    if (prev && prev.status === 'running' && chat.status !== 'running') {
+    // A turn that went back to the queue to wait for a sandbox did not end: the
+    // retry runs it again. Each refused retry would otherwise notify once more.
+    if (prev && prev.status === 'running' && chat.status !== 'running' && !chatWaitsForSandbox(chat)) {
       const s = get();
       const looking =
         s.selectedWorkbenchId === chat.workbenchId &&

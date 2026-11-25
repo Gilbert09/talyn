@@ -92,6 +92,7 @@ import { heldBackAgents } from '../selfHosted/exhaustedQuota.js';
 import { workspaceReviewSettings } from './cycle.js';
 import { liveWorkbenchForPr, sessionHoldReason } from '../workbenches/prSessions.js';
 import { findingsWentToSession, reportFindingsToSession } from './sessionReport.js';
+import { appendCodeReviewCard, appendFinishedCodeReviewCard } from './transcriptCards.js';
 
 export { anchorVerifier, filesForChunk, keyFor, matchJudgeKeep } from './unitPure.js';
 
@@ -274,7 +275,7 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
   }
   const runsTotal = codeReviewUnitCount(preset, chunkTotal, lensKeys.length);
 
-  await casTransition(
+  const planned = await casTransition(
     review.id,
     review.version,
     {
@@ -302,6 +303,14 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
       detail: { preset, chunkTotal, runsTotal, headSha: loaded.headSha, skippedLenses: skipped },
     }
   );
+  if (planned) {
+    await appendCodeReviewCard(review, {
+      action: 'started',
+      headSha: loaded.headSha,
+      fileCount: loaded.ctx.files.length,
+      reviewerCount: lensKeys.length,
+    });
+  }
 }
 
 /**
@@ -1106,7 +1115,7 @@ export async function ingestUnitOutput(
 /** Everything not seen this cycle goes stale, then the review rests at `ready`. */
 export async function finishCycle(review: ReviewRow, note?: string): Promise<void> {
   const staled = await markStale(review.id, review.cycle);
-  await casTransition(
+  const finished = await casTransition(
     review.id,
     review.version,
     {
@@ -1136,8 +1145,11 @@ export async function finishCycle(review: ReviewRow, note?: string): Promise<voi
   // The findings go to the live session that owns the pull request, when it
   // can take a message. Then its agent decides, and auto-fix must not push
   // beside it. Otherwise auto-fix runs (or holds back) as before.
+  // A report that goes writes the finished card itself, before its message.
+  // Without a report, the card goes here.
   const report = await reportFindingsToSession(review);
   if (findingsWentToSession(report)) return;
+  if (finished) await appendFinishedCodeReviewCard(review, review.targetHeadSha, false);
 
   await maybeAutoFix(review);
 }
@@ -1211,7 +1223,7 @@ export async function failCycle(
   code: string,
   message: string
 ): Promise<void> {
-  await casTransition(
+  const failed = await casTransition(
     review.id,
     review.version,
     { phase: 'failed', phaseStartedAt: new Date(), lastError: message, lastErrorAt: new Date() },
@@ -1224,6 +1236,12 @@ export async function failCycle(
     }
   );
   void captureCycleFailed(review, code);
+  // A failure in `fixing` comes after the cycle's finished card: no failed card.
+  if (failed && review.phase !== 'fixing') {
+    // Before `prepareCycle`, the target head is still the one of the last cycle.
+    const planned = review.phase !== 'queued' && review.phase !== 'preparing';
+    await appendCodeReviewCard(review, { action: 'failed', headSha: planned ? review.targetHeadSha || null : null, message });
+  }
 }
 
 /** Move the review to a new phase, recording why. */

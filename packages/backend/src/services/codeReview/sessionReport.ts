@@ -11,7 +11,7 @@
 // pull request. Without the bound, report → fix → push → automatic review →
 // report runs until a review finds nothing.
 
-import { CODE_REVIEW_DISMISS_REASONS, type CodeReviewPhase } from '@talyn/shared';
+import { CODE_REVIEW_DISMISS_REASONS, codeReviewFindingSummary, type CodeReviewPhase } from '@talyn/shared';
 import { deliverToSession } from '../mergeQueue/sessionFix.js';
 import { liveSessionActivityForPr, type PrSessionActivity } from '../workbenches/prSessions.js';
 import { confirmedOpenFindings, type ConfirmedFindingRow } from './findings.js';
@@ -24,6 +24,7 @@ import {
   type ReviewRow,
 } from './store.js';
 import { workspaceReviewSettings } from './cycle.js';
+import { appendCodeReviewCard, finishedCodeReviewCard } from './transcriptCards.js';
 
 /** The event that records the report of one cycle. Its `detail.cycle` is the idempotency key. */
 export const SESSION_REPORT_SENT = 'session_report_sent';
@@ -53,9 +54,7 @@ export function findingsWentToSession(outcome: SessionReportOutcome): boolean {
 
 /** One line of prose from a finding body: whitespace collapsed, first sentence, capped. */
 export function findingSummary(body: string): string {
-  const flat = body.replace(/\s+/g, ' ').trim();
-  const sentence = flat.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? flat;
-  return sentence.length > SUMMARY_MAX_CHARS ? `${sentence.slice(0, SUMMARY_MAX_CHARS - 1).trimEnd()}…` : sentence;
+  return codeReviewFindingSummary(body, SUMMARY_MAX_CHARS);
 }
 
 function findingLocation(f: ConfirmedFindingRow): string {
@@ -160,16 +159,21 @@ export async function reportFindingsToSession(review: ReviewRow): Promise<Sessio
     });
     if (!claimed) return { kind: 'already_sent' };
 
+    const headSha = fresh.reviewedHeadSha ?? fresh.targetHeadSha;
     try {
       const chatId = await deliverToSession(
         session.id,
-        sessionReportMessage({
-          reviewId: fresh.id,
-          pullRequestId: fresh.pullRequestId,
-          prRef,
-          headSha: fresh.reviewedHeadSha ?? fresh.targetHeadSha,
-          findings,
-        })
+        sessionReportMessage({ reviewId: fresh.id, pullRequestId: fresh.pullRequestId, prRef, headSha, findings }),
+        {
+          trigger: { kind: 'code_review', reviewId: fresh.id, findingCount: findings.length },
+          // The finished card goes into the same chat, before the message.
+          beforeSend: (chat) =>
+            appendCodeReviewCard(fresh, finishedCodeReviewCard(findings, headSha, true), {
+              workbenchId: session.id,
+              name: session.name,
+              chat,
+            }),
+        }
       );
       return { kind: 'sent', workbenchId: session.id, chatId, findings: findings.length };
     } catch (err) {
