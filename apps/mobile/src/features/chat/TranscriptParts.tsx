@@ -22,7 +22,7 @@ import { TypingDots } from './Pulse';
 import { answeredLabel, senderLabel, type TranscriptRow } from './transcript';
 import { useHighlighter } from './findHighlight';
 import { useMessageMenuOpener } from './messageMenu';
-import { BOX_REFUSALS, permissionTitle, systemRowText } from './transcriptFind';
+import { BOX_REFUSALS, permissionTitle, REVIEW_FINDINGS_SHOWN, systemRowText } from './transcriptFind';
 
 /** Links in a message, offered to screen readers as actions on the message. */
 function markdownLinks(text: string): Array<{ url: string; label: string }> {
@@ -135,7 +135,6 @@ function EventLine({ icon, text, tone = 'muted', href, url, label }: {
   return <View accessible accessibilityLabel={text} style={style}>{content}</View>;
 }
 
-const REVIEW_FINDINGS_SHOWN = 3;
 const REVIEW_SEVERITIES: CodeReviewSeverity[] = ['blocker', 'major', 'minor', 'nit'];
 
 function severityColor(c: ReturnType<typeof useTheme>, severity: CodeReviewSeverity): string {

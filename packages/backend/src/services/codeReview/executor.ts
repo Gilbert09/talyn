@@ -1236,7 +1236,8 @@ export async function failCycle(
     }
   );
   void captureCycleFailed(review, code);
-  if (failed) {
+  // A failure in `fixing` comes after the cycle's finished card: no failed card.
+  if (failed && review.phase !== 'fixing') {
     // Before `prepareCycle`, the target head is still the one of the last cycle.
     const planned = review.phase !== 'queued' && review.phase !== 'preparing';
     await appendCodeReviewCard(review, { action: 'failed', headSha: planned ? review.targetHeadSha || null : null, message });

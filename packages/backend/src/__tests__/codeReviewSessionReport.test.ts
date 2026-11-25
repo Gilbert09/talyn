@@ -378,6 +378,13 @@ describe('failCycle transcript card', () => {
     expect(m.appendCard).toHaveBeenCalledWith(failing, { action: 'failed', headSha, message: 'No reviewer finished.' });
   });
 
+  it('writes no failed card when auto-fix fails, because the finished card came first', async () => {
+    await failCycle({ ...review, phase: 'fixing' }, 'pr_closed', 'The pull request was closed.');
+
+    expect(m.cas).toHaveBeenCalled();
+    expect(m.appendCard).not.toHaveBeenCalled();
+  });
+
   it('writes no card when the transition lost', async () => {
     m.cas.mockResolvedValue(false);
 

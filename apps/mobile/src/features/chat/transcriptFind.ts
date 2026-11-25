@@ -29,11 +29,14 @@ export function systemRowText(row: SystemRow): string {
   return row.text;
 }
 
-/** The text a code review card shows, in the order it draws it, so find can match a finding. */
+/** A folded code review card shows this many findings. */
+export const REVIEW_FINDINGS_SHOWN = 3;
+
+/** The text a folded code review card shows, in the order it draws it, so find can match a finding. */
 function codeReviewCardText(text: string, event: CodeReviewTranscriptEvent): string {
   const lines = [event.prNumber ? `${text} #${event.prNumber}` : text];
   if (event.action === 'finished') {
-    for (const f of sortCodeReviewTranscriptFindings(event.findings)) {
+    for (const f of sortCodeReviewTranscriptFindings(event.findings).slice(0, REVIEW_FINDINGS_SHOWN)) {
       lines.push(CODE_REVIEW_SEVERITY_LABELS[f.severity], f.title, codeReviewTranscriptFindingLocation(f) ?? '', f.summary);
     }
   }
