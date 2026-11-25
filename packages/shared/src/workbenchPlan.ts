@@ -106,6 +106,8 @@ export function workbenchTurnPrompt(input: {
   internetAccess?: boolean;
   autoCreatePr?: boolean;
   hasPullRequest?: boolean;
+  /** False when the linked pull request is merged or closed. Unknown counts as open. */
+  pullRequestOpen?: boolean;
   /** A chat that continues a local conversation: where it came from and the box's repo folder. */
   imported?: { root: string; repoDir: string } | null;
   recap?: string;
@@ -130,7 +132,9 @@ export function workbenchTurnPrompt(input: {
   const autoPrNote = !input.thread && input.autoCreatePr !== false && !input.hasPullRequest && input.intent !== 'create_pr'
     ? buildAutoCreatePrInstructions()
     : null;
-  const openPrNote = !input.thread && input.hasPullRequest && input.intent !== 'create_pr' ? OPEN_PULL_REQUEST_NOTE : null;
+  const openPrNote = !input.thread && input.hasPullRequest && input.pullRequestOpen !== false && input.intent !== 'create_pr'
+    ? OPEN_PULL_REQUEST_NOTE
+    : null;
   const threadNote = input.thread ? TALYN_THREAD_NOTE : null;
   const importNote = input.imported ? importedPathsNote(input.imported, input.imported.repoDir) : null;
   const talynNote = input.talynTools

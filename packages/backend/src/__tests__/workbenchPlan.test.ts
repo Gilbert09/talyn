@@ -111,6 +111,7 @@ describe('workbenchTurnPrompt', () => {
     ['a Create PR turn', { intent: 'create_pr' as const }],
     ['a thread', { thread: true }],
     ['a session with no PR', { hasPullRequest: false }],
+    ['a session whose PR is merged or closed', { pullRequestOpen: false }],
   ])('no open-PR note in %s', (_, extra) => {
     const turn = workbenchTurnPrompt({ agent: 'claude', text: 'hi', planMode: false, createPr, hasPullRequest: true, ...extra });
     expect(`${turn.prompt}\n${turn.appendSystemPrompt ?? ''}`).not.toContain(OPEN_PULL_REQUEST_NOTE);

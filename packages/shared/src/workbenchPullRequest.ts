@@ -107,7 +107,7 @@ export function buildAutoCreatePrInstructions(): string {
  * left later changes uncommitted.
  */
 export const OPEN_PULL_REQUEST_NOTE = [
-  'This session already has a pull request. Talyn does not commit or push for you after your reply any more.',
+  'This session already has an open pull request. Talyn does not commit or push for you after your reply any more.',
   'Talyn\'s earlier rule "Talyn commits and pushes after your reply" applied only to opening the pull request.',
   'Before you end a turn in which you changed files, commit the changes with a conventional commit message',
   'and run `git push`, so that the pull request gets them.',

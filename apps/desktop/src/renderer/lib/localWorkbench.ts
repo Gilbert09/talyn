@@ -370,6 +370,7 @@ export class LocalTurnController {
       },
       autoCreatePr: workbench.settings?.autoCreatePr,
       hasPullRequest: Boolean(workbench.pullRequestId),
+      pullRequestOpen: workbench.pr?.state !== 'merged' && workbench.pr?.state !== 'closed',
     });
     const repositoryInstructions = workbench.repositoryId
       ? await this.deps.repositoryInstructions?.(workbench.repositoryId, chat.agent)
