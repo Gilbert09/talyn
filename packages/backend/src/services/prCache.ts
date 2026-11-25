@@ -10,7 +10,7 @@ import {
 } from '../db/schema.js';
 import { readWorkspaceSettings } from './workspaceSettings.js';
 import { emitPullRequestUpdated } from './websocket.js';
-import { keepRefusedBehind } from './mergeRefusal.js';
+import { keepRefusedBehind, readRefusedBehind } from './mergeRefusal.js';
 import { captureWorkspaceEvent } from './analytics.js';
 import { domainEvents } from './events.js';
 import { debugBus, describeError } from './debugBus.js';
@@ -651,8 +651,38 @@ async function upsertRow(
       };
     }
   }
+  // The update path's one read of the stored row, made here so the "refused
+  // as behind" mark below can shape the summary before it is digested.
+  //
+  // The description rides along on the same read, compared IN the database so
+  // the stored text never ships back. It has its own guard rather than
+  // sharing `summaryChanged`: a PR under CI rewrites its summary every few
+  // seconds while its description stands still for days, and re-TOASTing the
+  // body on every check transition is exactly the churn the digest exists to
+  // avoid. `IS DISTINCT FROM` so the NULL a pre-migration row still carries
+  // counts as a difference and fills on the first poll.
+  const body = summary.body ?? '';
+  const prev = opts.existingId
+    ? (
+        await db
+          .select({
+            digest: pullRequestsTable.lastSummaryDigest,
+            bodyChanged: sql<boolean>`${pullRequestsTable.body} IS DISTINCT FROM ${body}`,
+            // One boolean and one timestamp, on a read this path already makes —
+            // so knowing whether the PR was in the cohort, and since when, costs
+            // nothing extra.
+            reviewRequested: pullRequestsTable.reviewRequested,
+            reviewRequestedFirstSeenAt: pullRequestsTable.reviewRequestedFirstSeenAt,
+            // One small key, almost always absent.
+            refusedBehind: sql<unknown>`${pullRequestsTable.lastSummary} -> 'refusedBehind'`,
+          })
+          .from(pullRequestsTable)
+          .where(eq(pullRequestsTable.id, opts.existingId))
+          .limit(1)
+      )[0]
+    : undefined;
   // A merge GitHub just refused as behind outranks a fetch that still says CLEAN.
-  summary = keepRefusedBehind(opts.existingId, summary);
+  summary = keepRefusedBehind(readRefusedBehind({ refusedBehind: prev?.refusedBehind }), summary);
   const lastSummary = summaryToJsonb(summary);
   const cursors = nextCursors(summary);
   // A newly-tracked open PR inherits the workspace's "auto-keep mergeable by
@@ -693,29 +723,6 @@ async function upsertRow(
     // TOASTed `last_summary` + its cursor columns when nothing changed — the
     // poll then bumps only the TTL timestamp, saving the WAL + TOAST churn.
     const digest = summaryDigest(lastSummary, cursors);
-    // The description rides along on the same read, compared IN the database so
-    // the stored text never ships back. It has its own guard rather than
-    // sharing `summaryChanged`: a PR under CI rewrites its summary every few
-    // seconds while its description stands still for days, and re-TOASTing the
-    // body on every check transition is exactly the churn the digest exists to
-    // avoid. `IS DISTINCT FROM` so the NULL a pre-migration row still carries
-    // counts as a difference and fills on the first poll.
-    const body = summary.body ?? '';
-    const prev = (
-      await db
-        .select({
-          digest: pullRequestsTable.lastSummaryDigest,
-          bodyChanged: sql<boolean>`${pullRequestsTable.body} IS DISTINCT FROM ${body}`,
-          // One boolean and one timestamp, on a read this path already makes —
-          // so knowing whether the PR was in the cohort, and since when, costs
-          // nothing extra.
-          reviewRequested: pullRequestsTable.reviewRequested,
-          reviewRequestedFirstSeenAt: pullRequestsTable.reviewRequestedFirstSeenAt,
-        })
-        .from(pullRequestsTable)
-        .where(eq(pullRequestsTable.id, opts.existingId))
-        .limit(1)
-    )[0];
     const prevDigest = prev?.digest;
     const summaryChanged = prevDigest !== digest;
     stamps = reviewRequestedStamps(prev?.reviewRequested, opts.reviewRequested, now);
@@ -1049,6 +1056,9 @@ function summaryToJsonb(s: PRSummary): Record<string, unknown> {
     reviewDecision: s.reviewDecision,
     effectiveReviewDecision: s.effectiveReviewDecision,
     blockingReason: s.blockingReason,
+    // Absent, not null, on every PR GitHub has not refused, so the digest of an
+    // unmarked summary is unchanged.
+    ...(s.refusedBehind ? { refusedBehind: s.refusedBehind } : {}),
     checks: s.checks,
     // The CI picture on its own, and the gates only a person can clear. The
     // pill draws `ciStatus` instead of inferring required-ness from the verdict

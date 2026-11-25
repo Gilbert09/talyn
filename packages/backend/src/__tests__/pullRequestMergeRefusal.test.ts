@@ -10,7 +10,6 @@ import { githubService } from '../services/github.js';
 import * as graphqlModule from '../services/githubGraphql.js';
 import type { PRSummary } from '../services/githubGraphql.js';
 import * as mergeGate from '../services/repoMergeGate.js';
-import { _resetRefusedBehind } from '../services/mergeRefusal.js';
 
 /**
  * A merge GitHub refuses comes back as a code and a message a person can act
@@ -76,7 +75,11 @@ describe('merge refusals and Update branch', () => {
     });
 
     vi.spyOn(mergeGate, 'getExternalMergeGate').mockResolvedValue(null);
-    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({ state: 'open', merged: false } as never);
+    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
+      state: 'open',
+      merged: false,
+      head: { ref: 'feat', sha: 'sha1' },
+    } as never);
 
     const app = express();
     app.use(express.json());
@@ -95,7 +98,6 @@ describe('merge refusals and Update branch', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await testDb.cleanup();
     vi.restoreAllMocks();
-    _resetRefusedBehind();
   });
 
   const post = (path: string) =>
@@ -171,15 +173,44 @@ describe('merge refusals and Update branch', () => {
       expect((await storedSummary()).blockingReason).toBe('merge_conflicts');
     });
 
-    it('still answers when the refetch fails', async () => {
+    it('still answers, and still marks the row Behind, when the refetch fails', async () => {
       vi.spyOn(githubService, 'mergePullRequest').mockRejectedValue(new Error(OUT_OF_DATE));
-      vi.spyOn(graphqlModule, 'batchPullRequests').mockRejectedValue(new Error('GraphQL down'));
+      const batch = vi.spyOn(graphqlModule, 'batchPullRequests').mockRejectedValue(new Error('GraphQL down'));
       vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       const res = await post('/pull-requests/pr-1/merge');
 
       expect(res.status).toBe(400);
       expect(await res.json()).toMatchObject({ code: 'branch_behind' });
+      const stored = await storedSummary();
+      expect(stored).toMatchObject({ blockingReason: 'behind', mergeStateStatus: 'BEHIND' });
+      expect(stored.refusedBehind?.headSha).toBe('sha1');
+
+      // Update branch moves the head: the mark does not stick to the new head.
+      batch.mockResolvedValue([{ branch: 'feat', pr: summary({ headSha: 'sha2' }) }] as never);
+      vi.spyOn(githubService, 'updatePullRequestBranchOutcome').mockResolvedValue('ok');
+      expect((await post('/pull-requests/pr-1/update-branch')).status).toBe(200);
+      const after = await storedSummary();
+      expect(after.blockingReason).toBe('mergeable');
+      expect(after.refusedBehind).toBeUndefined();
+    });
+
+    it('marks the head GitHub refused, not an older cached head', async () => {
+      vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
+        state: 'open',
+        merged: false,
+        head: { ref: 'feat', sha: 'sha9' },
+      } as never);
+      vi.spyOn(githubService, 'mergePullRequest').mockRejectedValue(new Error(OUT_OF_DATE));
+      vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([
+        { branch: 'feat', pr: summary({ headSha: 'sha9' }) },
+      ] as never);
+
+      expect((await post('/pull-requests/pr-1/merge')).status).toBe(400);
+
+      const stored = await storedSummary();
+      expect(stored.refusedBehind?.headSha).toBe('sha9');
+      expect(stored.blockingReason).toBe('behind');
     });
 
     it('answers with a code when GitHub returns merged: false', async () => {

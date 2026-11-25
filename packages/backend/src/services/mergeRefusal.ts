@@ -93,38 +93,45 @@ export function markSummaryBehind(summary: PRSummary): PRSummary {
  */
 export const REFUSED_BEHIND_TTL_MS = 10 * 60_000;
 
-/** PR row id → the head commit GitHub refused as behind (null until a fetch names it), and until when. */
-const refusedBehind = new Map<string, { headSha: string | null; until: number }>();
-
 /**
- * Note that GitHub refused to merge this PR because its head is behind the
- * base. The base only moves forward, so the same head stays behind; a new head
- * (for example from "Update branch") ends the mark. The cached head can be
- * older than the one GitHub refused, so the mark takes its head from the first
- * fetch after the refusal — the route's own refetch, a moment later.
+ * "GitHub refused to merge this head commit because it is behind the base",
+ * stored in the PR row's `lastSummary` so every backend replica reads it. The
+ * base only moves forward, so the same head stays behind; a new head (for
+ * example from "Update branch" or a push) ends the mark.
  */
-export function noteRefusedBehind(prId: string, now = Date.now()): void {
-  refusedBehind.set(prId, { headSha: null, until: now + REFUSED_BEHIND_TTL_MS });
+export interface RefusedBehindMark {
+  headSha: string;
+  /** ISO time the mark expires. */
+  until: string;
+}
+
+export function refusedBehindMark(headSha: string, now = Date.now()): RefusedBehindMark {
+  return { headSha, until: new Date(now + REFUSED_BEHIND_TTL_MS).toISOString() };
+}
+
+/** The mark in a stored `lastSummary`, or null. */
+export function readRefusedBehind(lastSummary: unknown): RefusedBehindMark | null {
+  const mark = (lastSummary as { refusedBehind?: unknown } | null)?.refusedBehind as
+    | Partial<RefusedBehindMark>
+    | null
+    | undefined;
+  if (!mark || typeof mark.headSha !== 'string' || typeof mark.until !== 'string') return null;
+  return { headSha: mark.headSha, until: mark.until };
 }
 
 /**
- * Every summary write goes through this (`prCache.upsertRow`), so no later
- * fetch — the poll, the detail sheet's live read, a manual refresh — can put a
- * stale CLEAN back on a PR GitHub just refused as behind.
+ * A fresh summary with the stored mark applied. Every summary write
+ * (`prCache.upsertRow`) and the detail route's live read go through this, so no
+ * later fetch on any replica can put a stale CLEAN back on a PR GitHub just
+ * refused as behind. The mark rides along in the result while it holds, and
+ * drops out once it expires or the head changes.
  */
-export function keepRefusedBehind(prId: string | undefined, summary: PRSummary, now = Date.now()): PRSummary {
-  if (!prId) return summary;
-  const mark = refusedBehind.get(prId);
-  if (!mark) return summary;
-  if (mark.until <= now || (mark.headSha !== null && mark.headSha !== summary.headSha)) {
-    refusedBehind.delete(prId);
-    return summary;
-  }
-  if (mark.headSha === null && summary.headSha) mark.headSha = summary.headSha;
-  return markSummaryBehind(summary);
-}
-
-/** Test helper. */
-export function _resetRefusedBehind(): void {
-  refusedBehind.clear();
+export function keepRefusedBehind(
+  mark: RefusedBehindMark | null | undefined,
+  summary: PRSummary,
+  now = Date.now()
+): PRSummary {
+  const { refusedBehind: _ignored, ...fresh } = summary;
+  if (!mark || Date.parse(mark.until) <= now || mark.headSha !== fresh.headSha) return fresh;
+  return { ...markSummaryBehind(fresh), refusedBehind: mark };
 }
