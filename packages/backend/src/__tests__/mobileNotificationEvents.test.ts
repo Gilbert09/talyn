@@ -56,6 +56,18 @@ describe('durable mobile transition journal', () => {
     expect(await events()).toHaveLength(2);
   });
 
+  it('ignores a turn that goes back to the queue to wait for a sandbox, and records its real end', async () => {
+    const waiting = (attempts: number) => [{ id: 'm1', text: 'hi', queuedAt: '2026-01-01T00:00:00.000Z',
+      capacityWait: { turn: 1, startedAt: '2026-01-01T00:00:00.000Z', retryAt: '2026-01-01T00:01:00.000Z', attempts, reason: 'capacity' } }];
+    for (const attempts of [1, 2, 3]) {
+      await database.db.update(workbenchChats).set({ status: 'idle', queuedMessages: waiting(attempts) }).where(eq(workbenchChats.id, chat));
+      await database.db.update(workbenchChats).set({ status: 'running', queuedMessages: [] }).where(eq(workbenchChats.id, chat));
+    }
+    expect(await events()).toHaveLength(0);
+    await database.db.update(workbenchChats).set({ status: 'idle' }).where(eq(workbenchChats.id, chat));
+    expect((await events()).map((row) => row.category)).toEqual(['session_update']);
+  });
+
   it('records material input changes but stores no request text', async () => {
     await database.db.update(workbenchChats).set({ status: 'awaiting_input', statusMessage: 'Private request one' }).where(eq(workbenchChats.id, chat));
     await database.db.update(workbenchChats).set({ statusMessage: 'Private request two' }).where(eq(workbenchChats.id, chat));

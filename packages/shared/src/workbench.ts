@@ -524,6 +524,15 @@ export interface WorkbenchTurnPayer {
   avatarUrl: string | null;
 }
 
+/**
+ * The chat is not running, and the message at the head of its queue waits for
+ * a free sandbox. Its turn did not end: Talyn tries it again. A turn that
+ * leaves `running` for this wait is not finished, so it must not notify.
+ */
+export function chatWaitsForSandbox(chat: { status: WorkbenchChatStatus; queuedMessages?: WorkbenchQueuedMessage[] | null }): boolean {
+  return chat.status !== 'running' && Boolean(chat.queuedMessages?.[0]?.capacityWait);
+}
+
 /** A queued message that waits for a free sandbox. See `WorkbenchQueuedMessage.capacityWait`. */
 export interface WorkbenchCapacityWait {
   /** The turn the message keeps. The transcript shows its user message there. */
@@ -538,9 +547,11 @@ export interface WorkbenchCapacityWait {
    * What the last refusal said. `capacity`: the fleet has no room, or it
    * throttles the workspace ("Waiting for a free sandbox"). `waking`: the
    * fleet is restoring the box, or could not fetch its hibernated copy yet
-   * ("Waking the sandbox").
+   * ("Waking the sandbox"). `replacing`: the box was lost before the agent
+   * started, and Talyn is starting a new one that runs the message when it is
+   * ready ("Starting a new sandbox").
    */
-  reason: 'capacity' | 'waking';
+  reason: 'capacity' | 'waking' | 'replacing';
   /**
    * When the box's fleet host first did not answer in this wait. After a short
    * bound, Talyn replaces the box on another host. Absent when the last refusal came from a host that answers.

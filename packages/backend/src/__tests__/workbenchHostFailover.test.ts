@@ -157,7 +157,8 @@ describe('a turn fails over from a box whose host does not answer', () => {
       const row = await chat();
       expect(row.status).toBe('idle');
       expect(row.queuedMessages).toHaveLength(1);
-      expect(row.queuedMessages[0].capacityWait).toBeUndefined();
+      // The old box's wait is gone: the message waits for the new box.
+      expect(row.queuedMessages[0].capacityWait).toMatchObject({ reason: 'replacing', attempts: 0 });
     }, { timeout: 5000 });
   }
 

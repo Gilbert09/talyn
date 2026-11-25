@@ -504,6 +504,7 @@ export function Composer({
 /** The wait-for-a-sandbox text, with the seconds until the next try. */
 export function capacityWaitText(wait: WorkbenchCapacityWait, now: number): string {
   if (wait.reason === 'waking') return 'Waking the sandbox…';
+  if (wait.reason === 'replacing') return 'Starting a new sandbox…';
   const seconds = Math.max(0, Math.ceil((new Date(wait.retryAt).getTime() - now) / 1000));
   return Number.isFinite(seconds) && seconds > 0
     ? `Waiting for a free sandbox… (retrying in ${seconds}s)`

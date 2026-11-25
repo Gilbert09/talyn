@@ -225,6 +225,17 @@ describe('what runs on the box', () => {
     ]);
   });
 
+  it.each([
+    ['capacity', 'capacity_wait', 'Waiting for a free sandbox'],
+    ['waking', 'waking', 'Waking the sandbox'],
+    ['replacing', 'waking', 'Starting a new sandbox'],
+  ] as const)('names a %s wait', (reason, kind, words) => {
+    const s = describeSandboxStatus(input({ chats: [chat({ id: 'c1', title: 'Main', queued: 1, headWait: wait(reason) })] }));
+    expect(s.activity.map((a) => [a.kind, a.text])).toEqual([
+      [kind, `${words} for a message. Try 3 at 2099-01-01 12:01 UTC.`],
+    ]);
+  });
+
   it('says nothing runs with an empty list', () => {
     expect(describeSandboxStatus(input()).activity).toEqual([]);
   });

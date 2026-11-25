@@ -1,4 +1,4 @@
-import { PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchEvent } from '@talyn/shared';
+import { codeReviewTranscriptEvent, messageTriggerText, PLAN_APPROVED_MESSAGE, type AgentEvent, type WorkbenchEvent } from '@talyn/shared';
 
 import { diffTone, humanToolName, looksLikeDiff, preview, readableOutput, shortenPath, toolLine, unescapeText } from '../features/chat/toolFormat';
 import { rowLabel, transcriptRows, userMessageText, type TranscriptRow } from '../features/chat/transcript';
@@ -206,12 +206,24 @@ describe('transcript rows', () => {
   it.each([
     ['a pull request retry', { kind: 'pr_retry', attempt: 1, error: 'GitHub rejected the push' }, 'Talyn could not open the pull request. The agent tries to fix the cause.'],
     ['a wake-up', { kind: 'wakeup', wakeupId: 'w', reason: 'Check CI', createdBy: 'agent' }, 'Woke up: Check CI'],
+    ['a code review', { kind: 'code_review', reviewId: 'r1', findingCount: 2 }, messageTriggerText({ kind: 'code_review', reviewId: 'r1', findingCount: 2 })],
   ])('shows %s from Talyn as one short line', (_name, trigger, text) => {
     const rows = transcriptRows('chat-one', [at({
       type: 'user', message: { content: [{ type: 'text', text: 'The full message body' }] },
       talyn: { kind: 'user_message', origin: 'talyn', trigger },
     } as unknown as AgentEvent)]);
     expect(rows).toEqual([expect.objectContaining({ kind: 'system', subtype: 'talyn_message', text })]);
+  });
+
+  it.each([
+    ['started', { action: 'started', fileCount: 3, reviewerCount: 2 }, 'Code review started. 3 changed files · 2 reviewers at abc1234', false],
+    ['finished', { action: 'finished', findingCount: 0, findings: [], sentToAgent: false }, 'Code review finished with no findings. Reviewed at abc1234.', false],
+    ['failed', { action: 'failed', message: 'Runner crashed' }, 'Code review failed. Runner crashed', true],
+  ])('carries a %s code review on a system row', (_name, body, text, isError) => {
+    const stored = codeReviewTranscriptEvent({ reviewId: 'r1', pullRequestId: 'pr-1', prNumber: 7, cycle: 1, headSha: 'abc1234def', ...body } as never);
+    const rows = transcriptRows('chat-one', [at(stored as unknown as AgentEvent)]);
+    expect(rows).toEqual([expect.objectContaining({ kind: 'system', subtype: 'talyn_code_review', text, isError,
+      codeReview: expect.objectContaining({ action: body.action, pullRequestId: 'pr-1', prNumber: 7 }) })]);
   });
 
   it('keeps a Talyn message with no trigger as a bubble', () => {

@@ -1,4 +1,6 @@
 import {
+  CODE_REVIEW_SEVERITY_LABELS, codeReviewTranscriptCounts, codeReviewTranscriptDetail, codeReviewTranscriptFindingLocation, codeReviewTranscriptTitle,
+  sortCodeReviewTranscriptFindings, type CodeReviewSeverity, type CodeReviewTranscriptEvent, type CodeReviewTranscriptFinding,
   describeTool, endQuotesAtPlainLines, formatQuestionAnswers, isQuestionAnswered, type QuestionAnswer, type Workbench, type WorkbenchMessageSender,
   type WorkbenchQuestionEvent, type WorkbenchQuestionItem,
 } from '@talyn/shared';
@@ -20,7 +22,7 @@ import { TypingDots } from './Pulse';
 import { answeredLabel, senderLabel, type TranscriptRow } from './transcript';
 import { useHighlighter } from './findHighlight';
 import { useMessageMenuOpener } from './messageMenu';
-import { BOX_REFUSALS, permissionTitle, systemRowText } from './transcriptFind';
+import { BOX_REFUSALS, permissionTitle, REVIEW_FINDINGS_SHOWN, systemRowText } from './transcriptFind';
 
 /** Links in a message, offered to screen readers as actions on the message. */
 function markdownLinks(text: string): Array<{ url: string; label: string }> {
@@ -133,6 +135,79 @@ function EventLine({ icon, text, tone = 'muted', href, url, label }: {
   return <View accessible accessibilityLabel={text} style={style}>{content}</View>;
 }
 
+const REVIEW_SEVERITIES: CodeReviewSeverity[] = ['blocker', 'major', 'minor', 'nit'];
+
+function severityColor(c: ReturnType<typeof useTheme>, severity: CodeReviewSeverity): string {
+  return severity === 'blocker' ? c.destructive : severity === 'major' ? c.warning : severity === 'minor' ? c.information : c.muted;
+}
+
+function ReviewFinding({ finding }: { finding: CodeReviewTranscriptFinding }) {
+  const c = useTheme();
+  const mark = useHighlighter();
+  const [open, setOpen] = useState(false);
+  const color = severityColor(c, finding.severity);
+  const location = codeReviewTranscriptFindingLocation(finding);
+  const label = CODE_REVIEW_SEVERITY_LABELS[finding.severity];
+  const body = <>
+    <View style={styles.eventInner}>
+      <Text style={[type.caption, sans(600), { color }]}>{label}</Text>
+      <Text style={[type.meta, sans(600), { color: c.text, flex: 1 }]}>{mark(finding.title)}</Text>
+    </View>
+    {location ? <Text numberOfLines={1} style={[styles.mono, { color: c.muted }]}>{mark(location)}</Text> : null}
+    {finding.summary ? <Text numberOfLines={open ? undefined : 2} style={[type.meta, { color: c.muted }]}>{mark(finding.summary)}</Text> : null}
+  </>;
+  const style = [styles.reviewFinding, { borderColor: c.border }];
+  if (!finding.summary) return <View accessible accessibilityLabel={`${label}. ${finding.title}`} style={style}>{body}</View>;
+  return <Pressable accessibilityRole="button" accessibilityLabel={`${label}. ${finding.title}`} accessibilityState={{ expanded: open }}
+    onPress={() => setOpen(!open)} style={style}>{body}</Pressable>;
+}
+
+/** A code review of the session's pull request: started, finished with its findings, or failed. */
+function CodeReviewCard({ event }: { event: CodeReviewTranscriptEvent }) {
+  const c = useTheme();
+  const mark = useHighlighter();
+  const [all, setAll] = useState(false);
+  const failed = event.action === 'failed';
+  const findingsFound = event.action === 'finished' && event.findingCount > 0;
+  const tint = failed ? c.destructive
+    : event.action === 'cancelled' ? c.muted
+      : event.action === 'finished' ? (findingsFound ? c.warning : c.success) : c.information;
+  const icon: Symbol = failed ? { ios: 'exclamationmark.circle', android: 'error' }
+    : event.action === 'cancelled' ? { ios: 'stop.circle', android: 'stop_circle' }
+      : findingsFound ? { ios: 'exclamationmark.triangle', android: 'warning' }
+        : event.action === 'finished' ? { ios: 'checkmark.shield', android: 'verified_user' } : { ios: 'magnifyingglass', android: 'search' };
+  const title = codeReviewTranscriptTitle(event);
+  const detail = codeReviewTranscriptDetail(event);
+  const findings = useMemo(() => event.action === 'finished' ? sortCodeReviewTranscriptFindings(event.findings) : [], [event]);
+  const counts = useMemo(() => codeReviewTranscriptCounts(findings), [findings]);
+  const shown = all ? findings : findings.slice(0, REVIEW_FINDINGS_SHOWN);
+  const hidden = findings.length - shown.length;
+  const unlisted = event.action === 'finished' ? Math.max(0, event.findingCount - findings.length) : 0;
+  return <View style={[styles.permission, styles.reviewCard, { borderColor: withAlpha(tint, 0.35), backgroundColor: withAlpha(tint, c.mode === 'dark' ? 0.1 : 0.06) }]}>
+    <View accessible accessibilityLabel={`${title}${event.prNumber ? ` on pull request ${event.prNumber}` : ''}. ${detail}`} style={{ gap: 2 }}>
+      <View style={styles.eventInner}>
+        <SymbolView name={icon} size={14} tintColor={tint} />
+        <Text style={[type.meta, sans(600), { color: c.text, flex: 1 }]}>{mark(title)}</Text>
+        {event.prNumber ? <Text style={[type.caption, { color: c.muted }]}>#{event.prNumber}</Text> : null}
+      </View>
+      <Text style={[type.meta, { color: failed ? c.destructive : c.muted }]}>{mark(detail)}</Text>
+    </View>
+    {findings.length ? <Text style={[type.caption, { color: c.muted }]}>
+      {REVIEW_SEVERITIES.filter((severity) => counts[severity]).map((severity) => `${counts[severity]} ${CODE_REVIEW_SEVERITY_LABELS[severity]}`).join(' · ')}
+    </Text> : null}
+    {shown.map((finding) => <ReviewFinding key={finding.id} finding={finding} />)}
+    {hidden > 0 || (all && findings.length > REVIEW_FINDINGS_SHOWN) ? <Pressable accessibilityRole="button" onPress={() => setAll(!all)} hitSlop={6}>
+      <Text style={[type.meta, sans(600), { color: c.information }]}>{all ? 'Show fewer' : `Show ${hidden} more`}</Text>
+    </Pressable> : null}
+    {unlisted > 0 ? <Text style={[type.caption, { color: c.muted }]}>{unlisted} more in the findings list</Text> : null}
+    {event.action === 'finished' && event.findingCount > 0 ? <Link href={pullRequestRoute(event.pullRequestId, { tab: 'findings' })} asChild>
+      <Pressable accessibilityRole="link" accessibilityLabel="View findings" hitSlop={6}>
+        <Text style={[type.meta, sans(600), { color: c.information }]}>View findings</Text>
+      </Pressable>
+    </Link> : null}
+  </View>;
+}
+
 const PR_ICON: Symbol = { ios: 'arrow.triangle.pull', android: 'fork_right' };
 function SystemRow({ row, workbench }: { row: Extract<TranscriptRow, { kind: 'system' }>; workbench: Workbench }) {
   const url = row.url ? safeExternalUrl(row.url) ?? undefined : undefined;
@@ -144,6 +219,7 @@ function SystemRow({ row, workbench }: { row: Extract<TranscriptRow, { kind: 'sy
       label={`${verb}. Open pull request`} />;
   }
   if (row.subtype === 'talyn_pr') return <EventLine icon={PR_ICON} text={row.text} url={url} tone={row.isError ? 'destructive' : 'muted'} />;
+  if (row.subtype === 'talyn_code_review' && row.codeReview) return <CodeReviewCard event={row.codeReview} />;
   if (row.subtype === 'talyn_memory') return <EventLine icon={{ ios: 'brain', android: 'psychology' }} text={row.text} />;
   if (row.subtype === 'talyn_thread' && row.thread) {
     const failed = row.thread.action === 'session_finished' && row.thread.status === 'error';
@@ -324,6 +400,8 @@ const styles = StyleSheet.create({
   event: { alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 12, maxWidth: '100%' },
   eventInner: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   permission: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, padding: 10, gap: 6, marginVertical: 4 },
+  reviewCard: { gap: 8 },
+  reviewFinding: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8, gap: 2 },
   mono: { ...mono(400), fontSize: 12, lineHeight: 18 },
   plan: { borderWidth: 1, borderRadius: radius.lg, overflow: 'hidden', marginVertical: 6 },
   planHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth },

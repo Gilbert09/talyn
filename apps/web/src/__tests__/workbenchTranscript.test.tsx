@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { AgentEvent, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
+import { codeReviewTranscriptEvent, type AgentEvent, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
 import { WorkbenchTranscript, type OlderHistory } from '../components/workbench/WorkbenchTranscript';
 import type { WorkbenchOps } from '../lib/workbenchOps';
 import { toast } from '../stores/toast';
@@ -629,6 +629,77 @@ describe('message times', () => {
       <WorkbenchTranscript chat={chat} events={timed().map(({ createdAt: _at, ...e }) => e)} loading={false} error={null} ops={ops} />,
     );
     expect(container.querySelector('time')).toBeNull();
+  });
+});
+
+describe('code review events', () => {
+  const report = '[Talyn] The code review of #12 finished with 1 confirmed finding.';
+  const reviewEvents = (): WorkbenchEvent[] => [
+    userEvent(1, 1),
+    {
+      chatId: 'c1', seq: 2, turn: 1,
+      event: {
+        seq: 2,
+        ...codeReviewTranscriptEvent({
+          action: 'finished', reviewId: 'r1', pullRequestId: 'pr1', prNumber: 12, cycle: 1, headSha: null, findingCount: 1, sentToAgent: true,
+          findings: [{ id: 'f1', severity: 'blocker', title: 'Token leaks into logs', summary: 'The token is logged.', filePath: 'src/a.ts', lineStart: 3, lineEnd: null }],
+        }),
+      } as unknown as AgentEvent,
+    },
+    {
+      chatId: 'c1', seq: 3, turn: 2,
+      event: {
+        seq: 3,
+        type: 'user',
+        talyn: { origin: 'talyn', trigger: { kind: 'code_review', reviewId: 'r1', findingCount: 1 } },
+        message: { role: 'user', content: [{ type: 'text', text: report }] },
+      } as unknown as AgentEvent,
+    },
+    { chatId: 'c1', seq: 4, turn: 2, event: { seq: 4, type: 'assistant', message: { content: [{ type: 'text', text: 'Fixing it.' }] } } as AgentEvent },
+  ];
+
+  it('draws the review as a card and the report message as a row, not a bubble', () => {
+    renderEvents(reviewEvents());
+    expect(screen.getByTestId('code-review-card')).toHaveTextContent('Token leaks into logs');
+    expect(screen.getByText('Talyn sent 1 code review finding to the agent to check.')).toBeInTheDocument();
+    expect(screen.queryByText(report)).not.toBeInTheDocument();
+    expect(screen.getByText('message 1')).toBeInTheDocument();
+    expect(screen.getByText('Fixing it.')).toBeInTheDocument();
+  });
+
+  it('offers Revert to here on a turn that the report message started', async () => {
+    const restoreCheckpoint = vi.fn().mockResolvedValue(undefined);
+    const revertOps = { unavailable: null, restoreCheckpoint } as unknown as WorkbenchOps;
+    render(<WorkbenchTranscript chat={chat} events={reviewEvents()} loading={false} error={null} ops={revertOps} />);
+    const buttons = screen.getAllByRole('button', { name: /Revert to here/ });
+    // The person's message 1 and the report turn 2.
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(restoreCheckpoint).toHaveBeenCalledWith('c1', 2));
+  });
+
+  it('keeps the state of a triggered turn when older history loads above it', () => {
+    const revertOps = { unavailable: null, restoreCheckpoint: vi.fn() } as unknown as WorkbenchOps;
+    const recent = reviewEvents().slice(2);
+    const view = (events: WorkbenchEvent[]) => <WorkbenchTranscript chat={chat} events={events} loading={false} error={null} ops={revertOps} />;
+    const { rerender } = render(view(recent));
+    fireEvent.click(screen.getByRole('button', { name: /Revert to here/ }));
+    expect(screen.getByText(/Restore the files to before this message/)).toBeInTheDocument();
+    rerender(view(reviewEvents()));
+    expect(screen.getByText(/Restore the files to before this message/)).toBeInTheDocument();
+  });
+
+  it('offers no Revert to here on a triggered turn while the chat runs', () => {
+    render(<WorkbenchTranscript chat={{ ...chat, status: 'running' }} events={reviewEvents()} loading={false} error={null} ops={ops} />);
+    expect(screen.queryByRole('button', { name: /Revert to here/ })).toBeNull();
+  });
+
+  it('finds the card text with the find bar', () => {
+    render(<WorkbenchTranscript chat={chat} events={reviewEvents()} loading={false} error={null} ops={ops} older={older({ hasOlder: false })} />);
+    act(() => requestTranscriptFind('wb1'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Find in transcript' }), { target: { value: 'token leaks' } });
+    expect(screen.getByText('1 of 1')).toBeInTheDocument();
   });
 });
 

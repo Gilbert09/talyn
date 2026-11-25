@@ -1278,7 +1278,11 @@ async function requeueForReplacement(
   if (wb?.status !== 'provisioning' || wb.sandboxState !== 'lost') return null;
   events.add({ type: 'system', subtype: note.subtype, text: note.text });
   await events.flush();
-  const requeued = await requeueTurn(chat.id, message, { turn });
+  // A fresh marker, never an older wait: drop, clear and Stop end the turn
+  // through it (endCapacityWait), and the new box's wait starts from zero.
+  const now = new Date().toISOString();
+  const replacing: WorkbenchCapacityWait = { turn, startedAt: now, retryAt: now, attempts: 0, reason: 'replacing' };
+  const requeued = await requeueTurn(chat.id, { ...message, capacityWait: replacing }, { turn });
   if (!requeued) return null;
   noteTurn('turn_sandbox_lost_requeued', chat.id, turn, note.detail);
   emitWorkbenchChat(requeued.workspaceId, rowToChat(requeued));
@@ -1306,7 +1310,8 @@ async function capacityWaitOutcome(
 ): Promise<TurnOutcome> {
   const chatId = chat.id;
   const now = Date.now();
-  const prior = message.capacityWait?.turn === turn ? message.capacityWait : undefined;
+  // A wait for the replacement of a lost box is not a wait on this box.
+  const prior = message.capacityWait?.turn === turn && message.capacityWait.reason !== 'replacing' ? message.capacityWait : undefined;
   // A turn that already failed over keeps the bound of its first wait, and does not fail over again.
   const failedOver = message.hostFailover?.turn === turn ? message.hostFailover : undefined;
   const startedAt = prior ? Date.parse(prior.startedAt) : failedOver ? Date.parse(failedOver.waitStartedAt) : now;
@@ -1374,10 +1379,10 @@ async function failOverSilentHost(
       `the host of ${current.sandboxId} is silent, but no new box started (another chat runs, or a recent replacement); waiting`);
     return null;
   }
-  // Not a wait while the new box starts. The failover mark keeps the bound and stops a second failover.
-  const { capacityWait: _wait, ...plain } = message;
+  // requeueForReplacement replaces the old box's wait with a 'replacing' marker.
+  // The failover mark keeps the bound of the first wait and stops a second failover.
   const marked: WorkbenchQueuedMessage = {
-    ...plain,
+    ...message,
     hostFailover: { turn, at: new Date().toISOString(), waitStartedAt: new Date(waitStartedAt).toISOString() },
   };
   return requeueForReplacement(chat, marked, turn, events, {

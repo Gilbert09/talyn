@@ -51,8 +51,13 @@ function setSessions(list: Workbench[]) {
   useWorkbenchStore.getState().setWorkbenches('ws1', list);
 }
 
+function StoreList() {
+  const workbenches = useWorkbenchStore((s) => s.workbenches);
+  return <SidebarWorkbenchList workbenches={Object.values(workbenches)} />;
+}
+
 function renderList() {
-  return render(<SidebarWorkbenchList workbenches={Object.values(useWorkbenchStore.getState().workbenches)} />);
+  return render(<StoreList />);
 }
 
 const archiveAllButton = () => screen.getByRole('button', { name: 'Archive all sessions without an open pull request' });
@@ -120,6 +125,24 @@ describe('sidebar archive all', () => {
     await waitFor(() => expect(useWorkbenchStore.getState().selectedWorkbenchId).toBeNull());
   });
 
+  it('keeps a session the person opened while the archive ran', async () => {
+    let answer: (value: unknown) => void = () => {};
+    archiveMany.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+    useNavigationStore.getState().navigate({ view: 'workbench', id: 'lisbon' });
+    useWorkbenchStore.getState().selectWorkbench('lisbon');
+    renderList();
+    fireEvent.click(archiveAllButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive all' }));
+    await waitFor(() => expect(archiveMany).toHaveBeenCalledTimes(1));
+
+    useNavigationStore.getState().navigate({ view: 'workbench', id: 'oslo' });
+    useWorkbenchStore.getState().selectWorkbench('oslo');
+    answer({ archived: ['lisbon', 'porto'].map(archivedRow), failed: [] });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Archived 2 sessions'));
+    expect(useWorkbenchStore.getState().selectedWorkbenchId).toBe('oslo');
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'oslo' });
+  });
+
   it('counts only the sessions that archived when one fails', async () => {
     archiveMany.mockImplementation(async (ids: string[]) => ({
       archived: ids.filter((id) => id !== 'porto').map(archivedRow),
@@ -130,6 +153,61 @@ describe('sidebar archive all', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Archive all' }));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Archived 1 session'));
     expect(toast.error).toHaveBeenCalledWith('Could not archive 1 session', 'boom');
+  });
+
+  it('hides every session at once and closes the dialog before the server answers', async () => {
+    let answer: (value: unknown) => void = () => {};
+    archiveMany.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+    renderList();
+    expect(screen.getByText('lisbon')).toBeInTheDocument();
+    fireEvent.click(archiveAllButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive all' }));
+
+    await waitFor(() => expect(screen.queryByText('Archive 2 sessions?')).not.toBeInTheDocument());
+    expect(screen.queryByText('lisbon')).not.toBeInTheDocument();
+    expect(screen.queryByText('porto')).not.toBeInTheDocument();
+    expect(screen.getByText('oslo')).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalled();
+
+    answer({ archived: ['lisbon', 'porto'].map(archivedRow), failed: [] });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Archived 2 sessions'));
+  });
+
+  it('shows a session again when the server could not archive it', async () => {
+    archiveMany.mockImplementation(async () => ({
+      archived: [archivedRow('lisbon')],
+      failed: [{ id: 'porto', error: 'boom' }],
+    }));
+    renderList();
+    fireEvent.click(archiveAllButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive all' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not archive 1 session', 'boom'));
+    expect(useWorkbenchStore.getState().workbenches.porto).toEqual(porto);
+    expect(useWorkbenchStore.getState().workbenches.lisbon.status).toBe('archived');
+  });
+
+  it('shows every session again when the request fails', async () => {
+    archiveMany.mockRejectedValue(new Error('down'));
+    renderList();
+    fireEvent.click(archiveAllButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive all' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not archive the sessions', 'down'));
+    expect(useWorkbenchStore.getState().workbenches.lisbon).toEqual(lisbon);
+    expect(useWorkbenchStore.getState().workbenches.porto).toEqual(porto);
+  });
+
+  it('keeps a newer row from the server when the request fails', async () => {
+    const newer = { ...archivedRow('lisbon'), name: 'lisbon-from-server' } as Workbench;
+    archiveMany.mockImplementation(async () => {
+      useWorkbenchStore.getState().upsertWorkbench(newer);
+      throw new Error('timeout');
+    });
+    renderList();
+    fireEvent.click(archiveAllButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive all' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not archive the sessions', 'timeout'));
+    expect(useWorkbenchStore.getState().workbenches.lisbon).toBe(newer);
+    expect(useWorkbenchStore.getState().workbenches.porto).toEqual(porto);
   });
 
   it('shows one error and no success when the request fails', async () => {
