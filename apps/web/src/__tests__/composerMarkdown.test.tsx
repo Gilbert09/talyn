@@ -1,7 +1,7 @@
 import React from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { composerMarkdown, endQuotesAtPlainLines, type ComposerLine } from '@talyn/shared';
+import { closeFenceOnNewline, composerMarkdown, endQuotesAtPlainLines, type ComposerLine } from '@talyn/shared';
 import { MarkdownTextarea } from '../components/workbench/MarkdownTextarea';
 import { renderMarkdownish } from '../lib/markdown';
 
@@ -69,6 +69,46 @@ describe('composerMarkdown', () => {
   });
 });
 
+describe('closeFenceOnNewline', () => {
+  /** `|` marks the caret. */
+  function at(draft: string) {
+    const caret = draft.indexOf('|');
+    return closeFenceOnNewline(draft.replace('|', ''), caret, caret);
+  }
+
+  it.each([
+    ['a bare fence', '```|', { insert: '\n\n```', caret: 4 }],
+    ['a fence with a language', '```json|', { insert: '\n\n```', caret: 8 }],
+    ['a longer fence', '````|', { insert: '\n\n````', caret: 5 }],
+    ['a tilde fence', '~~~|', { insert: '\n\n~~~', caret: 4 }],
+    ['an indented fence', '  ```|', { insert: '\n\n  ```', caret: 6 }],
+    ['trailing spaces after the caret', '```|  ', { insert: '\n\n```', caret: 4 }],
+    ['after earlier text', 'see this:\n```|', { insert: '\n\n```', caret: 14 }],
+    ['after a closed block', '```\na\n```\n```|', { insert: '\n\n```', caret: 14 }],
+    ['before plain text below', '```|\nnext', { insert: '\n\n```', caret: 4 }],
+  ])('closes %s', (_name, draft, expected) => {
+    expect(at(draft)).toEqual(expected);
+  });
+
+  it.each([
+    ['plain text', 'hello|'],
+    ['inside the fence run', '``|`'],
+    ['before the language', '```|ts'],
+    ['a fence that is already closed', '```|\ncode\n```'],
+    ['a closing fence', '```\ncode\n```|'],
+    ['inside a code block', '```\ncode|'],
+    ['two backticks', '``|'],
+    ['a fence in a quote', '> ```|'],
+    ['inline code', '`a`|'],
+  ])('leaves %s alone', (_name, draft) => {
+    expect(at(draft)).toBeNull();
+  });
+
+  it('leaves a selection alone', () => {
+    expect(closeFenceOnNewline('```', 0, 3)).toBeNull();
+  });
+});
+
 describe('MarkdownTextarea', () => {
   afterEach(cleanup);
 
@@ -104,6 +144,72 @@ describe('MarkdownTextarea', () => {
     expect(copy.children).toHaveLength(3);
     expect(copy.children[1].textContent).toBe('​');
     expect(Array.from(copy.querySelectorAll('span')).map((s) => s.textContent)).toEqual(['**', 'b', '**']);
+  });
+
+  function fenceRuns(container: HTMLElement) {
+    return Array.from(container.querySelectorAll('[data-fence]')).map((line) => ({
+      side: line.getAttribute('data-fence'),
+      hidden: line.firstElementChild!.className.includes('text-transparent'),
+    }));
+  }
+
+  it('adds the closing fence on a new line after an opening one', () => {
+    render(<Harness initial="```json" />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.setSelectionRange(7, 7);
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true });
+    expect(textarea.value).toBe('```json\n\n```');
+    expect(textarea.selectionStart).toBe(8);
+    expect(textarea.selectionEnd).toBe(8);
+  });
+
+  it('leaves a new line alone once the fence is closed', () => {
+    render(<Harness initial={'```\ncode\n```'} />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.setSelectionRange(3, 3);
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true });
+    expect(textarea.value).toBe('```\ncode\n```');
+  });
+
+  it('does not add a fence when the parent handles Enter', () => {
+    const send = vi.fn((e: React.KeyboardEvent) => e.preventDefault());
+    render(<MarkdownTextarea aria-label="Message" value="```" onChange={() => undefined} onKeyDown={send} textClassName="" />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.setSelectionRange(3, 3);
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(textarea.value).toBe('```');
+  });
+
+  it('hides the fence backticks unless the caret is on their line', () => {
+    const { container } = render(<Harness initial={'```json\nx\n```\nafter'} />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    expect(fenceRuns(container)).toEqual([
+      { side: 'open', hidden: true },
+      { side: 'close', hidden: true },
+    ]);
+    // The language stays as a label.
+    expect(container.querySelector('[data-fence="open"]')!.textContent).toBe('```json');
+    expect(container.querySelector('[data-fence="open"]')!.lastElementChild!.className).not.toContain('text-transparent');
+
+    textarea.focus();
+    textarea.setSelectionRange(2, 2);
+    fireEvent.select(textarea);
+    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([false, true]);
+
+    textarea.setSelectionRange(9, 9);
+    fireEvent.select(textarea);
+    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([true, true]);
+
+    // A selection over the whole block shows both fences.
+    textarea.setSelectionRange(0, 14);
+    fireEvent.select(textarea);
+    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([false, false]);
+
+    fireEvent.blur(textarea);
+    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([true, true]);
   });
 
   it('passes the ref through to the textarea', () => {

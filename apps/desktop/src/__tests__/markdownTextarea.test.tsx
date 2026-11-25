@@ -40,6 +40,72 @@ describe('MarkdownTextarea', () => {
     expect(Array.from(copy.querySelectorAll('span')).map((s) => s.textContent)).toEqual(['**', 'b', '**']);
   });
 
+  function fenceRuns(container: HTMLElement) {
+    return Array.from(container.querySelectorAll('[data-fence]')).map((line) => ({
+      side: line.getAttribute('data-fence'),
+      hidden: line.firstElementChild!.className.includes('text-transparent'),
+    }));
+  }
+
+  it('adds the closing fence on a new line after an opening one', () => {
+    render(<Harness initial="```json" />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.setSelectionRange(7, 7);
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true });
+    expect(textarea.value).toBe('```json\n\n```');
+    expect(textarea.selectionStart).toBe(8);
+    expect(textarea.selectionEnd).toBe(8);
+  });
+
+  it('leaves a new line alone once the fence is closed', () => {
+    render(<Harness initial={'```\ncode\n```'} />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.setSelectionRange(3, 3);
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true });
+    expect(textarea.value).toBe('```\ncode\n```');
+  });
+
+  it('does not add a fence when the parent handles Enter', () => {
+    const send = jest.fn((e: React.KeyboardEvent) => e.preventDefault());
+    render(<MarkdownTextarea aria-label="Message" value="```" onChange={() => undefined} onKeyDown={send} textClassName="" />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.setSelectionRange(3, 3);
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(textarea.value).toBe('```');
+  });
+
+  it('hides the fence backticks unless the caret is on their line', () => {
+    const { container } = render(<Harness initial={'```json\nx\n```\nafter'} />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    expect(fenceRuns(container)).toEqual([
+      { side: 'open', hidden: true },
+      { side: 'close', hidden: true },
+    ]);
+    // The language stays as a label.
+    expect(container.querySelector('[data-fence="open"]')!.textContent).toBe('```json');
+    expect(container.querySelector('[data-fence="open"]')!.lastElementChild!.className).not.toContain('text-transparent');
+
+    textarea.focus();
+    textarea.setSelectionRange(2, 2);
+    fireEvent.select(textarea);
+    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([false, true]);
+
+    textarea.setSelectionRange(9, 9);
+    fireEvent.select(textarea);
+    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([true, true]);
+
+    // A selection over the whole block shows both fences.
+    textarea.setSelectionRange(0, 14);
+    fireEvent.select(textarea);
+    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([false, false]);
+
+    fireEvent.blur(textarea);
+    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([true, true]);
+  });
+
   it('passes the ref through to the textarea', () => {
     const ref = React.createRef<HTMLTextAreaElement>();
     render(<MarkdownTextarea ref={ref} value="x" onChange={() => undefined} textClassName="" />);

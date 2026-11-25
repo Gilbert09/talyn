@@ -1,5 +1,5 @@
-import React, { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
-import { composerMarkdown, type ComposerLine, type ComposerMark } from '@talyn/shared';
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { closeFenceOnNewline, composerMarkdown, type ComposerLine, type ComposerMark } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 
 /**
@@ -10,6 +10,9 @@ import { cn } from '../../lib/utils';
  * behind it. The copy must wrap exactly like the textarea, so the styles only
  * change colour, background and decoration, never the width of a glyph (bold
  * is a text stroke, not a heavier font).
+ *
+ * A code fence's backticks only show while the caret is on their line, and a
+ * new line after an opening fence adds the closing one.
  */
 export function MarkdownTextarea({
   value,
@@ -17,6 +20,9 @@ export function MarkdownTextarea({
   className,
   ref,
   onScroll,
+  onKeyDown,
+  onSelect,
+  onBlur,
   disabled,
   ...props
 }: Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'value'> & {
@@ -28,6 +34,8 @@ export function MarkdownTextarea({
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const copyRef = useRef<HTMLDivElement>(null);
   const lines = useMemo(() => composerMarkdown(value), [value]);
+  // The lines the caret or selection is on, while the textarea has focus.
+  const [caretLines, setCaretLines] = useState<[number, number] | null>(null);
 
   const setRef = useCallback(
     (el: HTMLTextAreaElement | null) => {
@@ -46,6 +54,34 @@ export function MarkdownTextarea({
     copy.style.right = `${Math.max(0, el.offsetWidth - el.clientWidth)}px`;
     copy.scrollTop = el.scrollTop;
   }, []);
+
+  const trackCaret = useCallback(() => {
+    const el = inputRef.current;
+    if (!el || document.activeElement !== el) {
+      setCaretLines(null);
+      return;
+    }
+    const lineOf = (at: number) => el.value.slice(0, at).split('\n').length - 1;
+    const from = lineOf(el.selectionStart);
+    const to = lineOf(el.selectionEnd);
+    setCaretLines((old) => (old && old[0] === from && old[1] === to ? old : [from, to]));
+  }, []);
+
+  const keyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    onKeyDown?.(e);
+    if (e.defaultPrevented || e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+    const el = e.currentTarget;
+    const close = closeFenceOnNewline(el.value, el.selectionStart, el.selectionEnd);
+    if (!close) return;
+    e.preventDefault();
+    insertText(el, close.insert);
+    el.setSelectionRange(close.caret, close.caret);
+    trackCaret();
+  };
+
+  useLayoutEffect(() => {
+    trackCaret();
+  }, [value, trackCaret]);
 
   useLayoutEffect(() => {
     sync();
@@ -74,8 +110,13 @@ export function MarkdownTextarea({
           disabled && 'opacity-50',
         )}
       >
-        {lines.map((line, index) => (
-          <ComposerLineView key={index} line={line} />
+        {fenceSides(lines).map((side, index) => (
+          <ComposerLineView
+            key={index}
+            line={lines[index]}
+            side={side}
+            showMarkers={caretLines !== null && index >= caretLines[0] && index <= caretLines[1]}
+          />
         ))}
       </div>
       <textarea
@@ -83,6 +124,15 @@ export function MarkdownTextarea({
         ref={setRef}
         value={value}
         disabled={disabled}
+        onKeyDown={keyDown}
+        onSelect={(e) => {
+          trackCaret();
+          onSelect?.(e);
+        }}
+        onBlur={(e) => {
+          setCaretLines(null);
+          onBlur?.(e);
+        }}
         onScroll={(e) => {
           sync();
           onScroll?.(e);
@@ -119,7 +169,42 @@ const MARK_CLASS: Record<ComposerMark, string> = {
   command: 'rounded-[3px] bg-primary/10 text-primary',
 };
 
-function ComposerLineView({ line }: { line: ComposerLine }) {
+/**
+ * Inserts text at the selection as if typed, so undo still works. The
+ * fallback (no execCommand, as in tests) fires the input event React reads.
+ */
+function insertText(el: HTMLTextAreaElement, text: string) {
+  if (typeof document.execCommand === 'function' && document.execCommand('insertText', false, text)) return;
+  el.setRangeText(text, el.selectionStart, el.selectionEnd, 'end');
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+type FenceSide = 'open' | 'close' | undefined;
+
+/** Which fence lines open a code block and which close one: they alternate. */
+function fenceSides(lines: ComposerLine[]): FenceSide[] {
+  let open = false;
+  return lines.map((line) => {
+    if (line.kind !== 'fence') return undefined;
+    open = !open;
+    return open ? 'open' : 'close';
+  });
+}
+
+const FENCE_RUN = /^\s*(`+|~+)/;
+
+function ComposerLineView({ line, side, showMarkers }: { line: ComposerLine; side: FenceSide; showMarkers: boolean }) {
+  if (line.kind === 'fence') {
+    // The backticks hide away from the caret; a language name stays as a label.
+    const text = line.spans.map((span) => span.text).join('');
+    const run = FENCE_RUN.exec(text)?.[0] ?? '';
+    return (
+      <div className={cn(LINE_CLASS.fence, side === 'open' ? 'rounded-t-md' : 'rounded-b-md')} data-fence={side}>
+        <span className={showMarkers ? MARK_CLASS.marker : 'text-transparent'}>{run}</span>
+        {text.length > run.length ? <span className={MARK_CLASS.marker}>{text.slice(run.length)}</span> : null}
+      </div>
+    );
+  }
   return (
     <div className={LINE_CLASS[line.kind]}>
       {line.spans.length === 0
