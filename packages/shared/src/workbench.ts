@@ -523,9 +523,11 @@ export interface WorkbenchCapacityWait {
    * What the last refusal said. `capacity`: the fleet has no room, or it
    * throttles the workspace ("Waiting for a free sandbox"). `waking`: the
    * fleet is restoring the box, or could not fetch its hibernated copy yet
-   * ("Waking the sandbox").
+   * ("Waking the sandbox"). `replacing`: the box was lost before the agent
+   * started, and Talyn is starting a new one that runs the message when it is
+   * ready ("Starting a new sandbox").
    */
-  reason: 'capacity' | 'waking';
+  reason: 'capacity' | 'waking' | 'replacing';
 }
 
 export interface WorkbenchChat {

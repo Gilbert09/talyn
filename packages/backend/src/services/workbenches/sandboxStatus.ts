@@ -277,11 +277,12 @@ function activityOf(input: SandboxStatusInput): SandboxActivity[] {
     }
     const wait = chat.headWait;
     if (wait && typeof wait === 'object' && wait.startedAt) {
-      const waking = wait.reason === 'waking';
+      const waking = wait.reason === 'waking' || wait.reason === 'replacing';
+      const what = wait.reason === 'replacing' ? 'Starting a new sandbox' : waking ? 'Waking the sandbox' : 'Waiting for a free sandbox';
       const tries = wait.attempts > 0 ? ` Try ${wait.attempts + 1}${wait.retryAt ? ` at ${checkpointTime(new Date(wait.retryAt))}` : ''}.` : '';
       out.push({
         kind: waking ? 'waking' : 'capacity_wait',
-        text: `${waking ? 'Waking the sandbox' : 'Waiting for a free sandbox'} for a message${where}.${tries}`,
+        text: `${what} for a message${where}.${tries}`,
         since: wait.startedAt,
         chatId: chat.id,
       });

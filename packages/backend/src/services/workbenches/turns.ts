@@ -1262,7 +1262,11 @@ async function requeueForReplacement(
   if (wb?.status !== 'provisioning' || wb.sandboxState !== 'lost') return null;
   events.add({ type: 'system', subtype: 'sandbox_lost_requeued', text: SANDBOX_LOST_REQUEUED_NOTE });
   await events.flush();
-  const requeued = await requeueTurn(chat.id, message, { turn });
+  // A fresh marker, never an older wait: drop, clear and Stop end the turn
+  // through it (endCapacityWait), and the new box's wait starts from zero.
+  const now = new Date().toISOString();
+  const replacing: WorkbenchCapacityWait = { turn, startedAt: now, retryAt: now, attempts: 0, reason: 'replacing' };
+  const requeued = await requeueTurn(chat.id, { ...message, capacityWait: replacing }, { turn });
   if (!requeued) return null;
   noteTurn('turn_sandbox_lost_requeued', chat.id, turn, 'the box was lost before the agent started; the message waits for the replacement');
   emitWorkbenchChat(requeued.workspaceId, rowToChat(requeued));
@@ -1285,7 +1289,8 @@ async function capacityWaitOutcome(
   events: EventBatcher,
 ): Promise<TurnOutcome> {
   const now = Date.now();
-  const prior = message.capacityWait?.turn === turn ? message.capacityWait : undefined;
+  // A wait for the replacement of a lost box is not a wait on this box.
+  const prior = message.capacityWait?.turn === turn && message.capacityWait.reason !== 'replacing' ? message.capacityWait : undefined;
   const startedAt = prior ? Date.parse(prior.startedAt) : now;
   const left = PROVISION_CAPACITY_WAIT.maxMs - (now - startedAt);
   const reason = await wakeRefusalReason(wb, err);
