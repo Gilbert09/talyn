@@ -174,6 +174,7 @@ export * from './workbenchInstructions.js';
 export * from './workbenchMemory.js';
 export * from './memoryReview.js';
 export * from './workbenchThread.js';
+export * from './codeReviewTranscript.js';
 export * from './workbenchQuestion.js';
 export * from './claudeSessionImport.js';
 export * from './sessionLinks.js';

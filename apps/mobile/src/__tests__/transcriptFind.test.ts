@@ -71,6 +71,8 @@ describe('rowSearchText gives the text a row shows before it opens', () => {
     ['system line', { ...base, kind: 'system', text: 'Opened pull request #4', isError: false }, ['Opened pull request #4'], []],
     ['interruption', { ...base, kind: 'system', text: 'raw', subtype: 'talyn_interruption', isError: false }, ['Interrupted'], ['raw']],
     ['box refusal', { ...base, kind: 'system', text: 'Add hours.', subtype: 'usage_exhausted', isError: false }, ['Out of hours. Add hours.'], []],
+    ['code review card', { ...base, kind: 'system', text: 'Code review failed. Runner crashed', subtype: 'talyn_code_review', isError: true },
+      ['Code review failed. Runner crashed'], []],
     ['long Talyn message is cut', { ...base, kind: 'system', text: `${'x'.repeat(280)}TAIL`, subtype: 'talyn_message', isError: false }, ['x…'], ['TAIL']],
     ['failed turn', { ...base, kind: 'failed', text: 'Out of memory' }, ['Turn failed. Out of memory'], []],
     ['stopped', { ...base, kind: 'stopped' }, ['Stopped'], []],

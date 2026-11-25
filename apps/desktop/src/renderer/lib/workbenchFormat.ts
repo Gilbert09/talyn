@@ -2,6 +2,7 @@ import {
   createClaudeStreamParser,
   isSubagentEvent,
   messageSender,
+  messageTrigger,
   nextWorkbenchAction,
   prSummaryToNextActionPr,
   TALYN_SKILL_SUMMARIES,
@@ -104,7 +105,7 @@ export interface TranscriptTurn {
   lastAt: string | null;
 }
 
-/** Split a chat's events into turns, each led by the user's message. */
+/** Split a chat's events into turns, each led by the user's message. A triggered message stays in the turn's events. */
 export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
   const turns: TranscriptTurn[] = [];
   let current: TranscriptTurn | null = null;
@@ -113,7 +114,8 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
       if (current) (current.subagentEvents ??= []).push({ ...e.event, timestamp: e.event.timestamp ?? e.createdAt });
       continue;
     }
-    const text = userMessageText(e.event);
+    // Talyn wrote a triggered message (a wake-up, a job exit, a code review report): AgentBlocks draws it as a row.
+    const text = messageTrigger(e.event.talyn) ? null : userMessageText(e.event);
     if (!current || current.turn !== e.turn || (text !== null && current.userText !== null)) {
       current = { turn: e.turn, userText: null, userSeq: null, attachments: [], sender: null, events: [], userAt: null, lastAt: null };
       turns.push(current);

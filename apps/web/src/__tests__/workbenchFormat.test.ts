@@ -172,6 +172,49 @@ describe('transcript turns', () => {
     expect(turn.sender).toEqual(expected);
   });
 
+  const talynMessage = (seq: number, turn: number, text: string, talyn: Record<string, unknown>) => {
+    const message = user(seq, turn, text);
+    return { ...message, event: { ...message.event, talyn: { origin: 'talyn', ...talyn } } as AgentEvent };
+  };
+
+  it.each([
+    ['a code review report', { kind: 'code_review', reviewId: 'r1', findingCount: 2 }],
+    ['a wake-up', { kind: 'wakeup', wakeupId: 'w1', reason: 'Check CI', createdBy: 'agent' }],
+    ['a job exit', { kind: 'job_exit', wakeupId: 'w2', reason: 'Done', jobId: 'j1', jobName: 'build', exitCode: 0 }],
+    ['a pull request retry', { kind: 'pr_retry', attempt: 1, error: 'push refused' }],
+  ])('keeps a triggered message in the turn events, not as the user text: %s', (_n, trigger) => {
+    const turns = splitTurns([
+      user(1, 1, 'first'),
+      we(2, 1, {}),
+      talynMessage(3, 2, 'The code review finished.', { trigger }),
+      we(4, 2, {}),
+    ]);
+    expect(turns.map((t) => [t.turn, t.userText, t.userSeq, t.events.map((e) => e.seq)])).toEqual([
+      [1, 'first', 1, [2]],
+      [2, null, null, [3, 4]],
+    ]);
+  });
+
+  it.each([
+    ['a Talyn message with no trigger', { origin: 'talyn' }],
+    ['a Talyn message with an unknown trigger', { origin: 'talyn', trigger: { kind: 'other' } }],
+    ['a thread message', { sender: { kind: 'thread', threadId: 't1', name: 'Plan' } }],
+  ])('keeps %s as the user text', (_n, talyn) => {
+    const message = user(1, 1, 'hello');
+    const [turn] = splitTurns([{ ...message, event: { ...message.event, talyn } as AgentEvent }, we(2, 1, {})]);
+    expect([turn.userText, turn.userSeq, turn.events.map((e) => e.seq)]).toEqual(['hello', 1, [2]]);
+  });
+
+  it('keeps a triggered message after the user text in the same turn', () => {
+    const turns = splitTurns([
+      user(1, 1, 'first'),
+      we(2, 1, {}),
+      talynMessage(3, 1, 'Report', { trigger: { kind: 'code_review', reviewId: 'r1', findingCount: 1 } }),
+      we(4, 1, {}),
+    ]);
+    expect(turns.map((t) => [t.userText, t.events.map((e) => e.seq)])).toEqual([['first', [2, 3, 4]]]);
+  });
+
   it('keeps a turn whose user message was never recorded', () => {
     const turns = splitTurns([we(1, 1, {}), we(2, 1, {})]);
     expect(turns).toHaveLength(1);

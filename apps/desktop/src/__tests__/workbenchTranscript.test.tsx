@@ -3,7 +3,7 @@ import { useWorkspaceStore } from '../renderer/stores/workspace';
 import '@testing-library/jest-dom';
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { AgentEvent, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
+import { codeReviewTranscriptEvent, type AgentEvent, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
 import { WorkbenchTranscript, type OlderHistory } from '../renderer/components/workbench/WorkbenchTranscript';
 import { PENDING_MESSAGE_GRACE_MS } from '../renderer/lib/workbenchFormat';
 import { requestTranscriptFind } from '../renderer/lib/transcriptFind';
@@ -628,6 +628,49 @@ describe('message times', () => {
       <WorkbenchTranscript chat={chat} events={timed().map(({ createdAt: _at, ...e }) => e)} loading={false} error={null} ops={ops} />,
     );
     expect(container.querySelector('time')).toBeNull();
+  });
+});
+
+describe('code review events', () => {
+  const report = '[Talyn] The code review of #12 finished with 1 confirmed finding.';
+  const reviewEvents = (): WorkbenchEvent[] => [
+    userEvent(1, 1),
+    {
+      chatId: 'c1', seq: 2, turn: 1,
+      event: {
+        seq: 2,
+        ...codeReviewTranscriptEvent({
+          action: 'finished', reviewId: 'r1', pullRequestId: 'pr1', prNumber: 12, cycle: 1, headSha: null, findingCount: 1, sentToAgent: true,
+          findings: [{ id: 'f1', severity: 'blocker', title: 'Token leaks into logs', summary: 'The token is logged.', filePath: 'src/a.ts', lineStart: 3, lineEnd: null }],
+        }),
+      } as unknown as AgentEvent,
+    },
+    {
+      chatId: 'c1', seq: 3, turn: 2,
+      event: {
+        seq: 3,
+        type: 'user',
+        talyn: { origin: 'talyn', trigger: { kind: 'code_review', reviewId: 'r1', findingCount: 1 } },
+        message: { role: 'user', content: [{ type: 'text', text: report }] },
+      } as unknown as AgentEvent,
+    },
+    { chatId: 'c1', seq: 4, turn: 2, event: { seq: 4, type: 'assistant', message: { content: [{ type: 'text', text: 'Fixing it.' }] } } as AgentEvent },
+  ];
+
+  it('draws the review as a card and the report message as a row, not a bubble', () => {
+    renderEvents(reviewEvents());
+    expect(screen.getByTestId('code-review-card')).toHaveTextContent('Token leaks into logs');
+    expect(screen.getByText('Talyn sent 1 code review finding to the agent to check.')).toBeInTheDocument();
+    expect(screen.queryByText(report)).not.toBeInTheDocument();
+    expect(screen.getByText('message 1')).toBeInTheDocument();
+    expect(screen.getByText('Fixing it.')).toBeInTheDocument();
+  });
+
+  it('finds the card text with the find bar', () => {
+    render(<WorkbenchTranscript chat={chat} events={reviewEvents()} loading={false} error={null} ops={ops} older={older({ hasOlder: false })} />);
+    act(() => requestTranscriptFind('wb1'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Find in transcript' }), { target: { value: 'token leaks' } });
+    expect(screen.getByText('1 of 1')).toBeInTheDocument();
   });
 });
 

@@ -14,6 +14,7 @@ import { MemoryChangeCard } from '../memory/MemoryChangeCard';
 import { Button } from '../ui/button';
 import { TalynMessageCard, ThreadSessionCard } from '../threads/ThreadSessionCard';
 import { TriggerRow } from './TriggerRow';
+import { CodeReviewTranscriptCard } from './CodeReviewTranscriptCard';
 import type { AgentEvent, EditDiff, GroupedBlock, ToolGroupChild } from '@talyn/shared';
 import {
   buildBlocks,
@@ -146,6 +147,7 @@ function BlockViewImpl({
         return <PullRequestCard text={block.text} url={block.url} pullRequest={block.pullRequest} />;
       if (block.subtype === 'talyn_pr')
         return <PullRequestLine text={block.text} url={block.url} isError={block.isError} />;
+      if (block.subtype === 'talyn_code_review' && block.codeReview) return <CodeReviewTranscriptCard event={block.codeReview} />;
       if (block.subtype === 'talyn_memory' && block.memory) return <MemoryChangeCard change={block.memory} />;
       if (block.subtype === 'talyn_thread' && block.thread) return <ThreadSessionCard event={block.thread} />;
       if (block.subtype === 'talyn_message' && block.trigger) return <TriggerRow trigger={block.trigger} text={block.text} />;

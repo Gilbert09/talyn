@@ -508,6 +508,26 @@ export const FEATURE_FLAGS = {
   },
 
   /**
+   * Code review cards in the session transcript: when a review of the pull
+   * request that a live cloud session owns starts, finishes or fails, Talyn
+   * appends a card to that session's chat. The finished card lists the
+   * confirmed findings.
+   *
+   * Server-only, asked for the workspace OWNER when the cycle moves. Fallback
+   * OFF and gated while it is new. With it off, no card is written; the
+   * report-back message (its own flag) is not changed. No release scope:
+   * `code-review` would withhold every code review highlight.
+   */
+  codeReviewTranscriptCards: {
+    posthogKey: 'code-review-transcript-cards',
+    envOverride: 'CODE_REVIEW_TRANSCRIPT_CARDS_ENABLED',
+    fallback: false,
+    description: 'Code review transcript cards — show review start, finish and findings in the session chat',
+    availability: 'gated',
+    releaseScopes: [],
+  },
+
+  /**
    * Code review auto-start: when a session becomes code complete (its turn
    * ended, its pull request is open, nothing runs and everything is pushed),
    * Talyn starts a code review of the pull request's head, once per head.
