@@ -3,6 +3,7 @@ import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { githubService } from './github.js';
 import { QUEUE_RESET_COLUMNS } from './mergeQueueBroadcast.js';
+import type { PRSummary } from './githubGraphql.js';
 import { forceFetchAndUpsert } from './prCache.js';
 import { markRefreshed } from './prFocus.js';
 import { emitPullRequestUpdated } from './websocket.js';
@@ -106,8 +107,12 @@ export type RefreshOutcome =
  * short cooldown so a racing poll does not overwrite it. A PR the GraphQL fetch
  * does not return is not open any more, so its terminal state is read from REST.
  */
-export async function refreshPullRequest(row: RefreshRow): Promise<RefreshOutcome> {
+export async function refreshPullRequest(
+  row: RefreshRow,
+  opts: { adjust?: (summary: PRSummary) => PRSummary } = {}
+): Promise<RefreshOutcome> {
   const result = await forceFetchAndUpsert({
+    adjust: opts.adjust,
     workspaceId: row.workspaceId,
     repositoryId: row.repositoryId,
     taskId: row.taskId,

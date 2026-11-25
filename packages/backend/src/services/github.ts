@@ -2980,6 +2980,22 @@ class GitHubService extends EventEmitter {
     repo: string,
     number: number
   ): Promise<'ok' | 'conflict' | 'error'> {
+    const outcome = await this.updatePullRequestBranchOutcome(workspaceId, owner, repo, number);
+    // The merge queue reads every 422 as a conflict, an up-to-date head included.
+    return outcome === 'up_to_date' ? 'conflict' : outcome;
+  }
+
+  /**
+   * {@link updatePullRequestBranch}, with GitHub's "There are no new commits on
+   * the base branch" kept apart from a conflict. A person's "Update branch"
+   * click needs that difference; the merge queue does not.
+   */
+  async updatePullRequestBranchOutcome(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    number: number
+  ): Promise<'ok' | 'conflict' | 'up_to_date' | 'error'> {
     try {
       await this.apiRequest(
         workspaceId,
@@ -2990,6 +3006,7 @@ class GitHubService extends EventEmitter {
       return 'ok';
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (/no new commits/i.test(msg)) return 'up_to_date';
       if (/422/.test(msg) || /merge conflict/i.test(msg)) return 'conflict';
       console.warn(`[github] update-branch ${owner}/${repo}#${number} failed:`, msg);
       return 'error';

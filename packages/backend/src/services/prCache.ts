@@ -317,6 +317,8 @@ export async function forceFetchAndUpsert(opts: {
   owner: string;
   repo: string;
   number: number;
+  /** Correct the fetched summary before it is stored, with a fact GitHub's fetch can lag. */
+  adjust?: (summary: PRSummary) => PRSummary;
 }): Promise<UpsertResult | null> {
   const db = getDbClient();
   const existing = await readRow(db, opts.workspaceId, opts.repositoryId, opts.number);
@@ -343,8 +345,9 @@ export async function forceFetchAndUpsert(opts: {
     // required from non-required failing checks.
     numbers: [opts.number],
   });
-  const summary = results[0]?.pr ?? null;
-  if (!summary) return null;
+  const fetched = results[0]?.pr ?? null;
+  if (!fetched) return null;
+  const summary = opts.adjust ? opts.adjust(fetched) : fetched;
   const previous: CursorState | null = existing
     ? {
         lastReviewId: existing.lastReviewId,
