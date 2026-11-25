@@ -6,6 +6,9 @@ import { settleFixRun } from './fix.js';
 import { scheduleReviewEvaluation } from './evaluator.js';
 import { startReviewCycle, workspaceOwner, workspaceReviewSettings } from './cycle.js';
 import { getPrForReview, getReviewForPr, reviewsByFixTask } from './store.js';
+import { startReviewIfCodeComplete } from './sessionAutoStart.js';
+import { liveWorkbenchForPr } from '../workbenches/prSessions.js';
+import { getWorkbench } from '../workbenches/store.js';
 import { CODE_REVIEW_PHASE_AT_REST, type CodeReviewPhase } from '@talyn/shared';
 
 /**
@@ -61,7 +64,7 @@ export function initCodeReviewTriggers(): void {
   });
 }
 
-async function onSnapshot(
+export async function onSnapshot(
   prId: string,
   workspaceId: string,
   state: 'open' | 'closed' | 'merged'
@@ -77,14 +80,20 @@ async function onSnapshot(
   if (state !== 'open') return;
 
   const settings = await workspaceReviewSettings(workspaceId);
-  if (!settings.autoReview) return;
-
-  // Re-checked at FIRE time, not just at the settings toggle. The toggle asserts
-  // the plan on its OFF->ON transition, which is right for grandfathering — but an
-  // account that later downgrades would otherwise keep reviewing every pull request
-  // for ever on a plan that does not include it.
-  const ownerId = await workspaceOwner(workspaceId);
-  if (!(await ownerHasAutoFeatures(ownerId))) return;
+  // The plan is re-checked at FIRE time, not just at the settings toggle. The
+  // toggle asserts the plan on its OFF->ON transition, which is right for
+  // grandfathering — but an account that later downgrades would otherwise keep
+  // reviewing every pull request for ever on a plan that does not include it.
+  const autoReviewRuns =
+    settings.autoReview && (await ownerHasAutoFeatures(await workspaceOwner(workspaceId)));
+  if (!autoReviewRuns) {
+    // With auto review running, the start below runs on every snapshot and is its
+    // own retry. Without it, a session-complete start the box gate deferred (it
+    // records `lastError`) has no turn end to try it again, so the poll does.
+    // The start is once per head and bounded, so a repeat call does nothing.
+    if (review?.lastError && settings.reviewOnSessionComplete) await retrySessionCompleteStart(workspaceId, prId);
+    return;
+  }
 
   // Only when the head has actually moved past what the findings describe, which
   // is what makes this idempotent against an event that fires on every poll: a
@@ -121,4 +130,13 @@ async function onSnapshot(
       console.log(`[code-review] auto review for ${prId} declined: ${outcome.code}`);
     }
   }
+}
+
+async function retrySessionCompleteStart(workspaceId: string, prId: string): Promise<void> {
+  const live = await liveWorkbenchForPr(workspaceId, prId);
+  if (!live) return;
+  const wb = await getWorkbench(live.id);
+  if (!wb) return;
+  // No box HEAD here: the stored unpushed count stands in, as at turn end.
+  await startReviewIfCodeComplete(wb, null);
 }
