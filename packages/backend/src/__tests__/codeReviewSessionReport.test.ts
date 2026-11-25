@@ -20,6 +20,9 @@ const m = vi.hoisted(() => ({
   liveWorkbenchForPr: vi.fn(),
   liveSessionActivityForPr: vi.fn(),
   deliverToSession: vi.fn(),
+  cas: vi.fn(),
+  appendCard: vi.fn(),
+  appendFinishedCard: vi.fn(),
 }));
 
 vi.mock('../services/featureFlags.js', async (orig) => ({
@@ -34,7 +37,7 @@ vi.mock('../services/codeReview/findings.js', async (orig) => ({
 }));
 vi.mock('../services/codeReview/store.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/store.js')>()),
-  casTransition: vi.fn().mockResolvedValue(true),
+  casTransition: m.cas,
   getReview: m.getReview,
   getPrForReview: m.getPrForReview,
   appendReviewEvent: m.appendReviewEvent,
@@ -43,6 +46,7 @@ vi.mock('../services/codeReview/store.js', async (orig) => ({
 vi.mock('../services/codeReview/analytics.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/analytics.js')>()),
   captureCycleFinished: vi.fn(),
+  captureCycleFailed: vi.fn(),
 }));
 vi.mock('../services/codeReview/cycle.js', async (orig) => ({
   ...(await orig<typeof import('../services/codeReview/cycle.js')>()),
@@ -61,8 +65,13 @@ vi.mock('../services/mergeQueue/sessionFix.js', async (orig) => ({
   ...(await orig<typeof import('../services/mergeQueue/sessionFix.js')>()),
   deliverToSession: m.deliverToSession,
 }));
+vi.mock('../services/codeReview/transcriptCards.js', async (orig) => ({
+  ...(await orig<typeof import('../services/codeReview/transcriptCards.js')>()),
+  appendCodeReviewCard: m.appendCard,
+  appendFinishedCodeReviewCard: m.appendFinishedCard,
+}));
 
-const { finishCycle } = await import('../services/codeReview/executor.js');
+const { failCycle, finishCycle } = await import('../services/codeReview/executor.js');
 const {
   findingSummary,
   reportFindingsToSession,
@@ -104,6 +113,11 @@ const minor = {
 };
 
 const SESSION = { id: 'wb-1', name: 'paris', status: 'ready' };
+const CHAT = { id: 'chat-1', turnCount: 4, closedAt: null };
+type DeliverOpts = { trigger?: unknown; beforeSend?: (chat: typeof CHAT) => Promise<unknown> };
+
+/** The order in which the card and the report message happen. */
+let calls: string[] = [];
 
 function eventCodes(): string[] {
   return m.appendReviewEvent.mock.calls.map((c) => (c[1] as { code: string }).code);
@@ -120,7 +134,22 @@ beforeEach(() => {
   m.confirmedOpenFindings.mockResolvedValue([blocker, minor]);
   m.appendReviewEventOnce.mockResolvedValue(true);
   m.liveWorkbenchForPr.mockResolvedValue(SESSION);
-  m.deliverToSession.mockResolvedValue('chat-1');
+  m.cas.mockResolvedValue(true);
+  calls = [];
+  // As the real one: the hook runs with the chosen chat, then the message goes.
+  m.deliverToSession.mockImplementation(async (_id: string, _text: string, opts: DeliverOpts = {}) => {
+    await opts.beforeSend?.(CHAT);
+    calls.push('message');
+    return 'chat-1';
+  });
+  m.appendCard.mockImplementation(async (_review: unknown, card: { action: string }) => {
+    calls.push(`card:${card.action}`);
+    return true;
+  });
+  m.appendFinishedCard.mockImplementation(async () => {
+    calls.push('card:finished');
+    return true;
+  });
   m.startFixRun.mockResolvedValue({ ok: true, taskId: 't1' });
 });
 
@@ -164,7 +193,11 @@ describe('finishCycle with a live session on the pull request', () => {
         detail: { workbenchId: 'wb-1', activity: 'working', findingIds: ['f1', 'f2'] },
       })
     );
-    expect(m.deliverToSession).toHaveBeenCalledWith('wb-1', expect.stringContaining('acme/app#42'));
+    expect(m.deliverToSession).toHaveBeenCalledWith(
+      'wb-1',
+      expect.stringContaining('acme/app#42'),
+      expect.objectContaining({ trigger: { kind: 'code_review', reviewId: 'rev-1', findingCount: 2 } })
+    );
   });
 
   it('sends nothing twice for the same cycle, and auto-fix still stands down', async () => {
@@ -232,6 +265,132 @@ describe('finishCycle with a live session on the pull request', () => {
 
     expect(m.deliverToSession).not.toHaveBeenCalled();
     expect(eventCodes()).toEqual(['auto_fix_session_active']);
+  });
+});
+
+describe('finishCycle transcript cards', () => {
+  it('writes the finished card before the report message, with the findings sent to the agent', async () => {
+    m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
+
+    await finishCycle(review);
+
+    expect(calls).toEqual(['card:finished', 'message']);
+    expect(m.appendFinishedCard).not.toHaveBeenCalled();
+    expect(m.appendCard).toHaveBeenCalledTimes(1);
+    expect(m.appendCard).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'rev-1', cycle: 3 }),
+      {
+        action: 'finished',
+        headSha: 'a'.repeat(40),
+        findingCount: 2,
+        findings: [
+          {
+            id: 'f1',
+            severity: 'blocker',
+            title: 'Null read on empty list',
+            summary: 'The loop reads items[0] before it checks the length.',
+            filePath: 'src/a.ts',
+            lineStart: 10,
+            lineEnd: 12,
+          },
+          {
+            id: 'f2',
+            severity: 'minor',
+            title: 'Unused import',
+            summary: '',
+            filePath: 'src/b.ts',
+            lineStart: 4,
+            lineEnd: 4,
+          },
+        ],
+        sentToAgent: true,
+      },
+      { workbenchId: 'wb-1', name: 'paris', chat: CHAT }
+    );
+  });
+
+  it('writes no card when an earlier call already sent the report for this cycle', async () => {
+    m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
+    m.appendReviewEventOnce.mockResolvedValue(false);
+
+    await finishCycle(review);
+
+    expect(calls).toEqual([]);
+  });
+
+  it.each([
+    { name: 'a local session', setup: () => m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'local' }) },
+    { name: 'no session', setup: () => m.liveSessionActivityForPr.mockResolvedValue(null) },
+    {
+      name: 'the report flag off',
+      setup: () => {
+        m.flag.mockResolvedValue({ enabled: false, source: 'posthog' });
+        m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
+      },
+    },
+    {
+      name: 'a clean review',
+      setup: () => {
+        m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
+        m.confirmedOpenFindings.mockResolvedValue([]);
+        m.listFindings.mockResolvedValue([]);
+      },
+    },
+    {
+      name: 'a delivery that throws before the send',
+      setup: () => {
+        m.liveSessionActivityForPr.mockResolvedValue({ ...SESSION, activity: 'idle' });
+        m.deliverToSession.mockRejectedValue(new Error('The session is gone.'));
+      },
+    },
+  ])('writes one finished card, not sent to the agent, for $name', async ({ setup }) => {
+    setup();
+
+    await finishCycle(review);
+
+    expect(calls).toEqual(['card:finished']);
+    expect(m.appendCard).not.toHaveBeenCalled();
+    expect(m.appendFinishedCard).toHaveBeenCalledWith(review, 'a'.repeat(40), false);
+  });
+
+  it('writes no card when another evaluation finished the cycle first', async () => {
+    m.cas.mockResolvedValue(false);
+    m.liveSessionActivityForPr.mockResolvedValue(null);
+
+    await finishCycle(review);
+
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('failCycle transcript card', () => {
+  it.each([
+    { phase: 'reviewing', targetHeadSha: 'b'.repeat(40), headSha: 'b'.repeat(40) },
+    { phase: 'judging', targetHeadSha: '', headSha: null },
+    { phase: 'preparing', targetHeadSha: 'b'.repeat(40), headSha: null },
+    { phase: 'queued', targetHeadSha: 'b'.repeat(40), headSha: null },
+  ])('writes the failed card from $phase with head $headSha', async ({ phase, targetHeadSha, headSha }) => {
+    const failing = { ...review, phase, targetHeadSha };
+
+    await failCycle(failing, 'no_reviewers', 'No reviewer finished.');
+
+    expect(m.appendCard).toHaveBeenCalledTimes(1);
+    expect(m.appendCard).toHaveBeenCalledWith(failing, { action: 'failed', headSha, message: 'No reviewer finished.' });
+  });
+
+  it('writes no failed card when auto-fix fails, because the finished card came first', async () => {
+    await failCycle({ ...review, phase: 'fixing' }, 'pr_closed', 'The pull request was closed.');
+
+    expect(m.cas).toHaveBeenCalled();
+    expect(m.appendCard).not.toHaveBeenCalled();
+  });
+
+  it('writes no card when the transition lost', async () => {
+    m.cas.mockResolvedValue(false);
+
+    await failCycle(review, 'no_reviewers', 'No reviewer finished.');
+
+    expect(m.appendCard).not.toHaveBeenCalled();
   });
 });
 

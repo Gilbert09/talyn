@@ -2,6 +2,7 @@ import {
   createClaudeStreamParser,
   isSubagentEvent,
   messageSender,
+  messageTrigger,
   nextWorkbenchAction,
   prSummaryToNextActionPr,
   TALYN_SKILL_SUMMARIES,
@@ -98,13 +99,20 @@ export interface TranscriptTurn {
   /** The agent's events for the turn, user message excluded. */
   events: AgentEvent[];
   subagentEvents?: AgentEvent[];
+  /**
+   * Talyn's triggered message (a wake-up, a job exit, a code review report)
+   * started the turn. The message stays in `events`, and `userAt` is its time.
+   */
+  triggered: boolean;
+  /** The seq of that triggered message. Null when no triggered message started the turn. */
+  triggerSeq: number | null;
   /** When the user's message was stored. Null when unknown. */
   userAt: string | null;
   /** When the turn's newest agent event was stored. Null when unknown. */
   lastAt: string | null;
 }
 
-/** Split a chat's events into turns, each led by the user's message. */
+/** Split a chat's events into turns, each led by the user's message. A triggered message stays in the turn's events. */
 export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
   const turns: TranscriptTurn[] = [];
   let current: TranscriptTurn | null = null;
@@ -113,9 +121,11 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
       if (current) (current.subagentEvents ??= []).push({ ...e.event, timestamp: e.event.timestamp ?? e.createdAt });
       continue;
     }
-    const text = userMessageText(e.event);
+    // Talyn wrote a triggered message (a wake-up, a job exit, a code review report): AgentBlocks draws it as a row.
+    const triggered = messageTrigger(e.event.talyn) !== null;
+    const text = triggered ? null : userMessageText(e.event);
     if (!current || current.turn !== e.turn || (text !== null && current.userText !== null)) {
-      current = { turn: e.turn, userText: null, userSeq: null, attachments: [], sender: null, events: [], userAt: null, lastAt: null };
+      current = { turn: e.turn, userText: null, userSeq: null, attachments: [], sender: null, events: [], userAt: null, lastAt: null, triggered: false, triggerSeq: null };
       turns.push(current);
     }
     if (text !== null && current.userText === null && current.events.length === 0) {
@@ -125,6 +135,11 @@ export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
       current.sender = messageSender((e.event as { talyn?: unknown }).talyn);
       current.userAt = e.createdAt ?? null;
     } else {
+      if (triggered && current.userText === null && current.events.length === 0) {
+        current.triggered = true;
+        current.triggerSeq = e.seq;
+        current.userAt = e.createdAt ?? null;
+      }
       current.events.push({ ...e.event, timestamp: e.event.timestamp ?? e.createdAt });
       if (e.createdAt) current.lastAt = e.createdAt;
     }

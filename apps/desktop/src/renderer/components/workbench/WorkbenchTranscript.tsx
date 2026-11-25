@@ -141,7 +141,7 @@ export function WorkbenchTranscript({
             const questionState: QuestionCardState = !last ? 'answered' : running || outgoing.length > 0 ? 'waiting' : 'open';
             return (
               <TurnView
-                key={`${chat.id}:${turn.turn}:${turn.userSeq ?? i}`}
+                key={`${chat.id}:${turn.turn}:${turn.userSeq ?? turn.triggerSeq ?? i}`}
                 chatId={chat.id}
                 chat={chat}
                 turn={turn}
@@ -150,7 +150,7 @@ export function WorkbenchTranscript({
                 retryResult={canRetry && !loading && !error && (chat.status === 'idle' || chat.status === 'error') && !chat.queuedMessages?.length && result?.kind === 'result' && result.isError && !turn.events.some((event) => event.type === 'result' && event.subtype === 'cancelled')
                   ? { key: result.key, reason: result.summary.trim() || 'The agent stopped unexpectedly.', reconnect: result.reason === 'reauth' }
                   : undefined}
-                canRevert={!running && !ops.unavailable && turn.userText !== null}
+                canRevert={!running && !ops.unavailable && (turn.userText !== null || turn.triggered)}
                 plan={
                   plan ? (
                     <PlanCard plan={plan} state={planState} {...(last && planState === 'open' ? { chat, ops } : {})} />
@@ -305,12 +305,12 @@ function useStableTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
       };
     });
     const out = splitTurns(displayEvents).map((turn, i) => {
-      const key = `${turn.turn}:${turn.userSeq ?? i}`;
+      const key = `${turn.turn}:${turn.userSeq ?? turn.triggerSeq ?? i}`;
       const size = turn.events.length + (turn.subagentEvents?.length ?? 0);
       const last = Math.max(turn.events.at(-1)?.seq ?? -1, turn.subagentEvents?.at(-1)?.seq ?? -1);
       const prev = cache.current.get(key);
       const kept =
-        prev && prev.size === size && prev.last === last && prev.turn.userText === turn.userText && prev.turn.attachments.length === turn.attachments.length && prev.turn.sender?.threadId === turn.sender?.threadId
+        prev && prev.size === size && prev.last === last && prev.turn.userText === turn.userText && prev.turn.triggered === turn.triggered && prev.turn.attachments.length === turn.attachments.length && prev.turn.sender?.threadId === turn.sender?.threadId
           ? prev.turn
           : turn;
       next.set(key, { size, last, turn: kept });
@@ -374,6 +374,11 @@ const TurnView = React.memo(function TurnView({
     <div className="space-y-3">
       {turn.userText !== null && (
         <UserMessage chatId={chatId} turn={turn.turn} text={turn.userText} attachments={turn.attachments} ops={ops} canRevert={canRevert} at={turn.userAt} sender={turn.sender} />
+      )}
+      {turn.userText === null && turn.triggered && canRevert && (
+        <div className="group" data-attr="triggered-turn-revert">
+          <RevertToHere chatId={chatId} turn={turn.turn} ops={ops} at={turn.userAt} />
+        </div>
       )}
       {turn.events.length > 0 && (
         <AgentBlocks
@@ -456,22 +461,6 @@ function UserMessage({
   /** The thread that wrote the message. */
   sender?: WorkbenchMessageSender | null;
 }) {
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  const restore = async () => {
-    setBusy(true);
-    try {
-      await ops.restoreCheckpoint(chatId, turn);
-      toast.success('Files restored', `The working tree is back to how it was before message ${turn}.`);
-      setConfirming(false);
-    } catch (err) {
-      toast.error('Could not restore the files', err instanceof Error ? err.message : undefined);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="group flex justify-end">
       <div className="max-w-[85%] space-y-1">
@@ -490,44 +479,80 @@ function UserMessage({
           </div>
         )}
         {footer}
-        {(canRevert || at) && (
-          <div className="flex items-center justify-end gap-1.5 text-[11px] text-muted-foreground">
-            {canRevert && (
-              confirming ? (
-                <>
-                  <span>Restore the files to before this message? Later changes are lost.</span>
-                  <button
-                    type="button"
-                    onClick={() => void restore()}
-                    disabled={busy}
-                    className="rounded px-1.5 text-warning hover:bg-accent disabled:opacity-50"
-                  >
-                    {busy ? <Loader2 className="inline h-3 w-3 animate-spin" /> : 'Restore'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirming(false)}
-                    disabled={busy}
-                    className="rounded px-1.5 hover:bg-accent"
-                  >
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirming(true)}
-                  className="inline-flex items-center gap-1 rounded px-1.5 opacity-0 hover:bg-accent hover:text-foreground group-hover:opacity-100"
-                  title="Restore the files to how they were before this message"
-                >
-                  <History className="h-3 w-3" /> Revert to here
-                </button>
-              )
-            )}
-            {at && !confirming && <RelativeTime iso={at} />}
-          </div>
-        )}
+        {(canRevert || at) && <RevertToHere chatId={chatId} turn={turn} ops={ops} at={at} canRevert={canRevert} />}
       </div>
+    </div>
+  );
+}
+
+/**
+ * "Revert to here" and the message time, under a message or above a turn that
+ * Talyn's triggered message started.
+ */
+function RevertToHere({
+  chatId,
+  turn,
+  ops,
+  at,
+  canRevert = true,
+}: {
+  chatId: string;
+  turn: number;
+  ops: WorkbenchOps;
+  at: string | null;
+  canRevert?: boolean;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const restore = async () => {
+    setBusy(true);
+    try {
+      await ops.restoreCheckpoint(chatId, turn);
+      toast.success('Files restored', `The working tree is back to how it was before message ${turn}.`);
+      setConfirming(false);
+    } catch (err) {
+      toast.error('Could not restore the files', err instanceof Error ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-end gap-1.5 text-[11px] text-muted-foreground">
+      {canRevert && (
+        confirming ? (
+          <>
+            <span>Restore the files to before this message? Later changes are lost.</span>
+            <button
+              type="button"
+              onClick={() => void restore()}
+              disabled={busy}
+              className="rounded px-1.5 text-warning hover:bg-accent disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="inline h-3 w-3 animate-spin" /> : 'Restore'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              disabled={busy}
+              className="rounded px-1.5 hover:bg-accent"
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            className="inline-flex items-center gap-1 rounded px-1.5 opacity-0 hover:bg-accent hover:text-foreground group-hover:opacity-100"
+            title="Restore the files to how they were before this message"
+          >
+            <History className="h-3 w-3" /> Revert to here
+          </button>
+        )
+      )}
+      {at && !confirming && <RelativeTime iso={at} />}
     </div>
   );
 }

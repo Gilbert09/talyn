@@ -352,6 +352,7 @@ reads as OFF only for `false`/`0`/`off`/`no`:
 | `CI_PARK_ENABLED` | `ci-park` | Suspend fleet fix runs while CI runs, then resume them | OFF | gated |
 | `CODE_REVIEW_AUTO_START_ON_COMPLETE_ENABLED` | `code-review-auto-start-on-complete` | Start a code review of the pull request when its session is code complete (once per head) | OFF | gated |
 | `CODE_REVIEW_SESSION_REPORT_BACK_ENABLED` | `code-review-session-report-back` | Send confirmed code review findings to the live session that owns the pull request, instead of auto-fix | OFF | gated |
+| `CODE_REVIEW_TRANSCRIPT_CARDS_ENABLED` | `code-review-transcript-cards` | Show code review start, finish and findings as cards in the chat of the session that owns the pull request | OFF | gated |
 | `FLEET_MULTI_ACCOUNT_ENABLED` | `fleet-multi-account` | More than one Claude or Codex account per workspace | ON | general |
 | `POSTHOG_CODE_RETIRED` | `posthog-code-retired` | PostHog Code retired: hidden for workspaces that have not connected it, no new connections, no fall-back onto it. Set `false` to bring it back | ON | general |
 | `REVIEW_PRIORITY_ENABLED` | `review-priority` | Ranked ordering of the Reviews tab | ON | general |

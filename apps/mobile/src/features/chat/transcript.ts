@@ -25,7 +25,7 @@ export type TranscriptRow = Base & (
   | { kind: 'tool_group'; group: ToolGroupBlock; partial: readonly string[] }
   | { kind: 'permission'; toolName: string; toolInput: unknown; status: 'pending' | 'allowed' | 'denied' | 'auto_allowed'; persist: boolean }
   | { kind: 'system'; text: string; subtype?: string; url?: string; isError: boolean;
-    pullRequest?: SystemBlock['pullRequest']; thread?: ThreadSessionEvent }
+    pullRequest?: SystemBlock['pullRequest']; thread?: ThreadSessionEvent; codeReview?: SystemBlock['codeReview'] }
   | { kind: 'failed'; text: string; reason?: 'reauth' | 'limited' | 'missing' | 'unavailable' }
   | { kind: 'stopped' }
   | { kind: 'plan'; plan: string; state: PlanState }
@@ -126,7 +126,7 @@ function turnRows(chatId: string, turn: Turn, partial: ReadonlySet<string>): Tra
       case 'permission': rows.push({ key, timestamp, kind: 'permission', toolName: block.toolName, toolInput: block.toolInput, status: block.status, persist: Boolean(block.persist) }); break;
       // A wake-up, a job exit or a pull request retry: one short line, as on web.
       case 'system': rows.push({ key, timestamp, kind: 'system', text: clip(block.trigger ? messageTriggerText(block.trigger) : block.text), subtype: block.subtype, url: block.url, isError: Boolean(block.isError),
-        pullRequest: block.pullRequest, thread: block.thread }); break;
+        pullRequest: block.pullRequest, thread: block.thread, codeReview: block.codeReview }); break;
       case 'result':
         if (cancelled) rows.push({ key, timestamp, kind: 'stopped' });
         else if (block.isError) rows.push({ key, timestamp, kind: 'failed', ...(block.reason ? { reason: block.reason } : {}), text: clip(block.summary.trim() || 'The agent stopped unexpectedly.') });

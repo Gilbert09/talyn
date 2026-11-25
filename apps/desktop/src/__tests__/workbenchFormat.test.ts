@@ -175,6 +175,66 @@ describe('transcript turns', () => {
     expect(turn.sender).toEqual(expected);
   });
 
+  const talynMessage = (seq: number, turn: number, text: string, talyn: Record<string, unknown>) => {
+    const message = user(seq, turn, text);
+    return { ...message, event: { ...message.event, talyn: { origin: 'talyn', ...talyn } } as AgentEvent };
+  };
+
+  it.each([
+    ['a code review report', { kind: 'code_review', reviewId: 'r1', findingCount: 2 }],
+    ['a wake-up', { kind: 'wakeup', wakeupId: 'w1', reason: 'Check CI', createdBy: 'agent' }],
+    ['a job exit', { kind: 'job_exit', wakeupId: 'w2', reason: 'Done', jobId: 'j1', jobName: 'build', exitCode: 0 }],
+    ['a pull request retry', { kind: 'pr_retry', attempt: 1, error: 'push refused' }],
+  ])('keeps a triggered message in the turn events, not as the user text: %s', (_n, trigger) => {
+    const turns = splitTurns([
+      user(1, 1, 'first'),
+      we(2, 1, {}),
+      talynMessage(3, 2, 'The code review finished.', { trigger }),
+      we(4, 2, {}),
+    ]);
+    expect(turns.map((t) => [t.turn, t.userText, t.userSeq, t.triggered, t.triggerSeq, t.events.map((e) => e.seq)])).toEqual([
+      [1, 'first', 1, false, null, [2]],
+      [2, null, null, true, 3, [3, 4]],
+    ]);
+  });
+
+  it.each([
+    ['a Talyn message with no trigger', { origin: 'talyn' }],
+    ['a Talyn message with an unknown trigger', { origin: 'talyn', trigger: { kind: 'other' } }],
+    ['a thread message', { sender: { kind: 'thread', threadId: 't1', name: 'Plan' } }],
+  ])('keeps %s as the user text', (_n, talyn) => {
+    const message = user(1, 1, 'hello');
+    const [turn] = splitTurns([{ ...message, event: { ...message.event, talyn } as AgentEvent }, we(2, 1, {})]);
+    expect([turn.userText, turn.userSeq, turn.events.map((e) => e.seq)]).toEqual(['hello', 1, [2]]);
+  });
+
+  it('keeps a triggered message after the user text in the same turn', () => {
+    const turns = splitTurns([
+      user(1, 1, 'first'),
+      we(2, 1, {}),
+      talynMessage(3, 1, 'Report', { trigger: { kind: 'code_review', reviewId: 'r1', findingCount: 1 } }),
+      we(4, 1, {}),
+    ]);
+    expect(turns.map((t) => [t.userText, t.triggered, t.events.map((e) => e.seq)])).toEqual([['first', false, [2, 3, 4]]]);
+  });
+
+  it.each([
+    ['with a time', '2026-11-25T10:00:00.000Z', '2026-11-25T10:00:00.000Z'],
+    ['with no time', undefined, null],
+  ])('records the time of the triggered message that starts a turn, %s', (_n, createdAt, expected) => {
+    const message = talynMessage(1, 1, 'Woke up', { trigger: { kind: 'wakeup', wakeupId: 'w1', reason: 'Check CI', createdBy: 'agent' } });
+    const [turn] = splitTurns([{ ...message, ...(createdAt ? { createdAt } : {}) }, we(2, 1, {})]);
+    expect([turn.triggered, turn.userAt]).toEqual([true, expected]);
+  });
+
+  it('does not mark a turn as triggered when a triggered message comes after the agent started', () => {
+    const turns = splitTurns([
+      we(1, 1, {}),
+      talynMessage(2, 1, 'Report', { trigger: { kind: 'code_review', reviewId: 'r1', findingCount: 1 } }),
+    ]);
+    expect(turns.map((t) => [t.triggered, t.triggerSeq, t.userAt])).toEqual([[false, null, null]]);
+  });
+
   it('keeps a turn whose user message was never recorded', () => {
     const turns = splitTurns([we(1, 1, {}), we(2, 1, {})]);
     expect(turns).toHaveLength(1);

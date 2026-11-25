@@ -22,6 +22,7 @@ import { memoryChangeText, parseMemoryChangeEvent, type MemoryChangeEvent } from
 import { messageTrigger, type WorkbenchMessageTrigger } from './workbenchBackground.js';
 import { isTalynOriginMessage, parseThreadSessionEvent, threadSessionEventText, type ThreadSessionEvent } from './workbenchThread.js';
 import { isAskUserToolName } from './workbenchQuestion.js';
+import { codeReviewTranscriptText, parseCodeReviewTranscriptEvent, type CodeReviewTranscriptEvent } from './codeReviewTranscript.js';
 
 const INTERRUPTED_MESSAGES = new Set([
   '[Request interrupted by user]',
@@ -123,6 +124,8 @@ export type Block =
       thread?: ThreadSessionEvent;
       /** Set for an ok `subtype: 'talyn_pr'`, so a card can show the PR. `title` is the agent's own, when its reply had one. */
       pullRequest?: { number: number; title?: string; existing: boolean; adopted: boolean };
+      /** Set for `subtype: 'talyn_code_review'`, so a card can show the review and its findings. */
+      codeReview?: CodeReviewTranscriptEvent;
       /** Set for `subtype: 'talyn_message'` when a wake-up or a job exit started the turn. `text` is then the full message body. */
       trigger?: WorkbenchMessageTrigger;
     }
@@ -489,6 +492,22 @@ function buildTranscriptBlocks(
           thread,
           ...(thread.prUrl ? { url: thread.prUrl } : {}),
           ...(thread.action === 'session_finished' && thread.status === 'error' ? { isError: true } : {}),
+        });
+      }
+      continue;
+    }
+
+    // A code review of the session's pull request started, finished or failed.
+    if (event.type === 'talyn_code_review') {
+      const codeReview = parseCodeReviewTranscriptEvent(event as Record<string, unknown>);
+      if (codeReview) {
+        blocks.push({
+          kind: 'system',
+          key: seqKey,
+          subtype: 'talyn_code_review',
+          text: codeReviewTranscriptText(codeReview),
+          codeReview,
+          ...(codeReview.action === 'failed' ? { isError: true } : {}),
         });
       }
       continue;
