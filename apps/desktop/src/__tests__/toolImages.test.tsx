@@ -28,10 +28,11 @@ describe('tool images in the transcript', () => {
 
   it('shows a screenshot from an MCP tool next to its text', () => {
     render(<AgentBlocks events={[
-      call('t1', 'mcp__playwright__browser_take_screenshot', {}),
+      call('t1', 'mcp__playwright__browser_take_screenshot', { type: 'png', fullPage: true }),
       result('t1', [{ type: 'text', text: 'Took the screenshot' }, { type: 'image', data: PNG, mimeType: 'image/jpeg' }]),
     ]} />);
     expect(screen.getByRole('img')).toHaveAttribute('src', `data:image/jpeg;base64,${PNG}`);
+    expect(screen.getByRole('img')).toHaveAttribute('alt', 'browser_take_screenshot');
     expect(screen.getByText('Took the screenshot')).toBeInTheDocument();
   });
 

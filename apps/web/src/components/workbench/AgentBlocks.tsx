@@ -27,6 +27,7 @@ import {
   stripAutoPrBlock,
   stripPlanBlocks,
   subagentCardModel,
+  toolImageLabel,
   toolOutputImages,
 } from '@talyn/shared';
 
@@ -335,7 +336,7 @@ function ToolBlockView({
   );
 
   const images = useMemo(
-    () => toolOutputImages(output).map((image) => ({ src: image.src, alt: toolImageAlt(name, input) })),
+    () => toolOutputImages(output).map((image) => ({ src: image.src, alt: toolImageLabel(name, input) })),
     [output, name, input]
   );
 
@@ -505,12 +506,6 @@ function SkillInstructions({ text }: { text: string }) {
   );
 }
 
-/** The label of a tool image: the file it came from, or the tool's name. */
-function toolImageAlt(name: string, input: unknown): string {
-  const described = describeTool(name, input);
-  return (described.isCommand ? '' : shortenPath(described.detail)) || described.label;
-}
-
 function ToolGroupView({
   items,
   summary,
@@ -536,7 +531,7 @@ function ToolGroupView({
     () =>
       items.flatMap((item) =>
         item.kind === 'tool'
-          ? toolOutputImages(item.output).map((image) => ({ src: image.src, alt: toolImageAlt(item.name, item.input) }))
+          ? toolOutputImages(item.output).map((image) => ({ src: image.src, alt: toolImageLabel(item.name, item.input) }))
           : []
       ),
     [items]

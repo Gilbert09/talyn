@@ -1478,6 +1478,17 @@ function imagePartSrc(part: unknown): ToolOutputImage | null {
 }
 
 /**
+ * The label of an image that a tool call returned: the file path for a Read,
+ * else the tool's own name without its MCP server prefix. The first argument of
+ * an unknown tool is often a flag such as `png`, so it is never the label.
+ */
+export function toolImageLabel(name: string, input: unknown): string {
+  const described = describeTool(name, input);
+  if (described.label === 'read' && described.detail) return described.detail;
+  return name.replace(/^mcp__.+?__/, '') || 'image';
+}
+
+/**
  * The images in a tool result: a screenshot that an MCP tool returned, or an
  * image file that the agent opened with Read. The transcript shows them, so
  * the person does not have to get the file out of the sandbox.

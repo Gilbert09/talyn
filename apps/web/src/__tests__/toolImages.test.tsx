@@ -4,6 +4,7 @@ import React from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { AgentEvent } from '@talyn/shared';
 import { AgentBlocks } from '../components/workbench/AgentBlocks';
+import { AgentConversation } from '../components/terminal/AgentConversation';
 
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 let seq = 0;
@@ -29,10 +30,11 @@ describe('tool images in the transcript', () => {
 
   it('shows a screenshot from an MCP tool next to its text', () => {
     render(<AgentBlocks events={[
-      call('t1', 'mcp__playwright__browser_take_screenshot', {}),
+      call('t1', 'mcp__playwright__browser_take_screenshot', { type: 'png', fullPage: true }),
       result('t1', [{ type: 'text', text: 'Took the screenshot' }, { type: 'image', data: PNG, mimeType: 'image/jpeg' }]),
     ]} />);
     expect(screen.getByRole('img')).toHaveAttribute('src', `data:image/jpeg;base64,${PNG}`);
+    expect(screen.getByRole('img')).toHaveAttribute('alt', 'browser_take_screenshot');
     expect(screen.getByText('Took the screenshot')).toBeInTheDocument();
   });
 
@@ -60,5 +62,14 @@ describe('tool images in the transcript', () => {
   it('shows no image for a tool call without one', () => {
     render(<AgentBlocks events={[call('t1', 'Bash', { command: 'ls' }), result('t1', 'a.png')]} />);
     expect(screen.queryByTestId('tool-images')).not.toBeInTheDocument();
+  });
+
+  it('shows images in a Queue task transcript, alone and in a closed group', () => {
+    render(<AgentConversation scopeId="task" transcript={readImage('t1', '/tmp/one.png')} />);
+    expect(screen.getByRole('img')).toHaveAttribute('alt', '/tmp/one.png');
+    expect(document.body.textContent).not.toContain(PNG);
+    cleanup();
+    render(<AgentConversation scopeId="task2" transcript={[...readImage('t2', '/tmp/two.png'), ...readImage('t3', '/tmp/three.png')]} />);
+    expect(screen.getAllByRole('img').map((img) => img.getAttribute('alt'))).toEqual(['/tmp/two.png', '/tmp/three.png']);
   });
 });

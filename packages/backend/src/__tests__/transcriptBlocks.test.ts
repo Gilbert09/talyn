@@ -13,6 +13,7 @@ import {
   groupedBlockSignature,
   mergeToolBlocks,
   mergedBlockSignature,
+  toolImageLabel,
   toolOutputImages,
   type AgentEvent,
 } from '@talyn/shared';
@@ -331,6 +332,16 @@ describe('toolOutputImages', () => {
     const out = formatToolOutput(output);
     expect(out.text).toBe(text);
     expect(out.text).not.toContain(PNG);
+  });
+
+  it.each([
+    ['Read uses the file path', 'Read', { file_path: '/tmp/shot.png' }, '/tmp/shot.png'],
+    ['an MCP tool uses its name, not its first argument', 'mcp__playwright__browser_take_screenshot', { type: 'png', fullPage: true }, 'browser_take_screenshot'],
+    ['an MCP tool with no input', 'mcp__chrome-devtools__take_screenshot', {}, 'take_screenshot'],
+    ['another tool uses its name', 'view_image', { path: '/tmp/x.png' }, 'view_image'],
+    ['Read with no path uses the tool name', 'Read', {}, 'Read'],
+  ])('labels a tool image: %s', (_name, tool, input, label) => {
+    expect(toolImageLabel(tool, input)).toBe(label);
   });
 
   it('still prints JSON for a part that is neither text nor an image', () => {
