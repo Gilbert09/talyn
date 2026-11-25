@@ -23,6 +23,7 @@ import {
   completeMcpOAuth,
   serverIdFromState,
   startMcpOAuth,
+  mcpLoopbackRedirectUri,
   validateMcpOAuthState,
 } from '../services/mcpServers/oauth.js';
 import {
@@ -303,6 +304,10 @@ export function mcpServerRoutes(): Router {
    * An optional `returnTo` (the mobile app's allowlisted URL base) makes
    * `/complete` answer `appReturnUrl`, `${returnTo}mcp/callback?mcp=...`, which
    * the web callback page opens to send the person back to the app.
+   *
+   * An optional `loopbackRedirectUri` (`http://127.0.0.1:<port>/callback`) is
+   * a callback the desktop app listens on. It is used only when the server
+   * refuses the hosted callback, and then for every later sign-in.
    */
   router.post('/:id/connect', async (req: Request, res: Response) => {
     const server = await loadAndGate(req, res);
@@ -310,15 +315,24 @@ export function mcpServerRoutes(): Router {
     if (server.authKind !== 'bearer') {
       return res.status(400).json({ success: false, error: 'Select OAuth before starting sign-in.' });
     }
-    const returnTo = parseReturnTo((req.body as { returnTo?: unknown } | undefined)?.returnTo);
+    const body = req.body as { returnTo?: unknown; loopbackRedirectUri?: unknown } | undefined;
+    const returnTo = parseReturnTo(body?.returnTo);
     if (!returnTo.ok) return res.status(400).json(invalidReturnToBody());
+    const loopbackRedirectUri = body?.loopbackRedirectUri == null ? null : mcpLoopbackRedirectUri(body.loopbackRedirectUri);
+    if (body?.loopbackRedirectUri != null && !loopbackRedirectUri) {
+      return res.status(400).json({ success: false, error: 'loopbackRedirectUri must be http://127.0.0.1:<port>/callback.' });
+    }
     try {
       const stored = await mcpOAuthStore.read(server.id);
-      const started = await startMcpOAuth(server, stored, new Date(), { mobileReturn: returnTo.returnTo });
+      const started = await startMcpOAuth(server, stored, new Date(), {
+        mobileReturn: returnTo.returnTo,
+        loopbackRedirectUri,
+      });
       await mcpOAuthStore.write(server.id, started.stored);
       captureWorkspaceEvent(server.workspaceId, 'mcp_server_connect_started', {
         ...serverShape(server),
         mcp_client_source: started.stored.clientSource ?? null,
+        mcp_loopback_redirect: !!started.stored.redirectUri,
       });
       const data = {
         flowId: started.flowId,

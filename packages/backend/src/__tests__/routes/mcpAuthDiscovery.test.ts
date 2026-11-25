@@ -33,7 +33,8 @@ vi.mock('../../services/mcpServers/store.js', () => ({
   mcpServersForDispatch: mocks.dispatch, recordMcpProbe: mocks.record,
   mcpOAuthStore: { read: mocks.read, write: mocks.write },
 }));
-vi.mock('../../services/mcpServers/oauth.js', () => ({
+vi.mock('../../services/mcpServers/oauth.js', async (importOriginal) => ({
+  mcpLoopbackRedirectUri: (await importOriginal<typeof import('../../services/mcpServers/oauth.js')>()).mcpLoopbackRedirectUri,
   serverIdFromState: () => 'srv-1',
   validateMcpOAuthState: mocks.validateState,
   completeMcpOAuth: mocks.complete,
@@ -203,7 +204,7 @@ describe('MCP OAuth mobile return', () => {
       async (returnTo) => {
         const response = await post('srv-1/connect', { returnTo });
         expect(response.status).toBe(200);
-        expect(mocks.start).toHaveBeenCalledWith(SERVER, null, expect.any(Date), { mobileReturn: returnTo });
+        expect(mocks.start).toHaveBeenCalledWith(SERVER, null, expect.any(Date), { mobileReturn: returnTo, loopbackRedirectUri: null });
         expect(mocks.write).toHaveBeenCalledWith('srv-1', {
           status: 'pending',
           flow: { ...FLOW, mobileReturn: returnTo },
@@ -213,7 +214,7 @@ describe('MCP OAuth mobile return', () => {
 
     it.each([{}, { returnTo: null }])('stores no return for %j', async (body) => {
       expect((await post('srv-1/connect', body)).status).toBe(200);
-      expect(mocks.start).toHaveBeenCalledWith(SERVER, null, expect.any(Date), { mobileReturn: null });
+      expect(mocks.start).toHaveBeenCalledWith(SERVER, null, expect.any(Date), { mobileReturn: null, loopbackRedirectUri: null });
       expect(mocks.write).toHaveBeenCalledWith('srv-1', { status: 'pending', flow: FLOW });
     });
 
@@ -230,6 +231,34 @@ describe('MCP OAuth mobile return', () => {
       const response = await post('srv-1/connect', { returnTo });
       expect(response.status).toBe(400);
       expect(await response.json()).toMatchObject({ success: false, code: 'invalid_return_to' });
+      expect(mocks.start).not.toHaveBeenCalled();
+      expect(mocks.write).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, null])('starts with no loopback redirect for %j', async (loopbackRedirectUri) => {
+      expect((await post('srv-1/connect', { loopbackRedirectUri })).status).toBe(200);
+      expect(mocks.start).toHaveBeenCalledWith(SERVER, null, expect.any(Date), { mobileReturn: null, loopbackRedirectUri: null });
+    });
+
+    it('passes a loopback redirect to the flow', async () => {
+      const loopbackRedirectUri = 'http://127.0.0.1:47823/callback';
+      expect((await post('srv-1/connect', { loopbackRedirectUri })).status).toBe(200);
+      expect(mocks.start).toHaveBeenCalledWith(SERVER, null, expect.any(Date), { mobileReturn: null, loopbackRedirectUri });
+    });
+
+    it.each([
+      'http://localhost:47823/callback',
+      'https://127.0.0.1:47823/callback',
+      'http://127.0.0.1/callback',
+      'http://127.0.0.1:80/callback',
+      'http://127.0.0.1:47823/other',
+      'http://127.0.0.1:47823/callback?x=1',
+      'http://evil.com:47823/callback',
+      '',
+      42,
+    ])('refuses loopbackRedirectUri %j with 400 before starting a flow', async (loopbackRedirectUri) => {
+      const response = await post('srv-1/connect', { loopbackRedirectUri });
+      expect(response.status).toBe(400);
       expect(mocks.start).not.toHaveBeenCalled();
       expect(mocks.write).not.toHaveBeenCalled();
     });

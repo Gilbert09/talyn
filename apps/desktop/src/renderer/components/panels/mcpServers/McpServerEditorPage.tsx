@@ -24,6 +24,7 @@ import { Section, TextField } from '../workflows/workflowFields';
 import { api } from '../../../lib/api';
 import { Markdown } from '../../../lib/markdown';
 import { openExternal, prepareSignInWindow } from '../../../lib/openExternal';
+import { startMcpSignIn } from '../../../lib/mcpSignIn';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { captureAnalyticsException, trackEvent } from '../../../lib/analytics';
 
@@ -1034,12 +1035,19 @@ function SignIn({
     setBusy(true);
     setError(null);
     setAuthorizeUrl(null);
+    let closeLoopback: () => void = () => undefined;
     try {
       const saved = await prepare();
       hostUrl = saved.url;
       setServerId(saved.id);
       if (current !== attempt.current) return;
-      const flow = await api.mcpServers.startSignIn(saved.id);
+      let forwardError: Error | null = null;
+      const { flow, close } = await startMcpSignIn(saved.id, {
+        onForwardError: (err) => {
+          forwardError = err;
+        },
+      });
+      closeLoopback = close;
       if (current !== attempt.current) return;
       try {
         opened = await browser.open(flow.authorizeUrl);
@@ -1052,6 +1060,7 @@ function SignIn({
       while (Date.now() < until && current === attempt.current) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
         if (current !== attempt.current) return;
+        if (forwardError) throw forwardError;
         const status = await api.mcpServers.signInStatus(saved.id, flow.flowId);
         if (current !== attempt.current) return;
         if (status.status === 'connected' && !status.pending) {
@@ -1074,6 +1083,11 @@ function SignIn({
       if (current === attempt.current)
         setError(err instanceof Error ? err.message : 'Could not start sign-in.');
     } finally {
+      // Only a finished attempt frees the loopback port. After an unmount or a
+      // superseded attempt, the browser can still deliver the code, and the
+      // listener forwards it on its own until its timeout. A newer sign-in
+      // closes it in the main process.
+      if (current === attempt.current) closeLoopback();
       if (!opened) browser.close();
       // A superseded attempt — the user pressed sign-in again, or left the
       // page — is reported as such rather than as an error. Counting it as a

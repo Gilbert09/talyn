@@ -24,6 +24,7 @@ import { resolveHtmlPath } from './util';
 import { AuthStorage, type EncryptionBackend } from './authStorage';
 import { initAutoUpdater } from './updater';
 import { signInToCodex } from './codexAuth';
+import { closeMcpLoopback, openMcpLoopback, waitMcpLoopback } from './mcpOAuthLoopback';
 import { scanLocalMcpServers } from './localMcp';
 import {
   installLocalAgentKit,
@@ -255,6 +256,16 @@ ipcMain.handle('auth:storage:remove', async (_event, key: string) => {
 // there is still exactly one place that knows how to talk to the backend.
 ipcMain.handle('codex:sign-in', async () => {
   return signInToCodex((url) => openExternalGuarded(url));
+});
+
+// MCP server sign-in on a loopback callback, for servers that refuse the
+// hosted one. Main only receives the code; the renderer sends it to the
+// backend, which holds the PKCE verifier. See main/mcpOAuthLoopback.ts.
+ipcMain.handle('mcp-oauth:listen', () => openMcpLoopback());
+ipcMain.handle('mcp-oauth:wait', (_event, id: unknown, state: unknown) =>
+  typeof id === 'string' && typeof state === 'string' ? waitMcpLoopback(id, state) : null);
+ipcMain.handle('mcp-oauth:close', (_event, id: unknown) => {
+  if (typeof id === 'string') closeMcpLoopback(id);
 });
 
 // Current app version, for display in Settings → About.
