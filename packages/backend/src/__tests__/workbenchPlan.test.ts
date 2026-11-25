@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildClaudeArgv,
   findTurnPlan,
+  OPEN_PULL_REQUEST_NOTE,
   parsePlanBlock,
   stripPlanBlocks,
   SANDBOX_SERVICES_NOTE,
@@ -82,10 +83,38 @@ describe('workbenchTurnPrompt', () => {
     }
   });
 
-  it.each([[false, false], [true, true]] as const)('omits the standing PR instruction when on=%s, linked=%s', (autoCreatePr, hasPullRequest) => {
+  it('omits the standing PR instruction when auto PR is off', () => {
     const turn = workbenchTurnPrompt({ agent: 'claude', text: 'hi', planMode: false, createPr,
-      autoCreatePr, hasPullRequest });
+      autoCreatePr: false, hasPullRequest: false });
     expect(turn).toEqual({ prompt: 'hi', appendSystemPrompt: SANDBOX_SERVICES_NOTE });
+  });
+
+  it.each([
+    ['claude', true],
+    ['claude', false],
+    ['codex', true],
+    ['codex', false],
+  ] as const)('%s with a linked PR (auto PR on=%s): commit and push, no talyn-pr block', (agent, autoCreatePr) => {
+    const turn = workbenchTurnPrompt({ agent, text: 'hi', planMode: false, createPr, autoCreatePr, hasPullRequest: true });
+    const instructions = turn.appendSystemPrompt ?? turn.prompt;
+    expect(instructions).toContain(OPEN_PULL_REQUEST_NOTE);
+    expect(instructions).not.toContain('```talyn-pr');
+    expect(instructions).not.toContain('Talyn does that after your reply');
+  });
+
+  it('keeps the person\'s own "do not push" (a review of another person\'s PR)', () => {
+    expect(OPEN_PULL_REQUEST_NOTE).toContain('if the person told you not to push');
+    expect(OPEN_PULL_REQUEST_NOTE).not.toMatch(/earlier instructions .* no longer apply/i);
+  });
+
+  it.each([
+    ['a Create PR turn', { intent: 'create_pr' as const }],
+    ['a thread', { thread: true }],
+    ['a session with no PR', { hasPullRequest: false }],
+    ['a session whose PR is merged or closed', { pullRequestOpen: false }],
+  ])('no open-PR note in %s', (_, extra) => {
+    const turn = workbenchTurnPrompt({ agent: 'claude', text: 'hi', planMode: false, createPr, hasPullRequest: true, ...extra });
+    expect(`${turn.prompt}\n${turn.appendSystemPrompt ?? ''}`).not.toContain(OPEN_PULL_REQUEST_NOTE);
   });
 
   it.each(['claude', 'codex'] as const)('tells %s about limited access only when it is off', (agent) => {

@@ -8,7 +8,7 @@
  */
 import type { AgentEvent } from './index.js';
 import type { WorkbenchAgent, WorkbenchMessageIntent } from './workbench.js';
-import { buildAutoCreatePrInstructions, buildCreatePrTurnInstructions } from './workbenchPullRequest.js';
+import { buildAutoCreatePrInstructions, buildCreatePrTurnInstructions, OPEN_PULL_REQUEST_NOTE } from './workbenchPullRequest.js';
 import { importedPathsNote } from './claudeSessionImport.js';
 import { SANDBOX_SERVICES_NOTE } from './sandboxSize.js';
 
@@ -106,6 +106,8 @@ export function workbenchTurnPrompt(input: {
   internetAccess?: boolean;
   autoCreatePr?: boolean;
   hasPullRequest?: boolean;
+  /** False when the linked pull request is merged or closed. Unknown counts as open. */
+  pullRequestOpen?: boolean;
   /** A chat that continues a local conversation: where it came from and the box's repo folder. */
   imported?: { root: string; repoDir: string } | null;
   recap?: string;
@@ -130,6 +132,9 @@ export function workbenchTurnPrompt(input: {
   const autoPrNote = !input.thread && input.autoCreatePr !== false && !input.hasPullRequest && input.intent !== 'create_pr'
     ? buildAutoCreatePrInstructions()
     : null;
+  const openPrNote = !input.thread && input.hasPullRequest && input.pullRequestOpen !== false && input.intent !== 'create_pr'
+    ? OPEN_PULL_REQUEST_NOTE
+    : null;
   const threadNote = input.thread ? TALYN_THREAD_NOTE : null;
   const importNote = input.imported ? importedPathsNote(input.imported, input.imported.repoDir) : null;
   const talynNote = input.talynTools
@@ -139,7 +144,7 @@ export function workbenchTurnPrompt(input: {
     : null;
   const memoryNote = input.talynTools && input.memory ? TALYN_MEMORY_NOTE : null;
   const instructions = [
-    actionInstructions, networkNote, autoPrNote, importNote, threadNote, talynNote, memoryNote,
+    actionInstructions, networkNote, autoPrNote, openPrNote, importNote, threadNote, talynNote, memoryNote,
     input.thread ? null : SANDBOX_SERVICES_NOTE, input.recap,
   ]
     .filter(Boolean)

@@ -101,6 +101,12 @@ export async function prSummaries(ids: string[]): Promise<Map<string, WorkbenchP
   return out;
 }
 
+/** The stored state of a linked PR ('open', 'merged' or 'closed'), or null when the row is gone. */
+export async function linkedPullRequestState(id: string): Promise<string | null> {
+  const [row] = await getPoolDbClient().select({ state: prTable.state }).from(prTable).where(eq(prTable.id, id)).limit(1);
+  return row?.state ?? null;
+}
+
 /** What went wrong, when the workbench or its sandbox is in an error state. */
 function errorOf(row: WorkbenchRow): string | null {
   return row.status === 'error' || row.sandboxState === 'error' ? row.statusMessage ?? 'Something went wrong.' : null;

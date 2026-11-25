@@ -101,6 +101,23 @@ export function buildAutoCreatePrInstructions(): string {
 }
 
 /**
+ * Told to each turn after the session's pull request opened. The earlier turns
+ * said "Talyn commits and pushes after your reply", but Talyn does that only
+ * to open the pull request. Without this note the agent kept the old rule and
+ * left later changes uncommitted.
+ */
+export const OPEN_PULL_REQUEST_NOTE = [
+  'This session already has an open pull request. Talyn does not commit or push for you after your reply any more.',
+  'Talyn\'s earlier rule "Talyn commits and pushes after your reply" applied only to opening the pull request.',
+  'Before you end a turn in which you changed files, commit the changes with a conventional commit message',
+  'and run `git push`, so that the pull request gets them.',
+  'Exception: if the person told you not to push (for example, in a review of another person\'s pull request),',
+  'do not commit or push. Tell the person what you changed instead.',
+  'Stay on this branch and do not open a new pull request.',
+  'If the push fails, read the error and fix the cause. Do not say that the changes are pushed until the push succeeded.',
+].join('\n');
+
+/**
  * What the agent is told on a Create PR turn. It must not commit, push or open
  * the PR: Talyn does that from the block at the end of the reply. `extra` is
  * the workbench's `settings.prompts.create_pr`, appended as it stands.

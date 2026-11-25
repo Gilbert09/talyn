@@ -84,7 +84,7 @@ import { sessionMemoryEnabled } from './memory.js';
 import { growOrMove, moveWorkbenchToFreshSandbox, needsFreshGolden } from './move.js';
 import { applyPendingResize, pendingResize } from './resize.js';
 import { applyPendingRestart, pendingRestart } from './restart.js';
-import { linkPullRequest, publicWorkbench } from './prLink.js';
+import { linkedPullRequestState, linkPullRequest, publicWorkbench } from './prLink.js';
 import { openPullRequestFromTurn } from './pullRequest.js';
 import { replaceSilentHostSandbox, SANDBOX_LOST_MESSAGE } from './recovery.js';
 import {
@@ -970,6 +970,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     const text = promptWith(message.text, agent === 'codex' && message.text.trim() ? attached.other : attached.all);
     // The transcript keeps `message.text`; the hidden instructions reach the agent only.
     let recap = await recoveryRecap(chatId, turn);
+    const pullRequestState = wb.pullRequestId ? await linkedPullRequestState(wb.pullRequestId).catch(() => null) : null;
     const buildArgv = () => {
       const { prompt, appendSystemPrompt } = workbenchTurnPrompt({
         recap,
@@ -987,6 +988,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
         // A thread has no branch to open a pull request from.
         autoCreatePr: isThread(wb) ? false : wb.settings?.autoCreatePr,
         hasPullRequest: Boolean(wb.pullRequestId),
+        pullRequestOpen: pullRequestState !== 'merged' && pullRequestState !== 'closed',
         imported: chat.importedFrom ? { root: chat.importedFrom.root || chat.importedFrom.cwd, repoDir: repoDirFor(wb) } : null,
         talynTools,
         talynSkills,
