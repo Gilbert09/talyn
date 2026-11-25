@@ -82,6 +82,8 @@ export function Composer({
   const setDraft = useWorkbenchStore((s) => s.setDraft);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [sending, setSending] = useState(false);
+  // The draft is read at Enter and cleared after the restore, so typing waits for the restore.
+  const [restoring, setRestoring] = useState(false);
   const [stopping, setStopping] = useState(false);
   const images = useComposerImages(ops.runtime, ops, workbench.status);
   const { attachments, setAttachments, pendingUploads, failedUploads, imageNotReady, setImageNotReady, fileInputRef, attachFiles, onPaste } = images;
@@ -279,7 +281,8 @@ export function Composer({
     let sendOps = ops;
     if (restoreOnSend) {
       // restoreWorkbench shows its own error, and the draft stays.
-      const restored = await restoreWorkbench(workbench);
+      setRestoring(true);
+      const restored = await restoreWorkbench(workbench).finally(() => setRestoring(false));
       if (!restored) {
         setSending(false);
         return;
@@ -467,7 +470,7 @@ export function Composer({
           ref={textareaRef}
           value={draft}
           rows={1}
-          disabled={sendBlocked}
+          disabled={sendBlocked || restoring}
           onChange={(e) => {
             setDraft(draftKey, e.target.value);
             if (owner && !restoreOnSend) wakeWorkbench(workbench.id);

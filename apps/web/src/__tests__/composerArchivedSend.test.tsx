@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { Composer, restoresOnSend } from '../components/workbench/Composer';
 import { sandboxOps } from '../lib/workbenchOps';
@@ -100,6 +100,22 @@ describe('an archived session', () => {
     expect(sendMessage).toHaveBeenCalledWith('chat-1', expect.objectContaining({ text: 'Pick this up again' }));
     expect(useWorkbenchStore.getState().workbenches['wb-1']).toMatchObject({ status: 'provisioning', archivedAt: null });
     await waitFor(() => expect(info).toHaveBeenCalledWith('Queued', 'It runs when the sandbox is ready.'));
+  });
+
+  it('blocks typing while the restore runs, so no typed text is lost', async () => {
+    let finish!: (value: Workbench) => void;
+    vi.spyOn(api.workbenches, 'restore').mockReturnValue(new Promise<Workbench>((resolve) => { finish = resolve; }) as never);
+    const sendMessage = vi.spyOn(api.workbenches, 'sendMessage').mockResolvedValue({ queued: true } as never);
+    const box = renderComposer();
+
+    send(box, 'Pick this up again');
+
+    await waitFor(() => expect(box).toBeDisabled());
+    expect(box).toHaveValue('Pick this up again');
+    expect(sendMessage).not.toHaveBeenCalled();
+    await act(async () => finish(restored));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    expect(box).toBeEnabled();
   });
 
   it('keeps the draft and sends nothing when the restore fails', async () => {

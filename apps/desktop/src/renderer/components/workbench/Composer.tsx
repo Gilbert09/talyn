@@ -38,7 +38,7 @@ import { toast } from '../../stores/toast';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { composerDraftKey, useWorkbenchStore } from '../../stores/workbenches';
 import { createSessionChat } from './createSessionChat';
-import { restoreWorkbench } from './archiveWorkbench';
+import { ownsLocalWorktree, restoreWorkbench } from './archiveWorkbench';
 import { useSlashCommandFileDescriptions } from './useSlashCommandFileDescriptions';
 import { ComposerPopover, applyTrigger, findTrigger, type ComposerMentionSource, type ComposerTrigger } from './ComposerPopover';
 import { isThread, threadMentions } from '../../lib/threads';
@@ -83,6 +83,8 @@ export function Composer({
   const localQueue = useWorkbenchStore((s) => (chat ? s.localQueues[chat.id] : undefined));
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [sending, setSending] = useState(false);
+  // The draft is read at Enter and cleared after the restore, so typing waits for the restore.
+  const [restoring, setRestoring] = useState(false);
   const [stopping, setStopping] = useState(false);
   const images = useComposerImages(ops.runtime, ops, workbench.status);
   const { attachments, setAttachments, pendingUploads, failedUploads, imageNotReady, setImageNotReady, fileInputRef, attachFiles, onPaste } = images;
@@ -283,7 +285,8 @@ export function Composer({
     let sendOps = ops;
     if (restoreOnSend) {
       // restoreWorkbench shows its own error, and the draft stays.
-      const restored = await restoreWorkbench(workbench);
+      setRestoring(true);
+      const restored = await restoreWorkbench(workbench).finally(() => setRestoring(false));
       if (!restored) {
         setSending(false);
         return;
@@ -460,7 +463,7 @@ export function Composer({
           ref={textareaRef}
           value={draft}
           rows={1}
-          disabled={sendBlocked}
+          disabled={sendBlocked || restoring}
           onChange={(e) => {
             setDraft(draftKey, e.target.value);
             if (owner && !restoreOnSend) wakeWorkbench(workbench.id);
@@ -517,9 +520,13 @@ export function Composer({
   );
 }
 
-/** True when a send restores the archived session first. Only the owner can restore. */
+/**
+ * True when a send restores the archived session first. Only the owner can
+ * restore, and a local session only on the computer that has its worktree.
+ */
 export function restoresOnSend(workbench: Workbench, owner: boolean): boolean {
-  return owner && (workbench.status === 'archived' || Boolean(workbench.archivedAt));
+  const archived = workbench.status === 'archived' || Boolean(workbench.archivedAt);
+  return owner && archived && (workbench.runtime === 'sandbox' || ownsLocalWorktree(workbench));
 }
 
 /** The wait-for-a-sandbox text, with the seconds until the next try. */

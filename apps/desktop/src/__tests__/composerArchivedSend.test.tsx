@@ -1,12 +1,13 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { Composer, restoresOnSend } from '../renderer/components/workbench/Composer';
 import { sandboxOps } from '../renderer/lib/workbenchOps';
 import { api } from '../renderer/lib/api';
 import { toast } from '../renderer/stores/toast';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
+import { getDeviceId } from '../renderer/lib/workbenchBridge';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 
@@ -55,7 +56,10 @@ describe('restoresOnSend', () => {
     ['archived status, owner', { status: 'archived' }, true, true],
     ['archivedAt set, owner', { status: 'ready', archivedAt: '2026-11-20T10:00:00Z' }, true, true],
     ['archived, not the owner', { status: 'archived' }, false, false],
-    ['archived local session', { status: 'archived', runtime: 'local' }, true, true],
+    ['archived local session on this computer', { status: 'archived', runtime: 'local', localPath: '/repo/wt', deviceId: getDeviceId() }, true, true],
+    ['archived local session with no device id', { status: 'archived', runtime: 'local', localPath: '/repo/wt', deviceId: null }, true, true],
+    ['archived local session on another computer', { status: 'archived', runtime: 'local', localPath: '/repo/wt', deviceId: 'other-device' }, true, false],
+    ['archived local session with no path', { status: 'archived', runtime: 'local', localPath: null }, true, false],
     ['live session', { status: 'ready', archivedAt: null }, true, false],
     ['provisioning session', { status: 'provisioning', archivedAt: null }, true, false],
     ['error session', { status: 'error', archivedAt: null }, true, false],
@@ -99,6 +103,22 @@ describe('an archived session', () => {
     expect(sendMessage).toHaveBeenCalledWith('chat-1', expect.objectContaining({ text: 'Pick this up again' }));
     expect(useWorkbenchStore.getState().workbenches['wb-1']).toMatchObject({ status: 'provisioning', archivedAt: null });
     await waitFor(() => expect(info).toHaveBeenCalledWith('Queued', 'It runs when the sandbox is ready.'));
+  });
+
+  it('blocks typing while the restore runs, so no typed text is lost', async () => {
+    let finish!: (value: Workbench) => void;
+    jest.spyOn(api.workbenches, 'restore').mockReturnValue(new Promise<Workbench>((resolve) => { finish = resolve; }) as never);
+    const sendMessage = jest.spyOn(api.workbenches, 'sendMessage').mockResolvedValue({ queued: true } as never);
+    const box = renderComposer();
+
+    send(box, 'Pick this up again');
+
+    await waitFor(() => expect(box).toBeDisabled());
+    expect(box).toHaveValue('Pick this up again');
+    expect(sendMessage).not.toHaveBeenCalled();
+    await act(async () => finish(restored));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    expect(box).toBeEnabled();
   });
 
   it('keeps the draft and sends nothing when the restore fails', async () => {
