@@ -94,13 +94,36 @@ describe('startMcpSignIn', () => {
     expect(complete).not.toHaveBeenCalled();
   });
 
-  it('swallows a failed forward, which the status poll reports', async () => {
+  it.each([
+    [new Error('Network error'), 'Talyn could not finish the sign-in (Network error). Try again.'],
+    [new Error(''), 'Talyn could not finish the sign-in. Try again.'],
+    ['not an error', 'Talyn could not finish the sign-in. Try again.'],
+  ])('reports a failed forward %j to the caller', async (failure, message) => {
     startSignIn.mockResolvedValue(flowFor(LOOPBACK));
     bridge.wait.mockResolvedValue({ state: 'srv-1.abc', code: 'c-1' });
-    complete.mockRejectedValue(new Error('exchange failed'));
+    complete.mockRejectedValue(failure);
+    const onForwardError = jest.fn();
+    await startMcpSignIn('srv-1', { onForwardError });
+    await flush();
+    expect(onForwardError).toHaveBeenCalledWith(expect.objectContaining({ message }));
+  });
+
+  it('survives a failed forward with no error handler', async () => {
+    startSignIn.mockResolvedValue(flowFor(LOOPBACK));
+    bridge.wait.mockResolvedValue({ state: 'srv-1.abc', code: 'c-1' });
+    complete.mockRejectedValue(new Error('Network error'));
     await startMcpSignIn('srv-1');
     await flush();
     expect(complete).toHaveBeenCalled();
+  });
+
+  it('reports nothing when the forward succeeds', async () => {
+    startSignIn.mockResolvedValue(flowFor(LOOPBACK));
+    bridge.wait.mockResolvedValue({ state: 'srv-1.abc', code: 'c-1' });
+    const onForwardError = jest.fn();
+    await startMcpSignIn('srv-1', { onForwardError });
+    await flush();
+    expect(onForwardError).not.toHaveBeenCalled();
   });
 
   it('closes the listener and rethrows when the backend refuses to start', async () => {

@@ -276,8 +276,12 @@ async function registrationRefusal(
   }
   if (doc.error === 'invalid_redirect_uri') {
     return {
+      // A loopback address came from the desktop app already, so do not send
+      // the user there.
       message: `${base}: it does not accept Talyn's sign-in address ${redirectUri}. ` +
-        'Connect it from the Talyn desktop app, ask the vendor to allow that address, or paste an API key instead.',
+        (mcpLoopbackRedirectUri(redirectUri)
+          ? 'Ask the vendor to allow that address, or paste an API key instead.'
+          : 'Connect it from the Talyn desktop app, ask the vendor to allow that address, or paste an API key instead.'),
       redirectRefused: true,
     };
   }

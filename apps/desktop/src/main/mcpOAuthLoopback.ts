@@ -107,7 +107,15 @@ export async function openMcpLoopback(
   active = listener;
 
   server.on('request', (req: http.IncomingMessage, res: http.ServerResponse) => {
-    const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`);
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`);
+    } catch {
+      // Node accepts targets like `http://[` that URL refuses. A throw here
+      // would be an uncaught exception in the main process.
+      res.writeHead(400).end();
+      return;
+    }
     if (req.method !== 'GET' || url.pathname !== CALLBACK_PATH) {
       res.writeHead(404).end();
       return;

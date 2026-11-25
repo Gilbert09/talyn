@@ -1041,7 +1041,12 @@ function SignIn({
       hostUrl = saved.url;
       setServerId(saved.id);
       if (current !== attempt.current) return;
-      const { flow, close } = await startMcpSignIn(saved.id);
+      let forwardError: Error | null = null;
+      const { flow, close } = await startMcpSignIn(saved.id, {
+        onForwardError: (err) => {
+          forwardError = err;
+        },
+      });
       closeLoopback = close;
       if (current !== attempt.current) return;
       try {
@@ -1055,6 +1060,7 @@ function SignIn({
       while (Date.now() < until && current === attempt.current) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
         if (current !== attempt.current) return;
+        if (forwardError) throw forwardError;
         const status = await api.mcpServers.signInStatus(saved.id, flow.flowId);
         if (current !== attempt.current) return;
         if (status.status === 'connected' && !status.pending) {

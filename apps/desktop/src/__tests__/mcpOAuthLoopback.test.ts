@@ -2,7 +2,7 @@
  * @jest-environment node
  */
 import http from 'http';
-import type { AddressInfo } from 'net';
+import net, { type AddressInfo } from 'net';
 import { closeMcpLoopback, openMcpLoopback, waitMcpLoopback } from '../main/mcpOAuthLoopback';
 
 /**
@@ -74,6 +74,24 @@ describe('MCP loopback listener', () => {
     const { id, redirectUri } = await open();
     const waiting = waitMcpLoopback(id, 's-1');
     expect(await get(`${base(redirectUri)}${path}`)).toBe(status);
+    expect(await get(`${redirectUri}?state=s-1&code=c-1`)).toBe(200);
+    await expect(waiting).resolves.toEqual({ state: 's-1', code: 'c-1' });
+  });
+
+  it('answers 400 to a request target that URL cannot parse, and keeps waiting', async () => {
+    const { id, redirectUri } = await open();
+    const waiting = waitMcpLoopback(id, 's-1');
+    const { port } = new URL(redirectUri);
+    const reply = await new Promise<string>((resolve, reject) => {
+      const socket = net.connect(Number(port), '127.0.0.1', () => {
+        socket.write('GET http://[ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
+      });
+      let data = '';
+      socket.on('data', (chunk) => { data += chunk.toString(); });
+      socket.on('end', () => resolve(data));
+      socket.on('error', reject);
+    });
+    expect(reply).toMatch(/^HTTP\/1\.1 400/);
     expect(await get(`${redirectUri}?state=s-1&code=c-1`)).toBe(200);
     await expect(waiting).resolves.toEqual({ state: 's-1', code: 'c-1' });
   });

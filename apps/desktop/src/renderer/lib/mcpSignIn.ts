@@ -12,8 +12,15 @@ type Flow = Awaited<ReturnType<typeof api.mcpServers.startSignIn>>;
  * caller's status poll then sees the result, as it does for the hosted path.
  *
  * Call `close` when the sign-in ends, so the port is freed.
+ *
+ * `onForwardError` gets a failed hand-off of the code. The backend records a
+ * refused exchange on the grant, but a request that never reached it leaves
+ * the flow pending, and the poll alone would wait until its timeout.
  */
-export async function startMcpSignIn(serverId: string): Promise<{ flow: Flow; close: () => void }> {
+export async function startMcpSignIn(
+  serverId: string,
+  opts: { onForwardError?: (err: Error) => void } = {}
+): Promise<{ flow: Flow; close: () => void }> {
   const bridge = window.electron?.mcpOAuth;
   const loopback = bridge ? await bridge.listen().catch(() => null) : null;
   const close = () => {
@@ -41,7 +48,9 @@ export async function startMcpSignIn(serverId: string): Promise<{ flow: Flow; cl
       if (!callback) return undefined;
       return api.mcpServers.complete(callback.state, callback.code ?? '', callback.error);
     })
-    // The backend stores a failed exchange on the grant, and the poll shows it.
-    .catch(() => undefined);
+    .catch((err: unknown) => {
+      const reason = err instanceof Error && err.message ? ` (${err.message})` : '';
+      opts.onForwardError?.(new Error(`Talyn could not finish the sign-in${reason}. Try again.`));
+    });
   return { flow, close };
 }

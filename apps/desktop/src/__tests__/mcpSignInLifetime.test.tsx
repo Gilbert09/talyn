@@ -91,7 +91,29 @@ describe('MCP sign-in listener lifetime', () => {
     setup();
     fireEvent.click(await screen.findByRole('button', { name: 'Connect account' }));
     await waitFor(() => expect(mockClose).toHaveBeenCalledTimes(1), { timeout: 4000 });
-    expect(mockStartMcpSignIn).toHaveBeenCalledWith('srv-1');
+    expect(mockStartMcpSignIn).toHaveBeenCalledWith('srv-1', { onForwardError: expect.any(Function) });
+  });
+
+  it('stops polling and shows a failed hand-off of the code', async () => {
+    mockApi.signInStatus.mockResolvedValue({ status: 'pending', pending: true });
+    mockStartMcpSignIn.mockImplementation(async (_id: string, opts: { onForwardError: (err: Error) => void }) => {
+      setTimeout(() => opts.onForwardError(new Error('Talyn could not finish the sign-in (Network error). Try again.')), 0);
+      return {
+        flow: {
+          authorizeUrl: 'https://auth.example.com/authorize',
+          flowId: 'flow-1',
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          scopes: [],
+        },
+        close: mockClose,
+      };
+    });
+    setup();
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect account' }));
+    expect((await screen.findByRole('alert', {}, { timeout: 4000 })).textContent)
+      .toBe('Talyn could not finish the sign-in (Network error). Try again.');
+    expect(mockApi.signInStatus).not.toHaveBeenCalled();
+    expect(mockClose).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the listener open when the page closes mid-sign-in', async () => {

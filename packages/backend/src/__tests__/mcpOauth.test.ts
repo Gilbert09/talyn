@@ -445,7 +445,10 @@ describe('signing in on a loopback redirect', () => {
     discoverServer();
     stubRegister(['https://app.talyn.dev/mcp/callback', LOOPBACK]);
     await expect(startMcpOAuth(SERVER, null, new Date(), { loopbackRedirectUri: LOOPBACK }))
-      .rejects.toThrow(`it does not accept Talyn's sign-in address ${LOOPBACK}`);
+      .rejects.toMatchObject({
+        message: `the server refused to set up sign-in (400): it does not accept Talyn's sign-in address ${LOOPBACK}. ` +
+          'Ask the vendor to allow that address, or paste an API key instead.',
+      });
     expect(registrations()).toHaveLength(2);
   });
 
