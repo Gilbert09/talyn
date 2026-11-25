@@ -76,29 +76,62 @@ const LOCAL_CLEANUP_CONCURRENCY = 4;
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /**
- * Archive many sessions with one request. A local worktree with uncommitted
- * changes stays on disk. `openId` is the open session, which clears the
- * selection when it is archived. Returns how many sessions were archived.
+ * Show the sessions as archived now, so they leave the sidebar together.
+ * Returns a function that puts back the ones the server did not archive.
+ */
+function hideAsArchived(ids: string[]): (ids: string[]) => void {
+  const store = useWorkbenchStore.getState();
+  const archivedAt = new Date().toISOString();
+  const shown = new Map<string, { before: Workbench; hidden: Workbench }>();
+  for (const id of ids) {
+    const before = store.workbenches[id];
+    if (!before) continue;
+    const hidden: Workbench = { ...before, status: 'archived', archivedAt };
+    shown.set(id, { before, hidden });
+    store.upsertWorkbench(hidden);
+  }
+  return (back) => {
+    for (const id of back) {
+      const entry = shown.get(id);
+      // A newer row from the server wins over the one held from before.
+      if (entry && useWorkbenchStore.getState().workbenches[id] === entry.hidden) {
+        useWorkbenchStore.getState().upsertWorkbench(entry.before);
+      }
+    }
+  };
+}
+
+/**
+ * Archive many sessions with one request. The sessions leave the sidebar at
+ * once, and come back if the server does not archive them. A local worktree
+ * with uncommitted changes stays on disk. `openId` is the open session, which
+ * clears the selection when it is archived. Returns how many sessions were
+ * archived.
  */
 export async function archiveWorkbenches(ids: string[], openId: string | null): Promise<number> {
   if (ids.length === 0) return 0;
   for (const id of ids) markDialogArchive(id, true);
+  const putBack = hideAsArchived(ids);
   try {
     let result: ArchiveWorkbenchesResult;
     try {
       result = await api.workbenches.archiveMany(ids);
     } catch (err) {
+      putBack(ids);
       captureWorkbenchFailure('archive_sessions', err);
       toast.error('Could not archive the sessions', err instanceof Error ? err.message : undefined);
       trackEvent('sessions_archived_bulk', { requested: ids.length, archived: 0 });
       return 0;
     }
+    putBack(result.failed.map((f) => f.id));
     // The server archived these. Clean up here a few at a time: each one can remove a worktree.
     let next = 0;
     const worker = async () => {
       while (next < result.archived.length) {
         const wb = result.archived[next++];
-        await finishArchive(wb, wb.id === openId, false);
+        // The dialog closed at once, so the person may have opened another session since.
+        const stillOpen = wb.id === openId && useWorkbenchStore.getState().selectedWorkbenchId === wb.id;
+        await finishArchive(wb, stillOpen, false);
       }
     };
     await Promise.all(Array.from({ length: Math.min(LOCAL_CLEANUP_CONCURRENCY, result.archived.length) }, worker));
