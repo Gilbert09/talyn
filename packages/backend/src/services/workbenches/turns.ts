@@ -69,7 +69,8 @@ import {
 } from './execFailures.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { notifyPrSessionChanged } from './prSessions.js';
-import { isHibernationFetchFailed, isWakeRefusal, localRuntimeError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
+import { isHibernationFetchFailed, isHostSilentAnswer, isWakeRefusal, localRuntimeError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
+import { HOST_FAILOVER, hostFailoverNote, hostNotAnswering } from './hostFailover.js';
 import { capacityWaitDelayMs, PROVISION_CAPACITY_WAIT, WAITING_FOR_SANDBOX_MESSAGE } from './lifecycle.js';
 import { isSizeRefusal } from './sandboxSize.js';
 import { safeMarker } from './execFraming.js';
@@ -85,8 +86,14 @@ import { applyPendingResize, pendingResize } from './resize.js';
 import { applyPendingRestart, pendingRestart } from './restart.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import { openPullRequestFromTurn } from './pullRequest.js';
-import { SANDBOX_LOST_MESSAGE } from './recovery.js';
-import { FleetRunNotFoundError, type FleetCapacityError, type FleetHttpError, type FleetThrottleError } from '../selfHosted/client.js';
+import { replaceSilentHostSandbox, SANDBOX_LOST_MESSAGE } from './recovery.js';
+import {
+  FleetRunNotFoundError,
+  type FleetCapacityError,
+  type FleetDispatchUncertainError,
+  type FleetHttpError,
+  type FleetThrottleError,
+} from '../selfHosted/client.js';
 import { selectFleetAccount } from '../selfHosted/accountSelection.js';
 import { exhaustedAgentFrom, noteExhaustedAgent, noteRateLimitedAccount, rateLimitedAgentFrom } from '../selfHosted/exhaustedQuota.js';
 import {
@@ -1132,7 +1139,11 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     // hibernated copy is not back yet. Wait, as a session start does. A relaunch
     // (attempt > 0) has logs in the box, so it does not.
     if (!launched && firstAttempt === 0 && isWakeRefusal(err) && !isSizeRefusal(err)) {
-      return capacityWaitOutcome(early, chatId, message, turn, err, events);
+      return capacityWaitOutcome(early, chat, message, turn, err, events);
+    }
+    // A 504 `host_silent`: the box's host does not answer. Wait, and fail over after the bound.
+    if (!launched && firstAttempt === 0 && isHostSilentAnswer(err)) {
+      return capacityWaitOutcome(early, chat, message, turn, err as FleetDispatchUncertainError, events);
     }
     if (agentMayBeRunning) return handoffOutcome('the agent may be running and its log could not be followed', err);
     // userFacingError, so a fleet answer such as hibernation_fetch_failed reads
@@ -1253,14 +1264,19 @@ async function wakeRefusalReason(wb: WorkbenchRow | null, err: unknown): Promise
  * again and the session failed): the turn then fails as before.
  */
 async function requeueForReplacement(
-  chat: ChatRow,
+  chat: Pick<ChatRow, 'id' | 'workbenchId'>,
   message: WorkbenchQueuedMessage,
   turn: number,
   events: EventBatcher,
+  note: { subtype: string; text: string; detail: string } = {
+    subtype: 'sandbox_lost_requeued',
+    text: SANDBOX_LOST_REQUEUED_NOTE,
+    detail: 'the box was lost before the agent started; the message waits for the replacement',
+  },
 ): Promise<TurnOutcome | null> {
   const wb = await getWorkbench(chat.workbenchId);
   if (wb?.status !== 'provisioning' || wb.sandboxState !== 'lost') return null;
-  events.add({ type: 'system', subtype: 'sandbox_lost_requeued', text: SANDBOX_LOST_REQUEUED_NOTE });
+  events.add({ type: 'system', subtype: note.subtype, text: note.text });
   await events.flush();
   // A fresh marker, never an older wait: drop, clear and Stop end the turn
   // through it (endCapacityWait), and the new box's wait starts from zero.
@@ -1268,7 +1284,7 @@ async function requeueForReplacement(
   const replacing: WorkbenchCapacityWait = { turn, startedAt: now, retryAt: now, attempts: 0, reason: 'replacing' };
   const requeued = await requeueTurn(chat.id, { ...message, capacityWait: replacing }, { turn });
   if (!requeued) return null;
-  noteTurn('turn_sandbox_lost_requeued', chat.id, turn, 'the box was lost before the agent started; the message waits for the replacement');
+  noteTurn('turn_sandbox_lost_requeued', chat.id, turn, note.detail);
   emitWorkbenchChat(requeued.workspaceId, rowToChat(requeued));
   return { status: 'idle', statusMessage: null, cancelled: false, requeued: true };
 }
@@ -1279,21 +1295,35 @@ async function requeueForReplacement(
  * try with the session start's backoff. After the start's bound
  * (`PROVISION_CAPACITY_WAIT.maxMs`, counted from the first refusal) the turn
  * fails.
+ *
+ * A box whose host has not answered
+ * for `HOST_FAILOVER.silentForMs` is replaced, and the message runs on the
+ * new box (`failOverSilentHost`).
  */
 async function capacityWaitOutcome(
   wb: WorkbenchRow | null,
-  chatId: string,
+  chat: ChatRow,
   message: WorkbenchQueuedMessage,
   turn: number,
-  err: FleetCapacityError | FleetThrottleError | FleetHttpError,
+  err: FleetCapacityError | FleetThrottleError | FleetHttpError | FleetDispatchUncertainError,
   events: EventBatcher,
 ): Promise<TurnOutcome> {
+  const chatId = chat.id;
   const now = Date.now();
   // A wait for the replacement of a lost box is not a wait on this box.
   const prior = message.capacityWait?.turn === turn && message.capacityWait.reason !== 'replacing' ? message.capacityWait : undefined;
-  const startedAt = prior ? Date.parse(prior.startedAt) : now;
+  // A turn that already failed over keeps the bound of its first wait, and does not fail over again.
+  const failedOver = message.hostFailover?.turn === turn ? message.hostFailover : undefined;
+  const startedAt = prior ? Date.parse(prior.startedAt) : failedOver ? Date.parse(failedOver.waitStartedAt) : now;
+  const hostSilent = wb !== null && (await hostNotAnswering(wb, err));
+  const hostSilentSince = hostSilent ? (prior?.hostSilentSince ? Date.parse(prior.hostSilentSince) : now) : null;
+  if (wb && !failedOver && hostSilentSince !== null && now - hostSilentSince >= HOST_FAILOVER.silentForMs) {
+    const replaced = await failOverSilentHost(wb, chat, message, turn, events, now - hostSilentSince, startedAt);
+    if (replaced) return replaced;
+  }
   const left = PROVISION_CAPACITY_WAIT.maxMs - (now - startedAt);
-  const reason = await wakeRefusalReason(wb, err);
+  // A silent host does not answer a read of the box either.
+  const reason = hostSilent ? 'capacity' : await wakeRefusalReason(wb, err);
   if (left <= 0) {
     const why = reason === 'waking' ? SANDBOX_DID_NOT_WAKE_TURN_MESSAGE : NO_FREE_SANDBOX_TURN_MESSAGE;
     noteTurn('turn_capacity_gave_up', chatId, turn, `the box did not wake after ${prior?.attempts ?? 0} tries`, err);
@@ -1316,8 +1346,50 @@ async function capacityWaitOutcome(
     capacityWait: {
       turn, startedAt: new Date(startedAt).toISOString(), retryAt: new Date(now + delay).toISOString(),
       attempts: attempts + 1, reason,
+      ...(hostSilentSince !== null ? { hostSilentSince: new Date(hostSilentSince).toISOString() } : {}),
     },
   };
+}
+
+/**
+ * The box's host has not answered for the failover bound, and nothing of the
+ * turn ran. Replace the box from its last checkpoint, keep the old one, and
+ * give the message back to the queue with its turn: the new box runs it when
+ * its provision ends. Null when no replacement starts; the turn then waits as
+ * before.
+ */
+async function failOverSilentHost(
+  wb: WorkbenchRow,
+  chat: ChatRow,
+  message: WorkbenchQueuedMessage,
+  turn: number,
+  events: EventBatcher,
+  silentMs: number,
+  waitStartedAt: number,
+): Promise<TurnOutcome | null> {
+  // The row as it is now: a step of this turn can have moved the box.
+  const current = (await getWorkbench(wb.id)) ?? wb;
+  const checkpointAt = current.workCheckpointAt ?? null;
+  const replaced = await replaceSilentHostSandbox(current, chat.id).catch((err: unknown) => {
+    console.warn(`[workbench] replacing sandbox ${current.sandboxId} of a silent host failed:`, err);
+    return null;
+  });
+  if (!replaced) {
+    noteTurn('turn_host_failover_skipped', chat.id, turn,
+      `the host of ${current.sandboxId} is silent, but no new box started (another chat runs, or a recent replacement); waiting`);
+    return null;
+  }
+  // requeueForReplacement replaces the old box's wait with a 'replacing' marker.
+  // The failover mark keeps the bound of the first wait and stops a second failover.
+  const marked: WorkbenchQueuedMessage = {
+    ...message,
+    hostFailover: { turn, at: new Date().toISOString(), waitStartedAt: new Date(waitStartedAt).toISOString() },
+  };
+  return requeueForReplacement(chat, marked, turn, events, {
+    subtype: 'sandbox_host_failover',
+    text: hostFailoverNote(checkpointAt),
+    detail: `the host of ${current.sandboxId} did not answer for ${Math.round(silentMs / 1000)} s before the agent started; the message waits for the new box`,
+  });
 }
 
 /**
@@ -1496,7 +1568,7 @@ export async function createCheckpoint(
 async function checkpointAndCheckDisk(wb: WorkbenchRow, chatId: string, turn: number, skipCheckpoint = false): Promise<WorkbenchRow> {
   const first = await createCheckpoint(wb, chatId, turn, skipCheckpoint).catch((err) => {
     // This exec wakes the box: a box that cannot wake fails every step after it, so the turn waits for room instead.
-    if (err instanceof FleetRunNotFoundError || isWakeRefusal(err)) throw err;
+    if (err instanceof FleetRunNotFoundError || isWakeRefusal(err) || isHostSilentAnswer(err)) throw err;
     console.warn(`[workbench] checkpoint for chat ${chatId} turn ${turn} failed:`, err);
     return { sha: null, disk: null, error: err instanceof Error ? err.message : String(err) };
   });

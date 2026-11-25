@@ -573,6 +573,8 @@ export class FleetCapacityError extends Error {
     readonly reason: 'no_capacity' | 'unreachable' = 'no_capacity',
     /** The fleet's machine code (`error` in its JSON body), when it sent one. */
     readonly code?: string,
+    /** Talyn's own request timed out: the fleet took the request and did not answer in time. */
+    readonly timedOut = false,
   ) {
     super(message);
     this.name = 'FleetCapacityError';
@@ -627,6 +629,11 @@ export function isHibernationLostResponse(status: number, message: string, code?
   return (code !== undefined && HIBERNATION_LOST_CODES.has(code)) || /hibernated copy cannot be restored/i.test(message);
 }
 
+/** The gateway knows the box's host does not answer, and refuses at once (503). */
+export const HOST_UNRESPONSIVE = 'host_unresponsive';
+/** The box's host took the request and never answered (504). */
+export const HOST_SILENT = 'host_silent';
+
 /** The fleet could not fetch a hibernated copy now (503). The copy is intact; try again later. */
 export const HIBERNATION_FETCH_FAILED = 'hibernation_fetch_failed';
 
@@ -658,7 +665,11 @@ export function isRunNotFoundResponse(status: number, message: string, code?: st
 export class FleetDispatchUncertainError extends Error {
   readonly isDispatchUncertain = true;
   readonly status = 504;
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** The fleet's machine code, when it sent one: `host_silent` says the box's host took the request and never answered. */
+    readonly code?: string,
+  ) {
     super(message);
     this.name = 'FleetDispatchUncertainError';
   }
@@ -921,6 +932,8 @@ export class FleetClient {
         `Fleet unreachable at ${this.endpoint}: ${err instanceof Error ? err.message : String(err)}`,
         undefined,
         'unreachable',
+        undefined,
+        err instanceof Error && err.name === 'TimeoutError',
       );
     }
 
@@ -943,9 +956,8 @@ export class FleetClient {
     if (resp.status === 504) {
       // The control plane started the create and never heard how it ended.
       // Retry the SAME id (idempotent), never another provider.
-      throw new FleetDispatchUncertainError(
-        await errorMessage(resp, 'the fleet lost the answer to this request'),
-      );
+      const { message, code } = await errorBody(resp, 'the fleet lost the answer to this request');
+      throw new FleetDispatchUncertainError(message, code);
     }
     if (resp.status === 502) {
       // A 502 is the edge in front of the control plane ("Application failed
