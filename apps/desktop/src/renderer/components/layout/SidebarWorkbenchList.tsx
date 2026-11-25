@@ -116,13 +116,11 @@ export function SessionsHeader({ workbenches, openId }: { workbenches: Workbench
     [workbenches, rows, chats]
   );
   const [confirmingAll, setConfirmingAll] = useState(false);
-  const [archivingAll, setArchivingAll] = useState(false);
 
-  const archiveAll = async () => {
-    setArchivingAll(true);
-    await archiveWorkbenches(candidates.map((w) => w.id), openId);
-    setArchivingAll(false);
+  // The sessions leave the sidebar at once, so the dialog closes without waiting for the server.
+  const archiveAll = () => {
     setConfirmingAll(false);
+    void archiveWorkbenches(candidates.map((w) => w.id), openId);
   };
 
   return (
@@ -161,9 +159,8 @@ export function SessionsHeader({ workbenches, openId }: { workbenches: Workbench
           </>
         }
         confirmLabel="Archive all"
-        busy={archivingAll}
         confirmDisabled={candidates.length === 0}
-        onConfirm={() => void archiveAll()}
+        onConfirm={archiveAll}
         onCancel={() => setConfirmingAll(false)}
       />
     </>

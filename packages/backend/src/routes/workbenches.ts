@@ -162,6 +162,11 @@ const MAX_EVENT_PAGE = 2000;
 const MAX_LOCAL_EVENT_BATCH = 1000;
 /** One "Archive all". Each archive answers fast (the save runs later), so this bounds the request time. */
 const MAX_BULK_ARCHIVE = 200;
+/**
+ * Archives that one "Archive all" runs at once. Each one reads its box from the
+ * fleet before it answers, so one after another takes seconds for a long list.
+ */
+const BULK_ARCHIVE_CONCURRENCY = 8;
 
 const CHAT_STATUSES: readonly WorkbenchChatStatus[] = ['idle', 'running', 'awaiting_input', 'error'];
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -974,8 +979,8 @@ export function workbenchRoutes(): Router {
 
   /**
    * Archive many sessions in one request, for "Archive all". Each id is checked
-   * and archived on its own: an unknown, foreign or failed id goes into
-   * `failed` and the others continue.
+   * and archived on its own, a few at a time: an unknown, foreign or failed id
+   * goes into `failed` and the others continue.
    */
   router.post('/archive', async (req, res) => {
     const ids: unknown = req.body?.ids;
@@ -993,30 +998,37 @@ export function workbenchRoutes(): Router {
       bad(res, 403, `Sessions are not available: ${workbenchesRefusalReason()}.`, 'workbenches_unavailable');
       return;
     }
-    const access = new Map<string, boolean>();
-    const mayArchive = async (workspaceId: string) => {
+    const access = new Map<string, Promise<boolean>>();
+    const mayArchive = (workspaceId: string) => {
       let allowed = access.get(workspaceId);
-      if (allowed === undefined) {
-        allowed = await requireWorkspaceAccess(req, workspaceId).then(() => true, () => false);
+      if (!allowed) {
+        allowed = requireWorkspaceAccess(req, workspaceId).then(() => true, () => false);
         access.set(workspaceId, allowed);
       }
       return allowed;
     };
-    const archived: WorkbenchRow[] = [];
-    const failed: Array<{ id: string; error: string }> = [];
-    for (const id of unique) {
+    type Outcome = { row: WorkbenchRow } | { failed: { id: string; error: string } };
+    const archiveOne = async (id: string): Promise<Outcome> => {
       const row = await getWorkbench(id);
-      if (!row || !(await mayArchive(row.workspaceId))) {
-        failed.push({ id, error: 'Session not found' });
-        continue;
-      }
+      if (!row || !(await mayArchive(row.workspaceId))) return { failed: { id, error: 'Session not found' } };
       try {
-        archived.push(await archiveWorkbench(row.id));
+        return { row: await archiveWorkbench(row.id) };
       } catch (err) {
         console.warn(`[workbench] bulk archive of ${id} failed:`, err);
-        failed.push({ id, error: fleetErrorAsRefusal(err)?.message ?? 'Could not archive the session' });
+        return { failed: { id, error: fleetErrorAsRefusal(err)?.message ?? 'Could not archive the session' } };
       }
-    }
+    };
+    const outcomes = new Array<Outcome>(unique.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < unique.length) {
+        const i = next++;
+        outcomes[i] = await archiveOne(unique[i]!);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(BULK_ARCHIVE_CONCURRENCY, unique.length) }, worker));
+    const archived = outcomes.flatMap((o) => ('row' in o ? [o.row] : []));
+    const failed = outcomes.flatMap((o) => ('failed' in o ? [o.failed] : []));
     ok(res, { archived: await publicWorkbenches(archived), failed });
   });
 

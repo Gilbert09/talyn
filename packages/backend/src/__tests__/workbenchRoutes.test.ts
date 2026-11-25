@@ -891,6 +891,17 @@ describe('workbench routes', () => {
       expect((await getWorkbench(b.id))?.archivedAt).not.toBeNull();
     });
 
+    it('archives more sessions than run at once and answers them in the order asked', async () => {
+      const ids: string[] = [];
+      for (let i = 0; i < 11; i++) ids.push((await createLocalWorkbench()).id);
+      const asked = [...ids.slice(5), 'missing', ...ids.slice(0, 5)];
+      const res = await call('POST', '/workbenches/archive', { ids: asked });
+      expect(res.status).toBe(200);
+      expect(res.body.data.archived.map((w: Loose) => w.id)).toEqual(asked.filter((id) => id !== 'missing'));
+      expect(res.body.data.failed).toEqual([{ id: 'missing', error: 'Session not found' }]);
+      for (const id of ids) expect((await getWorkbench(id))?.archivedAt).not.toBeNull();
+    });
+
     it('reports unknown and foreign ids as not found and still archives the others', async () => {
       const mine = await createLocalWorkbench();
       const theirs = await createLocalWorkbench();
