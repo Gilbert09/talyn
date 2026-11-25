@@ -1,9 +1,22 @@
-import type { ContextAttentionReason, SpaceSessionRow, Workbench, WorkbenchBackground, WorkbenchChat } from '@talyn/shared';
+import {
+  CODE_REVIEW_PHASE_LABELS,
+  sessionReviewState,
+  type ContextAttentionReason,
+  type SessionReviewFacts,
+  type SpaceSessionRow,
+  type Workbench,
+  type WorkbenchBackground,
+  type WorkbenchChat,
+} from '@talyn/shared';
 import type { PRRow } from './api';
 import type { WorkbenchPrLike } from './workbenchFormat';
 import { primaryWorkbenchAction } from './workbenchActions';
 
-type SessionPr = Pick<PRRow, 'number' | 'state'> & { summary: WorkbenchPrLike['summary'] };
+type SessionPr = Pick<PRRow, 'number' | 'state'> & {
+  summary: WorkbenchPrLike['summary'];
+  /** Only the open PR store has the code review. */
+  codeReview?: SessionReviewFacts | null;
+};
 
 export function sessionPr(workbench: Pick<Workbench, 'pr'>, storeRow: PRRow | null | undefined): SessionPr | null {
   if (storeRow) return storeRow;
@@ -22,8 +35,9 @@ export function sessionPr(workbench: Pick<Workbench, 'pr'>, storeRow: PRRow | nu
 
 /**
  * One answer to "what is this session doing, and does it need me?", for the
- * sidebar row. In priority order: a failure, then live work, then a reply
- * that waits for you, then a running background job, then the pull request's
+ * sidebar row. In priority order: a failure, then live work, then a question
+ * that waits for you, then a running code review of the pull request, then an
+ * unread reply, then a running background job, then the pull request's
  * state (a CI wake-up shows as waiting for CI), then a scheduled wake-up. A new pull request that is the only unseen
  * news (`prOnlyUnseen`) shows the PR mark, not the dot.
  *
@@ -37,6 +51,7 @@ export type SessionStateKind =
   | 'working'
   | 'needs_reply'
   | 'background_job'
+  | 'code_review'
   | 'pr_opened'
   | 'pr_attention'
   | 'ready_to_merge'
@@ -53,6 +68,8 @@ export interface SessionState {
   kind: SessionStateKind;
   /** Plain words for the tooltip and for assistive tech. */
   label: string;
+  /** A state that wins over an unread reply sets this, so the row still shows the reply as unread. */
+  unread?: boolean;
 }
 
 /** Derive the best state available in the compact space-session payload. */
@@ -143,7 +160,18 @@ export function sessionState(
   if (chats.some((c) => c.status === 'awaiting_input')) {
     return { kind: 'needs_reply', label: 'Waiting for your answer' };
   }
-  if (chats.some((c) => unread[c.id])) {
+  const hasUnread = chats.some((c) => unread[c.id]);
+  // The review starts when the agent stops, so an unread reply is usually there too.
+  // The review is the newer news: it shows in the icon, and the reply keeps the bold title.
+  const review = pr?.state === 'open' ? sessionReviewState(pr.codeReview) : 'none';
+  if (pr && (review === 'running' || review === 'waiting')) {
+    const label =
+      review === 'waiting'
+        ? `#${pr.number}: code review waits for a runner`
+        : `#${pr.number}: code review running (${CODE_REVIEW_PHASE_LABELS[pr.codeReview!.phase].toLowerCase()})`;
+    return hasUnread ? { kind: 'code_review', label, unread: true } : { kind: 'code_review', label };
+  }
+  if (hasUnread) {
     if (prOnlyUnseen && pr && pr.state === 'open') {
       return { kind: 'pr_opened', label: `Pull request opened: #${pr.number}` };
     }

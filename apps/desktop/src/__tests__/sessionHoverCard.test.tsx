@@ -370,3 +370,57 @@ describe('space session hover card', () => {
     );
   });
 });
+
+describe('session hover card: code review', () => {
+  function withReview(review: Record<string, unknown>) {
+    usePullRequestStore.setState({
+      rows: [{ ...prRow(), codeReview: { staleForHead: false, deferredSince: null, openCount: 0, counts: { blocker: 0, major: 0, minor: 0, nit: 0 }, phasePlan: [], ...review } }] as never,
+    });
+  }
+  function reviewLine() {
+    return document.querySelector('[data-attr="session-glance-code-review"]');
+  }
+
+  it('shows a running review in the row icon and the card', async () => {
+    withReview({ phase: 'validating' });
+    show();
+    expect(document.querySelector('[data-attr="session-state-code-review"]')).not.toBeNull();
+    await hover(row());
+    expect(card()!.textContent).toContain('#134522: code review running (checking the findings)');
+    expect(reviewLine()!.textContent).toBe('Code review running: checking the findings');
+  });
+
+  it('keeps the title bold when a reply is unread under a running review', () => {
+    withReview({ phase: 'reviewing' });
+    store().upsertChat({ id: 'c1', workbenchId: 'incidents', status: 'idle', agent: 'claude', createdAt: '2026-10-13T00:00:00Z', updatedAt: '2026-10-13T00:00:00Z' } as WorkbenchChat);
+    useWorkbenchStore.setState({ unread: { c1: true } });
+    show();
+    expect(document.querySelector('[data-attr="session-state-code-review"]')).not.toBeNull();
+    expect(row().querySelector('.font-semibold')).not.toBeNull();
+  });
+
+  it.each([
+    [{ phase: 'preparing', deferredSince: '2026-11-25T00:00:00Z' }, 'Code review waits for a runner'],
+    [{ phase: 'failed' }, 'Code review failed'],
+    [{ phase: 'ready' }, 'Code review: no open findings'],
+    [{ phase: 'ready', openCount: 1, counts: { blocker: 0, major: 1, minor: 0, nit: 0 } }, 'Code review: 1 open finding'],
+    [{ phase: 'ready', openCount: 3, counts: { blocker: 2, major: 1, minor: 0, nit: 0 } }, 'Code review: 3 open findings, 2 must fix'],
+  ])('says %o in the card', async (review, text) => {
+    withReview(review);
+    show();
+    await hover(row());
+    expect(reviewLine()!.textContent).toBe(text);
+  });
+
+  it.each([
+    ['no review', null],
+    ['a stopped review', { phase: 'cancelled' }],
+    ['findings for an older commit', { phase: 'ready', openCount: 2, staleForHead: true }],
+  ])('shows no review line for %s', async (_name, review) => {
+    if (review) withReview(review);
+    show();
+    await hover(row());
+    expect(card()).not.toBeNull();
+    expect(reviewLine()).toBeNull();
+  });
+});

@@ -237,8 +237,8 @@ function GroupHeader({
   const Chevron = expanded ? ChevronDown : ChevronRight;
   // A collapsed group must not hide a reply: its name goes bold, as an unread row does.
   const unreadHidden = hidden.filter((wb) => {
-    const kind = states.get(wb.id)?.kind;
-    return kind === 'needs_reply' || kind === 'pr_opened';
+    const state = states.get(wb.id);
+    return state?.kind === 'needs_reply' || state?.kind === 'pr_opened' || !!state?.unread;
   }).length;
   return (
     <button
@@ -295,7 +295,7 @@ export function WorkbenchRow({
     attention,
     pullRequest?.number,
   );
-  const isUnread = state.kind === 'needs_reply' || state.kind === 'pr_opened';
+  const isUnread = state.kind === 'needs_reply' || state.kind === 'pr_opened' || !!state.unread;
   const done = pullRequest?.state === 'merged' || pullRequest?.state === 'closed';
   const RuntimeIcon = workbench.runtime === 'local' ? Laptop : Cloud;
   const runtimeLabel = workbench.runtime === 'local' ? 'Local worktree' : 'Sandbox';

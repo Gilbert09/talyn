@@ -8,6 +8,7 @@ import {
   GitPullRequestDraft,
   Hourglass,
   Loader2,
+  ScanSearch,
   Timer,
 } from 'lucide-react';
 import type { WorkbenchChat } from '@talyn/shared';
@@ -83,6 +84,8 @@ export function SessionStateIcon({ state }: { state: SessionState }) {
       return <span className={cn(dot, 'bg-info')} aria-label={label} />;
     case 'background_job':
       return <Timer className={cn(icon, 'text-success')} aria-label={label} data-attr="session-state-background-job" />;
+    case 'code_review':
+      return <ScanSearch className={cn(icon, 'animate-pulse text-violet-500')} aria-label={label} data-attr="session-state-code-review" />;
     case 'pr_opened':
       return <GitPullRequest className={cn(icon, 'text-success')} aria-label={label} data-attr="sidebar-workbench-pr-opened" />;
     case 'pr_attention':
