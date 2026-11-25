@@ -630,25 +630,6 @@ export const FEATURE_FLAGS = {
     releaseScopes: ['onboarding'],
   },
 
-  /**
-   * Sandbox host failover: when a turn cannot wake its box because the box's
-   * fleet host does not answer (`host_unresponsive`, `host_silent`, or client
-   * timeouts while the fleet API answers), Talyn replaces the box after a
-   * short bound, from the last checkpoint, and runs the message on the new
-   * box. Only before the agent starts. The old box is kept for an operator.
-   *
-   * Server-only, asked for the workspace OWNER. Fallback OFF and gated: with
-   * the flag off or PostHog down, the turn waits as before.
-   */
-  sandboxHostFailover: {
-    posthogKey: 'sandbox-host-failover',
-    envOverride: 'SANDBOX_HOST_FAILOVER_ENABLED',
-    fallback: false,
-    description: 'Sandbox host failover — replace a box whose fleet host does not answer, from its checkpoint',
-    availability: 'gated',
-    releaseScopes: [],
-  },
-
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */

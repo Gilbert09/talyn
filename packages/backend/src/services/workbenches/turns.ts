@@ -70,7 +70,7 @@ import {
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { notifyPrSessionChanged } from './prSessions.js';
 import { isHibernationFetchFailed, isHostSilentAnswer, isWakeRefusal, localRuntimeError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
-import { HOST_FAILOVER, hostFailoverEnabled, hostFailoverNote, hostNotAnswering } from './hostFailover.js';
+import { HOST_FAILOVER, hostFailoverNote, hostNotAnswering } from './hostFailover.js';
 import { capacityWaitDelayMs, PROVISION_CAPACITY_WAIT, WAITING_FOR_SANDBOX_MESSAGE } from './lifecycle.js';
 import { isSizeRefusal } from './sandboxSize.js';
 import { safeMarker } from './execFraming.js';
@@ -1141,8 +1141,8 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     if (!launched && firstAttempt === 0 && isWakeRefusal(err) && !isSizeRefusal(err)) {
       return capacityWaitOutcome(early, chat, message, turn, err, events);
     }
-    // A 504 `host_silent` is not a refusal that waits, unless host failover is on.
-    if (!launched && firstAttempt === 0 && isHostSilentAnswer(err) && (await hostFailoverEnabled(chat.workspaceId))) {
+    // A 504 `host_silent`: the box's host does not answer. Wait, and fail over after the bound.
+    if (!launched && firstAttempt === 0 && isHostSilentAnswer(err)) {
       return capacityWaitOutcome(early, chat, message, turn, err as FleetDispatchUncertainError, events);
     }
     if (agentMayBeRunning) return handoffOutcome('the agent may be running and its log could not be followed', err);
@@ -1292,7 +1292,7 @@ async function requeueForReplacement(
  * (`PROVISION_CAPACITY_WAIT.maxMs`, counted from the first refusal) the turn
  * fails.
  *
- * With the `sandbox-host-failover` flag, a box whose host has not answered
+ * A box whose host has not answered
  * for `HOST_FAILOVER.silentForMs` is replaced, and the message runs on the
  * new box (`failOverSilentHost`).
  */
@@ -1310,7 +1310,7 @@ async function capacityWaitOutcome(
   // A turn that already failed over keeps the bound of its first wait, and does not fail over again.
   const failedOver = message.hostFailover?.turn === turn ? message.hostFailover : undefined;
   const startedAt = prior ? Date.parse(prior.startedAt) : failedOver ? Date.parse(failedOver.waitStartedAt) : now;
-  const hostSilent = wb !== null && (await hostFailoverEnabled(wb.workspaceId)) && (await hostNotAnswering(wb, err));
+  const hostSilent = wb !== null && (await hostNotAnswering(wb, err));
   const hostSilentSince = hostSilent ? (prior?.hostSilentSince ? Date.parse(prior.hostSilentSince) : now) : null;
   if (wb && !failedOver && hostSilentSince !== null && now - hostSilentSince >= HOST_FAILOVER.silentForMs) {
     const replaced = await failOverSilentHost(wb, chat, message, turn, events, now - hostSilentSince, startedAt);
@@ -1561,10 +1561,9 @@ export async function createCheckpoint(
  * move before the turn runs. Returns the row to run the turn on.
  */
 async function checkpointAndCheckDisk(wb: WorkbenchRow, chatId: string, turn: number, skipCheckpoint = false): Promise<WorkbenchRow> {
-  const first = await createCheckpoint(wb, chatId, turn, skipCheckpoint).catch(async (err) => {
+  const first = await createCheckpoint(wb, chatId, turn, skipCheckpoint).catch((err) => {
     // This exec wakes the box: a box that cannot wake fails every step after it, so the turn waits for room instead.
-    if (err instanceof FleetRunNotFoundError || isWakeRefusal(err)) throw err;
-    if (isHostSilentAnswer(err) && (await hostFailoverEnabled(wb.workspaceId))) throw err;
+    if (err instanceof FleetRunNotFoundError || isWakeRefusal(err) || isHostSilentAnswer(err)) throw err;
     console.warn(`[workbench] checkpoint for chat ${chatId} turn ${turn} failed:`, err);
     return { sha: null, disk: null, error: err instanceof Error ? err.message : String(err) };
   });

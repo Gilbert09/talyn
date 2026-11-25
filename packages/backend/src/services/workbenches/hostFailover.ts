@@ -1,4 +1,3 @@
-import { workspaceHasFeature } from '../featureFlags.js';
 import { isFleetTimeout, isHostSilentAnswer } from './errors.js';
 import { fleetClientFor } from './sandboxRuntime.js';
 import type { WorkbenchRow } from './store.js';
@@ -13,15 +12,6 @@ import { checkpointTime } from './workCheckpointScripts.js';
 export const HOST_FAILOVER = {
   silentForMs: 2 * 60_000,
 };
-
-/** Whether host failover is on for the workspace (`sandbox-host-failover`). Off when the flag cannot be read. */
-export async function hostFailoverEnabled(workspaceId: string): Promise<boolean> {
-  try {
-    return (await workspaceHasFeature('sandboxHostFailover', workspaceId)).enabled;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Whether a refusal says the box's host does not answer. The fleet says so

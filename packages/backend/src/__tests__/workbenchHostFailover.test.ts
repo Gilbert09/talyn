@@ -37,7 +37,6 @@ const { NO_FREE_SANDBOX_TURN_MESSAGE, isWaitingForSandbox, sendMessage, setTurnR
   await import('../services/workbenches/turns.js');
 const { HOST_FAILOVER, hostFailoverNote } = await import('../services/workbenches/hostFailover.js');
 const { SANDBOX_HOST_FAILOVER_MESSAGE, resetLostRecoveryForTests } = await import('../services/workbenches/recovery.js');
-const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 
 const DEFAULT_WAIT = { ...PROVISION_CAPACITY_WAIT };
 const DEFAULT_FAILOVER = { ...HOST_FAILOVER };
@@ -69,8 +68,6 @@ describe('a turn fails over from a box whose host does not answer', () => {
 
   beforeEach(async () => {
     vi.stubEnv('TALYN_TOKEN_KEY', randomBytes(32).toString('base64'));
-    vi.stubEnv('SANDBOX_HOST_FAILOVER_ENABLED', 'true');
-    resetFeatureFlagsForTests();
     resetWorkbenchDrainForTests();
     resetLostRecoveryForTests();
     setTurnRetryDelaysForTests([0]);
@@ -131,7 +128,6 @@ describe('a turn fails over from a box whose host does not answer', () => {
     Object.assign(HOST_FAILOVER, DEFAULT_FAILOVER);
     resetWorkbenchDrainForTests();
     resetLostRecoveryForTests();
-    resetFeatureFlagsForTests();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await testDb.cleanup();
@@ -365,32 +361,19 @@ describe('a turn fails over from a box whose host does not answer', () => {
     expect((await results()).map((e) => [e.turn, e.event.is_error])).toEqual([[1, true]]);
   });
 
-  describe('with the flag off', () => {
-    beforeEach(() => {
-      vi.stubEnv('SANDBOX_HOST_FAILOVER_ENABLED', 'false');
-      resetFeatureFlagsForTests();
-      Object.assign(HOST_FAILOVER, { silentForMs: 0 });
-    });
+  it('waits on a 504 host_silent instead of failing the turn', async () => {
+    Object.assign(HOST_FAILOVER, { silentForMs: 60_000 });
+    refusal = SILENT_HOST[1][1];
+    await sendMessage('chat', { text: 'go' });
+    await waiting(3);
+    expect((await chat()).queuedMessages[0].capacityWait).toMatchObject({ reason: 'capacity', hostSilentSince: expect.any(String) });
+    expect(await results()).toEqual([]);
+    expect(agentRuns).toBe(0);
+    expect(await workbench()).toMatchObject({ status: 'ready', sandboxId: OLD_BOX });
 
-    it.each([SILENT_HOST[0], SILENT_HOST[3]])('waits as before on %s, and never replaces the box', async (_name, make) => {
-      refusal = make;
-      await sendMessage('chat', { text: 'go' });
-      await waiting(3);
-      expect((await chat()).queuedMessages[0].capacityWait).toMatchObject({ reason: 'capacity' });
-      expect((await chat()).queuedMessages[0].capacityWait?.hostSilentSince).toBeUndefined();
-      expect(fleet.pings).toBe(0);
-      expect(await workbench()).toMatchObject({ status: 'ready', sandboxId: OLD_BOX });
-      expect(scheduleProvision).not.toHaveBeenCalled();
-      expect(await failoverNotes()).toEqual([]);
-    });
-
-    it('does not wait on a 504 host_silent', async () => {
-      refusal = SILENT_HOST[1][1];
-      await sendMessage('chat', { text: 'go' });
-      await vi.waitFor(async () => expect(agentRuns + (await results()).length).toBeGreaterThan(0), { timeout: 5000 });
-      expect(isWaitingForSandbox(await chat())).toBe(false);
-      expect(await workbench()).toMatchObject({ sandboxId: OLD_BOX });
-      expect(scheduleProvision).not.toHaveBeenCalled();
-    });
+    // The host answers again: the turn runs on the old box.
+    refusal = null;
+    await vi.waitFor(async () => expect(agentRuns).toBe(1), { timeout: 5000 });
+    expect(scheduleProvision).not.toHaveBeenCalled();
   });
 });
