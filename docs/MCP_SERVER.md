@@ -222,6 +222,7 @@ A local session runs in the desktop app. Tools that act on one answer: "This ses
 | `talyn_list_background` | List the session's background jobs: running ones, then recent ended ones. Read-only. |
 | `talyn_background_logs` | Read the last lines of a job's output (default 200, at most 2000). Records the exit if the job has exited. |
 | `talyn_stop_background` | Stop a job: INT, TERM, then KILL to its process group. |
+| `talyn_show_image` | Show an image file from the session's sandbox in the transcript. The path is absolute, or relative to the repository. PNG, JPEG, GIF or WebP of 2.5 MB or less; the type comes from the file's first bytes, so a text file is refused. The result is MCP image content, so the image also goes into the agent's context. Read-only. From a session token: the session itself only. |
 | `talyn_schedule_wakeup` | Ask Talyn to start a new turn in the chat later (`delay_seconds` or `at`, in the future, no upper bound). With `until_ci` (and `head_sha`), the turn starts when CI on the session's pull request settles, its head moves or it merges or closes; the time is then optional and is the latest (default 3 hours). `until_ci` is behind the `session-ci-wait` flag (on for every account). |
 | `talyn_list_wakeups` | List the session's wake-ups: scheduled, then recent fired, cancelled or failed ones. Read-only. |
 | `talyn_cancel_wakeup` | Cancel a scheduled wake-up. |

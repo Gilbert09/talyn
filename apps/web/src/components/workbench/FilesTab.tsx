@@ -7,6 +7,7 @@ import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { buildFileTree, type FileTreeNode } from '../../lib/workbenchFormat';
 import { needsWake, type WorkbenchOps } from '../../lib/workbenchOps';
 import { RECONNECTING_TEXT, readWithReconnect } from '../../lib/sandboxReconnect';
+import { MarkdownImage } from '../../lib/imagePreview';
 import { FileIcon } from './FileIcon';
 import { StoredBanner } from './StoredBanner';
 import { Button } from '../ui/button';
@@ -197,6 +198,35 @@ function TreeLevel({
   );
 }
 
+const IMAGE_MIME_BY_MAGIC: { mime: string; test: (b: Uint8Array) => boolean }[] = [
+  { mime: 'image/png', test: (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
+  { mime: 'image/jpeg', test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  { mime: 'image/gif', test: (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38 },
+  {
+    mime: 'image/webp',
+    test: (b) => b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50,
+  },
+];
+
+/** The image type of base64 content, read from its first bytes. Null when it is not a supported image. */
+function imageMime(base64: string): string | null {
+  try {
+    const head = atob(base64.slice(0, 16));
+    const bytes = Uint8Array.from(head, (c) => c.charCodeAt(0));
+    return IMAGE_MIME_BY_MAGIC.find((m) => m.test(bytes))?.mime ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function FileImage({ path, mime, content }: { path: string; mime: string; content: string }) {
+  return (
+    <div className="flex min-h-full items-center justify-center bg-muted/40 p-4" data-testid="file-image">
+      <MarkdownImage src={`data:${mime};base64,${content}`} alt={path} className="max-h-[70vh] bg-background" />
+    </div>
+  );
+}
+
 function FileViewer({ path, ops, onClose }: { path: string; ops: WorkbenchOps; onClose: () => void }) {
   const [file, setFile] = useState<WorkbenchFileContent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -252,7 +282,14 @@ function FileViewer({ path, ops, onClose }: { path: string; ops: WorkbenchOps; o
     );
   }
   else if (!file) body = loading;
-  else if (file.binary) body = <p className="p-3 text-xs text-muted-foreground">{path} is a binary file.</p>;
+  else if (file.binary) {
+    const mime = imageMime(file.content);
+    body = mime ? (
+      <FileImage path={path} mime={mime} content={file.content} />
+    ) : (
+      <p className="p-3 text-xs text-muted-foreground">{path} is a binary file.</p>
+    );
+  }
   else {
     body = (
       <Suspense fallback={loading}>
@@ -282,7 +319,7 @@ function FileViewer({ path, ops, onClose }: { path: string; ops: WorkbenchOps; o
           <X className="h-3 w-3" />
         </button>
       </div>
-      <div className="min-h-0 flex-1">{body}</div>
+      <div className="min-h-0 flex-1 overflow-auto">{body}</div>
     </div>
   );
 }

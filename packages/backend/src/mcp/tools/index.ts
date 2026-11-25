@@ -14,6 +14,7 @@ import type { SessionMcpBinding } from '../../services/sessionMcpToken.js';
 import { ACCOUNT } from './account.js';
 import { BACKGROUND } from './background.js';
 import { CODEREVIEW } from './codeReview.js';
+import { IMAGES } from './images.js';
 import { LOOPS } from './loops.js';
 import { MCPSERVERS } from './mcpServers.js';
 import { MEMORY } from './memory.js';
@@ -43,7 +44,17 @@ export interface McpToolDefinition {
   };
   /** Hide the tool when this account feature is off. Routes check access independently. */
   feature?: AccountFeatureFlagKey;
-  handler: (ownerId: string, args: Record<string, unknown>, ctx?: McpCallContext) => Promise<string>;
+  /** Text, or MCP content for a result that is more than text (an image). */
+  handler: (ownerId: string, args: Record<string, unknown>, ctx?: McpCallContext) => Promise<string | McpToolResult>;
+}
+
+export type McpToolContent =
+  | { type: 'text'; text: string }
+  | { type: 'image'; data: string; mimeType: string };
+
+/** A tool result that the server sends unchanged. */
+export interface McpToolResult {
+  content: McpToolContent[];
 }
 
 /** Who is calling, beyond the owner. */
@@ -61,6 +72,7 @@ export const TOOLS: McpToolDefinition[] = [
   ...TASKS,
   ...SESSIONS,
   ...BACKGROUND,
+  ...IMAGES,
   ...QUESTIONS,
   ...SPACES,
   ...MEMORY,

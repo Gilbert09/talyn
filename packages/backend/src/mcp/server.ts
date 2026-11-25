@@ -74,7 +74,7 @@ export function buildMcpServer(ownerId: string, ctx: McpCallContext = {}): Serve
     }
     const startedAt = Date.now();
     try {
-      const text = await tool.handler(
+      const result = await tool.handler(
         ownerId,
         (req.params.arguments ?? {}) as Record<string, unknown>,
         ctx
@@ -86,7 +86,7 @@ export function buildMcpServer(ownerId: string, ctx: McpCallContext = {}): Serve
         ok: true,
         meta: { durationMs: Date.now() - startedAt },
       });
-      return { content: [{ type: 'text' as const, text }] };
+      return typeof result === 'string' ? { content: [{ type: 'text' as const, text: result }] } : { content: result.content };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       debugBus.recordEvent({

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ExternalLink, ImageOff, X } from 'lucide-react';
+import { Download, ExternalLink, ImageOff, X } from 'lucide-react';
 import { cn } from './utils';
 
 /**
@@ -103,16 +103,29 @@ export function ImageLightbox({
       onClick={onClose}
     >
       <div className="absolute right-4 top-4 flex items-center gap-2">
-        <a
-          href={src}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(event) => event.stopPropagation()}
-          className="inline-flex items-center gap-1 rounded bg-white/10 px-2 py-1 text-xs text-white hover:bg-white/20"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          Open original
-        </a>
+        {/* A browser does not open a `data:` URL in a new tab, so that image downloads instead. */}
+        {src.startsWith('data:') ? (
+          <a
+            href={src}
+            download={downloadName(alt, src)}
+            onClick={(event) => event.stopPropagation()}
+            className="inline-flex items-center gap-1 rounded bg-white/10 px-2 py-1 text-xs text-white hover:bg-white/20"
+          >
+            <Download className="h-3.5 w-3.5" />
+            Download
+          </a>
+        ) : (
+          <a
+            href={src}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(event) => event.stopPropagation()}
+            className="inline-flex items-center gap-1 rounded bg-white/10 px-2 py-1 text-xs text-white hover:bg-white/20"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            Open original
+          </a>
+        )}
         <button
           ref={closeRef}
           type="button"
@@ -132,5 +145,29 @@ export function ImageLightbox({
       {caption && <div className="mt-3 max-w-full truncate text-xs text-white/70">{caption}</div>}
     </div>,
     document.body
+  );
+}
+
+/** A file name for a downloaded `data:` image: the last part of its label, or "image". */
+export function downloadName(alt: string, src: string): string {
+  const base = alt.split('/').pop()?.trim().replace(/[^\w.-]+/g, '-') || 'image';
+  if (/\.[a-z0-9]{2,5}$/i.test(base)) return base;
+  const ext = /^data:image\/([a-z0-9+.-]+)[;,]/i.exec(src)?.[1]?.toLowerCase().replace('jpeg', 'jpg').replace(/\+.*$/, '');
+  return ext ? `${base}.${ext}` : base;
+}
+
+/**
+ * The images that a tool call returned: a screenshot from a browser tool, or
+ * an image file that the agent opened. They show under the call without a
+ * click, and open full size like any other image.
+ */
+export function ToolImages({ images }: { images: { src: string; alt: string }[] }): React.ReactElement | null {
+  if (images.length === 0) return null;
+  return (
+    <div className="mt-1.5 ml-[2px] flex flex-wrap gap-2 border-l border-border pl-3" data-testid="tool-images">
+      {images.map((image, i) => (
+        <MarkdownImage key={i} src={image.src} alt={image.alt} className="max-h-60 border border-border" />
+      ))}
+    </div>
   );
 }

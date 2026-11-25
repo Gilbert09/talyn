@@ -1,5 +1,5 @@
 import type { ToolBlock, WorkbenchEvent } from '@talyn/shared';
-import { createContext, useContext } from 'react';
+import { createContext, useContext, useMemo, useRef, useState } from 'react';
 
 /** The seq of the event that holds a tool call: block keys are `<seq>.<index>`. */
 export function toolSeq(tool: Pick<ToolBlock, 'key'>): number | null {
@@ -38,3 +38,24 @@ export interface TranscriptActions {
 }
 export const TranscriptContext = createContext<TranscriptActions | null>(null);
 export const useTranscriptActions = () => useContext(TranscriptContext);
+
+export type WholeStatus = 'idle' | 'loading' | 'failed' | 'ready';
+
+/**
+ * Loads the whole call of a slim tool on demand. The loaded call stays in the caller's state,
+ * so it leaves memory with the row. `tool` is the held call, merged with the whole one once loaded.
+ */
+export function useWholeTool(held: ToolBlock): { tool: ToolBlock; status: WholeStatus; loadWhole(): void; canLoad: boolean } {
+  const actions = useTranscriptActions();
+  const [whole, setWhole] = useState<{ status: Exclude<WholeStatus, 'ready'> } | { status: 'ready'; tool: ToolBlock }>({ status: 'idle' });
+  const asked = useRef(false);
+  const tool = useMemo(() => whole.status === 'ready' ? { ...held, input: whole.tool.input, output: whole.tool.output ?? held.output } : held, [whole, held]);
+  const loadWhole = () => {
+    if (!actions || asked.current) return;
+    asked.current = true;
+    setWhole({ status: 'loading' });
+    const failed = () => { asked.current = false; setWhole({ status: 'failed' }); };
+    actions.loadFullTool(held).then((loaded) => { if (loaded) setWhole({ status: 'ready', tool: loaded }); else failed(); }, failed);
+  };
+  return { tool, status: whole.status, loadWhole, canLoad: Boolean(actions) };
+}

@@ -85,6 +85,15 @@ describe('slimming events at ingest', () => {
     expect(content[1]).toEqual({ type: 'image', source: { type: 'base64' } });
     expect(eventSize(slim)).toBeLessThan(2000);
   });
+  it('drops the data of an MCP image part and marks the tool', () => {
+    const slim = slimEvent(raw(1, { type: 'user', message: { content: [
+      { type: 'tool_result', tool_use_id: 't1', content: [{ type: 'image', data: 'A'.repeat(500000), mimeType: 'image/png' }, { type: 'text', text: 'ok' }] },
+    ] } }));
+    const content = slim.event.message!.content as Array<{ content: unknown }>;
+    expect(content[0].content).toEqual([{ type: 'image', mimeType: 'image/png' }, { type: 'text', text: 'ok' }]);
+    expect(slimTools(slim.event)).toEqual(['t1']);
+    expect(eventSize(slim)).toBeLessThan(2000);
+  });
   it('cuts a permission request input', () => {
     const slim = slimEvent(raw(1, { type: 'talyn_permission_request', requestId: 'r', tool_name: 'Write', tool_input: { content: huge } }));
     expect((slim.event.tool_input as { content: string }).content).toHaveLength(TOOL_TEXT_CAP);

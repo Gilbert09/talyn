@@ -8,11 +8,14 @@ import React, {
 import { ChevronDown, ChevronRight, Shield } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { renderMarkdownish } from '../../lib/markdown';
+import { ToolImages } from '../../lib/imagePreview';
 import type { AgentEvent, GroupedBlock, ToolBlock } from '@talyn/shared';
 import {
   buildBlocks,
   describeTool,
   formatToolOutput,
+  toolImageLabel,
+  toolOutputImages,
   groupToolRuns,
   groupedBlockSignature,
   mergeToolBlocks,
@@ -280,6 +283,10 @@ function ToolBlockView({
   const detail = isCommand ? described.detail : shortenPath(described.detail);
 
   const out = useMemo(() => formatToolOutput(output), [output]);
+  const images = useMemo(
+    () => toolOutputImages(output).map((image) => ({ src: image.src, alt: toolImageLabel(name, input) })),
+    [output, name, input]
+  );
 
   const maxLines = isError ? PREVIEW_LINES_ERROR : PREVIEW_LINES;
   const maxChars = isError ? PREVIEW_CHARS_ERROR : PREVIEW_CHARS;
@@ -364,6 +371,7 @@ function ToolBlockView({
           </pre>
         </div>
       )}
+      <ToolImages images={images} />
     </div>
   );
 }
@@ -397,6 +405,11 @@ function ToolGroupView({
   // happening. `useState` takes this once, at mount, so a group that finishes
   // while open STAYS open — content is never yanked away mid-read.
   const [open, setOpen] = useState(isError || running);
+  // A closed group still shows its images: a screenshot is the result the person wants to see.
+  const images = useMemo(
+    () => tools.flatMap((t) => toolOutputImages(t.output).map((image) => ({ src: image.src, alt: toolImageLabel(t.name, t.input) }))),
+    [tools]
+  );
 
   return (
     <div className="font-mono text-[12px] min-w-0">
@@ -438,6 +451,7 @@ function ToolGroupView({
           ))}
         </div>
       )}
+      {!open && <ToolImages images={images} />}
     </div>
   );
 }

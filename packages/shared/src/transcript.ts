@@ -1450,11 +1450,93 @@ export function extractToolText(content: unknown): string | null {
       typeof (item as { text?: unknown }).text === 'string'
     ) {
       texts.push((item as { text: string }).text);
-    } else {
+    } else if (!item || typeof item !== 'object' || (item as { type?: unknown }).type !== 'image') {
       return null;
     }
+    // An image part is shown by `toolOutputImages`, not as text.
   }
   return texts.join('\n\n');
+}
+
+/** An image in a tool result, as a `data:` URL that an `<img>` can show. */
+export interface ToolOutputImage {
+  src: string;
+  mediaType: string;
+}
+
+const TOOL_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+/**
+ * The data URL of one image part, or null when the part is not a usable image.
+ *
+ * Two shapes arrive. Claude's own tools (Read of a `.png`) use the Anthropic
+ * shape `{type:'image', source:{type:'base64', media_type, data}}`. An MCP tool
+ * (a browser screenshot) can use the MCP shape `{type:'image', data, mimeType}`,
+ * which is what Codex passes through. SVG is not accepted: it is a document,
+ * not a picture.
+ */
+function imagePartSrc(part: unknown): ToolOutputImage | null {
+  if (!part || typeof part !== 'object') return null;
+  const p = part as { type?: unknown; source?: unknown; data?: unknown; mimeType?: unknown };
+  if (p.type !== 'image') return null;
+  let data: unknown;
+  let mediaType: unknown;
+  if (p.source && typeof p.source === 'object') {
+    const s = p.source as { type?: unknown; media_type?: unknown; data?: unknown };
+    if (s.type !== 'base64') return null;
+    data = s.data;
+    mediaType = s.media_type;
+  } else {
+    data = p.data;
+    mediaType = p.mimeType;
+  }
+  if (typeof data !== 'string' || !data || typeof mediaType !== 'string') return null;
+  const type = mediaType.toLowerCase();
+  if (!TOOL_IMAGE_TYPES.has(type) || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return null;
+  return { src: `data:${type};base64,${data}`, mediaType: type };
+}
+
+/**
+ * How many image parts a tool result holds, counted with or without their
+ * data. Mobile keeps a slim copy of each event with the image data removed,
+ * so it needs this to know that an image is there to load.
+ */
+export function toolOutputImageCount(output: unknown): number {
+  if (!Array.isArray(output)) return 0;
+  return output.filter((part) => part && typeof part === 'object' && (part as { type?: unknown }).type === 'image').length;
+}
+
+/**
+ * The label of an image that a tool call returned: the image file the call
+ * named (Read, `talyn_show_image`, a screenshot tool's `filename`), else the
+ * tool's own name without its MCP server prefix. The first argument of an
+ * unknown tool is often a flag such as `png`, so it is never the label.
+ */
+export function toolImageLabel(name: string, input: unknown): string {
+  const described = describeTool(name, input);
+  if (described.label === 'read' && described.detail) return described.detail;
+  if (input && typeof input === 'object') {
+    for (const key of ['path', 'file_path', 'filePath', 'filename']) {
+      const value = (input as Record<string, unknown>)[key];
+      if (typeof value === 'string' && /\.(png|jpe?g|gif|webp)$/i.test(value.trim())) return value.trim();
+    }
+  }
+  return name.replace(/^mcp__.+?__/, '') || 'image';
+}
+
+/**
+ * The images in a tool result: a screenshot that an MCP tool returned, or an
+ * image file that the agent opened with Read. The transcript shows them, so
+ * the person does not have to get the file out of the sandbox.
+ */
+export function toolOutputImages(output: unknown): ToolOutputImage[] {
+  if (!Array.isArray(output)) return [];
+  const images: ToolOutputImage[] = [];
+  for (const part of output) {
+    const image = imagePartSrc(part);
+    if (image) images.push(image);
+  }
+  return images;
 }
 
 /** JSON.stringify that survives a cycle rather than throwing inside a render. */
