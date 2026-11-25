@@ -6,6 +6,8 @@ import {
   FleetRunNotFoundError,
   FleetThrottleError,
   HIBERNATION_FETCH_FAILED,
+  HOST_SILENT,
+  HOST_UNRESPONSIVE,
 } from '../selfHosted/client.js';
 import {
   fleetApiToken,
@@ -33,6 +35,23 @@ export function isHibernationFetchFailed(err: unknown): boolean {
  */
 export function isWakeRefusal(err: unknown): err is FleetCapacityError | FleetThrottleError | FleetHttpError {
   return err instanceof FleetCapacityError || err instanceof FleetThrottleError || isHibernationFetchFailed(err);
+}
+
+/**
+ * The fleet says the box's host does not answer: the gateway refuses at once
+ * (503 `host_unresponsive`), or the host took the request and never answered
+ * (504 `host_silent`). Other boxes of the fleet can still answer.
+ */
+export function isHostSilentAnswer(err: unknown): boolean {
+  const code = err instanceof FleetCapacityError || err instanceof FleetHttpError || err instanceof FleetDispatchUncertainError
+    ? err.code
+    : undefined;
+  return code === HOST_UNRESPONSIVE || code === HOST_SILENT;
+}
+
+/** Talyn's own request to the fleet timed out. Whether the host or the whole fleet is silent is not known yet. */
+export function isFleetTimeout(err: unknown): err is FleetCapacityError {
+  return err instanceof FleetCapacityError && err.timedOut;
 }
 
 /**

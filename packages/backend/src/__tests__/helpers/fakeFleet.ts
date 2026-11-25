@@ -232,6 +232,16 @@ export class FakeFleet {
     this.deleted.push(id);
   }
 
+  /** While set, the fleet's health check fails with it, as when the whole fleet is down. */
+  pingError: Error | null = null;
+  pings = 0;
+
+  async ping() {
+    this.pings++;
+    if (this.pingError) throw this.pingError;
+    return { status: 'ok', version: 'test' };
+  }
+
   async getSandbox(id: string) {
     return { sandbox: { id, status: this.sandboxStatus, goldenStale: this.goldenStale }, terminal: false };
   }

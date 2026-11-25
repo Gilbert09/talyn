@@ -526,6 +526,12 @@ export interface WorkbenchCapacityWait {
    * ("Waking the sandbox").
    */
   reason: 'capacity' | 'waking';
+  /**
+   * When the box's fleet host first did not answer in this wait. After a short
+   * bound, Talyn replaces the box on another host (the `sandbox-host-failover`
+   * flag). Absent when the last refusal came from a host that answers.
+   */
+  hostSilentSince?: string;
 }
 
 export interface WorkbenchChat {
