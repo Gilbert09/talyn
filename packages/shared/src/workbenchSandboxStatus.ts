@@ -35,7 +35,7 @@ export type SandboxStatusState =
   | 'local'
   | 'unknown';
 
-export type SandboxActivityKind = 'turn' | 'queued' | 'capacity_wait' | 'waking' | 'setup' | 'script';
+export type SandboxActivityKind = 'turn' | 'queued' | 'capacity_wait' | 'waking' | 'setup' | 'script' | 'background';
 
 /** One thing that runs or waits on the session now. */
 export interface SandboxActivity {
@@ -45,7 +45,7 @@ export interface SandboxActivity {
   /** When it started, when known. */
   since: string | null;
   chatId?: string;
-  /** The script name, for `setup` and `script`. */
+  /** The script or job name, for `setup`, `script` and `background`. */
   name?: string;
 }
 
