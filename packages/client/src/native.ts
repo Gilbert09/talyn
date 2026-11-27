@@ -39,6 +39,8 @@ import type {
   TeamInvitePreview,
   TeamInviteTokenRequest,
   MoveToSpaceRequest,
+  SetSpaceNotificationsRequest,
+  SpaceNotificationPreferences,
   Space,
   SpaceItemsResponse,
   SpaceRepository,
@@ -3126,6 +3128,12 @@ export const spaces = {
   /** Move a task into a space, or back to Personal with null. Owner only. */
   moveTask: (taskId: string, spaceId: string | null) =>
     request<Task>('PUT', `/tasks/${taskId}/space`, { spaceId } satisfies MoveToSpaceRequest),
+  /** The spaces I muted. My own choice: it applies on every device and to no teammate. */
+  notificationPreferences: () => request<SpaceNotificationPreferences>('GET', '/space-notifications'),
+  setNotificationsMuted: (spaceId: string, muted: boolean) =>
+    request<SpaceNotificationPreferences>('PUT', `/spaces/${spaceId}/notifications`, {
+      muted,
+    } satisfies SetSpaceNotificationsRequest),
 };
 
 // ============================================================================

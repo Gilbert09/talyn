@@ -1,5 +1,5 @@
 import { spaces, teams, wsClient } from '@talyn/client/native';
-import type { SpaceItemsResponse, SpacePresenceEvent, SpacePresenceMember, SpaceSessionRow, SpacesTeam, SpaceTaskRow, TeamMember } from '@talyn/shared';
+import type { SpaceItemsResponse, SpaceNotificationPreferences, SpacePresenceEvent, SpacePresenceMember, SpaceSessionRow, SpacesTeam, SpaceTaskRow, TeamMember } from '@talyn/shared';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 import { useAuth, useMobileRuntime } from '../../auth/AuthProvider';
@@ -15,6 +15,20 @@ export function useTeams() {
   const offered = spacesOffered(useFeatures());
   const user = useAuth().user?.id ?? null;
   return useRemote<SpacesTeam[]>(offered && user ? `teams:${user}` : null, () => teams.list(), { intervalMs: 120_000 });
+}
+
+/** The spaces I muted. The server keeps it, so desktop, web and this phone read the same list. */
+export function useSpaceNotificationPreferences() {
+  const offered = spacesOffered(useFeatures());
+  const user = useAuth().user?.id ?? null;
+  const preferences = useRemote<SpaceNotificationPreferences>(offered && user ? `space-notifications:${user}` : null,
+    () => spaces.notificationPreferences(), { intervalMs: 120_000 });
+  const refresh = preferences.refresh;
+  useEffect(() => {
+    if (!offered || !user) return undefined;
+    return wsClient.on('space:notifications', () => { void refresh(); });
+  }, [offered, user, refresh]);
+  return preferences;
 }
 
 export function useTeamMembers(teamId: string | null) {

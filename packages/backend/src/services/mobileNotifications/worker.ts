@@ -14,6 +14,7 @@ import { ExpoPushProvider, mobileProviderAvailable, PushProviderError,
   type MobilePushProvider, type PushErrorClass, type PushMessage } from './provider.js';
 import { composeMobilePushText } from './text.js';
 import { deskPresence } from '../deskPresence.js';
+import { destinationInMutedSpace } from '../teams/notifications.js';
 
 export const MAX_PUSH_ATTEMPTS = 6;
 export const MOBILE_INSTALLATION_MAX_AGE_MS = 30 * 86_400_000;
@@ -84,6 +85,9 @@ async function preflight(row: OutboxRow, now: Date, desk: DeskCache): Promise<Pu
   const [setting] = await db.select().from(preferences).where(and(eq(preferences.ownerId, row.ownerId), eq(preferences.workspaceId, row.workspaceId))).limit(1);
   if (!setting?.preferences.enabled || !setting.preferences.categories[row.category]) {
     await settle(row, { state: 'cancelled', lastErrorClass: 'preferences_disabled' }); return null;
+  }
+  if (await destinationInMutedSpace(row.ownerId, row.destination, db)) {
+    await settle(row, { state: 'cancelled', lastErrorClass: 'space_muted' }); return null;
   }
   // Absent on rows saved before the field existed, which reads as on.
   if (setting.preferences.onlyWhenAway !== false && await atDesk(row.ownerId, desk)) {

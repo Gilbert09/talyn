@@ -246,6 +246,20 @@ export interface MoveToSpaceRequest {
   spaceId: string | null;
 }
 
+/**
+ * The caller's own notification choice per space. It is personal: a mute
+ * stops this person's alerts for the space's sessions and threads (and their
+ * pull requests) on every computer, browser and phone, and changes nothing
+ * for teammates. A space that is not listed notifies as usual.
+ */
+export interface SpaceNotificationPreferences {
+  mutedSpaceIds: string[];
+}
+
+export interface SetSpaceNotificationsRequest {
+  muted: boolean;
+}
+
 export interface SpacePresenceMember extends SpaceItemCreator {
   sessionId: string | null;
   state: 'active' | 'away';

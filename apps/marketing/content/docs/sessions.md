@@ -41,6 +41,17 @@ In the desktop app and the web app, **Settings > Notifications** holds all notif
 - On a computer, turn on a notification when an agent finishes, and a notification when a merge-queue pull request is blocked. These settings apply only to that computer or browser.
 - For your phone, turn workspace notifications on or off, and choose the types: session updates, PR reviews, CI failures, ready to merge and human input. You can get alerts only when you are away from your computer, and you can set quiet hours. A change on one device also applies to the others. Each phone must also allow notifications in the Talyn mobile app.
 
+The **Team spaces** group lets you turn off alerts for a space, such as Automations.
+This personal setting applies to your desktop, browser, and phone.
+Your teammates keep their own preferences.
+Sessions, threads, and tasks in a muted space send you no alerts.
+Linked pull requests are muted when all their sessions and tasks are in spaces you muted.
+This includes archived sessions.
+A pull request with a session or task in Personal can still send alerts.
+Turn the space on again to use your usual notification settings.
+If muted spaces leave the list, select **Restore alerts** to remove their mutes.
+This also works after a space is archived or you leave its team.
+
 Claude adds itself as a commit co-author by default. Turn this off under **Settings > Sessions > Commits**.
 
 ## See a session at a glance

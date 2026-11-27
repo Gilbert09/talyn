@@ -7,6 +7,7 @@ import { createTestDb } from '../helpers/testDb.js';
 import { FakeFleet, claudeTurnLines, isAgentTurn } from '../helpers/fakeFleet.js';
 import {
   repositories,
+  spaceNotificationMutes,
   spaceRepositories,
   spaces,
   tasks,
@@ -215,6 +216,8 @@ describe('space routes', () => {
 
   it.each([
     ['GET', '/teams'],
+    ['GET', '/space-notifications'],
+    ['PUT', '/spaces/space-1/notifications'],
     ['GET', '/spaces/space-1/sessions'],
     ['POST', '/teams/team-1/spaces'],
     ['PUT', '/workbenches/wb-x/space'],
@@ -226,6 +229,61 @@ describe('space routes', () => {
     const res = await call(method, path, ANA, method === 'GET' ? undefined : {});
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('spaces_unavailable');
+  });
+
+  describe('personal space notifications', () => {
+    it('lets members mute a space without changing a teammate preference', async () => {
+      expect((await call('GET', '/space-notifications', BEN)).body.data).toEqual({ mutedSpaceIds: [] });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await call('PUT', '/spaces/space-1/notifications', BEN, { muted: true });
+        expect(result.status).toBe(200);
+        expect(result.body.data).toEqual({ mutedSpaceIds: ['space-1'] });
+      }
+      expect(await testDb.db.select().from(spaceNotificationMutes)).toHaveLength(1);
+      expect((await call('GET', '/space-notifications', BEN)).body.data).toEqual({ mutedSpaceIds: ['space-1'] });
+      expect((await call('GET', '/space-notifications', ANA)).body.data).toEqual({ mutedSpaceIds: [] });
+
+      await call('PUT', '/spaces/space-1/notifications', ANA, { muted: true });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await call('PUT', '/spaces/space-1/notifications', BEN, { muted: false });
+        expect(result.status).toBe(200);
+        expect(result.body.data).toEqual({ mutedSpaceIds: [] });
+      }
+      expect((await call('GET', '/space-notifications', ANA)).body.data).toEqual({ mutedSpaceIds: ['space-1'] });
+    });
+
+    it.each(['space-2', 'missing'])('refuses notification changes for inaccessible space %s', async (spaceId) => {
+      expect((await call('PUT', `/spaces/${spaceId}/notifications`, BEN, { muted: true })).status).toBe(404);
+      expect((await call('PUT', `/spaces/${spaceId}/notifications`, BEN, { muted: false })).status).toBe(200);
+      expect(await testDb.db.select().from(spaceNotificationMutes)).toHaveLength(0);
+    });
+
+    it.each([undefined, null, 'true', 1, [], {}])('refuses an invalid mute value: %j', async (muted) => {
+      expect((await call('PUT', '/spaces/space-1/notifications', BEN, { muted })).status).toBe(400);
+      expect(await testDb.db.select().from(spaceNotificationMutes)).toHaveLength(0);
+    });
+
+    it('lets a former member remove only their own mute', async () => {
+      await call('PUT', '/spaces/space-1/notifications', BEN, { muted: true });
+      await call('PUT', '/spaces/space-1/notifications', ANA, { muted: true });
+      await testDb.db.delete(teamMembers).where(eq(teamMembers.userId, BEN));
+      expect((await call('PUT', '/spaces/space-1/notifications', BEN, { muted: true })).status).toBe(404);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await call('PUT', '/spaces/space-1/notifications', BEN, { muted: false });
+        expect(result.status).toBe(200);
+        expect(result.body.data).toEqual({ mutedSpaceIds: [] });
+      }
+      expect((await call('GET', '/space-notifications', ANA)).body.data).toEqual({ mutedSpaceIds: ['space-1'] });
+    });
+
+    it('keeps the preference for an archived space', async () => {
+      const result = await call('PUT', '/spaces/space-old/notifications', BEN, { muted: true });
+      expect(result.status).toBe(200);
+      expect(result.body.data).toEqual({ mutedSpaceIds: ['space-old'] });
+      expect((await call('GET', '/space-notifications', BEN)).body.data).toEqual({ mutedSpaceIds: ['space-old'] });
+      expect((await call('PUT', '/spaces/space-old/notifications', BEN, { muted: false })).body.data)
+        .toEqual({ mutedSpaceIds: [] });
+    });
   });
 
   describe('teams and spaces', () => {

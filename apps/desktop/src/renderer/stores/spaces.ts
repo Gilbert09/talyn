@@ -12,6 +12,7 @@ import type {
   WorkbenchChat,
 } from '@talyn/shared';
 import { api } from '../lib/api';
+import { useWorkspaceStore } from './workspace';
 
 export interface SpaceList<T> {
   items: T[];
@@ -45,6 +46,11 @@ interface SpacesState {
   presence: Record<string, SpacePresenceMember[]>;
   extraLoads: Record<string, ExtraLoadState>;
   settingsTeamId: string | null;
+  /** The spaces I muted. Mine only; the server keeps it for every device. */
+  mutedSpaceIds: string[];
+  notificationsLoaded: boolean;
+  notificationsError: string | null;
+  notificationsSaving: boolean;
   dialog: SpacesDialog | null;
 
   setTeams: (teams: SpacesTeam[]) => void;
@@ -60,6 +66,7 @@ interface SpacesState {
   setPresence: (spaceId: string, members: SpacePresenceMember[]) => void;
   setExtraLoad: (workbenchId: string, state: ExtraLoadState | null) => void;
   setSettingsTeamId: (teamId: string | null) => void;
+  setMutedSpaceIds: (ids: string[]) => void;
   openDialog: (dialog: SpacesDialog | null) => void;
   // Return true when a new row needs its creator from the server.
   applyWorkbench: (workbench: Workbench) => boolean;
@@ -69,6 +76,9 @@ interface SpacesState {
   applyTaskUpdate: (taskId: string, updates: Record<string, unknown>) => boolean;
   removeTask: (taskId: string) => void;
 }
+
+let notificationReadVersion = 0;
+let notificationRefreshPending = false;
 
 export const useSpacesStore = create<SpacesState>((set, get) => ({
   teams: null,
@@ -81,6 +91,10 @@ export const useSpacesStore = create<SpacesState>((set, get) => ({
   presence: {},
   extraLoads: {},
   settingsTeamId: null,
+  mutedSpaceIds: [],
+  notificationsLoaded: false,
+  notificationsError: null,
+  notificationsSaving: false,
   dialog: null,
 
   setTeams: (teams) => set({ teams, teamsError: null }),
@@ -105,7 +119,12 @@ export const useSpacesStore = create<SpacesState>((set, get) => ({
     set((s) => ({
       teams: (s.teams ?? []).map((t) => ({ ...t, spaces: t.spaces.filter((x) => x.id !== spaceId) })),
     })),
-  setSelfUserId: (selfUserId) => set({ selfUserId }),
+  setSelfUserId: (selfUserId) => {
+    if (selfUserId === get().selfUserId) return;
+    notificationReadVersion++;
+    notificationRefreshPending = false;
+    set({ selfUserId, mutedSpaceIds: [], notificationsLoaded: false, notificationsError: null, notificationsSaving: false });
+  },
   setMembers: (teamId, members) => set((s) => ({ members: { ...s.members, [teamId]: members } })),
   setSessions: (spaceId, list) =>
     set((s) => ({ sessions: { ...s.sessions, [spaceId]: { ...(s.sessions[spaceId] ?? EMPTY_LIST), ...list } } })),
@@ -121,6 +140,7 @@ export const useSpacesStore = create<SpacesState>((set, get) => ({
       return { extraLoads };
     }),
   setSettingsTeamId: (settingsTeamId) => set({ settingsTeamId }),
+  setMutedSpaceIds: (mutedSpaceIds) => set({ mutedSpaceIds }),
   openDialog: (dialog) => set({ dialog }),
 
   applyWorkbench: (wb) => {
@@ -246,6 +266,7 @@ function message(err: unknown, fallback: string): string {
 }
 
 export async function loadTeams(): Promise<void> {
+  void loadSpaceNotifications();
   try {
     useSpacesStore.getState().setTeams(await api.teams.list());
   } catch (err) {
@@ -253,6 +274,57 @@ export async function loadTeams(): Promise<void> {
     store.setTeamsError(message(err, 'Could not load your teams.'));
     if (store.teams === null) store.setTeams([]);
   }
+}
+
+export async function loadSpaceNotifications(): Promise<void> {
+  if (useSpacesStore.getState().notificationsSaving) {
+    notificationRefreshPending = true;
+    return;
+  }
+  const version = ++notificationReadVersion;
+  try {
+    const prefs = await api.spaces.notificationPreferences();
+    if (version !== notificationReadVersion) return;
+    useSpacesStore.setState({ mutedSpaceIds: prefs.mutedSpaceIds, notificationsLoaded: true, notificationsError: null });
+  } catch {
+    if (version !== notificationReadVersion) return;
+    useSpacesStore.setState({ notificationsError: 'Could not load space notification settings.' });
+  }
+}
+
+/** Show the choice at once. Restore it if the save fails. */
+export async function setSpaceMuted(spaceId: string, muted: boolean): Promise<void> {
+  const store = useSpacesStore.getState();
+  if (store.notificationsSaving) return;
+  const userId = store.selfUserId;
+  notificationReadVersion++;
+  const before = store.mutedSpaceIds;
+  useSpacesStore.setState({
+    notificationsSaving: true,
+    mutedSpaceIds: muted ? [...new Set([...before, spaceId])] : before.filter((id) => id !== spaceId),
+  });
+  try {
+    const prefs = await api.spaces.setNotificationsMuted(spaceId, muted);
+    if (useSpacesStore.getState().selfUserId !== userId) return;
+    useSpacesStore.setState({ mutedSpaceIds: prefs.mutedSpaceIds, notificationsLoaded: true, notificationsError: null });
+  } catch (err) {
+    if (useSpacesStore.getState().selfUserId === userId) useSpacesStore.setState({ mutedSpaceIds: before });
+    throw err;
+  } finally {
+    if (useSpacesStore.getState().selfUserId === userId) {
+      useSpacesStore.setState({ notificationsSaving: false });
+      if (notificationRefreshPending) {
+        notificationRefreshPending = false;
+        await loadSpaceNotifications();
+      }
+    }
+  }
+}
+
+/** Whether I muted the space of this session. Personal sessions are never muted. */
+export function isSpaceMuted(spaceId: string | null | undefined): boolean {
+  return useWorkspaceStore.getState().features?.spaces === true
+    && !!spaceId && useSpacesStore.getState().mutedSpaceIds.includes(spaceId);
 }
 
 export async function loadMembers(teamId: string): Promise<void> {
