@@ -36,21 +36,24 @@ Other options in the composer:
 
 Your defaults for new sessions are in **Settings > Sessions**: the agent, the model, the reasoning effort, plan mode, internet access and a branch prefix such as `yourname/`.
 
-Open **Settings > Notifications** on your computer or phone to manage your alerts.
+The sandbox composer checks the last recorded subscription usage for Claude and Codex.
+If every usable subscription for your default agent is at its limit, the composer checks the other agent.
+The composer selects that agent if one of its subscriptions has usage left.
+You can still select an agent or model for that session.
+
+In the desktop app and the web app, **Settings > Notifications** holds all notification settings. In the mobile app, they are in the **Notifications** group in **Settings**.
 
 - On a computer, turn on a notification when an agent finishes, and a notification when a merge-queue pull request is blocked. These settings apply only to that computer or browser.
-- In the mobile app, select a workspace to turn its phone alerts on or off. Choose which alert types to receive. You can set quiet hours and receive alerts only when you are away from your computer. Each phone must allow notifications for Talyn.
+- For your phone, turn workspace notifications on or off, and choose the types: session updates, PR reviews, CI failures, ready to merge and human input. You can get alerts only when you are away from your computer, and you can set quiet hours. A change on one device also applies to the others. Each phone must also allow notifications in the Talyn mobile app.
 
-In the mobile app, select a team space to set each phone alert type to **On**, **Off**, or **Use workspace default**. The workspace still controls whether phone alerts are enabled and when they can arrive.
-
-You can also mute a team space, such as Automations.
+The **Team spaces** group lets you turn off alerts for a space, such as Automations.
 This personal setting applies to your desktop, browser, and phone.
 Your teammates keep their own preferences.
 Sessions, threads, and tasks in a muted space send you no alerts.
 Linked pull requests are muted when all their sessions and tasks are in spaces you muted.
 This includes archived sessions.
 A pull request with a session or task in Personal can still send alerts.
-Turn off the mute to use your saved settings again.
+Turn the space on again to use your usual notification settings.
 If muted spaces leave the list, select **Restore alerts** to remove their mutes.
 This also works after a space is archived or you leave its team.
 
@@ -196,6 +199,12 @@ An agent can wait for the checks on its pull request instead of polling them. It
 Sometimes the Claude or Codex API fails on its side, for example with a server error or an overload. Talyn then suspends the sandbox and tries again later. It waits 2, 5, 10, 20 and then 30 minutes between tries, and it tries at most 8 times. The chat shows **The model API is failing** and the time of the next try. Select **Resume now** to try at once, or **Cancel** to stop waiting.
 
 With automatic resume enabled, a waiting session continues by itself when usage returns or you reconnect an account.
+
+If all accounts for the current agent reach their usage limit, Talyn switches to the other available agent.
+This also applies when Talyn detects the limit before a turn starts.
+The sandbox must support both agents, and the other agent must have an account with available usage.
+The next turn uses a conversation recap and a model from the same capability tier.
+If neither agent can run, the session waits for usage to return.
 
 To turn this off, open **Settings > Sessions** and turn off **Continue when an agent hits its limit**. That setting also covers usage limits. See [The model API is failing](/docs/troubleshooting#the-model-api-is-failing).
 
