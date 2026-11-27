@@ -18,7 +18,8 @@ export interface PushSnapshot {
   providerAvailable: boolean;
   tapIssue: string | null;
 }
-export interface PushScope { user: string; workspace: string }
+type PushSettingsSnapshot = Omit<PushSnapshot, 'tapIssue'>;
+export interface PushScope { user: string; workspace: string | null }
 export interface PushGateway {
   registerInstallation(input: RegisterMobileInstallationInput): Promise<MobileInstallation>;
   removeInstallation(id: string): Promise<void>;
@@ -64,7 +65,7 @@ export class NotificationController {
     this.listeners.forEach((listener) => listener());
   }
   private current(generation: number) { return !this.disposed && generation === this.generation; }
-  private queue(work: () => Promise<void>) {
+  private queue<T>(work: () => Promise<T>) {
     const result = this.operation.then(work);
     this.operation = result.catch(() => {});
     return result;
@@ -81,57 +82,59 @@ export class NotificationController {
     this.publish({ state: 'disabled', preferences: null, providerAvailable: false, tapIssue: null });
     if (scope) { void this.refresh(); void this.openPending(); }
   }
-  refresh = () => {
-    const scope = this.scope;
-    const generation = this.generation;
-    if (!scope || !this.online()) return Promise.resolve();
-    return this.queue(async () => {
-      if (!this.current(generation)) return;
-      try {
-        const result = await this.api.getPreferences(scope.workspace);
-        if (!this.current(generation)) return;
-        // A backend from before onlyWhenAway sends no value; it reads as on.
-        this.publish({ preferences: normalizeMobileNotificationPreferences(result.preferences), providerAvailable: result.providerAvailable });
-        await this.register(false, generation);
-      } catch { if (this.current(generation)) this.publish({ state: 'failed' }); }
-    });
+  refresh = async () => {
+    if (this.scope?.workspace) await this.loadWorkspaceSettings(this.scope.workspace);
   };
-  private async register(requestPermission: boolean, generation: number) {
+  loadWorkspaceSettings = (workspace: string) => this.updateWorkspaceSettings(workspace);
+  saveWorkspaceSettings = (input: MobileNotificationPreferences, requestPermission = false) =>
+    this.updateWorkspaceSettings(input.workspaceId, input, requestPermission);
+
+  private updateWorkspaceSettings(workspace: string, input?: MobileNotificationPreferences, requestPermission = false) {
     const scope = this.scope;
-    if (!scope || !this.current(generation)) return;
-    if (!this.snapshot.preferences?.enabled) { this.publish({ state: 'disabled' }); return; }
-    if (!this.snapshot.providerAvailable || !this.device.available()) { this.publish({ state: 'unavailable' }); return; }
-    const existing = await this.device.installation(scope.user, false);
-    if (!this.current(generation)) return;
-    if (!existing && !requestPermission) { this.publish({ state: 'disabled' }); return; }
-    await this.device.channels();
-    if (!this.current(generation)) return;
-    if (!await this.device.permission(requestPermission)) { if (this.current(generation)) this.publish({ state: 'denied' }); return; }
-    const token = await this.device.token();
-    if (!this.current(generation)) return;
-    if (!/^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]{10,200}\]$/.test(token)) throw new Error('Device registration is not available.');
-    const installationId = existing ?? await this.device.installation(scope.user, true);
-    if (!installationId || !this.current(generation)) return;
-    const result = await this.api.registerInstallation({
-      schemaVersion: 1, installationId, workspaceId: scope.workspace, provider: 'expo', token, ...this.device.metadata(),
-    });
-    if (!this.current(generation)) return;
-    this.publish({ state: result.providerAvailable ? result.enabled ? 'ready' : 'failed' : 'unavailable' });
-  }
-  save = (preferences: MobileNotificationPreferences, requestPermission = false) => {
     const generation = this.generation;
-    if (!this.scope || preferences.workspaceId !== this.scope.workspace || !this.online()) return Promise.resolve();
-    return this.queue(async () => {
-      if (!this.current(generation)) return;
-      this.publish({ state: 'loading' });
+    if (!scope || !this.online()) return Promise.resolve(null);
+    return this.queue(async (): Promise<PushSettingsSnapshot | null> => {
+      if (!this.current(generation)) return null;
+      const active = scope.workspace === workspace;
+      let preferences: MobileNotificationPreferences | null = null;
+      let providerAvailable = false;
+      let state: PushState = 'failed';
+      if (input && active) this.publish({ state: 'loading' });
       try {
-        const result = await this.api.updatePreferences(preferences);
-        if (!this.current(generation)) return;
-        // A backend from before onlyWhenAway sends no value; it reads as on.
-        this.publish({ preferences: normalizeMobileNotificationPreferences(result.preferences), providerAvailable: result.providerAvailable });
-        await this.register(requestPermission, generation);
-      } catch { if (this.current(generation)) this.publish({ state: 'failed' }); }
+        const result = input ? await this.api.updatePreferences(input) : await this.api.getPreferences(workspace);
+        if (!this.current(generation)) return null;
+        preferences = normalizeMobileNotificationPreferences(result.preferences);
+        providerAvailable = result.providerAvailable;
+        state = await this.register(scope.user, workspace, preferences.enabled, providerAvailable, requestPermission, generation);
+      } catch { /* A failed registration can still have saved the workspace preferences. */ }
+      if (!this.current(generation)) return null;
+      if (active) this.publish({ state, ...(preferences ? { preferences, providerAvailable } : {}) });
+      return { state, preferences, providerAvailable };
     });
+  }
+  private async register(user: string, workspace: string, enabled: boolean, providerAvailable: boolean,
+    requestPermission: boolean, generation: number): Promise<PushState> {
+    if (!enabled) return 'disabled';
+    if (!providerAvailable || !this.device.available()) return 'unavailable';
+    const existing = await this.device.installation(user, false);
+    if (!this.current(generation) || (!existing && !requestPermission)) return 'disabled';
+    await this.device.channels();
+    if (!this.current(generation)) return 'disabled';
+    if (!await this.device.permission(requestPermission)) return 'denied';
+    if (!this.current(generation)) return 'disabled';
+    const token = await this.device.token();
+    if (!this.current(generation)) return 'disabled';
+    if (!/^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]{10,200}\]$/.test(token)) throw new Error('Device registration is not available.');
+    const installationId = existing ?? await this.device.installation(user, true);
+    if (!installationId || !this.current(generation)) return 'disabled';
+    const result = await this.api.registerInstallation({
+      schemaVersion: 1, installationId, workspaceId: workspace, provider: 'expo', token, ...this.device.metadata(),
+    });
+    if (!result.providerAvailable) return 'unavailable';
+    return result.enabled ? 'ready' : 'failed';
+  }
+  save = async (preferences: MobileNotificationPreferences, requestPermission = false) => {
+    if (preferences.workspaceId === this.scope?.workspace) await this.saveWorkspaceSettings(preferences, requestPermission);
   };
   enableDevice = () => this.snapshot.preferences ? this.save({ ...this.snapshot.preferences, enabled: true }, true) : Promise.resolve();
   tokenChanged = () => { void this.refresh(); };
@@ -173,7 +176,7 @@ export class NotificationController {
     const value = this.pending;
     const scope = this.scope;
     const generation = this.generation;
-    if (!value || !scope || this.opening || !this.online() || !this.navigationReady) return;
+    if (!value || !scope?.workspace || this.opening || !this.online() || !this.navigationReady) return;
     if (value.destination.workspaceId !== scope.workspace) {
       this.publish({ tapIssue: 'Choose the notification workspace in Settings, then try again.' }); return;
     }

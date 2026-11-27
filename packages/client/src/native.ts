@@ -40,6 +40,7 @@ import type {
   TeamInviteTokenRequest,
   MoveToSpaceRequest,
   SetSpaceNotificationsRequest,
+  SpacePhoneNotificationCategories,
   SpaceNotificationPreferences,
   Space,
   SpaceItemsResponse,
@@ -3134,6 +3135,8 @@ export const spaces = {
     request<SpaceNotificationPreferences>('PUT', `/spaces/${spaceId}/notifications`, {
       muted,
     } satisfies SetSpaceNotificationsRequest),
+  setPhoneNotificationCategories: (spaceId: string, categories: SpacePhoneNotificationCategories) =>
+    request<SpaceNotificationPreferences>('PUT', `/spaces/${spaceId}/notifications/phone`, { categories }),
 };
 
 // ============================================================================

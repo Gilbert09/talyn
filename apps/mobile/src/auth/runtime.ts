@@ -146,8 +146,8 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
     const usable = selected.status === 'ready' || selected.status === 'loading';
     workflow.setScope(account.status === 'signedIn' && account.user && usable && selected.selected
       ? { environment: namespace, user: account.user.id, workspace: selected.selected } : null);
-    notifications.setScope(account.status === 'signedIn' && account.user && usable && selected.selected
-      ? { user: account.user.id, workspace: selected.selected } : null);
+    notifications.setScope(account.status === 'signedIn' && account.user
+      ? { user: account.user.id, workspace: usable ? selected.selected : null } : null);
   };
   const unbindAuth = auth.subscribe(bindWorkflow);
   const unbindWorkspace = workspace.subscribe(bindWorkflow);

@@ -13,7 +13,7 @@ function fixture() {
   let online = true;
   const preferences = { ...defaultMobileNotificationPreferences(workspace), enabled: true };
   const api = {
-    getPreferences: jest.fn(async () => ({ preferences, providerAvailable: true })),
+    getPreferences: jest.fn(async (workspaceId: string) => ({ preferences: { ...preferences, workspaceId }, providerAvailable: true })),
     updatePreferences: jest.fn(async (value) => ({ preferences: value, providerAvailable: true })),
     registerInstallation: jest.fn(async (value) => ({ schemaVersion: 1 as const, installationId: value.installationId, enabled: true, providerAvailable: true })),
     removeInstallation: jest.fn(async () => {}),
@@ -60,6 +60,24 @@ describe('notification registration', () => {
     expect(f.api.registerInstallation).toHaveBeenCalledWith(expect.objectContaining({ installationId: entity, workspaceId: workspace }));
     expect(JSON.stringify(f.controller.getSnapshot())).not.toContain('synthetic-device-value');
     expect(f.controller.getSnapshot().state).toBe('ready'); f.controller.dispose();
+  });
+  it('edits another workspace without changing the active notification scope', async () => {
+    const f = fixture();
+    await f.controller.refresh();
+    const otherWorkspace = '10000000-0000-4000-8000-000000000009';
+    const preferences = { ...f.preferences, workspaceId: otherWorkspace };
+    expect(await f.controller.loadWorkspaceSettings(otherWorkspace)).toMatchObject({ state: 'disabled', preferences });
+    expect(f.api.getPreferences).toHaveBeenLastCalledWith(otherWorkspace);
+    expect(f.device.permission).not.toHaveBeenCalled();
+
+    const updated = { ...preferences, onlyWhenAway: false };
+    expect(await f.controller.saveWorkspaceSettings(updated, true)).toMatchObject({ state: 'ready', preferences: updated });
+    expect(f.api.updatePreferences).toHaveBeenCalledWith(updated);
+    expect(f.device.permission).toHaveBeenCalledWith(true);
+    expect(f.api.registerInstallation).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: otherWorkspace }));
+    expect(f.controller.getSnapshot()).toMatchObject({ state: 'disabled', preferences: f.preferences });
+    expect(f.controller.shouldAlert(payload)).toBe(true);
+    f.controller.dispose();
   });
   it.each(['permission', 'device', 'provider', 'network'] as const)('keeps workflows usable when %s is unavailable', async (reason) => {
     const f = fixture(); await f.controller.refresh();

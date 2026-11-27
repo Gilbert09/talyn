@@ -329,6 +329,18 @@ export const spaceNotificationMutes = pgTable(
   })
 );
 
+export const spacePhoneNotificationPreferences = pgTable(
+  'space_phone_notification_preferences',
+  {
+    userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    spaceId: text('space_id').notNull().references(() => spaces.id, { onDelete: 'cascade' }),
+    categories: jsonb('categories').$type<import('@talyn/shared').SpacePhoneNotificationCategories>().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ name: 'space_phone_notification_preferences_pk', columns: [t.userId, t.spaceId] }),
+  })
+);
+
 /** The space's repo picker. */
 export const spaceRepositories = pgTable(
   'space_repositories',

@@ -56,7 +56,7 @@ import {
   removeSpaceRepository,
   updateSpace,
 } from '../services/teams/spaces.js';
-import { readSpaceNotificationPreferences, setSpaceNotificationsMuted } from '../services/teams/notifications.js';
+import { readSpaceNotificationPreferences, setSpaceNotificationsMuted, setSpacePhoneNotificationCategories } from '../services/teams/notifications.js';
 import { broadcastToUser } from '../services/websocket.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { fleetErrorAsRefusal } from '../services/workbenches/errors.js';
@@ -367,6 +367,16 @@ export function spaceRoutes(): Router {
       broadcastToUser(assertUser(req).id, {
         type: 'space:notifications', payload: {}, timestamp: new Date().toISOString(),
       });
+      ok(res, data satisfies SpaceNotificationPreferences);
+    })
+  );
+
+  router.put(
+    '/spaces/:id/notifications/phone',
+    handle(async (req, res) => {
+      const user = assertUser(req);
+      const data = await setSpacePhoneNotificationCategories(user.id, req.params.id!, req.body?.categories);
+      broadcastToUser(user.id, { type: 'space:notifications', payload: {}, timestamp: new Date().toISOString() });
       ok(res, data satisfies SpaceNotificationPreferences);
     })
   );

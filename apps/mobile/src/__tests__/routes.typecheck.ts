@@ -16,6 +16,9 @@ export const validRoutes: Href[] = [
   // Settings editors and their browser return links.
   '/settings/sandboxSetup', '/settings/privateRoutes', '/settings/mcp', '/settings/apiTokens', '/settings/apiTokens/new',
   '/settings/slack', '/settings/integrations', '/settings/skills', '/settings/instructions', '/settings/memory', '/settings/codeReview', '/settings/whatsNew',
+  '/settings/notifications',
+  { pathname: '/settings/notifications/workspace/[id]', params: { id: 'workspace-id' } },
+  { pathname: '/settings/notifications/space/[id]', params: { id: 'space-id' } },
   '/mcp/callback', '/slack/callback', '/posthog/callback',
 ];
 
