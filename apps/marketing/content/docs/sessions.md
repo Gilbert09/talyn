@@ -11,7 +11,9 @@ A session is one task. It has its own branch, its own agent and its own cloud sa
 2. Describe the task.
 3. Pick the repository.
 4. Optionally, change the agent, model, reasoning effort or base branch.
-5. Press Enter, or select **Create and start**.
+5. Press Enter, or select **Create and start**. On mobile, tap **Start session**.
+
+The session opens as soon as you submit. Your message appears in the transcript while Talyn creates the session. You can use the session controls once creation finishes. If creation fails, Talyn returns you to the composer with your draft and shows the error.
 
 Talyn names the session, creates a branch, starts a sandbox and gives your message to the agent. Press Shift+Enter for a new line in the message.
 
@@ -43,19 +45,21 @@ If every usable subscription for your default agent is at its limit, the compose
 The composer selects that agent if one of its subscriptions has usage left.
 You can still select an agent or model for that session.
 
-In the desktop app and the web app, **Settings > Notifications** holds all notification settings. In the mobile app, they are in the **Notifications** group in **Settings**.
+Open **Settings > Notifications** on your computer or phone to manage your alerts.
 
 - On a computer, turn on a notification when an agent finishes, and a notification when a merge-queue pull request is blocked. These settings apply only to that computer or browser.
-- For your phone, turn workspace notifications on or off, and choose the types: session updates, PR reviews, CI failures, ready to merge and human input. You can get alerts only when you are away from your computer, and you can set quiet hours. A change on one device also applies to the others. Each phone must also allow notifications in the Talyn mobile app.
+- In the mobile app, select a workspace to turn its phone alerts on or off. Choose which alert types to receive. You can set quiet hours and receive alerts only when you are away from your computer. Each phone must allow notifications for Talyn.
 
-The **Team spaces** group lets you turn off alerts for a space, such as Automations.
+Under **Team spaces**, set each phone alert type to **On**, **Off**, or **Use workspace default**. The workspace still controls whether phone alerts are enabled and when they can arrive.
+
+You can also mute a team space, such as Automations.
 This personal setting applies to your desktop, browser, and phone.
 Your teammates keep their own preferences.
 Sessions, threads, and tasks in a muted space send you no alerts.
 Linked pull requests are muted when all their sessions and tasks are in spaces you muted.
 This includes archived sessions.
 A pull request with a session or task in Personal can still send alerts.
-Turn the space on again to use your usual notification settings.
+Turn off the mute to use your saved settings again.
 If muted spaces leave the list, select **Restore alerts** to remove their mutes.
 This also works after a space is archived or you leave its team.
 
@@ -140,7 +144,7 @@ Press ⌘F (Ctrl+F on Windows and Linux) to search the session's chat. The find 
 - The search does not include the contents of collapsed tool calls.
 - In the code viewer and in the terminal, ⌘F keeps its usual function.
 
-In a mobile session, tap the three-dot **Session actions** button. Then tap **Find in transcript**. In a mobile thread, tap the search button in the header. The row of the current match has a tinted background.
+In the mobile app, tap the search button in the session header. The row of the current match has a tinted background.
 
 ## Search all transcripts
 
@@ -224,15 +228,13 @@ One button in the session header moves the work on. Its label changes as the pul
 4. **Merge**: Talyn merges the pull request on GitHub.
 5. **Archive session**: once the pull request is merged.
 
-In the mobile app, the next action appears beside its status above the conversation. Open **Session actions** for **Changes**, the pull request, code review, and merge queue controls.
-
 **Address review comments** asks the agent to read and handle the unresolved review comments.
 
 In the desktop app, you can have the agent open the pull request by itself when it finishes. Turn on **Open a PR when the agent is done** in **Settings > Agents**.
 
 Sometimes Talyn cannot push the branch or commit the changes for a reason that the agent can fix. For example, the branch on GitHub has commits that the session does not have. Then Talyn gives the error back to the agent in a new turn. The agent merges the remote commits or fixes the commit, and Talyn tries again. The chat shows this turn as one line, **Talyn could not open the pull request**, and **Show error** shows the error. Talyn tries at most two times. It does not try again when GitHub refuses access, because only you can fix that. It also does not try again when you already sent the next message.
 
-On desktop and web, the header shows the number of the open pull request. Select the copy button next to it to copy the link. You can copy the plain link or a Markdown link that uses the pull request title. In the mobile app, **Session actions** has **Copy pull request link** and **Copy pull request as Markdown link**.
+When the session has an open pull request, the header shows its number. Select the copy button next to it to copy the link to the pull request. You can copy the plain link, or a Markdown link that uses the pull request's title. In the mobile app, the session menu has **Copy pull request link** and **Copy pull request as Markdown link**.
 
 To link a pull request that already exists, open the **More actions** menu in the header and select **Link pull request…**.
 

@@ -1,30 +1,31 @@
 import type { PRRow } from '@talyn/client/native';
 import { canCloseSessionPullRequest, sessionAutomation, type Workbench, type WorkbenchReadiness } from '@talyn/shared';
 import { useRouter } from 'expo-router';
+import { SymbolView } from 'expo-symbols';
 import { useContext, useState } from 'react';
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { PrPill, PrStatusPill, SessionStateIcon } from '../../components/Status';
-import { AppText, Banner, ChipButton, Dot, Row, SheetModal, toneColor, type SheetAction, type Symbol, type Tone } from '../../components/UI';
+import { AppText, Banner, ChipButton, PrNumber, Row, SheetModal, toneColor, type SheetAction, type Symbol, type Tone } from '../../components/UI';
 import { NativeText } from '../../components/Workflow';
 import { trackEvent } from '../../lib/analytics';
 import { showActionError } from '../../lib/errors';
 import { chatDetailsLine } from '../../lib/models';
-import { prRowStatus, workbenchState } from '../../lib/status';
+import { prNumberTone, prRowStatus, workbenchState } from '../../lib/status';
 import { longTime, relativeTimeLabel, useNow } from '../../lib/time';
 import { pullRequestRoute, threadRoute } from '../../navigation/routes';
-import { useTheme } from '../../theme/tokens';
+import { mono, radius, sans, useTheme, withAlpha } from '../../theme/tokens';
 import { workbenchKind, workbenchTitle } from '../../workflow/model';
-import { queueStateLabel } from '../prs/actions';
 import { CodeReviewSummary } from '../prs/CodeReviewSection';
 import { canRetry, isArchived, type SessionActionKind } from './actions';
+import type { ReviewBadgeIcon, ReviewBadgeView } from './codeComplete';
 import { readinessProblem } from './model';
 import { canQueue, cycleActions, cycleDisabledReason, cycleLabel, diffTotals, type QuickAction, type QuickActionKind } from './quickActions';
 import { runPromptAction, sendCreatePullRequest } from './sessionPrActions';
 
-export const QUICK_ACTION_ICON: Record<QuickActionKind | 'queue_add' | 'queue_remove', Symbol> = {
+export const QUICK_ACTION_ICON: Record<QuickActionKind | 'queue_remove', Symbol> = {
   create_pr: { ios: 'arrow.triangle.pull', android: 'fork_right' },
   resolve_conflicts: { ios: 'arrow.triangle.branch', android: 'call_split' },
   fix_checks: { ios: 'wrench.and.screwdriver', android: 'build' },
@@ -34,19 +35,21 @@ export const QUICK_ACTION_ICON: Record<QuickActionKind | 'queue_add' | 'queue_re
   restore: { ios: 'arrow.uturn.backward', android: 'unarchive' },
   queue_add: { ios: 'text.badge.plus', android: 'playlist_add' },
   queue_remove: { ios: 'text.badge.minus', android: 'playlist_remove' },
+  queue_status: { ios: 'list.number', android: 'format_list_numbered' },
 };
 
 const CLOSE_PR_ICON: Symbol = { ios: 'xmark.circle', android: 'cancel' };
 
-type RunnableKind = QuickActionKind | 'queue_add' | 'queue_remove' | 'close_pr';
+type RunnableKind = QuickActionKind | 'queue_remove' | 'close_pr';
 
 /** Web's header offers "Close pull request" for an open PR the person or this session opened. */
 export const canClosePr = (item: Workbench, row: PRRow | null): row is PRRow =>
   Boolean(row) && !isArchived(item) && workbenchKind(item) === 'session' && canCloseSessionPullRequest(item, row);
 
 /**
- * Runs the same client calls and confirmations as web `WorkbenchHeader`.
- * The header and the menu share the same handlers.
+ * Runs the header's quick actions with the same client calls and confirmations
+ * as web `WorkbenchHeader`. Session actions go through the session menu, so a
+ * chip and a menu entry behave the same.
  */
 export function useQuickActions({ item, row, runSession, toast }: {
   item: Workbench; row: PRRow | null;
@@ -54,6 +57,7 @@ export function useQuickActions({ item, row, runSession, toast }: {
   toast(message: string): void;
 }) {
   const { workflow } = useMobileRuntime();
+  const router = useRouter();
   const [busy, setBusy] = useState<RunnableKind | null>(null);
   const track = async (kind: RunnableKind, action: () => Promise<void>) => {
     setBusy(kind);
@@ -112,6 +116,7 @@ export function useQuickActions({ item, row, runSession, toast }: {
         });
         return;
       }
+      case 'queue_status': if (row) router.push(pullRequestRoute(row.id));
     }
   };
   return { busy, run };
@@ -129,8 +134,7 @@ export function quickMenuActions(item: Workbench, row: PRRow | null, options: { 
   if (canQueue(item, row)) {
     const kind = row.mergeQueued ? 'queue_remove' : 'queue_add';
     const reason = reasonFor(null);
-    out.push({ label: row.mergeQueued ? 'Remove from merge queue' : 'Add to merge queue', icon: QUICK_ACTION_ICON[kind],
-      detail: reason ?? (row.mergeQueued ? queueStateLabel(row) : undefined),
+    out.push({ label: row.mergeQueued ? 'Remove from merge queue' : 'Add to merge queue', icon: QUICK_ACTION_ICON[kind], detail: reason,
       disabled: options.busy || Boolean(reason), onPress: () => options.run(kind) });
   }
   if (canClosePr(item, row)) {
@@ -141,99 +145,96 @@ export function quickMenuActions(item: Workbench, row: PRRow | null, options: { 
   return out;
 }
 
-type ActionProps = { action: QuickAction; busy: RunnableKind | null; run(kind: QuickActionKind): void };
+/**
+ * Only the next step in the PR cycle (and Retry or Restore) is filled. The
+ * merge queue is an option, not the next step, so it never takes the accent
+ * even when it is the only chip.
+ */
+const PRIMARY_KINDS = new Set<QuickActionKind>(['create_pr', 'resolve_conflicts', 'fix_checks', 'merge', 'retry', 'restore']);
 
-export function ThreadQuickAction({ action, busy, run }: ActionProps) {
-  return <View accessibilityRole="toolbar" accessibilityLabel="Quick actions" style={styles.threadAction}>
-    <ChipButton label={action.label} icon={QUICK_ACTION_ICON[action.kind]} variant="primary"
+/** The one slim row of quick actions. Nothing renders without an action. */
+export function QuickActionRow({ actions, busy, run }: { actions: QuickAction[]; busy: RunnableKind | null; run(kind: QuickActionKind): void }) {
+  if (!actions.length) return null;
+  return <View accessibilityRole="toolbar" accessibilityLabel="Quick actions" style={styles.actions}>
+    {actions.map((action, index) => <ChipButton key={action.kind} label={action.label} icon={QUICK_ACTION_ICON[action.kind]}
+      variant={index === 0 && PRIMARY_KINDS.has(action.kind) ? 'primary' : 'secondary'}
       loading={busy === action.kind} disabled={Boolean(action.disabledReason) || (busy !== null && busy !== action.kind)}
-      hint={action.disabledReason ?? action.hint} onPress={() => run(action.kind)} />
+      hint={action.disabledReason ?? action.hint} onPress={() => run(action.kind)} />)}
   </View>;
 }
 
-function actionContext(item: Workbench, row: PRRow | null, kind: QuickActionKind): {
-  title: string; reason: string; tone: Tone; view: 'changes' | 'details' | 'pr';
-} {
-  if (kind === 'retry') return { title: 'Sandbox', reason: 'Failed to start', tone: 'destructive', view: 'details' };
-  if (kind === 'create_pr') {
-    const files = diffTotals(item)?.files;
-    const reason = files ? `${files} ${files === 1 ? 'file' : 'files'} changed` : 'Branch has changes';
-    return { title: 'Changes', reason, tone: 'muted', view: 'changes' };
-  }
-  const number = row?.number ?? item.pr?.number;
-  const title = number ? `PR #${number}` : 'Pull request';
-  const view = item.pullRequestId ? 'pr' : 'details';
-  if (kind === 'fix_checks') {
-    const checks = row?.summary.checks;
-    const reason = checks?.failed ? `${checks.failed} of ${checks.total} checks failing` : 'Checks failing';
-    return { title, reason, tone: 'destructive', view };
-  }
-  if (kind === 'resolve_conflicts') return { title, reason: 'Merge conflicts', tone: 'warning', view };
-  if (kind === 'merge') return { title, reason: 'Ready to merge', tone: 'success', view };
-  const merged = (row?.state ?? item.pr?.state) === 'merged';
-  return { title, reason: merged ? 'Merged' : 'Closed', tone: merged ? 'merged' : 'muted', view };
-}
+/** Below this window width the review badge shows its icon and at most a count. */
+const NARROW = 420;
 
-export function SessionNextAction({ item, row, action, busy, run, onDetails, onChanges }: ActionProps & {
-  item: Workbench; row: PRRow | null; onDetails(): void; onChanges(): void;
-}) {
-  const c = useTheme();
-  const router = useRouter();
-  const { title, reason, tone, view } = actionContext(item, row, action.kind);
-  const openContext = () => {
-    if (view === 'changes') onChanges();
-    else if (view === 'pr' && item.pullRequestId) router.push(pullRequestRoute(item.pullRequestId));
-    else onDetails();
-  };
-  return <View accessibilityRole="toolbar" accessibilityLabel="Next action"
-    style={[styles.nextAction, { backgroundColor: c.elevated, borderColor: c.border }]}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`${title}. ${reason}.`}
-      onPress={openContext} style={({ pressed }) => [styles.actionContext, { opacity: pressed ? 0.6 : 1 }]}>
-      <AppText variant="rowTitle" numberOfLines={1}>{title}</AppText>
-      <View style={styles.actionReason}>
-        <Dot size={6} color={toneColor(c, tone)} />
-        <AppText variant="caption" tone={tone} numberOfLines={2} style={styles.actionReasonText}>{reason}</AppText>
-      </View>
-    </Pressable>
-    <ChipButton label={action.label} variant="primary" style={styles.nextActionButton} loading={busy === action.kind}
-      disabled={Boolean(action.disabledReason) || (busy !== null && busy !== action.kind)}
-      hint={action.disabledReason ?? action.hint} onPress={() => run(action.kind)} />
-  </View>;
-}
-
-/** The native title opens session details. Threads still show the state icon. */
-export function HeaderTitle({ item, row, showRepository = false, onPress }: {
-  item: Workbench; row: PRRow | null; showRepository?: boolean; onPress(): void;
-}) {
+/** The native header's title: state icon and one line of title. Tapping it opens the details. */
+export function HeaderTitle({ item, row, onPress }: { item: Workbench; row: PRRow | null; onPress?(): void }) {
   const { width } = useWindowDimensions();
   const insets = useContext(SafeAreaInsetsContext);
   const state = workbenchState(item, row);
   const title = workbenchTitle(item);
-  const kind = workbenchKind(item);
-  const session = kind === 'session';
-  const status = session && isArchived(item) ? 'Archived' : state.label;
-  // Sessions reserve one 40 dp button. Threads also reserve the search button and gap.
-  const right = session ? 40 + 16 : 2 * 40 + 2 + 16;
+  // Reserve space for two 40 dp buttons, their gap, and the outer margin.
+  const right = 2 * 40 + 2 + 16;
   const available = width - (insets?.left ?? 0) - (insets?.right ?? 0);
+  // iOS centres the title, so it gets the same room on both sides. Android puts it after the back button.
   const maxWidth = Math.max(0, Platform.OS === 'ios' ? available - 2 * right : available - right - 88);
-  return <Pressable accessibilityRole="header" accessibilityLabel={`${title}. ${status}.`}
-    accessibilityHint={`Shows the ${kind} details.`} onPress={onPress} hitSlop={6}
-    style={({ pressed }) => [session ? styles.sessionTitle : styles.threadTitle,
-      { maxWidth, width: session ? maxWidth : undefined, opacity: pressed ? 0.6 : 1 }]}>
-    {session ? <>
-      <AppText variant="rowTitle" numberOfLines={1}>{title}</AppText>
-      <AppText variant="caption" tone="muted" numberOfLines={1}>
-        {showRepository && item.repoFullName ? item.repoFullName : status}
-      </AppText>
-    </> : <>
-      <SessionStateIcon state={state} />
-      <AppText variant="rowTitle" numberOfLines={1} style={{ flexShrink: 1 }}>{title}</AppText>
-    </>}
+  return <Pressable accessibilityRole="header" accessibilityLabel={`${title}. ${state.label}.`}
+    accessibilityHint={onPress ? `Shows the ${workbenchKind(item)} details.` : undefined} onPress={onPress} hitSlop={6}
+    style={({ pressed }) => [styles.title, { maxWidth, opacity: pressed ? 0.6 : 1 }]}>
+    <SessionStateIcon state={state} />
+    <AppText variant="rowTitle" numberOfLines={1} style={{ flexShrink: 1 }}>{title}</AppText>
   </Pressable>;
 }
 
+const BADGE_ICON: Record<Exclude<ReviewBadgeIcon, 'spinner'>, Symbol> = {
+  clock: { ios: 'clock', android: 'schedule' },
+  findings: { ios: 'exclamationmark.bubble', android: 'feedback' },
+  check: { ios: 'checkmark.circle', android: 'check_circle' },
+  failed: { ios: 'xmark.circle', android: 'cancel' },
+  review: { ios: 'checklist', android: 'checklist' },
+};
+
+/** The code review's status in the header. A narrow window shows the icon and at most a count. Opens the PR's findings. */
+export function ReviewBadge({ badge, onPress }: { badge: ReviewBadgeView; onPress(): void }) {
+  const c = useTheme();
+  const { width } = useWindowDimensions();
+  const color = toneColor(c, badge.tone);
+  const text = width < NARROW ? badge.short : badge.label;
+  return <Pressable testID="session-review-badge" accessibilityRole="button" accessibilityLabel={badge.accessibilityLabel} onPress={onPress} hitSlop={6}
+    style={({ pressed }) => [styles.badge, { backgroundColor: withAlpha(color, c.mode === 'dark' ? 0.16 : 0.1), opacity: pressed ? 0.6 : 1 }]}>
+    {badge.icon === 'spinner' ? <ActivityIndicator size={12} color={color} /> : <SymbolView name={BADGE_ICON[badge.icon]} size={13} tintColor={color} />}
+    {text ? <Text numberOfLines={1} style={[styles.badgeText, { color }]}>{text}</Text> : null}
+  </Pressable>;
+}
+
+/** Status controls sit below the navigation bar, with room to scroll when their text grows. */
+export function SessionStatusRow({ item, row, badge, onChanges }: { item: Workbench; row: PRRow | null; badge?: ReviewBadgeView | null; onChanges(): void }) {
+  const c = useTheme();
+  const router = useRouter();
+  if (workbenchKind(item) !== 'session') return null;
+  const totals = diffTotals(item);
+  const number = row?.number ?? item.pr?.number;
+  const status = row ? prRowStatus(row) : null;
+  const tone = (row?.state === 'open' && status ? status.tone : prNumberTone(row?.state ?? item.pr?.state ?? 'open', row?.summary.draft)) as Tone;
+  if (!(badge && row) && !totals && !(item.pullRequestId && number)) return null;
+  return <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={styles.statusScroll}
+    contentContainerStyle={styles.statusRow}>
+    {badge && row ? <ReviewBadge badge={badge} onPress={() => router.push(pullRequestRoute(row.id, { tab: 'findings' }))} /> : null}
+    {totals ? <Pressable accessibilityRole="button" accessibilityLabel={`Changes: ${totals.files} ${totals.files === 1 ? 'file' : 'files'}, ${totals.added} added, ${totals.removed} removed`}
+      onPress={onChanges} hitSlop={4} style={({ pressed }) => [styles.diff, { backgroundColor: pressed ? c.surface : 'transparent' }]}>
+      <Text style={[styles.diffText, { color: c.success }]}>+{totals.added}</Text>
+      <Text style={[styles.diffText, { color: c.destructive }]}>−{totals.removed}</Text>
+    </Pressable> : null}
+    {item.pullRequestId && number ? <Pressable accessibilityRole="button"
+      accessibilityLabel={`Pull request ${number}${status ? `. ${status.label}` : ''}. Open the pull request.`}
+      onPress={() => router.push(pullRequestRoute(item.pullRequestId!))} hitSlop={6} style={({ pressed }) => [styles.pr, { opacity: pressed ? 0.6 : 1 }]}>
+      <PrNumber number={number} tone={tone} />
+    </Pressable> : null}
+  </ScrollView>;
+}
+
 /**
- * Shows the full session title, metadata, and related work.
+ * Everything the header no longer shows: full title, repository, branch,
+ * update time, agent and model, problems, the PR and the parent thread.
  */
 export function SessionDetailsSheet({ visible, onClose, item, row, readiness, onRetry, retrying }: {
   visible: boolean; onClose(): void; item: Workbench; row: PRRow | null; readiness?: WorkbenchReadiness;
@@ -293,15 +294,15 @@ export function SessionDetailsSheet({ visible, onClose, item, row, readiness, on
 }
 
 const styles = StyleSheet.create({
-  threadAction: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 6 },
-  sessionTitle: { justifyContent: 'center' },
-  threadTitle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  nextAction: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end',
-    columnGap: 12, rowGap: 4, paddingHorizontal: 16, paddingVertical: 2, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth },
-  actionContext: { flexBasis: 120, flexGrow: 1, minWidth: 48, minHeight: 48, justifyContent: 'center' },
-  nextActionButton: { minWidth: 48, minHeight: 48, justifyContent: 'center' },
-  actionReason: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  actionReasonText: { flexShrink: 1 },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 6 },
+  title: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statusScroll: { flexGrow: 0, flexShrink: 0 },
+  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 4 },
+  diff: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, minHeight: 32, borderRadius: 6 },
+  diffText: { fontSize: 12, lineHeight: 16, ...mono(500) },
+  pr: { minHeight: 32, justifyContent: 'center', paddingHorizontal: 2 },
+  badge: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 26, paddingHorizontal: 7, borderRadius: radius.round, marginRight: 2 },
+  badgeText: { fontSize: 12, lineHeight: 16, ...sans(600) },
   details: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 24, gap: 12 },
   state: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   fact: { flexDirection: 'row', gap: 12, paddingVertical: 4 },
