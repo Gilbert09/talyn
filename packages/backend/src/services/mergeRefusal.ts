@@ -32,6 +32,10 @@ export function githubMergeWords(raw: string): string {
   );
 }
 
+export function isBranchBehindRefusal(message: string): boolean {
+  return /head branch is out of date|branch is not up to date|must be up to date/i.test(message);
+}
+
 export function describeMergeRefusal(
   raw: string,
   pr: { number: number; baseBranch?: string | null }
@@ -39,7 +43,7 @@ export function describeMergeRefusal(
   const words = githubMergeWords(raw);
   const ref = `#${pr.number}`;
   const base = pr.baseBranch || 'the base branch';
-  if (/head branch is out of date|branch is not up to date|must be up to date/i.test(words)) {
+  if (isBranchBehindRefusal(words)) {
     return {
       code: 'branch_behind',
       message:

@@ -28,6 +28,7 @@ import {
   type ExternalQueueStatus,
   type PRMergeableSummary,
 } from '@talyn/shared';
+import { isBranchBehindRefusal } from '../mergeRefusal.js';
 import {
   GITHUB_FAULT_FIRST_WAIT_MS,
   MAX_INFRA_SUBMITS_PER_HEAD,
@@ -1521,6 +1522,10 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
           message: 'Merged the base into the head server-side — waiting for checks to re-run.',
         },
       });
+      d.act({ kind: 'refresh_snapshot' });
+      return d.done('advance');
+    }
+    if (ctx.updateBranchOutcome === 'up_to_date' || ctx.updateBranchOutcome === 'head_changed') {
       d.act({ kind: 'refresh_snapshot' });
       return d.done('advance');
     }
@@ -3123,18 +3128,15 @@ function decideMergeAftermath(d: DecisionBuilder, pr: PrSnapshot, ctx: DecisionC
     return d.done('hold');
   }
 
-  // not_merged (bounced: lost a race, now behind) or a real rejection (405
-  // conflicts) — the cached mergeability was stale. Record the error, refetch
-  // immediately so the real CONFLICTING/BEHIND state hits the cache + UI now,
-  // and let the next evaluation funnel it into the fix path. Don't dequeue.
+  const refusedBehind = ctx.externalGate === null && isBranchBehindRefusal(outcome.message);
   d.transition('queued', {
     set: { lastError: outcome.message || 'GitHub did not merge the pull request', lastErrorAt: ctx.nowIso },
     event: {
-      code: outcome.kind === 'not_merged' ? 'merge_bounced' : 'merge_failed',
+      code: refusedBehind ? 'branch_behind' : outcome.kind === 'not_merged' ? 'merge_bounced' : 'merge_failed',
       message: outcome.message || 'GitHub did not merge the pull request.',
     },
   });
-  d.act({ kind: 'refresh_snapshot' });
+  d.act(refusedBehind ? { kind: 'refresh_snapshot', refusedBehind: true } : { kind: 'refresh_snapshot' });
   return d.done('hold');
 }
 

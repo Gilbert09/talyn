@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
-import type { PRRow } from '../lib/api';
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { api, type PRRow } from '../lib/api';
 import { trackEvent } from '../lib/analytics';
 import { PRDetailSheet } from '../components/widgets/PRDetailSheet';
 
@@ -66,6 +66,7 @@ vi.mock('../lib/api', () => ({
       // open time, not wait on a round trip to GitHub to do it.
       description: vi.fn(() => new Promise(() => {})),
       get: vi.fn(() => new Promise(() => {})),
+      updateBranch: vi.fn(async () => ({ updated: true, message: 'Checks will run again.' })),
       files: vi.fn(() => new Promise(() => {})),
       focus: vi.fn(async () => {}),
     },
@@ -118,6 +119,23 @@ function row(opts: { fixable: boolean; taskId?: string | null; state?: string })
 function open(seedRow: PRRow | null) {
   render(<PRDetailSheet pullRequestId="pr1" onClose={vi.fn()} seedRow={seedRow} />);
 }
+
+it('updates a behind branch from the PR detail sheet', async () => {
+  const behind = row({ fixable: false });
+  behind.summary = { ...behind.summary, blockingReason: 'behind', mergeStateStatus: 'BEHIND' };
+  const get = vi.mocked(api.pullRequests.get);
+  get.mockResolvedValueOnce({ row: behind, fresh: null });
+  get.mockResolvedValueOnce({ row: row({ fixable: false }), fresh: null });
+  open(behind);
+
+  const update = screen.getByRole('button', { name: 'Update branch' });
+  await waitFor(() => expect(update.hasAttribute('disabled')).toBe(false));
+  expect(screen.queryByRole('button', { name: 'Merge' })).toBeNull();
+  fireEvent.click(update);
+
+  expect(api.pullRequests.updateBranch).toHaveBeenCalledWith('pr1');
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Update branch' })).toBeNull());
+});
 
 const opened = () =>
   (trackEvent as unknown as { mock: { calls: unknown[][] } }).mock.calls.find(

@@ -81,6 +81,8 @@ Images in the description, the reviews and the comments show in the app. Click a
 
 The buttons at the top are **Code review**, **Fix with agent**, **Auto-keep mergeable**, **Add to merge queue** and **Merge**.
 
+If a pull request you opened or watch shows **Behind**, select **Update branch**. GitHub merges the latest changes from the base branch into the pull request branch. The required checks must pass again before you can merge. The [merge queue](/docs/merge-queue) can update the branch for you.
+
 ## Review requests
 
 The **Review requests** page lists open pull requests where you, or a team you are on, are a requested reviewer.

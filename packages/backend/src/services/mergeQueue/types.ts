@@ -546,7 +546,7 @@ export interface DecisionContext {
    * remedy is to go round again — see decideExternalEjection.
    */
   externalFailure?: ExternalQueueFailure | null;
-  /** Whether githubService.updateBranch exists/is enabled (Push E). */
+  /** Whether GitHub branch updates are available. */
   updateBranchAvailable: boolean;
   /**
    * A PostHog Visual Review run gating this PR, resolved only when the PR has
@@ -615,7 +615,7 @@ export interface DecisionContext {
   /** Result of `submit_external`. */
   submitOutcome?: SubmitOutcome;
   /** Result of `update_branch`. */
-  updateBranchOutcome?: 'ok' | 'conflict' | 'error';
+  updateBranchOutcome?: 'ok' | 'conflict' | 'up_to_date' | 'head_changed' | 'error';
 }
 
 /** Draft of a merge_queue_events row; the executor stamps `at` + trigger. */
@@ -757,7 +757,7 @@ export type Action =
   /** The single success path: entry → merged, PR row terminal, positions rebroadcast. */
   | { kind: 'record_merged' }
   /** Force-refetch the PR summary now (post-failed-merge staleness fix). */
-  | { kind: 'refresh_snapshot' }
+  | { kind: 'refresh_snapshot'; refusedBehind?: boolean }
   /** Fire the one-shot merge_queue:blocked notification (dedup is the executor's). */
   | { kind: 'notify_blocked' }
   /** The one gentle "still waiting for a review" reminder (merge_queue:review_wait). */

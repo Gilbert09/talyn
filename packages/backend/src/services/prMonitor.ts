@@ -237,6 +237,8 @@ export interface RefreshPrOptions {
   resolveMergeable?: boolean;
   repositoryId?: string;
   settleUnknown?: boolean;
+  /** An unchanged refresh must not start another queue evaluation. */
+  snapshotOnChangeOnly?: boolean;
 }
 
 /** Reuse responses only within one workspace and one sweep tick. */
@@ -1881,6 +1883,7 @@ class PRMonitorService extends EventEmitter {
         summary,
         reviewRequested,
         authored,
+        snapshotOnChangeOnly: opts.snapshotOnChangeOnly,
       });
       // The row we just wrote says GitHub hasn't computed mergeability yet, so
       // its `blockingReason` is 'unknown' — a verdict that belongs to no list
