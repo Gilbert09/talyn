@@ -26,6 +26,20 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
 
+    services:
+      postgres:
+        image: ${{ matrix.shard == 1 && 'postgres:15' || '' }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Check out Git repository
         uses: actions/checkout@v4
@@ -51,6 +65,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm test -w @talyn/backend -- --shard=${{ matrix.shard }}/4
+
+      - name: Test concurrent archive claims
+        if: matrix.shard == 1
+        env:
+          TALYN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: npm test -w @talyn/backend -- src/__tests__/workbenchArchiveConcurrency.test.ts
 
   test:
     needs: backend_tests

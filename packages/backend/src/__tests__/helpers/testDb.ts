@@ -26,7 +26,7 @@ const TEMPLATE_PATH = path.join(os.tmpdir(), `talyn-test-db-${migrationsFingerpr
 let templatePromise: Promise<void> | undefined;
 let cleanupCount = 0;
 
-async function initializeTestDb(pglite: PGlite): Promise<void> {
+export async function initializeTestDb(pglite: { exec: (query: string) => Promise<unknown> }): Promise<void> {
   // PGlite does not include the Supabase roles and auth schema.
   await pglite.exec(`CREATE SCHEMA IF NOT EXISTS auth`);
   await pglite.exec(`
@@ -42,9 +42,17 @@ async function initializeTestDb(pglite: PGlite): Promise<void> {
         CREATE ROLE authenticated NOLOGIN NOINHERIT;
       END IF;
     END $$;
-    CREATE ROLE anon NOLOGIN NOINHERIT;
-    CREATE ROLE authenticator NOLOGIN NOINHERIT;
-    CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN
+        CREATE ROLE anon NOLOGIN NOINHERIT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticator') THEN
+        CREATE ROLE authenticator NOLOGIN NOINHERIT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN
+        CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS;
+      END IF;
+    END $$;
     GRANT anon, authenticated TO authenticator;
     GRANT USAGE ON SCHEMA auth TO anon, authenticated;
     ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO PUBLIC, anon, authenticated;

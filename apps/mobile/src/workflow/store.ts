@@ -305,6 +305,7 @@ export class WorkflowStore {
       case 'transcript': return this.reconcile(id, scope, data as Transcript | undefined);
       case 'features': return this.api.features.get();
       case 'repositories': return (await this.api.repositories.list(scope.workspace)).filter((repo) => repo.workspaceId === scope.workspace);
+      case 'repositoryPreview': return this.api.repositories.preview.get(id);
       case 'providers': return this.api.cloudProviders.list(scope.workspace);
       case 'workspace': {
         const item = await this.api.workspaces.get(scope.workspace);
@@ -598,9 +599,18 @@ export class WorkflowStore {
     }
   }
   async mergePr(id: string) {
-    const result = await this.api.pullRequests.merge(id);
-    this.refresh('pr', id); this.refresh('attention');
-    return result;
+    try {
+      return await this.api.pullRequests.merge(id);
+    } finally {
+      this.refresh('pr', id); this.refresh('attention');
+    }
+  }
+  async updatePrBranch(id: string) {
+    try {
+      return await this.api.pullRequests.updateBranch(id);
+    } finally {
+      this.refresh('pr', id); this.refresh('attention');
+    }
   }
   /** Close the PR on GitHub without merging. The backend refuses a PR the person did not open. */
   async closePr(id: string) {

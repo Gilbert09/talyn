@@ -1,6 +1,6 @@
 import type { AgentEvent, WorkbenchEvent } from '@talyn/shared';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { ActionSheetIOS, Alert } from 'react-native';
+import { ActionSheetIOS, Alert, TextInput } from 'react-native';
 
 import { resetImageDrafts } from '../features/chat/attachmentDrafts';
 import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
@@ -45,11 +45,17 @@ const pickLibrary = () => {
 };
 
 describe('composer images', () => {
-  it('attaches a photo, shows it, and removes it', async () => {
-    pickLibrary();
+  it.each([
+    ['library', 'launchImageLibraryAsync', 0],
+    ['camera', 'launchCameraAsync', 1],
+  ] as const)('attaches a photo from the %s, focuses the message, and removes the photo', async (_source, picker, menuIndex) => {
+    const focus = jest.spyOn(TextInput.prototype, 'focus');
+    mockPicker[picker].mockResolvedValue({ canceled: false, assets: [{ uri: 'file:///cat.jpg', fileName: 'cat.jpg', mimeType: 'image/jpeg', fileSize: 1000 }] });
+    jest.spyOn(ActionSheetIOS, 'showActionSheetWithOptions').mockImplementation((_options, callback) => callback(menuIndex));
     await render(<WorkbenchDetailScreen kind="session" />);
     await fireEvent.press(await screen.findByRole('button', { name: 'Attach a photo or video' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Remove cat.jpg' })).toBeVisible());
+    await waitFor(() => expect(focus).toHaveBeenCalledTimes(1));
     expect(mockActions.uploadAttachment).toHaveBeenCalledWith('session-one', expect.objectContaining({ name: 'cat.jpg', mimeType: 'image/jpeg' }), expect.any(Function));
     await fireEvent.press(screen.getByRole('button', { name: 'Remove cat.jpg' }));
     expect(screen.queryByRole('button', { name: 'Remove cat.jpg' })).toBeNull();

@@ -72,6 +72,20 @@ describe('archiveAllCandidates', () => {
     expect(archiveAllCandidates([session], new Set(), { [session.id]: [{ status: 'idle' }] })).toEqual([session]);
   });
 
+  type Bg = NonNullable<Parameters<typeof archiveAllCandidates>[3]>[string];
+  const job = (status: string) => ({ status }) as never;
+  it.each<[string, Bg, boolean]>([
+    ['a running background job', { jobs: [job('running')], wakeups: [] }, false],
+    ['a scheduled wake-up', { jobs: [], wakeups: [job('scheduled')] }, false],
+    ['ended jobs and wake-ups', { jobs: [job('exited'), job('stopped'), job('lost')], wakeups: [job('fired'), job('cancelled')] }, true],
+    ['empty background', { jobs: [], wakeups: [] }, true],
+    ['background not loaded', undefined, true],
+  ])('a session with %s', (_name, bg, expected) => {
+    const session = wb();
+    const out = archiveAllCandidates([session], new Set(), {}, bg ? { [session.id]: bg } : {});
+    expect(out.map((w) => w.id)).toEqual(expected ? [session.id] : []);
+  });
+
   it('keeps the input order and filters a mixed list', () => {
     const list = [
       wb({ id: 'a' }),

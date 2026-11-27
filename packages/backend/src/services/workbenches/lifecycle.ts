@@ -1,7 +1,7 @@
 import { cancelLimitResume } from './limitResume.js';
 import { initWorkbenchMaintenance, stopWorkbenchMaintenance } from './maintenance.js';
 import { sweepMergeArchives } from './autoArchive.js';
-import { archiveBoxSource, IDLE_SWEEP_INTERVAL_MS, IDLE_POLLER, idleArchiveTick } from './idleArchive.js';
+import { archiveBoxSource, bulkArchiveGuard, IDLE_SWEEP_INTERVAL_MS, IDLE_POLLER, idleArchiveTick } from './idleArchive.js';
 import { resetSetupForGeneration, stopSandboxScripts } from './scriptStore.js';
 import { sweepAgentBackups } from './agentBackups.js';
 import { sweepScripts, detachScriptFollowers } from './scripts.js';
@@ -867,14 +867,17 @@ async function finishThreadProvision(
 
 /** Archive answers after the durable marker is written. */
 export function archiveWorkbench(workbenchId: string): Promise<WorkbenchRow>;
-export function archiveWorkbench(workbenchId: string, opts: { autoForMergedPr: true } | { idle: IdleArchiveClaim }): Promise<WorkbenchRow | null>;
+export function archiveWorkbench(workbenchId: string, opts: { autoForMergedPr: true } | { idle: IdleArchiveClaim } | { bulk: true }): Promise<WorkbenchRow | null>;
 export async function archiveWorkbench(
-  workbenchId: string, opts?: { autoForMergedPr: true } | { idle: IdleArchiveClaim },
+  workbenchId: string, opts?: { autoForMergedPr: true } | { idle: IdleArchiveClaim } | { bulk: true },
 ): Promise<WorkbenchRow | null> {
   const idle = opts && 'idle' in opts ? opts.idle : undefined;
   // A person's or a merge's archive of a sleeping box: a fresh save is the archive, so nothing wakes the box.
   const source = idle ? 'running' : await archiveBoxSource(workbenchId);
-  const row = await markArchive(workbenchId, Boolean(opts && 'autoForMergedPr' in opts), idle, source === 'running' ? undefined : source);
+  const row = await markArchive(
+    workbenchId, Boolean(opts && 'autoForMergedPr' in opts), idle, source === 'running' ? undefined : source,
+    opts && 'bulk' in opts ? bulkArchiveGuard() : undefined,
+  );
   if (!row && opts) return null;
   if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   await emitWorkbenchUpdated(await publicWorkbench(row));
@@ -946,7 +949,7 @@ export async function processArchive(workbenchId: string): Promise<void> {
       const config = await loadWorkbenchConfig(row);
       await checkLease();
       if (config?.archive) {
-        const { done } = await startScript(row, 'archive', { config, timeoutMs: ARCHIVE_SCRIPT_TIMEOUT_MS, resume: true });
+        const { done } = await startScript(row, 'archive', { config, timeoutMs: ARCHIVE_SCRIPT_TIMEOUT_MS, resume: true, allowArchived: true });
         await done;
       }
       await checkLease();

@@ -1,5 +1,5 @@
 import type { PRRow } from '@talyn/client/native';
-import { fleetAgentLabel, type Workbench, type WorkbenchReadiness } from '@talyn/shared';
+import { fleetAgentLabel, workbenchesOffered, type RepositoryPreviewResponse, type Workbench, type WorkbenchReadiness } from '@talyn/shared';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { HeaderHeightContext } from 'expo-router/react-navigation';
 import { useContext, useEffect, useState } from 'react';
@@ -10,14 +10,15 @@ import { ScreenContainer } from '../../components/ScreenContainer';
 import { AppText, Banner, ChipButton, Disclosure, IconButton, Row, SheetModal, useActionSheet, type SheetAction } from '../../components/UI';
 import { StateNotice, workflowStyles as styles } from '../../components/Workflow';
 import { showActionError } from '../../lib/errors';
-import { useKeyboardInset } from '../../lib/keyboard';
 import { useFeatures } from '../../lib/features';
+import { useKeyboardInset } from '../../lib/keyboard';
 import { useNow } from '../../lib/time';
 import { completeIntent } from '../../navigation/intents';
 import { pullRequestRoute, sessionRoute, threadRoute } from '../../navigation/routes';
 import { useResource } from '../../workflow/hooks';
 import { alternateChatAgent, workbenchKind } from '../../workflow/model';
 import { Conversation } from '../chat/Conversation';
+import { isArchived } from './actions';
 import { runningJobs } from './background';
 import { ChangesTab } from './ChangesTab';
 import { CodeCompleteReviewCard } from './CodeCompleteReviewCard';
@@ -26,19 +27,21 @@ import { useBackground } from './data';
 import { HeaderTitle, QuickActionRow, quickMenuActions, SessionDetailsSheet, SessionStatusRow, useQuickActions } from './DetailHeader';
 import { JobsTab } from './JobsTab';
 import { readinessProblem, sessionTabs } from './model';
+import { PreviewSheet } from './PreviewSheet';
 import { PullRequestTab } from './PullRequestTab';
 import { diffTotals, primaryActions } from './quickActions';
 import { useSessionMenu } from './SessionMenu';
 import { WorkbenchRow } from './WorkbenchRow';
 
 type PrDetail = { row: PRRow };
-type View_ = 'details' | 'changes' | 'jobs' | 'pr' | null;
+type View_ = 'details' | 'changes' | 'jobs' | 'pr' | 'preview' | null;
 
 const VIEW_ICON = {
   details: { ios: 'info.circle', android: 'info' },
   changes: { ios: 'plus.forwardslash.minus', android: 'difference' },
   jobs: { ios: 'timer', android: 'timer' },
   pr: { ios: 'arrow.triangle.pull', android: 'fork_right' },
+  preview: { ios: 'safari', android: 'language' },
 } as const;
 
 /** The pull request view, with its own action sheet so "Link" draws above the sheet. */
@@ -66,6 +69,12 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
   const offline = useNetwork() === 'offline';
   const now = useNow();
   const item = valid ? state.data : undefined;
+  const previewRepo = kind === 'session' && item?.runtime === 'sandbox' && !isArchived(item) && owns(item)
+    && features?.previewLinks === true && workbenchesOffered(features) ? item.repositoryId ?? '' : '';
+  const { data: preview } = useResource<RepositoryPreviewResponse>('repositoryPreview', previewRepo, Boolean(previewRepo), true);
+  const previewPorts = preview && preview.target !== 'off' && preview.target !== 'coder'
+    ? preview.ports.length ? preview.ports : [{ port: 3000 }]
+    : null;
   const prId = kind === 'session' ? item?.pullRequestId ?? '' : '';
   const prState = useResource<PrDetail>('pr', prId, Boolean(prId));
   const row = prState.data?.row ?? null;
@@ -124,6 +133,7 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
       detail: totals ? `${totals.files} ${totals.files === 1 ? 'file' : 'files'}, +${totals.added} −${totals.removed}` : undefined, onPress: () => setView('changes') });
     if (tabs.includes('pr')) views.push({ label: 'Pull request', icon: VIEW_ICON.pr, detail: target.pullRequestId ? undefined : 'None yet. Create or link one.',
       onPress: () => { if (target.pullRequestId) router.push(pullRequestRoute(target.pullRequestId)); else setView('pr'); } });
+    if (previewPorts) views.push({ label: 'Preview', icon: VIEW_ICON.preview, onPress: () => setView('preview') });
     if (tabs.includes('jobs')) views.push({ label: 'Background jobs', icon: VIEW_ICON.jobs, detail: running ? `${running} running` : undefined,
       onPress: () => setView('jobs') });
     const chat = target.chats?.at(-1);
@@ -178,6 +188,7 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
       <SheetModal visible={view === 'jobs'} onClose={close} title="Background jobs" full>
         {view === 'jobs' ? <JobsTab workbenchId={item.id} background={background} /> : null}
       </SheetModal>
+      {view === 'preview' && previewPorts ? <PreviewSheet key={item.id} item={item} ports={previewPorts} onClose={close} /> : null}
       <PullRequestSheet item={item} visible={view === 'pr'} onClose={close} onSent={(message) => { close(); menu.toast(message); }} />
     </> : null}
     {menu.elements}

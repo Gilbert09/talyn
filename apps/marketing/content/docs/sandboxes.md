@@ -68,6 +68,14 @@ Start your dev server with a run script. See [Repository setup](/docs/repository
 
 In the desktop app, Talyn forwards the sandbox's port to the same port on your computer, so you open the app on `localhost` like any other dev server.
 
+### Open a hosted preview on mobile
+
+1. Open a sandbox session in the Talyn mobile app.
+2. Open **Session actions** and tap **Preview**.
+3. Select the port for your app.
+
+Talyn starts the run script if necessary and waits for the app to respond. When Talyn shows the preview host, tap **Open website** to open it in your phone's browser. If the repository has no preview ports, Talyn uses port 3000. [Configure preview ports](/docs/repository-setup#preview-ports).
+
 ## Sandbox status
 
 The status chip in the session header shows what the sandbox is doing: **Starting**, **Running**, **Idle**, **Asleep**, **In storage**, **Waking**, **Moving**, **Lost** or **Failed**. The **Sandbox** tab shows more detail, the setup output, and the last problem.

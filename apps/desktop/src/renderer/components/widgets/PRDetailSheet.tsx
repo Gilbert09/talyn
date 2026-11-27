@@ -62,7 +62,7 @@ import { PRStatusPill } from './PRStatusPill';
 import { PRReviewPill } from './PRReviewPill';
 import { PollingOnlyBadge } from './PollingOnlyBadge';
 import { toast } from '../../stores/toast';
-import { mergeErrorText, mergeRefusalCode, showMergeRefusal } from '../../lib/mergeRefusal';
+import { mergeErrorText, mergeRefusalCode, showMergeRefusal, updatePullRequestBranch } from '../../lib/mergeRefusal';
 import { canResubmitMergeQueue, resubmitMergeQueue } from '../../lib/mergeQueueResubmit';
 import { trackEvent } from '../../lib/analytics';
 import type { PrDetailTab } from '../../lib/prDetail';
@@ -143,6 +143,7 @@ export function PRDetailSheet({
   const [tab, setTab] = useState<TabKey>(initialTab);
   const [refreshing, setRefreshing] = useState(false);
   const [merging, setMerging] = useState(false);
+  const [updatingBranch, setUpdatingBranch] = useState(false);
   const [confirmMerge, setConfirmMerge] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Which review dialog is open, if any. Only offered to a requested reviewer.
@@ -449,6 +450,19 @@ export function PRDetailSheet({
     }
   }
 
+  async function handleUpdateBranch(pr: PRRow): Promise<void> {
+    setUpdatingBranch(true);
+    try {
+      await updatePullRequestBranch(pr);
+      const next = await api.pullRequests.get(pr.id);
+      setData((prev) => (prev?.row.id === next.row.id ? next : prev));
+    } catch {
+      // The update action reports its result even if the detail cannot refresh.
+    } finally {
+      setUpdatingBranch(false);
+    }
+  }
+
   if (!pullRequestId) return null;
 
   // Show the merge affordance for an open PR GitHub reports as mergeable
@@ -682,6 +696,17 @@ export function PRDetailSheet({
                 nothing until the group actually wraps. */}
             {isOwnPr && (view.row.state === 'open' || canMerge) && (
               <div className="flex flex-wrap items-center justify-start gap-x-1 gap-y-1.5">
+            {view.row.state === 'open' && !view.row.summary.draft && view.row.summary.blockingReason === 'behind' && (
+              <Button
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => void handleUpdateBranch(view.row)}
+                disabled={detailPending || updatingBranch}
+              >
+                <RefreshCw className={cn('mr-1 h-3.5 w-3.5', updatingBranch && 'animate-spin')} />
+                Update branch
+              </Button>
+            )}
             {/* Findings first: reading what is wrong with a pull request comes
                 before handing it to an agent or queueing it to merge. Opens the
                 tab rather than starting a review — the tab is where the depth

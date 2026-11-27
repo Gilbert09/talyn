@@ -1,7 +1,7 @@
 import { nextRunningSubagentTab, runningSubagentCount, subagentTabs, type ToolBlock, type Workbench } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ReactNode } from 'react';
-import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View, type TextInput } from 'react-native';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ReactNode, type Ref } from 'react';
+import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View, type FlatListProps, type TextInput } from 'react-native';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { AppText } from '../../components/UI';
@@ -9,7 +9,7 @@ import { StateNotice, workflowStyles as styles } from '../../components/Workflow
 import { useFeatures } from '../../lib/features';
 import { useNow } from '../../lib/time';
 import { radius, type, useTheme, withAlpha } from '../../theme/tokens';
-import { useLocal, useResource } from '../../workflow/hooks';
+import { useResource } from '../../workflow/hooks';
 import { alternateChatAgent, type Transcript } from '../../workflow/model';
 import { slimTools } from '../../workflow/slim';
 import { FleetReconnectNotice } from '../agents/FleetReconnectNotice';
@@ -32,6 +32,15 @@ import { SubagentTabOpener, SubagentTranscript } from './ToolRow';
 const FOLLOW_DISTANCE = 64;
 /** How close to the oldest loaded message the next older page loads, in screen heights. */
 const OLDER_DISTANCE = 0.6;
+
+function TranscriptList({ ref, positionKey, ...props }: Omit<FlatListProps<Row>, 'contentOffset'> & {
+  ref: Ref<FlatList<Row>>; positionKey: string;
+}) {
+  const { workflow } = useMobileRuntime();
+  // A change to contentOffset moves the native list. Restore it once when the list opens.
+  const [contentOffset] = useState(() => ({ x: 0, y: workflow.local(positionKey).offset }));
+  return <FlatList {...props} ref={ref} contentOffset={contentOffset} />;
+}
 
 /**
  * The conversation for a session or a thread. The list is inverted: index 0 is
@@ -56,10 +65,10 @@ export function Conversation({ item, ready, canSwitchAgent, header, top, bottom,
   const alternate = canSwitchAgent ? alternateChatAgent(item, chat) : undefined;
   const state = useResource<Transcript>('transcript', chat?.id ?? '', Boolean(chat));
   const offline = useNetwork() === 'offline';
-  const local = useLocal(chat?.id ?? '');
+  const positionKey = chat?.id ?? item.id;
   const ref = useRef<FlatList<Row>>(null);
   const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
-  const [following, setFollowing] = useState(local.following);
+  const [following, setFollowing] = useState(() => workflow.local(positionKey).following);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [planBusy, setPlanBusy] = useState(false);
   const [questionBusy, setQuestionBusy] = useState(false);
@@ -77,7 +86,7 @@ export function Conversation({ item, ready, canSwitchAgent, header, top, bottom,
   const cache = useRef(new TranscriptRowCache());
   /** The reader reached the oldest loaded message while another load ran. The older page is owed once it ends. */
   const olderOwed = useRef(false);
-  useLayoutEffect(() => { setFollowing(workflow.local(chat?.id ?? '').following); }, [workflow, chat?.id]);
+  useLayoutEffect(() => { setFollowing(workflow.local(positionKey).following); }, [workflow, positionKey]);
   useEffect(() => { if (chat) workflow.updateLocal(`selected:${item.id}`, { selectedChat: chat.id }); }, [workflow, item.id, chat?.id]);
   const rows = useMemo(() => {
     const list = cache.current.rows(chat?.id ?? '', state.data?.events ?? []);
@@ -87,7 +96,7 @@ export function Conversation({ item, ready, canSwitchAgent, header, top, bottom,
     return list.reverse();
   }, [chat?.id, chat?.queuedMessages, state.data]);
 
-  const pauseFollowing = useCallback(() => { setFollowing(false); workflow.updateLocal(chat?.id ?? item.id, { following: false }); }, [workflow, chat?.id, item.id]);
+  const pauseFollowing = useCallback(() => { setFollowing(false); workflow.updateLocal(positionKey, { following: false }); }, [workflow, positionKey]);
   const data = state.data;
   const canLoadOlder = Boolean(chat && data?.hasOlder && !data.limited && !data.olderFailed && !loadingOlder && !state.refreshing && !offline);
   const chatId = chat?.id;
@@ -105,7 +114,7 @@ export function Conversation({ item, ready, canSwitchAgent, header, top, bottom,
     if (olderOwed.current && canLoadOlder) { olderOwed.current = false; startOlder(); }
   }, [canLoadOlder, startOlder]);
   const jumpToLatest = () => {
-    setFollowing(true); workflow.updateLocal(chat?.id ?? item.id, { following: true });
+    setFollowing(true); workflow.updateLocal(positionKey, { following: true });
     ref.current?.scrollToOffset({ offset: 0, animated: true });
   };
   const partialTools = useMemo(() => new Set((state.data?.events ?? []).flatMap((entry) => slimTools(entry.event))), [state.data]);
@@ -196,19 +205,21 @@ export function Conversation({ item, ready, canSwitchAgent, header, top, bottom,
       </TranscriptContext.Provider></RowBoundary>
     </View> : <View style={{ flex: 1 }}>
       <RowBoundary label="The conversation" resetKey={chat?.id} retry><TranscriptContext.Provider value={actions}><SubagentTabOpener.Provider value={openTab}>
-      <FlatList ref={ref} key={chat?.id ?? item.id} inverted data={rows} keyExtractor={(row) => row.key} accessibilityRole="list" accessibilityLabel="Conversation transcript"
+      <TranscriptList ref={ref} key={positionKey} positionKey={positionKey} inverted data={rows} keyExtractor={(row) => row.key} accessibilityRole="list" accessibilityLabel="Conversation transcript"
         initialNumToRender={14} maxToRenderPerBatch={10} windowSize={9} contentContainerStyle={[styles.content, local_.content]}
-        contentOffset={{ x: 0, y: local.offset }} scrollEventThrottle={100}
+        scrollEventThrottle={100}
         maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: FOLLOW_DISTANCE }}
         onScroll={(event) => {
           const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
           const offset = contentOffset.y;
           const next = offset < FOLLOW_DISTANCE;
           if (contentSize.height - offset - layoutMeasurement.height > layoutMeasurement.height * OLDER_DISTANCE * 2) olderOwed.current = false;
-          if (next !== following) setFollowing(next);
-          workflow.updateLocal(chat?.id ?? item.id, { offset, following: next });
+          workflow.rememberOffset(positionKey, offset);
+          if (next === workflow.local(positionKey).following) return;
+          setFollowing(next);
+          workflow.updateLocal(positionKey, { following: next });
           // Back at the newest message: older events past the release bound load again on the next scroll up.
-          if (next && !following && chat) workflow.release(chat.id);
+          if (next && chat) workflow.release(chat.id);
         }}
         onEndReached={loadOlder} onEndReachedThreshold={OLDER_DISTANCE} extraData={extraData}
         onScrollToIndexFailed={(info) => {

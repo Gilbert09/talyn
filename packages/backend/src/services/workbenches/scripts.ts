@@ -76,7 +76,7 @@ async function detectedRun(
 export async function startScript(
   row: WorkbenchRow,
   name: string,
-  opts: { config?: WorkbenchConfig; timeoutMs?: number; resume?: boolean } = {},
+  opts: { config?: WorkbenchConfig; timeoutMs?: number; resume?: boolean; allowArchived?: boolean } = {},
 ): Promise<{ done: Promise<number | null> }> {
   if (isWorkbenchDraining()) throw new WorkbenchError('The session is reconnecting. Try again shortly.', 503, 'draining');
   if (opts.resume && await existingScript(row.id, name, row.sandboxId!, row.sandboxGeneration ?? row.sandboxId!)) {
@@ -111,7 +111,7 @@ export async function startScript(
     await Promise.all(others.map((n) => stopScript(row, n)));
   }
 
-  const lease = await claimScript(row, name);
+  const lease = await claimScript(row, name, opts.allowArchived);
   if (!lease) throw new WorkbenchError(`The "${name}" script is already running.`, 409, 'script_running');
   const marker = scriptMarker(row.id, name);
   const command = opts.timeoutMs ? `timeout ${Math.ceil(opts.timeoutMs / 1000)} bash -c ${shellQuote(resolved.command)}` : resolved.command;

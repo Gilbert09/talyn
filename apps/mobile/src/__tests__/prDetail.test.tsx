@@ -72,6 +72,49 @@ describe('PR detail next step', () => {
     expect(screen.getByRole('tab', { name: 'Checks, 3' })).toBeVisible();
   });
 
+  it('updates a behind branch and refreshes the checks', async () => {
+    serve(mine({}, { blockingReason: 'behind' }));
+    mockActive.api.pullRequests.updateBranch.mockImplementationOnce(async () => {
+      serve(mine({}, { checks: { total: 1, passed: 0, failed: 0, inProgress: 1, skipped: 0 } }));
+      return { updated: true, message: 'The branch was updated.' };
+    });
+    await render(<PullRequestDetailScreen />);
+
+    const update = await screen.findByRole('button', { name: 'Update branch' });
+    expect(screen.getByRole('button', { name: 'Open pull request website' })).toBeVisible();
+    await fireEvent.press(update);
+
+    expect(mockActive.api.pullRequests.updateBranch).toHaveBeenCalledWith('pr-one');
+    expect(await screen.findByText('The branch was updated.')).toBeVisible();
+    expect(await screen.findByText('Checks are running (0 of 1 done)')).toBeVisible();
+  });
+
+  it('shows the error when GitHub cannot update the branch', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    serve(mine({}, { blockingReason: 'behind' }));
+    mockActive.api.pullRequests.updateBranch.mockRejectedValueOnce(new Error('The branch has merge conflicts.'));
+    await render(<PullRequestDetailScreen />);
+
+    await fireEvent.press(await screen.findByRole('button', { name: 'Update branch' }));
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith('Could not update #42', 'The branch has merge conflicts.'));
+  });
+
+  it('offers Update branch after GitHub refuses a merge because the base moved', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    serve(mine());
+    mockActive.api.pullRequests.merge.mockImplementationOnce(async () => {
+      serve(mine({}, { blockingReason: 'behind' }));
+      throw new Error('The head branch is out of date.');
+    });
+    await render(<PullRequestDetailScreen />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Merge' }));
+    const confirm = alert.mock.calls[0][2]?.find((button) => button.text === 'Merge');
+    await act(async () => { confirm?.onPress?.(); });
+
+    expect(await screen.findByRole('button', { name: 'Update branch' })).toBeEnabled();
+  });
+
   it('draws the queue and keep-mergeable switches as buttons that name their state', async () => {
     serve(mine({ mergeQueued: true, mergeQueue: { status: 'queued', position: 4 } as PRRow['mergeQueue'], autoKeepMergeable: true }));
     await render(<PullRequestDetailScreen />);
