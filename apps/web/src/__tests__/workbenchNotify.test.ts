@@ -12,6 +12,8 @@ import { useWorkbenchStore } from '../stores/workbenches';
 import { useWorkspaceStore } from '../stores/workspace';
 import { toast } from '../stores/toast';
 
+import { useSpacesStore } from '../stores/spaces';
+
 type Status = WorkbenchChat['status'];
 
 function event(turn: number, value: Record<string, unknown>, seq = turn): WorkbenchEvent {
@@ -194,5 +196,66 @@ describe('toastPullRequestFailures', () => {
     toastPullRequestFailures('chat1', events);
     expect(error).toHaveBeenCalledTimes(count);
     if (count) expect(error).toHaveBeenCalledWith('Could not open the pull request', 'No commits');
+  });
+});
+
+
+describe('personal space notification preferences', () => {
+  it.each([
+    ['muted space', 'space-muted', 0],
+    ['another space', 'space-other', 1],
+    ['Personal', null, 1],
+  ] as const)('shows the expected alerts for %s', (_label, spaceId, count) => {
+    const initial = useWorkbenchStore.getState();
+    const spaces = useSpacesStore.getState();
+    const originalNotification = globalThis.Notification;
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    const notification = vi.fn().mockImplementation(() => ({ onclick: null }));
+    Object.defineProperty(notification, 'permission', { value: 'granted' });
+    Object.defineProperty(globalThis, 'Notification', { configurable: true, value: notification });
+    useSpacesStore.setState({ mutedSpaceIds: ['space-muted'] });
+    useWorkbenchStore.setState({
+      workbenches: { wb1: { id: 'wb1', name: 'Session', spaceId } as Workbench },
+      chats: { wb1: [{ id: 'chat1', workbenchId: 'wb1', status: 'running' } as WorkbenchChat] },
+      chatEvents: {},
+    });
+    const uninstall = installWorkbenchNotifications();
+    try {
+      useWorkbenchStore.getState().upsertChat({ id: 'chat1', workbenchId: 'wb1', status: 'idle' } as WorkbenchChat);
+      expect(notification).toHaveBeenCalledTimes(count);
+      expect(useWorkbenchStore.getState().unread.chat1).toBe(true);
+    } finally {
+      uninstall();
+      useWorkbenchStore.setState(initial, true);
+      useSpacesStore.setState(spaces, true);
+      Object.defineProperty(globalThis, 'Notification', { configurable: true, value: originalNotification });
+      focus.mockRestore();
+    }
+  });
+});
+
+
+describe('space mutes for pull request failures', () => {
+  it.each([
+    ['space-muted', 0],
+    ['space-other', 1],
+    [null, 1],
+  ] as const)('shows %s failure alerts only when allowed', (spaceId, count) => {
+    const initial = useWorkbenchStore.getState();
+    const spaces = useSpacesStore.getState();
+    const error = vi.spyOn(toast, 'error').mockReturnValue('toast');
+    useSpacesStore.setState({ mutedSpaceIds: ['space-muted'] });
+    useWorkbenchStore.setState({
+      workbenches: { wb1: { id: 'wb1', runtime: 'sandbox', spaceId } as Workbench },
+      chats: { wb1: [{ id: 'chat1', workbenchId: 'wb1', status: 'idle' } as WorkbenchChat] },
+    });
+    try {
+      toastPullRequestFailures('chat1', [event(1, { type: 'talyn_pr', ok: false, message: 'No commits' })]);
+      expect(error).toHaveBeenCalledTimes(count);
+    } finally {
+      useWorkbenchStore.setState(initial, true);
+      useSpacesStore.setState(spaces, true);
+      error.mockRestore();
+    }
   });
 });

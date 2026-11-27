@@ -1,24 +1,32 @@
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { defaultMobileNotificationPreferences, type MobileNotificationPreferences } from '@talyn/shared';
+import { defaultMobileNotificationPreferences, type MobileNotificationPreferences, type SpacesTeam } from '@talyn/shared';
 import {
   NotificationsSettings,
   PHONE_SAVE_DEBOUNCE_MS,
   validPhonePreferences,
 } from './NotificationsSettings';
 
+import { useSpacesStore } from '../../../stores/spaces';
+
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
+  spaceGet: vi.fn(),
+  spaceSave: vi.fn(),
   update: vi.fn(),
   writeDefaults: vi.fn(),
   setBlocked: vi.fn(),
-  state: { workspaceId: 'ws1' as string | null, notifyOnFinish: true, blocked: false },
+  state: { workspaceId: 'ws1' as string | null, notifyOnFinish: true, blocked: false, spaces: false },
 }));
 const { get: mockGet, update: mockUpdate, writeDefaults: mockWriteDefaults, setBlocked: mockSetBlocked, state: mockState } = mocks;
 
 vi.mock('../../../lib/api', () => ({
   api: {
+    spaces: {
+      notificationPreferences: (...a: unknown[]) => mocks.spaceGet(...a),
+      setNotificationsMuted: (...a: unknown[]) => mocks.spaceSave(...a),
+    },
     mobileNotifications: {
       getPreferences: (...a: unknown[]) => mocks.get(...a),
       updatePreferences: (...a: unknown[]) => mocks.update(...a),
@@ -35,7 +43,7 @@ vi.mock('../../../hooks/useApi', () => ({
 }));
 vi.mock('../../../stores/workspace', () => ({
   useWorkspaceStore: (selector: (s: unknown) => unknown) =>
-    selector({ currentWorkspaceId: mocks.state.workspaceId }),
+    selector({ currentWorkspaceId: mocks.state.workspaceId, features: { spaces: mocks.state.spaces } }),
 }));
 
 const prefs = (over: Partial<MobileNotificationPreferences> = {}): MobileNotificationPreferences => ({
@@ -53,6 +61,10 @@ async function renderLoaded(initial = prefs({ enabled: true })) {
 
 beforeEach(() => {
   vi.useRealTimers();
+  mocks.spaceGet.mockReset().mockResolvedValue({ mutedSpaceIds: [] });
+  mocks.spaceSave.mockReset().mockResolvedValue({ mutedSpaceIds: ['automations'] });
+  mockState.spaces = false;
+  useSpacesStore.setState({ teams: null, mutedSpaceIds: [], notificationsLoaded: false, notificationsError: null, notificationsSaving: false });
   mockGet.mockReset();
   mockUpdate.mockReset();
   mockWriteDefaults.mockReset();
@@ -184,4 +196,73 @@ describe('validPhonePreferences', () => {
   ])('%j -> %s', (over, expected) => {
     expect(validPhonePreferences(prefs(over as Partial<MobileNotificationPreferences>))).toBe(expected);
   });
+});
+
+
+describe('NotificationsSettings: team spaces', () => {
+  beforeEach(() => {
+    mockState.spaces = true;
+    useSpacesStore.setState({ teams: [{
+      id: 'team', name: 'Team', spaces: [
+        { id: 'automations', name: 'Automations' },
+        { id: 'work', name: 'Work' },
+      ],
+    }] as SpacesTeam[] });
+  });
+
+  it('loads the personal preferences and saves a space mute', async () => {
+    await renderLoaded();
+    await waitFor(() => expect(mocks.spaceGet).toHaveBeenCalledTimes(1));
+    expect(checkbox('^Automations$')).toBeChecked();
+    fireEvent.click(checkbox('^Automations$'));
+    await waitFor(() => expect(checkbox('^Automations$')).not.toBeChecked());
+    expect(mocks.spaceSave).toHaveBeenCalledWith('automations', true);
+    expect(checkbox('^Work$')).toBeChecked();
+  });
+
+  it('turns notifications back on for a muted space', async () => {
+    mocks.spaceGet.mockResolvedValue({ mutedSpaceIds: ['automations'] });
+    mocks.spaceSave.mockResolvedValue({ mutedSpaceIds: [] });
+    await renderLoaded();
+    await waitFor(() => expect(checkbox('^Automations$')).not.toBeChecked());
+    fireEvent.click(checkbox('^Automations$'));
+    await waitFor(() => expect(checkbox('^Automations$')).toBeChecked());
+    expect(mocks.spaceSave).toHaveBeenCalledWith('automations', false);
+  });
+
+  it('restores the previous preference when a save fails', async () => {
+    mocks.spaceSave.mockRejectedValue(new Error('offline'));
+    await renderLoaded();
+    fireEvent.click(checkbox('^Automations$'));
+    await waitFor(() => expect(mocks.spaceSave).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(checkbox('^Automations$')).toBeChecked());
+    expect(checkbox('^Work$')).toBeChecked();
+  });
+  it('disables every space while a save is pending', async () => {
+    let finish!: (value: { mutedSpaceIds: string[] }) => void;
+    mocks.spaceSave.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    await renderLoaded();
+    fireEvent.click(checkbox('^Automations$'));
+    expect(checkbox('^Automations$')).toBeDisabled();
+    expect(checkbox('^Work$')).toBeDisabled();
+    fireEvent.click(checkbox('^Work$'));
+    expect(mocks.spaceSave).toHaveBeenCalledTimes(1);
+    await act(async () => { finish({ mutedSpaceIds: ['automations'] }); });
+    expect(checkbox('^Automations$')).not.toBeDisabled();
+    expect(checkbox('^Automations$')).not.toBeChecked();
+    expect(checkbox('^Work$')).toBeChecked();
+  });
+
+  it('disables space edits until the preferences load and offers a retry', async () => {
+    mocks.spaceGet.mockRejectedValueOnce(new Error('offline'));
+    await renderLoaded();
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    expect(checkbox('^Automations$')).toBeDisabled();
+    expect(mocks.spaceSave).not.toHaveBeenCalled();
+    mocks.spaceGet.mockResolvedValue({ mutedSpaceIds: ['automations'] });
+    fireEvent.click(retry);
+    await waitFor(() => expect(checkbox('^Automations$')).not.toBeDisabled());
+    expect(checkbox('^Automations$')).not.toBeChecked();
+  });
+
 });

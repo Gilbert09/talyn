@@ -1,6 +1,10 @@
 import { pullRequestOutcomeEvent, type Workbench, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
-import { installWorkbenchNotifications, notificationSummary, notificationText } from '../renderer/lib/workbenchNotify';
+import { installWorkbenchNotifications, notificationSummary, notificationText, toastPullRequestFailures } from '../renderer/lib/workbenchNotify';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
+
+import { useSpacesStore } from '../renderer/stores/spaces';
+
+import { toast } from '../renderer/stores/toast';
 
 type Status = WorkbenchChat['status'];
 
@@ -122,6 +126,67 @@ describe('notification text', () => {
       useWorkbenchStore.setState(initial, true);
       Object.defineProperty(global, 'Notification', { configurable: true, value: originalNotification });
       hasFocus.mockRestore();
+    }
+  });
+});
+
+
+describe('personal space notification preferences', () => {
+  it.each([
+    ['muted space', 'space-muted', 0],
+    ['another space', 'space-other', 1],
+    ['Personal', null, 1],
+  ] as const)('shows the expected alerts for %s', (_label, spaceId, count) => {
+    const initial = useWorkbenchStore.getState();
+    const spaces = useSpacesStore.getState();
+    const originalNotification = global.Notification;
+    const focus = jest.spyOn(document, 'hasFocus').mockReturnValue(false);
+    const notification = jest.fn().mockImplementation(() => ({ onclick: null }));
+    Object.defineProperty(notification, 'permission', { value: 'granted' });
+    Object.defineProperty(global, 'Notification', { configurable: true, value: notification });
+    useSpacesStore.setState({ mutedSpaceIds: ['space-muted'] });
+    useWorkbenchStore.setState({
+      workbenches: { wb1: { id: 'wb1', name: 'Session', spaceId } as Workbench },
+      chats: { wb1: [{ id: 'chat1', workbenchId: 'wb1', status: 'running' } as WorkbenchChat] },
+      chatEvents: {},
+    });
+    const uninstall = installWorkbenchNotifications();
+    try {
+      useWorkbenchStore.getState().upsertChat({ id: 'chat1', workbenchId: 'wb1', status: 'idle' } as WorkbenchChat);
+      expect(notification).toHaveBeenCalledTimes(count);
+      expect(useWorkbenchStore.getState().unread.chat1).toBe(true);
+    } finally {
+      uninstall();
+      useWorkbenchStore.setState(initial, true);
+      useSpacesStore.setState(spaces, true);
+      Object.defineProperty(global, 'Notification', { configurable: true, value: originalNotification });
+      focus.mockRestore();
+    }
+  });
+});
+
+
+describe('space mutes for pull request failures', () => {
+  it.each([
+    ['space-muted', 0],
+    ['space-other', 1],
+    [null, 1],
+  ] as const)('shows %s failure alerts only when allowed', (spaceId, count) => {
+    const initial = useWorkbenchStore.getState();
+    const spaces = useSpacesStore.getState();
+    const error = jest.spyOn(toast, 'error').mockReturnValue('toast');
+    useSpacesStore.setState({ mutedSpaceIds: ['space-muted'] });
+    useWorkbenchStore.setState({
+      workbenches: { wb1: { id: 'wb1', runtime: 'sandbox', spaceId } as Workbench },
+      chats: { wb1: [{ id: 'chat1', workbenchId: 'wb1', status: 'idle' } as WorkbenchChat] },
+    });
+    try {
+      toastPullRequestFailures('chat1', [event(1, { type: 'talyn_pr', ok: false, message: 'No commits' })]);
+      expect(error).toHaveBeenCalledTimes(count);
+    } finally {
+      useWorkbenchStore.setState(initial, true);
+      useSpacesStore.setState(spaces, true);
+      error.mockRestore();
     }
   });
 });

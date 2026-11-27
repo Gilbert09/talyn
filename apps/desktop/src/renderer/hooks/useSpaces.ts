@@ -12,6 +12,7 @@ import {
   loadSpaceSessions,
   loadSpaceTasks,
   loadTeams,
+  loadSpaceNotifications,
   useSpacesStore,
 } from '../stores/spaces';
 
@@ -20,10 +21,19 @@ export const PRESENCE_HEARTBEAT_MS = 20_000;
 export function useSpacesBoot(): void {
   const offered = useWorkspaceStore((s) => spacesOffered(s.features));
   const context = useWorkspaceStore((s) => s.currentContext);
+  const userId = useSpacesStore((s) => s.selfUserId);
   const teams = useSpacesStore((s) => s.teams);
 
   useEffect(() => {
     if (offered) void loadTeams();
+  }, [offered, userId]);
+
+  useEffect(() => {
+    if (!offered) return;
+    const refresh = () => { void loadSpaceNotifications(); };
+    const off = wsClient.on('space:notifications', refresh);
+    window.addEventListener('focus', refresh);
+    return () => { off(); window.removeEventListener('focus', refresh); };
   }, [offered]);
 
   useOnReconnect(() => {

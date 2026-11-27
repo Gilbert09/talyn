@@ -8083,3 +8083,12 @@ Decisions:
 - Mobile: a phone's text selection menu takes no app items without a native module (and a new binary). So the session menu on the detail screen has **New session from copied text**. It reads the clipboard (`expo-clipboard`, already in the binary) and opens `/new` with a new `prompt` route parameter. `NewWorkScreen` now matches the route's repository by id or by full name.
 - Analytics: `session_from_selection` with `source_kind`, `chars` and `repository_prefilled`, on all three front ends.
 - Later change (Tom): mobile replaces the clipboard item with a long-press menu on user and agent messages (`features/chat/messageMenu.tsx`). Items: **New session from message**, **Copy message**, **Select text**. **Select text** opens the message in a read-only `TextInput`, because a `Text` cannot report its selection and iOS `selectable` text copies only the whole block. The button there uses the selected part (`selectedText`). Inside a conversation the message `Markdown` is not natively selectable (`selectable={false}`), so the native long press and the menu do not both start. On Android the field stays editable with `showSoftInputOnFocus={false}` and drops edits, because a non-editable Android field cannot select. Analytics adds `via: 'message' | 'selection'`.
+
+
+### 2026-11-27 — Personal notification preferences for team spaces
+
+Settings now has a **Team spaces** group on desktop, web, and mobile.
+Each person can mute a space on all their devices without changing a teammate's preferences.
+The server stores these preferences and checks them before it sends a phone alert.
+Desktop and web also check the preference before showing alerts for that space.
+A change sends a private update to the person's other connected devices.

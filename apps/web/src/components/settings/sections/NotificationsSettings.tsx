@@ -7,6 +7,9 @@ import {
 import { api } from '../../../lib/api';
 import { useSessionDefaults, writeSessionDefaults } from '../../../lib/sessionDefaults';
 import { useWorkspaceStore } from '../../../stores/workspace';
+import { loadSpaceNotifications, setSpaceMuted, useSpacesStore } from '../../../stores/spaces';
+import { spacesOffered } from '../../../lib/spaces';
+import { toast } from '../../../stores/toast';
 import { getMergeBlockedNotifyEnabled, setMergeBlockedNotifyEnabled } from '../../../hooks/useApi';
 import { Button } from '../../ui/button';
 import { SettingRow, SettingToggle, SettingsPage, SettingsSection } from '../../ui/settings';
@@ -54,6 +57,7 @@ export function NotificationsSettings() {
     >
       <BrowserNotifications />
       <PhoneNotifications />
+      <SpaceNotifications />
     </SettingsPage>
   );
 }
@@ -319,5 +323,49 @@ function PhoneNotifications() {
         {save === 'saved' && 'Saved.'}
       </p>
     </>
+  );
+}
+
+function SpaceNotifications() {
+  const offered = useWorkspaceStore((s) => spacesOffered(s.features));
+  const teams = useSpacesStore((s) => s.teams);
+  const muted = useSpacesStore((s) => s.mutedSpaceIds);
+  const loaded = useSpacesStore((s) => s.notificationsLoaded);
+  const error = useSpacesStore((s) => s.notificationsError);
+  const saving = useSpacesStore((s) => s.notificationsSaving);
+
+  useEffect(() => {
+    // Another device may have changed the list since the app loaded it.
+    if (offered) void loadSpaceNotifications();
+  }, [offered]);
+
+  const withSpaces = (teams ?? []).filter((team) => team.spaces.length > 0);
+  if (!offered || withSpaces.length === 0) return null;
+
+  const toggle = (spaceId: string, on: boolean) => {
+    setSpaceMuted(spaceId, !on).catch(() => toast.error('Could not save the space notification setting'));
+  };
+
+  return (
+    <SettingsSection
+      title="Team spaces"
+      description="Control alerts for each space on all your devices. Turn a space off to mute its alerts for you. Teammates keep their own settings."
+    >
+      {error ? <SettingRow label={error}>
+        <Button variant="outline" size="sm" onClick={() => void loadSpaceNotifications()}>Retry</Button>
+      </SettingRow> : null}
+      {!loaded && !error ? <SettingRow label="Loading space notification settings…" /> : null}
+      {withSpaces.map((team) =>
+        team.spaces.map((space) => (
+          <SettingToggle
+            key={space.id}
+            label={withSpaces.length > 1 ? `${team.name} / ${space.name}` : space.name}
+            checked={!muted.includes(space.id)}
+            disabled={!loaded || saving}
+            onChange={(on) => toggle(space.id, on)}
+          />
+        ))
+      )}
+    </SettingsSection>
   );
 }

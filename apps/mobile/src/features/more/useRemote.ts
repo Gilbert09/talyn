@@ -32,14 +32,18 @@ export function useRemote<T>(key: string | null, load: () => Promise<T>, options
   const { lifecycle } = useMobileRuntime();
   const life = useSyncExternalStore(lifecycle.subscribe, lifecycle.getSnapshot, lifecycle.getSnapshot);
   const [state, setState] = useState<State<T>>({ key, status: key ? 'loading' : 'idle', refreshing: false });
+  const snapshot = useRef(state);
+  snapshot.current = state;
   const loader = useRef(load);
   loader.current = load;
   const current = useRef(key);
   current.current = key;
+  const generation = useRef(0);
   const offline = useRef(life.reachability === 'offline');
   offline.current = life.reachability === 'offline';
 
   const run = useCallback(async () => {
+    const request = ++generation.current;
     const target = current.current;
     if (!target) return;
     if (offline.current) {
@@ -49,10 +53,10 @@ export function useRemote<T>(key: string | null, load: () => Promise<T>, options
     setState((prev) => prev.key === target ? { ...prev, refreshing: true, status: prev.data === undefined ? 'loading' : prev.status } : prev);
     try {
       const data = await loader.current();
-      if (current.current !== target) return;
+      if (current.current !== target || generation.current !== request) return;
       setState({ key: target, status: 'ready', data, refreshing: false, updatedAt: Date.now() });
     } catch (error) {
-      if (current.current !== target) return;
+      if (current.current !== target || generation.current !== request) return;
       setState((prev) => ({ ...prev, key: target, status: failureState(error), refreshing: false }));
     }
   }, []);
@@ -78,8 +82,12 @@ export function useRemote<T>(key: string | null, load: () => Promise<T>, options
   }, [every, active, key, run]);
 
   const mutate = useCallback((update: (data: T) => T) => {
-    setState((prev) => prev.data === undefined ? prev : { ...prev, data: update(prev.data) });
-  }, []);
+    if (current.current !== key) return;
+    if (snapshot.current.key !== current.current || snapshot.current.data === undefined) return;
+    // A read started before this edit must not restore the old value.
+    generation.current++;
+    setState((prev) => prev.data === undefined ? prev : { ...prev, data: update(prev.data), refreshing: false });
+  }, [key]);
 
   const shown = state.key === key ? state : { key, status: key ? 'loading' as const : 'idle' as const, refreshing: false };
   return { status: shown.status, data: shown.data, stale: false, refreshing: shown.refreshing, updatedAt: shown.updatedAt, refresh: run, mutate };

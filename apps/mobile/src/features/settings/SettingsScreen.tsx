@@ -10,6 +10,7 @@ import { AppText, Button, Group, Row, Segmented, useActionSheet } from '../../co
 import { openExternal } from '../../components/Workflow';
 import { useFeatures } from '../../lib/features';
 import { NotificationSettings } from '../../notifications/Settings';
+import { SpaceNotificationSettings } from '../spaces/SpaceNotificationSettings';
 import { radius, setThemePreference, useTheme, useThemePreference } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
 import { AboutUpdates } from '../updates/AboutUpdates';
@@ -84,6 +85,7 @@ export function SettingsScreen() {
       </Group>
       {auth.issue === 'outage' ? <Status message="Sign-in is temporarily unavailable. Your account is still signed in." /> : null}
       {notifications ? <NotificationSettings controller={notifications} offline={offline} /> : null}
+      <SpaceNotificationSettings offline={offline} />
       <Group title="About">
         <Row title="Version" trailing={<AppText variant="meta" tone="muted" selectable>{info.build ? `${info.version} (${info.build})` : info.version}</AppText>} />
         <AboutUpdates info={info} />

@@ -37,7 +37,7 @@ export function shiftTime(value: string, minutes: number) {
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
-function Toggle({ label, value, disabled, change, last = false }: { label: string; value: boolean; disabled: boolean; change: (value: boolean) => void; last?: boolean }) {
+export function Toggle({ label, value, disabled, change, last = false }: { label: string; value: boolean; disabled: boolean; change: (value: boolean) => void; last?: boolean }) {
   const c = useTheme();
   return <View style={[styles.row, { borderBottomColor: last ? 'transparent' : c.border, opacity: disabled ? 0.45 : 1 }]}>
     <Text style={[type.body, { color: c.text, flex: 1 }]}>{label}</Text>

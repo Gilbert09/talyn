@@ -7,7 +7,8 @@ import type { AddressInfo } from 'node:net';
 import { defaultMobileNotificationPreferences, type RegisterMobileInstallationInput } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { mobileInstallations, mobileNotificationAudit, mobileNotificationOutbox as outbox,
-  mobileNotificationPreferences, users, workbenches, workspaces } from '../db/schema.js';
+  mobileNotificationPreferences, pullRequests, repositories, spaceNotificationMutes, spaces, tasks, teams,
+  users, workbenches, workspaces } from '../db/schema.js';
 import { decryptString } from '../services/tokenCrypto.js';
 import { enqueueMobileNotification, heartbeatMobileInstallation, readMobilePreferences, registerMobileInstallation,
   removeMobileInstallation, resolveMobileNotification, saveMobilePreferences } from '../services/mobileNotifications/store.js';
@@ -16,6 +17,7 @@ import { PushProviderError, type MobilePushProvider } from '../services/mobileNo
 import { installationInput, preferencesInput } from '../services/mobileNotifications/validation.js';
 import { internalProxyHeaders, requireAuth } from '../middleware/auth.js';
 import { mobileNotificationRoutes } from '../routes/mobileNotifications.js';
+import { destinationInMutedSpace, pullRequestNotificationsMuted } from '../services/teams/notifications.js';
 
 const owner = '00000000-0000-4000-8000-000000000001';
 const other = '00000000-0000-4000-8000-000000000002';
@@ -45,6 +47,14 @@ async function setupNotification() {
   const eventId = randomUUID();
   await enqueueMobileNotification({ ownerId: owner, workspaceId, destination, category: 'session_update', eventId, deduplicationKey: eventId });
   return { registration, eventId };
+}
+async function mutedSpace(userId = owner) {
+  const teamId = randomUUID();
+  const spaceId = randomUUID();
+  await fixture.db.insert(teams).values({ id: teamId, name: 'Team' });
+  await fixture.db.insert(spaces).values({ id: spaceId, teamId, name: 'Automations' });
+  await fixture.db.insert(spaceNotificationMutes).values({ userId, spaceId });
+  return spaceId;
 }
 beforeAll(async () => {
   vi.stubEnv('TALYN_ALLOWED_EMAILS', '');
@@ -112,7 +122,100 @@ describe('mobile registration and preferences', () => {
     const [row] = await fixture.db.select().from(mobileInstallations); expect(row.appVersion).toBe('2');
   });
 });
+describe('personal space notification destinations', () => {
+  it.each(['session', 'thread'] as const)('checks only the recipient preference for a %s', async (kind) => {
+    const spaceId = await mutedSpace();
+    await fixture.db.update(workbenches).set({ kind, spaceId }).where(eq(workbenches.id, entityId));
+    expect(await destinationInMutedSpace(owner, { ...destination, kind })).toBe(true);
+    expect(await destinationInMutedSpace(other, { ...destination, kind })).toBe(false);
+    expect(await destinationInMutedSpace(owner, { ...destination, kind, workspaceId: otherWorkspace })).toBe(false);
+    expect(await destinationInMutedSpace(owner, { ...destination, kind, entityId: randomUUID() })).toBe(false);
+    await fixture.db.update(workbenches).set({ spaceId: null }).where(eq(workbenches.id, entityId));
+    expect(await destinationInMutedSpace(owner, { ...destination, kind })).toBe(false);
+  });
+
+  describe('pull requests', () => {
+    const prId = '00000000-0000-4000-8000-000000000006';
+    const repositoryId = '00000000-0000-4000-8000-000000000007';
+    const prDestination = { kind: 'pull_request' as const, workspaceId, entityId: prId };
+
+    beforeEach(async () => {
+      await fixture.db.insert(repositories).values({ id: repositoryId, workspaceId, name: 'Repo', url: 'https://example.test/repo' });
+      await fixture.db.insert(pullRequests).values({ id: prId, workspaceId, repositoryId,
+        owner: 'fixture', repo: 'repo', number: 1, state: 'open' });
+    });
+
+    it('does not mute a pull request without linked work', async () => {
+      await mutedSpace();
+      expect(await destinationInMutedSpace(owner, prDestination)).toBe(false);
+    });
+
+    it('mutes only when every linked session is in a muted space', async () => {
+      const first = await mutedSpace();
+      const second = await mutedSpace();
+      await fixture.db.update(workbenches).set({ spaceId: first, pullRequestId: prId }).where(eq(workbenches.id, entityId));
+      const linked = randomUUID();
+      await fixture.db.insert(workbenches).values({ id: linked, workspaceId, spaceId: second, pullRequestId: prId,
+        name: 'Linked', repoFullName: '', branch: 'linked', baseBranch: 'main', runtime: 'sandbox', agent: 'claude' });
+      expect(await destinationInMutedSpace(owner, prDestination)).toBe(true);
+      expect(await destinationInMutedSpace(other, prDestination)).toBe(false);
+      expect(await pullRequestNotificationsMuted(workspaceId, prId)).toBe(true);
+      expect(await pullRequestNotificationsMuted(otherWorkspace, prId)).toBe(false);
+      await fixture.db.delete(spaceNotificationMutes).where(eq(spaceNotificationMutes.spaceId, second));
+      expect(await destinationInMutedSpace(owner, prDestination)).toBe(false);
+      await fixture.db.update(workbenches).set({ spaceId: null }).where(eq(workbenches.id, linked));
+      expect(await destinationInMutedSpace(owner, prDestination)).toBe(false);
+      await fixture.db.update(workbenches).set({ archivedAt: new Date() }).where(eq(workbenches.id, linked));
+      expect(await destinationInMutedSpace(owner, prDestination)).toBe(false);
+      await fixture.db.update(workbenches).set({ spaceId: first }).where(eq(workbenches.id, linked));
+      expect(await destinationInMutedSpace(owner, prDestination)).toBe(true);
+      await fixture.db.update(workbenches).set({ archivedAt: new Date() }).where(eq(workbenches.id, entityId));
+      expect(await destinationInMutedSpace(owner, prDestination)).toBe(true);
+    });
+
+    it('includes the spaces of linked tasks', async () => {
+      const spaceId = await mutedSpace();
+      const taskId = randomUUID();
+      await fixture.db.insert(tasks).values({ id: taskId, workspaceId, spaceId, pullRequestId: prId,
+        type: 'code_writing', title: 'Task', description: 'Task' });
+      expect(await destinationInMutedSpace(owner, prDestination)).toBe(true);
+      await fixture.db.update(tasks).set({ spaceId: null }).where(eq(tasks.id, taskId));
+      expect(await destinationInMutedSpace(owner, prDestination)).toBe(false);
+    });
+  });
+});
+
 describe('durable outbox', () => {
+  it.each(['session', 'thread'] as const)('cancels a queued %s push when its space is muted', async (kind) => {
+    await setupNotification();
+    const spaceId = await mutedSpace();
+    await fixture.db.update(workbenches).set({ kind, spaceId }).where(eq(workbenches.id, entityId));
+    await fixture.db.update(outbox).set({ destination: { ...destination, kind } });
+    const send = vi.fn<MobilePushProvider['send']>(async () => [{ status: 'ok', ticketId: randomUUID() }]);
+    await dispatchMobileNotifications({ send, receipts: async () => [] });
+    expect(send).not.toHaveBeenCalled();
+    expect((await fixture.db.select().from(outbox))[0]).toMatchObject({ state: 'cancelled', lastErrorClass: 'space_muted' });
+  });
+
+  it('sends a queued push after the recipient unmutes the space', async () => {
+    const spaceId = await mutedSpace();
+    await fixture.db.update(workbenches).set({ spaceId }).where(eq(workbenches.id, entityId));
+    await setupNotification();
+    await fixture.db.delete(spaceNotificationMutes).where(eq(spaceNotificationMutes.spaceId, spaceId));
+    const send = vi.fn<MobilePushProvider['send']>(async () => [{ status: 'ok', ticketId: randomUUID() }]);
+    await dispatchMobileNotifications({ send, receipts: async () => [] });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not apply another person’s mute to a queued push', async () => {
+    const spaceId = await mutedSpace(other);
+    await fixture.db.update(workbenches).set({ spaceId }).where(eq(workbenches.id, entityId));
+    await setupNotification();
+    const send = vi.fn<MobilePushProvider['send']>(async () => [{ status: 'ok', ticketId: randomUUID() }]);
+    await dispatchMobileNotifications({ send, receipts: async () => [] });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it('deduplicates each event across devices', async () => {
     const { eventId } = await setupNotification(); await registerMobileInstallation(owner, input());
     const event = { ownerId: owner, workspaceId, destination, category: 'session_update' as const, eventId, deduplicationKey: eventId };
