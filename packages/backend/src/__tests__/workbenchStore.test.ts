@@ -28,6 +28,7 @@ import {
   upsertCheckpoint,
   listCheckpoints,
   getWorkbench,
+  updateWorkbench,
 } from '../services/workbenches/store.js';
 import { findBranchPrQuery, linkPullRequest, publicWorkbench } from '../services/workbenches/prLink.js';
 
@@ -64,6 +65,11 @@ describe('workbench store', () => {
 
   afterEach(async () => {
     await testDb.cleanup();
+  });
+
+  it.each([null, 'claude-opus-5-5', 'claude-fable-5-2'])('includes the session model %s in the response', async (model) => {
+    const row = await updateWorkbench('wb-1', { model });
+    expect(await publicWorkbench(row!)).toMatchObject({ agent: 'claude', model });
   });
 
   describe('the migration', () => {

@@ -212,29 +212,42 @@ it('shows an ordinary queued message as a Queued chip', () => {
   expect(screen.queryByRole('button', { name: 'Stop waiting' })).not.toBeInTheDocument();
 });
 
-it('switches the chat provider at the same model tier', async () => {
-  const activeChat = { ...chat, agent: 'claude' as const, model: 'claude-opus-5-5' };
+it.each([
+  ['claude', 'claude-opus-5-5', 'codex', 'gpt-6.2-sol'],
+  ['claude', 'claude-fable-5-2', 'codex', 'gpt-6-astra'],
+  ['codex', 'gpt-6.2-sol', 'claude', 'claude-opus-5-5'],
+  ['codex', 'gpt-6-astra', 'claude', 'claude-fable-5-2'],
+] as const)('switches %s %s to %s %s', async (agent, model, nextAgent, nextModel) => {
+  const activeChat = { ...chat, workbenchId: workbench.id, agent, model, status: 'running' as const };
   const update = vi.spyOn(api.workbenches, 'updateChat').mockResolvedValue({
-    ...activeChat,
-    agent: 'codex',
-    model: 'gpt-6-astra',
+    ...activeChat, agent: nextAgent, model: nextModel,
   });
-  render(
-    <Composer
-      workbench={workbench}
-      chat={activeChat}
-      ops={sandboxOps(workbench)}
-      todos={null}
-      contextUsage={null}
-      slashCommands={null}
-    />,
-  );
+  render(<Composer workbench={workbench} chat={activeChat} ops={sandboxOps(workbench)}
+    todos={null} contextUsage={null} slashCommands={null} />);
 
-  fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: 'codex' } });
-  await waitFor(() => expect(update).toHaveBeenCalledWith('chat-1', expect.objectContaining({
-    agent: 'codex',
-    model: 'gpt-6-astra',
-  })));
+  fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: nextAgent } });
+  await waitFor(() => expect(update).toHaveBeenCalledWith('chat-1', { agent: nextAgent, model: nextModel }));
+  expect(useWorkbenchStore.getState().chats[workbench.id]?.find((item) => item.id === chat.id))
+    .toMatchObject({ agent: nextAgent, model: nextModel });
+});
+
+it.each([
+  ['claude', null, 'claude-opus-5-5', 'gpt-6.2-sol'],
+  ['claude', 'claude-fable-5-2', 'claude-fable-5-2', 'gpt-6-astra'],
+  ['codex', null, 'gpt-6.1-terra', 'claude-sonnet-5-5'],
+] as const)('switches from the effective model for %s with override %s', async (agent, model, shown, nextModel) => {
+  const session = { ...workbench, model: 'claude-opus-5-5' };
+  const activeChat = { ...chat, agent, model };
+  const nextAgent = agent === 'claude' ? 'codex' : 'claude';
+  const update = vi.spyOn(api.workbenches, 'updateChat').mockResolvedValue({
+    ...activeChat, agent: nextAgent, model: nextModel,
+  });
+  render(<Composer workbench={session} chat={activeChat} ops={sandboxOps(session)}
+    todos={null} contextUsage={null} slashCommands={null} />);
+
+  expect(screen.getByRole('combobox', { name: 'Model' })).toHaveValue(shown);
+  fireEvent.change(screen.getByRole('combobox', { name: 'Agent' }), { target: { value: nextAgent } });
+  await waitFor(() => expect(update).toHaveBeenCalledWith('chat-1', { agent: nextAgent, model: nextModel }));
 });
 
 it('stages a prompt before its send request finishes', async () => {

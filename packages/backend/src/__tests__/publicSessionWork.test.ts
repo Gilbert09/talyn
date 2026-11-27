@@ -644,8 +644,8 @@ describe('/v1 session work', () => {
       }).where(eq(workbenchChats.id, 'c1'));
       const res = await call('PATCH', '/chats/c1', { agent: 'codex', model: null });
       expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ object: 'chat', agent: 'codex', model: 'gpt-6-astra', status: 'idle' });
-      expect(await getChat('c1')).toMatchObject({ agent: 'codex', model: 'gpt-6-astra', agentSessionId: null });
+      expect(res.body).toMatchObject({ object: 'chat', agent: 'codex', model: 'gpt-6.2-sol', status: 'idle' });
+      expect(await getChat('c1')).toMatchObject({ agent: 'codex', model: 'gpt-6.2-sol', agentSessionId: null });
     });
 
     it.each([
