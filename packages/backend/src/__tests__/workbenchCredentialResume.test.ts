@@ -8,7 +8,7 @@ import { createTestDb, seedUser } from './helpers/testDb.js';
 import { fleetAccounts, workbenchChats, workbenches, workspaces } from '../db/schema.js';
 import { appendEvents, claimOrEnqueue, getChat, getWorkbench, updateChat } from '../services/workbenches/store.js';
 import { cancelLimitResume, handleChatLimit, limitRetryDelay, MAX_CREDENTIAL_RETRIES } from '../services/workbenches/limitResume.js';
-import { backfillChatLimits, sweepChatLimits } from '../services/workbenches/limitResumeSweep.js';
+import { backfillChatLimits, sweepChatLimits, LIMIT_RESUME_SWEEP_BUDGET_MS } from '../services/workbenches/limitResumeSweep.js';
 import { sendMessage } from '../services/workbenches/turns.js';
 import { existingBoxRefusal } from '../services/workbenches/boxGate.js';
 import { UsageExhaustedError } from '../services/billing/entitlements.js';
@@ -17,6 +17,8 @@ import { setUsageFetchForTests } from '../services/selfHosted/accountSelection.j
 import { encryptString } from '../services/tokenCrypto.js';
 import { randomBytes } from 'node:crypto';
 import { resetCodexOauthCache } from '../services/selfHosted/codexOauth.js';
+import { verifyAgentQuota } from '../services/selfHosted/quotaProbe.js';
+import { heldBackAgents } from '../services/selfHosted/exhaustedQuota.js';
 
 const tokenFetch = vi.hoisted(() => vi.fn());
 vi.mock('../services/httpTimeout.js', async (original) => ({
@@ -55,6 +57,7 @@ beforeEach(async () => {
   usageFetch.mockReset();
   tokenFetch.mockReset();
   resetCodexOauthCache();
+  vi.mocked(verifyAgentQuota).mockResolvedValue('unknown');
   setUsageFetchForTests(usageFetch);
   vi.mocked(existingBoxRefusal).mockResolvedValue(null);
   testDb = await createTestDb();
@@ -197,11 +200,12 @@ it.each(['unsupported', 'reauth'] as const)('ignores the earlier Codex reset whe
   expect((await chat()).resumeAt?.toISOString()).toBe(at);
 });
 
-it('bounds concurrent usage reads for a workspace with many stale subscriptions', async () => {
+it.each(['limited', 'timeout', 'available'] as const)('bounds usage reads for 31 stale subscriptions with %s capacity', async (response) => {
+  vi.useFakeTimers({ toFake: ['Date'] });
   vi.stubEnv('TALYN_TOKEN_KEY', randomBytes(32).toString('base64'));
   await setFleetAccountUsage('claude', { fetchedAt: new Date().toISOString(),
     windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 100, resetsAt: future(3 * 24 * 60) }] });
-  for (let i = 0; i < 19; i++) {
+  for (let i = 0; i < 31; i++) {
     const added = await addFleetAccount('ws', { kind: 'codex_oauth', credential: {
       accessTokenEnc: encryptString(`test-token-${i}`), refreshTokenEnc: encryptString('test-refresh'),
       expiresAt: future(60), accountId: `test-account-${i}`,
@@ -209,6 +213,7 @@ it('bounds concurrent usage reads for a workspace with many stale subscriptions'
     await setFleetAccountUsage(added.id, { fetchedAt: future(-10),
       windows: [{ key: 'session', label: '5-hour', usedPercent: 100, resetsAt: future(90) }] });
   }
+  if (response === 'available') await account('codex');
   let active = 0;
   let peak = 0;
   usageFetch.mockImplementation(async () => {
@@ -216,14 +221,153 @@ it('bounds concurrent usage reads for a workspace with many stale subscriptions'
     peak = Math.max(peak, active);
     await new Promise((resolve) => setTimeout(resolve, 25));
     active--;
+    if (response === 'timeout') throw new DOMException('Usage request timed out', 'TimeoutError');
     return new Response(JSON.stringify({ rate_limit: { limit_reached: true,
       primary_window: { used_percent: 100, limit_window_seconds: 18000, reset_after_seconds: 3600 },
     } }), { status: 200 });
   });
   await fail();
-  expect(usageFetch).toHaveBeenCalledTimes(19);
+  if (response === 'available') {
+    expect(usageFetch).not.toHaveBeenCalled();
+    expect(await chat()).toMatchObject({ agent: 'codex', status: 'running' });
+    return;
+  }
+  expect(usageFetch).toHaveBeenCalledOnce();
   expect(peak).toBe(1);
+  if (response === 'timeout') {
+    expect(await chat()).toMatchObject({ agent: 'codex', status: 'running' });
+    return;
+  }
   expect(sendMessage).not.toHaveBeenCalled();
+  expect((await chat()).resumeAt?.getTime()).toBe(Date.now() + 60_000);
+  vi.setSystemTime((await chat()).resumeAt!);
+  await sweepChatLimits();
+  expect(usageFetch).toHaveBeenCalledTimes(2);
+  const accountsRead = usageFetch.mock.calls.map(([, init]) => (init?.headers as Record<string, string>)['chatgpt-account-id']);
+  expect(new Set(accountsRead).size).toBe(2);
+});
+
+it('refreshes a held account when its hold clears despite a later stale usage reset', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.stubEnv('TALYN_TOKEN_KEY', randomBytes(32).toString('base64'));
+  await setFleetAccountUsage('claude', { fetchedAt: new Date().toISOString(),
+    windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 100, resetsAt: future(5 * 24 * 60) }] });
+  const codex = await addFleetAccount('ws', { kind: 'codex_oauth', credential: {
+    accessTokenEnc: encryptString('test-token'), refreshTokenEnc: encryptString('test-refresh'),
+    expiresAt: future(600), accountId: 'test-account',
+  } });
+  await setFleetAccountUsage(codex.id, { fetchedAt: future(-10),
+    windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 100, resetsAt: future(3 * 24 * 60) }] });
+  const at = future(60);
+  await testDb.db.update(fleetAccounts).set({ quotaExhausted: {
+    at: new Date().toISOString(), kind: 'rate_limit', resetsAt: at,
+  } }).where(eq(fleetAccounts.id, codex.id));
+  await fail();
+  expect((await chat()).resumeAt?.toISOString()).toBe(at);
+  expect(usageFetch).not.toHaveBeenCalled();
+  usageFetch.mockResolvedValue(new Response(JSON.stringify({ rate_limit: { limit_reached: false,
+    primary_window: { used_percent: 10, limit_window_seconds: 18000 },
+  } }), { status: 200 }));
+  vi.setSystemTime(new Date(at));
+  await sweepChatLimits();
+  expect(usageFetch).toHaveBeenCalledOnce();
+  expect(await chat()).toMatchObject({ agent: 'codex', status: 'running' });
+});
+
+it('leaves other workspaces due when one resume uses the sweep budget', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.stubEnv('TALYN_TOKEN_KEY', randomBytes(32).toString('base64'));
+  await setFleetAccountUsage('claude', { fetchedAt: new Date().toISOString(),
+    windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 100, resetsAt: future(3 * 24 * 60) }] });
+  const codex = await addFleetAccount('ws', { kind: 'codex_oauth', credential: {
+    accessTokenEnc: encryptString('test-token'), refreshTokenEnc: encryptString('test-refresh'),
+    expiresAt: future(60), accountId: 'test-account',
+  } });
+  await setFleetAccountUsage(codex.id, { fetchedAt: new Date().toISOString(),
+    windows: [{ key: 'session', label: '5-hour', usedPercent: 100, resetsAt: future(90) }] });
+  await fail();
+  await setFleetAccountUsage(codex.id, { fetchedAt: future(-10),
+    windows: [{ key: 'session', label: '5-hour', usedPercent: 100, resetsAt: future(90) }] });
+  await testDb.db.insert(workbenches).values({
+    id: 'other-wb', workspaceId: 'other', kind: 'thread', name: 'Other', repoFullName: '', branch: '', baseBranch: '',
+    runtime: 'sandbox', agent: 'claude', status: 'ready', sandboxId: 'other-box',
+  });
+  const due = new Date(Date.now() - 1000);
+  await testDb.db.insert(workbenchChats).values({
+    id: 'other-chat', workbenchId: 'other-wb', workspaceId: 'other', title: 'Other', agent: 'claude', status: 'error',
+    turnCount: 1, limitCount: 1, resumeReason: reason, resumeAt: due,
+  });
+  await appendEvents('other-chat', [{ turn: 1, event: { type: 'result', code: 'credentials_unavailable', reason: 'limited' } }]);
+  await addFleetAccount('other', { kind: 'anthropic_key', credential });
+  await updateChat('chat', { resumeAt: new Date(due.getTime() - 1000) });
+  usageFetch.mockImplementation(async () => {
+    vi.setSystemTime(Date.now() + LIMIT_RESUME_SWEEP_BUDGET_MS);
+    return new Response(JSON.stringify({ rate_limit: { limit_reached: true,
+      primary_window: { used_percent: 100, limit_window_seconds: 18000, reset_after_seconds: 3600 },
+    } }), { status: 200 });
+  });
+  expect(await sweepChatLimits()).toBe(1);
+  expect((await getChat('other-chat'))!.resumeAt).toEqual(due);
+  expect(sendMessage).not.toHaveBeenCalled();
+  expect(await sweepChatLimits()).toBe(1);
+  expect(await getChat('other-chat')).toMatchObject({ status: 'running', resumeAt: null });
+});
+
+it.each([20, 3 * 24 * 60])('keeps an explicit reset %i minutes away after an unconfirmed exhaustion', async (minutes) => {
+  vi.mocked(verifyAgentQuota).mockResolvedValue('available');
+  const at = future(minutes);
+  await handleChatLimit(await chat(), `You are out of extra usage. resetsAt: "${at}"`);
+  expect((await heldBackAgents('ws')).claude).toBeUndefined();
+  expect((await chat()).resumeAt?.toISOString()).toBe(at);
+});
+
+it('anchors a relative reset before refresh work starts', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.stubEnv('TALYN_TOKEN_KEY', randomBytes(32).toString('base64'));
+  vi.mocked(verifyAgentQuota).mockResolvedValue('available');
+  const at = future(20);
+  const codex = await addFleetAccount('ws', { kind: 'codex_oauth', credential: {
+    accessTokenEnc: encryptString('test-token'), refreshTokenEnc: encryptString('test-refresh'),
+    expiresAt: future(60), accountId: 'test-account',
+  } });
+  await setFleetAccountUsage(codex.id, { fetchedAt: future(-10), windows: [] });
+  usageFetch.mockImplementation(async () => {
+    vi.setSystemTime(Date.now() + 10_000);
+    return new Response(JSON.stringify({ rate_limit: { limit_reached: true,
+      primary_window: { used_percent: 100, limit_window_seconds: 18000, reset_after_seconds: 3600 },
+    } }), { status: 200 });
+  });
+  await handleChatLimit(await chat(), 'You are out of extra usage. Try again in 20 minutes.');
+  expect(usageFetch).toHaveBeenCalledOnce();
+  expect((await chat()).resumeAt?.toISOString()).toBe(at);
+});
+
+it('finishes a deferred reconnect check with more accounts than the retry allowance', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.stubEnv('TALYN_TOKEN_KEY', randomBytes(32).toString('base64'));
+  await setFleetAccountReauth('claude');
+  const total = MAX_CREDENTIAL_RETRIES + 2;
+  for (let i = 0; i < total; i++) {
+    const added = await addFleetAccount('ws', { kind: 'claude_oauth', credential: {
+      accessTokenEnc: encryptString(`test-token-${i}`), refreshTokenEnc: encryptString('test-refresh'), expiresAt: future(600),
+    } });
+    await setFleetAccountUsage(added.id, { fetchedAt: new Date(Date.now() - (total - i) * 60_000).toISOString(),
+      windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 100, resetsAt: future(3 * 24 * 60) }] });
+  }
+  usageFetch.mockImplementation(async (_url, init) => {
+    const ready = (init?.headers as Record<string, string>).authorization === `Bearer test-token-${total - 1}`;
+    return new Response(JSON.stringify({ limits: [{ kind: 'session', group: 'session',
+      percent: ready ? 10 : 100, resets_at: future(3 * 24 * 60), scope: null,
+    }] }), { status: 200 });
+  });
+  await fail();
+  for (let i = 0; i < total; i++) {
+    expect((await chat()).resumeAt).toBeInstanceOf(Date);
+    vi.setSystemTime((await chat()).resumeAt!);
+    await sweepChatLimits();
+  }
+  expect(usageFetch).toHaveBeenCalledTimes(total);
+  expect(await chat()).toMatchObject({ agent: 'claude', status: 'running', resumeAt: null, limitCount: 1 });
 });
 
 it('keeps a recoverable usage wait when refreshing Codex revokes its sign-in', async () => {
@@ -407,7 +551,15 @@ it.each(['update', 'add', 'upsert existing', 'upsert new'] as const)('wakes a re
   if (write === 'update') await updateFleetAccountCredential('claude', credential);
   if (write === 'add') await addFleetAccount('ws', { kind: 'anthropic_key', credential });
   if (write === 'upsert existing') await upsertPrimaryFleetAccount('ws', 'anthropic_key', credential);
-  if (write === 'upsert new') await upsertPrimaryFleetAccount('ws', 'claude_oauth', credential);
+  if (write === 'upsert new') {
+    vi.stubEnv('TALYN_TOKEN_KEY', randomBytes(32).toString('base64'));
+    await upsertPrimaryFleetAccount('ws', 'claude_oauth', {
+      accessTokenEnc: encryptString('test-token'), refreshTokenEnc: encryptString('test-refresh'), expiresAt: future(60),
+    });
+    usageFetch.mockResolvedValue(new Response(JSON.stringify({ limits: [{ kind: 'session', group: 'session',
+      percent: 10, resets_at: null, scope: null,
+    }] }), { status: 200 }));
+  }
   expect((await chat()).resumeAt!.getTime()).toBeGreaterThanOrEqual(before);
   expect((await chat()).resumeAt!.getTime()).toBeLessThanOrEqual(Date.now());
   await sweepChatLimits();

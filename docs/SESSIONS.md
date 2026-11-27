@@ -8125,3 +8125,7 @@ A usage wait uses the earliest retry across both supported agents.
 Usage refreshes run in sequence, and agent selection reads the saved sign-in state after each batch.
 Runtime limits also use account usage resets when scheduling the next check.
 Usage availability checks do not consume the allowance for failed turns.
+Each check refreshes at most one stale account per candidate agent and stops when an account is usable.
+Deferred accounts get another check in one minute, starting with the oldest snapshot.
+The shared sweep stops claiming chats after one minute and leaves other chats due for the next tick.
+Runtime errors retain their explicit reset time when the vendor probe writes no account hold.

@@ -11,6 +11,7 @@ import { emitWorkbenchChat } from './emit.js';
 import { CHAT_COLUMNS, rowToChat } from './store.js';
 
 const POLLER = 'chat_limit_resume';
+export const LIMIT_RESUME_SWEEP_BUDGET_MS = 60_000;
 let timer: NodeJS.Timeout | undefined;
 let ticking = false;
 
@@ -63,6 +64,7 @@ export async function sweepChatLimits(now = new Date()): Promise<number> {
         .orderBy(chats.resumeAt).limit(25);
       let count = 0;
       for (const chat of rows) {
+        if (Date.now() - start >= LIMIT_RESUME_SWEEP_BUDGET_MS) break;
         const [claimed] = await db.update(chats).set({ resumeAt: null, statusMessage: chat.resumeReason ?? chat.statusMessage })
           .where(and(eq(chats.id, chat.id), eq(chats.resumeAt, chat.resumeAt!),
             eq(chats.status, 'error'), eq(chats.resumeVersion, chat.resumeVersion)))
