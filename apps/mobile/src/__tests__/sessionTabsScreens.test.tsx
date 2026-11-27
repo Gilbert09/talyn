@@ -6,7 +6,7 @@ import { Alert, Dimensions, Linking, Platform, StyleSheet } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
 import { HistoryScreen } from '../features/history/HistoryScreen';
-import { HeaderTitle, SessionStatusRow } from '../features/sessions/DetailHeader';
+import { HeaderTitle } from '../features/sessions/DetailHeader';
 import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
 import { palettes } from '../theme/tokens';
 import { chat, fixture, pr, review, scope, session, thread } from './workflowFixtures';
@@ -294,21 +294,25 @@ describe('session agent switch', () => {
   });
 });
 
-describe('compact session header', () => {
-  it('keeps status controls below the navigation header', async () => {
+describe('mobile session header', () => {
+  it('pairs one action with its status and keeps other controls in the menu', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ diffStat: { added: 123456, removed: 78901, files: 200 } }));
-    withRow({ codeReview: review() });
+    withRow({ codeReview: review(), ...summary({ mergeable: 'MERGEABLE', ciStatus: 'failing_required', blockingReason: 'checks_failed',
+      checks: { total: 8, passed: 6, failed: 2, inProgress: 0, skipped: 0 } }) });
     await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await screen.findByRole('header', { name: 'Current work. #42 open, waiting on checks or review.' })).toBeVisible();
-    expect(await screen.findByRole('button', { name: /^Pull request 42\. .*Open the pull request\.$/ })).toBeVisible();
-    expect(await screen.findByRole('button', { name: /^Changes: 200 files/ })).toBeVisible();
-    expect(await screen.findByTestId('session-review-badge')).toBeVisible();
-    const navigation = within(screen.getByTestId('navigation-header'));
-    expect(navigation.getAllByRole('button').map((button) => button.props.accessibilityLabel))
-      .toEqual(['Find in transcript', 'Session actions']);
-    expect(screen.queryAllByRole('tab')).toHaveLength(0);
-    expect(screen.queryByText(/Updated /)).toBeNull();
-    expect(screen.queryByText('example/project')).toBeNull();
+    const navigation = within(await screen.findByTestId('navigation-header'));
+    expect(navigation.getAllByRole('button').map((button) => button.props.accessibilityLabel)).toEqual(['Session actions']);
+    expect(await navigation.findByText('example/project')).toBeVisible();
+    const next = within(await screen.findByLabelText('Next action'));
+    expect(next.getAllByRole('button').map((button) => button.props.accessibilityLabel))
+      .toEqual(['PR #42. 2 of 8 checks failing.', 'Fix checks']);
+    expect(screen.queryByRole('button', { name: 'Code review' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Find in transcript' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add to merge queue' })).toBeNull();
+    await fireEvent.press(navigation.getByRole('button', { name: 'Session actions' }));
+    expect(screen.getByRole('button', { name: 'Code review' })).toHaveProp('accessibilityHint', '2 findings');
+    expect(screen.getByRole('button', { name: 'Changes' })).toHaveProp('accessibilityHint', '200 files, +123456 −78901');
+    expect(screen.getByRole('button', { name: 'Find in transcript' })).toBeVisible();
   });
   it.each([
     ['ios', 320, 0, 1],
@@ -320,7 +324,7 @@ describe('compact session header', () => {
   ] as const)('reserves room for navigation on %s at %d dp with %d dp insets and font scale %d', async (os, width, inset, fontScale) => {
     jest.replaceProperty(Platform, 'OS', os);
     jest.spyOn(Dimensions, 'get').mockReturnValue({ width, height: 800, scale: 1, fontScale });
-    const title = 'A long session title that must leave room for search and the session menu';
+    const title = 'A long session title that must leave room for the session menu';
     const onPress = jest.fn();
     await render(<SafeAreaInsetsContext.Provider value={{ top: 0, bottom: 0, left: inset, right: inset }}>
       <HeaderTitle item={session({ title })} row={null} onPress={onPress} />
@@ -328,34 +332,37 @@ describe('compact session header', () => {
     const heading = screen.getByRole('header', { name: new RegExp(`^${title}`) });
     const maxWidth = StyleSheet.flatten(heading.props.style).maxWidth;
     expect(maxWidth).toBeGreaterThan(0);
-    expect(maxWidth + (os === 'ios' ? 196 : 186)).toBeLessThanOrEqual(width - 2 * inset);
+    expect(maxWidth + (os === 'ios' ? 112 : 144)).toBe(width - 2 * inset);
     expect(screen.getByText(title).props.numberOfLines).toBe(1);
     await fireEvent.press(heading);
     expect(onPress).toHaveBeenCalledTimes(1);
   });
-  it.each([
-    ['a session without status', noPr({ diffStat: null })],
-    ['a thread', thread()],
-  ])('leaves no status row for %s', async (_label, item) => {
-    const { toJSON } = await render(<SessionStatusRow item={item} row={null} onChanges={jest.fn()} />);
-    expect(toJSON()).toBeNull();
-  });
-  it('opens the pull request from its number', async () => {
+  it('opens the pull request from the next action context', async () => {
+    withRow(summary({ mergeable: 'CONFLICTING', blockingReason: 'merge_conflicts' }));
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await screen.findByRole('button', { name: /^Pull request 42\./ }));
+    await fireEvent.press(await screen.findByRole('button', { name: 'PR #42. Merge conflicts.' }));
     expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/attention/[id]', params: { id: 'pr-one' } });
   });
-  it('shows the +/- count and opens Changes from it', async () => {
-    mockActive.api.workbenches.get.mockResolvedValue(session({ diffStat: { added: 12, removed: 3, files: 2 } }));
+  it('opens Changes from the Create PR context', async () => {
+    mockActive.api.workbenches.get.mockResolvedValue(noPr());
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await screen.findByRole('button', { name: 'Changes: 2 files, 12 added, 3 removed' }));
+    await fireEvent.press(await screen.findByRole('button', { name: 'Changes. 2 files changed.' }));
     expect(await screen.findByRole('button', { name: 'Modified: src/app.ts. 2 added, 1 removed.' })).toBeVisible();
+  });
+  it('pairs Retry with the sandbox failure and opens its details', async () => {
+    mockActive.api.workbenches.get.mockResolvedValue(session({ status: 'error', error: 'The sandbox did not start.' }));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    expect(retry).toHaveProp('accessibilityHint', 'The sandbox did not start.');
+    await fireEvent.press(screen.getByRole('button', { name: 'Sandbox. Failed to start.' }));
+    expect(await screen.findByRole('header', { name: 'Session details' })).toBeVisible();
   });
   it('keeps a thread to its title and menu, with no PR marks or actions', async () => {
     mockParams = { id: 'thread-one' };
     await render(<WorkbenchDetailScreen kind="thread" />);
     expect(await screen.findByRole('header', { name: /^Planning work\./ })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Thread actions' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Find in transcript' })).toBeVisible();
     expect(screen.queryByRole('button', { name: /^Pull request|^Changes:/ })).toBeNull();
     expect(screen.queryByLabelText('Quick actions')).toBeNull();
   });
@@ -363,14 +370,14 @@ describe('compact session header', () => {
     mockActive.api.workbenches.get.mockResolvedValue(noPr({ diffStat: null }));
     await render(<WorkbenchDetailScreen kind="session" />);
     await screen.findByRole('header', { name: /^Current work\./ });
-    expect(screen.queryByLabelText('Quick actions')).toBeNull();
+    expect(screen.queryByLabelText('Next action')).toBeNull();
   });
   it('offers Restore only in the menu for an archived session', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ archivedAt: '2026-11-09T10:00:00Z' }));
     withRow({ state: 'merged' });
     await render(<WorkbenchDetailScreen kind="session" />);
     const actions = await screen.findByRole('button', { name: 'Session actions' });
-    expect(screen.queryByLabelText('Quick actions')).toBeNull();
+    expect(screen.queryByLabelText('Next action')).toBeNull();
     await fireEvent.press(actions);
     expect(await screen.findByRole('button', { name: 'Restore' })).toBeVisible();
   });
@@ -426,37 +433,42 @@ describe('compact session header', () => {
   });
 });
 
-describe('quick actions', () => {
-  const chips = () => screen.getByLabelText('Quick actions');
-  it('adds the pull request to the merge queue through the client', async () => {
+describe('next action and menu', () => {
+  it('adds the pull request to the merge queue from the menu', async () => {
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await screen.findByRole('button', { name: 'Add to merge queue' }));
+    await openView('Add to merge queue');
     await waitFor(() => expect(mockActive.api.pullRequests.setMergeQueue).toHaveBeenCalledWith('pr-one', true));
     expect(await screen.findByText('Added #42 to the merge queue.')).toBeVisible();
   });
-  const accent = { backgroundColor: palettes.light.primaryAction };
-  it('keeps the queue chip quiet when it is the only chip', async () => {
+  it('keeps the row hidden when checks are pending', async () => {
+    withRow(summary({ mergeable: 'MERGEABLE', ciStatus: 'running' }));
     await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await screen.findByRole('button', { name: 'Add to merge queue' })).not.toHaveStyle(accent);
+    await screen.findByRole('button', { name: 'Session actions' });
+    expect(screen.queryByLabelText('Next action')).toBeNull();
   });
-  it('fills the next step and keeps the queue quiet beside it', async () => {
+  it('fills the primary action and leaves the queue in the menu', async () => {
     withRow(summary({ mergeable: 'MERGEABLE', ciStatus: 'passing', blockingReason: 'mergeable' }));
     await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await screen.findByRole('button', { name: 'Merge' })).toHaveStyle(accent);
-    expect(screen.getByRole('button', { name: 'Add to merge queue' })).not.toHaveStyle(accent);
+    expect(await screen.findByRole('button', { name: 'Merge' })).toHaveStyle({ backgroundColor: palettes.light.primaryAction });
+    expect(screen.queryByRole('button', { name: 'Add to merge queue' })).toBeNull();
   });
-  it('leaves Wake to the menu', async () => {
+  it('leaves Wake in the menu', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ sandboxState: 'suspended' }));
     await render(<WorkbenchDetailScreen kind="session" />);
-    await screen.findByRole('button', { name: 'Add to merge queue' });
-    expect(screen.queryByRole('button', { name: 'Wake' })).toBeNull();
-    await fireEvent.press(screen.getByRole('button', { name: 'Session actions' }));
+    expect(screen.queryByRole('button', { name: 'Wake sandbox' })).toBeNull();
+    await fireEvent.press(await screen.findByRole('button', { name: 'Session actions' }));
     expect(screen.getByRole('button', { name: 'Wake sandbox' })).toBeVisible();
   });
-  it('shows the queue state once queued and opens the PR from it', async () => {
-    withRow({ mergeQueued: true, mergeQueue: { position: 2, status: 'queued' } as never });
+  it('shows the queue position in the menu and opens the PR', async () => {
+    withRow({ ...summary({ mergeable: 'MERGEABLE', ciStatus: 'passing' }), mergeQueued: true,
+      mergeQueue: { position: 2, status: 'queued' } as never });
     await render(<WorkbenchDetailScreen kind="session" />);
-    await fireEvent.press(await screen.findByRole('button', { name: 'Queued #2' }));
+    await fireEvent.press(await screen.findByRole('button', { name: 'Session actions' }));
+    expect(screen.queryByLabelText('Next action')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove from merge queue' })).toHaveProp('accessibilityHint', 'Queued #2');
+    const pullRequest = screen.getByRole('button', { name: 'Pull request' });
+    expect(pullRequest).toHaveProp('accessibilityHint', 'Queued #2');
+    await fireEvent.press(pullRequest);
     expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/attention/[id]', params: { id: 'pr-one' } });
     expect(mockActive.api.pullRequests.setMergeQueue).not.toHaveBeenCalled();
   });
@@ -488,15 +500,19 @@ describe('quick actions', () => {
     expect(await screen.findByRole('button', { name: 'Stop the agent' })).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
   });
-  it('disables every action offline and says why', async () => {
+  it('disables the next action and queue controls offline', async () => {
     mockNetwork = 'offline';
+    withRow(summary({ mergeable: 'MERGEABLE', ciStatus: 'passing' }));
     await mockActive.store.load('workbench', 'session-one');
     await mockActive.store.load('pr', 'pr-one');
     await render(<WorkbenchDetailScreen kind="session" />);
-    const queue = await screen.findByRole('button', { name: 'Add to merge queue' });
+    const merge = await screen.findByRole('button', { name: 'Merge' });
+    expect(merge).toBeDisabled();
+    expect(merge).toHaveProp('accessibilityHint', 'You are offline.');
+    await fireEvent.press(screen.getByRole('button', { name: 'Session actions' }));
+    const queue = screen.getByRole('button', { name: 'Add to merge queue' });
     expect(queue).toBeDisabled();
-    expect(queue.props.accessibilityHint).toBe('You are offline.');
-    expect(chips()).toBeVisible();
+    expect(queue).toHaveProp('accessibilityHint', 'You are offline.');
   });
   it('lists the PR cycle and the queue in the menu', async () => {
     withRow(summary({ mergeable: 'MERGEABLE', ciStatus: 'passing', blockingReason: 'mergeable' }));
@@ -505,7 +521,7 @@ describe('quick actions', () => {
     await fireEvent.press(screen.getByRole('button', { name: 'Session actions' }));
     const labels = screen.getAllByRole('button').map((item) => item.props.accessibilityLabel);
     expect(labels).toEqual(expect.arrayContaining(['Details', 'Changes', 'Pull request', 'Merge', 'Add to merge queue', 'Rename']));
-    // The chip comes first in the tree; the menu's own entry is the last one.
+    // The primary action comes first in the tree; the menu's own entry is the last one.
     expect(labels.indexOf('Details')).toBeLessThan(labels.lastIndexOf('Merge'));
     expect(labels.lastIndexOf('Merge')).toBeLessThan(labels.indexOf('Rename'));
   });

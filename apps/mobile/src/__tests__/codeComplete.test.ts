@@ -1,6 +1,6 @@
 import type { Workbench } from '@talyn/shared';
 
-import { codeCompleteInput, reviewBadge, reviewCard, sessionCodeComplete, type CodeCompleteFacts } from '../features/sessions/codeComplete';
+import { codeCompleteInput, reviewCard, reviewStatusLabel, sessionCodeComplete, type CodeCompleteFacts } from '../features/sessions/codeComplete';
 import { chat, pr, review, session } from './workflowFixtures';
 
 const queued = { id: 'q1', text: 'Next step', queuedAt: '2026-11-08T11:00:00Z' };
@@ -96,33 +96,24 @@ describe('end-of-chat review card', () => {
   });
 });
 
-describe('header review badge', () => {
+describe('session menu review status', () => {
   it.each([
-    ['code complete with no review', facts(), { label: 'Ready for review', short: 'Review', icon: 'review', tone: 'primary',
-      accessibilityLabel: 'Ready for review. Open the code review.' }],
-    ['running', facts({ row: pr({ codeReview: review({ phase: 'reviewing' }) }) }), { label: 'Reviewing', short: null, icon: 'spinner', tone: 'information',
-      accessibilityLabel: 'Code review: Reviewing. Show the findings.' }],
-    ['waiting', facts({ row: pr({ codeReview: review({ phase: 'queued', deferredSince: '2026-11-08T10:00:00Z' }) }) }), { label: 'Waiting for a runner',
-      short: null, icon: 'clock', tone: 'warning', accessibilityLabel: 'Code review: Waiting for a runner. Show the findings.' }],
-    ['with a blocker', facts({ row: pr({ codeReview: review() }) }), { label: '2 findings', short: '2', icon: 'findings', tone: 'destructive',
-      accessibilityLabel: 'Code review: 2 findings. Show the findings.' }],
-    ['with one major finding', facts({ row: pr({ codeReview: review({ counts: { blocker: 0, major: 1, minor: 0, nit: 0 }, openCount: 1 }) }) }),
-      { label: '1 finding', short: '1', icon: 'findings', tone: 'warning', accessibilityLabel: 'Code review: 1 finding. Show the findings.' }],
-    ['clean', facts({ row: pr({ codeReview: review({ counts: { blocker: 0, major: 0, minor: 0, nit: 0 }, openCount: 0 }) }) }),
-      { label: 'No findings', short: null, icon: 'check', tone: 'success', accessibilityLabel: 'Code review: No findings. Show the findings.' }],
+    ['code complete with no review', facts(), 'Ready for review'],
+    ['running', facts({ row: pr({ codeReview: review({ phase: 'reviewing' }) }) }), 'Reviewing'],
+    ['waiting', facts({ row: pr({ codeReview: review({ phase: 'queued', deferredSince: '2026-11-08T10:00:00Z' }) }) }), 'Waiting for a runner'],
+    ['with two findings', facts({ row: pr({ codeReview: review() }) }), '2 findings'],
+    ['with one finding', facts({ row: pr({ codeReview: review({ openCount: 1 }) }) }), '1 finding'],
+    ['clean', facts({ row: pr({ codeReview: review({ openCount: 0 }) }) }), 'No findings'],
     ['sent findings the session handled', facts({ row: pr({ codeReview: review({ staleForHead: true, counts: { blocker: 0, major: 0, minor: 0, nit: 0 },
-      openCount: 0, sessionReport: { workbenchId: 'session-one', sentAt: '2026-11-23T10:00:00Z', findingCount: 1 } }) }) }),
-      { label: 'No open findings', short: null, icon: 'check', tone: 'success', accessibilityLabel: 'Code review: No open findings. Show the findings.' }],
-    ['failed', facts({ row: pr({ codeReview: review({ phase: 'failed' }) }) }), { label: 'Review failed', short: null, icon: 'failed',
-      tone: 'destructive', accessibilityLabel: 'Code review: Review failed. Show the findings.' }],
-    ['a review while a turn runs', facts({ item: session({ chats: [chat({ status: 'running' })] }), row: pr({ codeReview: review() }) }),
-      { label: '2 findings', short: '2', icon: 'findings', tone: 'destructive', accessibilityLabel: 'Code review: 2 findings. Show the findings.' }],
-  ] as const)('shows %s', (_name, input, expected) => expect(reviewBadge(input)).toMatchObject(expected));
+      openCount: 0, sessionReport: { workbenchId: 'session-one', sentAt: '2026-11-23T10:00:00Z', findingCount: 1 } }) }) }), 'No open findings'],
+    ['failed', facts({ row: pr({ codeReview: review({ phase: 'failed' }) }) }), 'Review failed'],
+    ['a review while a turn runs', facts({ item: session({ chats: [chat({ status: 'running' })] }), row: pr({ codeReview: review() }) }), '2 findings'],
+  ] as const)('shows %s', (_name, input, expected) => expect(reviewStatusLabel(input)).toBe(expected));
 
   it.each([
     ['not code complete with no review', facts({ runningJobs: 1 })],
     ['an older review that is not code complete', facts({ runningJobs: 1, row: pr({ codeReview: review({ staleForHead: true }) }) })],
     ['no PR row', facts({ row: null })],
     ['a thread', withItem({ kind: 'thread' })],
-  ])('shows nothing for %s', (_name, input) => expect(reviewBadge(input)).toBeNull());
+  ])('shows nothing for %s', (_name, input) => expect(reviewStatusLabel(input)).toBeNull());
 });

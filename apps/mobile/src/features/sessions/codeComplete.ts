@@ -89,41 +89,19 @@ function reviewCardFor(facts: CodeCompleteFacts, review: CodeReviewPublic | null
   }
 }
 
-export type ReviewBadgeIcon = 'spinner' | 'clock' | 'findings' | 'check' | 'failed' | 'review';
-
-export interface ReviewBadgeView {
-  state: SessionReviewState;
-  label: string;
-  /** What a narrow header shows next to the icon. Null: the icon only. */
-  short: string | null;
-  icon: ReviewBadgeIcon;
-  tone: Tone;
-  accessibilityLabel: string;
-}
-
-const findingsLabel = (count: number) => `${count} ${count === 1 ? 'finding' : 'findings'}`;
-
-/**
- * The header's review badge: the review's status, or "Ready for review" when
- * the session is code complete with no current review. Null otherwise.
- */
-export function reviewBadge(facts: CodeCompleteFacts): ReviewBadgeView | null {
+/** The code review status shown in the session menu. */
+export function reviewStatusLabel(facts: CodeCompleteFacts): string | null {
   if ((facts.item.kind ?? 'session') !== 'session' || !facts.row) return null;
   const review: CodeReviewPublic | null = facts.row.codeReview ?? null;
-  const state = sessionReviewState(review);
-  const badge = (label: string, short: string | null, icon: ReviewBadgeIcon, tone: Tone): ReviewBadgeView =>
-    ({ state, label, short, icon, tone, accessibilityLabel: `Code review: ${label}. Show the findings.` });
-  switch (state) {
-    case 'none':
-      return sessionCodeComplete(facts) ? { ...badge('Ready for review', 'Review', 'review', 'primary'),
-        accessibilityLabel: 'Ready for review. Open the code review.' } : null;
-    case 'running': return badge('Reviewing', null, 'spinner', 'information');
-    case 'waiting': return badge('Waiting for a runner', null, 'clock', 'warning');
-    case 'failed': return badge('Review failed', null, 'failed', 'destructive');
+  switch (sessionReviewState(review)) {
+    case 'none': return sessionCodeComplete(facts) ? 'Ready for review' : null;
+    case 'running': return 'Reviewing';
+    case 'waiting': return 'Waiting for a runner';
+    case 'failed': return 'Review failed';
     case 'done': {
       const open = review!.openCount;
-      return open > 0 ? badge(findingsLabel(open), String(open), 'findings', review!.counts.blocker > 0 ? 'destructive' : 'warning')
-        : badge(review!.staleForHead ? 'No open findings' : 'No findings', null, 'check', 'success');
+      if (open > 0) return `${open} ${open === 1 ? 'finding' : 'findings'}`;
+      return review!.staleForHead ? 'No open findings' : 'No findings';
     }
   }
 }

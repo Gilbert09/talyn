@@ -3,13 +3,12 @@ import { nextWorkbenchAction, prSummaryToNextActionPr, type Workbench, type Work
 
 import { sessionPr, type SessionPr } from '../../lib/status';
 import { workbenchKind } from '../../workflow/model';
-import { queueStateLabel } from '../prs/actions';
 import { canRetry, isArchived } from './actions';
 import { hasChanges, sessionUnavailable } from './model';
 
 /** The header cycle of web `workbenchActions.ts`: Create PR, Resolve conflicts, Fix checks, Merge, Archive. */
 export type CycleAction = Exclude<WorkbenchNextAction, null>;
-export type QuickActionKind = CycleAction | 'retry' | 'restore' | 'queue_add' | 'queue_status';
+export type QuickActionKind = CycleAction | 'retry' | 'restore';
 
 export interface QuickAction {
   kind: QuickActionKind;
@@ -38,8 +37,6 @@ export const QUICK_ACTION_HINT: Record<QuickActionKind, string> = {
   archive: 'Archives this session.',
   retry: 'Starts the sandbox again.',
   restore: 'Restores this session.',
-  queue_add: 'Adds the pull request to the merge queue.',
-  queue_status: 'Opens the pull request.',
 };
 
 const PROMPT_ACTIONS = new Set<QuickActionKind>(['create_pr', 'resolve_conflicts', 'fix_checks']);
@@ -77,10 +74,11 @@ export function primaryCycleAction(item: Workbench, row: PRRow | null): CycleAct
   const pr = prInput(item, row);
   // A linked PR whose summary has not loaded yet is not "no PR". Wait for it.
   if (!pr && item.pullRequestId) return null;
-  return nextWorkbenchAction({
+  const action = nextWorkbenchAction({
     hasChanges: hasChanges(item),
     pr: pr ? prSummaryToNextActionPr({ state: pr.state, mergeable: pr.summary.mergeable ?? undefined, ciStatus: pr.summary.ciStatus ?? undefined }) : null,
   });
+  return action === 'merge' && pr?.summary.draft ? null : action;
 }
 
 /** Why a cycle action cannot run now. Mirrors web `disabled(action)`. */
@@ -100,25 +98,17 @@ export const canQueue = (item: Workbench, row: PRRow | null): row is PRRow =>
   Boolean(row) && !isArchived(item) && workbenchKind(item) === 'session' && row?.state === 'open';
 
 /**
- * The quick actions above the transcript, most urgent first, at most `limit`.
- * Retry comes first, then the primary PR action and the merge queue.
- * Archived sessions have no quick actions. Archived threads offer Restore.
- * Stop is in the composer and the menu. Wake is in the menu.
+ * Retry takes priority over the PR cycle. The merge queue stays in the menu.
+ * An archived thread can show Restore. An archived session has no next action.
  */
-export function primaryActions(item: Workbench, row: PRRow | null,
-  options: { offline?: boolean; limit?: number } = {}): QuickAction[] {
-  const offline = options.offline === true;
+export function primaryAction(item: Workbench, row: PRRow | null, offline = false): QuickAction | null {
   const make = (kind: QuickActionKind, label: string, reason: string | null = null): QuickAction =>
     ({ kind, label, hint: QUICK_ACTION_HINT[kind], disabledReason: offline ? OFFLINE : reason });
-  if (isArchived(item)) return workbenchKind(item) === 'thread' ? [make('restore', 'Restore')] : [];
-  const out: QuickAction[] = [];
-  if (canRetry(item)) out.push({ ...make('retry', 'Retry'), hint: item.error || item.statusMessage || QUICK_ACTION_HINT.retry });
+  if (isArchived(item)) return workbenchKind(item) === 'thread' ? make('restore', 'Restore') : null;
+  if (canRetry(item)) return { ...make('retry', 'Retry'), hint: item.error || item.statusMessage || QUICK_ACTION_HINT.retry };
   const primary = primaryCycleAction(item, row);
-  if (primary) out.push(make(primary, cycleLabel(primary, row, item), cycleDisabledReason(primary, item, row)));
-  if (canQueue(item, row)) {
-    out.push(row.mergeQueued ? { ...make('queue_status', queueStateLabel(row)), disabledReason: null } : make('queue_add', 'Add to merge queue'));
-  }
-  return out.slice(0, options.limit ?? 2);
+  if (!primary || (primary === 'merge' && row?.mergeQueued)) return null;
+  return make(primary, cycleLabel(primary, row, item), cycleDisabledReason(primary, item, row));
 }
 
 /** The +/- line count of the branch, or null with no changes. Committed and uncommitted work together. */
