@@ -1,7 +1,7 @@
 import { waitFor } from '@testing-library/react-native';
 import { defaultMobileNotificationPreferences, type MobileNotificationPayload } from '@talyn/shared';
 
-import { NotificationController, notificationPath } from '../notifications/controller';
+import { NotificationController, notificationPath, PUSH_TOKEN_TIMEOUT_MS } from '../notifications/controller';
 
 const workspace = '10000000-0000-4000-8000-000000000001';
 const entity = '20000000-0000-4000-8000-000000000002';
@@ -66,12 +66,16 @@ describe('notification registration', () => {
     await f.controller.refresh();
     const otherWorkspace = '10000000-0000-4000-8000-000000000009';
     const preferences = { ...f.preferences, workspaceId: otherWorkspace };
-    expect(await f.controller.loadWorkspaceSettings(otherWorkspace)).toMatchObject({ state: 'disabled', preferences });
+    const loaded = await f.controller.loadWorkspaceSettings(otherWorkspace);
+    expect(loaded).toMatchObject({ preferences });
+    expect(await loaded?.registration).toBe('disabled');
     expect(f.api.getPreferences).toHaveBeenLastCalledWith(otherWorkspace);
     expect(f.device.permission).not.toHaveBeenCalled();
 
     const updated = { ...preferences, onlyWhenAway: false };
-    expect(await f.controller.saveWorkspaceSettings(updated, true)).toMatchObject({ state: 'ready', preferences: updated });
+    const saved = await f.controller.saveWorkspaceSettings(updated, true);
+    expect(saved).toMatchObject({ preferences: updated });
+    expect(await saved?.registration).toBe('ready');
     expect(f.api.updatePreferences).toHaveBeenCalledWith(updated);
     expect(f.device.permission).toHaveBeenCalledWith(true);
     expect(f.api.registerInstallation).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: otherWorkspace }));
@@ -117,6 +121,37 @@ describe('notification registration', () => {
     const f = fixture(); await f.controller.refresh(); f.device.token.mockResolvedValue('invalid');
     await f.controller.enableDevice(); expect(f.controller.getSnapshot().state).toBe('failed');
     expect(f.api.registerInstallation).not.toHaveBeenCalled(); f.controller.dispose();
+  });
+  it('loads preferences while native token acquisition stalls and releases registration after its deadline', async () => {
+    const f = fixture();
+    await f.controller.refresh();
+    await f.controller.enableDevice();
+    f.api.registerInstallation.mockClear();
+    jest.useFakeTimers();
+    try {
+      let finishToken!: (token: string) => void;
+      f.device.token.mockImplementationOnce(() => new Promise((resolve) => { finishToken = resolve; }));
+      const first = await f.controller.loadWorkspaceSettings(workspace);
+      const otherWorkspace = '10000000-0000-4000-8000-000000000009';
+      const second = await f.controller.loadWorkspaceSettings(otherWorkspace);
+      expect(first).toMatchObject({ state: 'loading', preferences: f.preferences });
+      expect(second?.preferences?.workspaceId).toBe(otherWorkspace);
+      const disabled = { ...f.preferences, enabled: false };
+      expect(await f.controller.saveWorkspaceSettings(disabled)).toMatchObject({ state: 'disabled', preferences: disabled });
+      expect(f.api.registerInstallation).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(PUSH_TOKEN_TIMEOUT_MS);
+      expect(await first?.registration).toBe('failed');
+      expect(await second?.registration).toBe('ready');
+      finishToken('ExpoPushToken[synthetic-expired-request]');
+      await Promise.resolve();
+      expect(f.api.registerInstallation).toHaveBeenCalledTimes(1);
+      expect(f.api.registerInstallation).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: otherWorkspace }));
+      expect(f.controller.getSnapshot()).toMatchObject({ state: 'disabled', preferences: disabled });
+    } finally {
+      f.controller.dispose();
+      jest.useRealTimers();
+    }
   });
   it('clears notification identity and pending work after account deletion', async () => {
     const f = fixture(); await f.controller.refresh(); await f.controller.enableDevice();

@@ -62,8 +62,9 @@ function TimeStepper({ label, value, disabled, change }: { label: string; value:
 
 type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'failed' | 'invalid';
 
-export function NotificationSettings({ controller, offline, workspaceId }: {
+export function NotificationSettings({ controller, foreground, offline, workspaceId }: {
   controller: Pick<NotificationController, 'loadWorkspaceSettings' | 'saveWorkspaceSettings'>;
+  foreground: boolean;
   offline: boolean;
   workspaceId: string;
 }) {
@@ -71,22 +72,30 @@ export function NotificationSettings({ controller, offline, workspaceId }: {
   const [state, setState] = useState<PushState>('loading');
   const [draft, setDraft] = useState<MobileNotificationPreferences | null>(null);
   const [save, setSave] = useState<SaveState>('idle');
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'failed'>('loading');
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pending = useRef<MobileNotificationPreferences | null>(null);
   const revision = useRef(0);
-  const loaded = useRef(false);
+  const dirty = useRef(false);
   const load = useCallback(async () => {
+    if (dirty.current) return;
     const version = ++revision.current;
+    setLoadState('loading');
     setState('loading');
     const result = await controller.loadWorkspaceSettings(workspaceId);
     if (version !== revision.current) return;
     setState(result?.state ?? 'failed');
-    loaded.current = Boolean(result?.preferences);
-    setDraft(result?.preferences ?? null);
+    setLoadState(result?.preferences ? 'ready' : 'failed');
+    if (result?.preferences) setDraft(result.preferences);
+    if (result?.registration) {
+      const status = await result.registration;
+      if (status && version === revision.current) setState(status);
+    }
   }, [controller, workspaceId]);
+  const onlineInForeground = foreground && !offline;
   useEffect(() => {
-    if (!offline && !loaded.current) void load();
-  }, [load, offline]);
+    if (onlineInForeground) void load();
+  }, [load, onlineInForeground]);
   useEffect(() => () => {
     revision.current++;
     clearTimeout(timer.current);
@@ -96,6 +105,7 @@ export function NotificationSettings({ controller, offline, workspaceId }: {
 
   const submit = async (next: MobileNotificationPreferences, requestPermission = false) => {
     const version = ++revision.current;
+    dirty.current = true;
     clearTimeout(timer.current);
     pending.current = null;
     setSave('saving');
@@ -103,12 +113,18 @@ export function NotificationSettings({ controller, offline, workspaceId }: {
     if (version !== revision.current) return;
     setSave(result?.preferences ? 'saved' : 'failed');
     if (result?.preferences) {
+      dirty.current = false;
       setDraft(result.preferences);
       setState(result.state);
+    }
+    if (result?.registration) {
+      const status = await result.registration;
+      if (status && version === revision.current) setState(status);
     }
   };
   const change = (next: MobileNotificationPreferences) => {
     revision.current++;
+    dirty.current = true;
     setDraft(next);
     clearTimeout(timer.current);
     if (!validPreferences(next)) { pending.current = null; setSave('invalid'); return; }
@@ -117,17 +133,18 @@ export function NotificationSettings({ controller, offline, workspaceId }: {
     timer.current = setTimeout(() => { void submit(next); }, SAVE_DEBOUNCE);
   };
   const device = deviceTimezone();
-  const disabled = offline || state === 'loading';
+  const disabled = offline || loadState !== 'ready';
   const childDisabled = disabled || !draft?.enabled;
   return <View style={styles.content}>
     <Group title="Phone notifications" footer="Alerts show the session or pull request name and a short summary.">
       <View style={styles.block}>
         {offline ? <Status message="You are offline. Notification settings need an internet connection." /> :
-          <Status message={messages[state]} loading={state === 'loading'} tone={state === 'ready' ? 'success' : ['denied', 'unavailable', 'failed'].includes(state) ? 'warning' : 'information'} />}
+          <Status message={state === 'loading' && loadState === 'ready' ? 'Checking device notifications.' : messages[state]}
+            loading={state === 'loading'} tone={state === 'ready' ? 'success' : ['denied', 'unavailable', 'failed'].includes(state) ? 'warning' : 'information'} />}
         {state === 'denied' ? <Button variant="secondary" size="sm" title="Open device notification settings" onPress={() => { void Linking.openSettings().catch(() => {}); }} /> : null}
-        {draft && state !== 'ready' ? <Button size="sm" title="Enable notifications on this device" disabled={disabled || save === 'saving'}
+        {draft && loadState === 'ready' && state !== 'ready' ? <Button size="sm" title="Enable notifications on this device" disabled={disabled || state === 'loading' || save === 'saving'}
           onPress={() => { void submit({ ...draft, enabled: true }, true); }} /> : null}
-        {!draft && state === 'failed' ? <Button variant="secondary" size="sm" title="Retry notification settings" disabled={offline} onPress={() => { void load(); }} /> : null}
+        {loadState === 'failed' ? <Button variant="secondary" size="sm" title="Retry notification settings" disabled={offline} onPress={() => { void load(); }} /> : null}
       </View>
     </Group>
     {draft ? <>

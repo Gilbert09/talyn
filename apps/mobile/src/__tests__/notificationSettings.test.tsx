@@ -2,19 +2,19 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { defaultMobileNotificationPreferences, type MobileNotificationPreferences } from '@talyn/shared';
 
 import { deviceTimezone, NotificationSettings, SAVE_DEBOUNCE, shiftTime, validPreferences } from '../notifications/Settings';
-import type { PushState } from '../notifications/controller';
+import type { NotificationController, PushState } from '../notifications/controller';
 
 function fixture(state: PushState = 'disabled', enabled = false, patch: Partial<MobileNotificationPreferences> = {}) {
   const controller = {
-    loadWorkspaceSettings: jest.fn(async (workspaceId: string) => ({
+    loadWorkspaceSettings: jest.fn(async (workspaceId: string): ReturnType<NotificationController['loadWorkspaceSettings']> => ({
       state, preferences: { ...defaultMobileNotificationPreferences(workspaceId), enabled, ...patch }, providerAvailable: true,
     })),
     saveWorkspaceSettings: jest.fn(async (preferences: MobileNotificationPreferences, permission?: boolean) => ({
       state: permission ? 'ready' as const : state, preferences, providerAvailable: true,
     })),
   };
-  const ui = (offline = false, workspaceId = 'workspace') => <NotificationSettings key={workspaceId}
-    controller={controller} offline={offline} workspaceId={workspaceId} />;
+  const ui = (offline = false, workspaceId = 'workspace', foreground = true) => <NotificationSettings key={workspaceId}
+    controller={controller} foreground={foreground} offline={offline} workspaceId={workspaceId} />;
   return { controller, ui, render: (offline = false) => render(ui(offline)) };
 }
 const flush = async () => { await act(async () => { jest.advanceTimersByTime(SAVE_DEBOUNCE); }); };
@@ -56,6 +56,56 @@ describe('accessible notification settings', () => {
     expect(screen.getByRole('switch', { name: 'Enable workspace notifications' })).toBeEnabled();
     await view.rerender(f.ui(true));
     expect(screen.getByRole('switch', { name: 'Enable workspace notifications' })).toBeDisabled();
+  });
+  it.each(['resume', 'reconnect'])('reloads the edited workspace on %s before saving again', async (event) => {
+    const f = fixture('ready', true);
+    const workspaceId = 'other';
+    const view = await render(f.ui(false, workspaceId));
+    expect(screen.getByRole('switch', { name: 'CI failures' })).toBeEnabled();
+
+    await view.rerender(f.ui(event === 'reconnect', workspaceId, event !== 'resume'));
+    f.controller.loadWorkspaceSettings.mockResolvedValueOnce({
+      state: 'disabled', preferences: defaultMobileNotificationPreferences(workspaceId), providerAvailable: true,
+    });
+    await view.rerender(f.ui(false, workspaceId));
+
+    expect(f.controller.loadWorkspaceSettings.mock.calls).toEqual([[workspaceId], [workspaceId]]);
+    expect(screen.getByRole('switch', { name: 'Enable workspace notifications' }).props.value).toBe(false);
+    expect(screen.getByRole('switch', { name: 'CI failures' })).toBeDisabled();
+    expect(f.controller.saveWorkspaceSettings).not.toHaveBeenCalled();
+  });
+  it('shows preferences before registration and refreshes permission status on return', async () => {
+    const f = fixture('ready', true);
+    const preferences = { ...defaultMobileNotificationPreferences('workspace'), enabled: true };
+    let finishFirst!: (status: PushState) => void;
+    f.controller.loadWorkspaceSettings.mockResolvedValueOnce({
+      state: 'loading', preferences, providerAvailable: true,
+      registration: new Promise((resolve) => { finishFirst = resolve; }),
+    });
+    const view = await f.render();
+    expect(screen.getByRole('switch', { name: 'CI failures' })).toBeEnabled();
+    expect(screen.getByText('Checking device notifications.')).toBeVisible();
+    await act(async () => finishFirst('denied'));
+    expect(screen.getByRole('button', { name: 'Open device notification settings' })).toBeVisible();
+
+    await view.rerender(f.ui(false, 'workspace', false));
+    await view.rerender(f.ui());
+    expect(screen.getByRole('alert', { name: 'Notifications are on for this device.' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Open device notification settings' })).toBeNull();
+  });
+  it('preserves a pending edit when the app resumes', async () => {
+    const f = fixture('ready', true);
+    const view = await f.render();
+    await fireEvent(screen.getByRole('switch', { name: 'CI failures' }), 'valueChange', false);
+    await view.rerender(f.ui(false, 'workspace', false));
+    await view.rerender(f.ui());
+
+    expect(f.controller.loadWorkspaceSettings).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('switch', { name: 'CI failures' }).props.value).toBe(false);
+    await flush();
+    expect(f.controller.saveWorkspaceSettings).toHaveBeenCalledWith(expect.objectContaining({
+      categories: expect.objectContaining({ ci_failure: false }),
+    }), false);
   });
   it.each(['Session updates', 'Quiet hours'])('disables %s while workspace notifications are off', async (label) => {
     const f = fixture('ready', false); await f.render();
