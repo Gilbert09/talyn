@@ -18,6 +18,18 @@ Before you install or start anything:
 Do the setup that the repository describes. Do not invent another one.
 When you learn a setup fact that took time to find, save it with `talyn_memory_write`.
 
+When a missing tool or environment blocks a command, repair setup before you stop:
+
+1. Check the repository setup and the workspace setup list with `talyn_list_setup_steps`.
+2. Check the existing environment, tool paths, and command wrapper.
+3. Install the missing tool from a prebuilt package, if the task permits installation.
+4. Retry preparation, then run the original command.
+
+A wrapper that fails before the task starts is a setup failure.
+Do not apply a task's stop-on-failure rule before you try setup recovery.
+Follow explicit limits on installs and services.
+If recovery fails, report the commands you tried and the remaining error.
+
 ## 2. Install prebuilt tools
 
 Compiling a tool from source can take 10 minutes or more. Use a prebuilt binary:

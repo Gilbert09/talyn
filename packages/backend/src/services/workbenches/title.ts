@@ -3,7 +3,11 @@ import { askSessionAgent, type CheapAgentOptions } from './cheapAgent.js';
 import { emitWorkbenchUpdated } from './emit.js';
 import { publicWorkbench } from './prLink.js';
 import { recordWorkbenchEvent } from './sandboxRuntime.js';
-import { listChats, setGeneratedTitle, type WorkbenchRow } from './store.js';
+import { firstWorkbenchTask, listChats, setGeneratedTitle, type WorkbenchRow } from './store.js';
+
+interface TitleOptions extends CheapAgentOptions {
+  origin?: 'user' | 'talyn';
+}
 
 /**
  * A display title for a sandbox session, from its first message.
@@ -25,13 +29,13 @@ const inFlight = new Set<string>();
  * title. A failed try counts. After MAX_TITLE_FAILURES the session keeps its name
  * until the process restarts. Only one call per workbench runs at a time.
  */
-export function startTitleGeneration(row: WorkbenchRow, message: string, opts: CheapAgentOptions = {}): Promise<void> {
+export function startTitleGeneration(row: WorkbenchRow, message: string, opts: TitleOptions = {}): Promise<void> {
   if (row.title || row.runtime !== 'sandbox' || inFlight.has(row.id)) return Promise.resolve();
   if ((failures.get(row.id) ?? 0) >= MAX_TITLE_FAILURES) return Promise.resolve();
   inFlight.add(row.id);
   return generateSandboxTitle(row, message, opts)
     .then((updated) => {
-      if (!updated) failures.set(row.id, (failures.get(row.id) ?? 0) + 1);
+      if (updated === null) failures.set(row.id, (failures.get(row.id) ?? 0) + 1);
     })
     .catch((err) => {
       failures.set(row.id, (failures.get(row.id) ?? 0) + 1);
@@ -51,7 +55,9 @@ export async function startTitleFromQueue(row: WorkbenchRow, opts: CheapAgentOpt
   const chats = await listChats(row.id);
   const first = chats
     .filter((chat) => !chat.closedAt)
-    .flatMap((chat) => (chat.queuedMessages ?? []).map((message) => ({ text: message.text.trim(), agent: chat.agent })))
+    .flatMap((chat) => (chat.queuedMessages ?? [])
+      .filter((message) => message.origin !== 'talyn')
+      .map((message) => ({ text: message.text.trim(), agent: chat.agent })))
     .find((message) => message.text);
   if (!first) return;
   await startTitleGeneration(row, first.text, { agent: first.agent === 'codex' ? 'codex' : 'claude', ...opts });
@@ -63,14 +69,15 @@ export function resetTitleAttempts(): void {
   inFlight.clear();
 }
 
-/** The new row when a title was written; null when the name stays. */
+/** Return the updated row, null for a failed attempt, or undefined when no task exists. */
 export async function generateSandboxTitle(
   row: WorkbenchRow,
   firstMessage: string,
-  opts: CheapAgentOptions = {},
-): Promise<WorkbenchRow | null> {
-  if (!firstMessage.trim()) return null;
-  const result = await askSessionAgent(row, workbenchTitlePrompt(firstMessage), opts);
+  opts: TitleOptions = {},
+): Promise<WorkbenchRow | null | undefined> {
+  const task = await firstWorkbenchTask(row.id) ?? (opts.origin === 'talyn' ? '' : firstMessage);
+  if (!task.trim()) return undefined;
+  const result = await askSessionAgent(row, workbenchTitlePrompt(task), opts);
   const title = result && result.exitCode === 0 ? sanitizeWorkbenchTitle(result.stdout) : null;
   if (!title) {
     recordWorkbenchEvent(row, 'title', result ? `no usable title (exit ${result.exitCode})` : 'no answer from the sandbox', false);
