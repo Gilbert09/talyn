@@ -29,6 +29,7 @@ Other options in the composer:
 - Press Esc to leave the composer. Then you can use keyboard shortcuts such as G then P, which opens your pull requests. The text that you typed stays in the composer.
 - **Internet on** / **Internet off** controls whether the sandbox can reach the internet. See [Internet access](/docs/sandboxes#internet-access).
 - The attach button adds images, videos and text files. You can also paste or drop them into the chat. Images can be PNG, JPEG, WebP or GIF, up to 10 MB. Videos can be MP4, MOV or WebM, up to 50 MB. On the phone, pick a video from your library.
+- On Android, select **Take photo** in the attach menu to open the system camera. The camera app manages its own permission. Cancel in the camera to return to your draft.
 - On mobile, the composer focuses the text field after you attach a photo or video.
 - A text file must be UTF-8 text, up to 1 MB. Examples are logs, Markdown, CSV, JSON, YAML and source code. The file keeps its name. The agent reads it from the sandbox. The phone shows text files that you attach on the web or desktop, but cannot attach them yet.
 - You can attach a video only after the session starts. When you start a new session, attach images and text files only.

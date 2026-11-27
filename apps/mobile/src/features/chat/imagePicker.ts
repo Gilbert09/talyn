@@ -12,7 +12,8 @@ const denied = (what: string) => Alert.alert(`Allow access to ${what}`, `Talyn c
 
 async function choose(source: ImageSource, videos: boolean, onPicked: (assets: PickedImage[]) => void) {
   try {
-    if (source === 'camera') {
+    // On Android, the system camera app handles access.
+    if (source === 'camera' && Platform.OS !== 'android') {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
       if (!permission.granted) { denied('the camera'); return; }
     }

@@ -1,0 +1,18 @@
+diff --git a/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerModule.kt b/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerModule.kt
+--- a/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerModule.kt
++++ b/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerModule.kt
+@@ -277,7 +277,13 @@ class ImagePickerModule : Module() {
+       continuation.resumeWithException(Exceptions.ModuleNotFound(Permissions::class))
+       return@suspendCancellableCoroutine
+     }
+-
++
++    // The system camera app uses its own permission when the caller omits CAMERA.
++    if (!permissions.isPermissionPresentInManifest(Manifest.permission.CAMERA)) {
++      continuation.resume(Unit)
++      return@suspendCancellableCoroutine
++    }
++
+     permissions.askForPermissions(
+       { permissionsResponse ->
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

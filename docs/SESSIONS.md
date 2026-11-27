@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Android camera attachments (2026-11-27)
+
+Both Android composers now open the system camera directly. The camera app manages its own permission.
+Expo ImagePicker 58.0.10 checked for `CAMERA` even though Talyn removes it from the Android manifest.
+The patch skips that check when the manifest omits `CAMERA`.
+Android builds the picker from source because Expo's prebuilt library does not contain the patch.
+The fix requires a new Android binary.
+
+All 41 composer tests passed. The type, lint, release, and native profile checks passed.
+Patch application and Android autolinking also passed. A device check for capture and cancellation remains.
+
 ## Composer defaults based on subscription usage (2026-11-27)
 
 The new sandbox composer can default to Claude or Codex on web, desktop, and mobile.
