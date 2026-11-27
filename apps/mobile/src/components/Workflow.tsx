@@ -51,12 +51,14 @@ export function safeExternalUrl(value: string): string | null {
     return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : null;
   } catch { return null; }
 }
-export function openExternal(value: string) {
+export function openExternal(value: string, options: { originOnly?: boolean; onOpened?(): void } = {}) {
   const url = safeExternalUrl(value);
   if (!url) return;
-  Alert.alert('Open external website?', url, [
+  Alert.alert('Open external website?', options.originOnly ? new URL(url).origin : url, [
     { text: 'Cancel', style: 'cancel', isPreferred: true },
-    { text: 'Open website', onPress: () => { void Linking.openURL(url).catch(() => Alert.alert('Website unavailable', 'Try again when your connection is available.')); } },
+    { text: 'Open website', onPress: () => {
+      void Linking.openURL(url).then(options.onOpened, () => Alert.alert('Website unavailable', 'Try again when your connection is available.'));
+    } },
   ]);
 }
 export function NativeText({ text }: { text: string }) {

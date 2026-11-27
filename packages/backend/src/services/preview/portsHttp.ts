@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { Readable } from 'stream';
+import { WorkbenchError } from '../workbenches/errors.js';
 import { fleetClientFor } from '../workbenches/sandboxRuntime.js';
 
 /**
@@ -77,6 +78,44 @@ export interface PortTarget {
   fleetHost: string | null;
   sandboxId: string;
   port: number;
+}
+
+const FLEET_PORT_CONFLICTS = new Set([
+  'hibernation_unusable', 'resume_impossible', 'remote_resume_required',
+  'sandbox_not_live', 'sandbox_suspended', 'ports_failed', 'guest_unreachable',
+]);
+
+/** Check the sandbox directly when the app and Fleet can return the same status. */
+export async function previewPortAnswers(response: globalThis.Response, sandboxIsLive: () => Promise<boolean>): Promise<boolean> {
+  const reader = response.body?.getReader();
+  try {
+    if (response.status >= 502 && response.status <= 504) return false;
+    if ([401, 403, 404, 429].includes(response.status)) return sandboxIsLive();
+    if (response.status !== 409 || !reader || !response.headers.get('content-type')?.includes('application/json')) return true;
+
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 4096) return true;
+      chunks.push(value);
+    }
+    let code: string | undefined;
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { error?: string; message?: string } | null;
+      if (body?.message) code = body.error;
+    } catch {
+      return true;
+    }
+    if (code === 'ports_unsupported' || code === 'guest_too_old') {
+      throw new WorkbenchError('This sandbox does not support previews. Start a new sandbox to use previews.', 409, 'preview_unsupported');
+    }
+    return !code || !FLEET_PORT_CONFLICTS.has(code);
+  } finally {
+    await reader?.cancel().catch(() => undefined);
+  }
 }
 
 /**
