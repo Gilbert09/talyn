@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { ActionSheetIOS, Alert, TextInput } from 'react-native';
+import { ActionSheetIOS, Alert, Platform, TextInput } from 'react-native';
 
 import { readImageDrafts, resetImageDrafts } from '../features/chat/attachmentDrafts';
 import type { ImageDraft } from '../features/chat/attachments';
@@ -31,7 +31,7 @@ jest.mock('../auth/AuthProvider', () => ({
 jest.mock('expo-image-picker', () => ({
   launchImageLibraryAsync: jest.fn(), launchCameraAsync: jest.fn(), requestCameraPermissionsAsync: jest.fn(),
 }));
-const mockPicker = jest.requireMock('expo-image-picker') as Record<'launchImageLibraryAsync', jest.Mock>;
+const mockPicker = jest.requireMock('expo-image-picker') as Record<'launchImageLibraryAsync' | 'launchCameraAsync' | 'requestCameraPermissionsAsync', jest.Mock>;
 const mockImage = { saveAsync: jest.fn(), release: jest.fn() };
 const mockContextRef = { renderAsync: jest.fn(async () => mockImage), release: jest.fn() };
 jest.mock('expo-image-manipulator', () => ({
@@ -116,7 +116,7 @@ describe('new work with images', () => {
       repositoryId: 'repo-one', prompt: undefined, namingText: 'Fix this screen' })));
     await waitFor(() => expect(mockActions.send).toHaveBeenCalledWith('chat-one', {
       text: 'Fix this screen', attachments: [{ name: 'cat.jpg', mimeType: 'image/jpeg', dataBase64: 'AAAA' }] }));
-    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: expect.stringMatching(/^creating-/) } });
+    expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'session-new' } });
     expect(readImageDrafts('new:prompt')).toEqual([]);
     expect(mockActive.store.local('new:prompt').draft).toBe('');
   });
@@ -141,6 +141,28 @@ describe('new work with images', () => {
     await waitFor(() => expect(focus).toHaveBeenCalledTimes(1));
     finish({ uri: 'file:///small.jpg', width: 1, height: 1, base64: 'AAAA' });
     await waitFor(() => expect(startButton()).toBeEnabled());
+  });
+
+  it('returns to the home draft when the Android camera is canceled', async () => {
+    jest.replaceProperty(Platform, 'OS', 'android');
+    mockPicker.requestCameraPermissionsAsync.mockResolvedValue({ granted: false });
+    mockPicker.launchCameraAsync.mockResolvedValue({ canceled: true, assets: null });
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+      buttons?.find((button) => button.text === 'Take photo')?.onPress?.();
+    });
+    const focus = jest.spyOn(TextInput.prototype, 'focus');
+    await render(<NewWorkScreen presentation="home" />);
+    await fireEvent.changeText(await screen.findByLabelText('Task'), 'Fix this screen');
+    await fireEvent.press(screen.getByRole('button', { name: 'Attach an image' }));
+
+    expect(mockPicker.requestCameraPermissionsAsync).not.toHaveBeenCalled();
+    expect(mockPicker.launchCameraAsync).toHaveBeenCalledWith({ mediaTypes: ['images'], quality: 0.8 });
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(focus).not.toHaveBeenCalled();
+    expect(readImageDrafts('new:prompt')).toEqual([]);
+    expect(screen.getByLabelText('Task')).toHaveTextContent('Fix this screen');
+    await fireEvent.changeText(screen.getByLabelText('Task'), 'Keep editing');
+    expect(screen.getByLabelText('Task')).toHaveTextContent('Keep editing');
   });
 
   it('lets a failed image be tried again', async () => {
@@ -173,7 +195,7 @@ describe('new work with images', () => {
     await attach();
     await waitFor(() => expect(startButton()).toBeEnabled());
     await fireEvent.press(startButton());
-    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: expect.stringMatching(/^creating-/) } }));
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'session-new' } }));
     await waitFor(() => expect(alert).toHaveBeenCalled());
     expect(alert.mock.calls[0][0]).toBe('The first message did not send');
     expect(alert.mock.calls[0][1]).toContain('Your text and images are in the new chat.');

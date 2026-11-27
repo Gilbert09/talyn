@@ -1,5 +1,5 @@
 import type { PRRow } from '@talyn/client/native';
-import { fleetAgentLabel, type Workbench, type WorkbenchCreation, type WorkbenchReadiness } from '@talyn/shared';
+import { fleetAgentLabel, workbenchesOffered, type RepositoryPreviewResponse, type Workbench, type WorkbenchReadiness } from '@talyn/shared';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { HeaderHeightContext } from 'expo-router/react-navigation';
 import { useContext, useEffect, useState } from 'react';
@@ -10,14 +10,15 @@ import { ScreenContainer } from '../../components/ScreenContainer';
 import { AppText, Banner, ChipButton, Disclosure, IconButton, Row, SheetModal, useActionSheet, type SheetAction } from '../../components/UI';
 import { StateNotice, workflowStyles as styles } from '../../components/Workflow';
 import { showActionError } from '../../lib/errors';
-import { useKeyboardInset } from '../../lib/keyboard';
 import { useFeatures } from '../../lib/features';
+import { useKeyboardInset } from '../../lib/keyboard';
 import { useNow } from '../../lib/time';
 import { completeIntent } from '../../navigation/intents';
 import { pullRequestRoute, sessionRoute, threadRoute } from '../../navigation/routes';
 import { useResource } from '../../workflow/hooks';
 import { alternateChatAgent, workbenchKind } from '../../workflow/model';
 import { Conversation } from '../chat/Conversation';
+import { isArchived } from './actions';
 import { runningJobs } from './background';
 import { ChangesTab } from './ChangesTab';
 import { CodeCompleteReviewCard } from './CodeCompleteReviewCard';
@@ -26,19 +27,21 @@ import { useBackground } from './data';
 import { HeaderTitle, QuickActionRow, quickMenuActions, SessionDetailsSheet, SessionStatusRow, useQuickActions } from './DetailHeader';
 import { JobsTab } from './JobsTab';
 import { readinessProblem, sessionTabs } from './model';
+import { PreviewSheet } from './PreviewSheet';
 import { PullRequestTab } from './PullRequestTab';
 import { diffTotals, primaryActions } from './quickActions';
 import { useSessionMenu } from './SessionMenu';
 import { WorkbenchRow } from './WorkbenchRow';
 
 type PrDetail = { row: PRRow };
-type View_ = 'details' | 'changes' | 'jobs' | 'pr' | null;
+type View_ = 'details' | 'changes' | 'jobs' | 'pr' | 'preview' | null;
 
 const VIEW_ICON = {
   details: { ios: 'info.circle', android: 'info' },
   changes: { ios: 'plus.forwardslash.minus', android: 'difference' },
   jobs: { ios: 'timer', android: 'timer' },
   pr: { ios: 'arrow.triangle.pull', android: 'fork_right' },
+  preview: { ios: 'safari', android: 'language' },
 } as const;
 
 /** The pull request view, with its own action sheet so "Link" draws above the sheet. */
@@ -50,26 +53,28 @@ function PullRequestSheet({ item, visible, onClose, onSent }: { item: Workbench;
   </SheetModal>;
 }
 
-export function WorkbenchDetailScreen({ kind, creation, created }: {
-  kind: 'session' | 'thread'; creation?: WorkbenchCreation; created?: Workbench;
-}) {
+export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) {
   const { workflow } = useMobileRuntime();
   const workspace = useWorkspace();
   const owns = (target: Workbench) => workspace.choices.some(({ id: workspaceId }) => workspaceId === target.workspaceId);
   const params = useLocalSearchParams();
-  const id = created?.id ?? (typeof params.id === 'string' ? params.id : '');
+  const id = typeof params.id === 'string' ? params.id : '';
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
-  const state = useResource<Workbench>('workbench', id, !creation && Boolean(id), true);
-  const fresh = state.status === 'idle' || state.status === 'loading' ? created : undefined;
-  const data = state.data ?? (fresh?.workspaceId === workspace.selected ? fresh : undefined);
-  const valid = Boolean(data && workbenchKind(data) === kind);
+  const state = useResource<Workbench>('workbench', id, Boolean(id), true);
+  const valid = Boolean(state.data && workbenchKind(state.data) === kind);
   const features = useFeatures();
   const showChildren = kind === 'thread' || features?.sessionSubagents === true;
   const children = useResource<Workbench[]>('children', id, valid && showChildren);
   const readiness = useResource<WorkbenchReadiness>('readiness', '', valid);
   const offline = useNetwork() === 'offline';
   const now = useNow();
-  const item = creation?.workbench ?? (valid ? data : undefined);
+  const item = valid ? state.data : undefined;
+  const previewRepo = kind === 'session' && item?.runtime === 'sandbox' && !isArchived(item) && owns(item)
+    && features?.previewLinks === true && workbenchesOffered(features) ? item.repositoryId ?? '' : '';
+  const { data: preview } = useResource<RepositoryPreviewResponse>('repositoryPreview', previewRepo, Boolean(previewRepo), true);
+  const previewPorts = preview && preview.target !== 'off' && preview.target !== 'coder'
+    ? preview.ports.length ? preview.ports : [{ port: 3000 }]
+    : null;
   const prId = kind === 'session' ? item?.pullRequestId ?? '' : '';
   const prState = useResource<PrDetail>('pr', prId, Boolean(prId));
   const row = prState.data?.row ?? null;
@@ -77,10 +82,10 @@ export function WorkbenchDetailScreen({ kind, creation, created }: {
   const list = kind === 'session' ? '/sessions' as const : '/threads' as const;
   const menu = useSessionMenu({ onThreadScreen: kind === 'thread',
     onArchived: () => { if (router.canGoBack()) router.back(); else router.replace(list); } });
-  useEffect(() => { if (valid) completeIntent(`/${kind === 'session' ? 'sessions' : 'threads'}/${encodeURIComponent(id)}`); }, [valid, kind, id]);
+  useEffect(() => { if (item) completeIntent(`/${kind === 'session' ? 'sessions' : 'threads'}/${encodeURIComponent(id)}`); }, [item, kind, id]);
   const childItems = showChildren ? children.data ?? [] : [];
   const keyboard = useKeyboardInset();
-  const background = useBackground(creation ? undefined : item);
+  const background = useBackground(item);
   const [view, setView] = useState<View_>(null);
   const close = () => setView(null);
   const placeholder = item ?? ({ id, chats: [] } as unknown as Workbench);
@@ -93,9 +98,9 @@ export function WorkbenchDetailScreen({ kind, creation, created }: {
 
   let content = null;
   if (item) {
-    const actions = creation ? [] : primaryActions(item, row, { offline });
+    const actions = primaryActions(item, row, { offline });
     const problem = readinessProblem(readiness.data, item.agent);
-    const notice = !creation && (state.status === 'error' || offline);
+    const notice = state.status === 'error' || offline;
     const showParent = features?.sessionSubagents === true && Boolean(item.parentId);
     const fixed = showParent || notice || (Boolean(problem) && !keyboard.open) || (actions.length > 0 && !keyboard.open);
     // Only a real problem and the quick actions stay above the transcript. The rest is in the details sheet.
@@ -105,12 +110,11 @@ export function WorkbenchDetailScreen({ kind, creation, created }: {
       {problem && !keyboard.open ? <View style={local.notice}><Banner message={problem} tone="warning" /></View> : null}
       {keyboard.open ? null : <QuickActionRow actions={actions} busy={quick.busy} run={quick.run} />}
     </View> : null;
-    content = <Conversation key={item.id} item={item} firstMessage={creation?.message}
-      ready={!creation && (Boolean(fresh) || state.status === 'ready' || state.status === 'error')} header={header}
+    content = <Conversation key={item.id} item={item} ready={state.status === 'ready' || state.status === 'error'} header={header}
       canSwitchAgent={owns(item)}
       bottom={card && row ? <CodeCompleteReviewCard view={card} row={row} workbenchId={item.id} /> : undefined}
       find={find} onCloseFind={() => setFind(0)}
-      top={!creation && showChildren ? (pause) => <View style={{ gap: 4 }}>
+      top={showChildren ? (pause) => <View style={{ gap: 4 }}>
         <StateNotice resource={children} offline={offline} refresh={children.refresh} refreshLabel="Refresh child sessions" />
         {childItems.length ? <Disclosure title={`${kind === 'thread' ? 'Related sessions' : 'Sessions started'} (${childItems.length})`} onToggle={pause}>
           <View>{childItems.map((child, index) => <WorkbenchRow key={child.id} item={child} now={now} divider={index < childItems.length - 1} />)}</View>
@@ -129,6 +133,7 @@ export function WorkbenchDetailScreen({ kind, creation, created }: {
       detail: totals ? `${totals.files} ${totals.files === 1 ? 'file' : 'files'}, +${totals.added} −${totals.removed}` : undefined, onPress: () => setView('changes') });
     if (tabs.includes('pr')) views.push({ label: 'Pull request', icon: VIEW_ICON.pr, detail: target.pullRequestId ? undefined : 'None yet. Create or link one.',
       onPress: () => { if (target.pullRequestId) router.push(pullRequestRoute(target.pullRequestId)); else setView('pr'); } });
+    if (previewPorts) views.push({ label: 'Preview', icon: VIEW_ICON.preview, onPress: () => setView('preview') });
     if (tabs.includes('jobs')) views.push({ label: 'Background jobs', icon: VIEW_ICON.jobs, detail: running ? `${running} running` : undefined,
       onPress: () => setView('jobs') });
     const chat = target.chats?.at(-1);
@@ -156,8 +161,8 @@ export function WorkbenchDetailScreen({ kind, creation, created }: {
   const android = Platform.OS === 'android';
   return <ScreenContainer>
     {item ? <Stack.Screen options={{
-      headerTitle: () => <HeaderTitle item={item} row={row} onPress={creation ? undefined : () => setView('details')} />,
-      headerRight: creation ? undefined : () => <View style={local.headerRight}>
+      headerTitle: () => <HeaderTitle item={item} row={row} onPress={() => setView('details')} />,
+      headerRight: () => <View style={local.headerRight}>
         <IconButton label="Find in transcript" symbol={{ ios: 'magnifyingglass', android: 'search' }} onPress={() => setFind((value) => value + 1)} />
         <IconButton label={kind === 'session' ? 'Session actions' : 'Thread actions'}
           symbol={{ ios: 'ellipsis.circle', android: 'more_vert' }} onPress={() => openMenu(item)} />
@@ -175,7 +180,7 @@ export function WorkbenchDetailScreen({ kind, creation, created }: {
             : null}
         </ScrollView>}
     </KeyboardAvoidingView>
-    {item && !creation ? <>
+    {item ? <>
       <SessionDetailsSheet visible={view === 'details'} onClose={close} item={item} row={row} readiness={readiness.data} onRetry={retry} retrying={retrying} />
       <SheetModal visible={view === 'changes'} onClose={close} title="Changes" full>
         {view === 'changes' ? <ChangesTab item={item} /> : null}
@@ -183,6 +188,7 @@ export function WorkbenchDetailScreen({ kind, creation, created }: {
       <SheetModal visible={view === 'jobs'} onClose={close} title="Background jobs" full>
         {view === 'jobs' ? <JobsTab workbenchId={item.id} background={background} /> : null}
       </SheetModal>
+      {view === 'preview' && previewPorts ? <PreviewSheet key={item.id} item={item} ports={previewPorts} onClose={close} /> : null}
       <PullRequestSheet item={item} visible={view === 'pr'} onClose={close} onSent={(message) => { close(); menu.toast(message); }} />
     </> : null}
     {menu.elements}

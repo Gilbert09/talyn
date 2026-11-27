@@ -2,6 +2,24 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Android camera attachments (2026-11-27)
+
+Both Android composers now open the system camera directly. The camera app manages its own permission.
+Expo ImagePicker 58.0.10 checked for `CAMERA` even though Talyn removes it from the Android manifest.
+The patch skips that check when the manifest omits `CAMERA`.
+Android builds the picker from source because Expo's prebuilt library does not contain the patch.
+The fix requires a new Android binary.
+
+All 41 composer tests passed. The type, lint, release, and native profile checks passed.
+Patch application and Android autolinking also passed. A device check for capture and cancellation remains.
+
+## Hosted sandbox previews on mobile (2026-11-27)
+
+Mobile sessions list the repository's preview ports under **Session actions > Preview**.
+Talyn starts the run script when needed and waits for the port before it creates a one-time hosted link.
+The phone opens the link after you confirm the preview host. A probe timeout lets the app keep waiting while the run script continues.
+The ten-minute deadline covers all requests that prepare the preview.
+
 ## Composer defaults based on subscription usage (2026-11-27)
 
 The new sandbox composer can default to Claude or Codex on web, desktop, and mobile.
@@ -8137,16 +8155,3 @@ Each check refreshes at most one stale account per candidate agent and stops whe
 Deferred accounts get another check in one minute, starting with the oldest snapshot.
 The shared sweep stops claiming chats after one minute and leaves other chats due for the next tick.
 Runtime errors retain their explicit reset time when the vendor probe writes no account hold.
-
-### 2026-11-27 — Open sessions immediately after submission
-
-Web, desktop, and mobile open the regular session view as soon as you submit the composer.
-The transcript shows your first message while the server creates the session.
-The clients use the same temporary session data and keep it outside their session caches.
-The server's response supplies the session ID and enables session actions.
-On mobile, the app updates the route without opening a second screen.
-If the request fails, Talyn returns to the composer, keeps the draft and attachments, and shows the error.
-
-Validation covered delayed requests, successful navigation, and draft recovery after creation failed.
-The targeted suites passed on web (313 tests), desktop (225), and mobile (144).
-Type checks and lint passed for the changed code.
