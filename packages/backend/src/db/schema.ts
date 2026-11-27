@@ -2974,7 +2974,9 @@ export const workbenchScriptRuns = pgTable('workbench_script_runs', {
   exitCode: integer('exit_code'),
   /** When the run started (migration 0105). Null on older rows. */
   startedAt: timestamp('started_at', { withTimezone: true }),
-});
+}, (t) => ({
+  runningWorkbenchIdx: index('idx_workbench_script_runs_running_workbench').on(t.workbenchId).where(sql`${t.running}`),
+}));
 
 // ---------- Slack sessions (migration 0090) ----------
 //

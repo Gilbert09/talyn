@@ -2045,6 +2045,11 @@ export async function markArchive(
   const auto = autoForMergedPr || Boolean(idle);
   const fromSaved = idle ? Boolean(idle.fromSaved) : sleeping === 'from_saved';
   const row = await db().transaction(async (tx) => {
+    if (bulkGuard) {
+      // Turn claims hold FOR SHARE. Wait before reading activity with a fresh statement snapshot.
+      await tx.select({ id: workbenchesTable.id }).from(workbenchesTable)
+        .where(eq(workbenchesTable.id, id)).for('update');
+    }
     const [archived] = await tx.update(workbenchesTable).set({
       archivedAt: new Date(),
       archivePendingAt: new Date(),

@@ -46,6 +46,7 @@ import {
   publicWakeup,
   setJobKeepAwake,
   settleJob,
+  settleExitedJob,
   settleWakeup,
   noteJobChecked,
   type JobRow,
@@ -370,28 +371,25 @@ export async function applyProbe(row: WorkbenchRow, job: JobRow, probe: JobProbe
     if (settled) await emitBackground(row.workspaceId, row.id);
     return 'lost';
   }
-  const settled = await settleJob(job.id, { status: 'exited', exitCode: probe.code }, now);
-  if (!settled) return ((await getJob(job.id))?.status ?? 'exited') as WorkbenchBackgroundJobStatus;
-  let wakeupId: string | null = null;
-  if (settled.notifyOnExit) {
+  const settled = await settleExitedJob(job.id, probe.code, now, (ended) => {
     const lines = probe.lines.slice(-BACKGROUND_EXIT_TAIL_LINES);
-    const wakeup = await insertWakeup({
+    return {
       id: randomUUID(),
-      workbenchId: settled.workbenchId,
-      chatId: settled.chatId,
-      workspaceId: settled.workspaceId,
+      workbenchId: ended.workbenchId,
+      chatId: ended.chatId,
+      workspaceId: ended.workspaceId,
       wakeAt: now,
-      reason: `Background job ${settled.name} exited with ${probe.code === null ? 'an unknown code' : `code ${probe.code}`}`,
-      prompt: jobExitPrompt(settled, probe.code, lines, now),
+      reason: `Background job ${ended.name} exited with ${probe.code === null ? 'an unknown code' : `code ${probe.code}`}`,
+      prompt: jobExitPrompt(ended, probe.code, lines, now),
       createdBy: 'agent',
-      payerUserId: settled.payerUserId,
-      payerWorkspaceId: settled.payerWorkspaceId,
-      sourceJobId: settled.id,
-    });
-    wakeupId = wakeup?.id ?? null;
-  }
+      payerUserId: ended.payerUserId,
+      payerWorkspaceId: ended.payerWorkspaceId,
+      sourceJobId: ended.id,
+    };
+  });
+  if (!settled) return ((await getJob(job.id))?.status ?? 'exited') as WorkbenchBackgroundJobStatus;
   await emitBackground(row.workspaceId, row.id);
-  if (wakeupId) await fireWakeup(wakeupId);
+  if (settled.wakeup) await fireWakeup(settled.wakeup.id);
   return 'exited';
 }
 

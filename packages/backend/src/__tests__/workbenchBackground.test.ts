@@ -12,6 +12,7 @@ import { workbenchBackgroundJobs, workbenchChats, workbenches, workbenchWakeups,
 import { resetFeatureFlagsForTests } from '../services/featureFlags.js';
 import {
   JOB_PROBE,
+  applyProbe,
   cancelWakeup,
   fireWakeup,
   jobExitPrompt,
@@ -318,6 +319,46 @@ describe('background jobs', () => {
     expect(messageTriggerText(trigger)).toBe('Background job tests exited with code 3');
     // A second pass finds nothing running and sends nothing more.
     await sweepBackground();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a job running when its exit wake-up cannot be stored', async () => {
+    const job = await insertJob();
+    const row = (await getWorkbench('wb'))!;
+    const probe = { state: 'exited' as const, code: 0, lines: [] };
+    await testDb.pglite.exec(`
+      CREATE FUNCTION reject_exit_wakeup() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'exit wake-up insert failed'; END $$;
+      CREATE TRIGGER reject_exit_wakeup BEFORE INSERT ON workbench_wakeups
+      FOR EACH ROW EXECUTE FUNCTION reject_exit_wakeup();
+    `);
+
+    await expect(applyProbe(row, job, probe)).rejects.toThrow();
+    expect(await getJob('job')).toMatchObject({ status: 'running', endedAt: null, exitCode: null });
+    expect(await testDb.db.select().from(workbenchWakeups)).toHaveLength(0);
+    expect(await bulkArchiveBlocker('wb')).not.toBeNull();
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    await testDb.pglite.exec('DROP TRIGGER reject_exit_wakeup ON workbench_wakeups');
+    expect(await applyProbe(row, job, probe)).toBe('exited');
+    expect(await getJob('job')).toMatchObject({ status: 'exited', exitCode: 0 });
+    expect(await testDb.db.select().from(workbenchWakeups)).toHaveLength(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('stores one exit wake-up when two probes finish together', async () => {
+    const job = await insertJob();
+    const row = (await getWorkbench('wb'))!;
+    const probe = { state: 'exited' as const, code: 0, lines: [] };
+    vi.mocked(existingBoxRefusal).mockImplementationOnce(async () => {
+      expect(await getJob('job')).toMatchObject({ status: 'exited' });
+      expect(await testDb.db.select().from(workbenchWakeups)).toHaveLength(1);
+      expect(await bulkArchiveBlocker('wb')).not.toBeNull();
+      return null;
+    });
+
+    expect(await Promise.all([applyProbe(row, job, probe), applyProbe(row, job, probe)])).toEqual(['exited', 'exited']);
+    expect(await testDb.db.select().from(workbenchWakeups)).toHaveLength(1);
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
