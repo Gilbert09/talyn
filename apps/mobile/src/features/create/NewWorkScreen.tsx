@@ -1,5 +1,5 @@
 import { spaces, workbenches, workspaces as workspaceApi, type PRRow, type WatchedRepo } from '@talyn/client/native';
-import type { SpaceRepository, Workbench, WorkbenchAgent, WorkbenchReadiness, Workspace } from '@talyn/shared';
+import { fleetAgentForModel, type SpaceRepository, type Workbench, type WorkbenchAgent, type WorkbenchReadiness, type Workspace } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -112,7 +112,7 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
 
   const [mode, setMode] = useState<NewWorkMode>(initialMode);
   const [repositoryId, setRepositoryId] = useState('');
-  const [wantedAgent, setWantedAgent] = useState<WorkbenchAgent>('claude');
+  const [wantedAgent, setWantedAgent] = useState<WorkbenchAgent | null>(null);
   const [pickedModel, setPickedModel] = useState<string | null>(null);
   const [baseBranch, setBaseBranch] = useState('');
   const [pullRequest, setPullRequest] = useState<NewWorkPullRequest | null>(null);
@@ -176,7 +176,9 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   const sandbox = readinessSource.data?.sandbox ?? (readinessSource.status === 'error' || readinessSource.status === 'offline' || offline
     ? { ok: false, reasons: [{ code: 'unreachable', message: offline ? 'You are offline' : 'Talyn’s server is not responding' }],
       agents: { claude: { ok: false }, codex: { ok: false } } } as WorkbenchReadiness['sandbox'] : null);
-  const agent = usableAgent(sandbox, wantedAgent);
+  const settings = settingsSource?.settings;
+  const defaultAgent = settings?.defaultCloudProvider === 'selfhosted' ? fleetAgentForModel(settings.fleetModel) : 'claude';
+  const agent = usableAgent(sandbox, wantedAgent ?? sandbox?.usageFallback ?? defaultAgent);
   const model = pickedModel && modelsFor(agent).some((item) => item.id === pickedModel) ? pickedModel : modelFor(settingsSource?.settings, agent);
   const startFrom = prsOn ? activePullRequest(pullRequest, repository) : null;
   const form: NewWorkForm = { mode, prompt, repository, agent, model, baseBranch, internetAccess, pullRequest: startFrom };

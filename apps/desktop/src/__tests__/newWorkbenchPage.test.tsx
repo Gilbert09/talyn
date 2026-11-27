@@ -16,6 +16,7 @@ import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { useNavigationStore } from '../renderer/stores/navigation';
 import { usePullRequestStore } from '../renderer/stores/pullRequests';
 import { downscaleImage } from '../renderer/lib/imageDownscale';
+import * as workbenchBridge from '../renderer/lib/workbenchBridge';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 jest.mock('../renderer/lib/imageDownscale', () => ({ downscaleImage: jest.fn() }));
@@ -365,6 +366,21 @@ describe('NewWorkbenchPage', () => {
     await renderPage();
     expect(radio('Sandbox')).toBeEnabled();
     expect(radio('Sandbox')).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('applies subscription usage only when the composer runs in a sandbox', async () => {
+    const bridge = jest.spyOn(workbenchBridge, 'getWorkbenchBridge').mockReturnValue({
+      readiness: async () => ({ claude: { ok: true }, codex: { ok: true }, git: { ok: true }, pty: { ok: true } }),
+    } as NonNullable<ReturnType<typeof workbenchBridge.getWorkbenchBridge>>);
+    try {
+      mockReadiness.mockResolvedValue({ sandbox: { ...READY.sandbox, usageFallback: 'codex' } });
+      await renderPage();
+      expect(screen.getByRole('button', { name: 'Agent' })).toHaveTextContent('Codex');
+      fireEvent.click(radio('Local'));
+      expect(screen.getByRole('button', { name: 'Agent' })).toHaveTextContent('Claude Code');
+    } finally {
+      bridge.mockRestore();
+    }
   });
 
   it('disables Sandbox with the reason when readiness says no', async () => {

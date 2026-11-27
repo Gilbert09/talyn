@@ -6,6 +6,8 @@ import type {
 } from '@talyn/shared';
 import { fleetRefusalReason, workspaceMayUseFleet } from '../cloudProviders/fleetAccess.js';
 import { getCloudProvider } from '../cloudProviders/registry.js';
+import { subscriptionUsageFallback } from '../selfHosted/accountSelection.js';
+import { listFleetAccounts } from '../selfHosted/accounts.js';
 import { fleetAgentStatus } from '../selfHosted/credentials.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from './access.js';
 import { fleetDeploymentGap, fleetNotDeployedMessage, WorkbenchError } from './errors.js';
@@ -27,7 +29,11 @@ export interface ReadinessUser {
   email?: string | null;
 }
 
-export async function workbenchReadiness(workspaceId: string, user: ReadinessUser): Promise<WorkbenchReadiness> {
+export async function workbenchReadiness(
+  workspaceId: string,
+  user: ReadinessUser,
+  { includeUsage = false } = {},
+): Promise<WorkbenchReadiness> {
   const reasons: WorkbenchReadinessReason[] = [];
 
   if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
@@ -46,7 +52,8 @@ export async function workbenchReadiness(workspaceId: string, user: ReadinessUse
     reasons.push({ code: 'fleet_not_allowed', message: `Talyn Fleet is not available: ${fleetRefusalReason()}.` });
   }
 
-  const status = await fleetAgentStatus(workspaceId);
+  const accounts = includeUsage && reasons.length === 0 ? await listFleetAccounts(workspaceId) : undefined;
+  const status = await fleetAgentStatus(workspaceId, accounts);
   const connected = status.connectedAgents ?? [];
   const reauth = status.reauthAgents ?? [];
   const agentReadiness = (agent: WorkbenchAgent): WorkbenchAgentReadiness => {
@@ -75,12 +82,14 @@ export async function workbenchReadiness(workspaceId: string, user: ReadinessUse
     claude: agentReadiness('claude'),
     codex: agentReadiness('codex'),
   };
+  const usageFallback = accounts && subscriptionUsageFallback(accounts);
 
   return {
     sandbox: {
       ok: reasons.length === 0 && Object.values(agents).some((a) => a.ok),
       reasons,
       agents,
+      ...(usageFallback && { usageFallback }),
     },
   };
 }

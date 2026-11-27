@@ -132,7 +132,36 @@ export function accountOverVerdict(
   return fullest ? { reason: 'usage', window: fullest } : { reason: null };
 }
 
-function readsUsage(account: FleetAccount): boolean {
+type SubscriptionUsage = Pick<FleetAccount, 'agent' | 'kind' | 'reauthRequiredAt' | 'quotaExhausted' | 'usage'>;
+
+/** Use recorded limits to choose a default for the new session composer. */
+export function subscriptionUsageFallback(accounts: readonly SubscriptionUsage[], now = new Date()): FleetAgent | undefined {
+  const statusFor = (agent: FleetAgent) => {
+    const own = accounts.filter((account) => account.agent === agent && readsUsage(account));
+    const usage = own.map((account) => {
+      if (isHeldBack(account.quotaExhausted ?? undefined, now)) return 'exhausted';
+      const snapshot = account.usage;
+      if (!snapshot || !('windows' in snapshot)) return 'unknown';
+      // A model-specific limit does not exhaust the whole subscription.
+      const windows = snapshot.windows.filter((window) =>
+        !window.scopeModel && (!window.resetsAt || Date.parse(window.resetsAt) > now.getTime()),
+      );
+      if (isOverThreshold(windows, 100)) return 'exhausted';
+      return windows.length > 0 ? 'available' : 'unknown';
+    });
+    return {
+      exhausted: usage.length > 0 && usage.every((value) => value === 'exhausted'),
+      available: usage.includes('available'),
+    };
+  };
+  const claude = statusFor('claude');
+  const codex = statusFor('codex');
+  if (claude.exhausted && codex.available) return 'codex';
+  if (codex.exhausted && claude.available) return 'claude';
+  return undefined;
+}
+
+function readsUsage(account: Pick<FleetAccount, 'kind' | 'reauthRequiredAt'>): boolean {
   return (account.kind === 'claude_oauth' || account.kind === 'codex_oauth') && !account.reauthRequiredAt;
 }
 

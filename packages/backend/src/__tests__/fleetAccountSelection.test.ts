@@ -79,6 +79,31 @@ function claudeUsageResponse(percent: number): Response {
   );
 }
 
+describe('subscription usage fallback', () => {
+  const now = new Date('2026-11-27T12:00:00Z');
+  const held = { at: now.toISOString(), resetsAt: '2026-11-27T13:00:00Z' };
+  const claude = { agent: 'claude', kind: 'claude_oauth', reauthRequiredAt: null, quotaExhausted: null, usage: fresh([win(100)]) } as const;
+  const codex = { ...claude, agent: 'codex', kind: 'codex_oauth', usage: fresh([win(99)]) } as const;
+
+  it.each([
+    ['all Claude subscriptions are full', [claude, claude, codex], 'codex'],
+    ['all Codex subscriptions are full', [{ ...codex, usage: claude.usage }, { ...claude, usage: codex.usage }], 'claude'],
+    ['a confirmed usage hold', [{ ...claude, usage: null, quotaExhausted: held }, codex], 'codex'],
+    ['a disconnected subscription and a full subscription', [claude, { ...claude, reauthRequiredAt: now.toISOString() }, codex], 'codex'],
+    ['a Claude subscription has usage left', [claude, { ...claude, usage: codex.usage }, codex], undefined],
+    ['a Claude subscription has unknown usage', [claude, { ...claude, usage: null }, codex], undefined],
+    ['a Claude API key is separate from its full subscription', [claude, { ...claude, kind: 'anthropic_key', usage: null }, codex], 'codex'],
+    ['both agents are full', [claude, { ...codex, usage: claude.usage }], undefined],
+    ['Codex needs a new sign-in', [claude, { ...codex, reauthRequiredAt: now.toISOString() }], undefined],
+    ['Codex has no recorded usage', [claude, { ...codex, usage: null }], undefined],
+    ['Codex only has an API key', [claude, { ...codex, kind: 'openai_key', usage: null }], undefined],
+    ['the full window has reset', [{ ...claude, usage: fresh([win(100, { resetsAt: now.toISOString() })]) }, codex], undefined],
+    ['only one model reached its limit', [{ ...claude, usage: fresh([win(100, { scopeModel: 'Opus' })]) }, codex], undefined],
+  ] as const)('%s', (_name, listed, expected) => {
+    expect(selection.subscriptionUsageFallback(listed, now)).toBe(expected);
+  });
+});
+
 describe('choosing a fleet account by usage', () => {
   let db: Database;
   let cleanup: () => Promise<void>;

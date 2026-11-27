@@ -313,6 +313,22 @@ describe('start new work', () => {
     await fireEvent.press(sendButton());
     await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({ agent: 'codex', model: 'gpt-6-luna' })));
   });
+  it.each([
+    ['claude-sonnet-5-5', 'codex', 'Codex'],
+    ['gpt-6-luna', 'claude', 'Claude'],
+  ] as const)('uses available subscription usage with %s as the default model', async (fleetModel, agent, label) => {
+    const workspace = await mockActive.api.workspaces.get();
+    mockActive.api.workspaces.get.mockResolvedValue({ ...workspace, settings: { defaultCloudProvider: 'selfhosted', fleetModel } });
+    mockActive.api.workbenches.readiness.mockResolvedValue({
+      sandbox: { ok: true, reasons: [], agents: { claude: { ok: true }, codex: { ok: true } }, usageFallback: agent },
+    });
+    await render(<NewWorkScreen />);
+    expect(await screen.findByRole('button', { name: new RegExp(`^Model: .*, ${label}\\. Change model$`) })).toBeVisible();
+    await fireEvent.changeText(screen.getByLabelText('Task'), 'Read the code');
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await fireEvent.press(sendButton());
+    await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({ agent })));
+  });
   it('picks the base branch in its sheet', async () => {
     await render(<NewWorkScreen />);
     const chip = await screen.findByRole('button', { name: /^Base branch: .*\. Change what to start from$/ });
