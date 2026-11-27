@@ -85,6 +85,8 @@ describe('hosted sandbox previews', () => {
   const hostedUrl = 'https://sandbox-5173.preview.test/__talyn/auth?ticket=one-time';
   const waiting = { ready: false, running: true };
   const ready = { ready: true, running: false };
+  const stopped = { ready: false, running: false };
+  const withSignal = expect.objectContaining({ signal: expect.anything() });
 
   function enablePreview(settings: Partial<RepositoryPreviewResponse> = {}) {
     mockActive.api.features.get.mockResolvedValue({ workbenches: true, previewLinks: true });
@@ -93,52 +95,78 @@ describe('hosted sandbox previews', () => {
       reasons: [], source: 'user', user: {}, detected: null, ...settings,
     }));
     Object.assign(mockActive.api.repositories, { preview: { get } });
-    const previewStatus = jest.fn(async () => ready);
-    const runScript = jest.fn(async () => undefined);
-    const previewLink = jest.fn(async () => ({ url: hostedUrl }));
+    const previewStatus = jest.fn(async (_id: string, _port: number, _opts: { live?: boolean; signal: AbortSignal }) => ready);
+    const runScript = jest.fn(async (_id: string, _name: string, _opts: { signal: AbortSignal }) => undefined);
+    const previewLink = jest.fn(async (_id: string, _port: number, _opts: { signal: AbortSignal }) => ({ url: hostedUrl }));
     Object.assign(mockActive.api.workbenches, { previewStatus, runScript, previewLink });
     const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
     return { get, previewStatus, runScript, previewLink, openURL };
   }
 
+  async function answerPreviewPrompt(alert: jest.SpiedFunction<typeof Alert.alert>, answer: 'Cancel' | 'Open website') {
+    expect(alert).toHaveBeenLastCalledWith('Open external website?', new URL(hostedUrl).origin, expect.any(Array));
+    const buttons = alert.mock.lastCall?.[2];
+    const button = buttons?.find(({ text }) => text === answer);
+    expect(button).toBeDefined();
+    await act(() => { button?.onPress?.(); });
+  }
+
   it('opens the selected port through a new hosted ticket if the port is already responding', async () => {
     const { get, previewStatus, runScript, previewLink, openURL } = enablePreview();
+    const alert = jest.spyOn(Alert, 'alert');
     await render(<WorkbenchDetailScreen kind="session" />);
     expect(get).toHaveBeenCalledWith('repo-one');
     await openView('Preview');
     expect(screen.getByRole('button', { name: 'API' })).toBeVisible();
     await fireEvent.press(screen.getByRole('button', { name: 'App' }));
-    expect(previewStatus).toHaveBeenCalledWith('session-one', 5173);
+    expect(previewStatus).toHaveBeenCalledWith('session-one', 5173, withSignal);
     expect(runScript).not.toHaveBeenCalled();
-    expect(previewLink).toHaveBeenCalledWith('session-one', 5173);
+    expect(previewLink).toHaveBeenCalledWith('session-one', 5173, withSignal);
+    expect(openURL).not.toHaveBeenCalled();
+    await answerPreviewPrompt(alert, 'Open website');
     expect(openURL).toHaveBeenCalledWith(hostedUrl);
+  });
+
+  it('keeps the browser closed when the person cancels confirmation', async () => {
+    const { openURL } = enablePreview();
+    const alert = jest.spyOn(Alert, 'alert');
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await openView('Preview');
+    await fireEvent.press(screen.getByRole('button', { name: 'App' }));
+    await answerPreviewPrompt(alert, 'Cancel');
+    expect(openURL).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'App' })).toBeEnabled();
   });
 
   it.each([false, true])('waits for port 3000 after starting the run script (concurrent start %s)', async (concurrent) => {
     const { previewStatus, runScript, previewLink, openURL } = enablePreview({ ports: [] });
-    previewStatus.mockResolvedValueOnce({ ready: false, running: false }).mockResolvedValueOnce(waiting);
+    const alert = jest.spyOn(Alert, 'alert');
+    previewStatus.mockResolvedValueOnce(stopped).mockResolvedValueOnce(waiting);
     if (concurrent) runScript.mockRejectedValueOnce(new ApiError('Script already running.', 409, 'script_running'));
     await render(<WorkbenchDetailScreen kind="session" />);
     await openView('Preview');
     await fireEvent.press(screen.getByRole('button', { name: 'Port 3000' }));
-    expect(runScript).toHaveBeenCalledWith('session-one', 'run');
+    expect(runScript).toHaveBeenCalledWith('session-one', 'run', withSignal);
     expect(screen.getByText('Waiting for the app to start…')).toBeVisible();
     expect(previewLink).not.toHaveBeenCalled();
-    await waitFor(() => expect(previewLink).toHaveBeenCalledWith('session-one', 3000), { timeout: 3000 });
+    await waitFor(() => expect(previewLink).toHaveBeenCalledWith('session-one', 3000, withSignal), { timeout: 3000 });
+    await answerPreviewPrompt(alert, 'Open website');
     expect(openURL).toHaveBeenCalledWith(hostedUrl);
   });
 
   it('opens a detached server after the run script stops', async () => {
     const { previewStatus, runScript, previewLink, openURL } = enablePreview();
-    previewStatus.mockResolvedValueOnce({ ready: false, running: false }).mockResolvedValueOnce({ ready: false, running: false });
+    const alert = jest.spyOn(Alert, 'alert');
+    previewStatus.mockResolvedValueOnce(stopped).mockResolvedValueOnce(stopped);
     await render(<WorkbenchDetailScreen kind="session" />);
     await openView('Preview');
     jest.useFakeTimers();
     try {
       await fireEvent.press(screen.getByRole('button', { name: 'App' }));
-      expect(runScript).toHaveBeenCalledWith('session-one', 'run');
+      expect(runScript).toHaveBeenCalledWith('session-one', 'run', withSignal);
       expect(previewLink).not.toHaveBeenCalled();
       await act(async () => { await jest.advanceTimersByTimeAsync(1500); });
+      await answerPreviewPrompt(alert, 'Open website');
       expect(openURL).toHaveBeenCalledWith(hostedUrl);
     } finally {
       jest.useRealTimers();
@@ -161,7 +189,7 @@ describe('hosted sandbox previews', () => {
 
   it('reports a stopped script after the grace period without opening the browser', async () => {
     const { previewStatus, previewLink, openURL } = enablePreview();
-    previewStatus.mockResolvedValue({ ready: false, running: false });
+    previewStatus.mockResolvedValue(stopped);
     const alert = jest.spyOn(Alert, 'alert');
     await render(<WorkbenchDetailScreen kind="session" />);
     await openView('Preview');
@@ -178,6 +206,36 @@ describe('hosted sandbox previews', () => {
     }
   });
 
+  it.each(['initial check', 'run start', 'live check', 'ticket'] as const)('aborts a stalled %s at the startup deadline', async (phase) => {
+    const { previewStatus, runScript, previewLink, openURL } = enablePreview();
+    const alert = jest.spyOn(Alert, 'alert');
+    const stalled = new Promise<never>(() => {});
+    if (phase === 'initial check') previewStatus.mockReturnValueOnce(stalled);
+    if (phase === 'run start') {
+      previewStatus.mockResolvedValueOnce(stopped);
+      runScript.mockReturnValueOnce(stalled);
+    }
+    if (phase === 'live check') previewStatus.mockResolvedValueOnce(waiting).mockReturnValueOnce(stalled);
+    if (phase === 'ticket') previewLink.mockReturnValueOnce(stalled);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await openView('Preview');
+    jest.useFakeTimers();
+    try {
+      await fireEvent.press(screen.getByRole('button', { name: 'App' }));
+      const signal = previewStatus.mock.calls[0][2].signal;
+      const lastRequest = phase === 'run start' ? runScript : phase === 'ticket' ? previewLink : previewStatus;
+      expect(lastRequest.mock.lastCall?.[2].signal).toBe(signal);
+      expect(signal.aborted).toBe(false);
+      await act(async () => { await jest.advanceTimersByTimeAsync(600_000); });
+      expect(signal.aborted).toBe(true);
+      expect(openURL).not.toHaveBeenCalled();
+      expect(alert).toHaveBeenCalledWith('Could not open the preview', 'Talyn could not prepare the preview on port 5173 within 10 minutes.');
+      expect(screen.getByRole('button', { name: 'App' })).toBeEnabled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('does not open the browser if the preview sheet closes during startup', async () => {
     const { previewStatus, previewLink, openURL } = enablePreview();
     let finishProbe!: (status: typeof ready) => void;
@@ -186,6 +244,7 @@ describe('hosted sandbox previews', () => {
     await openView('Preview');
     await fireEvent.press(screen.getByRole('button', { name: 'App' }));
     await fireEvent.press(screen.getAllByRole('button', { name: 'Close' }).at(-1)!);
+    expect(previewStatus.mock.calls[0][2].signal.aborted).toBe(true);
     await act(() => { finishProbe(ready); });
     expect(previewLink).not.toHaveBeenCalled();
     expect(openURL).not.toHaveBeenCalled();

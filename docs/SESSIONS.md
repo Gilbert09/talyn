@@ -6,7 +6,8 @@ Chronological notes from development sessions. Most recent first. See [`CLAUDE.m
 
 Mobile sessions list the repository's preview ports under **Session actions > Preview**.
 Talyn starts the run script when needed and waits for the port before it creates a one-time hosted link.
-The phone opens the link in its browser. A probe that times out lets the app keep waiting while the run script continues.
+The phone opens the link after you confirm the preview host. A probe timeout lets the app keep waiting while the run script continues.
+The ten-minute deadline covers all requests that prepare the preview.
 
 ## Composer defaults based on subscription usage (2026-11-27)
 

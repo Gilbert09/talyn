@@ -89,6 +89,7 @@ const sessionRecovery = new WeakMap<ApiClientConfig, Promise<boolean>>();
 type RequestContext = {
   config: ApiClientConfig;
   runtime: ReturnType<typeof getRuntime>;
+  signal?: AbortSignal;
   invalidated: boolean;
   dispose: () => void;
 };
@@ -100,8 +101,8 @@ export class ClientInactiveError extends Error {
   }
 }
 
-function context(): RequestContext {
-  const ctx: RequestContext = { config: getConfig(), runtime: getRuntime(), invalidated: false, dispose: () => {} };
+function context(signal?: AbortSignal): RequestContext {
+  const ctx: RequestContext = { config: getConfig(), runtime: getRuntime(), signal, invalidated: false, dispose: () => {} };
   ctx.dispose = ctx.runtime.lifecycle.subscribe((event) => {
     if (event.type === 'state' && !canRun(event.state)) ctx.invalidated = true;
   });
@@ -109,6 +110,7 @@ function context(): RequestContext {
 }
 
 function assertActive(ctx: RequestContext): void {
+  if (ctx.signal?.aborted) throw ctx.signal.reason ?? new Error('Request aborted.');
   if (ctx.invalidated || ctx.config !== getConfig() || ctx.runtime.lifecycle.getSnapshot().activity === 'suspended') throw new ClientInactiveError();
 }
 
@@ -206,7 +208,7 @@ async function fetchOrThrow(
 }
 
 function reportRequestError(error: unknown, method: string, path: string, ctx: RequestContext): void {
-  if (ctx.config !== getConfig() || error instanceof ClientInactiveError) return;
+  if (ctx.signal?.aborted || ctx.config !== getConfig() || error instanceof ClientInactiveError) return;
   const apiError = error instanceof ApiError ? error : null;
   try {
     ctx.config.onRequestError?.({ error, method, path, status: apiError?.status, code: apiError?.code });
@@ -215,16 +217,17 @@ function reportRequestError(error: unknown, method: string, path: string, ctx: R
   }
 }
 
+type RawBody = { body: BodyInit; contentType: string; name?: string };
+
 export async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  isRetry = false,
-  raw?: { body: BodyInit; contentType: string; name?: string }
+  options: { signal?: AbortSignal; raw?: RawBody } = {},
 ): Promise<T> {
-  const ctx = context();
+  const ctx = context(options.signal);
   try {
-    return await requestInternal<T>(method, path, body, isRetry, raw, ctx);
+    return await requestInternal<T>(method, path, body, false, options.raw, ctx);
   } catch (error) {
     reportRequestError(error, method, path, ctx);
     throw error;
@@ -238,7 +241,7 @@ async function requestInternal<T>(
   path: string,
   body: unknown,
   isRetry = false,
-  raw: { body: BodyInit; contentType: string; name?: string } | undefined,
+  raw: RawBody | undefined,
   ctx: RequestContext
 ): Promise<T> {
   assertActive(ctx);
@@ -258,6 +261,7 @@ async function requestInternal<T>(
   const response = await fetchOrThrow(method, path, {
     headers,
     body: raw ? raw.body : body ? JSON.stringify(body) : undefined,
+    ...(ctx.signal && { signal: ctx.signal }),
   }, ctx);
   assertActive(ctx);
 
@@ -278,9 +282,11 @@ async function requestInternal<T>(
   try {
     text = await response.text();
   } catch (error) {
+    assertActive(ctx);
     if (response.status >= 500) throw new ApiError(`Backend unreachable (HTTP ${response.status})`, response.status);
     throw new ApiNetworkError(method, path, error);
   }
+  assertActive(ctx);
   let data: ApiResponse<T> | null = null;
   try {
     data = JSON.parse(text) as ApiResponse<T>;
@@ -300,7 +306,6 @@ async function requestInternal<T>(
     );
   }
 
-  assertActive(ctx);
   return data.data as T;
 }
 

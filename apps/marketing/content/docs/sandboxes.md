@@ -74,7 +74,7 @@ In the desktop app, Talyn forwards the sandbox's port to the same port on your c
 2. Open **Session actions** and tap **Preview**.
 3. Select the port for your app.
 
-Talyn starts the run script if necessary and waits for the app to respond. The preview opens in your phone's browser. If the repository has no preview ports, Talyn uses port 3000. [Configure preview ports](/docs/repository-setup#preview-ports).
+Talyn starts the run script if necessary and waits for the app to respond. When Talyn shows the preview host, tap **Open website** to open it in your phone's browser. If the repository has no preview ports, Talyn uses port 3000. [Configure preview ports](/docs/repository-setup#preview-ports).
 
 ## Sandbox status
 

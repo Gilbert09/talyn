@@ -169,7 +169,7 @@ have no flag of their own.
   2026-11-01 note in `SESSIONS.md`.
 - **Hosted URLs** (2026-11-01, migration `0098`). Web, mobile, and share links use hosted
   URLs. On mobile, open **Session actions**, tap **Preview**, and select a port.
-  Talyn starts the run script if necessary and opens the preview in the phone's browser.
+  Talyn starts the run script if necessary. Confirm the preview host to open it in the phone's browser.
   `PREVIEW_BASE_DOMAIN` (for example
   `preview.talyn.dev`) turns them on. With it unset, the ticket route answers 404
   `preview_links_unavailable` and `GET /features` says `previewLinks: false`. The
