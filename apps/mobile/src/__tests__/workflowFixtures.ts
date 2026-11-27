@@ -1,4 +1,4 @@
-import type { Workbench, WorkbenchChat, WorkbenchEvent, WorkbenchReadiness, WorkbenchTranscriptMatch } from '@talyn/shared';
+import type { UpdateWorkbenchChatInput, Workbench, WorkbenchChat, WorkbenchEvent, WorkbenchReadiness, WorkbenchTranscriptMatch } from '@talyn/shared';
 import type { ClientLifecycleEvent, ClientState, CodeReviewFinding, CodeReviewPublic, PRFile, PRReviewDetail, PRRow } from '@talyn/client/native';
 
 import { WorkflowStore, type WorkflowApi, type WorkflowSocket } from '../workflow/store';
@@ -71,6 +71,7 @@ export function fixture() {
       sendMessage: jest.fn(async (_id?: string, _input?: unknown) => ({ queued: false })),
       create: jest.fn(async (input: { kind?: string; repositoryId?: string }) => input.kind === 'thread' ? thread() : session({ id: 'session-new' })),
       update: jest.fn(async (id: string, patch: { title?: string }) => session({ id, ...patch })),
+      updateChat: jest.fn(async (id: string, patch: UpdateWorkbenchChatInput) => chat({ id, ...patch })),
       archive: jest.fn(async (id: string) => session({ id, status: 'archived', archivedAt: '2026-11-09T10:00:00Z' })),
       restore: jest.fn(async (id: string) => session({ id })),
       retry: jest.fn(async (id: string) => session({ id, status: 'provisioning' })),
