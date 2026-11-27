@@ -109,7 +109,9 @@ export function Composer({
   const navigate = useNavigationStore((s) => s.navigate);
 
   const agent = chat?.agent ?? workbench.agent;
-  const model = chat?.model ?? defaultModelFor(agent);
+  const model = chat?.model
+    ?? (agent === workbench.agent ? workbench.model : null)
+    ?? defaultModelFor(agent);
   const effort = chat?.effort ?? DEFAULT_WORKBENCH_EFFORT;
   const planMode = chat?.planMode ?? false;
   const running = chat?.status === 'running';

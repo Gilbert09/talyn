@@ -8,6 +8,7 @@ import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, isTitleScript, isWorkSaveScript, type ExecReply } from './helpers/fakeFleet.js';
 import { storeChangesCopy, type StoredCopy } from './helpers/storedChanges.js';
 import {
+  fleetAccounts,
   pullRequests,
   repositories,
   workbenchBackgroundJobs,
@@ -865,8 +866,8 @@ describe('workbench routes', () => {
 
       const switched = await call('PATCH', `/workbenches/chats/${chatId}`, { agent: 'codex', model: null });
       expect(switched.status).toBe(200);
-      expect(switched.body.data).toMatchObject({ agent: 'codex', model: 'gpt-6-astra', agentSessionId: null });
-      expect(await getChat(chatId)).toMatchObject({ agent: 'codex', model: 'gpt-6-astra', agentSessionId: null });
+      expect(switched.body.data).toMatchObject({ agent: 'codex', model: 'gpt-6.2-sol', agentSessionId: null });
+      expect(await getChat(chatId)).toMatchObject({ agent: 'codex', model: 'gpt-6.2-sol', agentSessionId: null });
       expect((await testDb.db.select({ pending: workbenchChats.recapPending })
         .from(workbenchChats).where(eq(workbenchChats.id, chatId)))[0].pending).toBe(true);
 
@@ -1276,6 +1277,43 @@ describe('workbench routes', () => {
       expect(res.body.data).toEqual({
         sandbox: { ok: true, reasons: [], agents: { claude: { ok: true }, codex: { ok: true } } },
       });
+    });
+
+    it('returns a composer default from the workspace subscription usage', async () => {
+      const fetchedAt = new Date().toISOString();
+      const envelope = { v: 1, iv: '', ct: '', tag: '' } as const;
+      const credential = { accessTokenEnc: envelope, refreshTokenEnc: envelope, expiresAt: fetchedAt };
+      const usage = (usedPercent: number) => ({ fetchedAt, windows: [{ key: 'session', label: '5-hour', usedPercent, resetsAt: null }] });
+      await testDb.db.insert(fleetAccounts).values([
+        { id: 'claude', workspaceId: 'ws-a', agent: 'claude', kind: 'claude_oauth', label: 'Claude', priority: 1, credential, usage: usage(100) },
+        { id: 'codex', workspaceId: 'ws-a', agent: 'codex', kind: 'codex_oauth', label: 'Codex', priority: 1, credential: { ...credential, accountId: 'codex' }, usage: usage(20) },
+        { id: 'other-claude', workspaceId: 'ws-b', agent: 'claude', kind: 'claude_oauth', label: 'Claude', priority: 1, credential, usage: usage(20) },
+      ]);
+      const res = await readiness();
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({
+        sandbox: { ok: true, reasons: [], agents: { claude: { ok: true }, codex: { ok: true } }, usageFallback: 'codex' },
+      });
+    });
+
+    it.each([
+      ['the shipped Sonnet model', {}, undefined],
+      ['a configured Opus model', { fleetModels: { claude: 'claude-opus-5' } }, 'claude'],
+    ] as const)('checks the usage limit for %s', async (_name, settings, expected) => {
+      await testDb.db.update(workspaces).set({ settings }).where(eq(workspaces.id, 'ws-a'));
+      const fetchedAt = new Date().toISOString();
+      const envelope = { v: 1, iv: '', ct: '', tag: '' } as const;
+      const credential = { accessTokenEnc: envelope, refreshTokenEnc: envelope, expiresAt: fetchedAt };
+      const sessionWindow = { key: 'session', label: '5-hour', resetsAt: null };
+      await testDb.db.insert(fleetAccounts).values([
+        { id: 'claude', workspaceId: 'ws-a', agent: 'claude', kind: 'claude_oauth', label: 'Claude', priority: 1, credential,
+          usage: { fetchedAt, windows: [{ ...sessionWindow, usedPercent: 20 }, { key: 'sonnet_weekly', label: 'Weekly (Sonnet)', resetsAt: null, usedPercent: 100, scopeModel: 'Sonnet' }] } },
+        { id: 'codex', workspaceId: 'ws-a', agent: 'codex', kind: 'codex_oauth', label: 'Codex', priority: 1, credential: { ...credential, accountId: 'codex' },
+          usage: { fetchedAt, windows: [{ ...sessionWindow, usedPercent: 100 }] } },
+      ]);
+      const res = await readiness();
+      expect(res.status).toBe(200);
+      expect(res.body.data.sandbox.usageFallback).toBe(expected);
     });
 
     it.each([

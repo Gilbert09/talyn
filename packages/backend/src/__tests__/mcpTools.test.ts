@@ -124,8 +124,7 @@ describe('mcp tool registry', () => {
 
   it('covers the full surface (listing, context, actions, tasks)', () => {
     const names = TOOLS.map((t) => t.name);
-    expect(names).toHaveLength(107);
-    for (const expected of [
+    const expected = [
       'talyn_ask_user',
       'talyn_list_workspaces',
       'talyn_get_workspace',
@@ -133,6 +132,8 @@ describe('mcp tool registry', () => {
       'talyn_add_repository',
       'talyn_remove_repository',
       'talyn_list_github_repos',
+      'talyn_list_setup_steps',
+      'talyn_revert_setup_step',
       'talyn_list_pull_requests',
       'talyn_get_pull_request',
       'talyn_get_pull_request_description',
@@ -157,6 +158,12 @@ describe('mcp tool registry', () => {
       'talyn_list_code_reviews',
       'talyn_list_tasks',
       'talyn_list_sessions',
+      'talyn_get_session',
+      'talyn_create_session',
+      'talyn_list_thread_sessions',
+      'talyn_send_session_message',
+      'talyn_list_accounts',
+      'talyn_set_session_account',
       'talyn_list_spaces',
       'talyn_get_session_transcript',
       'talyn_resize_session',
@@ -164,6 +171,16 @@ describe('mcp tool registry', () => {
       'talyn_continue_as_thread',
       'talyn_retry_session',
       'talyn_session_sandbox_status',
+      'talyn_session_timing',
+      'talyn_record_setup_step',
+      'talyn_cancel_session_turn',
+      'talyn_get_session_changes',
+      'talyn_get_session_diff',
+      'talyn_open_session_pull_request',
+      'talyn_run_session_script',
+      'talyn_stop_session_script',
+      'talyn_archive_session',
+      'talyn_restore_session',
       'talyn_run_background',
       'talyn_list_background',
       'talyn_background_logs',
@@ -216,9 +233,8 @@ describe('mcp tool registry', () => {
       'talyn_get_billing_status',
       'talyn_list_cloud_providers',
       'talyn_whats_new',
-    ]) {
-      expect(names).toContain(expected);
-    }
+    ];
+    expect(names.sort()).toEqual(expected.sort());
   });
 });
 

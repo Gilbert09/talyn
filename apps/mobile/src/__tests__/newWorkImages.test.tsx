@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { ActionSheetIOS, Alert } from 'react-native';
+import { ActionSheetIOS, Alert, TextInput } from 'react-native';
 
 import { readImageDrafts, resetImageDrafts } from '../features/chat/attachmentDrafts';
 import type { ImageDraft } from '../features/chat/attachments';
@@ -128,7 +128,8 @@ describe('new work with images', () => {
     expect(screen.queryByText(/larger than 10 MB/)).toBeNull();
   });
 
-  it('waits for an image that is still being prepared', async () => {
+  it('focuses the prompt while it prepares an image', async () => {
+    const focus = jest.spyOn(TextInput.prototype, 'focus');
     let finish: (value: unknown) => void = () => {};
     mockImage.saveAsync.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
     pickLibrary();
@@ -137,6 +138,7 @@ describe('new work with images', () => {
     await fireEvent.press(screen.getByRole('button', { name: 'Attach an image' }));
     await waitFor(() => expect(startButton().props.accessibilityHint).toBe('Preparing the images.'));
     expect(startButton()).toBeDisabled();
+    await waitFor(() => expect(focus).toHaveBeenCalledTimes(1));
     finish({ uri: 'file:///small.jpg', width: 1, height: 1, base64: 'AAAA' });
     await waitFor(() => expect(startButton()).toBeEnabled());
   });

@@ -27,6 +27,7 @@ import {
   setFleetAccountReauth,
   updateFleetAccountCredential,
   upsertPrimaryFleetAccount,
+  type FleetAccount,
   type FleetAccountFilter,
   type FleetAccountWithCredential,
   type FleetApiKeyCredential,
@@ -738,8 +739,8 @@ export interface FleetAgentStatus {
   reauthAccounts?: { id: string; label: string; agent: 'claude' | 'codex' }[];
 }
 
-export async function fleetAgentStatus(workspaceId: string): Promise<FleetAgentStatus> {
-  const accounts = await listFleetAccounts(workspaceId);
+export async function fleetAgentStatus(workspaceId: string, listed?: FleetAccount[]): Promise<FleetAgentStatus> {
+  const accounts = listed ?? await listFleetAccounts(workspaceId);
   const connectedAgents: ('claude' | 'codex')[] = [];
   const reauthAgents: ('claude' | 'codex')[] = [];
   const reauthAccounts = accounts.filter((a) => a.reauthRequiredAt).map(({ id, label, agent }) => ({ id, label, agent }));

@@ -101,17 +101,16 @@ export const canQueue = (item: Workbench, row: PRRow | null): row is PRRow =>
 
 /**
  * The quick actions above the transcript, most urgent first, at most `limit`.
- * Order: Retry a failed start, web's primary cycle action, then the merge
- * queue. Archived work only restores. A thread has no PR actions. Stop is in
- * the composer and the menu, and Wake is in the menu: a sleeping sandbox wakes
- * on the next message anyway, so it does not earn a place in the row.
+ * Retry comes first, then the primary PR action and the merge queue.
+ * Archived sessions have no quick actions. Archived threads offer Restore.
+ * Stop is in the composer and the menu. Wake is in the menu.
  */
 export function primaryActions(item: Workbench, row: PRRow | null,
   options: { offline?: boolean; limit?: number } = {}): QuickAction[] {
   const offline = options.offline === true;
   const make = (kind: QuickActionKind, label: string, reason: string | null = null): QuickAction =>
     ({ kind, label, hint: QUICK_ACTION_HINT[kind], disabledReason: offline ? OFFLINE : reason });
-  if (isArchived(item)) return [make('restore', 'Restore')];
+  if (isArchived(item)) return workbenchKind(item) === 'thread' ? [make('restore', 'Restore')] : [];
   const out: QuickAction[] = [];
   if (canRetry(item)) out.push({ ...make('retry', 'Retry'), hint: item.error || item.statusMessage || QUICK_ACTION_HINT.retry });
   const primary = primaryCycleAction(item, row);

@@ -990,8 +990,8 @@ describe('routes/pullRequests', () => {
       expect(row[0].mergedAt).not.toBeNull();
     });
 
-    it('surfaces GitHub\'s reason as a 400 when the merge is rejected', async () => {
-      const id = await insertPR(db, { state: 'open' });
+    it('returns a refusal code and guidance when GitHub rejects the merge', async () => {
+      const id = await insertPR(db, { state: 'open', number: 55 });
       vi.spyOn(githubService, 'mergePullRequest').mockRejectedValue(
         new Error('GitHub API error 405 Method Not Allowed: Pull Request is not mergeable')
       );
@@ -1002,9 +1002,13 @@ describe('routes/pullRequests', () => {
         body: JSON.stringify({ method: 'squash' }),
       });
       expect(res.status).toBe(400);
-      const body = (await res.json()) as { success: boolean; error: string };
+      const body = (await res.json()) as { success: boolean; code: string; error: string };
       expect(body.success).toBe(false);
-      expect(body.error).toContain('Pull Request is not mergeable');
+      expect(body.code).toBe('not_mergeable');
+      expect(body.error).toBe(
+        'GitHub cannot merge #55 now. It can have merge conflicts, failing required checks ' +
+        'or a missing review. Talyn refreshed its status.'
+      );
 
       // The row must NOT have been flipped to merged.
       const row = await db
@@ -1075,7 +1079,7 @@ describe('routes/pullRequests', () => {
     });
 
     it('does not mark the row merged when GitHub returns merged:false', async () => {
-      const id = await insertPR(db, { state: 'open' });
+      const id = await insertPR(db, { state: 'open', number: 58 });
       vi.spyOn(githubService, 'mergePullRequest').mockResolvedValue({
         sha: '',
         merged: false,
@@ -1088,9 +1092,10 @@ describe('routes/pullRequests', () => {
         body: JSON.stringify({ method: 'squash' }),
       });
       expect(res.status).toBe(400);
-      const body = (await res.json()) as { success: boolean; error: string };
+      const body = (await res.json()) as { success: boolean; code: string; error: string };
       expect(body.success).toBe(false);
-      expect(body.error).toContain('Base branch was modified');
+      expect(body.code).toBe('base_changed');
+      expect(body.error).toBe('the base branch changed during the merge. Merge #58 again.');
 
       const row = await db
         .select()
@@ -1098,6 +1103,7 @@ describe('routes/pullRequests', () => {
         .where(eq(pullRequestsTable.id, id))
         .limit(1);
       expect(row[0].state).toBe('open');
+      expect(row[0].mergedAt).toBeNull();
     });
   });
 

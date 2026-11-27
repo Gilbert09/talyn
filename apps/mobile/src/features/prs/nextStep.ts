@@ -12,7 +12,7 @@ export type NextStepKey = 'merged' | 'closed' | 'agent' | 'queued' | 'queue_stop
   | 'checks_failing' | 'changes_requested' | 'behind' | 'checks_running' | 'awaiting_review' | 'ready' | 'branch_rule'
   | 'waiting' | 'review_requested' | 'other';
 export type PrimaryKind = 'merge' | 'fix' | 'queue' | 'resubmit' | 'requeue' | 'session' | 'review' | 'findings' | 'open'
-  | 'approve' | 'request_changes';
+  | 'approve' | 'request_changes' | 'update_branch';
 
 export interface NextStepPrimary {
   kind: PrimaryKind;
@@ -154,7 +154,8 @@ export function prNextStep(input: NextStepInput): NextStep {
         'warning', 'changes', fix('Address review with agent'));
     }
     if (reason === 'behind') {
-      return step('behind', `Behind ${base}`, 'Update the branch on GitHub before it can merge.', 'warning', 'behind', OPEN);
+      return step('behind', `Behind ${base}`, 'Update the branch to run checks with the latest changes.',
+        'warning', 'behind', { kind: 'update_branch', label: 'Update branch' });
     }
     const checks = summary.checks;
     // Failing checks that do not block the merge. The Checks tab counts them, so the card says what they mean.

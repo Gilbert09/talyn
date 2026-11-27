@@ -1,6 +1,6 @@
 import type { Workbench } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
-import { useEffect, useRef, useState, type ComponentRef, type Ref } from 'react';
+import { useEffect, useRef, useState, type ComponentRef, type RefObject } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
@@ -15,7 +15,7 @@ import { ComposerImages } from './AttachmentViews';
 import { ComposerFormattedText } from './ComposerFormatting';
 import { useImageDrafts } from './attachmentDrafts';
 import { attachmentsFailed, attachmentsUploading, buildMessageInput, checkAttachment, imageErrorMessage, sendBlock, type ImageDraft, type PickedImage } from './attachments';
-import { showImagePicker } from './imagePicker';
+import { focusAfterImagePicker, showImagePicker } from './imagePicker';
 import { SandboxAgentNotice } from './SandboxAgentNotice';
 
 /** About six lines of body text, then the field scrolls. */
@@ -38,7 +38,7 @@ function RoundButton({ label, symbol, onPress, disabled, tone, busy = false }: {
  * `ready` is false only while the conversation has not loaded or cannot be
  * read. A background refresh never blocks sending; the server checks.
  */
-export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; chatId: string; ready: boolean; inputRef?: Ref<ComponentRef<typeof TextInput>> }) {
+export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; chatId: string; ready: boolean; inputRef: RefObject<ComponentRef<typeof TextInput> | null> }) {
   const { workflow, auth } = useMobileRuntime();
   const local = useLocal(chatId); const c = useTheme(); const network = useNetwork();
   const [focused, setFocused] = useState(false);
@@ -104,6 +104,7 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
     setImageSendError('');
     updateImages((current) => [...current, ...added]);
     added.forEach((draft) => { void upload(draft); });
+    focusAfterImagePicker(inputRef);
   };
   const attach = () => showImagePicker(addImages, { videos: true });
   const sendImages = async () => {

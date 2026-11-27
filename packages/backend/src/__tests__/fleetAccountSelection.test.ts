@@ -79,6 +79,50 @@ function claudeUsageResponse(percent: number): Response {
   );
 }
 
+describe('subscription usage fallback', () => {
+  const now = new Date('2026-11-27T12:00:00Z');
+  const held = { at: now.toISOString(), resetsAt: '2026-11-27T13:00:00Z' };
+  const claude = { agent: 'claude', kind: 'claude_oauth', reauthRequiredAt: null, quotaExhausted: null, usage: fresh([win(100)]) } as const;
+  const codex = { ...claude, agent: 'codex', kind: 'codex_oauth', usage: fresh([win(99)]) } as const;
+
+  it.each([
+    ['all Claude subscriptions are full', [claude, claude, codex], 'codex'],
+    ['all Codex subscriptions are full', [{ ...codex, usage: claude.usage }, { ...claude, usage: codex.usage }], 'claude'],
+    ['a confirmed usage hold', [{ ...claude, usage: null, quotaExhausted: held }, codex], 'codex'],
+    ['a disconnected subscription and a full subscription', [claude, { ...claude, reauthRequiredAt: now.toISOString() }, codex], 'codex'],
+    ['a Claude subscription has usage left', [claude, { ...claude, usage: codex.usage }, codex], undefined],
+    ['a Claude subscription has unknown usage', [claude, { ...claude, usage: null }, codex], undefined],
+    ['a Claude API key is separate from its full subscription', [claude, { ...claude, kind: 'anthropic_key', usage: null }, codex], 'codex'],
+    ['both agents are full', [claude, { ...codex, usage: claude.usage }], undefined],
+    ['Codex needs a new sign-in', [claude, { ...codex, reauthRequiredAt: now.toISOString() }], undefined],
+    ['Codex has no recorded usage', [claude, { ...codex, usage: null }], undefined],
+    ['Codex only has an API key', [claude, { ...codex, kind: 'openai_key', usage: null }], undefined],
+    ['the full window has reset', [{ ...claude, usage: fresh([win(100, { resetsAt: now.toISOString() })]) }, codex], undefined],
+    ['only one model reached its limit', [{ ...claude, usage: fresh([win(100, { scopeModel: 'Opus' })]) }, codex], undefined],
+  ] as const)('%s', async (_name, listed, expected) => {
+    const modelForAgent = vi.fn(async (agent: 'claude' | 'codex') =>
+      agent === 'claude' ? 'claude-sonnet-5-5' : 'gpt-6.1-terra');
+    expect(await selection.subscriptionUsageFallback(listed, modelForAgent, now)).toBe(expected);
+    expect(modelForAgent.mock.calls).toEqual(expected ? [[expected]] : []);
+  });
+
+  it.each([
+    ['active Sonnet limit', win(100, { scopeModel: 'Sonnet' }), false, undefined],
+    ['Sonnet has usage left', win(99, { scopeModel: 'Sonnet' }), false, 'claude'],
+    ['Sonnet limit has reset', win(100, { scopeModel: 'Sonnet', resetsAt: now.toISOString() }), false, 'claude'],
+    ['Opus limit does not apply', win(100, { scopeModel: 'Opus' }), false, 'claude'],
+    ['another subscription has usage left', win(100, { scopeModel: 'Sonnet' }), true, 'claude'],
+  ] as const)('checks the destination model when %s', async (_name, scoped, hasBackup, expected) => {
+    const openClaude = { ...claude, usage: fresh([win(20)]) };
+    const listed = [
+      { ...codex, usage: fresh([win(100)]) },
+      { ...openClaude, usage: fresh([win(20), scoped]) },
+      ...(hasBackup ? [openClaude] : []),
+    ];
+    expect(await selection.subscriptionUsageFallback(listed, async () => 'claude-sonnet-5-5', now)).toBe(expected);
+  });
+});
+
 describe('choosing a fleet account by usage', () => {
   let db: Database;
   let cleanup: () => Promise<void>;

@@ -11,6 +11,7 @@ import { emitWorkbenchChat } from './emit.js';
 import { CHAT_COLUMNS, rowToChat } from './store.js';
 
 const POLLER = 'chat_limit_resume';
+export const LIMIT_RESUME_SWEEP_BUDGET_MS = 60_000;
 let timer: NodeJS.Timeout | undefined;
 let ticking = false;
 
@@ -33,7 +34,8 @@ export async function backfillChatLimits(now = new Date()): Promise<number> {
     if (!reason) continue;
     const credentialReason = await credentialResumeReason(chat);
     if (credentialReason) {
-      if (!['limited', 'reauth'].includes(credentialReason) || chat.limitCount >= MAX_CREDENTIAL_RETRIES) continue;
+      if (!['limited', 'reauth'].includes(credentialReason)) continue;
+      if (chat.limitCount >= MAX_CREDENTIAL_RETRIES && !(credentialReason === 'limited' && chat.resumeReason)) continue;
     } else {
       if (!(exhaustedAgentFrom(reason) || rateLimitedAgentFrom(reason))) continue;
       if (chat.limitCount === 0 && !chatLimitAgent(chat, reason)) continue;
@@ -62,6 +64,7 @@ export async function sweepChatLimits(now = new Date()): Promise<number> {
         .orderBy(chats.resumeAt).limit(25);
       let count = 0;
       for (const chat of rows) {
+        if (Date.now() - start >= LIMIT_RESUME_SWEEP_BUDGET_MS) break;
         const [claimed] = await db.update(chats).set({ resumeAt: null, statusMessage: chat.resumeReason ?? chat.statusMessage })
           .where(and(eq(chats.id, chat.id), eq(chats.resumeAt, chat.resumeAt!),
             eq(chats.status, 'error'), eq(chats.resumeVersion, chat.resumeVersion)))

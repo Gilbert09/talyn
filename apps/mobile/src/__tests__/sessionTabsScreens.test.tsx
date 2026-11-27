@@ -171,6 +171,15 @@ describe('compact session header', () => {
     await screen.findByRole('header', { name: /^Current work\./ });
     expect(screen.queryByLabelText('Quick actions')).toBeNull();
   });
+  it('offers Restore only in the menu for an archived session', async () => {
+    mockActive.api.workbenches.get.mockResolvedValue(session({ archivedAt: '2026-11-09T10:00:00Z' }));
+    withRow({ state: 'merged' });
+    await render(<WorkbenchDetailScreen kind="session" />);
+    const actions = await screen.findByRole('button', { name: 'Session actions' });
+    expect(screen.queryByLabelText('Quick actions')).toBeNull();
+    await fireEvent.press(actions);
+    expect(await screen.findByRole('button', { name: 'Restore' })).toBeVisible();
+  });
   it('shows the full details in a sheet from the title', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ chats: [chat({ agent: 'claude', model: 'claude-opus-5-5', effort: 'high' })], threadId: 'thread-one' }));
     withRow(summary({ blockingReason: 'merge_conflicts' }));

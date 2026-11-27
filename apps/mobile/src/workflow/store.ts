@@ -598,9 +598,18 @@ export class WorkflowStore {
     }
   }
   async mergePr(id: string) {
-    const result = await this.api.pullRequests.merge(id);
-    this.refresh('pr', id); this.refresh('attention');
-    return result;
+    try {
+      return await this.api.pullRequests.merge(id);
+    } finally {
+      this.refresh('pr', id); this.refresh('attention');
+    }
+  }
+  async updatePrBranch(id: string) {
+    try {
+      return await this.api.pullRequests.updateBranch(id);
+    } finally {
+      this.refresh('pr', id); this.refresh('attention');
+    }
   }
   /** Close the PR on GitHub without merging. The backend refuses a PR the person did not open. */
   async closePr(id: string) {

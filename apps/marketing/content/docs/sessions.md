@@ -29,12 +29,18 @@ Other options in the composer:
 - Press Esc to leave the composer. Then you can use keyboard shortcuts such as G then P, which opens your pull requests. The text that you typed stays in the composer.
 - **Internet on** / **Internet off** controls whether the sandbox can reach the internet. See [Internet access](/docs/sandboxes#internet-access).
 - The attach button adds images, videos and text files. You can also paste or drop them into the chat. Images can be PNG, JPEG, WebP or GIF, up to 10 MB. Videos can be MP4, MOV or WebM, up to 50 MB. On the phone, pick a video from your library.
+- On mobile, the composer focuses the text field after you attach a photo or video.
 - A text file must be UTF-8 text, up to 1 MB. Examples are logs, Markdown, CSV, JSON, YAML and source code. The file keeps its name. The agent reads it from the sandbox. The phone shows text files that you attach on the web or desktop, but cannot attach them yet.
 - You can attach a video only after the session starts. When you start a new session, attach images and text files only.
 - You can send a message while a file uploads. The message waits, and goes when the upload finishes. Press send again to cancel it. If the upload fails, the message is not sent and stays in the composer.
 - The agent gets a video as a file in the sandbox. It cannot watch the video. It can take still frames from the video with a tool such as ffmpeg, if the sandbox has one.
 
 Your defaults for new sessions are in **Settings > Sessions**: the agent, the model, the reasoning effort, plan mode, internet access and a branch prefix such as `yourname/`.
+
+The sandbox composer checks the last recorded subscription usage for Claude and Codex.
+If every usable subscription for your default agent is at its limit, the composer checks the other agent.
+The composer selects that agent if one of its subscriptions has usage left.
+You can still select an agent or model for that session.
 
 In the desktop app and the web app, **Settings > Notifications** holds all notification settings. In the mobile app, they are in the **Notifications** group in **Settings**.
 
@@ -81,6 +87,27 @@ The panel on the right has four tabs:
 - **Sandbox**: what the sandbox is doing, its CPU and memory use over the last hour, and whether your work is saved.
 
 The terminal dock below has a **Run** tab for your run scripts and a **Terminal** tab with a shell in the sandbox. Press ⌘J on a Mac to show or hide it.
+
+## Switch agents in a session
+
+In the web or desktop composer, use **Agent** to switch between Claude and Codex.
+On mobile, open the session menu and select **Switch to Claude** or **Switch to Codex**.
+The sandbox must support both connected agents.
+A switch stops any running turn. The next agent receives a recap of the conversation.
+
+Talyn selects an equivalent model when you switch:
+
+| Claude model | Codex model |
+| --- | --- |
+| Opus 5.5 | GPT-6.2 Sol |
+| Fable 5.2 | GPT-6 Astra |
+| Sonnet 5.5 | GPT-6.1 Terra |
+| Sonnet 4.6 | GPT-6 Luna |
+
+These pairs work in both directions. Older Opus and Fable models also switch to Sol and Astra, respectively.
+The selected version comes from Talyn's current model list.
+If the chat has no model override, the switch uses the session model when both use the same agent.
+You can select another model after the switch.
 
 ## Subagents
 
@@ -174,6 +201,12 @@ Sometimes the Claude or Codex API fails on its side, for example with a server e
 
 With automatic resume enabled, a waiting session continues by itself when usage returns or you reconnect an account.
 
+If all accounts for the current agent reach their usage limit, Talyn switches to the other available agent.
+This also applies when Talyn detects the limit before a turn starts.
+The sandbox must support both agents, and the other agent must have an account with available usage.
+The next turn uses a conversation recap and a model from the same capability tier.
+If neither agent can run, the session waits for usage to return.
+
 To turn this off, open **Settings > Sessions** and turn off **Continue when an agent hits its limit**. That setting also covers usage limits. See [The model API is failing](/docs/troubleshooting#the-model-api-is-failing).
 
 ## Undo with checkpoints
@@ -250,6 +283,8 @@ Talyn also archives a session by itself:
 Open **Settings > Sessions > Auto-archive** to change these rules. You can turn off either rule. You can also choose how long a session stays idle before Talyn archives it.
 
 To bring a session back, open **History** and select **Restore**.
+
+If the archived session is open in the mobile app, tap the three-dot menu in the header. Select **Restore**.
 
 To delete a session for good, open **History** and select delete. This removes the session and its chats. It does not touch the branch on GitHub.
 

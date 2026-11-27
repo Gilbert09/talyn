@@ -618,7 +618,7 @@ export function workbenchRoutes(): Router {
       return handleAccessError(err, res);
     }
     const user = assertUser(req);
-    ok(res, await workbenchReadiness(workspaceId, { id: user.id, email: user.email }));
+    ok(res, await workbenchReadiness(workspaceId, { id: user.id, email: user.email }, { includeUsage: true }));
   });
 
   // ---- Instruction files: the user's own CLAUDE.md, rules and AGENTS.md, for sandbox sessions ----

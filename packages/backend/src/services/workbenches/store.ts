@@ -166,6 +166,7 @@ export function rowToWorkbench(row: WorkbenchRow): Workbench {
     baseBranch: row.baseBranch,
     runtime: row.runtime as WorkbenchRuntimeKind,
     agent: row.agent as WorkbenchAgent,
+    model: row.model ?? null,
     deviceId: row.deviceId,
     localPath: row.localPath,
     sandboxId: row.sandboxId,
