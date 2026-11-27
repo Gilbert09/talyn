@@ -1,9 +1,11 @@
 import type { Workbench, WorkbenchBackground } from '@talyn/shared';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import * as Clipboard from 'expo-clipboard';
-import { Alert } from 'react-native';
+import { Alert, Dimensions, Platform, StyleSheet } from 'react-native';
+import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
 import { HistoryScreen } from '../features/history/HistoryScreen';
+import { HeaderTitle, SessionStatusRow } from '../features/sessions/DetailHeader';
 import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
 import { palettes } from '../theme/tokens';
 import { chat, fixture, pr, review, session, thread } from './workflowFixtures';
@@ -23,7 +25,7 @@ jest.mock('expo-router', () => ({
   useRouter: () => mockRouter,
   Stack: { Screen: ({ options }: { options?: { headerTitle?: () => React.ReactNode; headerRight?: () => React.ReactNode } }) => {
     const React_ = jest.requireActual('react'); const { View } = jest.requireActual('react-native');
-    return React_.createElement(View, null, options?.headerTitle?.(), options?.headerRight?.());
+    return React_.createElement(View, { testID: 'navigation-header' }, options?.headerTitle?.(), options?.headerRight?.());
   } },
 }));
 jest.mock('@talyn/client/native', () => ({
@@ -79,13 +81,50 @@ const withRow = (rowPatch: Parameters<typeof pr>[0]) => mockActive.api.pullReque
 const summary = (summaryPatch: Partial<ReturnType<typeof pr>['summary']>) => ({ summary: { ...pr().summary, ...summaryPatch } });
 
 describe('compact session header', () => {
-  it('puts the title and the PR number in the header, with no tabs and no status line', async () => {
+  it('keeps status controls below the navigation header', async () => {
+    mockActive.api.workbenches.get.mockResolvedValue(session({ diffStat: { added: 123456, removed: 78901, files: 200 } }));
+    withRow({ codeReview: review() });
     await render(<WorkbenchDetailScreen kind="session" />);
     expect(await screen.findByRole('header', { name: 'Current work. #42 open, waiting on checks or review.' })).toBeVisible();
     expect(await screen.findByRole('button', { name: /^Pull request 42\. .*Open the pull request\.$/ })).toBeVisible();
+    expect(await screen.findByRole('button', { name: /^Changes: 200 files/ })).toBeVisible();
+    expect(await screen.findByTestId('session-review-badge')).toBeVisible();
+    const navigation = within(screen.getByTestId('navigation-header'));
+    expect(navigation.getAllByRole('button').map((button) => button.props.accessibilityLabel))
+      .toEqual(['Find in transcript', 'Session actions']);
     expect(screen.queryAllByRole('tab')).toHaveLength(0);
     expect(screen.queryByText(/Updated /)).toBeNull();
     expect(screen.queryByText('example/project')).toBeNull();
+  });
+  it.each([
+    ['ios', 320, 0, 1],
+    ['ios', 375, 0, 2],
+    ['ios', 812, 44, 1],
+    ['android', 320, 0, 1],
+    ['android', 360, 0, 2],
+    ['android', 800, 24, 1],
+  ] as const)('reserves room for navigation on %s at %d dp with %d dp insets and font scale %d', async (os, width, inset, fontScale) => {
+    jest.replaceProperty(Platform, 'OS', os);
+    jest.spyOn(Dimensions, 'get').mockReturnValue({ width, height: 800, scale: 1, fontScale });
+    const title = 'A long session title that must leave room for search and the session menu';
+    const onPress = jest.fn();
+    await render(<SafeAreaInsetsContext.Provider value={{ top: 0, bottom: 0, left: inset, right: inset }}>
+      <HeaderTitle item={session({ title })} row={null} onPress={onPress} />
+    </SafeAreaInsetsContext.Provider>);
+    const heading = screen.getByRole('header', { name: new RegExp(`^${title}`) });
+    const maxWidth = StyleSheet.flatten(heading.props.style).maxWidth;
+    expect(maxWidth).toBeGreaterThan(0);
+    expect(maxWidth + (os === 'ios' ? 196 : 186)).toBeLessThanOrEqual(width - 2 * inset);
+    expect(screen.getByText(title).props.numberOfLines).toBe(1);
+    await fireEvent.press(heading);
+    expect(onPress).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    ['a session without status', noPr({ diffStat: null })],
+    ['a thread', thread()],
+  ])('leaves no status row for %s', async (_label, item) => {
+    const { toJSON } = await render(<SessionStatusRow item={item} row={null} onChanges={jest.fn()} />);
+    expect(toJSON()).toBeNull();
   });
   it('opens the pull request from its number', async () => {
     await render(<WorkbenchDetailScreen kind="session" />);

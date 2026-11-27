@@ -22,7 +22,7 @@ import { ChangesTab } from './ChangesTab';
 import { CodeCompleteReviewCard } from './CodeCompleteReviewCard';
 import { reviewBadge, reviewCard } from './codeComplete';
 import { useBackground } from './data';
-import { HeaderTitle, HeaderTrailing, QuickActionRow, quickMenuActions, SessionDetailsSheet, useQuickActions } from './DetailHeader';
+import { HeaderTitle, QuickActionRow, quickMenuActions, SessionDetailsSheet, SessionStatusRow, useQuickActions } from './DetailHeader';
 import { JobsTab } from './JobsTab';
 import { readinessProblem, sessionTabs } from './model';
 import { PullRequestTab } from './PullRequestTab';
@@ -136,9 +136,8 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
   const android = Platform.OS === 'android';
   return <ScreenContainer>
     {item ? <Stack.Screen options={{
-      headerTitle: () => <HeaderTitle item={item} row={row} badge={badge} onPress={() => setView('details')} />,
+      headerTitle: () => <HeaderTitle item={item} row={row} onPress={() => setView('details')} />,
       headerRight: () => <View style={local.headerRight}>
-        <HeaderTrailing item={item} row={row} badge={badge} onChanges={() => setView('changes')} />
         <IconButton label="Find in transcript" symbol={{ ios: 'magnifyingglass', android: 'search' }} onPress={() => setFind((value) => value + 1)} />
         <IconButton label={kind === 'session' ? 'Session actions' : 'Thread actions'}
           symbol={{ ios: 'ellipsis.circle', android: 'more_vert' }} onPress={() => openMenu(item)} />
@@ -146,6 +145,7 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
     }} /> : null}
     <KeyboardAvoidingView style={[styles.page, android && { paddingBottom: keyboard.inset }]}
       behavior={android ? undefined : 'padding'} keyboardVerticalOffset={headerHeight}>
+      {item ? <SessionStatusRow item={item} row={row} badge={badge} onChanges={() => setView('changes')} /> : null}
       {item ? content
         : <ScrollView contentContainerStyle={[styles.content, { gap: 12 }]}>
           <StateNotice resource={state} offline={offline} refresh={state.refresh} />
