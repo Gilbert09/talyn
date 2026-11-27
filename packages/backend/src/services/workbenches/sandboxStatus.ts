@@ -15,7 +15,12 @@ import {
   type WorkbenchStoredDiffStat,
 } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
-import { workbenchChats as chats, workbenchEvents as events, workbenchScriptRuns as runs } from '../../db/schema.js';
+import {
+  workbenchBackgroundJobs as jobs,
+  workbenchChats as chats,
+  workbenchEvents as events,
+  workbenchScriptRuns as runs,
+} from '../../db/schema.js';
 import type { FleetSandbox } from '../selfHosted/client.js';
 import { describeUsageHistory, readResourceSamples, sampleFromFleet, type ResourceSample } from './resourceSamples.js';
 import { describeBoxStart, parseStartHistory, startHistoryQuery, type StartHistoryEntry } from './boxStart.js';
@@ -170,6 +175,23 @@ export function statusScriptsQuery(workbenchId: string) {
   return getPoolDbClient().select(STATUS_SCRIPT_COLUMNS).from(runs).where(eq(runs.workbenchId, workbenchId));
 }
 
+/** Running background jobs, without their commands. */
+export const STATUS_JOB_COLUMNS = {
+  name: jobs.name,
+  sandboxId: jobs.sandboxId,
+  keepAwakeUntil: jobs.keepAwakeUntil,
+  startedAt: jobs.startedAt,
+} as const;
+
+export type StatusJob = { name: string; sandboxId: string; keepAwakeUntil: Date | null; startedAt: Date };
+
+export function statusJobsQuery(workbenchId: string) {
+  return getPoolDbClient()
+    .select(STATUS_JOB_COLUMNS)
+    .from(jobs)
+    .where(and(eq(jobs.workbenchId, workbenchId), eq(jobs.status, 'running')));
+}
+
 export type ProblemNote = { subtype: string; text: string; at: Date };
 
 /** The newest problem note among each open chat's last {@link PROBLEM_NOTE_WINDOW} events. Ships two short strings, never the event. */
@@ -203,6 +225,8 @@ export interface SandboxStatusInput {
   fleet: FleetRead | null;
   chats: StatusChat[];
   scripts: StatusScript[];
+  /** Running background jobs. Absent: not read. */
+  jobs?: StatusJob[];
   note: ProblemNote | null;
   /** Talyn is resuming the box now. */
   resuming: boolean;
@@ -299,7 +323,34 @@ function activityOf(input: SandboxStatusInput): SandboxActivity[] {
       ? { kind: 'setup', text: `The setup script is running${time}.`, since: iso(script.startedAt), name: script.name }
       : { kind: 'script', text: `The script "${script.name}" is running${time}.`, since: iso(script.startedAt), name: script.name });
   }
+  for (const job of jobsOnBox(input)) {
+    const time = ` for ${durationWords(now.getTime() - job.startedAt.getTime())}`;
+    const awake = keepsAwake(job, now)
+      ? ` It keeps the sandbox awake until ${checkpointTime(job.keepAwakeUntil!)}.`
+      : ' The sandbox can sleep while it runs.';
+    out.push({ kind: 'background', text: `The background job "${job.name}" is running${time}.${awake}`, since: iso(job.startedAt), name: job.name });
+  }
   return out;
+}
+
+/** Running jobs on the session's current box. A job on another box is lost, and the sweep settles it. */
+function jobsOnBox(input: SandboxStatusInput): StatusJob[] {
+  const { row } = input;
+  return (input.jobs ?? []).filter((j) => !row.sandboxId || j.sandboxId === row.sandboxId);
+}
+
+const keepsAwake = (job: StatusJob, now: Date) => !!job.keepAwakeUntil && job.keepAwakeUntil.getTime() > now.getTime();
+
+/** The latest keep-awake time of the running jobs, or null when no job keeps the box awake. */
+function keptAwakeUntil(input: SandboxStatusInput): Date | null {
+  const times = jobsOnBox(input).filter((j) => keepsAwake(j, input.now)).map((j) => j.keepAwakeUntil!.getTime());
+  return times.length ? new Date(Math.max(...times)) : null;
+}
+
+function jobsHeadline(input: SandboxStatusInput, until: Date): string {
+  const n = jobsOnBox(input).filter((j) => keepsAwake(j, input.now)).length;
+  const what = n === 1 ? 'A background job keeps' : `${n} background jobs keep`;
+  return `Running. ${what} it awake until ${checkpointTime(until)}.`;
 }
 
 function workOf(input: SandboxStatusInput, activity: SandboxActivity[]): SandboxWorkSafety | null {
@@ -406,6 +457,8 @@ function stateOf(input: SandboxStatusInput, activity: SandboxActivity[]): StateA
   // Ready: the fleet's record decides between awake, asleep and gone.
   const sandbox = input.fleet?.ok ? input.fleet.sandbox : null;
   const busy = activity.some((a) => a.kind === 'turn' || a.kind === 'setup' || a.kind === 'script');
+  // The background sweep probes these jobs every 30 s, and each probe keeps the box awake.
+  const awakeUntil = keptAwakeUntil(input);
   if (input.resuming || activity.some((a) => a.kind === 'waking')) {
     return { ...base, state: 'waking', headline: 'Waking the sandbox.', since: parsed(sandbox?.suspendedAt) };
   }
@@ -429,6 +482,7 @@ function stateOf(input: SandboxStatusInput, activity: SandboxActivity[]): StateA
       case 'idle': {
         const since = parsed(sandbox.startedAt);
         if (busy) return { ...base, state: 'running', since, headline: 'Running.' };
+        if (awakeUntil) return { ...base, state: 'running', since, headline: jobsHeadline(input, awakeUntil) };
         const last = parsed(sandbox.lastRequestAt);
         const sleepsAt = last && sandbox.idleTtlSec ? new Date(last.getTime() + sandbox.idleTtlSec * 1000) : null;
         const headline = sleepsAt
@@ -443,6 +497,7 @@ function stateOf(input: SandboxStatusInput, activity: SandboxActivity[]): StateA
   // The fleet did not answer: read what the row says.
   if (row.sandboxState === 'suspended') return { ...base, state: 'asleep', headline: 'Asleep.' };
   if (busy) return { ...base, state: 'running', headline: 'Running.' };
+  if (awakeUntil) return { ...base, state: 'running', headline: jobsHeadline(input, awakeUntil) };
   return { ...base, state: 'unknown', headline: 'Talyn could not read the sandbox from the fleet.' };
 }
 
@@ -531,9 +586,10 @@ function asksFleet(row: WorkbenchRow): row is WorkbenchRow & { sandboxId: string
 }
 
 export async function getSandboxStatus(row: WorkbenchRow, now = new Date()): Promise<WorkbenchSandboxStatus> {
-  const [chatRows, scripts, fleet, history, samples] = await Promise.all([
+  const [chatRows, scripts, jobRows, fleet, history, samples] = await Promise.all([
     statusChatsQuery(row.id) as Promise<StatusChat[]>,
     row.runtime === 'sandbox' ? (statusScriptsQuery(row.id) as Promise<StatusScript[]>) : Promise.resolve([]),
+    row.runtime === 'sandbox' ? (statusJobsQuery(row.id) as Promise<StatusJob[]>) : Promise.resolve([]),
     asksFleet(row) ? readFleetRecord(row, now.getTime()) : Promise.resolve(null),
     readStartHistory(row),
     readSamples(row, now),
@@ -546,6 +602,7 @@ export async function getSandboxStatus(row: WorkbenchRow, now = new Date()): Pro
     fleet,
     chats: chatRows,
     scripts,
+    jobs: jobRows,
     note,
     resuming: row.sandboxId ? isResuming(row.sandboxId) : false,
     now,
