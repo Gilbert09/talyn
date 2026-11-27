@@ -242,7 +242,7 @@ describe('generateSandboxTitle', () => {
 
   it('skips an empty first message without a call', async () => {
     const run = vi.fn(reply('x'));
-    expect(await generateSandboxTitle(await row(), '   ', { run })).toBeNull();
+    expect(await generateSandboxTitle(await row(), '   ', { run })).toBeUndefined();
     expect(run).not.toHaveBeenCalled();
   });
 
@@ -289,11 +289,46 @@ describe('generateSandboxTitle', () => {
       expect((run.mock.calls[0] as unknown as [unknown, string])[1]).toContain('Fix the login redirect');
     });
 
+    it.each(['\t', '\n', '\r\n', ' \t\n', '\u00a0', '\u2003', '\ufeff', '\u2028'])(
+      'skips attachment text containing only whitespace (%j)', async (whitespace) => {
+        await insertChat({ id: 'chat-1', workbenchId: 'wb-1', workspaceId: 'ws-a', title: 'Chat', agent: 'claude' });
+        const attachment = userMessage(whitespace);
+        attachment.talyn = { ...attachment.talyn as Record<string, unknown>, attachments: [{ name: 'image.png', mimeType: 'image/png' }] };
+        await appendEvents('chat-1', [
+          { turn: 1, event: attachment },
+          { turn: 2, event: userMessage('Fix the login redirect') },
+        ]);
+        const run = vi.fn(reply('Fix Login Redirect'));
+        await startTitleGeneration(await row(), 'Please continue', { run });
+        expect((run.mock.calls[0] as unknown as [unknown, string])[1]).toContain('Fix the login redirect');
+        expect((await row()).title).toBe('Fix Login Redirect');
+      },
+    );
+
     it('keeps the name when an automatic turn has no original task', async () => {
       const run = vi.fn(reply('Resume After Rate Limit'));
       await startTitleGeneration(await row(), 'Continue after a rate limit', { run, origin: 'talyn' });
       expect(run).not.toHaveBeenCalled();
       expect((await row()).title).toBeNull();
+    });
+
+    it.each(['automatic', 'blank'] as const)('preserves the retry budget for skipped %s turns', async (kind) => {
+      const skipped = vi.fn(reply('Unused Title'));
+      for (let i = 0; i < MAX_TITLE_FAILURES + 1; i++) {
+        await startTitleGeneration(await row(), kind === 'automatic' ? 'Continue after a rate limit' : '\t\n', {
+          run: skipped, ...(kind === 'automatic' ? { origin: 'talyn' } : {}),
+        });
+      }
+      expect(skipped).not.toHaveBeenCalled();
+      const failed = vi.fn(reply('', 1));
+      for (let i = 0; i < MAX_TITLE_FAILURES - 1; i++) {
+        await startTitleGeneration(await row(), 'Fix the login redirect', { run: failed });
+      }
+      expect(failed).toHaveBeenCalledTimes(MAX_TITLE_FAILURES - 1);
+      const run = vi.fn(reply('Fix Login Redirect'));
+      await startTitleGeneration(await row(), 'Fix the login redirect', { run });
+      expect(run).toHaveBeenCalledOnce();
+      expect((await row()).title).toBe('Fix Login Redirect');
     });
 
     it('titles a recovered session on a later turn number', async () => {
