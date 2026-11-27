@@ -36,7 +36,6 @@ import {
 } from '../components/workbench/new/NewWorkbenchControls';
 import { RecentWorkbenches } from '../components/workbench/new/RecentWorkbenches';
 import { useCreateWorkbench } from '../components/workbench/new/useCreateWorkbench';
-import { PendingSessionView } from '../components/workbench/new/PendingSessionView';
 import { defaultRepositoryId, writeLastRepository } from '../components/workbench/new/lastRepository';
 import { MarkdownTextarea } from '../components/workbench/MarkdownTextarea';
 
@@ -59,7 +58,7 @@ export function NewWorkbenchPage() {
   const request = useWorkbenchStore((s) => s.newWorkbench);
   const workbenches = useWorkspaceWorkbenches();
   const readiness = useReadiness(workspaceId);
-  const { create, busy, pending, error: createError, clearError } = useCreateWorkbench();
+  const { create, busy, error: createError, clearError } = useCreateWorkbench();
 
   const [prompt, setPrompt] = useState('');
   const [repositoryId, setRepositoryId] = useState(() =>
@@ -299,7 +298,6 @@ export function NewWorkbenchPage() {
   const connectAgent = () => openSettings('integrations');
 
   // The draft stays in this page's state, so a failed create comes back to it with the error.
-  if (pending) return <PendingSessionView spec={pending} />;
 
   return (
     <TooltipProvider delayDuration={300}>

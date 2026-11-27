@@ -11,7 +11,9 @@ A session is one task. It has its own branch, its own agent and its own cloud sa
 2. Describe the task.
 3. Pick the repository.
 4. Optionally, change the agent, model, reasoning effort or base branch.
-5. Press Enter, or select **Create and start**.
+5. Press Enter, or select **Create and start**. On mobile, tap **Start session**.
+
+The session opens as soon as you submit. Your message appears in the transcript while Talyn creates the session. You can use the session controls once creation finishes. If creation fails, Talyn returns you to the composer with your draft and shows the error.
 
 Talyn names the session, creates a branch, starts a sandbox and gives your message to the agent. Press Shift+Enter for a new line in the message.
 

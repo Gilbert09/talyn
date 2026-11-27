@@ -1,6 +1,6 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, History, Loader2, RotateCcw } from 'lucide-react';
-import { agentOutageFrom, buildBlocks, endQuotesAtPlainLines, findTurnPlan, findTurnQuestion, isClaudeInterruptionEvent, isSubagentEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type Workbench, type WorkbenchChat, type WorkbenchEvent, type WorkbenchMessageSender } from '@talyn/shared';
+import { agentOutageFrom, buildBlocks, endQuotesAtPlainLines, findTurnPlan, findTurnQuestion, isClaudeInterruptionEvent, isSubagentEvent, PLAN_APPROVED_MESSAGE, type AgentEvent, type SendWorkbenchMessageInput, type Workbench, type WorkbenchChat, type WorkbenchEvent, type WorkbenchMessageSender } from '@talyn/shared';
 import { AgentBlocks } from './AgentBlocks';
 import { usePendingMessages } from './usePendingMessages';
 import { renderMarkdownish } from '../../lib/markdown';
@@ -36,6 +36,7 @@ export function WorkbenchTranscript({
   older = NO_OLDER,
   canRetry = true,
   workbench,
+  firstMessage,
 }: {
   chat: WorkbenchChat;
   events: WorkbenchEvent[];
@@ -48,6 +49,7 @@ export function WorkbenchTranscript({
   canRetry?: boolean;
   /** The session the chat belongs to. With it, selected text offers "New session from selection". */
   workbench?: Workbench;
+  firstMessage?: SendWorkbenchMessageInput;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -116,7 +118,7 @@ export function WorkbenchTranscript({
         className="min-h-0 min-w-0 flex-1 overflow-auto px-4 py-4 text-sm text-foreground"
       >
         {error && <p className="mb-3 text-xs text-destructive">Could not load this chat: {error}</p>}
-        {turns.length === 0 && outgoing.length === 0 && !loading && (
+        {!firstMessage && turns.length === 0 && outgoing.length === 0 && !loading && (
           <div className="flex h-full items-center justify-center text-center text-xs text-muted-foreground">
             {emptyHint ?? 'Send a message to start.'}
           </div>
@@ -170,6 +172,11 @@ export function WorkbenchTranscript({
               />
             );
           })}
+          {firstMessage && (firstMessage.text || firstMessage.attachments?.length) ? (
+            <UserMessage chatId={chat.id} turn={0} text={firstMessage.text}
+              attachments={firstMessage.attachments ?? []}
+              ops={ops} canRevert={false} previewOnly />
+          ) : null}
           {outgoing.map((message) => (
             <UserMessage
               key={message.id}
@@ -463,6 +470,7 @@ function UserMessage({
   sending = false,
   footer = null,
   sender = null,
+  previewOnly = false,
 }: {
   chatId: string;
   turn: number;
@@ -470,6 +478,7 @@ function UserMessage({
   attachments: TranscriptTurn['attachments'];
   ops: WorkbenchOps;
   canRevert: boolean;
+  previewOnly?: boolean;
   /** When the message was stored. */
   at?: string | null;
   sending?: boolean;
@@ -487,7 +496,7 @@ function UserMessage({
         )}
         <div className="rounded-lg bg-muted px-3 py-2 text-[13px] text-foreground [overflow-wrap:anywhere]">
           {renderMarkdownish(endQuotesAtPlainLines(text), 'surface')}
-          {attachments.length > 0 && <MessageAttachments attachments={attachments} ops={ops} />}
+          {attachments.length > 0 && <MessageAttachments attachments={attachments} ops={ops} previewOnly={previewOnly} />}
         </div>
         {sending && (
           <div className="flex items-center justify-end gap-1 text-[11px] text-muted-foreground" data-attr="outgoing-message">

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { isIntegrationKind, type IntegrationKind, type Workbench } from '@talyn/shared';
+import { isIntegrationKind, type IntegrationKind, type Workbench, type WorkbenchCreation } from '@talyn/shared';
 import { contextsEqual, setPanelNavigator, useWorkspaceStore, type AppContext, type SettingsSection } from './workspace';
 import { useWorkbenchStore } from './workbenches';
 import { findSpace, useSpacesStore } from './spaces';
@@ -151,6 +151,8 @@ function restoreContext(context: AppContext): void {
 
 interface NavigationState {
   route: Route;
+  /** The composer stays mounted until the create request returns. */
+  creation: { from: Route; context: AppContext; view: WorkbenchCreation } | null;
   replace: boolean;
   backStack: HistoryEntry[];
   forwardStack: HistoryEntry[];
@@ -194,6 +196,7 @@ const initialRoute = HOME;
 
 export const useNavigationStore = create<NavigationState>((set, get) => ({
   route: initialRoute,
+  creation: null,
   replace: false,
   backStack: [],
   forwardStack: [],
