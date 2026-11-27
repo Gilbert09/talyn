@@ -1,4 +1,5 @@
 import { notificationText, type Workbench, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
+import { isSpaceMuted } from '../stores/spaces';
 import { setChatFinishedListener, useWorkbenchStore } from '../stores/workbenches';
 import { toast } from '../stores/toast';
 import { useNavigationStore } from '../stores/navigation';
@@ -27,6 +28,7 @@ export function toastPullRequestFailures(chatId: string, events: WorkbenchEvent[
     .flat()
     .find((c) => c.id === chatId);
   if (!chat || workbenches[chat.workbenchId]?.runtime !== 'sandbox') return;
+  if (isSpaceMuted(workbenches[chat.workbenchId]?.spaceId)) return;
   for (const e of failed) {
     const message = (e.event as { message?: unknown }).message;
     toast.error('Could not open the pull request', typeof message === 'string' ? message : undefined);
@@ -78,6 +80,7 @@ export function showNativeNotification(title: string, body: string, onClick?: ()
 
 function notifyChatFinished(chat: WorkbenchChat, workbench: Workbench | undefined): void {
   if (!readSessionDefaults().notifyOnFinish) return;
+  if (isSpaceMuted(workbench?.spaceId)) return;
   const events = useWorkbenchStore.getState().chatEvents[chat.id]?.events ?? [];
   const { title, body } = notificationText(chat, workbench, events);
   showNativeNotification(title, body, () => openFromNotification(chat));

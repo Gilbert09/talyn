@@ -10,7 +10,7 @@ import { useFeatures } from '../../lib/features';
 import { useNow } from '../../lib/time';
 import { radius, type, useTheme, withAlpha } from '../../theme/tokens';
 import { useLocal, useResource } from '../../workflow/hooks';
-import type { Transcript } from '../../workflow/model';
+import { alternateChatAgent, type Transcript } from '../../workflow/model';
 import { slimTools } from '../../workflow/slim';
 import { FleetReconnectNotice } from '../agents/FleetReconnectNotice';
 import { TurnFailureActions } from './TurnFailureActions';
@@ -38,8 +38,8 @@ const OLDER_DISTANCE = 0.6;
  * the newest message, so it opens at the newest message with no scroll after
  * layout. Older history loads by itself when the reader reaches the top.
  */
-export function Conversation({ item, ready, header, top, bottom, find = 0, onCloseFind }: {
-  item: Workbench; ready: boolean; header?: ReactNode;
+export function Conversation({ item, ready, canSwitchAgent, header, top, bottom, find = 0, onCloseFind }: {
+  item: Workbench; ready: boolean; canSwitchAgent: boolean; header?: ReactNode;
   /** Content below the newest message, while no turn runs. */
   bottom?: ReactNode;
   /** 0 hides the find bar. Each new value opens it and focuses its field. */
@@ -53,6 +53,7 @@ export function Conversation({ item, ready, header, top, bottom, find = 0, onClo
   // Like web and desktop: a session shows its newest chat. Older sessions can have more than one.
   const chats = item.chats ?? [];
   const chat = chats[chats.length - 1];
+  const alternate = canSwitchAgent ? alternateChatAgent(item, chat) : undefined;
   const state = useResource<Transcript>('transcript', chat?.id ?? '', Boolean(chat));
   const offline = useNetwork() === 'offline';
   const local = useLocal(chat?.id ?? '');
@@ -238,7 +239,8 @@ export function Conversation({ item, ready, header, top, bottom, find = 0, onClo
           <TranscriptRow row={row} now={now} workbench={item} plan={plan} question={question} highlight={highlight && matchKeys.has(row.key) ? highlight : undefined} />
           {row.kind === 'failed' && rows[0]?.key === row.key && chat && (chat.status === 'idle' || chat.status === 'error')
             && !chat.queuedMessages?.length ? <TurnFailureActions chatId={chat.id} workbenchId={item.id} text={row.text}
-              reconnect={row.reason === 'reauth'} resumeAt={chat.resumeAt} resumeReason={chat.resumeReason} disabled={offline || !ready} /> : null}
+              reconnect={row.reason === 'reauth'} limited={row.reason === 'limited'} alternateAgent={alternate}
+              resumeAt={chat.resumeAt} resumeReason={chat.resumeReason} disabled={offline || !ready} /> : null}
         </View>} />
       </SubagentTabOpener.Provider></TranscriptContext.Provider></RowBoundary>
       {startHint ? <View pointerEvents="box-none" style={local_.startHint}>

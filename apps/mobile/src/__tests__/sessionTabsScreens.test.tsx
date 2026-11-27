@@ -78,6 +78,26 @@ async function openView(label: string) {
 const withRow = (rowPatch: Parameters<typeof pr>[0]) => mockActive.api.pullRequests.get.mockResolvedValue({ row: pr(rowPatch), fresh: null });
 const summary = (summaryPatch: Partial<ReturnType<typeof pr>['summary']>) => ({ summary: { ...pr().summary, ...summaryPatch } });
 
+describe('session agent switch', () => {
+  it.each([['claude', 'Codex', 'codex'], ['codex', 'Claude', 'claude']] as const)(
+    'switches a %s chat without sending a message or overriding its model tier', async (agent, label, alternate) => {
+      mockActive.api.workbenches.get.mockResolvedValue(session({ sandboxId: 'box', agent, chats: [chat({ agent })],
+        settings: { sandboxAgents: { box: ['claude', 'codex'] } } as Workbench['settings'] }));
+      await render(<WorkbenchDetailScreen kind="session" />);
+      await openView(`Switch to ${label}`);
+      expect(mockActive.api.workbenches.updateChat).toHaveBeenCalledWith('chat-one', { agent: alternate });
+      expect(mockActive.api.workbenches.sendMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not offer an agent that is not installed in the sandbox', async () => {
+    mockActive.api.workbenches.get.mockResolvedValue(session({ sandboxId: 'box' }));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Session actions' }));
+    expect(screen.queryByRole('button', { name: 'Switch to Claude' })).toBeNull();
+  });
+});
+
 describe('compact session header', () => {
   it('puts the title and the PR number in the header, with no tabs and no status line', async () => {
     await render(<WorkbenchDetailScreen kind="session" />);

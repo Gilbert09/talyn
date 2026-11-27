@@ -1,7 +1,7 @@
 import { cloudProviders, environments, features, pullRequests, repositories, tasks, workbenches, workspaces, wsClient,
   type ClientLifecycle, type CodeReviewDismissReason, type CodeReviewFinding, type CodeReviewPreset, type CodeReviewPublic,
   type PRReviewEvent, type PRRow } from '@talyn/client/native';
-import type { CreateWorkbenchInput, Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
+import type { CreateWorkbenchInput, Workbench, WorkbenchAgent, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 
 import { cacheKey, canCompose, canStartSend, deliveryReducer, EMPTY_DELIVERY, EMPTY_RESOURCE, emptyTranscript, explicitSendFailure,
   failureState, mergeEvents, PAGE_CEILING, PAGE_SIZE, releaseOlder, sameScope, windowFull, selectWorkbenches, upsertWorkbench, withChat, workbenchKind, workbenchTitle,
@@ -535,6 +535,11 @@ export class WorkflowStore {
   }
   async stopChat(workbenchId: string, chatId: string) {
     await this.api.workbenches.cancel(chatId);
+    this.refresh('workbench', workbenchId);
+    this.refresh('transcript', chatId);
+  }
+  async switchChatAgent(workbenchId: string, chatId: string, agent: WorkbenchAgent) {
+    await this.api.workbenches.updateChat(chatId, { agent });
     this.refresh('workbench', workbenchId);
     this.refresh('transcript', chatId);
   }

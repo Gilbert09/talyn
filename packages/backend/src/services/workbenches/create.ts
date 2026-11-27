@@ -1,7 +1,7 @@
 import { workspaceFlagSubject, workspaceHasFeature } from '../featureFlags.js';
 import { validateAgentModel } from './credentialPolicy.js';
 import { v4 as uuid } from 'uuid';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import {
   isValidBranchName,
   pickWorkbenchName,
@@ -168,6 +168,12 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
     pullRequestId = pr.id;
     branch = pr.headBranch;
     baseBranch = baseBranch || pr.baseBranch || '';
+  } else if (branch && body.branchGenerated !== true) {
+    const pr = await sessionPrForBranch(workspaceId, repo.id, branch);
+    if (pr) {
+      pullRequestId = pr.id;
+      baseBranch = baseBranch || pr.baseBranch || '';
+    }
   }
   if (!baseBranch) {
     baseBranch = await reconcileDefaultBranch({
@@ -301,6 +307,29 @@ export async function createWorkbench(body: CreateWorkbenchServiceInput, actor: 
     };
   });
   return data;
+}
+
+/**
+ * Reuse an open PR linked by a live or archived session in this workspace.
+ * A replacement session needs the link before its first push.
+ * A branch name alone does not prove ownership.
+ */
+async function sessionPrForBranch(
+  workspaceId: string, repositoryId: string, branch: string,
+): Promise<{ id: string; baseBranch: string | null } | null> {
+  const [pr] = await getPoolDbClient()
+    .select({ id: prTable.id, baseBranch: sql<string | null>`${prTable.lastSummary} ->> 'baseBranch'` })
+    .from(prTable)
+    .where(and(
+      eq(prTable.workspaceId, workspaceId),
+      eq(prTable.repositoryId, repositoryId),
+      eq(prTable.state, 'open'),
+      sql`${prTable.lastSummary} ->> 'headBranch' = ${branch}`,
+      sql`EXISTS (SELECT 1 FROM workbenches w WHERE w.pull_request_id = ${prTable.id} AND w.workspace_id = ${workspaceId})`,
+    ))
+    .orderBy(desc(prTable.number))
+    .limit(1);
+  return pr ?? null;
 }
 
 /** The id and space of a live thread in this workspace, or a 400. */

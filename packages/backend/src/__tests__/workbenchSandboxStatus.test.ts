@@ -4,7 +4,15 @@ import express from 'express';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SandboxStartInfo, WorkbenchCapacityWait } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
-import { repositories, workbenchChats, workbenchEvents, workbenches, workbenchScriptRuns, workspaces } from '../db/schema.js';
+import {
+  repositories,
+  workbenchBackgroundJobs,
+  workbenchChats,
+  workbenchEvents,
+  workbenches,
+  workbenchScriptRuns,
+  workspaces,
+} from '../db/schema.js';
 import type { FleetClient, FleetSandbox } from '../services/selfHosted/client.js';
 import { setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
 import {
@@ -16,10 +24,12 @@ import {
   resetSandboxStatusCacheForTests,
   STUCK_START_MS,
   statusChatsQuery,
+  statusJobsQuery,
   statusScriptsQuery,
   type FleetRead,
   type SandboxStatusInput,
   type StatusChat,
+  type StatusJob,
   type StatusScript,
 } from '../services/workbenches/sandboxStatus.js';
 import { getWorkbench, insertChat, insertWorkbench, type WorkbenchRow } from '../services/workbenches/store.js';
@@ -67,6 +77,10 @@ function input(overrides: Partial<SandboxStatusInput> = {}): SandboxStatusInput 
   return { row: row(), fleet: fleet({}), chats: [chat()], scripts: [], note: null, resuming: false, now: NOW, ...overrides };
 }
 
+const job = (overrides: Partial<StatusJob> = {}): StatusJob => ({
+  name: 'tests', sandboxId: 'box', keepAwakeUntil: new Date(NOW.getTime() + 40 * MIN), startedAt: ago(20 * MIN), ...overrides,
+});
+
 const wait = (reason: WorkbenchCapacityWait['reason']): WorkbenchCapacityWait =>
   ({ turn: 2, startedAt: ago(4 * MIN).toISOString(), retryAt: new Date(NOW.getTime() + MIN).toISOString(), attempts: 2, reason });
 
@@ -102,6 +116,30 @@ describe('the state of the box', () => {
     const s = describeSandboxStatus(input(given));
     expect(s.state).toBe(state);
     expect(s.headline).toBe(headline);
+  });
+
+  const idleFleet = fleet({ status: 'idle', startedAt: ago(54 * MIN).toISOString(), lastRequestAt: ago(10_000).toISOString(), idleTtlSec: 180 });
+
+  it.each<[string, Partial<SandboxStatusInput>, string, string]>([
+    ['one job keeps it awake', { fleet: idleFleet, jobs: [job()] }, 'running', 'Running. A background job keeps it awake until 2099-01-01 12:40 UTC.'],
+    ['two jobs, the later keep-awake wins', { fleet: idleFleet, jobs: [job(), job({ name: 'build', keepAwakeUntil: new Date(NOW.getTime() + 55 * MIN) })] }, 'running', 'Running. 2 background jobs keep it awake until 2099-01-01 12:55 UTC.'],
+    ['one of two jobs keeps it awake', { fleet: idleFleet, jobs: [job(), job({ name: 'lint', keepAwakeUntil: null })] }, 'running', 'Running. A background job keeps it awake until 2099-01-01 12:40 UTC.'],
+    ['a job without keep-awake', { fleet: idleFleet, jobs: [job({ keepAwakeUntil: null })] }, 'idle', 'Idle. It goes to sleep in 3 minutes.'],
+    ['a job whose keep-awake ended', { fleet: idleFleet, jobs: [job({ keepAwakeUntil: ago(MIN) })] }, 'idle', 'Idle. It goes to sleep in 3 minutes.'],
+    ['a job on an older box', { fleet: idleFleet, jobs: [job({ sandboxId: 'box-r0' })] }, 'idle', 'Idle. It goes to sleep in 3 minutes.'],
+    ['a job while a turn runs', { fleet: idleFleet, jobs: [job()], chats: [chat({ status: 'running', turnStartedAt: ago(MIN) })] }, 'running', 'Running.'],
+    ['a job while the fleet is busy', { fleet: fleet({ status: 'busy' }), jobs: [job()] }, 'running', 'Running.'],
+    ['a job on a box that sleeps', { fleet: fleet({ status: 'suspended', suspendDir: '/var/fleet/x' }), jobs: [job()] }, 'asleep', 'Asleep. It wakes in a few seconds at the next message.'],
+    ['a job, and the fleet does not answer', { fleet: { ok: false, error: 'timeout' }, jobs: [job()] }, 'running', 'Running. A background job keeps it awake until 2099-01-01 12:40 UTC.'],
+    ['a job without keep-awake, and the fleet does not answer', { fleet: { ok: false, error: 'timeout' }, jobs: [job({ keepAwakeUntil: null })] }, 'unknown', 'Talyn could not read the sandbox from the fleet.'],
+  ])('background jobs: %s', (_label, given, state, headline) => {
+    const s = describeSandboxStatus(input(given));
+    expect(s.state).toBe(state);
+    expect(s.headline).toBe(headline);
+  });
+
+  it('gives no sleep time while a background job keeps the box awake', () => {
+    expect(describeSandboxStatus(input({ fleet: idleFleet, jobs: [job()] }))).toMatchObject({ sleepsAt: null, since: ago(54 * MIN).toISOString() });
   });
 
   it('gives the times: sleep, uptime, time asleep', () => {
@@ -223,6 +261,26 @@ describe('what runs on the box', () => {
       ['setup', 'The setup script is running for 3 minutes.'],
       ['script', 'The script "dev" is running.'],
     ]);
+  });
+
+  it('lists running background jobs on the current box', () => {
+    const s = describeSandboxStatus(input({
+      jobs: [
+        job(),
+        job({ name: 'lint', keepAwakeUntil: null, startedAt: ago(2 * MIN) }),
+        job({ name: 'stale', keepAwakeUntil: ago(MIN), startedAt: ago(70 * MIN) }),
+        job({ name: 'old', sandboxId: 'box-r0' }),
+      ],
+    }));
+    expect(s.activity.map((a) => [a.kind, a.name, a.text, a.since])).toEqual([
+      ['background', 'tests', 'The background job "tests" is running for 20 minutes. It keeps the sandbox awake until 2099-01-01 12:40 UTC.', ago(20 * MIN).toISOString()],
+      ['background', 'lint', 'The background job "lint" is running for 2 minutes. The sandbox can sleep while it runs.', ago(2 * MIN).toISOString()],
+      ['background', 'stale', 'The background job "stale" is running for 1 hour 10 minutes. The sandbox can sleep while it runs.', ago(70 * MIN).toISOString()],
+    ]);
+  });
+
+  it('lists no background jobs for an archived session', () => {
+    expect(describeSandboxStatus(input({ row: row({ archivedAt: ago(MIN), status: 'archived' }), jobs: [job()] })).activity).toEqual([]);
   });
 
   it.each([
@@ -601,6 +659,23 @@ describe('GET /workbenches/:id/sandbox-status', () => {
     expect(getSandbox).toHaveBeenCalledWith('box');
   });
 
+  it('reads the running background jobs: one that keeps the box awake makes it running', async () => {
+    getSandbox.mockResolvedValue({ sandbox: { id: 'box', status: 'idle', lastRequestAt: new Date().toISOString(), idleTtlSec: 180 }, terminal: false });
+    const until = new Date(Date.now() + 40 * MIN);
+    const jobRow = (id: string, extra: Partial<typeof workbenchBackgroundJobs.$inferInsert>) => ({
+      id, workbenchId: 'wb-a', chatId: 'chat-a', workspaceId: 'ws-a', sandboxId: 'box', name: id, command: 'npm test', cwd: '/work/repo',
+      durableKey: `k-${id}`, marker: `m-${id}`, startedAt: new Date(Date.now() - 5 * MIN), ...extra,
+    });
+    await testDb.db.insert(workbenchBackgroundJobs).values([
+      jobRow('tests', { keepAwakeUntil: until }),
+      jobRow('done', { status: 'exited', exitCode: 0, keepAwakeUntil: until }),
+    ]);
+    const res = await call('/workbenches/wb-a/sandbox-status');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ state: 'running', sleepsAt: null, activity: [{ kind: 'background', name: 'tests' }] });
+    expect(res.body.data!.headline).toMatch(/^Running\. A background job keeps it awake until /);
+  });
+
   it('answers with an unknown fleet part when the fleet fails, and never fails the request', async () => {
     getSandbox.mockRejectedValue(new Error('connect ECONNREFUSED'));
     const res = await call('/workbenches/wb-a/sandbox-status');
@@ -639,6 +714,9 @@ describe('GET /workbenches/:id/sandbox-status', () => {
     expect(chats).not.toMatch(/"queued_messages",|"turn_parser"|"agent_backup"|"turn_message"/);
     const scripts = statusScriptsQuery('wb1').toSQL().sql;
     expect(scripts).not.toContain('"output"');
+    const jobs = statusJobsQuery('wb1').toSQL();
+    expect(jobs.sql).not.toContain('"command"');
+    expect(jobs.params).toContain('running');
     const note = problemNoteQuery([{ id: 'c1', nextSeq: 5000 }]).toSQL();
     const selected = note.sql.slice(0, note.sql.indexOf(' from '));
     expect(selected.replace(/(?:"workbench_events"\.)?"event" ->> '[a-z]+'/g, '')).not.toContain('"event"');

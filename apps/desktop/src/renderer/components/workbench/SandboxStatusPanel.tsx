@@ -667,7 +667,7 @@ export function SandboxStatusPanel({
         ) : (
           <ul className="space-y-0.5 text-xs" data-testid="sandbox-activity">
             {status.activity.map((a, i) => (
-              <li key={`${a.kind}-${a.chatId ?? a.name ?? i}`}>
+              <li key={`${a.kind}-${a.chatId ?? a.name ?? ''}-${i}`}>
                 {a.text}
                 {a.since && <span className="text-muted-foreground"> · {formatSpan(now - new Date(a.since).getTime())}</span>}
               </li>

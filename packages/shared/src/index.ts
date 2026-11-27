@@ -1471,6 +1471,8 @@ export type WSClientMessage =
 
 export type WSEventType =
   | 'space:presence'
+  // Personal notification preferences changed. Payload is empty; clients reload.
+  | 'space:notifications'
   | 'task:status'
   | 'task:event'
   | 'task:created'

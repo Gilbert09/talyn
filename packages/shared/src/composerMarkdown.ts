@@ -105,6 +105,113 @@ export function closeFenceOnNewline(text: string, start: number, end: number): {
   return { insert: `\n\n${marker}`, caret: start + 1 };
 }
 
+/** A change to the draft: replace `from`..`to` with `insert`, then put the caret at `caret`. */
+export interface ComposerEdit {
+  from: number;
+  to: number;
+  insert: string;
+  caret: number;
+}
+
+interface DraftLine {
+  kind: ComposerLineKind;
+  /** On a fence line: whether it opens or closes its code block. */
+  side?: 'open' | 'close';
+  text: string;
+  start: number;
+  end: number;
+}
+
+function draftLines(text: string): DraftLine[] {
+  const kinds = composerMarkdown(text);
+  let at = 0;
+  let open = false;
+  return text.split('\n').map((line, index) => {
+    const out: DraftLine = { kind: kinds[index].kind, text: line, start: at, end: at + line.length };
+    if (out.kind === 'fence') {
+      // Fence lines alternate open, close.
+      open = !open;
+      out.side = open ? 'open' : 'close';
+    }
+    at = out.end + 1;
+    return out;
+  });
+}
+
+function lineAt(lines: DraftLine[], offset: number): number {
+  return lines.findIndex((line) => offset <= line.end);
+}
+
+const isBlank = (line: DraftLine | undefined) => line !== undefined && line.text.trim() === '';
+
+/**
+ * Where the caret goes after Up or Down puts it on a closing fence. The
+ * composer hides those backticks, so the caret does not stay there. Down
+ * goes on to the line below the code block, and adds that line when the
+ * block ends the draft. Up goes back to the end of the last code line.
+ */
+export function stepOverClosingFence(text: string, caret: number, direction: 'up' | 'down'): ComposerEdit | null {
+  const lines = draftLines(text);
+  const index = lineAt(lines, caret);
+  const fence = lines[index];
+  if (fence?.side !== 'close') return null;
+  if (direction === 'up') {
+    const last = lines[index - 1];
+    return last.kind === 'code' ? { from: last.end, to: last.end, insert: '', caret: last.end } : null;
+  }
+  const below = lines[index + 1];
+  if (below) return { from: below.start, to: below.start, insert: '', caret: below.start };
+  return { from: fence.end, to: fence.end, insert: '\n', caret: fence.end + 1 };
+}
+
+/**
+ * What a new line (Shift+Enter) does at the end of a code block. On an empty
+ * last code line it leaves the block: the empty line goes, and the caret
+ * moves to a plain line below the closing fence. A block with no closing
+ * fence yet gets one. On the closing fence itself, the new line goes below
+ * the fence, wherever the caret is on it. Null for a plain new line.
+ */
+export function leaveCodeBlockOnNewline(text: string, start: number, end: number): ComposerEdit | null {
+  if (start !== end) return null;
+  const lines = draftLines(text);
+  const index = lineAt(lines, start);
+  const line = lines[index];
+  if (line.side === 'close') return { from: line.end, to: line.end, insert: '\n', caret: line.end + 1 };
+  if (line.kind !== 'code' || !isBlank(line)) return null;
+  const fence = lines[index + 1];
+  if (fence === undefined) {
+    const opening = lines.slice(0, index).reverse().find((l) => l.side === 'open');
+    const marker = opening ? FENCE.exec(opening.text)?.[0] : undefined;
+    if (!marker) return null;
+    return { from: line.start, to: line.end, insert: `${marker}\n`, caret: line.start + marker.length + 1 };
+  }
+  if (fence.side !== 'close') return null;
+  // Take out the empty line with the line break before it, then rewrite the fence.
+  const from = line.start - 1;
+  // An empty line below the block is already the new line.
+  const insert = isBlank(lines[index + 2]) ? `\n${fence.text}` : `\n${fence.text}\n`;
+  return { from, to: fence.end, insert, caret: from + `\n${fence.text}\n`.length };
+}
+
+/**
+ * What Backspace does at the start of the line below a code block. Without
+ * this, it would join that line onto the hidden closing fence, and the block
+ * would then run to the end of the draft. An empty line goes; a line with
+ * text stays. In both cases the caret moves to the end of the last code line.
+ */
+export function backspaceAfterCodeBlock(text: string, start: number, end: number): ComposerEdit | null {
+  if (start !== end) return null;
+  const lines = draftLines(text);
+  const index = lineAt(lines, start);
+  const line = lines[index];
+  if (start !== line.start || index < 2) return null;
+  const fence = lines[index - 1];
+  const last = lines[index - 2];
+  if (fence.side !== 'close' || last.kind !== 'code') return null;
+  if (isBlank(line)) return { from: fence.end, to: line.end, insert: '', caret: last.end };
+  return { from: start, to: start, insert: '', caret: last.end };
+}
+
 /**
  * Ends each quote at the first line without `>`, as the composer shows it.
  *
