@@ -200,6 +200,8 @@ export interface Workbench {
    * connected agent when the sandbox was created with both providers.
    */
   agent: WorkbenchAgent;
+  /** The session model, inherited by chats that use the same agent. Older servers omit this field. */
+  model?: string | null;
   /** Local runtime only: the device that owns the worktree. */
   deviceId: string | null;
   /** Local runtime only: the worktree's absolute path on that device. */
