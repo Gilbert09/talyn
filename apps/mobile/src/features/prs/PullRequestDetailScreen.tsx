@@ -31,7 +31,7 @@ import { ChecksTab, Description, DetailTabStrip, FilesTab, QueueSection, Reviews
 import { usePrLinkMenu, type PrLinkTarget } from './usePrLinkMenu';
 
 type PrDetail = Awaited<ReturnType<typeof pullRequests.get>>;
-type Busy = 'merge' | 'fix' | 'queue' | 'autoKeep' | 'resubmit' | 'hide' | 'review' | null;
+type Busy = 'merge' | 'fix' | 'queue' | 'autoKeep' | 'resubmit' | 'hide' | 'review' | 'update_branch' | null;
 /** GitHub refuses a review comment longer than this. */
 const MAX_REVIEW_BODY = 65_536;
 
@@ -54,6 +54,7 @@ const STEP_ICON: Record<NextStepIcon, Symbol> = {
 };
 const PRIMARY_ICON: Record<NextStepPrimary['kind'], Symbol> = {
   merge: { ios: 'arrow.triangle.merge', android: 'merge' },
+  update_branch: STEP_ICON.behind,
   fix: { ios: 'wand.and.stars', android: 'auto_fix_high' },
   queue: { ios: 'text.append', android: 'playlist_add' },
   resubmit: { ios: 'arrow.clockwise', android: 'refresh' },
@@ -209,6 +210,10 @@ export function PullRequestDetailScreen() {
       }) },
     ]);
   };
+  const updateBranch = () => row && void run('update_branch', `Could not update ${ref}`, async () => {
+    const result = await workflow.updatePrBranch(row.id);
+    setNotice({ message: result.message });
+  });
   const fix = (choice?: CloudAgentChoice) => {
     if (!row) return;
     void run('fix', `Could not start a run on ${ref}`, async () => {
@@ -274,6 +279,7 @@ export function PullRequestDetailScreen() {
   const runPrimary = (primary: NextStepPrimary) => {
     switch (primary.kind) {
       case 'merge': merge(); break;
+      case 'update_branch': updateBranch(); break;
       case 'fix': pressFix(); break;
       case 'queue': toggleQueue(true); break;
       case 'resubmit': resubmit(); break;
@@ -329,7 +335,7 @@ export function PullRequestDetailScreen() {
   const shownTab = tab === 'findings' && !codeReview.review ? 'overview' : tab;
   const primary = step?.primary ?? null;
   const secondary = primary && primary.kind !== 'open' ? step?.secondary ?? null : null;
-  const primaryBusy = primary && ({ merge: 'merge', fix: 'fix', queue: 'queue', requeue: 'queue', resubmit: 'resubmit', approve: 'review',
+  const primaryBusy = primary && ({ merge: 'merge', update_branch: 'update_branch', fix: 'fix', queue: 'queue', requeue: 'queue', resubmit: 'resubmit', approve: 'review',
     request_changes: 'review' } as Partial<Record<NextStepPrimary['kind'], Busy>>)[primary.kind];
   const primaryButton = primary ? <Button title={primary.label} variant={primary.kind === 'merge' ? 'success' : 'primary'} icon={PRIMARY_ICON[primary.kind]}
     loading={Boolean(primaryBusy) && busy === primaryBusy} disabled={Boolean(primary.disabledReason) || (Boolean(primaryBusy) &&

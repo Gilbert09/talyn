@@ -307,4 +307,16 @@ describe('workbench deploy handoff', () => {
     expect((await scriptSnapshots('wb'))[0].data).toBe('before\nafter\n');
   });
 
+  it.each([false, true])('starts an archive script only with lifecycle permission, allowed=%s', async (allowArchived) => {
+    const row = (await store.markArchive('wb'))!;
+    fleet.handler = () => ({ stdout: ['archived'] });
+    const config = { archive: { command: 'archive' }, run: [], runMode: 'nonconcurrent' as const, source: 'none' as const, filesToCopy: [], errors: [] };
+    if (allowArchived) {
+      expect(await (await startScript(row, 'archive', { config, allowArchived })).done).toBe(0);
+    } else {
+      await expect(startScript(row, 'archive', { config })).rejects.toThrow('already running');
+      expect(fleet.scripts).toEqual([]);
+    }
+  });
+
 });

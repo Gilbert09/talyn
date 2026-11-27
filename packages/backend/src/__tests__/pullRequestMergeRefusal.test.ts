@@ -265,21 +265,6 @@ describe('merge refusals and Update branch', () => {
   });
 });
 
-describe('githubService.updatePullRequestBranch', () => {
-  afterEach(() => vi.restoreAllMocks());
-
-  it.each<[string, 'ok' | 'conflict' | 'up_to_date' | 'error', 'ok' | 'conflict' | 'error']>([
-    ['ok', 'ok', 'ok'],
-    ['conflict', 'conflict', 'conflict'],
-    // The merge queue keeps its old reading of every 422.
-    ['up to date', 'up_to_date', 'conflict'],
-    ['error', 'error', 'error'],
-  ])('maps %s for the merge queue', async (_name, outcome, expected) => {
-    vi.spyOn(githubService, 'updatePullRequestBranchOutcome').mockResolvedValue(outcome);
-    expect(await githubService.updatePullRequestBranch('ws', 'o', 'r', 1)).toBe(expected);
-  });
-});
-
 describe('githubService.updatePullRequestBranchOutcome', () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -294,5 +279,14 @@ describe('githubService.updatePullRequestBranchOutcome', () => {
     else spy.mockResolvedValue({});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(await githubService.updatePullRequestBranchOutcome('ws', 'o', 'r', 1)).toBe(expected);
+  });
+
+  it('guards a queued update against a concurrent head push', async () => {
+    const request = vi.spyOn(githubService as unknown as { apiRequest: (...args: unknown[]) => Promise<unknown> }, 'apiRequest')
+      .mockRejectedValue(new Error('GitHub API error 422 Unprocessable Entity: The expected head SHA does not match.'));
+
+    expect(await githubService.updatePullRequestBranchOutcome('ws', 'o', 'r', 1, 'sha1')).toBe('head_changed');
+    expect(request).toHaveBeenCalledWith('ws', '/repos/o/r/pulls/1/update-branch',
+      expect.objectContaining({ body: JSON.stringify({ expected_head_sha: 'sha1' }) }), 'auto');
   });
 });

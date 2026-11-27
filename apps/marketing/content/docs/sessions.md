@@ -29,6 +29,8 @@ Other options in the composer:
 - Press Esc to leave the composer. Then you can use keyboard shortcuts such as G then P, which opens your pull requests. The text that you typed stays in the composer.
 - **Internet on** / **Internet off** controls whether the sandbox can reach the internet. See [Internet access](/docs/sandboxes#internet-access).
 - The attach button adds images, videos and text files. You can also paste or drop them into the chat. Images can be PNG, JPEG, WebP or GIF, up to 10 MB. Videos can be MP4, MOV or WebM, up to 50 MB. On the phone, pick a video from your library.
+- On Android, select **Take photo** in the attach menu to open the system camera. The camera app manages its own permission. Cancel in the camera to return to your draft.
+- On mobile, the composer focuses the text field after you attach a photo or video.
 - A text file must be UTF-8 text, up to 1 MB. Examples are logs, Markdown, CSV, JSON, YAML and source code. The file keeps its name. The agent reads it from the sandbox. The phone shows text files that you attach on the web or desktop, but cannot attach them yet.
 - You can attach a video only after the session starts. When you start a new session, attach images and text files only.
 - You can send a message while a file uploads. The message waits, and goes when the upload finishes. Press send again to cancel it. If the upload fails, the message is not sent and stays in the composer.
@@ -268,6 +270,12 @@ When you are done, archive the session:
 
 The session moves to **History**. Its branch, its chats and any pull request stay. Talyn saves any work you did not push before it removes the sandbox. It pushes nothing to GitHub to do this.
 
+**Archive all** selects sessions with no open pull request. It skips threads and sessions that are starting, moving, or working.
+Sessions with queued messages, running scripts, running background jobs, or pending wake-ups stay open.
+Talyn checks each session again on the server before it archives it.
+If work starts after the confirmation dialog opens, Talyn keeps the session and shows a notice.
+These checks apply to **Archive all**. You can still explicitly archive one session with the **Archive** action.
+
 Talyn also archives a session by itself:
 
 - When its pull request is merged and no chat is running.
@@ -276,6 +284,8 @@ Talyn also archives a session by itself:
 Open **Settings > Sessions > Auto-archive** to change these rules. You can turn off either rule. You can also choose how long a session stays idle before Talyn archives it.
 
 To bring a session back, open **History** and select **Restore**.
+
+If the archived session is open in the mobile app, tap the three-dot menu in the header. Select **Restore**.
 
 To delete a session for good, open **History** and select delete. This removes the session and its chats. It does not touch the branch on GitHub.
 

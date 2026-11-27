@@ -7,7 +7,16 @@ import type { AddressInfo } from 'net';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, isTitleScript, isWorkSaveScript, type ExecReply } from './helpers/fakeFleet.js';
 import { storeChangesCopy, type StoredCopy } from './helpers/storedChanges.js';
-import { fleetAccounts, pullRequests, repositories, workbenchChats, workspaces } from '../db/schema.js';
+import {
+  fleetAccounts,
+  pullRequests,
+  repositories,
+  workbenchBackgroundJobs,
+  workbenchChats,
+  workbenchScriptRuns,
+  workbenchWakeups,
+  workspaces,
+} from '../db/schema.js';
 import { resolveWorkbenchConfig } from '@talyn/shared';
 import { userFacingError } from '../services/workbenches/errors.js';
 
@@ -69,11 +78,12 @@ const { resetChangesStoreForTests } = await import('../services/workbenches/chan
 const { resetChangesStoredForTests } = await import('../services/workbenches/changesStored.js');
 const { resetChangesGithubForTests } = await import('../services/workbenches/changesGithub.js');
 const { GitHubRateLimitError } = await import('../services/githubRateGate.js');
-const { getChat, getWorkbench, insertWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
+const { claimOrEnqueue, finishTurn, getChat, getWorkbench, insertChat, insertWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
 const { liveWorkbenchForPr } = await import('../services/workbenches/prSessions.js');
 const { startStaleGoldenMove } = await import('../services/workbenches/move.js');
 const { backfillMergeArchives } = await import('../services/workbenches/mergeBackfill.js');
 const recovery = await import('../services/workbenches/recovery.js');
+const idleArchive = await import('../services/workbenches/idleArchive.js');
 const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../services/workbenches/turns.js');
 const { resolveRunCredentials } = await import('../services/selfHosted/runCredentials.js');
 const { FleetNotDeployedError } = await import('../services/selfHosted/credentials.js');
@@ -989,6 +999,121 @@ describe('workbench routes', () => {
       expect(asB.status).toBe(200);
       expect(asB.body.data).toEqual({ archived: [], failed: [{ id: theirs.id, error: 'Session not found' }] });
       expect((await getWorkbench(theirs.id))?.archivedAt).toBeNull();
+    });
+
+    const makeBusy: Record<string, (wbId: string, chatId: string) => Promise<unknown>> = {
+      'a running turn': (_wbId, chatId) => testDb.db.update(workbenchChats).set({ status: 'running' }).where(eq(workbenchChats.id, chatId)),
+      'a queued message': (_wbId, chatId) =>
+        testDb.db.update(workbenchChats).set({ queuedMessages: [{ id: 'q1', text: 'next' }] as never }).where(eq(workbenchChats.id, chatId)),
+      'a pending drain': (_wbId, chatId) => testDb.db.update(workbenchChats).set({ drainPending: true }).where(eq(workbenchChats.id, chatId)),
+      'a running background job': (wbId, chatId) =>
+        testDb.db.insert(workbenchBackgroundJobs).values({
+          id: `job-${wbId}`, workbenchId: wbId, chatId, workspaceId: 'ws-a', sandboxId: 'sb', name: 'tests',
+          command: 'npm test', cwd: '/work/repo', durableKey: 'k', marker: 'm',
+        }),
+      'a running script': (wbId) =>
+        testDb.db.insert(workbenchScriptRuns).values({
+          id: `run-${wbId}`, workbenchId: wbId, workspaceId: 'ws-a', sandboxId: 'sb', name: 'run', generation: 'g', owner: 'o',
+        }),
+      'a scheduled wake-up': (wbId, chatId) =>
+        testDb.db.insert(workbenchWakeups).values({
+          id: `wake-${wbId}`, workbenchId: wbId, chatId, workspaceId: 'ws-a', wakeAt: new Date(Date.now() + 60_000), reason: 'CI',
+        }),
+    };
+
+    it.each([
+      ['a running turn', 'The session works now.'],
+      ['a queued message', 'The session works now.'],
+      ['a pending drain', 'The session works now.'],
+      ['a running background job', 'The session has a running background job.'],
+      ['a running script', 'The session runs a script.'],
+      ['a scheduled wake-up', 'The session has a scheduled wake-up.'],
+    ])('keeps a session with %s and archives the others', async (kind, error) => {
+      const busy = await createLocalWorkbench();
+      const free = await createLocalWorkbench();
+      await makeBusy[kind]!(busy.id, await chatIdOf(busy.id));
+      const res = await call('POST', '/workbenches/archive', { ids: [busy.id, free.id] });
+      expect(res.status).toBe(200);
+      expect(res.body.data.archived.map((w: Loose) => w.id)).toEqual([free.id]);
+      expect(res.body.data.failed).toEqual([{ id: busy.id, error, busy: true }]);
+      expect((await getWorkbench(busy.id))?.archivedAt).toBeNull();
+      expect((await getWorkbench(free.id))?.archivedAt).not.toBeNull();
+    });
+
+    it.each([
+      ['an ended background job', (wbId: string, chatId: string) =>
+        testDb.db.insert(workbenchBackgroundJobs).values({
+          id: `job-${wbId}`, workbenchId: wbId, chatId, workspaceId: 'ws-a', sandboxId: 'sb', name: 'tests',
+          command: 'npm test', cwd: '/work/repo', durableKey: 'k', marker: 'm', status: 'exited', exitCode: 0,
+        })],
+      ['an ended script', (wbId: string) =>
+        testDb.db.insert(workbenchScriptRuns).values({
+          id: `run-${wbId}`, workbenchId: wbId, workspaceId: 'ws-a', sandboxId: 'sb', name: 'run', generation: 'g', owner: 'o', running: false,
+        })],
+      ['a fired wake-up', (wbId: string, chatId: string) =>
+        testDb.db.insert(workbenchWakeups).values({
+          id: `wake-${wbId}`, workbenchId: wbId, chatId, workspaceId: 'ws-a', wakeAt: new Date(), reason: 'CI', status: 'fired', firedAt: new Date(),
+        })],
+    ])('archives a session with %s', async (_kind, seed) => {
+      const wb = await createLocalWorkbench();
+      await seed(wb.id, await chatIdOf(wb.id));
+      const res = await call('POST', '/workbenches/archive', { ids: [wb.id] });
+      expect(res.body.data).toMatchObject({ failed: [] });
+      expect(res.body.data.archived.map((w: Loose) => w.id)).toEqual([wb.id]);
+    });
+
+    it.each(Object.keys(makeBusy))('keeps a session when %s starts before the archive claim', async (kind) => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      const source = vi.spyOn(idleArchive, 'archiveBoxSource').mockImplementationOnce(async () => {
+        await makeBusy[kind]!(wb.id, chatId);
+        return 'running';
+      });
+
+      const res = await call('POST', '/workbenches/archive', { ids: [wb.id] });
+      expect(source).toHaveBeenCalledWith(wb.id);
+      expect(res.body.data).toEqual({
+        archived: [], failed: [{ id: wb.id, error: expect.any(String), busy: true }],
+      });
+      expect(await getWorkbench(wb.id)).toMatchObject({ archivedAt: null, archivePendingAt: null });
+      if (kind === 'a running background job') {
+        expect((await testDb.db.select().from(workbenchBackgroundJobs))[0].status).toBe('running');
+      }
+      if (kind === 'a scheduled wake-up') {
+        expect((await testDb.db.select().from(workbenchWakeups))[0].status).toBe('scheduled');
+      }
+    });
+
+    it('archives a session after its last payer-blocked message is deleted', async () => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      const queuedAt = new Date().toISOString();
+      await insertChat({ id: 'blocked-chat', workbenchId: wb.id, workspaceId: 'ws-a', title: 'Blocked', agent: 'claude' });
+      await claimOrEnqueue(chatId, { id: 'running', text: 'work', queuedAt }, true);
+      const blocked = await claimOrEnqueue('blocked-chat', {
+        id: 'queued', text: 'wait', queuedAt, payer: { userId: 'owner-a', workspaceId: 'ws-a' },
+      }, true);
+      expect(blocked?.payerBlocked).toBe(true);
+      const removed = await call('DELETE', '/workbenches/chats/blocked-chat/queue/queued');
+      expect(removed.status).toBe(200);
+      expect(removed.body.data.queuedMessages).toEqual([]);
+      await finishTurn(chatId, { finalStatus: 'idle', statusMessage: null, drain: true });
+      const res = await call('POST', '/workbenches/archive', { ids: [wb.id] });
+      expect(res.body.data.failed).toEqual([]);
+      expect(res.body.data.archived.map((row: Loose) => row.id)).toEqual([wb.id]);
+    });
+
+    it('archives a session after its pending chat is closed', async () => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      await makeBusy['a pending drain']!(wb.id, chatId);
+      expect((await call('DELETE', `/workbenches/chats/${chatId}`)).status).toBe(200);
+      const [closed] = await testDb.db.select().from(workbenchChats).where(eq(workbenchChats.id, chatId));
+      expect(closed).toMatchObject({ closedAt: expect.any(Date), drainPending: false });
+
+      const res = await call('POST', '/workbenches/archive', { ids: [wb.id] });
+      expect(res.body.data.failed).toEqual([]);
+      expect(res.body.data.archived.map((row: Loose) => row.id)).toEqual([wb.id]);
     });
 
     it.each([

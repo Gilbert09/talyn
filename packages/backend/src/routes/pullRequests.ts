@@ -6,6 +6,7 @@ import { upsertFromBatchResult } from '../services/prCache.js';
 import { publicAutoMergeState, setAutoKeepMergeable } from '../services/prAutoKeep.js';
 import {
   reconcileTerminalState as reconcilePrTerminalState,
+  recordRefusedBehind,
   refreshPullRequest,
 } from '../services/prRefresh.js';
 import { mergeQueueTimelineForPr } from '../services/mergeQueue/timeline.js';
@@ -13,7 +14,6 @@ import {
   describeMergeRefusal,
   keepRefusedBehind,
   readRefusedBehind,
-  refusedBehindMark,
 } from '../services/mergeRefusal.js';
 import {
   dismissFinding,
@@ -2004,7 +2004,7 @@ export function pullRequestRoutes(): Router {
         },
       });
     }
-    if (outcome === 'error') {
+    if (outcome !== 'ok') {
       return res.status(400).json({
         success: false,
         code: 'update_branch_failed',
@@ -2273,50 +2273,6 @@ interface PullRequestRow {
   lastSummaryDigest: string | null;
   createdAt: Date;
   updatedAt: Date;
-}
-
-/**
- * Store "GitHub refused this head as behind" on the row, before the refetch
- * that follows, so the mark holds even when that refetch fails. The head comes
- * from GitHub (REST) because the cached one can be older than the head GitHub
- * refused; the cached one is the fallback. Never throws.
- */
-async function recordRefusedBehind(
-  row: { id: string; workspaceId: string; owner: string; repo: string; number: number; lastSummary: unknown },
-  cachedHeadSha: string | undefined
-): Promise<void> {
-  try {
-    let headSha = cachedHeadSha;
-    try {
-      const pr = await githubService.getPullRequest(row.workspaceId, row.owner, row.repo, row.number);
-      headSha = pr.head?.sha || headSha;
-    } catch {
-      // The cached head is the best we have.
-    }
-    if (!headSha) return;
-    const mark = refusedBehindMark(headSha);
-    const stored = (row.lastSummary ?? {}) as PRSummary;
-    const kept = keepRefusedBehind(mark, stored);
-    const patch = JSON.stringify({
-      refusedBehind: mark,
-      blockingReason: kept.blockingReason,
-      mergeStateStatus: kept.mergeStateStatus,
-    });
-    await getDbClient()
-      .update(pullRequestsTable)
-      .set({
-        lastSummary: sql`${pullRequestsTable.lastSummary} || ${patch}::jsonb`,
-        // The stored summary no longer matches its digest, so the next fetch must write.
-        lastSummaryDigest: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(pullRequestsTable.id, row.id));
-  } catch (err) {
-    console.warn(
-      `[pullRequests] recording the behind refusal failed for ${row.owner}/${row.repo}#${row.number}:`,
-      err instanceof Error ? err.message : err
-    );
-  }
 }
 
 /** Refetch a PR after a merge or a branch update. Never throws: the answer must still go out. */

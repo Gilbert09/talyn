@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
-import type { PRRow } from '../renderer/lib/api';
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { api, type PRRow } from '../renderer/lib/api';
 import { trackEvent } from '../renderer/lib/analytics';
 import { PRDetailSheet } from '../renderer/components/widgets/PRDetailSheet';
 
@@ -66,6 +66,7 @@ jest.mock('../renderer/lib/api', () => ({
       // open time, not wait on a round trip to GitHub to do it.
       description: jest.fn(() => new Promise(() => {})),
       get: jest.fn(() => new Promise(() => {})),
+      updateBranch: jest.fn(async () => ({ updated: true, message: 'Checks will run again.' })),
       files: jest.fn(() => new Promise(() => {})),
       focus: jest.fn(async () => {}),
     },
@@ -118,6 +119,23 @@ function row(opts: { fixable: boolean; taskId?: string | null; state?: string })
 function open(seedRow: PRRow | null) {
   render(<PRDetailSheet pullRequestId="pr1" onClose={jest.fn()} seedRow={seedRow} />);
 }
+
+it('updates a behind branch from the PR detail sheet', async () => {
+  const behind = row({ fixable: false });
+  behind.summary = { ...behind.summary, blockingReason: 'behind', mergeStateStatus: 'BEHIND' };
+  const get = jest.mocked(api.pullRequests.get);
+  get.mockResolvedValueOnce({ row: behind, fresh: null });
+  get.mockResolvedValueOnce({ row: row({ fixable: false }), fresh: null });
+  open(behind);
+
+  const update = screen.getByRole('button', { name: 'Update branch' });
+  await waitFor(() => expect(update.hasAttribute('disabled')).toBe(false));
+  expect(screen.queryByRole('button', { name: 'Merge' })).toBeNull();
+  fireEvent.click(update);
+
+  expect(api.pullRequests.updateBranch).toHaveBeenCalledWith('pr1');
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Update branch' })).toBeNull());
+});
 
 const opened = () =>
   (trackEvent as unknown as { mock: { calls: unknown[][] } }).mock.calls.find(

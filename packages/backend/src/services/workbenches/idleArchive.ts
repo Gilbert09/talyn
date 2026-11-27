@@ -89,6 +89,36 @@ export function idleArchiveGuard(now: Date): SQL {
   )`;
 }
 
+/** Use the same activity checks for the refusal reason and the archive claim. */
+function bulkArchiveBusyState(id: string | typeof w.id) {
+  return {
+    turn: sql<boolean>`EXISTS (SELECT 1 FROM workbench_chats c WHERE c.workbench_id = ${id}
+      AND (c.status = 'running' OR (c.closed_at IS NULL
+        AND (c.drain_pending OR jsonb_array_length(c.queued_messages) > 0))))`,
+    script: sql<boolean>`EXISTS (SELECT 1 FROM workbench_script_runs r WHERE r.workbench_id = ${id} AND r.running)`,
+    job: sql<boolean>`EXISTS (SELECT 1 FROM workbench_background_jobs j WHERE j.workbench_id = ${id} AND j.status = 'running')`,
+    wakeup: sql<boolean>`EXISTS (SELECT 1 FROM workbench_wakeups k WHERE k.workbench_id = ${id}
+      AND (k.status = 'scheduled' OR (k.status = 'fired' AND k.fired_at IS NULL)))`,
+  };
+}
+
+/** Recheck activity in the UPDATE that claims a bulk archive. */
+export function bulkArchiveGuard(): SQL {
+  const busy = bulkArchiveBusyState(w.id);
+  return sql`NOT (${busy.turn} OR ${busy.script} OR ${busy.job} OR ${busy.wakeup})`;
+}
+
+/** Why "Archive all" must keep this session, or null when it has no active work. */
+export async function bulkArchiveBlocker(id: string): Promise<string | null> {
+  const [row] = await getPoolDbClient().select(bulkArchiveBusyState(id)).from(w).where(eq(w.id, id));
+  if (!row) return null;
+  if (row.turn) return 'The session works now.';
+  if (row.job) return 'The session has a running background job.';
+  if (row.script) return 'The session runs a script.';
+  if (row.wakeup) return 'The session has a scheduled wake-up.';
+  return null;
+}
+
 /**
  * How an archive that a person or a merge asked for treats the box, read
  * without waking it. `running`: the ordinary archive (also when the fleet did

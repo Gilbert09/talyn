@@ -2,7 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { waitFor } from '@testing-library/react-native';
 import { createClient } from '@supabase/supabase-js';
-import { configureApiClient, workspaces, wsClient } from '@talyn/client/native';
+import { configureApiClient, mobileNotifications, workbenches, workspaces, wsClient } from '@talyn/client/native';
+import type { MobileNotificationPayload } from '@talyn/shared';
 import * as SecureStore from 'expo-secure-store';
 import { AppState, type AppStateStatus } from 'react-native';
 
@@ -61,6 +62,7 @@ jest.mock('@talyn/client/native', () => ({
   configureApiClient: jest.fn(), wsClient: { reset: jest.fn(), connect: jest.fn(async () => {}), on: jest.fn(() => () => {}),
     subscribe: jest.fn(), unsubscribe: jest.fn(), setCapabilities: jest.fn() },
   users: { wipeMe: jest.fn() }, workspaces: { list: jest.fn(async () => [{ id: 'one', name: 'One' }]) },
+  mobileNotifications: { getPreferences: jest.fn(), resolveNotification: jest.fn() }, workbenches: { get: jest.fn() },
 }));
 const config: MobileConfig = {
   environment: 'development', apiOrigin: 'https://api.example.test', supabaseUrl: 'https://auth.example.test',
@@ -107,6 +109,30 @@ describe('mobile runtime binding', () => {
     mockNetworkListener({ isConnected: true, isInternetReachable: true });
     mockNetworkListener({ isConnected: true, isInternetReachable: true });
     await waitFor(() => expect(mockAuth.startAutoRefresh).toHaveBeenCalledTimes(1)); runtime.dispose();
+  });
+  it('waits for the app to resume before resolving a notification tap', async () => {
+    const workspaceId = '10000000-0000-4000-8000-000000000001';
+    const entityId = '20000000-0000-4000-8000-000000000002';
+    const eventId = '30000000-0000-4000-8000-000000000003';
+    const payload: MobileNotificationPayload = { schemaVersion: 1, eventId, category: 'session_update',
+      destination: { workspaceId, entityId, kind: 'session' } };
+    jest.mocked(mobileNotifications.resolveNotification).mockResolvedValueOnce({ ...payload, expiresAt: '2099-01-01T00:00:00Z' });
+    jest.mocked(workbenches.get).mockResolvedValueOnce({ workspaceId, kind: 'session' } as Awaited<ReturnType<typeof workbenches.get>>);
+
+    const runtime = await createMobileRuntime(config);
+    const navigate = jest.fn();
+    runtime.notifications.setScope({ user: 'alice', workspace: workspaceId });
+    runtime.notifications.setNavigation(navigate, '/home');
+    mockAppListener('background');
+    runtime.notifications.receiveTap(payload);
+    expect(mobileNotifications.resolveNotification).not.toHaveBeenCalled();
+    expect(runtime.notifications.getSnapshot().tapIssue).toBeNull();
+
+    mockAppListener('active');
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith(`/sessions/${entityId}`));
+    expect(mobileNotifications.resolveNotification).toHaveBeenCalledTimes(1);
+    expect(workbenches.get).toHaveBeenCalledWith(entityId);
+    runtime.dispose();
   });
   it('binds workflow scope and clears drafts on workspace and auth changes', async () => {
     const restored = { access_token: 'access', refresh_token: 'refresh', expires_in: 3600, token_type: 'bearer',

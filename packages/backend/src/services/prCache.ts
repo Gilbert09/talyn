@@ -377,6 +377,7 @@ export async function upsertFromBatchResult(opts: {
   summary: PRSummary;
   reviewRequested?: boolean;
   authored?: boolean;
+  snapshotOnChangeOnly?: boolean;
   /**
    * The user explicitly asked to watch THIS pull request (the paste-a-URL
    * flow), rather than the poller having discovered it. Treated the same as
@@ -411,6 +412,7 @@ export async function upsertFromBatchResult(opts: {
     summary: opts.summary,
     reviewRequested: opts.reviewRequested,
     authored: opts.authored,
+    snapshotOnChangeOnly: opts.snapshotOnChangeOnly,
     explicitWatch: opts.explicitWatch,
     existingId: existing?.id,
   });
@@ -613,6 +615,7 @@ async function upsertRow(
     summary: PRSummary;
     reviewRequested?: boolean;
     authored?: boolean;
+    snapshotOnChangeOnly?: boolean;
     explicitWatch?: boolean;
     existingId?: string;
   }
@@ -667,6 +670,7 @@ async function upsertRow(
         await db
           .select({
             digest: pullRequestsTable.lastSummaryDigest,
+            state: pullRequestsTable.state,
             bodyChanged: sql<boolean>`${pullRequestsTable.body} IS DISTINCT FROM ${body}`,
             // One boolean and one timestamp, on a read this path already makes —
             // so knowing whether the PR was in the cohort, and since when, costs
@@ -685,6 +689,9 @@ async function upsertRow(
   summary = keepRefusedBehind(readRefusedBehind({ refusedBehind: prev?.refusedBehind }), summary);
   const lastSummary = summaryToJsonb(summary);
   const cursors = nextCursors(summary);
+  // Use the stored digest to skip writes of unchanged summaries and cursors.
+  const digest = summaryDigest(lastSummary, cursors);
+  const summaryChanged = prev?.digest !== digest;
   // A newly-tracked open PR inherits the workspace's "auto-keep mergeable by
   // default" setting when the user has, one way or another, ASKED for this
   // specific PR: they authored it, or they pasted its URL to watch it.
@@ -718,13 +725,6 @@ async function upsertRow(
   let stamps: ReturnType<typeof reviewRequestedStamps> = {};
   if (opts.existingId) {
     // Update path — leave taskId alone (set on first insert only).
-    // Disk-IO guard: most polls yield byte-identical content. Compare a cheap
-    // stored digest (one small text column) and skip rewriting the ~2 KB
-    // TOASTed `last_summary` + its cursor columns when nothing changed — the
-    // poll then bumps only the TTL timestamp, saving the WAL + TOAST churn.
-    const digest = summaryDigest(lastSummary, cursors);
-    const prevDigest = prev?.digest;
-    const summaryChanged = prevDigest !== digest;
     stamps = reviewRequestedStamps(prev?.reviewRequested, opts.reviewRequested, now);
 
     // The OUTCOME event, emitted where the transition is actually OBSERVED.
@@ -812,7 +812,7 @@ async function upsertRow(
       lastReviewCommentId: cursors.lastReviewCommentId,
       lastCommentId: cursors.lastCommentId,
       lastCheckDigest: cursors.lastCheckDigest,
-      lastSummaryDigest: summaryDigest(lastSummary, cursors),
+      lastSummaryDigest: digest,
       autoKeepMergeable,
       autoMergeState,
       createdAt: now,
@@ -847,15 +847,17 @@ async function upsertRow(
   // group it affects (this PR's own entry, or a group advance when a same-base
   // sibling merged). Fire-and-forget on the leaf event bus; no-op unless the
   // v2 engine is active.
-  domainEvents.emit('pr:snapshot', {
-    workspaceId: opts.workspaceId,
-    repositoryId: opts.repositoryId,
-    prId: id,
-    baseBranch: summary.baseBranch ?? '',
-    headBranch: summary.headBranch ?? '',
-    state: opts.summary.state,
-    trigger: 'prcache:upsert',
-  });
+  if (!opts.snapshotOnChangeOnly || summaryChanged || prev?.state !== summary.state) {
+    domainEvents.emit('pr:snapshot', {
+      workspaceId: opts.workspaceId,
+      repositoryId: opts.repositoryId,
+      prId: id,
+      baseBranch: summary.baseBranch ?? '',
+      headBranch: summary.headBranch ?? '',
+      state: opts.summary.state,
+      trigger: 'prcache:upsert',
+    });
+  }
   reseedLedgerFrom(opts.summary, opts.repositoryId);
   return id;
 }
