@@ -1018,7 +1018,11 @@ export function workbenchRoutes(): Router {
         // The client's list can be stale, and it does not know every session's jobs and wake-ups.
         const busy = row.archivedAt ? null : await bulkArchiveBlocker(row.id);
         if (busy) return { failed: { id, error: busy, busy: true } };
-        return { row: await archiveWorkbench(row.id) };
+        const archived = row.archivedAt ? await archiveWorkbench(row.id) : await archiveWorkbench(row.id, { bulk: true });
+        if (!archived) return { failed: {
+          id, error: await bulkArchiveBlocker(row.id) ?? 'The session changed before it could be archived.', busy: true,
+        } };
+        return { row: archived };
       } catch (err) {
         console.warn(`[workbench] bulk archive of ${id} failed:`, err);
         return { failed: { id, error: fleetErrorAsRefusal(err)?.message ?? 'Could not archive the session' } };

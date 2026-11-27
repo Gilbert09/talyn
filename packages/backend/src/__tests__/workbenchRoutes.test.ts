@@ -81,6 +81,7 @@ const { getChat, getWorkbench, listChats, updateChat, updateWorkbench, rowToWork
 const { startStaleGoldenMove } = await import('../services/workbenches/move.js');
 const { backfillMergeArchives } = await import('../services/workbenches/mergeBackfill.js');
 const recovery = await import('../services/workbenches/recovery.js');
+const idleArchive = await import('../services/workbenches/idleArchive.js');
 const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../services/workbenches/turns.js');
 const { resolveRunCredentials } = await import('../services/selfHosted/runCredentials.js');
 const { FleetNotDeployedError } = await import('../services/selfHosted/credentials.js');
@@ -982,6 +983,41 @@ describe('workbench routes', () => {
       const res = await call('POST', '/workbenches/archive', { ids: [wb.id] });
       expect(res.body.data).toMatchObject({ failed: [] });
       expect(res.body.data.archived.map((w: Loose) => w.id)).toEqual([wb.id]);
+    });
+
+    it.each(Object.keys(makeBusy))('keeps a session when %s starts before the archive claim', async (kind) => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      const source = vi.spyOn(idleArchive, 'archiveBoxSource').mockImplementationOnce(async () => {
+        await makeBusy[kind]!(wb.id, chatId);
+        return 'running';
+      });
+
+      const res = await call('POST', '/workbenches/archive', { ids: [wb.id] });
+      expect(source).toHaveBeenCalledWith(wb.id);
+      expect(res.body.data).toEqual({
+        archived: [], failed: [{ id: wb.id, error: expect.any(String), busy: true }],
+      });
+      expect(await getWorkbench(wb.id)).toMatchObject({ archivedAt: null, archivePendingAt: null });
+      if (kind === 'a running background job') {
+        expect((await testDb.db.select().from(workbenchBackgroundJobs))[0].status).toBe('running');
+      }
+      if (kind === 'a scheduled wake-up') {
+        expect((await testDb.db.select().from(workbenchWakeups))[0].status).toBe('scheduled');
+      }
+    });
+
+    it('archives a session after its pending chat is closed', async () => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      await makeBusy['a pending drain']!(wb.id, chatId);
+      expect((await call('DELETE', `/workbenches/chats/${chatId}`)).status).toBe(200);
+      const [closed] = await testDb.db.select().from(workbenchChats).where(eq(workbenchChats.id, chatId));
+      expect(closed).toMatchObject({ closedAt: expect.any(Date), drainPending: true });
+
+      const res = await call('POST', '/workbenches/archive', { ids: [wb.id] });
+      expect(res.body.data.failed).toEqual([]);
+      expect(res.body.data.archived.map((row: Loose) => row.id)).toEqual([wb.id]);
     });
 
     it.each([

@@ -10,6 +10,8 @@ interface SessionBackgroundState {
 }
 
 const versions = new Map<string, number>();
+const pendingLoads = new Map<string, number>();
+let connectionVersion = 0;
 
 export const useSessionBackgroundStore = create<SessionBackgroundState>((set) => ({
   byWorkbench: {},
@@ -29,12 +31,31 @@ export const useSessionBackgroundStore = create<SessionBackgroundState>((set) =>
 
 export async function loadBackground(id: string): Promise<void> {
   const version = versions.get(id) ?? 0;
+  const connection = connectionVersion;
+  pendingLoads.set(id, (pendingLoads.get(id) ?? 0) + 1);
   try {
     const payload = await api.workbenches.background(id);
-    if ((versions.get(id) ?? 0) === version) useSessionBackgroundStore.getState().applyBackground(payload);
+    if (connection === connectionVersion && (versions.get(id) ?? 0) === version) {
+      useSessionBackgroundStore.getState().applyBackground(payload);
+    }
   } catch {
     // A later open or reconnect retries the load.
+  } finally {
+    const remaining = (pendingLoads.get(id) ?? 1) - 1;
+    if (remaining === 0) pendingLoads.delete(id);
+    else pendingLoads.set(id, remaining);
   }
+}
+
+/** Clear stale state before refreshing sessions, including those with no open view. */
+export async function reconcileBackground(): Promise<void> {
+  const ids = new Set([
+    ...Object.keys(useSessionBackgroundStore.getState().byWorkbench),
+    ...pendingLoads.keys(),
+  ]);
+  connectionVersion++;
+  useSessionBackgroundStore.setState({ byWorkbench: {} });
+  await Promise.all([...ids].map(loadBackground));
 }
 
 export function useBackground(id: string): WorkbenchBackground | undefined {

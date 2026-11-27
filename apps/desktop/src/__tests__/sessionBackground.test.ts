@@ -1,10 +1,11 @@
-import type { WorkbenchBackground, WorkbenchBackgroundJob, WorkbenchWakeup } from '@talyn/shared';
+import type { Workbench, WorkbenchBackground, WorkbenchBackgroundJob, WorkbenchWakeup } from '@talyn/shared';
 
 jest.mock('../renderer/lib/api', () => ({ api: { workbenches: { background: jest.fn() } } }));
 
 import { api } from '../renderer/lib/api';
 import { emptyLogText, formatCountdown, formatRunTime, isActiveBackground, keepAwakeLabel, wakeLaterPresets, wakeupTitle, wakeupWhen } from '../renderer/lib/sessionBackground';
-import { loadBackground, useSessionBackgroundStore } from '../renderer/stores/sessionBackground';
+import { loadBackground, reconcileBackground, useSessionBackgroundStore } from '../renderer/stores/sessionBackground';
+import { archiveAllCandidates } from '../renderer/lib/archiveAll';
 
 const empty = (workbenchId: string): WorkbenchBackground => ({ workbenchId, jobs: [], wakeups: [] });
 const deferred = <T>() => {
@@ -39,6 +40,48 @@ describe('session background store', () => {
     pending.resolve(empty('a'));
     await load;
     expect(useSessionBackgroundStore.getState().byWorkbench.a).toBe(live);
+  });
+
+  it.each(['running', 'scheduled'])('discards stale %s state before a reconnect refresh completes', async (status) => {
+    const session = { id: 'a', status: 'ready', kind: 'session', pullRequestId: null } as Workbench;
+    useSessionBackgroundStore.getState().applyBackground({
+      ...empty('a'),
+      jobs: status === 'running' ? [{ status } as WorkbenchBackgroundJob] : [],
+      wakeups: status === 'scheduled' ? [{ status } as WorkbenchWakeup] : [],
+    });
+    const candidates = () => archiveAllCandidates([session], new Set(), {}, useSessionBackgroundStore.getState().byWorkbench);
+    expect(candidates()).toEqual([]);
+    const pending = deferred<WorkbenchBackground>();
+    jest.mocked(api.workbenches.background).mockReturnValue(pending.promise);
+    const refresh = reconcileBackground();
+    expect(candidates()).toEqual([session]);
+    pending.resolve(empty('a'));
+    await refresh;
+    expect(api.workbenches.background).toHaveBeenCalledWith('a');
+    expect(candidates()).toEqual([session]);
+  });
+
+  it('replaces a load from before reconnect even when no snapshot was cached', async () => {
+    const old = deferred<WorkbenchBackground>();
+    const fresh = deferred<WorkbenchBackground>();
+    jest.mocked(api.workbenches.background).mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+    const load = loadBackground('a');
+    const refresh = reconcileBackground();
+    old.resolve({ ...empty('a'), jobs: [{ status: 'running' } as WorkbenchBackgroundJob] });
+    await load;
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
+    fresh.resolve(empty('a'));
+    await refresh;
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toEqual(empty('a'));
+  });
+
+  it('does not restore a stale snapshot when reconnect refresh fails', async () => {
+    useSessionBackgroundStore.getState().applyBackground({
+      ...empty('a'), jobs: [{ status: 'running' } as WorkbenchBackgroundJob],
+    });
+    jest.mocked(api.workbenches.background).mockRejectedValue(new Error('offline'));
+    await reconcileBackground();
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
   });
 });
 

@@ -2038,7 +2038,7 @@ const SLEEPING_ARCHIVE_NOTE: Record<SleepingArchive, string> = {
 };
 
 export async function markArchive(
-  id: string, autoForMergedPr = false, idle?: IdleArchiveClaim, sleeping?: SleepingArchive,
+  id: string, autoForMergedPr = false, idle?: IdleArchiveClaim, sleeping?: SleepingArchive, bulkGuard?: SQL,
 ): Promise<WorkbenchRow | null> {
   const noRunningChat = sql`NOT EXISTS (SELECT 1 FROM workbench_chats c
     WHERE c.workbench_id = ${workbenchesTable.id} AND c.status = 'running')`;
@@ -2062,6 +2062,7 @@ export async function markArchive(
       updatedAt: new Date(),
     }).where(and(
       eq(workbenchesTable.id, id), isNull(workbenchesTable.restoreRequestedAt),
+      bulkGuard,
       idle ? and(isNull(workbenchesTable.archivedAt), noRunningChat, idle.guard)
         : autoForMergedPr ? and(
           isNull(workbenchesTable.archivedAt),
@@ -2090,7 +2091,7 @@ export async function markArchive(
     }
     return archived;
   });
-  return row ?? (auto ? null : getWorkbench(id));
+  return row ?? (auto || bulkGuard ? null : getWorkbench(id));
 }
 
 const ACTIVITY_WRITE_EVERY_MS = 5 * 60_000;

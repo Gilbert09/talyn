@@ -36,7 +36,7 @@ import { toast } from '../stores/toast';
 import { notifyMergeQueueReviewWait } from '../lib/mergeQueueReviewWait';
 import { trackEvent } from '../lib/analytics';
 import { useWorkbenchStore, wellFormedEvents } from '../stores/workbenches';
-import { useSessionBackgroundStore } from '../stores/sessionBackground';
+import { reconcileBackground, useSessionBackgroundStore } from '../stores/sessionBackground';
 import { reconcileWorkbenches } from '../lib/workbenchData';
 import { installWorkbenchNotifications, toastPullRequestFailures } from '../lib/workbenchNotify';
 import { installDeskPresence } from '../lib/deskPresence';
@@ -329,6 +329,7 @@ export function useApiConnection() {
   // task + environment lists to reconcile any changes we missed. The first
   // connect is covered by useInitialDataLoad.
   useOnReconnect(() => {
+    void reconcileBackground();
     void reconcileTasksFromServer();
     void reconcileEnvironmentsFromServer();
     void useBillingStore.getState().refresh();
