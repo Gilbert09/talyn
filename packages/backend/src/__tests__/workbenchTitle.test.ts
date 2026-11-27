@@ -23,9 +23,10 @@ vi.mock('../services/websocket.js', async (importOriginal) => ({
 const { generateSandboxTitle, startTitleFromQueue, startTitleGeneration, resetTitleAttempts, MAX_TITLE_FAILURES } = await import(
   '../services/workbenches/title.js'
 );
-const { getWorkbench, insertChat, insertWorkbench, setGeneratedTitle, updateWorkbench } = await import(
+const { appendEvents, getWorkbench, insertChat, insertWorkbench, setGeneratedTitle, updateWorkbench } = await import(
   '../services/workbenches/store.js'
 );
+const { userMessageEvent } = await import('../services/workbenches/turns.js');
 
 describe('sanitizeWorkbenchTitle', () => {
   it.each([
@@ -165,6 +166,9 @@ describe('generateSandboxTitle', () => {
   });
 
   const row = async () => (await getWorkbench('wb-1'))!;
+  const userMessage = (text: string, origin?: 'user' | 'talyn') => userMessageEvent({
+    id: text, text, origin, queuedAt: new Date().toISOString(),
+  });
 
   it('sets the title, keeps the name and branch, and broadcasts the update', async () => {
     const run = vi.fn(reply('"Explain the Merge Queue."\n'));
@@ -253,6 +257,45 @@ describe('generateSandboxTitle', () => {
       expect((await row()).title).toBe('Fix Retry Titles');
     });
 
+    it.each([
+      ['a rate limit', 'Continue from where you stopped. The last turn ended with an error: API Error: Request rejected (429).', 'talyn'],
+      ['an API outage', 'Continue from where you stopped. The last turn ended because the model API failed: overloaded.', 'talyn'],
+      ['a later user message', 'Please continue', 'user'],
+    ] as const)('retries the original task after %s', async (_label, retry, origin) => {
+      await insertChat({ id: 'chat-1', workbenchId: 'wb-1', workspaceId: 'ws-a', title: 'Chat', agent: 'claude' });
+      await appendEvents('chat-1', [{ turn: 1, event: userMessage('Add missing warehouse endpoint tables') }]);
+      await startTitleGeneration(await row(), 'Add missing warehouse endpoint tables', { run: reply('', 1) });
+      await appendEvents('chat-1', [{ turn: 2, event: userMessage(retry, origin) }]);
+      const run = vi.fn(reply('Add Missing Warehouse Tables'));
+      await startTitleGeneration(await row(), retry, { run, agent: 'codex', origin });
+      const script = (run.mock.calls[0] as unknown as [unknown, string])[1];
+      expect(script).toContain('Add missing warehouse endpoint tables');
+      expect(script).not.toContain(retry);
+      expect((await row()).title).toBe('Add Missing Warehouse Tables');
+    });
+
+    it('ignores automatic and empty messages when it finds the original task', async () => {
+      await insertChat({ id: 'chat-1', workbenchId: 'wb-1', workspaceId: 'ws-a', title: 'Chat', agent: 'claude', closedAt: new Date() });
+      await appendEvents('chat-1', [
+        { turn: 1, event: userMessage('Background job exited', 'talyn') },
+        { turn: 2, event: userMessage('   ') },
+        { turn: 3, event: userMessage('Fix the login redirect') },
+        { turn: 3, event: { type: 'assistant', message: { content: [{ type: 'text', text: 'Checking the redirect' }] } } },
+      ]);
+      await insertChat({ id: 'chat-2', workbenchId: 'wb-1', workspaceId: 'ws-a', title: 'New chat', agent: 'codex' });
+      await appendEvents('chat-2', [{ turn: 1, event: userMessage('Continue the task', 'talyn') }]);
+      const run = vi.fn(reply('Fix Login Redirect'));
+      await startTitleGeneration(await row(), 'Continue the task', { run, origin: 'talyn' });
+      expect((run.mock.calls[0] as unknown as [unknown, string])[1]).toContain('Fix the login redirect');
+    });
+
+    it('keeps the name when an automatic turn has no original task', async () => {
+      const run = vi.fn(reply('Resume After Rate Limit'));
+      await startTitleGeneration(await row(), 'Continue after a rate limit', { run, origin: 'talyn' });
+      expect(run).not.toHaveBeenCalled();
+      expect((await row()).title).toBeNull();
+    });
+
     it('titles a recovered session on a later turn number', async () => {
       await updateWorkbench('wb-1', { sandboxId: 'talyn-wb-wb-1-r1' });
       await startTitleGeneration(await row(), 'turn five', { run: reply('Recovered Session') });
@@ -277,6 +320,7 @@ describe('generateSandboxTitle', () => {
       let release: (v: { exitCode: number; stdout: string; stderr: string; stdoutBytes: Buffer }) => void = () => {};
       const slow = vi.fn(() => new Promise<{ exitCode: number; stdout: string; stderr: string; stdoutBytes: Buffer }>((r) => { release = r; }));
       const first = startTitleGeneration(await row(), 'a', { run: slow });
+      await vi.waitFor(() => expect(slow).toHaveBeenCalledTimes(1));
       await startTitleGeneration(await row(), 'b', { run: slow });
       expect(slow).toHaveBeenCalledTimes(1);
       release({ exitCode: 0, stdout: 'Slow Title', stderr: '', stdoutBytes: Buffer.from('Slow Title') });
@@ -319,6 +363,39 @@ describe('generateSandboxTitle', () => {
       await startTitleFromQueue(await row(), { run });
       expect((run.mock.calls[0] as unknown as [unknown, string])[1]).toContain('add dark mode');
       expect((await row()).title).toBe('Add Dark Mode');
+    });
+
+    it('skips automatic messages in the queue', async () => {
+      await insertChat({
+        id: 'chat-1', workbenchId: 'wb-1', workspaceId: 'ws-a', title: 'Chat', agent: 'codex',
+        queuedMessages: [{ ...queued('Continue after a rate limit'), origin: 'talyn' }, queued('add dark mode')],
+      });
+      const run = vi.fn(reply('Add Dark Mode'));
+      await startTitleFromQueue(await row(), { run });
+      const script = (run.mock.calls[0] as unknown as [unknown, string])[1];
+      expect(script).toContain('add dark mode');
+      expect(script).not.toContain('Continue after a rate limit');
+    });
+
+    it('keeps the name when only automatic messages are queued', async () => {
+      await insertChat({
+        id: 'chat-1', workbenchId: 'wb-1', workspaceId: 'ws-a', title: 'Chat', agent: 'codex',
+        queuedMessages: [{ ...queued('Continue after a rate limit'), origin: 'talyn' }],
+      });
+      const run = vi.fn(reply('Resume After Rate Limit'));
+      await startTitleFromQueue(await row(), { run });
+      expect(run).not.toHaveBeenCalled();
+      expect((await row()).title).toBeNull();
+    });
+
+    it('uses the original task when a later message is queued after recovery', async () => {
+      await chat('chat-1', ['Please continue']);
+      await appendEvents('chat-1', [{ turn: 1, event: userMessage('Fix the login redirect') }]);
+      const run = vi.fn(reply('Fix Login Redirect'));
+      await startTitleFromQueue(await row(), { run });
+      const script = (run.mock.calls[0] as unknown as [unknown, string])[1];
+      expect(script).toContain('Fix the login redirect');
+      expect(script).not.toContain('Please continue');
     });
 
     it('never replaces a title a person set', async () => {

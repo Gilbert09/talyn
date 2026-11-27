@@ -1034,6 +1034,22 @@ export async function listChats(workbenchId: string): Promise<ChatRow[]> {
     .orderBy(asc(chatsTable.createdAt));
 }
 
+/** Read the original task for title retries, without loading the transcript. */
+export async function firstWorkbenchTask(workbenchId: string): Promise<string | null> {
+  const text = sql<string>`${eventsTable.event} #>> '{message,content,0,text}'`;
+  const [row] = await db().select({ text }).from(eventsTable)
+    .innerJoin(chatsTable, eq(chatsTable.id, eventsTable.chatId))
+    .where(and(
+      eq(chatsTable.workbenchId, workbenchId),
+      sql`${eventsTable.event}->'talyn'->>'kind' = 'user_message'`,
+      sql`${eventsTable.event}->'talyn'->>'origin' IS DISTINCT FROM 'talyn'`,
+      sql`btrim(${text}) <> ''`,
+    ))
+    .orderBy(asc(eventsTable.createdAt), asc(chatsTable.createdAt), asc(eventsTable.seq), asc(chatsTable.id))
+    .limit(1);
+  return row?.text ?? null;
+}
+
 /**
  * Mark a chat that has never run a turn as busy with an import, in one
  * statement. A message sent meanwhile queues behind it, and a second import
