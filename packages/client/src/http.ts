@@ -89,7 +89,6 @@ const sessionRecovery = new WeakMap<ApiClientConfig, Promise<boolean>>();
 type RequestContext = {
   config: ApiClientConfig;
   runtime: ReturnType<typeof getRuntime>;
-  signal?: AbortSignal;
   invalidated: boolean;
   dispose: () => void;
 };
@@ -101,8 +100,8 @@ export class ClientInactiveError extends Error {
   }
 }
 
-function context(signal?: AbortSignal): RequestContext {
-  const ctx: RequestContext = { config: getConfig(), runtime: getRuntime(), signal, invalidated: false, dispose: () => {} };
+function context(): RequestContext {
+  const ctx: RequestContext = { config: getConfig(), runtime: getRuntime(), invalidated: false, dispose: () => {} };
   ctx.dispose = ctx.runtime.lifecycle.subscribe((event) => {
     if (event.type === 'state' && !canRun(event.state)) ctx.invalidated = true;
   });
@@ -110,7 +109,6 @@ function context(signal?: AbortSignal): RequestContext {
 }
 
 function assertActive(ctx: RequestContext): void {
-  if (ctx.signal?.aborted) throw ctx.signal.reason ?? new Error('Request aborted.');
   if (ctx.invalidated || ctx.config !== getConfig() || ctx.runtime.lifecycle.getSnapshot().activity === 'suspended') throw new ClientInactiveError();
 }
 
@@ -208,7 +206,7 @@ async function fetchOrThrow(
 }
 
 function reportRequestError(error: unknown, method: string, path: string, ctx: RequestContext): void {
-  if (ctx.signal?.aborted || ctx.config !== getConfig() || error instanceof ClientInactiveError) return;
+  if (ctx.config !== getConfig() || error instanceof ClientInactiveError) return;
   const apiError = error instanceof ApiError ? error : null;
   try {
     ctx.config.onRequestError?.({ error, method, path, status: apiError?.status, code: apiError?.code });
@@ -217,21 +215,31 @@ function reportRequestError(error: unknown, method: string, path: string, ctx: R
   }
 }
 
-type RawBody = { body: BodyInit; contentType: string; name?: string };
-
 export async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  options: { signal?: AbortSignal; raw?: RawBody } = {},
+  isRetry = false,
+  raw?: { body: BodyInit; contentType: string; name?: string },
+  options: { signal?: AbortSignal } = {}
 ): Promise<T> {
-  const ctx = context(options.signal);
+  const ctx = context();
+  const { signal } = options;
+  let abort: (() => void) | undefined;
   try {
-    return await requestInternal<T>(method, path, body, false, options.raw, ctx);
+    const pending = requestInternal<T>(method, path, body, isRetry, raw, ctx, signal);
+    if (!signal) return await pending;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      abort = () => reject(signal.reason ?? new Error('Request aborted'));
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
+    });
+    return await Promise.race([pending, cancelled]);
   } catch (error) {
-    reportRequestError(error, method, path, ctx);
+    if (!signal?.aborted) reportRequestError(error, method, path, ctx);
     throw error;
   } finally {
+    if (abort) signal?.removeEventListener('abort', abort);
     ctx.dispose();
   }
 }
@@ -241,9 +249,11 @@ async function requestInternal<T>(
   path: string,
   body: unknown,
   isRetry = false,
-  raw: RawBody | undefined,
-  ctx: RequestContext
+  raw: { body: BodyInit; contentType: string; name?: string } | undefined,
+  ctx: RequestContext,
+  signal?: AbortSignal
 ): Promise<T> {
+  if (signal?.aborted) throw signal.reason ?? new Error('Request aborted');
   assertActive(ctx);
   const headers: Record<string, string> = {
     'Content-Type': raw ? raw.contentType : 'application/json',
@@ -255,14 +265,16 @@ async function requestInternal<T>(
   };
   if (raw?.name) headers['X-Attachment-Name'] = encodeURIComponent(raw.name);
   const token = await ctx.config.getAccessToken();
+  if (signal?.aborted) throw signal.reason ?? new Error('Request aborted');
   assertActive(ctx);
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const response = await fetchOrThrow(method, path, {
     headers,
     body: raw ? raw.body : body ? JSON.stringify(body) : undefined,
-    ...(ctx.signal && { signal: ctx.signal }),
+    ...(signal ? { signal } : {}),
   }, ctx);
+  if (signal?.aborted) throw signal.reason ?? new Error('Request aborted');
   assertActive(ctx);
 
   if (response.status === 401 && token && !isRetry) {
@@ -270,7 +282,7 @@ async function requestInternal<T>(
     // recoverSession) and replay the request once with the fresh token;
     // a second 401 falls through to the normal error path.
     if (await recoverSession(ctx)) {
-      return requestInternal<T>(method, path, body, true, raw, ctx);
+      return requestInternal<T>(method, path, body, true, raw, ctx, signal);
     }
   }
 
@@ -282,11 +294,9 @@ async function requestInternal<T>(
   try {
     text = await response.text();
   } catch (error) {
-    assertActive(ctx);
     if (response.status >= 500) throw new ApiError(`Backend unreachable (HTTP ${response.status})`, response.status);
     throw new ApiNetworkError(method, path, error);
   }
-  assertActive(ctx);
   let data: ApiResponse<T> | null = null;
   try {
     data = JSON.parse(text) as ApiResponse<T>;
@@ -306,6 +316,7 @@ async function requestInternal<T>(
     );
   }
 
+  assertActive(ctx);
   return data.data as T;
 }
 
