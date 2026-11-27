@@ -1,8 +1,7 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
-import type { FleetAgent } from '@talyn/shared';
+import { defaultFleetModelForAgent, fleetModelForAgentSwitch, type FleetAgent } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { workbenchChats } from '../../db/schema.js';
-import { fleetAgentStatus } from '../selfHosted/credentials.js';
 import { listFleetAccounts, setFleetAccountExhausted } from '../selfHosted/accounts.js';
 import {
   agentLabel, exhaustedAgentFrom, heldBackAgents, noteExhaustedAgent,
@@ -89,11 +88,19 @@ export async function handleChatLimit(chat: ChatRow, text: string, retry = false
       });
     }
   }
-  const [status, holds] = await Promise.all([fleetAgentStatus(workspaceId), heldBackAgents(workspaceId, now)]);
-  const possible = sandboxAgents(wb).filter((a) => status.connectedAgents.includes(a) && !status.reauthAgents.includes(a));
+  // Account selection loads the turn runtime. Load it after session initialization.
+  const { accountOverVerdict, fleetSwitchSettings } = await import('../selfHosted/accountSelection.js');
+  const [accounts, settings, holds] = await Promise.all([
+    listFleetAccounts(workspaceId), fleetSwitchSettings(workspaceId), heldBackAgents(workspaceId, now),
+  ]);
+  const threshold = settings.useFullQuotaWhenAllOver ? 100 : settings.threshold;
+  const possible = sandboxAgents(wb).filter((a) => accounts.some((account) => account.agent === a && !account.reauthRequiredAt));
+  const model = chat.model ?? (agent === wb.agent ? wb.model : null) ?? defaultFleetModelForAgent(agent);
   const other = agent === 'claude' ? 'codex' : 'claude';
-  const candidates: FleetAgent[] = credentialReason ? (retry ? [agent] : []) : retry ? [agent, other] : [other];
-  const chosen = candidates.find((a) => possible.includes(a) && !holds[a]);
+  const candidates: FleetAgent[] = credentialReason === 'reauth' ? (retry ? [agent] : []) : retry ? [agent, other] : [other];
+  const chosen = candidates.find((a) => possible.includes(a) && !holds[a] && accounts.some((account) =>
+    account.agent === a && !accountOverVerdict(account, threshold,
+      a === agent ? model : fleetModelForAgentSwitch(model, a), now).reason));
   const refusal = chosen && wb.status === 'ready' ? await existingBoxRefusal(wb, true, payer) : null;
   if (chosen && wb.status === 'ready' && !refusal) {
     const fresh = await getChat(chat.id);
@@ -117,25 +124,22 @@ export async function handleChatLimit(chat: ChatRow, text: string, retry = false
   if (credentialReason) {
     if (retry && current.limitCount >= MAX_CREDENTIAL_RETRIES) return;
     const count = current.limitCount + (retry ? 1 : 0);
-    // Credential selection also loads the turn runtime. Load it after session initialization.
-    const { accountOverVerdict, fleetSwitchSettings } = await import('../selfHosted/accountSelection.js');
     const { accountReset } = await import('./credentialFailure.js');
-    const [accounts, settings] = await Promise.all([listFleetAccounts(workspaceId, agent), fleetSwitchSettings(workspaceId)]);
-    const threshold = settings.useFullQuotaWhenAllOver ? 100 : settings.threshold;
-    const resets = accounts.filter((a) => !a.reauthRequiredAt)
-      .map((a) => accountReset(a, threshold, chat.model ?? undefined, now))
+    const own = accounts.filter((a) => a.agent === agent);
+    const resets = own.filter((a) => !a.reauthRequiredAt)
+      .map((a) => accountReset(a, threshold, model, now))
       .filter((at): at is number => at !== null);
-    const probes = accounts.filter((a) => !a.reauthRequiredAt && a.quotaExhausted)
+    const probes = own.filter((a) => !a.reauthRequiredAt && a.quotaExhausted)
       .map((a) => probeAfter(a.quotaExhausted!)).filter((at) => at > now.getTime());
     const delay = limitRetryDelay(credentialReason === 'reauth' ? Math.max(count, 4) : count);
-    const reconnected = !retry && credentialReason === 'reauth' && accounts.some((a) =>
-      !accountOverVerdict(a, threshold, chat.model ?? undefined, now).reason);
+    const reconnected = !retry && credentialReason === 'reauth' && own.some((a) =>
+      !accountOverVerdict(a, threshold, model, now).reason);
     const fallback = new Date(credentialReason === 'reauth'
       ? (reconnected ? now.getTime() : Math.min(now.getTime() + delay, ...resets))
       : resets.length ? Math.min(...resets)
         : Math.max(now.getTime() + delay, probes.length ? Math.min(...probes) : 0));
     const at = refusal ? deferralRetryAt(refusal, now.getTime()) : fallback;
-    const labels = accounts.filter((a) => a.reauthRequiredAt).map((a) => a.label);
+    const labels = own.filter((a) => a.reauthRequiredAt).map((a) => a.label);
     const label = labels.length ? new Intl.ListFormat('en', { style: 'long', type: 'conjunction' }).format(labels) : agentLabel(agent);
     const time = (at ?? fallback).toISOString().replace('T', ' ').slice(0, 16);
     const message = credentialReason === 'reauth'

@@ -174,6 +174,12 @@ Sometimes the Claude or Codex API fails on its side, for example with a server e
 
 With automatic resume enabled, a waiting session continues by itself when usage returns or you reconnect an account.
 
+If all accounts for the current agent reach their usage limit, Talyn switches to the other available agent.
+This also applies when Talyn detects the limit before a turn starts.
+The sandbox must support both agents, and the other agent must have an account with available usage.
+The next turn uses a conversation recap and a model from the same capability tier.
+If neither agent can run, the session waits for usage to return.
+
 To turn this off, open **Settings > Sessions** and turn off **Continue when an agent hits its limit**. That setting also covers usage limits. See [The model API is failing](/docs/troubleshooting#the-model-api-is-failing).
 
 ## Undo with checkpoints

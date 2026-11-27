@@ -8111,3 +8111,12 @@ Each person can mute a space on all their devices without changing a teammate's 
 The server stores these preferences and checks them before it sends a phone alert.
 Desktop and web also check the preference before showing alerts for that space.
 A change sends a private update to the person's other connected devices.
+
+### 2026-11-27 — Switch agents after a credential usage refusal
+
+Chats now switch agents when all accounts reach their usage limit before a turn starts.
+The resume sweep can also switch a waiting chat when the other agent becomes available.
+The choice checks account usage, account holds, sign-in state, the model, and the workspace quota settings.
+It uses the payer's accounts and the existing sandbox, budget, and automatic resume checks.
+The existing switch prepares a conversation recap and selects a model from the same capability tier.
+This server change applies to web, desktop, and mobile.
