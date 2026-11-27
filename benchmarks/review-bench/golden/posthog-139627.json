@@ -1,0 +1,133 @@
+{
+  "repo": "PostHog/posthog",
+  "pr": 139627,
+  "head": "6cca8c04ca3ebe9b718a9c1221cc418c76d22927",
+  "base": "57fbf4f20a7dafee35d86379606ebf23b0f8a55e",
+  "note": "HogVM host driver API and resource limits for untrusted programs (Rust). Golden issues are the real findings that PostHog Review, Veria, Parameter, the security review bot and haacked posted on the first reviewed commit, plus later-commit findings verified present at the head (snapshot cycles, tuple marking, membership/equality budget, shared property keys). Each was fixed later in the PR. Excluded: findings the author declined with a valid bound (native string copies of ordered globals, regex recompile over compiled_limit, scalar equality, 64 MiB constant), issues introduced by later commits, tests, docs and nits.",
+  "issues": [
+    {
+      "id": "G1",
+      "severity": "high",
+      "file": "rust/common/hogvm/src/vm.rs",
+      "summary": "With async calls, a program can keep a string larger than max_heap_size repeated many times (shared strings now cost one pointer) across a suspension; snapshot() serializes the stack and closed cells through value_to_json with no expansion budget, and collect_cells/value_to_json follow cyclic or very deep values with no guard, so the snapshot exhausts host memory or overflows the stack.",
+      "sources": [
+        "posthog",
+        "parameter",
+        "veria"
+      ]
+    },
+    {
+      "id": "G2",
+      "severity": "medium",
+      "file": "rust/common/hogvm/src/stl.rs",
+      "summary": "replaceOne reserves the whole subject plus the replacement without subtracting the matched text (and charges the replacement on a miss), so replaceOne(s, s, '') on a string over half the heap raises OutOfResource although the result is empty.",
+      "sources": [
+        "posthog"
+      ]
+    },
+    {
+      "id": "G3",
+      "severity": "medium",
+      "file": "rust/common/hogvm/src/stl.rs",
+      "summary": "The new jsonStringify preflight (assert_repeats_fit) enters the SQL-AST cycle rule, so jsonStringify of a cyclic object that contains __hx_ast now fails with OutOfResource instead of emitting null; JSON serialization never uses the HogQL printer, so this breaks input that worked before.",
+      "sources": [
+        "posthog"
+      ]
+    },
+    {
+      "id": "G4",
+      "severity": "medium",
+      "file": "rust/common/hogvm/src/print.rs",
+      "summary": "assert_repeats_fit returns early for any HogValue::Lit, so a shared string literal larger than the heap (e.g. from an ordered global or array element) passed to jsonStringify is never measured; the guard also counts raw length, not JSON-escaped length (up to 6x), so serialization builds a result far past the heap budget.",
+      "sources": [
+        "posthog",
+        "security"
+      ]
+    },
+    {
+      "id": "G5",
+      "severity": "medium",
+      "file": "rust/common/hogvm/src/print.rs",
+      "summary": "The public print_hog_value skips assert_repeats_fit (only print_hog_string_output runs it), and marked stops only cycles, so a host that prints a raw result built by repeated a := [a, a] prints exponential text and exhausts memory in one call.",
+      "sources": [
+        "veria",
+        "security"
+      ]
+    },
+    {
+      "id": "G6",
+      "severity": "medium",
+      "file": "rust/common/hogvm/src/print.rs",
+      "summary": "The HogQL printer detects repeated next_join entries with Vec::contains, which is O(n^2) over a long acyclic join chain; print_hog_value skips the repeat check and the loop does not advance the depth guard, so one print monopolizes the worker.",
+      "sources": [
+        "posthog"
+      ]
+    },
+    {
+      "id": "G7",
+      "severity": "medium",
+      "file": "rust/common/hogvm/src/vm.rs",
+      "summary": "track_closed_upvalue prunes only when the vector is full and does not reserve headroom, so with capacity-1 long-lived closed upvalues every temporary closure triggers a full retain scan: quadratic work.",
+      "sources": [
+        "posthog"
+      ]
+    },
+    {
+      "id": "G8",
+      "severity": "medium",
+      "file": "rust/common/hogvm/src/util.rs",
+      "summary": "On a bounded RegexCache, a miss does get then compile then insert instead of get_or_insert_with, so concurrent workers that meet the same uncached pattern each compile it, multiplying CPU and memory on cold start or cache churn.",
+      "sources": [
+        "posthog"
+      ]
+    },
+    {
+      "id": "G9",
+      "severity": "medium",
+      "file": "rust/common/hogvm/src/values.rs",
+      "summary": "HogLiteral::size charges 0 bytes for null, empty owned strings and empty arrays/objects, while emplace still appends a heap entry and arrayPushBack copies arrays; a loop like a := arrayPushBack(a, null) holds gigabytes while heap.current_bytes and the new memory_bytes() stay near zero, defeating the heap limit.",
+      "sources": [
+        "parameter",
+        "security"
+      ]
+    },
+    {
+      "id": "G10",
+      "severity": "medium",
+      "file": "rust/common/hogvm/src/vm.rs",
+      "summary": "The new repeat bound in hog_to_json treats a cycle as free (RepeatMeasure ends the walk with Ok), but hog_to_json_impl has no marked set and follows the cycle to MAX_JSON_SERDE_DEPTH, copying contents about 257 times, so a self-referencing object with a large string allocates far past the heap limit (process abort).",
+      "sources": [
+        "security"
+      ]
+    },
+    {
+      "id": "G11",
+      "severity": "medium",
+      "file": "rust/common/hogvm/src/stl.rs",
+      "summary": "RepeatMeasure treats tuples as cycle boundaries, but json_stringify (and the printer) mark only arrays and objects, so a tuple that reaches itself through an array is expanded repeatedly: the preflight accepts a value whose serialization is gigabytes.",
+      "sources": [
+        "veria"
+      ]
+    },
+    {
+      "id": "G12",
+      "severity": "medium",
+      "file": "rust/common/hogvm/src/vm.rs",
+      "summary": "Membership and equality (in/notIn opcodes, has, indexOf, in(), ==, equals, notEquals) compare every element in full with no work budget; a haystack that repeats one large array or one shared string (charged as a pointer) makes one VM step do quadratic, unmetered work.",
+      "sources": [
+        "parameter",
+        "veria",
+        "haacked"
+      ]
+    },
+    {
+      "id": "G13",
+      "severity": "medium",
+      "file": "rust/common/hogvm/src/vm.rs",
+      "summary": "SetProperty charges the key with key.size(), which is one pointer for a shared string, but set_property copies the key into an owned String; reusing a 1 MiB literal as the key of many objects retains hundreds of MiB while the heap limit and memory_bytes() record only kilobytes.",
+      "sources": [
+        "veria"
+      ]
+    }
+  ]
+}

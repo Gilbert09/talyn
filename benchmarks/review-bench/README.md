@@ -31,6 +31,29 @@ A unit fails when its agent commands fail for an environment reason, so a blind 
 
 Results and prompt experiments are in [FINDINGS.md](./FINDINGS.md).
 
+## Golden-case runs with Claude Code
+
+`src/golden.ts` reviews one real pull request whose true problems are known, with Claude Code.
+It runs the same prompts and the same lens, sweep and judge sequence as `review()`.
+A case file in `golden/` lists the known problems. Each problem is one that another reviewer reported and that was present at the head commit.
+
+The runner needs a checkout of the case repository at the head commit, the GitHub file list with patches, and the PR title and body.
+It starts `claude -p` in the checkout, with read-only tools and an empty `HOME`, so your own `CLAUDE.md` does not reach the reviewer.
+A Sonnet call then matches the findings to the known problems. It scores the candidates before the judge and the findings after it.
+
+```sh
+npx esbuild benchmarks/review-bench/src/golden.ts --bundle --platform=node --format=esm \
+  --alias:@talyn/shared=./packages/shared/src/index.ts --outfile=/tmp/golden.js
+node /tmp/golden.js --case benchmarks/review-bench/golden/posthog-143292.json \
+  --repo /path/to/posthog-checkout --files files.json --pr pr.json --out /tmp/run \
+  --preset standard --model claude-opus-5-5
+```
+
+`files.json` is the `files` array of `GET /repos/<repo>/compare/<base>...<head>`.
+`pr.json` holds `title`, `body`, `head` and `base` (the branch names).
+Add `--score-only` to score an earlier run again.
+These commands spend model usage.
+
 Install Docker, Node.js 22, npm, Git, and jq on the host.
 Refresh your host credentials with any normal `codex exec` run before you start.
 The helper rejects credentials whose `last_refresh` is at least 7 days old. Codex refreshes a token after about 8 days, and a refresh inside the container rotates the refresh token, which can log the host out.

@@ -6,6 +6,9 @@ import { pathToFileURL } from 'node:url';
 import {
   CODE_REVIEW_PRESET_PLAN,
   CODE_REVIEW_SEVERITY_ORDER,
+  CODE_REVIEW_WHOLE_PR_LENSES,
+  codeReviewLensRunsOnChunk,
+  planCodeReviewParts,
   isCodeReviewPreset,
   parseCodeReviewFindings,
   type CodeReviewPreset,
@@ -208,7 +211,7 @@ export function applyJudge(
   if (unmatched) log(`The judge returned ${unmatched} unmatched keeps. Applying only named drops.`);
   return candidates.flatMap((candidate) => {
     const keep = keeps.get(candidate.dedupeKey);
-    if (keep) return [{ ...candidate, severity: keep.severity, body: keep.body }];
+    if (keep) return [{ ...candidate, severity: keep.severity, body: keep.body || candidate.body }];
     return unmatched && !drops.has(candidate.dedupeKey) ? [candidate] : [];
   });
 }
@@ -220,18 +223,27 @@ async function parallel<T>(items: T[], limit: number, run: (item: T) => Promise<
   }));
 }
 
+export interface ReviewHooks {
+  /** Called with every candidate before the judge runs. */
+  onUnjudged?: (candidates: Candidate[]) => void;
+  /** The base commit, when the checkout can fetch it. */
+  baseSha?: string;
+}
+
 export async function review(
   ctx: ReviewPromptContext,
   settings: Settings,
   runner: AgentRunner,
   log: Log = console.log,
+  hooks: ReviewHooks = {},
 ): Promise<Candidate[]> {
   const plan = CODE_REVIEW_PRESET_PLAN[settings.preset];
   const lensKeys = lensesForPreset(settings.preset);
-  const chunkTotal = plan.chunk ? Math.max(1, Math.ceil(ctx.files.length / 25)) : 1;
+  const chunkTotal = plan.chunk ? planCodeReviewParts(ctx.files, plan.maxParts).length || 1 : 1;
   const scoped = (index: number): ReviewPromptContext => ({
-    ...ctx, files: filesForChunk(ctx.files, index, chunkTotal), chunkIndex: index + 1, chunkTotal,
+    ...ctx, files: filesForChunk(ctx.files, index, chunkTotal), allFiles: ctx.files, chunkIndex: index + 1, chunkTotal,
   });
+  const whole: ReviewPromptContext = { ...ctx, chunkIndex: 1, chunkTotal: 1 };
   const verified = anchorVerifier(ctx.files);
   const stored = new Map<string, Candidate>();
   const candidates = () => [...stored.values()].sort((a, b) => rank(a) - rank(b));
@@ -250,9 +262,11 @@ export async function review(
   const units: AgentUnit[] = [];
   for (let chunk = 0; chunk < chunkTotal; chunk++) {
     for (const lens of lensKeys) {
+      if (chunkTotal > 1 && !codeReviewLensRunsOnChunk(lens, chunk)) continue;
+      const wholePr = chunkTotal > 1 && CODE_REVIEW_WHOLE_PR_LENSES.has(lens);
       units.push({
         name: `lens-${lens}-${chunk + 1}`, kind: 'lens', lens, model: settings.model,
-        prompt: buildLensPrompt(lensByKey(lens)!, scoped(chunk)),
+        prompt: buildLensPrompt(lensByKey(lens)!, wholePr ? whole : scoped(chunk)),
       });
     }
   }
@@ -280,10 +294,11 @@ export async function review(
     });
   }
   const unjudged = candidates();
+  hooks.onUnjudged?.(unjudged);
   if (!plan.validate || !unjudged.length) return unjudged;
   const parsed = await execute({
     name: 'judge', kind: 'judge', lens: '', model: settings.judgeModel,
-    prompt: buildJudgePrompt(scoped(0), unjudged.map((finding) => ({
+    prompt: buildJudgePrompt(whole, unjudged.map((finding) => ({
       id: finding.dedupeKey,
       severity: finding.severity,
       filePath: finding.file,
@@ -487,7 +502,9 @@ export async function main(): Promise<void> {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// The golden runner bundles this module too, and must not start a ReviewBench run.
+if (process.argv[1] && /(^|\/)main\.[jt]s$/.test(process.argv[1])
+  && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

@@ -5,6 +5,8 @@ import {
   codeReviewLensLabel,
   codeReviewLensNames,
   codeReviewUnitCount,
+  CODE_REVIEW_WHOLE_PR_LENSES,
+  planCodeReviewParts,
   isCodeReviewPreset,
   isCustomReviewerLens,
   parseCodeReviewFindings,
@@ -244,7 +246,7 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
     return;
   }
 
-  const chunkTotal = plan.chunk ? chunkCountFor(loaded.ctx.files) : 1;
+  const chunkTotal = plan.chunk ? planCodeReviewParts(loaded.ctx.files, plan.maxParts).length || 1 : 1;
 
   // Which reviewers this change actually needs, decided HERE because this is
   // where the file list first exists — and because `runsTotal` is written in
@@ -273,7 +275,12 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
     );
     return;
   }
-  const runsTotal = codeReviewUnitCount(preset, chunkTotal, lensKeys.length);
+  const runsTotal = codeReviewUnitCount(
+    preset,
+    chunkTotal,
+    lensKeys.length,
+    lensKeys.filter((k) => CODE_REVIEW_WHOLE_PR_LENSES.has(k)).length
+  );
 
   const planned = await casTransition(
     review.id,
@@ -311,21 +318,6 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
       reviewerCount: lensKeys.length,
     });
   }
-}
-
-/**
- * How many pieces a large pull request is read in.
- *
- * Provisional, and marked as such. The anchor that matters is how much a lens can
- * hold and still reason about, which is a measurement nobody has taken for these
- * repositories yet — so this is a deliberately coarse split by file count, and the
- * experiment that replaces it is comparing findings-per-file on one large PR read
- * whole against the same PR read in pieces.
- */
-const FILES_PER_CHUNK = 25;
-
-function chunkCountFor(files: unknown[]): number {
-  return Math.max(1, Math.ceil(files.length / FILES_PER_CHUNK));
 }
 
 // ---------- Dispatching a unit ----------
@@ -813,12 +805,18 @@ async function buildUnitPrompt(
   unit: UnitKey,
   ctx: ReviewPromptContext
 ): Promise<BuiltPrompt | null> {
-  const scoped: ReviewPromptContext = {
-    ...ctx,
-    files: filesForChunk(ctx.files, unit.chunkIndex, review.chunkTotal),
-    chunkIndex: unit.chunkIndex + 1,
-    chunkTotal: review.chunkTotal,
-  };
+  // The judge and a whole-PR lens read every file. Every other unit reads its part.
+  const whole =
+    unit.kind === 'validate' || (unit.kind === 'lens' && CODE_REVIEW_WHOLE_PR_LENSES.has(unit.lens));
+  const scoped: ReviewPromptContext = whole
+    ? { ...ctx, chunkIndex: 1, chunkTotal: 1 }
+    : {
+        ...ctx,
+        files: filesForChunk(ctx.files, unit.chunkIndex, review.chunkTotal),
+        allFiles: ctx.files,
+        chunkIndex: unit.chunkIndex + 1,
+        chunkTotal: review.chunkTotal,
+      };
 
   if (unit.kind === 'lens') {
     const lens = lensByKey(unit.lens);

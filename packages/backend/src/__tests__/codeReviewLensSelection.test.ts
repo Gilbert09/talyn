@@ -146,6 +146,6 @@ describe('codeReviewUnitCount with a known lens count', () => {
   });
 
   it('falls back to the preset when the caller does not know yet', () => {
-    expect(codeReviewUnitCount('standard', 1)).toBe(codeReviewUnitCount('standard', 1, 3));
+    expect(codeReviewUnitCount('standard', 1)).toBe(codeReviewUnitCount('standard', 1, 4));
   });
 });

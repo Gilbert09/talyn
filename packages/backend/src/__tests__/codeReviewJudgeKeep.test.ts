@@ -104,7 +104,28 @@ describe('the judge contract', () => {
       [{ id: 'abc123', severity: 'major', filePath: 'src/a.ts', lines: '10', title: 'T', body: 'B', raisedBy: [] }]
     );
     expect(prompt).toContain('### abc123');
-    expect(prompt).toContain('MUST carry one more field: `"id"`');
+    expect(prompt).toContain('List the candidates you KEEP by their id');
+    expect(prompt).toContain('"findings":[{"id":"<candidate id>"');
+  });
+
+  it('does not ask the judge to copy the kept findings back', () => {
+    // An 18 KB copy with one typo in it left a whole review unchecked.
+    const prompt = buildJudgePrompt(
+      { ref: 'acme/app#7', title: 't', body: '', headBranch: 'h', baseBranch: 'main', files: [], chunkIndex: 1, chunkTotal: 1 },
+      []
+    );
+    expect(prompt).toContain('Do not copy the');
+    expect(prompt).not.toContain('"anchor":"the exact source line');
+  });
+
+  it('reads a keep that carries only an id, a severity and a title', () => {
+    const parsed = parseCodeReviewFindings(
+      'TALYN_REVIEW_FINDINGS:\n```json\n{"schema":1,"findings":[{"id":"abc123","severity":"minor","title":"T"}],' +
+        '"dropped":[{"id":"def456","reason":"r"}]}\n```'
+    );
+    expect(parsed.ok && parsed.findings).toEqual([expect.objectContaining({ id: 'abc123', severity: 'minor' })]);
+    expect(parsed.ok && parsed.dropped).toEqual([{ id: 'def456', reason: 'r' }]);
+    expect(parsed.ok && matchJudgeKeep(parsed.findings[0]!, new Set(['abc123']), false)).toBe('abc123');
   });
 
   it.each([
@@ -127,8 +148,8 @@ describe('the judge contract', () => {
 
     if (reviewerLine) expect(prompt).toContain(`### abc123\n${reviewerLine}`);
     else expect(prompt).not.toContain('Raised by:');
-    expect(prompt).toContain('## Keep a coverage gap when');
-    expect(prompt).toContain('## Keep an operability problem when');
+    expect(prompt).toContain('## A coverage gap');
+    expect(prompt).toContain('## An operability problem');
   });
 
   it.each([

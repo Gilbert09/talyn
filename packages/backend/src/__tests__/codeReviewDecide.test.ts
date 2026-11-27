@@ -94,8 +94,9 @@ describe('decide', () => {
 
     it.each([
       ['one chunk, three lenses', 1, ['correctness', 'security', 'reliability'], 3],
-      ['four chunks, three lenses', 4, ['correctness', 'security', 'reliability'], 12],
-      ['two chunks, six lenses', 2, ['correctness', 'security', 'reliability', 'performance', 'tests', 'style'], 12],
+      // The generalist reads the whole pull request once; the others read each part.
+      ['four chunks, three lenses', 4, ['correctness', 'security', 'reliability'], 9],
+      ['two chunks, six lenses', 2, ['correctness', 'security', 'reliability', 'performance', 'tests', 'style'], 11],
     ])('fires every missing unit at once, with no workspace cap (%s)', (_label, chunkTotal, lensKeys, expected) => {
       // No per-workspace ceiling: each box is metered against the user's compute
       // time, and a unit that finds the fleet full waits there for room.
@@ -129,12 +130,21 @@ describe('decide', () => {
       expect(decide(state({ runs }))).toEqual([]);
     });
 
-    it('fires a lens per chunk when the pull request was split', () => {
+    it('fires a lens per chunk when the pull request was split, and the generalist once', () => {
       const actions = decide(state({ chunkTotal: 2 }));
-      expect(actions).toHaveLength(6);
-      expect(new Set(actions.map((a) => (a.type === 'dispatch' ? a.unit.chunkIndex : -1)))).toEqual(
-        new Set([0, 1])
-      );
+      const units = actions.map((a) => (a.type === 'dispatch' ? `${a.unit.lens}:${a.unit.chunkIndex}` : ''));
+      expect(units.sort()).toEqual(['correctness:0', 'reliability:0', 'reliability:1', 'security:0', 'security:1']);
+    });
+
+    it('waits for the generalist only on the first chunk', () => {
+      const runs = [
+        run({ id: 'a', lens: 'correctness', chunkIndex: 0, status: 'succeeded' }),
+        ...['security', 'reliability'].flatMap((lens) =>
+          [0, 1].map((chunkIndex) => run({ id: `${lens}-${chunkIndex}`, lens, chunkIndex, status: 'succeeded' }))
+        ),
+      ];
+      const actions = decide(state({ chunkTotal: 2, runs }));
+      expect(actions.some((a) => a.type === 'dispatch' && a.unit.kind === 'lens')).toBe(false);
     });
 
     it('waits rather than re-dispatching while a unit is running', () => {
