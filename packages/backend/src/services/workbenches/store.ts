@@ -2066,7 +2066,7 @@ export async function markArchive(
   const fromSaved = idle ? Boolean(idle.fromSaved) : sleeping === 'from_saved';
   const row = await db().transaction(async (tx) => {
     if (bulkGuard) {
-      // Turn claims hold FOR SHARE. Wait before reading activity with a fresh statement snapshot.
+      // Turn and script claims hold FOR SHARE. Read activity after the lock with a fresh statement snapshot.
       await tx.select({ id: workbenchesTable.id }).from(workbenchesTable)
         .where(eq(workbenchesTable.id, id)).for('update');
     }

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, ne, or, lt, sql } from 'drizzle-orm';
 import type { WorkbenchScriptFrame } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
-import { workbenchScriptRuns as runs } from '../../db/schema.js';
+import { workbenchScriptRuns as runs, workbenches } from '../../db/schema.js';
 import { cleanJsonbString } from './jsonSafe.js';
 import { TURN_OWNER } from './ownership.js';
 import { touchWorkbenchActivity, type WorkbenchRow } from './store.js';
@@ -12,11 +12,17 @@ const columns = {
   sandboxGeneration: runs.sandboxGeneration, generation: runs.generation, owner: runs.owner, heartbeat: runs.heartbeat, offset: runs.offset,
 };
 export type ScriptLease = { [K in keyof typeof columns]: typeof runs.$inferSelect[K] };
-export async function claimScript(row: WorkbenchRow, name: string): Promise<ScriptLease | null> {
+export async function claimScript(row: WorkbenchRow, name: string, allowArchived = false): Promise<ScriptLease | null> {
   const values = { id: `${row.id}:${name}`, workbenchId: row.id, sandboxId: row.sandboxId!, workspaceId: row.workspaceId, name,
     sandboxGeneration: row.sandboxGeneration ?? row.sandboxId!, generation: randomUUID(), owner: TURN_OWNER, heartbeat: new Date(), offset: 0, output: '', running: true, exitCode: null, startedAt: new Date() };
-  const [claimed] = await getPoolDbClient().insert(runs).values(values)
-    .onConflictDoUpdate({ target: runs.id, set: values, setWhere: or(eq(runs.running, false), ne(runs.sandboxId, row.sandboxId!), sql`coalesce(${runs.sandboxGeneration}, ${runs.sandboxId}) <> ${row.sandboxGeneration ?? row.sandboxId!}`) }).returning(columns);
+  const claimed = await getPoolDbClient().transaction(async (tx) => {
+    const [current] = await tx.select({ archivedAt: workbenches.archivedAt }).from(workbenches)
+      .where(eq(workbenches.id, row.id)).for('share');
+    if (!current || (current.archivedAt && !allowArchived)) return null;
+    const [lease] = await tx.insert(runs).values(values)
+      .onConflictDoUpdate({ target: runs.id, set: values, setWhere: or(eq(runs.running, false), ne(runs.sandboxId, row.sandboxId!), sql`coalesce(${runs.sandboxGeneration}, ${runs.sandboxId}) <> ${row.sandboxGeneration ?? row.sandboxId!}`) }).returning(columns);
+    return lease ?? null;
+  });
   if (claimed) touchWorkbenchActivity(row.id, true);
   return claimed ?? null;
 }

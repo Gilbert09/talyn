@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { useMemo } from 'react';
-import type { WorkbenchBackground, WorkbenchBackgroundJob, WorkbenchWakeup } from '@talyn/shared';
+import type { Workbench, WorkbenchBackground, WorkbenchBackgroundJob, WorkbenchWakeup } from '@talyn/shared';
 import { api } from '../lib/api';
 
 interface SessionBackgroundState {
@@ -12,6 +12,11 @@ interface SessionBackgroundState {
 const versions = new Map<string, number>();
 const knownIds = new Set<string>();
 let connectionVersion = 0;
+const refreshQueue = new Set<string>();
+let refreshPromise: Promise<void> | undefined;
+let finishRefresh: (() => void) | undefined;
+let refreshWorkers = 0;
+const REFRESH_CONCURRENCY = 4;
 
 export const useSessionBackgroundStore = create<SessionBackgroundState>((set) => ({
   byWorkbench: {},
@@ -22,6 +27,7 @@ export const useSessionBackgroundStore = create<SessionBackgroundState>((set) =>
   },
   clear: (id) => {
     knownIds.delete(id);
+    refreshQueue.delete(id);
     versions.set(id, (versions.get(id) ?? 0) + 1);
     set((state) => {
       const byWorkbench = { ...state.byWorkbench };
@@ -45,15 +51,43 @@ export async function loadBackground(id: string): Promise<void> {
   }
 }
 
-/** Clear stale state before refreshing sessions, including those with no open view. */
-export async function reconcileBackground(): Promise<void> {
-  const ids = new Set([
-    ...Object.keys(useSessionBackgroundStore.getState().byWorkbench),
-    ...knownIds,
-  ]);
+/** Stop tracking sessions that were archived, deleted, or left with the previous workspace. */
+export function pruneBackground(workbenches: Record<string, Workbench>): void {
+  for (const id of knownIds) {
+    const workbench = workbenches[id];
+    if (!workbench || workbench.archivedAt || workbench.status === 'archived') {
+      useSessionBackgroundStore.getState().clear(id);
+    }
+  }
+}
+
+async function refreshWorker(): Promise<void> {
+  while (refreshQueue.size > 0) {
+    const id = refreshQueue.values().next().value!;
+    refreshQueue.delete(id);
+    await loadBackground(id);
+  }
+  refreshWorkers--;
+  if (refreshWorkers === 0) {
+    refreshPromise = undefined;
+    finishRefresh?.();
+    finishRefresh = undefined;
+  }
+}
+
+/** Clear stale snapshots and share a bounded queue across reconnects. */
+export function reconcileBackground(workbenches?: Record<string, Workbench>): Promise<void> {
+  if (workbenches) pruneBackground(workbenches);
   connectionVersion++;
   useSessionBackgroundStore.setState({ byWorkbench: {} });
-  await Promise.all([...ids].map(loadBackground));
+  refreshQueue.clear();
+  for (const id of knownIds) refreshQueue.add(id);
+  if (refreshPromise) return refreshPromise;
+  const promise = new Promise<void>((resolve) => { finishRefresh = resolve; });
+  refreshPromise = promise;
+  refreshWorkers = REFRESH_CONCURRENCY;
+  for (let i = 0; i < REFRESH_CONCURRENCY; i++) void refreshWorker();
+  return promise;
 }
 
 export function useBackground(id: string): WorkbenchBackground | undefined {

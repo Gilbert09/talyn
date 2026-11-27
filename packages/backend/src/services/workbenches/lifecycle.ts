@@ -949,7 +949,7 @@ export async function processArchive(workbenchId: string): Promise<void> {
       const config = await loadWorkbenchConfig(row);
       await checkLease();
       if (config?.archive) {
-        const { done } = await startScript(row, 'archive', { config, timeoutMs: ARCHIVE_SCRIPT_TIMEOUT_MS, resume: true });
+        const { done } = await startScript(row, 'archive', { config, timeoutMs: ARCHIVE_SCRIPT_TIMEOUT_MS, resume: true, allowArchived: true });
         await done;
       }
       await checkLease();

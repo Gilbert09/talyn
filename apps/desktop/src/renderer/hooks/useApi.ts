@@ -36,7 +36,7 @@ import { toast } from '../stores/toast';
 import { notifyMergeQueueReviewWait } from '../lib/mergeQueueReviewWait';
 import { trackEvent } from '../lib/analytics';
 import { useWorkbenchStore, wellFormedEvents } from '../stores/workbenches';
-import { reconcileBackground, useSessionBackgroundStore } from '../stores/sessionBackground';
+import { pruneBackground, reconcileBackground, useSessionBackgroundStore } from '../stores/sessionBackground';
 import { reconcileWorkbenches } from '../lib/workbenchData';
 import { installWorkbenchNotifications, toastPullRequestFailures } from '../lib/workbenchNotify';
 import { installDeskPresence } from '../lib/deskPresence';
@@ -329,7 +329,7 @@ export function useApiConnection() {
   // task + environment lists to reconcile any changes we missed. The first
   // connect is covered by useInitialDataLoad.
   useOnReconnect(() => {
-    void reconcileBackground();
+    void reconcileBackground(useWorkbenchStore.getState().workbenches);
     void reconcileTasksFromServer();
     void reconcileEnvironmentsFromServer();
     void useBillingStore.getState().refresh();
@@ -337,7 +337,10 @@ export function useApiConnection() {
     // past the last seq held for chats whose history is open.
     const workbenchWorkspace = useWorkbenchStore.getState().workspaceId;
     if (workbenchWorkspace && workbenchWorkspace === useWorkspaceStore.getState().currentWorkspaceId) {
-      void reconcileWorkbenches(workbenchWorkspace).then(() => getLocalController()?.resetInterruptedTurns());
+      void reconcileWorkbenches(workbenchWorkspace).then(() => {
+        pruneBackground(useWorkbenchStore.getState().workbenches);
+        getLocalController()?.resetInterruptedTurns();
+      });
     }
     if (workbenchesOffered(useWorkspaceStore.getState().features)) void loadSlackPending();
   });
@@ -494,6 +497,7 @@ export function useApiConnection() {
     // merged once per frame, exactly like task:event.
     unsubscribers.push(
       wsClient.on<WorkbenchWsPayloads['workbench:updated']>('workbench:updated', (payload) => {
+        if (isArchivedWorkbench(payload.workbench)) useSessionBackgroundStore.getState().clear(payload.workbench.id);
         if (isArchivedWorkbench(payload.workbench)) stopCoderPreview(payload.workbench.id);
         const store = useWorkbenchStore.getState();
         store.upsertWorkbench(payload.workbench);
@@ -530,6 +534,8 @@ export function useApiConnection() {
         useWorkbenchStore.getState().appendScriptFrame(payload);
       }),
       wsClient.on<WorkbenchWsPayloads['workbench:background']>('workbench:background', (payload) => {
+        const workbench = useWorkbenchStore.getState().workbenches[payload.workbenchId];
+        if (!workbench || isArchivedWorkbench(workbench)) return;
         useSessionBackgroundStore.getState().applyBackground(payload);
       })
     );

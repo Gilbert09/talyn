@@ -4,7 +4,7 @@ jest.mock('../renderer/lib/api', () => ({ api: { workbenches: { background: jest
 
 import { api } from '../renderer/lib/api';
 import { emptyLogText, formatCountdown, formatRunTime, isActiveBackground, keepAwakeLabel, wakeLaterPresets, wakeupTitle, wakeupWhen } from '../renderer/lib/sessionBackground';
-import { loadBackground, reconcileBackground, useSessionBackgroundStore } from '../renderer/stores/sessionBackground';
+import { loadBackground, pruneBackground, reconcileBackground, useSessionBackgroundStore } from '../renderer/stores/sessionBackground';
 import { archiveAllCandidates } from '../renderer/lib/archiveAll';
 
 const empty = (workbenchId: string): WorkbenchBackground => ({ workbenchId, jobs: [], wakeups: [] });
@@ -15,8 +15,7 @@ const deferred = <T>() => {
 };
 
 beforeEach(() => {
-  useSessionBackgroundStore.getState().clear('a');
-  useSessionBackgroundStore.getState().clear('b');
+  pruneBackground({});
   jest.resetAllMocks();
 });
 
@@ -119,6 +118,56 @@ describe('session background store', () => {
     await reconcileBackground();
     expect(api.workbenches.background).toHaveBeenCalledTimes(1);
     expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
+  });
+
+  it('bounds requests and coalesces repeated reconnects', async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `session-${i}`);
+    for (const id of ids) useSessionBackgroundStore.getState().applyBackground(empty(id));
+    const blocked = deferred<void>();
+    let active = 0;
+    let peak = 0;
+    jest.mocked(api.workbenches.background).mockImplementation(async (id) => {
+      active++;
+      peak = Math.max(peak, active);
+      await blocked.promise;
+      active--;
+      return empty(id);
+    });
+    const first = reconcileBackground();
+    const second = reconcileBackground();
+    const third = reconcileBackground();
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    expect(api.workbenches.background).toHaveBeenCalledTimes(4);
+    blocked.resolve();
+    await first;
+    expect(peak).toBe(4);
+    expect(api.workbenches.background).toHaveBeenCalledTimes(16);
+    expect(Object.keys(useSessionBackgroundStore.getState().byWorkbench).sort()).toEqual(ids.sort());
+  });
+
+  it('prunes archived and missing sessions, including queued and pending refreshes', async () => {
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    for (const id of ids) useSessionBackgroundStore.getState().applyBackground(empty(id));
+    const blocked = deferred<void>();
+    jest.mocked(api.workbenches.background).mockImplementation(async (id) => {
+      await blocked.promise;
+      return empty(id);
+    });
+    const refresh = reconcileBackground();
+    pruneBackground({
+      a: { id: 'a', status: 'ready' } as Workbench,
+      b: { id: 'b', status: 'archived' } as Workbench,
+      c: { id: 'c', status: 'ready', archivedAt: '2026-11-27' } as Workbench,
+    });
+    blocked.resolve();
+    await refresh;
+    expect(Object.keys(useSessionBackgroundStore.getState().byWorkbench)).toEqual(['a']);
+    expect(api.workbenches.background).not.toHaveBeenCalledWith('e');
+    jest.mocked(api.workbenches.background).mockClear();
+    await reconcileBackground();
+    expect(api.workbenches.background).toHaveBeenCalledTimes(1);
+    expect(api.workbenches.background).toHaveBeenCalledWith('a');
   });
 
   it('does not retry or restore a cleared session with a pending load', async () => {

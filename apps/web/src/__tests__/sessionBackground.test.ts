@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkbenchBackground, WorkbenchBackgroundJob, WorkbenchWakeup } from '@talyn/shared';
+import type { Workbench, WorkbenchBackground, WorkbenchBackgroundJob, WorkbenchWakeup } from '@talyn/shared';
 
 vi.mock('../lib/api', () => ({ api: { workbenches: { background: vi.fn() } } }));
 
 import { api } from '../lib/api';
 import { emptyLogText, formatCountdown, formatRunTime, isActiveBackground, keepAwakeLabel, wakeLaterPresets, wakeupTitle, wakeupWhen } from '../lib/sessionBackground';
-import { loadBackground, useSessionBackgroundStore } from '../stores/sessionBackground';
+import { loadBackground, pruneBackground, reconcileBackground, useSessionBackgroundStore } from '../stores/sessionBackground';
 
 const empty = (workbenchId: string): WorkbenchBackground => ({ workbenchId, jobs: [], wakeups: [] });
 const deferred = <T>() => {
@@ -15,8 +15,8 @@ const deferred = <T>() => {
 };
 
 beforeEach(() => {
-  useSessionBackgroundStore.setState({ byWorkbench: {} });
-  vi.clearAllMocks();
+  pruneBackground({});
+  vi.resetAllMocks();
 });
 
 describe('session background store', () => {
@@ -40,6 +40,145 @@ describe('session background store', () => {
     pending.resolve(empty('a'));
     await load;
     expect(useSessionBackgroundStore.getState().byWorkbench.a).toBe(live);
+  });
+
+  it.each(['running', 'scheduled'])('discards stale %s state before a reconnect refresh completes', async (status) => {
+    useSessionBackgroundStore.getState().applyBackground({
+      ...empty('a'),
+      jobs: status === 'running' ? [{ status } as WorkbenchBackgroundJob] : [],
+      wakeups: status === 'scheduled' ? [{ status } as WorkbenchWakeup] : [],
+    });
+    expect(isActiveBackground(useSessionBackgroundStore.getState().byWorkbench.a)).toBe(true);
+    const pending = deferred<WorkbenchBackground>();
+    vi.mocked(api.workbenches.background).mockReturnValue(pending.promise);
+    const refresh = reconcileBackground();
+    expect(isActiveBackground(useSessionBackgroundStore.getState().byWorkbench.a)).toBe(false);
+    pending.resolve(empty('a'));
+    await refresh;
+    expect(api.workbenches.background).toHaveBeenCalledWith('a');
+    expect(isActiveBackground(useSessionBackgroundStore.getState().byWorkbench.a)).toBe(false);
+  });
+
+  it('replaces a load from before reconnect even when no snapshot was cached', async () => {
+    const old = deferred<WorkbenchBackground>();
+    const fresh = deferred<WorkbenchBackground>();
+    vi.mocked(api.workbenches.background).mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+    const load = loadBackground('a');
+    const refresh = reconcileBackground();
+    old.resolve({ ...empty('a'), jobs: [{ status: 'running' } as WorkbenchBackgroundJob] });
+    await load;
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
+    fresh.resolve(empty('a'));
+    await refresh;
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toEqual(empty('a'));
+  });
+
+  it('does not restore a stale snapshot when reconnect refresh fails', async () => {
+    useSessionBackgroundStore.getState().applyBackground({
+      ...empty('a'), jobs: [{ status: 'running' } as WorkbenchBackgroundJob],
+    });
+    vi.mocked(api.workbenches.background).mockRejectedValue(new Error('offline'));
+    await reconcileBackground();
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
+  });
+
+  it.each(['running', 'scheduled'])('retries an unopened session after refresh fails and restores %s state', async (status) => {
+    useSessionBackgroundStore.getState().applyBackground(empty('a'));
+    const live = {
+      ...empty('a'),
+      jobs: status === 'running' ? [{ status } as WorkbenchBackgroundJob] : [],
+      wakeups: status === 'scheduled' ? [{ status } as WorkbenchWakeup] : [],
+    };
+    vi.mocked(api.workbenches.background).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(live);
+    await reconcileBackground();
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
+    await reconcileBackground();
+    expect(api.workbenches.background).toHaveBeenNthCalledWith(2, 'a');
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBe(live);
+    expect(isActiveBackground(useSessionBackgroundStore.getState().byWorkbench.a)).toBe(true);
+  });
+
+  it('retries a failed first load after reconnect', async () => {
+    vi.mocked(api.workbenches.background).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(empty('a'));
+    await loadBackground('a');
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
+    await reconcileBackground();
+    expect(api.workbenches.background).toHaveBeenNthCalledWith(2, 'a');
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toEqual(empty('a'));
+  });
+
+  it('does not retry a cleared session after refresh fails', async () => {
+    useSessionBackgroundStore.getState().applyBackground(empty('a'));
+    vi.mocked(api.workbenches.background).mockRejectedValue(new Error('offline'));
+    await reconcileBackground();
+    useSessionBackgroundStore.getState().clear('a');
+    await reconcileBackground();
+    expect(api.workbenches.background).toHaveBeenCalledTimes(1);
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
+  });
+
+  it('bounds requests and coalesces repeated reconnects', async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `session-${i}`);
+    for (const id of ids) useSessionBackgroundStore.getState().applyBackground(empty(id));
+    const blocked = deferred<void>();
+    let active = 0;
+    let peak = 0;
+    vi.mocked(api.workbenches.background).mockImplementation(async (id) => {
+      active++;
+      peak = Math.max(peak, active);
+      await blocked.promise;
+      active--;
+      return empty(id);
+    });
+    const first = reconcileBackground();
+    const second = reconcileBackground();
+    const third = reconcileBackground();
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    expect(api.workbenches.background).toHaveBeenCalledTimes(4);
+    blocked.resolve();
+    await first;
+    expect(peak).toBe(4);
+    expect(api.workbenches.background).toHaveBeenCalledTimes(16);
+    expect(Object.keys(useSessionBackgroundStore.getState().byWorkbench).sort()).toEqual(ids.sort());
+  });
+
+  it('prunes archived and missing sessions, including queued and pending refreshes', async () => {
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    for (const id of ids) useSessionBackgroundStore.getState().applyBackground(empty(id));
+    const blocked = deferred<void>();
+    vi.mocked(api.workbenches.background).mockImplementation(async (id) => {
+      await blocked.promise;
+      return empty(id);
+    });
+    const refresh = reconcileBackground();
+    pruneBackground({
+      a: { id: 'a', status: 'ready' } as Workbench,
+      b: { id: 'b', status: 'archived' } as Workbench,
+      c: { id: 'c', status: 'ready', archivedAt: '2026-11-27' } as Workbench,
+    });
+    blocked.resolve();
+    await refresh;
+    expect(Object.keys(useSessionBackgroundStore.getState().byWorkbench)).toEqual(['a']);
+    expect(api.workbenches.background).not.toHaveBeenCalledWith('e');
+    vi.mocked(api.workbenches.background).mockClear();
+    await reconcileBackground();
+    expect(api.workbenches.background).toHaveBeenCalledTimes(1);
+    expect(api.workbenches.background).toHaveBeenCalledWith('a');
+  });
+
+  it('does not retry or restore a cleared session with a pending load', async () => {
+    const pending = deferred<WorkbenchBackground>();
+    vi.mocked(api.workbenches.background).mockReturnValue(pending.promise);
+    const load = loadBackground('a');
+    useSessionBackgroundStore.getState().clear('a');
+    await reconcileBackground();
+    expect(api.workbenches.background).toHaveBeenCalledTimes(1);
+    pending.resolve(empty('a'));
+    await load;
+    await reconcileBackground();
+    expect(api.workbenches.background).toHaveBeenCalledTimes(1);
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
   });
 });
 
