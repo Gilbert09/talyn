@@ -15,6 +15,7 @@ import {
   findingsEligibleForAutoFix,
   filesWorthReviewing,
   selectLensesForFiles,
+  codeReviewLensReadsPart,
   UNATTENDED_SANDBOX_SIZE,
 } from '@talyn/shared';
 import { eq } from 'drizzle-orm';
@@ -307,7 +308,14 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
       // The skips are RECORDED, with their reasons, because a reviewer that
       // never ran finds nothing and nothing looks exactly like a clean bill of
       // health. This is what lets the app say which ones sat out and why.
-      detail: { preset, chunkTotal, runsTotal, headSha: loaded.headSha, skippedLenses: skipped },
+      detail: {
+        preset,
+        chunkTotal,
+        runsTotal,
+        headSha: loaded.headSha,
+        skippedLenses: skipped,
+        cycle: review.cycle,
+      },
     }
   );
   if (planned) {
@@ -820,6 +828,8 @@ async function buildUnitPrompt(
 
   if (unit.kind === 'lens') {
     const lens = lensByKey(unit.lens);
+    // A part with no file this lens reads is skipped, and boots no sandbox.
+    if (lens && !whole && !codeReviewLensReadsPart(unit.lens, scoped.files)) return null;
     if (lens) return { ok: true, prompt: buildLensPrompt(lens, scoped) };
     if (!isCustomReviewerLens(unit.lens)) return null;
 
@@ -997,7 +1007,10 @@ export async function ingestUnitOutput(
   run: RunRow,
   finalText: string | null
 ): Promise<{ parsed: boolean; findings: number }> {
-  const parsed = parseCodeReviewFindings(finalText);
+  const parsed = parseCodeReviewFindings(
+    finalText,
+    run.kind === 'validate' ? { maxFindings: Infinity } : {}
+  );
   if (!parsed.ok) {
     // A unit that never STARTED is not a unit that produced bad output, and
     // calling both "unparseable" told the user to try again — advice that would

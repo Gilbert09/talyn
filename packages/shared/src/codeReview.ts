@@ -619,6 +619,18 @@ export const CODE_REVIEW_LENS_NEEDS: Record<string, readonly CodeReviewFileClass
   operability: ['code', 'config', 'migration'],
 };
 
+/**
+ * Whether a lens has anything to read in one part of a split change.
+ *
+ * The cycle selects lenses over the whole change. A part can still hold only
+ * files that a lens skips, such as a `docs/` part, and the lens runs on that
+ * part for nothing. Same rule as `selectLensesForFiles`, for one part.
+ */
+export function codeReviewLensReadsPart(lens: string, files: readonly { filename: string }[]): boolean {
+  const needs = CODE_REVIEW_LENS_NEEDS[lens];
+  return !needs || files.some((f) => needs.includes(classifyReviewFile(f.filename)));
+}
+
 /** Why a lens was not dispatched, in the words the app shows. */
 export interface SkippedLens {
   lens: string;
@@ -821,6 +833,12 @@ export interface CodeReviewPublic {
    * clean bill of health. The precise reason for each is in the timeline.
    */
   lensesRun: string[];
+  /**
+   * How many of Talyn's lenses this cycle's plan skipped, because the change had
+   * nothing they read. From the cycle's own plan, so a preset that grows later
+   * does not change an older review. Absent from an older backend.
+   */
+  lensesNotNeeded?: number;
   /**
    * The team's own reviewers on this cycle, so a client can label their lens
    * keys. Frozen at cycle start, so a skill renamed or removed afterwards still
@@ -1121,7 +1139,6 @@ function judgeOutputContract(): string {
     'Rules for that block:',
     '- `findings` holds one entry per candidate you KEEP, and nothing else. Do not copy the',
     '  body, the anchor or the lines: the id is enough.',
-    `- At most ${CODE_REVIEW_MAX_FINDINGS_PER_UNIT} entries.`,
     '- `dropped` holds one entry per candidate you drop.',
     '- An empty findings array means you refuted every candidate. Emit the block anyway:',
     '  a message with no block is recorded as a failed check, not a clean one.',
@@ -1140,8 +1157,15 @@ function judgeOutputContract(): string {
  * failed unit. It must never be read as "the agent found nothing": inverting
  * that turns a broken run into a clean bill of health, which is the worst
  * failure this product has available to it.
+ *
+ * `maxFindings` is a reviewer's cap. The judge names keeps by id only and may
+ * keep every candidate, so its caller passes `Infinity`: a keep cut off at 40
+ * would reject a candidate the judge never dropped.
  */
-export function parseCodeReviewFindings(text: string | null | undefined): ParsedCodeReviewFindings {
+export function parseCodeReviewFindings(
+  text: string | null | undefined,
+  { maxFindings = CODE_REVIEW_MAX_FINDINGS_PER_UNIT }: { maxFindings?: number } = {}
+): ParsedCodeReviewFindings {
   if (!text) return { ok: false, error: 'The agent produced no final message.' };
 
   const marker = text.lastIndexOf(CODE_REVIEW_FINDINGS_SENTINEL);
@@ -1176,9 +1200,9 @@ export function parseCodeReviewFindings(text: string | null | undefined): Parsed
     return { ok: false, error: 'The JSON block had no `findings` array.' };
   }
 
-  const truncated = list.length > CODE_REVIEW_MAX_FINDINGS_PER_UNIT;
+  const truncated = list.length > maxFindings;
   const findings = list
-    .slice(0, CODE_REVIEW_MAX_FINDINGS_PER_UNIT)
+    .slice(0, maxFindings)
     .map(normaliseFinding)
     .filter((f): f is RawCodeReviewFinding => f !== null);
 

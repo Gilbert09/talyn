@@ -228,6 +228,21 @@ describe('orchestration with a fake runner', () => {
     }
   });
 
+  it('skips a per-part lens on a part with nothing it reads', async () => {
+    const files = [
+      ...Array.from({ length: 2 }, (_, i) => ({ filename: `docs/page-${i}.md`, status: 'modified', additions: 300, deletions: 0, patch: '@@ -1 +1 @@\n+x' })),
+      ...Array.from({ length: 2 }, (_, i) => ({ filename: `src/f-${i}.ts`, status: 'modified', additions: 300, deletions: 0, patch: '@@ -1 +1 @@\n+x' })),
+    ];
+    const calls: AgentUnit[] = [];
+    await review({ ...context(), files }, readSettings({}), async (unit) => {
+      calls.push(unit);
+      return message();
+    });
+    const lenses = calls.filter((u) => u.kind === 'lens').map((u) => u.name).sort();
+    // Two parts: docs, then src. Security and reliability read the src part only.
+    expect(lenses).toEqual(['lens-correctness-1', 'lens-reliability-2', 'lens-rules-1', 'lens-security-2']);
+  });
+
   it('passes deduped coverage to the sweep and all candidates to the judge', async () => {
     const sweepFinding = finding({ file: 'src/sweep.ts', title: 'Sweep issue' });
     const calls: AgentUnit[] = [];

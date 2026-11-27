@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CODE_REVIEW_DEFAULT_LENS_ORDER,
   CODE_REVIEW_PART_LINES,
+  codeReviewLensReadsPart,
   codeReviewLensRunsOnChunk,
   codeReviewOutputContract,
   codeReviewUnitCount,
@@ -266,5 +267,22 @@ describe('the reporting bar', () => {
     expect(prompt).toContain('TRY TO REFUTE IT from the code');
     expect(prompt).toContain('## These are NOT reasons to drop');
     expect(prompt).not.toContain('PRECISION OVER RECALL');
+  });
+});
+
+describe('codeReviewLensReadsPart', () => {
+  it.each([
+    ['security', ['docs/guide.md', 'README.md'], false],
+    ['security', ['docs/guide.md', 'src/a.ts'], true],
+    ['security', ['config/app.yaml'], true],
+    ['reliability', ['src/a.test.ts', 'tests/b.py'], false],
+    ['reliability', ['migrations/0001.sql'], true],
+    ['rules', ['tests/b.py'], true],
+    ['rules', ['docs/guide.md'], false],
+    ['correctness', ['docs/guide.md'], true],
+    ['skill:repo:acme/api:house-rules', ['docs/guide.md'], true],
+    ['security', [], false],
+  ] as const)('%s on %j: %s', (lens, paths, expected) => {
+    expect(codeReviewLensReadsPart(lens, paths.map((p) => ({ filename: p })))).toBe(expected);
   });
 });

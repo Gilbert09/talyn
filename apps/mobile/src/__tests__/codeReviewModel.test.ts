@@ -69,13 +69,12 @@ describe('code review findings', () => {
   ] as const)('phase %s is running: %s', (phase, expected) => expect(reviewRunning(review({ phase }))).toBe(expected));
 
   it.each([
-    [['correctness', 'security'], 'standard', 1],
-    [['correctness', 'security', 'reliability'], 'standard', 0],
-    [['correctness', 'skill:repo:team/review'], 'deep', 4],
-    [['skill:repo:team/review'], 'standard', 0],
-    [[], 'deep', 0],
-  ] as const)('counts reviewers that sat out for %j on %s', (lensesRun, preset, expected) =>
-    expect(notNeededCount({ lensesRun: [...lensesRun], preset })).toBe(expected));
+    [0, 0],
+    [2, 2],
+    [undefined, 0],
+    [-1, 0],
+  ] as const)('counts %s reviewers that sat out as %s', (lensesNotNeeded, expected) =>
+    expect(notNeededCount({ lensesNotNeeded })).toBe(expected));
 
   it.each([
     [['correctness'], null],

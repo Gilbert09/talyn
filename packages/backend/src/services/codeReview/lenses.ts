@@ -632,6 +632,39 @@ export function buildSweepPrompt(
 }
 
 /** Candidates by file, then by first line, so duplicates sit together. */
+/**
+ * The judge's candidate list, at most `MAX_INLINE_DIFF_BYTES` of it.
+ *
+ * The prompt is one argv entry (see `MAX_INLINE_DIFF_BYTES`). When the bodies
+ * do not fit, each one is cut to an equal share. A shorter body still names
+ * the problem and its place, and the judge reads the code. A prompt that does
+ * not start checks nothing.
+ */
+function judgeCandidateList(candidates: JudgeCandidate[]): string {
+  const render = (bodyChars: number) =>
+    byLocation(candidates)
+      .map((c) =>
+        [
+          `### ${c.id}`,
+          ...(c.raisedBy.length ? [`Raised by: ${c.raisedBy.join(', ')}`] : []),
+          `[${c.severity}] ${c.filePath}:${c.lines}`,
+          c.title,
+          '',
+          c.body.length > bodyChars ? `${c.body.slice(0, bodyChars)}… (cut to fit the prompt)` : c.body,
+          '',
+        ].join('\n')
+      )
+      .join('\n');
+  const fits = (text: string) => Buffer.byteLength(text, 'utf8') <= MAX_INLINE_DIFF_BYTES;
+  const whole = render(Infinity);
+  if (fits(whole) || !candidates.length) return whole;
+  const headers = Buffer.byteLength(render(0), 'utf8');
+  let share = Math.floor((MAX_INLINE_DIFF_BYTES - headers) / candidates.length);
+  // A character can be more than one byte, so halve the share until it fits.
+  while (share > 200 && !fits(render(share))) share = Math.floor(share / 2);
+  return render(Math.max(200, share));
+}
+
 function byLocation<T extends { filePath: string; lines: string }>(candidates: T[]): T[] {
   const start = (c: T) => Number.parseInt(c.lines, 10) || 0;
   return [...candidates].sort((a, b) =>
@@ -656,12 +689,22 @@ function byLocation<T extends { filePath: string; lines: string }>(candidates: T
  * So a candidate now stays unless the judge can show it is wrong, and a real
  * problem that is smaller than claimed gets a lower severity, not a drop.
  */
-export function buildJudgePrompt(
-  ctx: ReviewPromptContext,
-  candidates: { id: string; severity: string; filePath: string; lines: string; title: string; body: string; raisedBy: string[] }[]
-): string {
+type JudgeCandidate = {
+  id: string;
+  severity: string;
+  filePath: string;
+  lines: string;
+  title: string;
+  body: string;
+  raisedBy: string[];
+};
+
+export function buildJudgePrompt(ctx: ReviewPromptContext, candidates: JudgeCandidate[]): string {
+  const listed = judgeCandidateList(candidates);
   return [
-    preamble(ctx),
+    // The candidates take their bytes from the inline diff's budget, as a skill
+    // does. The judge reads the patches it no longer gets in the checkout.
+    preamble(ctx, Math.max(0, MAX_INLINE_DIFF_BYTES - Buffer.byteLength(listed, 'utf8'))),
     '',
     '## Your job',
     '',
@@ -735,17 +778,7 @@ export function buildJudgePrompt(
     'They are grouped by file and line, so a restated candidate is usually next to the',
     'one it restates.',
     '',
-    ...byLocation(candidates).map((c) =>
-      [
-        `### ${c.id}`,
-        ...(c.raisedBy.length ? [`Raised by: ${c.raisedBy.join(', ')}`] : []),
-        `[${c.severity}] ${c.filePath}:${c.lines}`,
-        c.title,
-        '',
-        c.body,
-        '',
-      ].join('\n')
-    ),
+    listed,
     '',
     '## Output',
     '',

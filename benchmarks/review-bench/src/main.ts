@@ -7,6 +7,7 @@ import {
   CODE_REVIEW_PRESET_PLAN,
   CODE_REVIEW_SEVERITY_ORDER,
   CODE_REVIEW_WHOLE_PR_LENSES,
+  codeReviewLensReadsPart,
   codeReviewLensRunsOnChunk,
   planCodeReviewParts,
   isCodeReviewPreset,
@@ -247,7 +248,10 @@ export async function review(
   const candidates = () => [...stored.values()].sort((a, b) => rank(a) - rank(b));
   const execute = async (unit: AgentUnit): Promise<ParsedCodeReviewFindings> => {
     try {
-      const parsed = parseCodeReviewFindings(await runner(unit));
+      const parsed = parseCodeReviewFindings(
+        await runner(unit),
+        unit.kind === 'judge' ? { maxFindings: Infinity } : {},
+      );
       if (!parsed.ok) log(`${unit.name} failed: ${parsed.error}`);
       return parsed;
     } catch (error) {
@@ -262,9 +266,11 @@ export async function review(
     for (const lens of lensKeys) {
       if (chunkTotal > 1 && !codeReviewLensRunsOnChunk(lens, chunk)) continue;
       const wholePr = chunkTotal > 1 && CODE_REVIEW_WHOLE_PR_LENSES.has(lens);
+      const context = wholePr ? whole : scoped(chunk);
+      if (!wholePr && !codeReviewLensReadsPart(lens, context.files)) continue;
       units.push({
         name: `lens-${lens}-${chunk + 1}`, kind: 'lens', lens, model: settings.model,
-        prompt: buildLensPrompt(lensByKey(lens)!, wholePr ? whole : scoped(chunk)),
+        prompt: buildLensPrompt(lensByKey(lens)!, context),
       });
     }
   }

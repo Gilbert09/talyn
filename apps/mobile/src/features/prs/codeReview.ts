@@ -1,6 +1,6 @@
 import type { CodeReviewFinding, CodeReviewPublic, CodeReviewSeverity } from '@talyn/client/native';
-import { CODE_REVIEW_PHASE_AT_REST, CODE_REVIEW_PRESET_PLAN, CODE_REVIEW_SEVERITY_GROUP_LABELS, CODE_REVIEW_SEVERITY_ORDER, codeReviewLensLabel,
-  codeReviewProgress, isCustomReviewerLens, severityAtOrAbove, type CodeReviewLensNames } from '@talyn/shared';
+import { CODE_REVIEW_PHASE_AT_REST, CODE_REVIEW_SEVERITY_GROUP_LABELS, CODE_REVIEW_SEVERITY_ORDER, codeReviewLensLabel,
+  codeReviewProgress, severityAtOrAbove, type CodeReviewLensNames } from '@talyn/shared';
 
 import type { StatusTone } from '../../lib/status';
 
@@ -120,10 +120,8 @@ export const REVIEW_WAITING = 'Waiting for a runner to become free.';
 export const REVIEW_STALE = 'There are newer commits.';
 
 /** How many of Talyn's own reviewers sat this change out. Web `notNeededCount`. */
-export function notNeededCount(review: Pick<CodeReviewPublic, 'lensesRun' | 'preset'>): number {
-  const builtIn = review.lensesRun.filter((lens) => !isCustomReviewerLens(lens)).length;
-  if (builtIn === 0) return 0;
-  return Math.max(0, CODE_REVIEW_PRESET_PLAN[review.preset].lenses - builtIn);
+export function notNeededCount(review: Pick<CodeReviewPublic, 'lensesNotNeeded'>): number {
+  return Math.max(0, review.lensesNotNeeded ?? 0);
 }
 
 /** "Logic and Security agree", or null for one reviewer. Named, not counted, as on web. */
