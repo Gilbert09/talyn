@@ -12,6 +12,8 @@ import { useSpacesStore } from '../renderer/stores/spaces';
 
 const mockSpaceGet = jest.fn();
 const mockSpaceSave = jest.fn();
+const mockSpaceCategory = jest.fn();
+const mockSpaceReset = jest.fn();
 const mockGet = jest.fn();
 const mockUpdate = jest.fn();
 const mockWriteDefaults = jest.fn();
@@ -28,6 +30,8 @@ jest.mock('../renderer/lib/api', () => ({
     spaces: {
       notificationPreferences: (...a: unknown[]) => mockSpaceGet(...a),
       setNotificationsMuted: (...a: unknown[]) => mockSpaceSave(...a),
+      setPhoneNotificationCategory: (...a: unknown[]) => mockSpaceCategory(...a),
+      setPhoneNotificationCategories: (...a: unknown[]) => mockSpaceReset(...a),
     },
     mobileNotifications: {
       getPreferences: (...a: unknown[]) => mockGet(...a),
@@ -65,8 +69,10 @@ beforeEach(() => {
   jest.useRealTimers();
   mockSpaceGet.mockReset().mockResolvedValue({ mutedSpaceIds: [] });
   mockSpaceSave.mockReset().mockResolvedValue({ mutedSpaceIds: ['automations'] });
+  mockSpaceCategory.mockReset();
+  mockSpaceReset.mockReset();
   mockState.spaces = false;
-  useSpacesStore.setState({ teams: null, mutedSpaceIds: [], notificationsLoaded: false, notificationsError: null, notificationsSaving: false });
+  useSpacesStore.setState({ teams: null, mutedSpaceIds: [], phoneCategoriesBySpace: {}, notificationsLoaded: false, notificationsError: null, notificationsSaving: false });
   mockGet.mockReset();
   mockUpdate.mockReset();
   mockWriteDefaults.mockReset();
@@ -230,6 +236,53 @@ describe('NotificationsSettings: team spaces', () => {
     fireEvent.click(checkbox('^Automations$'));
     await waitFor(() => expect(checkbox('^Automations$')).toBeChecked());
     expect(mockSpaceSave).toHaveBeenCalledWith('automations', false);
+  });
+
+  it.each([
+    ['on', true], ['off', false], ['default', null],
+  ] as const)('saves %s for one space phone alert type', async (choice, value) => {
+    const initial = value === false;
+    mockSpaceGet.mockResolvedValue({
+      mutedSpaceIds: [],
+      phoneCategoriesBySpace: { automations: { ci_failure: initial, human_gate: true } },
+    });
+    mockSpaceCategory.mockResolvedValue({
+      mutedSpaceIds: [],
+      phoneCategoriesBySpace: { automations: { ...(value === null ? {} : { ci_failure: value }), human_gate: true } },
+    });
+    await renderLoaded();
+    fireEvent.click(screen.getByLabelText('Automations phone alert types'));
+    const ci = screen.getByRole('combobox', { name: 'Automations CI failures' });
+    expect(ci).toHaveValue(initial ? 'on' : 'off');
+    fireEvent.change(ci, { target: { value: choice } });
+    await waitFor(() => expect(ci).toHaveValue(choice));
+    expect(mockSpaceCategory).toHaveBeenCalledWith('automations', 'ci_failure', value);
+    expect(screen.getByRole('combobox', { name: 'Automations Human input' })).toHaveValue('on');
+    expect(mockSpaceSave).not.toHaveBeenCalled();
+  });
+
+  it('shows phone choices without enabling edits for a muted space', async () => {
+    mockSpaceGet.mockResolvedValue({
+      mutedSpaceIds: ['automations'], phoneCategoriesBySpace: { automations: { human_gate: true } },
+    });
+    await renderLoaded();
+    fireEvent.click(screen.getByLabelText('Automations phone alert types'));
+    const choice = screen.getByRole('combobox', { name: 'Automations Human input' });
+    expect(choice).toHaveValue('on');
+    expect(choice).toBeDisabled();
+  });
+
+  it('resets phone choices for an unlisted space and keeps its mute', async () => {
+    useSpacesStore.setState({ teams: [] });
+    mockSpaceGet.mockResolvedValue({
+      mutedSpaceIds: ['old'], phoneCategoriesBySpace: { old: { ci_failure: true } },
+    });
+    mockSpaceReset.mockResolvedValue({ mutedSpaceIds: ['old'] });
+    await renderLoaded();
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset phone alert types' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reset phone alert types' })).toBeNull());
+    expect(mockSpaceReset).toHaveBeenCalledWith('old', {});
+    expect(screen.getByRole('button', { name: 'Restore alerts' })).toBeVisible();
   });
 
   it('restores the previous preference when a save fails', async () => {

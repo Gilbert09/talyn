@@ -7,12 +7,12 @@ import {
 import { api } from '../../../lib/api';
 import { useSessionDefaults, writeSessionDefaults } from '../../../lib/sessionDefaults';
 import { useWorkspaceStore } from '../../../stores/workspace';
-import { loadSpaceNotifications, setSpaceMuted, useSpacesStore } from '../../../stores/spaces';
+import { loadSpaceNotifications, resetSpacePhoneCategories, setSpaceMuted, setSpacePhoneCategory, useSpacesStore } from '../../../stores/spaces';
 import { spacesOffered } from '../../../lib/spaces';
 import { toast } from '../../../stores/toast';
 import { getMergeBlockedNotifyEnabled, setMergeBlockedNotifyEnabled } from '../../../hooks/useApi';
 import { Button } from '../../ui/button';
-import { SettingRow, SettingToggle, SettingsPage, SettingsSection } from '../../ui/settings';
+import { SettingRow, SettingToggle, SettingsPage, SettingsSection, SettingsSelect } from '../../ui/settings';
 
 /** Same names as the mobile app's notification settings. */
 export const PHONE_NOTIFICATION_LABELS: Record<MobileNotificationCategory, string> = {
@@ -330,6 +330,7 @@ function SpaceNotifications() {
   const offered = useWorkspaceStore((s) => spacesOffered(s.features));
   const teams = useSpacesStore((s) => s.teams);
   const muted = useSpacesStore((s) => s.mutedSpaceIds);
+  const phoneCategories = useSpacesStore((s) => s.phoneCategoriesBySpace);
   const loaded = useSpacesStore((s) => s.notificationsLoaded);
   const error = useSpacesStore((s) => s.notificationsError);
   const saving = useSpacesStore((s) => s.notificationsSaving);
@@ -343,19 +344,20 @@ function SpaceNotifications() {
   const withSpaces = (teams ?? []).filter((team) => team.spaces.length > 0);
   const listedIds = new Set((teams ?? []).flatMap((team) => team.spaces.map((space) => space.id)));
   const otherMutedIds = teams === null ? [] : muted.filter((id) => !listedIds.has(id));
-  if (!offered || (withSpaces.length === 0 && otherMutedIds.length === 0)) return null;
+  const otherPhoneIds = teams === null ? [] : Object.keys(phoneCategories).filter((id) => !listedIds.has(id));
+  if (!offered || (withSpaces.length === 0 && otherMutedIds.length === 0 && otherPhoneIds.length === 0)) return null;
 
-  const restoreOtherSpaces = async () => {
+  const restoreOtherSpaces = async (ids: string[], reset: (id: string) => Promise<void>) => {
     if (saving || restoring) return;
     setRestoring(true);
     const userId = useSpacesStore.getState().selfUserId;
     try {
-      for (const id of otherMutedIds) {
+      for (const id of ids) {
         if (useSpacesStore.getState().selfUserId !== userId) return;
-        await setSpaceMuted(id, false);
+        await reset(id);
       }
     } catch {
-      toast.error('Could not restore all space alerts. Try again.');
+      toast.error('Could not reset all space notification settings. Try again.');
     } finally {
       setRestoring(false);
     }
@@ -364,33 +366,67 @@ function SpaceNotifications() {
   const toggle = (spaceId: string, on: boolean) => {
     setSpaceMuted(spaceId, !on).catch(() => toast.error('Could not save the space notification setting'));
   };
+  const disabled = !loaded || saving || restoring;
 
   return (
     <SettingsSection
       title="Team spaces"
-      description="Control alerts for each space on all your devices. Turn a space off to mute its alerts for you. Teammates keep their own settings."
+      description="Turn a space off to mute your alerts on all devices. Phone alert types can override workspace defaults. Phone alerts must be enabled for the workspace. Its delivery settings and quiet hours apply here."
     >
       {error ? <SettingRow label={error}>
         <Button variant="outline" size="sm" onClick={() => void loadSpaceNotifications()}>Retry</Button>
       </SettingRow> : null}
       {!loaded && !error ? <SettingRow label="Loading space notification settings…" /> : null}
       {withSpaces.map((team) =>
-        team.spaces.map((space) => (
-          <SettingToggle
-            key={space.id}
-            label={withSpaces.length > 1 ? `${team.name} / ${space.name}` : space.name}
-            checked={!muted.includes(space.id)}
-            disabled={!loaded || saving || restoring}
-            onChange={(on) => toggle(space.id, on)}
-          />
-        ))
+        team.spaces.map((space) => {
+          const label = withSpaces.length > 1 ? `${team.name} / ${space.name}` : space.name;
+          const isMuted = muted.includes(space.id);
+          return (
+            <div key={space.id}>
+              <SettingToggle label={label} checked={!isMuted} disabled={disabled} onChange={(on) => toggle(space.id, on)} />
+              <details>
+                <summary aria-label={`${label} phone alert types`} className="cursor-pointer px-3 py-2 pl-8 text-xs text-muted-foreground">
+                  Phone alert types
+                </summary>
+                {MOBILE_NOTIFICATION_CATEGORIES.map((category) => {
+                  const value = phoneCategories[space.id]?.[category];
+                  return (
+                    <SettingRow key={category} label={PHONE_NOTIFICATION_LABELS[category]} className="pl-8">
+                      <SettingsSelect
+                        aria-label={`${label} ${PHONE_NOTIFICATION_LABELS[category]}`}
+                        disabled={disabled || isMuted}
+                        value={value === undefined ? 'default' : value ? 'on' : 'off'}
+                        onChange={(event) => {
+                          const choice = event.target.value;
+                          void setSpacePhoneCategory(space.id, category, choice === 'default' ? null : choice === 'on')
+                            .catch(() => toast.error('Could not save the space notification setting'));
+                        }}
+                      >
+                        <option value="default">Use workspace default</option>
+                        <option value="on">On</option>
+                        <option value="off">Off</option>
+                      </SettingsSelect>
+                    </SettingRow>
+                  );
+                })}
+              </details>
+            </div>
+          );
+        })
       )}
       {otherMutedIds.length > 0 ? <SettingRow
         label={`${otherMutedIds.length} other muted ${otherMutedIds.length === 1 ? 'space' : 'spaces'}`}
         description="These muted spaces are not in the current list."
       >
-        <Button variant="outline" size="sm" disabled={!loaded || saving || restoring}
-          onClick={() => void restoreOtherSpaces()}>Restore alerts</Button>
+        <Button variant="outline" size="sm" disabled={disabled}
+          onClick={() => void restoreOtherSpaces(otherMutedIds, (id) => setSpaceMuted(id, false))}>Restore alerts</Button>
+      </SettingRow> : null}
+      {otherPhoneIds.length > 0 ? <SettingRow
+        label="Other space phone alert settings"
+        description="These spaces are archived or no longer in your teams."
+      >
+        <Button variant="outline" size="sm" disabled={disabled}
+          onClick={() => void restoreOtherSpaces(otherPhoneIds, resetSpacePhoneCategories)}>Reset phone alert types</Button>
       </SettingRow> : null}
     </SettingsSection>
   );

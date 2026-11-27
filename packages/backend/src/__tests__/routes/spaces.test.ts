@@ -219,6 +219,7 @@ describe('space routes', () => {
     ['GET', '/space-notifications'],
     ['PUT', '/spaces/space-1/notifications'],
     ['PUT', '/spaces/space-1/notifications/phone'],
+    ['PATCH', '/spaces/space-1/notifications/phone'],
     ['GET', '/spaces/space-1/sessions'],
     ['POST', '/teams/team-1/spaces'],
     ['PUT', '/workbenches/wb-x/space'],
@@ -233,6 +234,34 @@ describe('space routes', () => {
   });
 
   describe('personal space notifications', () => {
+    it('keeps concurrent edits to different phone alert types', async () => {
+      const path = '/spaces/space-1/notifications/phone';
+      const updates = await Promise.all([
+        call('PATCH', path, BEN, { category: 'ci_failure', value: true }),
+        call('PATCH', path, BEN, { category: 'session_update', value: false }),
+      ]);
+      expect(updates.map((response) => response.status)).toEqual([200, 200]);
+      expect((await call('GET', '/space-notifications', BEN)).body.data).toEqual({
+        mutedSpaceIds: [], phoneCategoriesBySpace: { 'space-1': { ci_failure: true, session_update: false } },
+      });
+
+      const simultaneous = await Promise.all([
+        call('PATCH', path, BEN, { category: 'ci_failure', value: null }),
+        call('PATCH', path, BEN, { category: 'pr_review', value: true }),
+      ]);
+      expect(simultaneous.map((response) => response.status)).toEqual([200, 200]);
+      expect((await call('GET', '/space-notifications', BEN)).body.data).toEqual({
+        mutedSpaceIds: [], phoneCategoriesBySpace: { 'space-1': { session_update: false, pr_review: true } },
+      });
+      expect((await call('PATCH', path, CY, { category: 'pr_review', value: false })).status).toBe(404);
+      expect((await call('PATCH', path, BEN, { category: 'pr_review', value: 'true' })).status).toBe(400);
+
+      await call('PATCH', path, BEN, { category: 'pr_review', value: null });
+      const reset = await call('PATCH', path, BEN, { category: 'session_update', value: null });
+      expect(reset.status).toBe(200);
+      expect(reset.body.data).toEqual({ mutedSpaceIds: [] });
+    });
+
     it('keeps phone notification choices private and resets them independently of mutes', async () => {
       const path = '/spaces/space-1/notifications/phone';
       const categories = { ci_failure: true, session_update: false };

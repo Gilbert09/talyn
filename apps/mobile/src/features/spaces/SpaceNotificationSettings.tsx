@@ -15,6 +15,8 @@ export function SpaceNotificationSettings({ offline, spaceId: selectedSpaceId }:
   currentUserId.current = userId;
   const teams = useTeams();
   const prefs = useSpaceNotificationPreferences();
+  const latest = useRef({ offline, prefs });
+  latest.current = { offline, prefs };
   useRefreshOnFocus(() => { void prefs.refresh(); });
   const [failed, setFailed] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -75,8 +77,9 @@ export function SpaceNotificationSettings({ offline, spaceId: selectedSpaceId }:
   };
 
   const change = (request: () => Promise<SpaceNotificationPreferences>, optimistic?: SpaceNotificationPreferences) => {
-    if (offline || pending.current || prefs.refreshing) return;
-    const before = prefs.data;
+    const current = latest.current;
+    if (currentUserId.current !== userId || current.offline || pending.current) return;
+    const before = current.prefs.data;
     pending.current = true;
     setSaving(true);
     setFailed(false);
@@ -97,16 +100,14 @@ export function SpaceNotificationSettings({ offline, spaceId: selectedSpaceId }:
 
   const chooseCategory = (spaceId: string, category: MobileNotificationCategory) => {
     const current = phone[spaceId] ?? {};
-    const choose = (value: boolean | undefined) => {
-      const categories = { ...current };
-      if (value === undefined) delete categories[category];
-      else categories[category] = value;
-      change(() => spaces.setPhoneNotificationCategories(spaceId, categories));
+    const choose = (value: boolean | null) => {
+      if (latest.current.prefs.data?.mutedSpaceIds.includes(spaceId)) return;
+      change(() => spaces.setPhoneNotificationCategory(spaceId, category, value));
     };
     sheet.open({
       title: notificationLabels[category],
       actions: [
-        { label: 'Use workspace default', selected: current[category] === undefined, onPress: () => choose(undefined) },
+        { label: 'Use workspace default', selected: current[category] === undefined, onPress: () => choose(null) },
         { label: 'On', selected: current[category] === true, onPress: () => choose(true) },
         { label: 'Off', selected: current[category] === false, onPress: () => choose(false) },
       ],

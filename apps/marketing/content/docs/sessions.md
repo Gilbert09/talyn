@@ -46,7 +46,7 @@ Open **Settings > Notifications** on your computer or phone to manage your alert
 - On a computer, turn on a notification when an agent finishes, and a notification when a merge-queue pull request is blocked. These settings apply only to that computer or browser.
 - In the mobile app, select a workspace to turn its phone alerts on or off. Choose which alert types to receive. You can set quiet hours and receive alerts only when you are away from your computer. Each phone must allow notifications for Talyn.
 
-In the mobile app, select a team space to set each phone alert type to **On**, **Off**, or **Use workspace default**. The workspace still controls whether phone alerts are enabled and when they can arrive.
+Under **Team spaces**, set each phone alert type to **On**, **Off**, or **Use workspace default**. The workspace still controls whether phone alerts are enabled and when they can arrive.
 
 You can also mute a team space, such as Automations.
 This personal setting applies to your desktop, browser, and phone.

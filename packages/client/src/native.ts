@@ -38,6 +38,7 @@ import type {
   TeamEmailInvite,
   TeamInvitePreview,
   TeamInviteTokenRequest,
+  MobileNotificationCategory,
   MoveToSpaceRequest,
   SetSpaceNotificationsRequest,
   SpacePhoneNotificationCategories,
@@ -3137,6 +3138,8 @@ export const spaces = {
     } satisfies SetSpaceNotificationsRequest),
   setPhoneNotificationCategories: (spaceId: string, categories: SpacePhoneNotificationCategories) =>
     request<SpaceNotificationPreferences>('PUT', `/spaces/${spaceId}/notifications/phone`, { categories }),
+  setPhoneNotificationCategory: (spaceId: string, category: MobileNotificationCategory, value: boolean | null) =>
+    request<SpaceNotificationPreferences>('PATCH', `/spaces/${spaceId}/notifications/phone`, { category, value }),
 };
 
 // ============================================================================

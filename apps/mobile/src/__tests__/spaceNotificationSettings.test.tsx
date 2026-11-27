@@ -16,6 +16,7 @@ jest.mock('@talyn/client/native', () => ({
     notificationPreferences: () => mockRead(),
     setNotificationsMuted: (...args: unknown[]) => mockSave(...args),
     setPhoneNotificationCategories: (...args: unknown[]) => mockSavePhone(...args),
+    setPhoneNotificationCategory: (...args: unknown[]) => mockSavePhone(...args),
   },
   wsClient: { on: (name: string, listener: () => void) => {
     mockListeners.set(name, listener);
@@ -67,10 +68,10 @@ it('disables edits offline', async () => {
 });
 
 it.each([
-  ['On', true], ['Off', false], ['Use workspace default', undefined],
+  ['On', true], ['Off', false], ['Use workspace default', null],
 ] as const)('sets a phone alert type to %s and keeps the other choices', async (label, value) => {
   const prior = { session_update: false, ci_failure: value === false };
-  const categories = value === undefined ? { session_update: false } : { ...prior, ci_failure: value };
+  const categories = value === null ? { session_update: false } : { ...prior, ci_failure: value };
   mockRead.mockResolvedValue({ mutedSpaceIds: [], phoneCategoriesBySpace: { automation: prior } });
   mockSavePhone.mockResolvedValue({ mutedSpaceIds: [], phoneCategoriesBySpace: { automation: categories } });
 
@@ -78,8 +79,22 @@ it.each([
   await fireEvent.press(await screen.findByRole('button', { name: 'CI failures' }));
   await fireEvent.press(screen.getByRole('button', { name: label }));
 
-  expect(mockSavePhone).toHaveBeenCalledWith('automation', categories);
+  expect(mockSavePhone).toHaveBeenCalledWith('automation', 'ci_failure', value);
   expect(mockSave).not.toHaveBeenCalled();
+});
+
+it('sends only the selected category after another device changes a preference with the picker open', async () => {
+  mockRead.mockResolvedValue({ mutedSpaceIds: [], phoneCategoriesBySpace: { automation: { session_update: false } } });
+  await render(<SpaceNotificationSettings offline={false} spaceId="automation" />);
+  await fireEvent.press(await screen.findByRole('button', { name: 'CI failures' }));
+  mockRead.mockResolvedValue({ mutedSpaceIds: [], phoneCategoriesBySpace: { automation: { session_update: true } } });
+  await act(async () => mockListeners.get('space:notifications')?.());
+  const saved = { mutedSpaceIds: [], phoneCategoriesBySpace: { automation: { session_update: true, ci_failure: false } } };
+  mockSavePhone.mockResolvedValue(saved);
+  mockRead.mockResolvedValue(saved);
+  await fireEvent.press(screen.getByRole('button', { name: 'Off' }));
+
+  expect(mockSavePhone).toHaveBeenCalledWith('automation', 'ci_failure', false);
 });
 
 it('shows a space mute and disables edits to phone alert types', async () => {

@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { MOBILE_NOTIFICATION_CATEGORIES, type MobileNotificationCategory, type MobileNotificationDestination,
   type SpaceNotificationPreferences, type SpacePhoneNotificationCategories } from '@talyn/shared';
 import { z } from 'zod';
@@ -39,6 +39,38 @@ export async function setSpaceNotificationsMuted(
 }
 
 const phoneCategoriesInput = z.record(z.enum(MOBILE_NOTIFICATION_CATEGORIES), z.boolean());
+const phoneCategoryInput = z.object({
+  category: z.enum(MOBILE_NOTIFICATION_CATEGORIES),
+  value: z.boolean().nullable(),
+}).strict();
+
+export async function setSpacePhoneNotificationCategory(
+  userId: string,
+  spaceId: string,
+  input: unknown
+): Promise<SpaceNotificationPreferences> {
+  const parsed = phoneCategoryInput.safeParse(input);
+  if (!parsed.success) throw new TeamError(400, 'Use a supported phone alert type and a boolean or null value.');
+  const { category, value } = parsed.data;
+  const db = getPoolDbClient();
+  if (value === null) {
+    // Keep the row locked until an empty set of overrides is removed.
+    await db.transaction(async (tx) => {
+      const ownerAndSpace = and(eq(phoneTable.userId, userId), eq(phoneTable.spaceId, spaceId));
+      const [row] = await tx.update(phoneTable).set({ categories: sql`${phoneTable.categories} - ${category}::text` })
+        .where(ownerAndSpace).returning({ categories: phoneTable.categories });
+      if (row && Object.keys(row.categories).length === 0) await tx.delete(phoneTable).where(ownerAndSpace);
+    });
+  } else {
+    await assertSpaceMember(userId, spaceId);
+    await db.insert(phoneTable).values({ userId, spaceId, categories: { [category]: value } })
+      .onConflictDoUpdate({
+        target: [phoneTable.userId, phoneTable.spaceId],
+        set: { categories: sql`${phoneTable.categories} || excluded.categories` },
+      });
+  }
+  return readSpaceNotificationPreferences(userId);
+}
 
 export async function setSpacePhoneNotificationCategories(
   userId: string,
