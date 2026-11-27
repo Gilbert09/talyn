@@ -8137,3 +8137,16 @@ Each check refreshes at most one stale account per candidate agent and stops whe
 Deferred accounts get another check in one minute, starting with the oldest snapshot.
 The shared sweep stops claiming chats after one minute and leaves other chats due for the next tick.
 Runtime errors retain their explicit reset time when the vendor probe writes no account hold.
+
+### 2026-11-27 — Open sessions immediately after submission
+
+Web, desktop, and mobile open the regular session view as soon as you submit the composer.
+The transcript shows your first message while the server creates the session.
+The clients use the same temporary session data and keep it outside their session caches.
+The server's response supplies the session ID and enables session actions.
+On mobile, the app updates the route without opening a second screen.
+If the request fails, Talyn returns to the composer, keeps the draft and attachments, and shows the error.
+
+Validation covered delayed requests, successful navigation, and draft recovery after creation failed.
+The targeted suites passed on web (313 tests), desktop (225), and mobile (144).
+Type checks and lint passed for the changed code.
