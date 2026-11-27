@@ -8,6 +8,7 @@ import { previewBaseDomain } from '../services/preview/previewHost.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { v4 as uuid } from 'uuid';
 import {
+  type ArchiveWorkbenchesResult,
   isValidBranchName,
   sanitizeWorkbenchTitle,
   WORKBENCH_EFFORTS,
@@ -50,6 +51,7 @@ import { MOVE_SETTINGS_KEYS, startStaleGoldenMove } from '../services/workbenche
 import { chooseReadSource } from '../services/workbenches/sandboxReadSource.js';
 import { BOX_START_SETTINGS_KEYS } from '../services/workbenches/boxStart.js';
 import { requestArchiveAfterTurn } from '../services/workbenches/autoArchive.js';
+import { bulkArchiveBlocker } from '../services/workbenches/idleArchive.js';
 import { createWorkbench, type CreateWorkbenchServiceInput } from '../services/workbenches/create.js';
 import { searchTranscripts } from '../services/workbenches/transcriptSearch.js';
 import {
@@ -1008,12 +1010,19 @@ export function workbenchRoutes(): Router {
       }
       return allowed;
     };
-    type Outcome = { row: WorkbenchRow } | { failed: { id: string; error: string } };
+    type Outcome = { row: WorkbenchRow } | { failed: ArchiveWorkbenchesResult['failed'][number] };
     const archiveOne = async (id: string): Promise<Outcome> => {
       const row = await getWorkbench(id);
       if (!row || !(await mayArchive(row.workspaceId))) return { failed: { id, error: 'Session not found' } };
       try {
-        return { row: await archiveWorkbench(row.id) };
+        // The client's list can be stale, and it does not know every session's jobs and wake-ups.
+        const busy = row.archivedAt ? null : await bulkArchiveBlocker(row.id);
+        if (busy) return { failed: { id, error: busy, busy: true } };
+        const archived = row.archivedAt ? await archiveWorkbench(row.id) : await archiveWorkbench(row.id, { bulk: true });
+        if (!archived) return { failed: {
+          id, error: await bulkArchiveBlocker(row.id) ?? 'The session changed before it could be archived.', busy: true,
+        } };
+        return { row: archived };
       } catch (err) {
         console.warn(`[workbench] bulk archive of ${id} failed:`, err);
         return { failed: { id, error: fleetErrorAsRefusal(err)?.message ?? 'Could not archive the session' } };

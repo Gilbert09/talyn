@@ -5,6 +5,7 @@ import {
   ClientInactiveError,
   configureApiClient,
   workspaces,
+  workbenches,
   type ApiClientConfig,
 } from '../src/native';
 import { rawRequest } from '../src/http';
@@ -47,6 +48,28 @@ async function outcome<T>(promise: Promise<T>) {
 }
 
 describe('REST retry and cancellation', () => {
+  it.each(['token', 'fetch', 'body'] as const)('cancels a background read stalled at %s', async (stage) => {
+    const controller = new AbortController();
+    const report = vi.fn();
+    const blockedToken = deferred<string | null>();
+    const blockedFetch = deferred<Response>();
+    const blockedBody = deferred<string>();
+    configureApiClient({ ...config, onRequestError: report,
+      getAccessToken: stage === 'token' ? () => blockedToken.promise : config.getAccessToken });
+    fetchMock.mockReturnValue(stage === 'fetch' ? blockedFetch.promise
+      : Promise.resolve({ ...response(), text: () => blockedBody.promise } as Response));
+    const { result } = await outcome(workbenches.background('session', { signal: controller.signal }));
+    if (stage !== 'token') expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
+    controller.abort(new Error('Cancelled'));
+    expect(await result).toMatchObject({ error: { message: 'Cancelled' } });
+    expect(report).not.toHaveBeenCalled();
+    blockedToken.resolve('token');
+    blockedFetch.resolve(response());
+    blockedBody.resolve(JSON.stringify({ success: true, data: {} }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(stage === 'token' ? 0 : 1);
+  });
+
   it('reports a transport failure once after the retry fails', async () => {
     const report = vi.fn();
     configureApiClient({ ...config, onRequestError: report });

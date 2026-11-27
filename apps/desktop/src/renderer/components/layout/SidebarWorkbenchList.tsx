@@ -111,9 +111,10 @@ export function SidebarWorkbenchList({ workbenches }: { workbenches: Workbench[]
 export function SessionsHeader({ workbenches, openId }: { workbenches: Workbench[]; openId: string | null }) {
   const rows = usePullRequestStore((s) => s.rows);
   const chats = useWorkbenchStore((s) => s.chats);
+  const background = useSessionBackgroundStore((s) => s.byWorkbench);
   const candidates = useMemo(
-    () => archiveAllCandidates(workbenches, new Set(rows.map((r) => r.id)), chats),
-    [workbenches, rows, chats]
+    () => archiveAllCandidates(workbenches, new Set(rows.map((r) => r.id)), chats, background),
+    [workbenches, rows, chats, background]
   );
   const [confirmingAll, setConfirmingAll] = useState(false);
 
@@ -150,7 +151,7 @@ export function SessionsHeader({ workbenches, openId }: { workbenches: Workbench
           <>
             <span className="block">
               Talyn archives each session without an open pull request: no PR, or a merged or closed one. Sessions that
-              work now stay.
+              work now stay, also those with a running background job or a scheduled wake-up.
             </span>
             <span className="mt-2 block">
               They move to History. Their branches, chats and PRs stay, and you can restore them later. A local worktree

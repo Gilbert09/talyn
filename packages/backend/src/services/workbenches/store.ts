@@ -1109,6 +1109,10 @@ export async function removeQueuedMessage(chatId: string, messageId: string): Pr
         FROM jsonb_array_elements(c.queued_messages) WITH ORDINALITY AS e(value, ord)
         WHERE e.value ->> 'id' IS DISTINCT FROM ${messageId}
       ), '[]'::jsonb),
+      drain_pending = c.drain_pending AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements(c.queued_messages) AS e(value)
+        WHERE e.value ->> 'id' IS DISTINCT FROM ${messageId}
+      ),
       updated_at = now()
     WHERE c.id = ${chatId}
     RETURNING ${RETURNING_CHAT}
@@ -1134,7 +1138,7 @@ export async function updateChat(
 ): Promise<ChatRow | null> {
   const [row] = await db()
     .update(chatsTable)
-    .set({ ...patch, updatedAt: new Date() })
+    .set({ ...patch, ...(patch.queuedMessages?.length === 0 ? { drainPending: false } : {}), updatedAt: new Date() })
     .where(eq(chatsTable.id, id))
     .returning(CHAT_COLUMNS);
   return row ?? null;
@@ -2059,13 +2063,18 @@ const SLEEPING_ARCHIVE_NOTE: Record<SleepingArchive, string> = {
 };
 
 export async function markArchive(
-  id: string, autoForMergedPr = false, idle?: IdleArchiveClaim, sleeping?: SleepingArchive,
+  id: string, autoForMergedPr = false, idle?: IdleArchiveClaim, sleeping?: SleepingArchive, bulkGuard?: SQL,
 ): Promise<WorkbenchRow | null> {
   const noRunningChat = sql`NOT EXISTS (SELECT 1 FROM workbench_chats c
     WHERE c.workbench_id = ${workbenchesTable.id} AND c.status = 'running')`;
   const auto = autoForMergedPr || Boolean(idle);
   const fromSaved = idle ? Boolean(idle.fromSaved) : sleeping === 'from_saved';
   const row = await db().transaction(async (tx) => {
+    if (bulkGuard) {
+      // Turn and script claims hold FOR SHARE. Read activity after the lock with a fresh statement snapshot.
+      await tx.select({ id: workbenchesTable.id }).from(workbenchesTable)
+        .where(eq(workbenchesTable.id, id)).for('update');
+    }
     const [archived] = await tx.update(workbenchesTable).set({
       archivedAt: new Date(),
       archivePendingAt: new Date(),
@@ -2083,6 +2092,7 @@ export async function markArchive(
       updatedAt: new Date(),
     }).where(and(
       eq(workbenchesTable.id, id), isNull(workbenchesTable.restoreRequestedAt),
+      bulkGuard,
       idle ? and(isNull(workbenchesTable.archivedAt), noRunningChat, idle.guard)
         : autoForMergedPr ? and(
           isNull(workbenchesTable.archivedAt),
@@ -2111,7 +2121,7 @@ export async function markArchive(
     }
     return archived;
   });
-  return row ?? (auto ? null : getWorkbench(id));
+  return row ?? (auto || bulkGuard ? null : getWorkbench(id));
 }
 
 const ACTIVITY_WRITE_EVERY_MS = 5 * 60_000;

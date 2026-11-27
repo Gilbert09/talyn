@@ -12,6 +12,7 @@ import { workbenchBackgroundJobs, workbenchChats, workbenches, workbenchWakeups,
 import { resetFeatureFlagsForTests } from '../services/featureFlags.js';
 import {
   JOB_PROBE,
+  applyProbe,
   cancelWakeup,
   fireWakeup,
   jobExitPrompt,
@@ -29,7 +30,8 @@ import {
   getWakeup,
 } from '../services/workbenches/backgroundStore.js';
 import { checkJob, endBackgroundOnArchive, markJobsLostAfterMove, sweepBackground } from '../services/workbenches/backgroundSweep.js';
-import { getWorkbench } from '../services/workbenches/store.js';
+import { getWorkbench, markArchive } from '../services/workbenches/store.js';
+import { bulkArchiveBlocker, bulkArchiveGuard } from '../services/workbenches/idleArchive.js';
 import { WorkbenchError } from '../services/workbenches/errors.js';
 import { sendMessage } from '../services/workbenches/turns.js';
 import * as runtime from '../services/workbenches/sandboxRuntime.js';
@@ -115,6 +117,37 @@ afterEach(async () => {
 });
 
 describe('wake-ups', () => {
+  it.each(['queued', 'running'])('protects a wake-up until its message is %s', async (state) => {
+    await insertWakeup();
+    const assertProtected = async () => {
+      expect(await getWakeup('wake')).toMatchObject({ status: 'fired', firedAt: null });
+      expect(await bulkArchiveBlocker('wb')).not.toBeNull();
+      expect(await markArchive('wb', false, undefined, undefined, bulkArchiveGuard())).toBeNull();
+      expect(await getWorkbench('wb')).toMatchObject({ archivedAt: null, archivePendingAt: null });
+    };
+    vi.mocked(existingBoxRefusal).mockImplementationOnce(async () => {
+      await assertProtected();
+      return null;
+    });
+    vi.mocked(sendMessage).mockImplementationOnce(async () => {
+      await assertProtected();
+      await testDb.db.update(workbenchChats).set(state === 'running'
+        ? { status: 'running' }
+        : { queuedMessages: [{ id: 'message', text: 'Wake up' }] as never }
+      ).where(eq(workbenchChats.id, 'chat'));
+      return { queued: state === 'queued' };
+    });
+
+    const now = new Date();
+    expect(await fireWakeup('wake', now)).toBe(true);
+    expect(await getWakeup('wake')).toMatchObject({ status: 'fired', firedAt: now });
+    expect(await markArchive('wb', false, undefined, undefined, bulkArchiveGuard())).toBeNull();
+
+    await testDb.db.update(workbenchChats).set({ status: 'idle', queuedMessages: [] }).where(eq(workbenchChats.id, 'chat'));
+    expect(await bulkArchiveBlocker('wb')).toBeNull();
+    expect(await markArchive('wb', false, undefined, undefined, bulkArchiveGuard())).toMatchObject({ status: 'archived' });
+  });
+
   it('sends one turn when two sweeps run together', async () => {
     await insertWakeup();
     await Promise.all([sweepBackground(), sweepBackground(), fireWakeup('wake')]);
@@ -192,6 +225,7 @@ describe('wake-ups', () => {
     await sweepBackground();
     expect(sendMessage).not.toHaveBeenCalled();
     expect(await getWakeup('wake')).toMatchObject({ status: 'cancelled', failureDetail: 'The chat is closed.' });
+    expect(await bulkArchiveBlocker('wb')).toBeNull();
   });
 
   it('marks a wake-up failed on a box-gate refusal, and sends nothing', async () => {
@@ -201,6 +235,7 @@ describe('wake-ups', () => {
     expect(sendMessage).not.toHaveBeenCalled();
     expect(vi.mocked(existingBoxRefusal).mock.calls[0][1]).toBe(true);
     expect(await getWakeup('wake')).toMatchObject({ status: 'failed', failureDetail: 'Your box-hours ran out.' });
+    expect(await bulkArchiveBlocker('wb')).toBeNull();
   });
 
   it('marks a wake-up failed when the send fails', async () => {
@@ -208,6 +243,7 @@ describe('wake-ups', () => {
     vi.mocked(sendMessage).mockRejectedValueOnce(new WorkbenchError('This session failed to start; retry it.', 409, 'not_ready'));
     await sweepBackground();
     expect(await getWakeup('wake')).toMatchObject({ status: 'failed', failureDetail: 'This session failed to start; retry it.' });
+    expect(await bulkArchiveBlocker('wb')).toBeNull();
   });
 
   it('sends the turn with the stored payer', async () => {
@@ -283,6 +319,46 @@ describe('background jobs', () => {
     expect(messageTriggerText(trigger)).toBe('Background job tests exited with code 3');
     // A second pass finds nothing running and sends nothing more.
     await sweepBackground();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a job running when its exit wake-up cannot be stored', async () => {
+    const job = await insertJob();
+    const row = (await getWorkbench('wb'))!;
+    const probe = { state: 'exited' as const, code: 0, lines: [] };
+    await testDb.pglite.exec(`
+      CREATE FUNCTION reject_exit_wakeup() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'exit wake-up insert failed'; END $$;
+      CREATE TRIGGER reject_exit_wakeup BEFORE INSERT ON workbench_wakeups
+      FOR EACH ROW EXECUTE FUNCTION reject_exit_wakeup();
+    `);
+
+    await expect(applyProbe(row, job, probe)).rejects.toThrow();
+    expect(await getJob('job')).toMatchObject({ status: 'running', endedAt: null, exitCode: null });
+    expect(await testDb.db.select().from(workbenchWakeups)).toHaveLength(0);
+    expect(await bulkArchiveBlocker('wb')).not.toBeNull();
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    await testDb.pglite.exec('DROP TRIGGER reject_exit_wakeup ON workbench_wakeups');
+    expect(await applyProbe(row, job, probe)).toBe('exited');
+    expect(await getJob('job')).toMatchObject({ status: 'exited', exitCode: 0 });
+    expect(await testDb.db.select().from(workbenchWakeups)).toHaveLength(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('stores one exit wake-up when two probes finish together', async () => {
+    const job = await insertJob();
+    const row = (await getWorkbench('wb'))!;
+    const probe = { state: 'exited' as const, code: 0, lines: [] };
+    vi.mocked(existingBoxRefusal).mockImplementationOnce(async () => {
+      expect(await getJob('job')).toMatchObject({ status: 'exited' });
+      expect(await testDb.db.select().from(workbenchWakeups)).toHaveLength(1);
+      expect(await bulkArchiveBlocker('wb')).not.toBeNull();
+      return null;
+    });
+
+    expect(await Promise.all([applyProbe(row, job, probe), applyProbe(row, job, probe)])).toEqual(['exited', 'exited']);
+    expect(await testDb.db.select().from(workbenchWakeups)).toHaveLength(1);
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 

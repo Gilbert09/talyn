@@ -210,6 +210,32 @@ describe('archiveWorkbenches', () => {
     expect(toast.error).toHaveBeenCalledWith('Could not archive 1 session', 'Session not found');
   });
 
+  it('says which sessions stayed because they work now, apart from real failures', async () => {
+    archiveMany.mockResolvedValue({
+      archived: [archivedRow('wb1')],
+      failed: [
+        { id: 'wb2', error: 'The session has a running background job.', busy: true },
+        { id: 'wb3', error: 'Session not found' },
+      ],
+    });
+    expect(await archiveWorkbenches(['wb1', 'wb2', 'wb3'], null)).toBe(1);
+    expect(toast.info).toHaveBeenCalledWith('Kept 1 session that works now', 'The session has a running background job.');
+    expect(toast.error).toHaveBeenCalledWith('Could not archive 1 session', 'Session not found');
+  });
+
+  it('shows no error when every refused session works now', async () => {
+    archiveMany.mockResolvedValue({
+      archived: [],
+      failed: [
+        { id: 'wb1', error: 'The session works now.', busy: true },
+        { id: 'wb2', error: 'The session has a scheduled wake-up.', busy: true },
+      ],
+    });
+    expect(await archiveWorkbenches(['wb1', 'wb2'], null)).toBe(0);
+    expect(toast.info).toHaveBeenCalledWith('Kept 2 sessions that work now', 'The session works now.');
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it('removes nothing when the request failed', async () => {
     archiveMany.mockRejectedValue(new Error('offline'));
     expect(await archiveWorkbenches(['wb1', 'wb2'], null)).toBe(0);

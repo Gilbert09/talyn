@@ -17,6 +17,8 @@ import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { toast } from '../../stores/toast';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { useWorkbenchStore } from '../../stores/workbenches';
+import { loadBackground } from '../../stores/sessionBackground';
+import { isArchivedWorkbench } from '../../lib/workbenchActions';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 
 export interface ArchiveOptions {
@@ -98,7 +100,21 @@ function hideAsArchived(ids: string[]): (ids: string[]) => void {
         useWorkbenchStore.getState().upsertWorkbench(entry.before);
       }
     }
+    // Broadcasts can be missed while the sessions are hidden.
+    void refreshRestoredBackground(back);
   };
+}
+
+async function refreshRestoredBackground(ids: string[]): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < ids.length) {
+      const id = ids[next++];
+      const row = useWorkbenchStore.getState().workbenches[id];
+      if (row?.runtime === 'sandbox' && !isArchivedWorkbench(row)) await loadBackground(id);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(LOCAL_CLEANUP_CONCURRENCY, ids.length) }, worker));
 }
 
 /**
@@ -138,8 +154,13 @@ export async function archiveWorkbenches(ids: string[], openId: string | null): 
     const archived = result.archived.length;
     trackEvent('sessions_archived_bulk', { requested: ids.length, archived });
     if (archived > 0) toast.success(`Archived ${plural(archived, 'session', 'sessions')}`);
-    if (result.failed.length > 0) {
-      toast.error(`Could not archive ${plural(result.failed.length, 'session', 'sessions')}`, result.failed[0].error);
+    const busy = result.failed.filter((f) => f.busy);
+    const failed = result.failed.filter((f) => !f.busy);
+    if (busy.length > 0) {
+      toast.info(`Kept ${plural(busy.length, 'session that works', 'sessions that work')} now`, busy[0].error);
+    }
+    if (failed.length > 0) {
+      toast.error(`Could not archive ${plural(failed.length, 'session', 'sessions')}`, failed[0].error);
     }
     return archived;
   } finally {

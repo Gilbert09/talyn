@@ -269,6 +269,12 @@ When you are done, archive the session:
 
 The session moves to **History**. Its branch, its chats and any pull request stay. Talyn saves any work you did not push before it removes the sandbox. It pushes nothing to GitHub to do this.
 
+**Archive all** selects sessions with no open pull request. It skips threads and sessions that are starting, moving, or working.
+Sessions with queued messages, running scripts, running background jobs, or pending wake-ups stay open.
+Talyn checks each session again on the server before it archives it.
+If work starts after the confirmation dialog opens, Talyn keeps the session and shows a notice.
+These checks apply to **Archive all**. You can still explicitly archive one session with the **Archive** action.
+
 Talyn also archives a session by itself:
 
 - When its pull request is merged and no chat is running.
