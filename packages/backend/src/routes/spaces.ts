@@ -5,6 +5,7 @@ import type {
   CreateSpaceSessionResponse,
   Space,
   SpaceItemsResponse,
+  SpaceNotificationPreferences,
   SpaceRepository,
   SpacesTeam,
   SpaceSessionRow,
@@ -55,6 +56,8 @@ import {
   removeSpaceRepository,
   updateSpace,
 } from '../services/teams/spaces.js';
+import { readSpaceNotificationPreferences, setSpaceNotificationsMuted } from '../services/teams/notifications.js';
+import { broadcastToUser } from '../services/websocket.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { fleetErrorAsRefusal } from '../services/workbenches/errors.js';
 
@@ -344,6 +347,27 @@ export function spaceRoutes(): Router {
       }
       const data = await createSessionInSpace(req.params.id!, { id: user.id, email: user.email }, req.body ?? {}, sentAt);
       ok(res, data satisfies CreateSpaceSessionResponse);
+    })
+  );
+
+  // ---- My notification choice per space ----
+
+  router.get(
+    '/space-notifications',
+    handle(async (req, res) => {
+      ok(res, (await readSpaceNotificationPreferences(assertUser(req).id)) satisfies SpaceNotificationPreferences);
+    })
+  );
+
+  router.put(
+    '/spaces/:id/notifications',
+    handle(async (req, res) => {
+      const muted = (req.body as { muted?: unknown } | undefined)?.muted;
+      const data = await setSpaceNotificationsMuted(assertUser(req).id, req.params.id!, muted);
+      broadcastToUser(assertUser(req).id, {
+        type: 'space:notifications', payload: {}, timestamp: new Date().toISOString(),
+      });
+      ok(res, data satisfies SpaceNotificationPreferences);
     })
   );
 

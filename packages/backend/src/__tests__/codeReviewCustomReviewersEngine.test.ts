@@ -384,12 +384,12 @@ describe('which reviewers a cycle runs', () => {
     expect(JSON.stringify(queued.customReviewers)).not.toContain('audit row');
 
     const review = await startAndPlanFrom(queued);
-    expect(review.lensKeys).toEqual(['correctness', 'security', 'reliability', REPO_LENS, PLATFORM_LENS]);
-    // Standard, one chunk: five reviewers, the sweep, the judge.
-    expect(review.runsTotal).toBe(7);
+    expect(review.lensKeys).toEqual(['correctness', 'security', 'reliability', 'rules', REPO_LENS, PLATFORM_LENS]);
+    // Standard, one chunk: six reviewers, the sweep, the judge.
+    expect(review.runsTotal).toBe(8);
 
     const publicReview = await toPublicReview(review);
-    expect(publicReview.runsTotal).toBe(7);
+    expect(publicReview.runsTotal).toBe(8);
     expect(publicReview.lensesRun).toEqual(review.lensKeys);
     expect(publicReview.customReviewers).toEqual([
       { lensKey: REPO_LENS, name: 'house-rules' },
@@ -430,8 +430,8 @@ describe('which reviewers a cycle runs', () => {
     });
     const review = await startAndPlan();
     expect(review.customReviewers?.map((r) => r.skillKey)).toEqual([REPO_KEY]);
-    expect(review.lensKeys).toEqual(['correctness', 'security', 'reliability', REPO_LENS]);
-    expect(review.runsTotal).toBe(6);
+    expect(review.lensKeys).toEqual(['correctness', 'security', 'reliability', 'rules', REPO_LENS]);
+    expect(review.runsTotal).toBe(7);
   });
 
   it.each([
@@ -468,7 +468,8 @@ describe('which reviewers a cycle runs', () => {
       Array.from({ length: 30 }, (_, i) => ({
         filename: `src/f${i}.ts`,
         status: 'modified',
-        additions: 1,
+        // 750 changed lines: two parts of about 600.
+        additions: 25,
         deletions: 0,
         patch: '@@ -1 +1 @@\n+x',
       }))
@@ -494,7 +495,7 @@ describe('which reviewers a cycle runs', () => {
       customReviewers: [{ skillKey: REPO_KEY, name: 'house-rules' }],
     });
     const review = await startAndPlanFrom((await getReview(id))!);
-    expect(review.lensKeys).toEqual(['correctness', 'security', 'reliability', PLATFORM_LENS]);
+    expect(review.lensKeys).toEqual(['correctness', 'security', 'reliability', 'rules', PLATFORM_LENS]);
 
     // And after the plan: the cycle in flight is handed back as it is.
     const again = await start();
@@ -522,7 +523,7 @@ describe('which reviewers a cycle runs', () => {
     await prepareCycle((await getReview('rev-old'))!);
     const review = (await getReview('rev-old'))!;
     expect(review.customReviewers).toBeNull();
-    expect(review.lensKeys).toEqual(['correctness', 'security', 'reliability']);
+    expect(review.lensKeys).toEqual(['correctness', 'security', 'reliability', 'rules']);
   });
 
   it('reports the reviewers to analytics as a count and a boolean', async () => {
@@ -708,11 +709,12 @@ describe('dispatching a custom reviewer', () => {
       correctness: 'running',
       security: 'running',
       reliability: 'running',
+      rules: 'running',
       [REPO_LENS]: 'running',
       [PLATFORM_LENS]: 'failed',
     });
 
-    // The four that ran settle. The phase moves on with what it has.
+    // The five that ran settle. The phase moves on with what it has.
     for (const run of runs.filter((r) => r.status === 'running')) {
       await ingestUnitOutput(review, run, answer([]));
     }
@@ -770,7 +772,7 @@ describe('dispatching a custom reviewer', () => {
     await db.update(prCodeReviews).set({ phase: 'sweeping' }).where(eq(prCodeReviews.id, review.id));
     await dispatchUnit((await getReview(review.id))!, { kind: 'sweep', lens: '', chunkIndex: 0 });
     const prompt = sentPrompt();
-    expect(prompt).toContain('- Logic\n- Security\n- Reliability\n- house-rules\n- Security rules');
+    expect(prompt).toContain('- Logic\n- Security\n- Reliability\n- Repository rules\n- house-rules\n- Security rules');
     expect(prompt).not.toContain(REPO_LENS);
   });
 });

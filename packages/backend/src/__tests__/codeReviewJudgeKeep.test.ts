@@ -88,6 +88,10 @@ describe('matchJudgeKeep', () => {
   });
 });
 
+function ctx(over: Partial<Parameters<typeof buildJudgePrompt>[0]> = {}): Parameters<typeof buildJudgePrompt>[0] {
+  return { ref: 'acme/app#7', title: 't', body: '', headBranch: 'h', baseBranch: 'main', files: [], chunkIndex: 1, chunkTotal: 1, ...over };
+}
+
 describe('the judge contract', () => {
   it('asks for the id on every keep', () => {
     const prompt = buildJudgePrompt(
@@ -104,7 +108,28 @@ describe('the judge contract', () => {
       [{ id: 'abc123', severity: 'major', filePath: 'src/a.ts', lines: '10', title: 'T', body: 'B', raisedBy: [] }]
     );
     expect(prompt).toContain('### abc123');
-    expect(prompt).toContain('MUST carry one more field: `"id"`');
+    expect(prompt).toContain('List the candidates you KEEP by their id');
+    expect(prompt).toContain('"findings":[{"id":"<candidate id>"');
+  });
+
+  it('does not ask the judge to copy the kept findings back', () => {
+    // An 18 KB copy with one typo in it left a whole review unchecked.
+    const prompt = buildJudgePrompt(
+      { ref: 'acme/app#7', title: 't', body: '', headBranch: 'h', baseBranch: 'main', files: [], chunkIndex: 1, chunkTotal: 1 },
+      []
+    );
+    expect(prompt).toContain('Do not copy the');
+    expect(prompt).not.toContain('"anchor":"the exact source line');
+  });
+
+  it('reads a keep that carries only an id, a severity and a title', () => {
+    const parsed = parseCodeReviewFindings(
+      'TALYN_REVIEW_FINDINGS:\n```json\n{"schema":1,"findings":[{"id":"abc123","severity":"minor","title":"T"}],' +
+        '"dropped":[{"id":"def456","reason":"r"}]}\n```'
+    );
+    expect(parsed.ok && parsed.findings).toEqual([expect.objectContaining({ id: 'abc123', severity: 'minor' })]);
+    expect(parsed.ok && parsed.dropped).toEqual([{ id: 'def456', reason: 'r' }]);
+    expect(parsed.ok && matchJudgeKeep(parsed.findings[0]!, new Set(['abc123']), false)).toBe('abc123');
   });
 
   it.each([
@@ -127,8 +152,8 @@ describe('the judge contract', () => {
 
     if (reviewerLine) expect(prompt).toContain(`### abc123\n${reviewerLine}`);
     else expect(prompt).not.toContain('Raised by:');
-    expect(prompt).toContain('## Keep a coverage gap when');
-    expect(prompt).toContain('## Keep an operability problem when');
+    expect(prompt).toContain('## A coverage gap');
+    expect(prompt).toContain('## An operability problem');
   });
 
   it.each([
@@ -147,6 +172,66 @@ describe('the judge contract', () => {
     const parsed = parseCodeReviewFindings(text);
     expect(parsed.ok).toBe(true);
     if (parsed.ok) expect(parsed.findings[0]!.id).toBe(expected);
+  });
+});
+
+describe('the judge keeps', () => {
+  const block = (count: number) =>
+    `${CODE_REVIEW_FINDINGS_SENTINEL}\n\`\`\`json\n` +
+    JSON.stringify({
+      schema: 1,
+      findings: Array.from({ length: count }, (_, i) => ({ id: `k${i}`, severity: 'minor', title: `T${i}` })),
+    }) +
+    '\n```';
+
+  it.each([
+    ['a reviewer, at the cap', {}, 45, 40, true],
+    ['a reviewer, under the cap', {}, 12, 12, false],
+    ['the judge, past the reviewer cap', { maxFindings: Infinity }, 45, 45, false],
+  ] as const)('parses %s', (_label, options, count, expected, truncated) => {
+    const parsed = parseCodeReviewFindings(block(count), options);
+    expect(parsed.ok && parsed.findings).toHaveLength(expected);
+    expect(parsed.ok && parsed.truncated).toBe(truncated);
+  });
+
+  it('does not tell the judge to keep at most 40', () => {
+    const prompt = buildJudgePrompt(ctx(), []);
+    expect(prompt).not.toMatch(/At most \d+ entries/);
+  });
+});
+
+describe('the judge prompt size', () => {
+  const ARGV_LIMIT = 131072;
+  const candidate = (i: number, body: string) => ({
+    id: `c${i}`, severity: 'major', filePath: `src/f${i}.ts`, lines: '10', title: `T${i}`, body, raisedBy: ['Logic'],
+  });
+  const bigDiff = Array.from({ length: 30 }, (_, i) => ({
+    filename: `src/f${i}.ts`, status: 'modified', additions: 100, deletions: 0, patch: `@@ -1 +1 @@\n+${'x'.repeat(3000)}`,
+  }));
+
+  it('inlines the diff when the candidates are small', () => {
+    const prompt = buildJudgePrompt(ctx({ files: bigDiff.slice(0, 2) }), [candidate(1, 'short')]);
+    expect(prompt).toContain('--- src/f0.ts');
+    expect(prompt).not.toContain('cut to fit');
+  });
+
+  it.each([
+    ['many long bodies', 40, 'b'.repeat(4000)],
+    ['long multi-byte bodies', 40, '\u00e9'.repeat(4000)],
+    ['a few long bodies', 6, 'b'.repeat(4000)],
+  ])('stays under the argv limit with %s and a full diff', (_label, count, body) => {
+    const candidates = Array.from({ length: count }, (_, i) => candidate(i, body));
+    const prompt = buildJudgePrompt(ctx({ files: bigDiff }), candidates);
+    expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThan(ARGV_LIMIT);
+    for (const c of candidates) expect(prompt).toContain(`### ${c.id}`);
+  });
+
+  it('cuts the bodies only when the candidates alone do not fit', () => {
+    const few = buildJudgePrompt(ctx({ files: bigDiff }), [candidate(1, 'b'.repeat(4000))]);
+    expect(few).not.toContain('cut to fit');
+    const many = buildJudgePrompt(ctx({ files: bigDiff }), Array.from({ length: 40 }, (_, i) => candidate(i, 'b'.repeat(4000))));
+    expect(many).toContain('cut to fit the prompt');
+    expect(many).toContain('not inlined here');
   });
 });
 

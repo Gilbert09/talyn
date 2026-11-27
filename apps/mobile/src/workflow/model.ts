@@ -1,4 +1,4 @@
-import type { Workbench, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
+import type { Workbench, WorkbenchAgent, WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 import type { PRRow, WorkbenchEventsPage } from '@talyn/client/native';
 
 import { eventSize, slimEvent } from './slim';
@@ -277,4 +277,11 @@ export function stackLabel(row: PRRow) {
 }
 export function canCompose(item: Workbench | undefined, chat: WorkbenchChat | undefined) {
   return Boolean(item && chat && item.status === 'ready' && !item.archivedAt && ['idle', 'running', 'awaiting_input', 'error'].includes(chat.status));
+}
+export function alternateChatAgent(item: Workbench, chat: WorkbenchChat | undefined): WorkbenchAgent | undefined {
+  if (!chat || !canCompose(item, chat) || item.runtime !== 'sandbox' || !item.sandboxId) return;
+  const alternate = chat.agent === 'claude' ? 'codex' : 'claude';
+  const agents = (item.settings as { sandboxAgents?: Record<string, WorkbenchAgent[]> } | null)?.sandboxAgents;
+  const installed = agents?.[item.sandboxId] ?? [item.agent];
+  return installed.includes(alternate) ? alternate : undefined;
 }

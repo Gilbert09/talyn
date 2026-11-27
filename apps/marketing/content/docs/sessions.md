@@ -23,6 +23,7 @@ Other options in the composer:
 
 - **Create from…** starts the session on an existing branch or an open pull request, instead of a new branch. In the mobile app, the branch control above the message opens **Start from**, which lists a base branch for a new branch and the repository's open pull requests.
 - To start a session from a pull request, you can also use **Open in session** on the pull request. On mobile, it is in the pull request's menu.
+- A session on an existing branch can reuse an open PR link from another session in the same workspace. The previous session can be archived. The link appears before the new session pushes changes.
 - **Plan** turns on plan mode. The agent reads the code and writes a plan, and changes nothing until you approve it. Press Shift+Tab to switch plan mode.
 - The composer shows Markdown formatting while you type: quotes, headings, lists, bold, italic, strikethrough, code, code blocks and links. It also marks file mentions (@) and a slash command at the start of the message. The marks such as `**` and `>` stay in the text, so the agent gets the Markdown that you typed.
 - Press Esc to leave the composer. Then you can use keyboard shortcuts such as G then P, which opens your pull requests. The text that you typed stays in the composer.
@@ -39,6 +40,17 @@ In the desktop app and the web app, **Settings > Notifications** holds all notif
 
 - On a computer, turn on a notification when an agent finishes, and a notification when a merge-queue pull request is blocked. These settings apply only to that computer or browser.
 - For your phone, turn workspace notifications on or off, and choose the types: session updates, PR reviews, CI failures, ready to merge and human input. You can get alerts only when you are away from your computer, and you can set quiet hours. A change on one device also applies to the others. Each phone must also allow notifications in the Talyn mobile app.
+
+The **Team spaces** group lets you turn off alerts for a space, such as Automations.
+This personal setting applies to your desktop, browser, and phone.
+Your teammates keep their own preferences.
+Sessions, threads, and tasks in a muted space send you no alerts.
+Linked pull requests are muted when all their sessions and tasks are in spaces you muted.
+This includes archived sessions.
+A pull request with a session or task in Personal can still send alerts.
+Turn the space on again to use your usual notification settings.
+If muted spaces leave the list, select **Restore alerts** to remove their mutes.
+This also works after a space is archived or you leave its team.
 
 Claude adds itself as a commit co-author by default. Turn this off under **Settings > Sessions > Commits**.
 

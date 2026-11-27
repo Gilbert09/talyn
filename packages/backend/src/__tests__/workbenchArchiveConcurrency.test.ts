@@ -57,8 +57,8 @@ describe.skipIf(!url)('bulk archive against a concurrent PostgreSQL turn claim',
     const claimReady = new Promise<void>((resolve) => { claimed = resolve; });
     let release!: () => void;
     const mayCommit = new Promise<void>((resolve) => { release = resolve; });
-    const turn = pool.begin(async (tx) => {
-      setDbClient(drizzle(tx, { schema, casing: 'snake_case' }));
+    const turn = db.transaction(async (tx) => {
+      setDbClient(tx as unknown as Database);
       try {
         const result = await claimOrEnqueue(chatId, { id: 'message', text: 'Continue', queuedAt: new Date().toISOString() }, canStart);
         expect(Boolean(result?.started)).toBe(canStart);

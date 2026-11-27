@@ -26,6 +26,7 @@ import { debugBus, matchesOwnerFilter, type DebugOwnerFilter } from './debugBus.
 import { setLocalDelivery, publishBroadcast, publishToWorkspace, publishToUser, publishToSpace } from './wsBus.js';
 import { verifyTokenAndGetUser, enforceAllowList, AuthError, type AuthUser } from '../middleware/auth.js';
 import { isFeatureEnabled } from './featureFlags.js';
+import { pullRequestNotificationsMuted } from './teams/notifications.js';
 import { assertSpaceMember } from './teams/access.js';
 import { PresenceStore, startPresenceSweep } from './teams/presence.js';
 import { deskPresence } from './deskPresence.js';
@@ -949,6 +950,15 @@ export function emitPullRequestUpdated(
   });
 }
 
+function emitPersonalPullRequestAlert(workspaceId: string, pullRequestId: string, event: WSEvent): void {
+  void pullRequestNotificationsMuted(workspaceId, pullRequestId).then((muted) => {
+    if (!muted) broadcastToWorkspace(workspaceId, event);
+  }).catch((err) => {
+    console.warn('[ws] space notification check failed:', err);
+    broadcastToWorkspace(workspaceId, event);
+  });
+}
+
 /**
  * Fired once when a merge-queue PR transitions into `blocked` (gave up after
  * its retry budget). The desktop surfaces it as an OS notification + toast.
@@ -962,7 +972,7 @@ export function emitAutoKeepNeedsHuman(
   workspaceId: string,
   payload: AutoKeepNeedsHumanEvent
 ): void {
-  broadcastToWorkspace(workspaceId, {
+  emitPersonalPullRequestAlert(workspaceId, payload.pullRequestId, {
     type: 'auto_keep:needs_human',
     payload,
     timestamp: new Date().toISOString(),
@@ -973,7 +983,7 @@ export function emitMergeQueueBlocked(
   workspaceId: string,
   payload: MergeQueueBlockedEvent
 ): void {
-  broadcastToWorkspace(workspaceId, {
+  emitPersonalPullRequestAlert(workspaceId, payload.pullRequestId, {
     type: 'merge_queue:blocked',
     payload,
     timestamp: new Date().toISOString(),
@@ -992,7 +1002,7 @@ export function emitMergeQueueReviewWait(
   workspaceId: string,
   payload: MergeQueueReviewWaitEvent
 ): void {
-  broadcastToWorkspace(workspaceId, {
+  emitPersonalPullRequestAlert(workspaceId, payload.pullRequestId, {
     type: 'merge_queue:review_wait',
     payload,
     timestamp: new Date().toISOString(),

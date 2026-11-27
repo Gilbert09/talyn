@@ -34,10 +34,12 @@ With no review of the pull request's latest commit, the card has a **Run code re
 | Depth | What runs | How long |
 | --- | --- | --- |
 | **Quick** | One reviewer, one pass. No second pass and no checking pass, so expect more noise. | Usually under ten minutes |
-| **Standard** (default) | Three reviewers in parallel, then a second pass for anything they missed, then a checking pass on each finding. | Typically half an hour |
-| **Deep** | Five reviewers, the second pass and the checking pass. A large pull request is read in pieces rather than skimmed. | An hour or more on a large pull request |
+| **Standard** (default) | Four reviewers in parallel, then a second pass for anything they missed, then a checking pass on each finding. A large pull request is read in up to four parts. | Typically half an hour |
+| **Deep** | Six reviewers, the second pass and the checking pass. A large pull request is read in up to eight parts. | An hour or more on a large pull request |
 
-The reviewers are **Logic**, **Security**, **Reliability**, **Tests** and **Operability**. Standard uses the first three. Talyn skips a reviewer when the files make it pointless, for example a change to docs only. Generated files, lock files and vendored code are not reviewed.
+The reviewers are **Logic**, **Security**, **Reliability**, **Repository rules**, **Tests** and **Operability**. Standard uses the first four. **Repository rules** checks the change against the repository's `AGENTS.md`, `CLAUDE.md` and the guides they point to.
+
+When a large pull request is read in parts, **Logic** and **Repository rules** read the whole change once. **Security** and **Reliability** read one part each. Each part is about 600 changed lines, and the files of one directory stay together. Talyn skips a reviewer when the files make it pointless, for example a change to docs only. Generated files, lock files and vendored code are not reviewed.
 
 The **second pass** reads what every reviewer found, all together, and looks for what they missed. The **checking pass** goes through each finding again and drops the ones it cannot stand behind.
 

@@ -77,7 +77,8 @@ const { resetChangesStoreForTests } = await import('../services/workbenches/chan
 const { resetChangesStoredForTests } = await import('../services/workbenches/changesStored.js');
 const { resetChangesGithubForTests } = await import('../services/workbenches/changesGithub.js');
 const { GitHubRateLimitError } = await import('../services/githubRateGate.js');
-const { getChat, getWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
+const { getChat, getWorkbench, insertWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
+const { liveWorkbenchForPr } = await import('../services/workbenches/prSessions.js');
 const { startStaleGoldenMove } = await import('../services/workbenches/move.js');
 const { backfillMergeArchives } = await import('../services/workbenches/mergeBackfill.js');
 const recovery = await import('../services/workbenches/recovery.js');
@@ -478,6 +479,81 @@ describe('workbench routes', () => {
       expect(wb).toMatchObject({ branch: 'feat/thing', baseBranch: 'develop', pullRequestId: 'pr-a' });
       const got = await call('GET', `/workbenches/${wb.id}`);
       expect(got.body.data.pr).toMatchObject({ number: 42, state: 'open', ciStatus: 'failure' });
+    });
+
+    describe('an existing branch with a session PR', () => {
+      async function seedLinkedPr(overrides: Partial<typeof pullRequests.$inferInsert> = {}, linkedWorkspace = 'ws-a') {
+        await testDb.db.insert(pullRequests).values({
+          id: 'pr-a', workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'acme', repo: 'app', number: 42,
+          state: 'open', lastSummary: { headBranch: 'feat/thing', baseBranch: 'develop', createdAt: '2026-01-01T00:00:00Z' },
+          ...overrides,
+        });
+        await insertWorkbench({
+          id: 'previous', workspaceId: linkedWorkspace, repositoryId: overrides.repositoryId ?? 'repo-a',
+          repoFullName: 'acme/app', name: 'previous', branch: 'feat/thing', baseBranch: 'develop',
+          runtime: 'local', agent: 'claude', status: 'archived', archivedAt: new Date(),
+          pullRequestId: 'pr-a', pullRequestLinkExplicit: true,
+        });
+      }
+
+      it.each([false, true])('links before the first push when the previous session is archived: %s', async (archived) => {
+        await seedLinkedPr();
+        if (!archived) await updateWorkbench('previous', { archivedAt: null, status: 'ready' });
+        const wb = await createSandboxWorkbench({ branch: ' feat/thing ' });
+        expect(wb).toMatchObject({ branch: 'feat/thing', baseBranch: 'develop', pullRequestId: 'pr-a' });
+        expect(wb.pr).toMatchObject({ number: 42, state: 'open' });
+        await backfillMergeArchives();
+        expect(await getWorkbench(wb.id)).toMatchObject({ pullRequestId: 'pr-a', pullRequestLinkExplicit: true });
+        expect(await liveWorkbenchForPr('ws-a', 'pr-a')).toMatchObject({ id: wb.id });
+      });
+
+      it('keeps the requested base branch', async () => {
+        await seedLinkedPr();
+        expect(await createSandboxWorkbench({ branch: 'feat/thing', baseBranch: 'master' }))
+          .toMatchObject({ pullRequestId: 'pr-a', baseBranch: 'master' });
+      });
+
+      it('uses the repository default when the PR has no base branch', async () => {
+        await seedLinkedPr({ lastSummary: { headBranch: 'feat/thing', createdAt: '2026-01-01T00:00:00Z' } });
+        expect(await createSandboxWorkbench({ branch: 'feat/thing' }))
+          .toMatchObject({ pullRequestId: 'pr-a', baseBranch: 'main' });
+      });
+
+      it.each(['closed', 'merged', 'unlinked', 'other-workspace', 'other-repository', 'foreign-session', 'other-branch'])(
+        'does not reuse a %s PR link', async (reason) => {
+          await testDb.db.insert(repositories).values({
+            id: 'repo-other', workspaceId: 'ws-a', name: 'acme/other', url: 'https://github.com/acme/other',
+          });
+          await seedLinkedPr({
+            ...(reason === 'closed' || reason === 'merged' ? { state: reason } : {}),
+            ...(reason === 'other-workspace' ? { workspaceId: 'ws-b', repositoryId: 'repo-b' } : {}),
+            ...(reason === 'other-repository' ? { repositoryId: 'repo-other' } : {}),
+          }, reason === 'foreign-session' || reason === 'other-workspace' ? 'ws-b' : 'ws-a');
+          if (reason === 'unlinked') await updateWorkbench('previous', { pullRequestId: null });
+          const wb = await createSandboxWorkbench({ branch: reason === 'other-branch' ? 'feat/other' : 'feat/thing' });
+          expect(wb).toMatchObject({ pullRequestId: null, baseBranch: 'main' });
+        },
+      );
+
+      it.each([false, true])('links a local branch only when the branch is not generated: %s', async (branchGenerated) => {
+        await seedLinkedPr();
+        const res = await call('POST', '/workbenches', {
+          workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'local', agent: 'claude',
+          deviceId: 'dev-1', localPath: '/tmp/wt', branch: 'feat/thing', branchGenerated,
+        });
+        expect(res.status).toBe(200);
+        expect(res.body.data.pullRequestId).toBe(branchGenerated ? null : 'pr-a');
+      });
+
+      it('uses an explicit PR selection before a branch match', async () => {
+        await seedLinkedPr();
+        await testDb.db.insert(pullRequests).values({
+          id: 'pr-selected', workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'acme', repo: 'app', number: 43,
+          state: 'open', lastSummary: { headBranch: 'feat/selected', baseBranch: 'release' },
+        });
+        expect(await createSandboxWorkbench({ branch: 'feat/thing', fromPullRequestId: 'pr-selected' }))
+          .toMatchObject({ branch: 'feat/selected', baseBranch: 'release', pullRequestId: 'pr-selected' });
+      });
     });
 
     it('keeps the link to an older pull request through the merge backfill', async () => {

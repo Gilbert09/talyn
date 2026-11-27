@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { Alert } from 'react-native';
 
 import { FleetReconnectNotice } from '../features/agents/FleetReconnectNotice';
 import { TurnFailureActions } from '../features/chat/TurnFailureActions';
@@ -7,13 +8,15 @@ const mockPush = jest.fn();
 const mockRefresh = jest.fn();
 const mockSend = jest.fn(async (..._args: unknown[]) => undefined);
 const mockCancelResume = jest.fn(async (..._args: unknown[]) => undefined);
+const mockSwitchChatAgent = jest.fn(async (..._args: unknown[]) => undefined);
 let mockProviders: unknown[] | undefined;
 jest.mock('expo-router', () => ({ useRouter: () => ({ push: mockPush }) }));
 jest.mock('../workflow/hooks', () => ({ useResource: () => ({ data: mockProviders }) }));
-jest.mock('../auth/AuthProvider', () => ({ useMobileRuntime: () => ({ workflow: { refresh: mockRefresh } }) }));
+jest.mock('../auth/AuthProvider', () => ({ useMobileRuntime: () => ({ workflow: { refresh: mockRefresh, switchChatAgent: mockSwitchChatAgent } }) }));
 jest.mock('../features/chat/actions', () => ({ chatActions: { cancelResume: (...args: unknown[]) => mockCancelResume(...args), send: (...args: unknown[]) => mockSend(...args) } }));
 
 beforeEach(() => { mockProviders = undefined; jest.clearAllMocks(); });
+afterEach(() => { jest.restoreAllMocks(); });
 
 it.each([undefined, [], [{ type: 'selfhosted', connectedAgents: ['claude'], reauthAgents: [] }]])('hides the notice without a reconnect: %j', async (providers) => {
   mockProviders = providers;
@@ -59,4 +62,24 @@ it.each([true, false])('shows a waiting line with cancel, reconnect=%s', async (
   await fireEvent.press(screen.getByText('Cancel'));
   await waitFor(() => expect(mockCancelResume).toHaveBeenCalledWith('chat'));
   expect(mockRefresh).toHaveBeenCalledWith('workbench', 'wb');
+});
+
+it.each([undefined, '2026-11-28T08:00:00Z'])('switches before retrying a usage limit with resumeAt=%s', async (resumeAt) => {
+  await render(<TurnFailureActions chatId="chat" workbenchId="wb" text="Claude is at its usage limit." reconnect={false}
+    limited alternateAgent="codex" resumeAt={resumeAt} />);
+  await fireEvent.press(screen.getByRole('button', { name: 'Switch to Codex and retry' }));
+  expect(mockSwitchChatAgent).toHaveBeenCalledWith('wb', 'chat', 'codex');
+  expect(mockSend).toHaveBeenCalledWith('chat', { text: 'Continue from where you stopped.' });
+  expect(mockSwitchChatAgent.mock.invocationCallOrder[0]).toBeLessThan(mockSend.mock.invocationCallOrder[0]);
+  expect(mockCancelResume).not.toHaveBeenCalled();
+});
+
+it('does not retry on the old agent if the switch fails', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  mockSwitchChatAgent.mockRejectedValueOnce(new Error('Could not reach the server.'));
+  await render(<TurnFailureActions chatId="chat" workbenchId="wb" text="Claude is at its usage limit." reconnect={false}
+    limited alternateAgent="codex" />);
+  await fireEvent.press(screen.getByRole('button', { name: 'Switch to Codex and retry' }));
+  expect(alert).toHaveBeenCalledWith('Could not switch agents', 'Could not reach the server.');
+  expect(mockSend).not.toHaveBeenCalled();
 });

@@ -198,6 +198,8 @@ describe('Data API database boundary', () => {
       'memory_review_runs',
       // Team invites by email (0147): email addresses and live link tokens.
       'team_invites',
+      // Personal space mutes (0151): read by the push worker with no request.
+      'space_notification_mutes',
     ]) {
       await expect(testDb.pglite.query(`SELECT * FROM ${table}`)).rejects.toMatchObject({ code: '42501' });
       await expect(testDb.pglite.query(`INSERT INTO ${table} DEFAULT VALUES`)).rejects.toMatchObject({ code: '42501' });

@@ -1,7 +1,16 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { closeFenceOnNewline, composerMarkdown, endQuotesAtPlainLines, type ComposerLine } from '@talyn/shared';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import {
+  backspaceAfterCodeBlock,
+  closeFenceOnNewline,
+  composerMarkdown,
+  endQuotesAtPlainLines,
+  leaveCodeBlockOnNewline,
+  stepOverClosingFence,
+  type ComposerEdit,
+  type ComposerLine,
+} from '@talyn/shared';
 import { MarkdownTextarea } from '../components/workbench/MarkdownTextarea';
 import { renderMarkdownish } from '../lib/markdown';
 
@@ -109,6 +118,100 @@ describe('closeFenceOnNewline', () => {
   });
 });
 
+/** `|` marks the caret. Gives back the draft after the edit, with `|` at the new caret, or null. */
+function edited(draft: string, edit: (text: string, caret: number) => ComposerEdit | null): string | null {
+  const caret = draft.indexOf('|');
+  const text = draft.replace('|', '');
+  const change = edit(text, caret);
+  if (!change) return null;
+  const after = text.slice(0, change.from) + change.insert + text.slice(change.to);
+  return `${after.slice(0, change.caret)}|${after.slice(change.caret)}`;
+}
+
+describe('stepOverClosingFence', () => {
+  it.each([
+    ['down to the line below', '```\ncode\n``|`\nafter', 'down', '```\ncode\n```\n|after'],
+    ['down at the start of the fence', '```\ncode\n|```\nafter', 'down', '```\ncode\n```\n|after'],
+    ['down to a new line at the end of the draft', '```\ncode\n`|``', 'down', '```\ncode\n```\n|'],
+    ['down past a tilde fence', '~~~\ncode\n~|~~', 'down', '~~~\ncode\n~~~\n|'],
+    ['down past a fence with a language', '```ts\ncode\n|```', 'down', '```ts\ncode\n```\n|'],
+    ['up to the end of the last code line', 'a\n```\nfirst\nlast\n|```\nb', 'up', 'a\n```\nfirst\nlast|\n```\nb'],
+  ] as const)('goes %s', (_name, draft, direction, expected) => {
+    expect(edited(draft, (text, caret) => stepOverClosingFence(text, caret, direction))).toBe(expected);
+  });
+
+  it.each([
+    ['a code line', '```\nco|de\n```', 'down'],
+    ['an opening fence', '``|`\ncode\n```', 'down'],
+    ['plain text', 'hel|lo', 'down'],
+    ['a fence in an unclosed block', '```\ncode\n``|`ts', 'down'],
+    ['up from an empty block', '```\n|```', 'up'],
+  ] as const)('leaves %s alone', (_name, draft, direction) => {
+    expect(edited(draft, (text, caret) => stepOverClosingFence(text, caret, direction))).toBeNull();
+  });
+});
+
+describe('leaveCodeBlockOnNewline', () => {
+  const newline = (text: string, caret: number) => leaveCodeBlockOnNewline(text, caret, caret);
+
+  it.each([
+    ['an empty last code line', '```\ncode\n|\n```', '```\ncode\n```\n|'],
+    ['an empty last line with spaces', '```\ncode\n  |\n```', '```\ncode\n```\n|'],
+    ['an empty last line above text', '```\ncode\n|\n```\nafter', '```\ncode\n```\n|\nafter'],
+    ['an empty last line above an empty line', '```\ncode\n|\n```\n\nafter', '```\ncode\n```\n|\nafter'],
+    ['the only code line', 'see:\n```\n|\n```', 'see:\n```\n```\n|'],
+    ['a fence with a language', '```ts\nx\n|\n```', '```ts\nx\n```\n|'],
+    ['a tilde block', '~~~\nx\n|\n~~~', '~~~\nx\n~~~\n|'],
+    ['an unclosed block', '```\ncode\n|', '```\ncode\n```\n|'],
+    ['an unclosed indented block', '  ````\ncode\n|', '  ````\ncode\n  ````\n|'],
+    ['the start of a closing fence', '```\ncode\n|```', '```\ncode\n```\n|'],
+    ['the end of a closing fence', '```\ncode\n```|\nafter', '```\ncode\n```\n|\nafter'],
+  ])('leaves the block from %s', (_name, draft, expected) => {
+    expect(edited(draft, newline)).toBe(expected);
+  });
+
+  it.each([
+    ['the end of a code line', '```\ncode|\n```'],
+    ['an empty code line in the middle', '```\na\n|\nb\n```'],
+    ['an opening fence', '```|\ncode\n```'],
+    ['plain text', 'hello|'],
+    ['an empty plain line', 'hello\n|'],
+    ['a quote', '> quote|'],
+  ])('leaves %s alone', (_name, draft) => {
+    expect(edited(draft, newline)).toBeNull();
+  });
+
+  it('leaves a selection alone', () => {
+    expect(leaveCodeBlockOnNewline('```\ncode\n\n```', 0, 3)).toBeNull();
+  });
+});
+
+describe('backspaceAfterCodeBlock', () => {
+  const backspace = (text: string, caret: number) => backspaceAfterCodeBlock(text, caret, caret);
+
+  it.each([
+    ['an empty line', '```\ncode\n```\n|', '```\ncode|\n```'],
+    ['an empty line above more text', '```\ncode\n```\n|\nmore', '```\ncode|\n```\nmore'],
+    ['a line with text', '```\ncode\n```\n|after', '```\ncode|\n```\nafter'],
+  ])('moves back into the block from %s', (_name, draft, expected) => {
+    expect(edited(draft, backspace)).toBe(expected);
+  });
+
+  it.each([
+    ['the middle of the line', '```\ncode\n```\naf|ter'],
+    ['below an empty block', '```\n```\n|'],
+    ['plain text', 'a\n|b'],
+    ['the first line', '|a'],
+    ['a code line', '```\na\n|b\n```'],
+  ])('leaves %s alone', (_name, draft) => {
+    expect(edited(draft, backspace)).toBeNull();
+  });
+
+  it('leaves a selection alone', () => {
+    expect(backspaceAfterCodeBlock('```\ncode\n```\nx', 13, 14)).toBeNull();
+  });
+});
+
 describe('MarkdownTextarea', () => {
   afterEach(cleanup);
 
@@ -183,7 +286,7 @@ describe('MarkdownTextarea', () => {
     expect(textarea.value).toBe('```');
   });
 
-  it('hides the fence backticks unless the caret is on their line', () => {
+  it('hides closing backticks, and opening ones unless the caret is on their line', () => {
     const { container } = render(<Harness initial={'```json\nx\n```\nafter'} />);
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
     expect(fenceRuns(container)).toEqual([
@@ -203,13 +306,67 @@ describe('MarkdownTextarea', () => {
     fireEvent.select(textarea);
     expect(fenceRuns(container).map((f) => f.hidden)).toEqual([true, true]);
 
-    // A selection over the whole block shows both fences.
+    // On the closing fence, its backticks still do not show.
+    textarea.setSelectionRange(12, 12);
+    fireEvent.select(textarea);
+    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([true, true]);
+
     textarea.setSelectionRange(0, 14);
     fireEvent.select(textarea);
-    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([false, false]);
+    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([false, true]);
 
     fireEvent.blur(textarea);
     expect(fenceRuns(container).map((f) => f.hidden)).toEqual([true, true]);
+  });
+
+  it.each([
+    ['Shift+Enter on an empty last code line', '```\ncode\n\n```', 9, { key: 'Enter', shiftKey: true }, '```\ncode\n```\n', 13],
+    ['Backspace below a block', '```\ncode\n```\n', 13, { key: 'Backspace' }, '```\ncode\n```', 8],
+  ])('handles %s', (_name, initial, caret, key, value, after) => {
+    render(<Harness initial={initial} />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.setSelectionRange(caret, caret);
+    fireEvent.keyDown(textarea, key);
+    expect(textarea.value).toBe(value);
+    expect(textarea.selectionStart).toBe(after);
+    expect(textarea.selectionEnd).toBe(after);
+  });
+
+  it('does not leave the block when the parent handles the key', () => {
+    const send = vi.fn((e: React.KeyboardEvent) => e.preventDefault());
+    render(<MarkdownTextarea aria-label="Message" value={'```\ncode\n\n```'} onChange={() => undefined} onKeyDown={send} textClassName="" />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.setSelectionRange(9, 9);
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true });
+    expect(textarea.value).toBe('```\ncode\n\n```');
+  });
+
+  it.each([
+    ['Down past the closing fence', 'ArrowDown', '```\ncode\n```', 10, '```\ncode\n```\n', 13],
+    ['Up past the closing fence', 'ArrowUp', '```\ncode\n```\nafter', 9, '```\ncode\n```\nafter', 8],
+    ['Down onto a code line', 'ArrowDown', '```\na\nb\n```', 6, '```\na\nb\n```', 6],
+  ])('steps %s after the browser moves the caret', async (_name, key, initial, landed, value, after) => {
+    render(<Harness initial={initial} />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key });
+    // jsdom does not move the caret on arrow keys: put it where the browser would.
+    textarea.setSelectionRange(landed, landed);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(textarea.value).toBe(value);
+    expect(textarea.selectionStart).toBe(after);
+  });
+
+  it('does not step over the fence while Shift extends a selection', async () => {
+    render(<Harness initial={'```\ncode\n```'} />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key: 'ArrowDown', shiftKey: true });
+    textarea.setSelectionRange(10, 10);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(textarea.value).toBe('```\ncode\n```');
+    expect(textarea.selectionStart).toBe(10);
   });
 
   it('passes the ref through to the textarea', () => {

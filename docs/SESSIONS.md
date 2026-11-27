@@ -2,6 +2,25 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+### 2026-11-27 — Repeated tests of code review reliability
+
+The v6 and v7 comparison covers four PostHog pull requests, with two runs per variant and case.
+All 16 runs completed without recorded unit errors. One Opus scorer call per run scores every candidate and its restatements.
+The final score uses the same reply for the findings that survive the judge.
+Mean recall after the judge rises from 48.2% to 50.7%. At minor and above, it rises from 47.5% to 48.2%.
+These small gains need more runs. The change keeps the v7 reliability method.
+Sonnet for parts and sweeps cuts cost, but loses recall on one completed case. The change adds no cheaper tier.
+Two other Sonnet experiments failed at Claude rate limits. Their scores are excluded.
+The full comparison and its limits are in `benchmarks/review-bench/FINDINGS.md`, with a CSV of all 20 runs.
+
+## PR links for replacement sessions (2026-11-27)
+
+A session on an existing branch now reuses an open PR link from a session in the same workspace.
+The previous session can be archived. The PR must match the repository and branch.
+This restores the PR list link before the replacement session pushes changes.
+Generated branches do not inherit the link. An explicit PR selection takes precedence.
+The backend supplies the link to web, desktop, and mobile through their existing responses.
+
 ## Image preview in PR descriptions, reviews and comments (2026-11-20)
 
 Jovan asked to see a screenshot from a PR description without opening GitHub.
@@ -8083,3 +8102,12 @@ Decisions:
 - Mobile: a phone's text selection menu takes no app items without a native module (and a new binary). So the session menu on the detail screen has **New session from copied text**. It reads the clipboard (`expo-clipboard`, already in the binary) and opens `/new` with a new `prompt` route parameter. `NewWorkScreen` now matches the route's repository by id or by full name.
 - Analytics: `session_from_selection` with `source_kind`, `chars` and `repository_prefilled`, on all three front ends.
 - Later change (Tom): mobile replaces the clipboard item with a long-press menu on user and agent messages (`features/chat/messageMenu.tsx`). Items: **New session from message**, **Copy message**, **Select text**. **Select text** opens the message in a read-only `TextInput`, because a `Text` cannot report its selection and iOS `selectable` text copies only the whole block. The button there uses the selected part (`selectedText`). Inside a conversation the message `Markdown` is not natively selectable (`selectable={false}`), so the native long press and the menu do not both start. On Android the field stays editable with `showSoftInputOnFocus={false}` and drops edits, because a non-editable Android field cannot select. Analytics adds `via: 'message' | 'selection'`.
+
+
+### 2026-11-27 — Personal notification preferences for team spaces
+
+Settings now has a **Team spaces** group on desktop, web, and mobile.
+Each person can mute a space on all their devices without changing a teammate's preferences.
+The server stores these preferences and checks them before it sends a phone alert.
+Desktop and web also check the preference before showing alerts for that space.
+A change sends a private update to the person's other connected devices.

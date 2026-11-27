@@ -307,9 +307,10 @@ describe('codeReviewDedupeKey', () => {
 describe('preset plans and progress', () => {
   it('counts the units a preset will spend, which is the progress denominator', () => {
     expect(codeReviewUnitCount('quick')).toBe(1);
-    // 3 lenses + a sweep + a judging pass.
-    expect(codeReviewUnitCount('standard')).toBe(5);
-    // 5 lenses + a sweep, per chunk, plus one judging pass over the lot.
+    // 4 lenses + a sweep + a judging pass.
+    expect(codeReviewUnitCount('standard')).toBe(6);
+    // The generalist and the rules lens once, 4 lenses + a sweep per chunk, plus
+    // one judging pass.
     expect(codeReviewUnitCount('deep', 2)).toBe(13);
   });
 

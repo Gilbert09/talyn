@@ -1,28 +1,29 @@
 import type { PRRow } from '@talyn/client/native';
-import type { Workbench, WorkbenchReadiness } from '@talyn/shared';
+import { fleetAgentLabel, type Workbench, type WorkbenchReadiness } from '@talyn/shared';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { HeaderHeightContext } from 'expo-router/react-navigation';
 import { useContext, useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 
-import { useNetwork } from '../../auth/AuthProvider';
+import { useMobileRuntime, useNetwork, useWorkspace } from '../../auth/AuthProvider';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { AppText, Banner, ChipButton, Disclosure, IconButton, Row, SheetModal, useActionSheet, type SheetAction } from '../../components/UI';
 import { StateNotice, workflowStyles as styles } from '../../components/Workflow';
+import { showActionError } from '../../lib/errors';
 import { useKeyboardInset } from '../../lib/keyboard';
 import { useFeatures } from '../../lib/features';
 import { useNow } from '../../lib/time';
 import { completeIntent } from '../../navigation/intents';
 import { pullRequestRoute, sessionRoute, threadRoute } from '../../navigation/routes';
 import { useResource } from '../../workflow/hooks';
-import { workbenchKind } from '../../workflow/model';
+import { alternateChatAgent, workbenchKind } from '../../workflow/model';
 import { Conversation } from '../chat/Conversation';
 import { runningJobs } from './background';
 import { ChangesTab } from './ChangesTab';
 import { CodeCompleteReviewCard } from './CodeCompleteReviewCard';
 import { reviewBadge, reviewCard } from './codeComplete';
 import { useBackground } from './data';
-import { HeaderTitle, HeaderTrailing, QuickActionRow, quickMenuActions, SessionDetailsSheet, useQuickActions } from './DetailHeader';
+import { HeaderTitle, QuickActionRow, quickMenuActions, SessionDetailsSheet, SessionStatusRow, useQuickActions } from './DetailHeader';
 import { JobsTab } from './JobsTab';
 import { readinessProblem, sessionTabs } from './model';
 import { PullRequestTab } from './PullRequestTab';
@@ -50,6 +51,9 @@ function PullRequestSheet({ item, visible, onClose, onSent }: { item: Workbench;
 }
 
 export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) {
+  const { workflow } = useMobileRuntime();
+  const workspace = useWorkspace();
+  const owns = (target: Workbench) => workspace.choices.some(({ id: workspaceId }) => workspaceId === target.workspaceId);
   const params = useLocalSearchParams();
   const id = typeof params.id === 'string' ? params.id : '';
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
@@ -98,6 +102,7 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
       {keyboard.open ? null : <QuickActionRow actions={actions} busy={quick.busy} run={quick.run} />}
     </View> : null;
     content = <Conversation key={item.id} item={item} ready={state.status === 'ready' || state.status === 'error'} header={header}
+      canSwitchAgent={owns(item)}
       bottom={card && row ? <CodeCompleteReviewCard view={card} row={row} workbenchId={item.id} /> : undefined}
       find={find} onCloseFind={() => setFind(0)}
       top={showChildren ? (pause) => <View style={{ gap: 4 }}>
@@ -121,9 +126,19 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
       onPress: () => { if (target.pullRequestId) router.push(pullRequestRoute(target.pullRequestId)); else setView('pr'); } });
     if (tabs.includes('jobs')) views.push({ label: 'Background jobs', icon: VIEW_ICON.jobs, detail: running ? `${running} running` : undefined,
       onPress: () => setView('jobs') });
+    const chat = target.chats?.at(-1);
+    const alternate = owns(target) ? alternateChatAgent(target, chat) : undefined;
+    const extra = session ? quickMenuActions(target, row, { offline, busy: quick.busy !== null, run: quick.run }) : [];
+    if (chat && alternate) extra.unshift({
+      label: `Switch to ${fleetAgentLabel(alternate)}`,
+      icon: { ios: 'arrow.left.arrow.right', android: 'swap_horiz' },
+      detail: chat.status === 'running' ? 'This stops the current turn.' : undefined,
+      disabled: offline,
+      onPress: () => { void workflow.switchChatAgent(target.id, chat.id, alternate)
+        .catch((error) => showActionError('Could not switch agents', error)); },
+    });
     menu.open(target, {
-      views, prTitle: row?.summary.title,
-      extra: session ? quickMenuActions(target, row, { offline, busy: quick.busy !== null, run: quick.run }) : [],
+      views, prTitle: row?.summary.title, extra,
     });
   };
   const retry = () => {
@@ -136,9 +151,8 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
   const android = Platform.OS === 'android';
   return <ScreenContainer>
     {item ? <Stack.Screen options={{
-      headerTitle: () => <HeaderTitle item={item} row={row} badge={badge} onPress={() => setView('details')} />,
+      headerTitle: () => <HeaderTitle item={item} row={row} onPress={() => setView('details')} />,
       headerRight: () => <View style={local.headerRight}>
-        <HeaderTrailing item={item} row={row} badge={badge} onChanges={() => setView('changes')} />
         <IconButton label="Find in transcript" symbol={{ ios: 'magnifyingglass', android: 'search' }} onPress={() => setFind((value) => value + 1)} />
         <IconButton label={kind === 'session' ? 'Session actions' : 'Thread actions'}
           symbol={{ ios: 'ellipsis.circle', android: 'more_vert' }} onPress={() => openMenu(item)} />
@@ -146,6 +160,7 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
     }} /> : null}
     <KeyboardAvoidingView style={[styles.page, android && { paddingBottom: keyboard.inset }]}
       behavior={android ? undefined : 'padding'} keyboardVerticalOffset={headerHeight}>
+      {item ? <SessionStatusRow item={item} row={row} badge={badge} onChanges={() => setView('changes')} /> : null}
       {item ? content
         : <ScrollView contentContainerStyle={[styles.content, { gap: 12 }]}>
           <StateNotice resource={state} offline={offline} refresh={state.refresh} />

@@ -309,6 +309,26 @@ export const spaces = pgTable(
   })
 );
 
+/**
+ * A person's own mute of a space's notifications (migration 0151). A row means
+ * muted. It applies to their phone pushes and their desktop and web alerts.
+ */
+export const spaceNotificationMutes = pgTable(
+  'space_notification_mutes',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    spaceId: text('space_id')
+      .notNull()
+      .references(() => spaces.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ name: 'space_notification_mutes_pk', columns: [t.userId, t.spaceId] }),
+  })
+);
+
 /** The space's repo picker. */
 export const spaceRepositories = pgTable(
   'space_repositories',
