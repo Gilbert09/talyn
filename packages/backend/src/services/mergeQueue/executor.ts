@@ -57,7 +57,8 @@ import {
   gatingRunForPr as gatingVisualReviewRun,
 } from '../visualReview.js';
 import { prMonitorService } from '../prMonitor.js';
-import { recordRefusedBehind } from '../prRefresh.js';
+import { readRefusedBehind } from '../mergeRefusal.js';
+import { clearRefusedBehind, recordRefusedBehind } from '../prRefresh.js';
 import { createCloudTask } from '../taskCreate.js';
 import { isBoxGateError, type BoxGateError } from '../billing/entitlements.js';
 import { boxDeferral, boxDeferralEventCode, workspaceBoxHold } from '../billing/boxDeferral.js';
@@ -662,6 +663,10 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
         ctx.pr.number,
         ctx.prSnap.headSha || undefined
       );
+      if (ctx.extras.updateBranchOutcome === 'up_to_date') {
+        const mark = readRefusedBehind(ctx.pr.lastSummary);
+        if (mark?.headSha === ctx.prSnap.headSha) await clearRefusedBehind(ctx.pr.id, mark);
+      }
       return { redecide: true };
     }
     case 'retarget_base':
@@ -682,8 +687,11 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
     }
     case 'refresh_snapshot': {
       if (action.refusedBehind) await recordRefusedBehind(ctx.pr, ctx.prSnap.headSha);
+      const opts = ctx.extras.updateBranchOutcome === undefined
+        ? undefined
+        : { resolveMergeable: true, snapshotOnChangeOnly: true };
       await prMonitorService
-        .refreshPr(ctx.pr.workspaceId, ctx.pr.owner, ctx.pr.repo, ctx.pr.number)
+        .refreshPr(ctx.pr.workspaceId, ctx.pr.owner, ctx.pr.repo, ctx.pr.number, opts)
         .catch((err) => {
           console.warn(
             `[mergeQueueV2] snapshot refresh failed for ${ctx.pr.owner}/${ctx.pr.repo}#${ctx.pr.number}:`,

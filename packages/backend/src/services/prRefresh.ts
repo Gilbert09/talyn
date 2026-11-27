@@ -3,7 +3,7 @@ import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { githubService } from './github.js';
 import { QUEUE_RESET_COLUMNS } from './mergeQueueBroadcast.js';
-import { refusedBehindMark } from './mergeRefusal.js';
+import { refusedBehindMark, type RefusedBehindMark } from './mergeRefusal.js';
 import { forceFetchAndUpsert } from './prCache.js';
 import { markRefreshed } from './prFocus.js';
 import { emitPullRequestUpdated } from './websocket.js';
@@ -52,6 +52,21 @@ export async function recordRefusedBehind(
   } catch (err) {
     console.warn(`[pull-requests] could not record the behind refusal for ${row.id}:`, err);
   }
+}
+
+/** Clear the observed refusal after GitHub confirms that head is current. */
+export async function clearRefusedBehind(prId: string, mark: RefusedBehindMark): Promise<void> {
+  const summary = pullRequestsTable.lastSummary;
+  await getDbClient()
+    .update(pullRequestsTable)
+    .set({
+      lastSummary: sql`${summary} - 'refusedBehind'`,
+      lastSummaryDigest: null,
+    })
+    .where(and(
+      eq(pullRequestsTable.id, prId),
+      sql`${summary}->'refusedBehind' = ${JSON.stringify(mark)}::jsonb`
+    ));
 }
 
 /** What the reconcile emits: the fields every client patches a row with. */
