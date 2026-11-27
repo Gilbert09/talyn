@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## PR links for replacement sessions (2026-11-27)
+
+A session on an existing branch now reuses an open PR link from a session in the same workspace.
+The previous session can be archived. The PR must match the repository and branch.
+This restores the PR list link before the replacement session pushes changes.
+Generated branches do not inherit the link. An explicit PR selection takes precedence.
+The backend supplies the link to web, desktop, and mobile through their existing responses.
+
 ## Image preview in PR descriptions, reviews and comments (2026-11-20)
 
 Jovan asked to see a screenshot from a PR description without opening GitHub.
