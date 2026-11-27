@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { Readable } from 'stream';
+import { WorkbenchError } from '../workbenches/errors.js';
 import { fleetClientFor } from '../workbenches/sandboxRuntime.js';
 
 /**
@@ -79,18 +80,18 @@ export interface PortTarget {
   port: number;
 }
 
-const FLEET_PORT_ERRORS = new Set([
-  'bad_port', 'bad_request', 'unauthorized', 'forbidden', 'not_found', 'too_many_requests',
-  'guest_too_old', 'hibernation_unusable', 'resume_impossible', 'remote_resume_required',
-  'sandbox_not_live', 'sandbox_suspended', 'ports_unsupported', 'ports_failed', 'guest_unreachable',
+const FLEET_PORT_CONFLICTS = new Set([
+  'hibernation_unusable', 'resume_impossible', 'remote_resume_required',
+  'sandbox_not_live', 'sandbox_suspended', 'ports_failed', 'guest_unreachable',
 ]);
 
-/** Read only a short Fleet error. App content stays on the preview host. */
-export async function previewPortAnswers(response: globalThis.Response): Promise<boolean> {
+/** Check the sandbox directly when the app and Fleet can return the same status. */
+export async function previewPortAnswers(response: globalThis.Response, sandboxIsLive: () => Promise<boolean>): Promise<boolean> {
   const reader = response.body?.getReader();
   try {
     if (response.status >= 502 && response.status <= 504) return false;
-    if (response.status < 400 || !reader || !response.headers.get('content-type')?.includes('application/json')) return true;
+    if ([401, 403, 404, 429].includes(response.status)) return sandboxIsLive();
+    if (response.status !== 409 || !reader || !response.headers.get('content-type')?.includes('application/json')) return true;
 
     const chunks: Uint8Array[] = [];
     let size = 0;
@@ -101,12 +102,17 @@ export async function previewPortAnswers(response: globalThis.Response): Promise
       if (size > 4096) return true;
       chunks.push(value);
     }
+    let code: string | undefined;
     try {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { error?: string; message?: string } | null;
-      return !(body?.message && body.error && FLEET_PORT_ERRORS.has(body.error));
+      if (body?.message) code = body.error;
     } catch {
       return true;
     }
+    if (code === 'ports_unsupported' || code === 'guest_too_old') {
+      throw new WorkbenchError('This sandbox does not support previews. Start a new sandbox to use previews.', 409, 'preview_unsupported');
+    }
+    return !code || !FLEET_PORT_CONFLICTS.has(code);
   } finally {
     await reader?.cancel().catch(() => undefined);
   }

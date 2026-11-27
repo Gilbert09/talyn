@@ -128,16 +128,54 @@ describe('hosted sandbox previews', () => {
     expect(openURL).toHaveBeenCalledWith(hostedUrl);
   });
 
-  it('reports a stopped script without opening the browser', async () => {
+  it('opens a detached server after the run script stops', async () => {
+    const { previewStatus, runScript, previewLink, openURL } = enablePreview();
+    previewStatus.mockResolvedValueOnce({ ready: false, running: false }).mockResolvedValueOnce({ ready: false, running: false });
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await openView('Preview');
+    jest.useFakeTimers();
+    try {
+      await fireEvent.press(screen.getByRole('button', { name: 'App' }));
+      expect(runScript).toHaveBeenCalledWith('session-one', 'run');
+      expect(previewLink).not.toHaveBeenCalled();
+      await act(async () => { await jest.advanceTimersByTimeAsync(1500); });
+      expect(openURL).toHaveBeenCalledWith(hostedUrl);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('shows an unsupported preview error even if the run script is still running', async () => {
+    const { previewStatus, runScript, previewLink } = enablePreview();
+    previewStatus.mockResolvedValueOnce(waiting)
+      .mockRejectedValueOnce(new ApiError('This sandbox does not support previews.', 409, 'preview_unsupported'));
+    const alert = jest.spyOn(Alert, 'alert');
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await openView('Preview');
+    await fireEvent.press(screen.getByRole('button', { name: 'App' }));
+    expect(alert).toHaveBeenCalledWith('Could not open the preview', 'This sandbox does not support previews.');
+    expect(previewStatus).toHaveBeenCalledTimes(2);
+    expect(runScript).not.toHaveBeenCalled();
+    expect(previewLink).not.toHaveBeenCalled();
+  });
+
+  it('reports a stopped script after the grace period without opening the browser', async () => {
     const { previewStatus, previewLink, openURL } = enablePreview();
     previewStatus.mockResolvedValue({ ready: false, running: false });
     const alert = jest.spyOn(Alert, 'alert');
     await render(<WorkbenchDetailScreen kind="session" />);
     await openView('Preview');
-    await fireEvent.press(screen.getByRole('button', { name: 'App' }));
-    expect(alert).toHaveBeenCalledWith('Could not open the preview', 'The run script stopped before the app answered.');
-    expect(previewLink).not.toHaveBeenCalled();
-    expect(openURL).not.toHaveBeenCalled();
+    jest.useFakeTimers();
+    try {
+      await fireEvent.press(screen.getByRole('button', { name: 'App' }));
+      expect(alert).not.toHaveBeenCalled();
+      await act(async () => { await jest.advanceTimersByTimeAsync(10_500); });
+      expect(alert).toHaveBeenCalledWith('Could not open the preview', 'The run script stopped before the app answered.');
+      expect(previewLink).not.toHaveBeenCalled();
+      expect(openURL).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('does not open the browser if the preview sheet closes during startup', async () => {

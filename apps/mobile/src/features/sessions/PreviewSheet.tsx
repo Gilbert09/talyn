@@ -9,6 +9,7 @@ import { safeExternalUrl, workflowStyles } from '../../components/Workflow';
 import { showActionError } from '../../lib/errors';
 
 const PROBE_INTERVAL_MS = 1500;
+const STOPPED_GRACE_MS = 10_000;
 const START_TIMEOUT_MS = 10 * 60_000;
 
 export function PreviewSheet({ item, ports, onClose }: { item: Workbench; ports: PreviewPort[]; onClose(): void }) {
@@ -40,11 +41,16 @@ export function PreviewSheet({ item, ports, onClose }: { item: Workbench; ports:
         }
       }
       const deadline = Date.now() + START_TIMEOUT_MS;
+      let stoppedSince: number | undefined;
       while (!status.ready && !attempt.signal.aborted) {
         status = await api.previewStatus(id, port, { live: true });
         if (status.ready || attempt.signal.aborted) break;
-        if (!status.running) throw new Error('The run script stopped before the app answered.');
-        if (Date.now() >= deadline) throw new Error(`The app did not answer on port ${port} within 10 minutes.`);
+        const now = Date.now();
+        stoppedSince = status.running ? undefined : stoppedSince ?? now;
+        if (stoppedSince !== undefined && now - stoppedSince >= STOPPED_GRACE_MS) {
+          throw new Error('The run script stopped before the app answered.');
+        }
+        if (now >= deadline) throw new Error(`The app did not answer on port ${port} within 10 minutes.`);
         await new Promise((resolve) => setTimeout(resolve, PROBE_INTERVAL_MS));
       }
       if (attempt.signal.aborted) return;

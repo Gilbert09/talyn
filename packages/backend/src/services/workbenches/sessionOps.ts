@@ -465,9 +465,9 @@ export async function sessionPreviewStatus(row: WorkbenchRow, port: number, live
   let ready: boolean;
   try {
     const response = await client.proxyPort(sandboxId, port, '', { method: 'GET', headers: {}, signal });
-    ready = await previewPortAnswers(response);
+    ready = await previewPortAnswers(response, async () => (await chooseReadSource(row, Date.now(), { fresh: true })).live);
   } catch (error) {
-    if (!signal.aborted) throw error;
+    if (error instanceof WorkbenchError || !signal.aborted) throw error;
     ready = false;
   }
   const run = ready ? null : await existingScript(row.id, 'run', sandboxId, row.sandboxGeneration ?? sandboxId);

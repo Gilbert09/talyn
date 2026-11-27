@@ -221,6 +221,7 @@ describe('hosted preview links', () => {
       await insertWorkbench({
         id, workspaceId: 'ws', repositoryId: 'repo', repoFullName: 'o/r', baseBranch: 'main', branch: id, name: id,
         runtime, status, sandboxId: `sb-${id}`, agent: 'claude',
+        sandboxState: runtime === 'sandbox' && status === 'ready' ? 'running' : undefined,
       });
     }
 
@@ -252,6 +253,7 @@ describe('hosted preview links', () => {
     vi.stubEnv('WORKBENCHES_ENABLED', 'true');
     resetFeatureFlagsForTests();
     resetPreviewAccessCacheForTests();
+    getSandbox.mockReset().mockResolvedValue({ sandbox: { status: 'idle' }, terminal: false });
     proxyPort.mockReset();
     proxyPort.mockImplementation(async () => new Response('from the app', {
       status: 200,
@@ -289,23 +291,42 @@ describe('hosted preview links', () => {
       headers: { 'x-user': user, authorization: 'Bearer talyn-jwt' },
     });
 
-    it.each([200, 302, 404])('recognizes app response %i without forwarding it', async (code) => {
-      proxyPort.mockResolvedValue(Response.json({ error: 'App response' }, {
-        status: code, headers: { location: 'https://example.test' },
-      }));
-      const response = await status();
-      expect(response.status).toBe(200);
-      expect(response.headers.location).toBeUndefined();
-      expect(JSON.parse(response.body).data).toEqual({ ready: true, running: false });
-      expect(proxyPort).toHaveBeenCalledWith('sb-ready', 5173, '', expect.objectContaining({ method: 'GET', headers: {} }));
-    });
-
-    it.each([[404, 'not_found'], [409, 'ports_unsupported'], [409, 'remote_resume_required'], [429, 'too_many_requests']])(
-      'recognizes Fleet response %i (%s) as unready', async (statusCode, error) => {
-        proxyPort.mockResolvedValue(Response.json({ error, message: 'Fleet error.' }, { status: statusCode }));
-        expect(JSON.parse((await status()).body).data).toEqual({ ready: false, running: false });
+    it.each([[200, 'ok'], [302, 'redirect'], [401, 'unauthorized'], [404, 'not_found']] as const)(
+      'recognizes app response %i without forwarding it', async (code, error) => {
+        proxyPort.mockResolvedValue(Response.json({ error, message: 'App response.' }, {
+          status: code, headers: { location: 'https://example.test' },
+        }));
+        const response = await status();
+        expect(response.status).toBe(200);
+        expect(response.headers.location).toBeUndefined();
+        expect(JSON.parse(response.body).data).toEqual({ ready: true, running: false });
+        expect(proxyPort).toHaveBeenCalledWith('sb-ready', 5173, '', expect.objectContaining({ method: 'GET', headers: {} }));
       },
     );
+
+    it('reports a missing sandbox as unready', async () => {
+      proxyPort.mockResolvedValue(Response.json({ error: 'not_found', message: 'Fleet error.' }, { status: 404 }));
+      getSandbox.mockRejectedValue(new Error('Sandbox not found.'));
+      expect(JSON.parse((await status()).body).data).toEqual({ ready: false, running: false });
+    });
+
+    it('reports a sandbox that needs a remote restore as unready', async () => {
+      proxyPort.mockResolvedValue(Response.json({ error: 'remote_resume_required', message: 'Fleet error.' }, { status: 409 }));
+      expect(JSON.parse((await status()).body).data).toEqual({ ready: false, running: false });
+    });
+
+    it.each(['ports_unsupported', 'guest_too_old'])('refuses preview immediately when Fleet reports %s', async (error) => {
+      proxyPort.mockResolvedValue(Response.json({ error, message: 'Fleet error.' }, { status: 409 }));
+      const row = (await getWorkbench('ready'))!;
+      const lease = (await claimScript(row, 'run'))!;
+      try {
+        const response = await status();
+        expect(response.status).toBe(409);
+        expect(JSON.parse(response.body)).toMatchObject({ success: false, code: 'preview_unsupported' });
+      } finally {
+        await finishScript(lease, 0);
+      }
+    });
 
     it('leaves a sleeping sandbox asleep on the first check', async () => {
       await updateWorkbench('ready2', { sandboxState: 'running' });
@@ -347,7 +368,7 @@ describe('hosted preview links', () => {
             controller.error(new Error('The response timed out.'));
           },
         });
-        return new Response(body, { status: 404, headers: { 'content-type': 'application/json' } });
+        return new Response(body, { status: 409, headers: { 'content-type': 'application/json' } });
       });
       const row = (await getWorkbench('ready'))!;
       const lease = (await claimScript(row, 'run'))!;
