@@ -38,12 +38,9 @@ import type {
   TeamEmailInvite,
   TeamInvitePreview,
   TeamInviteTokenRequest,
-  MobileNotificationCategory,
   MoveToSpaceRequest,
   SetSpaceNotificationsRequest,
-  SpacePhoneNotificationCategories,
   SpaceNotificationPreferences,
-  SpaceNotificationResetScope,
   Space,
   SpaceItemsResponse,
   SpaceRepository,
@@ -2945,13 +2942,17 @@ export const workbenches = {
    */
   portUrl: (id: string, port: number, path = '') =>
     `${getConfig().baseUrl}/api/v1/workbenches/${enc(id)}/ports/${port}/${path.replace(/^\/+/, '')}`,
+  /** A preview check leaves a sleeping sandbox asleep unless live is true. */
+  previewStatus: (id: string, port: number, opts: { live?: boolean; signal?: AbortSignal } = {}) =>
+    request<{ ready: boolean; running: boolean }>('GET', `/workbenches/${enc(id)}/preview-ports/${port}/status${opts.live ? '?live=1' : ''}`,
+      undefined, { signal: opts.signal }),
   /**
    * A one-time link to the port on its own preview host, for a plain browser
    * tab or a share link. 404 `preview_links_unavailable` when the deployment
    * has no preview domain (`features.previewLinks` says so up front).
    */
-  previewLink: (id: string, port: number) =>
-    request<WorkbenchPreviewLink>('POST', `/workbenches/${enc(id)}/ports/${port}/ticket`),
+  previewLink: (id: string, port: number, opts: { signal?: AbortSignal } = {}) =>
+    request<WorkbenchPreviewLink>('POST', `/workbenches/${enc(id)}/ports/${port}/ticket`, undefined, opts),
 
   // ---- Checkpoints ----
   checkpoints: (chatId: string) =>
@@ -2967,8 +2968,8 @@ export const workbenches = {
   // Live updates arrive as `workbench:background` WS events carrying the
   // whole `WorkbenchBackground`.
   /** The session's jobs (running first) and wake-ups (scheduled first). */
-  background: (id: string) =>
-    request<import('@talyn/shared').WorkbenchBackground>('GET', `/workbenches/${enc(id)}/background`),
+  background: (id: string, options: { signal?: AbortSignal } = {}) =>
+    request<import('@talyn/shared').WorkbenchBackground>('GET', `/workbenches/${enc(id)}/background`, undefined, options),
   /**
    * The last lines of a job's output. A sleeping box is not woken unless
    * `live: true`; then the answer has `asleep: true` and no lines.
@@ -3004,8 +3005,8 @@ export const workbenches = {
     request<WorkbenchConfig>('GET', `/workbenches/${enc(id)}/config${opts.live ? '?live=1' : ''}`),
   saveDetectedConfig: (id: string) => request<void>('POST', `/workbenches/${enc(id)}/config/detected`),
   scriptOutput: (id: string) => request<import('@talyn/shared').WorkbenchScriptFrame[]>('GET', `/workbenches/${enc(id)}/scripts/output`),
-  runScript: (id: string, name: 'setup' | 'run' | 'archive' | (string & {})) =>
-    request<void>('POST', `/workbenches/${enc(id)}/scripts/${enc(name)}`),
+  runScript: (id: string, name: 'setup' | 'run' | 'archive' | (string & {}), opts: { signal?: AbortSignal } = {}) =>
+    request<void>('POST', `/workbenches/${enc(id)}/scripts/${enc(name)}`, undefined, opts),
   stopScript: (id: string, name: string) =>
     request<void>('POST', `/workbenches/${enc(id)}/scripts/${enc(name)}/stop`),
 
@@ -3133,16 +3134,10 @@ export const spaces = {
     request<Task>('PUT', `/tasks/${taskId}/space`, { spaceId } satisfies MoveToSpaceRequest),
   /** The spaces I muted. My own choice: it applies on every device and to no teammate. */
   notificationPreferences: () => request<SpaceNotificationPreferences>('GET', '/space-notifications'),
-  resetUnlistedNotifications: (scope: SpaceNotificationResetScope) =>
-    request<SpaceNotificationPreferences>('DELETE', `/space-notifications/unlisted?scope=${scope}`),
   setNotificationsMuted: (spaceId: string, muted: boolean) =>
     request<SpaceNotificationPreferences>('PUT', `/spaces/${spaceId}/notifications`, {
       muted,
     } satisfies SetSpaceNotificationsRequest),
-  setPhoneNotificationCategories: (spaceId: string, categories: SpacePhoneNotificationCategories) =>
-    request<SpaceNotificationPreferences>('PUT', `/spaces/${spaceId}/notifications/phone`, { categories }),
-  setPhoneNotificationCategory: (spaceId: string, category: MobileNotificationCategory, value: boolean | null) =>
-    request<SpaceNotificationPreferences>('PATCH', `/spaces/${spaceId}/notifications/phone`, { category, value }),
 };
 
 // ============================================================================

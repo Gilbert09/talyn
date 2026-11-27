@@ -29,6 +29,8 @@ Other options in the composer:
 - Press Esc to leave the composer. Then you can use keyboard shortcuts such as G then P, which opens your pull requests. The text that you typed stays in the composer.
 - **Internet on** / **Internet off** controls whether the sandbox can reach the internet. See [Internet access](/docs/sandboxes#internet-access).
 - The attach button adds images, videos and text files. You can also paste or drop them into the chat. Images can be PNG, JPEG, WebP or GIF, up to 10 MB. Videos can be MP4, MOV or WebM, up to 50 MB. On the phone, pick a video from your library.
+- On Android, select **Take photo** in the attach menu to open the system camera. The camera app manages its own permission. Cancel in the camera to return to your draft.
+- On mobile, the composer focuses the text field after you attach a photo or video.
 - A text file must be UTF-8 text, up to 1 MB. Examples are logs, Markdown, CSV, JSON, YAML and source code. The file keeps its name. The agent reads it from the sandbox. The phone shows text files that you attach on the web or desktop, but cannot attach them yet.
 - You can attach a video only after the session starts. When you start a new session, attach images and text files only.
 - You can send a message while a file uploads. The message waits, and goes when the upload finishes. Press send again to cancel it. If the upload fails, the message is not sent and stays in the composer.
@@ -41,21 +43,19 @@ If every usable subscription for your default agent is at its limit, the compose
 The composer selects that agent if one of its subscriptions has usage left.
 You can still select an agent or model for that session.
 
-Open **Settings > Notifications** on your computer or phone to manage your alerts.
+In the desktop app and the web app, **Settings > Notifications** holds all notification settings. In the mobile app, they are in the **Notifications** group in **Settings**.
 
 - On a computer, turn on a notification when an agent finishes, and a notification when a merge-queue pull request is blocked. These settings apply only to that computer or browser.
-- In the mobile app, select a workspace to turn its phone alerts on or off. Choose which alert types to receive. You can set quiet hours and receive alerts only when you are away from your computer. Each phone must allow notifications for Talyn.
+- For your phone, turn workspace notifications on or off, and choose the types: session updates, PR reviews, CI failures, ready to merge and human input. You can get alerts only when you are away from your computer, and you can set quiet hours. A change on one device also applies to the others. Each phone must also allow notifications in the Talyn mobile app.
 
-Under **Team spaces**, set each phone alert type to **On**, **Off**, or **Use workspace default**. The workspace still controls whether phone alerts are enabled and when they can arrive.
-
-You can also mute a team space, such as Automations.
+The **Team spaces** group lets you turn off alerts for a space, such as Automations.
 This personal setting applies to your desktop, browser, and phone.
 Your teammates keep their own preferences.
 Sessions, threads, and tasks in a muted space send you no alerts.
 Linked pull requests are muted when all their sessions and tasks are in spaces you muted.
 This includes archived sessions.
 A pull request with a session or task in Personal can still send alerts.
-Turn off the mute to use your saved settings again.
+Turn the space on again to use your usual notification settings.
 If muted spaces leave the list, select **Restore alerts** to remove their mutes.
 This also works after a space is archived or you leave its team.
 
@@ -270,6 +270,12 @@ When you are done, archive the session:
 
 The session moves to **History**. Its branch, its chats and any pull request stay. Talyn saves any work you did not push before it removes the sandbox. It pushes nothing to GitHub to do this.
 
+**Archive all** selects sessions with no open pull request. It skips threads and sessions that are starting, moving, or working.
+Sessions with queued messages, running scripts, running background jobs, or pending wake-ups stay open.
+Talyn checks each session again on the server before it archives it.
+If work starts after the confirmation dialog opens, Talyn keeps the session and shows a notice.
+These checks apply to **Archive all**. You can still explicitly archive one session with the **Archive** action.
+
 Talyn also archives a session by itself:
 
 - When its pull request is merged and no chat is running.
@@ -278,6 +284,8 @@ Talyn also archives a session by itself:
 Open **Settings > Sessions > Auto-archive** to change these rules. You can turn off either rule. You can also choose how long a session stays idle before Talyn archives it.
 
 To bring a session back, open **History** and select **Restore**.
+
+If the archived session is open in the mobile app, tap the three-dot menu in the header. Select **Restore**.
 
 To delete a session for good, open **History** and select delete. This removes the session and its chats. It does not touch the branch on GitHub.
 
