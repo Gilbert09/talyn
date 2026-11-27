@@ -8,6 +8,7 @@ const mockTeams = jest.fn();
 const mockRead = jest.fn();
 const mockSave = jest.fn();
 const mockSavePhone = jest.fn();
+const mockResetUnlisted = jest.fn();
 const mockListeners = new Map<string, () => void>();
 
 jest.mock('@talyn/client/native', () => ({
@@ -15,8 +16,8 @@ jest.mock('@talyn/client/native', () => ({
   spaces: {
     notificationPreferences: () => mockRead(),
     setNotificationsMuted: (...args: unknown[]) => mockSave(...args),
-    setPhoneNotificationCategories: (...args: unknown[]) => mockSavePhone(...args),
     setPhoneNotificationCategory: (...args: unknown[]) => mockSavePhone(...args),
+    resetUnlistedNotifications: (...args: unknown[]) => mockResetUnlisted(...args),
   },
   wsClient: { on: (name: string, listener: () => void) => {
     mockListeners.set(name, listener);
@@ -145,26 +146,43 @@ it.each(['preferences', 'teams'])('keeps controls after a failed %s refresh', as
 it.each([false, true])('restores an unlisted mute when the team list is empty: %s', async (emptyTeams) => {
   if (emptyTeams) mockTeams.mockResolvedValue([]);
   mockRead.mockResolvedValue({ mutedSpaceIds: ['old-space'] });
-  mockSave.mockResolvedValue({ mutedSpaceIds: [] });
+  mockResetUnlisted.mockResolvedValue({ mutedSpaceIds: [] });
   await render(<SpaceNotificationSettings offline={false} />);
   expect(await screen.findByText('1 other muted space')).toBeVisible();
   mockRead.mockResolvedValue({ mutedSpaceIds: [] });
   await fireEvent.press(screen.getByRole('button', { name: 'Restore alerts' }));
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore alerts' })).toBeNull());
-  expect(mockSave).toHaveBeenCalledWith('old-space', false);
+  expect(mockResetUnlisted).toHaveBeenCalledTimes(1);
+  expect(mockResetUnlisted).toHaveBeenCalledWith('mutes');
 });
 
-it('keeps remaining mutes after a partial restore failure', async () => {
+it.each(['phone', 'all'] as const)('resets multiple unlisted preferences in one %s request', async (scope) => {
+  mockRead.mockResolvedValue({
+    mutedSpaceIds: scope === 'all' ? ['old-a', 'old-b'] : [],
+    phoneCategoriesBySpace: { 'old-a': { ci_failure: false }, 'old-b': { session_update: true }, automation: { ci_failure: true } },
+  });
+  mockResetUnlisted.mockResolvedValue({
+    mutedSpaceIds: [], phoneCategoriesBySpace: { automation: { ci_failure: true } },
+  });
+  await render(<SpaceNotificationSettings offline={false} />);
+  await fireEvent.press(await screen.findByRole('button', { name: 'Reset settings' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Reset settings' })).toBeNull());
+
+  expect(mockResetUnlisted).toHaveBeenCalledTimes(1);
+  expect(mockResetUnlisted).toHaveBeenCalledWith(scope);
+  expect(mockRead).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('Custom phone alerts')).toBeVisible();
+});
+
+it('keeps the mutes after a reset fails', async () => {
   mockRead.mockResolvedValue({ mutedSpaceIds: ['automation', 'old-a', 'old-b'] });
-  mockSave.mockResolvedValueOnce({ mutedSpaceIds: ['automation', 'old-b'] })
-    .mockRejectedValueOnce(new Error('Unavailable'));
+  mockResetUnlisted.mockRejectedValueOnce(new Error('Unavailable'));
   await render(<SpaceNotificationSettings offline={false} />);
   await screen.findByRole('button', { name: 'Restore alerts' });
-  mockRead.mockResolvedValue({ mutedSpaceIds: ['automation', 'old-b'] });
   await fireEvent.press(screen.getByRole('button', { name: 'Restore alerts' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Restore alerts' })).toBeEnabled());
-  expect(mockSave.mock.calls).toEqual([['old-a', false], ['old-b', false]]);
-  expect(screen.getByText('1 other muted space')).toBeVisible();
+  expect(mockResetUnlisted.mock.calls).toEqual([['mutes']]);
+  expect(screen.getByText('2 other muted spaces')).toBeVisible();
   expect(screen.getByText('Muted on all devices')).toBeVisible();
   expect(screen.getByRole('alert', { name: /could not be saved/ })).toBeVisible();
 });
@@ -172,12 +190,12 @@ it('keeps remaining mutes after a partial restore failure', async () => {
 it('blocks other edits while restoring an unlisted mute', async () => {
   let resolve!: (value: { mutedSpaceIds: string[] }) => void;
   mockRead.mockResolvedValue({ mutedSpaceIds: ['old-space'] });
-  mockSave.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+  mockResetUnlisted.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
   await render(<SpaceNotificationSettings offline={false} />);
   await fireEvent.press(await screen.findByRole('button', { name: 'Restore alerts' }));
   expect(screen.getByRole('button', { name: 'Restore alerts' })).toBeDisabled();
   await fireEvent.press(screen.getByRole('button', { name: 'Restore alerts' }));
-  expect(mockSave).toHaveBeenCalledTimes(1);
+  expect(mockResetUnlisted).toHaveBeenCalledTimes(1);
   mockRead.mockResolvedValue({ mutedSpaceIds: [] });
   await act(async () => resolve({ mutedSpaceIds: [] }));
   expect(screen.queryByRole('button', { name: 'Restore alerts' })).toBeNull();

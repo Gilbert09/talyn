@@ -29,7 +29,7 @@ vi.mock('../../../lib/api', () => ({
       notificationPreferences: (...a: unknown[]) => mocks.spaceGet(...a),
       setNotificationsMuted: (...a: unknown[]) => mocks.spaceSave(...a),
       setPhoneNotificationCategory: (...a: unknown[]) => mocks.spaceCategory(...a),
-      setPhoneNotificationCategories: (...a: unknown[]) => mocks.spaceReset(...a),
+      resetUnlistedNotifications: (...a: unknown[]) => mocks.spaceReset(...a),
     },
     mobileNotifications: {
       getPreferences: (...a: unknown[]) => mocks.get(...a),
@@ -270,16 +270,18 @@ describe('NotificationsSettings: team spaces', () => {
     expect(choice).toBeDisabled();
   });
 
-  it('resets phone choices for an unlisted space and keeps its mute', async () => {
+  it('resets phone choices for unlisted spaces in one request and keeps their mutes', async () => {
     useSpacesStore.setState({ teams: [] });
     mocks.spaceGet.mockResolvedValue({
-      mutedSpaceIds: ['old'], phoneCategoriesBySpace: { old: { ci_failure: true } },
+      mutedSpaceIds: ['old-a'],
+      phoneCategoriesBySpace: { 'old-a': { ci_failure: true }, 'old-b': { human_gate: false } },
     });
-    mocks.spaceReset.mockResolvedValue({ mutedSpaceIds: ['old'] });
+    mocks.spaceReset.mockResolvedValue({ mutedSpaceIds: ['old-a'] });
     await renderLoaded();
     fireEvent.click(await screen.findByRole('button', { name: 'Reset phone alert types' }));
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Reset phone alert types' })).toBeNull());
-    expect(mocks.spaceReset).toHaveBeenCalledWith('old', {});
+    expect(mocks.spaceReset.mock.calls).toEqual([['phone']]);
+    expect(mocks.spaceSave).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Restore alerts' })).toBeVisible();
   });
 
@@ -318,44 +320,53 @@ describe('NotificationsSettings: team spaces', () => {
     expect(checkbox('^Automations$')).not.toBeChecked();
   });
 
-  it.each([true, false])('restores missing muted spaces with live spaces: %s', async (hasLiveSpaces) => {
+  it.each([true, false])('restores multiple unlisted spaces in one request with live spaces: %s', async (hasLiveSpaces) => {
     if (!hasLiveSpaces) useSpacesStore.setState({ teams: [] });
     mocks.spaceGet.mockResolvedValue({ mutedSpaceIds: ['old-a', 'old-b'] });
-    mocks.spaceSave.mockResolvedValueOnce({ mutedSpaceIds: ['old-b'] }).mockResolvedValueOnce({ mutedSpaceIds: [] });
+    mocks.spaceReset.mockResolvedValue({ mutedSpaceIds: [] });
     await renderLoaded();
     const restore = await screen.findByRole('button', { name: 'Restore alerts' });
     expect(screen.getByText('2 other muted spaces')).toBeInTheDocument();
     fireEvent.click(restore);
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore alerts' })).toBeNull());
-    expect(mocks.spaceSave).toHaveBeenNthCalledWith(1, 'old-a', false);
-    expect(mocks.spaceSave).toHaveBeenNthCalledWith(2, 'old-b', false);
+    expect(mocks.spaceReset.mock.calls).toEqual([['mutes']]);
+    expect(mocks.spaceSave).not.toHaveBeenCalled();
     if (hasLiveSpaces) expect(checkbox('^Automations$')).toBeChecked();
   });
 
-  it('keeps the remaining mute after a partial restore fails', async () => {
-    mocks.spaceGet.mockResolvedValue({ mutedSpaceIds: ['old-a', 'old-b'] });
-    mocks.spaceSave.mockResolvedValueOnce({ mutedSpaceIds: ['old-b'] }).mockRejectedValueOnce(new Error('offline'));
+  it.each([
+    ['mutes', 'Restore alerts'], ['phone', 'Reset phone alert types'],
+  ])('keeps existing preferences and lets the user retry when the %s reset fails', async (scope, label) => {
+    const phoneCategoriesBySpace = { 'old-a': { ci_failure: true }, 'old-b': { human_gate: false } };
+    mocks.spaceGet.mockResolvedValue({ mutedSpaceIds: ['old-a', 'old-b'], phoneCategoriesBySpace });
+    mocks.spaceReset.mockRejectedValueOnce(new Error('offline'));
     await renderLoaded();
-    fireEvent.click(await screen.findByRole('button', { name: 'Restore alerts' }));
-    await waitFor(() => expect(mocks.spaceSave).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Restore alerts' })).not.toBeDisabled());
-    expect(screen.getByText('1 other muted space')).toBeInTheDocument();
-    expect(useSpacesStore.getState().mutedSpaceIds).toEqual(['old-b']);
-    mocks.spaceSave.mockResolvedValueOnce({ mutedSpaceIds: [] });
-    fireEvent.click(screen.getByRole('button', { name: 'Restore alerts' }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore alerts' })).toBeNull());
+    fireEvent.click(await screen.findByRole('button', { name: label }));
+    await waitFor(() => expect(mocks.spaceReset.mock.calls).toEqual([[scope]]));
+    await waitFor(() => expect(screen.getByRole('button', { name: label })).not.toBeDisabled());
+    expect(screen.getByText('2 other muted spaces')).toBeInTheDocument();
+    expect(useSpacesStore.getState()).toMatchObject({ mutedSpaceIds: ['old-a', 'old-b'], phoneCategoriesBySpace });
+
+    mocks.spaceReset.mockResolvedValueOnce(scope === 'phone'
+      ? { mutedSpaceIds: ['old-a', 'old-b'] }
+      : { mutedSpaceIds: [], phoneCategoriesBySpace });
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: label })).toBeNull());
   });
 
   it('blocks other edits while missing spaces are being restored', async () => {
-    mocks.spaceGet.mockResolvedValue({ mutedSpaceIds: ['old-a', 'old-b'] });
+    mocks.spaceGet.mockResolvedValue({
+      mutedSpaceIds: ['old-a', 'old-b'],
+      phoneCategoriesBySpace: { 'old-a': { ci_failure: true } },
+    });
     let finish!: (value: { mutedSpaceIds: string[] }) => void;
-    mocks.spaceSave.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }))
-      .mockResolvedValueOnce({ mutedSpaceIds: [] });
+    mocks.spaceReset.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
     await renderLoaded();
     fireEvent.click(await screen.findByRole('button', { name: 'Restore alerts' }));
     expect(checkbox('^Automations$')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Restore alerts' })).toBeDisabled();
-    await act(async () => finish({ mutedSpaceIds: ['old-b'] }));
+    expect(screen.getByRole('button', { name: 'Reset phone alert types' })).toBeDisabled();
+    await act(async () => finish({ mutedSpaceIds: [] }));
     await waitFor(() => expect(checkbox('^Automations$')).not.toBeDisabled());
   });
 

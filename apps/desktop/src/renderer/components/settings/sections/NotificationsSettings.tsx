@@ -7,7 +7,7 @@ import {
 import { api } from '../../../lib/api';
 import { useSessionDefaults, writeSessionDefaults } from '../../../lib/sessionDefaults';
 import { useWorkspaceStore } from '../../../stores/workspace';
-import { loadSpaceNotifications, resetSpacePhoneCategories, setSpaceMuted, setSpacePhoneCategory, useSpacesStore } from '../../../stores/spaces';
+import { loadSpaceNotifications, resetUnlistedSpaceNotifications, setSpaceMuted, setSpacePhoneCategory, useSpacesStore } from '../../../stores/spaces';
 import { spacesOffered } from '../../../lib/spaces';
 import { toast } from '../../../stores/toast';
 import { getMergeBlockedNotifyEnabled, setMergeBlockedNotifyEnabled } from '../../../hooks/useApi';
@@ -334,7 +334,6 @@ function SpaceNotifications() {
   const loaded = useSpacesStore((s) => s.notificationsLoaded);
   const error = useSpacesStore((s) => s.notificationsError);
   const saving = useSpacesStore((s) => s.notificationsSaving);
-  const [restoring, setRestoring] = useState(false);
 
   useEffect(() => {
     // Another device may have changed the list since the app loaded it.
@@ -347,26 +346,14 @@ function SpaceNotifications() {
   const otherPhoneIds = teams === null ? [] : Object.keys(phoneCategories).filter((id) => !listedIds.has(id));
   if (!offered || (withSpaces.length === 0 && otherMutedIds.length === 0 && otherPhoneIds.length === 0)) return null;
 
-  const restoreOtherSpaces = async (ids: string[], reset: (id: string) => Promise<void>) => {
-    if (saving || restoring) return;
-    setRestoring(true);
-    const userId = useSpacesStore.getState().selfUserId;
-    try {
-      for (const id of ids) {
-        if (useSpacesStore.getState().selfUserId !== userId) return;
-        await reset(id);
-      }
-    } catch {
-      toast.error('Could not reset all space notification settings. Try again.');
-    } finally {
-      setRestoring(false);
-    }
+  const resetUnlisted = (scope: 'mutes' | 'phone') => {
+    resetUnlistedSpaceNotifications(scope).catch(() => toast.error('Could not reset all space notification settings. Try again.'));
   };
 
   const toggle = (spaceId: string, on: boolean) => {
     setSpaceMuted(spaceId, !on).catch(() => toast.error('Could not save the space notification setting'));
   };
-  const disabled = !loaded || saving || restoring;
+  const disabled = !loaded || saving;
 
   return (
     <SettingsSection
@@ -419,14 +406,14 @@ function SpaceNotifications() {
         description="These muted spaces are not in the current list."
       >
         <Button variant="outline" size="sm" disabled={disabled}
-          onClick={() => void restoreOtherSpaces(otherMutedIds, (id) => setSpaceMuted(id, false))}>Restore alerts</Button>
+          onClick={() => resetUnlisted('mutes')}>Restore alerts</Button>
       </SettingRow> : null}
       {otherPhoneIds.length > 0 ? <SettingRow
         label="Other space phone alert settings"
         description="These spaces are archived or no longer in your teams."
       >
         <Button variant="outline" size="sm" disabled={disabled}
-          onClick={() => void restoreOtherSpaces(otherPhoneIds, resetSpacePhoneCategories)}>Reset phone alert types</Button>
+          onClick={() => resetUnlisted('phone')}>Reset phone alert types</Button>
       </SettingRow> : null}
     </SettingsSection>
   );

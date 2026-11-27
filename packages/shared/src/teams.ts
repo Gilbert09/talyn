@@ -261,6 +261,9 @@ export interface SpaceNotificationPreferences {
 /** A missing category uses the workspace default. */
 export type SpacePhoneNotificationCategories = Partial<Record<MobileNotificationCategory, boolean>>;
 
+export const SPACE_NOTIFICATION_RESET_SCOPES = ['mutes', 'phone', 'all'] as const;
+export type SpaceNotificationResetScope = typeof SPACE_NOTIFICATION_RESET_SCOPES[number];
+
 export interface SetSpaceNotificationsRequest {
   muted: boolean;
 }

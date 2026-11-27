@@ -8,6 +8,7 @@ import { FakeFleet, claudeTurnLines, isAgentTurn } from '../helpers/fakeFleet.js
 import {
   repositories,
   spaceNotificationMutes,
+  spacePhoneNotificationPreferences,
   spaceRepositories,
   spaces,
   tasks,
@@ -217,6 +218,7 @@ describe('space routes', () => {
   it.each([
     ['GET', '/teams'],
     ['GET', '/space-notifications'],
+    ['DELETE', '/space-notifications/unlisted?scope=all'],
     ['PUT', '/spaces/space-1/notifications'],
     ['PUT', '/spaces/space-1/notifications/phone'],
     ['PATCH', '/spaces/space-1/notifications/phone'],
@@ -234,6 +236,41 @@ describe('space routes', () => {
   });
 
   describe('personal space notifications', () => {
+    it.each(['phone', 'mutes', 'all'] as const)('resets unlisted %s without changing active spaces or teammates', async (scope) => {
+      await testDb.db.insert(teams).values({ id: 'team-3', name: 'Rejoined' });
+      await testDb.db.insert(teamMembers).values({
+        id: 'm-ben-invite', teamId: 'team-3', githubUserId: 200, githubLogin: 'ben', role: 'member',
+      });
+      await testDb.db.insert(spaces).values({ id: 'space-rejoined', teamId: 'team-3', name: 'Rejoined' });
+      const active = ['space-1', 'space-rejoined'];
+      const unlisted = ['space-2', 'space-old'];
+      const ben = [...active, ...unlisted].map((spaceId) => ({ userId: BEN, spaceId }));
+      const ana = { userId: ANA, spaceId: 'space-old' };
+      const categories = { ci_failure: true };
+      await testDb.db.insert(spaceNotificationMutes).values([...ben, ana]);
+      await testDb.db.insert(spacePhoneNotificationPreferences).values([...ben, ana].map((row) => ({ ...row, categories })));
+
+      const result = await call('DELETE', `/space-notifications/unlisted?scope=${scope}`, BEN);
+
+      expect(result.status).toBe(200);
+      expect(result.body.data).toEqual({
+        mutedSpaceIds: (scope === 'phone' ? [...active, ...unlisted] : active).sort(),
+        phoneCategoriesBySpace: Object.fromEntries((scope === 'mutes' ? [...active, ...unlisted] : active)
+          .map((id) => [id, categories])),
+      });
+      expect((await call('GET', '/space-notifications', ANA)).body.data).toEqual({
+        mutedSpaceIds: ['space-old'], phoneCategoriesBySpace: { 'space-old': categories },
+      });
+    });
+
+    it('requires an explicit valid scope before resetting unlisted settings', async () => {
+      await testDb.db.insert(spaceNotificationMutes).values({ userId: BEN, spaceId: 'space-old' });
+      for (const query of ['', '?scope=everything', '?scope=mutes&scope=phone']) {
+        expect((await call('DELETE', `/space-notifications/unlisted${query}`, BEN)).status).toBe(400);
+      }
+      expect((await call('GET', '/space-notifications', BEN)).body.data).toEqual({ mutedSpaceIds: ['space-old'] });
+    });
+
     it('keeps concurrent edits to different phone alert types', async () => {
       const path = '/spaces/space-1/notifications/phone';
       const updates = await Promise.all([

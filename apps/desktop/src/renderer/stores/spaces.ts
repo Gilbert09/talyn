@@ -347,8 +347,8 @@ export function setSpacePhoneCategory(spaceId: string, category: MobileNotificat
   return saveSpaceNotifications(() => api.spaces.setPhoneNotificationCategory(spaceId, category, value));
 }
 
-export function resetSpacePhoneCategories(spaceId: string): Promise<void> {
-  return saveSpaceNotifications(() => api.spaces.setPhoneNotificationCategories(spaceId, {}));
+export function resetUnlistedSpaceNotifications(scope: 'mutes' | 'phone'): Promise<void> {
+  return saveSpaceNotifications(() => api.spaces.resetUnlistedNotifications(scope));
 }
 
 /** Whether I muted the space of this session. Personal sessions are never muted. */

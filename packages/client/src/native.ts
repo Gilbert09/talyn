@@ -43,6 +43,7 @@ import type {
   SetSpaceNotificationsRequest,
   SpacePhoneNotificationCategories,
   SpaceNotificationPreferences,
+  SpaceNotificationResetScope,
   Space,
   SpaceItemsResponse,
   SpaceRepository,
@@ -3132,6 +3133,8 @@ export const spaces = {
     request<Task>('PUT', `/tasks/${taskId}/space`, { spaceId } satisfies MoveToSpaceRequest),
   /** The spaces I muted. My own choice: it applies on every device and to no teammate. */
   notificationPreferences: () => request<SpaceNotificationPreferences>('GET', '/space-notifications'),
+  resetUnlistedNotifications: (scope: SpaceNotificationResetScope) =>
+    request<SpaceNotificationPreferences>('DELETE', `/space-notifications/unlisted?scope=${scope}`),
   setNotificationsMuted: (spaceId: string, muted: boolean) =>
     request<SpaceNotificationPreferences>('PUT', `/spaces/${spaceId}/notifications`, {
       muted,

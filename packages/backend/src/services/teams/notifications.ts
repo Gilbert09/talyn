@@ -1,13 +1,15 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
-import { MOBILE_NOTIFICATION_CATEGORIES, type MobileNotificationCategory, type MobileNotificationDestination,
+import { and, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
+import { MOBILE_NOTIFICATION_CATEGORIES, SPACE_NOTIFICATION_RESET_SCOPES, type MobileNotificationCategory, type MobileNotificationDestination,
   type SpaceNotificationPreferences, type SpacePhoneNotificationCategories } from '@talyn/shared';
 import { z } from 'zod';
 import { getPoolDbClient, type Database } from '../../db/client.js';
-import { spaceNotificationMutes as mutesTable, spacePhoneNotificationPreferences as phoneTable,
+import { spaceNotificationMutes as mutesTable, spacePhoneNotificationPreferences as phoneTable, spaces as spacesTable,
+  teamMembers as membersTable,
   tasks as tasksTable, users as usersTable, workbenches as workbenchesTable, workspaces as workspacesTable } from '../../db/schema.js';
 import { TeamError } from '../billing/teams.js';
 import { isFeatureEnabled } from '../featureFlags.js';
 import { assertSpaceMember } from './access.js';
+import { callerGithubIdentity, mineCondition } from './membership.js';
 
 export async function readSpaceNotificationPreferences(userId: string): Promise<SpaceNotificationPreferences> {
   const db = getPoolDbClient();
@@ -88,6 +90,27 @@ export async function setSpacePhoneNotificationCategories(
   } else {
     await db.delete(phoneTable).where(and(eq(phoneTable.userId, userId), eq(phoneTable.spaceId, spaceId)));
   }
+  return readSpaceNotificationPreferences(userId);
+}
+
+const unlistedResetScope = z.enum(SPACE_NOTIFICATION_RESET_SCOPES);
+
+export async function resetUnlistedSpaceNotifications(userId: string, input: unknown): Promise<SpaceNotificationPreferences> {
+  const scope = unlistedResetScope.safeParse(input);
+  if (!scope.success) throw new TeamError(400, 'Choose which notification settings to reset.');
+  const { githubUserId } = await callerGithubIdentity(userId);
+
+  await getPoolDbClient().transaction(async (tx) => {
+    const activeSpaceIds = tx.select({ id: spacesTable.id }).from(spacesTable)
+      .innerJoin(membersTable, eq(membersTable.teamId, spacesTable.teamId))
+      .where(and(isNull(spacesTable.archivedAt), mineCondition(userId, githubUserId)));
+    if (scope.data !== 'phone') {
+      await tx.delete(mutesTable).where(and(eq(mutesTable.userId, userId), notInArray(mutesTable.spaceId, activeSpaceIds)));
+    }
+    if (scope.data !== 'mutes') {
+      await tx.delete(phoneTable).where(and(eq(phoneTable.userId, userId), notInArray(phoneTable.spaceId, activeSpaceIds)));
+    }
+  });
   return readSpaceNotificationPreferences(userId);
 }
 

@@ -57,20 +57,15 @@ export function SpaceNotificationSettings({ offline, spaceId: selectedSpaceId }:
     setSaving(true);
     setFailed(false);
     try {
-      for (const spaceId of missing) {
-        if (currentUserId.current !== userId) return;
-        const next = await spaces.setNotificationsMuted(spaceId, false);
-        prefs.mutate(() => next);
-      }
-      for (const spaceId of missingPhone) {
-        if (currentUserId.current !== userId) return;
-        const next = await spaces.setPhoneNotificationCategories(spaceId, {});
-        prefs.mutate(() => next);
-      }
+      const scope = missingPhone.length ? (missing.length ? 'all' : 'phone') : 'mutes';
+      const next = await spaces.resetUnlistedNotifications(scope);
+      if (currentUserId.current === userId) prefs.mutate(() => next);
     } catch {
-      setFailed(true);
+      if (currentUserId.current === userId) {
+        setFailed(true);
+        await prefs.refresh();
+      }
     } finally {
-      if (currentUserId.current === userId) await prefs.refresh();
       pending.current = false;
       setSaving(false);
     }
