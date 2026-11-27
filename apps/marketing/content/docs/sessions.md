@@ -277,6 +277,8 @@ Open **Settings > Sessions > Auto-archive** to change these rules. You can turn 
 
 To bring a session back, open **History** and select **Restore**.
 
+If the archived session is open in the mobile app, tap the three-dot menu in the header. Select **Restore**.
+
 To delete a session for good, open **History** and select delete. This removes the session and its chats. It does not touch the branch on GitHub.
 
 ## Local sessions
