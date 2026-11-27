@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MarkdownTextarea } from '../renderer/components/workbench/MarkdownTextarea';
 
 // The tokenizer (@talyn/shared composerMarkdown) has its cases in the web suite.
@@ -77,7 +77,7 @@ describe('MarkdownTextarea', () => {
     expect(textarea.value).toBe('```');
   });
 
-  it('hides the fence backticks unless the caret is on their line', () => {
+  it('hides closing backticks, and opening ones unless the caret is on their line', () => {
     const { container } = render(<Harness initial={'```json\nx\n```\nafter'} />);
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
     expect(fenceRuns(container)).toEqual([
@@ -97,13 +97,67 @@ describe('MarkdownTextarea', () => {
     fireEvent.select(textarea);
     expect(fenceRuns(container).map((f) => f.hidden)).toEqual([true, true]);
 
-    // A selection over the whole block shows both fences.
+    // On the closing fence, its backticks still do not show.
+    textarea.setSelectionRange(12, 12);
+    fireEvent.select(textarea);
+    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([true, true]);
+
     textarea.setSelectionRange(0, 14);
     fireEvent.select(textarea);
-    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([false, false]);
+    expect(fenceRuns(container).map((f) => f.hidden)).toEqual([false, true]);
 
     fireEvent.blur(textarea);
     expect(fenceRuns(container).map((f) => f.hidden)).toEqual([true, true]);
+  });
+
+  it.each([
+    ['Shift+Enter on an empty last code line', '```\ncode\n\n```', 9, { key: 'Enter', shiftKey: true }, '```\ncode\n```\n', 13],
+    ['Backspace below a block', '```\ncode\n```\n', 13, { key: 'Backspace' }, '```\ncode\n```', 8],
+  ])('handles %s', (_name, initial, caret, key, value, after) => {
+    render(<Harness initial={initial} />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.setSelectionRange(caret, caret);
+    fireEvent.keyDown(textarea, key);
+    expect(textarea.value).toBe(value);
+    expect(textarea.selectionStart).toBe(after);
+    expect(textarea.selectionEnd).toBe(after);
+  });
+
+  it('does not leave the block when the parent handles the key', () => {
+    const send = jest.fn((e: React.KeyboardEvent) => e.preventDefault());
+    render(<MarkdownTextarea aria-label="Message" value={'```\ncode\n\n```'} onChange={() => undefined} onKeyDown={send} textClassName="" />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.setSelectionRange(9, 9);
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true });
+    expect(textarea.value).toBe('```\ncode\n\n```');
+  });
+
+  it.each([
+    ['Down past the closing fence', 'ArrowDown', '```\ncode\n```', 10, '```\ncode\n```\n', 13],
+    ['Up past the closing fence', 'ArrowUp', '```\ncode\n```\nafter', 9, '```\ncode\n```\nafter', 8],
+    ['Down onto a code line', 'ArrowDown', '```\na\nb\n```', 6, '```\na\nb\n```', 6],
+  ])('steps %s after the browser moves the caret', async (_name, key, initial, landed, value, after) => {
+    render(<Harness initial={initial} />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key });
+    // jsdom does not move the caret on arrow keys: put it where the browser would.
+    textarea.setSelectionRange(landed, landed);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(textarea.value).toBe(value);
+    expect(textarea.selectionStart).toBe(after);
+  });
+
+  it('does not step over the fence while Shift extends a selection', async () => {
+    render(<Harness initial={'```\ncode\n```'} />);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key: 'ArrowDown', shiftKey: true });
+    textarea.setSelectionRange(10, 10);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(textarea.value).toBe('```\ncode\n```');
+    expect(textarea.selectionStart).toBe(10);
   });
 
   it('passes the ref through to the textarea', () => {
