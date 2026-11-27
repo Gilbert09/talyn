@@ -33,7 +33,8 @@ export async function backfillChatLimits(now = new Date()): Promise<number> {
     if (!reason) continue;
     const credentialReason = await credentialResumeReason(chat);
     if (credentialReason) {
-      if (!['limited', 'reauth'].includes(credentialReason) || chat.limitCount >= MAX_CREDENTIAL_RETRIES) continue;
+      if (!['limited', 'reauth'].includes(credentialReason)) continue;
+      if (chat.limitCount >= MAX_CREDENTIAL_RETRIES && !(credentialReason === 'limited' && chat.resumeReason)) continue;
     } else {
       if (!(exhaustedAgentFrom(reason) || rateLimitedAgentFrom(reason))) continue;
       if (chat.limitCount === 0 && !chatLimitAgent(chat, reason)) continue;

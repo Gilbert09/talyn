@@ -8122,3 +8122,6 @@ The existing switch prepares a conversation recap and selects a model from the s
 This server change applies to web, desktop, and mobile.
 Resume checks refresh stale subscription usage before selecting an agent.
 A usage wait uses the earliest retry across both supported agents.
+Usage refreshes run in sequence, and agent selection reads the saved sign-in state after each batch.
+Runtime limits also use account usage resets when scheduling the next check.
+Usage availability checks do not consume the allowance for failed turns.

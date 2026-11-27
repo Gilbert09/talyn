@@ -90,16 +90,24 @@ export async function handleChatLimit(chat: ChatRow, text: string, retry = false
   }
   // Account selection loads the turn runtime. Load it after session initialization.
   const { accountOverVerdict, fleetSwitchSettings, refreshAccountUsage } = await import('../selfHosted/accountSelection.js');
-  const [listed, settings, holds] = await Promise.all([
-    listFleetAccounts(workspaceId), fleetSwitchSettings(workspaceId), heldBackAgents(workspaceId, now),
+  const [listed, settings] = await Promise.all([
+    listFleetAccounts(workspaceId), fleetSwitchSettings(workspaceId),
   ]);
   const supported = sandboxAgents(wb);
-  const accounts = await Promise.all(listed.map((account) =>
-    supported.includes(account.agent) ? refreshAccountUsage(account) : account));
+  // Each refresh holds a database connection. Keep room for its queries and other requests.
+  for (const account of listed) {
+    if (supported.includes(account.agent)) await refreshAccountUsage(account);
+  }
+  // A refresh can mark a revoked grant as needing sign-in.
+  const [accounts, holds] = await Promise.all([
+    listFleetAccounts(workspaceId), heldBackAgents(workspaceId, now),
+  ]);
   const threshold = settings.useFullQuotaWhenAllOver ? 100 : settings.threshold;
   const possible = supported.filter((a) => accounts.some((account) => account.agent === a && !account.reauthRequiredAt));
   const model = chat.model ?? (agent === wb.agent ? wb.model : null) ?? defaultFleetModelForAgent(agent);
   const modelFor = (candidate: FleetAgent) => candidate === agent ? model : fleetModelForAgentSwitch(model, candidate);
+  const { accountReset } = await import('./credentialFailure.js');
+  const eligibleAccounts = accounts.filter((a) => possible.includes(a.agent) && !a.reauthRequiredAt);
   const other = agent === 'claude' ? 'codex' : 'claude';
   const candidates: FleetAgent[] = credentialReason === 'reauth' ? (retry ? [agent] : []) : retry ? [agent, other] : [other];
   const chosen = candidates.find((a) => possible.includes(a) && !holds[a] && accounts.some((account) =>
@@ -125,13 +133,13 @@ export async function handleChatLimit(chat: ChatRow, text: string, retry = false
     return;
   }
   if (credentialReason) {
-    if (retry && current.limitCount >= MAX_CREDENTIAL_RETRIES) return;
-    const count = current.limitCount + (retry ? 1 : 0);
-    const { accountReset } = await import('./credentialFailure.js');
+    if (retry && credentialReason === 'reauth' && current.limitCount >= MAX_CREDENTIAL_RETRIES) return;
+    // An availability check sends no turn and must not consume the usage retry allowance.
+    const count = current.limitCount + (retry && credentialReason === 'reauth' ? 1 : 0);
     const own = accounts.filter((a) => a.agent === agent);
     const delay = limitRetryDelay(credentialReason === 'reauth' ? Math.max(count, 4) : count);
     const waitingAccounts = credentialReason === 'limited'
-      ? accounts.filter((a) => possible.includes(a.agent) && !a.reauthRequiredAt)
+      ? eligibleAccounts
       : own.filter((a) => !a.reauthRequiredAt);
     const retries = waitingAccounts.map((a) => accountReset(a, threshold, modelFor(a.agent), now)
       ?? Math.max(now.getTime() + delay, a.quotaExhausted ? probeAfter(a.quotaExhausted) : 0));
@@ -156,17 +164,13 @@ export async function handleChatLimit(chat: ChatRow, text: string, retry = false
     if (waiting) emitWorkbenchChat(chat.workspaceId, rowToChat(waiting));
     return;
   }
-  const resets = possible.map((a) => holds[a]?.resetsAt).filter((at): at is string => Boolean(at))
-    .map(Date.parse).filter((at) => at > now.getTime());
-  const ownReset = !retry ? resetInstantFrom(text, now) : null;
-  if (ownReset && possible.includes(agent) && Date.parse(ownReset) > now.getTime()) resets.push(Date.parse(ownReset));
   const delay = exhaustedAgentFrom(text)
     ? 5 * 60 * 60_000
     : limitRetryDelay(Math.max(current.limitCount, 1));
-  const probes = possible.map((a) => holds[a]).filter((hold) => hold !== undefined)
-    .map((hold) => probeAfter(hold)).filter((at) => at > now.getTime());
-  const at = refusal ? deferralRetryAt(refusal, now.getTime()) : new Date(resets.length ? Math.min(...resets) :
-    Math.max(now.getTime() + delay, probes.length ? Math.min(...probes) : 0));
+  const retries = eligibleAccounts.map((a) => accountReset(a, threshold, modelFor(a.agent), now)
+    ?? Math.max(now.getTime() + delay, a.quotaExhausted ? probeAfter(a.quotaExhausted) : 0));
+  const at = refusal ? deferralRetryAt(refusal, now.getTime())
+    : new Date(retries.length ? Math.min(...retries) : now.getTime() + delay);
   const [waiting] = await db.update(workbenchChats).set({
     resumeAt: at, resumeReason: text,
     statusMessage: refusal?.message ?? `Waiting for usage. Resumes at ${at!.toISOString().slice(11, 16)} UTC.`,

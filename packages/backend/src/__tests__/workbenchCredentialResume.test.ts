@@ -16,6 +16,12 @@ import { recordSandboxAgents } from '../services/workbenches/credentialPolicy.js
 import { setUsageFetchForTests } from '../services/selfHosted/accountSelection.js';
 import { encryptString } from '../services/tokenCrypto.js';
 import { randomBytes } from 'node:crypto';
+import { resetCodexOauthCache } from '../services/selfHosted/codexOauth.js';
+
+const tokenFetch = vi.hoisted(() => vi.fn());
+vi.mock('../services/httpTimeout.js', async (original) => ({
+  ...(await original<typeof import('../services/httpTimeout.js')>()), fetchWithTimeout: tokenFetch,
+}));
 
 vi.mock('../services/githubIdentity.js', async (original) => ({
   ...(await original<typeof import('../services/githubIdentity.js')>()), ensureGithubUserId: async () => null,
@@ -47,6 +53,8 @@ async function account(agent: 'claude' | 'codex') {
 beforeEach(async () => {
   vi.clearAllMocks();
   usageFetch.mockReset();
+  tokenFetch.mockReset();
+  resetCodexOauthCache();
   setUsageFetchForTests(usageFetch);
   vi.mocked(existingBoxRefusal).mockResolvedValue(null);
   testDb = await createTestDb();
@@ -68,6 +76,7 @@ beforeEach(async () => {
 afterEach(async () => {
   setUsageFetchForTests(undefined);
   vi.unstubAllEnvs();
+  vi.useRealTimers();
   resetFeatureFlagsForTests();
   await testDb.cleanup();
 });
@@ -186,6 +195,114 @@ it.each(['unsupported', 'reauth'] as const)('ignores the earlier Codex reset whe
   else await setFleetAccountReauth('codex');
   await fail();
   expect((await chat()).resumeAt?.toISOString()).toBe(at);
+});
+
+it('bounds concurrent usage reads for a workspace with many stale subscriptions', async () => {
+  vi.stubEnv('TALYN_TOKEN_KEY', randomBytes(32).toString('base64'));
+  await setFleetAccountUsage('claude', { fetchedAt: new Date().toISOString(),
+    windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 100, resetsAt: future(3 * 24 * 60) }] });
+  for (let i = 0; i < 19; i++) {
+    const added = await addFleetAccount('ws', { kind: 'codex_oauth', credential: {
+      accessTokenEnc: encryptString(`test-token-${i}`), refreshTokenEnc: encryptString('test-refresh'),
+      expiresAt: future(60), accountId: `test-account-${i}`,
+    } });
+    await setFleetAccountUsage(added.id, { fetchedAt: future(-10),
+      windows: [{ key: 'session', label: '5-hour', usedPercent: 100, resetsAt: future(90) }] });
+  }
+  let active = 0;
+  let peak = 0;
+  usageFetch.mockImplementation(async () => {
+    active++;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    active--;
+    return new Response(JSON.stringify({ rate_limit: { limit_reached: true,
+      primary_window: { used_percent: 100, limit_window_seconds: 18000, reset_after_seconds: 3600 },
+    } }), { status: 200 });
+  });
+  await fail();
+  expect(usageFetch).toHaveBeenCalledTimes(19);
+  expect(peak).toBe(1);
+  expect(sendMessage).not.toHaveBeenCalled();
+});
+
+it('keeps a recoverable usage wait when refreshing Codex revokes its sign-in', async () => {
+  vi.stubEnv('TALYN_TOKEN_KEY', randomBytes(32).toString('base64'));
+  const at = future(3 * 24 * 60);
+  await setFleetAccountUsage('claude', { fetchedAt: new Date().toISOString(),
+    windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 100, resetsAt: at }] });
+  const codex = await addFleetAccount('ws', { kind: 'codex_oauth', credential: {
+    accessTokenEnc: encryptString('test-token'), refreshTokenEnc: encryptString('test-refresh'),
+    expiresAt: future(-60), accountId: 'test-account',
+  } });
+  await setFleetAccountUsage(codex.id, { fetchedAt: future(-10), windows: [] });
+  tokenFetch.mockResolvedValue({ ok: false, status: 400, bodyText: JSON.stringify({ error: 'invalid_grant' }) });
+  await fail();
+  expect((await fleetAgentStatus('ws')).reauthAgents).toEqual(['codex']);
+  expect(await chat()).toMatchObject({ agent: 'claude', status: 'error', resumeAt: new Date(at) });
+  expect(sendMessage).not.toHaveBeenCalled();
+  expect(usageFetch).not.toHaveBeenCalled();
+  await setFleetAccountUsage('claude', { fetchedAt: new Date().toISOString(), windows: [] });
+  await sweepChatLimits(new Date(at));
+  expect(await chat()).toMatchObject({ agent: 'claude', status: 'running', resumeAt: null });
+  expect(tokenFetch).toHaveBeenCalledOnce();
+});
+
+it.each(['usage', 'unknown'] as const)('checks the earlier Codex %s reset after a runtime rate limit', async (source) => {
+  await account('codex');
+  await updateChat('chat', { model: 'claude-opus-5-5' });
+  const at = future(60);
+  await setFleetAccountUsage('codex', { fetchedAt: new Date().toISOString(), windows: [{
+    key: 'model', label: 'Astra', scopeModel: 'Astra', usedPercent: 100, resetsAt: source === 'unknown' ? null : at,
+  }] });
+  const start = Date.now();
+  await handleChatLimit(await chat(), `${reason} resetsAt: "${future(3 * 24 * 60)}"`);
+  const waiting = await chat();
+  expect(sendMessage).not.toHaveBeenCalled();
+  if (source === 'unknown') {
+    expect(waiting.resumeAt!.getTime()).toBeGreaterThanOrEqual(start + limitRetryDelay(1));
+    expect(waiting.resumeAt!.getTime()).toBeLessThanOrEqual(Date.now() + limitRetryDelay(1));
+  } else expect(waiting.resumeAt?.toISOString()).toBe(at);
+  await setFleetAccountUsage('codex', { fetchedAt: new Date().toISOString(), windows: [] });
+  await sweepChatLimits(waiting.resumeAt!);
+  expect(await chat()).toMatchObject({ agent: 'codex', status: 'running', resumeAt: null });
+});
+
+it.each([1, MAX_CREDENTIAL_RETRIES])('preserves a usage wait at count %i through availability checks and recovery', async (count) => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  await account('codex');
+  await updateChat('chat', { limitCount: count - 1 });
+  const reset = future(3 * 24 * 60);
+  await setFleetAccountUsage('claude', { fetchedAt: new Date().toISOString(),
+    windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 100, resetsAt: reset }] });
+  await setFleetAccountUsage('codex', { fetchedAt: new Date().toISOString(),
+    windows: [{ key: 'session', label: '5-hour', usedPercent: 100, resetsAt: null }] });
+  await fail();
+  for (let i = 0; i <= MAX_CREDENTIAL_RETRIES; i++) {
+    const waiting = await chat();
+    expect(waiting.resumeAt).toBeInstanceOf(Date);
+    vi.setSystemTime(waiting.resumeAt!);
+    await sweepChatLimits();
+    expect((await chat()).limitCount).toBe(count);
+  }
+  expect(sendMessage).not.toHaveBeenCalled();
+  await updateChat('chat', { resumeAt: null });
+  expect(await backfillChatLimits()).toBe(1);
+  await sweepChatLimits();
+  expect((await chat()).resumeAt).toBeInstanceOf(Date);
+  vi.setSystemTime(new Date(reset));
+  await setFleetAccountUsage('claude', { fetchedAt: new Date().toISOString(), windows: [] });
+  await sweepChatLimits();
+  expect(await chat()).toMatchObject({ agent: 'claude', status: 'running', resumeAt: null });
+});
+
+it('does not restart a new usage failure after the failed turn allowance is spent', async () => {
+  await setFleetAccountUsage('claude', { fetchedAt: new Date().toISOString(),
+    windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 100, resetsAt: future(3 * 24 * 60) }] });
+  await updateChat('chat', { limitCount: MAX_CREDENTIAL_RETRIES });
+  await fail();
+  expect((await chat()).resumeAt).toBeNull();
+  expect(await backfillChatLimits()).toBe(0);
 });
 
 it.each(['usage', 'hold', 'reauth', 'old box'] as const)('waits after a credential usage refusal when Codex has %s', async (condition) => {
