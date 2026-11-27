@@ -2,7 +2,7 @@ import { waitFor } from '@testing-library/react-native';
 import { ClientInactiveError } from '@talyn/client/native';
 import { defaultMobileNotificationPreferences, type MobileNotificationPayload } from '@talyn/shared';
 
-import { NotificationController, notificationPath } from '../notifications/controller';
+import { NotificationController, notificationPath, PUSH_TOKEN_TIMEOUT_MS } from '../notifications/controller';
 
 const workspace = '10000000-0000-4000-8000-000000000001';
 const entity = '20000000-0000-4000-8000-000000000002';
@@ -14,7 +14,7 @@ function fixture() {
   let online = true;
   const preferences = { ...defaultMobileNotificationPreferences(workspace), enabled: true };
   const api = {
-    getPreferences: jest.fn(async () => ({ preferences, providerAvailable: true })),
+    getPreferences: jest.fn(async (workspaceId: string) => ({ preferences: { ...preferences, workspaceId }, providerAvailable: true })),
     updatePreferences: jest.fn(async (value) => ({ preferences: value, providerAvailable: true })),
     registerInstallation: jest.fn(async (value) => ({ schemaVersion: 1 as const, installationId: value.installationId, enabled: true, providerAvailable: true })),
     removeInstallation: jest.fn(async () => {}),
@@ -33,7 +33,8 @@ function fixture() {
   const controller = new NotificationController(api, device, () => online, fetchDestination, () => Date.parse('2026-11-08'));
   controller.setNavigation(navigate, '/sessions');
   controller.setScope({ user: 'alice', workspace });
-  return { api, device, controller, navigate, fetchDestination, preferences, offline: () => { online = false; } };
+  return { api, device, controller, navigate, fetchDestination, preferences,
+    offline: () => { online = false; }, resume: () => { online = true; } };
 }
 
 describe('notification registration', () => {
@@ -61,6 +62,28 @@ describe('notification registration', () => {
     expect(f.api.registerInstallation).toHaveBeenCalledWith(expect.objectContaining({ installationId: entity, workspaceId: workspace }));
     expect(JSON.stringify(f.controller.getSnapshot())).not.toContain('synthetic-device-value');
     expect(f.controller.getSnapshot().state).toBe('ready'); f.controller.dispose();
+  });
+  it('edits another workspace without changing the active notification scope', async () => {
+    const f = fixture();
+    await f.controller.refresh();
+    const otherWorkspace = '10000000-0000-4000-8000-000000000009';
+    const preferences = { ...f.preferences, workspaceId: otherWorkspace };
+    const loaded = await f.controller.loadWorkspaceSettings(otherWorkspace);
+    expect(loaded).toMatchObject({ preferences });
+    expect(await loaded?.registration).toBe('disabled');
+    expect(f.api.getPreferences).toHaveBeenLastCalledWith(otherWorkspace);
+    expect(f.device.permission).not.toHaveBeenCalled();
+
+    const updated = { ...preferences, onlyWhenAway: false };
+    const saved = await f.controller.saveWorkspaceSettings(updated, true);
+    expect(saved).toMatchObject({ preferences: updated });
+    expect(await saved?.registration).toBe('ready');
+    expect(f.api.updatePreferences).toHaveBeenCalledWith(updated);
+    expect(f.device.permission).toHaveBeenCalledWith(true);
+    expect(f.api.registerInstallation).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: otherWorkspace }));
+    expect(f.controller.getSnapshot()).toMatchObject({ state: 'disabled', preferences: f.preferences });
+    expect(f.controller.shouldAlert(payload)).toBe(true);
+    f.controller.dispose();
   });
   it.each(['permission', 'device', 'provider', 'network'] as const)('keeps workflows usable when %s is unavailable', async (reason) => {
     const f = fixture(); await f.controller.refresh();
@@ -101,6 +124,37 @@ describe('notification registration', () => {
     await f.controller.enableDevice(); expect(f.controller.getSnapshot().state).toBe('failed');
     expect(f.api.registerInstallation).not.toHaveBeenCalled(); f.controller.dispose();
   });
+  it('loads preferences while native token acquisition stalls and releases registration after its deadline', async () => {
+    const f = fixture();
+    await f.controller.refresh();
+    await f.controller.enableDevice();
+    f.api.registerInstallation.mockClear();
+    jest.useFakeTimers();
+    try {
+      let finishToken!: (token: string) => void;
+      f.device.token.mockImplementationOnce(() => new Promise((resolve) => { finishToken = resolve; }));
+      const first = await f.controller.loadWorkspaceSettings(workspace);
+      const otherWorkspace = '10000000-0000-4000-8000-000000000009';
+      const second = await f.controller.loadWorkspaceSettings(otherWorkspace);
+      expect(first).toMatchObject({ state: 'loading', preferences: f.preferences });
+      expect(second?.preferences?.workspaceId).toBe(otherWorkspace);
+      const disabled = { ...f.preferences, enabled: false };
+      expect(await f.controller.saveWorkspaceSettings(disabled)).toMatchObject({ state: 'disabled', preferences: disabled });
+      expect(f.api.registerInstallation).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(PUSH_TOKEN_TIMEOUT_MS);
+      expect(await first?.registration).toBe('failed');
+      expect(await second?.registration).toBe('ready');
+      finishToken('ExpoPushToken[synthetic-expired-request]');
+      await Promise.resolve();
+      expect(f.api.registerInstallation).toHaveBeenCalledTimes(1);
+      expect(f.api.registerInstallation).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: otherWorkspace }));
+      expect(f.controller.getSnapshot()).toMatchObject({ state: 'disabled', preferences: disabled });
+    } finally {
+      f.controller.dispose();
+      jest.useRealTimers();
+    }
+  });
   it('clears notification identity and pending work after account deletion', async () => {
     const f = fixture(); await f.controller.refresh(); await f.controller.enableDevice();
     await f.controller.clearLocal('alice');
@@ -110,6 +164,23 @@ describe('notification registration', () => {
 });
 
 describe('notification taps', () => {
+  it('waits to open a tap and allows workspace settings to load when requests can resume', async () => {
+    const f = fixture();
+    await f.controller.refresh();
+    f.api.getPreferences.mockClear();
+    f.offline();
+    f.controller.receiveTap(payload);
+    expect(await f.controller.loadWorkspaceSettings(entity)).toBeNull();
+    expect(f.api.getPreferences).not.toHaveBeenCalled();
+    expect(f.api.resolveNotification).not.toHaveBeenCalled();
+    expect(f.controller.getSnapshot().tapIssue).toBeNull();
+
+    f.resume();
+    f.controller.retryTap();
+    expect(await f.controller.loadWorkspaceSettings(entity)).toMatchObject({ preferences: { workspaceId: entity } });
+    await waitFor(() => expect(f.navigate).toHaveBeenCalledWith(`/sessions/${entity}`));
+    f.controller.dispose();
+  });
   it.each(['cold', 'warm'] as const)('resolves %s taps and fetches authoritative state before navigation', async (start) => {
     const f = fixture();
     if (start === 'cold') f.controller.setScope(null);

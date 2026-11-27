@@ -225,18 +225,18 @@ describe('repository shortcut', () => {
 });
 
 describe('NewWorkbenchPage', () => {
-  it('shows the new session loading at once, then opens it', async () => {
+  it('publishes the session view on Enter and opens the saved session', async () => {
     let finishCreate: (workbench: Workbench) => void = () => undefined;
     mockCreate.mockReturnValue(new Promise<Workbench>((resolve) => { finishCreate = resolve; }));
     await renderPage();
     fireEvent.change(textarea(), { target: { value: 'Fix the slow search' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
 
-    expect(screen.queryByRole('textbox', { name: 'Task' })).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'New session' })).toBeInTheDocument();
-    expect(screen.getByText('acme/api')).toBeInTheDocument();
-    expect(screen.getByText('Fix the slow search')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('Creating the session…');
+    expect(useNavigationStore.getState().creation?.view).toMatchObject({
+      workbench: { name: 'New session', repoFullName: 'acme/api', status: 'provisioning' },
+      message: { text: 'Fix the slow search' },
+    });
+    expect(useWorkbenchStore.getState().workbenches.creating).toBeUndefined();
 
     await act(async () => finishCreate(wb('fast-search')));
     expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'fast-search' });
@@ -248,12 +248,12 @@ describe('NewWorkbenchPage', () => {
     await renderPage();
     fireEvent.change(textarea(), { target: { value: 'Add dark mode' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));
-    expect(screen.getByRole('status')).toHaveTextContent('Creating the session…');
+    expect(useNavigationStore.getState().creation).not.toBeNull();
 
     await act(async () => failCreate(new Error('No boxes left.')));
     expect(await screen.findByRole('alert')).toHaveTextContent('No boxes left.');
     expect(textarea()).toHaveValue('Add dark mode');
-    expect(screen.queryByText('Creating the session…')).not.toBeInTheDocument();
+    expect(useNavigationStore.getState().creation).toBeNull();
   });
 
   it('lists repository files after @ and inserts the selected path', async () => {

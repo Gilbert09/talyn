@@ -157,13 +157,13 @@ export function StartingHint({ workbench, queued, canWrite = true }: { workbench
 }
 
 /** One line under queued messages while the sandbox starts. */
-export function StartingLine({ workbench }: { workbench: Workbench }) {
+export function StartingLine({ workbench, creating = false }: { workbench: Workbench; creating?: boolean }) {
   const c = useTheme();
   const progress = workbench.startProgress ?? null;
   const fraction = useStartFraction(progress);
   const title = startTitle(workbench);
   const stepText = progress ? startStepText(progress) : null;
-  const text = stepText && stepText !== title ? `${title} · ${stepText}` : title;
+  const text = (creating ? workbench.statusMessage : null) ?? (stepText && stepText !== title ? `${title} · ${stepText}` : title);
   return <View testID="workbench-starting-line" accessibilityLiveRegion="polite" style={local.line}>
     <View style={local.lineText}>
       <ActivityIndicator size="small" color={c.muted} />

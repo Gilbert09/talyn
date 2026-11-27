@@ -62,6 +62,7 @@ export function Composer({
   slashCommands,
   attachRef,
   autoFocus = true,
+  creating = false,
 }: {
   workbench: Workbench;
   chat: WorkbenchChat | null;
@@ -76,6 +77,7 @@ export function Composer({
    * passes true only to the focused pane's, so they do not fight over the caret.
    */
   autoFocus?: boolean;
+  creating?: boolean;
 }) {
   const draftKey = composerDraftKey(workbench.id, chat);
   const draft = useWorkbenchStore((s) => s.drafts[draftKey] ?? '');
@@ -264,11 +266,12 @@ export function Composer({
   // A session whose sandbox is starting, moving or being replaced still takes
   // messages: the backend queues them and runs them when the sandbox is ready.
   // An archived session takes a message from its owner too: the send restores it first.
-  const sendBlocked =
+  const sendBlocked = creating || (
     Boolean(ops.unavailable) &&
     !restoreOnSend &&
     !workbenchQueuesMessages(workbench.status) &&
-    !(workbench.status === 'ready' && workbench.sandboxState === 'lost');
+    !(workbench.status === 'ready' && workbench.sandboxState === 'lost')
+  );
 
   const send = async () => {
     const text = draft.trim();
@@ -485,7 +488,7 @@ export function Composer({
           onPaste={onPaste}
           onBlur={() => setTrigger(null)}
           placeholder={
-            (restoreOnSend ? 'This session is archived. Send a message to restore it.' : ops.unavailable) ??
+            (restoreOnSend ? 'This session is archived. Send a message to restore it.' : creating ? null : ops.unavailable) ??
             (running ? 'The agent is working. A message now is queued for when it finishes.' : 'Ask the agent… (@ for files, / for commands)')
           }
           textClassName="px-3 py-2 text-sm"
@@ -493,13 +496,13 @@ export function Composer({
           aria-label="Message the agent"
         />
         <div className="flex items-center gap-1 px-2 pb-1.5">
-          {!restoreOnSend && <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} videos />}
-          <AgentPicker value={agent} onChange={(next) => void patchChat({ agent: next, model: fleetModelForAgentSwitch(model, next) })} disabled={!owner || !chat || Boolean(ops.unavailable) || ops.runtime === 'local'} />
-          <ModelPicker agent={agent} value={model} onChange={(m) => void patchChat({ model: m })} disabled={!owner || !chat || Boolean(ops.unavailable)} />
-          <EffortPicker value={effort} onChange={(v) => void patchChat({ effort: v })} disabled={!owner || !chat || Boolean(ops.unavailable)} />
-          <PlanToggle on={planMode} onToggle={() => void patchChat({ planMode: !planMode })} disabled={!owner || !chat || Boolean(ops.unavailable)} />
+          {!creating && !restoreOnSend && <ImageAttachButton inputRef={fileInputRef} onFiles={(files) => void attachFiles(files)} videos />}
+          <AgentPicker value={agent} onChange={(next) => void patchChat({ agent: next, model: fleetModelForAgentSwitch(model, next) })} disabled={creating || !owner || !chat || Boolean(ops.unavailable) || ops.runtime === 'local'} />
+          <ModelPicker agent={agent} value={model} onChange={(m) => void patchChat({ model: m })} disabled={creating || !owner || !chat || Boolean(ops.unavailable)} />
+          <EffortPicker value={effort} onChange={(v) => void patchChat({ effort: v })} disabled={creating || !owner || !chat || Boolean(ops.unavailable)} />
+          <PlanToggle on={planMode} onToggle={() => void patchChat({ planMode: !planMode })} disabled={creating || !owner || !chat || Boolean(ops.unavailable)} />
           <TodoChip todos={todos} />
-          {owner && chat && <WakeLaterPopover workbenchId={workbench.id} chatId={chat.id} />}
+          {!creating && owner && chat && <WakeLaterPopover workbenchId={workbench.id} chatId={chat.id} />}
           <div className="flex-1" />
           <ContextMeter usage={contextUsage} />
           {running && owner ? (

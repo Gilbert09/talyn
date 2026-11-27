@@ -264,9 +264,9 @@ export function sandboxChipState(
 }
 
 /** The Sandbox chip in the session header. It opens the Sandbox tab of the right panel. */
-export function SandboxStatusChip({ workbench, chat }: { workbench: Workbench; chat?: WorkbenchChat | null }) {
+export function SandboxStatusChip({ workbench, chat, creating = false }: { workbench: Workbench; chat?: WorkbenchChat | null; creating?: boolean }) {
   const setSideTab = useWorkbenchStore((s) => s.setSideTab);
-  const { status, refresh } = useSandboxStatus(workbench, false);
+  const { status, refresh } = useSandboxStatus(workbench, false, !creating);
   const attention = sandboxStatusNeedsAttention(status);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -287,6 +287,7 @@ export function SandboxStatusChip({ workbench, chat }: { workbench: Workbench; c
     <button
       type="button"
       onClick={() => setSideTab('sandbox')}
+      disabled={creating}
       className="inline-flex !max-w-48 shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
       title="Sandbox status"
       data-attr="workbench-sandbox-chip"

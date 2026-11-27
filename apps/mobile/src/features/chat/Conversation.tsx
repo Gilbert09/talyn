@@ -1,4 +1,4 @@
-import { nextRunningSubagentTab, runningSubagentCount, subagentTabs, type ToolBlock, type Workbench } from '@talyn/shared';
+import { nextRunningSubagentTab, runningSubagentCount, subagentTabs, type SendWorkbenchMessageInput, type ToolBlock, type Workbench } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ReactNode, type Ref } from 'react';
 import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View, type FlatListProps, type TextInput } from 'react-native';
@@ -47,7 +47,8 @@ function TranscriptList({ ref, positionKey, ...props }: Omit<FlatListProps<Row>,
  * the newest message, so it opens at the newest message with no scroll after
  * layout. Older history loads by itself when the reader reaches the top.
  */
-export function Conversation({ item, ready, canSwitchAgent, header, top, bottom, find = 0, onCloseFind }: {
+export function Conversation({ item, ready, canSwitchAgent, header, top, bottom, find = 0, onCloseFind, firstMessage }: {
+  firstMessage?: SendWorkbenchMessageInput;
   item: Workbench; ready: boolean; canSwitchAgent: boolean; header?: ReactNode;
   /** Content below the newest message, while no turn runs. */
   bottom?: ReactNode;
@@ -63,7 +64,7 @@ export function Conversation({ item, ready, canSwitchAgent, header, top, bottom,
   const chats = item.chats ?? [];
   const chat = chats[chats.length - 1];
   const alternate = canSwitchAgent ? alternateChatAgent(item, chat) : undefined;
-  const state = useResource<Transcript>('transcript', chat?.id ?? '', Boolean(chat));
+  const state = useResource<Transcript>('transcript', chat?.id ?? '', Boolean(chat) && !firstMessage);
   const offline = useNetwork() === 'offline';
   const positionKey = chat?.id ?? item.id;
   const ref = useRef<FlatList<Row>>(null);
@@ -87,14 +88,20 @@ export function Conversation({ item, ready, canSwitchAgent, header, top, bottom,
   /** The reader reached the oldest loaded message while another load ran. The older page is owed once it ends. */
   const olderOwed = useRef(false);
   useLayoutEffect(() => { setFollowing(workflow.local(positionKey).following); }, [workflow, positionKey]);
-  useEffect(() => { if (chat) workflow.updateLocal(`selected:${item.id}`, { selectedChat: chat.id }); }, [workflow, item.id, chat?.id]);
+  useEffect(() => { if (chat && !firstMessage) workflow.updateLocal(`selected:${item.id}`, { selectedChat: chat.id }); }, [workflow, item.id, chat?.id, firstMessage]);
   const rows = useMemo(() => {
+    if (firstMessage) {
+      const files = firstMessage.attachments ?? [];
+      return firstMessage.text || files.length
+        ? [{ key: 'first-message', kind: 'user' as const, text: firstMessage.text, files, attachments: files.length, timestamp: null }]
+        : [];
+    }
     const list = cache.current.rows(chat?.id ?? '', state.data?.events ?? []);
     for (const message of chat?.queuedMessages ?? []) {
       list.push({ key: `queue:${message.id}`, kind: 'queued', text: message.text, fromTalyn: message.origin === 'talyn', timestamp: message.queuedAt });
     }
     return list.reverse();
-  }, [chat?.id, chat?.queuedMessages, state.data]);
+  }, [chat?.id, chat?.queuedMessages, state.data, firstMessage]);
 
   const pauseFollowing = useCallback(() => { setFollowing(false); workflow.updateLocal(positionKey, { following: false }); }, [workflow, positionKey]);
   const data = state.data;
@@ -191,9 +198,9 @@ export function Conversation({ item, ready, canSwitchAgent, header, top, bottom,
   const empty = state.status === 'ready' && rows.length === 0;
   const starting = isStarting(item);
   // A new sandbox: show what it does in place of the empty conversation, also while the first load runs.
-  const startHint = starting && rows.length === 0 && (state.status === 'idle' || state.status === 'loading' || state.status === 'ready');
+  const startHint = !firstMessage && starting && rows.length === 0 && (state.status === 'idle' || state.status === 'loading' || state.status === 'ready');
 
-  return <MessageMenuContext.Provider value={messageMenu.open}><View style={{ flex: 1 }}>
+  return <MessageMenuContext.Provider value={firstMessage ? null : messageMenu.open}><View style={{ flex: 1 }}>
     {header}
     <FleetReconnectNotice />
     {findOpen ? <FindBar query={query} onChangeQuery={changeQuery} count={matches.length} label={matchCountLabel(current, matches.length, query)}
@@ -209,7 +216,7 @@ export function Conversation({ item, ready, canSwitchAgent, header, top, bottom,
         initialNumToRender={14} maxToRenderPerBatch={10} windowSize={9} contentContainerStyle={[styles.content, local_.content]}
         scrollEventThrottle={100}
         maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: FOLLOW_DISTANCE }}
-        onScroll={(event) => {
+        onScroll={firstMessage ? undefined : (event) => {
           const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
           const offset = contentOffset.y;
           const next = offset < FOLLOW_DISTANCE;
@@ -228,13 +235,13 @@ export function Conversation({ item, ready, canSwitchAgent, header, top, bottom,
           if (scrollRetries.current++ < 3) setTimeout(() => ref.current?.scrollToIndex({ index: info.index, animated: true, viewPosition: 0.5 }), 120);
         }}
         keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive"
-        ListHeaderComponent={starting && !running && rows.length ? <StartingLine workbench={item} /> : running ? <View accessibilityLiveRegion="polite" style={local_.working}>
+        ListHeaderComponent={firstMessage || (starting && !running && rows.length) ? <StartingLine workbench={item} creating={Boolean(firstMessage)} /> : running ? <View accessibilityLiveRegion="polite" style={local_.working}>
           <TypingDots />
           <Text style={[type.caption, { color: c.muted }]}>{chat?.phase === 'restoring' ? 'Restoring the sandbox. This can take a few minutes.' : 'Working'}</Text>
         </View> : bottom ? <View>{bottom}</View> : undefined}
         ListFooterComponent={<View style={local_.top}>
           {top ? <View>{top(pauseFollowing)}</View> : null}
-          {startHint ? null : <StateNotice resource={state} offline={offline} refresh={state.refresh} refreshLabel="Try again" />}
+          {firstMessage || startHint ? null : <StateNotice resource={state} offline={offline} refresh={state.refresh} refreshLabel="Try again" />}
           {loadingOlder ? <View style={local_.older}><ActivityIndicator accessibilityLabel="Loading earlier messages" size="small" color={c.muted} /></View> : null}
           {data?.olderFailed ? <View style={local_.older}>
             <Pressable accessibilityRole="button" accessibilityLabel="Could not load earlier messages. Try again" hitSlop={8}
@@ -270,7 +277,7 @@ export function Conversation({ item, ready, canSwitchAgent, header, top, bottom,
       <StatusDot state="running" />
       <AppText variant="caption" tone="muted">{runningAgents} {runningAgents === 1 ? 'subagent' : 'subagents'} running</AppText>
     </Pressable> : null}
-    {chat ? <Composer item={item} chatId={chat.id} ready={ready} inputRef={inputRef} />
+    {chat ? <Composer item={item} chatId={chat.id} ready={ready} inputRef={inputRef} creating={Boolean(firstMessage)} />
       : startHint ? null : <AppText variant="meta" tone="muted" style={local_.empty}>No conversation is available for this item.</AppText>}
     {messageMenu.elements}
   </View></MessageMenuContext.Provider>;

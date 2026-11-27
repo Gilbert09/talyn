@@ -78,20 +78,23 @@ describe('personal space preferences store', () => {
   });
 
   it.each(['read', 'save'] as const)('clears preferences and ignores an old account %s', async (operation) => {
-    useSpacesStore.setState({ mutedSpaceIds: ['work'], notificationsLoaded: true });
+    useSpacesStore.setState({
+      mutedSpaceIds: ['work'], phoneCategoriesBySpace: { work: { session_update: false } }, notificationsLoaded: true,
+    });
     const pending = deferred();
     get.mockReturnValueOnce(pending.promise);
     save.mockReturnValueOnce(pending.promise);
     const request = operation === 'read' ? loadSpaceNotifications() : setSpaceMuted('automations', true);
     useSpacesStore.getState().setSelfUserId('user-b');
     expect(useSpacesStore.getState()).toMatchObject({
-      mutedSpaceIds: [], notificationsLoaded: false, notificationsSaving: false, notificationsError: null,
+      mutedSpaceIds: [], phoneCategoriesBySpace: {}, notificationsLoaded: false, notificationsSaving: false, notificationsError: null,
     });
-    pending.resolve({ mutedSpaceIds: ['automations', 'work'] });
+    pending.resolve({ mutedSpaceIds: ['automations', 'work'], phoneCategoriesBySpace: { work: { session_update: true } } });
     await request;
     expect(useSpacesStore.getState()).toMatchObject({
       selfUserId: 'user-b', mutedSpaceIds: [], notificationsLoaded: false, notificationsSaving: false,
     });
+    expect(useSpacesStore.getState().phoneCategoriesBySpace).toEqual({});
   });
 
   it('keeps the previous choices if a refresh fails', async () => {

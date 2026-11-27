@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Loader2, Moon, RefreshCw } from 'lucide-react';
-import type { Workbench, WorkbenchChat } from '@talyn/shared';
+import type { SendWorkbenchMessageInput, Workbench, WorkbenchChat, WorkbenchCreation } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { chatInsights } from '../../lib/workbenchFormat';
@@ -28,10 +28,11 @@ import { sessionPr } from '../../lib/sessionState';
 import { ImageDropOverlay, useImageDropZone } from './useComposerImages';
 
 /** The header spans the chat and right panel. Threads use WorkPanel on the right. */
-export function WorkbenchView({ workbench }: { workbench: Workbench }) {
-  useWorkbenchBackgroundLoad(workbench.id);
+export function WorkbenchView({ workbench, creation }: { workbench: Workbench; creation?: WorkbenchCreation }) {
+  useWorkbenchBackgroundLoad(creation ? null : workbench.id);
   const ops = useWorkbenchOps(workbench);
-  const chat = useSelectedChat(workbench.id);
+  const selectedChat = useSelectedChat(workbench.id);
+  const chat = creation?.chat ?? selectedChat;
   const pr = useWorkbenchPr(workbench);
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
   const prDetailId = useWorkbenchStore((s) => s.prDetailId);
@@ -48,22 +49,22 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   // A fresh read on open: the list may be minutes old, and it carries the chats when the backend embeds them.
   // Opening never wakes the sandbox: only a prompt or a person's action does (the composer, the terminal, a refresh).
   useEffect(() => {
-    void loadWorkbench(workbench.id);
-  }, [workbench.id]);
+    if (!creation) void loadWorkbench(workbench.id);
+  }, [workbench.id, creation]);
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-attr="workbench-view">
-      <WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={ops} />
+      <WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={ops} creating={Boolean(creation)} />
       <div className="flex min-h-0 min-w-0 flex-1" data-attr="workbench-columns">
         <div className="flex min-w-0 flex-1 flex-col">
           <StatusBanner workbench={workbench} ops={ops} />
-          <ChatView workbench={workbench} chat={chat} ops={ops} />
+          <ChatView workbench={workbench} chat={chat} ops={ops} firstMessage={creation?.message} />
         </div>
         {rightPanelOpen &&
           (isThread(workbench) ? (
-            <WorkPanel thread={workbench} />
+            <WorkPanel thread={workbench} creating={Boolean(creation)} />
           ) : (
-            <GitPanel workbench={workbench} chat={chat} ops={ops} pr={pr} />
+            <GitPanel workbench={workbench} chat={chat} ops={ops} pr={pr} creating={Boolean(creation)} />
           ))}
       </div>
       <PRDetailSheet
@@ -84,32 +85,34 @@ export function ChatView({
   chat,
   ops,
   autoFocus = true,
+  firstMessage,
 }: {
   workbench: Workbench;
   chat: WorkbenchChat | null;
   ops: WorkbenchOps;
   /** Passed to the composer: only one composer on screen should take focus. */
   autoFocus?: boolean;
+  firstMessage?: SendWorkbenchMessageInput;
 }) {
   const state = useWorkbenchStore((s) => (chat ? s.chatEvents[chat.id] : undefined)) ?? emptyChatEvents;
   const markRead = useWorkbenchStore((s) => s.markRead);
 
   useEffect(() => {
-    if (chat) void ensureChatHistory(chat.id);
-  }, [chat?.id]);
+    if (chat && !firstMessage) void ensureChatHistory(chat.id);
+  }, [chat?.id, firstMessage]);
 
   // Looking at a chat reads it; so does coming back to the window while it is open.
   useEffect(() => {
-    if (!chat) return undefined;
+    if (!chat || firstMessage) return undefined;
     markRead(chat.id);
     const onFocus = () => markRead(chat.id);
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, [chat?.id, chat?.status, markRead]);
+  }, [chat?.id, chat?.status, firstMessage, markRead]);
 
   const insights = useMemo(() => chatInsights(state.events), [state.events]);
   const queued = chat?.queuedMessages?.length ?? 0;
-  const startingHint = isStarting(workbench) ? <StartingHint workbench={workbench} queued={queued} /> : undefined;
+  const startingHint = !firstMessage && isStarting(workbench) ? <StartingHint workbench={workbench} queued={queued} /> : undefined;
   // The whole chat column takes image drops, not only the composer strip.
   const attachRef = useRef<((files: File[]) => void) | null>(null);
   const { dragging, dropProps } = useImageDropZone((files) => attachRef.current?.(files));
@@ -121,7 +124,7 @@ export function ChatView({
   const openTab = useCallback((toolId: string) => { if (chatId) openSubagentTab(chatId, toolId); }, [chatId, openSubagentTab]);
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col" data-attr="workbench-chat-drop-zone" {...dropProps}>
+    <div className="relative flex min-h-0 flex-1 flex-col" data-attr="workbench-chat-drop-zone" {...(firstMessage ? {} : dropProps)}>
       <ImageDropOverlay dragging={dragging} />
       {chat && subagents.tabs.length > 0 && <SubagentTabBar chatId={chat.id} tabs={subagents.tabs} current={subagents.current} />}
       <div className="min-h-0 flex-1">
@@ -130,7 +133,8 @@ export function ChatView({
         ) : chat ? (
           <SubagentTabOpener.Provider value={openTab}>
             <WorkbenchTranscript
-              workbench={workbench}
+              workbench={firstMessage ? undefined : workbench}
+              firstMessage={firstMessage}
               chat={chat}
               events={state.events}
               loading={state.loading}
@@ -160,7 +164,8 @@ export function ChatView({
         contextUsage={insights.contextUsage}
         slashCommands={insights.slashCommands}
         attachRef={attachRef}
-        autoFocus={autoFocus}
+        autoFocus={autoFocus && !firstMessage}
+        creating={Boolean(firstMessage)}
       />
     </div>
   );
@@ -224,6 +229,7 @@ export function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Wo
     return (
       <Banner
         tone="muted"
+        status
         icon={<Loader2 className="h-3.5 w-3.5 animate-spin" />}
         text={
           (workbench.sandboxState === 'lost'
@@ -257,14 +263,17 @@ function Banner({
   icon,
   text,
   action,
+  status,
 }: {
   tone: 'muted' | 'error';
   icon: React.ReactNode;
   text: string;
   action?: React.ReactNode;
+  status?: boolean;
 }) {
   return (
     <div
+      role={status ? 'status' : undefined}
       className={
         tone === 'error'
           ? 'flex items-center gap-2 border-b bg-destructive/10 px-3 py-1.5 text-xs text-destructive'

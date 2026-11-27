@@ -8,6 +8,7 @@ import { FakeFleet, claudeTurnLines, isAgentTurn } from '../helpers/fakeFleet.js
 import {
   repositories,
   spaceNotificationMutes,
+  spacePhoneNotificationPreferences,
   spaceRepositories,
   spaces,
   tasks,
@@ -217,7 +218,10 @@ describe('space routes', () => {
   it.each([
     ['GET', '/teams'],
     ['GET', '/space-notifications'],
+    ['DELETE', '/space-notifications/unlisted?scope=all'],
     ['PUT', '/spaces/space-1/notifications'],
+    ['PUT', '/spaces/space-1/notifications/phone'],
+    ['PATCH', '/spaces/space-1/notifications/phone'],
     ['GET', '/spaces/space-1/sessions'],
     ['POST', '/teams/team-1/spaces'],
     ['PUT', '/workbenches/wb-x/space'],
@@ -232,6 +236,100 @@ describe('space routes', () => {
   });
 
   describe('personal space notifications', () => {
+    it.each(['phone', 'mutes', 'all'] as const)('resets unlisted %s without changing active spaces or teammates', async (scope) => {
+      await testDb.db.insert(teams).values({ id: 'team-3', name: 'Rejoined' });
+      await testDb.db.insert(teamMembers).values({
+        id: 'm-ben-invite', teamId: 'team-3', githubUserId: 200, githubLogin: 'ben', role: 'member',
+      });
+      await testDb.db.insert(spaces).values({ id: 'space-rejoined', teamId: 'team-3', name: 'Rejoined' });
+      const active = ['space-1', 'space-rejoined'];
+      const unlisted = ['space-2', 'space-old'];
+      const ben = [...active, ...unlisted].map((spaceId) => ({ userId: BEN, spaceId }));
+      const ana = { userId: ANA, spaceId: 'space-old' };
+      const categories = { ci_failure: true };
+      await testDb.db.insert(spaceNotificationMutes).values([...ben, ana]);
+      await testDb.db.insert(spacePhoneNotificationPreferences).values([...ben, ana].map((row) => ({ ...row, categories })));
+
+      const result = await call('DELETE', `/space-notifications/unlisted?scope=${scope}`, BEN);
+
+      expect(result.status).toBe(200);
+      expect(result.body.data).toEqual({
+        mutedSpaceIds: (scope === 'phone' ? [...active, ...unlisted] : active).sort(),
+        phoneCategoriesBySpace: Object.fromEntries((scope === 'mutes' ? [...active, ...unlisted] : active)
+          .map((id) => [id, categories])),
+      });
+      expect((await call('GET', '/space-notifications', ANA)).body.data).toEqual({
+        mutedSpaceIds: ['space-old'], phoneCategoriesBySpace: { 'space-old': categories },
+      });
+    });
+
+    it('requires an explicit valid scope before resetting unlisted settings', async () => {
+      await testDb.db.insert(spaceNotificationMutes).values({ userId: BEN, spaceId: 'space-old' });
+      for (const query of ['', '?scope=everything', '?scope=mutes&scope=phone']) {
+        expect((await call('DELETE', `/space-notifications/unlisted${query}`, BEN)).status).toBe(400);
+      }
+      expect((await call('GET', '/space-notifications', BEN)).body.data).toEqual({ mutedSpaceIds: ['space-old'] });
+    });
+
+    it('keeps concurrent edits to different phone alert types', async () => {
+      const path = '/spaces/space-1/notifications/phone';
+      const updates = await Promise.all([
+        call('PATCH', path, BEN, { category: 'ci_failure', value: true }),
+        call('PATCH', path, BEN, { category: 'session_update', value: false }),
+      ]);
+      expect(updates.map((response) => response.status)).toEqual([200, 200]);
+      expect((await call('GET', '/space-notifications', BEN)).body.data).toEqual({
+        mutedSpaceIds: [], phoneCategoriesBySpace: { 'space-1': { ci_failure: true, session_update: false } },
+      });
+
+      const simultaneous = await Promise.all([
+        call('PATCH', path, BEN, { category: 'ci_failure', value: null }),
+        call('PATCH', path, BEN, { category: 'pr_review', value: true }),
+      ]);
+      expect(simultaneous.map((response) => response.status)).toEqual([200, 200]);
+      expect((await call('GET', '/space-notifications', BEN)).body.data).toEqual({
+        mutedSpaceIds: [], phoneCategoriesBySpace: { 'space-1': { session_update: false, pr_review: true } },
+      });
+      expect((await call('PATCH', path, CY, { category: 'pr_review', value: false })).status).toBe(404);
+      expect((await call('PATCH', path, BEN, { category: 'pr_review', value: 'true' })).status).toBe(400);
+
+      await call('PATCH', path, BEN, { category: 'pr_review', value: null });
+      const reset = await call('PATCH', path, BEN, { category: 'session_update', value: null });
+      expect(reset.status).toBe(200);
+      expect(reset.body.data).toEqual({ mutedSpaceIds: [] });
+    });
+
+    it('keeps phone notification choices private and resets them independently of mutes', async () => {
+      const path = '/spaces/space-1/notifications/phone';
+      const categories = { ci_failure: true, session_update: false };
+      await call('PUT', '/spaces/space-1/notifications', BEN, { muted: true });
+      const saved = await call('PUT', path, BEN, { categories });
+      expect(saved.status).toBe(200);
+      expect(saved.body.data).toEqual({ mutedSpaceIds: ['space-1'], phoneCategoriesBySpace: { 'space-1': categories } });
+      expect((await call('GET', '/space-notifications', BEN)).body.data).toEqual(saved.body.data);
+      expect((await call('GET', '/space-notifications', ANA)).body.data).toEqual({ mutedSpaceIds: [] });
+      expect((await call('PUT', path, CY, { categories })).status).toBe(404);
+      const replaced = await call('PUT', path, BEN, { categories: { ci_failure: false } });
+      expect(replaced.body.data).toEqual({ mutedSpaceIds: ['space-1'], phoneCategoriesBySpace: { 'space-1': { ci_failure: false } } });
+
+      await call('PUT', path, ANA, { categories: { pr_review: false } });
+      await testDb.db.delete(teamMembers).where(eq(teamMembers.userId, BEN));
+      expect((await call('PUT', path, BEN, { categories: { ci_failure: false } })).status).toBe(404);
+      const reset = await call('PUT', path, BEN, { categories: {} });
+      expect(reset.status).toBe(200);
+      expect(reset.body.data).toEqual({ mutedSpaceIds: ['space-1'] });
+      expect((await call('GET', '/space-notifications', ANA)).body.data).toEqual({
+        mutedSpaceIds: [], phoneCategoriesBySpace: { 'space-1': { pr_review: false } },
+      });
+    });
+
+    it.each([[undefined], [null], [[]], [{ unknown_event: true }], [{ ci_failure: 'true' }]])(
+      'rejects an invalid phone notification choice: %j', async (categories) => {
+        expect((await call('PUT', '/spaces/space-1/notifications/phone', BEN, { categories })).status).toBe(400);
+        expect((await call('GET', '/space-notifications', BEN)).body.data).toEqual({ mutedSpaceIds: [] });
+      },
+    );
+
     it('lets members mute a space without changing a teammate preference', async () => {
       expect((await call('GET', '/space-notifications', BEN)).body.data).toEqual({ mutedSpaceIds: [] });
       for (let attempt = 0; attempt < 2; attempt++) {

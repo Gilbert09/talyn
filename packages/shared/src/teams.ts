@@ -1,5 +1,6 @@
 import type { Workbench, WorkbenchAgent, WorkbenchKind, WorkbenchSandboxState, WorkbenchStatus } from './workbench.js';
 import type { TaskStatus, TaskType } from './index.js';
+import type { MobileNotificationCategory } from './mobileNotifications.js';
 
 /**
  * Teams and Spaces: the contract of `/api/v1/teams` and `/api/v1/spaces`.
@@ -254,7 +255,14 @@ export interface MoveToSpaceRequest {
  */
 export interface SpaceNotificationPreferences {
   mutedSpaceIds: string[];
+  phoneCategoriesBySpace?: Record<string, SpacePhoneNotificationCategories>;
 }
+
+/** A missing category uses the workspace default. */
+export type SpacePhoneNotificationCategories = Partial<Record<MobileNotificationCategory, boolean>>;
+
+export const SPACE_NOTIFICATION_RESET_SCOPES = ['mutes', 'phone', 'all'] as const;
+export type SpaceNotificationResetScope = typeof SPACE_NOTIFICATION_RESET_SCOPES[number];
 
 export interface SetSpaceNotificationsRequest {
   muted: boolean;

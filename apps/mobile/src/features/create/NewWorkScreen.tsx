@@ -34,7 +34,7 @@ import { activePullRequest, agentForModel, blockedReason, branchSuggestions, chi
   pullRequestChoices, pullRequestSource, rememberRepository, sandboxChoice, sendState, usableAgent, type ChipState, type ComposerChip, type NewWorkForm,
   type NewWorkMode, type NewWorkPullRequest } from './model';
 import { composerLayout } from './recent';
-import { PendingSessionView } from './PendingSessionView';
+import { beginCreation } from './creation';
 import { RecentWork } from './RecentWork';
 import { addsRepositoryNote, spaceBlockedReason, spaceCreateBody, spacePlaceholder, spacePullRequestRows, spaceRepositories } from './space';
 import { useInlineImages } from './useInlineImages';
@@ -123,6 +123,7 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   const [pullRequest, setPullRequest] = useState<NewWorkPullRequest | null>(null);
   const [internetAccess, setInternetAccess] = useState(true);
   const [busy, setBusy] = useState(false);
+  const starting = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
   const [sheet, setSheet] = useState<SheetKind | null>(null);
@@ -199,14 +200,18 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   const addsNote = inSpace && home ? addsRepositoryNote(mode, repository?.fullName, settingsSource) : null;
 
   const start = async () => {
-    if (!send.enabled) return;
+    if (!send.enabled || starting.current || !workspaceId) return;
+    const withImages = attached.length > 0;
+    const input = createInput(form, workspaceId, withImages);
+    starting.current = true;
     setBusy(true); setError(null);
+    const creation = beginCreation(workflow.getScope(), {
+      ...input, repoFullName: repository?.fullName, spaceId: inSpace?.space.id,
+      message: { text: form.prompt.trim(), attachments: attached.map(({ name, mimeType }) => ({ name, mimeType })) },
+    }, presentation === 'route');
+    Keyboard.dismiss();
+    router.push(mode === 'thread' ? threadRoute(creation.id) : sessionRoute(creation.id));
     try {
-      const open = (id: string) => {
-        const href = mode === 'thread' ? threadRoute(id) : sessionRoute(id);
-        if (presentation === 'route') router.replace(href); else router.push(href);
-      };
-      const withImages = attached.length > 0;
       if (inSpace) {
         const created = await spaces.createSession(inSpace.space.id, spaceCreateBody(form, withImages));
         trackCreated(created.workbench, form, withImages);
@@ -214,7 +219,7 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
         // With a chat to take the images, the session opens at once and the first message goes after, like web.
         if (withImages && created.workspaceId === workspaceId && created.workbench.chats?.[0]?.id) {
           workflow.updateLocal(draftKey, { draft: '' }); images.clear(); setBaseBranch(''); setPullRequest(null);
-          workflow.applyWorkbench(created.workbench); open(created.workbench.id); setBusy(false);
+          workflow.applyWorkbench(created.workbench); creation.finish(created.workbench); setBusy(false);
           await sendFirstMessage(created.workbench, form, attached);
           return;
         }
@@ -223,20 +228,20 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
         setBaseBranch('');
         setPullRequest(null);
         // The detail screens read the selected workspace, so a session in another of mine switches to it first.
-        if (created.workspaceId === workspaceId) { workflow.applyWorkbench(created.workbench); open(created.workbench.id); }
+        if (created.workspaceId === workspaceId) { workflow.applyWorkbench(created.workbench); creation.finish(created.workbench); }
         else {
           await workspaces.select(created.workspaceId);
-          if (workspaces.getSnapshot().selected === created.workspaceId) open(created.workbench.id);
+          if (workspaces.getSnapshot().selected === created.workspaceId) creation.finish(created.workbench);
           else toast.show(mode === 'thread' ? 'Thread started.' : 'Session started.');
         }
         return;
       }
-      const item = await workflow.createWorkbench(createInput(form, workspaceId, withImages));
+      const item = await workflow.createWorkbench(input);
       trackCreated(item, form, withImages);
       if (mode === 'session' && repository) rememberRepository(repoKey, repository.id);
       if (withImages && item.chats?.[0]?.id) {
         workflow.updateLocal(draftKey, { draft: '' }); images.clear(); setBaseBranch(''); setPullRequest(null);
-        open(item.id); setBusy(false);
+        creation.finish(item); setBusy(false);
         await sendFirstMessage(item, form, attached);
         return;
       }
@@ -245,12 +250,16 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
       if (!kept) { workflow.updateLocal(draftKey, { draft: '' }); images.clear(); }
       setBaseBranch('');
       setPullRequest(null);
-      open(item.id);
+      creation.finish(item);
     } catch (failure) {
       const refusal = boxRefusal(failure);
       if (refusal) showBoxRefusal(refusal, mode === 'thread' ? 'thread_create' : 'session_create');
       setError(refusal?.message ?? errorMessage(failure, mode === 'thread' ? 'Could not create the thread.' : 'Could not create the session.'));
-    } finally { setBusy(false); }
+    } finally {
+      creation.finish(null);
+      starting.current = false;
+      setBusy(false);
+    }
   };
 
   /**
@@ -307,10 +316,6 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   if (features === null || place.context.kind === 'pending') return <ScreenContainer topInset={presentation === 'home'}><View style={styles.center}><Spinner /></View></ScreenContainer>;
   if (!offered) return <ScreenContainer topInset={presentation === 'home'}>
     <EmptyState title="Sessions are not available on this account." />
-  </ScreenContainer>;
-
-  if (busy) return <ScreenContainer topInset={presentation === 'home'}>
-    <PendingSessionView mode={mode} repository={repository?.fullName} branch={startFrom ? null : baseBranch.trim()} prompt={prompt} images={attached.length} />
   </ScreenContainer>;
 
   const noRepositories = mode === 'session' && reposStatus === 'ready' && !repos.length;

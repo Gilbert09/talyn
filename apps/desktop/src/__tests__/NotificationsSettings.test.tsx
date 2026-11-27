@@ -12,6 +12,8 @@ import { useSpacesStore } from '../renderer/stores/spaces';
 
 const mockSpaceGet = jest.fn();
 const mockSpaceSave = jest.fn();
+const mockSpaceCategory = jest.fn();
+const mockSpaceReset = jest.fn();
 const mockGet = jest.fn();
 const mockUpdate = jest.fn();
 const mockWriteDefaults = jest.fn();
@@ -28,6 +30,8 @@ jest.mock('../renderer/lib/api', () => ({
     spaces: {
       notificationPreferences: (...a: unknown[]) => mockSpaceGet(...a),
       setNotificationsMuted: (...a: unknown[]) => mockSpaceSave(...a),
+      setPhoneNotificationCategory: (...a: unknown[]) => mockSpaceCategory(...a),
+      resetUnlistedNotifications: (...a: unknown[]) => mockSpaceReset(...a),
     },
     mobileNotifications: {
       getPreferences: (...a: unknown[]) => mockGet(...a),
@@ -65,8 +69,10 @@ beforeEach(() => {
   jest.useRealTimers();
   mockSpaceGet.mockReset().mockResolvedValue({ mutedSpaceIds: [] });
   mockSpaceSave.mockReset().mockResolvedValue({ mutedSpaceIds: ['automations'] });
+  mockSpaceCategory.mockReset();
+  mockSpaceReset.mockReset();
   mockState.spaces = false;
-  useSpacesStore.setState({ teams: null, mutedSpaceIds: [], notificationsLoaded: false, notificationsError: null, notificationsSaving: false });
+  useSpacesStore.setState({ teams: null, mutedSpaceIds: [], phoneCategoriesBySpace: {}, notificationsLoaded: false, notificationsError: null, notificationsSaving: false });
   mockGet.mockReset();
   mockUpdate.mockReset();
   mockWriteDefaults.mockReset();
@@ -232,6 +238,55 @@ describe('NotificationsSettings: team spaces', () => {
     expect(mockSpaceSave).toHaveBeenCalledWith('automations', false);
   });
 
+  it.each([
+    ['on', true], ['off', false], ['default', null],
+  ] as const)('saves %s for one space phone alert type', async (choice, value) => {
+    const initial = value === false;
+    mockSpaceGet.mockResolvedValue({
+      mutedSpaceIds: [],
+      phoneCategoriesBySpace: { automations: { ci_failure: initial, human_gate: true } },
+    });
+    mockSpaceCategory.mockResolvedValue({
+      mutedSpaceIds: [],
+      phoneCategoriesBySpace: { automations: { ...(value === null ? {} : { ci_failure: value }), human_gate: true } },
+    });
+    await renderLoaded();
+    fireEvent.click(screen.getByLabelText('Automations phone alert types'));
+    const ci = screen.getByRole('combobox', { name: 'Automations CI failures' });
+    expect(ci).toHaveValue(initial ? 'on' : 'off');
+    fireEvent.change(ci, { target: { value: choice } });
+    await waitFor(() => expect(ci).toHaveValue(choice));
+    expect(mockSpaceCategory).toHaveBeenCalledWith('automations', 'ci_failure', value);
+    expect(screen.getByRole('combobox', { name: 'Automations Human input' })).toHaveValue('on');
+    expect(mockSpaceSave).not.toHaveBeenCalled();
+  });
+
+  it('shows phone choices without enabling edits for a muted space', async () => {
+    mockSpaceGet.mockResolvedValue({
+      mutedSpaceIds: ['automations'], phoneCategoriesBySpace: { automations: { human_gate: true } },
+    });
+    await renderLoaded();
+    fireEvent.click(screen.getByLabelText('Automations phone alert types'));
+    const choice = screen.getByRole('combobox', { name: 'Automations Human input' });
+    expect(choice).toHaveValue('on');
+    expect(choice).toBeDisabled();
+  });
+
+  it('resets phone choices for unlisted spaces in one request and keeps their mutes', async () => {
+    useSpacesStore.setState({ teams: [] });
+    mockSpaceGet.mockResolvedValue({
+      mutedSpaceIds: ['old-a'],
+      phoneCategoriesBySpace: { 'old-a': { ci_failure: true }, 'old-b': { human_gate: false } },
+    });
+    mockSpaceReset.mockResolvedValue({ mutedSpaceIds: ['old-a'] });
+    await renderLoaded();
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset phone alert types' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reset phone alert types' })).toBeNull());
+    expect(mockSpaceReset.mock.calls).toEqual([['phone']]);
+    expect(mockSpaceSave).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Restore alerts' })).toBeVisible();
+  });
+
   it('restores the previous preference when a save fails', async () => {
     mockSpaceSave.mockRejectedValue(new Error('offline'));
     await renderLoaded();
@@ -267,44 +322,53 @@ describe('NotificationsSettings: team spaces', () => {
     expect(checkbox('^Automations$')).not.toBeChecked();
   });
 
-  it.each([true, false])('restores missing muted spaces with live spaces: %s', async (hasLiveSpaces) => {
+  it.each([true, false])('restores multiple unlisted spaces in one request with live spaces: %s', async (hasLiveSpaces) => {
     if (!hasLiveSpaces) useSpacesStore.setState({ teams: [] });
     mockSpaceGet.mockResolvedValue({ mutedSpaceIds: ['old-a', 'old-b'] });
-    mockSpaceSave.mockResolvedValueOnce({ mutedSpaceIds: ['old-b'] }).mockResolvedValueOnce({ mutedSpaceIds: [] });
+    mockSpaceReset.mockResolvedValue({ mutedSpaceIds: [] });
     await renderLoaded();
     const restore = await screen.findByRole('button', { name: 'Restore alerts' });
     expect(screen.getByText('2 other muted spaces')).toBeInTheDocument();
     fireEvent.click(restore);
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore alerts' })).toBeNull());
-    expect(mockSpaceSave).toHaveBeenNthCalledWith(1, 'old-a', false);
-    expect(mockSpaceSave).toHaveBeenNthCalledWith(2, 'old-b', false);
+    expect(mockSpaceReset.mock.calls).toEqual([['mutes']]);
+    expect(mockSpaceSave).not.toHaveBeenCalled();
     if (hasLiveSpaces) expect(checkbox('^Automations$')).toBeChecked();
   });
 
-  it('keeps the remaining mute after a partial restore fails', async () => {
-    mockSpaceGet.mockResolvedValue({ mutedSpaceIds: ['old-a', 'old-b'] });
-    mockSpaceSave.mockResolvedValueOnce({ mutedSpaceIds: ['old-b'] }).mockRejectedValueOnce(new Error('offline'));
+  it.each([
+    ['mutes', 'Restore alerts'], ['phone', 'Reset phone alert types'],
+  ])('keeps existing preferences and lets the user retry when the %s reset fails', async (scope, label) => {
+    const phoneCategoriesBySpace = { 'old-a': { ci_failure: true }, 'old-b': { human_gate: false } };
+    mockSpaceGet.mockResolvedValue({ mutedSpaceIds: ['old-a', 'old-b'], phoneCategoriesBySpace });
+    mockSpaceReset.mockRejectedValueOnce(new Error('offline'));
     await renderLoaded();
-    fireEvent.click(await screen.findByRole('button', { name: 'Restore alerts' }));
-    await waitFor(() => expect(mockSpaceSave).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Restore alerts' })).not.toBeDisabled());
-    expect(screen.getByText('1 other muted space')).toBeInTheDocument();
-    expect(useSpacesStore.getState().mutedSpaceIds).toEqual(['old-b']);
-    mockSpaceSave.mockResolvedValueOnce({ mutedSpaceIds: [] });
-    fireEvent.click(screen.getByRole('button', { name: 'Restore alerts' }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore alerts' })).toBeNull());
+    fireEvent.click(await screen.findByRole('button', { name: label }));
+    await waitFor(() => expect(mockSpaceReset.mock.calls).toEqual([[scope]]));
+    await waitFor(() => expect(screen.getByRole('button', { name: label })).not.toBeDisabled());
+    expect(screen.getByText('2 other muted spaces')).toBeInTheDocument();
+    expect(useSpacesStore.getState()).toMatchObject({ mutedSpaceIds: ['old-a', 'old-b'], phoneCategoriesBySpace });
+
+    mockSpaceReset.mockResolvedValueOnce(scope === 'phone'
+      ? { mutedSpaceIds: ['old-a', 'old-b'] }
+      : { mutedSpaceIds: [], phoneCategoriesBySpace });
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: label })).toBeNull());
   });
 
   it('blocks other edits while missing spaces are being restored', async () => {
-    mockSpaceGet.mockResolvedValue({ mutedSpaceIds: ['old-a', 'old-b'] });
+    mockSpaceGet.mockResolvedValue({
+      mutedSpaceIds: ['old-a', 'old-b'],
+      phoneCategoriesBySpace: { 'old-a': { ci_failure: true } },
+    });
     let finish!: (value: { mutedSpaceIds: string[] }) => void;
-    mockSpaceSave.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }))
-      .mockResolvedValueOnce({ mutedSpaceIds: [] });
+    mockSpaceReset.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
     await renderLoaded();
     fireEvent.click(await screen.findByRole('button', { name: 'Restore alerts' }));
     expect(checkbox('^Automations$')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Restore alerts' })).toBeDisabled();
-    await act(async () => finish({ mutedSpaceIds: ['old-b'] }));
+    expect(screen.getByRole('button', { name: 'Reset phone alert types' })).toBeDisabled();
+    await act(async () => finish({ mutedSpaceIds: [] }));
     await waitFor(() => expect(checkbox('^Automations$')).not.toBeDisabled());
   });
 

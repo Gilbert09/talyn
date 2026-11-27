@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import { loadBackground } from '../stores/sessionBackground';
 import { useOnReconnect } from './useOnReconnect';
 
-export function useWorkbenchBackgroundLoad(workbenchId: string): void {
+export function useWorkbenchBackgroundLoad(workbenchId: string | null): void {
   useEffect(() => {
-    void loadBackground(workbenchId);
+    if (workbenchId) void loadBackground(workbenchId);
   }, [workbenchId]);
   useOnReconnect(() => {
-    void loadBackground(workbenchId);
+    if (workbenchId) void loadBackground(workbenchId);
   });
 }
 

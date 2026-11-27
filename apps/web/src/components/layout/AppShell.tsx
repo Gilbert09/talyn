@@ -13,6 +13,7 @@ import { WhatsNewModal } from '../modals/WhatsNewModal';
 import { CodeReviewIntroModal } from '../modals/CodeReviewIntroModal';
 import { AddRepositoryModal } from '../modals/AddRepositoryModal';
 import { HomePage } from '../../pages/HomePage';
+import { WorkbenchPage } from '../../pages/WorkbenchPage';
 import { HistoryView } from '../../pages/HistoryView';
 import { PullRequestsView } from '../../pages/PullRequestsView';
 import { IntegrationsView } from '../../pages/IntegrationsView';
@@ -23,10 +24,10 @@ import { usePullRequestSync } from '../../hooks/usePullRequestSync';
 import { useWhatsNew } from '../../hooks/useWhatsNew';
 import { useDeferredRuns } from '../../hooks/useDeferredRuns';
 import { useBillingLive } from '../../hooks/useBillingLive';
-import { useWorkspaceStore } from '../../stores/workspace';
+import { contextsEqual, useWorkspaceStore } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
 import { useWorkbenchStore } from '../../stores/workbenches';
-import { useNavigationStore } from '../../stores/navigation';
+import { useNavigationStore, type Route } from '../../stores/navigation';
 import { lazyWithReload } from '../../lib/lazyWithReload';
 import { useActiveSpace, loadExtraWorkbench, spacesOffered } from '../../lib/spaces';
 import { useFollowSessionContext, useSpaceLive, useSpacesBoot } from '../../hooks/useSpaces';
@@ -101,7 +102,8 @@ export function AppShell() {
 export function RoutedView() {
   const route = useNavigationStore((s) => s.route);
   const features = useWorkspaceStore((s) => s.features);
-  const space = useActiveSpace();
+  const context = useWorkspaceStore((s) => s.currentContext);
+  const request = useNavigationStore((s) => s.creation);
   const offered = workbenchesOffered(features);
   if (
     (route.view === 'workbench' ||
@@ -110,6 +112,22 @@ export function RoutedView() {
     !offered
   )
     return null;
+  const creation = offered && request?.from === route && contextsEqual(request.context, context) ? request.view : undefined;
+
+  return <>
+    {creation || route.view === 'workbench' ? (
+      <WorkbenchPage id={route.view === 'workbench' ? route.id : undefined} creation={creation} />
+    ) : null}
+    {/* Keep the draft in the composer so it is ready to edit if creation fails. */}
+    {route.view !== 'workbench' ? (
+      <div className="h-full" hidden={Boolean(creation)}><RouteContent route={route} /></div>
+    ) : null}
+  </>;
+}
+
+function RouteContent({ route }: { route: Exclude<Route, { view: 'workbench' }> }) {
+  const features = useWorkspaceStore((s) => s.features);
+  const space = useActiveSpace();
   // A space shows its own feed where Personal shows pages that belong only to Personal.
   if (space && (route.view === 'home' || route.view === 'prs' || route.view === 'integrations' || route.view === 'mcp_servers' || route.view === 'insights')) {
     return <SpaceHomePage active={space} />;
@@ -117,8 +135,6 @@ export function RoutedView() {
   switch (route.view) {
     case 'home':
       return <HomePage />;
-    case 'workbench':
-      return <WorkbenchPage id={route.id} />;
     case 'history':
       return <HistoryView />;
     case 'split':
@@ -168,8 +184,6 @@ function useWorkbenchList(): void {
 }
 
 const CommandPalette = lazyWithReload(() => import('../CommandPalette').then((m) => ({ default: m.CommandPalette })));
-
-const WorkbenchPage = lazyWithReload(() => import('../../pages/WorkbenchPage').then((m) => ({ default: m.WorkbenchPage })));
 
 const SplitView = lazyWithReload(() => import('../workbench/SplitView').then((m) => ({ default: m.SplitView })));
 
