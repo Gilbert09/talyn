@@ -49,6 +49,24 @@ describe('summarise', () => {
       [{ severity: 'major' }],
       { recall: 0.25, highRecall: 0, visibleRecall: 0.25, matched: ['G2'] },
     ],
+    [
+      'one finding claimed by two golden issues counts once, for the first',
+      '{"matches":{"G1":["F1"],"G2":["F1"]}}',
+      [{ severity: 'major' }],
+      { recall: 0.25, highRecall: 0.5, visibleRecall: 0.25, matched: ['G1'], missed: ['G2', 'G3', 'G4'] },
+    ],
+    [
+      'a shared finding does not hide an issue that has its own',
+      '{"matches":{"G1":["F1"],"G2":["F1","F2"]}}',
+      [{ severity: 'major' }, { severity: 'nit' }],
+      { recall: 0.5, visibleRecall: 0.25, matched: ['G1', 'G2'] },
+    ],
+    [
+      'the same reference twice in one issue',
+      '{"matches":{"G3":["F1","F1"]}}',
+      [{ severity: 'minor' }],
+      { recall: 0.25, visibleRecall: 0.25, matched: ['G3'] },
+    ],
   ] as const)('%s', (_label, reply, findings, expected) => {
     expect(summarise(golden, reply, findings as never)).toMatchObject(expected);
   });

@@ -203,16 +203,32 @@ export interface Score {
 export function summarise(golden: GoldenCase, reply: string, findings: Pick<Candidate, 'severity'>[]): Score {
   const findingCount = findings.length;
   // A reference the scorer made up names no finding and counts for nothing.
-  const finding = (ref: string) => (/^F\d+$/.test(ref) ? findings[Number(ref.slice(1)) - 1] : undefined);
+  const indexOf = (ref: string) => {
+    const i = /^F\d+$/.test(ref) ? Number(ref.slice(1)) - 1 : -1;
+    return i >= 0 && i < findings.length ? i : -1;
+  };
   const visible = (ref: string) => {
-    const f = finding(ref);
-    return !!f && f.severity !== 'nit';
+    const i = indexOf(ref);
+    return i >= 0 && findings[i]!.severity !== 'nit';
   };
   const json = reply.slice(reply.indexOf('{'), reply.lastIndexOf('}') + 1);
   const parsed = JSON.parse(json) as { matches: Record<string, string[]>; extras?: Record<string, string> };
-  const matched = golden.issues.filter((g) => (parsed.matches[g.id] ?? []).some((ref) => !!finding(ref))).map((g) => g.id);
+  // A finding matches at most one golden issue: the first one in the golden list
+  // that names it. A later claim on the same finding counts for nothing.
+  const claimed = new Set<number>();
+  const refsOf = new Map<string, string[]>();
+  for (const g of golden.issues) {
+    const own = (parsed.matches[g.id] ?? []).filter((ref) => {
+      const i = indexOf(ref);
+      if (i < 0 || claimed.has(i)) return false;
+      claimed.add(i);
+      return true;
+    });
+    refsOf.set(g.id, own);
+  }
+  const matched = golden.issues.filter((g) => refsOf.get(g.id)!.length > 0).map((g) => g.id);
   const high = golden.issues.filter((g) => g.severity === 'high');
-  const visibleMatched = golden.issues.filter((g) => (parsed.matches[g.id] ?? []).some(visible));
+  const visibleMatched = golden.issues.filter((g) => refsOf.get(g.id)!.some(visible));
   return {
     visibleRecall: visibleMatched.length / golden.issues.length,
     visibleWrong: Object.entries(parsed.extras ?? {}).filter(([ref, v]) => v === 'wrong' && visible(ref)).length,
