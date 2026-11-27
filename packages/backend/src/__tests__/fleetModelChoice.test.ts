@@ -113,14 +113,18 @@ describe('fleet model choice', () => {
   });
 
   it.each([
-    ['claude-opus-5-5', 'codex', 'gpt-6-astra'],
+    ['claude-opus-5-5', 'codex', 'gpt-6.2-sol'],
     ['claude-opus-5', 'codex', 'gpt-6.2-sol'],
+    ['claude-opus-4-8', 'codex', 'gpt-6.2-sol'],
     ['claude-sonnet-5-5', 'codex', 'gpt-6.1-terra'],
     ['claude-sonnet-4-6', 'codex', 'gpt-6-luna'],
-    ['claude-fable-5-1', 'codex', 'gpt-6.2-sol'],
+    ['claude-fable-5-2', 'codex', 'gpt-6-astra'],
+    ['claude-fable-5-1', 'codex', 'gpt-6-astra'],
+    ['claude-fable-5', 'codex', 'gpt-6-astra'],
     ['gpt-6-astra', 'claude', 'claude-fable-5-2'],
-    ['gpt-6.2-sol', 'claude', 'claude-opus-5'],
-    ['gpt-6.1-sol', 'claude', 'claude-opus-5'],
+    ['gpt-6.2-sol', 'claude', 'claude-opus-5-5'],
+    ['gpt-6.1-sol', 'claude', 'claude-opus-5-5'],
+    ['gpt-5.6-sol', 'claude', 'claude-opus-5-5'],
     ['gpt-6.1-terra', 'claude', 'claude-sonnet-5-5'],
     ['gpt-6-luna', 'claude', 'claude-sonnet-4-6'],
   ] as const)('maps %s to the matching %s tier', (model, agent, expected) => {

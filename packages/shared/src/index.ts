@@ -398,10 +398,10 @@ export interface FleetModel {
  */
 export const BUNDLED_FLEET_MODELS = [
   { id: 'claude-fable-5-2', label: 'Fable 5.2', provider: 'anthropic', tier: 'flagship', blurb: 'Most capable — demanding reasoning.' },
-  { id: 'claude-opus-5-5', label: 'Opus 5.5', provider: 'anthropic', tier: 'flagship', blurb: 'Newest Opus.' },
+  { id: 'claude-opus-5-5', label: 'Opus 5.5', provider: 'anthropic', tier: 'strong', blurb: 'Newest Opus.' },
   { id: 'claude-opus-5', label: 'Opus 5', provider: 'anthropic', tier: 'strong', blurb: 'The previous Opus — 1M context.' },
-  { id: 'claude-fable-5-1', label: 'Fable 5.1', provider: 'anthropic', tier: 'strong', blurb: 'The previous Fable.' },
-  { id: 'claude-fable-5', label: 'Fable 5', provider: 'anthropic', tier: 'strong', blurb: 'An older Fable.' },
+  { id: 'claude-fable-5-1', label: 'Fable 5.1', provider: 'anthropic', tier: 'flagship', blurb: 'The previous Fable.' },
+  { id: 'claude-fable-5', label: 'Fable 5', provider: 'anthropic', tier: 'flagship', blurb: 'An older Fable.' },
   { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', provider: 'anthropic', tier: 'fast', blurb: 'Strong and fast — the default.' },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', provider: 'anthropic', tier: 'fast', blurb: 'The previous Sonnet.' },
   { id: 'claude-opus-4-8', label: 'Opus 4.8', provider: 'anthropic', tier: 'strong', blurb: 'The previous Opus flagship.' },

@@ -82,6 +82,27 @@ The panel on the right has four tabs:
 
 The terminal dock below has a **Run** tab for your run scripts and a **Terminal** tab with a shell in the sandbox. Press ⌘J on a Mac to show or hide it.
 
+## Switch agents in a session
+
+In the web or desktop composer, use **Agent** to switch between Claude and Codex.
+On mobile, open the session menu and select **Switch to Claude** or **Switch to Codex**.
+The sandbox must support both connected agents.
+A switch stops any running turn. The next agent receives a recap of the conversation.
+
+Talyn selects an equivalent model when you switch:
+
+| Claude model | Codex model |
+| --- | --- |
+| Opus 5.5 | GPT-6.2 Sol |
+| Fable 5.2 | GPT-6 Astra |
+| Sonnet 5.5 | GPT-6.1 Terra |
+| Sonnet 4.6 | GPT-6 Luna |
+
+These pairs work in both directions. Older Opus and Fable models also switch to Sol and Astra, respectively.
+The selected version comes from Talyn's current model list.
+If the chat has no model override, the switch uses the session model when both use the same agent.
+You can select another model after the switch.
+
 ## Subagents
 
 Claude subagents have a Subagent card in web, desktop and mobile. Codex does not have subagent cards yet.
