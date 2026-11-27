@@ -13,7 +13,8 @@ import {
   workbenchPreviewTickets,
   workspaces,
 } from '../db/schema.js';
-import { insertWorkbench, updateWorkbench } from '../services/workbenches/store.js';
+import { getWorkbench, insertWorkbench, updateWorkbench } from '../services/workbenches/store.js';
+import { claimScript, finishScript } from '../services/workbenches/scriptStore.js';
 import { setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
 import type { FleetClient } from '../services/selfHosted/client.js';
 import { resetFeatureFlagsForTests } from '../services/featureFlags.js';
@@ -173,6 +174,7 @@ describe('hosted preview links', () => {
   let port: number;
   let upstream: Upstream;
   let routes: Router;
+  const getSandbox = vi.fn();
   const proxyPort = vi.fn();
   const openPortWebSocket = vi.fn();
 
@@ -267,7 +269,7 @@ describe('hosted preview links', () => {
       queueMicrotask(() => upstream.emit('open'));
       return upstream as unknown as WebSocket;
     });
-    setWorkbenchFleetClientForTests(async () => ({ proxyPort, openPortWebSocket } as unknown as FleetClient));
+    setWorkbenchFleetClientForTests(async () => ({ getSandbox, proxyPort, openPortWebSocket } as unknown as FleetClient));
   });
 
   afterEach(() => {
@@ -280,6 +282,60 @@ describe('hosted preview links', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await testDb.cleanup();
     resetFeatureFlagsForTests();
+  });
+
+  describe('checking preview status', () => {
+    const status = (user = 'owner') => send('api.test', '/api/v1/workbenches/ready/preview-ports/5173/status?live=1', {
+      headers: { 'x-user': user, authorization: 'Bearer talyn-jwt' },
+    });
+
+    it.each([200, 302, 404])('recognizes app response %i without forwarding it', async (code) => {
+      proxyPort.mockResolvedValue(Response.json({ error: 'App response' }, {
+        status: code, headers: { location: 'https://example.test' },
+      }));
+      const response = await status();
+      expect(response.status).toBe(200);
+      expect(response.headers.location).toBeUndefined();
+      expect(JSON.parse(response.body).data).toEqual({ ready: true, running: false });
+      expect(proxyPort).toHaveBeenCalledWith('sb-ready', 5173, '', expect.objectContaining({ method: 'GET', headers: {} }));
+    });
+
+    it.each([[404, 'not_found'], [409, 'ports_unsupported'], [409, 'remote_resume_required'], [429, 'too_many_requests']])(
+      'recognizes Fleet response %i (%s) as unready', async (statusCode, error) => {
+        proxyPort.mockResolvedValue(Response.json({ error, message: 'Fleet error.' }, { status: statusCode }));
+        expect(JSON.parse((await status()).body).data).toEqual({ ready: false, running: false });
+      },
+    );
+
+    it('leaves a sleeping sandbox asleep on the first check', async () => {
+      await updateWorkbench('ready2', { sandboxState: 'running' });
+      getSandbox.mockResolvedValue({ sandbox: { status: 'suspended' } });
+      const response = await send('api.test', '/api/v1/workbenches/ready2/preview-ports/5173/status', {
+        headers: { 'x-user': 'owner' },
+      });
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body).data).toEqual({ ready: false, running: false });
+      expect(getSandbox).toHaveBeenCalledWith('sb-ready2');
+      expect(proxyPort).not.toHaveBeenCalled();
+    });
+
+    it('reports a running script while the port is closed', async () => {
+      proxyPort.mockResolvedValue(new Response(null, { status: 502 }));
+      const row = (await getWorkbench('ready'))!;
+      expect(JSON.parse((await status()).body).data).toEqual({ ready: false, running: false });
+      const lease = (await claimScript(row, 'run'))!;
+      try {
+        expect(JSON.parse((await status()).body).data).toEqual({ ready: false, running: true });
+      } finally {
+        await finishScript(lease, 1);
+      }
+      expect(JSON.parse((await status()).body).data).toEqual({ ready: false, running: false });
+    });
+
+    it('does not probe a session owned by another user', async () => {
+      expect((await status('other')).status).toBe(404);
+      expect(proxyPort).not.toHaveBeenCalled();
+    });
   });
 
   describe('minting a ticket', () => {

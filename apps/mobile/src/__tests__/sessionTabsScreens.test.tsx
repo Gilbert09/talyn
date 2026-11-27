@@ -1,14 +1,15 @@
-import type { Workbench, WorkbenchBackground } from '@talyn/shared';
+import { ApiError } from '@talyn/client/native';
+import type { RepositoryPreviewResponse, Workbench, WorkbenchBackground } from '@talyn/shared';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import * as Clipboard from 'expo-clipboard';
-import { Alert, Dimensions, Platform, StyleSheet } from 'react-native';
+import { Alert, Dimensions, Linking, Platform, StyleSheet } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
 import { HistoryScreen } from '../features/history/HistoryScreen';
 import { HeaderTitle, SessionStatusRow } from '../features/sessions/DetailHeader';
 import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
 import { palettes } from '../theme/tokens';
-import { chat, fixture, pr, review, session, thread } from './workflowFixtures';
+import { chat, fixture, pr, review, scope, session, thread } from './workflowFixtures';
 
 jest.setTimeout(15000);
 
@@ -79,6 +80,102 @@ async function openView(label: string) {
 }
 const withRow = (rowPatch: Parameters<typeof pr>[0]) => mockActive.api.pullRequests.get.mockResolvedValue({ row: pr(rowPatch), fresh: null });
 const summary = (summaryPatch: Partial<ReturnType<typeof pr>['summary']>) => ({ summary: { ...pr().summary, ...summaryPatch } });
+
+describe('hosted sandbox previews', () => {
+  const hostedUrl = 'https://sandbox-5173.preview.test/__talyn/auth?ticket=one-time';
+  const waiting = { ready: false, running: true };
+  const ready = { ready: true, running: false };
+
+  function enablePreview(settings: Partial<RepositoryPreviewResponse> = {}) {
+    mockActive.api.features.get.mockResolvedValue({ workbenches: true, previewLinks: true });
+    const get = jest.fn(async (): Promise<RepositoryPreviewResponse> => ({
+      target: 'sandbox', ports: [{ port: 5173, label: 'App' }, { port: 4000, label: 'API' }],
+      reasons: [], source: 'user', user: {}, detected: null, ...settings,
+    }));
+    Object.assign(mockActive.api.repositories, { preview: { get } });
+    const previewStatus = jest.fn(async () => ready);
+    const runScript = jest.fn(async () => undefined);
+    const previewLink = jest.fn(async () => ({ url: hostedUrl }));
+    Object.assign(mockActive.api.workbenches, { previewStatus, runScript, previewLink });
+    const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+    return { get, previewStatus, runScript, previewLink, openURL };
+  }
+
+  it('opens the selected port through a new hosted ticket if the port is already responding', async () => {
+    const { get, previewStatus, runScript, previewLink, openURL } = enablePreview();
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(get).toHaveBeenCalledWith('repo-one');
+    await openView('Preview');
+    expect(screen.getByRole('button', { name: 'API' })).toBeVisible();
+    await fireEvent.press(screen.getByRole('button', { name: 'App' }));
+    expect(previewStatus).toHaveBeenCalledWith('session-one', 5173);
+    expect(runScript).not.toHaveBeenCalled();
+    expect(previewLink).toHaveBeenCalledWith('session-one', 5173);
+    expect(openURL).toHaveBeenCalledWith(hostedUrl);
+  });
+
+  it.each([false, true])('waits for port 3000 after starting the run script (concurrent start %s)', async (concurrent) => {
+    const { previewStatus, runScript, previewLink, openURL } = enablePreview({ ports: [] });
+    previewStatus.mockResolvedValueOnce({ ready: false, running: false }).mockResolvedValueOnce(waiting);
+    if (concurrent) runScript.mockRejectedValueOnce(new ApiError('Script already running.', 409, 'script_running'));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await openView('Preview');
+    await fireEvent.press(screen.getByRole('button', { name: 'Port 3000' }));
+    expect(runScript).toHaveBeenCalledWith('session-one', 'run');
+    expect(screen.getByText('Waiting for the app to start…')).toBeVisible();
+    expect(previewLink).not.toHaveBeenCalled();
+    await waitFor(() => expect(previewLink).toHaveBeenCalledWith('session-one', 3000), { timeout: 3000 });
+    expect(openURL).toHaveBeenCalledWith(hostedUrl);
+  });
+
+  it('reports a stopped script without opening the browser', async () => {
+    const { previewStatus, previewLink, openURL } = enablePreview();
+    previewStatus.mockResolvedValue({ ready: false, running: false });
+    const alert = jest.spyOn(Alert, 'alert');
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await openView('Preview');
+    await fireEvent.press(screen.getByRole('button', { name: 'App' }));
+    expect(alert).toHaveBeenCalledWith('Could not open the preview', 'The run script stopped before the app answered.');
+    expect(previewLink).not.toHaveBeenCalled();
+    expect(openURL).not.toHaveBeenCalled();
+  });
+
+  it('does not open the browser if the preview sheet closes during startup', async () => {
+    const { previewStatus, previewLink, openURL } = enablePreview();
+    let finishProbe!: (status: typeof ready) => void;
+    previewStatus.mockImplementationOnce(() => new Promise((resolve) => { finishProbe = resolve; }));
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await openView('Preview');
+    await fireEvent.press(screen.getByRole('button', { name: 'App' }));
+    await fireEvent.press(screen.getAllByRole('button', { name: 'Close' }).at(-1)!);
+    await act(() => { finishProbe(ready); });
+    expect(previewLink).not.toHaveBeenCalled();
+    expect(openURL).not.toHaveBeenCalled();
+  });
+
+  it.each(['off', 'coder'] as const)('hides the entry when the repository target is %s', async (target) => {
+    const { get } = enablePreview({ target });
+    await render(<WorkbenchDetailScreen kind="session" />);
+    expect(get).toHaveBeenCalledWith('repo-one');
+    await fireEvent.press(await screen.findByRole('button', { name: 'Session actions' }));
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+  });
+
+  it.each([
+    ['local', { runtime: 'local' }],
+    ['archived', { status: 'archived' }],
+    ['shared', { workspaceId: 'another-workspace' }],
+  ] as [string, Partial<Workbench>][])('hides the entry for a %s session', async (_label, patch_) => {
+    const { get } = enablePreview();
+    const item = noPr(patch_);
+    mockActive.store.setScope({ ...scope, workspace: item.workspaceId });
+    mockActive.api.workbenches.get.mockResolvedValue(item);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Session actions' }));
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+    expect(get).not.toHaveBeenCalled();
+  });
+});
 
 describe('session agent switch', () => {
   it.each([['claude', 'Codex', 'codex'], ['codex', 'Claude', 'claude']] as const)(

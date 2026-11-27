@@ -79,6 +79,39 @@ export interface PortTarget {
   port: number;
 }
 
+const FLEET_PORT_ERRORS = new Set([
+  'bad_port', 'bad_request', 'unauthorized', 'forbidden', 'not_found', 'too_many_requests',
+  'guest_too_old', 'hibernation_unusable', 'resume_impossible', 'remote_resume_required',
+  'sandbox_not_live', 'sandbox_suspended', 'ports_unsupported', 'ports_failed', 'guest_unreachable',
+]);
+
+/** Read only a short Fleet error. App content stays on the preview host. */
+export async function previewPortAnswers(response: globalThis.Response): Promise<boolean> {
+  const reader = response.body?.getReader();
+  try {
+    if (response.status >= 502 && response.status <= 504) return false;
+    if (response.status < 400 || !reader || !response.headers.get('content-type')?.includes('application/json')) return true;
+
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 4096) return true;
+      chunks.push(value);
+    }
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { error?: string; message?: string } | null;
+      return !(body?.message && body.error && FLEET_PORT_ERRORS.has(body.error));
+    } catch {
+      return true;
+    }
+  } finally {
+    await reader?.cancel().catch(() => undefined);
+  }
+}
+
 /**
  * Sends one request to the port and streams the answer back. Throws before
  * the response starts (a fleet fault), so the caller can answer in its own

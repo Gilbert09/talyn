@@ -16,6 +16,7 @@ import {
 } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import { billingEnabled, checkBoxGate } from '../billing/entitlements.js';
+import { previewPortAnswers } from '../preview/portsHttp.js';
 import { mintPreviewTicket } from '../preview/previewLinks.js';
 import { ownerOfWorkspace } from '../workflows/owner.js';
 import { previewBaseDomain } from '../preview/previewHost.js';
@@ -35,7 +36,8 @@ import { recoverLostSandbox } from './recovery.js';
 import { readSandboxImage, type SandboxImage } from './sandboxImage.js';
 import { requestSessionResize, type ResizeInput, type SessionResizeResult } from './resize.js';
 import { requestSessionRestart, type RestartInput, type SessionRestartResult } from './restart.js';
-import { loadWorkbenchConfig, loadWorkbenchConfigWithDetection } from './sandboxRuntime.js';
+import { fleetClientFor, loadWorkbenchConfig, loadWorkbenchConfigWithDetection } from './sandboxRuntime.js';
+import { existingScript } from './scriptStore.js';
 import { startScript, stopScript } from './scripts.js';
 import {
   getChat,
@@ -450,4 +452,19 @@ export async function createSessionPreviewLink(row: WorkbenchRow, port: number, 
   if (row.runtime !== 'sandbox') throw new WorkbenchError('Only sandbox sessions have hosted previews.', 400, 'local_runtime');
   if (row.archivedAt || row.status === 'archived') throw new WorkbenchError('This session is archived.', 409, 'not_ready');
   return mintPreviewTicket({ workbenchId: row.id, port, userId }, domain);
+}
+
+/** Check the port without returning app content or following app redirects. */
+export async function sessionPreviewStatus(row: WorkbenchRow, port: number, live: boolean): Promise<{ ready: boolean; running: boolean }> {
+  refuseThread(row);
+  await requireReadySandbox(row);
+  if (!live && !(await chooseReadSource(row)).live) return { ready: false, running: false };
+  const sandboxId = row.sandboxId!;
+  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+  const response = await client.proxyPort(sandboxId, port, '', {
+    method: 'GET', headers: {}, signal: AbortSignal.timeout(15_000),
+  });
+  const ready = await previewPortAnswers(response);
+  const run = ready ? null : await existingScript(row.id, 'run', sandboxId, row.sandboxGeneration ?? sandboxId);
+  return { ready, running: run?.running ?? false };
 }

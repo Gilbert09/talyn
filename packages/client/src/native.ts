@@ -2942,6 +2942,9 @@ export const workbenches = {
    */
   portUrl: (id: string, port: number, path = '') =>
     `${getConfig().baseUrl}/api/v1/workbenches/${enc(id)}/ports/${port}/${path.replace(/^\/+/, '')}`,
+  /** A preview check leaves a sleeping sandbox asleep unless live is true. */
+  previewStatus: (id: string, port: number, opts: { live?: boolean } = {}) =>
+    request<{ ready: boolean; running: boolean }>('GET', `/workbenches/${enc(id)}/preview-ports/${port}/status${opts.live ? '?live=1' : ''}`),
   /**
    * A one-time link to the port on its own preview host, for a plain browser
    * tab or a share link. 404 `preview_links_unavailable` when the deployment

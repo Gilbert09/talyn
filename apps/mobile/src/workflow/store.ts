@@ -305,6 +305,7 @@ export class WorkflowStore {
       case 'transcript': return this.reconcile(id, scope, data as Transcript | undefined);
       case 'features': return this.api.features.get();
       case 'repositories': return (await this.api.repositories.list(scope.workspace)).filter((repo) => repo.workspaceId === scope.workspace);
+      case 'repositoryPreview': return this.api.repositories.preview.get(id);
       case 'providers': return this.api.cloudProviders.list(scope.workspace);
       case 'workspace': {
         const item = await this.api.workspaces.get(scope.workspace);

@@ -19,7 +19,7 @@ export interface Scope { environment: string; user: string; workspace: string }
  * `contextAttention` holds the server's reason for each session that waits on the person, as `{ [id]: reason }`.
  */
 export type Entity = 'sessions' | 'threads' | 'attention' | 'contextAttention' | 'workbench' | 'children' | 'readiness' | 'pr' | 'timeline' | 'transcript'
-  | 'features' | 'repositories' | 'providers' | 'workspace' | 'environments' | 'codeReview' | 'prDescription' | 'prFiles' | 'prReviews';
+  | 'features' | 'repositories' | 'repositoryPreview' | 'providers' | 'workspace' | 'environments' | 'codeReview' | 'prDescription' | 'prFiles' | 'prReviews';
 export const cacheKey = (scope: Scope, entity: Entity, id = '') =>
   JSON.stringify(['mobile', SCHEMA_VERSION, scope.environment, scope.user, scope.workspace, entity, id]);
 export const sameScope = (a: Scope | null, b: Scope | null) => a === b || Boolean(a && b &&
