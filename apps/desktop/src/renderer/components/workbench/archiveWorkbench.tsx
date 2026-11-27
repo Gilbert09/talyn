@@ -17,6 +17,8 @@ import { captureWorkbenchFailure } from '../../lib/workbenchAnalytics';
 import { toast } from '../../stores/toast';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { useWorkbenchStore } from '../../stores/workbenches';
+import { loadBackground } from '../../stores/sessionBackground';
+import { isArchivedWorkbench } from '../../lib/workbenchActions';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 
 export interface ArchiveOptions {
@@ -98,7 +100,21 @@ function hideAsArchived(ids: string[]): (ids: string[]) => void {
         useWorkbenchStore.getState().upsertWorkbench(entry.before);
       }
     }
+    // Broadcasts can be missed while the sessions are hidden.
+    void refreshRestoredBackground(back);
   };
+}
+
+async function refreshRestoredBackground(ids: string[]): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < ids.length) {
+      const id = ids[next++];
+      const row = useWorkbenchStore.getState().workbenches[id];
+      if (row?.runtime === 'sandbox' && !isArchivedWorkbench(row)) await loadBackground(id);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(LOCAL_CLEANUP_CONCURRENCY, ids.length) }, worker));
 }
 
 /**

@@ -10,11 +10,13 @@ import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { installNavigation, useNavigationStore } from '../renderer/stores/navigation';
 import { usePullRequestStore } from '../renderer/stores/pullRequests';
 import { useSessionBackgroundStore } from '../renderer/stores/sessionBackground';
+import { isArchivedWorkbench } from '../renderer/lib/workbenchActions';
 import { toast } from '../renderer/stores/toast';
 
 const archiveMany = jest.fn();
+const backgroundApi = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
-  api: { workbenches: { archiveMany: (...a: unknown[]) => archiveMany(...a), update: jest.fn() } },
+  api: { workbenches: { archiveMany: (...a: unknown[]) => archiveMany(...a), background: (...a: unknown[]) => backgroundApi(...a), update: jest.fn() } },
 }));
 jest.mock('../renderer/stores/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() },
@@ -69,6 +71,8 @@ beforeAll(() => installNavigation());
 
 beforeEach(() => {
   archiveMany.mockReset();
+  backgroundApi.mockReset();
+  backgroundApi.mockImplementation(async (id: string) => ({ workbenchId: id, jobs: [], wakeups: [] }));
   archiveMany.mockImplementation(async (ids: string[]) => ({ archived: ids.map(archivedRow), failed: [] }));
   jest.mocked(toast.success).mockClear();
   jest.mocked(toast.error).mockClear();
@@ -126,7 +130,9 @@ describe('sidebar archive all', () => {
     expect(useWorkbenchStore.getState().workbenches.lisbon).toEqual(lisbon);
   });
 
-  it('restores a busy session when its background state was not loaded', async () => {
+  it('restores a busy session and reloads its background state', async () => {
+    const live = { workbenchId: 'lisbon', jobs: [{ id: 'new', status: 'running' } as WorkbenchBackgroundJob], wakeups: [] };
+    backgroundApi.mockResolvedValue(live);
     archiveMany.mockResolvedValue({
       archived: [archivedRow('porto')],
       failed: [{ id: 'lisbon', error: 'The session has a running background job.', busy: true }],
@@ -141,7 +147,38 @@ describe('sidebar archive all', () => {
     expect(screen.getByText('lisbon')).toBeInTheDocument();
     expect(useWorkbenchStore.getState().workbenches.lisbon).toEqual(lisbon);
     expect(useWorkbenchStore.getState().selectedWorkbenchId).toBe('lisbon');
+    await waitFor(() => expect(useSessionBackgroundStore.getState().byWorkbench.lisbon).toEqual(live));
+    expect(backgroundApi.mock.calls.map(([id]) => id)).toContain('lisbon');
+    expect(archiveAllButton()).toBeDisabled();
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it.each(['running', 'scheduled'])('reloads missed %s activity when a pending archive is refused', async (status) => {
+    let answer!: (value: unknown) => void;
+    archiveMany.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+    setSessions([lisbon]);
+    renderList();
+    fireEvent.click(archiveAllButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive all' }));
+    await waitFor(() => expect(archiveMany).toHaveBeenCalledTimes(1));
+
+    const live: WorkbenchBackground = {
+      workbenchId: 'lisbon',
+      jobs: status === 'running' ? [{ id: 'new-job', status } as WorkbenchBackgroundJob] : [],
+      wakeups: status === 'scheduled' ? [{ id: 'new-wakeup', status } as WorkbenchWakeup] : [],
+    };
+    backgroundApi.mockResolvedValue(live);
+    // The socket handler drops this broadcast while the row is hidden as archived.
+    const row = useWorkbenchStore.getState().workbenches.lisbon;
+    expect(isArchivedWorkbench(row)).toBe(true);
+    if (!isArchivedWorkbench(row)) useSessionBackgroundStore.getState().applyBackground(live);
+    expect(useSessionBackgroundStore.getState().byWorkbench.lisbon).toBeUndefined();
+    answer({ archived: [], failed: [{ id: 'lisbon', busy: true, error: 'The session works now.' }] });
+
+    await waitFor(() => expect(useSessionBackgroundStore.getState().byWorkbench.lisbon).toEqual(live));
+    expect(screen.getByText('lisbon')).toBeInTheDocument();
+    expect(archiveAllButton()).toBeDisabled();
+    expect(backgroundApi.mock.calls.map(([id]) => id)).toEqual(['lisbon']);
   });
 
   it('is disabled when every session has an open PR or works now', () => {
@@ -244,6 +281,7 @@ describe('sidebar archive all', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not archive the sessions', 'timeout'));
     expect(useWorkbenchStore.getState().workbenches.lisbon).toBe(newer);
     expect(useWorkbenchStore.getState().workbenches.porto).toEqual(porto);
+    expect(backgroundApi.mock.calls.map(([id]) => id)).toEqual(['porto']);
   });
 
   it('shows one error and no success when the request fails', async () => {

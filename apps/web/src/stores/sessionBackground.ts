@@ -17,6 +17,14 @@ let refreshPromise: Promise<void> | undefined;
 let finishRefresh: (() => void) | undefined;
 let refreshWorkers = 0;
 const REFRESH_CONCURRENCY = 4;
+const BACKGROUND_TIMEOUT_MS = 15_000;
+const activeRequests = new Map<AbortController, string>();
+
+function forgetBackground(id: string): void {
+  knownIds.delete(id);
+  refreshQueue.delete(id);
+  versions.set(id, (versions.get(id) ?? 0) + 1);
+}
 
 export const useSessionBackgroundStore = create<SessionBackgroundState>((set) => ({
   byWorkbench: {},
@@ -26,9 +34,10 @@ export const useSessionBackgroundStore = create<SessionBackgroundState>((set) =>
     set((state) => ({ byWorkbench: { ...state.byWorkbench, [payload.workbenchId]: payload } }));
   },
   clear: (id) => {
-    knownIds.delete(id);
-    refreshQueue.delete(id);
-    versions.set(id, (versions.get(id) ?? 0) + 1);
+    forgetBackground(id);
+    for (const [controller, requestId] of activeRequests) {
+      if (requestId === id) controller.abort();
+    }
     set((state) => {
       const byWorkbench = { ...state.byWorkbench };
       delete byWorkbench[id];
@@ -41,24 +50,38 @@ export async function loadBackground(id: string): Promise<void> {
   knownIds.add(id);
   const version = versions.get(id) ?? 0;
   const connection = connectionVersion;
+  const controller = new AbortController();
+  activeRequests.set(controller, id);
+  const timeout = setTimeout(() => controller.abort(), BACKGROUND_TIMEOUT_MS);
   try {
-    const payload = await api.workbenches.background(id);
-    if (connection === connectionVersion && (versions.get(id) ?? 0) === version) {
+    const payload = await api.workbenches.background(id, { signal: controller.signal });
+    if (!controller.signal.aborted && connection === connectionVersion && (versions.get(id) ?? 0) === version) {
       useSessionBackgroundStore.getState().applyBackground(payload);
     }
   } catch {
     // A later open or reconnect retries the load.
+  } finally {
+    clearTimeout(timeout);
+    activeRequests.delete(controller);
   }
 }
 
 /** Stop tracking sessions that were archived, deleted, or left with the previous workspace. */
 export function pruneBackground(workbenches: Record<string, Workbench>): void {
+  const byWorkbench = { ...useSessionBackgroundStore.getState().byWorkbench };
+  let changed = false;
   for (const id of knownIds) {
     const workbench = workbenches[id];
     if (!workbench || workbench.archivedAt || workbench.status === 'archived') {
-      useSessionBackgroundStore.getState().clear(id);
+      forgetBackground(id);
+      delete byWorkbench[id];
+      changed = true;
     }
   }
+  for (const [controller, id] of activeRequests) {
+    if (!knownIds.has(id)) controller.abort();
+  }
+  if (changed) useSessionBackgroundStore.setState({ byWorkbench });
 }
 
 async function refreshWorker(): Promise<void> {
@@ -79,6 +102,7 @@ async function refreshWorker(): Promise<void> {
 export function reconcileBackground(workbenches?: Record<string, Workbench>): Promise<void> {
   if (workbenches) pruneBackground(workbenches);
   connectionVersion++;
+  for (const controller of activeRequests.keys()) controller.abort();
   useSessionBackgroundStore.setState({ byWorkbench: {} });
   refreshQueue.clear();
   for (const id of knownIds) refreshQueue.add(id);

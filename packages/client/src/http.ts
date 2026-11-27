@@ -220,15 +220,26 @@ export async function request<T>(
   path: string,
   body?: unknown,
   isRetry = false,
-  raw?: { body: BodyInit; contentType: string; name?: string }
+  raw?: { body: BodyInit; contentType: string; name?: string },
+  options: { signal?: AbortSignal } = {}
 ): Promise<T> {
   const ctx = context();
+  const { signal } = options;
+  let abort: (() => void) | undefined;
   try {
-    return await requestInternal<T>(method, path, body, isRetry, raw, ctx);
+    const pending = requestInternal<T>(method, path, body, isRetry, raw, ctx, signal);
+    if (!signal) return await pending;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      abort = () => reject(signal.reason ?? new Error('Request aborted'));
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
+    });
+    return await Promise.race([pending, cancelled]);
   } catch (error) {
-    reportRequestError(error, method, path, ctx);
+    if (!signal?.aborted) reportRequestError(error, method, path, ctx);
     throw error;
   } finally {
+    if (abort) signal?.removeEventListener('abort', abort);
     ctx.dispose();
   }
 }
@@ -239,8 +250,10 @@ async function requestInternal<T>(
   body: unknown,
   isRetry = false,
   raw: { body: BodyInit; contentType: string; name?: string } | undefined,
-  ctx: RequestContext
+  ctx: RequestContext,
+  signal?: AbortSignal
 ): Promise<T> {
+  if (signal?.aborted) throw signal.reason ?? new Error('Request aborted');
   assertActive(ctx);
   const headers: Record<string, string> = {
     'Content-Type': raw ? raw.contentType : 'application/json',
@@ -252,13 +265,16 @@ async function requestInternal<T>(
   };
   if (raw?.name) headers['X-Attachment-Name'] = encodeURIComponent(raw.name);
   const token = await ctx.config.getAccessToken();
+  if (signal?.aborted) throw signal.reason ?? new Error('Request aborted');
   assertActive(ctx);
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const response = await fetchOrThrow(method, path, {
     headers,
     body: raw ? raw.body : body ? JSON.stringify(body) : undefined,
+    ...(signal ? { signal } : {}),
   }, ctx);
+  if (signal?.aborted) throw signal.reason ?? new Error('Request aborted');
   assertActive(ctx);
 
   if (response.status === 401 && token && !isRetry) {
@@ -266,7 +282,7 @@ async function requestInternal<T>(
     // recoverSession) and replay the request once with the fresh token;
     // a second 401 falls through to the normal error path.
     if (await recoverSession(ctx)) {
-      return requestInternal<T>(method, path, body, true, raw, ctx);
+      return requestInternal<T>(method, path, body, true, raw, ctx, signal);
     }
   }
 

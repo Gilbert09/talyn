@@ -2964,8 +2964,8 @@ export const workbenches = {
   // Live updates arrive as `workbench:background` WS events carrying the
   // whole `WorkbenchBackground`.
   /** The session's jobs (running first) and wake-ups (scheduled first). */
-  background: (id: string) =>
-    request<import('@talyn/shared').WorkbenchBackground>('GET', `/workbenches/${enc(id)}/background`),
+  background: (id: string, options: { signal?: AbortSignal } = {}) =>
+    request<import('@talyn/shared').WorkbenchBackground>('GET', `/workbenches/${enc(id)}/background`, undefined, false, undefined, options),
   /**
    * The last lines of a job's output. A sleeping box is not woken unless
    * `live: true`; then the answer has `asleep: true` and no lines.

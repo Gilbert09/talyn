@@ -55,7 +55,7 @@ describe('session background store', () => {
     expect(isActiveBackground(useSessionBackgroundStore.getState().byWorkbench.a)).toBe(false);
     pending.resolve(empty('a'));
     await refresh;
-    expect(api.workbenches.background).toHaveBeenCalledWith('a');
+    expect(api.workbenches.background).toHaveBeenCalledWith('a', expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(isActiveBackground(useSessionBackgroundStore.getState().byWorkbench.a)).toBe(false);
   });
 
@@ -93,7 +93,7 @@ describe('session background store', () => {
     await reconcileBackground();
     expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
     await reconcileBackground();
-    expect(api.workbenches.background).toHaveBeenNthCalledWith(2, 'a');
+    expect(api.workbenches.background).toHaveBeenNthCalledWith(2, 'a', expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(useSessionBackgroundStore.getState().byWorkbench.a).toBe(live);
     expect(isActiveBackground(useSessionBackgroundStore.getState().byWorkbench.a)).toBe(true);
   });
@@ -103,7 +103,7 @@ describe('session background store', () => {
     await loadBackground('a');
     expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
     await reconcileBackground();
-    expect(api.workbenches.background).toHaveBeenNthCalledWith(2, 'a');
+    expect(api.workbenches.background).toHaveBeenNthCalledWith(2, 'a', expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(useSessionBackgroundStore.getState().byWorkbench.a).toEqual(empty('a'));
   });
 
@@ -143,6 +143,68 @@ describe('session background store', () => {
     expect(Object.keys(useSessionBackgroundStore.getState().byWorkbench).sort()).toEqual(ids.sort());
   });
 
+  it('cancels stalled requests on reconnect and refreshes every queued session', async () => {
+    const ids = Array.from({ length: 8 }, (_, i) => `stalled-${i}`);
+    for (const id of ids) useSessionBackgroundStore.getState().applyBackground(empty(id));
+    const signals: AbortSignal[] = [];
+    let online = false;
+    vi.mocked(api.workbenches.background).mockImplementation((id, options) => {
+      if (online) return Promise.resolve(empty(id));
+      const signal = options!.signal!;
+      signals.push(signal);
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('Aborted')), { once: true });
+      });
+    });
+    const first = reconcileBackground();
+    expect(signals).toHaveLength(4);
+    online = true;
+    const second = reconcileBackground();
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    await Promise.all([first, second]);
+    expect(api.workbenches.background).toHaveBeenCalledTimes(12);
+    expect(Object.keys(useSessionBackgroundStore.getState().byWorkbench).sort()).toEqual(ids.sort());
+  });
+
+  it('aborts expired requests and retries the sessions on the next reconnect', async () => {
+    vi.useFakeTimers();
+    try {
+      useSessionBackgroundStore.getState().applyBackground(empty('a'));
+      let signal!: AbortSignal;
+      vi.mocked(api.workbenches.background).mockImplementationOnce((_id, options) => {
+        signal = options!.signal!;
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('Aborted')), { once: true });
+        });
+      });
+      const refresh = reconcileBackground();
+      await vi.advanceTimersByTimeAsync(15_000);
+      await refresh;
+      expect(signal.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      vi.mocked(api.workbenches.background).mockResolvedValue(empty('a'));
+      await reconcileBackground();
+      expect(useSessionBackgroundStore.getState().byWorkbench.a).toEqual(empty('a'));
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('publishes one cache update when pruning many sessions', () => {
+    for (let i = 0; i < 1000; i++) useSessionBackgroundStore.getState().applyBackground(empty(`old-${i}`));
+    useSessionBackgroundStore.getState().applyBackground(empty('a'));
+    const changed = vi.fn();
+    const unsubscribe = useSessionBackgroundStore.subscribe(changed);
+    try {
+      pruneBackground({ a: { id: 'a', status: 'ready' } as Workbench });
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect(useSessionBackgroundStore.getState().byWorkbench).toEqual({ a: empty('a') });
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('prunes archived and missing sessions, including queued and pending refreshes', async () => {
     const ids = ['a', 'b', 'c', 'd', 'e'];
     for (const id of ids) useSessionBackgroundStore.getState().applyBackground(empty(id));
@@ -160,11 +222,11 @@ describe('session background store', () => {
     blocked.resolve();
     await refresh;
     expect(Object.keys(useSessionBackgroundStore.getState().byWorkbench)).toEqual(['a']);
-    expect(api.workbenches.background).not.toHaveBeenCalledWith('e');
+    expect(api.workbenches.background).not.toHaveBeenCalledWith('e', expect.anything());
     vi.mocked(api.workbenches.background).mockClear();
     await reconcileBackground();
     expect(api.workbenches.background).toHaveBeenCalledTimes(1);
-    expect(api.workbenches.background).toHaveBeenCalledWith('a');
+    expect(api.workbenches.background).toHaveBeenCalledWith('a', expect.objectContaining({ signal: expect.any(AbortSignal) }));
   });
 
   it('does not retry or restore a cleared session with a pending load', async () => {

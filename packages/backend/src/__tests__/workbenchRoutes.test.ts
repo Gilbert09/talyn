@@ -77,7 +77,7 @@ const { resetChangesStoreForTests } = await import('../services/workbenches/chan
 const { resetChangesStoredForTests } = await import('../services/workbenches/changesStored.js');
 const { resetChangesGithubForTests } = await import('../services/workbenches/changesGithub.js');
 const { GitHubRateLimitError } = await import('../services/githubRateGate.js');
-const { getChat, getWorkbench, insertWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
+const { claimOrEnqueue, finishTurn, getChat, getWorkbench, insertChat, insertWorkbench, listChats, updateChat, updateWorkbench, rowToWorkbench } = await import('../services/workbenches/store.js');
 const { liveWorkbenchForPr } = await import('../services/workbenches/prSessions.js');
 const { startStaleGoldenMove } = await import('../services/workbenches/move.js');
 const { backfillMergeArchives } = await import('../services/workbenches/mergeBackfill.js');
@@ -1083,13 +1083,32 @@ describe('workbench routes', () => {
       }
     });
 
+    it('archives a session after its last payer-blocked message is deleted', async () => {
+      const wb = await createLocalWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      const queuedAt = new Date().toISOString();
+      await insertChat({ id: 'blocked-chat', workbenchId: wb.id, workspaceId: 'ws-a', title: 'Blocked', agent: 'claude' });
+      await claimOrEnqueue(chatId, { id: 'running', text: 'work', queuedAt }, true);
+      const blocked = await claimOrEnqueue('blocked-chat', {
+        id: 'queued', text: 'wait', queuedAt, payer: { userId: 'owner-a', workspaceId: 'ws-a' },
+      }, true);
+      expect(blocked?.payerBlocked).toBe(true);
+      const removed = await call('DELETE', '/workbenches/chats/blocked-chat/queue/queued');
+      expect(removed.status).toBe(200);
+      expect(removed.body.data.queuedMessages).toEqual([]);
+      await finishTurn(chatId, { finalStatus: 'idle', statusMessage: null, drain: true });
+      const res = await call('POST', '/workbenches/archive', { ids: [wb.id] });
+      expect(res.body.data.failed).toEqual([]);
+      expect(res.body.data.archived.map((row: Loose) => row.id)).toEqual([wb.id]);
+    });
+
     it('archives a session after its pending chat is closed', async () => {
       const wb = await createLocalWorkbench();
       const chatId = await chatIdOf(wb.id);
       await makeBusy['a pending drain']!(wb.id, chatId);
       expect((await call('DELETE', `/workbenches/chats/${chatId}`)).status).toBe(200);
       const [closed] = await testDb.db.select().from(workbenchChats).where(eq(workbenchChats.id, chatId));
-      expect(closed).toMatchObject({ closedAt: expect.any(Date), drainPending: true });
+      expect(closed).toMatchObject({ closedAt: expect.any(Date), drainPending: false });
 
       const res = await call('POST', '/workbenches/archive', { ids: [wb.id] });
       expect(res.body.data.failed).toEqual([]);
