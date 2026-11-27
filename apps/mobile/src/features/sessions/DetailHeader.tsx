@@ -2,8 +2,9 @@ import type { PRRow } from '@talyn/client/native';
 import { canCloseSessionPullRequest, sessionAutomation, type Workbench, type WorkbenchReadiness } from '@talyn/shared';
 import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
 import { useMobileRuntime, useNetwork } from '../../auth/AuthProvider';
 import { PrPill, PrStatusPill, SessionStateIcon } from '../../components/Status';
@@ -165,21 +166,17 @@ export function QuickActionRow({ actions, busy, run }: { actions: QuickAction[];
 /** Below this window width the review badge shows its icon and at most a count. */
 const NARROW = 420;
 
-/** Width the header's trailing items take, so the title knows how much it may use. */
-function trailingWidth(item: Workbench, badge: ReviewBadgeView | null | undefined, width: number) {
-  const session = workbenchKind(item) === 'session';
-  const badgeWidth = session && badge ? (width < NARROW ? 40 : 28 + badge.label.length * 7) : 0;
-  return 44 + (session && item.pullRequestId ? 56 : 0) + (session && diffTotals(item) ? 84 : 0) + badgeWidth;
-}
-
 /** The native header's title: state icon and one line of title. Tapping it opens the details. */
-export function HeaderTitle({ item, row, badge, onPress }: { item: Workbench; row: PRRow | null; badge?: ReviewBadgeView | null; onPress(): void }) {
+export function HeaderTitle({ item, row, onPress }: { item: Workbench; row: PRRow | null; onPress(): void }) {
   const { width } = useWindowDimensions();
+  const insets = useContext(SafeAreaInsetsContext);
   const state = workbenchState(item, row);
   const title = workbenchTitle(item);
-  const right = trailingWidth(item, badge, width);
+  // Reserve space for two 40 dp buttons, their gap, and the outer margin.
+  const right = 2 * 40 + 2 + 16;
+  const available = width - (insets?.left ?? 0) - (insets?.right ?? 0);
   // iOS centres the title, so it gets the same room on both sides. Android puts it after the back button.
-  const maxWidth = Math.max(120, Platform.OS === 'ios' ? width - 2 * Math.max(right, 72) : width - right - 88);
+  const maxWidth = Math.max(0, Platform.OS === 'ios' ? available - 2 * right : available - right - 88);
   return <Pressable accessibilityRole="header" accessibilityLabel={`${title}. ${state.label}.`}
     accessibilityHint={`Shows the ${workbenchKind(item)} details.`} onPress={onPress} hitSlop={6}
     style={({ pressed }) => [styles.title, { maxWidth, opacity: pressed ? 0.6 : 1 }]}>
@@ -209,8 +206,8 @@ export function ReviewBadge({ badge, onPress }: { badge: ReviewBadgeView; onPres
   </Pressable>;
 }
 
-/** The header's trailing marks: the review badge, the branch's +/- count (opens Changes) and the PR number (opens the PR). */
-export function HeaderTrailing({ item, row, badge, onChanges }: { item: Workbench; row: PRRow | null; badge?: ReviewBadgeView | null; onChanges(): void }) {
+/** Status controls sit below the navigation bar, with room to scroll when their text grows. */
+export function SessionStatusRow({ item, row, badge, onChanges }: { item: Workbench; row: PRRow | null; badge?: ReviewBadgeView | null; onChanges(): void }) {
   const c = useTheme();
   const router = useRouter();
   if (workbenchKind(item) !== 'session') return null;
@@ -218,7 +215,9 @@ export function HeaderTrailing({ item, row, badge, onChanges }: { item: Workbenc
   const number = row?.number ?? item.pr?.number;
   const status = row ? prRowStatus(row) : null;
   const tone = (row?.state === 'open' && status ? status.tone : prNumberTone(row?.state ?? item.pr?.state ?? 'open', row?.summary.draft)) as Tone;
-  return <>
+  if (!(badge && row) && !totals && !(item.pullRequestId && number)) return null;
+  return <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={styles.statusScroll}
+    contentContainerStyle={styles.statusRow}>
     {badge && row ? <ReviewBadge badge={badge} onPress={() => router.push(pullRequestRoute(row.id, { tab: 'findings' }))} /> : null}
     {totals ? <Pressable accessibilityRole="button" accessibilityLabel={`Changes: ${totals.files} ${totals.files === 1 ? 'file' : 'files'}, ${totals.added} added, ${totals.removed} removed`}
       onPress={onChanges} hitSlop={4} style={({ pressed }) => [styles.diff, { backgroundColor: pressed ? c.surface : 'transparent' }]}>
@@ -230,7 +229,7 @@ export function HeaderTrailing({ item, row, badge, onChanges }: { item: Workbenc
       onPress={() => router.push(pullRequestRoute(item.pullRequestId!))} hitSlop={6} style={({ pressed }) => [styles.pr, { opacity: pressed ? 0.6 : 1 }]}>
       <PrNumber number={number} tone={tone} />
     </Pressable> : null}
-  </>;
+  </ScrollView>;
 }
 
 /**
@@ -297,6 +296,8 @@ export function SessionDetailsSheet({ visible, onClose, item, row, readiness, on
 const styles = StyleSheet.create({
   actions: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 6 },
   title: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statusScroll: { flexGrow: 0, flexShrink: 0 },
+  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 4 },
   diff: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, minHeight: 32, borderRadius: 6 },
   diffText: { fontSize: 12, lineHeight: 16, ...mono(500) },
   pr: { minHeight: 32, justifyContent: 'center', paddingHorizontal: 2 },
