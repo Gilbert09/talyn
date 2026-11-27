@@ -26,8 +26,7 @@ export const workbenches = {
       'POST',
       `/workbenches/${enc(workbenchId)}/attachments`,
       undefined,
-      false,
-      { body: file, contentType: file.type, name }
+      { raw: { body: file, contentType: file.type, name } }
     ),
   /**
    * Continue a local Claude Code conversation in a fresh sandbox session. The
@@ -38,10 +37,11 @@ export const workbenches = {
       'POST',
       `/workbenches/${enc(workbenchId)}/import`,
       undefined,
-      false,
       {
-        body: new Blob([body as BlobPart], { type: 'application/octet-stream' }),
-        contentType: 'application/octet-stream',
+        raw: {
+          body: new Blob([body as BlobPart], { type: 'application/octet-stream' }),
+          contentType: 'application/octet-stream',
+        },
       }
     ),
 

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, lte, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, ne, sql } from 'drizzle-orm';
 import {
   BACKGROUND_COMMAND_PREVIEW_CHARS,
   type WorkbenchBackgroundJob,
@@ -197,8 +197,9 @@ export async function settleJob(
   id: string,
   patch: { status: Exclude<WorkbenchBackgroundJobStatus, 'running'>; exitCode?: number | null; detail?: string | null },
   at = new Date(),
+  client: Pick<Database, 'update'> = db(),
 ): Promise<JobRow | null> {
-  const [row] = await db().update(jobs)
+  const [row] = await client.update(jobs)
     .set({ status: patch.status, exitCode: patch.exitCode ?? null, detail: patch.detail ?? null, endedAt: at, lastCheckedAt: at })
     .where(and(eq(jobs.id, id), eq(jobs.status, 'running')))
     .returning(JOB_COLUMNS);
@@ -256,9 +257,27 @@ export async function markArchivedJobsLost(detail: string, workbenchId?: string)
 // ---------- Wake-ups ----------
 
 /** Insert a wake-up. Null when the job already has its exit wake-up. */
-export async function insertWakeup(values: typeof wakeups.$inferInsert): Promise<WakeupRow | null> {
-  const [row] = await db().insert(wakeups).values(values).onConflictDoNothing().returning(WAKEUP_COLUMNS);
+export async function insertWakeup(
+  values: typeof wakeups.$inferInsert,
+  client: Pick<Database, 'insert'> = db(),
+): Promise<WakeupRow | null> {
+  const [row] = await client.insert(wakeups).values(values).onConflictDoNothing().returning(WAKEUP_COLUMNS);
   return row ?? null;
+}
+
+/** Keep archive protection until an exited job's wake-up is stored. */
+export async function settleExitedJob(
+  id: string,
+  exitCode: number | null,
+  at: Date,
+  makeWakeup: (job: JobRow) => typeof wakeups.$inferInsert,
+): Promise<{ job: JobRow; wakeup: WakeupRow | null } | null> {
+  return db().transaction(async (tx) => {
+    const job = await settleJob(id, { status: 'exited', exitCode }, at, tx);
+    if (!job) return null;
+    const wakeup = job.notifyOnExit ? await insertWakeup(makeWakeup(job), tx) : null;
+    return { job, wakeup };
+  });
 }
 
 export async function getWakeup(id: string): Promise<WakeupRow | null> {
@@ -344,13 +363,20 @@ export async function scheduledCiWakeups(opts: { pullRequestIds?: string[]; limi
 /**
  * The claim: `scheduled` to `fired` in one statement. Two sweeps that both
  * read the row as due cannot both win it, so a wake-up sends one turn.
+ * Leave firedAt null until the message is queued, so bulk archive still protects it.
  */
-export async function claimWakeup(id: string, at = new Date()): Promise<WakeupRow | null> {
+export async function claimWakeup(id: string): Promise<WakeupRow | null> {
   const [row] = await db().update(wakeups)
-    .set({ status: 'fired', firedAt: at })
+    .set({ status: 'fired', firedAt: null })
     .where(and(eq(wakeups.id, id), eq(wakeups.status, 'scheduled')))
     .returning(WAKEUP_COLUMNS);
   return row ?? null;
+}
+
+/** Release archive protection after the message is queued or its turn starts. */
+export async function completeWakeup(id: string, at: Date): Promise<void> {
+  await db().update(wakeups).set({ firedAt: at })
+    .where(and(eq(wakeups.id, id), eq(wakeups.status, 'fired'), isNull(wakeups.firedAt)));
 }
 
 /** Record why a claimed or scheduled wake-up did not send its turn. */

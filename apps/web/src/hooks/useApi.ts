@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useState, useRef } from 'react';
 import { api, wsClient } from '../lib/api';
+import { isArchivedWorkbench } from '../lib/workbenchActions';
 import { prefetchSkills } from '../lib/skillsData';
 import { useOnReconnect } from './useOnReconnect';
 import {
@@ -33,7 +34,7 @@ import { useWorkbenchStore } from '../stores/workbenches';
 import { reconcileWorkbenches } from '../lib/workbenchData';
 import { installWorkbenchNotifications, toastPullRequestFailures } from '../lib/workbenchNotify';
 import { installDeskPresence } from '../lib/deskPresence';
-import { useSessionBackgroundStore } from '../stores/sessionBackground';
+import { pruneBackground, reconcileBackground, useSessionBackgroundStore } from '../stores/sessionBackground';
 
 // ---------------------------------------------------------------------------
 // task:event coalescing
@@ -321,6 +322,7 @@ export function useApiConnection() {
   // task + environment lists to reconcile any changes we missed. The first
   // connect is covered by useInitialDataLoad.
   useOnReconnect(() => {
+    void reconcileBackground(useWorkbenchStore.getState().workbenches);
     void reconcileTasksFromServer();
     void reconcileEnvironmentsFromServer();
     void useBillingStore.getState().refresh();
@@ -328,7 +330,9 @@ export function useApiConnection() {
     // past the last seq held for chats whose history is open.
     const workbenchWorkspace = useWorkbenchStore.getState().workspaceId;
     if (workbenchWorkspace && workbenchWorkspace === useWorkspaceStore.getState().currentWorkspaceId) {
-      void reconcileWorkbenches(workbenchWorkspace);
+      void reconcileWorkbenches(workbenchWorkspace).then(() => {
+        pruneBackground(useWorkbenchStore.getState().workbenches);
+      });
     }
     if (workbenchesOffered(useWorkspaceStore.getState().features)) void loadSlackPending();
   });
@@ -468,6 +472,7 @@ export function useApiConnection() {
     // merged once per frame, exactly like task:event.
     unsubscribers.push(
       wsClient.on<WorkbenchWsPayloads['workbench:updated']>('workbench:updated', (payload) => {
+        if (isArchivedWorkbench(payload.workbench)) useSessionBackgroundStore.getState().clear(payload.workbench.id);
         const store = useWorkbenchStore.getState();
         store.upsertWorkbench(payload.workbench);
         // The row embeds its open chats; replacing the list is what makes a closed chat disappear.
@@ -498,6 +503,8 @@ export function useApiConnection() {
         useWorkbenchStore.getState().appendScriptFrame(payload);
       }),
       wsClient.on<WorkbenchWsPayloads['workbench:background']>('workbench:background', (payload) => {
+        const workbench = useWorkbenchStore.getState().workbenches[payload.workbenchId];
+        if (!workbench || isArchivedWorkbench(workbench)) return;
         useSessionBackgroundStore.getState().applyBackground(payload);
       })
     );

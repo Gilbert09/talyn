@@ -13,7 +13,8 @@ import {
   workbenchPreviewTickets,
   workspaces,
 } from '../db/schema.js';
-import { insertWorkbench, updateWorkbench } from '../services/workbenches/store.js';
+import { getWorkbench, insertWorkbench, updateWorkbench } from '../services/workbenches/store.js';
+import { claimScript, finishScript } from '../services/workbenches/scriptStore.js';
 import { setWorkbenchFleetClientForTests } from '../services/workbenches/sandboxRuntime.js';
 import type { FleetClient } from '../services/selfHosted/client.js';
 import { resetFeatureFlagsForTests } from '../services/featureFlags.js';
@@ -173,6 +174,7 @@ describe('hosted preview links', () => {
   let port: number;
   let upstream: Upstream;
   let routes: Router;
+  const getSandbox = vi.fn();
   const proxyPort = vi.fn();
   const openPortWebSocket = vi.fn();
 
@@ -219,6 +221,7 @@ describe('hosted preview links', () => {
       await insertWorkbench({
         id, workspaceId: 'ws', repositoryId: 'repo', repoFullName: 'o/r', baseBranch: 'main', branch: id, name: id,
         runtime, status, sandboxId: `sb-${id}`, agent: 'claude',
+        sandboxState: runtime === 'sandbox' && status === 'ready' ? 'running' : undefined,
       });
     }
 
@@ -250,6 +253,7 @@ describe('hosted preview links', () => {
     vi.stubEnv('WORKBENCHES_ENABLED', 'true');
     resetFeatureFlagsForTests();
     resetPreviewAccessCacheForTests();
+    getSandbox.mockReset().mockResolvedValue({ sandbox: { status: 'idle' }, terminal: false });
     proxyPort.mockReset();
     proxyPort.mockImplementation(async () => new Response('from the app', {
       status: 200,
@@ -267,7 +271,7 @@ describe('hosted preview links', () => {
       queueMicrotask(() => upstream.emit('open'));
       return upstream as unknown as WebSocket;
     });
-    setWorkbenchFleetClientForTests(async () => ({ proxyPort, openPortWebSocket } as unknown as FleetClient));
+    setWorkbenchFleetClientForTests(async () => ({ getSandbox, proxyPort, openPortWebSocket } as unknown as FleetClient));
   });
 
   afterEach(() => {
@@ -280,6 +284,112 @@ describe('hosted preview links', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await testDb.cleanup();
     resetFeatureFlagsForTests();
+  });
+
+  describe('checking preview status', () => {
+    const status = (user = 'owner') => send('api.test', '/api/v1/workbenches/ready/preview-ports/5173/status?live=1', {
+      headers: { 'x-user': user, authorization: 'Bearer talyn-jwt' },
+    });
+
+    it.each([[200, 'ok'], [302, 'redirect'], [401, 'unauthorized'], [404, 'not_found']] as const)(
+      'recognizes app response %i without forwarding it', async (code, error) => {
+        proxyPort.mockResolvedValue(Response.json({ error, message: 'App response.' }, {
+          status: code, headers: { location: 'https://example.test' },
+        }));
+        const response = await status();
+        expect(response.status).toBe(200);
+        expect(response.headers.location).toBeUndefined();
+        expect(JSON.parse(response.body).data).toEqual({ ready: true, running: false });
+        expect(proxyPort).toHaveBeenCalledWith('sb-ready', 5173, '', expect.objectContaining({ method: 'GET', headers: {} }));
+      },
+    );
+
+    it('reports a missing sandbox as unready', async () => {
+      proxyPort.mockResolvedValue(Response.json({ error: 'not_found', message: 'Fleet error.' }, { status: 404 }));
+      getSandbox.mockRejectedValue(new Error('Sandbox not found.'));
+      expect(JSON.parse((await status()).body).data).toEqual({ ready: false, running: false });
+    });
+
+    it('reports a sandbox that needs a remote restore as unready', async () => {
+      proxyPort.mockResolvedValue(Response.json({ error: 'remote_resume_required', message: 'Fleet error.' }, { status: 409 }));
+      expect(JSON.parse((await status()).body).data).toEqual({ ready: false, running: false });
+    });
+
+    it.each(['ports_unsupported', 'guest_too_old'])('refuses preview immediately when Fleet reports %s', async (error) => {
+      proxyPort.mockResolvedValue(Response.json({ error, message: 'Fleet error.' }, { status: 409 }));
+      const row = (await getWorkbench('ready'))!;
+      const lease = (await claimScript(row, 'run'))!;
+      try {
+        const response = await status();
+        expect(response.status).toBe(409);
+        expect(JSON.parse(response.body)).toMatchObject({ success: false, code: 'preview_unsupported' });
+      } finally {
+        await finishScript(lease, 0);
+      }
+    });
+
+    it('leaves a sleeping sandbox asleep on the first check', async () => {
+      await updateWorkbench('ready2', { sandboxState: 'running' });
+      getSandbox.mockResolvedValue({ sandbox: { status: 'suspended' } });
+      const response = await send('api.test', '/api/v1/workbenches/ready2/preview-ports/5173/status', {
+        headers: { 'x-user': 'owner' },
+      });
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body).data).toEqual({ ready: false, running: false });
+      expect(getSandbox).toHaveBeenCalledWith('sb-ready2');
+      expect(proxyPort).not.toHaveBeenCalled();
+    });
+
+    it('reports a running script while the port is closed', async () => {
+      proxyPort.mockResolvedValue(new Response(null, { status: 502 }));
+      const row = (await getWorkbench('ready'))!;
+      expect(JSON.parse((await status()).body).data).toEqual({ ready: false, running: false });
+      const lease = (await claimScript(row, 'run'))!;
+      try {
+        expect(JSON.parse((await status()).body).data).toEqual({ ready: false, running: true });
+      } finally {
+        await finishScript(lease, 1);
+      }
+      expect(JSON.parse((await status()).body).data).toEqual({ ready: false, running: false });
+    });
+
+    it.each(['headers', 'body'])('reports a running script when reading the %s times out', async (phase) => {
+      const deadline = new AbortController();
+      const timeout = AbortSignal.timeout.bind(AbortSignal);
+      vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => ms === 15_000 ? deadline.signal : timeout(ms));
+      proxyPort.mockImplementation(async () => {
+        if (phase === 'headers') {
+          deadline.abort();
+          throw new Error('Fleet unreachable.');
+        }
+        const body = new ReadableStream({
+          pull(controller) {
+            deadline.abort();
+            controller.error(new Error('The response timed out.'));
+          },
+        });
+        return new Response(body, { status: 409, headers: { 'content-type': 'application/json' } });
+      });
+      const row = (await getWorkbench('ready'))!;
+      const lease = (await claimScript(row, 'run'))!;
+      try {
+        const response = await status();
+        expect(response.status).toBe(200);
+        expect(JSON.parse(response.body).data).toEqual({ ready: false, running: true });
+      } finally {
+        await finishScript(lease, 1);
+      }
+    });
+
+    it('reports a probe failure that occurs before the timeout', async () => {
+      proxyPort.mockRejectedValue(new Error('Unexpected failure.'));
+      expect((await status()).status).toBe(500);
+    });
+
+    it('does not probe a session owned by another user', async () => {
+      expect((await status('other')).status).toBe(404);
+      expect(proxyPort).not.toHaveBeenCalled();
+    });
   });
 
   describe('minting a ticket', () => {

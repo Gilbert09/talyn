@@ -1,3 +1,4 @@
+import { ClientInactiveError } from '@talyn/client/native';
 import {
   isMobileNotificationPayload,
   isMobileNotificationResolution,
@@ -47,13 +48,14 @@ export class NotificationController {
   private pending: MobileNotificationPayload | null = null;
   private seen = new Set<string>();
   private opening: string | null = null;
+  private retryRequested = false;
   private disposed = false;
   private operation: Promise<unknown> = Promise.resolve();
   private navigate: (path: string) => void = () => {};
   private navigationReady = false;
   private visible = '';
   constructor(private api: PushGateway, private device: PushDevice,
-    private online: () => boolean, private fetchDestination: (destination: MobileNotificationDestination) => Promise<void>,
+    private canRequest: () => boolean, private fetchDestination: (destination: MobileNotificationDestination) => Promise<void>,
     private now = Date.now) {}
 
   getSnapshot = () => this.snapshot;
@@ -84,7 +86,7 @@ export class NotificationController {
   refresh = () => {
     const scope = this.scope;
     const generation = this.generation;
-    if (!scope || !this.online()) return Promise.resolve();
+    if (!scope || !this.canRequest()) return Promise.resolve();
     return this.queue(async () => {
       if (!this.current(generation)) return;
       try {
@@ -120,7 +122,7 @@ export class NotificationController {
   }
   save = (preferences: MobileNotificationPreferences, requestPermission = false) => {
     const generation = this.generation;
-    if (!this.scope || preferences.workspaceId !== this.scope.workspace || !this.online()) return Promise.resolve();
+    if (!this.scope || preferences.workspaceId !== this.scope.workspace || !this.canRequest()) return Promise.resolve();
     return this.queue(async () => {
       if (!this.current(generation)) return;
       this.publish({ state: 'loading' });
@@ -149,7 +151,7 @@ export class NotificationController {
     try {
       await this.operation;
       const id = await this.device.installation(user, false);
-      if (id && this.online()) await this.api.removeInstallation(id);
+      if (id && this.canRequest()) await this.api.removeInstallation(id);
     } catch { /* Last-seen expiry removes registrations after offline sign-out. */ }
     finally {
       await this.device.clearInstallation(user).catch(() => {});
@@ -167,17 +169,21 @@ export class NotificationController {
     return isMobileNotificationPayload(value) && this.scope?.workspace === value.destination.workspaceId &&
       this.visible !== notificationPath(value.destination);
   }
-  retryTap = () => { void this.openPending(); };
+  retryTap = () => {
+    if (this.opening) { this.retryRequested = true; return; }
+    void this.openPending();
+  };
   clearTapIssue = () => this.publish({ tapIssue: null });
   private async openPending() {
     const value = this.pending;
     const scope = this.scope;
     const generation = this.generation;
-    if (!value || !scope || this.opening || !this.online() || !this.navigationReady) return;
+    if (!value || !scope || this.opening || !this.canRequest() || !this.navigationReady) return;
     if (value.destination.workspaceId !== scope.workspace) {
       this.publish({ tapIssue: 'Choose the notification workspace in Settings, then try again.' }); return;
     }
     this.opening = value.eventId;
+    let retryAfterResume = false;
     try {
       const resolved = await this.api.resolveNotification(value.eventId);
       if (!this.current(generation)) return;
@@ -196,6 +202,11 @@ export class NotificationController {
       this.navigate(notificationPath(payload.destination));
     } catch (error) {
       if (!this.current(generation)) return;
+      if (error instanceof ClientInactiveError) {
+        // The app can resume before the interrupted request rejects.
+        retryAfterResume = this.retryRequested;
+        return;
+      }
       if ([403, 404, 410].includes((error as { status?: number })?.status ?? 0)) {
         if (this.pending?.eventId === value.eventId) this.pending = null;
         this.seen.add(value.eventId);
@@ -203,7 +214,8 @@ export class NotificationController {
       this.publish({ tapIssue: 'This notification is no longer available. Refresh your sessions or try again.' });
     } finally {
       this.opening = null;
-      if (this.pending && (this.pending.eventId !== value.eventId || this.generation !== generation)) void this.openPending();
+      this.retryRequested = false;
+      if (this.pending && (retryAfterResume || this.pending.eventId !== value.eventId || this.generation !== generation)) void this.openPending();
     }
   }
   dispose() { this.disposed = true; this.generation++; this.pending = null; this.seen.clear(); this.listeners.clear(); }

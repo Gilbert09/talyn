@@ -2,7 +2,7 @@ import { spaces, workbenches, workspaces as workspaceApi, type PRRow, type Watch
 import { fleetAgentForModel, type SpaceRepository, type Workbench, type WorkbenchAgent, type WorkbenchReadiness, type Workspace } from '@talyn/shared';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import { ActivityIndicator, Alert, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Animated, { FadeIn, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
@@ -26,7 +26,7 @@ import { chatActions } from '../chat/actions';
 import { ComposerImages } from '../chat/AttachmentViews';
 import { writeImageDrafts } from '../chat/attachmentDrafts';
 import { buildMessageInput, type ImageDraft } from '../chat/attachments';
-import { showImagePicker } from '../chat/imagePicker';
+import { focusAfterImagePicker, showImagePicker } from '../chat/imagePicker';
 import { useActiveContext } from '../spaces/context';
 import { ConnectAgentSheet } from '../agents/connect/ConnectAgentSheet';
 import { activePullRequest, agentForModel, blockedReason, branchSuggestions, chipLabel, composerChips, CONNECT_ACTION, connectNotice, createInput, defaultRepositoryId,
@@ -106,6 +106,11 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
   useEffect(() => { if (initialPrompt) workflow.updateLocal(draftKey, { draft: initialPrompt }); }, [initialPrompt, workflow]);
   const images = useInlineImages(draftKey);
   const attached = images.drafts;
+  const promptRef = useRef<ComponentRef<typeof TextInput>>(null);
+  const attach = () => showImagePicker((assets) => {
+    images.add(assets);
+    focusAfterImagePicker(promptRef);
+  });
   // Pull requests belong to the workspace shown, so a space offers them only when that is my home workspace.
   const homePrs = Boolean(inSpace) && home === workspaceId;
   const prsOn = !inSpace || homePrs;
@@ -363,7 +368,7 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
           {attached.length ? <View style={styles.images}>
             <ComposerImages drafts={attached} errors={[]} onRemove={images.remove} onRetry={images.retry} onDismissError={() => undefined} />
           </View> : null}
-          <TextInput accessibilityLabel={mode === 'thread' ? 'What to get done' : 'Task'} multiline editable={!busy}
+          <TextInput ref={promptRef} accessibilityLabel={mode === 'thread' ? 'What to get done' : 'Task'} multiline editable={!busy}
             placeholder={inSpace ? spacePlaceholder(mode, inSpace.space.name) : PLACEHOLDER[mode]} placeholderTextColor={c.muted} selectionColor={c.primary}
             onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
             onChangeText={(text) => { workflow.updateLocal(draftKey, { draft: text }); if (error) setError(null); }}
@@ -372,7 +377,7 @@ export function NewWorkScreen({ initialMode = 'session', initialRepositoryId, in
           </TextInput>
           {compact ? null : <View style={styles.controls}>
             <Pressable accessibilityRole="button" accessibilityLabel="Attach an image" accessibilityState={{ disabled: busy }}
-              disabled={busy} hitSlop={6} onPress={() => { Keyboard.dismiss(); showImagePicker(images.add); }}
+              disabled={busy} hitSlop={6} onPress={attach}
               style={({ pressed }) => [styles.attach, { borderColor: c.border, backgroundColor: pressed ? c.surface : 'transparent', opacity: busy ? 0.5 : 1 }]}>
               <SymbolView name={{ ios: 'plus', android: 'add' }} size={16} tintColor={c.muted} />
             </Pressable>

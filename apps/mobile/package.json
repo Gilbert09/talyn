@@ -7,6 +7,13 @@
   "engines": {
     "node": "^22.13.0 || ^24.3.0 || ^26.0.0 || >=27.0.0"
   },
+  "expo": {
+    "autolinking": {
+      "android": {
+        "buildFromSource": ["expo-image-picker"]
+      }
+    }
+  },
   "scripts": {
     "start": "expo start --dev-client",
     "android": "expo run:android",

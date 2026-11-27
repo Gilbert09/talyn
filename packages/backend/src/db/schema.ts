@@ -2994,7 +2994,9 @@ export const workbenchScriptRuns = pgTable('workbench_script_runs', {
   exitCode: integer('exit_code'),
   /** When the run started (migration 0105). Null on older rows. */
   startedAt: timestamp('started_at', { withTimezone: true }),
-});
+}, (t) => ({
+  runningWorkbenchIdx: index('idx_workbench_script_runs_running_workbench').on(t.workbenchId).where(sql`${t.running}`),
+}));
 
 // ---------- Slack sessions (migration 0090) ----------
 //
@@ -3429,6 +3431,7 @@ export const workbenchWakeups = pgTable(
     /** The PR row's head when it was scheduled. Until the push webhook lands, it can name the commit before. */
     ciPrHeadAtSchedule: text('ci_pr_head_at_schedule'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** A fired wake-up with no timestamp is still delivering its message. */
     firedAt: timestamp('fired_at', { withTimezone: true }),
   },
   (t) => ({

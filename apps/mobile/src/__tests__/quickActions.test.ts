@@ -15,8 +15,9 @@ const kinds = (item: Workbench, pull: PRRow | null, options: Parameters<typeof p
 
 describe('primaryActions', () => {
   it.each<[string, Workbench, PRRow | null, string[]]>([
-    ['archived work only restores', session({ archivedAt: '2026-11-09T10:00:00Z' }), row(mergeable), ['restore']],
-    ['archived by status only restores', session({ status: 'archived' }), null, ['restore']],
+    ['an archived session has no quick actions', session({ archivedAt: '2026-11-09T10:00:00Z' }), row(mergeable), []],
+    ['a session with archived status has no quick actions', session({ status: 'archived' }), null, []],
+    ['an archived thread offers Restore', { ...thread(), archivedAt: '2026-11-09T10:00:00Z' }, null, ['restore']],
     ['a quiet session with no PR and no changes has nothing', noPr(), null, []],
     ['changes with no PR offer Create PR', noPr(changes), null, ['create_pr']],
     ['committed work alone offers Create PR', noPr({ committedStats: { added: 1, removed: 0, files: 1 } }), null, ['create_pr']],
