@@ -9,8 +9,6 @@ import { useWorkspaceName } from '../../components/ScreenHeader';
 import { AppText, Button, Group, Row, Segmented, useActionSheet } from '../../components/UI';
 import { openExternal } from '../../components/Workflow';
 import { useFeatures } from '../../lib/features';
-import { NotificationSettings } from '../../notifications/Settings';
-import { SpaceNotificationSettings } from '../spaces/SpaceNotificationSettings';
 import { radius, setThemePreference, useTheme, useThemePreference } from '../../theme/tokens';
 import { useResource } from '../../workflow/hooks';
 import { AboutUpdates } from '../updates/AboutUpdates';
@@ -22,7 +20,7 @@ import { SessionSettings } from './SessionSettings';
 
 export function SettingsScreen() {
   const auth = useAuth();
-  const { account, auth: controller, notifications, signOut } = useMobileRuntime();
+  const { account, auth: controller, signOut } = useMobileRuntime();
   const selected = useWorkspace().selected;
   const workspaceName = useWorkspaceName();
   const workspace = useResource<Workspace>('workspace', '', Boolean(selected));
@@ -57,6 +55,9 @@ export function SettingsScreen() {
         <AnalyticsSetting divider />
         <Row title="Sign out" disabled={deleting} divider={false} onPress={() => { void (signOut ? signOut() : controller.signOut()); }} />
       </Group>
+      <Group>
+        <Row title="Notifications" subtitle="Manage alerts for workspaces and team spaces" chevron href="/settings/notifications" divider={false} />
+      </Group>
       <Group title="Workspace">
         <Row title={workspaceName ?? 'No workspace selected'} subtitle="Current workspace" chevron href="/workspaces"
           leading={current ? <WorkspaceLogo workspace={current} /> : undefined}
@@ -84,8 +85,6 @@ export function SettingsScreen() {
         </View>
       </Group>
       {auth.issue === 'outage' ? <Status message="Sign-in is temporarily unavailable. Your account is still signed in." /> : null}
-      {notifications ? <NotificationSettings controller={notifications} offline={offline} /> : null}
-      <SpaceNotificationSettings offline={offline} />
       <Group title="About">
         <Row title="Version" trailing={<AppText variant="meta" tone="muted" selectable>{info.build ? `${info.version} (${info.build})` : info.version}</AppText>} />
         <AboutUpdates info={info} />

@@ -1,17 +1,26 @@
-import { and, eq, inArray } from 'drizzle-orm';
-import type { MobileNotificationDestination, SpaceNotificationPreferences } from '@talyn/shared';
+import { and, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
+import { MOBILE_NOTIFICATION_CATEGORIES, SPACE_NOTIFICATION_RESET_SCOPES, type MobileNotificationCategory, type MobileNotificationDestination,
+  type SpaceNotificationPreferences, type SpacePhoneNotificationCategories } from '@talyn/shared';
+import { z } from 'zod';
 import { getPoolDbClient, type Database } from '../../db/client.js';
-import { spaceNotificationMutes as mutesTable, tasks as tasksTable, users as usersTable, workbenches as workbenchesTable, workspaces as workspacesTable } from '../../db/schema.js';
+import { spaceNotificationMutes as mutesTable, spacePhoneNotificationPreferences as phoneTable, spaces as spacesTable,
+  teamMembers as membersTable,
+  tasks as tasksTable, users as usersTable, workbenches as workbenchesTable, workspaces as workspacesTable } from '../../db/schema.js';
 import { TeamError } from '../billing/teams.js';
 import { isFeatureEnabled } from '../featureFlags.js';
 import { assertSpaceMember } from './access.js';
+import { callerGithubIdentity, mineCondition } from './membership.js';
 
 export async function readSpaceNotificationPreferences(userId: string): Promise<SpaceNotificationPreferences> {
-  const rows = await getPoolDbClient()
-    .select({ spaceId: mutesTable.spaceId })
-    .from(mutesTable)
-    .where(eq(mutesTable.userId, userId));
-  return { mutedSpaceIds: rows.map((r) => r.spaceId).sort() };
+  const db = getPoolDbClient();
+  const [mutes, phone] = await Promise.all([
+    db.select({ spaceId: mutesTable.spaceId }).from(mutesTable).where(eq(mutesTable.userId, userId)),
+    db.select({ spaceId: phoneTable.spaceId, categories: phoneTable.categories }).from(phoneTable).where(eq(phoneTable.userId, userId)),
+  ]);
+  return {
+    mutedSpaceIds: mutes.map((row) => row.spaceId).sort(),
+    ...(phone.length ? { phoneCategoriesBySpace: Object.fromEntries(phone.map((row) => [row.spaceId, row.categories])) } : {}),
+  };
 }
 
 export async function setSpaceNotificationsMuted(
@@ -31,12 +40,81 @@ export async function setSpaceNotificationsMuted(
   return readSpaceNotificationPreferences(userId);
 }
 
-/** A PR stays audible if any linked session or task belongs to Personal or an unmuted space. */
-export async function destinationInMutedSpace(
-  ownerId: string,
-  destination: MobileNotificationDestination,
-  db: Database = getPoolDbClient()
-): Promise<boolean> {
+const phoneCategoriesInput = z.record(z.enum(MOBILE_NOTIFICATION_CATEGORIES), z.boolean());
+const phoneCategoryInput = z.object({
+  category: z.enum(MOBILE_NOTIFICATION_CATEGORIES),
+  value: z.boolean().nullable(),
+}).strict();
+
+export async function setSpacePhoneNotificationCategory(
+  userId: string,
+  spaceId: string,
+  input: unknown
+): Promise<SpaceNotificationPreferences> {
+  const parsed = phoneCategoryInput.safeParse(input);
+  if (!parsed.success) throw new TeamError(400, 'Use a supported phone alert type and a boolean or null value.');
+  const { category, value } = parsed.data;
+  const db = getPoolDbClient();
+  if (value === null) {
+    // Keep the row locked until an empty set of overrides is removed.
+    await db.transaction(async (tx) => {
+      const ownerAndSpace = and(eq(phoneTable.userId, userId), eq(phoneTable.spaceId, spaceId));
+      const [row] = await tx.update(phoneTable).set({ categories: sql`${phoneTable.categories} - ${category}::text` })
+        .where(ownerAndSpace).returning({ categories: phoneTable.categories });
+      if (row && Object.keys(row.categories).length === 0) await tx.delete(phoneTable).where(ownerAndSpace);
+    });
+  } else {
+    await assertSpaceMember(userId, spaceId);
+    await db.insert(phoneTable).values({ userId, spaceId, categories: { [category]: value } })
+      .onConflictDoUpdate({
+        target: [phoneTable.userId, phoneTable.spaceId],
+        set: { categories: sql`${phoneTable.categories} || excluded.categories` },
+      });
+  }
+  return readSpaceNotificationPreferences(userId);
+}
+
+export async function setSpacePhoneNotificationCategories(
+  userId: string,
+  spaceId: string,
+  input: unknown
+): Promise<SpaceNotificationPreferences> {
+  const parsed = phoneCategoriesInput.safeParse(input);
+  if (!parsed.success) throw new TeamError(400, 'Use a supported phone alert type and a boolean value.');
+  const db = getPoolDbClient();
+  const categories: SpacePhoneNotificationCategories = parsed.data;
+  if (Object.keys(categories).length) {
+    await assertSpaceMember(userId, spaceId);
+    await db.insert(phoneTable).values({ userId, spaceId, categories })
+      .onConflictDoUpdate({ target: [phoneTable.userId, phoneTable.spaceId], set: { categories } });
+  } else {
+    await db.delete(phoneTable).where(and(eq(phoneTable.userId, userId), eq(phoneTable.spaceId, spaceId)));
+  }
+  return readSpaceNotificationPreferences(userId);
+}
+
+const unlistedResetScope = z.enum(SPACE_NOTIFICATION_RESET_SCOPES);
+
+export async function resetUnlistedSpaceNotifications(userId: string, input: unknown): Promise<SpaceNotificationPreferences> {
+  const scope = unlistedResetScope.safeParse(input);
+  if (!scope.success) throw new TeamError(400, 'Choose which notification settings to reset.');
+  const { githubUserId } = await callerGithubIdentity(userId);
+
+  await getPoolDbClient().transaction(async (tx) => {
+    const activeSpaceIds = tx.select({ id: spacesTable.id }).from(spacesTable)
+      .innerJoin(membersTable, eq(membersTable.teamId, spacesTable.teamId))
+      .where(and(isNull(spacesTable.archivedAt), mineCondition(userId, githubUserId)));
+    if (scope.data !== 'phone') {
+      await tx.delete(mutesTable).where(and(eq(mutesTable.userId, userId), notInArray(mutesTable.spaceId, activeSpaceIds)));
+    }
+    if (scope.data !== 'mutes') {
+      await tx.delete(phoneTable).where(and(eq(phoneTable.userId, userId), notInArray(phoneTable.spaceId, activeSpaceIds)));
+    }
+  });
+  return readSpaceNotificationPreferences(userId);
+}
+
+async function destinationSpaceIds(destination: MobileNotificationDestination, db: Database) {
   const rows = await db
     .select({ spaceId: workbenchesTable.spaceId })
     .from(workbenchesTable)
@@ -53,19 +131,61 @@ export async function destinationInMutedSpace(
       eq(tasksTable.workspaceId, destination.workspaceId), eq(tasksTable.pullRequestId, destination.entityId)
     )));
   }
-  if (rows.length === 0) return false;
-  const spaceIds = rows.map((r) => r.spaceId);
-  if (spaceIds.some((id) => id === null)) return false;
-  const unique = [...new Set(spaceIds as string[])];
-  const muted = await db
+  return [...new Set(rows.map((row) => row.spaceId))];
+}
+
+async function mutedSpaceIds(ownerId: string, spaceIds: string[], db: Database) {
+  const rows = await db
     .select({ spaceId: mutesTable.spaceId })
     .from(mutesTable)
-    .where(and(eq(mutesTable.userId, ownerId), inArray(mutesTable.spaceId, unique)));
-  if (muted.length !== unique.length) return false;
-  // Apply mutes only while the recipient can manage Spaces preferences.
+    .where(and(eq(mutesTable.userId, ownerId), inArray(mutesTable.spaceId, spaceIds)));
+  return new Set(rows.map((row) => row.spaceId));
+}
+
+async function canUseSpacePreferences(ownerId: string, db: Database) {
   const [owner] = await db.select({ email: usersTable.email }).from(usersTable)
     .where(eq(usersTable.id, ownerId)).limit(1);
   return !!owner && isFeatureEnabled('spaces', { distinctId: ownerId, email: owner.email });
+}
+
+/** A PR stays audible if any linked session or task belongs to Personal or an unmuted space. */
+export async function destinationInMutedSpace(
+  ownerId: string,
+  destination: MobileNotificationDestination,
+  db: Database = getPoolDbClient()
+): Promise<boolean> {
+  const ids = await destinationSpaceIds(destination, db);
+  if (!ids.length || ids.some((id) => id === null)) return false;
+  const muted = await mutedSpaceIds(ownerId, ids as string[], db);
+  return muted.size === ids.length && canUseSpacePreferences(ownerId, db);
+}
+
+export async function mobileSpaceNotificationSuppression(
+  ownerId: string,
+  destination: MobileNotificationDestination,
+  category: MobileNotificationCategory,
+  workspaceDefault: boolean,
+  db: Database
+): Promise<'space_muted' | 'preferences_disabled' | null> {
+  const fallback = workspaceDefault ? null : 'preferences_disabled';
+  const ids = await destinationSpaceIds(destination, db);
+  if (workspaceDefault && ids.includes(null)) return null;
+  const spaceIds = ids.filter((id): id is string => id !== null);
+  if (!spaceIds.length) return fallback;
+
+  const [muted, phone] = await Promise.all([
+    mutedSpaceIds(ownerId, spaceIds, db),
+    db.select({ spaceId: phoneTable.spaceId, categories: phoneTable.categories }).from(phoneTable)
+      .where(and(eq(phoneTable.userId, ownerId), inArray(phoneTable.spaceId, spaceIds))),
+  ]);
+  if (!muted.size && !phone.length) return fallback;
+  if (!await canUseSpacePreferences(ownerId, db)) return fallback;
+
+  const overrides = new Map(phone.map((row) => [row.spaceId, row.categories]));
+  for (const id of spaceIds) {
+    if (!muted.has(id) && (overrides.get(id)?.[category] ?? workspaceDefault)) return null;
+  }
+  return muted.size === ids.length ? 'space_muted' : 'preferences_disabled';
 }
 
 /** PR alerts belong to the workspace owner, just like phone pushes. */

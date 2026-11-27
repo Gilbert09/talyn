@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import type {
+  MobileNotificationCategory,
   Space,
+  SpaceNotificationPreferences,
+  SpacePhoneNotificationCategories,
   SpacePresenceMember,
   SpaceRepository,
   SpaceSessionRow,
@@ -54,6 +57,7 @@ interface SpacesState {
   settingsTeamId: string | null;
   /** The spaces I muted. Mine only; the server keeps it for every device. */
   mutedSpaceIds: string[];
+  phoneCategoriesBySpace: Record<string, SpacePhoneNotificationCategories>;
   notificationsLoaded: boolean;
   notificationsError: string | null;
   notificationsSaving: boolean;
@@ -104,6 +108,7 @@ export const useSpacesStore = create<SpacesState>((set, get) => ({
   extraLoads: {},
   settingsTeamId: null,
   mutedSpaceIds: [],
+  phoneCategoriesBySpace: {},
   notificationsLoaded: false,
   notificationsError: null,
   notificationsSaving: false,
@@ -135,7 +140,7 @@ export const useSpacesStore = create<SpacesState>((set, get) => ({
     if (selfUserId === get().selfUserId) return;
     notificationReadVersion++;
     notificationRefreshPending = false;
-    set({ selfUserId, mutedSpaceIds: [], notificationsLoaded: false, notificationsError: null, notificationsSaving: false });
+    set({ selfUserId, mutedSpaceIds: [], phoneCategoriesBySpace: {}, notificationsLoaded: false, notificationsError: null, notificationsSaving: false });
   },
   setMembers: (teamId, members) => set((s) => ({ members: { ...s.members, [teamId]: members } })),
   setSessions: (spaceId, list) =>
@@ -292,6 +297,15 @@ export async function loadTeams(): Promise<void> {
   }
 }
 
+function applySpaceNotifications(prefs: SpaceNotificationPreferences) {
+  useSpacesStore.setState({
+    mutedSpaceIds: prefs.mutedSpaceIds,
+    phoneCategoriesBySpace: prefs.phoneCategoriesBySpace ?? {},
+    notificationsLoaded: true,
+    notificationsError: null,
+  });
+}
+
 export async function loadSpaceNotifications(): Promise<void> {
   if (useSpacesStore.getState().notificationsSaving) {
     notificationRefreshPending = true;
@@ -301,33 +315,34 @@ export async function loadSpaceNotifications(): Promise<void> {
   try {
     const prefs = await api.spaces.notificationPreferences();
     if (version !== notificationReadVersion) return;
-    useSpacesStore.setState({ mutedSpaceIds: prefs.mutedSpaceIds, notificationsLoaded: true, notificationsError: null });
+    applySpaceNotifications(prefs);
   } catch {
     if (version !== notificationReadVersion) return;
     useSpacesStore.setState({ notificationsError: 'Could not load space notification settings.' });
   }
 }
 
-/** Show the choice at once. Restore it if the save fails. */
-export async function setSpaceMuted(spaceId: string, muted: boolean): Promise<void> {
+async function saveSpaceNotifications(
+  request: () => Promise<SpaceNotificationPreferences>,
+  optimisticMutes?: string[],
+): Promise<void> {
   const store = useSpacesStore.getState();
   if (store.notificationsSaving) return;
-  const userId = store.selfUserId;
-  notificationReadVersion++;
-  const before = store.mutedSpaceIds;
+  const version = ++notificationReadVersion;
   useSpacesStore.setState({
     notificationsSaving: true,
-    mutedSpaceIds: muted ? [...new Set([...before, spaceId])] : before.filter((id) => id !== spaceId),
+    mutedSpaceIds: optimisticMutes ?? store.mutedSpaceIds,
   });
   try {
-    const prefs = await api.spaces.setNotificationsMuted(spaceId, muted);
-    if (useSpacesStore.getState().selfUserId !== userId) return;
-    useSpacesStore.setState({ mutedSpaceIds: prefs.mutedSpaceIds, notificationsLoaded: true, notificationsError: null });
+    const prefs = await request();
+    if (version === notificationReadVersion) applySpaceNotifications(prefs);
   } catch (err) {
-    if (useSpacesStore.getState().selfUserId === userId) useSpacesStore.setState({ mutedSpaceIds: before });
+    if (version === notificationReadVersion && optimisticMutes) {
+      useSpacesStore.setState({ mutedSpaceIds: store.mutedSpaceIds });
+    }
     throw err;
   } finally {
-    if (useSpacesStore.getState().selfUserId === userId) {
+    if (version === notificationReadVersion) {
       useSpacesStore.setState({ notificationsSaving: false });
       if (notificationRefreshPending) {
         notificationRefreshPending = false;
@@ -335,6 +350,21 @@ export async function setSpaceMuted(spaceId: string, muted: boolean): Promise<vo
       }
     }
   }
+}
+
+/** Show the choice at once. Restore it if the save fails. */
+export function setSpaceMuted(spaceId: string, muted: boolean): Promise<void> {
+  const { mutedSpaceIds } = useSpacesStore.getState();
+  const next = muted ? [...new Set([...mutedSpaceIds, spaceId])] : mutedSpaceIds.filter((id) => id !== spaceId);
+  return saveSpaceNotifications(() => api.spaces.setNotificationsMuted(spaceId, muted), next);
+}
+
+export function setSpacePhoneCategory(spaceId: string, category: MobileNotificationCategory, value: boolean | null): Promise<void> {
+  return saveSpaceNotifications(() => api.spaces.setPhoneNotificationCategory(spaceId, category, value));
+}
+
+export function resetUnlistedSpaceNotifications(scope: 'mutes' | 'phone'): Promise<void> {
+  return saveSpaceNotifications(() => api.spaces.resetUnlistedNotifications(scope));
 }
 
 /** Whether I muted the space of this session. Personal sessions are never muted. */

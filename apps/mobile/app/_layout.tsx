@@ -91,6 +91,9 @@ function AuthenticatedRoutes() {
       <RootStack.Screen name="settings/memory/index" options={detailOptions('Memory')} />
       <RootStack.Screen name="settings/memory/[id]" options={detailOptions('Memory')} />
       <RootStack.Screen name="settings/codeReview" options={detailOptions('Code review')} />
+      <RootStack.Screen name="settings/notifications/index" options={detailOptions('Notifications')} />
+      <RootStack.Screen name="settings/notifications/workspace/[id]" options={detailOptions('Workspace notifications')} />
+      <RootStack.Screen name="settings/notifications/space/[id]" options={detailOptions('Space notifications')} />
       <RootStack.Screen name="workspaces" options={detailOptions('Workspace')} />
       <RootStack.Screen name="repositories" options={detailOptions('Repositories')} />
       {/* Setup draws its own heading and steps, with no navigation header. */}

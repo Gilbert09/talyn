@@ -7,13 +7,15 @@ import type { AddressInfo } from 'node:net';
 import { defaultMobileNotificationPreferences, type RegisterMobileInstallationInput } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { mobileInstallations, mobileNotificationAudit, mobileNotificationOutbox as outbox,
-  mobileNotificationPreferences, pullRequests, repositories, spaceNotificationMutes, spaces, tasks, teams,
+  mobileNotificationPreferences, mobileNotificationSourceEvents, pullRequests, repositories, spaceNotificationMutes,
+  spacePhoneNotificationPreferences, spaces, tasks, teams,
   users, workbenches, workspaces } from '../db/schema.js';
 import { decryptString } from '../services/tokenCrypto.js';
 import { enqueueMobileNotification, heartbeatMobileInstallation, readMobilePreferences, registerMobileInstallation,
   removeMobileInstallation, resolveMobileNotification, saveMobilePreferences } from '../services/mobileNotifications/store.js';
 import { claimMobileNotifications, dispatchMobileNotifications, processMobileNotificationReceipts, sweepMobileNotificationStorage } from '../services/mobileNotifications/worker.js';
 import { PushProviderError, type MobilePushProvider } from '../services/mobileNotifications/provider.js';
+import { reconcileMobileNotificationEvents } from '../services/mobileNotificationEvents.js';
 import { installationInput, preferencesInput } from '../services/mobileNotifications/validation.js';
 import { internalProxyHeaders, requireAuth } from '../middleware/auth.js';
 import { mobileNotificationRoutes } from '../routes/mobileNotifications.js';
@@ -49,11 +51,15 @@ async function setupNotification() {
   await enqueueMobileNotification({ ownerId: owner, workspaceId, destination, category: 'session_update', eventId, deduplicationKey: eventId });
   return { registration, eventId };
 }
-async function mutedSpace(userId = owner) {
+async function notificationSpace() {
   const teamId = randomUUID();
   const spaceId = randomUUID();
   await fixture.db.insert(teams).values({ id: teamId, name: 'Team' });
   await fixture.db.insert(spaces).values({ id: spaceId, teamId, name: 'Automations' });
+  return spaceId;
+}
+async function mutedSpace(userId = owner) {
+  const spaceId = await notificationSpace();
   await fixture.db.insert(spaceNotificationMutes).values({ userId, spaceId });
   return spaceId;
 }
@@ -209,10 +215,66 @@ describe('personal space notification destinations', () => {
       await fixture.db.update(tasks).set({ spaceId: null }).where(eq(tasks.id, taskId));
       expect(await destinationInMutedSpace(owner, prDestination)).toBe(false);
     });
+
+    it('delivers a PR phone notification when a linked task allows it and a linked session is muted', async () => {
+      const muted = await mutedSpace();
+      const custom = await notificationSpace();
+      await fixture.db.update(workbenches).set({ spaceId: muted, pullRequestId: prId }).where(eq(workbenches.id, entityId));
+      await fixture.db.insert(tasks).values({ id: randomUUID(), workspaceId, spaceId: custom, pullRequestId: prId,
+        type: 'code_writing', title: 'Task', description: 'Task' });
+      await fixture.db.insert(spacePhoneNotificationPreferences).values({ userId: owner, spaceId: custom, categories: { pr_review: true } });
+      const defaults = defaultMobileNotificationPreferences(workspaceId);
+      await saveMobilePreferences(owner, { ...defaults, enabled: true, onlyWhenAway: false,
+        categories: { ...defaults.categories, pr_review: false } });
+      await registerMobileInstallation(owner, input());
+
+      await fixture.db.update(pullRequests).set({ reviewRequested: true }).where(eq(pullRequests.id, prId));
+
+      expect(await reconcileMobileNotificationEvents()).toBe(1);
+      const send = vi.fn<MobilePushProvider['send']>(async () => [{ status: 'ok', ticketId: randomUUID() }]);
+      await dispatchMobileNotifications({ send, receipts: async () => [] });
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0][0][0].data).toMatchObject({ category: 'pr_review', destination: prDestination });
+    });
   });
 });
 
 describe('durable outbox', () => {
+  it.each([true, false])('keeps the workspace phone notification master in force when enabled is %s', async (enabled) => {
+    const spaceId = await notificationSpace();
+    await fixture.db.update(workbenches).set({ spaceId }).where(eq(workbenches.id, entityId));
+    await fixture.db.insert(spacePhoneNotificationPreferences).values({ userId: owner, spaceId, categories: { session_update: true } });
+    const defaults = defaultMobileNotificationPreferences(workspaceId);
+    await saveMobilePreferences(owner, { ...defaults, enabled, onlyWhenAway: false,
+      categories: { ...defaults.categories, session_update: false } });
+    await registerMobileInstallation(owner, input());
+
+    await fixture.db.update(workbenches).set({ status: 'error' }).where(eq(workbenches.id, entityId));
+
+    const journal = await fixture.db.select().from(mobileNotificationSourceEvents);
+    expect(journal).toMatchObject(enabled ? [{ category: 'session_update', entityId }] : []);
+    expect(await reconcileMobileNotificationEvents()).toBe(enabled ? 1 : 0);
+    const send = vi.fn<MobilePushProvider['send']>(async () => [{ status: 'ok', ticketId: randomUUID() }]);
+    await dispatchMobileNotifications({ send, receipts: async () => [] });
+    expect(send).toHaveBeenCalledTimes(enabled ? 1 : 0);
+  });
+
+  it('suppresses a queued phone notification when a space turns its category off', async () => {
+    const spaceId = await notificationSpace();
+    await fixture.db.update(workbenches).set({ spaceId }).where(eq(workbenches.id, entityId));
+    await saveMobilePreferences(owner, { ...defaultMobileNotificationPreferences(workspaceId), enabled: true, onlyWhenAway: false });
+    await registerMobileInstallation(owner, input());
+    await fixture.db.update(workbenches).set({ status: 'error' }).where(eq(workbenches.id, entityId));
+    expect(await reconcileMobileNotificationEvents()).toBe(1);
+    await fixture.db.insert(spacePhoneNotificationPreferences).values({ userId: owner, spaceId, categories: { session_update: false } });
+
+    const send = vi.fn<MobilePushProvider['send']>(async () => [{ status: 'ok', ticketId: randomUUID() }]);
+    await dispatchMobileNotifications({ send, receipts: async () => [] });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(await fixture.db.select().from(outbox)).toMatchObject([{ state: 'cancelled', lastErrorClass: 'preferences_disabled' }]);
+  });
+
   it.each(['session', 'thread'] as const)('cancels a queued %s push when its space is muted', async (kind) => {
     await setupNotification();
     const spaceId = await mutedSpace();

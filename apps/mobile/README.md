@@ -35,10 +35,11 @@ Complete the documented account, policy, domain, privacy, signing, and physical-
 
 See [push operations](../../docs/MOBILE_PUSH_NOTIFICATIONS.md) for backend configuration, worker limits, retention, and activation gates.
 
-Open Settings after sign-in and workspace selection. Read the explanation, then select **Enable notifications on this device**.
+Open **Settings > Notifications** after you sign in. Select a workspace, then select **Enable notifications on this device**.
 The app requests operating system permission only after that action.
 Permission denial does not block any workflow. Settings shows denied, disabled, failed, and unavailable states.
-Global and category choices apply to the selected workspace. Quiet hours use the saved IANA timezone.
+Choose the alert types, delivery settings, and quiet hours for each workspace. Quiet hours use the saved IANA timezone.
+Choose a team space to override individual phone alert types. Use **Mute space** to mute its alerts across devices.
 Alerts show the session name and a short summary, or the PR reference and title, as on desktop.
 Android hides the alert text on a locked device. The sensitive preview choice is not used.
 

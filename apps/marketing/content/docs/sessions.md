@@ -45,19 +45,21 @@ If every usable subscription for your default agent is at its limit, the compose
 The composer selects that agent if one of its subscriptions has usage left.
 You can still select an agent or model for that session.
 
-In the desktop app and the web app, **Settings > Notifications** holds all notification settings. In the mobile app, they are in the **Notifications** group in **Settings**.
+Open **Settings > Notifications** on your computer or phone to manage your alerts.
 
 - On a computer, turn on a notification when an agent finishes, and a notification when a merge-queue pull request is blocked. These settings apply only to that computer or browser.
-- For your phone, turn workspace notifications on or off, and choose the types: session updates, PR reviews, CI failures, ready to merge and human input. You can get alerts only when you are away from your computer, and you can set quiet hours. A change on one device also applies to the others. Each phone must also allow notifications in the Talyn mobile app.
+- In the mobile app, select a workspace to turn its phone alerts on or off. Choose which alert types to receive. You can set quiet hours and receive alerts only when you are away from your computer. Each phone must allow notifications for Talyn.
 
-The **Team spaces** group lets you turn off alerts for a space, such as Automations.
+Under **Team spaces**, set each phone alert type to **On**, **Off**, or **Use workspace default**. The workspace still controls whether phone alerts are enabled and when they can arrive.
+
+You can also mute a team space, such as Automations.
 This personal setting applies to your desktop, browser, and phone.
 Your teammates keep their own preferences.
 Sessions, threads, and tasks in a muted space send you no alerts.
 Linked pull requests are muted when all their sessions and tasks are in spaces you muted.
 This includes archived sessions.
 A pull request with a session or task in Personal can still send alerts.
-Turn the space on again to use your usual notification settings.
+Turn off the mute to use your saved settings again.
 If muted spaces leave the list, select **Restore alerts** to remove their mutes.
 This also works after a space is archived or you leave its team.
 

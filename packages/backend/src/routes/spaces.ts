@@ -56,7 +56,8 @@ import {
   removeSpaceRepository,
   updateSpace,
 } from '../services/teams/spaces.js';
-import { readSpaceNotificationPreferences, setSpaceNotificationsMuted } from '../services/teams/notifications.js';
+import { readSpaceNotificationPreferences, resetUnlistedSpaceNotifications, setSpaceNotificationsMuted, setSpacePhoneNotificationCategories,
+  setSpacePhoneNotificationCategory } from '../services/teams/notifications.js';
 import { broadcastToUser } from '../services/websocket.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { fleetErrorAsRefusal } from '../services/workbenches/errors.js';
@@ -359,6 +360,16 @@ export function spaceRoutes(): Router {
     })
   );
 
+  router.delete(
+    '/space-notifications/unlisted',
+    handle(async (req, res) => {
+      const user = assertUser(req);
+      const data = await resetUnlistedSpaceNotifications(user.id, req.query.scope);
+      broadcastToUser(user.id, { type: 'space:notifications', payload: {}, timestamp: new Date().toISOString() });
+      ok(res, data satisfies SpaceNotificationPreferences);
+    })
+  );
+
   router.put(
     '/spaces/:id/notifications',
     handle(async (req, res) => {
@@ -367,6 +378,26 @@ export function spaceRoutes(): Router {
       broadcastToUser(assertUser(req).id, {
         type: 'space:notifications', payload: {}, timestamp: new Date().toISOString(),
       });
+      ok(res, data satisfies SpaceNotificationPreferences);
+    })
+  );
+
+  router.put(
+    '/spaces/:id/notifications/phone',
+    handle(async (req, res) => {
+      const user = assertUser(req);
+      const data = await setSpacePhoneNotificationCategories(user.id, req.params.id!, req.body?.categories);
+      broadcastToUser(user.id, { type: 'space:notifications', payload: {}, timestamp: new Date().toISOString() });
+      ok(res, data satisfies SpaceNotificationPreferences);
+    })
+  );
+
+  router.patch(
+    '/spaces/:id/notifications/phone',
+    handle(async (req, res) => {
+      const user = assertUser(req);
+      const data = await setSpacePhoneNotificationCategory(user.id, req.params.id!, req.body);
+      broadcastToUser(user.id, { type: 'space:notifications', payload: {}, timestamp: new Date().toISOString() });
       ok(res, data satisfies SpaceNotificationPreferences);
     })
   );
