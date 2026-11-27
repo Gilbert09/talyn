@@ -1,7 +1,8 @@
-import { pullRequestOutcomeEvent, type Workbench, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
+import { pullRequestOutcomeEvent, type Features, type Workbench, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
 import { installWorkbenchNotifications, notificationSummary, notificationText, toastPullRequestFailures } from '../renderer/lib/workbenchNotify';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 
+import { useWorkspaceStore } from '../renderer/stores/workspace';
 import { useSpacesStore } from '../renderer/stores/spaces';
 
 import { toast } from '../renderer/stores/toast';
@@ -133,12 +134,15 @@ describe('notification text', () => {
 
 describe('personal space notification preferences', () => {
   it.each([
-    ['muted space', 'space-muted', 0],
-    ['another space', 'space-other', 1],
-    ['Personal', null, 1],
-  ] as const)('shows the expected alerts for %s', (_label, spaceId, count) => {
+    ['muted space', 'space-muted', 0, true],
+    ['another space', 'space-other', 1, true],
+    ['Personal', null, 1, true],
+    ['Spaces disabled', 'space-muted', 1, false],
+  ] as const)('shows the expected alerts for %s', (_label, spaceId, count, offered) => {
     const initial = useWorkbenchStore.getState();
     const spaces = useSpacesStore.getState();
+    const features = useWorkspaceStore.getState().features;
+    useWorkspaceStore.setState({ features: { spaces: offered } as Features });
     const originalNotification = global.Notification;
     const focus = jest.spyOn(document, 'hasFocus').mockReturnValue(false);
     const notification = jest.fn().mockImplementation(() => ({ onclick: null }));
@@ -159,6 +163,7 @@ describe('personal space notification preferences', () => {
       uninstall();
       useWorkbenchStore.setState(initial, true);
       useSpacesStore.setState(spaces, true);
+      useWorkspaceStore.setState({ features });
       Object.defineProperty(global, 'Notification', { configurable: true, value: originalNotification });
       focus.mockRestore();
     }
@@ -168,12 +173,15 @@ describe('personal space notification preferences', () => {
 
 describe('space mutes for pull request failures', () => {
   it.each([
-    ['space-muted', 0],
-    ['space-other', 1],
-    [null, 1],
-  ] as const)('shows %s failure alerts only when allowed', (spaceId, count) => {
+    ['space-muted', 0, true],
+    ['space-other', 1, true],
+    [null, 1, true],
+    ['space-muted', 1, false],
+  ] as const)('shows %s failure alerts only when allowed', (spaceId, count, offered) => {
     const initial = useWorkbenchStore.getState();
     const spaces = useSpacesStore.getState();
+    const features = useWorkspaceStore.getState().features;
+    useWorkspaceStore.setState({ features: { spaces: offered } as Features });
     const error = jest.spyOn(toast, 'error').mockReturnValue('toast');
     useSpacesStore.setState({ mutedSpaceIds: ['space-muted'] });
     useWorkbenchStore.setState({
@@ -186,6 +194,7 @@ describe('space mutes for pull request failures', () => {
     } finally {
       useWorkbenchStore.setState(initial, true);
       useSpacesStore.setState(spaces, true);
+      useWorkspaceStore.setState({ features });
       error.mockRestore();
     }
   });

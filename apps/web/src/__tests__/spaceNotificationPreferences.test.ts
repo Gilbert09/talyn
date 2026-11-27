@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SpaceNotificationPreferences } from '@talyn/shared';
+import type { Features, SpaceNotificationPreferences } from '@talyn/shared';
 import { api } from '../lib/api';
-import { loadSpaceNotifications, setSpaceMuted, useSpacesStore } from '../stores/spaces';
+import { isSpaceMuted, loadSpaceNotifications, setSpaceMuted, useSpacesStore } from '../stores/spaces';
+import { useWorkspaceStore } from '../stores/workspace';
 
 vi.mock('../lib/api', () => ({ api: { spaces: {
   notificationPreferences: vi.fn(),
@@ -19,6 +20,7 @@ const get = vi.mocked(api.spaces.notificationPreferences);
 const save = vi.mocked(api.spaces.setNotificationsMuted);
 
 beforeEach(() => {
+  useWorkspaceStore.setState({ features: null });
   get.mockReset();
   save.mockReset();
   useSpacesStore.getState().setSelfUserId(null);
@@ -98,5 +100,31 @@ describe('personal space preferences store', () => {
     await loadSpaceNotifications();
     expect(useSpacesStore.getState().mutedSpaceIds).toEqual(['automations']);
     expect(useSpacesStore.getState().notificationsError).toBeTruthy();
+  });
+});
+
+
+describe('space mute feature gate', () => {
+  it.each([
+    ['enabled', { spaces: true }, true],
+    ['disabled', { spaces: false }, false],
+    ['unknown', null, false],
+    ['missing', {}, false],
+  ] as const)('applies a cached mute when Spaces is %s', (_label, features, expected) => {
+    useSpacesStore.setState({ mutedSpaceIds: ['automations'] });
+    useWorkspaceStore.setState({ features: features as Features | null });
+    expect(isSpaceMuted('automations')).toBe(expected);
+    expect(isSpaceMuted('other')).toBe(false);
+    expect(isSpaceMuted(null)).toBe(false);
+    expect(isSpaceMuted(undefined)).toBe(false);
+  });
+
+  it('keeps the saved choice when Spaces is disabled and enabled again', () => {
+    useSpacesStore.setState({ mutedSpaceIds: ['automations'] });
+    for (const spaces of [true, false, true]) {
+      useWorkspaceStore.setState({ features: { spaces } as Features });
+      expect(isSpaceMuted('automations')).toBe(spaces);
+      expect(useSpacesStore.getState().mutedSpaceIds).toEqual(['automations']);
+    }
   });
 });

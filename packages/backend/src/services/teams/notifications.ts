@@ -1,8 +1,9 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import type { MobileNotificationDestination, SpaceNotificationPreferences } from '@talyn/shared';
 import { getPoolDbClient, type Database } from '../../db/client.js';
-import { spaceNotificationMutes as mutesTable, tasks as tasksTable, workbenches as workbenchesTable, workspaces as workspacesTable } from '../../db/schema.js';
+import { spaceNotificationMutes as mutesTable, tasks as tasksTable, users as usersTable, workbenches as workbenchesTable, workspaces as workspacesTable } from '../../db/schema.js';
 import { TeamError } from '../billing/teams.js';
+import { isFeatureEnabled } from '../featureFlags.js';
 import { assertSpaceMember } from './access.js';
 
 export async function readSpaceNotificationPreferences(userId: string): Promise<SpaceNotificationPreferences> {
@@ -60,7 +61,11 @@ export async function destinationInMutedSpace(
     .select({ spaceId: mutesTable.spaceId })
     .from(mutesTable)
     .where(and(eq(mutesTable.userId, ownerId), inArray(mutesTable.spaceId, unique)));
-  return muted.length === unique.length;
+  if (muted.length !== unique.length) return false;
+  // Apply mutes only while the recipient can manage Spaces preferences.
+  const [owner] = await db.select({ email: usersTable.email }).from(usersTable)
+    .where(eq(usersTable.id, ownerId)).limit(1);
+  return !!owner && isFeatureEnabled('spaces', { distinctId: ownerId, email: owner.email });
 }
 
 /** PR alerts belong to the workspace owner, just like phone pushes. */

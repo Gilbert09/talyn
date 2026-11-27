@@ -17,6 +17,7 @@ import { PushProviderError, type MobilePushProvider } from '../services/mobileNo
 import { installationInput, preferencesInput } from '../services/mobileNotifications/validation.js';
 import { internalProxyHeaders, requireAuth } from '../middleware/auth.js';
 import { mobileNotificationRoutes } from '../routes/mobileNotifications.js';
+import * as featureFlags from '../services/featureFlags.js';
 import { destinationInMutedSpace, pullRequestNotificationsMuted } from '../services/teams/notifications.js';
 
 const owner = '00000000-0000-4000-8000-000000000001';
@@ -69,6 +70,7 @@ beforeAll(async () => {
   url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/mobile`;
 });
 beforeEach(async () => {
+  vi.stubEnv('SPACES_ENABLED', 'true');
   await fixture.db.delete(users);
   await seedUser(fixture.db, { id: owner }); await seedUser(fixture.db, { id: other });
   await fixture.db.insert(workspaces).values([{ id: workspaceId, ownerId: owner, name: 'Fixture' }, { id: otherWorkspace, ownerId: other, name: 'Fixture' }]);
@@ -134,6 +136,19 @@ describe('personal space notification destinations', () => {
     expect(await destinationInMutedSpace(owner, { ...destination, kind })).toBe(false);
   });
 
+  it('evaluates Spaces for the recipient with their email', async () => {
+    const spaceId = await mutedSpace(other);
+    await fixture.db.update(workbenches).set({ spaceId }).where(eq(workbenches.id, entityId));
+    const flag = vi.spyOn(featureFlags, 'isFeatureEnabled').mockResolvedValue(false);
+    try {
+      expect(await destinationInMutedSpace(other, destination)).toBe(false);
+      const [recipient] = await fixture.db.select({ email: users.email }).from(users).where(eq(users.id, other));
+      expect(flag).toHaveBeenCalledWith('spaces', { distinctId: other, email: recipient.email });
+    } finally {
+      flag.mockRestore();
+    }
+  });
+
   describe('pull requests', () => {
     const prId = '00000000-0000-4000-8000-000000000006';
     const repositoryId = '00000000-0000-4000-8000-000000000007';
@@ -173,6 +188,18 @@ describe('personal space notification destinations', () => {
       expect(await destinationInMutedSpace(owner, prDestination)).toBe(true);
     });
 
+    it('ignores saved PR mutes while Spaces is disabled and restores them when enabled', async () => {
+      const spaceId = await mutedSpace();
+      await fixture.db.update(workbenches).set({ spaceId, pullRequestId: prId }).where(eq(workbenches.id, entityId));
+      expect(await pullRequestNotificationsMuted(workspaceId, prId)).toBe(true);
+      vi.stubEnv('SPACES_ENABLED', 'false');
+      expect(await destinationInMutedSpace(owner, prDestination)).toBe(false);
+      expect(await pullRequestNotificationsMuted(workspaceId, prId)).toBe(false);
+      expect(await fixture.db.select().from(spaceNotificationMutes)).toHaveLength(1);
+      vi.stubEnv('SPACES_ENABLED', 'true');
+      expect(await pullRequestNotificationsMuted(workspaceId, prId)).toBe(true);
+    });
+
     it('includes the spaces of linked tasks', async () => {
       const spaceId = await mutedSpace();
       const taskId = randomUUID();
@@ -195,6 +222,19 @@ describe('durable outbox', () => {
     await dispatchMobileNotifications({ send, receipts: async () => [] });
     expect(send).not.toHaveBeenCalled();
     expect((await fixture.db.select().from(outbox))[0]).toMatchObject({ state: 'cancelled', lastErrorClass: 'space_muted' });
+  });
+
+  it.each(['session', 'thread'] as const)('sends a muted %s push while Spaces is disabled', async (kind) => {
+    await setupNotification();
+    const spaceId = await mutedSpace();
+    await fixture.db.update(workbenches).set({ kind, spaceId }).where(eq(workbenches.id, entityId));
+    await fixture.db.update(outbox).set({ destination: { ...destination, kind } });
+    vi.stubEnv('SPACES_ENABLED', 'false');
+    const send = vi.fn<MobilePushProvider['send']>(async () => [{ status: 'ok', ticketId: randomUUID() }]);
+    await dispatchMobileNotifications({ send, receipts: async () => [] });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect((await fixture.db.select().from(outbox))[0].state).toBe('ticketed');
+    expect(await fixture.db.select().from(spaceNotificationMutes)).toHaveLength(1);
   });
 
   it('sends a queued push after the recipient unmutes the space', async () => {

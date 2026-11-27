@@ -12,6 +12,7 @@ import type {
   WorkbenchChat,
 } from '@talyn/shared';
 import { api } from '../lib/api';
+import { useWorkspaceStore } from './workspace';
 
 /** One list of a space (sessions or tasks), with what the caller cannot see. */
 export interface SpaceList<T> {
@@ -338,7 +339,8 @@ export async function setSpaceMuted(spaceId: string, muted: boolean): Promise<vo
 
 /** Whether I muted the space of this session. Personal sessions are never muted. */
 export function isSpaceMuted(spaceId: string | null | undefined): boolean {
-  return !!spaceId && useSpacesStore.getState().mutedSpaceIds.includes(spaceId);
+  return useWorkspaceStore.getState().features?.spaces === true
+    && !!spaceId && useSpacesStore.getState().mutedSpaceIds.includes(spaceId);
 }
 
 export async function loadMembers(teamId: string): Promise<void> {
