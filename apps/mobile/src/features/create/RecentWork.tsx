@@ -16,12 +16,14 @@ import { useDrawerWork } from '../nav/data';
 import { useSessionMenu } from '../sessions/SessionMenu';
 import { branchChanges, recentLift, recentWork, shortRepository } from './recent';
 
+type ScrollPhase = 'dragging' | 'released';
+
 /**
  * Web's "Recent" list on the home composer: the newest sessions and threads,
  * one tap away. Rows read the live store lists, so their state, changes and
  * pull request follow socket events. A long press opens the session menu.
- * A drag down the list lifts the composer (`onLift`), and a pull back to the
- * top brings it down again.
+ * The composer lifts after a drag down the list and expands after a pull
+ * back to the top.
  */
 export function RecentWork({ lifted = false, onLift }: { lifted?: boolean; onLift?(lifted: boolean): void } = {}) {
   const { personal } = useDrawerWork();
@@ -32,25 +34,23 @@ export function RecentWork({ lifted = false, onLift }: { lifted?: boolean; onLif
   const menu = useSessionMenu();
   const now = useNow();
   const c = useTheme();
-  const dragging = useRef(false);
+  const scrollPhase = useRef<ScrollPhase | null>(null);
   const [height, setHeight] = useState(0);
   if (!items.length) return null;
-  const follow = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const next = recentLift({ offset: event.nativeEvent.contentOffset.y, dragging: dragging.current, lifted });
-    if (next !== lifted) onLift?.(next);
-  };
-  // A drag or a fling ends where the person left it, so its last offset counts too.
-  const settle = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    dragging.current = true;
-    follow(event);
-    dragging.current = false;
+  const settle = (event: NativeSyntheticEvent<NativeScrollEvent>, phase: ScrollPhase) => {
+    if (!onLift || scrollPhase.current !== phase) return;
+    const next = recentLift(event.nativeEvent.contentOffset.y, lifted);
+    // Resizing the list can reset its offset. Check the fling only if the drag kept the same layout.
+    scrollPhase.current = phase === 'dragging' && next === lifted ? 'released' : null;
+    if (next !== lifted) onLift(next);
   };
   // Lifted, the list keeps one point to scroll, so a pull back to the top still reaches it when the rows fit.
   return <ScrollView testID="recent-work" style={styles.scroll} contentContainerStyle={[styles.content, lifted && height ? { minHeight: height + 1 } : null]}
-    keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} scrollEventThrottle={16}
-    onLayout={(event) => setHeight(event.nativeEvent.layout.height)} onScroll={onLift ? follow : undefined}
-    onScrollBeginDrag={() => { dragging.current = true; }} onScrollEndDrag={settle}
-    onMomentumScrollBegin={() => { dragging.current = true; }} onMomentumScrollEnd={settle}>
+    keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}
+    onLayout={(event) => setHeight(event.nativeEvent.layout.height)}
+    onScrollBeginDrag={() => { scrollPhase.current = 'dragging'; }}
+    onScrollEndDrag={(event) => settle(event, 'dragging')}
+    onMomentumScrollEnd={(event) => settle(event, 'released')}>
     <Text accessibilityRole="header" style={[styles.label, { color: c.muted }]}>Recent</Text>
     <View accessibilityRole="list" accessibilityLabel="Recent sessions"
       style={[styles.card, { backgroundColor: c.elevated, borderColor: c.border }]}>

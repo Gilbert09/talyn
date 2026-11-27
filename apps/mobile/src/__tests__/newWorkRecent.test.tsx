@@ -95,17 +95,15 @@ describe('composerLayout', () => {
 });
 
 describe('recentLift', () => {
-  it.each<[string, number, boolean, boolean, boolean]>([
-    ['a drag past the threshold lifts', LIFT_AFTER + 1, true, false, true],
-    ['a drag to the threshold keeps it down', LIFT_AFTER, true, false, false],
-    ['a drag inside the threshold keeps a lift', 10, true, true, true],
-    ['a drag inside the threshold keeps it down', 10, true, false, false],
-    ['a drag back to the top drops the lift', 0, true, true, false],
-    ['a pull past the top drops the lift', -30, true, true, false],
-    ['a far drag keeps a lift', 400, true, true, true],
-    ['a layout move to the top keeps a lift', 0, false, true, true],
-    ['a layout move far down does not lift', 400, false, false, false],
-  ])('%s', (_name, offset, dragging, lifted, expected) => expect(recentLift({ offset, dragging, lifted })).toBe(expected));
+  it.each<[string, number, boolean, boolean]>([
+    ['a drag past the threshold lifts', LIFT_AFTER + 1, false, true],
+    ['a drag to the threshold keeps it down', LIFT_AFTER, false, false],
+    ['a drag inside the threshold keeps a lift', 10, true, true],
+    ['a drag inside the threshold keeps it down', 10, false, false],
+    ['a drag back to the top drops the lift', 0, true, false],
+    ['a pull past the top drops the lift', -30, true, false],
+    ['a far drag keeps a lift', 400, true, true],
+  ])('%s', (_name, offset, lifted, expected) => expect(recentLift(offset, lifted)).toBe(expected));
 });
 
 describe('home composer with recent work', () => {
@@ -209,7 +207,10 @@ describe('home composer with recent work', () => {
     it('turns compact after a drag down and back after a drag to the top', async () => {
       await render(<NewWorkScreen presentation="home" />);
       await waitFor(() => expect(recent()).not.toBeNull());
-      await dragTo(LIFT_AFTER + 40);
+      await fireEvent(list(), 'scrollBeginDrag', scroll(0));
+      await fireEvent.scroll(list(), scroll(LIFT_AFTER + 40));
+      expect(compact()).toBe(false);
+      await fireEvent(list(), 'scrollEndDrag', scroll(LIFT_AFTER + 40));
       expect(compact()).toBe(true);
       expect(screen.getByLabelText('Task')).toBeVisible();
       expect(recent()).not.toBeNull();
@@ -225,12 +226,26 @@ describe('home composer with recent work', () => {
       expect(compact()).toBe(true);
     });
 
-    it('drops the lift when a fling ends at the top', async () => {
+    it('keeps the lift if resizing the list resets the offset during the same fling', async () => {
       await render(<NewWorkScreen presentation="home" />);
       await waitFor(() => expect(recent()).not.toBeNull());
       await dragTo(LIFT_AFTER + 40);
       await fireEvent(list(), 'momentumScrollBegin', scroll(LIFT_AFTER + 40));
       await fireEvent.scroll(list(), scroll(0));
+      await fireEvent(list(), 'momentumScrollEnd', scroll(0));
+      expect(compact()).toBe(true);
+    });
+
+    it('drops the lift when a new fling ends at the top', async () => {
+      await render(<NewWorkScreen presentation="home" />);
+      await waitFor(() => expect(recent()).not.toBeNull());
+      await dragTo(LIFT_AFTER + 40);
+      await fireEvent(list(), 'scrollBeginDrag', scroll(LIFT_AFTER + 40));
+      await fireEvent(list(), 'scrollEndDrag', scroll(10));
+      await fireEvent(list(), 'momentumScrollBegin', scroll(10));
+      await fireEvent.scroll(list(), scroll(0));
+      expect(compact()).toBe(true);
+      await fireEvent(list(), 'momentumScrollEnd', scroll(0));
       expect(compact()).toBe(false);
     });
 
