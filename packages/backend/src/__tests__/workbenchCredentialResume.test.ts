@@ -13,6 +13,9 @@ import { sendMessage } from '../services/workbenches/turns.js';
 import { existingBoxRefusal } from '../services/workbenches/boxGate.js';
 import { UsageExhaustedError } from '../services/billing/entitlements.js';
 import { recordSandboxAgents } from '../services/workbenches/credentialPolicy.js';
+import { setUsageFetchForTests } from '../services/selfHosted/accountSelection.js';
+import { encryptString } from '../services/tokenCrypto.js';
+import { randomBytes } from 'node:crypto';
 
 vi.mock('../services/githubIdentity.js', async (original) => ({
   ...(await original<typeof import('../services/githubIdentity.js')>()), ensureGithubUserId: async () => null,
@@ -32,6 +35,7 @@ vi.mock('../services/workbenches/emit.js', () => ({ emitWorkbenchChat: vi.fn(), 
 
 const reason = "API Error: Request rejected (429) · This request would exceed your account's rate limit. Please try again later.";
 const credential: FleetApiKeyCredential = { keyEnc: { v: 1, iv: 'unused', ct: 'unused', tag: 'unused' } };
+const usageFetch = vi.fn<typeof fetch>();
 let testDb: Awaited<ReturnType<typeof createTestDb>>;
 const chat = async () => (await getChat('chat'))!;
 async function account(agent: 'claude' | 'codex') {
@@ -42,6 +46,8 @@ async function account(agent: 'claude' | 'codex') {
 }
 beforeEach(async () => {
   vi.clearAllMocks();
+  usageFetch.mockReset();
+  setUsageFetchForTests(usageFetch);
   vi.mocked(existingBoxRefusal).mockResolvedValue(null);
   testDb = await createTestDb();
   await seedUser(testDb.db, { id: 'owner' });
@@ -59,7 +65,12 @@ beforeEach(async () => {
   });
   await account('claude');
 });
-afterEach(async () => { vi.unstubAllEnvs(); resetFeatureFlagsForTests(); await testDb.cleanup(); });
+afterEach(async () => {
+  setUsageFetchForTests(undefined);
+  vi.unstubAllEnvs();
+  resetFeatureFlagsForTests();
+  await testDb.cleanup();
+});
 
 const future = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
 async function fail() {
@@ -99,6 +110,82 @@ it.each(['usage', 'hold'] as const)('switches a waiting chat when Codex becomes 
   await sweepChatLimits();
   expect(await chat()).toMatchObject({ agent: 'codex', status: 'running', resumeAt: null });
   expect(sendMessage).toHaveBeenCalledOnce();
+});
+
+it.each([
+  ['claude', 'credential'], ['codex', 'credential'],
+  ['claude', 'rate limit'], ['codex', 'rate limit'],
+] as const)('refreshes stale %s usage during a %s resume', async (agent, failure) => {
+  vi.stubEnv('TALYN_TOKEN_KEY', randomBytes(32).toString('base64'));
+  if (agent === 'codex') await account('codex');
+  await testDb.db.update(fleetAccounts).set({
+    kind: agent === 'claude' ? 'claude_oauth' : 'codex_oauth',
+    credential: {
+      accessTokenEnc: encryptString('test-token'), refreshTokenEnc: encryptString('test-refresh'),
+      expiresAt: future(60), ...(agent === 'codex' ? { accountId: 'test-account' } : {}),
+    },
+  }).where(eq(fleetAccounts.id, agent));
+  for (const id of agent === 'codex' ? ['claude', 'codex'] : ['claude']) {
+    await setFleetAccountUsage(id, { fetchedAt: new Date().toISOString(),
+      windows: [{ key: 'session', label: '5-hour', usedPercent: 100, resetsAt: future(90) }] });
+  }
+  if (failure === 'credential') await fail();
+  else await handleChatLimit(await chat(), reason);
+  expect(sendMessage).not.toHaveBeenCalled();
+  expect(usageFetch).not.toHaveBeenCalled();
+
+  await setFleetAccountUsage(agent, { fetchedAt: future(-10),
+    windows: [{ key: 'session', label: '5-hour', usedPercent: 100, resetsAt: future(-1) }] });
+  if (failure === 'rate limit') await testDb.db.update(fleetAccounts).set({
+    quotaExhausted: { at: future(-10), kind: 'rate_limit' },
+  }).where(eq(fleetAccounts.id, 'claude'));
+  usageFetch.mockResolvedValue(new Response(JSON.stringify(agent === 'claude'
+    ? { limits: [{ kind: 'session', group: 'session', percent: 10, resets_at: null, scope: null }] }
+    : { rate_limit: { limit_reached: false, primary_window: { used_percent: 10, limit_window_seconds: 18000 } } }),
+  { status: 200 }));
+  await updateChat('chat', { resumeAt: new Date(Date.now() - 1000) });
+  await sweepChatLimits();
+  expect(usageFetch).toHaveBeenCalledOnce();
+  expect(sendMessage).toHaveBeenCalledOnce();
+  expect(await chat()).toMatchObject({ agent, status: 'running', resumeAt: null });
+});
+
+it.each(['usage', 'hold', 'unknown'] as const)('schedules the earlier Codex retry from %s', async (source) => {
+  await account('codex');
+  await updateChat('chat', { model: 'claude-opus-5-5' });
+  await setFleetAccountUsage('claude', { fetchedAt: new Date().toISOString(),
+    windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 100, resetsAt: future(3 * 24 * 60) }] });
+  const at = future(60);
+  if (source === 'hold') await testDb.db.update(fleetAccounts).set({
+    quotaExhausted: { at: new Date().toISOString(), kind: 'rate_limit', resetsAt: at },
+  }).where(eq(fleetAccounts.id, 'codex'));
+  else await setFleetAccountUsage('codex', { fetchedAt: new Date().toISOString(), windows: [{
+    key: 'model', label: 'Astra', scopeModel: 'Astra', usedPercent: 100, resetsAt: source === 'unknown' ? null : at,
+  }] });
+  const start = Date.now();
+  await fail();
+  const waiting = await chat();
+  expect(sendMessage).not.toHaveBeenCalled();
+  if (source === 'unknown') {
+    expect(waiting.resumeAt!.getTime()).toBeGreaterThanOrEqual(start + limitRetryDelay(1));
+    expect(waiting.resumeAt!.getTime()).toBeLessThanOrEqual(Date.now() + limitRetryDelay(1));
+  } else expect(waiting.resumeAt?.toISOString()).toBe(at);
+  await testDb.db.update(fleetAccounts).set({ quotaExhausted: null, usage: null }).where(eq(fleetAccounts.id, 'codex'));
+  await sweepChatLimits(waiting.resumeAt!);
+  expect(await chat()).toMatchObject({ agent: 'codex', status: 'running', resumeAt: null });
+});
+
+it.each(['unsupported', 'reauth'] as const)('ignores the earlier Codex reset when Codex is %s', async (condition) => {
+  await account('codex');
+  const at = future(3 * 24 * 60);
+  await setFleetAccountUsage('claude', { fetchedAt: new Date().toISOString(),
+    windows: [{ key: 'weekly', label: 'Weekly', usedPercent: 100, resetsAt: at }] });
+  await setFleetAccountUsage('codex', { fetchedAt: new Date().toISOString(),
+    windows: [{ key: 'session', label: '5-hour', usedPercent: 100, resetsAt: future(60) }] });
+  if (condition === 'unsupported') await recordSandboxAgents((await getWorkbench('wb'))!, 'box', ['claude']);
+  else await setFleetAccountReauth('codex');
+  await fail();
+  expect((await chat()).resumeAt?.toISOString()).toBe(at);
 });
 
 it.each(['usage', 'hold', 'reauth', 'old box'] as const)('waits after a credential usage refusal when Codex has %s', async (condition) => {

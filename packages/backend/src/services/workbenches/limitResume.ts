@@ -89,18 +89,21 @@ export async function handleChatLimit(chat: ChatRow, text: string, retry = false
     }
   }
   // Account selection loads the turn runtime. Load it after session initialization.
-  const { accountOverVerdict, fleetSwitchSettings } = await import('../selfHosted/accountSelection.js');
-  const [accounts, settings, holds] = await Promise.all([
+  const { accountOverVerdict, fleetSwitchSettings, refreshAccountUsage } = await import('../selfHosted/accountSelection.js');
+  const [listed, settings, holds] = await Promise.all([
     listFleetAccounts(workspaceId), fleetSwitchSettings(workspaceId), heldBackAgents(workspaceId, now),
   ]);
+  const supported = sandboxAgents(wb);
+  const accounts = await Promise.all(listed.map((account) =>
+    supported.includes(account.agent) ? refreshAccountUsage(account) : account));
   const threshold = settings.useFullQuotaWhenAllOver ? 100 : settings.threshold;
-  const possible = sandboxAgents(wb).filter((a) => accounts.some((account) => account.agent === a && !account.reauthRequiredAt));
+  const possible = supported.filter((a) => accounts.some((account) => account.agent === a && !account.reauthRequiredAt));
   const model = chat.model ?? (agent === wb.agent ? wb.model : null) ?? defaultFleetModelForAgent(agent);
+  const modelFor = (candidate: FleetAgent) => candidate === agent ? model : fleetModelForAgentSwitch(model, candidate);
   const other = agent === 'claude' ? 'codex' : 'claude';
   const candidates: FleetAgent[] = credentialReason === 'reauth' ? (retry ? [agent] : []) : retry ? [agent, other] : [other];
   const chosen = candidates.find((a) => possible.includes(a) && !holds[a] && accounts.some((account) =>
-    account.agent === a && !accountOverVerdict(account, threshold,
-      a === agent ? model : fleetModelForAgentSwitch(model, a), now).reason));
+    account.agent === a && !accountOverVerdict(account, threshold, modelFor(a), now).reason));
   const refusal = chosen && wb.status === 'ready' ? await existingBoxRefusal(wb, true, payer) : null;
   if (chosen && wb.status === 'ready' && !refusal) {
     const fresh = await getChat(chat.id);
@@ -126,18 +129,17 @@ export async function handleChatLimit(chat: ChatRow, text: string, retry = false
     const count = current.limitCount + (retry ? 1 : 0);
     const { accountReset } = await import('./credentialFailure.js');
     const own = accounts.filter((a) => a.agent === agent);
-    const resets = own.filter((a) => !a.reauthRequiredAt)
-      .map((a) => accountReset(a, threshold, model, now))
-      .filter((at): at is number => at !== null);
-    const probes = own.filter((a) => !a.reauthRequiredAt && a.quotaExhausted)
-      .map((a) => probeAfter(a.quotaExhausted!)).filter((at) => at > now.getTime());
     const delay = limitRetryDelay(credentialReason === 'reauth' ? Math.max(count, 4) : count);
+    const waitingAccounts = credentialReason === 'limited'
+      ? accounts.filter((a) => possible.includes(a.agent) && !a.reauthRequiredAt)
+      : own.filter((a) => !a.reauthRequiredAt);
+    const retries = waitingAccounts.map((a) => accountReset(a, threshold, modelFor(a.agent), now)
+      ?? Math.max(now.getTime() + delay, a.quotaExhausted ? probeAfter(a.quotaExhausted) : 0));
     const reconnected = !retry && credentialReason === 'reauth' && own.some((a) =>
       !accountOverVerdict(a, threshold, model, now).reason);
     const fallback = new Date(credentialReason === 'reauth'
-      ? (reconnected ? now.getTime() : Math.min(now.getTime() + delay, ...resets))
-      : resets.length ? Math.min(...resets)
-        : Math.max(now.getTime() + delay, probes.length ? Math.min(...probes) : 0));
+      ? (reconnected ? now.getTime() : Math.min(now.getTime() + delay, ...retries))
+      : retries.length ? Math.min(...retries) : now.getTime() + delay);
     const at = refusal ? deferralRetryAt(refusal, now.getTime()) : fallback;
     const labels = own.filter((a) => a.reauthRequiredAt).map((a) => a.label);
     const label = labels.length ? new Intl.ListFormat('en', { style: 'long', type: 'conjunction' }).format(labels) : agentLabel(agent);

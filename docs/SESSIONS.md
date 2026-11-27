@@ -8120,3 +8120,5 @@ The choice checks account usage, account holds, sign-in state, the model, and th
 It uses the payer's accounts and the existing sandbox, budget, and automatic resume checks.
 The existing switch prepares a conversation recap and selects a model from the same capability tier.
 This server change applies to web, desktop, and mobile.
+Resume checks refresh stale subscription usage before selecting an agent.
+A usage wait uses the earliest retry across both supported agents.
