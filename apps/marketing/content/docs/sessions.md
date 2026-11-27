@@ -36,6 +36,11 @@ Other options in the composer:
 
 Your defaults for new sessions are in **Settings > Sessions**: the agent, the model, the reasoning effort, plan mode, internet access and a branch prefix such as `yourname/`.
 
+The sandbox composer checks the last recorded subscription usage for Claude and Codex.
+If every usable subscription for your default agent is at its limit, the composer checks the other agent.
+The composer selects that agent if one of its subscriptions has usage left.
+You can still select an agent or model for that session.
+
 In the desktop app and the web app, **Settings > Notifications** holds all notification settings. In the mobile app, they are in the **Notifications** group in **Settings**.
 
 - On a computer, turn on a notification when an agent finishes, and a notification when a merge-queue pull request is blocked. These settings apply only to that computer or browser.

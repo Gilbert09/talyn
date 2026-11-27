@@ -429,6 +429,33 @@ describe('NewWorkbenchPage', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Agent' })).toHaveTextContent('Codex'));
   });
 
+  it.each([
+    ['claude', 'codex', 'Codex', 'gpt-6-luna'],
+    ['codex', 'claude', 'Claude Code', 'claude-sonnet-5-5'],
+  ] as const)('starts with %s as the preference and uses %s when it has quota', async (preferred, agent, label, model) => {
+    localStorage.setItem('talyn.session.defaults', JSON.stringify({ agent: preferred }));
+    const [workspace] = useWorkspaceStore.getState().workspaces;
+    useWorkspaceStore.setState({ workspaces: [{ ...workspace, settings: { ...workspace.settings, fleetModels: { [agent]: model } } }] });
+    mockReadiness.mockResolvedValue({ sandbox: { ...READY.sandbox, usageFallback: agent } });
+    mockCreate.mockResolvedValue(wb('quota-fallback'));
+    await renderPage();
+    expect(screen.getByRole('button', { name: 'Agent' })).toHaveTextContent(label);
+    expect(screen.getByRole('combobox', { name: 'Model' })).toHaveValue(model);
+    fireEvent.change(textarea(), { target: { value: 'Read the code' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ agent, model })));
+  });
+
+  it('keeps the model and agent selected for the draft when usage changes', async () => {
+    await renderPage();
+    const modelPicker = screen.getByRole('combobox', { name: 'Model' });
+    fireEvent.change(modelPicker, { target: { value: 'claude-opus-5' } });
+    mockReadiness.mockResolvedValue({ sandbox: { ...READY.sandbox, usageFallback: 'codex' } });
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    expect(screen.getByRole('button', { name: 'Agent' })).toHaveTextContent('Claude Code');
+    expect(modelPicker).toHaveValue('claude-opus-5');
+  });
+
   describe('an agent the workspace has not connected', () => {
     const realOpenSettings = useWorkspaceStore.getState().openSettings;
     afterEach(() => {

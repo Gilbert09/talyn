@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Composer defaults based on subscription usage (2026-11-27)
+
+The new sandbox composer can default to Claude or Codex on web, desktop, and mobile.
+It selects the other agent when every usable subscription for the preferred agent is at its limit.
+The other agent must have a usable subscription with recorded usage left.
+The readiness response uses stored usage so the composer can load without waiting for either vendor.
+Manual agent and model selections take precedence over the usage-based default.
+
 ### 2026-11-27 — Repeated tests of code review reliability
 
 The v6 and v7 comparison covers four PostHog pull requests, with two runs per variant and case.

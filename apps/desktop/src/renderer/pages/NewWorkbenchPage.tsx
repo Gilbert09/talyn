@@ -96,8 +96,7 @@ export function NewWorkbenchPage() {
   const [defaults] = useState(readSessionDefaults);
   const [runtime, setRuntime] = useState<WorkbenchRuntime>(defaults.runtime);
   const [runtimeTouched, setRuntimeTouched] = useState(false);
-  const [agent, setAgent] = useState<WorkbenchAgent>(defaults.agent);
-  const [model, setModel] = useState<string>(() => defaultFleetModelForAgent(defaults.agent));
+  const [agentSelection, setAgentSelection] = useState<{ agent: WorkbenchAgent; model?: string } | null>(null);
   const [effort, setEffort] = useState<WorkbenchEffort>(defaults.effort);
   const [planMode, setPlanMode] = useState(defaults.planMode);
   const [internetAccess, setInternetAccess] = useState(defaults.internetAccess);
@@ -140,6 +139,10 @@ export function NewWorkbenchPage() {
     (a: WorkbenchAgent) => agentChoice({ sandbox: readiness.sandbox, local: readiness.local }, effectiveRuntime, a),
     [readiness.sandbox, readiness.local, effectiveRuntime]
   );
+  const wantedAgent = agentSelection?.agent ?? (effectiveRuntime === 'sandbox' ? readiness.sandbox?.usageFallback : undefined) ?? defaults.agent;
+  const agent = choiceFor(wantedAgent).available ? wantedAgent : AGENTS.find((a) => choiceFor(a).available) ?? wantedAgent;
+  const model = (agentSelection?.agent === agent ? agentSelection.model : undefined)
+    ?? storedFleetModelForAgent(workspace?.settings, agent) ?? defaultFleetModelForAgent(agent);
   const agentOk = choiceFor(agent);
   const readinessKnown = !readiness.loading && (readiness.sandbox !== null || !workspaceId);
 
@@ -156,16 +159,6 @@ export function NewWorkbenchPage() {
     const other: WorkbenchRuntime = runtime === 'sandbox' ? 'local' : 'sandbox';
     if (runtimes[other].available) setRuntime(other);
   }, [mode, readinessKnown, runtimeTouched, runtime, runtimes]);
-
-  // Keep the agent usable for the runtime, and the model the agent's.
-  useEffect(() => {
-    if (agentOk.available) return;
-    const usable = AGENTS.find((a) => choiceFor(a).available);
-    if (usable && usable !== agent) setAgent(usable);
-  }, [agentOk.available, choiceFor, agent]);
-  useEffect(() => {
-    setModel(storedFleetModelForAgent(workspace?.settings, agent) ?? defaultFleetModelForAgent(agent));
-  }, [agent, workspace?.settings]);
 
   const focus = () => textareaRef.current?.focus();
 
@@ -519,8 +512,8 @@ export function NewWorkbenchPage() {
                   <span className="truncate font-mono">{repoPath ? shortPath(repoPath) : 'Choose folder…'}</span>
                 </ControlChip>
               )}
-              <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} onConnect={connectAgent} />
-              <ModelPicker agent={agent} value={model} onChange={setModel} unconnected={missingAgents.map((m) => m.agent)} />
+              <AgentPicker value={agent} onChange={(next) => setAgentSelection({ agent: next, ...(next === agent && { model }) })} choiceFor={choiceFor} onConnect={connectAgent} />
+              <ModelPicker agent={agent} value={model} onChange={(next) => setAgentSelection({ agent, model: next })} unconnected={missingAgents.map((m) => m.agent)} />
               <EffortPicker value={effort} onChange={setEffort} />
               {showImport && (
                 <ControlChip
