@@ -85,6 +85,7 @@ import {
   requireReadySandbox,
   resizeSession,
   restartSession,
+  sessionPreviewStatus,
   startSessionScript,
   stopSessionScript,
   switchChatAgent,
@@ -1443,6 +1444,19 @@ export function workbenchRoutes(): Router {
   });
 
   // ---- Preview: a port a script listens on in the sandbox, behind the same gate ----
+
+  router.get('/:id/preview-ports/:port/status', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    const port = Number(req.params.port);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) return bad(res, 400, 'port must be 1024-65535');
+    try {
+      res.setHeader('Cache-Control', 'no-store');
+      ok(res, await sessionPreviewStatus(row, port, wantsLive(req)));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
 
   // A one-time sign-in link to the port on its own preview host. Declared
   // before the proxy route, which would otherwise read `ticket` as a path.

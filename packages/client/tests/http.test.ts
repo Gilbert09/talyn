@@ -4,8 +4,8 @@ import {
   ApiNetworkError,
   ClientInactiveError,
   configureApiClient,
-  workspaces,
   workbenches,
+  workspaces,
   type ApiClientConfig,
 } from '../src/native';
 import { rawRequest } from '../src/http';
@@ -48,6 +48,38 @@ async function outcome<T>(promise: Promise<T>) {
 }
 
 describe('REST retry and cancellation', () => {
+  it.each([
+    (signal: AbortSignal) => workbenches.previewStatus('id', 3000, { signal }),
+    (signal: AbortSignal) => workbenches.runScript('id', 'run', { signal }),
+    (signal: AbortSignal) => workbenches.previewLink('id', 3000, { signal }),
+  ])('passes preview cancellation to fetch', async (start) => {
+    const report = vi.fn();
+    configureApiClient({ ...config, onRequestError: report });
+    fetchMock.mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    }));
+    const controller = new AbortController();
+    const { result } = await outcome<unknown>(start(controller.signal));
+    expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ signal: controller.signal }));
+    const error = new Error('Cancelled.');
+    controller.abort(error);
+    await expect(result).resolves.toEqual({ error });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it('does not fetch a cancelled preview after a pending token lookup', async () => {
+    const pendingToken = deferred<string>();
+    configureApiClient({ ...config, getAccessToken: () => pendingToken.promise });
+    const controller = new AbortController();
+    const { result } = await outcome(workbenches.runScript('id', 'run', { signal: controller.signal }));
+    const error = new Error('Cancelled.');
+    controller.abort(error);
+    pendingToken.resolve('old-token');
+    expect(await result).toEqual({ error });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each(['token', 'fetch', 'body'] as const)('cancels a background read stalled at %s', async (stage) => {
     const controller = new AbortController();
     const report = vi.fn();

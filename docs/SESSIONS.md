@@ -13,6 +13,13 @@ The fix requires a new Android binary.
 All 41 composer tests passed. The type, lint, release, and native profile checks passed.
 Patch application and Android autolinking also passed. A device check for capture and cancellation remains.
 
+## Hosted sandbox previews on mobile (2026-11-27)
+
+Mobile sessions list the repository's preview ports under **Session actions > Preview**.
+Talyn starts the run script when needed and waits for the port before it creates a one-time hosted link.
+The phone opens the link after you confirm the preview host. A probe timeout lets the app keep waiting while the run script continues.
+The ten-minute deadline covers all requests that prepare the preview.
+
 ## Composer defaults based on subscription usage (2026-11-27)
 
 The new sandbox composer can default to Claude or Codex on web, desktop, and mobile.
