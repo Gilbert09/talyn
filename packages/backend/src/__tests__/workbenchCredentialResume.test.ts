@@ -94,7 +94,7 @@ async function fail() {
 }
 
 it.each([
-  ['claude', 'codex', 'claude-opus-5-5', 'gpt-6-astra'],
+  ['claude', 'codex', 'claude-opus-5-5', 'gpt-6.2-sol'],
   ['codex', 'claude', 'gpt-6-astra', 'claude-fable-5-2'],
 ] as const)('switches from %s to %s after a credential usage refusal', async (from, to, model, switchedModel) => {
   await account('codex');
@@ -172,7 +172,7 @@ it.each(['usage', 'hold', 'unknown'] as const)('schedules the earlier Codex retr
     quotaExhausted: { at: new Date().toISOString(), kind: 'rate_limit', resetsAt: at },
   }).where(eq(fleetAccounts.id, 'codex'));
   else await setFleetAccountUsage('codex', { fetchedAt: new Date().toISOString(), windows: [{
-    key: 'model', label: 'Astra', scopeModel: 'Astra', usedPercent: 100, resetsAt: source === 'unknown' ? null : at,
+    key: 'model', label: 'Sol', scopeModel: 'Sol', usedPercent: 100, resetsAt: source === 'unknown' ? null : at,
   }] });
   const start = Date.now();
   await fail();
@@ -397,7 +397,7 @@ it.each(['usage', 'unknown'] as const)('checks the earlier Codex %s reset after 
   await updateChat('chat', { model: 'claude-opus-5-5' });
   const at = future(60);
   await setFleetAccountUsage('codex', { fetchedAt: new Date().toISOString(), windows: [{
-    key: 'model', label: 'Astra', scopeModel: 'Astra', usedPercent: 100, resetsAt: source === 'unknown' ? null : at,
+    key: 'model', label: 'Sol', scopeModel: 'Sol', usedPercent: 100, resetsAt: source === 'unknown' ? null : at,
   }] });
   const start = Date.now();
   await handleChatLimit(await chat(), `${reason} resetsAt: "${future(3 * 24 * 60)}"`);
@@ -486,7 +486,7 @@ it.each(['Astra', 'Sol'])('checks the mapped model against a %s usage window', a
   await setFleetAccountUsage('codex', { fetchedAt: new Date().toISOString(),
     windows: [{ key: 'model', label: scopeModel, scopeModel, usedPercent: 100, resetsAt: future(90) }] });
   await fail();
-  expect((await chat()).agent).toBe(scopeModel === 'Astra' ? 'claude' : 'codex');
+  expect((await chat()).agent).toBe(scopeModel === 'Sol' ? 'claude' : 'codex');
 });
 
 it.each(['setting', 'budget'] as const)('respects the %s gate before an automatic switch', async (gate) => {
