@@ -332,6 +332,39 @@ describe('hosted preview links', () => {
       expect(JSON.parse((await status()).body).data).toEqual({ ready: false, running: false });
     });
 
+    it.each(['headers', 'body'])('reports a running script when reading the %s times out', async (phase) => {
+      const deadline = new AbortController();
+      const timeout = AbortSignal.timeout.bind(AbortSignal);
+      vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => ms === 15_000 ? deadline.signal : timeout(ms));
+      proxyPort.mockImplementation(async () => {
+        if (phase === 'headers') {
+          deadline.abort();
+          throw new Error('Fleet unreachable.');
+        }
+        const body = new ReadableStream({
+          pull(controller) {
+            deadline.abort();
+            controller.error(new Error('The response timed out.'));
+          },
+        });
+        return new Response(body, { status: 404, headers: { 'content-type': 'application/json' } });
+      });
+      const row = (await getWorkbench('ready'))!;
+      const lease = (await claimScript(row, 'run'))!;
+      try {
+        const response = await status();
+        expect(response.status).toBe(200);
+        expect(JSON.parse(response.body).data).toEqual({ ready: false, running: true });
+      } finally {
+        await finishScript(lease, 1);
+      }
+    });
+
+    it('reports a probe failure that occurs before the timeout', async () => {
+      proxyPort.mockRejectedValue(new Error('Unexpected failure.'));
+      expect((await status()).status).toBe(500);
+    });
+
     it('does not probe a session owned by another user', async () => {
       expect((await status('other')).status).toBe(404);
       expect(proxyPort).not.toHaveBeenCalled();

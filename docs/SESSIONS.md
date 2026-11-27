@@ -2,6 +2,12 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Hosted sandbox previews on mobile (2026-11-27)
+
+Mobile sessions list the repository's preview ports under **Session actions > Preview**.
+Talyn starts the run script when needed and waits for the port before it creates a one-time hosted link.
+The phone opens the link in its browser. A probe that times out lets the app keep waiting while the run script continues.
+
 ## Composer defaults based on subscription usage (2026-11-27)
 
 The new sandbox composer can default to Claude or Codex on web, desktop, and mobile.

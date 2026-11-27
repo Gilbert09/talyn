@@ -461,10 +461,15 @@ export async function sessionPreviewStatus(row: WorkbenchRow, port: number, live
   if (!live && !(await chooseReadSource(row)).live) return { ready: false, running: false };
   const sandboxId = row.sandboxId!;
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  const response = await client.proxyPort(sandboxId, port, '', {
-    method: 'GET', headers: {}, signal: AbortSignal.timeout(15_000),
-  });
-  const ready = await previewPortAnswers(response);
+  const signal = AbortSignal.timeout(15_000);
+  let ready: boolean;
+  try {
+    const response = await client.proxyPort(sandboxId, port, '', { method: 'GET', headers: {}, signal });
+    ready = await previewPortAnswers(response);
+  } catch (error) {
+    if (!signal.aborted) throw error;
+    ready = false;
+  }
   const run = ready ? null : await existingScript(row.id, 'run', sandboxId, row.sandboxGeneration ?? sandboxId);
   return { ready, running: run?.running ?? false };
 }
