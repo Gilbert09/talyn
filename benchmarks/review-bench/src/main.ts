@@ -101,6 +101,8 @@ export interface Settings {
   preset: CodeReviewPreset;
   model: string;
   judgeModel: string;
+  /** The model for a lens on one part and for the sweeps. Default: `model`. */
+  partModel?: string;
   effort?: string;
   concurrency: number;
   unitTimeoutSec: number;
@@ -119,6 +121,7 @@ export function readSettings(env: NodeJS.ProcessEnv): Settings {
     preset,
     model,
     judgeModel: env.RB_CONFIG_JUDGE_MODEL || model,
+    partModel: env.RB_CONFIG_PART_MODEL || undefined,
     effort: env.RB_CONFIG_EFFORT || undefined,
     concurrency: positiveInteger('RB_CONFIG_CONCURRENCY', 5),
     unitTimeoutSec: positiveInteger('RB_CONFIG_UNIT_TIMEOUT_SEC', 900),
@@ -269,7 +272,8 @@ export async function review(
       const context = wholePr ? whole : scoped(chunk);
       if (!wholePr && !codeReviewLensReadsPart(lens, context.files)) continue;
       units.push({
-        name: `lens-${lens}-${chunk + 1}`, kind: 'lens', lens, model: settings.model,
+        name: `lens-${lens}-${chunk + 1}`, kind: 'lens', lens,
+        model: wholePr || chunkTotal === 1 ? settings.model : (settings.partModel ?? settings.model),
         prompt: buildLensPrompt(lensByKey(lens)!, context),
       });
     }
@@ -289,7 +293,7 @@ export async function review(
       severity: finding.severity, filePath: finding.file, title: finding.title,
     }));
     const sweeps: AgentUnit[] = Array.from({ length: chunkTotal }, (_, chunk) => ({
-      name: `sweep-${chunk + 1}`, kind: 'sweep', lens: 'sweep', model: settings.model,
+      name: `sweep-${chunk + 1}`, kind: 'sweep', lens: 'sweep', model: settings.partModel ?? settings.model,
       prompt: buildSweepPrompt(scoped(chunk), covered, lensKeys),
     }));
     await parallel(sweeps, settings.concurrency, async (unit) => {

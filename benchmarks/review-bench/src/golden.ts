@@ -40,6 +40,7 @@ interface Args {
   preset: CodeReviewPreset;
   model: string;
   judgeModel: string;
+  partModel?: string;
   scoreModel: string;
   concurrency: number;
   unitTimeoutSec: number;
@@ -66,6 +67,7 @@ function parseArgs(argv: string[]): Args {
     preset,
     model,
     judgeModel: get('judge-model', model),
+    partModel: argv.includes('--part-model') ? get('part-model') : undefined,
     scoreModel: get('score-model', 'claude-sonnet-5-5'),
     concurrency: Number(get('concurrency', '4')),
     unitTimeoutSec: Number(get('unit-timeout', '1500')),
@@ -168,10 +170,11 @@ export function claudeRunner(repoDir: string, debugDir: string, timeoutSec: numb
 function scorePrompt(golden: GoldenCase, findings: Candidate[]): string {
   return [
     'You score a code review against a list of known real problems (the golden list).',
-    'For each golden issue, decide which review findings describe the SAME concrete problem:',
-    'the same defect or root cause in the same code. A finding that only touches the same',
-    'function but names a different defect does not match. A finding may match at most one',
-    'golden issue; choose the closest.',
+    'For each golden issue, list EVERY review finding that describes the SAME concrete',
+    'problem: the same defect or root cause in the same code. Reviews often state one problem',
+    'several times, so list each restatement, not only the best one. A finding that only',
+    'touches the same function but names a different defect does not match. A finding may',
+    'match at most one golden issue; choose the closest.',
     'For each finding that matches no golden issue, classify it as "real" (a concrete, likely',
     'correct problem a careful engineer would fix), "doubtful", or "wrong". Use only the text;',
     'do not read files.',
@@ -241,9 +244,52 @@ export function summarise(golden: GoldenCase, reply: string, findings: Pick<Cand
   };
 }
 
-async function score(args: Args, golden: GoldenCase, label: string, findings: Candidate[], home: string): Promise<Score> {
-  const runner = claudeRunner(args.out, join(args.out, 'units'), 600, home);
-  const reply = await runner({ name: `score-${label}`, kind: 'judge', lens: '', model: args.scoreModel, prompt: scorePrompt(golden, findings) });
+/**
+ * The scorer's reply for `from`, with each reference moved to the same
+ * candidate in `to`, matched by dedupe key. A candidate that is not in `to`
+ * is left out.
+ *
+ * The final findings are the candidates the judge kept, so they are scored
+ * from the one reply about the candidates. Two separate scorer calls disagreed:
+ * one run scored 23% before the judge and 38% after it.
+ */
+export function remapScoreReply(
+  reply: string,
+  from: Pick<Candidate, 'dedupeKey'>[],
+  to: Pick<Candidate, 'dedupeKey'>[]
+): string {
+  const json = reply.slice(reply.indexOf('{'), reply.lastIndexOf('}') + 1);
+  const parsed = JSON.parse(json) as { matches: Record<string, string[]>; extras?: Record<string, string> };
+  const position = new Map(to.map((f, i) => [f.dedupeKey, i + 1]));
+  const move = (ref: string): string | null => {
+    const i = /^F\d+$/.test(ref) ? Number(ref.slice(1)) - 1 : -1;
+    const at = i >= 0 && i < from.length ? position.get(from[i]!.dedupeKey) : undefined;
+    return at ? `F${at}` : null;
+  };
+  const matches = Object.fromEntries(
+    Object.entries(parsed.matches ?? {}).map(([id, refs]) => [id, refs.map(move).filter((r): r is string => !!r)])
+  );
+  const extras = Object.fromEntries(
+    Object.entries(parsed.extras ?? {}).flatMap(([ref, v]) => {
+      const moved = move(ref);
+      return moved ? [[moved, v]] : [];
+    })
+  );
+  return JSON.stringify({ matches, extras });
+}
+
+async function score(
+  args: Args,
+  golden: GoldenCase,
+  label: string,
+  findings: Candidate[],
+  home: string,
+  reply?: string
+): Promise<{ result: Score; reply: string }> {
+  if (reply === undefined) {
+    const runner = claudeRunner(args.out, join(args.out, 'units'), 600, home);
+    reply = await runner({ name: `score-${label}`, kind: 'judge', lens: '', model: args.scoreModel, prompt: scorePrompt(golden, findings) });
+  }
   const result = summarise(golden, reply, findings);
   await writeFile(join(args.out, `score-${label}.json`), JSON.stringify(result, null, 2));
   const real = Object.values(result.extras).filter((v) => v === 'real').length;
@@ -253,7 +299,7 @@ async function score(args: Args, golden: GoldenCase, label: string, findings: Ca
       `high=${(result.highRecall * 100).toFixed(0)}% visible=${(result.visibleRecall * 100).toFixed(0)}% ` +
       `visible-wrong=${result.visibleWrong} extras real=${real} wrong=${wrong} missed=${result.missed.join(',')}`
   );
-  return result;
+  return { result, reply };
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
@@ -286,6 +332,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       preset: args.preset,
       model: args.model,
       judgeModel: args.judgeModel,
+      partModel: args.partModel,
       concurrency: args.concurrency,
       unitTimeoutSec: args.unitTimeoutSec,
     };
@@ -299,8 +346,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
 
   const unjudged = JSON.parse(await readFile(join(args.out, 'unjudged.json'), 'utf8')) as Candidate[];
   const final = JSON.parse(await readFile(join(args.out, 'final.json'), 'utf8')) as Candidate[];
-  await score(args, golden, 'unjudged', unjudged, home);
-  await score(args, golden, 'final', final, home);
+  const { reply } = await score(args, golden, 'unjudged', unjudged, home);
+  await score(args, golden, 'final', final, home, remapScoreReply(reply, unjudged, final));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

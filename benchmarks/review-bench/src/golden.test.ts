@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { main, reviewerEnv, summarise, type GoldenCase } from './golden.js';
+import { main, remapScoreReply, reviewerEnv, summarise, type GoldenCase } from './golden.js';
 
 const golden: GoldenCase = {
   repo: 'o/r', pr: 1, head: 'h', base: 'b',
@@ -96,5 +96,33 @@ describe('main', () => {
     await expect(
       main(['--case', '/nope.json', '--repo', '/nope', '--files', '/nope', '--pr', '/nope', '--out', '/nope'])
     ).rejects.toThrow('--sandboxed');
+  });
+});
+
+describe('remapScoreReply', () => {
+  const unjudged = [{ dedupeKey: 'a' }, { dedupeKey: 'b' }, { dedupeKey: 'c' }];
+
+  it.each([
+    ['keeps a match whose finding survived, at its new position',
+      '{"matches":{"G1":["F2"]},"extras":{}}', [{ dedupeKey: 'b' }], { matches: { G1: ['F1'] }, extras: {} }],
+    ['drops a match whose finding the judge dropped',
+      '{"matches":{"G1":["F1"],"G2":["F3"]}}', [{ dedupeKey: 'c' }], { matches: { G1: [], G2: ['F1'] }, extras: {} }],
+    ['moves and drops extras the same way',
+      '{"matches":{},"extras":{"F1":"wrong","F3":"real"}}', [{ dedupeKey: 'c' }, { dedupeKey: 'a' }],
+      { matches: {}, extras: { F2: 'wrong', F1: 'real' } }],
+    ['ignores a reference to no candidate',
+      'text {"matches":{"G1":["F9","x"]}} text', [{ dedupeKey: 'a' }], { matches: { G1: [] }, extras: {} }],
+  ] as const)('%s', (_label, reply, final, expected) => {
+    expect(JSON.parse(remapScoreReply(reply, unjudged, [...final]))).toEqual(expected);
+  });
+
+  it('never scores the final list above the candidates', () => {
+    const reply = '{"matches":{"G1":["F1"],"G2":["F2"],"G4":["F3"]},"extras":{}}';
+    const findings = unjudged.map(() => ({ severity: 'major' as const }));
+    const final = [{ dedupeKey: 'c', severity: 'major' as const }];
+    const before = summarise(golden, reply, findings);
+    const after = summarise(golden, remapScoreReply(reply, unjudged, final), final);
+    expect(before.recall).toBe(0.75);
+    expect(after).toMatchObject({ recall: 0.25, matched: ['G4'] });
   });
 });

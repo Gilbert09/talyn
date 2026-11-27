@@ -243,6 +243,19 @@ describe('orchestration with a fake runner', () => {
     expect(lenses).toEqual(['lens-correctness-1', 'lens-reliability-2', 'lens-rules-1', 'lens-security-2']);
   });
 
+  it.each([
+    ['split into parts', 3, 500, { 'lens-correctness-1': 'main', 'lens-rules-1': 'main', 'lens-security-2': 'part', 'sweep-1': 'part', judge: 'judge' }],
+    ['one part', 1, 1, { 'lens-correctness-1': 'main', 'lens-security-1': 'main', 'sweep-1': 'part', judge: 'judge' }],
+  ] as const)('runs the part model on part lenses and sweeps, %s', async (_label, count, additions, expected) => {
+    const settings = { ...readSettings({}), model: 'main', judgeModel: 'judge', partModel: 'part' };
+    const models: Record<string, string> = {};
+    await review(context(count, additions), settings, async (unit) => {
+      models[unit.name] = unit.model;
+      return message(unit.kind === 'lens' ? [finding()] : []);
+    });
+    expect(models).toMatchObject(expected);
+  });
+
   it('passes deduped coverage to the sweep and all candidates to the judge', async () => {
     const sweepFinding = finding({ file: 'src/sweep.ts', title: 'Sweep issue' });
     const calls: AgentUnit[] = [];
@@ -289,7 +302,7 @@ describe('orchestration with a fake runner', () => {
 describe('settings and output validation', () => {
   it('uses the defaults and accepts optional settings', () => {
     expect(readSettings({})).toEqual({ preset: 'standard', model: 'gpt-6.1-terra', judgeModel: 'gpt-6.1-terra',
-      effort: undefined, concurrency: 5, unitTimeoutSec: 900 });
+      partModel: undefined, effort: undefined, concurrency: 5, unitTimeoutSec: 900 });
     expect(readSettings({ RB_CONFIG_MODEL: 'custom', RB_CONFIG_EFFORT: 'high' })).toMatchObject({
       model: 'custom', judgeModel: 'custom', effort: 'high',
     });
