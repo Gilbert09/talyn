@@ -97,7 +97,8 @@ function bulkArchiveBusyState(id: string | typeof w.id) {
         AND (c.drain_pending OR jsonb_array_length(c.queued_messages) > 0))))`,
     script: sql<boolean>`EXISTS (SELECT 1 FROM workbench_script_runs r WHERE r.workbench_id = ${id} AND r.running)`,
     job: sql<boolean>`EXISTS (SELECT 1 FROM workbench_background_jobs j WHERE j.workbench_id = ${id} AND j.status = 'running')`,
-    wakeup: sql<boolean>`EXISTS (SELECT 1 FROM workbench_wakeups k WHERE k.workbench_id = ${id} AND k.status = 'scheduled')`,
+    wakeup: sql<boolean>`EXISTS (SELECT 1 FROM workbench_wakeups k WHERE k.workbench_id = ${id}
+      AND (k.status = 'scheduled' OR (k.status = 'fired' AND k.fired_at IS NULL)))`,
   };
 }
 

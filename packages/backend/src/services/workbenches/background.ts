@@ -37,6 +37,7 @@ import {
   getJob,
   getWakeup,
   claimWakeup,
+  completeWakeup,
   insertJob,
   insertWakeup,
   listJobs,
@@ -562,11 +563,11 @@ async function wakeupTurn(claimed: WakeupRow, ci: CiWakeupOutcome | undefined): 
  * box-gate refusal or a send that fails marks it failed with the reason, and
  * nothing answers 402. True when a turn was sent or queued.
  *
- * The order is claim, then send. A crash between the two loses the wake-up
- * (it shows as fired with no turn); the other order could send it twice.
+ * The order is claim, then send. A crash between them leaves firedAt null.
+ * Bulk archive keeps the session protected because delivery is uncertain.
  */
 export async function fireWakeup(id: string, now = new Date(), opts: { ci?: CiWakeupOutcome } = {}): Promise<boolean> {
-  const claimed = await claimWakeup(id, now);
+  const claimed = await claimWakeup(id);
   if (!claimed) return false;
   let sent = false;
   try {
@@ -595,6 +596,7 @@ export async function fireWakeup(id: string, now = new Date(), opts: { ci?: CiWa
           trigger: wakeupTrigger(claimed, job, turn.ci),
           ...(payer ? { payer } : {}),
         });
+        await completeWakeup(claimed.id, now);
         sent = true;
         if (turn.ci) {
           captureWorkspaceEvent(claimed.workspaceId, 'session_ci_wakeup_fired', {

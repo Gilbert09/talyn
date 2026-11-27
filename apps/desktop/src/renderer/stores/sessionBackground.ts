@@ -10,16 +10,18 @@ interface SessionBackgroundState {
 }
 
 const versions = new Map<string, number>();
-const pendingLoads = new Map<string, number>();
+const knownIds = new Set<string>();
 let connectionVersion = 0;
 
 export const useSessionBackgroundStore = create<SessionBackgroundState>((set) => ({
   byWorkbench: {},
   applyBackground: (payload) => {
+    knownIds.add(payload.workbenchId);
     versions.set(payload.workbenchId, (versions.get(payload.workbenchId) ?? 0) + 1);
     set((state) => ({ byWorkbench: { ...state.byWorkbench, [payload.workbenchId]: payload } }));
   },
   clear: (id) => {
+    knownIds.delete(id);
     versions.set(id, (versions.get(id) ?? 0) + 1);
     set((state) => {
       const byWorkbench = { ...state.byWorkbench };
@@ -30,9 +32,9 @@ export const useSessionBackgroundStore = create<SessionBackgroundState>((set) =>
 }));
 
 export async function loadBackground(id: string): Promise<void> {
+  knownIds.add(id);
   const version = versions.get(id) ?? 0;
   const connection = connectionVersion;
-  pendingLoads.set(id, (pendingLoads.get(id) ?? 0) + 1);
   try {
     const payload = await api.workbenches.background(id);
     if (connection === connectionVersion && (versions.get(id) ?? 0) === version) {
@@ -40,10 +42,6 @@ export async function loadBackground(id: string): Promise<void> {
     }
   } catch {
     // A later open or reconnect retries the load.
-  } finally {
-    const remaining = (pendingLoads.get(id) ?? 1) - 1;
-    if (remaining === 0) pendingLoads.delete(id);
-    else pendingLoads.set(id, remaining);
   }
 }
 
@@ -51,7 +49,7 @@ export async function loadBackground(id: string): Promise<void> {
 export async function reconcileBackground(): Promise<void> {
   const ids = new Set([
     ...Object.keys(useSessionBackgroundStore.getState().byWorkbench),
-    ...pendingLoads.keys(),
+    ...knownIds,
   ]);
   connectionVersion++;
   useSessionBackgroundStore.setState({ byWorkbench: {} });

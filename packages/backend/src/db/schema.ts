@@ -3409,6 +3409,7 @@ export const workbenchWakeups = pgTable(
     /** The PR row's head when it was scheduled. Until the push webhook lands, it can name the commit before. */
     ciPrHeadAtSchedule: text('ci_pr_head_at_schedule'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** A fired wake-up with no timestamp is still delivering its message. */
     firedAt: timestamp('fired_at', { withTimezone: true }),
   },
   (t) => ({

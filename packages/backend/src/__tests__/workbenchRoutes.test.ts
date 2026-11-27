@@ -975,7 +975,7 @@ describe('workbench routes', () => {
         })],
       ['a fired wake-up', (wbId: string, chatId: string) =>
         testDb.db.insert(workbenchWakeups).values({
-          id: `wake-${wbId}`, workbenchId: wbId, chatId, workspaceId: 'ws-a', wakeAt: new Date(), reason: 'CI', status: 'fired',
+          id: `wake-${wbId}`, workbenchId: wbId, chatId, workspaceId: 'ws-a', wakeAt: new Date(), reason: 'CI', status: 'fired', firedAt: new Date(),
         })],
     ])('archives a session with %s', async (_kind, seed) => {
       const wb = await createLocalWorkbench();

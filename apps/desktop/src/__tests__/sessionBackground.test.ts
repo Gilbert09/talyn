@@ -15,8 +15,9 @@ const deferred = <T>() => {
 };
 
 beforeEach(() => {
-  useSessionBackgroundStore.setState({ byWorkbench: {} });
-  jest.clearAllMocks();
+  useSessionBackgroundStore.getState().clear('a');
+  useSessionBackgroundStore.getState().clear('b');
+  jest.resetAllMocks();
 });
 
 describe('session background store', () => {
@@ -81,6 +82,56 @@ describe('session background store', () => {
     });
     jest.mocked(api.workbenches.background).mockRejectedValue(new Error('offline'));
     await reconcileBackground();
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
+  });
+
+  it.each(['running', 'scheduled'])('retries an unopened session after refresh fails and restores %s state', async (status) => {
+    const session = { id: 'a', status: 'ready', kind: 'session', pullRequestId: null } as Workbench;
+    useSessionBackgroundStore.getState().applyBackground(empty('a'));
+    const live = {
+      ...empty('a'),
+      jobs: status === 'running' ? [{ status } as WorkbenchBackgroundJob] : [],
+      wakeups: status === 'scheduled' ? [{ status } as WorkbenchWakeup] : [],
+    };
+    jest.mocked(api.workbenches.background).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(live);
+    await reconcileBackground();
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
+    await reconcileBackground();
+    expect(api.workbenches.background).toHaveBeenNthCalledWith(2, 'a');
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBe(live);
+    expect(archiveAllCandidates([session], new Set(), {}, useSessionBackgroundStore.getState().byWorkbench)).toEqual([]);
+  });
+
+  it('retries a failed first load after reconnect', async () => {
+    jest.mocked(api.workbenches.background).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(empty('a'));
+    await loadBackground('a');
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
+    await reconcileBackground();
+    expect(api.workbenches.background).toHaveBeenNthCalledWith(2, 'a');
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toEqual(empty('a'));
+  });
+
+  it('does not retry a cleared session after refresh fails', async () => {
+    useSessionBackgroundStore.getState().applyBackground(empty('a'));
+    jest.mocked(api.workbenches.background).mockRejectedValue(new Error('offline'));
+    await reconcileBackground();
+    useSessionBackgroundStore.getState().clear('a');
+    await reconcileBackground();
+    expect(api.workbenches.background).toHaveBeenCalledTimes(1);
+    expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
+  });
+
+  it('does not retry or restore a cleared session with a pending load', async () => {
+    const pending = deferred<WorkbenchBackground>();
+    jest.mocked(api.workbenches.background).mockReturnValue(pending.promise);
+    const load = loadBackground('a');
+    useSessionBackgroundStore.getState().clear('a');
+    await reconcileBackground();
+    expect(api.workbenches.background).toHaveBeenCalledTimes(1);
+    pending.resolve(empty('a'));
+    await load;
+    await reconcileBackground();
+    expect(api.workbenches.background).toHaveBeenCalledTimes(1);
     expect(useSessionBackgroundStore.getState().byWorkbench.a).toBeUndefined();
   });
 });

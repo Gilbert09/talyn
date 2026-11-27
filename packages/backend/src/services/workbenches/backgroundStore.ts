@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, lte, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, ne, sql } from 'drizzle-orm';
 import {
   BACKGROUND_COMMAND_PREVIEW_CHARS,
   type WorkbenchBackgroundJob,
@@ -344,13 +344,20 @@ export async function scheduledCiWakeups(opts: { pullRequestIds?: string[]; limi
 /**
  * The claim: `scheduled` to `fired` in one statement. Two sweeps that both
  * read the row as due cannot both win it, so a wake-up sends one turn.
+ * Leave firedAt null until the message is queued, so bulk archive still protects it.
  */
-export async function claimWakeup(id: string, at = new Date()): Promise<WakeupRow | null> {
+export async function claimWakeup(id: string): Promise<WakeupRow | null> {
   const [row] = await db().update(wakeups)
-    .set({ status: 'fired', firedAt: at })
+    .set({ status: 'fired', firedAt: null })
     .where(and(eq(wakeups.id, id), eq(wakeups.status, 'scheduled')))
     .returning(WAKEUP_COLUMNS);
   return row ?? null;
+}
+
+/** Release archive protection after the message is queued or its turn starts. */
+export async function completeWakeup(id: string, at: Date): Promise<void> {
+  await db().update(wakeups).set({ firedAt: at })
+    .where(and(eq(wakeups.id, id), eq(wakeups.status, 'fired'), isNull(wakeups.firedAt)));
 }
 
 /** Record why a claimed or scheduled wake-up did not send its turn. */
