@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+### 2026-11-27 — Repeated tests of code review reliability
+
+The v6 and v7 comparison covers four PostHog pull requests, with two runs per variant and case.
+All 16 runs completed without recorded unit errors. One Opus scorer call per run scores every candidate and its restatements.
+The final score uses the same reply for the findings that survive the judge.
+Mean recall after the judge rises from 48.2% to 50.7%. At minor and above, it rises from 47.5% to 48.2%.
+These small gains need more runs. The change keeps the v7 reliability method.
+Sonnet for parts and sweeps cuts cost, but loses recall on one completed case. The change adds no cheaper tier.
+Two other Sonnet experiments failed at Claude rate limits. Their scores are excluded.
+The full comparison and its limits are in `benchmarks/review-bench/FINDINGS.md`, with a CSV of all 20 runs.
+
 ## Image preview in PR descriptions, reviews and comments (2026-11-20)
 
 Jovan asked to see a screenshot from a PR description without opening GitHub.
