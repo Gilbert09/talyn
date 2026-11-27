@@ -19,12 +19,12 @@ export async function setSpaceNotificationsMuted(
   muted: unknown
 ): Promise<SpaceNotificationPreferences> {
   if (typeof muted !== 'boolean') throw new TeamError(400, 'muted must be true or false.');
-  // An archived space may still be muted or unmuted: its sessions keep running.
-  await assertSpaceMember(userId, spaceId);
   const db = getPoolDbClient();
   if (muted) {
+    await assertSpaceMember(userId, spaceId);
     await db.insert(mutesTable).values({ userId, spaceId }).onConflictDoNothing();
   } else {
+    // People can remove their own preference after they leave a team.
     await db.delete(mutesTable).where(and(eq(mutesTable.userId, userId), eq(mutesTable.spaceId, spaceId)));
   }
   return readSpaceNotificationPreferences(userId);

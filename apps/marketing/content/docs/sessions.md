@@ -48,6 +48,8 @@ Linked pull requests are muted when all their sessions and tasks are in spaces y
 This includes archived sessions.
 A pull request with a session or task in Personal can still send alerts.
 Turn the space on again to use your usual notification settings.
+If muted spaces leave the list, select **Restore alerts** to remove their mutes.
+This also works after a space is archived or you leave its team.
 
 Claude adds itself as a commit co-author by default. Turn this off under **Settings > Sessions > Commits**.
 

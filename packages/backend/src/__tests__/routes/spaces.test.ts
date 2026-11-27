@@ -253,9 +253,8 @@ describe('space routes', () => {
     });
 
     it.each(['space-2', 'missing'])('refuses notification changes for inaccessible space %s', async (spaceId) => {
-      for (const muted of [true, false]) {
-        expect((await call('PUT', `/spaces/${spaceId}/notifications`, BEN, { muted })).status).toBe(404);
-      }
+      expect((await call('PUT', `/spaces/${spaceId}/notifications`, BEN, { muted: true })).status).toBe(404);
+      expect((await call('PUT', `/spaces/${spaceId}/notifications`, BEN, { muted: false })).status).toBe(200);
       expect(await testDb.db.select().from(spaceNotificationMutes)).toHaveLength(0);
     });
 
@@ -264,11 +263,26 @@ describe('space routes', () => {
       expect(await testDb.db.select().from(spaceNotificationMutes)).toHaveLength(0);
     });
 
+    it('lets a former member remove only their own mute', async () => {
+      await call('PUT', '/spaces/space-1/notifications', BEN, { muted: true });
+      await call('PUT', '/spaces/space-1/notifications', ANA, { muted: true });
+      await testDb.db.delete(teamMembers).where(eq(teamMembers.userId, BEN));
+      expect((await call('PUT', '/spaces/space-1/notifications', BEN, { muted: true })).status).toBe(404);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await call('PUT', '/spaces/space-1/notifications', BEN, { muted: false });
+        expect(result.status).toBe(200);
+        expect(result.body.data).toEqual({ mutedSpaceIds: [] });
+      }
+      expect((await call('GET', '/space-notifications', ANA)).body.data).toEqual({ mutedSpaceIds: ['space-1'] });
+    });
+
     it('keeps the preference for an archived space', async () => {
       const result = await call('PUT', '/spaces/space-old/notifications', BEN, { muted: true });
       expect(result.status).toBe(200);
       expect(result.body.data).toEqual({ mutedSpaceIds: ['space-old'] });
       expect((await call('GET', '/space-notifications', BEN)).body.data).toEqual({ mutedSpaceIds: ['space-old'] });
+      expect((await call('PUT', '/spaces/space-old/notifications', BEN, { muted: false })).body.data)
+        .toEqual({ mutedSpaceIds: [] });
     });
   });
 

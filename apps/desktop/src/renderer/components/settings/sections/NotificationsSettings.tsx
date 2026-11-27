@@ -333,6 +333,7 @@ function SpaceNotifications() {
   const loaded = useSpacesStore((s) => s.notificationsLoaded);
   const error = useSpacesStore((s) => s.notificationsError);
   const saving = useSpacesStore((s) => s.notificationsSaving);
+  const [restoring, setRestoring] = useState(false);
 
   useEffect(() => {
     // Another device may have changed the list since the app loaded it.
@@ -340,7 +341,25 @@ function SpaceNotifications() {
   }, [offered]);
 
   const withSpaces = (teams ?? []).filter((team) => team.spaces.length > 0);
-  if (!offered || withSpaces.length === 0) return null;
+  const listedIds = new Set((teams ?? []).flatMap((team) => team.spaces.map((space) => space.id)));
+  const otherMutedIds = teams === null ? [] : muted.filter((id) => !listedIds.has(id));
+  if (!offered || (withSpaces.length === 0 && otherMutedIds.length === 0)) return null;
+
+  const restoreOtherSpaces = async () => {
+    if (saving || restoring) return;
+    setRestoring(true);
+    const userId = useSpacesStore.getState().selfUserId;
+    try {
+      for (const id of otherMutedIds) {
+        if (useSpacesStore.getState().selfUserId !== userId) return;
+        await setSpaceMuted(id, false);
+      }
+    } catch {
+      toast.error('Could not restore all space alerts. Try again.');
+    } finally {
+      setRestoring(false);
+    }
+  };
 
   const toggle = (spaceId: string, on: boolean) => {
     setSpaceMuted(spaceId, !on).catch(() => toast.error('Could not save the space notification setting'));
@@ -361,11 +380,18 @@ function SpaceNotifications() {
             key={space.id}
             label={withSpaces.length > 1 ? `${team.name} / ${space.name}` : space.name}
             checked={!muted.includes(space.id)}
-            disabled={!loaded || saving}
+            disabled={!loaded || saving || restoring}
             onChange={(on) => toggle(space.id, on)}
           />
         ))
       )}
+      {otherMutedIds.length > 0 ? <SettingRow
+        label={`${otherMutedIds.length} other muted ${otherMutedIds.length === 1 ? 'space' : 'spaces'}`}
+        description="These muted spaces are not in the current list."
+      >
+        <Button variant="outline" size="sm" disabled={!loaded || saving || restoring}
+          onClick={() => void restoreOtherSpaces()}>Restore alerts</Button>
+      </SettingRow> : null}
     </SettingsSection>
   );
 }

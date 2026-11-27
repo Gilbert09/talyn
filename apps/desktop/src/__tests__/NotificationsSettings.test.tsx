@@ -267,4 +267,45 @@ describe('NotificationsSettings: team spaces', () => {
     expect(checkbox('^Automations$')).not.toBeChecked();
   });
 
+  it.each([true, false])('restores missing muted spaces with live spaces: %s', async (hasLiveSpaces) => {
+    if (!hasLiveSpaces) useSpacesStore.setState({ teams: [] });
+    mockSpaceGet.mockResolvedValue({ mutedSpaceIds: ['old-a', 'old-b'] });
+    mockSpaceSave.mockResolvedValueOnce({ mutedSpaceIds: ['old-b'] }).mockResolvedValueOnce({ mutedSpaceIds: [] });
+    await renderLoaded();
+    const restore = await screen.findByRole('button', { name: 'Restore alerts' });
+    expect(screen.getByText('2 other muted spaces')).toBeInTheDocument();
+    fireEvent.click(restore);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore alerts' })).toBeNull());
+    expect(mockSpaceSave).toHaveBeenNthCalledWith(1, 'old-a', false);
+    expect(mockSpaceSave).toHaveBeenNthCalledWith(2, 'old-b', false);
+    if (hasLiveSpaces) expect(checkbox('^Automations$')).toBeChecked();
+  });
+
+  it('keeps the remaining mute after a partial restore fails', async () => {
+    mockSpaceGet.mockResolvedValue({ mutedSpaceIds: ['old-a', 'old-b'] });
+    mockSpaceSave.mockResolvedValueOnce({ mutedSpaceIds: ['old-b'] }).mockRejectedValueOnce(new Error('offline'));
+    await renderLoaded();
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore alerts' }));
+    await waitFor(() => expect(mockSpaceSave).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Restore alerts' })).not.toBeDisabled());
+    expect(screen.getByText('1 other muted space')).toBeInTheDocument();
+    expect(useSpacesStore.getState().mutedSpaceIds).toEqual(['old-b']);
+    mockSpaceSave.mockResolvedValueOnce({ mutedSpaceIds: [] });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore alerts' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Restore alerts' })).toBeNull());
+  });
+
+  it('blocks other edits while missing spaces are being restored', async () => {
+    mockSpaceGet.mockResolvedValue({ mutedSpaceIds: ['old-a', 'old-b'] });
+    let finish!: (value: { mutedSpaceIds: string[] }) => void;
+    mockSpaceSave.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }))
+      .mockResolvedValueOnce({ mutedSpaceIds: [] });
+    await renderLoaded();
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore alerts' }));
+    expect(checkbox('^Automations$')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Restore alerts' })).toBeDisabled();
+    await act(async () => finish({ mutedSpaceIds: ['old-b'] }));
+    await waitFor(() => expect(checkbox('^Automations$')).not.toBeDisabled());
+  });
+
 });
