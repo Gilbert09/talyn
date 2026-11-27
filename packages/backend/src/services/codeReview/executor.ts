@@ -5,6 +5,8 @@ import {
   codeReviewLensLabel,
   codeReviewLensNames,
   codeReviewUnitCount,
+  CODE_REVIEW_WHOLE_PR_LENSES,
+  planCodeReviewParts,
   isCodeReviewPreset,
   isCustomReviewerLens,
   parseCodeReviewFindings,
@@ -13,6 +15,7 @@ import {
   findingsEligibleForAutoFix,
   filesWorthReviewing,
   selectLensesForFiles,
+  codeReviewLensReadsPart,
   UNATTENDED_SANDBOX_SIZE,
 } from '@talyn/shared';
 import { eq } from 'drizzle-orm';
@@ -244,7 +247,7 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
     return;
   }
 
-  const chunkTotal = plan.chunk ? chunkCountFor(loaded.ctx.files) : 1;
+  const chunkTotal = plan.chunk ? planCodeReviewParts(loaded.ctx.files, plan.maxParts).length || 1 : 1;
 
   // Which reviewers this change actually needs, decided HERE because this is
   // where the file list first exists — and because `runsTotal` is written in
@@ -273,7 +276,12 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
     );
     return;
   }
-  const runsTotal = codeReviewUnitCount(preset, chunkTotal, lensKeys.length);
+  const runsTotal = codeReviewUnitCount(
+    preset,
+    chunkTotal,
+    lensKeys.length,
+    lensKeys.filter((k) => CODE_REVIEW_WHOLE_PR_LENSES.has(k)).length
+  );
 
   const planned = await casTransition(
     review.id,
@@ -300,7 +308,14 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
       // The skips are RECORDED, with their reasons, because a reviewer that
       // never ran finds nothing and nothing looks exactly like a clean bill of
       // health. This is what lets the app say which ones sat out and why.
-      detail: { preset, chunkTotal, runsTotal, headSha: loaded.headSha, skippedLenses: skipped },
+      detail: {
+        preset,
+        chunkTotal,
+        runsTotal,
+        headSha: loaded.headSha,
+        skippedLenses: skipped,
+        cycle: review.cycle,
+      },
     }
   );
   if (planned) {
@@ -311,21 +326,6 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
       reviewerCount: lensKeys.length,
     });
   }
-}
-
-/**
- * How many pieces a large pull request is read in.
- *
- * Provisional, and marked as such. The anchor that matters is how much a lens can
- * hold and still reason about, which is a measurement nobody has taken for these
- * repositories yet — so this is a deliberately coarse split by file count, and the
- * experiment that replaces it is comparing findings-per-file on one large PR read
- * whole against the same PR read in pieces.
- */
-const FILES_PER_CHUNK = 25;
-
-function chunkCountFor(files: unknown[]): number {
-  return Math.max(1, Math.ceil(files.length / FILES_PER_CHUNK));
 }
 
 // ---------- Dispatching a unit ----------
@@ -813,15 +813,23 @@ async function buildUnitPrompt(
   unit: UnitKey,
   ctx: ReviewPromptContext
 ): Promise<BuiltPrompt | null> {
-  const scoped: ReviewPromptContext = {
-    ...ctx,
-    files: filesForChunk(ctx.files, unit.chunkIndex, review.chunkTotal),
-    chunkIndex: unit.chunkIndex + 1,
-    chunkTotal: review.chunkTotal,
-  };
+  // The judge and a whole-PR lens read every file. Every other unit reads its part.
+  const whole =
+    unit.kind === 'validate' || (unit.kind === 'lens' && CODE_REVIEW_WHOLE_PR_LENSES.has(unit.lens));
+  const scoped: ReviewPromptContext = whole
+    ? { ...ctx, chunkIndex: 1, chunkTotal: 1 }
+    : {
+        ...ctx,
+        files: filesForChunk(ctx.files, unit.chunkIndex, review.chunkTotal),
+        allFiles: ctx.files,
+        chunkIndex: unit.chunkIndex + 1,
+        chunkTotal: review.chunkTotal,
+      };
 
   if (unit.kind === 'lens') {
     const lens = lensByKey(unit.lens);
+    // A part with no file this lens reads is skipped, and boots no sandbox.
+    if (lens && !whole && !codeReviewLensReadsPart(unit.lens, scoped.files)) return null;
     if (lens) return { ok: true, prompt: buildLensPrompt(lens, scoped) };
     if (!isCustomReviewerLens(unit.lens)) return null;
 
@@ -999,7 +1007,10 @@ export async function ingestUnitOutput(
   run: RunRow,
   finalText: string | null
 ): Promise<{ parsed: boolean; findings: number }> {
-  const parsed = parseCodeReviewFindings(finalText);
+  const parsed = parseCodeReviewFindings(
+    finalText,
+    run.kind === 'validate' ? { maxFindings: Infinity } : {}
+  );
   if (!parsed.ok) {
     // A unit that never STARTED is not a unit that produced bad output, and
     // calling both "unparseable" told the user to try again — advice that would

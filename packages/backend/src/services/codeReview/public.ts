@@ -39,6 +39,9 @@ import { deferredSinceOf, hasDeferredUnit, settledUnitCount } from './decide.js'
 import { owningWorkbenchesForPrs } from '../workbenches/prSessions.js';
 import { SESSION_REPORT_SENT } from './sessionReport.js';
 
+/** The event code of a cycle's plan, which records the lenses it skipped. */
+export const CYCLE_PLANNED = 'cycle_planned';
+
 /**
  * The one public shape a review takes.
  *
@@ -71,6 +74,8 @@ interface ReviewFacts {
   session: CodeReviewSession | null;
   /** The report-back of the review's current cycle, if one went. */
   sessionReport: CodeReviewSessionReport | null;
+  /** How many of Talyn's lenses this cycle's plan skipped. */
+  lensesNotNeeded: number;
 }
 
 /** Pure: facts in, payload out. Shared by the one-review and the batch paths. */
@@ -88,6 +93,7 @@ function shapeReview(review: ReviewRow, facts: ReviewFacts): CodeReviewPublic {
     runsDone: facts.runsDone,
     runsTotal: review.runsTotal,
     lensesRun: ((review.lensKeys as string[]) ?? []).slice(),
+    lensesNotNeeded: facts.lensesNotNeeded,
     // Lens key and name only. This is what lets a client print the skill's name
     // beside a finding instead of its key.
     customReviewers: (review.customReviewers ?? []).map((r) => ({
@@ -126,6 +132,50 @@ function shapeReview(review: ReviewRow, facts: ReviewFacts): CodeReviewPublic {
     sessionReport: facts.sessionReport,
   };
 }
+
+/**
+ * How many of Talyn's lenses each review's current cycle skipped, in one query.
+ *
+ * Read from the cycle's own plan, not from today's preset: a preset that grows
+ * a lens must not make every older review say that a lens sat out. A cycle
+ * that is not planned yet has skipped nothing. Degrades to an empty map.
+ */
+export async function lensesNotNeededFor(
+  reviews: Pick<ReviewRow, 'id' | 'cycle' | 'phase'>[]
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const planned = reviews.filter((r) => !CODE_REVIEW_UNPLANNED_PHASES.has(r.phase));
+  if (!planned.length) return out;
+  const cycleOf = new Map(planned.map((r) => [r.id, r.cycle]));
+  try {
+    const rows = await getDbClient()
+      .select({ reviewId: prCodeReviewEvents.reviewId, detail: prCodeReviewEvents.detail })
+      .from(prCodeReviewEvents)
+      .where(
+        and(
+          inArray(prCodeReviewEvents.reviewId, [...cycleOf.keys()]),
+          eq(prCodeReviewEvents.code, CYCLE_PLANNED)
+        )
+      )
+      .orderBy(desc(prCodeReviewEvents.at));
+    for (const row of rows) {
+      if (out.has(row.reviewId)) continue;
+      const detail = (row.detail ?? {}) as { cycle?: unknown; skippedLenses?: unknown };
+      // An older plan has no cycle, and the latest plan is the current cycle's.
+      if (detail.cycle !== undefined && Number(detail.cycle) !== cycleOf.get(row.reviewId)) {
+        out.set(row.reviewId, 0);
+        continue;
+      }
+      out.set(row.reviewId, Array.isArray(detail.skippedLenses) ? detail.skippedLenses.length : 0);
+    }
+  } catch (err) {
+    console.warn('[code-review] could not read the cycle plans:', err);
+  }
+  return out;
+}
+
+/** A cycle in these phases has not chosen its lenses yet. */
+const CODE_REVIEW_UNPLANNED_PHASES: ReadonlySet<string> = new Set(['idle', 'queued', 'preparing']);
 
 /**
  * The report-back of each review's current cycle, in one query. An older
@@ -169,7 +219,7 @@ export async function toPublicReview(
   review: ReviewRow,
   options: { headSha?: string | null } = {}
 ): Promise<CodeReviewPublic> {
-  const [counts, dismissedCount, funnel, runs, bars, sessions, reports] = await Promise.all([
+  const [counts, dismissedCount, funnel, runs, bars, sessions, reports, notNeeded] = await Promise.all([
     severityCounts(review.id),
     countDismissed(review.id),
     funnelCounts(review.id),
@@ -177,6 +227,7 @@ export async function toPublicReview(
     reportingBarsFor([review.workspaceId]),
     owningWorkbenchesForPrs(review.workspaceId, [review.pullRequestId]),
     sessionReportsFor([review]),
+    lensesNotNeededFor([review]),
   ]);
   const currentHead =
     options.headSha !== undefined
@@ -196,6 +247,7 @@ export async function toPublicReview(
     currentHead,
     session: sessions.get(review.pullRequestId) ?? null,
     sessionReport: reports.get(review.id) ?? null,
+    lensesNotNeeded: notNeeded.get(review.id) ?? 0,
   });
 }
 
@@ -249,7 +301,7 @@ export async function codeReviewsForPrs(
     const reviewIds = reviews.map((r) => r.id);
 
     const workspaceIds = [...new Set(reviews.map((r) => r.workspaceId))];
-    const [countRows, settledRows, deferredRows, heads, bars, sessions, reports] = await Promise.all([
+    const [countRows, settledRows, deferredRows, heads, bars, sessions, reports, notNeeded] = await Promise.all([
       db
         .select({
           reviewId: prCodeReviewFindings.reviewId,
@@ -311,6 +363,7 @@ export async function codeReviewsForPrs(
       // One query for the page. It degrades to no links rather than failing.
       owningWorkbenchesForPrs(workspaceIds, pullRequestIds),
       sessionReportsFor(reviews),
+      lensesNotNeededFor(reviews),
     ]);
 
     const headById = new Map(
@@ -356,6 +409,7 @@ export async function codeReviewsForPrs(
           currentHead: headById.get(review.pullRequestId) ?? null,
           session: sessions.get(review.pullRequestId) ?? null,
           sessionReport: reports.get(review.id) ?? null,
+          lensesNotNeeded: notNeeded.get(review.id) ?? 0,
         })
       );
     }

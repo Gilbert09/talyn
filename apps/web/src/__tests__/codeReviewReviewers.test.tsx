@@ -484,21 +484,22 @@ describe('FindingsTab with a custom reviewer', () => {
     expect(screen.getByText(/Logic and house-rules agree/)).toBeInTheDocument();
   });
 
-  it.each<[string, string[], 'quick' | 'standard' | 'deep', number]>([
-    ["all of Talyn's", ['correctness', 'security', 'reliability'], 'standard', 0],
-    ["all of Talyn's and one of the team's", ['correctness', 'security', 'reliability', LENS], 'standard', 0],
-    ["one of Talyn's sat out, hidden by nothing", ['correctness', 'security', LENS], 'standard', 1],
-    ["two sat out on a docs change", ['correctness', LENS], 'standard', 2],
-    ["Talyn's turned off", [LENS], 'standard', 0],
-    ["Talyn's turned off, two of the team's", [LENS, 'skill:platform:s2'], 'deep', 0],
-    ['nothing ran', [], 'standard', 0],
-    ['more custom reviewers than the depth has lenses', ['correctness', LENS, 'skill:platform:s2'], 'quick', 0],
-  ])('notNeededCount with %s', (_label, lensesRun, preset, expected) => {
-    expect(notNeededCount({ lensesRun, preset })).toBe(expected);
+  it.each<[string, number | undefined, number]>([
+    ['none skipped', 0, 0],
+    ['two skipped', 2, 2],
+    ['an older backend', undefined, 0],
+    ['a bad count', -1, 0],
+  ])('notNeededCount with %s', (_label, lensesNotNeeded, expected) => {
+    expect(notNeededCount({ lensesNotNeeded })).toBe(expected);
   });
 
   it("says a lens sat out even when one of the team's reviewers ran", async () => {
-    await renderTab({ lensesRun: ['correctness', LENS] });
+    await renderTab({ lensesRun: ['correctness', LENS], lensesNotNeeded: 2 });
     expect(screen.getByText(/read by Logic, Security rules \(2 not needed here\)/)).toBeInTheDocument();
+  });
+
+  it('says nothing sat out on an older review that ran fewer lenses than the preset has now', async () => {
+    await renderTab({ lensesRun: ['correctness', 'security', 'reliability'], lensesNotNeeded: 0 });
+    expect(document.body.textContent).not.toContain('not needed here');
   });
 });

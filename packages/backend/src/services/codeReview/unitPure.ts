@@ -1,16 +1,23 @@
-import { codeReviewDedupeKey, type RawCodeReviewFinding } from '@talyn/shared';
+import { codeReviewDedupeKey, planCodeReviewParts, type RawCodeReviewFinding } from '@talyn/shared';
 import type { ReviewPromptContext } from './lenses.js';
 
-/** The files one chunk is responsible for. */
+/**
+ * The files one chunk is responsible for.
+ *
+ * Parts come from `planCodeReviewParts`, by directory and by changed lines, so
+ * every pass and every retry reads the same split. `chunkTotal` was frozen when
+ * the cycle started. If the file list has changed since (a push during the
+ * review) and no longer splits into that many parts, the files are dealt out
+ * round-robin instead, so every file still belongs to exactly one part.
+ */
 export function filesForChunk(
   files: ReviewPromptContext['files'],
   chunkIndex: number,
   chunkTotal: number
 ): ReviewPromptContext['files'] {
   if (chunkTotal <= 1) return files;
-  // Round-robin by position rather than by directory, which is the honest v1:
-  // directory affinity is the better split and needs measuring before it earns
-  // the complexity. Deterministic either way, so a retry reads the same files.
+  const parts = planCodeReviewParts(files, chunkTotal);
+  if (parts.length === chunkTotal) return parts[chunkIndex] ?? [];
   return files.filter((_, i) => i % chunkTotal === chunkIndex);
 }
 

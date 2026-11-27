@@ -134,6 +134,8 @@ export interface CodeReviewPresetPlan {
   readonly validate: boolean;
   /** Whether a large diff is split and read in pieces. */
   readonly chunk: boolean;
+  /** The most parts a large diff is split into. See `planCodeReviewParts`. */
+  readonly maxParts: number;
   /** 'default' runs the workspace's chosen model; 'top' its strongest. */
   readonly effort: 'default' | 'top';
 }
@@ -142,10 +144,108 @@ export const CODE_REVIEW_PRESET_PLAN: Record<CodeReviewPreset, CodeReviewPresetP
   // One unit, and the reporting bar goes in the lens prompt rather than in a
   // judging pass of its own: at this size a second sandbox costs more than the
   // precision it buys.
-  quick: { lenses: 1, sweep: false, validate: false, chunk: false, effort: 'default' },
-  standard: { lenses: 3, sweep: true, validate: true, chunk: false, effort: 'default' },
-  deep: { lenses: 5, sweep: true, validate: true, chunk: true, effort: 'top' },
+  quick: { lenses: 1, sweep: false, validate: false, chunk: false, maxParts: 1, effort: 'default' },
+  // Standard splits a large change too, as PostHog Review's Standard does: a
+  // lens that holds 1,700 lines at once stops reading closely long before the
+  // end. With parts, a whole-PR generalist and rules lens, and the refute-first
+  // judge, Standard found 61-67% of the known problems on PostHog/posthog#143292
+  // (2026-11-27), where it had found 6%. See benchmarks/review-bench/FINDINGS.md.
+  standard: { lenses: 4, sweep: true, validate: true, chunk: true, maxParts: 4, effort: 'default' },
+  deep: { lenses: 6, sweep: true, validate: true, chunk: true, maxParts: 8, effort: 'top' },
 };
+
+/**
+ * The lenses that read the WHOLE pull request once, even when it is split.
+ *
+ * The generalist is the reviewer that connects a change in one file to its
+ * effect in another. Split it by part and that connection is exactly what it
+ * loses. The rules lens checks the change against guides that each cover many
+ * files. The specialist lenses read one part each, which is where their depth
+ * comes from.
+ */
+export const CODE_REVIEW_WHOLE_PR_LENSES: ReadonlySet<string> = new Set(['correctness', 'rules']);
+
+/** Whether this lens runs on this chunk. A whole-PR lens runs on the first only. */
+export function codeReviewLensRunsOnChunk(lens: string, chunkIndex: number): boolean {
+  return chunkIndex === 0 || !CODE_REVIEW_WHOLE_PR_LENSES.has(lens);
+}
+
+/** About how many changed lines one part holds. */
+export const CODE_REVIEW_PART_LINES = 600;
+
+/**
+ * Split the changed files into parts, for the lenses that read one part each.
+ *
+ * Deterministic and with no model call, so every pass and every retry reads the
+ * same split. Files stay whole. Files in one directory stay together when they
+ * fit, because a directory is usually one feature and its files explain each
+ * other. When the change needs more than `maxParts` parts at the normal size,
+ * the parts grow until it fits: a review of a very large change is shallower,
+ * and that is better than a review nobody waits for.
+ */
+export function planCodeReviewParts<T extends { filename: string; additions: number; deletions: number }>(
+  files: readonly T[],
+  maxParts: number,
+  partLines: number = CODE_REVIEW_PART_LINES
+): T[][] {
+  const sorted = [...files].sort((a, b) => (a.filename < b.filename ? -1 : a.filename > b.filename ? 1 : 0));
+  const lines = (f: T) => Math.max(1, f.additions + f.deletions);
+  const total = sorted.reduce((sum, f) => sum + lines(f), 0);
+  if (maxParts <= 1 || total <= partLines || sorted.length <= 1) return sorted.length ? [sorted] : [];
+
+  const dirOf = (f: T) => {
+    const i = f.filename.lastIndexOf('/');
+    return i < 0 ? '' : f.filename.slice(0, i);
+  };
+  const pack = (budget: number): T[][] => {
+    const groups: T[][] = [];
+    for (const f of sorted) {
+      const last = groups[groups.length - 1];
+      if (last && dirOf(last[0]!) === dirOf(f)) last.push(f);
+      else groups.push([f]);
+    }
+    const parts: T[][] = [];
+    let current: T[] = [];
+    let used = 0;
+    const flush = () => {
+      if (current.length) parts.push(current);
+      current = [];
+      used = 0;
+    };
+    // A part is closed when the next files do not fit, unless it is still small:
+    // a part of a few lines costs a full set of reviewers and gives them nothing.
+    const full = (next: number) => used >= budget / 4 && used + next > budget;
+    for (const group of groups) {
+      const size = group.reduce((sum, f) => sum + lines(f), 0);
+      if (size <= budget) {
+        if (full(size)) flush();
+        current.push(...group);
+        used += size;
+        continue;
+      }
+      // A directory larger than one part is packed file by file.
+      for (const f of group) {
+        if (full(lines(f))) flush();
+        current.push(f);
+        used += lines(f);
+      }
+    }
+    flush();
+    return parts;
+  };
+
+  let parts = pack(partLines);
+  if (parts.length <= maxParts) return parts;
+  let low = partLines;
+  let high = total;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (pack(mid).length <= maxParts) high = mid;
+    else low = mid + 1;
+  }
+  parts = pack(low);
+  return parts;
+}
 
 /**
  * How many agent runs a preset will spend on a given number of chunks.
@@ -166,13 +266,40 @@ export function codeReviewUnitCount(
    * never promised. Defaults to the preset's count for callers deciding before
    * the files are loaded.
    */
-  lensCount?: number
+  lensCount?: number,
+  /**
+   * How many of those lenses read the whole pull request once rather than one
+   * part each. Defaults to the preset's own whole-PR lenses.
+   */
+  wholePrLensCount?: number
 ): number {
   const plan = CODE_REVIEW_PRESET_PLAN[preset];
   const lenses = lensCount ?? plan.lenses;
-  const perChunk = lenses + (plan.sweep ? 1 : 0);
-  return perChunk * Math.max(1, chunks) + (plan.validate ? 1 : 0);
+  const parts = Math.max(1, chunks);
+  const whole =
+    parts > 1
+      ? Math.min(
+          lenses,
+          wholePrLensCount ??
+            [...CODE_REVIEW_WHOLE_PR_LENSES].filter((k) => CODE_REVIEW_DEFAULT_LENS_ORDER.slice(0, plan.lenses).includes(k))
+              .length
+        )
+      : 0;
+  return whole + (lenses - whole) * parts + (plan.sweep ? parts : 0) + (plan.validate ? 1 : 0);
 }
+
+/**
+ * The built-in lens keys in preset order. The prompts live in the backend's
+ * `lenses.ts`, whose order a test holds equal to this list.
+ */
+export const CODE_REVIEW_DEFAULT_LENS_ORDER: readonly string[] = [
+  'correctness',
+  'security',
+  'reliability',
+  'rules',
+  'tests',
+  'operability',
+];
 
 // ---------- Phases ----------
 
@@ -481,6 +608,9 @@ export const CODE_REVIEW_LENS_NEEDS: Record<string, readonly CodeReviewFileClass
   security: ['code', 'config', 'migration'],
   // Load, failure and resource behaviour are properties of things that RUN.
   reliability: ['code', 'migration'],
+  // Written rules are about code and how it is built and tested. A docs-only
+  // change is read by the generalist.
+  rules: ['code', 'test', 'config', 'migration'],
   // Coverage is assessed against a behaviour change, or against the tests
   // themselves when those are what changed.
   tests: ['code', 'test', 'migration'],
@@ -488,6 +618,18 @@ export const CODE_REVIEW_LENS_NEEDS: Record<string, readonly CodeReviewFileClass
   // what migrates it.
   operability: ['code', 'config', 'migration'],
 };
+
+/**
+ * Whether a lens has anything to read in one part of a split change.
+ *
+ * The cycle selects lenses over the whole change. A part can still hold only
+ * files that a lens skips, such as a `docs/` part, and the lens runs on that
+ * part for nothing. Same rule as `selectLensesForFiles`, for one part.
+ */
+export function codeReviewLensReadsPart(lens: string, files: readonly { filename: string }[]): boolean {
+  const needs = CODE_REVIEW_LENS_NEEDS[lens];
+  return !needs || files.some((f) => needs.includes(classifyReviewFile(f.filename)));
+}
 
 /** Why a lens was not dispatched, in the words the app shows. */
 export interface SkippedLens {
@@ -691,6 +833,12 @@ export interface CodeReviewPublic {
    * clean bill of health. The precise reason for each is in the timeline.
    */
   lensesRun: string[];
+  /**
+   * How many of Talyn's lenses this cycle's plan skipped, because the change had
+   * nothing they read. From the cycle's own plan, so a preset that grows later
+   * does not change an older review. Absent from an older backend.
+   */
+  lensesNotNeeded?: number;
   /**
    * The team's own reviewers on this cycle, so a client can label their lens
    * keys. Frozen at cycle start, so a skill renamed or removed afterwards still
@@ -920,7 +1068,8 @@ export type ParsedCodeReviewFindings =
  * Generated from the constants above so the prompt and the parser cannot drift:
  * change the sentinel or a cap and the words the agent reads change with it.
  */
-export function codeReviewOutputContract(): string {
+export function codeReviewOutputContract(opts: { judge?: boolean } = {}): string {
+  if (opts.judge) return judgeOutputContract();
   return [
     `Finish your final message with the line \`${CODE_REVIEW_FINDINGS_SENTINEL}\` on its own,`,
     'then one fenced JSON code block, and nothing after it. The schema is:',
@@ -940,14 +1089,59 @@ export function codeReviewOutputContract(): string {
     '```',
     '',
     'Rules for that block:',
-    `- At most ${CODE_REVIEW_MAX_FINDINGS_PER_UNIT} findings. Report the ones that matter, not everything you noticed.`,
+    ...(opts.judge
+      ? [`- At most ${CODE_REVIEW_MAX_FINDINGS_PER_UNIT} findings.`]
+      : [
+          `- At most ${CODE_REVIEW_MAX_FINDINGS_PER_UNIT} findings. Do not stop at the first problem you find. Keep`,
+          '  going until you have listed every problem the author would fix if they knew',
+          '  about it. One finding per distinct problem.',
+        ]),
     '- `anchor` must be copied from the file verbatim, not paraphrased. It is how a',
     '  finding survives somebody rebasing the branch, and a paraphrase silently',
     '  becomes a duplicate.',
+    '- `lineStart`/`lineEnd` are line numbers in the file at the pull request head.',
+    '  Keep the range short, under 10 lines, on the line that shows the problem.',
+    '- `body` is one paragraph. Name the trigger (the input, state or environment the',
+    '  problem needs), the consequence, and the code involved. State it as a fact,',
+    '  without "may" or "could potentially". When a repository rule supports the',
+    '  finding, name the rule file and its line range in the body.',
+    '- `severity`: blocker breaks production or loses data for ordinary use; major is',
+    '  a real defect a user or operator will hit; minor is a real defect with a',
+    '  narrow trigger or small cost; nit is everything smaller.',
     '- Report a problem only if you can name a concrete trigger and a concrete',
     '  consequence. If you cannot, leave it out.',
     '- An empty findings array is a real and useful answer. Emit the block anyway:',
     '  a message with no block is recorded as a failed review, not a clean one.',
+  ].join('\n');
+}
+
+/**
+ * The judge's output: which candidates it keeps, at what severity, and why it
+ * dropped the rest.
+ *
+ * It names keeps by id and copies nothing else. The judge used to copy every
+ * kept finding back whole, and the backend reads only the id and the severity
+ * of a keep. On a 26-candidate review (2026-11-27) the copy was 18 KB of JSON,
+ * one typo in it (`"lineEnd":393"`) failed the parse, and the whole review was
+ * left unchecked.
+ */
+function judgeOutputContract(): string {
+  return [
+    `Finish your final message with the line \`${CODE_REVIEW_FINDINGS_SENTINEL}\` on its own,`,
+    'then one fenced JSON code block, and nothing after it. The schema is:',
+    '',
+    '```json',
+    '{"schema":1,',
+    ' "findings":[{"id":"<candidate id>","severity":"blocker|major|minor|nit","title":"<its title>"}],',
+    ' "dropped":[{"id":"<candidate id>","reason":"<one sentence>"}]}',
+    '```',
+    '',
+    'Rules for that block:',
+    '- `findings` holds one entry per candidate you KEEP, and nothing else. Do not copy the',
+    '  body, the anchor or the lines: the id is enough.',
+    '- `dropped` holds one entry per candidate you drop.',
+    '- An empty findings array means you refuted every candidate. Emit the block anyway:',
+    '  a message with no block is recorded as a failed check, not a clean one.',
   ].join('\n');
 }
 
@@ -963,8 +1157,15 @@ export function codeReviewOutputContract(): string {
  * failed unit. It must never be read as "the agent found nothing": inverting
  * that turns a broken run into a clean bill of health, which is the worst
  * failure this product has available to it.
+ *
+ * `maxFindings` is a reviewer's cap. The judge names keeps by id only and may
+ * keep every candidate, so its caller passes `Infinity`: a keep cut off at 40
+ * would reject a candidate the judge never dropped.
  */
-export function parseCodeReviewFindings(text: string | null | undefined): ParsedCodeReviewFindings {
+export function parseCodeReviewFindings(
+  text: string | null | undefined,
+  { maxFindings = CODE_REVIEW_MAX_FINDINGS_PER_UNIT }: { maxFindings?: number } = {}
+): ParsedCodeReviewFindings {
   if (!text) return { ok: false, error: 'The agent produced no final message.' };
 
   const marker = text.lastIndexOf(CODE_REVIEW_FINDINGS_SENTINEL);
@@ -999,9 +1200,9 @@ export function parseCodeReviewFindings(text: string | null | undefined): Parsed
     return { ok: false, error: 'The JSON block had no `findings` array.' };
   }
 
-  const truncated = list.length > CODE_REVIEW_MAX_FINDINGS_PER_UNIT;
+  const truncated = list.length > maxFindings;
   const findings = list
-    .slice(0, CODE_REVIEW_MAX_FINDINGS_PER_UNIT)
+    .slice(0, maxFindings)
     .map(normaliseFinding)
     .filter((f): f is RawCodeReviewFinding => f !== null);
 
@@ -1481,6 +1682,7 @@ export function findingsEligibleForAutoFix<
 export const CODE_REVIEW_LENS_LABELS: Record<string, string> = {
   correctness: 'Logic',
   security: 'Security',
+  rules: 'Repository rules',
   reliability: 'Reliability',
   tests: 'Tests',
   operability: 'Operability',

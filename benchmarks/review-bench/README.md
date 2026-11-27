@@ -12,8 +12,9 @@ The harness implements the sequence of lens, sweep, and judge runs.
 It keeps the production rules for duplicate findings, unmatched keeps, and failed judges.
 It fails the PR if every lens fails.
 
-Quick runs one lens. Standard runs three lenses, one sweep, and one judge.
-Deep runs five lenses per chunk, then one sweep per chunk and one judge.
+Quick runs one lens. Standard has four lenses. Deep has six lenses.
+In Standard and Deep, correctness and repository rules each read the whole pull request once.
+The other lenses read each part, followed by one sweep per part and one judge for the review.
 The judge receives all candidates. Its diff context uses the first chunk, as production does.
 
 This harness uses Codex only, pinned to `0.166.0`, the fleet version.
@@ -30,6 +31,42 @@ The container is the isolation boundary. Do not use this flag outside the contai
 A unit fails when its agent commands fail for an environment reason, so a blind review cannot pass.
 
 Results and prompt experiments are in [FINDINGS.md](./FINDINGS.md).
+
+## Golden-case runs with Claude Code
+
+`src/golden.ts` reviews one real pull request whose true problems are known, with Claude Code.
+It runs the same prompts and the same lens, sweep and judge sequence as `review()`.
+A case file in `golden/` lists the known problems. Each problem is one that another reviewer reported and that was present at the head commit.
+
+The runner needs a checkout of the case repository at the head commit, the GitHub file list with patches, and the PR title and body.
+It starts `claude -p` in the checkout with no edit or web tools and an empty `HOME`, so your own `CLAUDE.md` does not reach the reviewer.
+The reviewer keeps a shell with no permission checks, as a fleet unit does, so the scores match production.
+The pull request is third-party text that can steer that shell.
+Run the runner only in a disposable VM or container, and pass `--sandboxed` to confirm. Without that flag it refuses to start.
+The reviewer gets only the environment it needs to reach the model: `PATH`, locale, proxy and certificate settings, and `ANTHROPIC_*` and `CLAUDE_CODE_*`.
+Rule files are read at the case's `base` commit, so a later change to the rules does not change an old case's score.
+One scorer call matches the candidates to known problems, including every restatement.
+The final score uses that same reply, with references moved to findings that survive the judge.
+The scorer defaults to Sonnet. Use `--score-model` to choose another model.
+
+```sh
+npx esbuild benchmarks/review-bench/src/golden.ts --bundle --platform=node --format=esm \
+  --alias:@talyn/shared=./packages/shared/src/index.ts --outfile=/tmp/golden.js
+node /tmp/golden.js --case benchmarks/review-bench/golden/posthog-143292.json \
+  --repo /path/to/posthog-checkout --files files.json --pr pr.json --out /tmp/run \
+  --preset standard --model claude-opus-5-5 --sandboxed
+```
+
+`files.json` is the `files` array of `GET /repos/<repo>/compare/<base>...<head>`.
+`pr.json` holds `title`, `body`, `head` and `base` (the branch names).
+Add `--score-only` to score an earlier run again.
+Use the same scorer model and prompt for every run in a comparison.
+Check each `units/*.out.md` header for `error: true` before you use its scores.
+A failed judge leaves unjudged findings in `final.json`. That file alone does not prove a valid run.
+`--score-only` does not retry failed lenses, sweeps or judges.
+Use `--part-model` to test another model for lenses that read one part and for sweeps.
+This option changes only the benchmark. It does not change the model in production.
+These commands spend model usage.
 
 Install Docker, Node.js 22, npm, Git, and jq on the host.
 Refresh your host credentials with any normal `codex exec` run before you start.

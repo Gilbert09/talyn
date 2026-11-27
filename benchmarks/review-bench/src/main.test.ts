@@ -18,11 +18,11 @@ const candidate = (overrides: Partial<RawCodeReviewFinding> = {}): Candidate => 
   const raw = finding(overrides);
   return { ...raw, dedupeKey: keyFor(raw, false), seenCount: 1, lenses: ['correctness'] };
 };
-const context = (count = 1): ReviewPromptContext => ({
+const context = (count = 1, additions = 1): ReviewPromptContext => ({
   ref: 'owner/repo#42', title: 'Test change', body: '', headBranch: 'pr-42', baseBranch: 'base',
   chunkIndex: 1, chunkTotal: 1,
   files: Array.from({ length: count }, (_, index) => ({
-    filename: index ? `src/file-${index}.ts` : 'src/a.ts', status: 'modified', additions: 1, deletions: 0,
+    filename: index ? `src/file-${index}.ts` : 'src/a.ts', status: 'modified', additions, deletions: 0,
     patch: '@@ -1 +1,2 @@\n context\n+return value;',
   })),
 });
@@ -187,17 +187,19 @@ describe('orchestration with a fake runner', () => {
     else expect(check).not.toThrow();
   });
 
+  // Lens counts: the whole-PR lenses (the generalist and the rules lens) run
+  // once, the others once per part of about 600 changed lines.
   it.each([
-    ['quick', 1, 1, 0, 0], ['standard', 1, 3, 1, 1],
-    ['deep', 25, 5, 1, 1], ['deep', 26, 10, 2, 1], ['deep', 51, 15, 3, 1],
-  ] as const)('runs %s with %s files in production order', async (preset, fileCount, lenses, sweeps, judges) => {
+    ['quick', 1, 1, 1, 0, 0], ['standard', 1, 1, 4, 1, 1], ['deep', 1, 1, 6, 1, 1],
+    ['standard', 3, 500, 8, 3, 1], ['deep', 3, 500, 14, 3, 1], ['standard', 20, 500, 10, 4, 1],
+  ] as const)('runs %s with %s files of %s lines in production order', async (preset, fileCount, additions, lenses, sweeps, judges) => {
     const settings = { ...readSettings({ RB_CONFIG_PRESET: preset }), concurrency: 2, judgeModel: 'judge-model' };
     const calls: AgentUnit[] = [];
     let active = 0;
     let peak = 0;
     let finishedLenses = 0;
     let finishedSweeps = 0;
-    await review(context(fileCount), settings, async (unit) => {
+    await review(context(fileCount, additions), settings, async (unit) => {
       calls.push(unit);
       active++;
       peak = Math.max(peak, active);
@@ -226,6 +228,34 @@ describe('orchestration with a fake runner', () => {
     }
   });
 
+  it('skips a per-part lens on a part with nothing it reads', async () => {
+    const files = [
+      ...Array.from({ length: 2 }, (_, i) => ({ filename: `docs/page-${i}.md`, status: 'modified', additions: 300, deletions: 0, patch: '@@ -1 +1 @@\n+x' })),
+      ...Array.from({ length: 2 }, (_, i) => ({ filename: `src/f-${i}.ts`, status: 'modified', additions: 300, deletions: 0, patch: '@@ -1 +1 @@\n+x' })),
+    ];
+    const calls: AgentUnit[] = [];
+    await review({ ...context(), files }, readSettings({}), async (unit) => {
+      calls.push(unit);
+      return message();
+    });
+    const lenses = calls.filter((u) => u.kind === 'lens').map((u) => u.name).sort();
+    // Two parts: docs, then src. Security and reliability read the src part only.
+    expect(lenses).toEqual(['lens-correctness-1', 'lens-reliability-2', 'lens-rules-1', 'lens-security-2']);
+  });
+
+  it.each([
+    ['split into parts', 3, 500, { 'lens-correctness-1': 'main', 'lens-rules-1': 'main', 'lens-security-2': 'part', 'sweep-1': 'part', judge: 'judge' }],
+    ['one part', 1, 1, { 'lens-correctness-1': 'main', 'lens-security-1': 'main', 'sweep-1': 'part', judge: 'judge' }],
+  ] as const)('runs the part model on part lenses and sweeps, %s', async (_label, count, additions, expected) => {
+    const settings = { ...readSettings({}), model: 'main', judgeModel: 'judge', partModel: 'part' };
+    const models: Record<string, string> = {};
+    await review(context(count, additions), settings, async (unit) => {
+      models[unit.name] = unit.model;
+      return message(unit.kind === 'lens' ? [finding()] : []);
+    });
+    expect(models).toMatchObject(expected);
+  });
+
   it('passes deduped coverage to the sweep and all candidates to the judge', async () => {
     const sweepFinding = finding({ file: 'src/sweep.ts', title: 'Sweep issue' });
     const calls: AgentUnit[] = [];
@@ -247,7 +277,7 @@ describe('orchestration with a fake runner', () => {
       return 'Invalid output';
     });
     await expect(review(context(), readSettings({}), runner, vi.fn())).rejects.toThrow('Every lens unit failed');
-    expect(runner).toHaveBeenCalledTimes(3);
+    expect(runner).toHaveBeenCalledTimes(4);
   });
 
   it('continues after a partial lens failure and skips the judge for empty findings', async () => {
@@ -256,7 +286,7 @@ describe('orchestration with a fake runner', () => {
       calls.push(unit);
       return unit.lens === 'security' ? 'Invalid output' : message();
     }, vi.fn())).toEqual([]);
-    expect(calls.map((unit) => unit.kind)).toEqual(['lens', 'lens', 'lens', 'sweep']);
+    expect(calls.map((unit) => unit.kind)).toEqual(['lens', 'lens', 'lens', 'lens', 'sweep']);
   });
 
   it.each(['throws', 'unparseable'])('keeps candidates when the sweep and judge %s', async (failure) => {
@@ -265,14 +295,14 @@ describe('orchestration with a fake runner', () => {
       if (failure === 'throws') throw new Error('Timed out.');
       return 'Invalid output';
     }, vi.fn());
-    expect(results).toMatchObject([{ seenCount: 3, lenses: ['correctness', 'security', 'reliability'] }]);
+    expect(results).toMatchObject([{ seenCount: 4, lenses: ['correctness', 'security', 'reliability', 'rules'] }]);
   });
 });
 
 describe('settings and output validation', () => {
   it('uses the defaults and accepts optional settings', () => {
     expect(readSettings({})).toEqual({ preset: 'standard', model: 'gpt-6.1-terra', judgeModel: 'gpt-6.1-terra',
-      effort: undefined, concurrency: 5, unitTimeoutSec: 900 });
+      partModel: undefined, effort: undefined, concurrency: 5, unitTimeoutSec: 900 });
     expect(readSettings({ RB_CONFIG_MODEL: 'custom', RB_CONFIG_EFFORT: 'high' })).toMatchObject({
       model: 'custom', judgeModel: 'custom', effort: 'high',
     });

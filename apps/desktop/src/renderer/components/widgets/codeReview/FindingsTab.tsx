@@ -19,11 +19,9 @@ import {
   codeReviewLensLabel,
   codeReviewLensNames,
   codeReviewLensTally,
-  isCustomReviewerLens,
   type CodeReviewLensNames,
   codeReviewPresetFacts,
   CODE_REVIEW_PRESET_LABELS,
-  CODE_REVIEW_PRESET_PLAN,
   resolveReportingBar,
   CODE_REVIEW_SEVERITY_GROUP_LABELS,
   CODE_REVIEW_SEVERITY_ORDER,
@@ -901,14 +899,12 @@ function headline(review: CodeReviewPublic): string {
 /**
  * How many of Talyn's own reviewers sat this change out.
  *
- * Counted over Talyn's lenses only. A team's own reviewers are extra, so they
- * must not hide a lens that sat out. And a cycle that ran none of Talyn's has
- * them turned off, which is a setting and not a reviewer that was not needed.
+ * The backend reads it from the cycle's own plan. Counting against today's
+ * preset would say a lens sat out on every review from before the preset grew.
+ * A team's own reviewers and Talyn's turned off are not counted there either.
  */
-export function notNeededCount(review: Pick<CodeReviewPublic, 'lensesRun' | 'preset'>): number {
-  const builtIn = review.lensesRun.filter((lens) => !isCustomReviewerLens(lens)).length;
-  if (builtIn === 0) return 0;
-  return Math.max(0, CODE_REVIEW_PRESET_PLAN[review.preset].lenses - builtIn);
+export function notNeededCount(review: Pick<CodeReviewPublic, 'lensesNotNeeded'>): number {
+  return Math.max(0, review.lensesNotNeeded ?? 0);
 }
 
 function FindingCard({

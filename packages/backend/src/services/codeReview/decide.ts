@@ -1,4 +1,4 @@
-import type { CodeReviewPhase, CodeReviewPreset } from '@talyn/shared';
+import { codeReviewLensRunsOnChunk, type CodeReviewPhase, type CodeReviewPreset } from '@talyn/shared';
 import type { RunKind, RunRow, RunStatus } from './store.js';
 
 /**
@@ -135,7 +135,11 @@ function plannedUnits(state: DecideState, phase: 'reviewing' | 'sweeping' | 'val
   if (phase === 'reviewing') {
     const units: UnitKey[] = [];
     for (let chunk = 0; chunk < Math.max(1, state.chunkTotal); chunk++) {
-      for (const lens of state.lensKeys) units.push({ kind: 'lens', lens, chunkIndex: chunk });
+      for (const lens of state.lensKeys) {
+        // A whole-PR lens reads every part at once, so it runs on the first only.
+        if (state.chunkTotal > 1 && !codeReviewLensRunsOnChunk(lens, chunk)) continue;
+        units.push({ kind: 'lens', lens, chunkIndex: chunk });
+      }
     }
     return units;
   }
