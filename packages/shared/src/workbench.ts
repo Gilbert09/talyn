@@ -815,7 +815,8 @@ export type ConfirmWorkbenchBranchNameResult =
 /** POST /workbenches/archive: the sessions it archived, and each id it could not archive with the reason. */
 export interface ArchiveWorkbenchesResult {
   archived: Workbench[];
-  failed: Array<{ id: string; error: string }>;
+  /** `busy`: the session works now (a turn, script, background job or wake-up), so it stays. */
+  failed: Array<{ id: string; error: string; busy?: true }>;
 }
 
 export interface UpdateWorkbenchInput {

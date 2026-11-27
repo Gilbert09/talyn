@@ -7,7 +7,15 @@ import type { AddressInfo } from 'net';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { claudeTurnLines, FakeFleet, isAgentTurn, isTitleScript, isWorkSaveScript, type ExecReply } from './helpers/fakeFleet.js';
 import { storeChangesCopy, type StoredCopy } from './helpers/storedChanges.js';
-import { pullRequests, repositories, workbenchChats, workspaces } from '../db/schema.js';
+import {
+  pullRequests,
+  repositories,
+  workbenchBackgroundJobs,
+  workbenchChats,
+  workbenchScriptRuns,
+  workbenchWakeups,
+  workspaces,
+} from '../db/schema.js';
 import { resolveWorkbenchConfig } from '@talyn/shared';
 import { userFacingError } from '../services/workbenches/errors.js';
 
@@ -913,6 +921,67 @@ describe('workbench routes', () => {
       expect(asB.status).toBe(200);
       expect(asB.body.data).toEqual({ archived: [], failed: [{ id: theirs.id, error: 'Session not found' }] });
       expect((await getWorkbench(theirs.id))?.archivedAt).toBeNull();
+    });
+
+    const makeBusy: Record<string, (wbId: string, chatId: string) => Promise<unknown>> = {
+      'a running turn': (_wbId, chatId) => testDb.db.update(workbenchChats).set({ status: 'running' }).where(eq(workbenchChats.id, chatId)),
+      'a queued message': (_wbId, chatId) =>
+        testDb.db.update(workbenchChats).set({ queuedMessages: [{ id: 'q1', text: 'next' }] as never }).where(eq(workbenchChats.id, chatId)),
+      'a pending drain': (_wbId, chatId) => testDb.db.update(workbenchChats).set({ drainPending: true }).where(eq(workbenchChats.id, chatId)),
+      'a running background job': (wbId, chatId) =>
+        testDb.db.insert(workbenchBackgroundJobs).values({
+          id: `job-${wbId}`, workbenchId: wbId, chatId, workspaceId: 'ws-a', sandboxId: 'sb', name: 'tests',
+          command: 'npm test', cwd: '/work/repo', durableKey: 'k', marker: 'm',
+        }),
+      'a running script': (wbId) =>
+        testDb.db.insert(workbenchScriptRuns).values({
+          id: `run-${wbId}`, workbenchId: wbId, workspaceId: 'ws-a', sandboxId: 'sb', name: 'run', generation: 'g', owner: 'o',
+        }),
+      'a scheduled wake-up': (wbId, chatId) =>
+        testDb.db.insert(workbenchWakeups).values({
+          id: `wake-${wbId}`, workbenchId: wbId, chatId, workspaceId: 'ws-a', wakeAt: new Date(Date.now() + 60_000), reason: 'CI',
+        }),
+    };
+
+    it.each([
+      ['a running turn', 'The session works now.'],
+      ['a queued message', 'The session works now.'],
+      ['a pending drain', 'The session works now.'],
+      ['a running background job', 'The session has a running background job.'],
+      ['a running script', 'The session runs a script.'],
+      ['a scheduled wake-up', 'The session has a scheduled wake-up.'],
+    ])('keeps a session with %s and archives the others', async (kind, error) => {
+      const busy = await createLocalWorkbench();
+      const free = await createLocalWorkbench();
+      await makeBusy[kind]!(busy.id, await chatIdOf(busy.id));
+      const res = await call('POST', '/workbenches/archive', { ids: [busy.id, free.id] });
+      expect(res.status).toBe(200);
+      expect(res.body.data.archived.map((w: Loose) => w.id)).toEqual([free.id]);
+      expect(res.body.data.failed).toEqual([{ id: busy.id, error, busy: true }]);
+      expect((await getWorkbench(busy.id))?.archivedAt).toBeNull();
+      expect((await getWorkbench(free.id))?.archivedAt).not.toBeNull();
+    });
+
+    it.each([
+      ['an ended background job', (wbId: string, chatId: string) =>
+        testDb.db.insert(workbenchBackgroundJobs).values({
+          id: `job-${wbId}`, workbenchId: wbId, chatId, workspaceId: 'ws-a', sandboxId: 'sb', name: 'tests',
+          command: 'npm test', cwd: '/work/repo', durableKey: 'k', marker: 'm', status: 'exited', exitCode: 0,
+        })],
+      ['an ended script', (wbId: string) =>
+        testDb.db.insert(workbenchScriptRuns).values({
+          id: `run-${wbId}`, workbenchId: wbId, workspaceId: 'ws-a', sandboxId: 'sb', name: 'run', generation: 'g', owner: 'o', running: false,
+        })],
+      ['a fired wake-up', (wbId: string, chatId: string) =>
+        testDb.db.insert(workbenchWakeups).values({
+          id: `wake-${wbId}`, workbenchId: wbId, chatId, workspaceId: 'ws-a', wakeAt: new Date(), reason: 'CI', status: 'fired',
+        })],
+    ])('archives a session with %s', async (_kind, seed) => {
+      const wb = await createLocalWorkbench();
+      await seed(wb.id, await chatIdOf(wb.id));
+      const res = await call('POST', '/workbenches/archive', { ids: [wb.id] });
+      expect(res.body.data).toMatchObject({ failed: [] });
+      expect(res.body.data.archived.map((w: Loose) => w.id)).toEqual([wb.id]);
     });
 
     it.each([

@@ -4,11 +4,12 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { Workbench } from '@talyn/shared';
+import type { Workbench, WorkbenchBackground, WorkbenchBackgroundJob, WorkbenchWakeup } from '@talyn/shared';
 import { SidebarWorkbenchList } from '../renderer/components/layout/SidebarWorkbenchList';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { installNavigation, useNavigationStore } from '../renderer/stores/navigation';
 import { usePullRequestStore } from '../renderer/stores/pullRequests';
+import { useSessionBackgroundStore } from '../renderer/stores/sessionBackground';
 import { toast } from '../renderer/stores/toast';
 
 const archiveMany = jest.fn();
@@ -71,6 +72,8 @@ beforeEach(() => {
   archiveMany.mockImplementation(async (ids: string[]) => ({ archived: ids.map(archivedRow), failed: [] }));
   jest.mocked(toast.success).mockClear();
   jest.mocked(toast.error).mockClear();
+  jest.mocked(toast.info).mockClear();
+  useSessionBackgroundStore.setState({ byWorkbench: {} });
   useWorkbenchStore.getState().setWorkspace('ws1');
   setSessions([lisbon, oslo, porto, rome]);
   useWorkbenchStore.setState({ listLoaded: true, chats: {} });
@@ -106,6 +109,39 @@ describe('sidebar archive all', () => {
     fireEvent.click(archiveAllButton());
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
     expect(archiveMany).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Pick<WorkbenchBackground, 'jobs' | 'wakeups'>]>([
+    ['a running background job', { jobs: [{ id: 'j1', status: 'running' } as WorkbenchBackgroundJob], wakeups: [] }],
+    ['a scheduled wake-up', { jobs: [], wakeups: [{ id: 'w1', status: 'scheduled' } as WorkbenchWakeup] }],
+  ])('excludes a session with %s from the count and request', async (_kind, background) => {
+    useSessionBackgroundStore.setState({
+      byWorkbench: { lisbon: { workbenchId: 'lisbon', ...background } },
+    });
+    renderList();
+    expect(archiveAllButton()).toHaveAttribute('title', 'Archive all sessions without an open pull request (1)');
+    fireEvent.click(archiveAllButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive all' }));
+    await waitFor(() => expect(archiveMany).toHaveBeenCalledWith(['porto']));
+    expect(useWorkbenchStore.getState().workbenches.lisbon).toEqual(lisbon);
+  });
+
+  it('restores a busy session when its background state was not loaded', async () => {
+    archiveMany.mockResolvedValue({
+      archived: [archivedRow('porto')],
+      failed: [{ id: 'lisbon', error: 'The session has a running background job.', busy: true }],
+    });
+    useWorkbenchStore.getState().selectWorkbench('lisbon');
+    renderList();
+    fireEvent.click(archiveAllButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive all' }));
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith(
+      'Kept 1 session that works now', 'The session has a running background job.'
+    ));
+    expect(screen.getByText('lisbon')).toBeInTheDocument();
+    expect(useWorkbenchStore.getState().workbenches.lisbon).toEqual(lisbon);
+    expect(useWorkbenchStore.getState().selectedWorkbenchId).toBe('lisbon');
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('is disabled when every session has an open PR or works now', () => {

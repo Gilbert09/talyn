@@ -138,8 +138,13 @@ export async function archiveWorkbenches(ids: string[], openId: string | null): 
     const archived = result.archived.length;
     trackEvent('sessions_archived_bulk', { requested: ids.length, archived });
     if (archived > 0) toast.success(`Archived ${plural(archived, 'session', 'sessions')}`);
-    if (result.failed.length > 0) {
-      toast.error(`Could not archive ${plural(result.failed.length, 'session', 'sessions')}`, result.failed[0].error);
+    const busy = result.failed.filter((f) => f.busy);
+    const failed = result.failed.filter((f) => !f.busy);
+    if (busy.length > 0) {
+      toast.info(`Kept ${plural(busy.length, 'session that works', 'sessions that work')} now`, busy[0].error);
+    }
+    if (failed.length > 0) {
+      toast.error(`Could not archive ${plural(failed.length, 'session', 'sessions')}`, failed[0].error);
     }
     return archived;
   } finally {
