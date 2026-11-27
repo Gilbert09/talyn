@@ -1,9 +1,10 @@
-import { useCallback, useState } from 'react';
-import { DEFAULT_WORKBENCH_EFFORT, type SendWorkbenchMessageInput, type Workbench, type WorkbenchAgent, type WorkbenchAttachment, type WorkbenchEffort } from '@talyn/shared';
+import { useCallback, useRef, useState } from 'react';
+import { DEFAULT_WORKBENCH_EFFORT, workbenchCreation, type SendWorkbenchMessageInput, type Workbench, type WorkbenchAgent, type WorkbenchAttachment, type WorkbenchEffort } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { toast } from '../../../stores/toast';
 import { useNavigationStore } from '../../../stores/navigation';
 import { useWorkbenchStore } from '../../../stores/workbenches';
+import { contextsEqual, useWorkspaceStore } from '../../../stores/workspace';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
 import { captureWorkbenchFailure } from '../../../lib/workbenchAnalytics';
@@ -38,19 +39,27 @@ export interface CreateWorkbenchState {
   /** Create the workbench, open it, and start its first message. Null when it failed; `error` says why. */
   create: (spec: NewWorkbenchSpec) => Promise<Workbench | null>;
   busy: boolean;
-  /** The workbench being created. The page shows it as a session that loads, until it opens. */
-  pending: NewWorkbenchSpec | null;
   error: string | null;
   clearError: () => void;
 }
 
 /** Create a sandbox session and queue its first message. */
 export function useCreateWorkbench(): CreateWorkbenchState {
-  const [inFlight, setInFlight] = useState<NewWorkbenchSpec | null>(null);
+  const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   const create = useCallback(async (spec: NewWorkbenchSpec): Promise<Workbench | null> => {
-    setInFlight(spec);
+    if (inFlight.current) return null;
+    inFlight.current = true;
+    const route = useNavigationStore.getState().route;
+    const creation = {
+      from: route,
+      context: useWorkspaceStore.getState().currentContext,
+      view: workbenchCreation({ ...spec, id: 'creating', runtime: 'sandbox', message: { text: spec.prompt.trim(), attachments: spec.attachments } }),
+    };
+    useNavigationStore.setState({ creation });
+    setBusy(true);
     setError(null);
     try {
       const wb = await createWorkbench(spec);
@@ -69,7 +78,13 @@ export function useCreateWorkbench(): CreateWorkbenchState {
       const pending = firstChat && (spec.prompt.trim() || spec.attachments?.length)
         ? { chatId: firstChat.id, id: store.addOutgoingMessage(firstChat.id, { text: spec.prompt.trim(), attachments: spec.attachments, settled: !spec.attachments?.length }) }
         : null;
-      useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
+      const navigation = useNavigationStore.getState();
+      if (navigation.creation === creation) {
+        if (navigation.route === route && contextsEqual(creation.context, useWorkspaceStore.getState().currentContext)) {
+          navigation.navigate({ view: 'workbench', id: wb.id });
+        }
+        useNavigationStore.setState({ creation: null });
+      }
       void applyFirstChatSettings(wb, spec);
       if (spec.attachments?.length) {
         const firstInput: SendWorkbenchMessageInput = {
@@ -100,12 +115,14 @@ export function useCreateWorkbench(): CreateWorkbenchState {
       setError(err instanceof Error && err.message ? err.message : spec.kind === 'thread' ? 'Could not create the thread.' : 'Could not create the session.');
       return null;
     } finally {
-      setInFlight(null);
+      if (useNavigationStore.getState().creation === creation) useNavigationStore.setState({ creation: null });
+      inFlight.current = false;
+      setBusy(false);
     }
   }, []);
 
   const clearError = useCallback(() => setError(null), []);
-  return { create, busy: inFlight !== null, pending: inFlight, error, clearError };
+  return { create, busy, error, clearError };
 }
 
 async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {

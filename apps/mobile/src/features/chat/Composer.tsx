@@ -38,7 +38,7 @@ function RoundButton({ label, symbol, onPress, disabled, tone, busy = false }: {
  * `ready` is false only while the conversation has not loaded or cannot be
  * read. A background refresh never blocks sending; the server checks.
  */
-export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; chatId: string; ready: boolean; inputRef: RefObject<ComponentRef<typeof TextInput> | null> }) {
+export function Composer({ item, chatId, ready, inputRef, creating = false }: { item: Workbench; chatId: string; ready: boolean; creating?: boolean; inputRef: RefObject<ComponentRef<typeof TextInput> | null> }) {
   const { workflow, auth } = useMobileRuntime();
   const local = useLocal(chatId); const c = useTheme(); const network = useNetwork();
   const [focused, setFocused] = useState(false);
@@ -143,7 +143,8 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
     chat?.status === 'awaiting_input' ? 'The agent is waiting for your reply.' : '',
     queued ? `${queued} ${queued === 1 ? 'message' : 'messages'} queued` : '',
   ].filter(Boolean).join(' · ');
-  const placeholder = running ? 'The agent is working. A message now is queued.'
+  const placeholder = creating ? (workbenchKind(item) === 'thread' ? 'Ask the thread' : 'Ask the agent')
+    : running ? 'The agent is working. A message now is queued.'
     : isStarting(item) ? 'The sandbox is starting. A message now is queued.'
     : chat?.status === 'awaiting_input' ? 'Reply to the agent' : workbenchKind(item) === 'thread' ? 'Ask the thread' : 'Ask the agent';
   return <View style={[styles.wrap, { backgroundColor: c.background, borderColor: c.border }]}>
@@ -176,7 +177,7 @@ export function Composer({ item, chatId, ready, inputRef }: { item: Workbench; c
       </Pressable>
       <TextInput ref={inputRef} multiline accessibilityLabel="Message" accessibilityHint="Drafts stay on this device for this account and workspace."
         maxLength={20000} onChangeText={(draft) => workflow.updateLocal(chatId, { draft })}
-        editable={delivery.status !== 'sending' && !sendingImages} placeholder={placeholder} placeholderTextColor={c.muted} selectionColor={c.primary}
+        editable={!creating && delivery.status !== 'sending' && !sendingImages} placeholder={placeholder} placeholderTextColor={c.muted} selectionColor={c.primary}
         onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
         style={[styles.input, { color: c.text, opacity: delivery.status === 'sending' ? 0.6 : 1 }]}>
         <ComposerFormattedText text={local.draft} />

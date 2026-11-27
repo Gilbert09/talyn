@@ -422,7 +422,7 @@ describe('useCreateWorkbench: local', () => {
 });
 
 describe('useCreateWorkbench: the session opens without waiting', () => {
-  it('exposes the spec while the create is in flight, then clears it', async () => {
+  it('publishes the session view while the create is in flight, then clears it', async () => {
     let finish: (wb: Workbench) => void = () => undefined;
     mockApi.create.mockReturnValue(new Promise<Workbench>((resolve) => { finish = resolve; }));
     const { result } = renderHook(() => useCreateWorkbench());
@@ -431,7 +431,10 @@ describe('useCreateWorkbench: the session opens without waiting', () => {
     act(() => {
       done = result.current.create(input);
     });
-    expect(result.current.pending).toBe(input);
+    expect(useNavigationStore.getState().creation?.view).toMatchObject({
+      workbench: { status: 'provisioning', repoFullName: input.repoFullName },
+      message: { text: input.prompt.trim() },
+    });
     expect(result.current.busy).toBe(true);
     expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
 
@@ -439,15 +442,15 @@ describe('useCreateWorkbench: the session opens without waiting', () => {
       finish(workbench());
       await done;
     });
-    expect(result.current.pending).toBeNull();
+    expect(useNavigationStore.getState().creation).toBeNull();
     expect(result.current.busy).toBe(false);
     expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'wb1' });
   });
 
-  it('clears the spec when the create fails', async () => {
+  it('clears the session view when the create fails', async () => {
     mockApi.create.mockRejectedValue(new Error('No boxes left.'));
     const { result } = await run(spec());
-    expect(result.current.pending).toBeNull();
+    expect(useNavigationStore.getState().creation).toBeNull();
     expect(result.current.error).toBe('No boxes left.');
   });
 

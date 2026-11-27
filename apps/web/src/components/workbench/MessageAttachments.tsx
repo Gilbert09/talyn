@@ -7,21 +7,23 @@ import { Dialog, DialogContent, DialogTitle } from '../ui/dialog';
 
 type Attachment = { name: string; mimeType: string; path?: string };
 
-export function MessageAttachments({ attachments, ops }: { attachments: Attachment[]; ops: WorkbenchOps }) {
+export function MessageAttachments({ attachments, ops, previewOnly = false }: {
+  attachments: Attachment[]; ops: WorkbenchOps; previewOnly?: boolean;
+}) {
   return (
     <div className="flex flex-wrap gap-2 pt-2">
       {attachments.map((attachment, index) => (
-        <MessageAttachment key={`${attachment.path ?? attachment.name}:${index}`} attachment={attachment} ops={ops} />
+        <MessageAttachment key={`${attachment.path ?? attachment.name}:${index}`} attachment={attachment} ops={ops} previewOnly={previewOnly} />
       ))}
     </div>
   );
 }
 
-function MessageAttachment({ attachment, ops }: { attachment: Attachment; ops: WorkbenchOps }) {
-  if (isWorkbenchVideoType(attachment.mimeType) && attachment.path) {
+function MessageAttachment({ attachment, ops, previewOnly }: { attachment: Attachment; ops: WorkbenchOps; previewOnly: boolean }) {
+  if (isWorkbenchVideoType(attachment.mimeType) && attachment.path && (!previewOnly || attachmentPreview(attachment.path))) {
     return <VideoAttachment attachment={{ ...attachment, path: attachment.path }} ops={ops} />;
   }
-  return <ImageAttachment attachment={attachment} ops={ops} />;
+  return <ImageAttachment attachment={attachment} ops={ops} previewOnly={previewOnly} />;
 }
 
 /**
@@ -74,14 +76,14 @@ function VideoAttachment({ attachment, ops }: { attachment: Attachment & { path:
   );
 }
 
-function ImageAttachment({ attachment, ops }: { attachment: Attachment; ops: WorkbenchOps }) {
+function ImageAttachment({ attachment, ops, previewOnly }: { attachment: Attachment; ops: WorkbenchOps; previewOnly: boolean }) {
   const [source, setSource] = useState(() => (attachment.path ? attachmentPreview(attachment.path) : null));
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState(false);
   const image = attachment.mimeType.startsWith('image/');
 
   useEffect(() => {
-    if (!image || !attachment.path || source || failed) return;
+    if (previewOnly || !image || !attachment.path || source || failed) return;
     let active = true;
     loadAttachmentPreview(ops.attachmentBlob, attachment.path, attachment.mimeType)
       .then((preview) => {
@@ -95,7 +97,7 @@ function ImageAttachment({ attachment, ops }: { attachment: Attachment; ops: Wor
     return () => {
       active = false;
     };
-  }, [attachment.path, attachment.mimeType, image, ops, source, failed]);
+  }, [attachment.path, attachment.mimeType, image, ops, source, failed, previewOnly]);
 
   useEffect(() => {
     if (!open) return;
@@ -106,12 +108,12 @@ function ImageAttachment({ attachment, ops }: { attachment: Attachment; ops: Wor
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [open]);
 
-  if (!image || failed || !attachment.path) {
+  if (!image || failed || !attachment.path || (previewOnly && !source)) {
     const Icon = attachment.mimeType === WORKBENCH_TEXT_TYPE ? FileText : FileIcon;
     return (
       <span className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-muted-foreground">
         <Icon className="h-3.5 w-3.5" /> {attachment.name}
-        {image && (failed || !attachment.path) && ' · Image unavailable'}
+        {!previewOnly && image && (failed || !attachment.path) && ' · Image unavailable'}
       </span>
     );
   }

@@ -4,9 +4,10 @@ import { vi, describe, it, expect, beforeAll, beforeEach, afterEach } from 'vite
  */
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { Features, Workbench, WorkbenchReadiness, Workspace } from '@talyn/shared';
 import type { PRRow } from '../lib/api';
+import { RoutedView } from '../components/layout/AppShell';
 import { buildAppShortcuts } from '../components/layout/appShortcuts';
 import { dispatchKeydown, registerShortcuts } from '../lib/shortcuts';
 import { NewWorkbenchPage } from '../pages/NewWorkbenchPage';
@@ -22,20 +23,29 @@ vi.mock('../lib/supabase', () => ({
   isSupabaseConfigured: () => false,
   supabase: null,
 }));
+vi.mock('../pages/HomePage', async () => {
+  const { NewWorkbenchPage: HomePage } = await import('../pages/NewWorkbenchPage');
+  return { HomePage };
+});
+vi.mock('../components/workbench/terminal/TerminalPanel', () => ({ TerminalPanel: () => null }));
 vi.mock('../lib/imageDownscale', () => ({ downscaleImage: vi.fn() }));
 
 const mockReadiness = vi.fn();
 const mockCreate = vi.fn();
+const mockGet = vi.fn();
 const mockSend = vi.fn();
 const mockRepositoryFiles = vi.fn();
-vi.mock('../lib/api', () => ({
+vi.mock('../lib/api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../lib/api')>(),
   ApiNetworkError: class ApiNetworkError extends Error {
     online = true;
   },
   api: {
+    ws: { on: vi.fn() },
     workbenches: {
       readiness: (...args: unknown[]) => mockReadiness(...args),
       create: (...args: unknown[]) => mockCreate(...args),
+      get: (...args: unknown[]) => mockGet(...args),
       updateChat: vi.fn(),
       createChat: vi.fn(),
       sendMessage: (...args: unknown[]) => mockSend(...args),
@@ -192,13 +202,14 @@ beforeEach(() => {
   useWorkbenchStore.getState().setWorkbenches('ws1', []);
   useWorkbenchStore.setState({ newWorkbench: { seq: 0, prefill: null } });
   usePullRequestStore.setState({ rows: [] });
+  useNavigationStore.setState({ creation: null });
   useNavigationStore.getState().navigate({ view: 'home' });
 });
 
 afterEach(cleanup);
 
-async function renderPage() {
-  const utils = render(<NewWorkbenchPage />);
+async function renderPage(page = <NewWorkbenchPage />) {
+  const utils = render(page);
   await waitFor(() => expect(mockReadiness).toHaveBeenCalledWith('ws1'));
   // useReadiness settles through several promise hops; one macrotask drains them all.
   await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -259,27 +270,33 @@ describe('repository shortcut', () => {
 });
 
 describe('NewWorkbenchPage', () => {
-  it('shows the new session loading at once, then opens it', async () => {
+  it('opens the regular session view on Enter before creation completes', async () => {
     let finishCreate: (workbench: Workbench) => void = () => undefined;
     mockCreate.mockReturnValue(new Promise<Workbench>((resolve) => { finishCreate = resolve; }));
-    await renderPage();
+    const { container } = await renderPage(<RoutedView />);
     fireEvent.change(textarea(), { target: { value: 'Fix the slow search' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
 
     expect(screen.queryByRole('textbox', { name: 'Task' })).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'New session' })).toBeInTheDocument();
-    expect(screen.getByText('acme/api')).toBeInTheDocument();
-    expect(screen.getByText('Fix the slow search')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'New session' })).toBeVisible();
+    expect(screen.getByRole('textbox', { name: 'Message the agent' })).toBeDisabled();
+    const sessionView = container.querySelector<HTMLElement>('[data-attr="workbench-view"]')!;
+    expect(within(sessionView).getByText('Fix the slow search')).toBeVisible();
     expect(screen.getByRole('status')).toHaveTextContent('Creating the session…');
+    expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
+    expect(mockGet).not.toHaveBeenCalled();
 
-    await act(async () => finishCreate(wb('fast-search')));
+    await act(async () => finishCreate(wb('fast-search', { title: 'Fast search' })));
     expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'fast-search' });
+    expect(screen.getByRole('heading', { name: 'Fast search' })).toBeVisible();
+    expect(mockGet).toHaveBeenCalledWith('fast-search');
+    expect(screen.getByRole('textbox', { name: 'Message the agent' })).toBeEnabled();
   });
 
   it('comes back to the draft with the reason when the create fails', async () => {
     let failCreate: (error: Error) => void = () => undefined;
     mockCreate.mockReturnValue(new Promise<Workbench>((_resolve, reject) => { failCreate = reject; }));
-    await renderPage();
+    await renderPage(<RoutedView />);
     fireEvent.change(textarea(), { target: { value: 'Add dark mode' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));
     expect(screen.getByRole('status')).toHaveTextContent('Creating the session…');

@@ -169,11 +169,13 @@ export function WorkbenchHeader({
   pr,
   chat,
   ops,
+  creating = false,
 }: {
   workbench: Workbench;
   pr: PRRow | null;
   chat: WorkbenchChat | null;
   ops: WorkbenchOps;
+  creating?: boolean;
 }) {
   const toggleTerminal = useWorkbenchStore((s) => s.toggleTerminal);
   const toggleRightPanel = useWorkbenchStore((s) => s.toggleRightPanel);
@@ -207,7 +209,7 @@ export function WorkbenchHeader({
   const rename = useRenameSession(workbench);
   const thread = isThread(workbench);
   const viewer = useSessionViewer(workbench);
-  const owner = viewer.owner;
+  const owner = viewer.owner && !creating;
   const spacesOn = useWorkspaceStore((s) => spacesOffered(s.features));
   const continueInThread = async () => {
     setContinuing(true);
@@ -401,7 +403,7 @@ export function WorkbenchHeader({
           </h1>
         )}
         <SessionSpaceChip spaceId={workbench.spaceId} />
-        {!owner && <SessionOwnerChip creator={viewer.creator} />}
+        {!creating && !owner && <SessionOwnerChip creator={viewer.creator} />}
         <SessionPresence viewers={viewer.viewers} />
         <div className="flex min-w-0 max-w-[70%] shrink items-center gap-2">
           {!thread && pr?.state === "open" && pr.summary.url && (
@@ -630,7 +632,7 @@ export function WorkbenchHeader({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {splitOn && (
+          {!creating && splitOn && (
             <Button
               variant="ghost"
               className="h-7 w-7 p-0"
@@ -694,7 +696,8 @@ export function WorkbenchHeader({
               PR #{pr.number} was closed without merging
             </div>
           )}
-          {!thread && (
+          {creating && !thread && <span className="truncate font-mono text-xs text-muted-foreground">{workbench.repoFullName}</span>}
+          {!creating && !thread && (
             <div className="flex min-w-0 max-w-full items-center gap-1.5 overflow-hidden font-mono text-xs text-muted-foreground">
               <GitBranch className="h-3 w-3 shrink-0" />
               <span className="truncate">{workbench.branch}</span>
@@ -745,17 +748,17 @@ export function WorkbenchHeader({
                 Local
               </span>
             ) : (
-              <SandboxStatusChip workbench={workbench} chat={chat} />
+              <SandboxStatusChip workbench={workbench} chat={chat} creating={creating} />
             )}
             {!thread && workbench.threadId && (
               <ThreadChip threadId={workbench.threadId} />
             )}
-            {!thread && <ParentSessions workbench={workbench} />}
+            {!creating && !thread && <ParentSessions workbench={workbench} />}
             {slackSourceOf(workbench) && (
               <SlackThreadChip source={slackSourceOf(workbench)!} />
             )}
             <AutomationChip workbenchId={workbench.id} source={workbench.source} />
-            {!thread && <SessionPreviewLinks workbench={workbench} ops={ops} />}
+            {!creating && !thread && <SessionPreviewLinks workbench={workbench} ops={ops} />}
             {workbench.settings?.internetAccess === false && (
               <span
                 className="shrink-0 text-[10px] text-muted-foreground"

@@ -35,10 +35,10 @@ import { useWhatsNew } from '../../hooks/useWhatsNew';
 import { useStartupCheckoutDetection } from '../../hooks/useStartupCheckoutDetection';
 import { useDeferredRuns } from '../../hooks/useDeferredRuns';
 import { useInstructionFileSync } from '../../hooks/useInstructionFileSync';
-import { useWorkspaceStore } from '../../stores/workspace';
+import { contextsEqual, useWorkspaceStore } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
 import { useWorkbenchStore } from '../../stores/workbenches';
-import { useNavigationStore } from '../../stores/navigation';
+import { useNavigationStore, type Route } from '../../stores/navigation';
 
 /**
  * The signed-in, onboarded app: `[ContextRail | AppSidebar | main column]`, with the
@@ -114,6 +114,22 @@ export function AppShell() {
 /** The main column's content for the current route. */
 export function RoutedView() {
   const route = useNavigationStore((s) => s.route);
+  const context = useWorkspaceStore((s) => s.currentContext);
+  const request = useNavigationStore((s) => s.creation);
+  const creation = request?.from === route && contextsEqual(request.context, context) ? request.view : undefined;
+
+  return <>
+    {creation || route.view === 'workbench' ? (
+      <WorkbenchPage id={route.view === 'workbench' ? route.id : undefined} creation={creation} />
+    ) : null}
+    {/* Keep the draft in the composer so it is ready to edit if creation fails. */}
+    {route.view !== 'workbench' ? (
+      <div className="h-full" hidden={Boolean(creation)}><RouteContent route={route} /></div>
+    ) : null}
+  </>;
+}
+
+function RouteContent({ route }: { route: Exclude<Route, { view: 'workbench' }> }) {
   const features = useWorkspaceStore((s) => s.features);
   const space = useActiveSpace();
   if (space && (route.view === 'home' || route.view === 'prs' || route.view === 'integrations' || route.view === 'insights')) {
@@ -122,8 +138,6 @@ export function RoutedView() {
   switch (route.view) {
     case 'home':
       return <HomePage />;
-    case 'workbench':
-      return <WorkbenchPage id={route.id} />;
     case 'history':
       return <HistoryView />;
     case 'split':

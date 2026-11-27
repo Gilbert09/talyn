@@ -167,7 +167,7 @@ export function QuickActionRow({ actions, busy, run }: { actions: QuickAction[];
 const NARROW = 420;
 
 /** The native header's title: state icon and one line of title. Tapping it opens the details. */
-export function HeaderTitle({ item, row, onPress }: { item: Workbench; row: PRRow | null; onPress(): void }) {
+export function HeaderTitle({ item, row, onPress }: { item: Workbench; row: PRRow | null; onPress?(): void }) {
   const { width } = useWindowDimensions();
   const insets = useContext(SafeAreaInsetsContext);
   const state = workbenchState(item, row);
@@ -178,7 +178,7 @@ export function HeaderTitle({ item, row, onPress }: { item: Workbench; row: PRRo
   // iOS centres the title, so it gets the same room on both sides. Android puts it after the back button.
   const maxWidth = Math.max(0, Platform.OS === 'ios' ? available - 2 * right : available - right - 88);
   return <Pressable accessibilityRole="header" accessibilityLabel={`${title}. ${state.label}.`}
-    accessibilityHint={`Shows the ${workbenchKind(item)} details.`} onPress={onPress} hitSlop={6}
+    accessibilityHint={onPress ? `Shows the ${workbenchKind(item)} details.` : undefined} onPress={onPress} hitSlop={6}
     style={({ pressed }) => [styles.title, { maxWidth, opacity: pressed ? 0.6 : 1 }]}>
     <SessionStateIcon state={state} />
     <AppText variant="rowTitle" numberOfLines={1} style={{ flexShrink: 1 }}>{title}</AppText>

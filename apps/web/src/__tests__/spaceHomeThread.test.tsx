@@ -196,16 +196,17 @@ describe('SpaceHomePage composer, like the personal one', () => {
     expect(composer().value).toBe('keep me');
   });
 
-  it('shows the new session loading while the create is in flight', async () => {
+  it('opens the session view from a space while the create is in flight', async () => {
     let finish: (value: { workbench: Workbench }) => void = () => undefined;
     createSession.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
     render(<SpaceHomePage active={ACTIVE} />);
     fireEvent.change(composer(), { target: { value: 'plan the work' } });
     fireEvent.keyDown(composer(), { key: 'Enter' });
 
-    expect(await screen.findByRole('status')).toHaveTextContent('Creating the session…');
-    expect(screen.getByRole('heading', { name: 'New session' })).toBeInTheDocument();
-    expect(screen.queryByRole('textbox', { name: 'Task' })).not.toBeInTheDocument();
+    expect(useNavigationStore.getState().creation?.view).toMatchObject({
+      workbench: { spaceId: 's1', status: 'provisioning', name: 'New session' },
+      message: { text: 'plan the work' },
+    });
 
     await act(async () => finish({ workbench: { ...CREATED, kind: 'session' } as Workbench }));
     await waitFor(() => expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'new' }));

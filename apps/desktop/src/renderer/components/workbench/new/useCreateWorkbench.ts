@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react';
-import { DEFAULT_WORKBENCH_EFFORT, type SendWorkbenchMessageInput, type Workbench, type WorkbenchAgent, type WorkbenchAttachment, type WorkbenchEffort, type WorkbenchRuntimeKind } from '@talyn/shared';
+import { useCallback, useRef, useState } from 'react';
+import { DEFAULT_WORKBENCH_EFFORT, workbenchCreation, type SendWorkbenchMessageInput, type Workbench, type WorkbenchAgent, type WorkbenchAttachment, type WorkbenchEffort, type WorkbenchRuntimeKind } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { createLocalWorkbench } from '../../../lib/localWorkbench';
 import { opsFor } from '../../../lib/workbenchOps';
@@ -7,7 +7,7 @@ import { toast } from '../../../stores/toast';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { useNavigationStore } from '../../../stores/navigation';
 import { useWorkbenchStore } from '../../../stores/workbenches';
-import { useWorkspaceStore } from '../../../stores/workspace';
+import { contextsEqual, useWorkspaceStore } from '../../../stores/workspace';
 import { trackEvent } from '../../../lib/analytics';
 import { captureWorkbenchFailure } from '../../../lib/workbenchAnalytics';
 import { sendFailureText } from '../../../lib/workbenchFormat';
@@ -44,8 +44,6 @@ export interface CreateWorkbenchState {
   /** Create the workbench, open it, and start its first message. Null when it failed; `error` says why. */
   create: (spec: NewWorkbenchSpec) => Promise<Workbench | null>;
   busy: boolean;
-  /** The workbench being created. The page shows it as a session that loads, until it opens. */
-  pending: NewWorkbenchSpec | null;
   error: string | null;
   clearError: () => void;
 }
@@ -61,11 +59,21 @@ export interface CreateWorkbenchState {
  * (a readiness refusal, a worktree error) stays on the caller's page.
  */
 export function useCreateWorkbench(): CreateWorkbenchState {
-  const [inFlight, setInFlight] = useState<NewWorkbenchSpec | null>(null);
+  const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   const create = useCallback(async (spec: NewWorkbenchSpec): Promise<Workbench | null> => {
-    setInFlight(spec);
+    if (inFlight.current) return null;
+    inFlight.current = true;
+    const route = useNavigationStore.getState().route;
+    const creation = {
+      from: route,
+      context: useWorkspaceStore.getState().currentContext,
+      view: workbenchCreation({ ...spec, id: 'creating', message: { text: spec.prompt.trim(), attachments: spec.attachments } }),
+    };
+    useNavigationStore.setState({ creation });
+    setBusy(true);
     setError(null);
     try {
       const wb = await createWorkbench(spec);
@@ -85,7 +93,13 @@ export function useCreateWorkbench(): CreateWorkbenchState {
       const pending: PendingFirstMessage | null = firstChat && (spec.prompt.trim() || spec.attachments?.length)
         ? { chatId: firstChat.id, id: store.addOutgoingMessage(firstChat.id, { text: spec.prompt.trim(), attachments: spec.attachments, settled: alreadySent }) }
         : null;
-      useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
+      const navigation = useNavigationStore.getState();
+      if (navigation.creation === creation) {
+        if (navigation.route === route && contextsEqual(creation.context, useWorkspaceStore.getState().currentContext)) {
+          navigation.navigate({ view: 'workbench', id: wb.id });
+        }
+        useNavigationStore.setState({ creation: null });
+      }
       if (spec.runtime === 'local') void startLocalChat(wb, spec, pending);
       else void applyFirstChatSettings(wb, spec);
       if (spec.runtime !== 'local' && spec.attachments?.length) {
@@ -117,12 +131,14 @@ export function useCreateWorkbench(): CreateWorkbenchState {
       setError(err instanceof Error && err.message ? err.message : spec.kind === 'thread' ? 'Could not create the thread.' : 'Could not create the session.');
       return null;
     } finally {
-      setInFlight(null);
+      if (useNavigationStore.getState().creation === creation) useNavigationStore.setState({ creation: null });
+      inFlight.current = false;
+      setBusy(false);
     }
   }, []);
 
   const clearError = useCallback(() => setError(null), []);
-  return { create, busy: inFlight !== null, pending: inFlight, error, clearError };
+  return { create, busy, error, clearError };
 }
 
 async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
