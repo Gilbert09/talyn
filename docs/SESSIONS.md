@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Composer defaults based on subscription usage (2026-11-27)
+
+The new sandbox composer can default to Claude or Codex on web, desktop, and mobile.
+It selects the other agent when every usable subscription for the preferred agent is at its limit.
+The other agent must have a usable subscription with recorded usage left.
+The readiness response uses stored usage so the composer can load without waiting for either vendor.
+Manual agent and model selections take precedence over the usage-based default.
+
 ### 2026-11-27 — Repeated tests of code review reliability
 
 The v6 and v7 comparison covers four PostHog pull requests, with two runs per variant and case.
@@ -8111,3 +8119,21 @@ Each person can mute a space on all their devices without changing a teammate's 
 The server stores these preferences and checks them before it sends a phone alert.
 Desktop and web also check the preference before showing alerts for that space.
 A change sends a private update to the person's other connected devices.
+
+### 2026-11-27 — Switch agents after a credential usage refusal
+
+Chats now switch agents when all accounts reach their usage limit before a turn starts.
+The resume sweep can also switch a waiting chat when the other agent becomes available.
+The choice checks account usage, account holds, sign-in state, the model, and the workspace quota settings.
+It uses the payer's accounts and the existing sandbox, budget, and automatic resume checks.
+The existing switch prepares a conversation recap and selects a model from the same capability tier.
+This server change applies to web, desktop, and mobile.
+Resume checks refresh stale subscription usage before selecting an agent.
+A usage wait uses the earliest retry across both supported agents.
+Usage refreshes run in sequence, and agent selection reads the saved sign-in state after each batch.
+Runtime limits also use account usage resets when scheduling the next check.
+Usage availability checks do not consume the allowance for failed turns.
+Each check refreshes at most one stale account per candidate agent and stops when an account is usable.
+Deferred accounts get another check in one minute, starting with the oldest snapshot.
+The shared sweep stops claiming chats after one minute and leaves other chats due for the next tick.
+Runtime errors retain their explicit reset time when the vendor probe writes no account hold.

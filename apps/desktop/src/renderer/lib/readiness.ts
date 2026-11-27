@@ -118,7 +118,7 @@ export function useReadiness(workspaceId: string | null | undefined): ReadinessS
   loading: boolean;
   refresh: () => Promise<void>;
 } {
-  const [state, setState] = useState<ReadinessState>({ sandbox: null, local: null });
+  const [state, setState] = useState<ReadinessState & { workspaceId?: string | null }>({ sandbox: null, local: null });
   const [loading, setLoading] = useState(false);
   const latest = useRef(0);
 
@@ -138,7 +138,7 @@ export function useReadiness(workspaceId: string | null | undefined): ReadinessS
         : Promise.resolve(null),
     ]);
     if (call !== latest.current) return;
-    setState({ sandbox, local });
+    setState({ sandbox, local, workspaceId });
     setLoading(false);
   }, [workspaceId]);
 
@@ -152,12 +152,13 @@ export function useReadiness(workspaceId: string | null | undefined): ReadinessS
     };
   }, [refresh]);
 
-  const down = isUnreachable(state.sandbox);
+  const sandbox = state.workspaceId === workspaceId ? state.sandbox : null;
+  const down = isUnreachable(sandbox);
   useEffect(() => {
     if (!down) return undefined;
     const timer = window.setTimeout(() => void refresh(), UNREACHABLE_RETRY_MS);
     return () => window.clearTimeout(timer);
-  }, [down, state.sandbox, refresh]);
+  }, [down, sandbox, refresh]);
 
-  return { ...state, loading, refresh };
+  return { sandbox, local: state.local, loading, refresh };
 }

@@ -72,8 +72,7 @@ export function NewWorkbenchPage() {
   const [fromOpen, setFromOpen] = useState(false);
   // Read once: a change in Settings applies to the next new session, not to this draft.
   const [defaults] = useState(readSessionDefaults);
-  const [agent, setAgent] = useState<WorkbenchAgent>(defaults.agent);
-  const [model, setModel] = useState<string>(() => defaultFleetModelForAgent(defaults.agent));
+  const [agentSelection, setAgentSelection] = useState<{ agent: WorkbenchAgent; model?: string } | null>(null);
   const [effort, setEffort] = useState<WorkbenchEffort>(defaults.effort);
   const [planMode, setPlanMode] = useState(defaults.planMode);
   const [internetAccess, setInternetAccess] = useState(defaults.internetAccess);
@@ -106,6 +105,10 @@ export function NewWorkbenchPage() {
     (a: WorkbenchAgent) => agentChoice({ sandbox: readiness.sandbox }, a),
     [readiness.sandbox],
   );
+  const wantedAgent = agentSelection?.agent ?? readiness.sandbox?.usageFallback ?? defaults.agent;
+  const agent = choiceFor(wantedAgent).available ? wantedAgent : AGENTS.find((a) => choiceFor(a).available) ?? wantedAgent;
+  const model = (agentSelection?.agent === agent ? agentSelection.model : undefined)
+    ?? storedFleetModelForAgent(workspace?.settings, agent) ?? defaultFleetModelForAgent(agent);
   const agentOk = choiceFor(agent);
   const readinessKnown = !readiness.loading && (readiness.sandbox !== null || !workspaceId);
 
@@ -116,16 +119,6 @@ export function NewWorkbenchPage() {
   }, [repositories, repositoryId, workspaceId, mode]);
 
   useEffect(() => setTrigger(null), [repositoryId]);
-
-  // Keep the agent usable for the runtime, and the model the agent's.
-  useEffect(() => {
-    if (agentOk.available) return;
-    const usable = AGENTS.find((a) => choiceFor(a).available);
-    if (usable && usable !== agent) setAgent(usable);
-  }, [agentOk.available, choiceFor, agent]);
-  useEffect(() => {
-    setModel(storedFleetModelForAgent(workspace?.settings, agent) ?? defaultFleetModelForAgent(agent));
-  }, [agent, workspace?.settings]);
 
   const focus = () => textareaRef.current?.focus();
 
@@ -417,11 +410,11 @@ export function NewWorkbenchPage() {
                 <Globe2 className="h-3.5 w-3.5" />
                 <span>Internet {internetAccess ? 'on' : 'off'}</span>
               </ControlChip>
-              <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} onConnect={connectAgent} />
+              <AgentPicker value={agent} onChange={(next) => setAgentSelection({ agent: next, ...(next === agent && { model }) })} choiceFor={choiceFor} onConnect={connectAgent} />
               <ModelPicker
                 agent={agent}
                 value={model}
-                onChange={setModel}
+                onChange={(next) => setAgentSelection({ agent, model: next })}
                 unconnected={missingAgents.map((m) => m.agent)}
               />
               <EffortPicker value={effort} onChange={setEffort} />

@@ -115,8 +115,7 @@ function SpaceComposer({
   useEffect(() => onPendingChange(pending), [pending, onPendingChange]);
   // Read once: a change in Settings applies to the next new session, not to this draft.
   const [defaults] = useState(readSessionDefaults);
-  const [agent, setAgent] = useState<WorkbenchAgent>(defaults.agent);
-  const [model, setModel] = useState<string>(() => defaultFleetModelForAgent(defaults.agent));
+  const [agentSelection, setAgentSelection] = useState<{ agent: WorkbenchAgent; model?: string } | null>(null);
   const [effort, setEffort] = useState<WorkbenchEffort>(defaults.effort);
   const [planMode, setPlanMode] = useState(defaults.planMode);
   const [internetAccess, setInternetAccess] = useState(defaults.internetAccess);
@@ -188,21 +187,13 @@ function SpaceComposer({
 
   useEffect(() => setTrigger(null), [repoFullName]);
 
-  // The home workspace runs the session, so its model setting applies.
-  const storedModel = storedFleetModelForAgent(homeWorkspace?.settings, agent);
-  useEffect(() => {
-    setModel(storedModel ?? defaultFleetModelForAgent(agent));
-  }, [agent, storedModel]);
-
   const choiceFor = useCallback((a: WorkbenchAgent) => agentChoice({ sandbox: readiness.sandbox }, a), [readiness.sandbox]);
+  const wantedAgent = agentSelection?.agent ?? readiness.sandbox?.usageFallback ?? defaults.agent;
+  const agent = choiceFor(wantedAgent).available ? wantedAgent : AGENTS.find((a) => choiceFor(a).available) ?? wantedAgent;
+  const model = (agentSelection?.agent === agent ? agentSelection.model : undefined)
+    ?? storedFleetModelForAgent(homeWorkspace?.settings, agent) ?? defaultFleetModelForAgent(agent);
   const agentOk = choiceFor(agent);
   const sandbox = sandboxChoice(readiness);
-  useEffect(() => {
-    if (agentOk.available) return;
-    const usable = AGENTS.find((a) => choiceFor(a).available);
-    if (usable && usable !== agent) setAgent(usable);
-  }, [agentOk.available, choiceFor, agent]);
-
   const focus = () => textareaRef.current?.focus();
   useEffect(() => {
     window.addEventListener(FOCUS_COMPOSER_EVENT, focus);
@@ -481,8 +472,8 @@ function SpaceComposer({
           <Globe2 className="h-3.5 w-3.5" />
           <span>Internet {internetAccess ? 'on' : 'off'}</span>
         </ControlChip>
-        <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} onConnect={connectAgent} />
-        <ModelPicker agent={agent} value={model} onChange={setModel} unconnected={missingAgents.map((m) => m.agent)} />
+        <AgentPicker value={agent} onChange={(next) => setAgentSelection({ agent: next, ...(next === agent && { model }) })} choiceFor={choiceFor} onConnect={connectAgent} />
+        <ModelPicker agent={agent} value={model} onChange={(next) => setAgentSelection({ agent, model: next })} unconnected={missingAgents.map((m) => m.agent)} />
         <EffortPicker value={effort} onChange={setEffort} />
       </div>
 

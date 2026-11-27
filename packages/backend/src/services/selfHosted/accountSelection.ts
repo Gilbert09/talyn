@@ -132,7 +132,43 @@ export function accountOverVerdict(
   return fullest ? { reason: 'usage', window: fullest } : { reason: null };
 }
 
-function readsUsage(account: FleetAccount): boolean {
+type SubscriptionUsage = Pick<FleetAccount, 'agent' | 'kind' | 'reauthRequiredAt' | 'quotaExhausted' | 'usage'>;
+
+/** Use recorded limits to choose a default for the new session composer. */
+export async function subscriptionUsageFallback(
+  accounts: readonly SubscriptionUsage[],
+  modelForAgent: (agent: FleetAgent) => Promise<string>,
+  now = new Date(),
+): Promise<FleetAgent | undefined> {
+  const statusFor = (agent: FleetAgent) => {
+    const own = accounts.filter((account) => account.agent === agent && readsUsage(account));
+    const usage = own.map((account) => {
+      if (isHeldBack(account.quotaExhausted ?? undefined, now)) return { exhausted: true, windows: [] };
+      const snapshot = account.usage;
+      if (!snapshot || !('windows' in snapshot)) return { exhausted: false, windows: [] };
+      const activeWindows = snapshot.windows.filter((window) => !window.resetsAt || Date.parse(window.resetsAt) > now.getTime());
+      // A model-specific limit does not exhaust the whole subscription.
+      const globalWindows = activeWindows.filter((window) => !window.scopeModel);
+      return {
+        exhausted: isOverThreshold(globalWindows, 100),
+        windows: globalWindows.length > 0 ? activeWindows : [],
+      };
+    });
+    return {
+      agent,
+      exhausted: usage.length > 0 && usage.every((value) => value.exhausted),
+      available: usage.filter((value) => !value.exhausted && value.windows.length > 0),
+    };
+  };
+  const claude = statusFor('claude');
+  const codex = statusFor('codex');
+  const fallback = claude.exhausted ? codex : codex.exhausted ? claude : undefined;
+  if (!fallback?.available.length) return undefined;
+  const model = modelMatchText(await modelForAgent(fallback.agent));
+  return fallback.available.some(({ windows }) => !isOverThreshold(windows, 100, model)) ? fallback.agent : undefined;
+}
+
+function readsUsage(account: Pick<FleetAccount, 'kind' | 'reauthRequiredAt'>): boolean {
   return (account.kind === 'claude_oauth' || account.kind === 'codex_oauth') && !account.reauthRequiredAt;
 }
 

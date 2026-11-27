@@ -926,6 +926,8 @@ export interface WorkbenchReadiness {
     ok: boolean;
     reasons: WorkbenchReadinessReason[];
     agents: Record<WorkbenchAgent, WorkbenchAgentReadiness>;
+    /** Default to this agent when the other has exhausted its usage. */
+    usageFallback?: WorkbenchAgent;
   };
 }
 
