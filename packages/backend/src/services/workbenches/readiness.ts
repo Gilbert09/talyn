@@ -9,6 +9,7 @@ import { getCloudProvider } from '../cloudProviders/registry.js';
 import { subscriptionUsageFallback } from '../selfHosted/accountSelection.js';
 import { listFleetAccounts } from '../selfHosted/accounts.js';
 import { fleetAgentStatus } from '../selfHosted/credentials.js';
+import { workspaceAgentModel } from '../selfHosted/fleetModel.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from './access.js';
 import { fleetDeploymentGap, fleetNotDeployedMessage, WorkbenchError } from './errors.js';
 
@@ -82,7 +83,7 @@ export async function workbenchReadiness(
     claude: agentReadiness('claude'),
     codex: agentReadiness('codex'),
   };
-  const usageFallback = accounts && subscriptionUsageFallback(accounts);
+  const usageFallback = accounts && await subscriptionUsageFallback(accounts, (agent) => workspaceAgentModel(workspaceId, agent));
 
   return {
     sandbox: {

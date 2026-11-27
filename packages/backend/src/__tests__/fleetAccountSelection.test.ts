@@ -99,8 +99,27 @@ describe('subscription usage fallback', () => {
     ['Codex only has an API key', [claude, { ...codex, kind: 'openai_key', usage: null }], undefined],
     ['the full window has reset', [{ ...claude, usage: fresh([win(100, { resetsAt: now.toISOString() })]) }, codex], undefined],
     ['only one model reached its limit', [{ ...claude, usage: fresh([win(100, { scopeModel: 'Opus' })]) }, codex], undefined],
-  ] as const)('%s', (_name, listed, expected) => {
-    expect(selection.subscriptionUsageFallback(listed, now)).toBe(expected);
+  ] as const)('%s', async (_name, listed, expected) => {
+    const modelForAgent = vi.fn(async (agent: 'claude' | 'codex') =>
+      agent === 'claude' ? 'claude-sonnet-5-5' : 'gpt-6.1-terra');
+    expect(await selection.subscriptionUsageFallback(listed, modelForAgent, now)).toBe(expected);
+    expect(modelForAgent.mock.calls).toEqual(expected ? [[expected]] : []);
+  });
+
+  it.each([
+    ['active Sonnet limit', win(100, { scopeModel: 'Sonnet' }), false, undefined],
+    ['Sonnet has usage left', win(99, { scopeModel: 'Sonnet' }), false, 'claude'],
+    ['Sonnet limit has reset', win(100, { scopeModel: 'Sonnet', resetsAt: now.toISOString() }), false, 'claude'],
+    ['Opus limit does not apply', win(100, { scopeModel: 'Opus' }), false, 'claude'],
+    ['another subscription has usage left', win(100, { scopeModel: 'Sonnet' }), true, 'claude'],
+  ] as const)('checks the destination model when %s', async (_name, scoped, hasBackup, expected) => {
+    const openClaude = { ...claude, usage: fresh([win(20)]) };
+    const listed = [
+      { ...codex, usage: fresh([win(100)]) },
+      { ...openClaude, usage: fresh([win(20), scoped]) },
+      ...(hasBackup ? [openClaude] : []),
+    ];
+    expect(await selection.subscriptionUsageFallback(listed, async () => 'claude-sonnet-5-5', now)).toBe(expected);
   });
 });
 

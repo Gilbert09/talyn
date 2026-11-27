@@ -1172,6 +1172,26 @@ describe('workbench routes', () => {
     });
 
     it.each([
+      ['the shipped Sonnet model', {}, undefined],
+      ['a configured Opus model', { fleetModels: { claude: 'claude-opus-5' } }, 'claude'],
+    ] as const)('checks the usage limit for %s', async (_name, settings, expected) => {
+      await testDb.db.update(workspaces).set({ settings }).where(eq(workspaces.id, 'ws-a'));
+      const fetchedAt = new Date().toISOString();
+      const envelope = { v: 1, iv: '', ct: '', tag: '' } as const;
+      const credential = { accessTokenEnc: envelope, refreshTokenEnc: envelope, expiresAt: fetchedAt };
+      const sessionWindow = { key: 'session', label: '5-hour', resetsAt: null };
+      await testDb.db.insert(fleetAccounts).values([
+        { id: 'claude', workspaceId: 'ws-a', agent: 'claude', kind: 'claude_oauth', label: 'Claude', priority: 1, credential,
+          usage: { fetchedAt, windows: [{ ...sessionWindow, usedPercent: 20 }, { key: 'sonnet_weekly', label: 'Weekly (Sonnet)', resetsAt: null, usedPercent: 100, scopeModel: 'Sonnet' }] } },
+        { id: 'codex', workspaceId: 'ws-a', agent: 'codex', kind: 'codex_oauth', label: 'Codex', priority: 1, credential: { ...credential, accountId: 'codex' },
+          usage: { fetchedAt, windows: [{ ...sessionWindow, usedPercent: 100 }] } },
+      ]);
+      const res = await readiness();
+      expect(res.status).toBe(200);
+      expect(res.body.data.sandbox.usageFallback).toBe(expected);
+    });
+
+    it.each([
       ['flag_off', () => vi.stubEnv('WORKBENCHES_ENABLED', 'false'), /WORKBENCHES_ENABLED=false/],
       ['fleet_disabled', () => (fleetRegistered = false), /FLEET_ENABLED=true/],
       ['fleet_not_deployed', () => vi.stubEnv('FLEET_API_TOKEN', ''), /set FLEET_PINNED_ENDPOINT and FLEET_GATEWAY_TOKEN\./],
