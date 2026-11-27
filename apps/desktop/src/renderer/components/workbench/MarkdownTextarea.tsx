@@ -1,5 +1,14 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { closeFenceOnNewline, composerMarkdown, type ComposerLine, type ComposerMark } from '@talyn/shared';
+import {
+  backspaceAfterCodeBlock,
+  closeFenceOnNewline,
+  composerMarkdown,
+  leaveCodeBlockOnNewline,
+  stepOverClosingFence,
+  type ComposerEdit,
+  type ComposerLine,
+  type ComposerMark,
+} from '@talyn/shared';
 import { cn } from '../../lib/utils';
 
 /**
@@ -11,8 +20,11 @@ import { cn } from '../../lib/utils';
  * change colour, background and decoration, never the width of a glyph (bold
  * is a text stroke, not a heavier font).
  *
- * A code fence's backticks only show while the caret is on their line, and a
- * new line after an opening fence adds the closing one.
+ * Code blocks act like blocks. An opening fence's backticks only show while
+ * the caret is on their line, and a closing fence's backticks never show. A
+ * new line after an opening fence adds the closing one. Down from the last
+ * code line, or a new line on an empty last code line, goes on to a plain
+ * line below the block.
  */
 export function MarkdownTextarea({
   value,
@@ -69,13 +81,31 @@ export function MarkdownTextarea({
 
   const keyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     onKeyDown?.(e);
-    if (e.defaultPrevented || e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+    if (e.defaultPrevented || e.nativeEvent.isComposing || e.altKey || e.metaKey || e.ctrlKey) return;
     const el = e.currentTarget;
-    const close = closeFenceOnNewline(el.value, el.selectionStart, el.selectionEnd);
-    if (!close) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (e.shiftKey) return;
+      const direction = e.key === 'ArrowDown' ? 'down' : 'up';
+      // Only the browser knows where Up or Down puts the caret in wrapped text: look after it moves.
+      window.setTimeout(() => {
+        if (document.activeElement !== el || el.selectionStart !== el.selectionEnd) return;
+        const step = stepOverClosingFence(el.value, el.selectionStart, direction);
+        if (step) applyEdit(el, step);
+        trackCaret();
+      }, 0);
+      return;
+    }
+    const { value: text, selectionStart: start, selectionEnd: end } = el;
+    let edit: ComposerEdit | null = null;
+    if (e.key === 'Enter') {
+      const close = closeFenceOnNewline(text, start, end);
+      edit = close ? { from: start, to: end, insert: close.insert, caret: close.caret } : leaveCodeBlockOnNewline(text, start, end);
+    } else if (e.key === 'Backspace' && !e.shiftKey) {
+      edit = backspaceAfterCodeBlock(text, start, end);
+    }
+    if (!edit) return;
     e.preventDefault();
-    insertText(el, close.insert);
-    el.setSelectionRange(close.caret, close.caret);
+    applyEdit(el, edit);
     trackCaret();
   };
 
@@ -169,12 +199,21 @@ const MARK_CLASS: Record<ComposerMark, string> = {
   command: 'rounded-[3px] bg-primary/10 text-primary',
 };
 
+/** Applies an edit as if typed, so undo still works, then places the caret. */
+function applyEdit(el: HTMLTextAreaElement, edit: ComposerEdit) {
+  if (edit.from !== edit.to || edit.insert) {
+    el.setSelectionRange(edit.from, edit.to);
+    insertText(el, edit.insert);
+  }
+  el.setSelectionRange(edit.caret, edit.caret);
+}
+
 /**
- * Inserts text at the selection as if typed, so undo still works. The
- * fallback (no execCommand, as in tests) fires the input event React reads.
+ * Replaces the selection with text as if typed. The fallback (no
+ * execCommand, as in tests) fires the input event React reads.
  */
 function insertText(el: HTMLTextAreaElement, text: string) {
-  if (typeof document.execCommand === 'function' && document.execCommand('insertText', false, text)) return;
+  if (typeof document.execCommand === 'function' && document.execCommand(text ? 'insertText' : 'delete', false, text)) return;
   el.setRangeText(text, el.selectionStart, el.selectionEnd, 'end');
   el.dispatchEvent(new Event('input', { bubbles: true }));
 }
@@ -195,12 +234,12 @@ const FENCE_RUN = /^\s*(`+|~+)/;
 
 function ComposerLineView({ line, side, showMarkers }: { line: ComposerLine; side: FenceSide; showMarkers: boolean }) {
   if (line.kind === 'fence') {
-    // The backticks hide away from the caret; a language name stays as a label.
+    // Opening backticks hide away from the caret, closing ones always. A language name stays as a label.
     const text = line.spans.map((span) => span.text).join('');
     const run = FENCE_RUN.exec(text)?.[0] ?? '';
     return (
       <div className={cn(LINE_CLASS.fence, side === 'open' ? 'rounded-t-md' : 'rounded-b-md')} data-fence={side}>
-        <span className={showMarkers ? MARK_CLASS.marker : 'text-transparent'}>{run}</span>
+        <span className={showMarkers && side === 'open' ? MARK_CLASS.marker : 'text-transparent'}>{run}</span>
         {text.length > run.length ? <span className={MARK_CLASS.marker}>{text.slice(run.length)}</span> : null}
       </div>
     );
