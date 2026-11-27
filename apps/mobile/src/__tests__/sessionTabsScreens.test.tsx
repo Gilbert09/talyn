@@ -304,8 +304,9 @@ describe('mobile session header', () => {
     expect(navigation.getAllByRole('button').map((button) => button.props.accessibilityLabel)).toEqual(['Session actions']);
     expect(await navigation.findByText('example/project')).toBeVisible();
     const next = within(await screen.findByLabelText('Next action'));
-    expect(next.getAllByRole('button').map((button) => button.props.accessibilityLabel))
-      .toEqual(['PR #42. 2 of 8 checks failing.', 'Fix checks']);
+    const buttons = next.getAllByRole('button');
+    expect(buttons.map((button) => button.props.accessibilityLabel)).toEqual(['PR #42. 2 of 8 checks failing.', 'Fix checks']);
+    for (const button of buttons) expect(button).toHaveStyle({ minWidth: 48, minHeight: 48 });
     expect(screen.queryByRole('button', { name: 'Code review' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Find in transcript' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Add to merge queue' })).toBeNull();

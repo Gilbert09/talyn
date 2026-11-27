@@ -195,7 +195,7 @@ export function SessionNextAction({ item, row, action, busy, run, onDetails, onC
         <AppText variant="caption" tone={tone} numberOfLines={2} style={styles.actionReasonText}>{reason}</AppText>
       </View>
     </Pressable>
-    <ChipButton label={action.label} variant="primary" loading={busy === action.kind}
+    <ChipButton label={action.label} variant="primary" style={styles.nextActionButton} loading={busy === action.kind}
       disabled={Boolean(action.disabledReason) || (busy !== null && busy !== action.kind)}
       hint={action.disabledReason ?? action.hint} onPress={() => run(action.kind)} />
   </View>;
@@ -297,8 +297,9 @@ const styles = StyleSheet.create({
   sessionTitle: { justifyContent: 'center' },
   threadTitle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   nextAction: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end',
-    columnGap: 12, rowGap: 4, paddingHorizontal: 16, paddingVertical: 4, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth },
-  actionContext: { flexBasis: 120, flexGrow: 1, minHeight: 44, justifyContent: 'center' },
+    columnGap: 12, rowGap: 4, paddingHorizontal: 16, paddingVertical: 2, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth },
+  actionContext: { flexBasis: 120, flexGrow: 1, minWidth: 48, minHeight: 48, justifyContent: 'center' },
+  nextActionButton: { minWidth: 48, minHeight: 48, justifyContent: 'center' },
   actionReason: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   actionReasonText: { flexShrink: 1 },
   details: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 24, gap: 12 },

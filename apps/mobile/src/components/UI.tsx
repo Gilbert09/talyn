@@ -492,16 +492,16 @@ export function Toggle(props: ComponentProps<typeof Switch>) {
  * A compact action chip for a quick-action row: icon, short label, and a
  * spinner while it runs. `hint` explains it, or why it is disabled.
  */
-export function ChipButton({ label, onPress, icon, variant = 'secondary', loading = false, disabled = false, hint, accessibilityLabel }: {
+export function ChipButton({ label, onPress, icon, variant = 'secondary', loading = false, disabled = false, hint, accessibilityLabel, style }: {
   label: string; onPress(): void; icon?: Symbol; variant?: 'primary' | 'secondary'; loading?: boolean; disabled?: boolean;
-  hint?: string; accessibilityLabel?: string;
+  hint?: string; accessibilityLabel?: string; style?: StyleProp<ViewStyle>;
 }) {
   const c = useTheme();
   const primary = variant === 'primary';
   const foreground = primary ? c.primaryText : c.text;
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? label} accessibilityHint={hint}
     accessibilityState={{ disabled: disabled || loading, busy: loading }} disabled={disabled || loading} onPress={onPress} hitSlop={4}
-    style={({ pressed }) => [chipStyles.chip, { backgroundColor: primary ? c.primaryAction : c.surface,
+    style={({ pressed }) => [chipStyles.chip, style, { backgroundColor: primary ? c.primaryAction : c.surface,
       opacity: disabled ? 0.45 : pressed ? 0.75 : 1 }]}>
     {loading ? <ActivityIndicator size={12} color={foreground} /> : icon ? <SymbolView name={icon} size={14} tintColor={foreground} /> : null}
     <Text numberOfLines={1} style={[chipStyles.label, { color: foreground }]}>{label}</Text>
