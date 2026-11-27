@@ -1,5 +1,5 @@
 import type { PRRow } from '@talyn/client/native';
-import { fleetAgentLabel, type Workbench, type WorkbenchReadiness } from '@talyn/shared';
+import { fleetAgentLabel, type Workbench, type WorkbenchCreation, type WorkbenchReadiness } from '@talyn/shared';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { HeaderHeightContext } from 'expo-router/react-navigation';
 import { useContext, useEffect, useState } from 'react';
@@ -50,22 +50,26 @@ function PullRequestSheet({ item, visible, onClose, onSent }: { item: Workbench;
   </SheetModal>;
 }
 
-export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) {
+export function WorkbenchDetailScreen({ kind, creation, created }: {
+  kind: 'session' | 'thread'; creation?: WorkbenchCreation; created?: Workbench;
+}) {
   const { workflow } = useMobileRuntime();
   const workspace = useWorkspace();
   const owns = (target: Workbench) => workspace.choices.some(({ id: workspaceId }) => workspaceId === target.workspaceId);
   const params = useLocalSearchParams();
-  const id = typeof params.id === 'string' ? params.id : '';
+  const id = created?.id ?? (typeof params.id === 'string' ? params.id : '');
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
-  const state = useResource<Workbench>('workbench', id, Boolean(id), true);
-  const valid = Boolean(state.data && workbenchKind(state.data) === kind);
+  const state = useResource<Workbench>('workbench', id, !creation && Boolean(id), true);
+  const fresh = state.status === 'idle' || state.status === 'loading' ? created : undefined;
+  const data = state.data ?? (fresh?.workspaceId === workspace.selected ? fresh : undefined);
+  const valid = Boolean(data && workbenchKind(data) === kind);
   const features = useFeatures();
   const showChildren = kind === 'thread' || features?.sessionSubagents === true;
   const children = useResource<Workbench[]>('children', id, valid && showChildren);
   const readiness = useResource<WorkbenchReadiness>('readiness', '', valid);
   const offline = useNetwork() === 'offline';
   const now = useNow();
-  const item = valid ? state.data : undefined;
+  const item = creation?.workbench ?? (valid ? data : undefined);
   const prId = kind === 'session' ? item?.pullRequestId ?? '' : '';
   const prState = useResource<PrDetail>('pr', prId, Boolean(prId));
   const row = prState.data?.row ?? null;
@@ -73,10 +77,10 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
   const list = kind === 'session' ? '/sessions' as const : '/threads' as const;
   const menu = useSessionMenu({ onThreadScreen: kind === 'thread',
     onArchived: () => { if (router.canGoBack()) router.back(); else router.replace(list); } });
-  useEffect(() => { if (item) completeIntent(`/${kind === 'session' ? 'sessions' : 'threads'}/${encodeURIComponent(id)}`); }, [item, kind, id]);
+  useEffect(() => { if (valid) completeIntent(`/${kind === 'session' ? 'sessions' : 'threads'}/${encodeURIComponent(id)}`); }, [valid, kind, id]);
   const childItems = showChildren ? children.data ?? [] : [];
   const keyboard = useKeyboardInset();
-  const background = useBackground(item);
+  const background = useBackground(creation ? undefined : item);
   const [view, setView] = useState<View_>(null);
   const close = () => setView(null);
   const placeholder = item ?? ({ id, chats: [] } as unknown as Workbench);
@@ -89,9 +93,9 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
 
   let content = null;
   if (item) {
-    const actions = primaryActions(item, row, { offline });
+    const actions = creation ? [] : primaryActions(item, row, { offline });
     const problem = readinessProblem(readiness.data, item.agent);
-    const notice = state.status === 'error' || offline;
+    const notice = !creation && (state.status === 'error' || offline);
     const showParent = features?.sessionSubagents === true && Boolean(item.parentId);
     const fixed = showParent || notice || (Boolean(problem) && !keyboard.open) || (actions.length > 0 && !keyboard.open);
     // Only a real problem and the quick actions stay above the transcript. The rest is in the details sheet.
@@ -101,11 +105,12 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
       {problem && !keyboard.open ? <View style={local.notice}><Banner message={problem} tone="warning" /></View> : null}
       {keyboard.open ? null : <QuickActionRow actions={actions} busy={quick.busy} run={quick.run} />}
     </View> : null;
-    content = <Conversation key={item.id} item={item} ready={state.status === 'ready' || state.status === 'error'} header={header}
+    content = <Conversation key={item.id} item={item} firstMessage={creation?.message}
+      ready={!creation && (Boolean(fresh) || state.status === 'ready' || state.status === 'error')} header={header}
       canSwitchAgent={owns(item)}
       bottom={card && row ? <CodeCompleteReviewCard view={card} row={row} workbenchId={item.id} /> : undefined}
       find={find} onCloseFind={() => setFind(0)}
-      top={showChildren ? (pause) => <View style={{ gap: 4 }}>
+      top={!creation && showChildren ? (pause) => <View style={{ gap: 4 }}>
         <StateNotice resource={children} offline={offline} refresh={children.refresh} refreshLabel="Refresh child sessions" />
         {childItems.length ? <Disclosure title={`${kind === 'thread' ? 'Related sessions' : 'Sessions started'} (${childItems.length})`} onToggle={pause}>
           <View>{childItems.map((child, index) => <WorkbenchRow key={child.id} item={child} now={now} divider={index < childItems.length - 1} />)}</View>
@@ -151,8 +156,8 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
   const android = Platform.OS === 'android';
   return <ScreenContainer>
     {item ? <Stack.Screen options={{
-      headerTitle: () => <HeaderTitle item={item} row={row} onPress={() => setView('details')} />,
-      headerRight: () => <View style={local.headerRight}>
+      headerTitle: () => <HeaderTitle item={item} row={row} onPress={creation ? undefined : () => setView('details')} />,
+      headerRight: creation ? undefined : () => <View style={local.headerRight}>
         <IconButton label="Find in transcript" symbol={{ ios: 'magnifyingglass', android: 'search' }} onPress={() => setFind((value) => value + 1)} />
         <IconButton label={kind === 'session' ? 'Session actions' : 'Thread actions'}
           symbol={{ ios: 'ellipsis.circle', android: 'more_vert' }} onPress={() => openMenu(item)} />
@@ -170,7 +175,7 @@ export function WorkbenchDetailScreen({ kind }: { kind: 'session' | 'thread' }) 
             : null}
         </ScrollView>}
     </KeyboardAvoidingView>
-    {item ? <>
+    {item && !creation ? <>
       <SessionDetailsSheet visible={view === 'details'} onClose={close} item={item} row={row} readiness={readiness.data} onRetry={retry} retrying={retrying} />
       <SheetModal visible={view === 'changes'} onClose={close} title="Changes" full>
         {view === 'changes' ? <ChangesTab item={item} /> : null}

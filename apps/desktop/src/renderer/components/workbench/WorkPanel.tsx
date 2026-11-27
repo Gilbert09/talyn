@@ -25,7 +25,7 @@ import { isArchived, useThreadChildren } from './workbenchSelectors';
  * sessions, the memory the thread saved or read, and the repositories its sessions
  * work on.
  */
-export function WorkPanel({ thread }: { thread: Workbench }) {
+export function WorkPanel({ thread, creating = false }: { thread: Workbench; creating?: boolean }) {
   const width = useWorkbenchStore((s) => s.rightPanelWidth);
   const setWidth = useWorkbenchStore((s) => s.setRightPanelWidth);
   const children = useThreadChildren(thread.id, { includeArchived: true });
@@ -67,7 +67,7 @@ export function WorkPanel({ thread }: { thread: Workbench }) {
             </ul>
           )}
         </Section>
-        <MemorySection thread={thread} />
+        {!creating && <MemorySection thread={thread} />}
         <Section title="Repositories" count={repos.length} short>
           {repos.length === 0 ? (
             <p className="px-3 text-xs text-muted-foreground">No repositories yet.</p>

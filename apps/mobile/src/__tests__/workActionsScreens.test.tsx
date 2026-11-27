@@ -6,9 +6,10 @@ import { forgetLastRepositories } from '../features/create/model';
 import { NewWorkScreen } from '../features/create/NewWorkScreen';
 import { PullRequestDetailScreen } from '../features/prs/PullRequestDetailScreen';
 import { WorkbenchDetailScreen } from '../features/sessions/WorkbenchDetailScreen';
+import { WorkbenchRoute } from '../features/sessions/WorkbenchRoute';
 import { WorkbenchListScreen } from '../features/sessions/WorkbenchListScreen';
 import { DetailRoute } from '../navigation/DetailRoute';
-import { fixture, pr, session } from './workflowFixtures';
+import { chat, deferred, fixture, pr, session } from './workflowFixtures';
 
 jest.setTimeout(15000);
 
@@ -17,7 +18,10 @@ let mockParams: Record<string, string> = { id: 'session-one' };
 let mockNetwork = 'online';
 let mockWorkspace: { status: string; selected: string | null; choices: unknown[] } = { status: 'ready', selected: 'one', choices: [{ id: 'one', name: 'Test workspace' }] };
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => true };
+const mockNavigation = { getState: jest.fn(), reset: jest.fn() };
 jest.mock('expo-router', () => ({
+  useIsFocused: () => true,
+  useNavigation: () => mockNavigation,
   useLocalSearchParams: () => mockParams,
   usePathname: () => '/sessions/session-one',
   Link: ({ children }: { children: React.ReactNode }) => children,
@@ -42,6 +46,7 @@ beforeEach(() => {
   mockActive.store.dispose(); mockActive = fixture(); mockParams = { id: 'session-one' }; mockNetwork = 'online';
   forgetLastRepositories(); mockStorage.getItem.mockReset().mockResolvedValue(null); mockStorage.setItem.mockClear();
   mockWorkspace = { status: 'ready', selected: 'one', choices: [{ id: 'one', name: 'Test workspace' }] };
+  mockNavigation.reset.mockClear();
   Object.values(mockRouter).forEach((value) => { if (jest.isMockFunction(value)) value.mockClear(); });
 });
 afterEach(() => { mockActive.store.dispose(); jest.restoreAllMocks(); });
@@ -218,33 +223,72 @@ describe('start new work', () => {
     await fireEvent.press(sendButton());
     await waitFor(() => expect(mockActive.api.workbenches.create).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId: 'one', repositoryId: 'repo-one', runtime: 'sandbox', prompt: 'Fix the flaky test' })));
-    expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'session-new' } });
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: expect.stringMatching(/^creating-/) } });
   });
-  it('shows the pending session while the create is in flight', async () => {
-    let finish: (value: ReturnType<typeof session>) => void = () => {};
-    mockActive.api.workbenches.create.mockReturnValueOnce(new Promise((done) => { finish = done; }));
-    await render(<NewWorkScreen />);
+  const openPushedSession = async (fromComposerRoute: boolean) => {
+    const target = mockRouter.push.mock.calls.at(-1)?.[0];
+    expect(target.pathname).toBe('/sessions/[id]');
+    mockParams = target.params;
+    const routes = [
+      { name: '(drawer)', key: 'drawer' },
+      ...(fromComposerRoute ? [{ name: 'new', key: 'new-composer' }] : []),
+      { name: 'sessions/[id]', key: 'detail', params: target.params },
+    ];
+    mockNavigation.getState.mockReturnValue({ index: routes.length - 1, routes });
+    return render(<WorkbenchRoute kind="session" />);
+  };
+
+  it.each(['route', 'home'] as const)('opens the session layout before create returns from %s', async (presentation) => {
+    const create = deferred<ReturnType<typeof session>>();
+    const load = deferred<ReturnType<typeof session>>();
+    mockActive.api.workbenches.create.mockReturnValueOnce(create.promise);
+    mockActive.api.workbenches.get.mockReturnValue(load.promise);
+    await render(<NewWorkScreen presentation={presentation} />);
     await fireEvent.changeText(await screen.findByLabelText('Task'), 'Fix the flaky test');
     await waitFor(() => expect(sendButton()).toBeEnabled());
     await fireEvent.press(sendButton());
-    expect(await screen.findByText('Creating the session…')).toBeVisible();
-    expect(screen.getByText('New session')).toBeVisible();
+    const detail = await openPushedSession(presentation === 'route');
+    expect(await screen.findByLabelText('Conversation transcript')).toBeVisible();
+    expect(screen.getByRole('header', { name: /^New session\./ })).toBeVisible();
     expect(screen.getByText('Fix the flaky test')).toBeVisible();
-    expect(screen.getByText('You can write more when the session opens.')).toBeVisible();
-    expect(screen.queryByLabelText('Task')).toBeNull();
-    await act(async () => finish(session({ id: 'session-new' })));
-    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'session-new' } }));
+    expect(screen.getByLabelText('Message')).toBeVisible();
+    expect(screen.getByLabelText('Message').props.editable).toBe(false);
+    expect(mockActive.api.workbenches.get).not.toHaveBeenCalled();
+
+    const created = session({ id: 'session-new', title: 'Flaky test fix', chats: [chat({
+      workbenchId: 'session-new',
+      queuedMessages: [{ id: 'first', text: 'Fix the flaky test', queuedAt: '2026-11-27T00:00:00.000Z' }],
+    })] });
+    await act(async () => create.resolve(created));
+    expect(screen.getByRole('header', { name: /^Flaky test fix\./ })).toBeVisible();
+    expect(screen.getByLabelText('Conversation transcript')).toBeVisible();
+    expect(screen.getByText('Fix the flaky test')).toBeVisible();
+    expect(mockNavigation.reset).toHaveBeenCalledWith(expect.objectContaining({
+      index: 1,
+      routes: [
+        { name: '(drawer)', key: 'drawer' },
+        { name: 'sessions/[id]', key: 'detail', params: { id: 'session-new' } },
+      ],
+    }));
+    mockParams = { id: created.id };
+    await detail.rerender(<WorkbenchRoute kind="session" />);
+    expect(screen.getByText('Fix the flaky test')).toBeVisible();
+    await act(async () => load.resolve(created));
   });
+
   it('returns to the composer with the prompt and the error when the create fails', async () => {
-    mockActive.api.workbenches.create.mockRejectedValueOnce(new Error('No box is free.'));
-    await render(<NewWorkScreen />);
+    const create = deferred<ReturnType<typeof session>>();
+    mockActive.api.workbenches.create.mockReturnValueOnce(create.promise);
+    const composer = await render(<NewWorkScreen />);
     await fireEvent.changeText(await screen.findByLabelText('Task'), 'Fix the flaky test');
     await waitFor(() => expect(sendButton()).toBeEnabled());
     await fireEvent.press(sendButton());
-    expect(await screen.findByText('No box is free.')).toBeVisible();
-    expect(screen.getByLabelText('Task')).toHaveTextContent('Fix the flaky test');
-    expect(screen.queryByText('Creating the session…')).toBeNull();
-    expect(mockRouter.replace).not.toHaveBeenCalled();
+    await openPushedSession(true);
+    await act(async () => create.reject(new Error('No box is free.')));
+    expect(mockRouter.back).toHaveBeenCalledTimes(1);
+    expect(await composer.findByText('No box is free.')).toBeVisible();
+    expect(composer.getByLabelText('Task')).toHaveTextContent('Fix the flaky test');
+    expect(mockNavigation.reset).not.toHaveBeenCalled();
   });
   const twoRepos = () => mockActive.api.repositories.list.mockResolvedValue([
     { id: 'repo-one', workspaceId: 'one', owner: 'example', repo: 'project', fullName: 'example/project', defaultBranch: 'main' },

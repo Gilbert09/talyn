@@ -36,11 +36,13 @@ export function GitPanel({
   chat,
   ops,
   pr,
+  creating = false,
 }: {
   workbench: Workbench;
   chat: WorkbenchChat | null;
   ops: WorkbenchOps;
   pr: PRRow | null;
+  creating?: boolean;
 }) {
   const storedTab = useWorkbenchStore((s) => s.sideTab);
   const owner = useIsWorkbenchOwner(workbench);
@@ -56,7 +58,7 @@ export function GitPanel({
   const [mounted, setMounted] = useState<Record<GitPanelTab, boolean>>({ files: false, changes: false, pr: false, sandbox: false, background: false });
   const viewed = useRef(new Set<string>());
   const turnsEnded = useTurnsEnded(chats);
-  const sandbox = useSandboxStatus(workbench, tab === 'sandbox', hasSandbox);
+  const sandbox = useSandboxStatus(workbench, tab === 'sandbox', hasSandbox && !creating);
   const sandboxAttention = hasSandbox ? sandboxStatusNeedsAttention(sandbox.status) : null;
   const uncommittedFiles = workbench.uncommittedStats?.files ?? workbench.diffStat?.files ?? 0;
   const openPrHasUncommitted = (pr?.state ?? workbench.pr?.state) === 'open' && uncommittedFiles > 0;
@@ -65,10 +67,10 @@ export function GitPanel({
   useEffect(() => setMounted((m) => (m[tab] ? m : { ...m, [tab]: true })), [tab]);
   useEffect(() => {
     const key = `${workbench.id}:${tab}`;
-    if (viewed.current.has(key)) return;
+    if (creating || viewed.current.has(key)) return;
     viewed.current.add(key);
     trackEvent('session_tab_viewed', { workbench_id: workbench.id, tab });
-  }, [workbench.id, tab]);
+  }, [workbench.id, tab, creating]);
 
   const onDragStart = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -144,7 +146,7 @@ export function GitPanel({
         ))}
       </div>
       <div className="min-h-0 flex-1">
-        {(mounted.changes || tab === 'changes') && (
+        {!creating && (mounted.changes || tab === 'changes') && (
           <div className={cn('h-full', tab !== 'changes' && 'hidden')}>
             <ChangesTab
               workbench={workbench}
@@ -157,28 +159,28 @@ export function GitPanel({
             />
           </div>
         )}
-        {(mounted.files || tab === 'files') && (
+        {!creating && (mounted.files || tab === 'files') && (
           <div className={cn('h-full', tab !== 'files' && 'hidden')}>
             <FilesTab workbench={workbench} ops={ops} visible={tab === 'files'} />
           </div>
         )}
-        {(mounted.pr || tab === 'pr') && (
+        {!creating && (mounted.pr || tab === 'pr') && (
           <div className={cn('h-full', tab !== 'pr' && 'hidden')}>
             <PullRequestTab workbench={workbench} chat={chat} pr={pr} visible={tab === 'pr'} turnsEnded={turnsEnded} />
           </div>
         )}
-        {hasSandbox && (mounted.sandbox || tab === 'sandbox') && (
+        {!creating && hasSandbox && (mounted.sandbox || tab === 'sandbox') && (
           <div className={cn('h-full', tab !== 'sandbox' && 'hidden')}>
             <SandboxTab workbench={workbench} sandbox={sandbox} />
           </div>
         )}
-        {owner && (mounted.background || tab === 'background') && (
+        {!creating && owner && (mounted.background || tab === 'background') && (
           <div className={cn('h-full', tab !== 'background' && 'hidden')}>
             <BackgroundTab workbenchId={workbench.id} />
           </div>
         )}
       </div>
-      {owner && <TerminalPanel workbench={workbench} ops={ops} />}
+      {!creating && owner && <TerminalPanel workbench={workbench} ops={ops} />}
     </div>
   );
 }

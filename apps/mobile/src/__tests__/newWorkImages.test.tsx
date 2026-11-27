@@ -116,7 +116,7 @@ describe('new work with images', () => {
       repositoryId: 'repo-one', prompt: undefined, namingText: 'Fix this screen' })));
     await waitFor(() => expect(mockActions.send).toHaveBeenCalledWith('chat-one', {
       text: 'Fix this screen', attachments: [{ name: 'cat.jpg', mimeType: 'image/jpeg', dataBase64: 'AAAA' }] }));
-    expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'session-new' } });
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: expect.stringMatching(/^creating-/) } });
     expect(readImageDrafts('new:prompt')).toEqual([]);
     expect(mockActive.store.local('new:prompt').draft).toBe('');
   });
@@ -173,7 +173,7 @@ describe('new work with images', () => {
     await attach();
     await waitFor(() => expect(startButton()).toBeEnabled());
     await fireEvent.press(startButton());
-    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: 'session-new' } }));
+    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/sessions/[id]', params: { id: expect.stringMatching(/^creating-/) } }));
     await waitFor(() => expect(alert).toHaveBeenCalled());
     expect(alert.mock.calls[0][0]).toBe('The first message did not send');
     expect(alert.mock.calls[0][1]).toContain('Your text and images are in the new chat.');

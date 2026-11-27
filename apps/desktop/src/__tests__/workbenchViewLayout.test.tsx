@@ -1,10 +1,10 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { Workbench } from '@talyn/shared';
+import { workbenchCreation, type Workbench } from '@talyn/shared';
 import { WorkbenchView } from '../renderer/components/workbench/WorkbenchView';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
-import { loadWorkbench } from '../renderer/lib/workbenchData';
+import { ensureChatHistory, loadWorkbench } from '../renderer/lib/workbenchData';
 import { wakeWorkbench } from '../renderer/lib/wakeWorkbench';
 
 jest.mock('../renderer/lib/workbenchData', () => ({ loadWorkbench: jest.fn(), ensureChatHistory: jest.fn(), loadOlderEvents: jest.fn() }));
@@ -75,4 +75,23 @@ it('places a thread header above its work panel', () => {
     .toBe(container.querySelector('[data-attr="workbench-header"]'));
   expect(screen.getByTestId('work-panel').parentElement)
     .toBe(container.querySelector('[data-attr="workbench-columns"]'));
+});
+
+
+it('shows the submitted prompt in the session layout while creation waits for a server ID', () => {
+  jest.mocked(loadWorkbench).mockClear();
+  jest.mocked(ensureChatHistory).mockClear();
+  const creation = workbenchCreation({
+    id: 'creating', workspaceId: 'ws1', repositoryId: 'r1', repoFullName: 'acme/app',
+    runtime: 'sandbox', agent: 'claude', message: { text: 'Fix the slow search' },
+  });
+  render(<WorkbenchView workbench={creation.workbench} creation={creation} />);
+
+  expect(screen.getByRole('heading', { name: 'New session' })).toBeVisible();
+  expect(screen.getByText('Fix the slow search')).toBeVisible();
+  expect(screen.getByRole('status')).toHaveTextContent('Creating the session…');
+  expect(screen.getByTestId('composer')).toBeVisible();
+  expect(screen.getByRole('tablist', { name: 'Session panels' })).toBeVisible();
+  expect(loadWorkbench).not.toHaveBeenCalled();
+  expect(ensureChatHistory).not.toHaveBeenCalled();
 });
