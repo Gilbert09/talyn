@@ -30,6 +30,9 @@ afterEach(() => { mockActive.store.dispose(); jest.restoreAllMocks(); });
 const ev = (seq: number, body: Record<string, unknown>, turn = 1): WorkbenchEvent =>
   ({ chatId: 'chat-one', seq, turn, createdAt: '2026-11-08T11:00:00Z', event: { seq, ...body } as AgentEvent });
 const transcript = (events: WorkbenchEvent[]) => mockActive.api.workbenches.events.mockResolvedValue({ events, cursor: events.length, oldestSeq: 1, hasOlder: false });
+const scrollTranscript = async (y: number) => fireEvent.scroll(screen.getByLabelText('Conversation transcript'), {
+  nativeEvent: { contentOffset: { x: 0, y }, contentSize: { width: 360, height: 2000 }, layoutMeasurement: { width: 360, height: 600 } },
+});
 
 describe('markdown messages', () => {
   it('renders markdown without raw syntax and keeps links inline behind a confirmation', async () => {
@@ -81,6 +84,28 @@ describe('markdown messages', () => {
 });
 
 describe('conversation rows', () => {
+  it('saves the scroll position without moving the open list', async () => {
+    mockActive.store.rememberOffset('chat-one', 24);
+    await render(<WorkbenchDetailScreen kind="session" />);
+    await screen.findByText('Agent response 1');
+    const getOffset = () => screen.getByLabelText('Conversation transcript').props.contentOffset;
+    const notify = jest.fn();
+    const unsubscribe = mockActive.store.subscribe(notify);
+    expect(getOffset()).toEqual({ x: 0, y: 24 });
+
+    await scrollTranscript(40);
+    expect(mockActive.store.local('chat-one').offset).toBe(40);
+    expect(getOffset()).toEqual({ x: 0, y: 24 });
+    expect(notify).not.toHaveBeenCalled();
+
+    await scrollTranscript(80);
+    expect(mockActive.store.local('chat-one')).toMatchObject({ offset: 80, following: false });
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeVisible();
+    expect(getOffset()).toEqual({ x: 0, y: 24 });
+    expect(notify).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
   it('shows a user bubble, agent text, and a compact tool line that expands to its result', async () => {
     transcript([
       ev(1, { type: 'user', talyn_user_message: true, message: { content: [{ type: 'text', text: 'Please build' }] } }),
@@ -196,6 +221,7 @@ describe('subagents in the conversation', () => {
     await render(<WorkbenchDetailScreen kind="session" />);
     const chip = await screen.findByRole('button', { name: "2 subagents running. Open a subagent's tab" });
     expect(screen.getByRole('tab', { name: 'Main transcript', selected: true })).toBeVisible();
+    await scrollTranscript(90);
     await fireEvent.press(chip);
     expect(screen.getByRole('tab', { name: 'Subagent Find the entry, running', selected: true })).toBeVisible();
     expect(screen.getByTestId('subagent-transcript')).toBeVisible();
@@ -207,6 +233,7 @@ describe('subagents in the conversation', () => {
     await fireEvent.press(screen.getByRole('tab', { name: 'Main transcript' }));
     expect(screen.queryByTestId('subagent-transcript')).toBeNull();
     expect(screen.getByRole('tab', { name: 'Main transcript', selected: true })).toBeVisible();
+    expect(screen.getByLabelText('Conversation transcript').props.contentOffset).toEqual({ x: 0, y: 90 });
   });
 
   it('opens a subagent tab from the card and shows its result when it ends', async () => {
