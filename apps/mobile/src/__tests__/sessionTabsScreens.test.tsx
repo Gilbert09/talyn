@@ -1,5 +1,5 @@
 import { ApiError } from '@talyn/client/native';
-import type { RepositoryPreviewResponse, Workbench, WorkbenchBackground } from '@talyn/shared';
+import { workbenchCreation, type RepositoryPreviewResponse, type Workbench, type WorkbenchBackground } from '@talyn/shared';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Alert, Dimensions, Linking, Platform, StyleSheet } from 'react-native';
@@ -295,6 +295,14 @@ describe('session agent switch', () => {
 });
 
 describe('mobile session header', () => {
+  it('shows the title while the new session waits for its ID', async () => {
+    const creation = workbenchCreation({ id: 'creating-one', workspaceId: 'one', kind: 'session',
+      runtime: 'sandbox', agent: 'codex', message: { text: 'Check the build' } });
+    await render(<WorkbenchDetailScreen kind="session" creation={creation} />);
+    expect(screen.getByRole('header', { name: /^New session\./ }).props.accessibilityHint).toBeUndefined();
+    expect(screen.queryByRole('button', { name: 'Session actions' })).toBeNull();
+    expect(screen.queryByLabelText('Next action')).toBeNull();
+  });
   it('pairs one action with its status and keeps other controls in the menu', async () => {
     mockActive.api.workbenches.get.mockResolvedValue(session({ diffStat: { added: 123456, removed: 78901, files: 200 } }));
     withRow({ codeReview: review(), ...summary({ mergeable: 'MERGEABLE', ciStatus: 'failing_required', blockingReason: 'checks_failed',
