@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { isSubagentTool, type WorkbenchQueuedMessage } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
-import { pullRequests, repositories, workspaces } from '../db/schema.js';
+import { pullRequests, repositories, workbenchChats, workspaces } from '../db/schema.js';
 import {
   appendEvents,
   openSubagentCount,
@@ -28,14 +29,18 @@ import {
   upsertCheckpoint,
   listCheckpoints,
   getWorkbench,
+  markArchive,
   updateWorkbench,
 } from '../services/workbenches/store.js';
+import { bulkArchiveBlocker, bulkArchiveGuard } from '../services/workbenches/idleArchive.js';
 import { findBranchPrQuery, linkPullRequest, publicWorkbench } from '../services/workbenches/prLink.js';
 
 const msg = (id: string, text = id): WorkbenchQueuedMessage => ({ id, text, queuedAt: new Date(0).toISOString() });
 
 describe('workbench store', () => {
   let testDb: Awaited<ReturnType<typeof createTestDb>>;
+  const drainPending = async (id: string) =>
+    (await testDb.db.select({ pending: workbenchChats.drainPending }).from(workbenchChats).where(eq(workbenchChats.id, id)))[0].pending;
 
   it.each(['Agent', 'Task', 'subagent', 'dispatch_agent', 'Bash', 'mcp__Agent'])(
     'counts open %s calls with the shared tool rules', async (name) => {
@@ -465,14 +470,32 @@ describe('workbench store', () => {
       },
     );
 
+    it.each(['remove last message', 'clear queue'])('permits bulk archive after a blocked payer queue is emptied: %s', async (action) => {
+      await insertChat({ id: 'other-chat', workbenchId: 'wb-1', workspaceId: 'ws-a', title: 'Other', agent: 'claude' });
+      await claimOrEnqueue('chat-1', msg('running'), true);
+      const blocked = await claimOrEnqueue('other-chat', { ...msg('blocked'), payer: { userId: 'owner-a', workspaceId: 'ws-a' } }, true);
+      expect(blocked).toMatchObject({ started: null, payerBlocked: true });
+      expect(await drainPending('other-chat')).toBe(true);
+      const emptied = action === 'remove last message'
+        ? await removeQueuedMessage('other-chat', 'blocked')
+        : await updateChat('other-chat', { queuedMessages: [] });
+      expect(emptied).toMatchObject({ queuedMessages: [] });
+      expect(await drainPending('other-chat')).toBe(false);
+      expect(await bulkArchiveBlocker('wb-1')).not.toBeNull();
+      await finishTurn('chat-1', { finalStatus: 'idle', statusMessage: null, drain: true });
+      expect(await bulkArchiveBlocker('wb-1')).toBeNull();
+      expect(await markArchive('wb-1', false, undefined, undefined, bulkArchiveGuard())).not.toBeNull();
+    });
+
     it.each([
       ['m2', ['m3']],
       ['m3', ['m2']],
       ['nope', ['m2', 'm3']],
     ])('removes queued message %s', async (id, left) => {
-      await updateChat('chat-1', { queuedMessages: [msg('m2'), msg('m3')] });
+      await updateChat('chat-1', { queuedMessages: [msg('m2'), msg('m3')], drainPending: true });
       const row = await removeQueuedMessage('chat-1', id);
       expect(row?.queuedMessages.map((m) => m.id)).toEqual(left);
+      expect(await drainPending('chat-1')).toBe(true);
       expect(await removeQueuedMessage('no-chat', id)).toBeNull();
     });
   });

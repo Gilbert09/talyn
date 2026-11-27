@@ -65,7 +65,7 @@ function sleptSince(read: FleetRead, now: number): boolean {
  * not ready for another reason (a move, a start) goes to the box path, which
  * waits for the move or refuses with `not_ready`, as before.
  */
-export async function chooseReadSource(row: WorkbenchRow, now = Date.now()): Promise<ReadSource> {
+export async function chooseReadSource(row: WorkbenchRow, now = Date.now(), opts: { fresh?: boolean } = {}): Promise<ReadSource> {
   if (row.runtime !== 'sandbox') return LIVE;
   if (row.archivedAt) return { live: false, reason: 'archived' };
   if (row.sandboxState === 'lost') return { live: false, reason: 'lost' };
@@ -73,9 +73,9 @@ export async function chooseReadSource(row: WorkbenchRow, now = Date.now()): Pro
   if (row.status !== 'ready' || !row.sandboxId) return LIVE;
   if (isResuming(row.sandboxId)) return { live: false, reason: 'waking' };
   const box = { workspaceId: row.workspaceId, fleetHost: row.fleetHost, sandboxId: row.sandboxId };
-  let read = await readFleetRecord(box, now);
+  let read = await readFleetRecord(box, now, opts);
   // A cached "idle" can be up to ten seconds old. Past its idle time the box
   // may sleep now, and an exec would wake it: ask the fleet again.
-  if (sleptSince(read, now)) read = await readFleetRecord(box, now, { fresh: true });
+  if (!opts.fresh && sleptSince(read, now)) read = await readFleetRecord(box, now, { fresh: true });
   return fromFleet(read) ?? LIVE;
 }
