@@ -105,7 +105,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
   rejectRefresh = () => { void auth.signOut(); };
   bindClient();
   const notifications = new NotificationController(mobileNotifications, notificationDevice(config, namespace),
-    () => lifecycle.getSnapshot().reachability !== 'offline', async (destination) => {
+    reachable, async (destination) => {
       if (destination.kind === 'pull_request') {
         const item = await pullRequests.get(destination.entityId);
         if (item.row.workspaceId !== destination.workspaceId) throw { status: 403 };
@@ -133,8 +133,7 @@ export async function createMobileRuntime(config: MobileConfig, signal?: AbortSi
   });
   let pushActive = false;
   const unbindPushLifecycle = lifecycle.subscribe(() => {
-    const state = lifecycle.getSnapshot();
-    const next = state.activity === 'active' && state.reachability !== 'offline';
+    const next = reachable();
     if (next && !pushActive) { void notifications.refresh(); notifications.retryTap(); }
     pushActive = next;
   });
