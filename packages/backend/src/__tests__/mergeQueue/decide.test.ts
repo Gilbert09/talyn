@@ -615,6 +615,12 @@ describe('decide — update-branch beats a paid fix run for BEHIND', () => {
     expect(fixRun(d)).toBeTruthy();
   });
 
+  it.each(['up_to_date', 'head_changed'] as const)('refreshes the snapshot on %s', (updateBranchOutcome) => {
+    const d = decide(entry(), behindPr(), ctx({ updateBranchAvailable: true, updateBranchOutcome }));
+    expect(kinds(d)).toEqual(['refresh_snapshot']);
+    expect(d.verdict).toBe('advance');
+  });
+
   it('never uses update-branch when genuine followup work exists (conflicts)', () => {
     const d = decide(entry(), conflictingPr(), ctx({ updateBranchAvailable: true }));
     expect(kinds(d)).not.toContain('update_branch');

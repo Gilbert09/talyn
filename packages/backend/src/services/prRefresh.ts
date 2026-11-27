@@ -1,8 +1,9 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { githubService } from './github.js';
 import { QUEUE_RESET_COLUMNS } from './mergeQueueBroadcast.js';
+import { refusedBehindMark } from './mergeRefusal.js';
 import { forceFetchAndUpsert } from './prCache.js';
 import { markRefreshed } from './prFocus.js';
 import { emitPullRequestUpdated } from './websocket.js';
@@ -19,6 +20,39 @@ type Row = typeof pullRequestsTable.$inferSelect;
 export type ReconcileRow = Pick<Row, 'id' | 'workspaceId' | 'owner' | 'repo' | 'number' | 'state' | 'mergeQueued'>;
 
 export type RefreshRow = ReconcileRow & Pick<Row, 'repositoryId' | 'taskId'>;
+
+/** Keep a merge refusal visible while GitHub recalculates the PR's status. */
+export async function recordRefusedBehind(
+  row: Pick<ReconcileRow, 'id' | 'workspaceId' | 'owner' | 'repo' | 'number'>,
+  cachedHeadSha?: string
+): Promise<void> {
+  try {
+    const pr = await githubService.getPullRequest(row.workspaceId, row.owner, row.repo, row.number)
+      .catch(() => null);
+    const headSha = pr?.head?.sha || cachedHeadSha;
+    if (!headSha) return;
+    const summary = pullRequestsTable.lastSummary;
+    const mark = JSON.stringify({ refusedBehind: refusedBehindMark(headSha) });
+    await getDbClient()
+      .update(pullRequestsTable)
+      .set({
+        lastSummary: sql`coalesce(${summary}, '{}'::jsonb) || ${mark}::jsonb ||
+          case when ${summary}->>'headSha' = ${headSha}
+            and ${summary}->>'blockingReason' in ('mergeable', 'checks_failed_optional', 'unknown')
+          then '{"blockingReason":"behind","mergeStateStatus":"BEHIND"}'::jsonb
+          else '{}'::jsonb end`,
+        lastSummaryDigest: null,
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(pullRequestsTable.id, row.id),
+        eq(pullRequestsTable.state, 'open'),
+        sql`coalesce(${summary}->>'headSha', '') in (${headSha}, ${cachedHeadSha ?? ''})`
+      ));
+  } catch (err) {
+    console.warn(`[pull-requests] could not record the behind refusal for ${row.id}:`, err);
+  }
+}
 
 /** What the reconcile emits: the fields every client patches a row with. */
 const EMIT_COLUMNS = {

@@ -1171,7 +1171,7 @@ describe('mergeQueue v2 pipeline', () => {
         },
       ]);
       const comment = vi.spyOn(githubService, 'createIssueComment').mockResolvedValue(undefined);
-      const updateSpy = vi.spyOn(githubService, 'updatePullRequestBranch').mockResolvedValue('ok');
+      const updateSpy = vi.spyOn(githubService, 'updatePullRequestBranchOutcome').mockResolvedValue('ok');
       const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
 
       const { prId, entryId } = await insertQueuedPr(db, {
@@ -2392,7 +2392,7 @@ describe('mergeQueue v2 pipeline', () => {
 
     it('updates a BEHIND branch server-side instead of firing a paid fix run', async () => {
       const updateSpy = vi
-        .spyOn(githubService, 'updatePullRequestBranch')
+        .spyOn(githubService, 'updatePullRequestBranchOutcome')
         .mockResolvedValue('ok');
       const { prId } = await insertQueuedPr(db, {
         summary: { ...cleanSummary(), mergeStateStatus: 'BEHIND' },
@@ -2401,13 +2401,45 @@ describe('mergeQueue v2 pipeline', () => {
       await evaluateGroupNow('repo1', 'main', 'test');
 
       expect(updateSpy).toHaveBeenCalledTimes(1);
+      expect(updateSpy).toHaveBeenCalledWith('ws1', 'a', 'b', expect.any(Number), 'abc');
       expect(await countTasks(db)).toBe(0); // no cloud run
       expect((await entryOf(db, prId))?.status).toBe('awaiting_ci');
       expect(refreshSpy).toHaveBeenCalled();
     });
 
+    it('updates the branch after GitHub refuses a merge while the snapshot still reads clean', async () => {
+      mergeSpy.mockRejectedValueOnce(new Error('GitHub API error 409 Conflict: Head branch is out of date.'));
+      const updateSpy = vi.spyOn(githubService, 'updatePullRequestBranchOutcome').mockResolvedValue('ok');
+      const { prId } = await insertQueuedPr(db);
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+      expect((await entryOf(db, prId))?.status).toBe('queued');
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+      expect(await countTasks(db)).toBe(0);
+      expect((await entryOf(db, prId))?.status).toBe('awaiting_ci');
+
+      const updated = cleanSummary('main', 'updated-head');
+      await db.update(pullRequestsTable).set({
+        lastSummary: {
+          ...updated,
+          mergeStateStatus: 'BLOCKED',
+          checks: { ...updated.checks, passed: 0, inProgress: 1 },
+        },
+      }).where(eq(pullRequestsTable.id, prId));
+      await evaluateGroupNow('repo1', 'main', 'test');
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+
+      await db.update(pullRequestsTable).set({ lastSummary: updated }).where(eq(pullRequestsTable.id, prId));
+      await evaluateGroupNow('repo1', 'main', 'test');
+      expect(mergeSpy).toHaveBeenCalledTimes(2);
+      expect(await entryOf(db, prId)).toBeNull();
+    });
+
     it('falls back to the fix run when the server-side update conflicts', async () => {
-      vi.spyOn(githubService, 'updatePullRequestBranch').mockResolvedValue('conflict');
+      vi.spyOn(githubService, 'updatePullRequestBranchOutcome').mockResolvedValue('conflict');
       const { prId } = await insertQueuedPr(db, {
         summary: { ...cleanSummary(), mergeStateStatus: 'BEHIND' },
       });

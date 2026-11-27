@@ -57,6 +57,7 @@ import {
   gatingRunForPr as gatingVisualReviewRun,
 } from '../visualReview.js';
 import { prMonitorService } from '../prMonitor.js';
+import { recordRefusedBehind } from '../prRefresh.js';
 import { createCloudTask } from '../taskCreate.js';
 import { isBoxGateError, type BoxGateError } from '../billing/entitlements.js';
 import { boxDeferral, boxDeferralEventCode, workspaceBoxHold } from '../billing/boxDeferral.js';
@@ -654,11 +655,12 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
     case 'update_branch': {
       const held = await providerHoldsBeforePush(ctx);
       if (held) return held;
-      ctx.extras.updateBranchOutcome = await githubService.updatePullRequestBranch(
+      ctx.extras.updateBranchOutcome = await githubService.updatePullRequestBranchOutcome(
         ctx.pr.workspaceId,
         ctx.pr.owner,
         ctx.pr.repo,
-        ctx.pr.number
+        ctx.pr.number,
+        ctx.prSnap.headSha || undefined
       );
       return { redecide: true };
     }
@@ -679,6 +681,7 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
       return {};
     }
     case 'refresh_snapshot': {
+      if (action.refusedBehind) await recordRefusedBehind(ctx.pr, ctx.prSnap.headSha);
       await prMonitorService
         .refreshPr(ctx.pr.workspaceId, ctx.pr.owner, ctx.pr.repo, ctx.pr.number)
         .catch((err) => {

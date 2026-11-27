@@ -2967,46 +2967,34 @@ class GitHubService extends EventEmitter {
   }
 
   /**
-   * Merge the base branch into the PR's head server-side — GitHub's "Update
-   * branch" button. The merge queue uses it for BEHIND heads with no genuine
-   * followup work: one REST call instead of a paid cloud fix run. `conflict`
-   * means the update can't be done automatically (422 merge conflict) and the
-   * fix-run path takes over. NB: the merge commit is authored server-side by
-   * GitHub and is GitHub-signed.
-   */
-  async updatePullRequestBranch(
-    workspaceId: string,
-    owner: string,
-    repo: string,
-    number: number
-  ): Promise<'ok' | 'conflict' | 'error'> {
-    const outcome = await this.updatePullRequestBranchOutcome(workspaceId, owner, repo, number);
-    // The merge queue reads every 422 as a conflict, an up-to-date head included.
-    return outcome === 'up_to_date' ? 'conflict' : outcome;
-  }
-
-  /**
-   * {@link updatePullRequestBranch}, with GitHub's "There are no new commits on
-   * the base branch" kept apart from a conflict. A person's "Update branch"
-   * click needs that difference; the merge queue does not.
+   * Ask GitHub to merge the base branch into the PR's head. The expected SHA
+   * lets the merge queue update only the head it evaluated.
    */
   async updatePullRequestBranchOutcome(
     workspaceId: string,
     owner: string,
     repo: string,
-    number: number
-  ): Promise<'ok' | 'conflict' | 'up_to_date' | 'error'> {
+    number: number,
+    expectedHeadSha?: string
+  ): Promise<'ok' | 'conflict' | 'up_to_date' | 'head_changed' | 'error'> {
     try {
       await this.apiRequest(
         workspaceId,
         `/repos/${owner}/${repo}/pulls/${number}/update-branch`,
-        { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expected_head_sha: expectedHeadSha }),
+        },
         'auto'
       );
       return 'ok';
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/no new commits/i.test(msg)) return 'up_to_date';
+      if (expectedHeadSha && /expected[ _]head[ _]sha|head branch was modified/i.test(msg)) {
+        return 'head_changed';
+      }
       if (/422/.test(msg) || /merge conflict/i.test(msg)) return 'conflict';
       console.warn(`[github] update-branch ${owner}/${repo}#${number} failed:`, msg);
       return 'error';
