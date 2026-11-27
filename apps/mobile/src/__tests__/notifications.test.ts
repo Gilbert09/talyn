@@ -1,4 +1,5 @@
 import { waitFor } from '@testing-library/react-native';
+import { ClientInactiveError } from '@talyn/client/native';
 import { defaultMobileNotificationPreferences, type MobileNotificationPayload } from '@talyn/shared';
 
 import { NotificationController, notificationPath } from '../notifications/controller';
@@ -122,6 +123,26 @@ describe('notification taps', () => {
     const f = fixture(); f.controller.receiveTap(payload); f.controller.receiveTap(payload);
     await waitFor(() => expect(f.navigate).toHaveBeenCalledTimes(1)); f.controller.receiveTap(payload);
     expect(f.navigate).toHaveBeenCalledTimes(1); f.controller.dispose();
+  });
+  it.each(['before', 'after'] as const)('retries silently when the app resumes %s the request rejects', async (resume) => {
+    const f = fixture();
+    let interrupt!: (error: Error) => void;
+    f.api.resolveNotification.mockImplementationOnce(() => new Promise((_resolve, reject) => { interrupt = reject; }));
+    const issues: string[] = [];
+    f.controller.subscribe(() => {
+      const { tapIssue } = f.controller.getSnapshot();
+      if (tapIssue) issues.push(tapIssue);
+    });
+    f.controller.receiveTap(payload);
+    if (resume === 'before') f.controller.retryTap();
+    interrupt(new ClientInactiveError());
+    await Promise.resolve();
+    if (resume === 'after') f.controller.retryTap();
+
+    await waitFor(() => expect(f.navigate).toHaveBeenCalledWith(`/sessions/${entity}`));
+    expect(f.api.resolveNotification).toHaveBeenCalledTimes(2);
+    expect(issues).toEqual([]);
+    f.controller.dispose();
   });
   it.each(['expired', 'deleted', 'wrong_account', 'invalid'] as const)('rejects a %s notification without navigation', async (reason) => {
     const f = fixture();
