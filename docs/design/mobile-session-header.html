@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mobile session header · Talyn</title>
+  <style>
+    @font-face { font-family: Inter; src: local('Inter'); }
+    @font-face { font-family: 'Space Grotesk'; src: local('Space Grotesk'); }
+    :root {
+      color-scheme: light;
+      font: 16px Inter, system-ui, sans-serif;
+      color: #23201b;
+      background: #f3eee5;
+      --ink: #23201b;
+      --muted: #70685b;
+      --paper: #f2ede3;
+      --screen: #fcfbf8;
+      --line: #ddd4c6;
+      --accent: #a94d2e;
+      --failed: #b42318;
+      --merged: #6b35a5;
+      --success: #1f7a40;
+      --phone-width: 390px;
+      --display: 'Space Grotesk', Inter, system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, select { font: inherit; color: inherit; }
+    button { border: 0; background: none; cursor: pointer; }
+    button:hover { background-color: #23201b0a; }
+    button:focus-visible, select:focus-visible { outline: 2px solid #1659ca; outline-offset: -2px; }
+    button:disabled { cursor: default; }
+    p, h1, h2, h3 { margin: 0; }
+    .board { max-width: 1298px; margin: auto; padding: 42px 32px 48px; }
+    .board-header { display: flex; align-items: end; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+    .board-header h1 { font: 600 clamp(32px, 5vw, 50px)/1.05 var(--display); letter-spacing: -.055em; }
+    .board-header p { margin-top: 10px; color: var(--muted); font-size: 15px; }
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+    .controls label { display: grid; gap: 5px; font-size: 12px; font-weight: 600; }
+    select { min-height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--screen); font-size: 13px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 370px), 1fr)); gap: 27px 22px; margin-top: 26px; }
+    .concept { width: min(100%, 390px); margin-inline: auto; padding-top: 12px; border-top: 1px solid #d5cbbd; }
+    .concept h2 { font-size: 17px; font-weight: 650; letter-spacing: -.025em; }
+    .concept > p { min-height: 39px; padding-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .phone {
+      display: flex; flex-direction: column; width: min(100%, var(--phone-width)); height: 372px; margin-inline: auto;
+      overflow: hidden; border-radius: 23px; background: var(--screen);
+      box-shadow: 0 0 0 1px #d8cec0, 0 5px 13px #442d1b0d;
+      font-size: 13px; line-height: 1.4;
+    }
+    .system { display: flex; flex: none; align-items: center; justify-content: space-between; height: 28px; padding: 5px 19px 0; font-size: 11px; font-weight: 700; }
+    .system-icons { display: flex; align-items: center; gap: 5px; }
+    .reception { width: 14px; height: 9px; background: currentColor; clip-path: polygon(0 70%, 17% 70%, 17% 50%, 40% 50%, 40% 30%, 65% 30%, 65% 0, 100% 0, 100% 100%, 0 100%); }
+    .battery { position: relative; width: 16px; height: 8px; border: 1px solid #70685b; border-radius: 2px; }
+    .battery::before { content: ''; position: absolute; inset: 1px 2px 1px 1px; background: var(--ink); border-radius: 1px; }
+    .battery::after { content: ''; position: absolute; right: -3px; top: 2px; width: 1px; height: 2px; background: var(--muted); }
+    .header { flex: none; border-bottom: 1px solid var(--line); }
+    .nav { display: flex; align-items: center; gap: 4px; min-height: 46px; margin-inline: 6px; }
+    .nav .spacer { flex: 1; }
+    .icon-button { display: grid; flex: 0 0 44px; width: 44px; height: 44px; place-items: center; border-radius: 10px; }
+    .icon { position: relative; display: inline-block; flex: none; width: 15px; height: 15px; }
+    .back::before, .forward::before {
+      content: ''; position: absolute; width: 7px; height: 7px; top: 3px; left: 5px;
+      border-bottom: 1.7px solid currentColor; border-left: 1.7px solid currentColor; transform: rotate(45deg);
+    }
+    .forward::before { transform: rotate(225deg); }
+    .search::before { content: ''; position: absolute; inset: 0 4px 4px 0; border: 1.6px solid currentColor; border-radius: 50%; }
+    .search::after { content: ''; position: absolute; top: 10px; left: 9px; width: 5px; border-top: 1.6px solid currentColor; transform: rotate(45deg); transform-origin: left; }
+    .more::before { content: ''; position: absolute; top: 6px; left: 6px; width: 3px; height: 3px; background: currentColor; border-radius: 50%; box-shadow: -5px 0 currentColor, 5px 0 currentColor; }
+    .circled { outline: 1.4px solid currentColor; outline-offset: 2px; border-radius: 50%; }
+    .circle-warning { display: inline-grid; place-items: center; width: 13px; height: 13px; border: 1px solid currentColor; border-radius: 50%; font-size: 9px; font-weight: 700; }
+    .title { min-width: 0; min-height: 44px; flex: 1; padding: 5px 3px; text-align: left; border-radius: 6px; }
+    .title-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; font-size: 14px; letter-spacing: -.015em; }
+    .compact-title .eyeline .forward { width: 10px; height: 10px; }
+    .compact-title .eyeline .forward::before { top: 2px; left: 1px; width: 5px; height: 5px; }
+    .current-nav { position: relative; justify-content: space-between; }
+    .trailing { display: flex; }
+    .current-title {
+      display: flex; align-items: center; justify-content: center; gap: 6px; position: absolute; left: 50%;
+      transform: translateX(-50%); width: calc(100% - 184px); height: 44px; padding-inline: 0;
+    }
+    .current-title .title-text { font-size: 15px; }
+    .eyeline { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+    .dot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .failed { color: var(--failed); }
+    .running { color: #965609; }
+    .archived { color: var(--muted); }
+    .added { color: var(--success); }
+    .removed { color: var(--failed); }
+    .merged { color: var(--merged); }
+    .status-row, .action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 14px 5px; }
+    .status-row button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; border-radius: 5px; font-family: ui-monospace, monospace; font-size: 11px; }
+    .status-row .findings { background: #96560913; }
+    .status-row .failed-pr { background: #b4231810; }
+    .action-row { padding-bottom: 9px; }
+    .action { flex: none; min-height: 36px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 11px; font-weight: 650; }
+    .action.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+    .action.primary:hover { background: #8c3c23; }
+    .summary-link { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 35px; padding: 5px 16px; text-align: left; font-size: 11px; }
+    .summary-link .forward { margin-left: auto; color: var(--muted); }
+    .summary-link b { font-weight: 650; }
+    .back-label { display: flex; align-items: center; gap: 2px; min-height: 44px; padding-inline: 4px 9px; border-radius: 8px; color: var(--accent); font-weight: 600; }
+    .large-title { display: block; width: 100%; padding: 0 16px 8px; text-align: left; }
+    .large-title .title-text { white-space: normal; font: 600 22px/1.12 var(--display); letter-spacing: -.035em; }
+    .large-title .eyeline { margin-top: 5px; }
+    .tabs { display: flex; gap: 4px; padding: 0 12px; }
+    .tabs button { flex: 1; white-space: nowrap; min-height: 44px; padding: 4px; border-bottom: 2px solid transparent; color: var(--muted); font-size: 11px; }
+    .tabs button[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 700; }
+    .tabs .tab-meta { margin-left: 3px; font-size: 10px; }
+    .transcript { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; padding: 11px 14px 12px; }
+    .message { width: fit-content; max-width: 90%; margin-left: auto; padding: 7px 10px; border-radius: 10px 10px 3px 10px; background: var(--paper); font-size: 12px; }
+    .reply { max-width: 95%; margin-top: 9px; font-size: 12px; color: #51493e; }
+    .reply b { display: block; padding-bottom: 2px; font-size: 11px; color: var(--ink); }
+    .work-card { margin-bottom: 12px; padding: 9px 10px 7px; border: 1px solid var(--line); border-radius: 10px; background: #f8f4ed; }
+    .work-top, .next-step { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .work-top > button:first-child, .next-step > button:first-child { min-width: 0; padding: 3px 2px; text-align: left; border-radius: 5px; }
+    .work-top b, .next-step b { display: block; font-size: 12px; font-weight: 650; }
+    .quick-links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--line); }
+    .quick-links button { padding: 4px 2px; border-radius: 5px; color: var(--muted); font-size: 11px; }
+    .next-step { padding: 6px 14px 8px; background: #f8f4ed; border-top: 1px solid #ede5d9; }
+    .view-content h3 { margin-bottom: 6px; font: 600 19px/1.2 var(--display); }
+    .view-content p { margin: 5px 0; color: var(--muted); font-size: 12px; }
+    .view-content .action { margin-top: 8px; }
+    .composer { flex: none; padding: 5px 12px 6px; }
+    .input {
+      display: flex; align-items: center; justify-content: space-between; min-height: 35px; padding: 4px 7px 4px 10px;
+      border: 1px solid var(--line); border-radius: 9px; background: #fefdfb; color: var(--muted); font-size: 11px;
+    }
+    .send { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 6px; background: var(--paper); font-size: 13px; }
+    .home { width: 84px; height: 3px; margin: 6px auto 0; border-radius: 3px; background: #23201b; opacity: .75; }
+    .read-only { display: block; padding: 3px 0 0; text-align: center; color: var(--muted); font-size: 11px; }
+    dialog { width: min(390px, calc(100% - 24px)); max-height: calc(100% - 24px); padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--screen); color: var(--ink); }
+    dialog::backdrop { background: #23201b70; }
+    .sheet-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 12px 8px 16px; border-bottom: 1px solid var(--line); }
+    .sheet-head h2 { font: 600 20px/1.15 var(--display); }
+    .sheet-body { padding: 12px 16px 16px; }
+    .sheet-body p { margin: 6px 0; font-size: 14px; }
+    .sheet-body label { display: grid; gap: 5px; font-size: 13px; }
+    .sheet-body input { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 7px; font: inherit; }
+    .menu-entry { display: block; width: 100%; min-height: 44px; padding: 8px 4px; border-bottom: 1px solid var(--line); text-align: left; font-size: 14px; }
+    .menu-entry:last-child { border: 0; }
+    @media (max-width: 500px) {
+      .board { padding: 25px 14px 30px; }
+      .grid { margin-top: 20px; }
+      .concept > p { min-height: 36px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="board">
+    <header class="board-header">
+      <div>
+        <h1>Mobile session header</h1>
+        <p>Compare five layout ideas with the same sample session.</p>
+      </div>
+      <div class="controls">
+        <label>Session state
+          <select id="scenario">
+            <option value="failed">PR checks failing</option>
+            <option value="running">Agent running · No PR</option>
+            <option value="archived">Archived · PR merged</option>
+          </select>
+        </label>
+        <label>Screen width
+          <select id="width">
+            <option value="390">390 pt</option>
+            <option value="320">320 pt</option>
+          </select>
+        </label>
+      </div>
+    </header>
+    <div class="grid" id="concepts"></div>
+  </main>
+  <dialog id="sheet" aria-labelledby="sheet-title">
+    <div class="sheet-head">
+      <h2 id="sheet-title"></h2>
+      <form method="dialog"><button class="icon-button" aria-label="Close" autofocus>×</button></form>
+    </div>
+    <div class="sheet-body" id="sheet-body"></div>
+  </dialog>
+  <script>
+    const title = 'Prevent duplicate notifications when a review finishes';
+    const request = 'Can you check why review notifications sometimes arrive twice?';
+    const scenarios = {
+      failed: { state: 'Checks failing', pr: 'PR #418', status: '2 of 8 checks failing', reply: 'I added a guard for duplicate notifications and opened PR #418.' },
+      running: { state: 'Working', pr: '', status: '', reply: 'I’m tracing the two paths that send review notifications.' },
+      archived: { state: 'Archived', pr: 'PR #418', status: 'Merged', reply: 'PR #418 merged. The guard now blocks duplicate notifications.' },
+    };
+    const concepts = [
+      { id: 'current', name: 'Current header', note: 'Search, status indicators, and quick actions share the top of the screen.' },
+      { id: 'compact', name: 'Compact', note: 'The title and status share one row. Search moves to the menu.' },
+      { id: 'title', name: 'Title first', note: 'A two-line title puts the session name in view. Search stays in the header.' },
+      { id: 'tabs', name: 'Work tabs', note: 'Switch between chat, changes, and the pull request with one tap.' },
+      { id: 'card', name: 'Transcript card', note: 'The work summary and its actions scroll with the conversation.' },
+      { id: 'action', name: 'Next action', note: 'Keep one action next to the reason it matters.' },
+    ];
+    const selectedViews = new Map();
+    const grid = document.querySelector('#concepts');
+    const sheet = document.querySelector('#sheet');
+    const scenario = document.querySelector('#scenario');
+
+    const icon = (name) => `<span class="icon ${name}" aria-hidden="true"></span>`;
+    const iconButton = (name, label, target) => `<button type="button" class="icon-button" data-open="${target}" aria-label="${label}">${icon(name)}</button>`;
+    const back = () => iconButton('back', 'Back to sessions', 'sessions');
+    const search = () => iconButton('search', 'Find in transcript', 'find');
+    const more = (name = 'more') => iconButton(name, 'Session actions', 'menu');
+    const action = (label, target, primary = false) => `<button type="button" class="action${primary ? ' primary' : ''}" data-open="${target}">${label}</button>`;
+    const smallStatus = (state) => `<span class="eyeline"><span class="dot ${scenario.value}"></span>${state.state}</span>`;
+    const titleButton = (subtitle = '') => `<button type="button" class="title" data-open="details" aria-label="Session details: ${title}"><span class="title-text">${title}</span>${subtitle}</button>`;
+    const nav = (heading) => `<div class="nav">${back()}${heading}${more()}</div>`;
+    const diff = '<span class="added">+84</span> <span class="removed">−19</span>';
+
+    function currentHeader(state) {
+      const status = scenario.value === 'failed'
+        ? '<span class="dot added" aria-hidden="true"></span>'
+        : `<span class="dot ${scenario.value}" aria-hidden="true"></span>`;
+      const pr = state.pr ? `<button type="button" class="${scenario.value === 'failed' ? 'failed-pr failed' : 'merged'}" data-open="pr" aria-label="${state.pr}, ${state.status}">#418</button>` : '';
+      const findings = scenario.value === 'failed' ? '<button type="button" class="findings running" data-open="findings" aria-label="2 review findings"><span class="circle-warning" aria-hidden="true">!</span> 2</button>' : '';
+      const actions = {
+        failed: action('Fix checks', 'fix', true) + action('Add to merge queue', 'queue'),
+        running: action('Create PR', 'create', true),
+        archived: action('Restore', 'restore', true),
+      };
+      return `<div class="nav current-nav">${back()}<button type="button" class="title current-title" data-open="details" aria-label="Session details: ${title}, ${state.state}">
+        ${status}<span class="title-text">${title}</span></button><div class="trailing">${search()}${more('more circled')}</div></div>
+        <div class="status-row">${findings}<button type="button" data-open="changes" aria-label="3 changed files, 84 additions, 19 deletions">${diff}</button>${pr}</div>
+        <div class="action-row">${actions[scenario.value]}</div>`;
+    }
+
+    function compactHeader(state) {
+      if (!state.pr) return nav(titleButton(smallStatus(state)));
+      const tone = scenario.value === 'failed' ? 'failed' : 'merged';
+      const status = scenario.value === 'failed' ? state.state : state.status;
+      return nav(`<button type="button" class="title compact-title" data-open="pr"><span class="title-text">${title}</span>
+        <span class="eyeline"><span class="dot ${tone}"></span>${state.pr} · ${status}${icon('forward')}</span></button>`);
+    }
+
+    function prSummary(state) {
+      if (!state.pr) return '';
+      const tone = scenario.value === 'failed' ? 'failed' : 'merged';
+      return `<button type="button" class="summary-link" data-open="pr"><b>${state.pr}</b>
+        <span class="dot ${tone}"></span><span class="${tone}">${state.status}</span>${icon('forward')}</button>`;
+    }
+
+    function titleHeader(state) {
+      return `<div class="nav"><button type="button" class="back-label" data-open="sessions">${icon('back')}Sessions</button><span class="spacer"></span>${search()}${more()}</div>
+        <button type="button" class="large-title" data-open="details" aria-label="Session details: ${title}"><span class="title-text">${title}</span>
+        <span class="eyeline">${state.pr && scenario.value !== 'archived' ? '' : `${smallStatus(state)} · `}Gilbert09/talyn</span></button>`;
+    }
+
+    function workTabs(concept, state, view) {
+      const tab = (name, label, meta = '') => `<button type="button" data-view="${name}" aria-pressed="${view === name}">${label}${meta}</button>`;
+      const prMarker = scenario.value === 'failed' ? '<span class="dot tab-meta failed" aria-label="Checks failing"></span>' : '';
+      return `<div class="tabs" role="group" aria-label="${concept.name} views">${tab('chat', 'Chat')}
+        ${tab('changes', 'Changes', '<span class="tab-meta">3</span>')}${state.pr ? tab('pr', state.pr, prMarker) : tab('pr', 'Pull request')}</div>`;
+    }
+
+    function prStatus(state, className) {
+      const tone = scenario.value === 'failed' ? 'failed' : 'merged';
+      return `<div class="${className}"><button type="button" data-open="pr"><b>${state.pr}</b>
+        <span class="eyeline ${tone}"><span class="dot"></span>${state.status}</span></button>
+        ${scenario.value === 'failed' ? action('Fix checks', 'fix', true) : ''}</div>`;
+    }
+
+    function workCard(state) {
+      const findings = scenario.value === 'failed' ? '<button type="button" data-open="findings">2 review findings</button>' : '';
+      return `<div class="work-card">${prStatus(state, 'work-top')}
+        <div class="quick-links"><button type="button" data-open="changes">3 files &nbsp; ${diff}</button>${findings}</div></div>`;
+    }
+
+    function composer(view) {
+      const body = scenario.value === 'archived'
+        ? '<span class="read-only">Session archived</span>'
+        : '<div class="input" aria-hidden="true">Message Codex…<span class="send">↑</span></div>';
+      return `<div class="composer">${view === 'chat' ? body : ''}<div class="home" aria-hidden="true"></div></div>`;
+    }
+
+    function viewBody(concept, state, view) {
+      if (view === 'changes') return `<div class="view-content"><h3>Changes</h3><p>3 files &nbsp; ${diff}</p><p>notifications.ts<br>reviewEvents.ts<br>notifications.test.ts</p></div>`;
+      if (view === 'pr') return state.pr
+        ? `<div class="view-content"><h3>${state.pr}</h3><p>${state.status}</p>${scenario.value === 'failed' ? `${action('Review findings', 'findings')} ${action('Fix checks', 'fix', true)}` : ''}</div>`
+        : `<div class="view-content"><h3>Pull request</h3><p>No pull request yet.</p>${action('Create PR', 'create', true)}</div>`;
+      return `${concept.id === 'card' && state.pr ? workCard(state) : ''}<p class="message">${request}</p>
+        <p class="reply"><b>Codex</b>${state.reply}</p>`;
+    }
+
+    function screen(concept) {
+      const state = scenarios[scenario.value];
+      const view = selectedViews.get(concept.id) ?? 'chat';
+      const navWithState = nav(titleButton(smallStatus(state)));
+      const headers = {
+        current: () => currentHeader(state),
+        compact: () => compactHeader(state),
+        title: () => titleHeader(state) + prSummary(state),
+        tabs: () => navWithState + workTabs(concept, state, view),
+        card: () => state.pr && scenario.value !== 'archived' ? nav(titleButton()) : navWithState,
+        action: () => scenario.value === 'failed'
+          ? nav(titleButton('<span class="eyeline">Gilbert09/talyn</span>')) + prStatus(state, 'next-step')
+          : navWithState,
+      };
+      return `<div class="system" aria-hidden="true">9:41<span class="system-icons"><span class="reception"></span><span class="battery"></span></span></div>
+        <div class="header">${headers[concept.id]()}</div>
+        <div class="transcript">${viewBody(concept, state, view)}</div>${composer(view)}`;
+    }
+
+    function render() {
+      grid.innerHTML = concepts.map((concept) => `<article class="concept" data-concept="${concept.id}">
+        <h2>${concept.name}</h2><p>${concept.note}</p><div class="phone">${screen(concept)}</div></article>`).join('');
+    }
+
+    function openSheet(target, conceptId) {
+      const state = scenarios[scenario.value];
+      const entries = [['details', 'Session details'], ['changes', 'Changes'], ['pr', 'Pull request']];
+      if (!['current', 'title'].includes(conceptId)) entries.push(['find', 'Find in transcript']);
+      if (scenario.value === 'failed') entries.push(['findings', 'Review findings'], ['fix', 'Fix checks'], ['queue', 'Add to merge queue']);
+      if (scenario.value === 'running') entries.push(['stop', 'Stop agent'], ['create', 'Create PR']);
+      entries.push(scenario.value === 'archived' ? ['restore', 'Restore'] : ['archive', 'Archive']);
+      const views = {
+        sessions: ['Sessions', `<p>${title}</p>`],
+        menu: ['Session actions', entries.map(([id, label]) => `<button type="button" class="menu-entry" data-open="${id}">${label}</button>`).join('')],
+        details: ['Session details', `<p><b>${title}</b></p><p>Gilbert09/talyn · ${state.state}</p>`],
+        find: ['Find in transcript', '<label>Search the sample transcript<input type="search" id="query"></label><p id="matches" aria-live="polite"></p>'],
+        changes: ['Changes', `<p>3 files &nbsp; ${diff}</p><p>notifications.ts<br>reviewEvents.ts<br>notifications.test.ts</p>`],
+        pr: ['Pull request', viewBody({ id: 'tabs' }, state, 'pr')],
+        findings: ['Review findings', '<p>2 findings from code review.</p><p>Check the retry path and confirm the notification key stays the same.</p>'],
+        fix: ['Fix checks', '<p>In Talyn, this asks the agent to fix the failing checks.</p>'],
+        queue: ['Add to merge queue', '<p>In Talyn, this adds the pull request to the merge queue.</p>'],
+        stop: ['Stop agent', '<p>In Talyn, this stops the active turn.</p>'],
+        create: ['Create PR', '<p>In Talyn, this asks the agent to open a pull request.</p>'],
+        restore: ['Restore', '<p>In Talyn, this restores the archived session.</p>'],
+        archive: ['Archive', '<p>In Talyn, this archives the session.</p>'],
+      };
+      const [heading, content] = views[target];
+      sheet.dataset.concept = conceptId;
+      sheet.querySelector('#sheet-title').textContent = heading;
+      sheet.querySelector('#sheet-body').innerHTML = content;
+      if (!sheet.open) sheet.showModal();
+      (sheet.querySelector('#query') ?? sheet.querySelector('button')).focus();
+    }
+
+    grid.addEventListener('click', (event) => {
+      const button = event.target.closest('button');
+      if (!button) return;
+      const card = button.closest('[data-concept]');
+      const id = card.dataset.concept;
+      if (button.dataset.view) {
+        const view = button.dataset.view;
+        selectedViews.set(id, view);
+        card.querySelector('.phone').innerHTML = screen(concepts.find((concept) => concept.id === id));
+        card.querySelector(`[data-view="${view}"]`).focus();
+      } else {
+        openSheet(button.dataset.open, id);
+      }
+    });
+    sheet.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-open]');
+      if (button) openSheet(button.dataset.open, sheet.dataset.concept);
+    });
+    sheet.addEventListener('input', (event) => {
+      if (event.target.id !== 'query') return;
+      const query = event.target.value.trim().toLowerCase();
+      const messages = [request, scenarios[scenario.value].reply];
+      const matches = messages.filter((message) => message.toLowerCase().includes(query));
+      sheet.querySelector('#matches').textContent = query ? matches.join(' ') || 'No matching messages.' : '';
+    });
+    scenario.addEventListener('change', () => { selectedViews.clear(); render(); });
+    document.querySelector('#width').addEventListener('change', (event) => {
+      document.documentElement.style.setProperty('--phone-width', `${event.target.value}px`);
+    });
+    render();
+  </script>
+</body>
+</html>
