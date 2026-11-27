@@ -226,8 +226,6 @@ async function parallel<T>(items: T[], limit: number, run: (item: T) => Promise<
 export interface ReviewHooks {
   /** Called with every candidate before the judge runs. */
   onUnjudged?: (candidates: Candidate[]) => void;
-  /** The base commit, when the checkout can fetch it. */
-  baseSha?: string;
 }
 
 export async function review(

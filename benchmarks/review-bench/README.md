@@ -38,7 +38,12 @@ It runs the same prompts and the same lens, sweep and judge sequence as `review(
 A case file in `golden/` lists the known problems. Each problem is one that another reviewer reported and that was present at the head commit.
 
 The runner needs a checkout of the case repository at the head commit, the GitHub file list with patches, and the PR title and body.
-It starts `claude -p` in the checkout, with read-only tools and an empty `HOME`, so your own `CLAUDE.md` does not reach the reviewer.
+It starts `claude -p` in the checkout with no edit or web tools and an empty `HOME`, so your own `CLAUDE.md` does not reach the reviewer.
+The reviewer keeps a shell with no permission checks, as a fleet unit does, so the scores match production.
+The pull request is third-party text that can steer that shell.
+Run the runner only in a disposable VM or container, and pass `--sandboxed` to confirm. Without that flag it refuses to start.
+The reviewer gets only the environment it needs to reach the model: `PATH`, locale, proxy and certificate settings, and `ANTHROPIC_*` and `CLAUDE_CODE_*`.
+Rule files are read at the case's `base` commit, so a later change to the rules does not change an old case's score.
 A Sonnet call then matches the findings to the known problems. It scores the candidates before the judge and the findings after it.
 
 ```sh
@@ -46,7 +51,7 @@ npx esbuild benchmarks/review-bench/src/golden.ts --bundle --platform=node --for
   --alias:@talyn/shared=./packages/shared/src/index.ts --outfile=/tmp/golden.js
 node /tmp/golden.js --case benchmarks/review-bench/golden/posthog-143292.json \
   --repo /path/to/posthog-checkout --files files.json --pr pr.json --out /tmp/run \
-  --preset standard --model claude-opus-5-5
+  --preset standard --model claude-opus-5-5 --sandboxed
 ```
 
 `files.json` is the `files` array of `GET /repos/<repo>/compare/<base>...<head>`.

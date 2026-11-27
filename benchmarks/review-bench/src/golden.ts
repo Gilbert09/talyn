@@ -44,6 +44,7 @@ interface Args {
   concurrency: number;
   unitTimeoutSec: number;
   scoreOnly: boolean;
+  sandboxed: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -69,12 +70,32 @@ function parseArgs(argv: string[]): Args {
     concurrency: Number(get('concurrency', '4')),
     unitTimeoutSec: Number(get('unit-timeout', '1500')),
     scoreOnly: argv.includes('--score-only'),
+    sandboxed: argv.includes('--sandboxed'),
   };
 }
 
+// Names the reviewer needs to reach the model, through a proxy if there is one.
+const REVIEWER_ENV = /^(PATH|LANG|LC_[A-Z]+|TERM|TZ|TMPDIR|USER|SHELL|(HTTPS?|NO|ALL)_PROXY|(https?|no|all)_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_(FILE|DIR)|ANTHROPIC_[A-Z_]+|CLAUDE_CODE_[A-Z_]+)$/;
+
 /**
- * Runs `claude -p` in the checkout with read-only tools.
+ * The environment of a reviewer: only the allowlisted names, with HOME set to
+ * an empty directory. The operator's other tokens stay out of reach of a
+ * reviewer that a pull request has steered.
+ */
+export function reviewerEnv(env: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { HOME: home };
+  for (const [name, value] of Object.entries(env)) {
+    if (value !== undefined && REVIEWER_ENV.test(name)) out[name] = value;
+  }
+  return out;
+}
+
+/**
+ * Runs `claude -p` in the checkout with no edit or web tools.
  *
+ * Bash stays on and permission checks are off, as in a fleet unit, so the
+ * scores match production. A third-party pull request can steer that shell,
+ * so `main()` runs only with `--sandboxed`: in a disposable VM or container.
  * HOME points at an empty directory so the operator's own CLAUDE.md and
  * settings do not reach the reviewer. The fleet units do not carry them either.
  */
@@ -90,7 +111,7 @@ export function claudeRunner(repoDir: string, debugDir: string, timeoutSec: numb
           '--permission-mode', 'bypassPermissions',
           '--disallowedTools', 'Edit,Write,NotebookEdit,WebFetch,WebSearch,Agent,Task',
         ],
-        { cwd: repoDir, detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, HOME: home } }
+        { cwd: repoDir, detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: reviewerEnv(process.env, home) }
       );
       let stdout = '';
       let stderr = '';
@@ -181,13 +202,15 @@ export interface Score {
 
 export function summarise(golden: GoldenCase, reply: string, findings: Pick<Candidate, 'severity'>[]): Score {
   const findingCount = findings.length;
+  // A reference the scorer made up names no finding and counts for nothing.
+  const finding = (ref: string) => (/^F\d+$/.test(ref) ? findings[Number(ref.slice(1)) - 1] : undefined);
   const visible = (ref: string) => {
-    const f = findings[Number(ref.replace(/^F/, '')) - 1];
+    const f = finding(ref);
     return !!f && f.severity !== 'nit';
   };
   const json = reply.slice(reply.indexOf('{'), reply.lastIndexOf('}') + 1);
   const parsed = JSON.parse(json) as { matches: Record<string, string[]>; extras?: Record<string, string> };
-  const matched = golden.issues.filter((g) => (parsed.matches[g.id] ?? []).length > 0).map((g) => g.id);
+  const matched = golden.issues.filter((g) => (parsed.matches[g.id] ?? []).some((ref) => !!finding(ref))).map((g) => g.id);
   const high = golden.issues.filter((g) => g.severity === 'high');
   const visibleMatched = golden.issues.filter((g) => (parsed.matches[g.id] ?? []).some(visible));
   return {
@@ -219,6 +242,12 @@ async function score(args: Args, golden: GoldenCase, label: string, findings: Ca
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv);
+  if (!args.sandboxed) {
+    throw new Error(
+      'The reviewers run a shell with no permission checks in a third-party checkout. ' +
+        'Run this only in a disposable VM or container, and pass --sandboxed to confirm.'
+    );
+  }
   const golden = JSON.parse(await readFile(args.caseFile, 'utf8')) as GoldenCase;
   const home = join(args.out, '.home');
   await mkdir(home, { recursive: true });
@@ -232,6 +261,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       body: pr.body ?? '',
       headBranch: pr.head,
       baseBranch: pr.base,
+      rulesRef: golden.base,
       files: filesWorthReviewing(files),
       chunkIndex: 1,
       chunkTotal: 1,
@@ -246,7 +276,6 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     let unjudged: Candidate[] = [];
     const final = await review(ctx, settings, claudeRunner(args.repoDir, join(args.out, 'units'), args.unitTimeoutSec, home), console.log, {
       onUnjudged: (c) => { unjudged = c; },
-      baseSha: golden.base,
     });
     await writeFile(join(args.out, 'unjudged.json'), JSON.stringify(unjudged, null, 2));
     await writeFile(join(args.out, 'final.json'), JSON.stringify(final, null, 2));

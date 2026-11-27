@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { summarise, type GoldenCase } from './golden.js';
+import { main, reviewerEnv, summarise, type GoldenCase } from './golden.js';
 
 const golden: GoldenCase = {
   repo: 'o/r', pr: 1, head: 'h', base: 'b',
@@ -41,9 +41,42 @@ describe('summarise', () => {
       'a reference to a finding that does not exist',
       '{"matches":{"G1":["F9"]}}',
       [{ severity: 'major' }],
-      { recall: 0.25, visibleRecall: 0 },
+      { recall: 0, highRecall: 0, visibleRecall: 0, matched: [], missed: ['G1', 'G2', 'G3', 'G4'] },
+    ],
+    [
+      'a malformed reference next to a real one',
+      '{"matches":{"G1":["X1","F0"],"G2":["F9","F1"]}}',
+      [{ severity: 'major' }],
+      { recall: 0.25, highRecall: 0, visibleRecall: 0.25, matched: ['G2'] },
     ],
   ] as const)('%s', (_label, reply, findings, expected) => {
     expect(summarise(golden, reply, findings as never)).toMatchObject(expected);
+  });
+});
+
+describe('reviewerEnv', () => {
+  const env = {
+    PATH: '/bin', LANG: 'C.UTF-8', HTTPS_PROXY: 'http://p', https_proxy: 'http://p',
+    ANTHROPIC_API_KEY: 'k', ANTHROPIC_BASE_URL: 'http://a', CLAUDE_CODE_USE_BEDROCK: '1',
+    HOME: '/home/me', GITHUB_TOKEN: 't', AWS_SECRET_ACCESS_KEY: 's', NPM_TOKEN: 'n', SSH_AUTH_SOCK: '/s',
+  };
+
+  it('keeps what the model call needs and sets HOME', () => {
+    expect(reviewerEnv(env, '/tmp/h')).toEqual({
+      HOME: '/tmp/h', PATH: '/bin', LANG: 'C.UTF-8', HTTPS_PROXY: 'http://p', https_proxy: 'http://p',
+      ANTHROPIC_API_KEY: 'k', ANTHROPIC_BASE_URL: 'http://a', CLAUDE_CODE_USE_BEDROCK: '1',
+    });
+  });
+
+  it.each(['GITHUB_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'NPM_TOKEN', 'SSH_AUTH_SOCK'])('drops %s', (name) => {
+    expect(reviewerEnv(env, '/tmp/h')).not.toHaveProperty(name);
+  });
+});
+
+describe('main', () => {
+  it('refuses to run without --sandboxed, before it reads any file', async () => {
+    await expect(
+      main(['--case', '/nope.json', '--repo', '/nope', '--files', '/nope', '--pr', '/nope', '--out', '/nope'])
+    ).rejects.toThrow('--sandboxed');
   });
 });

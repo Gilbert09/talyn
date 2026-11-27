@@ -201,6 +201,18 @@ describe('the repository rules section', () => {
     expect(rules).toContain('It also changes 1 rule file(s)');
   });
 
+  it.each([
+    ['a pinned base commit', { rulesRef: 'abc123def' }, "git fetch --depth 1 origin 'abc123def'"],
+    ['no pinned ref', {}, "git fetch --depth 1 origin 'main'"],
+  ] as const)('reads the rules at %s', (_label, extra, expected) => {
+    expect(buildLensPrompt(lens, ctx(extra))).toContain(expected);
+  });
+
+  it('has no fetch command for a rules ref a shell could misread', () => {
+    const prompt = buildLensPrompt(lens, ctx({ rulesRef: "abc'; rm -rf ~; '" }));
+    expect(prompt).not.toContain('git fetch');
+  });
+
   it('has no fetch command for a base branch name a shell could misread', () => {
     const prompt = buildLensPrompt(lens, ctx({ baseBranch: "main'; rm -rf ~; '" }));
     expect(prompt).not.toContain('git fetch');

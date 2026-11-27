@@ -231,6 +231,8 @@ export interface ReviewPromptContext {
   body: string;
   headBranch: string;
   baseBranch: string;
+  /** The ref to read rule files from, such as a pinned base commit. Default: `baseBranch`. */
+  rulesRef?: string;
   /** The files this unit is responsible for, with their patches. */
   files: { filename: string; status: string; additions: number; deletions: number; patch?: string }[];
   /**
@@ -338,7 +340,8 @@ function repositoryRules(ctx: ReviewPromptContext): string[] {
   const changed = (ctx.allFiles ?? ctx.files).map((f) => f.filename).filter(isRepositoryRuleFile);
   const named = changed.filter((f) => SAFE_PATH.test(f));
   const unnamed = changed.length - named.length;
-  const base = SAFE_PATH.test(ctx.baseBranch) ? ctx.baseBranch : '';
+  const ref = ctx.rulesRef ?? ctx.baseBranch;
+  const base = SAFE_PATH.test(ref) ? ref : '';
   return [
     '## Repository rules',
     '',
