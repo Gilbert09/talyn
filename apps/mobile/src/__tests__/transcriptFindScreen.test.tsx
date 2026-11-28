@@ -14,7 +14,7 @@ jest.mock('expo-router', () => ({
   useLocalSearchParams: () => ({ id: 'session-one' }),
   Link: ({ children }: { children: React.ReactNode }) => children,
   useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => true }),
-  // Draw the header buttons, so the test can press the find button.
+  // Draw the header so the test can open the session menu.
   Stack: { Screen: ({ options }: { options?: { headerRight?: () => ReactNode } }) => options?.headerRight?.() ?? null },
 }));
 jest.mock('../auth/AuthProvider', () => ({
@@ -29,11 +29,16 @@ const ev = (seq: number, body: Record<string, unknown>, turn = 1): WorkbenchEven
 const said = (seq: number, text: string, turn = 1) => ev(seq, { type: 'assistant', message: { content: [{ type: 'text', text }] } }, turn);
 const asked = (seq: number, text: string, turn: number) => ev(seq, { type: 'user', talyn_user_message: true, message: { content: [{ type: 'text', text }] } }, turn);
 
+async function openSearch() {
+  await fireEvent.press(screen.getByRole('button', { name: 'Session actions' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Find in transcript' }));
+}
+
 async function openFind(events: WorkbenchEvent[], hasOlder = false) {
   mockActive.api.workbenches.events.mockResolvedValue({ events, cursor: events.length, oldestSeq: 1, hasOlder });
   await render(<WorkbenchDetailScreen kind="session" />);
   await screen.findAllByLabelText(/^Agent said: /);
-  await fireEvent.press(screen.getByRole('button', { name: 'Find in transcript' }));
+  await openSearch();
 }
 
 describe('find in the conversation', () => {
@@ -85,7 +90,7 @@ describe('find in the conversation', () => {
     await fireEvent.press(screen.getByRole('button', { name: 'Close find' }));
     expect(screen.queryByPlaceholderText('Find in transcript')).toBeNull();
     expect(screen.queryByText('3 of 3')).toBeNull();
-    await fireEvent.press(screen.getByRole('button', { name: 'Find in transcript' }));
+    await openSearch();
     expect(screen.getByPlaceholderText('Find in transcript')).toHaveProp('value', '');
   });
 

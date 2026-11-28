@@ -69,18 +69,19 @@ describe('session controls', () => {
     expect(mockActive.api.workbenches.archive).toHaveBeenCalledWith('session-one');
     expect(mockRouter.back).toHaveBeenCalled();
   });
-  it('hides the quick actions while the keyboard is open and keeps the title', async () => {
+  it('hides the next action while the keyboard is open and keeps the title', async () => {
     const listeners = new Map<string, (event: { endCoordinates: { height: number } }) => void>();
     jest.spyOn(Keyboard, 'addListener').mockImplementation(((name: string, listener: (event: { endCoordinates: { height: number } }) => void) => {
       listeners.set(name, listener); return { remove: jest.fn() };
     }) as never);
+    mockActive.api.workbenches.get.mockResolvedValue(session({ pullRequestId: null, pr: null, diffStat: { files: 1, added: 2, removed: 1 } }));
     await render(<WorkbenchDetailScreen kind="session" />);
-    expect(await screen.findByRole('button', { name: 'Add to merge queue' })).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Create PR' })).toBeVisible();
     await act(async () => listeners.get('keyboardWillShow')?.({ endCoordinates: { height: 300 } }));
     expect(screen.getByRole('header', { name: /^Current work\./ })).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Add to merge queue' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Create PR' })).toBeNull();
     await act(async () => listeners.get('keyboardWillHide')?.({ endCoordinates: { height: 0 } }));
-    expect(screen.getByRole('button', { name: 'Add to merge queue' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Create PR' })).toBeVisible();
   });
   it('renames through the prompt sheet', async () => {
     await render(<WorkbenchDetailScreen kind="session" />);

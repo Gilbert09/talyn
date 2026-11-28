@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Next action in mobile session headers (2026-11-27)
+
+The mobile session header pairs one next action with its status above the conversation.
+The row hides when the keyboard opens or there is no next action.
+**Session actions** includes transcript search, change counts, code review, and merge queue controls.
+Archived sessions offer **Restore** in the menu. Threads keep the search button in the header.
+
+All 280 targeted mobile tests passed. The mobile type check and ESLint passed.
+A native device check remains pending.
+
 ## Android camera attachments (2026-11-27)
 
 Both Android composers now open the system camera directly. The camera app manages its own permission.

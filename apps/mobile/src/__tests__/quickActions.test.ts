@@ -1,7 +1,7 @@
 import type { PRRow } from '@talyn/client/native';
 import type { Workbench } from '@talyn/shared';
 
-import { canQueue, cycleActions, diffTotals, primaryActions, primaryCycleAction } from '../features/sessions/quickActions';
+import { canQueue, cycleActions, diffTotals, primaryAction, primaryCycleAction } from '../features/sessions/quickActions';
 import { chat, pr, session, thread } from './workflowFixtures';
 
 const row = (summary: Partial<PRRow['summary']> = {}, patch: Partial<PRRow> = {}) => pr({ ...patch, summary: { ...pr().summary, ...summary } });
@@ -10,76 +10,64 @@ const conflicts = { mergeable: 'CONFLICTING', blockingReason: 'merge_conflicts' 
 const failing = { mergeable: 'MERGEABLE', ciStatus: 'failing_required', blockingReason: 'checks_failed' } as const;
 const noPr = (patch: Partial<Workbench> = {}) => session({ pullRequestId: null, pr: null, ...patch });
 const changes = { diffStat: { added: 3, removed: 1, files: 2 } };
-const kinds = (item: Workbench, pull: PRRow | null, options: Parameters<typeof primaryActions>[2] = {}) =>
-  primaryActions(item, pull, options).map((action) => action.kind);
-
-describe('primaryActions', () => {
-  it.each<[string, Workbench, PRRow | null, string[]]>([
-    ['an archived session has no quick actions', session({ archivedAt: '2026-11-09T10:00:00Z' }), row(mergeable), []],
-    ['a session with archived status has no quick actions', session({ status: 'archived' }), null, []],
-    ['an archived thread offers Restore', { ...thread(), archivedAt: '2026-11-09T10:00:00Z' }, null, ['restore']],
-    ['a quiet session with no PR and no changes has nothing', noPr(), null, []],
-    ['changes with no PR offer Create PR', noPr(changes), null, ['create_pr']],
-    ['committed work alone offers Create PR', noPr({ committedStats: { added: 1, removed: 0, files: 1 } }), null, ['create_pr']],
-    ['conflicts come first, then the queue', session(), row(conflicts), ['resolve_conflicts', 'queue_add']],
-    ['failing checks offer Fix checks and the queue', session(), row(failing), ['fix_checks', 'queue_add']],
-    ['a mergeable PR offers Merge and the queue', session(), row(mergeable), ['merge', 'queue_add']],
-    ['no checks configured counts as green', session(), row({ mergeable: 'MERGEABLE', ciStatus: 'none' }), ['merge', 'queue_add']],
-    ['pending checks wait, leaving the queue', session(), row({ mergeable: 'MERGEABLE', ciStatus: 'running' }), ['queue_add']],
-    ['unknown mergeability waits, leaving the queue', session(), row(), ['queue_add']],
-    ['a queued PR shows its queue state', session(), row(mergeable, { mergeQueued: true, mergeQueue: { position: 3, status: 'queued' } as never }), ['merge', 'queue_status']],
-    ['a merged PR offers Archive', session(), row({}, { state: 'merged' }), ['archive']],
-    ['a closed PR offers Archive', session(), row({}, { state: 'closed' }), ['archive']],
-    ['a running turn leaves Stop to the composer', session({ chats: [chat({ status: 'running' })] }), row(conflicts), ['resolve_conflicts', 'queue_add']],
-    ['a failed start offers Retry', noPr({ status: 'error', error: 'Boom.' }), null, ['retry']],
-    ['a failed sandbox offers Retry before the PR action', session({ sandboxState: 'error' }), row(mergeable), ['retry', 'merge']],
-    ['a sleeping sandbox leaves Wake to the menu', noPr({ sandboxState: 'suspended' }), null, []],
-    ['a sleeping sandbox still offers its PR actions', session({ sandboxState: 'suspended' }), row(mergeable), ['merge', 'queue_add']],
-    ['a thread never gets PR actions', thread(), null, []],
-    ['a running thread has no quick actions', { ...thread(), chats: [chat({ id: 'thread-chat', status: 'running' })] }, null, []],
-    ['a sleeping thread has no quick actions', { ...thread(), sandboxState: 'suspended' }, null, []],
-    ['a linked PR still loading waits instead of offering Create PR', session({ diffStat: changes.diffStat }), null, []],
-    ['the workbench summary drives the cycle before the row loads', session({ pr: { number: 42, url: '', state: 'open', mergeable: 'conflicting', ciStatus: 'success' } }), null, ['resolve_conflicts']],
+describe('primaryAction', () => {
+  it.each<[string, Workbench, PRRow | null, string | null]>([
+    ['an archived session has no next action', session({ archivedAt: '2026-11-09T10:00:00Z' }), row(mergeable), null],
+    ['an archived status has no next action', session({ status: 'archived' }), null, null],
+    ['an archived thread offers Restore', { ...thread(), archivedAt: '2026-11-09T10:00:00Z' }, null, 'restore'],
+    ['no PR and no changes waits', noPr(), null, null],
+    ['changes with no PR offer Create PR', noPr(changes), null, 'create_pr'],
+    ['committed work also offers Create PR', noPr({ committedStats: { added: 1, removed: 0, files: 1 } }), null, 'create_pr'],
+    ['conflicts offer Resolve conflicts', session(), row(conflicts), 'resolve_conflicts'],
+    ['failing checks offer Fix checks', session(), row(failing), 'fix_checks'],
+    ['a mergeable PR offers Merge', session(), row(mergeable), 'merge'],
+    ['a draft PR with passing checks waits', session(), row({ ...mergeable, draft: true }), null],
+    ['no checks configured counts as green', session(), row({ mergeable: 'MERGEABLE', ciStatus: 'none' }), 'merge'],
+    ['pending checks wait', session(), row({ mergeable: 'MERGEABLE', ciStatus: 'running' }), null],
+    ['unknown mergeability waits', session(), row(), null],
+    ['a queued PR waits for the merge queue', session(), row(mergeable, { mergeQueued: true }), null],
+    ['a queued PR still offers Fix checks', session(), row(failing, { mergeQueued: true }), 'fix_checks'],
+    ['a merged PR offers Archive', session(), row({}, { state: 'merged' }), 'archive'],
+    ['a closed PR offers Archive', session(), row({}, { state: 'closed' }), 'archive'],
+    ['a running turn leaves Stop to the composer', session({ chats: [chat({ status: 'running' })] }), row(conflicts), 'resolve_conflicts'],
+    ['a failed start offers Retry', noPr({ status: 'error', error: 'Boom.' }), null, 'retry'],
+    ['a failed sandbox offers Retry before Merge', session({ sandboxState: 'error' }), row(mergeable), 'retry'],
+    ['a sleeping sandbox leaves Wake to the menu', noPr({ sandboxState: 'suspended' }), null, null],
+    ['a sleeping sandbox still offers Merge', session({ sandboxState: 'suspended' }), row(mergeable), 'merge'],
+    ['a thread has no PR action', thread(), null, null],
+    ['a running thread has no next action', { ...thread(), chats: [chat({ id: 'thread-chat', status: 'running' })] }, null, null],
+    ['a sleeping thread has no next action', { ...thread(), sandboxState: 'suspended' }, null, null],
+    ['a linked PR still loading waits', session({ diffStat: changes.diffStat }), null, null],
+    ['the workbench summary applies before the row loads', session({ pr: { number: 42, url: '', state: 'open', mergeable: 'conflicting', ciStatus: 'success' } }), null, 'resolve_conflicts'],
   ])('%s', (_name, item, pull, expected) => {
-    expect(kinds(item, pull)).toEqual(expected);
-  });
-
-  it('keeps at most the limit', () => {
-    const item = session({ status: 'error' });
-    expect(kinds(item, row(conflicts), { limit: 3 })).toEqual(['retry', 'resolve_conflicts', 'queue_add']);
-    expect(kinds(item, row(conflicts), { limit: 1 })).toEqual(['retry']);
+    expect(primaryAction(item, pull)?.kind ?? null).toBe(expected);
   });
 
   it.each([
-    ['Create PR', noPr(changes), null, 'create_pr', 'Create PR'],
-    ['Resolve conflicts', session(), row(conflicts), 'resolve_conflicts', 'Resolve conflicts'],
-    ['Merge', session(), row(mergeable), 'merge', 'Merge'],
-    ['Archive after a merge', session(), row({}, { state: 'merged' }), 'archive', 'Archive session'],
-    ['Archive after a close', session(), row({}, { state: 'closed' }), 'archive', 'Archive'],
-    ['Queue', session(), row(), 'queue_add', 'Add to merge queue'],
-    ['Queue state', session(), row({}, { mergeQueued: true, mergeQueue: { position: 2, status: 'queued' } as never }), 'queue_status', 'Queued #2'],
-  ] as const)('labels %s', (_name, item, pull, kind, label) => {
-    expect(primaryActions(item, pull, { limit: 5 }).find((action) => action.kind === kind)?.label).toBe(label);
+    ['Create PR', noPr(changes), null, 'Create PR'],
+    ['Resolve conflicts', session(), row(conflicts), 'Resolve conflicts'],
+    ['Merge', session(), row(mergeable), 'Merge'],
+    ['Archive after a merge', session(), row({}, { state: 'merged' }), 'Archive session'],
+    ['Archive after a close', session(), row({}, { state: 'closed' }), 'Archive'],
+  ] as const)('labels %s', (_name, item, pull, label) => {
+    expect(primaryAction(item, pull)?.label).toBe(label);
   });
 
   it.each([
-    ['a local session cannot send prompts', noPr({ ...changes, runtime: 'local' }), null, 'create_pr', 'This session runs on a computer with the Talyn desktop app. Open it there.'],
-    ['a starting sandbox cannot send prompts', session({ status: 'provisioning' }), row(conflicts), 'resolve_conflicts', 'The sandbox is starting.'],
-    ['merge needs the row', session({ pr: { number: 42, url: '', state: 'open', mergeable: 'mergeable', ciStatus: 'success' } }), null, 'merge', 'The pull request is still loading.'],
-    ['a ready session can act', session(), row(conflicts), 'resolve_conflicts', null],
-  ] as const)('gives a reason when %s', (_name, item, pull, kind, reason) => {
-    expect(primaryActions(item, pull, { limit: 5 }).find((action) => action.kind === kind)?.disabledReason).toBe(reason);
+    ['a local session cannot send prompts', noPr({ ...changes, runtime: 'local' }), null, 'This session runs on a computer with the Talyn desktop app. Open it there.'],
+    ['a starting sandbox cannot send prompts', session({ status: 'provisioning' }), row(conflicts), 'The sandbox is starting.'],
+    ['merge needs the row', session({ pr: { number: 42, url: '', state: 'open', mergeable: 'mergeable', ciStatus: 'success' } }), null, 'The pull request is still loading.'],
+    ['a ready session can act', session(), row(conflicts), null],
+  ] as const)('gives a reason when %s', (_name, item, pull, reason) => {
+    expect(primaryAction(item, pull)?.disabledReason).toBe(reason);
   });
 
-  it('disables every action offline but the queue state, which only navigates', () => {
-    const actions = primaryActions(session({ sandboxState: 'suspended' }), row(mergeable, { mergeQueued: true }), { offline: true, limit: 5 });
-    expect(actions.map((action) => [action.kind, action.disabledReason])).toEqual([
-      ['merge', 'You are offline.'], ['queue_status', null],
-    ]);
+  it('disables the next action offline', () => {
+    expect(primaryAction(session(), row(mergeable), true)?.disabledReason).toBe('You are offline.');
   });
 
   it('puts the failure in the Retry hint', () => {
-    expect(primaryActions(noPr({ status: 'error', error: 'The sandbox did not start.' }), null)[0].hint).toBe('The sandbox did not start.');
+    expect(primaryAction(noPr({ status: 'error', error: 'The sandbox did not start.' }), null)?.hint).toBe('The sandbox did not start.');
   });
 });
 
@@ -90,6 +78,7 @@ describe('cycleActions', () => {
     ['failing optional checks still offer Fix checks and Merge', session(), row({ mergeable: 'MERGEABLE', ciStatus: 'failing_optional' }), ['fix_checks', 'merge']],
     ['running checks still offer Merge', session(), row({ mergeable: 'MERGEABLE', ciStatus: 'running' }), ['merge']],
     ['a draft with running checks does not offer Merge', session(), row({ draft: true, mergeable: 'MERGEABLE', ciStatus: 'running' }), []],
+    ['a draft with passing checks does not offer Merge', session(), row({ ...mergeable, draft: true }), []],
     ['a merged PR offers nothing here', session(), row({}, { state: 'merged' }), []],
     ['archived work offers nothing', session({ archivedAt: '2026-11-09T10:00:00Z' }), row(conflicts), []],
     ['a thread offers nothing', thread(), null, []],

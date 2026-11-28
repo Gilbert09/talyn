@@ -46,6 +46,7 @@ const show = async ({ item = {}, codeReview = null, state = 'open' }: { item?: P
   await screen.findByText('Agent response 1');
 };
 const card = () => screen.getByTestId('code-complete-review-card');
+const openMenu = async () => fireEvent.press(await screen.findByRole('button', { name: 'Session actions' }));
 
 describe('end-of-chat code review card', () => {
   it.each([
@@ -60,13 +61,14 @@ describe('end-of-chat code review card', () => {
       ['View findings'], 'No findings'],
     ['findings sent to this session', review({ sessionReport: { workbenchId: 'session-one', sentAt: '2026-11-23T10:00:00Z', findingCount: 2 } }),
       ['Code review done', 'Must fix 1 · Should fix 1', 'Talyn sent 2 findings to this session.'], ['View findings'], '2 findings'],
-  ] as const)('shows %s', async (_name, codeReview, texts, buttons, badge) => {
+  ] as const)('shows %s', async (_name, codeReview, texts, buttons, status) => {
     await show({ codeReview });
     const inCard = within(await screen.findByTestId('code-complete-review-card'));
     texts.forEach((text) => expect(inCard.getByText(text)).toBeVisible());
     buttons.forEach((name) => expect(inCard.getByRole('button', { name })).toBeVisible());
     expect(inCard.queryAllByRole('button')).toHaveLength(buttons.length);
-    expect(within(screen.getByTestId('session-review-badge')).getByText(badge)).toBeVisible();
+    await openMenu();
+    expect(screen.getByRole('button', { name: 'Code review' })).toHaveProp('accessibilityHint', status);
   });
 
   it('shows the progress bar while the review runs', async () => {
@@ -86,10 +88,9 @@ describe('end-of-chat code review card', () => {
   ])('is hidden when %s', async (_name, { item, state, jobs }) => {
     if (jobs) api().background.mockResolvedValue(background([job('running')]));
     await show({ item, state, codeReview: null });
-    // The PR button names the PR's status once its row has loaded.
-    await screen.findByRole('button', { name: /^Pull request 42\. .+\. Open the pull request\.$/ });
     await waitFor(() => expect(screen.queryByTestId('code-complete-review-card')).toBeNull());
-    expect(screen.queryByTestId('session-review-badge')).toBeNull();
+    await openMenu();
+    expect(screen.queryByRole('button', { name: 'Code review' })).toBeNull();
   });
 
   it('starts a review with the workspace default and shows that it runs', async () => {
@@ -113,18 +114,20 @@ describe('end-of-chat code review card', () => {
     await waitFor(() => expect(alert).toHaveBeenCalledWith('Could not start the code review', 'No runner.'));
   });
 
-  it('opens the findings from the card and from the header badge', async () => {
+  it('opens the findings from the card and from the session menu', async () => {
     await show({ codeReview: review() });
     await fireEvent.press(within(await screen.findByTestId('code-complete-review-card')).getByRole('button', { name: 'View findings' }));
     expect(mockRouter.push).toHaveBeenLastCalledWith({ pathname: '/attention/[id]', params: { id: 'pr-one', tab: 'findings' } });
     mockRouter.push.mockClear();
-    await fireEvent.press(screen.getByRole('button', { name: 'Code review: 2 findings. Show the findings.' }));
+    await openMenu();
+    await fireEvent.press(screen.getByRole('button', { name: 'Code review' }));
     expect(mockRouter.push).toHaveBeenLastCalledWith({ pathname: '/attention/[id]', params: { id: 'pr-one', tab: 'findings' } });
   });
 
-  it('keeps the review badge while a turn runs', async () => {
+  it('keeps the review menu entry while a turn runs', async () => {
     await show({ item: { chats: [chat({ status: 'running' })] }, codeReview: review() });
-    expect(await screen.findByRole('button', { name: 'Code review: 2 findings. Show the findings.' })).toBeVisible();
+    await openMenu();
+    expect(screen.getByRole('button', { name: 'Code review' })).toHaveProp('accessibilityHint', '2 findings');
     expect(screen.queryByTestId('code-complete-review-card')).toBeNull();
   });
 });
